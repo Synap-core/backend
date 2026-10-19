@@ -857,44 +857,51 @@ const UUID_TOKEN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** `routines_horizon`, `fal_generate_image` — a snake_case slug. */
 const SNAKE_TOKEN = /^[a-z0-9]+(?:_[a-z0-9]+)+$/;
-/** `entity.delete`, `gmail.send` — a dotted machine id. */
+/** `entity.delete`, `gmail.send` — dotted lower-case segments. */
 const DOTTED_TOKEN = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/;
-/** `local-b88d021b7d74`, `b88d021b` — a build tag or a hash (a digit AND a hex letter). */
+/**
+ * `local-b88d021b7d74` — a host build tag; or a bare hash of 12+ hex
+ * characters holding a digit AND a letter. Short hex-shaped words are names
+ * ("Cafe2024", "decade2025").
+ */
 const BUILD_TAG_TOKEN =
-  /^(?:[a-z]+-)?(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}$/i;
+  /^(?:(?:local|build)-[0-9a-f]{7,}|(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{12,})$/i;
 
-/** One word shaped like a machine token: a slug, an id, a build tag. */
-function isMachineToken(text: string): boolean {
+/**
+ * One word that is a machine token, not a name. Narrow ON PURPOSE — a false
+ * positive deletes a real name from the title a person approves:
+ *   - a UUID, a build tag (above);
+ *   - a dotted id whose last segment is a known ACTION (`entity.create`,
+ *     `gmail.send`) — so `report.pdf`, `synap.live`, `j.doe` stay names;
+ *   - a snake_case slug only when the object is a Tool, whose identity IS its
+ *     key (`routines_horizon`) — `meeting_notes` names a document.
+ */
+function isMachineToken(text: string, noun: string): boolean {
   if (/\s/.test(text)) return false;
+  if (UUID_TOKEN.test(text) || BUILD_TAG_TOKEN.test(text)) return true;
+  if (DOTTED_TOKEN.test(text)) {
+    return text.slice(text.lastIndexOf(".") + 1) in ACTION_VERBS;
+  }
   return (
-    UUID_TOKEN.test(text) ||
-    SNAKE_TOKEN.test(text) ||
-    DOTTED_TOKEN.test(text) ||
-    BUILD_TAG_TOKEN.test(text)
+    SNAKE_TOKEN.test(text) &&
+    noun !== "" &&
+    noun === resolveObjectNoun("capability")
   );
-}
-
-function startsWithWords(text: string, prefix: string): boolean {
-  if (!prefix) return false;
-  const t = text.toLowerCase();
-  const p = prefix.toLowerCase();
-  return t === p || t.startsWith(`${p} `);
 }
 
 /**
  * The quoted NAME in a title, or "" for none. A name names the object; it
  * never restates the action and is never a machine token. What reaches this
- * slot is often a SUMMARY (a cluster's label falls back to it), so:
- *   - a name that repeats the head or the verb loses the repeat
- *     (`Update Space "Update Space"` → `Update Space`;
- *     `Delete Question "Delete Question \"GRP #3\""` → `… "GRP #3"`);
- *   - what is left is dropped when it is empty, only the noun, or a machine
- *     token (`Run Tool "Run fal_generate_image"` → `Run Tool`,
- *     `Create Tool "routines_horizon"` → `Create Tool`).
- * Any other name is kept as written — except that a name opening with the
- * verb loses that word ("Create onboarding list" under `Create Task` reads
- * `Create Task "onboarding list"`). NOT caught: a kebab slug
- * (`arch-client-intelligence` reads like a hyphenated name).
+ * slot is often a SUMMARY (a cluster's label falls back to it), so it drops:
+ *   - the head, the verb or the noun alone (`Update Space "Update Space"` →
+ *     `Update Space`);
+ *   - the door's own title shape, keeping its name once
+ *     (`Delete Question "Delete Question \"GRP #3\""` → `… "GRP #3"`);
+ *   - the verb followed by a machine token (`Run Tool "Run fal_generate_image"`
+ *     → `Run Tool`), and a machine token (`Create Tool "routines_horizon"`).
+ * Every other name is kept AS WRITTEN — "Create landing page" under
+ * `Create Task` stays whole: a name may start with a verb. NOT caught: a
+ * kebab slug (`arch-client-intelligence` reads like a hyphenated name).
  */
 function nameSlot(
   objectName: string | null | undefined,
@@ -902,23 +909,27 @@ function nameSlot(
   verb: string,
   noun: string
 ): string {
-  let name = (objectName ?? "").trim();
+  const name = (objectName ?? "").trim();
   if (!name) return "";
-  const repeat = startsWithWords(name, head)
-    ? head
-    : startsWithWords(name, verb)
-      ? verb
-      : "";
-  if (repeat) {
-    name = name
-      .slice(repeat.length)
-      .trim()
-      .replace(/^"(.*)"$/, "$1")
-      .trim();
+  const lower = name.toLowerCase();
+  for (const word of [head, verb, noun]) {
+    if (word && lower === word.toLowerCase()) return "";
   }
-  if (!name) return "";
-  if (noun && name.toLowerCase() === noun.toLowerCase()) return "";
-  return isMachineToken(name) ? "" : name;
+  // The door's own output (`Head "name"`) handed back as a name.
+  const quoted = head
+    ? name
+        .slice(head.length)
+        .trim()
+        .match(/^"(.+)"$/)
+    : null;
+  if (quoted && lower.startsWith(`${head.toLowerCase()} `)) {
+    return nameSlot(quoted[1], head, verb, noun);
+  }
+  if (verb && lower.startsWith(`${verb.toLowerCase()} `)) {
+    const rest = name.slice(verb.length).trim();
+    if (isMachineToken(rest, noun)) return "";
+  }
+  return isMachineToken(name, noun) ? "" : name;
 }
 
 /**

@@ -1555,4 +1555,34 @@ describe("buildObjectActionTitle — the name slot names, never restates", () =>
       })
     ).toBe('Create Task "Acme"');
   });
+
+  // Real names the FIRST rule dropped or edited (review R1 #3, measured on
+  // dist). Every row here was wrong under that rule — so each one rules it
+  // out; the drops above still hold under the narrow one.
+  it.each([
+    ["create", "document", "report.pdf"], // a file name, not a dotted id
+    ["create", "link", "synap.live"], // a domain
+    ["create", "company", "example.com"],
+    ["create", "person", "j.doe"], // a handle
+    ["create", "document", "meeting_notes"], // snake, but a document's name
+    ["create", "project", "Cafe2024"], // hex-shaped words, not hashes
+    ["create", "project", "fab2025"],
+    ["create", "project", "decade2025"],
+    ["create", "task", "Create landing page"], // a name may start with a verb
+    ["update", "task", "Update pricing page"],
+    ["create", "task", "Create Task list for Q4"], // the head + more words
+  ])("KEEPS %s %s %j as written", (action, objectKind, objectName) => {
+    const title = buildObjectActionTitle({ action, objectKind, objectName });
+    expect(title.endsWith(`"${objectName}"`)).toBe(true);
+  });
+
+  it("still drops a dotted ACTION id (`entity.create`) — the dotted rule kept its job", () => {
+    expect(
+      buildObjectActionTitle({
+        action: "update",
+        objectKind: "note",
+        objectName: "entity.create",
+      })
+    ).toBe("Update Note");
+  });
 });
