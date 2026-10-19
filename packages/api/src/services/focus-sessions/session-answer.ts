@@ -36,7 +36,7 @@
  * reply speaks for is an OPEN founder decision (AI principal). Until it is
  * decided, a non-owner reply is an ordinary room message and nothing more.
  *
- * ── WHO IS WOKEN (M3) ───────────────────────────────────────────────────────
+ * ── WHO IS WOKEN ────────────────────────────────────────────────────────────
  * The agent that ASKED (the question's author), through the ONE turn door
  * `triggerAutoRespond` with its agent type named (session rooms are GROUP
  * rooms, which wake only a named agent). With no question to go on (the direct
@@ -672,7 +672,7 @@ export type AnswerSessionSlotResult =
         recorded: boolean;
         resumed: boolean;
       };
-      /** The `decision` entity this answer filed or updated (W2). */
+      /** The `decision` entity this answer filed or updated. */
       decision?: Extract<
         AnswerExpectedOutputResult,
         { status: "answered" }
@@ -750,10 +750,21 @@ export async function answerSessionSlot(p: {
   const value = resolved.value;
 
   // PROVIDE — the pod's half of the rule: the reference must name a row the
-  // person owns (or, for a file, can see). The shape already refused a
-  // plaintext credential; this refuses someone else's secret.
+  // person owns (or, for a file, can see), and a connection must be for the
+  // asked service. The shape already refused a plaintext credential; this
+  // refuses someone else's secret or another service's connection.
   if (value?.type === "provide") {
-    const check = await checkProvideRef({ userId: p.userId, ref: value.ref });
+    const check =
+      ask?.mode === "provide"
+        ? await checkProvideRef({
+            userId: p.userId,
+            ref: value.ref,
+            asked: ask.provide,
+          })
+        : ({
+            ok: false,
+            message: "This question does not ask you to hand anything over.",
+          } as const);
     if (!check.ok) {
       return {
         status: "ask_invalid",

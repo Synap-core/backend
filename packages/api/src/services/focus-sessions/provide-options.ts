@@ -18,23 +18,11 @@
  *   - file       → where an upload lands (`resolveProvideFileLanding`).
  */
 
+import { db, and, eq, or, isNull, isNotNull, asc } from "@synap/database";
 import {
-  db,
-  and,
-  eq,
-  or,
-  isNull,
-  isNotNull,
-  inArray,
-  asc,
-} from "@synap/database";
-import {
-  capabilities,
   focusSessions,
-  links,
   projects,
   secrets,
-  tools,
   workspaces,
 } from "@synap/database/schema";
 import type { ExpectedOutput } from "@synap/playbooks";
@@ -48,11 +36,13 @@ import {
 } from "@synap-core/types/ask";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { canWriteWorkspace } from "../../routers/file-upload.js";
-import { providerConfigKeyOf } from "../capabilities/capability-provider-resolution.js";
 import { selectSlotToAnswer } from "./answer-slot.js";
 import { describeAnswerRefusal } from "./session-answer.js";
 import { resolveAskingAgent } from "./provide-secret-grant.js";
-import { resolveProvideProvider, sameService } from "./provide-connect.js";
+import {
+  capabilitiesForService,
+  resolveProvideProvider,
+} from "./provide-connect.js";
 
 // ── The owed provide ask ────────────────────────────────────────────────────
 
@@ -410,62 +400,4 @@ async function usableConnectionRows(
       isDefault: r.isDefault,
       needsReauth: r.connectionState === "needs_reauth",
     }));
-}
-
-async function capabilitiesForService(
-  capabilityIds: string[],
-  service: string
-): Promise<Set<string>> {
-  const [caps, edges] = await Promise.all([
-    db
-      .select({
-        id: capabilities.id,
-        name: capabilities.name,
-        templateKey: capabilities.templateKey,
-      })
-      .from(capabilities)
-      .where(inArray(capabilities.id, capabilityIds)),
-    db
-      .select({ capabilityId: links.toId, toolId: links.fromId })
-      .from(links)
-      .where(
-        and(
-          eq(links.fromType, "tool"),
-          eq(links.linkType, "member_of"),
-          eq(links.toType, "capability"),
-          inArray(links.toId, capabilityIds)
-        )
-      ),
-  ]);
-  const memberTools =
-    edges.length === 0
-      ? []
-      : await db
-          .select({
-            id: tools.id,
-            credentialRef: tools.credentialRef,
-            config: tools.config,
-          })
-          .from(tools)
-          .where(
-            inArray(
-              tools.id,
-              edges.map((e) => e.toolId)
-            )
-          );
-  const providerOfTool = new Map(
-    memberTools.map((t) => [t.id, providerConfigKeyOf(t)])
-  );
-  const matching = new Set<string>();
-  for (const c of caps) {
-    if (sameService(c.templateKey, service) || sameService(c.name, service)) {
-      matching.add(c.id);
-    }
-  }
-  for (const e of edges) {
-    if (sameService(providerOfTool.get(e.toolId), service)) {
-      matching.add(e.capabilityId);
-    }
-  }
-  return matching;
 }
