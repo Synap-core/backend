@@ -236,7 +236,9 @@ sidebar_position: 1
 
 > **Auto-generated** from tRPC router definitions. Do not edit manually — run \`pnpm gen-docs\` in \`synap-backend/packages/api\` to regenerate.
 
-This page lists every tRPC procedure exposed by the Synap data pod. All procedures are callable via \`@synap-core/sdk\` (vanilla JS) or \`@synap-core/react\` hooks.
+This page lists every tRPC procedure exposed by the Synap data pod. All procedures are callable via \`@synap-core/sdk\` (vanilla JS) or \`@synap-core/react\` hooks, as a signed-in user (session cookie or Kratos session token).
+
+> **API keys do not work here.** \`/trpc\` is behind Ory session auth and refuses hub / user API keys (\`synap_hub_*\`, \`synap_user_*\`) with a 401; \`apiKey\` on \`createSynapClient\` is for the local-mode token only. For hub / user API keys (servers, scripts, sites) use \`@synap-core/hub-rest-client\` against \`/api/hub/*\`.
 
 ## How to read this page
 
@@ -245,14 +247,19 @@ This page lists every tRPC procedure exposed by the Synap data pod. All procedur
 - **Router key** — the first segment in the call chain, e.g. \`entities.list\`
 
 \`\`\`typescript
-// Vanilla JS
+// Vanilla JS — a signed-in user (omit sessionToken in a browser: the cookie is sent)
 import { createSynapClient } from "@synap-core/sdk";
-const synap = createSynapClient({ podUrl, apiKey, workspaceId });
+const synap = createSynapClient({ podUrl, sessionToken, workspaceId });
 const result = await synap.entities.list.query({ limit: 20 });
 
 // React
 import { useSynap } from "@synap-core/react";
 const { data } = useSynap().entities.list.useQuery({ limit: 20 });
+
+// A hub / user API key — the Hub REST door, not /trpc
+import { HubRestClient } from "@synap-core/hub-rest-client";
+const hub = new HubRestClient({ podUrl, apiKey, workspaceId });
+const recent = await hub.getRecentEntities({ limit: 20 }); // GET /api/hub/entities
 \`\`\`
 
 ---
