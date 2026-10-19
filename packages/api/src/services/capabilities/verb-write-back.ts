@@ -49,7 +49,11 @@ import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js
 import { declaredWriteBack } from "./capability-drift.js";
 
 export type VerbWriteBackReport =
-  | { status: "recorded"; entityId: string; properties: Record<string, unknown> }
+  | {
+      status: "recorded";
+      entityId: string;
+      properties: Record<string, unknown>;
+    }
   /** `entityId` null: the write-back could not even be checked (read failed). */
   | { status: "failed"; entityId: string | null; reason: string };
 
