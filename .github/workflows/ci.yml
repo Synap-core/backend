@@ -4,7 +4,10 @@ on:
   pull_request:
     branches: ["main", "develop"]
   push:
-    branches: ["main", "develop"]
+    # release/** : a release is cut from a branch (a verified main commit plus
+    # chosen fixes) and tagged; CI must gate THAT exact commit. A pull_request
+    # run would test the branch merged into today's main instead.
+    branches: ["main", "develop", "release/**"]
 
 # Cancel in-progress runs for same PR/branch
 concurrency:
