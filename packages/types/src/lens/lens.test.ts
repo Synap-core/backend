@@ -19,6 +19,7 @@ import {
   LENS_SCOPE_FACT_KIND,
   batchHappened,
   capLensRows,
+  lensCapShown,
   encodeLensScope,
   happenedAtRest,
   lensHeaderModel,
@@ -156,13 +157,22 @@ describe("sections and caps", () => {
     for (const c of ATTENTION_CLASSES) expect(LENS_CAPS[c]).toBeGreaterThan(0);
   });
   it("capLensRows counts hidden ITEMS in row units (a session card counts its items)", () => {
-    const rows = Array.from({ length: 5 }, (_, i) => ({ id: i, count: 1 }));
-    rows.push({ id: 5, count: 3 }); // the 6th row: a session card owing 3
+    const rows = Array.from({ length: 6 }, (_, i) => ({ id: i, count: 1 }));
+    rows.push({ id: 6, count: 3 }); // the 7th row: a session card owing 3
     const c = capLensRows(rows, "blocking");
     expect(c.shown).toHaveLength(5);
-    expect(c.hiddenRows).toBe(1);
-    expect(c.hiddenItems).toBe(3);
-    expect(c.total).toBe(8);
+    expect(c.hiddenRows).toBe(2);
+    expect(c.hiddenItems).toBe(4);
+    expect(c.total).toBe(9);
+  });
+  it("a cap never hides exactly ONE row: it is drawn instead of a 'Show all' (critique L P1-3)", () => {
+    const six = Array.from({ length: 6 }, (_, i) => ({ id: i }));
+    expect(capLensRows(six, "happening").shown).toHaveLength(6);
+    expect(capLensRows(six, "happening").hiddenRows).toBe(0);
+    expect(lensCapShown(6, 5)).toBe(6);
+    expect(lensCapShown(7, 5)).toBe(5);
+    expect(lensCapShown(3, 5)).toBe(3);
+    expect(lensCapShown(1, 0)).toBe(0); // a list folded shut stays shut
   });
 });
 
