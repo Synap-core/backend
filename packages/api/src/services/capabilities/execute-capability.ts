@@ -46,7 +46,12 @@ import {
   getWorkspaceMembership,
 } from "@synap/database";
 import { randomUUID } from "crypto";
-import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import {
+  isKnownToolName,
+  nounInSentence,
+  resolveObjectNoun,
+  resolveToolLabel,
+} from "@synap-core/types/vocabulary";
 import {
   capabilityRunReasoning,
   describeEntityVerbRun,
@@ -61,7 +66,8 @@ import {
  * package named because that is the row a reviewer most needs to read at a
  * glance — the marketplace's whole promise is that an install proposes and the
  * human approves, which is meaningless if the queue row does not say WHICH
- * package. Every other verb degrades to its own id rather than to nothing.
+ * package. Every other verb degrades to the tool door's words for its id
+ * (`resolveToolLabel`) rather than to nothing — never to the raw id.
  *
  * The kind noun comes from the vocabulary SSOT (`cell` renders as **Card**,
  * `workflow` as **Automation**) — never a hand-written label map.
@@ -92,7 +98,14 @@ export function describeCapabilityRun(
     if (slug) return `Install package "${slug}"`;
   }
 
-  return `Run ${verbId}`;
+  // Never the raw tool id ("Run fal_generate_image"): the tool door's words.
+  // A known tool is its own verb phrase ("Create entity"); any other reads as
+  // "Run fal generate image". Dots are word breaks here — `humanizeToken`
+  // keeps only the last dotted segment, which would turn `gmail.send` into
+  // "Run send".
+  const tool = verbId.replace(/\./g, "_");
+  const label = resolveToolLabel(tool, "imperative");
+  return isKnownToolName(tool) ? label : `Run ${nounInSentence(label)}`;
 }
 
 import { createLogger } from "@synap-core/core";

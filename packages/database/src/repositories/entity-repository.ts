@@ -582,6 +582,7 @@ export class EntityRepository extends BaseRepository<
         const outerFacetRepo = new FacetRepository(this.db, this.eventRepo);
         await outerFacetRepo.emitAttachCompletedEvent(
           attachedFacet,
+          roleFacetProfile.slug,
           userId,
           data.facetEmitContext
         );

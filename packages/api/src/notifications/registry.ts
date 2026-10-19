@@ -98,6 +98,18 @@ export interface NotificationDef {
   actions?: NotificationActionDef[];
   /** Auto-dismiss after ms. 0 = persistent. */
   ttl?: number;
+  /**
+   * SERVER expiry, in ms. Declared ⇒ `NotificationService.create()` stamps
+   * `expiresAt = now + expiresAfterMs` (unless the producer passes its own),
+   * and the daily `notification-cleanup` worker dismisses the row once it
+   * passes — read or not. Omit ⇒ the row never expires.
+   *
+   * Not `ttl`: no server code reads `ttl` (its finite values are toast-length,
+   * 4–6 s), so stamping it would expire those rows the next day. Declare this
+   * on news that goes stale on its own — a failed update a week later, a
+   * closed session's flag — never on an ask.
+   */
+  expiresAfterMs?: number;
   /** Group notifications sharing the same resolved groupBy field */
   groupBy?: string;
   /**
@@ -198,6 +210,13 @@ export const SESSION_ATTENTION_DEDUPE_WINDOW_MS = 6 * 60 * 60 * 1000;
  * (`NotificationService.create`, the 0281 guard).
  */
 export const NOTIFICATION_REPEAT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How long informational news about a moment that has passed stays in the
+ * bell (`expiresAfterMs`): a week — long enough to be seen after a weekend,
+ * short enough that last month's failed update is not still news.
+ */
+export const STALE_NEWS_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Registry
@@ -855,6 +874,11 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     bodyTemplate: "{{detail}}",
     defaultChannels: ["in_app"],
     ttl: 0,
+    // News, not an ask: the engine already rolled back (or says what state
+    // the pod is in) and nothing waits on the person — it never counts in
+    // needs-you, and it goes stale (a later update supersedes it).
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
   },
   {
     type: "system.capability_update_available",
@@ -1280,6 +1304,11 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ttl: 0,
     groupBy: "sessionId",
     dedupeWindowMs: SESSION_ATTENTION_DEDUPE_WINDOW_MS,
+    // The push stays (above); the COUNT does not: the session is closed, so
+    // nothing waits on the person — news about finished work, never an ask.
+    // Its door still opens the session. It goes stale with the work.
+    needsYou: "informational",
+    expiresAfterMs: STALE_NEWS_EXPIRY_MS,
     actions: [
       {
         id: "view",

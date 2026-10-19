@@ -2,3 +2,29 @@ packages:
   - "apps/*"
   - "packages/*"
   - "marketplaces/*"
+
+# `pnpm audit` exceptions. They live here, not in package.json's `pnpm` field,
+# because each one needs a comment saying why, and JSON has none. Every entry
+# names the dependency path that pulls it in and whether that path is reachable.
+auditConfig:
+  ignoreGhsas:
+    # Added in e48db7e1f (2026-07-10) with no recorded reason. None of the five
+    # is reported by `pnpm audit --prod` on 2026-10-19 (the packages moved on);
+    # kept until someone confirms each can go.
+    - GHSA-7h2j-956f-4vf2
+    - GHSA-3ppc-4f35-3m26
+    - GHSA-7r86-cg39-jmmj
+    - GHSA-23c5-xmqv-rm74
+    - GHSA-c2c7-rcm5-vvqj
+    # braces <=3.0.3, stack-exhaustion DoS on deeply nested patterns
+    # (CVE-2026-93687). No patched version exists (3.0.3 is the latest).
+    # Path: apps/pod-admin > @heroui/theme > tailwindcss@3 > chokidar > braces.
+    # Not reachable: tailwind's file watcher expands our own content globs at
+    # build time; no request input ever reaches braces. 2026-10-19.
+    - GHSA-vfj7-8cjw-p6xm
+    # jsondiffpatch <0.7.6, prototype pollution in the patch APIs
+    # (CVE-2026-8657). Path: packages/ai > ai@4 > jsondiffpatch@0.6.0. The fix
+    # needs ai@5 (a major; ai@4.3.19, the last v4, still pins 0.6.0).
+    # Not reachable: ai@4 uses it only in `ai/rsc` (streamable UI diffs), which
+    # nothing in this repo imports. Follow-up: upgrade ai to v5. 2026-10-19.
+    - GHSA-j4fx-xxwh-2485

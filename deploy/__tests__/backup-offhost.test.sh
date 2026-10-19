@@ -201,6 +201,7 @@ chmod +x "$T/head"; [ "$(uname)" = Darwin ] && cp "$T/head" "$T/bin/head"   # GN
 
 # The backup container's context (docker-compose.yml postgres-backup env).
 ct() { env SYNAP_PG_DIRECT=1 SYNAP_BACKUPS_DIR="$T/backups" SYNAP_STATE_DIR="$T/state" \
+        SYNAP_PG_LIB_DIR="${PG_LIB:-$T/no-pg-lib}" \
         SYNAP_ENV_FILE="$T/deploy/.env" BACKUP_KEEP=5 TMPDIR="$T/tmp" PATH="$T/bin:$PATH" "$@"; }
 mkdir -p "$T/tmp"
 calls_since() { tail -n +"$(( $1 + 1 ))" "$CALLS"; }
@@ -320,7 +321,11 @@ m=$(mark)
 ct FAKE_RESTIC_FAIL=1 sh "$SAFETY" run >"$T/out" 2>&1; rc=$?
 [ "$rc" = 1 ] && [ -s "$T/backups/.push-failed" ] && ! calls_since "$m" | grep -q "^curl" && grep -q "'backup', 'failed'.*restic backup failed" "$RUNS" \
     && ok "restic failure → exit 1, .push-failed, no heartbeat, recorded" || bad "restic fail: rc=$rc"
-ct sh "$SAFETY" run >"$T/out" 2>&1; [ ! -e "$T/backups/.push-failed" ] && ok "next good push clears .push-failed" || bad ".push-failed stuck"
+# Dump dirs are named to the second ($ts-auto) and a failed push keeps its
+# dump: a good run in the SAME second collides with it (mv fails, the run
+# returns early). Real runs are an hour apart; a fast CI runner is not.
+s0="$(date -u +%S)"; while [ "$(date -u +%S)" = "$s0" ]; do sleep 0.1; done
+ct sh "$SAFETY" run >"$T/out" 2>&1; [ ! -e "$T/backups/.push-failed" ] && ok "next good push clears .push-failed" || bad ".push-failed stuck: $(cat "$T/backups/.push-failed" 2>/dev/null) $(cat "$T/out")"
 snap_good="$(ls "$REPO/snaps" | grep -v meta | tail -1)"
 
 echo "── D. drill"

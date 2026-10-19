@@ -406,6 +406,22 @@ export interface NeedsYouAccessRequest {
   from: string;
 }
 
+/** The Inbox's four filters and its triage order — see `./buckets.ts`. */
+export {
+  NEEDS_YOU_BUCKETS,
+  isFailureSignal,
+  needsYouBucketOf,
+  needsYouBuckets,
+  needsYouProposalId,
+  needsYouReasonOf,
+  orderNeedsYouByBlocking,
+  type BucketableSignal,
+  type NeedsYouBucket,
+  type NeedsYouBucketed,
+  type NeedsYouBucketOptions,
+  type NeedsYouBuckets,
+} from "./buckets.js";
+
 /** The needs-you pages' context strip — see `./context.ts`. */
 export {
   NEEDS_YOU_CONTEXT_COPY,

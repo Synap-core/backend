@@ -14,7 +14,9 @@
  */
 
 import {
+  isFailureSignal,
   needsYouCountsLabel,
+  needsYouReasonOf,
   repeatLabel,
   type GroupableSignal,
   type NeedsYouAccessRequest,
@@ -46,7 +48,7 @@ import {
 } from "../events/connection-lines.js";
 import type { ActivityActor, ActivityRow } from "../activity/index.js";
 import { calendarDayIn } from "../activity/heat.js";
-import { FAILURE_NOTIFICATION_TYPES, type AttentionClass } from "./classes.js";
+import type { AttentionClass } from "./classes.js";
 import type { LensSource } from "./scope.js";
 
 /** An object-nav address (the `Signal.target` shape). The host routes it. */
@@ -82,6 +84,13 @@ export interface LensRow {
    * grey prose in the reason slot). Absent = none.
    */
   detail?: string | null;
+  /**
+   * The KIND of ask, as a glyph key (`needsYouReasonOf`: decision · ask ·
+   * review · failure · an owed slot's blocker) — drawn as the row's reason
+   * mark when the list mixes reasons (`lensRowsAnatomy(rows).reason`); the
+   * state keeps the tone. Absent = not a needs-you item row.
+   */
+  reasonKind?: string;
   /** "×N" when the row stands for N identical things, else null. */
   repeat: string | null;
   /** Provenance. Pass through `visibleSource(row, scope)` before drawing it. */
@@ -201,16 +210,8 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   access?: NeedsYouAccessRequest | null;
 }
 
-/** A work-broke notification ({@link FAILURE_NOTIFICATION_TYPES}): a failed run, not an ask. */
-export function isFailureSignal(
-  s: Pick<LensNeedsYouSignal, "kind" | "notificationType">
-): boolean {
-  return (
-    s.kind === "notification" &&
-    s.notificationType != null &&
-    FAILURE_NOTIFICATION_TYPES.has(s.notificationType)
-  );
-}
+/** A work-broke notification: ONE rule, owned by the Inbox buckets (`needs-you/buckets.ts`). */
+export { isFailureSignal };
 
 /** The generic reason the lens rejects as a chip — the row's verb already says it. */
 const GENERIC_BLOCKED_REASON = "decision";
@@ -409,6 +410,7 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       ...(s.kind === "owed-slot" && s.why?.trim()
         ? { detail: s.why.trim() }
         : {}),
+      reasonKind: needsYouReasonOf(s),
       repeat: repeatLabel(s),
       source: row.session
         ? {

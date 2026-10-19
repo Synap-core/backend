@@ -13,6 +13,7 @@ import {
   backupStatusBody,
   checkDataHealth,
   healthStatusFor,
+  readinessFor,
   readRecoveryKitSaved,
   toPublicBackupStatus,
 } from "./pod-data-status.js";
@@ -251,6 +252,38 @@ describe("/health data check", () => {
   });
 });
 
+describe("/health readiness — can a caller use the pod yet?", () => {
+  // Each row rules a wrong rule out:
+  //  - boot still running reads "starting" even when the data check is ok
+  //    (rules out "ready = data answered" — the 10-16 wedge had a stale ok);
+  //  - booted but the users check timed out reads "unknown", never "ready"
+  //    (rules out the status quo: top-level "ok" while hasUsers is null);
+  //  - an EMPTY pod is ready (its alarm is `data` + degraded — rules out
+  //    folding degraded into not-ready, which would hide the alarm behind a
+  //    spinner).
+  it.each([
+    [false, "ok", "starting"],
+    [false, "unknown", "starting"],
+    [true, "unknown", "unknown"],
+    [true, "ok", "ready"],
+    [true, "empty", "ready"],
+  ] as const)("settled=%s data=%s → %s", (settled, data, expected) => {
+    expect(readinessFor({ status: data }, settled)).toBe(expected);
+  });
+  it("a timed-out users check after boot is `unknown` end to end", async () => {
+    const d = await checkDataHealth({
+      stateDir: "/s",
+      now: () => NOW,
+      log: () => {},
+      exists: () => false,
+      timeoutMs: 20,
+      hasUsers: () => new Promise(() => {}),
+    });
+    expect(healthStatusFor(d)).toBe("ok"); // liveness unchanged, by design
+    expect(readinessFor(d, true)).toBe("unknown");
+  });
+});
+
 describe("wiring in apps/api/src/index.ts (source tripwire)", () => {
   // Behaviour above is the unit; this pins that the routes USE it. It reads
   // source text: it cannot see a handler that is registered but shadowed.
@@ -276,6 +309,11 @@ describe("wiring in apps/api/src/index.ts (source tripwire)", () => {
     );
     expect(b).toMatch(/\n\s+data,\n/);
     expect(b).toMatch(/\n\s+authHealth,\n/);
+    // Readiness rides the body from the SAME data check and the boot-hook
+    // flag; HTTP and top-level status stay liveness (consumers gate on them).
+    expect(flat(b)).toContain(
+      flat("readiness: readinessFor(data, haveStartupHooksSettled())")
+    );
     expect(b).toContain('auth: "ory-stack"'); // the stack name keeps its type
     expect(b).not.toMatch(/c\.json\([^)]*,\s*5\d\d\)/); // never a 5xx for data
   });

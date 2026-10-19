@@ -201,3 +201,26 @@ export function healthStatusFor(
     ? "degraded"
     : "ok";
 }
+
+/**
+ * Can a caller USE this pod yet? `status` is liveness and stays "ok" + HTTP 200
+ * while the process serves, so it cannot say "still booting" — and must not
+ * start to: the desktop pod manager, the CLI, compose healthchecks and uptime
+ * monitors gate on the HTTP code, `synap init` fingerprints `status` as
+ * ok|ready|degraded. This is an additive body field instead.
+ *
+ * `starting` — the post-listen boot hooks have not finished (a wedged boot
+ * stays here; the 10-16 desktop wedge read "ok" forever). `unknown` — booted,
+ * but the data check could not answer (users check failed or timed out).
+ * `ready` — booted and the data check answered; an `empty` pod is ready (its
+ * alarm is `data` + "degraded", not readiness).
+ */
+export type PodReadiness = "ready" | "starting" | "unknown";
+
+export function readinessFor(
+  data: Pick<DataHealth, "status">,
+  startupSettled: boolean
+): PodReadiness {
+  if (!startupSettled) return "starting";
+  return data.status === "unknown" ? "unknown" : "ready";
+}

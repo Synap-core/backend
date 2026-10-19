@@ -17,7 +17,7 @@
  */
 
 import { z } from "zod";
-import { db, eq, playbookRuns } from "@synap/database";
+import { db, eq, focusSessions, playbookRuns } from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { applyRunCapture } from "../../../services/runs/apply-run-capture.js";
 import { reviveSessionForWrite } from "../../../services/focus-sessions/revive-stale-session.js";
@@ -29,7 +29,7 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import {
   hasScope,
   logger,
-  resolveActingContext,
+  resolveRowActingContext,
   type HubHono,
   httpStatusForTrpcError,
   requireUuidParam,
@@ -77,6 +77,27 @@ const CaptureResponseSchema = z.object({
   status: z.string(),
   proposalId: z.string().nullable(),
 });
+
+/**
+ * The row `resolveRowActingContext` authorizes a run against. A run's OWNER is
+ * its session's owner — the identity `cancelRun` floors on — never `createdBy`,
+ * which is the agent attribution (`agentUserId ?? userId`). Every insert sets a
+ * session; a run without one falls back to `createdBy`. Only read for a
+ * pod-personal run: a workspace run is authorized by membership.
+ */
+async function runOwnerRow(run: {
+  workspaceId: string | null;
+  sessionId: string | null;
+  createdBy: string;
+}): Promise<{ workspaceId: string | null; userId: string | null }> {
+  if (run.workspaceId) return { workspaceId: run.workspaceId, userId: null };
+  if (!run.sessionId) return { workspaceId: null, userId: run.createdBy };
+  const session = await db.query.focusSessions.findFirst({
+    where: eq(focusSessions.id, run.sessionId),
+    columns: { userId: true },
+  });
+  return { workspaceId: null, userId: session?.userId ?? null };
+}
 
 export function registerRunsRoutes(app: HubHono): void {
   // ── GET /runs — the unified cross-flow run feed (read door) ────────────────
@@ -272,8 +293,8 @@ export function registerRunsRoutes(app: HubHono): void {
         where: eq(playbookRuns.id, runId),
       });
       if (!run) return c.json({ error: "Run not found" }, 404);
-      const acting = await resolveActingContext(c, {
-        workspaceId: run.workspaceId ?? undefined,
+      const acting = await resolveRowActingContext(c, await runOwnerRow(run), {
+        notFound: "Run not found",
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       if (run.workspaceId && run.workspaceId !== acting.workspaceId) {
@@ -370,10 +391,11 @@ export function registerRunsRoutes(app: HubHono): void {
 
       // Resolve acting context within the run's OWN workspace — this both
       // verifies membership and closes the cross-tenant write (an agent can only
-      // capture into a run whose workspace it belongs to).
-      const acting = await resolveActingContext(c, {
+      // capture into a run whose workspace it belongs to). A pod-personal run
+      // is floored on its owner instead.
+      const acting = await resolveRowActingContext(c, await runOwnerRow(run), {
+        notFound: "Run not found",
         userId: body.agentUserId,
-        workspaceId: run.workspaceId ?? undefined,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       if (run.workspaceId && run.workspaceId !== acting.workspaceId) {

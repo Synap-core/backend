@@ -364,3 +364,74 @@ describe("a role attach is announced once, from every path (R1)", () => {
     expect(fires({ ...triggerConfig, includeMergeOrigin: true })).toBe(true);
   }, 60_000);
 });
+
+/**
+ * BOOT WEDGE (fresh desktop pod, 2026-10-16). The startup backfill
+ * (`backfillAllWorkspacesTeamPersonBridge` → `backfillTeamPersonBridge`)
+ * attaches `team-member` INSIDE `ensureTeamPersonForMember`'s transaction, so
+ * the door's announcement runs inside it too. The emitter used to `await` a
+ * slug lookup on the GLOBAL `db` — another connection — and a single-session
+ * database never serves another connection while a transaction is open: the
+ * desktop pod's pglite-socket serves only the transaction's owner, and
+ * in-process PGlite (here) queues every non-transaction query behind the
+ * transaction mutex. The attach waited on the read, the read waited on the
+ * attach's transaction: boot hung forever. The slug now rides the event.
+ *
+ * Driven through the REAL boot door on a REAL single-session engine, with the
+ * REAL boot-wired emitter and the global `db` pointed at the SAME engine.
+ * Cannot see: the socket shim itself, a postgres.js pool, or the
+ * CONNECT_TIMEOUT cascade new connections hit once the shim is wedged — it
+ * proves no awaited read leaves the transaction on this path, which is the
+ * cause; the shim's affinity is the amplifier.
+ */
+describe("the boot team-person backfill completes on a single-session engine", () => {
+  let client: PGlite;
+  let database: Database;
+  const OWNER = "owner-boot";
+  const WS = randomUUID();
+
+  beforeAll(async () => {
+    ({ client, database } = await freshDb());
+    await client.query(
+      `insert into users (id, email, name, user_type) values ($1, 'owner@boot.test', 'Owner Boot', 'human')`,
+      [OWNER]
+    );
+    await client.query(
+      `insert into workspaces (id, name, owner_id) values ($1, 'Personal', $2)`,
+      [WS, OWNER]
+    );
+    await client.query(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+      [randomUUID(), WS, OWNER]
+    );
+    await client.query(
+      `insert into profiles (id, slug, display_name, profile_kind, entity_scope, user_id, scope, applicable_kinds)
+       values ($1, 'person', 'Person', 'kind', 'pod', $3, 'system', '{}'),
+              ($2, 'team-member', 'Team member', 'role', 'workspace', $3, 'system', '{person}')`,
+      [randomUUID(), randomUUID(), OWNER]
+    );
+    const { registerFacetAttachEmitter } = await import("./helpers.js");
+    registerFacetAttachEmitter();
+  }, 120_000);
+
+  beforeEach(() => vi.mocked(emitSideEffects).mockClear());
+
+  it("attaches team-member inside the bridge transaction and announces it, without wedging", async () => {
+    const { backfillTeamPersonBridge } = await import("@synap/database");
+    const WEDGED = Symbol("wedged");
+    // A deadlock never resolves; any bound discriminates. Generous for a
+    // loaded machine — the healthy run takes well under a second.
+    const outcome = await Promise.race([
+      backfillTeamPersonBridge(database as never, {
+        workspaceId: WS,
+        ownerUserId: OWNER,
+      }),
+      new Promise<typeof WEDGED>((r) => setTimeout(() => r(WEDGED), 20_000)),
+    ]);
+    expect(outcome).not.toBe(WEDGED);
+    expect(outcome).toMatchObject({ created: 1, errors: 0 });
+    await settle();
+    expect(attaches()).toHaveLength(1);
+    expect(attaches()[0]!.data).toMatchObject({ profileSlug: "team-member" });
+  }, 60_000);
+});

@@ -31,8 +31,18 @@ vi.mock("@synap/database", async (importOriginal) => {
         playbookRuns: {
           findFirst: async () => {
             h.reads += 1;
-            return { id: RUN, workspaceId: null };
+            return {
+              id: RUN,
+              workspaceId: null,
+              sessionId: SESSION,
+              createdBy: USER,
+            };
           },
+        },
+        // A pod-personal run is floored on its SESSION's owner at the door
+        // (`resolveRowActingContext`) — here, the caller's own session.
+        focusSessions: {
+          findFirst: async () => ({ userId: USER }),
         },
       },
     },
@@ -44,6 +54,7 @@ import type { HubHono, HubVariables } from "./_shared.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const RUN = "22222222-2222-4222-8222-222222222222";
+const SESSION = "44444444-4444-4444-8444-444444444444";
 
 function buildApp(vars: Record<string, unknown>): HubHono {
   const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();

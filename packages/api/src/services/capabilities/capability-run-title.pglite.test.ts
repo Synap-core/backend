@@ -112,7 +112,7 @@ describe("write time — the stored summary names the action on the object", () 
 
   it("any other verb keeps its own title", () => {
     expect(describeCapabilityRun("gmail_send", { to: "a@b.c" })).toBe(
-      "Run gmail_send"
+      "Run gmail send"
     );
   });
 });
