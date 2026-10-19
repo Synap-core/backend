@@ -495,6 +495,19 @@ function labelFor(
   if (via === "relations" || via === "property") {
     return resolveConnectionLabel(edgeType, direction, defs.get(edgeType));
   }
+  if (via === "session") {
+    // focus_sessions.subjectEntityId: the session is ABOUT the focus. The pod
+    // carries no edge type for it — `edgeType` arrives as the session's own
+    // title (relations.ts `label`), so humanizing it repeated the row's name.
+    // The tie is the `about` link's, read from the focus's side.
+    return {
+      label: resolveLineageEdgeLabel(
+        "about",
+        direction === "incoming" ? "incoming" : "outgoing"
+      ),
+      reversed: false,
+    };
+  }
   if (via === "governed") {
     // The proposal that touched it: its edgeType is the proposal TYPE.
     return { label: resolveProposalKindLabel(edgeType), reversed: false };
@@ -519,6 +532,27 @@ function labelFor(
     label: resolveLineageEdgeLabel(edgeType, "outgoing"),
     reversed: false,
   };
+}
+
+/**
+ * The words for ONE edge, read from the focus's side — the same label the
+ * zones carry, for a host that draws edges itself (the browser graph canvas).
+ * An edge with no type reads "Also linked", never an empty or humanized blank;
+ * a `session` edge carries no type at all (see {@link labelFor}).
+ */
+export function resolveNodeEdgeLabel(
+  edge: {
+    edgeType?: string | null;
+    direction: ConnectionDirection;
+    via?: string | null;
+  },
+  defs: ReadonlyMap<string, ConnectionRelationType> = new Map()
+): { label: string; reversed: boolean } {
+  const edgeType = edge.edgeType?.trim() ?? "";
+  const via = edge.via ?? null;
+  return edgeType || via === "session"
+    ? labelFor(via, edgeType, edge.direction, defs)
+    : { label: "Also linked", reversed: false };
 }
 
 /**
@@ -578,9 +612,10 @@ export function deriveNodeNeighbourhood(
       via,
     });
     const subtype = n.subtype?.trim() || null;
-    const { label, reversed } = edgeType
-      ? labelFor(via, edgeType, n.direction, defs)
-      : { label: "Also linked", reversed: false };
+    const { label, reversed } = resolveNodeEdgeLabel(
+      { edgeType, direction: n.direction, via },
+      defs
+    );
     const item: NodeNeighbourItem = {
       id: n.id,
       kind: n.kind === "entity" && subtype ? subtype : n.kind,
