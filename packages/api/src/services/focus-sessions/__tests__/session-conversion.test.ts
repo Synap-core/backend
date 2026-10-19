@@ -149,14 +149,10 @@ vi.mock("@synap/database", async (importOriginal) => {
       transaction: vi.fn(
         async (cb: (tx: ReturnType<typeof makeTx>) => unknown) => {
           const tx = makeTx();
-          try {
-            const result = await cb(tx);
-            tx.__commit();
-            return result;
-          } catch (e) {
-            // Rollback: staged writes are simply never applied.
-            throw e;
-          }
+          // Rollback = a throw from cb: staged writes are simply never applied.
+          const result = await cb(tx);
+          tx.__commit();
+          return result;
         }
       ),
     },

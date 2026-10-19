@@ -36,7 +36,7 @@ describe("playbookStageSchema — gate", () => {
   });
 
   it("rejects a proposalType with no executor behind it", () => {
-    // Not a taste call: an unregistered type falls to the `*​/*` catch-all on
+    // Not a taste call: an unregistered type falls to the `*/*` catch-all on
     // approve, which flips the row green without resuming the paused session.
     expect(
       playbookStageSchema.safeParse({

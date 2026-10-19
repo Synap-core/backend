@@ -16,7 +16,7 @@ import type { Context } from "hono";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
 import {
   playbookDefinitionSchema,
-  playbookExpectedOutputSchema,
+  type playbookExpectedOutputSchema,
 } from "../../../schemas/playbook-definition.js";
 import {
   createPlaybookDoor,

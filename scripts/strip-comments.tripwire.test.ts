@@ -161,7 +161,7 @@ describe("stripComments — hand cases (byte copy of the synap-app scanner)", ()
     expect(out).not.toContain("/* c */");
   });
 
-  it("JSX text: a glob `src/**\/*.tsx` opens no comment (a block opener glued to `*`)", () => {
+  it("JSX text: a glob `src/**/*.tsx` opens no comment (a block opener glued to `*`)", () => {
     const src = [
       "export const Help = () => (",
       "  <p>Matches <code>src/**/*.tsx</code> files</p>",

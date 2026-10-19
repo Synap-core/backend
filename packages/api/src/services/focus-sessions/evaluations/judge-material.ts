@@ -25,9 +25,11 @@
  *
  * Budget: every produced item and the room get a FAIR share (water-filling —
  * a short section keeps all of its text, what it leaves is re-split among the
- * rest), so a long first document can no longer starve a later one. A clipped
- * document keeps its head AND its tail (conclusions and logs land at the
- * end); a clipped room keeps its newest messages. Every cut says how much it
+ * rest), so a long first document can no longer starve a later one. Inside the
+ * room, its messages share the room's part the same way, so one long message
+ * in a quiet room reaches the judge whole; a crowded room drops its OLDEST
+ * messages first. A clipped document or message keeps its head AND its tail
+ * (conclusions and logs land at the end). Every cut says how much it
  * dropped (`[clipped: N chars omitted]`), and a material with ANY cut opens
  * with a "CLIPPED MATERIAL" note — a criterion is never judged on a truncated
  * view without the judge being told (the IS judge prompt then prefers
@@ -69,7 +71,13 @@ const REPORT_MAX = 1200;
 const EARLIER_MAX = 1200;
 /** How many of the room's latest messages the judge reads. */
 export const ROOM_MESSAGES_N = 20;
-const ROOM_MESSAGE_MAX = 800;
+/**
+ * The smallest slice of a long room message worth showing. When the room's
+ * fair split would cut a message below it, the oldest messages are dropped
+ * whole instead, so the judge reads the newest ones rather than twenty
+ * fragments.
+ */
+const ROOM_MESSAGE_MIN = 400;
 /** The marker a cut leaves behind, naming how much it dropped. */
 const clipMark = (omitted: number) => `…[clipped: ${omitted} chars omitted]…`;
 /** The header note of a material with any cut in it. */
@@ -224,12 +232,7 @@ export async function loadProducedMaterial(params: {
  * that did not happen, and the material says so.
  */
 export type RoomMaterial =
-  | {
-      status: "ok";
-      messages: Array<{ author: string; text: string }>;
-      /** How many of `messages` were cut to `ROOM_MESSAGE_MAX` on read. */
-      clippedMessages?: number;
-    }
+  | { status: "ok"; messages: Array<{ author: string; text: string }> }
   | { status: "refused" }
   | { status: "failed"; reason: string };
 
@@ -238,7 +241,8 @@ export type RoomMaterial =
  * (`queryChannelMessages` with `userId`: the canonical channel read floor,
  * plus the deleted / ephemeral filters). A session's `channelId` is a pointer,
  * not a grant — the room is read only when the owner can read that channel.
- * System / bot notices are noise, not evidence, and are left out.
+ * System / bot notices are noise, not evidence, and are left out. Messages are
+ * read WHOLE: what fits is the builder's call, made against the whole budget.
  */
 export async function loadRoomMaterial(params: {
   channelId: string | null;
@@ -261,15 +265,11 @@ export async function loadRoomMaterial(params: {
         MessageAuthorType.AI_AGENT,
       ]),
     });
-    const clippedMessages = rows.filter(
-      (r) => r.content.length > ROOM_MESSAGE_MAX
-    ).length;
     return {
       status: "ok",
-      ...(clippedMessages > 0 ? { clippedMessages } : {}),
       messages: rows.reverse().map((r) => ({
         author: r.authorType === MessageAuthorType.HUMAN ? "person" : "agent",
-        text: clip(r.content, ROOM_MESSAGE_MAX),
+        text: r.content,
       })),
     };
   } catch (err) {
@@ -284,19 +284,14 @@ export async function loadRoomMaterial(params: {
 
 /**
  * ≤ `max` chars. `ends` keeps the head and the tail (a document's verdict and
- * logs are often at its end); `tail` keeps only the end (the newest messages).
+ * logs are often at its end); `head` keeps only the start.
  */
-function clip(
-  s: string,
-  max: number,
-  keep: "ends" | "tail" | "head" = "ends"
-): string {
+function clip(s: string, max: number, keep: "ends" | "head" = "ends"): string {
   if (s.length <= max) return s;
   // Sized for the widest count (the whole string), so the real mark fits.
   const room = max - clipMark(s.length).length;
   if (room <= 0) return max > 0 ? clipMark(s.length).slice(0, max) : "";
   const mark = clipMark(s.length - room);
-  if (keep === "tail") return `${mark}${s.slice(s.length - room)}`;
   if (keep === "head") return `${s.slice(0, room)}${mark}`;
   const head = Math.ceil(room / 2);
   return `${s.slice(0, head)}${mark}${s.slice(s.length - (room - head))}`;
@@ -321,6 +316,54 @@ export function fairShares(
     left -= share;
   });
   return shares;
+}
+
+/**
+ * Pure: the room's lines (oldest → newest) in ≤ `budget` chars. Every kept
+ * message gets a fair share of the budget ({@link fairShares}); while a share
+ * would cut a message below {@link ROOM_MESSAGE_MIN}, the OLDEST message is
+ * dropped whole and the room opens with one mark naming what that cost.
+ * `cut` = anything was dropped or clipped.
+ */
+function packRoom(
+  messages: ReadonlyArray<{ author: string; text: string }>,
+  budget: number
+): { text: string; cut: boolean } {
+  const lines = messages.map((m) => ({
+    prefix: `[${m.author}] `,
+    text: m.text,
+  }));
+  let dropped = 0;
+  for (let from = 0; from < lines.length; from++) {
+    const kept = lines.slice(from);
+    const lead = from > 0 ? clipMark(dropped) : "";
+    // Exactly what `join("\n")` below adds around the message texts.
+    const overhead =
+      kept.reduce((n, l) => n + l.prefix.length, 0) +
+      kept.length -
+      1 +
+      (lead ? lead.length + 1 : 0);
+    const shares = fairShares(
+      kept.map((l) => l.text.length),
+      budget - overhead
+    );
+    const readable = kept.every(
+      (l, i) => shares[i]! >= l.text.length || shares[i]! >= ROOM_MESSAGE_MIN
+    );
+    if (readable || kept.length === 1) {
+      return {
+        text: [
+          lead,
+          ...kept.map((l, i) => `${l.prefix}${clip(l.text, shares[i]!)}`),
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        cut: from > 0 || kept.some((l, i) => l.text.length > shares[i]!),
+      };
+    }
+    dropped += lines[from]!.prefix.length + lines[from]!.text.length + 1;
+  }
+  return { text: "", cut: false };
 }
 
 /**
@@ -420,12 +463,14 @@ export function buildJudgeMaterial(
           ),
         ].join("\n")
       : "";
-    const roomPart = roomText
-      ? `${roomHeading}\n${clip(roomText, shares[produced.length]!, "tail")}`
+    const packed =
+      room.status === "ok"
+        ? packRoom(room.messages, shares[produced.length]!)
+        : { text: "", cut: false };
+    const roomPart = packed.text
+      ? `${roomHeading}\n${packed.text}`
       : roomHeading;
-    const roomCut =
-      roomText.length > shares[produced.length]! ||
-      (room.status === "ok" && (room.clippedMessages ?? 0) > 0);
+    const roomCut = packed.cut;
     return {
       body: [...head, producedPart, roomPart, earlier]
         .filter(Boolean)

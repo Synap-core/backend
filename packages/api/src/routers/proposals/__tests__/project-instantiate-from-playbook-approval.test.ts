@@ -2,7 +2,7 @@
  * `project/instantiate_from_playbook` — the APPROVAL HALF.
  *
  * A governed write door with no approve-executor is a defect this codebase has
- * shipped three times: the proposal sits pending, approval hits the `*​/*`
+ * shipped three times: the proposal sits pending, approval hits the `*\/*`
  * catch-all, and NOTHING happens while the reviewer sees success. This file
  * proves the executor exists and actually applies.
  *

@@ -5,11 +5,7 @@
 export type InviteScope = "workspace" | "pod";
 
 export type InviteStatus =
-  | "pending"
-  | "accepted"
-  | "rejected"
-  | "expired"
-  | "revoked";
+  "pending" | "accepted" | "rejected" | "expired" | "revoked";
 
 export interface InviteSummary {
   id: string;

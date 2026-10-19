@@ -83,12 +83,23 @@ beforeAll(async () => {
   );
   await q(
     `insert into entities (id, user_id, workspace_id, type, title) values ($1,$4,$5,'lead','Acme Corp'),($2,$4,$5,'lead','Beta Ltd'),($3,$6,$7,'lead',$8)`,
-    [ACME, BETA, HIDDEN_LEAD, VIEWER, WS_SEEN, OTHER, WS_HIDDEN, HIDDEN_LEAD_NAME]
+    [
+      ACME,
+      BETA,
+      HIDDEN_LEAD,
+      VIEWER,
+      WS_SEEN,
+      OTHER,
+      WS_HIDDEN,
+      HIDDEN_LEAD_NAME,
+    ]
   );
 });
 
-
-function runRow(payload: Record<string, unknown>, envelope: Record<string, unknown> = {}) {
+function runRow(
+  payload: Record<string, unknown>,
+  envelope: Record<string, unknown> = {}
+) {
   const now = new Date();
   return {
     id: randomUUID(),
@@ -144,7 +155,9 @@ describe("a rule's run on a playbook reads as the session it starts", () => {
     expect(out.review.summary).toBe("Qualify a lead · Acme Corp");
     expect(out.subjectName).toBe("Acme Corp");
     expect(out.subjectKind).toBe("lead");
-    expect(out.subjects).toEqual([{ id: ACME, name: "Acme Corp", kind: "lead" }]);
+    expect(out.subjects).toEqual([
+      { id: ACME, name: "Acme Corp", kind: "lead" },
+    ]);
     expect(out.automationName).toBe("New lead → qualify");
     expect(out.automationId).toBe(RULE);
     expect(out.playbookName).toBe("Qualify a lead");
@@ -178,7 +191,10 @@ describe("the rule behind a proposal and the pod's own words", () => {
       [run, RULE, WS_SEEN]
     );
     const out = await enrich(
-      runRow({ subjectId: ACME }, { automationId: undefined, automationRunId: run })
+      runRow(
+        { subjectId: ACME },
+        { automationId: undefined, automationRunId: run }
+      )
     );
     expect(out.automationId).toBe(RULE);
     expect(out.automationRunId).toBe(run);

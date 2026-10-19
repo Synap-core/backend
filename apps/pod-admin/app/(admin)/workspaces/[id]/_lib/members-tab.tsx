@@ -48,7 +48,7 @@ function memberInitial(m: Member): string {
 function roleBadgeClass(role: string): string {
   if (role === "owner") return "bg-primary/10 text-primary ring-primary/20";
   if (role === "admin") return "bg-warning/10 text-warning ring-warning/20";
-  return "bg-foreground/[0.06] text-foreground/55 ring-foreground/10";
+  return "bg-foreground/[0.06] text-foreground/65 ring-foreground/10";
 }
 
 export function MembersTab({ workspaceId }: { workspaceId: string }) {
@@ -126,7 +126,7 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
                     {m.user.name ?? m.user.email ?? m.userId}
                   </span>
                   {m.user.name && m.user.email ? (
-                    <span className="truncate font-mono text-[10.5px] text-foreground/40">
+                    <span className="truncate font-mono text-[10.5px] text-foreground/65">
                       {m.user.email}
                     </span>
                   ) : null}

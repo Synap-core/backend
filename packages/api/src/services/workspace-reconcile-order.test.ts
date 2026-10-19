@@ -24,9 +24,7 @@ import {
 } from "./workspace-reconcile-order.js";
 
 /** Builds a lookup from a plain slug→deps map. Keyed by meta.slug, like the real one. */
-function lookupFrom(
-  graph: Record<string, string[]>
-): TemplateLookup {
+function lookupFrom(graph: Record<string, string[]>): TemplateLookup {
   const map = new Map<string, TemplateForOrdering>(
     Object.entries(graph).map(([slug, deps]) => [
       slug,
@@ -159,13 +157,19 @@ describe("orderWorkspacesByTemplateDependencies", () => {
     // entirely and leave the rows in input order.
     const lookup: TemplateLookup = (slug) => {
       if (slug === "alias-subtype")
-        return { meta: { slug: "real-consumer" }, dependencies: [{ slug: "base" }] };
+        return {
+          meta: { slug: "real-consumer" },
+          dependencies: [{ slug: "base" }],
+        };
       if (slug === "base") return { meta: { slug: "base" }, dependencies: [] };
       return undefined;
     };
 
     const ordered = orderWorkspacesByTemplateDependencies(
-      [{ id: "consumer", subtype: "alias-subtype" }, { id: "base", subtype: "base" }],
+      [
+        { id: "consumer", subtype: "alias-subtype" },
+        { id: "base", subtype: "base" },
+      ],
       lookup
     );
 
@@ -173,9 +177,8 @@ describe("orderWorkspacesByTemplateDependencies", () => {
   });
 
   it("(4b) REAL installed templates: the live foundation consumers sort deps-first", async () => {
-    const { getWorkspaceTemplate, WORKSPACE_TEMPLATES } = await import(
-      "@synap-core/workspace-templates"
-    );
+    const { getWorkspaceTemplate, WORKSPACE_TEMPLATES } =
+      await import("@synap-core/workspace-templates");
 
     // Pin the real graph this sort must handle, so a template change that alters
     // it surfaces here rather than on a live pod boot.
@@ -201,13 +204,18 @@ describe("orderWorkspacesByTemplateDependencies", () => {
     // stamped subtype `operations` resolves to the OPERATIONS template — never to
     // `grants`. The sort faithfully orders what the lookup returns; it does not
     // and must not second-guess which template a row belongs to.
-    expect(WORKSPACE_TEMPLATES["grants"]?.workspace?.subtype).toBe("operations");
+    expect(WORKSPACE_TEMPLATES["grants"]?.workspace?.subtype).toBe(
+      "operations"
+    );
     expect(getWorkspaceTemplate("operations")?.meta.slug).toBe("operations");
 
     // operations declares no deps → an operations row is unconstrained, and a
     // grants-subtype row simply never enters the graph as `grants`.
     const opsOrdered = orderWorkspacesByTemplateDependencies(
-      [{ id: "w-ops", subtype: "operations" }, { id: "w-found", subtype: "foundation" }],
+      [
+        { id: "w-ops", subtype: "operations" },
+        { id: "w-found", subtype: "foundation" },
+      ],
       getWorkspaceTemplate
     );
     expect(opsOrdered).toHaveLength(2);

@@ -98,7 +98,9 @@ async function writeCloudTrust(mode: CloudTrustMode): Promise<void> {
       })
       .where(eq(podSettings.id, existing.id));
   } else {
-    await db.insert(podSettings).values({ settings: { accountRecovery: value } });
+    await db
+      .insert(podSettings)
+      .values({ settings: { accountRecovery: value } });
   }
 }
 
@@ -203,7 +205,10 @@ export async function audit(entry: {
     });
   } catch (err) {
     logger.warn(
-      { err: err instanceof Error ? err.message : String(err), change: entry.change },
+      {
+        err: err instanceof Error ? err.message : String(err),
+        change: entry.change,
+      },
       "[account-recovery] audit append failed"
     );
   }

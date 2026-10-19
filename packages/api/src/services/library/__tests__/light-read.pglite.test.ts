@@ -92,6 +92,7 @@ import { LibraryActionError, runLibraryAction } from "../run-action.js";
 import type { SubmitCaptureGraphInput } from "../../capture-agent/submit-capture-graph.js";
 import { keepLibraryPageHtml, readLibraryPageMeta } from "../page-html.js";
 import { scoreGroupSuggestions } from "../suggest-groups.js";
+import { libraryCancelReadWith } from "../readers.js";
 import { toLibraryItemView } from "../read-model.js";
 import { stageImportItems } from "../../imports/stage.js";
 import type { ImportSessionRow } from "../../imports/session.js";
@@ -1894,5 +1895,631 @@ describe("group suggestions", () => {
     expect(scoreGroupSuggestions("Garden tomatoes", groups)).toEqual([
       { groupId: "g", score: 5 },
     ]);
+  });
+});
+
+describe('the consent a "Read with X" tap gives ENDS (7 days) — never run after', () => {
+  const DAY = 86_400_000;
+  const held = (at: Date, heldFrom = "needs_file") => ({
+    status: "over_budget" as const,
+    suggestedActions: [],
+    requestedReader: APIFY,
+    requestedAt: at.toISOString(),
+    heldFrom,
+  });
+
+  it("the sweep's job finds an ENDED consent: runs nothing, forgets it, the item waits for a reader again", async () => {
+    const ig = await stageLink(IG, {}, held(new Date(NOW.getTime() - 8 * DAY)));
+    const { deps, calls } = makeDeps({ readers: async () => [APIFY_OFFER] });
+    expect(await read(ig, deps)).toEqual({ itemId: ig, status: "skipped" });
+    expect(calls.readUrl).toBe(0);
+    const r = (await readOf(ig))!;
+    expect(r.status).toBe("needs_file");
+    expect(r).not.toHaveProperty("requestedReader");
+    expect(r).not.toHaveProperty("requestedAt");
+    expect(calls.notified.map((n) => n.itemId)).toEqual([ig]);
+  });
+
+  it("a consent with no date is never run (a bill needs a dated consent)", async () => {
+    const ig = await stageLink(
+      IG,
+      {},
+      {
+        status: "over_budget",
+        suggestedActions: [],
+        requestedReader: APIFY,
+      }
+    );
+    const { deps, calls } = makeDeps({ readers: async () => [APIFY_OFFER] });
+    expect(await read(ig, deps)).toMatchObject({ status: "skipped" });
+    expect(calls.readUrl).toBe(0);
+    expect((await readOf(ig))!.status).toBe("needs_file");
+  });
+
+  it("a LIVE consent runs; a retry keeps the TAP's date (the pod never renews it)", async () => {
+    const tapped = new Date(NOW.getTime() - 6 * DAY);
+    const ig = await stageLink(IG, {}, held(tapped, "unreadable"));
+    // Still over budget: it waits again, with the same consent and heldFrom.
+    const over = makeDeps({ perDay: 0, readers: async () => [APIFY_OFFER] });
+    expect(await read(ig, over.deps)).toMatchObject({ status: "over_budget" });
+    expect((await readOf(ig))!).toMatchObject({
+      requestedReader: APIFY,
+      requestedAt: tapped.toISOString(),
+      heldFrom: "unreadable",
+    });
+    // A fresh tap dates a new consent.
+    await read(ig, over.deps, { reader: APIFY });
+    expect((await readOf(ig))!.requestedAt).toBe(NOW.toISOString());
+  });
+
+  it("the sweep forgets ended consents BEFORE picking: an ended one is never queued, a live one is", async () => {
+    const now = Date.now();
+    const ended = await stageItem({
+      item: { source: { kind: "url", url: "https://www.instagram.com/p/e" } },
+      ageMinutes: 30,
+      read: held(new Date(now - 8 * DAY)),
+    });
+    const live = await stageItem({
+      item: { source: { kind: "url", url: "https://www.instagram.com/p/l" } },
+      ageMinutes: 30,
+      read: held(new Date(now - 1 * DAY)),
+    });
+    const sent: string[] = [];
+    const send = async (_q: string, data: { itemId: string }) =>
+      void sent.push(data.itemId);
+    const res = await sweepLibraryLightReads({
+      database: db as never,
+      send,
+      perDay: 5,
+    });
+    expect(sent).toEqual([live]);
+    expect(res.consentsEnded).toBe(1);
+    expect((await readOf(ended))!).toMatchObject({ status: "needs_file" });
+    expect((await readOf(ended))!).not.toHaveProperty("requestedReader");
+    expect((await readOf(live))!.requestedReader).toBe(APIFY);
+    // The days are a knob: with 1 day the live one ends too.
+    sent.length = 0;
+    await sweepLibraryLightReads({
+      database: db as never,
+      send,
+      perDay: 5,
+      consentDays: 1,
+    });
+    expect(sent).toEqual([]);
+    expect((await readOf(live))!.status).toBe("needs_file");
+  });
+});
+
+describe('"Get the pictures" (missingMedia): a re-read KEEPS the read, adds media', () => {
+  it("the read's media is copied; its text, summary and reader stay; no speech-to-text", async () => {
+    const ig = await stageLink(
+      IG,
+      {},
+      {
+        status: "read",
+        summary: "the kept summary",
+        suggestedActions: [],
+        textKey: "kept/text",
+        reader: STAMP("builtin:article"),
+      }
+    );
+    h.objects.set("kept/text", Buffer.from("the kept text"));
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (url, opts) => {
+        calls.readOpts.push(opts);
+        return doorRead(url, {
+          via: APIFY_STAMP,
+          text: "a NEW caption",
+          media: [
+            { url: "https://cdn.ig.test/new.jpg", kind: "image", order: 0 },
+            { url: "https://cdn.ig.test/new.mp4", kind: "video", order: 1 },
+          ],
+        });
+      },
+    });
+    deps.copyMedia = recordingCopy(calls);
+    expect(
+      await read(ig, deps, { reader: APIFY, force: true, keepRead: true })
+    ).toMatchObject({ status: "read" });
+    expect(calls.copied).toEqual([
+      {
+        itemId: ig,
+        urls: ["https://cdn.ig.test/new.jpg", "https://cdn.ig.test/new.mp4"],
+      },
+    ]);
+    expect(calls.stt).toEqual([]);
+    expect(calls.summarize).toBe(0);
+    const r = (await readOf(ig))!;
+    expect(r).toMatchObject({
+      status: "read",
+      summary: "the kept summary",
+      textKey: "kept/text",
+      reader: { id: "builtin:article" },
+    });
+    expect(h.objects.get("kept/text")!.toString()).toBe("the kept text");
+  });
+
+  it("an item with no read yet is READ by it (nothing to keep)", async () => {
+    const ig = await stageLink(IG);
+    const { deps } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (url) => doorRead(url, { via: APIFY_STAMP }),
+      summarize: async () => null,
+    });
+    expect(
+      await read(ig, deps, { reader: APIFY, force: true, keepRead: true })
+    ).toMatchObject({ status: "read" });
+    expect((await readOf(ig))!.reader).toMatchObject({ id: APIFY });
+  });
+});
+
+describe("withVideo reaches the reader door only with an explicit reader", () => {
+  it("passed with the reader; never on an automatic read", async () => {
+    const ig = await stageLink("https://www.tiktok.com/@a/video/1");
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      summarize: async () => null,
+    });
+    await read(ig, deps, { reader: APIFY, withVideo: true });
+    await read(ig, deps, { force: true, withVideo: true });
+    expect(calls.readOpts).toEqual([
+      { reader: APIFY, allowBilled: true, interactive: true, withVideo: true },
+      { allowBilled: false },
+    ]);
+  });
+});
+
+describe("the queue carries keepRead / withVideo for an explicit reader only", () => {
+  it("in the payload with a reader; dropped without one", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const send = async (_q: string, data: Record<string, unknown>) =>
+      void sent.push(data);
+    await enqueueLibraryLightRead(
+      [
+        {
+          userId: USER,
+          itemId: "a",
+          reader: APIFY,
+          force: true,
+          keepRead: true,
+          withVideo: true,
+        },
+        { userId: USER, itemId: "b", keepRead: true, withVideo: true },
+      ],
+      send as never
+    );
+    expect(sent).toEqual([
+      {
+        userId: USER,
+        itemId: "a",
+        force: true,
+        reader: APIFY,
+        keepRead: true,
+        withVideo: true,
+      },
+      { userId: USER, itemId: "b" },
+    ]);
+  });
+});
+
+describe("the sweep's read of a held consent runs with the person's \"with video\" choice", () => {
+  const TT = "https://www.tiktok.com/@a/video/7";
+  const held = (withVideo: boolean, at = NOW) => ({
+    status: "over_budget" as const,
+    suggestedActions: [],
+    requestedReader: APIFY,
+    requestedAt: at.toISOString(),
+    heldFrom: "needs_file",
+    ...(withVideo ? { requestedWithVideo: true } : {}),
+  });
+
+  it("remembered → the reader is asked with withVideo; not remembered → without", async () => {
+    const withV = await stageLink(TT, {}, held(true));
+    const without = await stageLink(`${TT}8`, {}, held(false));
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      summarize: async () => null,
+    });
+    await read(withV, deps);
+    await read(without, deps);
+    expect(calls.readOpts).toEqual([
+      { reader: APIFY, allowBilled: true, interactive: true, withVideo: true },
+      { reader: APIFY, allowBilled: true, interactive: true },
+    ]);
+  });
+
+  it("still waiting (over budget again): the choice stays with the consent, its date unchanged", async () => {
+    const tapped = new Date(NOW.getTime() - 86_400_000);
+    const id = await stageLink(TT, {}, held(true, tapped));
+    const over = makeDeps({ perDay: 0, readers: async () => [APIFY_OFFER] });
+    expect(await read(id, over.deps)).toMatchObject({ status: "over_budget" });
+    expect((await readOf(id))!).toMatchObject({
+      requestedWithVideo: true,
+      requestedAt: tapped.toISOString(),
+    });
+  });
+
+  it("an ENDED consent forgets the choice too (never run)", async () => {
+    const id = await stageLink(
+      TT,
+      {},
+      held(true, new Date(NOW.getTime() - 9 * 86_400_000))
+    );
+    const { deps, calls } = makeDeps({ readers: async () => [APIFY_OFFER] });
+    expect(await read(id, deps)).toMatchObject({ status: "skipped" });
+    expect(calls.readUrl).toBe(0);
+    expect((await readOf(id))!).not.toHaveProperty("requestedWithVideo");
+  });
+});
+
+describe("a re-read waiting BESIDE a read: the sweep's run keeps or replaces the read, then the consent ends", () => {
+  const live = () => new Date(NOW.getTime() - 86_400_000).toISOString();
+  const readWithConsent = (extra: Record<string, unknown> = {}) => ({
+    status: "read" as const,
+    summary: "the kept summary",
+    suggestedActions: [],
+    textKey: "kept/text2",
+    reader: STAMP("builtin:article"),
+    requestedReader: APIFY,
+    requestedAt: live(),
+    ...extra,
+  });
+
+  it('"Get the pictures" (remembered keepRead): media copied, the read stays, the consent is forgotten (never re-run)', async () => {
+    const ig = await stageLink(
+      IG,
+      {},
+      readWithConsent({ requestedKeepRead: true })
+    );
+    h.objects.set("kept/text2", Buffer.from("the kept text"));
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (url, opts) => {
+        calls.readOpts.push(opts);
+        return doorRead(url, {
+          via: APIFY_STAMP,
+          text: "a NEW caption",
+          media: [
+            { url: "https://cdn.ig.test/n.jpg", kind: "image", order: 0 },
+          ],
+        });
+      },
+    });
+    deps.copyMedia = recordingCopy(calls);
+    // The sweep's job: no reader, no force — the remembered consent runs.
+    expect(await read(ig, deps)).toMatchObject({ status: "read" });
+    expect(calls.readOpts).toEqual([
+      { reader: APIFY, allowBilled: true, interactive: true },
+    ]);
+    expect(calls.copied).toEqual([
+      { itemId: ig, urls: ["https://cdn.ig.test/n.jpg"] },
+    ]);
+    expect(calls.summarize).toBe(0);
+    const r = (await readOf(ig))!;
+    expect(r).toMatchObject({
+      status: "read",
+      summary: "the kept summary",
+      textKey: "kept/text2",
+    });
+    expect(r).not.toHaveProperty("requestedReader");
+    expect(r).not.toHaveProperty("requestedKeepRead");
+    // Nothing left to run: the next job keeps the final read.
+    expect(await read(ig, deps)).toMatchObject({ status: "skipped" });
+    expect(calls.readOpts).toHaveLength(1);
+  });
+
+  it("a remembered re-read that did not read: the read stays, the attempt is noted, the consent ends", async () => {
+    const ig = await stageLink(IG, {}, readWithConsent());
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (u) => {
+        calls.readUrl++;
+        return {
+          status: "blocked",
+          sourceUrl: u,
+          via: APIFY_STAMP,
+          blocked: { reason: "private" },
+        };
+      },
+    });
+    await read(ig, deps);
+    const r = (await readOf(ig))!;
+    expect(r).toMatchObject({
+      status: "read",
+      summary: "the kept summary",
+      lastAttempt: { readerId: APIFY },
+    });
+    expect(r).not.toHaveProperty("requestedReader");
+    expect(await read(ig, deps)).toMatchObject({ status: "skipped" });
+    expect(calls.readUrl).toBe(1);
+  });
+
+  it("the sweep picks a read item holding a LIVE consent (the person's budget has room)", async () => {
+    const waiting = await stageItem({
+      item: { source: { kind: "url", url: "https://www.instagram.com/p/rr" } },
+      ageMinutes: 30,
+      read: { ...readWithConsent(), requestedAt: new Date().toISOString() },
+    });
+    await stageItem({
+      item: { source: { kind: "url", url: "https://www.instagram.com/p/r0" } },
+      ageMinutes: 30,
+      read: { status: "read", suggestedActions: [] },
+    });
+    const sent: string[] = [];
+    await sweepLibraryLightReads({
+      database: db as never,
+      send: async (_q: string, data: { itemId: string }) =>
+        void sent.push(data.itemId),
+      perDay: 5,
+    });
+    expect(sent).toEqual([waiting]);
+  });
+});
+
+describe("a remembered re-read that fails TRANSIENTLY keeps its consent and is tried again", () => {
+  const tapped = new Date(NOW.getTime() - 86_400_000).toISOString();
+  const readWithConsent = (extra: Record<string, unknown> = {}) => ({
+    status: "read" as const,
+    summary: "the kept summary",
+    suggestedActions: [],
+    textKey: "kept/text3",
+    reader: STAMP("builtin:article"),
+    requestedReader: APIFY,
+    requestedAt: tapped,
+    requestedKeepRead: true,
+    ...extra,
+  });
+  const down = (u: string): UrlRead => ({
+    status: "failed",
+    sourceUrl: u,
+    via: APIFY_STAMP,
+    error: "Apify answered 503",
+    errorClass: "unavailable",
+  });
+  const at = (ms: number) => () => new Date(NOW.getTime() + ms);
+  const MIN = 60_000;
+
+  it("a billed reader: the read and the consent stay, the try waits (backoff), counted to the same cap as any billed read", async () => {
+    const ig = await stageLink(IG, {}, readWithConsent());
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (u) => {
+        calls.readUrl++;
+        return down(u);
+      },
+    });
+    expect(await read(ig, deps)).toMatchObject({ status: "not_read" });
+    let r = (await readOf(ig))!;
+    expect(r).toMatchObject({
+      status: "read",
+      summary: "the kept summary",
+      requestedReader: APIFY,
+      requestedAt: tapped,
+      requestedKeepRead: true,
+      lastAttempt: {
+        readerId: APIFY,
+        status: "not_read",
+        consentAt: tapped,
+        attempts: 1,
+        failure: {
+          class: "unavailable",
+          transient: true,
+          nextAttemptAt: new Date(NOW.getTime() + 15 * MIN).toISOString(),
+        },
+      },
+    });
+    // The item's view still shows the waiting consent beside the read.
+    expect(r).not.toHaveProperty("failure");
+    // Second try (the sweep's, once due): still waiting, the wait doubles.
+    await read(ig, { ...deps, now: at(16 * MIN) });
+    r = (await readOf(ig))!;
+    expect(r).toMatchObject({
+      requestedReader: APIFY,
+      lastAttempt: {
+        attempts: 2,
+        failure: {
+          nextAttemptAt: new Date(NOW.getTime() + 46 * MIN).toISOString(),
+        },
+      },
+    });
+    // Third: out of tries (a billed read's cap) — the consent ends, the read stays.
+    await read(ig, { ...deps, now: at(50 * MIN) });
+    r = (await readOf(ig))!;
+    expect(r).toMatchObject({
+      status: "read",
+      summary: "the kept summary",
+      lastAttempt: { readerId: APIFY, status: "needs_file" },
+    });
+    expect(r).not.toHaveProperty("requestedReader");
+    expect(calls.readUrl).toBe(3);
+    expect(await read(ig, deps)).toMatchObject({ status: "skipped" });
+    expect(calls.readUrl).toBe(3);
+  });
+
+  it("a free reader: never counted — it keeps waiting and trying until the consent's end", async () => {
+    const FREE = "read_public_page";
+    const FREE_STAMP: ReaderStamp = {
+      id: FREE,
+      name: "Free reader",
+      verbId: FREE,
+      billed: false,
+      readAt: NOW.toISOString(),
+    };
+    const ig = await stageLink(
+      IG,
+      {},
+      readWithConsent({ requestedReader: FREE })
+    );
+    const { deps, calls } = makeDeps({
+      readers: async () => [
+        {
+          readerId: FREE,
+          name: "Free reader",
+          verbId: FREE,
+          billing: "none" as const,
+          state: "ready" as const,
+        },
+      ],
+      readUrl: async (u) => {
+        calls.readUrl++;
+        return { ...down(u), via: FREE_STAMP };
+      },
+    });
+    for (let i = 0; i < 5; i++) {
+      await read(ig, { ...deps, now: at(i * 24 * 60 * MIN) });
+    }
+    const r = (await readOf(ig))!;
+    expect(r).toMatchObject({
+      status: "read",
+      requestedReader: FREE,
+      requestedAt: tapped,
+      lastAttempt: { attempts: 0, transientFailures: 5 },
+    });
+    expect(calls.readUrl).toBe(5);
+    // Past the consent's end (7 days from the tap): never run, forgotten.
+    expect(
+      await read(ig, { ...deps, now: at(7 * 24 * 60 * MIN) })
+    ).toMatchObject({ status: "skipped" });
+    expect(calls.readUrl).toBe(5);
+    expect((await readOf(ig))!).not.toHaveProperty("requestedReader");
+  });
+
+  it("a PERMANENT failure still ends the consent (the read stays)", async () => {
+    const ig = await stageLink(IG, {}, readWithConsent());
+    const { deps } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (u) => ({
+        ...down(u),
+        error: "the vendor answered nothing usable",
+        errorClass: "bad_output",
+      }),
+    });
+    await read(ig, deps);
+    const r = (await readOf(ig))!;
+    expect(r).toMatchObject({ status: "read", summary: "the kept summary" });
+    expect(r).not.toHaveProperty("requestedReader");
+    expect(r.lastAttempt).not.toHaveProperty("failure");
+  });
+
+  it("a cancel while it waits ends it: the sweep no longer picks it", async () => {
+    const ig = await stageLink(IG, {}, readWithConsent());
+    const { deps } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (u) => down(u),
+    });
+    await read(ig, deps);
+    expect((await readOf(ig))!).toHaveProperty("requestedReader", APIFY);
+    await libraryCancelReadWith({
+      userId: USER,
+      itemIds: [ig],
+      notify: () => undefined,
+    });
+    const r = (await readOf(ig))!;
+    expect(r).toMatchObject({ status: "read", summary: "the kept summary" });
+    expect(r).not.toHaveProperty("requestedReader");
+  });
+
+  it("the sweep picks it only once its wait is over; a wait of an EARLIER consent never delays a new one", async () => {
+    const recent = new Date().toISOString();
+    const stage = (lastAttempt: Record<string, unknown>) =>
+      stageItem({
+        item: {
+          source: { kind: "url", url: `https://www.instagram.com/p/w${++seq}` },
+        },
+        ageMinutes: 30,
+        read: readWithConsent({ requestedAt: recent, lastAttempt }),
+      });
+    const failed = (nextAttemptAt: string, consentAt = recent) => ({
+      readerId: APIFY,
+      status: "not_read",
+      at: recent,
+      consentAt,
+      attempts: 1,
+      failure: { class: "unavailable", transient: true, nextAttemptAt },
+    });
+    const later = await stage(failed("2999-01-01T00:00:00.000Z"));
+    const due = await stage(failed("2000-01-01T00:00:00.000Z"));
+    const earlierConsent = await stage(
+      failed("2999-01-01T00:00:00.000Z", "2026-01-01T00:00:00.000Z")
+    );
+    const sent: string[] = [];
+    await sweepLibraryLightReads({
+      database: db as never,
+      send: async (_q: string, data: { itemId: string }) =>
+        void sent.push(data.itemId),
+      perDay: 5,
+    });
+    expect(sent.sort()).toEqual([due, earlierConsent].sort());
+    expect(sent).not.toContain(later);
+  });
+});
+
+describe("a consent the person cancelled while the sweep's run was in flight stays cancelled", () => {
+  it("the run ends waiting (a retry): the cancelled consent is NOT written back", async () => {
+    const tapped = new Date(NOW.getTime() - 86_400_000).toISOString();
+    const ig = await stageLink(
+      IG,
+      {},
+      {
+        status: "over_budget",
+        suggestedActions: [],
+        requestedReader: APIFY,
+        requestedAt: tapped,
+        heldFrom: "needs_file",
+      }
+    );
+    const { deps, calls } = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (u) => {
+        calls.readUrl++;
+        // The person taps Cancel while the vendor runs.
+        await libraryCancelReadWith({
+          userId: USER,
+          itemIds: [ig],
+          notify: () => undefined,
+        });
+        return {
+          status: "failed",
+          sourceUrl: u,
+          via: APIFY_STAMP,
+          error: "Apify answered 503",
+          errorClass: "unavailable",
+        };
+      },
+    });
+    expect(await read(ig, deps)).toMatchObject({ status: "not_read" });
+    expect(calls.readUrl).toBe(1);
+    const r = (await readOf(ig))!;
+    expect(r).not.toHaveProperty("requestedReader");
+    expect(r).not.toHaveProperty("requestedAt");
+    // CONTROL: without a cancel, the same run keeps the consent (tap's date).
+    const kept = await stageLink(
+      `${IG}x`,
+      {},
+      {
+        status: "over_budget",
+        suggestedActions: [],
+        requestedReader: APIFY,
+        requestedAt: tapped,
+        heldFrom: "needs_file",
+      }
+    );
+    const plain = makeDeps({
+      readers: async () => [APIFY_OFFER],
+      readUrl: async (u) => ({
+        status: "failed",
+        sourceUrl: u,
+        via: APIFY_STAMP,
+        error: "Apify answered 503",
+        errorClass: "unavailable",
+      }),
+    });
+    await read(kept, plain.deps);
+    expect((await readOf(kept))!).toMatchObject({
+      status: "not_read",
+      requestedReader: APIFY,
+      requestedAt: tapped,
+    });
   });
 });

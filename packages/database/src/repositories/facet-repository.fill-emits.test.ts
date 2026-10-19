@@ -31,21 +31,17 @@ function stubSharedRole() {
   vi.spyOn(
     ProfileResolutionService.prototype,
     "resolveProfile"
-  ).mockResolvedValue(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    {
-      id: "role-client",
-      slug: "client",
-      scope: "shared",
-      profileKind: "role",
-      applicableKinds: null,
-    } as any
-  );
+  ).mockResolvedValue({
+    id: "role-client",
+    slug: "client",
+    scope: "shared",
+    profileKind: "role",
+    applicableKinds: null,
+  } as any);
   vi.spyOn(
     PropertyValidationService.prototype,
     "validateProperties"
   ).mockImplementation(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async (props: any) =>
       ({ valid: true, errors: [], normalized: props }) as any
   );
@@ -74,7 +70,6 @@ function collidingDb(opts: { vanished?: boolean } = {}) {
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const repoFor = (db: any) => new FacetRepository(db, {} as any);
 
 const ATTACH = {
@@ -91,7 +86,7 @@ describe("FacetRepository lens-collapsed fill — announced through the emitter"
   it("emits `update` with the WRITTEN row", async () => {
     stubSharedRole();
     const emit = vi
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       .spyOn(FacetRepository.prototype as any, "emitCompleted")
       .mockResolvedValue(undefined);
     await repoFor(collidingDb()).attach(ATTACH, USER);
@@ -109,7 +104,7 @@ describe("FacetRepository lens-collapsed fill — announced through the emitter"
   it("skipEvent leaves the emit to the caller's post-commit hook", async () => {
     stubSharedRole();
     const emit = vi
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       .spyOn(FacetRepository.prototype as any, "emitCompleted")
       .mockResolvedValue(undefined);
     await repoFor(collidingDb()).attach({ ...ATTACH, skipEvent: true }, USER);
@@ -119,7 +114,6 @@ describe("FacetRepository lens-collapsed fill — announced through the emitter"
   it("a row that vanished before the write is an error, never the stale copy", async () => {
     stubSharedRole();
     vi.spyOn(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       FacetRepository.prototype as any,
       "emitCompleted"
     ).mockResolvedValue(undefined);

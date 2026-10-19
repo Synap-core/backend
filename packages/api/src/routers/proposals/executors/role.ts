@@ -15,7 +15,7 @@ import type { Context } from "../../../context.js";
 export function registerRoleExecutors(): void {
   // ── role / create ─────────────────────────────────────────────────────────
   // A gated role create lands here on approval. Before this executor the
-  // proposal fell to the `*​/*` catch-all: the row flipped APPROVED and NO role
+  // proposal fell to the `*/*` catch-all: the row flipped APPROVED and NO role
   // was ever inserted — and because the gate payload had been narrowed to
   // `{ id, name }`, the request was unrecoverable even by hand. `permissions`
   // is a REQUIRED, non-defaultable input, so the narrow payload could not have

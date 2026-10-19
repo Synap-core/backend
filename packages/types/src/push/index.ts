@@ -265,7 +265,9 @@ export function isPushCategoryEnabled(
   category: PushCategory
 ): boolean {
   const set = prefs?.categories?.[category];
-  return typeof set === "boolean" ? set : PUSH_CATEGORY_POLICY[category].defaultOn;
+  return typeof set === "boolean"
+    ? set
+    : PUSH_CATEGORY_POLICY[category].defaultOn;
 }
 
 export interface EffectivePushCategory extends PushCategoryPolicy {

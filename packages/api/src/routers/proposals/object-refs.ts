@@ -176,7 +176,11 @@ export function collectIdRefs(
 ): CollectedIdRef[] {
   const out: CollectedIdRef[] = [];
   if (!payload) return out;
-  const walk = (node: Record<string, unknown>, prefix: string, depth: number) => {
+  const walk = (
+    node: Record<string, unknown>,
+    prefix: string,
+    depth: number
+  ) => {
     for (const [key, value] of Object.entries(node)) {
       if (out.length >= MAX_REFS_PER_PAYLOAD) return;
       if (key.startsWith("_")) continue;
@@ -400,7 +404,9 @@ export async function resolveObjectRefs(
     skill: byId(skillRows.map((r) => ({ id: r.id, name: text(r.name) }))),
     tool: byId(toolRows.map((r) => ({ id: r.id, name: text(r.name) }))),
     track: byId(trackRows.map((r) => ({ id: r.id, name: text(r.name) }))),
-    document: byId(documentRows.map((r) => ({ id: r.id, name: text(r.title) }))),
+    document: byId(
+      documentRows.map((r) => ({ id: r.id, name: text(r.title) }))
+    ),
     channel: byId(channelRows.map((r) => ({ id: r.id, name: text(r.title) }))),
   };
 

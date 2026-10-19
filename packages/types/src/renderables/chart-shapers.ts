@@ -28,7 +28,6 @@ import type {
   ChartXYPoint,
 } from "./chart-data.js";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyEntity = Record<string, any>;
 type ChartConfig = Record<string, unknown>;
 

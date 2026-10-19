@@ -60,7 +60,7 @@
  *                                @synap/realtime.
  */
 
-import { EventNames } from "@synap-core/types/events";
+import { type EventNames } from "@synap-core/types/events";
 
 export const SERVER_CONVERSATION_EVENTS = {
   /** AI response streaming chunks/completion (channel:<id> room). */

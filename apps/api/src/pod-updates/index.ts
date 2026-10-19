@@ -173,7 +173,8 @@ export async function readLastUpdate(
   try {
     text = await read(path);
   } catch (err) {
-    if ((err as { code?: unknown })?.code === "ENOENT") return { read: "absent" };
+    if ((err as { code?: unknown })?.code === "ENOENT")
+      return { read: "absent" };
     return {
       read: "failed",
       error: err instanceof Error ? err.message : String(err),
@@ -214,12 +215,10 @@ export async function buildPodUpdatesStatus(deps: {
       (raw) => ({ ok: true as const, raw }),
       () => ({ ok: false as const })
     ),
-    deps.readLastUpdate().catch(
-      (err): LastUpdateRead => ({
-        read: "failed",
-        error: err instanceof Error ? err.message : String(err),
-      })
-    ),
+    deps.readLastUpdate().catch((err): LastUpdateRead => ({
+      read: "failed",
+      error: err instanceof Error ? err.message : String(err),
+    })),
   ]);
   return {
     settings: settingsResult.ok

@@ -505,12 +505,17 @@ export function emitFacetSideEffects(opts: {
  * `created` activator fires on it (R1).
  */
 export function registerFacetAttachEmitter(): void {
-  registerFacetAttachedEmitter(async ({ facet, userId, context }) => {
+  // Synchronous on purpose: the door can announce from INSIDE its caller's
+  // transaction (the team-person bridge at boot), and an awaited read of the
+  // global `db` there runs on another pool connection — which a single-session
+  // database (PGlite / pglite-socket, the desktop pod) never serves while the
+  // transaction is open, so boot wedged forever. The slug rides the event.
+  registerFacetAttachedEmitter(({ facet, profileSlug, userId, context }) => {
     emitFacetSideEffects({
       action: "attach",
       entityId: facet.entityId,
       facetId: facet.id,
-      profileSlug: await resolveFacetProfileSlug(facet.profileId),
+      profileSlug,
       status: facet.status,
       userId,
       workspaceId: facet.workspaceId ?? context?.fallbackWorkspaceId ?? null,

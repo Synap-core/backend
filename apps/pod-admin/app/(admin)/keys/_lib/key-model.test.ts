@@ -4,6 +4,7 @@ import {
   categorize,
   holderHref,
   holderName,
+  keyHref,
   keyStatus,
   normalizeScopes,
   type UnifiedKey,
@@ -167,5 +168,36 @@ describe("holderHref", () => {
       holderHref(key({ holder: { kind: "computer", name: "devbox" } }))
     ).toBeNull();
     expect(holderHref(key({ userId: "u", holder: null }))).toBeNull();
+  });
+});
+
+describe("keyHref", () => {
+  it("opens the holder's page first, even for a space key", () => {
+    expect(
+      keyHref(
+        key({
+          userId: "c1",
+          workspaceId: "ws1",
+          holder: { kind: "computer", name: "devbox" },
+        })
+      )
+    ).toBe("/computers/c1");
+  });
+
+  it("opens a space key with no holder page on its space's keys tab", () => {
+    expect(
+      keyHref(
+        key({
+          id: "k 1",
+          workspaceId: "ws1",
+          holder: { kind: "person", name: "x" },
+        })
+      )
+    ).toBe("/workspaces/ws1?tab=api-keys&focus=k%201");
+  });
+
+  it("is null for a pod-wide key with no holder page", () => {
+    expect(keyHref(key({ workspaceId: null, holder: null }))).toBeNull();
+    expect(keyHref(key({}))).toBeNull();
   });
 });

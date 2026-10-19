@@ -207,7 +207,7 @@ describe("insertPendingProposal — correlationId default", () => {
 
   it("mints a correlationId when the caller supplies none", async () => {
     const ex = fakeExecutor();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     await insertPendingProposal(base, ex as any);
     const minted = ex.captured[0].correlationId;
     expect(typeof minted).toBe("string");
@@ -218,7 +218,7 @@ describe("insertPendingProposal — correlationId default", () => {
 
   it("never leaves correlationId NULL — the gap this default closes", async () => {
     const ex = fakeExecutor();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     await insertPendingProposal({ ...base, correlationId: null }, ex as any);
     expect(ex.captured[0].correlationId).toBeTruthy();
   });
@@ -227,7 +227,7 @@ describe("insertPendingProposal — correlationId default", () => {
     const ex = fakeExecutor();
     await insertPendingProposal(
       { ...base, correlationId: "corr-from-the-door" },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       ex as any
     );
     expect(ex.captured[0].correlationId).toBe("corr-from-the-door");
@@ -235,9 +235,9 @@ describe("insertPendingProposal — correlationId default", () => {
 
   it("mints a DISTINCT id per call (it groups an intent, it is not a constant)", async () => {
     const ex = fakeExecutor();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     await insertPendingProposal(base, ex as any);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     await insertPendingProposal(base, ex as any);
     expect(ex.captured[0].correlationId).not.toBe(ex.captured[1].correlationId);
   });
@@ -284,9 +284,9 @@ describe("insertPendingProposal — correlationId default", () => {
 
   it("two identical proposals still hash equal AFTER minting — dedup survives", async () => {
     const ex = fakeExecutor();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     await insertPendingProposal(base, ex as any);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     await insertPendingProposal(base, ex as any);
     const hashOf = (v: Record<string, unknown>) =>
       computeProposalDedupHash({

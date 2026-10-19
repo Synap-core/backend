@@ -24,9 +24,9 @@ const valid = { presentation: { family: "media" } };
 
 describe("profile uiHints.presentation is parsed on create and update", () => {
   it("update refuses an invalid presentation", () => {
-    expect(inputOf("update").safeParse({ id: ID, uiHints: invalid }).success).toBe(
-      false
-    );
+    expect(
+      inputOf("update").safeParse({ id: ID, uiHints: invalid }).success
+    ).toBe(false);
   });
 
   it("update accepts a valid one, and uiHints without presentation", () => {

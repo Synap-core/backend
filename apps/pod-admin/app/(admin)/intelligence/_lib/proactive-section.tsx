@@ -129,7 +129,7 @@ export function ProactiveDefaultsSection() {
       }
     >
       {query.isLoading || isAuthRedirecting || !draft ? (
-        <div className="flex items-center gap-2 px-3 py-4 text-[12.5px] text-foreground/55">
+        <div className="flex items-center gap-2 px-3 py-4 text-[12.5px] text-foreground/65">
           <Spinner size="sm" /> Loading proactive defaults…
         </div>
       ) : query.isError ? (
@@ -141,7 +141,7 @@ export function ProactiveDefaultsSection() {
               <span className="text-[12.5px] font-medium text-foreground">
                 Proactive AI enabled by default
               </span>
-              <span className="text-[11px] text-foreground/55">
+              <span className="text-[11px] text-foreground/65">
                 Whether new workspaces start with proactive nudges on
               </span>
             </div>
@@ -159,7 +159,7 @@ export function ProactiveDefaultsSection() {
               <span className="text-[12.5px] font-medium text-foreground">
                 Default nudge density
               </span>
-              <span className="text-[11px] text-foreground/55">
+              <span className="text-[11px] text-foreground/65">
                 How chatty proactive AI is by default
               </span>
             </div>
@@ -189,7 +189,7 @@ export function ProactiveDefaultsSection() {
               <span className="text-[12.5px] font-medium text-foreground">
                 Morning briefing
               </span>
-              <span className="text-[11px] text-foreground/55">
+              <span className="text-[11px] text-foreground/65">
                 Cron-driven daily summary in personal channel
               </span>
             </div>
@@ -207,7 +207,7 @@ export function ProactiveDefaultsSection() {
               <span className="text-[12.5px] font-medium text-foreground">
                 Weekly digest
               </span>
-              <span className="text-[11px] text-foreground/55">
+              <span className="text-[11px] text-foreground/65">
                 A Sunday summary of the week
               </span>
             </div>
@@ -225,7 +225,7 @@ export function ProactiveDefaultsSection() {
               <span className="text-[12.5px] font-medium text-foreground">
                 Health check
               </span>
-              <span className="text-[11px] text-foreground/55">
+              <span className="text-[11px] text-foreground/65">
                 Daily AI sanity sweep across the workspace
               </span>
             </div>

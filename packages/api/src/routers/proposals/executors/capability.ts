@@ -768,7 +768,7 @@ export function registerCapabilityExecutors(): void {
   // path"), so this door is reached BY DESIGN, not by accident.
   //
   // WHAT APPROVAL USED TO DO: nothing. `capability` is not a materializer
-  // subject, so the `*​/*` catch-all's honesty gate threw NOT_IMPLEMENTED and
+  // subject, so the `*/*` catch-all's honesty gate threw NOT_IMPLEMENTED and
   // the reviewer could never apply the attach at all.
   //
   // PAYLOAD (checked at the gate, not assumed): it stores the COMPLETE

@@ -88,6 +88,11 @@ const ResolveResponseSchema = z
     id: z.string().describe("The id to open (may differ from the queried id)"),
     displayName: z.string().nullable().optional(),
     workspaceId: z.string().nullable().optional(),
+    updatedAt: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("When the object last changed (ISO 8601); null if untracked"),
     profileSlug: z.string().nullable().optional(),
     /**
      * False when the id resolved but the thing has no browser surface at all

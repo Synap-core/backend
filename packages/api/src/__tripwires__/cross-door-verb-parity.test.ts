@@ -279,15 +279,16 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     })
   ),
   // ── playbook — Hub REST ────────────────────────────────────────────────────
-  // list / create / run shipped on Hub REST (GET /playbooks, POST /playbooks,
-  // POST /playbooks/:id/run — the Raycast structure doors); those gaps closed.
-  ...(["get", "archive"] as const).map((verb) => ({
+  // list / create / run / get shipped on Hub REST (GET /playbooks,
+  // POST /playbooks, POST /playbooks/:id/run, GET /playbooks/:id); those gaps
+  // closed.
+  {
     object: "playbook",
-    verb,
-    door: "hub_rest" as Door,
+    verb: "archive",
+    door: "hub_rest",
     reason:
-      "Hub REST has no single-playbook read or archive: the narrow doors browse with GET /playbooks and run by id; retiring a shared process is a human act in the browser.",
-  })),
+      "Hub REST has no playbook archive: retiring a shared process is a human act in the browser.",
+  },
   // ── playbook — MCP ─────────────────────────────────────────────────────────
   {
     object: "playbook",
@@ -533,7 +534,6 @@ describe("tripwire (T3): every object × verb × door cell is present or acknowl
   // silently counted as clean.
   it("reports any door whose root is absent from this checkout", () => {
     for (const door of UNAVAILABLE) {
-      // eslint-disable-next-line no-console
       console.warn(
         `[T3] The "${door}" door's scan root is absent (${ROOTS[door].dir}) — ` +
           `its cells were NOT verified in this run. This is expected in a ` +

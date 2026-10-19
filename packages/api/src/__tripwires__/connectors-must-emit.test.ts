@@ -42,9 +42,8 @@ vi.mock("../utils/domain-mutation.js", () => ({
     recordDomainMutationMock(...args),
 }));
 
-const { recordExternalAction, EXTERNAL_DISPATCH_SOURCE } = await import(
-  "../connectors/external-dispatch.js"
-);
+const { recordExternalAction, EXTERNAL_DISPATCH_SOURCE } =
+  await import("../connectors/external-dispatch.js");
 
 describe("guard: recordExternalAction fires the domain-mutation door (real code path)", () => {
   beforeEach(() => {

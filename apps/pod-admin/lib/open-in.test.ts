@@ -111,6 +111,17 @@ describe("openIn — objectInApp", () => {
     expect(app.href).toBe(`synap://open/proposal/${ID}`);
     expect(app.fallback).toBeDefined();
   });
+
+  it("carries the object's address params (a run's flowType)", () => {
+    const exit = openIn({
+      kind: "objectInApp",
+      objectKind: "run",
+      id: ID,
+      params: { flowType: "playbook" },
+    });
+    expect(exit.href).toBe(`synap://open/run/${ID}?flowType=playbook`);
+    expect(exit.fallback).toBeDefined();
+  });
 });
 
 describe("openIn — a viewed object hands off with its view", () => {

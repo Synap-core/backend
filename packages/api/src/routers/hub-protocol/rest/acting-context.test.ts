@@ -78,7 +78,12 @@ describe("resolveActingContext — body.userId is bound to identities the caller
 
   it("sub-token end-user naming the parent key's agent principal → 403", async () => {
     const r = await resolveActingContext(
-      ctx({ ...agentKey, userId: VICTIM, externalUserId: "ext-1", parentKeyId: "key-1" }),
+      ctx({
+        ...agentKey,
+        userId: VICTIM,
+        externalUserId: "ext-1",
+        parentKeyId: "key-1",
+      }),
       { userId: AGENT }
     );
     expect(r).toMatchObject({ ok: false, status: 403 });
@@ -140,9 +145,9 @@ describe("mayActAsUser — edge cases of the shared predicate", () => {
   });
 
   it("an agentUserId is only honoured as an exact match, never as a wildcard", () => {
-    expect(mayActAsUser(ctx({ ...agentKey, agentUserId: undefined }), AGENT)).toBe(
-      false
-    );
+    expect(
+      mayActAsUser(ctx({ ...agentKey, agentUserId: undefined }), AGENT)
+    ).toBe(false);
     expect(mayActAsUser(ctx(agentKey), "")).toBe(true); // empty = not naming anyone
   });
 

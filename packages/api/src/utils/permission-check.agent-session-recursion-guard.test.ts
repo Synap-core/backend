@@ -34,7 +34,9 @@ vi.mock("@synap/database", async (importOriginal) => {
 // test DB-free (partial mock, same reason as above).
 vi.mock("../services/agent-identity-service.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../services/agent-identity-service.js")>();
+    await importOriginal<
+      typeof import("../services/agent-identity-service.js")
+    >();
   return { ...actual, getAgentFocusProjectId: vi.fn().mockResolvedValue(null) };
 });
 vi.mock("@synap-core/core", () => ({

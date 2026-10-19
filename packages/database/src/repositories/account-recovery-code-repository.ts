@@ -73,7 +73,10 @@ export class AccountRecoveryCodeRepository {
           isNull(accountRecoveryCodes.usedAt)
         )
       )
-      .orderBy(asc(accountRecoveryCodes.createdAt), asc(accountRecoveryCodes.id));
+      .orderBy(
+        asc(accountRecoveryCodes.createdAt),
+        asc(accountRecoveryCodes.id)
+      );
   }
 
   /**
@@ -85,7 +88,10 @@ export class AccountRecoveryCodeRepository {
       .update(accountRecoveryCodes)
       .set({ usedAt })
       .where(
-        and(eq(accountRecoveryCodes.id, id), isNull(accountRecoveryCodes.usedAt))
+        and(
+          eq(accountRecoveryCodes.id, id),
+          isNull(accountRecoveryCodes.usedAt)
+        )
       )
       .returning({ id: accountRecoveryCodes.id });
     return rows.length === 1;

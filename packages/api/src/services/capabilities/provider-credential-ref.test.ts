@@ -17,7 +17,9 @@ import {
  */
 describe("isVaultCredentialRef — vault secret vs broker account", () => {
   it("reads a remapped vault ref as a stored secret", () => {
-    expect(isVaultCredentialRef("vault://54823334-672f-48b7-9fd2-fbacc2962c70")).toBe(true);
+    expect(
+      isVaultCredentialRef("vault://54823334-672f-48b7-9fd2-fbacc2962c70")
+    ).toBe(true);
     // The template's own spelling, before the apply-time rewrite.
     expect(isVaultCredentialRef("vault://stripe")).toBe(true);
     expect(isVaultCredentialRef("VAULT://Stripe")).toBe(true);
@@ -45,23 +47,32 @@ describe("providerIdForTool — the id a connector could match", () => {
       providerIdForTool({
         credentialRef: "vault://54823334-672f-48b7-9fd2-fbacc2962c70",
         name: "stripe",
-      }),
+      })
     ).toBe("stripe");
   });
 
   it("strips the broker scheme so the remainder is the provider", () => {
     expect(
-      providerIdForTool({ credentialRef: "nango://google-mail", name: "Nango — Google Workspace" }),
+      providerIdForTool({
+        credentialRef: "nango://google-mail",
+        name: "Nango — Google Workspace",
+      })
     ).toBe("google-mail");
   });
 
   it("falls back to the tool's name when there is no ref at all", () => {
-    expect(providerIdForTool({ credentialRef: null, name: "custom-thing" })).toBe("custom-thing");
-    expect(providerIdForTool({ credentialRef: "", name: "custom-thing" })).toBe("custom-thing");
+    expect(
+      providerIdForTool({ credentialRef: null, name: "custom-thing" })
+    ).toBe("custom-thing");
+    expect(providerIdForTool({ credentialRef: "", name: "custom-thing" })).toBe(
+      "custom-thing"
+    );
   });
 
   it("never returns an empty provider", () => {
-    expect(providerIdForTool({ credentialRef: "nango://", name: "fallback" })).toBe("fallback");
+    expect(
+      providerIdForTool({ credentialRef: "nango://", name: "fallback" })
+    ).toBe("fallback");
   });
 });
 

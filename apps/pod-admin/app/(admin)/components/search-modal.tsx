@@ -567,7 +567,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
                     >
                       <div
                         id={headingId}
-                        className="px-2 py-1 text-[10.5px] font-medium uppercase tracking-wider text-foreground/45"
+                        className="px-2 py-1 text-[10.5px] font-medium uppercase tracking-wider text-foreground/65"
                       >
                         {meta.label}
                       </div>
@@ -592,7 +592,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
               )}
             </div>
 
-            <div className="flex items-center justify-between gap-3 border-t border-foreground/[0.06] px-4 py-2 text-[10.5px] text-foreground/45">
+            <div className="flex items-center justify-between gap-3 border-t border-foreground/[0.06] px-4 py-2 text-[10.5px] text-foreground/65">
               <span>
                 <kbd className="font-mono">↑↓</kbd> navigate ·{" "}
                 <kbd className="font-mono">↵</kbd> open ·{" "}
@@ -655,7 +655,7 @@ function SearchRow({
           {result.primary}
         </span>
         {result.secondary && (
-          <span className="truncate text-[11px] text-foreground/55">
+          <span className="truncate text-[11px] text-foreground/65">
             {result.secondary}
           </span>
         )}

@@ -63,7 +63,6 @@ export function workspaceNameKey(name: string): string {
   return name.trim().toLowerCase();
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Executor = any;
 
 /**

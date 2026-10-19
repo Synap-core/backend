@@ -90,7 +90,9 @@ export async function rebuildPropertyIndex(): Promise<{
 
 // Run if called directly (tsx), not when imported by the drift test.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  console.log("🔁 Rebuilding property-index + identity-signal projections...\n");
+  console.log(
+    "🔁 Rebuilding property-index + identity-signal projections...\n"
+  );
   rebuildPropertyIndex()
     .then(async (r) => {
       console.log(

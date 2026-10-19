@@ -34,7 +34,7 @@ const OTHER_AUTOMATION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const WS = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 
 let pg: PGlite;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let db: any;
 
 beforeAll(async () => {

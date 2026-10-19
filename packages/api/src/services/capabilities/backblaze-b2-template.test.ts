@@ -181,7 +181,12 @@ describe("backblaze-b2 template — governance reaches the gate", () => {
     return gateCapabilityExecution({
       capabilityKind: "skill",
       capabilityId: `skill-${name}`,
-      skill: { id: `skill-${name}`, approved: true, userId: "owner-1", name } as never,
+      skill: {
+        id: `skill-${name}`,
+        approved: true,
+        userId: "owner-1",
+        name,
+      } as never,
       actorUserId: "owner-1",
       agentUserId: "agent-1",
       workspaceId: null,
@@ -190,13 +195,19 @@ describe("backblaze-b2 template — governance reaches the gate", () => {
     } as never);
   }
 
-  it.each(READS)("%s auto-runs for an agent with no grant (declared read)", async (n) => {
-    expect((await gateAsAgent(n)).decision).toBe("run");
-  });
+  it.each(READS)(
+    "%s auto-runs for an agent with no grant (declared read)",
+    async (n) => {
+      expect((await gateAsAgent(n)).decision).toBe("run");
+    }
+  );
 
-  it.each(WRITES)("%s is PROPOSED for an agent with no grant (write)", async (n) => {
-    expect((await gateAsAgent(n)).decision).toBe("propose");
-  });
+  it.each(WRITES)(
+    "%s is PROPOSED for an agent with no grant (write)",
+    async (n) => {
+      expect((await gateAsAgent(n)).decision).toBe("propose");
+    }
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -231,8 +242,20 @@ async function runSkill(name: string, args: Record<string, unknown>) {
   ) => {
     expect(provider).toBe(t.name);
     const r = await vaultHandler({
-      input: { userId: "owner-1", provider: "vault://v1", method, path, body } as never,
-      tool: { id: "t1", name: t.name, kind: "api", credentialRef: "vault://v1", config: t.config } as never,
+      input: {
+        userId: "owner-1",
+        provider: "vault://v1",
+        method,
+        path,
+        body,
+      } as never,
+      tool: {
+        id: "t1",
+        name: t.name,
+        kind: "api",
+        credentialRef: "vault://v1",
+        config: t.config,
+      } as never,
     });
     if (!r.success) throw new Error(`callProvider failed: ${r.error}`);
     return { status: r.status, headers: r.headers, body: r.body };
@@ -240,7 +263,10 @@ async function runSkill(name: string, args: Record<string, unknown>) {
   const fn = new Function(
     "callProvider",
     `return (async (args, context) => {\n${s.code}\n});`
-  )(callProvider) as (a: unknown, c: unknown) => Promise<Record<string, unknown>>;
+  )(callProvider) as (
+    a: unknown,
+    c: unknown
+  ) => Promise<Record<string, unknown>>;
   return fn(args, {});
 }
 
@@ -291,12 +317,17 @@ describe("backblaze-b2 template — skill code against a fake B2 (real vault han
   it("a declared accountId slot is filled from the sign-in (bodyFrom)", async () => {
     b2 = () => ({ buckets: [bucket()] });
     await runSkill("b2_list_buckets", {});
-    expect(ops[0]).toEqual({ op: "b2_list_buckets", body: { accountId: "acct-1" } });
+    expect(ops[0]).toEqual({
+      op: "b2_list_buckets",
+      body: { accountId: "acct-1" },
+    });
   });
 
   it("b2_get_bucket_settings reports a compliant bucket as compliant", async () => {
     b2 = () => ({ buckets: [bucket()] });
-    const r = await runSkill("b2_get_bucket_settings", { bucketName: "synap-pod-backups" });
+    const r = await runSkill("b2_get_bucket_settings", {
+      bucketName: "synap-pod-backups",
+    });
     expect(r.backupPolicy).toMatchObject({
       private: true,
       lifecycleRule: true,
@@ -307,10 +338,24 @@ describe("backblaze-b2 template — skill code against a fake B2 (real vault han
 
   it("b2_get_bucket_settings flags a public bucket and an unreadable Object Lock", async () => {
     b2 = () => ({
-      buckets: [bucket({ bucketType: "allPublic", fileLockConfiguration: { isClientAuthorizedToRead: false, value: null } })],
+      buckets: [
+        bucket({
+          bucketType: "allPublic",
+          fileLockConfiguration: {
+            isClientAuthorizedToRead: false,
+            value: null,
+          },
+        }),
+      ],
     });
-    const r = await runSkill("b2_get_bucket_settings", { bucketName: "synap-pod-backups" });
-    expect(r.backupPolicy).toMatchObject({ private: false, objectLock: "unreadable", compliant: false });
+    const r = await runSkill("b2_get_bucket_settings", {
+      bucketName: "synap-pod-backups",
+    });
+    expect(r.backupPolicy).toMatchObject({
+      private: false,
+      objectLock: "unreadable",
+      compliant: false,
+    });
   });
 
   it("b2_backup_freshness: newest snapshot under pods/<id>/snapshots/, recent within maxAgeHours", async () => {
@@ -320,31 +365,64 @@ describe("backblaze-b2 template — skill code against a fake B2 (real vault han
         ? { buckets: [bucket()] }
         : {
             files: [
-              { fileName: `pods/${POD}/snapshots/aa`, action: "upload", uploadTimestamp: now - 50 * 3600_000 },
-              { fileName: `pods/${POD}/snapshots/bb`, action: "upload", uploadTimestamp: now - 2 * 3600_000 },
+              {
+                fileName: `pods/${POD}/snapshots/aa`,
+                action: "upload",
+                uploadTimestamp: now - 50 * 3600_000,
+              },
+              {
+                fileName: `pods/${POD}/snapshots/bb`,
+                action: "upload",
+                uploadTimestamp: now - 2 * 3600_000,
+              },
             ],
             nextFileName: null,
           };
-    const r = await runSkill("b2_backup_freshness", { bucketName: "synap-pod-backups", podId: POD });
+    const r = await runSkill("b2_backup_freshness", {
+      bucketName: "synap-pod-backups",
+      podId: POD,
+    });
     expect(ops[1]).toEqual({
       op: "b2_list_file_names",
       // No accountId: b2_list_file_names does not take one (B2 rejects unknown fields).
-      body: { bucketId: "bkt-1", prefix: `pods/${POD}/snapshots/`, maxFileCount: 1000 },
+      body: {
+        bucketId: "bkt-1",
+        prefix: `pods/${POD}/snapshots/`,
+        maxFileCount: 1000,
+      },
     });
-    expect(r).toMatchObject({ present: true, snapshotCount: 2, recent: true, maxAgeHours: 26 });
+    expect(r).toMatchObject({
+      present: true,
+      snapshotCount: 2,
+      recent: true,
+      maxAgeHours: 26,
+    });
     expect(r.ageHours).toBeCloseTo(2, 0);
   });
 
   it("b2_backup_freshness: no snapshots → not present, not recent", async () => {
-    b2 = (op) => (op === "b2_list_buckets" ? { buckets: [bucket()] } : { files: [], nextFileName: null });
-    const r = await runSkill("b2_backup_freshness", { bucketName: "synap-pod-backups", podId: POD });
-    expect(r).toMatchObject({ present: false, recent: false, newestSnapshotAt: null });
+    b2 = (op) =>
+      op === "b2_list_buckets"
+        ? { buckets: [bucket()] }
+        : { files: [], nextFileName: null };
+    const r = await runSkill("b2_backup_freshness", {
+      bucketName: "synap-pod-backups",
+      podId: POD,
+    });
+    expect(r).toMatchObject({
+      present: false,
+      recent: false,
+      newestSnapshotAt: null,
+    });
   });
 
   it("a podId that is a path is refused before any listing", async () => {
     b2 = () => ({ buckets: [bucket()] });
     await expect(
-      runSkill("b2_backup_freshness", { bucketName: "synap-pod-backups", podId: "../other" })
+      runSkill("b2_backup_freshness", {
+        bucketName: "synap-pod-backups",
+        podId: "../other",
+      })
     ).rejects.toThrow(/podId/);
     expect(ops.some((o) => o.op === "b2_list_file_names")).toBe(false);
   });
@@ -363,13 +441,28 @@ describe("backblaze-b2 template — skill code against a fake B2 (real vault han
           nextFileId: "f2",
         };
       }
-      return { files: [{ action: "upload", contentLength: 25 }], nextFileName: null };
+      return {
+        files: [{ action: "upload", contentLength: 25 }],
+        nextFileName: null,
+      };
     };
-    const r = await runSkill("b2_storage_by_pod", { bucketName: "synap-pod-backups", podId: POD });
+    const r = await runSkill("b2_storage_by_pod", {
+      bucketName: "synap-pod-backups",
+      podId: POD,
+    });
     expect(r.pods).toEqual([
-      { podId: POD, prefix: `pods/${POD}/`, bytes: 175, versions: 3, hiddenMarkers: 1, truncated: false },
+      {
+        podId: POD,
+        prefix: `pods/${POD}/`,
+        bytes: 175,
+        versions: 3,
+        hiddenMarkers: 1,
+        truncated: false,
+      },
     ]);
-    expect(ops.filter((o) => o.op === "b2_list_file_versions")[1]!.body).toMatchObject({
+    expect(
+      ops.filter((o) => o.op === "b2_list_file_versions")[1]!.body
+    ).toMatchObject({
       startFileName: "pods/x/next",
       startFileId: "f2",
     });
@@ -377,8 +470,12 @@ describe("backblaze-b2 template — skill code against a fake B2 (real vault han
 
   it("b2_ensure_backup_bucket CREATES a missing bucket with the exact policy", async () => {
     b2 = (op, body) =>
-      op === "b2_list_buckets" ? { buckets: [] } : { ...bucket(), ...body, bucketId: "new-1" };
-    const r = await runSkill("b2_ensure_backup_bucket", { bucketName: "synap-pod-backups" });
+      op === "b2_list_buckets"
+        ? { buckets: [] }
+        : { ...bucket(), ...body, bucketId: "new-1" };
+    const r = await runSkill("b2_ensure_backup_bucket", {
+      bucketName: "synap-pod-backups",
+    });
     expect(ops[1]).toEqual({
       op: "b2_create_bucket",
       body: {
@@ -393,12 +490,28 @@ describe("backblaze-b2 template — skill code against a fake B2 (real vault han
   });
 
   it("b2_ensure_backup_bucket UPDATES a drifted bucket, keeping unrelated rules", async () => {
-    const other = { fileNamePrefix: "logs/", daysFromHidingToDeleting: 1, daysFromUploadingToHiding: 7 };
+    const other = {
+      fileNamePrefix: "logs/",
+      daysFromHidingToDeleting: 1,
+      daysFromUploadingToHiding: 7,
+    };
     b2 = (op, body) =>
       op === "b2_list_buckets"
-        ? { buckets: [bucket({ bucketType: "allPublic", lifecycleRules: [other, { fileNamePrefix: "pods/", daysFromHidingToDeleting: 1 }] })] }
+        ? {
+            buckets: [
+              bucket({
+                bucketType: "allPublic",
+                lifecycleRules: [
+                  other,
+                  { fileNamePrefix: "pods/", daysFromHidingToDeleting: 1 },
+                ],
+              }),
+            ],
+          }
         : { ...bucket(), ...body };
-    const r = await runSkill("b2_ensure_backup_bucket", { bucketName: "synap-pod-backups" });
+    const r = await runSkill("b2_ensure_backup_bucket", {
+      bucketName: "synap-pod-backups",
+    });
     expect(ops[1]).toEqual({
       op: "b2_update_bucket",
       body: {
@@ -414,14 +527,23 @@ describe("backblaze-b2 template — skill code against a fake B2 (real vault han
 
   it("b2_ensure_backup_bucket is a no-op on a compliant bucket", async () => {
     b2 = () => ({ buckets: [bucket()] });
-    const r = await runSkill("b2_ensure_backup_bucket", { bucketName: "synap-pod-backups" });
+    const r = await runSkill("b2_ensure_backup_bucket", {
+      bucketName: "synap-pod-backups",
+    });
     expect(r).toMatchObject({ action: "unchanged" });
     expect(ops.map((o) => o.op)).toEqual(["b2_list_buckets"]);
   });
 
   it("b2_ensure_backup_bucket refuses a bucket with Object Lock on (B2 cannot undo it)", async () => {
     b2 = () => ({
-      buckets: [bucket({ fileLockConfiguration: { isClientAuthorizedToRead: true, value: { isFileLockEnabled: true } } })],
+      buckets: [
+        bucket({
+          fileLockConfiguration: {
+            isClientAuthorizedToRead: true,
+            value: { isFileLockEnabled: true },
+          },
+        }),
+      ],
     });
     await expect(
       runSkill("b2_ensure_backup_bucket", { bucketName: "synap-pod-backups" })

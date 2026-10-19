@@ -298,7 +298,7 @@ export function LoginForm({
                 the owner to invite you.
               </p>
               {signIn.email ? (
-                <p className="text-foreground/55">
+                <p className="text-foreground/65">
                   Synap Cloud account:{" "}
                   <span className="font-medium text-foreground/80">
                     {signIn.email}
@@ -325,7 +325,7 @@ export function LoginForm({
           )}
 
           {loading ? (
-            <div className="rounded-medium bg-foreground/[0.04] p-4 text-[13px] text-foreground/55">
+            <div className="rounded-medium bg-foreground/[0.04] p-4 text-[13px] text-foreground/65">
               Loading sign-in…
             </div>
           ) : stateView ? null : flow ? (

@@ -141,7 +141,9 @@ describe("the policy sentence is not the proposer's reasoning", () => {
   });
 
   it("the proposer's own reasoning is stored as the reasoning", async () => {
-    await checkPermissionOrPropose(agentWrite("Standardise how we score tools"));
+    await checkPermissionOrPropose(
+      agentWrite("Standardise how we score tools")
+    );
     expect(storedRow()!.data.reasoning).toBe("Standardise how we score tools");
   });
 });

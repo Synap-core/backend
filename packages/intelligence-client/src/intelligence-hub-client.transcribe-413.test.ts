@@ -17,15 +17,26 @@ const clip = { content: "AAAA", mimeType: "audio/webm" };
 describe("IntelligenceHubClient.transcribe — uncoded refusals", () => {
   it("reads an uncoded 413 as audio_too_large", async () => {
     fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ error: "Request too large", maxSize: "10MB" }), { status: 413 }),
+      new Response(
+        JSON.stringify({ error: "Request too large", maxSize: "10MB" }),
+        { status: 413 }
+      )
     );
-    expect(await client.transcribe(clip)).toMatchObject({ ok: false, status: 413, code: "audio_too_large" });
+    expect(await client.transcribe(clip)).toMatchObject({
+      ok: false,
+      status: 413,
+      code: "audio_too_large",
+    });
   });
 
   it("keeps a coded refusal's own code", async () => {
     fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ code: "transcription_not_configured" }), { status: 503 }),
+      new Response(JSON.stringify({ code: "transcription_not_configured" }), {
+        status: 503,
+      })
     );
-    expect(await client.transcribe(clip)).toMatchObject({ code: "transcription_not_configured" });
+    expect(await client.transcribe(clip)).toMatchObject({
+      code: "transcription_not_configured",
+    });
   });
 });

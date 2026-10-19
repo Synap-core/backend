@@ -141,33 +141,25 @@ jobs:
       - name: Upgrade npm for Trusted Publishing (exact pin, >= 11.5.1)
         run: npm install -g npm@11.20.0 && npm --version
 
-      # Auth: currently the NPM_TOKEN secret; migrating to npm Trusted Publishing.
+      # Auth: npm Trusted Publishing (OIDC) only. No secret: npm mints a
+      # short-lived credential for this job from its OIDC token (the
+      # `id-token: write` permission above), and provenance comes with it.
       #
-      # Trusted Publishing is the target. Once configured in the npm UI it needs
-      # NO secret at all — npm mints short-lived OIDC credentials for this job
-      # (see the `id-token: write` permission above) and provenance attestations
-      # come for free.
-      #
-      # TO FINISH THE MIGRATION (manual, npmjs.com — cannot be automated here):
+      # Each published package must trust this workflow on npmjs.com
+      # (package → Settings → Trusted Publishers → Add — cannot be automated):
       #   for EACH package (@synap-core/types and @synap-core/api-types):
-      #     package → Settings → Trusted Publishers → Add
-      #       Organization/user : Synap-core
-      #       Repository        : Synap-core/backend
-      #       Workflow filename : publish-types.yml
-      #       Environment       : leave blank
-      # ...then delete BOTH `env:` blocks below AND the NPM_TOKEN repo secret.
-      #
-      # Do NOT delete the token before npm trusts this workflow — publishing stops.
+      #     Organization/user : Synap-core
+      #     Repository        : Synap-core/backend
+      #     Workflow filename : publish-types.yml
+      #     Environment       : leave blank
+      # Until a package trusts it, its publish step fails with E404/ENEEDAUTH.
+      # The NPM_TOKEN repo secret is no longer read; delete it.
       - name: Publish @synap-core/types
         run: cd packages/types && pnpm publish --no-git-checks --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @synap-core/api-types
         if: steps.bump-api-types.outputs.bumped == 'true'
         run: cd packages/api-types && pnpm publish --no-git-checks --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # Backstop for the whole failure class: re-download what the registry now
       # serves and fail if any dependency range is `workspace:`/`file:` (i.e.

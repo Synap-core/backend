@@ -11,9 +11,15 @@
  * ONE copy path: each in-scope item's card image goes through
  * `copyLibraryItemMedia` (SSRF guard, ≤ 25 MB, magic bytes, dedup, record on
  * the item) as a single `image` cover — no reader runs, nothing is billed, no
- * page is fetched. An expired CDN link (old Instagram posts) is recorded as a
- * failed copy on the item by that door (`importMediaFailed`, honest), never
- * dropped.
+ * page is fetched.
+ *
+ * An EXPIRED signed CDN link (old Instagram / TikTok posts: `oe=` /
+ * `x-expires` in the past, `isExpiredSignedMediaUrl`) is SKIPPED before any
+ * fetch — no request, no failure recorded, no error mark: the item is marked
+ * `importMediaSkipped` (`library-media-skip.ts`) and draws the platform tile.
+ * Those items are the `missingMedia` scope of `library.readers` / `readWith`
+ * ("Get pictures for N old posts with X"). A link whose expiry is unknown, or
+ * still in the future, is fetched as before.
  *
  * Scope (SQL): live Library items (`metadata ? 'importItem'`) holding NO copy
  * (`importMedia` absent or empty) whose card image is an http(s) URL.
@@ -46,7 +52,15 @@ import {
   documents,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import type { UrlReadMedia } from "@synap-core/types/url-read";
+import {
+  isExpiredSignedMediaUrl,
+  signedMediaUrlExpiresAt,
+  type UrlReadMedia,
+} from "@synap-core/types/url-read";
+import {
+  markLibraryMediaSkipped,
+  type LibraryMediaSkip,
+} from "./library-media-skip.js";
 import {
   copyLibraryItemMedia,
   type CopyLibraryItemMediaResult,
@@ -58,8 +72,12 @@ import {
 
 const logger = createLogger({ module: "library-media-backfill" });
 
-/** Bump when the scope rule changes: a blinder pass's stamp stops counting. */
-export const LIBRARY_MEDIA_BACKFILL_VERSION = 1;
+/**
+ * Bump when the scope rule changes: a blinder pass's stamp stops counting.
+ * v2: expired signed links are skipped before fetching (and a v1 failure for
+ * such a link is replaced by the skip mark).
+ */
+export const LIBRARY_MEDIA_BACKFILL_VERSION = 2;
 export const LIBRARY_MEDIA_BACKFILL_SETTINGS_KEY = "libraryMediaBackfill";
 export const LIBRARY_MEDIA_BACKFILL_BATCH = 100;
 /** Items one run hands to the copy door at most (the next boot resumes). */
@@ -76,6 +94,8 @@ export interface LibraryMediaBackfillMarker {
   copied: number;
   /** Items whose card image could not be copied (recorded on the item). */
   failed: number;
+  /** Items whose card image link had expired: skipped, never fetched. */
+  skipped: number;
   startedAt: string;
   completedAt?: string;
 }
@@ -86,6 +106,8 @@ export interface LibraryMediaBackfillDeps {
     itemId: string;
     media: UrlReadMedia[];
   }) => Promise<CopyLibraryItemMediaResult>;
+  /** Test seam: the skip mark (`markLibraryMediaSkipped`). */
+  markSkipped?: (itemId: string, skip: LibraryMediaSkip) => Promise<void>;
   sleep?: (ms: number) => Promise<void>;
   now?: () => Date;
   batchSize?: number;
@@ -98,6 +120,7 @@ export interface LibraryMediaBackfillResult {
   scanned: number;
   copied: number;
   failed: number;
+  skipped: number;
 }
 
 async function readMarker(): Promise<LibraryMediaBackfillMarker | null> {
@@ -111,6 +134,7 @@ async function readMarker(): Promise<LibraryMediaBackfillMarker | null> {
     scanned: typeof m.scanned === "number" ? m.scanned : 0,
     copied: typeof m.copied === "number" ? m.copied : 0,
     failed: typeof m.failed === "number" ? m.failed : 0,
+    skipped: typeof m.skipped === "number" ? m.skipped : 0,
     startedAt: typeof m.startedAt === "string" ? m.startedAt : "",
     ...(typeof m.completedAt === "string"
       ? { completedAt: m.completedAt }
@@ -140,6 +164,10 @@ export async function backfillLibraryItemMedia(
   deps: LibraryMediaBackfillDeps = {}
 ): Promise<LibraryMediaBackfillResult> {
   const copy = deps.copy ?? ((input) => copyLibraryItemMedia(input));
+  const markSkipped =
+    deps.markSkipped ??
+    ((itemId: string, skip: LibraryMediaSkip) =>
+      markLibraryMediaSkipped(db, itemId, skip));
   const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? (() => new Date());
   const batchSize = deps.batchSize ?? LIBRARY_MEDIA_BACKFILL_BATCH;
@@ -153,6 +181,7 @@ export async function backfillLibraryItemMedia(
       scanned: previous.scanned,
       copied: previous.copied,
       failed: previous.failed,
+      skipped: previous.skipped,
     };
   }
   const marker: LibraryMediaBackfillMarker = previous ?? {
@@ -161,6 +190,7 @@ export async function backfillLibraryItemMedia(
     scanned: 0,
     copied: 0,
     failed: 0,
+    skipped: 0,
     startedAt: now().toISOString(),
   };
 
@@ -175,6 +205,7 @@ export async function backfillLibraryItemMedia(
         scanned: marker.scanned,
         copied: marker.copied,
         failed: marker.failed,
+        skipped: marker.skipped,
       };
     }
     const page = await db
@@ -193,14 +224,26 @@ export async function backfillLibraryItemMedia(
       .limit(want);
 
     for (const row of page) {
+      const url = row.imageUrl.trim();
+      const at = now();
+      const expiresAt = signedMediaUrlExpiresAt(url);
+      if (expiresAt !== null && isExpiredSignedMediaUrl(url, at.getTime())) {
+        // Dead before we ask: no request, no failure, no spacing spent.
+        await markSkipped(row.id, {
+          reason: "expired",
+          sourceUrl: url,
+          expiredAt: new Date(expiresAt).toISOString(),
+          at: at.toISOString(),
+        });
+        marker.skipped++;
+        continue;
+      }
       if (!first) await sleep(spacingMs);
       first = false;
       const result = await copy({
         userId: row.userId,
         itemId: row.id,
-        media: [
-          { url: row.imageUrl.trim(), kind: "image", role: "cover", order: 0 },
-        ],
+        media: [{ url, kind: "image", role: "cover", order: 0 }],
       });
       if (result.status === "failed") {
         // Nothing recorded on the item: stop here, the next boot retries
@@ -227,6 +270,7 @@ export async function backfillLibraryItemMedia(
         scanned: marker.scanned,
         copied: marker.copied,
         failed: marker.failed,
+        skipped: marker.skipped,
       };
     }
     await writePodSettingsKey(LIBRARY_MEDIA_BACKFILL_SETTINGS_KEY, marker);

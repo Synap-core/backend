@@ -40,7 +40,7 @@ export function MembersByRoleSection({
       hint="Every human with at least one workspace membership"
       actions={
         members.length > 0 ? (
-          <span className="text-[11px] tabular text-foreground/55">
+          <span className="text-[11px] tabular text-foreground/65">
             {members.length} {members.length === 1 ? "member" : "members"}
           </span>
         ) : null
@@ -59,7 +59,7 @@ export function MembersByRoleSection({
             if (!bucket || bucket.length === 0) return null;
             return (
               <div key={role} className="flex flex-col">
-                <div className="px-3 pb-1 pt-2 text-[10.5px] font-medium uppercase tracking-wider text-foreground/40">
+                <div className="px-3 pb-1 pt-2 text-[10.5px] font-medium uppercase tracking-wider text-foreground/65">
                   {role}s · {bucket.length}
                 </div>
                 <div className="-mx-2 divide-y divide-foreground/[0.05]">

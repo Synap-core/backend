@@ -72,7 +72,14 @@ beforeAll(async () => {
     `insert into focus_sessions (id, user_id, title, goal, project_id, status, origin, expected_outputs, agent_ids, metadata) values
       ($1, $3, 'Tracks-first', 'Move the whole project experience to tracks-first, end to end', $4, 'active', 'human', $5::jsonb, '{}', '{}'::jsonb),
       ($2, $3, null, 'Ship billing', null, 'active', 'human', $6::jsonb, '{}', '{}'::jsonb)`,
-    [TITLED, UNTITLED, USER, PROJECT, slots("Pick a plan", "Approve copy"), slots("Sign contract")]
+    [
+      TITLED,
+      UNTITLED,
+      USER,
+      PROJECT,
+      slots("Pick a plan", "Approve copy"),
+      slots("Sign contract"),
+    ]
   );
 }, 120_000);
 
@@ -117,6 +124,9 @@ describe("session title + project arrive on the needs-you row", () => {
       counts: [{ kind: "decision", count: 2 }],
     });
     const single = rows.find((r) => r.kind === "item");
-    expect(single).toMatchObject({ kind: "item", session: { id: UNTITLED, title: "Ship billing" } });
+    expect(single).toMatchObject({
+      kind: "item",
+      session: { id: UNTITLED, title: "Ship billing" },
+    });
   });
 });

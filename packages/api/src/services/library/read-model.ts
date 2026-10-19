@@ -38,6 +38,9 @@ import {
   type LibraryReadStatus,
 } from "@synap-core/types/imports";
 import { readItemCuration, toItemView } from "../imports/read-model.js";
+import { libraryReadConsentOf } from "./read-consent.js";
+import { readStoredLibraryRead } from "./light-read-store.js";
+import { mediaSkippedExpired } from "../media-copy/library-media-skip.js";
 
 export type LibraryDb = typeof defaultDb;
 
@@ -254,9 +257,24 @@ export function toLibraryItemView(row: {
     ?.intakeSource as { sessionId?: string | null } | undefined;
   const groupIds = c.groupIds ?? [];
   const media = readLibraryItemMedia(row.metadata);
+  const read = readLibraryItemRead(row.metadata, base.contentStatus);
+  const stored = readStoredLibraryRead(row.metadata, base.contentStatus).read;
+  const consent = libraryReadConsentOf(
+    {
+      ...(stored.requestedReader
+        ? { requestedReader: stored.requestedReader }
+        : {}),
+      ...(stored.requestedAt ? { requestedAt: stored.requestedAt } : {}),
+      ...(stored.requestedWithVideo
+        ? { requestedWithVideo: true as const }
+        : {}),
+      status: read.status,
+    },
+    new Date()
+  );
   return {
     ...base,
-    read: readLibraryItemRead(row.metadata, base.contentStatus),
+    read: consent ? { ...read, consent } : read,
     groupIds,
     suggestedGroupIds: (c.suggestedGroupIds ?? []).filter(
       (g) => !groupIds.includes(g) && !(c.dismissedGroupIds ?? []).includes(g)
@@ -270,6 +288,9 @@ export function toLibraryItemView(row: {
     ...(media.failedAt ? { mediaFailedAt: media.failedAt } : {}),
     ...(media.failedReasons.length
       ? { mediaFailedReasons: media.failedReasons }
+      : {}),
+    ...(media.media.length === 0 && mediaSkippedExpired(row.metadata)
+      ? { mediaExpired: true as const }
       : {}),
   };
 }

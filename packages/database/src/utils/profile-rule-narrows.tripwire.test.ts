@@ -61,7 +61,6 @@ const profileRule = (key: string, profile: string) => ({
   verdict: "auto" as const,
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function dbReturning(rows: unknown[]): any {
   return {
     select: () => ({
@@ -114,7 +113,10 @@ describe("a profile on an action rule only narrows", () => {
             };
             if (!draftRuleMatchesWrite(narrow, write)) continue;
             matched++;
-            expect(draftRuleMatchesWrite(bare, write), `${key}/${ruleProfile}`).toBe(true);
+            expect(
+              draftRuleMatchesWrite(bare, write),
+              `${key}/${ruleProfile}`
+            ).toBe(true);
             expect(writeProfile, `${key}/${ruleProfile}`).toBe(ruleProfile);
           }
         }
@@ -132,7 +134,11 @@ describe("a profile on an action rule only narrows", () => {
           const { targetProfile: _p, ...bare } = narrow;
           for (const writeKey of [...REVERSIBLE_EVENT_KEYS, ...FLOORED_KEYS]) {
             for (const writeProfile of [...PROFILES, null]) {
-              const write = { ...split(writeKey), agentUserId: AGENT, profileSlug: writeProfile };
+              const write = {
+                ...split(writeKey),
+                agentUserId: AGENT,
+                profileSlug: writeProfile,
+              };
               expect(
                 draftRuleMatchesWrite(narrow, write),
                 `${pattern}/${ruleProfile} on ${writeKey}/${writeProfile}`
@@ -150,8 +156,26 @@ describe("a profile on an action rule only narrows", () => {
     for (const writeProfile of [...PROFILES, "deal"]) {
       const match = await resolveGovernanceRule({
         db: dbReturning([
-          { id: "tighten", principalKind: "agent", scopeKind: "pod", targetKind: "action", targetPattern: "entity.*", targetProfile: "person", verdict: "propose", createdAt: new Date("2026-09-01") },
-          { id: "broad-auto", principalKind: "any", scopeKind: "pod", targetKind: "action", targetPattern: "*", targetProfile: null, verdict: "auto", createdAt: new Date("2026-09-20") },
+          {
+            id: "tighten",
+            principalKind: "agent",
+            scopeKind: "pod",
+            targetKind: "action",
+            targetPattern: "entity.*",
+            targetProfile: "person",
+            verdict: "propose",
+            createdAt: new Date("2026-09-01"),
+          },
+          {
+            id: "broad-auto",
+            principalKind: "any",
+            scopeKind: "pod",
+            targetKind: "action",
+            targetPattern: "*",
+            targetProfile: null,
+            verdict: "auto",
+            createdAt: new Date("2026-09-20"),
+          },
         ]),
         agentUserId: AGENT,
         subjectType: "entity",
@@ -167,8 +191,26 @@ describe("a profile on an action rule only narrows", () => {
       const { subjectType, action } = split(key);
       const match = await resolveGovernanceRule({
         db: dbReturning([
-          { id: "old-grant", principalKind: "agent", scopeKind: "pod", targetKind: "action", targetPattern: key, targetProfile: "note", verdict: "auto", createdAt: new Date("2026-09-01") },
-          { id: "new-posture", principalKind: "agent", scopeKind: "pod", targetKind: "action", targetPattern: key, targetProfile: null, verdict: "propose", createdAt: new Date("2026-09-20") },
+          {
+            id: "old-grant",
+            principalKind: "agent",
+            scopeKind: "pod",
+            targetKind: "action",
+            targetPattern: key,
+            targetProfile: "note",
+            verdict: "auto",
+            createdAt: new Date("2026-09-01"),
+          },
+          {
+            id: "new-posture",
+            principalKind: "agent",
+            scopeKind: "pod",
+            targetKind: "action",
+            targetPattern: key,
+            targetProfile: null,
+            verdict: "propose",
+            createdAt: new Date("2026-09-20"),
+          },
         ]),
         agentUserId: AGENT,
         subjectType,
@@ -212,7 +254,9 @@ describe("a profile on an action rule only narrows", () => {
         governanceRuleVerdict: match!.verdict,
         ...context,
       });
-      expect(verdict.verdict, `${key} ${JSON.stringify(context)}`).toBe("propose");
+      expect(verdict.verdict, `${key} ${JSON.stringify(context)}`).toBe(
+        "propose"
+      );
     }
   });
 });

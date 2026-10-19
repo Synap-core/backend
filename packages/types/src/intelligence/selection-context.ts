@@ -4,10 +4,7 @@
  */
 
 export type SelectionContextType =
-  | "entities"
-  | "viewRows"
-  | "documents"
-  | "text";
+  "entities" | "viewRows" | "documents" | "text";
 
 export interface SelectionContextBase {
   type: SelectionContextType;

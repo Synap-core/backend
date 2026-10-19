@@ -140,7 +140,9 @@ const read = async (table: object, grant?: GrantScope) => {
     scopedDb(AccessContext.operator({ userId: ALICE })).findMany<{
       id: string;
     }>(table);
-  const rows = grant ? await runWithGrant(grantOfScope(grant), run) : await run();
+  const rows = grant
+    ? await runWithGrant(grantOfScope(grant), run)
+    : await run();
   return rows.map((r) => r.id).sort();
 };
 
@@ -213,7 +215,9 @@ describe("the DATA-table seam (accessScopeWhere) honours the grant too", () => {
             userId: ALICE,
           })
         );
-    const rows = grant ? await runWithGrant(grantOfScope(grant), run) : await run();
+    const rows = grant
+      ? await runWithGrant(grantOfScope(grant), run)
+      : await run();
     return rows.map((r) => r.id).sort();
   };
 
@@ -245,7 +249,9 @@ describe("the shared channel and session helpers honour the grant", () => {
         .select({ id: idCol as never })
         .from(table)
         .where(where());
-    const rows = grant ? await runWithGrant(grantOfScope(grant), run) : await run();
+    const rows = grant
+      ? await runWithGrant(grantOfScope(grant), run)
+      : await run();
     return rows.map((r) => r.id);
   };
 

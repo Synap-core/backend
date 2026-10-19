@@ -25,7 +25,10 @@ const cloudSession: KratosSessionLike = {
 };
 const passwordSession: KratosSessionLike = {
   identity: { id: ID },
-  authentication_methods: [{ method: "oidc", provider: "cp" }, { method: "password" }],
+  authentication_methods: [
+    { method: "oidc", provider: "cp" },
+    { method: "password" },
+  ],
 };
 const recoverySession: KratosSessionLike = {
   identity: { id: ID },
@@ -50,7 +53,11 @@ function world(opts: {
   return createCloudTrustHookRouter(deps);
 }
 
-function settings(router: ReturnType<typeof world>, body: unknown, secret = SECRET) {
+function settings(
+  router: ReturnType<typeof world>,
+  body: unknown,
+  secret = SECRET
+) {
   return router.request("/settings/guard", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Webhook-Secret": secret },
@@ -95,15 +102,21 @@ describe("POST /settings/guard", () => {
   });
 
   it("allows Cloud-only to add the FIRST pod-held factor", async () => {
-    const res = await settings(world({ sessions: { c1: cloudSession }, podHeld: false }), {
-      identity_id: ID,
-      session_cookie: "c1",
-    });
+    const res = await settings(
+      world({ sessions: { c1: cloudSession }, podHeld: false }),
+      {
+        identity_id: ID,
+        session_cookie: "c1",
+      }
+    );
     expect(res.status).toBe(204);
   });
 
   it("fails closed when the session cannot be proven: no cookie, invalid cookie, other identity", async () => {
-    const other: KratosSessionLike = { ...passwordSession, identity: { id: "someone-else" } };
+    const other: KratosSessionLike = {
+      ...passwordSession,
+      identity: { id: "someone-else" },
+    };
     const router = world({ sessions: { other } });
     for (const body of [
       { identity_id: ID },
@@ -133,19 +146,26 @@ describe("POST /login/cloud", () => {
   const login = (router: ReturnType<typeof world>) =>
     router.request("/login/cloud", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-Webhook-Secret": SECRET },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Webhook-Secret": SECRET,
+      },
       body: JSON.stringify({ identity_id: ID }),
     });
 
   it("refuses Cloud sign-in when the owner turned it off", async () => {
     const res = await login(world({ trust: "off" }));
     expect(res.status).toBe(403);
-    expect((await res.json()).messages[0].messages[0].id).toBe(CLOUD_SIGN_IN_DISABLED.id);
+    expect((await res.json()).messages[0].messages[0].id).toBe(
+      CLOUD_SIGN_IN_DISABLED.id
+    );
   });
 
   it("lets it through for sign_in and sign_in_recovery", async () => {
     expect((await login(world({ trust: "sign_in" }))).status).toBe(204);
-    expect((await login(world({ trust: "sign_in_recovery" }))).status).toBe(204);
+    expect((await login(world({ trust: "sign_in_recovery" }))).status).toBe(
+      204
+    );
   });
 
   it("a failed read is 503", async () => {

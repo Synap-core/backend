@@ -167,9 +167,7 @@ export async function searchInstructionSkills(
 
   const order: SQL[] = [
     ...(linkedFirst ? [drizzleSql`${linkedFirst} ASC`] : []),
-    ...(score
-      ? [drizzleSql`${score} DESC`]
-      : []),
+    ...(score ? [drizzleSql`${score} DESC`] : []),
     drizzleSql`${skills.name} ASC`,
     drizzleSql`${skills.id} ASC`,
   ];

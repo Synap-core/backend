@@ -105,7 +105,7 @@ function collectPatternNames(
       break;
     case "ArrayPattern":
       for (const e of n.elements as (acorn.Node | null)[])
-        e && collectPatternNames(e, out);
+        if (e) collectPatternNames(e, out);
       break;
     case "RestElement":
       collectPatternNames(n.argument as acorn.Node, out);

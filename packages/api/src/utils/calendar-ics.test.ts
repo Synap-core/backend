@@ -73,7 +73,9 @@ describe("ICS builder — all-day VALUE=DATE does not UTC-shift", () => {
   });
 
   it("a T00:00 ISO still places on the Y-M-D in the string", () => {
-    const { ics } = build([entity({ properties: { dueDate: "2026-07-25T00:00:00.000Z" } })]);
+    const { ics } = build([
+      entity({ properties: { dueDate: "2026-07-25T00:00:00.000Z" } }),
+    ]);
     expect(ics).toContain("DTSTART;VALUE=DATE:20260725");
   });
 });
@@ -81,25 +83,25 @@ describe("ICS builder — all-day VALUE=DATE does not UTC-shift", () => {
 describe("ICS builder — timed UTC", () => {
   it("emits DTSTART as a UTC instant", () => {
     const { ics } = build([
-        entity({
-          profileSlug: "event",
-          properties: { startTime: "2026-07-25T15:30:00.000Z" },
-        }),
-      ]);
+      entity({
+        profileSlug: "event",
+        properties: { startTime: "2026-07-25T15:30:00.000Z" },
+      }),
+    ]);
     expect(ics).toContain("DTSTART:20260725T153000Z");
     expect(ics).not.toContain("VALUE=DATE");
   });
 
   it("includes timed DTEND when endTime is present", () => {
     const { ics } = build([
-        entity({
-          profileSlug: "event",
-          properties: {
-            startTime: "2026-07-25T15:30:00.000Z",
-            endTime: "2026-07-25T16:30:00.000Z",
-          },
-        }),
-      ]);
+      entity({
+        profileSlug: "event",
+        properties: {
+          startTime: "2026-07-25T15:30:00.000Z",
+          endTime: "2026-07-25T16:30:00.000Z",
+        },
+      }),
+    ]);
     expect(ics).toContain("DTEND:20260725T163000Z");
   });
 });
@@ -136,8 +138,7 @@ describe("SEQUENCE reaches the body and increases with updatedAt", () => {
   it("a later updatedAt yields a STRICTLY GREATER value", () => {
     const older = build([entity({ updatedAt: "2026-07-20T10:00:00.000Z" })]);
     const newer = build([entity({ updatedAt: "2026-07-20T10:05:00.000Z" })]);
-    const read = (ics: string) =>
-      Number(/^SEQUENCE:(\d+)\r?$/m.exec(ics)?.[1]);
+    const read = (ics: string) => Number(/^SEQUENCE:(\d+)\r?$/m.exec(ics)?.[1]);
     expect(read(newer.ics)).toBeGreaterThan(read(older.ics));
     expect(read(older.ics)).toBeGreaterThan(0);
   });
@@ -163,11 +164,11 @@ describe("SEQUENCE reaches the body and increases with updatedAt", () => {
 describe("ICS builder — cancelled omitted", () => {
   it("drops a cancelled task even when it has a date", () => {
     const { ics, events } = build([
-        entity({
-          title: "Cancelled thing",
-          properties: { dueDate: "2026-07-25", status: "cancelled" },
-        }),
-      ]);
+      entity({
+        title: "Cancelled thing",
+        properties: { dueDate: "2026-07-25", status: "cancelled" },
+      }),
+    ]);
     expect(events).toHaveLength(0);
     expect(ics).not.toContain("Cancelled thing");
     expect(ics).not.toContain("BEGIN:VEVENT");
@@ -220,12 +221,12 @@ describe("ICS builder — cancelled omitted", () => {
 
   it("does not drop a dated event whose status happens to be cancelled", () => {
     const { events } = build([
-        entity({
-          profileSlug: "event",
-          title: "Rain plan",
-          properties: { startDate: "2026-07-25", status: "cancelled" },
-        }),
-      ]);
+      entity({
+        profileSlug: "event",
+        title: "Rain plan",
+        properties: { startDate: "2026-07-25", status: "cancelled" },
+      }),
+    ]);
     expect(events).toHaveLength(1);
     expect(events[0]?.summary).toBe("Rain plan");
   });
@@ -233,7 +234,9 @@ describe("ICS builder — cancelled omitted", () => {
 
 describe("ICS builder — undated omitted", () => {
   it("omits an entity with no date property", () => {
-    const { events, ics } = build([entity({ title: "No date", properties: {} })]);
+    const { events, ics } = build([
+      entity({ title: "No date", properties: {} }),
+    ]);
     expect(events).toHaveLength(0);
     expect(ics).not.toContain("No date");
   });
@@ -247,12 +250,12 @@ describe("ICS builder — undated omitted", () => {
       })
     ).toBeNull();
     const { events } = build([
-        entity({
-          title: "Created only",
-          properties: {},
-          updatedAt: "2026-07-01T00:00:00.000Z",
-        }),
-      ]);
+      entity({
+        title: "Created only",
+        properties: {},
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+    ]);
     expect(events).toHaveLength(0);
   });
 });
@@ -298,7 +301,9 @@ describe("ICS envelope", () => {
     expect(ics).toMatch(/^X-PUBLISHED-TTL:PT\d+[HMD]\r?$/m);
     // Same value in both spellings, or a client reading one disagrees with a
     // client reading the other.
-    const refresh = /^REFRESH-INTERVAL;VALUE=DURATION:(\S+?)\r?$/m.exec(ics)![1];
+    const refresh = /^REFRESH-INTERVAL;VALUE=DURATION:(\S+?)\r?$/m.exec(
+      ics
+    )![1];
     const ttl = /^X-PUBLISHED-TTL:(\S+?)\r?$/m.exec(ics)![1];
     expect(refresh).toBe(ttl);
     expect(refresh).toBe(FEED_REFRESH_HINT);
@@ -324,7 +329,7 @@ describe("SUMMARY/DESCRIPTION escaping reaches the OUTPUT, not just the helper",
   // title contained a character that needs escaping — so deleting the
   // escapeIcsText() wrapper from the SUMMARY line left the suite green while
   // a title with a newline could break the file into forged properties.
-  const NASTY = 'Ship v2; call Bob, then\nBEGIN:VEVENT\nSUMMARY:Injected';
+  const NASTY = "Ship v2; call Bob, then\nBEGIN:VEVENT\nSUMMARY:Injected";
 
   it("a title with newline, semicolon and comma cannot break the line", () => {
     const { ics } = build([entity({ title: NASTY })]);
@@ -336,7 +341,7 @@ describe("SUMMARY/DESCRIPTION escaping reaches the OUTPUT, not just the helper",
     expect(ics.match(/^SUMMARY:/gm) ?? []).toHaveLength(1);
     // The raw newline is gone; the ICS escape is present.
     expect(ics).toContain("\\nBEGIN:VEVENT");
-    expect(ics).toContain("\;");
+    expect(ics).toContain("\\;");
     expect(ics).toContain("\\,");
   });
 
@@ -360,7 +365,11 @@ describe("SUMMARY/DESCRIPTION escaping reaches the OUTPUT, not just the helper",
 
 describe("the feed is windowed", () => {
   const at = (y: number, m: number, d: number) =>
-    entity({ properties: { dueDate: `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}` } });
+    entity({
+      properties: {
+        dueDate: `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`,
+      },
+    });
 
   it("keeps what is inside the window", () => {
     expect(isWithinFeedWindow(new Date(2026, 6, 25), NOW)).toBe(true);

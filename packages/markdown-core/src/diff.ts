@@ -257,7 +257,7 @@ export type DiffBlock =
  * what the block renders. Such blocks diff as whole blocks instead.
  */
 const INLINE_MARKUP =
-  /[\[\]*_`~=<>|\\]|^\s{0,3}(#|>|[-+*]\s|\d+[.)]\s|:{3,}|```|~~~)/m;
+  /[[\]*_`~=<>|\\]|^\s{0,3}(#|>|[-+*]\s|\d+[.)]\s|:{3,}|```|~~~)/m;
 
 /** A single-line-or-wrapped paragraph with no inline markup. */
 export function isPlainProse(block: string): boolean {

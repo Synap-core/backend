@@ -20,7 +20,7 @@ import { Button, addToast } from "@heroui/react";
 import { ArrowRight, Bot, KeyRound } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import {
@@ -38,13 +38,9 @@ import {
   notFound,
   type FailureWording,
 } from "../../../_lib/object/load-failure";
+import { SubjectActivity } from "../../../_lib/object/subject-activity";
 import type { ObjectFrame } from "../../../_lib/object/views/object-frame";
-import {
-  ResourceRow,
-  ResourceRowEmpty,
-  ResourceRowError,
-  ResourceRowSkeleton,
-} from "../../components/resource-row";
+import { ResourceRow, ResourceRowEmpty } from "../../components/resource-row";
 import { SectionCard } from "../../components/section-card";
 import {
   ComputerKeyLifetimeModal,
@@ -65,8 +61,6 @@ import {
   type ComputerLike,
 } from "./computer-model";
 
-/** Activity rows the tab reads — one page, newest first. */
-const ACTIVITY_SHOWN = 25;
 /** Agents the Overview previews before "Open Agents tab". */
 const AGENTS_PREVIEW = 3;
 
@@ -369,7 +363,12 @@ export function ComputerObject({
           {
             key: "activity",
             label: "Activity",
-            content: <ActivityTab computerId={c.id} viewerId={viewerId} />,
+            content: (
+              <SubjectActivity
+                subjectIds={[c.id]}
+                line={(e) => activityLine(e, humanizeToken)}
+              />
+            ),
           },
         ],
         advanced: {
@@ -429,66 +428,6 @@ function AgentRows({
         />
       ))}
     </div>
-  );
-}
-
-/**
- * What was done to this computer (`events.search` on it as the subject). The
- * door is floored to the reader: their own acts, and acts in spaces they can
- * see — so an admin reading another member's computer sees what THEY did.
- */
-function ActivityTab({
-  computerId,
-  viewerId,
-}: {
-  computerId: string;
-  viewerId: string | null;
-}) {
-  const events = trpc.events.search.useQuery(
-    { subjectId: computerId, limit: ACTIVITY_SHOWN },
-    { staleTime: 30_000 }
-  );
-  let body: ReactNode;
-  if (events.isLoading) body = <ResourceRowSkeleton count={3} />;
-  else if (events.isError)
-    body = (
-      <ResourceRowError
-        message="Couldn't load its activity."
-        onRetry={() => void events.refetch()}
-      />
-    );
-  else if ((events.data ?? []).length === 0)
-    body = (
-      <ResourceRowEmpty message="Nothing recorded on it that you can see yet." />
-    );
-  else
-    body = (
-      <ul className="flex flex-col divide-y divide-foreground/[0.05]">
-        {(events.data ?? []).map((e) => (
-          <li
-            key={e.id}
-            className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-2"
-          >
-            <span className="min-w-0 text-[12.5px] text-foreground">
-              {activityLine(e, humanizeToken)}
-              {viewerId && e.userId === viewerId && (
-                <span className="text-foreground/65"> · by you</span>
-              )}
-            </span>
-            <span className="shrink-0 text-[12px] text-foreground/65">
-              {formatRelative(e.timestamp)}
-            </span>
-          </li>
-        ))}
-      </ul>
-    );
-  return (
-    <SectionCard
-      title="Activity"
-      hint="Changes you can see: yours, and those in spaces you belong to."
-    >
-      {body}
-    </SectionCard>
   );
 }
 

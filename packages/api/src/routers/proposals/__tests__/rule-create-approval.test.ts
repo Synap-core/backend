@@ -2,7 +2,7 @@
  * `rule/create` — the APPROVAL half of the Rule Loop's governed write door.
  *
  * A governed write door with no approval half is this repo's most repeated
- * silent-success defect: the `*​/*` catch-all does NOT throw for a gate-made
+ * silent-success defect: the `*\/*` catch-all does NOT throw for a gate-made
  * proposal — it emits `.validated`, flips the row APPROVED and returns success
  * while nothing is written. These tests DRIVE the executor (not a source-text
  * scan) so they measure that approval actually applies.

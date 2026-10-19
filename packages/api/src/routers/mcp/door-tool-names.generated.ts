@@ -285,6 +285,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__move_entities",
     raycast: "move-to-space",
   },
+  synap_organize_library: {
+    "pod-mcp": "synap_organize_library",
+    "cp-connector": "pod__organize_library",
+    raycast: null,
+  },
   synap_orient: {
     "pod-mcp": "synap_orient",
     "cp-connector": "pod__orient",

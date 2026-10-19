@@ -15,7 +15,7 @@
  */
 import { and, eq, type SQL } from "drizzle-orm";
 import type { AnyColumn } from "drizzle-orm";
-import { db } from "@synap/database";
+import { type db } from "@synap/database";
 import { channels } from "@synap/database/schema";
 import { channelVisibilityWhere as podChannelVisibilityWhere } from "@synap/database/channel-visibility";
 import { grantReadPredicate } from "../access/grant-read.js";

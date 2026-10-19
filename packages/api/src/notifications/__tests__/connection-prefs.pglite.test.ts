@@ -12,7 +12,15 @@
  *
  * Stubbed: socket, Expo, side-effect emitters, the event log.
  */
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterAll,
+  vi,
+} from "vitest";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -49,11 +57,7 @@ vi.mock("../../utils/chat-realtime-broadcast.js", () => ({
 vi.mock("@synap/events", () => ({ emitSideEffects: async () => undefined }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import {
-  notifications,
-  notificationPreferences,
-  users,
-} from "@synap/database";
+import { notifications, notificationPreferences, users } from "@synap/database";
 import { NotificationService } from "../NotificationService.js";
 import {
   connectionPrefPatchSchema,
@@ -153,7 +157,11 @@ describe("connection prefs — pin + notify level (decision 7)", () => {
       `insert into notification_preferences (user_id, workspace_id, enabled, routing_rules) values ($1, null, true, '{"ai":"mute"}'::jsonb)`,
       [USER]
     );
-    await writeConnectionPref(USER, { kind: "model", id: "openai", pinned: true });
+    await writeConnectionPref(USER, {
+      kind: "model",
+      id: "openai",
+      pinned: true,
+    });
     const row = await q<{ routing_rules: unknown; connection_prefs: unknown }>(
       `select routing_rules, connection_prefs from notification_preferences where user_id = $1`,
       [USER]
@@ -220,7 +228,11 @@ describe("connection prefs — pin + notify level (decision 7)", () => {
   });
 
   it("only the NAMED connection's level applies", async () => {
-    await writeConnectionPref(USER, { kind: "account", id: "slack", notify: "nothing" });
+    await writeConnectionPref(USER, {
+      kind: "account",
+      id: "slack",
+      notify: "nothing",
+    });
     expect(await notice("connector.auth.expired")).toBeTruthy();
     // A notice that names no connection is never gated.
     await writeConnectionPref(USER, { ...GOOGLE, notify: "nothing" });

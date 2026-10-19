@@ -411,7 +411,10 @@ export async function clipHostedAgentGrants(
         if (live.length === 0) continue; // already touches nothing
         const clipped = new Map<
           string,
-          { row: (typeof live)[number]; scope: GrantInput & { expiresAt: Date | null } }
+          {
+            row: (typeof live)[number];
+            scope: GrantInput & { expiresAt: Date | null };
+          }
         >();
         for (const row of live)
           for (const scope of scopesWithinLive([row], hostLive, row.expiresAt))

@@ -39,3 +39,7 @@ CHANGELOG.md
 # reformatting it here would fork it from the canonical.
 scripts/strip-comments.mjs
 scripts/strip-comments.d.mts
+
+# Byte-identical in synap-app, synap-backend and synap-control-plane-api (see its
+# header): reformatting it here would fork it from the other two copies.
+scripts/precommit-check.mjs

@@ -1147,20 +1147,16 @@ async function runDirectWriteVerbOnce(opts: {
   }
 
   // ── 2. RUN ────────────────────────────────────────────────────────────────────
-  let ran: Awaited<ReturnType<typeof runResolvedSkill>>;
-  try {
-    ran = await runResolvedSkill(opts.skillRow, opts.parameters, {
-      userId: opts.userId,
-      workspaceId: opts.workspaceId,
-      connectionSelector: opts.connectionSelector,
-      agentUserId: opts.agentUserId,
-      sessionId: opts.sessionId ?? null,
-    });
-  } catch (err) {
-    // Ambiguous throw (the side effect may have reached the far side): KEEP the
-    // claim so a retry within the window does NOT re-send. Rethrow.
-    throw err;
-  }
+  // An ambiguous throw (the side effect may have reached the far side)
+  // propagates with the claim KEPT, so a retry within the window does NOT
+  // re-send.
+  const ran = await runResolvedSkill(opts.skillRow, opts.parameters, {
+    userId: opts.userId,
+    workspaceId: opts.workspaceId,
+    connectionSelector: opts.connectionSelector,
+    agentUserId: opts.agentUserId,
+    sessionId: opts.sessionId ?? null,
+  });
 
   // ── 3. RESOLVE ──────────────────────────────────────────────────────────────
   if (ran.kind !== "run") {

@@ -65,6 +65,9 @@ export default [
       // repo: a lint or format fix here would fork it from the canonical.
       "scripts/strip-comments.mjs",
       "scripts/strip-comments.d.mts",
+      // Same for the pre-commit checker: byte-identical in synap-app,
+      // synap-backend and synap-control-plane-api (see its header).
+      "scripts/precommit-check.mjs",
     ],
   },
   js.configs.recommended,
@@ -83,9 +86,18 @@ export default [
         "warn",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
+      // `disallowTypeAnnotations: false`: inline `typeof import("./x")` types are
+      // the idiom here, not a lapse — vitest's documented
+      // `importOriginal<typeof import("./x")>()` in ~660 test files, and lazy
+      // `await import()` doors that type the module without a static edge. The
+      // rule still converts every static value import used only as a type.
       "@typescript-eslint/consistent-type-imports": [
         "warn",
-        { prefer: "type-imports", fixStyle: "inline-type-imports" },
+        {
+          prefer: "type-imports",
+          fixStyle: "inline-type-imports",
+          disallowTypeAnnotations: false,
+        },
       ],
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-empty-object-type": "warn", // Downgrade to warn (generated files use {})
@@ -155,6 +167,11 @@ export default [
       "packages/api/src/routers/capture.ts",
       "packages/database/src/services/team-person-bridge.ts",
       "packages/database/src/utils/create-workspace-from-definition.ts",
+      // Unenforced-period debt (CI red 2026-05-05 → 2026-10-18), may only
+      // SHRINK: `entityRepo.create` sites written while nothing ran this rule.
+      // Not sanctioned — funnel each through materializeEntity, delete its line.
+      "packages/api/src/services/definition-seeds.ts", // created d6db364bb 2026-09-27
+      "packages/api/src/services/event-sync/migrate-gcal-events.ts", // created 069b0345d 2026-07-23
     ],
     rules: {
       "no-restricted-syntax": "off",
@@ -211,6 +228,10 @@ export default [
     // migration ledger). SHRINKS as batches convert each to scopedDb /
     // scopedDb().mutate(). A NEW router doing raw access is NOT added here — it
     // is written through the access layer from the start.
+    // Reconciled 2026-10-19: a parent split into a folder is replaced by its
+    // split files (each says which parent and commit); parents that no longer
+    // touch a scoped table, and paths that no longer exist, were dropped.
+    // scripts/check-eslint-ledger-paths.mjs fails CI on a path that is gone.
     files: [
       "packages/api/src/routers/activity.ts",
       "packages/api/src/routers/artifacts.ts",
@@ -220,11 +241,23 @@ export default [
       "packages/api/src/routers/capture.ts",
       "packages/api/src/routers/cell-instances.ts",
       "packages/api/src/routers/cells.ts",
-      "packages/api/src/routers/channels.ts",
+      "packages/api/src/routers/channels/branches.ts", // split from routers/channels.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/channels/crud.ts", // split from routers/channels.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/channels/external.ts", // split from routers/channels.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/channels/feeds.ts", // split from routers/channels.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/channels/helpers.ts", // split from routers/channels.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/channels/messaging.ts", // split from routers/channels.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/channels/send-message.ts", // split from routers/channels.ts in b32b606dd (2026-08-13)
       "packages/api/src/routers/chat-stream.ts",
       "packages/api/src/routers/devplane.ts",
       "packages/api/src/routers/documents.ts",
       "packages/api/src/routers/entities.ts",
+      "packages/api/src/routers/entities/admin.ts", // split from routers/entities.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/entities/create.ts", // split from routers/entities.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/entities/facets.ts", // split from routers/entities.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/entities/helpers.ts", // split from routers/entities.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/entities/mutate.ts", // split from routers/entities.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/entities/read.ts", // split from routers/entities.ts in b32b606dd (2026-08-13)
       "packages/api/src/routers/external/chat.ts",
       "packages/api/src/routers/file-upload.ts",
       "packages/api/src/routers/graph.ts",
@@ -233,7 +266,6 @@ export default [
       "packages/api/src/routers/hub-protocol/context.ts",
       "packages/api/src/routers/hub-protocol/documents.ts",
       "packages/api/src/routers/hub-protocol/linking.ts",
-      "packages/api/src/routers/hub-protocol/migration.ts",
       "packages/api/src/routers/hub-protocol/profiles.ts",
       "packages/api/src/routers/hub-protocol/proposals.ts",
       "packages/api/src/routers/hub-protocol/rest/artifacts.ts",
@@ -245,9 +277,7 @@ export default [
       "packages/api/src/routers/hub-protocol/rest/knowledge.ts",
       "packages/api/src/routers/hub-protocol/rest/mcp-servers.ts",
       "packages/api/src/routers/hub-protocol/rest/messaging.ts",
-      "packages/api/src/routers/hub-protocol/rest/packages.ts",
       "packages/api/src/routers/hub-protocol/rest/projects.ts",
-      "packages/api/src/routers/hub-protocol/rest/resolve.ts",
       "packages/api/src/routers/hub-protocol/rest/runs.ts",
       "packages/api/src/routers/hub-protocol/rest/threads.ts",
       "packages/api/src/routers/hub-protocol/rest/vault.ts",
@@ -260,9 +290,28 @@ export default [
       "packages/api/src/routers/playbook-runs.ts",
       "packages/api/src/routers/playbooks.ts",
       "packages/api/src/routers/proposals.ts",
-      "packages/api/src/routers/proposals/approve-executors.ts",
+      "packages/api/src/routers/proposals/apply-approval.ts", // split from routers/proposals.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/proposals/display.ts", // split from routers/proposals.ts in b32b606dd (2026-08-13)
+      "packages/api/src/routers/proposals/executors/automation.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/capability.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/catch-all.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/cell.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/channel.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/document.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/entity.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/focus-session.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/messaging.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/playbook.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/profile.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/project.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/property-def.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/provider.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/shared.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/skill.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/tool.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/view.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
+      "packages/api/src/routers/proposals/executors/workspace.ts", // split from routers/proposals/approve-executors.ts in 054f6afd9 (2026-08-12)
       "packages/api/src/routers/relations.ts",
-      "packages/api/src/routers/search.ts",
       "packages/api/src/routers/secrets-vault.ts",
       "packages/api/src/routers/skills.ts",
       "packages/api/src/routers/subscriptions.ts",
@@ -273,7 +322,7 @@ export default [
       "packages/api/src/routers/webhooks-inbound.ts",
       "packages/api/src/routers/whiteboards.ts",
       "packages/api/src/routers/widget-definitions.ts",
-      "packages/api/src/routers/workspaces.ts",
+      "packages/api/src/routers/workspaces/definition-engine.ts", // split from routers/workspaces.ts in b32b606dd (2026-08-13)
       // Batch 3 (access-convergence migration ledger) — routers that still do
       // raw access to the newly-registered user-floored tables. Every read in
       // these is already `userId`-floored (or podAdmin/workspace-gated); the
@@ -295,8 +344,68 @@ export default [
       "packages/api/src/routers/preferences.ts",
       "packages/api/src/routers/source-configs.ts",
       "packages/api/src/routers/source-subscriptions.ts",
-      "packages/api/src/routers/trusted-issuers.ts",
       "packages/api/src/routers/users.ts",
+    ],
+    rules: {
+      "no-restricted-syntax": "off",
+    },
+  },
+  {
+    // Unenforced-period debt (CI red 2026-05-05 → 2026-10-18), may only SHRINK.
+    // The ledger above was written on 2026-07-11 while CI was already dark, so
+    // nothing stopped new routers from doing raw scoped-table access. These are
+    // the routers that did — written after the ledger, or split from a router
+    // the ledger never listed (mcp/adapter.ts), or older files that gained raw
+    // access later. They are listed so CI can go green; they are NOT sanctioned.
+    // Convert each to scopedDb / scopedDb().mutate() and delete its line. Never
+    // add a line here: a new router goes through the access layer.
+    files: [
+      "packages/api/src/routers/captures.ts", // created 4ff56b807 2026-09-14
+      "packages/api/src/routers/connectors-trpc.ts", // created 408aadf0d 2026-03-23; file predates the ledger, raw access since 0fde689e0 2026-09-13
+      "packages/api/src/routers/file-upload-presign.ts", // created 1e8045b08 2026-10-05
+      "packages/api/src/routers/focus-sessions.ts", // created 2383016dc 2026-06-10; file predates the ledger, raw access since 70f7d0c4f 2026-10-01
+      "packages/api/src/routers/governance-rules.ts", // created 2511c96b0 2026-07-27
+      "packages/api/src/routers/guidelines.ts", // created 9cc6cb6ca 2026-08-12
+      "packages/api/src/routers/hub-protocol/agent-belongs-to.ts", // created 2099fc31f 2026-10-11
+      "packages/api/src/routers/hub-protocol/compacted-states.ts", // created 6d3681634 2026-03-05; file predates the ledger, raw access since a5294e738 2026-10-06
+      "packages/api/src/routers/hub-protocol/playbook-doors.ts", // created 7b4540f3c 2026-09-14
+      "packages/api/src/routers/hub-protocol/rest/_shared.ts", // created 48592420b 2026-05-03; file predates the ledger, raw access since b6d6d3fb1 2026-07-19
+      "packages/api/src/routers/hub-protocol/rest/calendar-feed.ts", // created a00ad0460 2026-09-12
+      "packages/api/src/routers/hub-protocol/rest/discord.ts", // created cbbd822c9 2026-06-20; file predates the ledger, raw access since 1c79eadb1 2026-08-03
+      "packages/api/src/routers/hub-protocol/rest/events.ts", // created 48592420b 2026-05-03; file predates the ledger, raw access since 44c7a8e0a 2026-08-04
+      "packages/api/src/routers/hub-protocol/rest/installed.ts", // created cc6ccd6b2 2026-09-06
+      "packages/api/src/routers/hub-protocol/rest/mcp-redeem.ts", // created a05e1c9b1 2026-07-24
+      "packages/api/src/routers/hub-protocol/rest/pod-config.ts", // created f67446fcb 2026-07-19
+      "packages/api/src/routers/hub-protocol/rest/public-projection.ts", // created 8262089f3 2026-07-19
+      "packages/api/src/routers/hub-protocol/sessions.ts", // created 6d3681634 2026-03-05; file predates the ledger, raw access since 122b8cec6 2026-08-15
+      "packages/api/src/routers/mcp/handlers/capture.ts", // created b32b606dd 2026-08-13, split from routers/mcp/adapter.ts (never ledgered)
+      "packages/api/src/routers/mcp/handlers/session.ts", // created b32b606dd 2026-08-13, split from routers/mcp/adapter.ts (never ledgered)
+      "packages/api/src/routers/mcp/handlers/shared.ts", // created b32b606dd 2026-08-13, split from routers/mcp/adapter.ts (never ledgered)
+      "packages/api/src/routers/mcp/handlers/workspace.ts", // created b32b606dd 2026-08-13, split from routers/mcp/adapter.ts (never ledgered)
+      "packages/api/src/routers/mcp/tool-access.ts", // created a4dcbb1d1 2026-09-28
+      "packages/api/src/routers/onboarding.ts", // created 3458bedbd 2026-07-26
+      "packages/api/src/routers/projects.ts", // created fcbbbcc16 2026-01-15; file predates the ledger, raw access since f2c68567b 2026-10-14
+      "packages/api/src/routers/proposals/ask-ai.ts", // created 2dc6dd66f 2026-09-22
+      "packages/api/src/routers/proposals/executors/agent.ts", // created b27570b36 2026-10-11
+      "packages/api/src/routers/proposals/executors/ai-provider.ts", // created 3654911b6 2026-09-09
+      "packages/api/src/routers/proposals/executors/app.ts", // created 7decd8de5 2026-10-06
+      "packages/api/src/routers/proposals/executors/artifact.ts", // created 292092a85 2026-08-21
+      "packages/api/src/routers/proposals/executors/dev-approval.ts", // created 8fe559861 2026-09-05
+      "packages/api/src/routers/proposals/executors/entity-transition.ts", // created ae8cd5f3f 2026-10-11
+      "packages/api/src/routers/proposals/executors/link.ts", // created d6db364bb 2026-09-27
+      "packages/api/src/routers/proposals/executors/playbook-stage-gate.ts", // created 8fe559861 2026-09-05
+      "packages/api/src/routers/proposals/executors/pod-hygiene.ts", // created 8ea3d08f1 2026-09-14
+      "packages/api/src/routers/proposals/executors/project-filing.ts", // created a70a01e1b 2026-09-28
+      "packages/api/src/routers/proposals/executors/role.ts", // created 292092a85 2026-08-21
+      "packages/api/src/routers/proposals/executors/rule.ts", // created 55a3dec9b 2026-08-20
+      "packages/api/src/routers/proposals/executors/track.ts", // created e135da6a9 2026-09-25
+      "packages/api/src/routers/proposals/executors/vault.ts", // created 3a9154706 2026-10-06
+      "packages/api/src/routers/proposals/executors/widget.ts", // created 292092a85 2026-08-21
+      "packages/api/src/routers/proposals/object-refs.ts", // created 8b71c5838 2026-10-14
+      "packages/api/src/routers/proposals/render-for-prompt.ts", // created 97d764a15 2026-07-13
+      "packages/api/src/routers/resource-state.ts", // created 97d764a15 2026-07-13
+      "packages/api/src/routers/signal.ts", // created 7a6d75f19 2026-08-05
+      "packages/api/src/routers/signals.ts", // created b219b7d30 2026-09-04
     ],
     rules: {
       "no-restricted-syntax": "off",

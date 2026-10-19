@@ -2985,6 +2985,57 @@ export const tools = {
         },
       },
 
+      // ── Library: organise what the person kept (propose only) ──────────────
+      {
+        name: "synap_organize_library",
+        annotations: {
+          title: "Organize Library",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Propose how to ORGANISE the person's Library (the links, files and notes they kept) — never add to it: your own words, links and files go to synap_capture. Without `ops`: returns the Library's groups (id, name, note, item counts) so you can name one. With `ops`: files ONE proposal for the person's review — always a proposal for an agent, `proposed` is success (surface reviewUrl); nothing changes until they approve, then it applies exactly as if they had done it. Ops: group.create {name, note?, itemIds?} · group.items {groupId, add?, remove?} (existing items) · group.update {groupId, name?, note?, workspaceId?: the space Build files into, null clears} · group.build {groupId} (approval runs Build, whose result is reviewed again). Item ids come from synap_ask (its Library hits carry their id). An id that is not in this Library is refused.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            ops: {
+              type: "array",
+              description:
+                "1-50 organisation ops, applied in order on approval. Omit to list the groups.",
+              items: {
+                type: "object",
+                properties: {
+                  op: {
+                    type: "string",
+                    enum: [
+                      "group.create",
+                      "group.items",
+                      "group.update",
+                      "group.build",
+                    ],
+                  },
+                  name: { type: "string" },
+                  note: { type: "string" },
+                  itemIds: { type: "array", items: { type: "string" } },
+                  groupId: { type: "string" },
+                  add: { type: "array", items: { type: "string" } },
+                  remove: { type: "array", items: { type: "string" } },
+                  workspaceId: { type: ["string", "null"] },
+                },
+                required: ["op"],
+              },
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why this organisation helps, in the person's words — shown to the reviewer. One line.",
+            },
+          },
+          required: [],
+        },
+      },
+
       // ── Capture ─────────────────────────────────────────────────────────────
       {
         name: "synap_capture",

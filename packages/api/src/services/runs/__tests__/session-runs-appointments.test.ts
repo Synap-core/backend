@@ -25,7 +25,9 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: mockDb,
-    and: vi.fn((...c: unknown[]) => ({ and: c.filter((x) => x !== undefined) })),
+    and: vi.fn((...c: unknown[]) => ({
+      and: c.filter((x) => x !== undefined),
+    })),
     or: vi.fn((...c: unknown[]) => ({ or: c.filter((x) => x !== undefined) })),
     eq: vi.fn((col: unknown, v: unknown) => ({ eq: [col, v] })),
     ne: vi.fn((col: unknown, v: unknown) => ({ ne: [col, v] })),
@@ -80,14 +82,28 @@ function sessionLedger(rows: Row[]) {
     captured.where = w;
     return chain;
   });
-  chain.limit = vi.fn(async () => rows.filter((r) => matches(captured.where, r)));
+  chain.limit = vi.fn(async () =>
+    rows.filter((r) => matches(captured.where, r))
+  );
   return { chain, captured };
 }
 
 const ROWS: Row[] = [
-  { id: "appointment", status: "scheduled", startedAt: new Date("2026-09-14T08:00:00Z") },
-  { id: "live-work", status: "active", startedAt: new Date("2026-09-13T09:00:00Z") },
-  { id: "done-work", status: "closed", startedAt: new Date("2026-09-12T09:00:00Z") },
+  {
+    id: "appointment",
+    status: "scheduled",
+    startedAt: new Date("2026-09-14T08:00:00Z"),
+  },
+  {
+    id: "live-work",
+    status: "active",
+    startedAt: new Date("2026-09-13T09:00:00Z"),
+  },
+  {
+    id: "done-work",
+    status: "closed",
+    startedAt: new Date("2026-09-12T09:00:00Z"),
+  },
 ];
 
 describe("runs feed — a scheduled session (appointment) is not a run", () => {

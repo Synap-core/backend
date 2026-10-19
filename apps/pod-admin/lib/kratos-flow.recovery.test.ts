@@ -18,10 +18,15 @@ const json = (body: unknown, status = 200) =>
     status,
     headers: { "content-type": "application/json" },
   });
-const notFound = () => json({ error: { code: 404, message: "not found" } }, 404);
+const notFound = () =>
+  json({ error: { code: 404, message: "not found" } }, 404);
 const flow = (id: string): KratosFlow => ({
   id,
-  ui: { action: "https://pod.example.com/self-service/x?flow=" + id, method: "POST", nodes: [] },
+  ui: {
+    action: "https://pod.example.com/self-service/x?flow=" + id,
+    method: "POST",
+    nodes: [],
+  },
 });
 
 let calls: string[] = [];
@@ -71,7 +76,9 @@ describe("a recovery or settings flow id that lands on /login", () => {
   });
 
   it("a non-404 failure on the way is reported, not skipped", async () => {
-    stub({ registration: () => json({ error: { message: "flow expired" } }, 410) });
+    stub({
+      registration: () => json({ error: { message: "flow expired" } }, 410),
+    });
     await expect(fetchSelfServiceFlow("f")).rejects.toThrow("flow expired");
     expect(calls).toHaveLength(2);
   });
@@ -91,13 +98,16 @@ describe("submitSelfServiceFlow", () => {
         json(
           {
             error: { id: "session_refresh_required", code: 403 },
-            redirect_browser_to: "https://pod-admin.example.com/login?flow=refresh-1",
+            redirect_browser_to:
+              "https://pod-admin.example.com/login?flow=refresh-1",
           },
           403
         )
       )
     );
-    expect((await submitSelfServiceFlow(flow("s"), {})).kind).toBe("refresh_required");
+    expect((await submitSelfServiceFlow(flow("s"), {})).kind).toBe(
+      "refresh_required"
+    );
   });
 
   it("a completed recovery code (422 location change) is a redirect to settings", async () => {
@@ -107,20 +117,26 @@ describe("submitSelfServiceFlow", () => {
         json(
           {
             error: { id: "browser_location_change_required", code: 422 },
-            redirect_browser_to: "https://pod-admin.example.com/settings/security?flow=s1",
+            redirect_browser_to:
+              "https://pod-admin.example.com/settings/security?flow=s1",
           },
           422
         )
       )
     );
-    expect(await submitSelfServiceFlow(flow("r"), { method: "code", code: "123456" })).toEqual({
+    expect(
+      await submitSelfServiceFlow(flow("r"), { method: "code", code: "123456" })
+    ).toEqual({
       kind: "redirect",
       to: "https://pod-admin.example.com/settings/security?flow=s1",
     });
   });
 
   it("a re-rendered flow (validation) comes back as a flow", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => json(flow("r2"), 400)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => json(flow("r2"), 400))
+    );
     const r = await submitSelfServiceFlow(flow("r"), {});
     expect(r.kind).toBe("flow");
   });

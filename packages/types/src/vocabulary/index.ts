@@ -222,6 +222,10 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // humanized to "Add" in BOTH moods, so the receipt read "Add to X".
   add: { imperative: "Add", past: "Added" },
   detach: { imperative: "Detach", past: "Detached" },
+  // A Library organise op ("Remove 3 items from …") and a group Build: both
+  // humanized to one word in BOTH moods, so a receipt read "Remove" / "Build".
+  remove: { imperative: "Remove", past: "Removed" },
+  build: { imperative: "Build", past: "Built" },
   install: { imperative: "Install", past: "Installed" },
   enable: { imperative: "Enable", past: "Enabled" },
   disable: { imperative: "Disable", past: "Disabled" },
@@ -367,6 +371,9 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
     present: "Files",
   },
   unfile_entities: { imperative: "Unfile", past: "Unfiled" },
+  // An agent's proposal to organise the person's Library (`library/organize`:
+  // groups, their items, notes, target space, a build request).
+  organize: { imperative: "Organize", past: "Organized" },
   // Server-side dev-loop HUMAN GATES (`dev.plan_approval` /
   // `dev.deploy_approval`). Verbs are matched on the LAST dotted segment, so
   // these keys resolve the full proposal types. They are NOT bare "approve":

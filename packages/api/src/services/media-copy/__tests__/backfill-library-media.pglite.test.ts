@@ -7,8 +7,11 @@
  *   - an item that already HOLDS a copy, a `data:` card image, a deleted item
  *     and a non-Library document are never handed over (an "any document with
  *     a card image" rule would copy them all); an EMPTY `importMedia` is in;
- *   - an expired card URL ends RECORDED as a failed copy on the item (honest),
- *     a live one as a held copy — the value reaches the item;
+ *   - a card URL that fails ends RECORDED as a failed copy on the item
+ *     (honest), a live one as a held copy — the value reaches the item;
+ *   - a SIGNED link whose built-in expiry (`oe=` / `x-expires`) is past is
+ *     skipped before any request: a skip mark, no failure; a future or
+ *     unknown expiry is fetched;
  *   - the completed stamp short-circuits the next run;
  *   - a copy RUN that failed stops the pass and the next run retries THAT item
  *     (the cursor never passes it); the run cap pauses and the next run resumes.
@@ -46,6 +49,7 @@ import {
 } from "../copy-library-item-media.js";
 import { png } from "./fixtures.js";
 import { libraryItemMetadata } from "../../library/__tests__/fixtures.js";
+import { toLibraryItemView } from "../../library/read-model.js";
 
 const A = "user-backfill-a";
 const q = <T>(sql: string, params?: unknown[]) =>
@@ -280,5 +284,101 @@ describe("backfillLibraryItemMedia", () => {
       scanned: 5,
       completedAt: expect.any(String),
     });
+  });
+});
+
+describe("expired signed CDN links are skipped BEFORE fetching (no failure, no error mark)", () => {
+  const NOW = new Date("2026-10-18T12:00:00.000Z");
+  const sec = (d: Date) => Math.floor(d.getTime() / 1000);
+  const PAST = new Date("2026-09-01T00:00:00.000Z");
+  const FUTURE = new Date("2026-11-01T00:00:00.000Z");
+  const igPast = `https://scontent-cdg4-1.cdninstagram.com/v/t51/1.jpg?stp=x&oe=${sec(PAST).toString(16).toUpperCase()}&_nc_sid=1`;
+  const igFuture = `https://scontent.fbcdn.net/v/t51/2.jpg?oe=${sec(FUTURE).toString(16)}`;
+  const ttPast = `https://p16-sign-va.tiktokcdn.com/obj/cover.jpeg?x-expires=${sec(PAST)}&x-signature=abc`;
+  const ttFuture = `https://p77-sign.tiktokcdn-us.com/cover.jpeg?x-expires=${sec(FUTURE)}`;
+
+  it("past oe= / x-expires → no request, a skip mark, nothing failed; future or unknown → fetched", async () => {
+    const a = await doc({ card: igPast });
+    const b = await doc({ card: igFuture });
+    const c = await doc({ card: ttPast });
+    const d = await doc({ card: ttFuture });
+    const e = await doc({ card: "https://cdn.example.com/plain.jpg" });
+    const r = recorder();
+    const result = await backfillLibraryItemMedia({
+      copy: r.copy,
+      sleep: noSleep,
+      now: () => NOW,
+    });
+    expect(result).toMatchObject({
+      status: "completed",
+      scanned: 5,
+      skipped: 2,
+    });
+    expect(r.calls.map((x) => x.itemId).sort()).toEqual([b, d, e].sort());
+    for (const id of [a, c]) {
+      const m = await metaOf(id);
+      expect(m.importMediaSkipped).toMatchObject({
+        reason: "expired",
+        expiredAt: PAST.toISOString(),
+        at: NOW.toISOString(),
+      });
+      expect(m.importMediaFailed ?? 0).toBe(0);
+      expect(m.importMediaFailures ?? []).toEqual([]);
+    }
+    expect((await metaOf(a)).importMediaSkipped.sourceUrl).toBe(igPast);
+    // The value reaches the item view: the expired mark, no failure.
+    const { rows } = await q<{
+      id: string;
+      metadata: unknown;
+      created_at: Date;
+    }>(`select id, metadata, created_at from documents where id = $1`, [a]);
+    const view = toLibraryItemView({
+      id: rows[0]!.id,
+      metadata: rows[0]!.metadata,
+      createdAt: new Date(rows[0]!.created_at),
+    })!;
+    expect(view.mediaExpired).toBe(true);
+    expect(view.mediaFailed).toBeUndefined();
+  });
+
+  it("a failure an earlier pass recorded for that same link is replaced by the skip (the count follows)", async () => {
+    const id = await doc({ card: igPast });
+    await q(
+      `update documents set metadata = metadata || $2::jsonb where id = $1`,
+      [
+        id,
+        JSON.stringify({
+          importMediaFailed: 2,
+          importMediaFailures: [
+            {
+              sourceUrl: igPast,
+              kind: "image",
+              reason: "http_4xx",
+              attempts: 1,
+              lastAttemptAt: PAST.toISOString(),
+            },
+            {
+              sourceUrl: "https://cdn.example.com/other.mp4",
+              kind: "video",
+              reason: "http_5xx",
+              attempts: 1,
+              lastAttemptAt: PAST.toISOString(),
+            },
+          ],
+        }),
+      ]
+    );
+    const r = recorder();
+    await backfillLibraryItemMedia({
+      copy: r.copy,
+      sleep: noSleep,
+      now: () => NOW,
+    });
+    expect(r.calls).toEqual([]);
+    const m = await metaOf(id);
+    expect(m.importMediaFailed).toBe(1);
+    expect(
+      m.importMediaFailures.map((f: { sourceUrl: string }) => f.sourceUrl)
+    ).toEqual(["https://cdn.example.com/other.mp4"]);
   });
 });

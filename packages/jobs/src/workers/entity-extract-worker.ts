@@ -400,8 +400,7 @@ async function resolveFeedConfig(
 
     let minRelevanceScore: number;
     const relevanceFromAgent = agentConfig.minRelevanceScore as
-      | number
-      | undefined;
+      number | undefined;
     const relevanceFromConfig = config.minRelevanceScore as number | undefined;
 
     if (typeof relevanceFromAgent === "number") {
@@ -425,8 +424,7 @@ async function resolveFeedConfig(
 
     const feedArchetype =
       ((sourceConfig?.metadata as Record<string, unknown>)?.archetype as
-        | string
-        | undefined) ?? undefined;
+        string | undefined) ?? undefined;
 
     return {
       feedType,
@@ -682,8 +680,7 @@ export async function handleEntityExtract(job: {
         title: item.title,
         excerpt: item.excerpt,
         bodyText: (item.raw as Record<string, unknown>)?.bodyText as
-          | string
-          | undefined,
+          string | undefined,
       }));
 
       classificationMap = await classifyWithIS(

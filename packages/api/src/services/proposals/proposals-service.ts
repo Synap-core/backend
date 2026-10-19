@@ -549,6 +549,7 @@ export async function mergeProposalRevision(
         targetId: proposals.targetId,
         sessionId: proposals.sessionId,
         revisionHistory: proposals.revisionHistory,
+        subjectUserId: proposals.subjectUserId,
       })
       .from(proposals)
       .where(eq(proposals.id, params.proposalId))
@@ -557,6 +558,12 @@ export async function mergeProposalRevision(
 
     if (!existing) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+    }
+    // A Library proposal is its person's alone (tRPC / Hub / MCP revise).
+    if (params.actorId) {
+      const { assertNotForeignLibraryProposal } =
+        await import("../../utils/proposal-visibility.js");
+      assertNotForeignLibraryProposal(existing, params.actorId);
     }
 
     // ── Review authority ────────────────────────────────────────────────────

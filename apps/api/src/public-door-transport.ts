@@ -103,6 +103,7 @@ export const publicDoorTransport: MiddlewareHandler = async (c, next) => {
   // Re-seat the response so its headers are mutable whatever produced it
   // (Hono's `res` setter copies it into a fresh instance), then impose the
   // policy LAST — after every inner middleware has had its say.
+  // eslint-disable-next-line no-self-assign -- the setter's side effect is the point
   c.res = c.res;
   applyPublicDoorHeaders(c.res.headers, method);
 };

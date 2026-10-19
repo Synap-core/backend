@@ -11,6 +11,7 @@ import type {
   ConnectionBroker,
   SyncFailureReportResult,
 } from "./ConnectionBroker.js";
+import { deadCredential } from "./nango-dead-credential.js";
 
 const NangoRecordSchema = z
   .object({
@@ -233,6 +234,19 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
       };
     }
     if (!res.ok) {
+      // Reading a connection makes Nango refresh its token. A credential it can
+      // no longer refresh is a reconnect, not an outage (nango-dead-credential).
+      const dead = deadCredential(
+        res.status,
+        await res.json().catch(() => null)
+      );
+      if (dead) {
+        return {
+          ok: false,
+          reason: "needs_reauth",
+          error: `Nango returned ${res.status}: ${dead}`,
+        };
+      }
       return {
         ok: false,
         reason: "unreachable",

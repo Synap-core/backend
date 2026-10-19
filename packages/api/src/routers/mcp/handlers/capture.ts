@@ -36,6 +36,7 @@ import {
   resolveProjectPlacement,
 } from "@synap/database";
 import { logger } from "../../hub-protocol/rest/_shared.js";
+import { toolError } from "../tool-errors.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
@@ -51,18 +52,18 @@ import {
 import {
   ok,
   requireScope,
-  CaptureScope,
-  CaptureWriteReceipt,
+  type CaptureScope,
+  type CaptureWriteReceipt,
   CAPTURE_CROSSKIND_PRECHECK_MAX,
   normalizeCaptureText,
   hasDurableText,
   hasDurableEntity,
   captureRejected,
   listMemberWorkspacesForAgent,
-  McpToolContext,
-  CallToolResult,
-  McpHandlerMap,
-  McpToolHandler,
+  type McpToolContext,
+  type CallToolResult,
+  type McpHandlerMap,
+  type McpToolHandler,
 } from "./shared.js";
 // Static, NOT part of the dynamic `submit-capture-graph` import in the graph
 // branch: a pure helper there would be stubbed away by any `vi.mock` of that
@@ -804,7 +805,7 @@ const captureHandler: McpToolHandler = async (
   // Domain text capture MUST NOT fall back to membership[0] (silent
   // wrong-placement — same bug link_entities stopped fabricating). Global
   // knowledge_keys may still need a concrete workspaceId column (below).
-  let captureWsId: string | undefined = requestedWorkspaceId;
+  const captureWsId: string | undefined = requestedWorkspaceId;
   const textScope: CaptureScope = {
     workspaceId: captureWsId ?? null,
     projectId: scopeProjectId,
@@ -1427,7 +1428,72 @@ const captureHandler: McpToolHandler = async (
   });
 };
 
+/**
+ * `synap_organize_library` — an agent PROPOSES how to organise the person's
+ * Library (never adds to it: content goes to `synap_capture`). No `ops` →
+ * the Library's groups (ids to name); `ops` → ONE governed proposal
+ * (`library/organize`, always a proposal for an agent).
+ */
+const organizeLibraryHandler = async (
+  ctx: McpToolContext
+): Promise<CallToolResult> => {
+  const { toolName, args, apiKeyScopes, userId } = ctx;
+  if (args.ops === undefined) {
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const { adoptImportGroups, readLibraryGroups } =
+      await import("../../../services/library/groups.js");
+    await adoptImportGroups({ userId });
+    const { groups, ungrouped, archived } = await readLibraryGroups({ userId });
+    return ok({
+      groups: groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        ...(g.note ? { note: g.note } : {}),
+        items: g.counts.items,
+        newSinceBuilt: g.counts.newSinceBuilt,
+        ...(g.builtAt ? { builtAt: g.builtAt } : {}),
+        ...(g.pendingBuildProposalId
+          ? { pendingBuildProposalId: g.pendingBuildProposalId }
+          : {}),
+      })),
+      ungrouped,
+      archived,
+    });
+  }
+  requireScope(apiKeyScopes, "mcp.write", toolName);
+  const { LibraryProposeInputSchema, proposeLibraryOrganize } =
+    await import("../../../services/library/organize.js");
+  const parsed = LibraryProposeInputSchema.safeParse({
+    ops: args.ops,
+    ...(typeof args.reasoning === "string"
+      ? { reasoning: args.reasoning }
+      : {}),
+  });
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return toolError(
+      `Tool '${toolName}': ops must be 1-50 of: group.create {name, note?, itemIds?}, group.items {groupId, add?, remove?}, group.update {groupId, name?, note?, workspaceId?}, group.build {groupId}${issue ? ` — ${issue.path.join(".") || "ops"}: ${issue.message}` : ""}.`
+    );
+  }
+  // The same per-person limit as tRPC `library.propose` / Hub `POST /library/propose`.
+  const [{ assertUserRateLimit }, { LIBRARY_READER_DOOR_LIMITS }] =
+    await Promise.all([
+      import("../../../middleware/ai-rate-limit.js"),
+      import("../../../services/library/door-limits.js"),
+    ]);
+  assertUserRateLimit(userId, LIBRARY_READER_DOOR_LIMITS.propose);
+  return ok(
+    await proposeLibraryOrganize({
+      userId,
+      caller: { agentUserId: ctx.agentUserId ?? null, keyType: ctx.keyType },
+      ops: parsed.data.ops,
+      ...(parsed.data.reasoning ? { reasoning: parsed.data.reasoning } : {}),
+    })
+  );
+};
+
 export const captureHandlers: McpHandlerMap = {
   synap_capture: captureHandler,
   synap_capture_graph: captureHandler,
+  synap_organize_library: organizeLibraryHandler,
 };

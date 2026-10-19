@@ -33,7 +33,7 @@ import {
 } from "./ensure-system-profiles.js";
 
 let pglite: Awaited<ReturnType<typeof makeLifecyclePglite>>;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let db: any;
 
 beforeAll(async () => {

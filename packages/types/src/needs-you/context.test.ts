@@ -113,7 +113,10 @@ describe("needsYouContextFromOwedSlot", () => {
       outputs: { status: "ok", value: outputs },
       session: {
         status: "ok",
-        value: { ...session, trackStages: [{ key: "audit", name: "Review the audit" }] },
+        value: {
+          ...session,
+          trackStages: [{ key: "audit", name: "Review the audit" }],
+        },
       },
     });
     expect(ctx.from?.step).toEqual({ key: "audit", name: "Review the audit" });
@@ -176,7 +179,10 @@ describe("needsYouContextFromProposal", () => {
 
     const plan = outputs.outcomes.find((o) => o.key === "plan-approved")!;
     const byKey = needsYouContextFromProposal({
-      proposal: { sessionId: "s1", data: { expectedKey: plan.key, expectedLabel: "nope" } },
+      proposal: {
+        sessionId: "s1",
+        data: { expectedKey: plan.key, expectedLabel: "nope" },
+      },
       outputs: { status: "ok", value: outputs },
       session: { status: "ok", value: session },
     });
@@ -188,13 +194,21 @@ describe("needsYouContextFromProposal", () => {
     const ctx = needsYouContextFromProposal({
       proposal: { sessionId: "s1", sessionGoal: "Grants audit goal" },
     });
-    expect(ctx.from).toEqual({ sessionId: "s1", title: "Grants audit goal", step: null });
+    expect(ctx.from).toEqual({
+      sessionId: "s1",
+      title: "Grants audit goal",
+      step: null,
+    });
     expect(ctx.unblocks).toBeNull();
   });
 
   it("a private session is never named: no From, no Unblocks", () => {
     const ctx = needsYouContextFromProposal({
-      proposal: { sessionId: "s1", sessionPrivate: true, data: { expectedLabel: "Review checklist" } },
+      proposal: {
+        sessionId: "s1",
+        sessionPrivate: true,
+        data: { expectedLabel: "Review checklist" },
+      },
       outputs: { status: "ok", value: outputs },
       session: { status: "ok", value: session },
       aiCanDo,

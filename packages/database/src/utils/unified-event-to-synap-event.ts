@@ -33,12 +33,7 @@ export function unifiedEventToSynapEvent(
     metadata: event.metadata as Record<string, unknown> | undefined,
     userId: event.userId,
     source: event.source as
-      | "api"
-      | "automation"
-      | "sync"
-      | "migration"
-      | "system"
-      | "intelligence",
+      "api" | "automation" | "sync" | "migration" | "system" | "intelligence",
     timestamp:
       event.timestamp instanceof Date
         ? event.timestamp

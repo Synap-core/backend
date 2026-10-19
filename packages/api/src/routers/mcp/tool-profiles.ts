@@ -76,6 +76,7 @@ export const TOOL_GROUPS = {
     "synap_attach_facet",
     "synap_detach_facet",
     "synap_move_entities",
+    "synap_organize_library",
   ],
   /** The rest of the session lifecycle. */
   sessions: [

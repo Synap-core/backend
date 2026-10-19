@@ -775,3 +775,77 @@ describe("offerIdOfStamp — every built-in rung's stamp is the one `builtin` of
     expect(offerIdOfStamp("builtinish_reader")).toBe("builtinish_reader");
   });
 });
+
+describe("per-tap reader options (withVideo) — declared by the reader, sent only to it", () => {
+  const skillWith = (params: Record<string, unknown>) =>
+    ({
+      kind: "skill",
+      id: "skill-apify",
+      name: "capture_social_post",
+      inputSchema: params,
+      executor: "is-agent",
+      governance: "none",
+      enabled: true,
+      runnable: true,
+      containerId: "cap-apify",
+      verbs: [],
+    }) as unknown as RegistryCapability;
+
+  it("the offer lists withVideo when the backing skill takes it as a boolean (type map or JSON Schema)", () => {
+    const flat = foldUrlReaders(
+      [skillWith({ url: "string", withVideo: "boolean?" }), apifyReady],
+      IG
+    )[0]!;
+    expect(flat.options).toEqual(["withVideo"]);
+    const schema = foldUrlReaders(
+      [
+        skillWith({
+          type: "object",
+          properties: {
+            url: { type: "string" },
+            withVideo: { type: "boolean" },
+          },
+        }),
+        apifyReady,
+      ],
+      IG
+    )[0]!;
+    expect(schema.options).toEqual(["withVideo"]);
+    // Not declared, or not a boolean → no option.
+    expect(
+      foldUrlReaders([skillWith({ url: "string" }), apifyReady], IG)[0]!
+    ).not.toHaveProperty("options");
+    expect(
+      foldUrlReaders(
+        [skillWith({ url: "string", withVideo: "string?" }), apifyReady],
+        IG
+      )[0]!
+    ).not.toHaveProperty("options");
+  });
+
+  it("readUrl sends withVideo to a reader that declares it — never to one that does not", async () => {
+    const declares = deps([
+      skillWith({ url: "string", withVideo: "boolean?" }),
+      apifyReady,
+    ]);
+    await readUrl(
+      CTX,
+      IG,
+      { reader: "capture_social_post", allowBilled: true, withVideo: true },
+      declares.d
+    );
+    expect(declares.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ parameters: { url: IG, withVideo: true } })
+    );
+    const silent = deps([skillWith({ url: "string" }), apifyReady]);
+    await readUrl(
+      CTX,
+      IG,
+      { reader: "capture_social_post", allowBilled: true, withVideo: true },
+      silent.d
+    );
+    expect(silent.execute).toHaveBeenCalledWith(
+      expect.objectContaining({ parameters: { url: IG } })
+    );
+  });
+});

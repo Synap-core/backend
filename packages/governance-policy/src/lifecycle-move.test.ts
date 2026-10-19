@@ -39,7 +39,10 @@ describe("lifecycle move governance", () => {
         governanceRuleId: "rule-explicit-transition",
         governanceRuleNamesWrite: true,
       })
-    ).toEqual({ verdict: "execute", governanceRuleId: "rule-explicit-transition" });
+    ).toEqual({
+      verdict: "execute",
+      governanceRuleId: "rule-explicit-transition",
+    });
     // ownership does NOT decide it (rung 3 sits below)
     expect(
       decideAgentPolicy({
@@ -80,7 +83,10 @@ describe("lifecycle move governance", () => {
         governanceRuleNamesWrite: false,
         writesRequireProposal: true,
       })
-    ).toEqual({ verdict: "execute", governanceRuleId: "rule-reversible-class" });
+    ).toEqual({
+      verdict: "execute",
+      governanceRuleId: "rule-reversible-class",
+    });
   });
 
   it("a broad PROPOSE rule still tightens a terminal move (reason = the rule)", () => {

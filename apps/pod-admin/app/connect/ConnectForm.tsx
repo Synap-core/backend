@@ -424,7 +424,7 @@ function IdleStep({
             px-3.5 py-2.5
           "
         >
-          <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/45">
+          <p className="mb-1 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/65">
             Will deliver to
           </p>
           <p className="break-all font-mono text-[12px] text-foreground/85">
@@ -505,14 +505,14 @@ function DoneStep({
         {copied ? "Copied" : "Copy key"}
       </Button>
 
-      <div className="flex flex-col gap-1 text-[12px] text-foreground/55">
+      <div className="flex flex-col gap-1 text-[12px] text-foreground/65">
         <p>
-          <span className="text-foreground/40">Pod: </span>
+          <span className="text-foreground/65">Pod: </span>
           <code className="font-mono text-foreground/75">{podUrl}</code>
         </p>
         {workspaceId && (
           <p>
-            <span className="text-foreground/40">Workspace: </span>
+            <span className="text-foreground/65">Workspace: </span>
             <code className="font-mono text-foreground/75">{workspaceId}</code>
           </p>
         )}
@@ -548,7 +548,7 @@ function ErrorStep({ message, flowId, onRetry }: ErrorStepProps) {
           </p>
           <p className="mt-0.5 text-[12.5px] text-foreground/65">{message}</p>
           {flowId && (
-            <p className="mt-1 font-mono text-[11px] text-foreground/45">
+            <p className="mt-1 font-mono text-[11px] text-foreground/65">
               Flow ID: {flowId}
             </p>
           )}
@@ -597,7 +597,7 @@ function InlineNotice({ tone, icon, title, message }: InlineNoticeProps) {
       ? "bg-warning/10 ring-warning/30"
       : "bg-foreground/[0.03] ring-foreground/10";
   const iconWrapperClass =
-    tone === "warning" ? "text-warning" : "text-foreground/55";
+    tone === "warning" ? "text-warning" : "text-foreground/65";
   return (
     <div
       className={`flex items-start gap-2.5 rounded-lg ring-1 ring-inset ${wrapperClass} px-3.5 py-2.5`}

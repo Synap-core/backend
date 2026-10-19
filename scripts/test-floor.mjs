@@ -123,7 +123,14 @@ for (const entry of entries) {
   process.stderr.write(
     `${passed} passed / ${total} total${failed ? `, ${failed} failed` : ""} (${secs}s)\n`
   );
-  summary.push({ id: entry.id, total, passed, failed, pending, files: files.length });
+  summary.push({
+    id: entry.id,
+    total,
+    passed,
+    failed,
+    pending,
+    files: files.length,
+  });
 
   if (RECORD) {
     entry.floor = entry.floor === null ? null : passed;
@@ -174,7 +181,9 @@ for (const entry of entries) {
         `WITHOUT turning the suite red. Fix the file, or — if it is known debt — ` +
         `add it to this entry's "quarantine" in scripts/test-floors.json WITH a ` +
         `reason, so the next new one still goes red:\n` +
-        emptyFiles.map((e) => `      ${e.file}\n        ↳ ${e.reason}`).join("\n"),
+        emptyFiles
+          .map((e) => `      ${e.file}\n        ↳ ${e.reason}`)
+          .join("\n"),
     });
   }
   // A quarantine entry that no longer triggers is stale — it must be deleted, or
@@ -194,7 +203,11 @@ for (const entry of entries) {
   }
 
   // ── class 3: tests silently disappeared ───────────────────────────────────
-  if (entry.floor !== null && entry.floor !== undefined && passed < entry.floor) {
+  if (
+    entry.floor !== null &&
+    entry.floor !== undefined &&
+    passed < entry.floor
+  ) {
     problems.push({
       id: entry.id,
       kind: "below-floor",
@@ -213,7 +226,9 @@ rmSync(tmp, { recursive: true, force: true });
 if (RECORD) {
   config.recordedAt = new Date().toISOString();
   writeFileSync(FLOORS_PATH, `${JSON.stringify(config, null, 2)}\n`);
-  console.log(`\nRecorded ${entries.length} floor(s) → ${relative(REPO_ROOT, FLOORS_PATH)}`);
+  console.log(
+    `\nRecorded ${entries.length} floor(s) → ${relative(REPO_ROOT, FLOORS_PATH)}`
+  );
   process.exit(0);
 }
 

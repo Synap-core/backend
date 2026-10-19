@@ -14,7 +14,13 @@ describe("attention order — the ONE ladder a list sorts by", () => {
     // The whole contract in one assertion. A rung inserted, removed or moved
     // fails here — which is the point: a silent re-order relocates the "what
     // needs me" row on every screen at once.
-    expect([...ATTENTION_LEVELS]).toEqual(["error", "needs-you", "pending", "ready", "off"]);
+    expect([...ATTENTION_LEVELS]).toEqual([
+      "error",
+      "needs-you",
+      "pending",
+      "ready",
+      "off",
+    ]);
   });
 
   it("ranks by position, so the ladder IS the numbering", () => {
@@ -24,20 +30,25 @@ describe("attention order — the ONE ladder a list sorts by", () => {
     // Strictly increasing: any two rungs compare in ladder order.
     for (let i = 1; i < ATTENTION_LEVELS.length; i += 1) {
       expect(attentionRank(ATTENTION_LEVELS[i]!)).toBeGreaterThan(
-        attentionRank(ATTENTION_LEVELS[i - 1]!),
+        attentionRank(ATTENTION_LEVELS[i - 1]!)
       );
     }
   });
 
   it("puts a failure above everything and a switched-off thing below everything", () => {
     const others: AttentionLevel[] = ["needs-you", "pending", "ready", "off"];
-    for (const level of others) expect(compareAttention("error", level)).toBeLessThan(0);
+    for (const level of others)
+      expect(compareAttention("error", level)).toBeLessThan(0);
     const above: AttentionLevel[] = ["error", "needs-you", "pending", "ready"];
-    for (const level of above) expect(compareAttention("off", level)).toBeGreaterThan(0);
+    for (const level of above)
+      expect(compareAttention("off", level)).toBeGreaterThan(0);
   });
 
   it("names exactly the two rungs that ask something of the reader", () => {
-    expect(ATTENTION_LEVELS.filter(wantsAttention)).toEqual(["error", "needs-you"]);
+    expect(ATTENTION_LEVELS.filter(wantsAttention)).toEqual([
+      "error",
+      "needs-you",
+    ]);
   });
 
   it("sorts a list most-urgent-first and KEEPS the caller's order within a rung", () => {
@@ -60,14 +71,19 @@ describe("attention order — the ONE ladder a list sorts by", () => {
   });
 
   it("does not mutate the caller's array", () => {
-    const items = [{ v: "off" as AttentionLevel }, { v: "error" as AttentionLevel }];
+    const items = [
+      { v: "off" as AttentionLevel },
+      { v: "error" as AttentionLevel },
+    ];
     const before = [...items];
     sortByAttention(items, (i) => i.v);
     expect(items).toEqual(before);
   });
 
   it("folds a container to its most urgent member, and returns null for none", () => {
-    expect(mostUrgentAttention(["ready", "off", "needs-you"])).toBe("needs-you");
+    expect(mostUrgentAttention(["ready", "off", "needs-you"])).toBe(
+      "needs-you"
+    );
     expect(mostUrgentAttention(["ready"])).toBe("ready");
     expect(mostUrgentAttention([])).toBeNull();
   });
@@ -85,11 +101,21 @@ describe("attention order — the ONE ladder a list sorts by", () => {
             ? "ready"
             : "off";
     const syncPhase = (p: string): AttentionLevel =>
-      p === "failed" ? "error" : p === "running" ? "pending" : p === "success" ? "ready" : "off";
+      p === "failed"
+        ? "error"
+        : p === "running"
+          ? "pending"
+          : p === "success"
+            ? "ready"
+            : "off";
 
     // A failed sync outranks a tool that merely needs a reconnect, whichever
     // list they appear in — because both ask THIS table.
-    expect(compareAttention(syncPhase("failed"), toolState("reconnect"))).toBeLessThan(0);
-    expect(compareAttention(toolState("reconnect"), syncPhase("success"))).toBeLessThan(0);
+    expect(
+      compareAttention(syncPhase("failed"), toolState("reconnect"))
+    ).toBeLessThan(0);
+    expect(
+      compareAttention(toolState("reconnect"), syncPhase("success"))
+    ).toBeLessThan(0);
   });
 });

@@ -25,7 +25,9 @@ describe("governance policy sentences — the types mirror equals the engine", (
     const sentences = Object.values(PROPOSE_REASON);
     expect(sentences.length).toBeGreaterThan(10);
     for (const s of sentences) expect(isGovernancePolicySentence(s)).toBe(true);
-    expect(isGovernancePolicySentence("Standardise how we score tools")).toBe(false);
+    expect(isGovernancePolicySentence("Standardise how we score tools")).toBe(
+      false
+    );
     expect(isGovernancePolicySentence(undefined)).toBe(false);
   });
 });

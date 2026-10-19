@@ -1,9 +1,6 @@
 // Target Types
 export type TemplateTargetType =
-  | "entity"
-  | "document"
-  | "project"
-  | "inbox_item";
+  "entity" | "document" | "project" | "inbox_item";
 export type LayoutZone =
   | "banner"
   | "header"

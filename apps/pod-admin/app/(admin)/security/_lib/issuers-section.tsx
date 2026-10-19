@@ -256,11 +256,11 @@ export function IssuersSection() {
                 "text-[12px] font-medium tracking-tight transition-colors",
                 active
                   ? "bg-foreground/[0.08] text-foreground ring-1 ring-inset ring-foreground/15"
-                  : "text-foreground/55 hover:bg-content2/50 hover:text-foreground",
+                  : "text-foreground/65 hover:bg-content2/50 hover:text-foreground",
               ].join(" ")}
             >
               {filterLabel(f)}
-              <span className="tabular text-[11px] text-foreground/45">
+              <span className="tabular text-[11px] text-foreground/65">
                 {counts[f]}
               </span>
             </button>
@@ -270,7 +270,7 @@ export function IssuersSection() {
           <button
             type="button"
             onClick={() => setActiveFilters(new Set())}
-            className="text-[11.5px] text-foreground/45 hover:text-foreground/70 transition-colors"
+            className="text-[11.5px] text-foreground/65 hover:text-foreground/70 transition-colors"
           >
             Show all
           </button>
@@ -388,7 +388,7 @@ function IssuerRow({
               </Button>
             )}
             {issuer.isBuiltIn && (
-              <span className="inline-flex items-center gap-1 px-2 text-[11px] text-foreground/45">
+              <span className="inline-flex items-center gap-1 px-2 text-[11px] text-foreground/65">
                 <Lock className="h-3 w-3" />
                 System
               </span>
@@ -450,7 +450,7 @@ function RevokeModal({
             Revoke access for{" "}
             <span className="font-medium">{issuer.displayName}</span>?
           </p>
-          <p className="text-[11.5px] text-foreground/55">
+          <p className="text-[11.5px] text-foreground/65">
             Signed JWTs from this issuer will no longer be accepted. Linked
             integration keys will be revoked at the same time. This cannot be
             undone without re-approving.

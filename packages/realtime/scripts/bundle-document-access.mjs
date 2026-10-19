@@ -47,10 +47,13 @@ const result = await build({
 });
 
 const pkgName = (spec) =>
-  spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
+  spec.startsWith("@")
+    ? spec.split("/").slice(0, 2).join("/")
+    : spec.split("/")[0];
 const externals = new Set();
 for (const input of Object.values(result.metafile.inputs)) {
-  for (const imp of input.imports) if (imp.external) externals.add(pkgName(imp.path));
+  for (const imp of input.imports)
+    if (imp.external) externals.add(pkgName(imp.path));
 }
 const bad = [...externals].filter(
   (name) => name === "@synap/api" || !prodDeps.includes(name)

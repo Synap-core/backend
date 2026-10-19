@@ -174,10 +174,7 @@ function loadConfig(): Config {
   try {
     // Auto-detect storage provider if not explicitly set
     const explicitProvider = process.env.STORAGE_PROVIDER as
-      | "r2"
-      | "minio"
-      | "local"
-      | undefined;
+      "r2" | "minio" | "local" | undefined;
     const hasR2Credentials =
       process.env.R2_ACCOUNT_ID &&
       process.env.R2_ACCESS_KEY_ID &&

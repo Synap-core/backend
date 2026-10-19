@@ -214,7 +214,10 @@ describe("resolveEntityMedia", () => {
         { id: "e", properties: { cover: ENT, image: URL_A } },
         {
           family: "work",
-          media: { source: { property: "photo" }, fallbacks: [{ entityRef: "cover" }, { property: "image" }] },
+          media: {
+            source: { property: "photo" },
+            fallbacks: [{ entityRef: "cover" }, { property: "image" }],
+          },
         }
       );
       expect(r.primary).toEqual({ via: "stored", entityId: ENT });
@@ -237,7 +240,11 @@ describe("resolveEntityMedia", () => {
         },
         BRAND
       );
-      expect(r.primary).toEqual({ via: "stored", documentId: DOC2, mime: "image/jpeg" });
+      expect(r.primary).toEqual({
+        via: "stored",
+        documentId: DOC2,
+        mime: "image/jpeg",
+      });
     });
 
     it("a value that is no reference (a storage path in asset-url) skips to the next home, then (c)", () => {
@@ -245,11 +252,18 @@ describe("resolveEntityMedia", () => {
         {
           id: "e",
           documentId: DOC,
-          properties: { "asset-url": "marketing-assets/hero/", mimeType: "image/png" },
+          properties: {
+            "asset-url": "marketing-assets/hero/",
+            mimeType: "image/png",
+          },
         },
         BRAND
       );
-      expect(r.primary).toEqual({ via: "stored", documentId: DOC, mime: "image/png" });
+      expect(r.primary).toEqual({
+        via: "stored",
+        documentId: DOC,
+        mime: "image/png",
+      });
     });
   });
 
@@ -300,7 +314,11 @@ describe("resolveEntityMedia", () => {
       },
       { family: "work" }
     );
-    expect(r.primary).toEqual({ via: "stored", documentId: DOC, mime: "image/jpeg" });
+    expect(r.primary).toEqual({
+      via: "stored",
+      documentId: DOC,
+      mime: "image/jpeg",
+    });
     expect(r.all).toEqual([r.primary]);
   });
 

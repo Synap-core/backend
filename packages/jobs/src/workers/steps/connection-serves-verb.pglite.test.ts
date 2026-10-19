@@ -22,7 +22,7 @@ import {
 } from "./command-skill-capability.js";
 
 let pg: PGlite;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let database: any;
 
 const GOOGLE_CAP = "aaaaaaaa-0000-4000-8000-000000000001";

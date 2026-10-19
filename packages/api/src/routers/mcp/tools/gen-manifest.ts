@@ -48,7 +48,7 @@ async function main() {
     parser: "json",
   });
   writeFileSync(OUT_PATH, formatted, "utf8");
-  // eslint-disable-next-line no-console
+
   console.log(`Wrote ${toolDefs.length} tools + instructions to ${OUT_PATH}`);
 }
 

@@ -158,7 +158,11 @@ beforeAll(async () => {
     [E_ASSET, OWNER, { "asset-document-id": D_ASSET }],
     [E_ATTACK_ASSET, ATTACKER, { "asset-document-id": D_UNRELATED }],
     // The earliest file shape: the key (and a mime claim) on the entity itself.
-    [E_LEGACY, OWNER, { storageKey: keyOf(D_UNRELATED), mimeType: "text/html" }],
+    [
+      E_LEGACY,
+      OWNER,
+      { storageKey: keyOf(D_UNRELATED), mimeType: "text/html" },
+    ],
   ] as const) {
     await q(
       `insert into entities (id, user_id, workspace_id, title, profile_id, properties) values ($1,$2,null,'Asset',$3,$4::jsonb)`,
@@ -187,9 +191,7 @@ beforeAll(async () => {
 describe("file door read floor — documents", () => {
   it("the author signs every document of theirs", async () => {
     for (const d of [D_FILE, D_MEDIA, D_UNRELATED]) {
-      expect((await loadSignableDocument(OWNER, d))?.storageKey).toBe(
-        keyOf(d)
-      );
+      expect((await loadSignableDocument(OWNER, d))?.storageKey).toBe(keyOf(d));
     }
   });
 

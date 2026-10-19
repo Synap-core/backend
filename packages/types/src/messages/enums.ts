@@ -35,8 +35,7 @@ export enum MessageLinkTargetType {
  * String literal union type (for flexibility)
  */
 export type MessageLinkTargetTypeString =
-  | `${MessageLinkTargetType}`
-  | (string & {});
+  `${MessageLinkTargetType}` | (string & {});
 
 /**
  * Message Link Relationship Types
@@ -60,8 +59,7 @@ export enum MessageLinkRelationshipType {
  * String literal union type (for flexibility)
  */
 export type MessageLinkRelationshipTypeString =
-  | `${MessageLinkRelationshipType}`
-  | (string & {});
+  `${MessageLinkRelationshipType}` | (string & {});
 
 /**
  * Zod schemas for validation

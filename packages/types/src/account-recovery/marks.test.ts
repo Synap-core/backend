@@ -10,7 +10,12 @@ import {
 
 /** Shaped the way the pod's `/status` builds it: `set` is `remaining > 0`. */
 function wire(remaining: number, total: number = RECOVERY_CODE_COUNT) {
-  return { set: remaining > 0, remaining, total, createdAt: total > 0 ? "2026-10-04T00:00:00Z" : null };
+  return {
+    set: remaining > 0,
+    remaining,
+    total,
+    createdAt: total > 0 ? "2026-10-04T00:00:00Z" : null,
+  };
 }
 
 describe("recoveryCodesMark", () => {
@@ -38,7 +43,10 @@ describe("recoveryCodesMark", () => {
       glyph: "alert",
       label: "2 of 10 left",
     });
-    expect(recoveryCodesMark(wire(1))).toMatchObject({ tone: "warning", label: "1 of 10 left" });
+    expect(recoveryCodesMark(wire(1))).toMatchObject({
+      tone: "warning",
+      label: "1 of 10 left",
+    });
   });
 
   it("3+ left → success 'N of M left'", () => {
@@ -47,7 +55,10 @@ describe("recoveryCodesMark", () => {
       glyph: "check",
       label: "3 of 10 left",
     });
-    expect(recoveryCodesMark(wire(10))).toMatchObject({ tone: "success", label: "10 of 10 left" });
+    expect(recoveryCodesMark(wire(10))).toMatchObject({
+      tone: "success",
+      label: "10 of 10 left",
+    });
   });
 
   it("returns tokens, never colours", () => {
@@ -83,7 +94,9 @@ describe("RECOVERY_DOOR_COPY", () => {
 
 describe("operator reset message", () => {
   it("carries the command, with a placeholder for a blank email", () => {
-    expect(operatorResetCommand(" a@b.co ")).toBe("synap users reset-password a@b.co");
+    expect(operatorResetCommand(" a@b.co ")).toBe(
+      "synap users reset-password a@b.co"
+    );
     expect(operatorResetCommand("")).toBe("synap users reset-password <email>");
     const msg = operatorResetMessage("a@b.co", "pod.example.com");
     expect(msg).toContain("synap users reset-password a@b.co");

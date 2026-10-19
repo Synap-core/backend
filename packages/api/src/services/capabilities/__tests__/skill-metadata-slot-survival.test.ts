@@ -58,7 +58,10 @@ describe("SkillDefSchema.metadata survives CapabilityDefinitionSchema.parse", ()
     const skill = parsed.skills.find((s) => s.name === "fetch_page");
     expect(skill, "skill should exist").toBeDefined();
     expect(skill!.metadata).toBeDefined();
-    expect(skill!.metadata!.allowedHosts).toEqual(["api.example.com", "cdn.example.com"]);
+    expect(skill!.metadata!.allowedHosts).toEqual([
+      "api.example.com",
+      "cdn.example.com",
+    ]);
   });
 
   it("a skill declaring BOTH readOnly and allowedHosts keeps BOTH after parsing", () => {

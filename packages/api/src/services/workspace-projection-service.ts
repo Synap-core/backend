@@ -103,7 +103,11 @@ export async function setWorkspacePublicProjection(
   await workspaceRepo.mergeSettings(workspaceId, patch, actorUserId);
 
   logger.info(
-    { workspaceId, enabled: projection.enabled, roleCount: projection.roles.length },
+    {
+      workspaceId,
+      enabled: projection.enabled,
+      roleCount: projection.roles.length,
+    },
     "workspace public-projection config set"
   );
 

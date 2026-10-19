@@ -52,7 +52,9 @@ export function describePodUpdateOutcome(
     return {
       headline: "was rolled back",
       detail: `The update failed${why}. Your pod is running ${previous} again${
-        o.dbRestored ? ", with its data restored from the pre-update backup" : ""
+        o.dbRestored
+          ? ", with its data restored from the pre-update backup"
+          : ""
       }.`,
     };
   }
@@ -71,9 +73,9 @@ export function describePodUpdateOutcome(
 export interface PodUpdateOutcomeDeps {
   recipients(): Promise<string[]>;
   alreadyNotified(sourceId: string): Promise<Set<string>>;
-  create(input: Parameters<typeof NotificationService.create>[0]): Promise<
-    string | undefined
-  >;
+  create(
+    input: Parameters<typeof NotificationService.create>[0]
+  ): Promise<string | undefined>;
 }
 
 const defaultDeps: PodUpdateOutcomeDeps = {

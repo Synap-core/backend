@@ -1,0 +1,501 @@
+/**
+ * An AGENT proposes how to ORGANISE the person's Library — never its content.
+ *
+ * Founder rule (2026-10-13, widened 2026-10-18): nothing an agent SENDS lands
+ * in the Library (its words, links and files go to `synap_capture`); an agent
+ * may PROPOSE how to organise what is already there — create a group (with
+ * existing items, a note), add / remove existing items of a group, rename it,
+ * set its note or the space Build files into, ask for a group to be built.
+ *
+ *   file  — {@link proposeLibraryOrganize}: references checked (the person's
+ *           own groups and items), names and titles captured for the card,
+ *           then THE governed door `checkPermissionOrPropose`
+ *           (`library/organize`) with `forcePropose`: for an agent the answer
+ *           is a pending proposal or a denial, never an execution.
+ *   apply — {@link applyLibraryOrganize} (the approval half,
+ *           `routers/proposals/executors/library.ts`): the SAME
+ *           `curateLibrary` the person's own edits run, then the SAME
+ *           `buildLibraryGroup` for a build request (whose bundle is reviewed
+ *           as always) — owner-floored on the proposal's subject.
+ *
+ * A person never files here: their edits are direct (`library.curate`,
+ * `library.build`).
+ */
+
+import { TRPCError } from "@trpc/server";
+import { z } from "zod";
+import {
+  db as defaultDb,
+  documents,
+  libraryGroups,
+  proposals,
+  and,
+  eq,
+  inArray,
+} from "@synap/database";
+import { ProposalStatus } from "@synap/database/schema";
+import {
+  IMPORT_LIMITS,
+  LIBRARY_ORGANIZE_DOOR,
+  LIBRARY_ORGANIZE_OPS_MAX,
+  type ImportBuildResult,
+  type LibraryCurateOp,
+  type LibraryCurateResult,
+  type LibraryOrganizeOp,
+  type LibraryOrganizeProposalData,
+  type LibraryProposeResult,
+} from "@synap-core/types/imports";
+import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { deterministicUuidFromKey } from "../../utils/write-door-idempotency.js";
+import { proposalUnchangedSince } from "../proposals/proposal-cas.js";
+import type { ImportBuildDeps } from "../imports/build.js";
+import { isAgentCaller } from "./agent-door.js";
+import { libraryItemsWhere, type LibraryDb } from "./read-model.js";
+
+const L = IMPORT_LIMITS;
+const uuid = z.string().uuid();
+const optIds = z.array(uuid).max(L.itemsMax).optional();
+
+/** THE schema of one organise op — the door and the approval both parse with it. */
+export const LibraryOrganizeOpSchema: z.ZodType<LibraryOrganizeOp> =
+  z.discriminatedUnion("op", [
+    z.object({
+      op: z.literal("group.create"),
+      name: z.string().min(1).max(L.groupNameMax),
+      note: z.string().max(L.groupNoteMax).optional(),
+      itemIds: optIds,
+    }),
+    z.object({
+      op: z.literal("group.items"),
+      groupId: uuid,
+      add: optIds,
+      remove: optIds,
+    }),
+    z.object({
+      op: z.literal("group.update"),
+      groupId: uuid,
+      name: z.string().min(1).max(L.groupNameMax).optional(),
+      note: z.string().max(L.groupNoteMax).optional(),
+      workspaceId: uuid.nullable().optional(),
+    }),
+    z.object({ op: z.literal("group.build"), groupId: uuid }),
+  ]);
+
+export const LibraryProposeInputSchema = z.object({
+  ops: z.array(LibraryOrganizeOpSchema).min(1).max(LIBRARY_ORGANIZE_OPS_MAX),
+  reasoning: z.string().max(2000).optional(),
+});
+
+/** Every existing group / item an op names. */
+function referenced(ops: readonly LibraryOrganizeOp[]): {
+  groupIds: string[];
+  itemIds: string[];
+} {
+  const groupIds = new Set<string>();
+  const itemIds = new Set<string>();
+  for (const op of ops) {
+    if (op.op === "group.create") {
+      for (const id of op.itemIds ?? []) itemIds.add(id);
+      continue;
+    }
+    groupIds.add(op.groupId);
+    if (op.op === "group.items") {
+      for (const id of [...(op.add ?? []), ...(op.remove ?? [])]) {
+        itemIds.add(id);
+      }
+    }
+  }
+  return { groupIds: [...groupIds], itemIds: [...itemIds] };
+}
+
+/** One line for the card, e.g. `Create group "Recipes" with 4 items`. */
+export function organizeSummary(
+  ops: readonly LibraryOrganizeOp[],
+  groupName: (id: string) => string
+): string {
+  const items = (n: number) => `${n} item${n === 1 ? "" : "s"}`;
+  const parts = ops.map((op) => {
+    switch (op.op) {
+      case "group.create":
+        return `Create group "${op.name}"${op.itemIds?.length ? ` with ${items(op.itemIds.length)}` : ""}`;
+      case "group.items": {
+        const g = `"${groupName(op.groupId)}"`;
+        const add = op.add?.length ?? 0;
+        const rm = op.remove?.length ?? 0;
+        return [
+          add ? `Add ${items(add)} to ${g}` : "",
+          rm ? `Remove ${items(rm)} from ${g}` : "",
+        ]
+          .filter(Boolean)
+          .join(", ");
+      }
+      case "group.update": {
+        const what = [
+          op.name !== undefined ? `rename to "${op.name}"` : "",
+          op.note !== undefined ? "set its note" : "",
+          op.workspaceId !== undefined ? "set where it is built" : "",
+        ].filter(Boolean);
+        return `Update group "${groupName(op.groupId)}"${what.length ? `: ${what.join(", ")}` : ""}`;
+      }
+      case "group.build":
+        return `Build group "${groupName(op.groupId)}"`;
+    }
+  });
+  const shown = parts.filter(Boolean);
+  return shown.length <= 2
+    ? shown.join("; ")
+    : `${shown.slice(0, 2).join("; ")}; and ${shown.length - 2} more`;
+}
+
+/**
+ * The names and titles of what the ops reference, owner-floored. A group or
+ * item that is not the person's (or does not exist) is a BAD_REQUEST naming
+ * it — a proposal that could never apply is not filed.
+ */
+async function resolveReferences(
+  database: LibraryDb,
+  userId: string,
+  ops: readonly LibraryOrganizeOp[]
+): Promise<Pick<LibraryOrganizeProposalData, "groups" | "items">> {
+  const { groupIds, itemIds } = referenced(ops);
+  const groups = groupIds.length
+    ? await database
+        .select({ id: libraryGroups.id, name: libraryGroups.name })
+        .from(libraryGroups)
+        .where(
+          and(
+            eq(libraryGroups.userId, userId),
+            inArray(libraryGroups.id, groupIds)
+          )
+        )
+    : [];
+  const items = itemIds.length
+    ? await database
+        .select({ id: documents.id, title: documents.title })
+        .from(documents)
+        .where(and(libraryItemsWhere(userId), inArray(documents.id, itemIds)))
+    : [];
+  const missingGroups = groupIds.filter(
+    (id) => !groups.some((g) => g.id === id)
+  );
+  const missingItems = itemIds.filter((id) => !items.some((i) => i.id === id));
+  if (missingGroups.length || missingItems.length) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: [
+        missingGroups.length
+          ? `No such group in this Library: ${missingGroups.join(", ")}.`
+          : "",
+        missingItems.length
+          ? `No such item in this Library: ${missingItems.join(", ")}.`
+          : "",
+      ]
+        .filter(Boolean)
+        .join(" "),
+    });
+  }
+  return {
+    groups: groups.map((g) => ({ id: g.id, name: g.name })),
+    items: items.map((i) => ({ id: i.id, title: i.title ?? "" })),
+  };
+}
+
+/**
+ * File an agent's organise proposal. Agents only (a person organises
+ * directly); always a proposal — a gate answer that would EXECUTE is refused
+ * rather than applied, so no rule or default can let an agent organise the
+ * Library unreviewed.
+ */
+export async function proposeLibraryOrganize(args: {
+  database?: LibraryDb;
+  userId: string;
+  caller: { agentUserId?: string | null; keyType?: string | null };
+  ops: LibraryOrganizeOp[];
+  reasoning?: string;
+  /** Test seam: the governed door. */
+  gate?: typeof checkPermissionOrPropose;
+}): Promise<LibraryProposeResult> {
+  if (!isAgentCaller(args.caller)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A person organises the Library directly (library.curate, library.build); proposals are for agents.",
+      cause: { reasonCode: "PERSON_USE_CURATE" },
+    });
+  }
+  const database = args.database ?? defaultDb;
+  const refs = await resolveReferences(database, args.userId, args.ops);
+  const nameOf = (id: string) =>
+    refs.groups.find((g) => g.id === id)?.name ?? "a group";
+  const data: LibraryOrganizeProposalData = {
+    ops: args.ops,
+    ...refs,
+    summary: organizeSummary(args.ops, nameOf),
+  };
+  const gate = args.gate ?? checkPermissionOrPropose;
+  const perm = await gate({
+    userId: args.userId,
+    ...(args.caller.agentUserId
+      ? { agentUserId: args.caller.agentUserId }
+      : {}),
+    subjectType: LIBRARY_ORGANIZE_DOOR.subjectType,
+    action: LIBRARY_ORGANIZE_DOOR.action,
+    // An agent's caller path: the AI ladder, never the human one (the IS key
+    // carries no agent user, so the source says it).
+    source: "intelligence",
+    // ALWAYS a proposal for an agent (rung 2.1, above every rule and the
+    // default whitelist): organising the person's Library is their call.
+    forcePropose: true,
+    data: data as unknown as Record<string, unknown>,
+    ...(args.reasoning ? { reasoning: args.reasoning } : {}),
+  });
+  if ("denied" in perm && perm.denied) {
+    throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+  }
+  if ("proposalId" in perm && perm.proposalId) {
+    return {
+      status: "proposed",
+      proposalId: perm.proposalId,
+      ...("reviewUrl" in perm && perm.reviewUrl
+        ? { reviewUrl: perm.reviewUrl as string }
+        : {}),
+    };
+  }
+  // Never reached for an agent (forcePropose). Refused, never applied.
+  throw new TRPCError({
+    code: "INTERNAL_SERVER_ERROR",
+    message:
+      "An agent's Library organisation must be reviewed, but no proposal was filed. Nothing was changed.",
+  });
+}
+
+/** The curate ops of an organise proposal (identical shapes), in order. */
+export function curateOpsOf(
+  ops: readonly LibraryOrganizeOp[]
+): LibraryCurateOp[] {
+  return ops.flatMap((op): LibraryCurateOp[] => {
+    switch (op.op) {
+      case "group.create":
+        return [
+          {
+            op: "group.create",
+            name: op.name,
+            ...(op.note !== undefined ? { note: op.note } : {}),
+            ...(op.itemIds?.length ? { itemIds: op.itemIds } : {}),
+          },
+        ];
+      case "group.items":
+        return [
+          {
+            op: "group.items",
+            groupId: op.groupId,
+            ...(op.add?.length ? { add: op.add } : {}),
+            ...(op.remove?.length ? { remove: op.remove } : {}),
+          },
+        ];
+      case "group.update":
+        return [
+          {
+            op: "group.update",
+            groupId: op.groupId,
+            ...(op.name !== undefined ? { name: op.name } : {}),
+            ...(op.note !== undefined ? { note: op.note } : {}),
+            ...(op.workspaceId !== undefined
+              ? { workspaceId: op.workspaceId }
+              : {}),
+          },
+        ];
+      case "group.build":
+        return [];
+    }
+  });
+}
+
+export interface LibraryOrganizeApplied {
+  curate: LibraryCurateResult | null;
+  builds: Array<{ groupId: string; result: ImportBuildResult }>;
+}
+
+/**
+ * The id the `n`-th op of organise proposal `proposalId` gives the group it
+ * creates: derived from the proposal, so a retried apply finds the group the
+ * first run made instead of creating a second list.
+ */
+export function organizeGroupId(proposalId: string, opIndex: number): string {
+  return deterministicUuidFromKey(`library.organize:${proposalId}:${opIndex}`);
+}
+
+/** The approval was decided elsewhere (another approve won): nothing applied. */
+export class OrganizeApprovalTaken extends Error {
+  constructor() {
+    super("This Library proposal is no longer waiting for approval.");
+    this.name = "OrganizeApprovalTaken";
+  }
+}
+
+/**
+ * The approval's CLAIM: run inside the transaction the curate ops write in,
+ * so it commits or rolls back with them; `release` gives it back when a later
+ * step (a build) threw — the approval is then recorded failed and may be
+ * retried (the group creates are keyed by the proposal).
+ */
+export interface OrganizeApprovalClaim {
+  /** Pending (or approval_failed) → approved, atomically; false = taken. */
+  take(tx: LibraryDb): Promise<boolean>;
+  release(): Promise<void>;
+}
+
+/**
+ * THE once-only door of an organise approval: ONE conditional UPDATE
+ * (`status IN (pending, approval_failed)` → approved, RETURNING), run inside
+ * the curate transaction. Two approvals racing (approve, batch, REST, tRPC —
+ * every door reaches the executor) both try it; the row lock makes the second
+ * wait for the first to commit, and it then matches nothing (false). `at` is
+ * the claim's stamp: {@link releaseOrganizeApproval} gives back only this one.
+ */
+export async function markOrganizeProposalApproved(
+  tx: LibraryDb,
+  proposalId: string,
+  approverUserId: string,
+  at: Date
+): Promise<boolean> {
+  const rows = await tx
+    .update(proposals)
+    .set({
+      status: ProposalStatus.APPROVED,
+      reviewedBy: approverUserId,
+      reviewedAt: at,
+      updatedAt: at,
+    })
+    .where(
+      and(
+        eq(proposals.id, proposalId),
+        inArray(proposals.status, [
+          ProposalStatus.PENDING,
+          ProposalStatus.APPROVAL_FAILED,
+        ])
+      )
+    )
+    .returning({ id: proposals.id });
+  return rows.length > 0;
+}
+
+/**
+ * Give back the claim taken at `at` (a later step threw): approved →
+ * approval_failed, compare-and-set on `updated_at`, so only the run that took
+ * it releases it. The approval may then be retried.
+ */
+export async function releaseOrganizeApproval(
+  proposalId: string,
+  at: Date,
+  database: LibraryDb = defaultDb
+): Promise<void> {
+  await database
+    .update(proposals)
+    .set({ status: ProposalStatus.APPROVAL_FAILED, updatedAt: new Date() })
+    .where(
+      and(
+        eq(proposals.id, proposalId),
+        eq(proposals.status, ProposalStatus.APPROVED),
+        proposalUnchangedSince(at)
+      )
+    );
+}
+
+/**
+ * Apply an APPROVED organise proposal for its owner, ONCE: the claim and the
+ * curate ops in ONE transaction (`curateLibrary`: atomic — a bad op writes
+ * nothing, and the claim rolls back with it), then each build request through
+ * `buildLibraryGroup`. A build that throws releases the claim. `group.create`
+ * ops are keyed by the proposal ({@link organizeGroupId}): a retry never
+ * creates a second group. Throws {@link OrganizeApprovalTaken} when the claim
+ * is lost (nothing applied). The approval half only.
+ */
+export async function applyLibraryOrganize(args: {
+  ownerUserId: string;
+  proposalId: string;
+  ops: readonly LibraryOrganizeOp[];
+  claim: OrganizeApprovalClaim;
+  depsFor: (run: { workspaceId: string | null }) => ImportBuildDeps;
+  /** Test seams: the person's own doors. */
+  curate?: (input: {
+    userId: string;
+    ops: LibraryCurateOp[];
+    createIds: string[];
+    inTransaction: (tx: LibraryDb) => Promise<void>;
+  }) => Promise<LibraryCurateResult>;
+  build?: (input: {
+    userId: string;
+    groupId: string;
+    depsFor: (run: { workspaceId: string | null }) => ImportBuildDeps;
+  }) => Promise<ImportBuildResult>;
+}): Promise<LibraryOrganizeApplied> {
+  const curate =
+    args.curate ??
+    (async (input: {
+      userId: string;
+      ops: LibraryCurateOp[];
+      createIds: string[];
+      inTransaction: (tx: LibraryDb) => Promise<void>;
+    }) => {
+      const { adoptImportGroups } = await import("./groups.js");
+      const { curateLibrary } = await import("./curate.js");
+      await adoptImportGroups({ userId: input.userId });
+      return curateLibrary(input);
+    });
+  const build =
+    args.build ??
+    (async (input: {
+      userId: string;
+      groupId: string;
+      depsFor: (run: { workspaceId: string | null }) => ImportBuildDeps;
+    }) => (await import("./build.js")).buildLibraryGroup(input));
+  const take = async (tx: LibraryDb) => {
+    if (!(await args.claim.take(tx))) throw new OrganizeApprovalTaken();
+  };
+  const ops = curateOpsOf(args.ops);
+  const createIds = args.ops.flatMap((op, i) =>
+    op.op === "group.create" ? [organizeGroupId(args.proposalId, i)] : []
+  );
+  let curated: LibraryCurateResult | null = null;
+  if (ops.length) {
+    curated = await curate({
+      userId: args.ownerUserId,
+      ops,
+      createIds,
+      inTransaction: take,
+    });
+  } else {
+    // Builds only: the claim alone (one statement), before any build runs.
+    await take(defaultDb);
+  }
+  const builds: LibraryOrganizeApplied["builds"] = [];
+  try {
+    for (const op of args.ops) {
+      if (op.op !== "group.build") continue;
+      builds.push({
+        groupId: op.groupId,
+        result: await build({
+          userId: args.ownerUserId,
+          groupId: op.groupId,
+          depsFor: args.depsFor,
+        }),
+      });
+    }
+  } catch (err) {
+    await args.claim.release();
+    throw err;
+  }
+  return { curate: curated, builds };
+}
+
+/** The proposal's status now (after a lost claim: who decided it). */
+export async function organizeProposalStatus(
+  proposalId: string
+): Promise<string | null> {
+  const [row] = await defaultDb
+    .select({ status: proposals.status })
+    .from(proposals)
+    .where(eq(proposals.id, proposalId));
+  return row?.status ?? null;
+}

@@ -32,6 +32,8 @@ export interface OpenTarget {
   id: string;
   displayName: string | null;
   workspaceId: string | null;
+  /** When the object last changed; null when its table does not record it. */
+  updatedAt: Date | null;
   profileSlug?: string;
   /** Whether `type` names a surface the browser can open. */
   openable: boolean;
@@ -55,6 +57,7 @@ export async function resolveOpenTarget(
       id,
       displayName: null,
       workspaceId: null,
+      updatedAt: null,
       openable: false,
     };
   }
@@ -68,6 +71,7 @@ export async function resolveOpenTarget(
       id: resolved.id,
       displayName: resolved.displayName ?? null,
       workspaceId: resolved.workspaceId ?? null,
+      updatedAt: resolved.updatedAt ?? null,
       openable: false,
     };
   }
@@ -77,6 +81,7 @@ export async function resolveOpenTarget(
     id: resolved.id,
     displayName: resolved.displayName ?? null,
     workspaceId: resolved.workspaceId ?? null,
+    updatedAt: resolved.updatedAt ?? null,
     ...(resolved.profileSlug ? { profileSlug: resolved.profileSlug } : {}),
     openable: true,
     ...(route.params ? { params: route.params } : {}),

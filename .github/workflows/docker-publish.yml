@@ -1,14 +1,14 @@
 name: Publish Docker Images
 
 on:
-  # Primary: fires after CI quality checks complete on main/develop
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main, develop]
-  # Tags only: branch images are built AFTER CI is green (workflow_run above),
-  # once per commit — so `sha-<full>` is written exactly once (immutable) and a
-  # red commit never becomes an image. v* tags are not covered by CI.
+  # ON DEMAND ONLY (founder, 2026-10-18): images and releases are built when a
+  # release is wanted, never on every green push. Two doors, both gated on a
+  # green CI run for the exact commit (job ci-gate below):
+  #   - a v* tag  → STABLE release vX.Y.Z (what managed and lab pods install)
+  #   - "Run workflow" on main (gh workflow run docker-publish.yml --ref main)
+  #               → FAST release main-<sha7>
+  # The old `workflow_run: CI completed` trigger built a fast release (and asked
+  # for a production approval) after every merge.
   push:
     tags:
       - "v*"
@@ -30,7 +30,28 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  # A release is only ever built from a commit CI has passed. A tag or a manual
+  # run is not itself covered by CI, so this checks the CI history of the SHA.
+  ci-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: CI passed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          n=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&status=success&per_page=1" --jq '.total_count')
+          if [ "${n:-0}" -lt 1 ]; then
+            echo "::error::CI has not passed on $SHA. Push it to main (CI runs on every push) and wait for green, then release."
+            exit 1
+          fi
+          echo "CI passed on $SHA ($n green run(s))."
+
   build-and-push-backend-api:
+    needs: ci-gate
     runs-on: ubuntu-latest
     # Only run if CI passed (workflow_run), or if triggered by tag push / manual dispatch
     if: >
@@ -203,6 +224,7 @@ jobs:
           platforms: linux/amd64
 
   build-and-push-pod-agent:
+    needs: ci-gate
     runs-on: ubuntu-latest
     if: >
       github.event_name == 'workflow_dispatch' ||
@@ -302,6 +324,7 @@ jobs:
   # on the host. It is a generic image (POD_PUBLIC_URL is runtime env, nothing
   # NEXT_PUBLIC_* is baked), so one artifact serves every pod.
   build-and-push-pod-admin:
+    needs: ci-gate
     runs-on: ubuntu-latest
     if: >
       github.event_name == 'workflow_dispatch' ||
@@ -412,7 +435,7 @@ jobs:
       - build-and-push-pod-agent
       - build-and-push-pod-admin
     if: >
-      (github.event_name == 'workflow_run' && needs.build-and-push-backend-api.outputs.resolved_ref == 'refs/heads/main') ||
+      needs.build-and-push-backend-api.outputs.resolved_ref == 'refs/heads/main' ||
       startsWith(needs.build-and-push-backend-api.outputs.resolved_ref, 'refs/tags/v')
     permissions:
       contents: write

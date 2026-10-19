@@ -10,7 +10,7 @@
  * entities name — one batched query, none when no entity carries a profile id.
  */
 
-import { db, profiles, inArray } from "@synap/database";
+import { type db, profiles, inArray } from "@synap/database";
 
 /** The identity a card needs: the kind slug, its display name, its icon. */
 export interface EntityProfileRef {

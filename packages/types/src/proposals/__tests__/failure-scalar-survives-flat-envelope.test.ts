@@ -26,10 +26,7 @@ import type { Proposal } from "@synap/database";
  */
 
 /** Minimal Proposal row carrying a flat envelope in its `data` column. */
-function makeRow(
-  targetType: string,
-  data: Record<string, unknown>
-): Proposal {
+function makeRow(targetType: string, data: Record<string, unknown>): Proposal {
   return {
     id: "prop-aaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     workspaceId: "ws-1",
@@ -57,9 +54,7 @@ describe("failure scalars survive buildRequestFromProposal for flat targets", ()
     // Sanity: this envelope is flat, not nested — the precondition the chip relies on.
     expect(isNestedEnvelope(raw)).toBe(false);
 
-    const request = buildRequestFromProposal(
-      makeRow("provider.action", raw)
-    );
+    const request = buildRequestFromProposal(makeRow("provider.action", raw));
 
     expect(request.data?.failure).toBeDefined();
     expect(request.data?.failure).toEqual(failure);
@@ -75,9 +70,7 @@ describe("failure scalars survive buildRequestFromProposal for flat targets", ()
     };
     expect(isNestedEnvelope(raw)).toBe(false);
 
-    const request = buildRequestFromProposal(
-      makeRow("capability.run", raw)
-    );
+    const request = buildRequestFromProposal(makeRow("capability.run", raw));
 
     expect(request.data?.failure).toBeDefined();
     expect(request.data?.failure).toEqual(failure);

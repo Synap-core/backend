@@ -45,7 +45,9 @@ describe("U3 default — auto-update is ON (founder decision)", () => {
 
   // Catches: a string "false" from a hand-edited row silently becoming truthy.
   it("malformed stored fields fall back per field", () => {
-    expect(resolvePodUpdateSettings({ auto: "false", channel: "beta" })).toEqual({
+    expect(
+      resolvePodUpdateSettings({ auto: "false", channel: "beta" })
+    ).toEqual({
       auto: true,
       channel: "stable",
       explicit: false,
@@ -84,10 +86,15 @@ describe("U4 outcome projection — metadata only", () => {
   it("derives a STABLE update id from the record when it carries none", () => {
     const a = projectUpdateOutcome(ENGINE_RECORD)!.updateId;
     const b = projectUpdateOutcome({ ...ENGINE_RECORD })!.updateId;
-    const other = projectUpdateOutcome({ ...ENGINE_RECORD, ts: "2026-10-05T00:00:00Z" })!.updateId;
+    const other = projectUpdateOutcome({
+      ...ENGINE_RECORD,
+      ts: "2026-10-05T00:00:00Z",
+    })!.updateId;
     expect(a).toBe(b);
     expect(a).not.toBe(other);
-    expect(projectUpdateOutcome({ ...ENGINE_RECORD, id: "upd-1" })!.updateId).toBe("upd-1");
+    expect(
+      projectUpdateOutcome({ ...ENGINE_RECORD, id: "upd-1" })!.updateId
+    ).toBe("upd-1");
   });
 });
 
@@ -106,11 +113,15 @@ describe("readLastUpdate — absent and failed are different facts", () => {
     expect(r.read).toBe("failed");
   });
   it("garbage ⇒ failed", async () => {
-    expect((await readLastUpdate("/x", async () => "{not json")).read).toBe("failed");
+    expect((await readLastUpdate("/x", async () => "{not json")).read).toBe(
+      "failed"
+    );
     expect((await readLastUpdate("/x", async () => "{}")).read).toBe("failed");
   });
   it("a record ⇒ ok with the projected outcome", async () => {
-    const r = await readLastUpdate("/x", async () => JSON.stringify(ENGINE_RECORD));
+    const r = await readLastUpdate("/x", async () =>
+      JSON.stringify(ENGINE_RECORD)
+    );
     expect(r.read).toBe("ok");
   });
 });
@@ -131,13 +142,21 @@ describe("buildPodUpdatesStatus — the section the CP reads", () => {
 
   it("a healthy pod reports its setting and outcome", async () => {
     const s = await buildPodUpdatesStatus({
-      readSettingsRaw: async () => ({ auto: false, channel: "stable", updatedAt: "x" }),
+      readSettingsRaw: async () => ({
+        auto: false,
+        channel: "stable",
+        updatedAt: "x",
+      }),
       readLastUpdate: async () => ({
         read: "ok",
         outcome: projectUpdateOutcome(ENGINE_RECORD)!,
       }),
     });
-    expect(s.settings).toEqual({ auto: false, channel: "stable", explicit: true });
+    expect(s.settings).toEqual({
+      auto: false,
+      channel: "stable",
+      explicit: true,
+    });
     expect(s.settingsRead).toBe("ok");
     expect(s.lastUpdate.read).toBe("ok");
   });

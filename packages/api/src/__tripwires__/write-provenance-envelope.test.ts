@@ -92,9 +92,9 @@ describe("tripwire: createProposal call sites pass the envelope, not loose prove
   // `createProposal(args: {` and does NOT match `createProposal(\{`. Non-greedy
   // up to the first `});` — the reasoning template literal contains `})` (e.g.
   // `${result.role})`) but never `});`, so the terminator is unambiguous.
-  const callBodies = [...src.matchAll(/createProposal\(\{([\s\S]*?)\}\);/g)].map(
-    (m) => m[1]
-  );
+  const callBodies = [
+    ...src.matchAll(/createProposal\(\{([\s\S]*?)\}\);/g),
+  ].map((m) => m[1]);
 
   it("finds the createProposal call sites (guards against a dead regex)", () => {
     expect(callBodies.length).toBeGreaterThanOrEqual(5);

@@ -480,7 +480,6 @@ function extensionFor(type: string): string {
  * in this module.
  */
 export async function createDocumentWithContent(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   dbOrTx: any,
   eventRepo: EventRepository,
   input: CreateDocumentWithContentInput

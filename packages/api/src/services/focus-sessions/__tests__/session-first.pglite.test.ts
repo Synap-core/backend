@@ -234,7 +234,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    "delete from focus_sessions; delete from proposals; delete from playbooks; delete from playbook_runs;"
+    "delete from focus_sessions; delete from proposals; delete from playbooks; delete from playbook_runs; delete from workspaces;"
   );
   matchSpy.mockClear();
   permSpy.mockClear();
@@ -860,6 +860,90 @@ describe("playbook candidates are SUGGESTED, never applied", () => {
     expect(result.playbooks).toBeUndefined();
   });
 
+  it("a UUID templateId naming NO playbook is REFUSED — nothing stored, nothing proposed", async () => {
+    // The live case: a well-formed UUID built from a known playbook's prefix.
+    // It used to start an ad-hoc session silently — one that followed nothing
+    // while the agent believed it was running the playbook it named.
+    const known = await playbook("Weekly review", "Review the week");
+    const madeUp = `${known.slice(0, 8)}-0000-4000-8000-000000000000`;
+    await expect(
+      createFocusSession({
+        userId: USER,
+        agentUserId: AGENT,
+        goal: "Weekly review of the pipeline",
+        templateId: madeUp,
+        matchTemplate: true,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(
+        /names no playbook you can see.*list_playbooks.*templateId: null/
+      ),
+    });
+    expect(await rows()).toEqual([]);
+    expect(permSpy).not.toHaveBeenCalled();
+  });
+
+  it("a playbook in a workspace the caller cannot see is refused the same way", async () => {
+    // Same words as a missing id, so the refusal never confirms that a
+    // stranger's playbook exists.
+    const theirs = randomUUID();
+    const hidden = randomUUID();
+    await q(
+      `insert into workspaces (id, owner_id, name) values ($1, $2, 'Theirs')`,
+      [theirs, "stranger-1"]
+    );
+    await q(
+      `insert into playbooks (id, workspace_id, name, goal_template, status, executor, stages, params, expected_outputs, criteria, created_by)
+       values ($1, $2, 'Their review', 'Review', 'active', 'is-agent', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, 'stranger-1')`,
+      [hidden, theirs]
+    );
+    await expect(
+      createFocusSession({
+        userId: USER,
+        agentUserId: AGENT,
+        goal: "Borrow their review",
+        templateId: hidden,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("names no playbook you can see"),
+    });
+    expect(await rows()).toEqual([]);
+  });
+
+  it("a POD-WIDE playbook still binds to a session started IN a workspace", async () => {
+    // The discriminating row for the read's scope: a workspace LENS on the
+    // lookup would hide every pod-wide playbook from a workspace session.
+    const ws = randomUUID();
+    await q(
+      `insert into workspaces (id, owner_id, name) values ($1, $2, 'Mine')`,
+      [ws, USER]
+    );
+    const weekly = await playbook("Weekly review", "Review the week");
+    const result = await createFocusSession({
+      userId: USER,
+      agentUserId: AGENT,
+      workspaceId: ws,
+      goal: "Weekly review of the pipeline",
+      templateId: weekly,
+    });
+    if (result.status !== "created") throw new Error(result.status);
+    expect(result.session.playbookId).toBe(weekly);
+  });
+
+  it("CONTROL — a free-text templateId (a legacy template NAME) still starts", async () => {
+    const result = await createFocusSession({
+      userId: USER,
+      agentUserId: AGENT,
+      goal: "Weekly review of the pipeline",
+      templateId: "weekly-review",
+    });
+    if (result.status !== "created") throw new Error(result.status);
+    expect(result.session.templateId).toBe("weekly-review");
+    expect(result.session.playbookId).toBeNull();
+  });
+
   it("explicit templateId: null → no matching at all", async () => {
     await playbook("Weekly review", "Review the week");
     const result = await createFocusSession({
@@ -898,6 +982,12 @@ describe("titleSource and the proposed template path", () => {
   it("a PROPOSED start with a real playbook carries playbookId for the executor", async () => {
     const id = randomUUID();
     const ws = randomUUID();
+    // The caller's own workspace: the start door only binds a playbook the
+    // caller can see.
+    await q(
+      `insert into workspaces (id, owner_id, name) values ($1, $2, 'Mine')`,
+      [ws, USER]
+    );
     await q(
       `insert into playbooks (id, workspace_id, name, goal_template, status, executor, stages, params, expected_outputs, criteria, created_by)
        values ($1, $3, 'Weekly review', 'Review', 'active', 'is-agent', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, $2)`,

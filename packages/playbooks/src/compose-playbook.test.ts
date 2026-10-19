@@ -76,7 +76,7 @@ describe("composePlaybookDef", () => {
       "close",
       "research",
     ]);
-    const qualify = out.stages?.find((s) => s.key === "qualify")!;
+    const qualify = (out.stages ?? []).find((s) => s.key === "qualify")!;
     // matched stage keeps base name and unions grants (crm + linkedin).
     expect(qualify.name).toBe("Qualify");
     expect(qualify.grants).toEqual([

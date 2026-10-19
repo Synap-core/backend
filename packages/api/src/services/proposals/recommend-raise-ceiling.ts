@@ -115,11 +115,13 @@ interface DailyCount {
 }
 
 async function listAgentUsers(): Promise<AgentRow[]> {
-  return db
-    .select({ id: users.id, createdByUserId: users.createdByUserId })
-    .from(users)
-    // An app's agent is governed on its app's page, never recommended here.
-    .where(and(eq(users.userType, "agent"), notAnAppAgent(users.id)));
+  return (
+    db
+      .select({ id: users.id, createdByUserId: users.createdByUserId })
+      .from(users)
+      // An app's agent is governed on its app's page, never recommended here.
+      .where(and(eq(users.userType, "agent"), notAnAppAgent(users.id)))
+  );
 }
 
 /**

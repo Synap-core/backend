@@ -55,6 +55,11 @@ import {
   type GroupProfile,
 } from "./suggest-groups.js";
 import type { LibraryReadDb } from "./read-budget.js";
+import {
+  forgetLibraryReadConsent,
+  heldFromStatus,
+  isLibraryReadConsentLive,
+} from "./read-consent.js";
 import type { LightReadDeps } from "./light-read-deps.js";
 import type { Got } from "./light-read-map.js";
 import { loadRow, readContent } from "./light-read-content.js";
@@ -138,6 +143,22 @@ interface ReadJob {
   item: ImportItemMetadata;
   prev: StoredLibraryRead;
   reader?: string;
+  /**
+   * When the person gave the consent `reader` runs on (ISO): now for a fresh
+   * tap, the remembered tap's date for the sweep's retry of it.
+   */
+  consentAt?: string;
+  /** The person's "with video" choice for `reader` (a fresh tap's, or the remembered one). */
+  withVideo?: boolean;
+  /**
+   * The job runs a REMEMBERED consent (the sweep's retry), read from the item
+   * at this `requestedAt`: its waiting write re-stores the consent only while
+   * the item still holds that one — a consent the person cancelled while the
+   * job ran stays cancelled.
+   */
+  rememberedConsentAt?: string;
+  /** "Get the pictures": the choice waits with the consent like `withVideo`. */
+  keepRead?: boolean;
   force?: boolean;
   now: Date;
   title: string;
@@ -254,6 +275,44 @@ function retryPlan(
   };
 }
 
+/**
+ * A REMEMBERED re-read (a consent waiting beside the item's read) that failed
+ * TRANSIENTLY: the same {@link retryPlan} an unread item gets (backoff,
+ * `nextAttemptAt`, a billed reader's tries counted to the same cap), on the
+ * counters of THIS consent (`lastAttempt.consentAt`), never the read's. The
+ * consent waits only while the plan is `not_read`; a billed reader out of
+ * tries (`needs_file`) ends it. Null (no plan) = a permanent failure or a
+ * status (blocked, needs a file…): the consent ends. The consent's own end (7 days) and
+ * the person's cancel still stop it: the sweep forgets an ended consent before
+ * picking, the job never runs one, and a cancelled one is no longer picked.
+ */
+function rereadRetryPlan(
+  prev: StoredLibraryRead,
+  got: Exclude<Got, { kind: "text" }>,
+  now: Date
+): ReturnType<typeof retryPlan> | null {
+  if (got.kind !== "retry" || !isTransientUrlReadFailure(got.failure)) {
+    return null;
+  }
+  if (!prev.requestedAt) return null;
+  const last = prev.lastAttempt;
+  const ours =
+    last?.readerId === prev.requestedReader &&
+    last?.consentAt === prev.requestedAt;
+  const count = (n: unknown) =>
+    ours && typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
+  const plan = retryPlan(
+    {
+      ...prev,
+      attempts: count(last?.attempts),
+      transientFailures: count(last?.transientFailures),
+    },
+    got,
+    now
+  );
+  return plan;
+}
+
 /** The content did not read (a status, or a retry): write that, honestly. */
 async function finishUnread(
   job: ReadJob,
@@ -271,15 +330,38 @@ async function finishUnread(
   if (reader && prev.status === "read") {
     // An explicit RE-read that did not read: the read the item has stays,
     // the attempt is recorded (never silent, never an erased read).
+    const plan =
+      prev.requestedReader === reader ? rereadRetryPlan(prev, got, now) : null;
+    const again = plan?.status === "not_read" ? plan : null;
+    if (prev.requestedReader) {
+      // A re-read that waited beside the read: still over the budget, it
+      // keeps waiting; a TRANSIENT failure keeps it too and is tried again
+      // like any transient failure (`rereadRetryPlan`); any other outcome
+      // ends that consent (never re-run).
+      if (status === "over_budget") return { itemId, status };
+      if (!again) await forgetLibraryReadConsent(database, job.userId, itemId);
+    }
     const noted = await recordLastAttempt(database, itemId, {
       readerId: reader,
-      status,
+      status: plan ? plan.status : status,
       ...(got.blocked ? { blocked: got.blocked } : {}),
       ...(got.error ? { error: got.error } : {}),
       at: now.toISOString(),
+      ...(again
+        ? {
+            consentAt: prev.requestedAt!,
+            attempts: again.attempts,
+            transientFailures: again.transientFailures,
+            failure: again.failure,
+          }
+        : {}),
     });
     if (!noted) return { itemId, status: "skipped" };
-    return { itemId, status, usedAi: got.usedAi ?? false };
+    return {
+      itemId,
+      status: plan ? plan.status : status,
+      usedAi: got.usedAi ?? false,
+    };
   }
   // The person's choice waits with the item until it can run.
   const waiting = status === "not_read" || status === "over_budget";
@@ -303,12 +385,24 @@ async function finishUnread(
         : {}),
       ...(retry ? { failure: retry.failure } : {}),
       ...(got.error ? { lastError: got.error.slice(0, 500) } : {}),
-      ...(reader && waiting ? { requestedReader: reader } : {}),
+      ...(reader && waiting
+        ? {
+            requestedReader: reader,
+            requestedAt: job.consentAt ?? now.toISOString(),
+            // The choice waits with the consent and ends with it.
+            ...(job.withVideo ? { requestedWithVideo: true as const } : {}),
+            ...(job.keepRead ? { requestedKeepRead: true as const } : {}),
+            ...(heldFromStatus(prev) ? { heldFrom: heldFromStatus(prev) } : {}),
+          }
+        : {}),
       ...(status !== "not_read" && status !== "over_budget"
         ? { readAt: now.toISOString() }
         : {}),
     },
-    !reader && !job.force
+    !reader && !job.force,
+    job.rememberedConsentAt !== undefined
+      ? { rememberedConsentAt: job.rememberedConsentAt }
+      : {}
   );
   if (!written) return { itemId, status: "skipped" };
   if (status !== "not_read") await indexQuietly(deps, itemId);
@@ -432,6 +526,20 @@ async function finishRead(
 }
 
 /**
+ * "Get the pictures" read: the media were copied, the read text stays. A
+ * consent that waited beside the read ends here (never re-run).
+ */
+async function keepTheRead(
+  job: ReadJob,
+  usedAi: boolean | undefined
+): Promise<LightReadResult> {
+  if (job.prev.requestedReader) {
+    await forgetLibraryReadConsent(job.database, job.userId, job.itemId);
+  }
+  return { itemId: job.itemId, status: "read", usedAi: usedAi ?? false };
+}
+
+/**
  * Read one Library item. Idempotent: a final read is kept unless `force`.
  * Throws only when the pod itself failed (a database or storage write).
  */
@@ -445,6 +553,13 @@ export async function lightReadLibraryItem(args: {
    * (one budget unit), and is interactive. Absent = automatic (free only).
    */
   reader?: string;
+  /**
+   * With `reader`: an item that already has a read KEEPS it — the read's
+   * media is copied, its text is not written (`missingMedia`).
+   */
+  keepRead?: boolean;
+  /** With `reader`: download the video too (the reader declares `withVideo`). */
+  withVideo?: boolean;
   deps: LightReadDeps;
 }): Promise<LightReadResult> {
   const { database, userId, itemId, deps } = args;
@@ -458,12 +573,40 @@ export async function lightReadLibraryItem(args: {
   );
   // An explicit read, or the retry of one (the sweep's job carries no reader:
   // the reader the person chose is remembered on the item).
-  const reader =
-    args.reader ??
-    (typeof prev.requestedReader === "string" && prev.requestedReader
-      ? prev.requestedReader
-      : undefined);
-  if (!args.force && !args.reader && everRead && isFinal(prev, item)) {
+  const now = deps.now();
+  // A remembered consent runs only while it lasts (`read-consent.ts`): an
+  // ended one is forgotten here and NEVER run — the item goes back to waiting
+  // for a reader, nothing is billed.
+  if (
+    !args.reader &&
+    prev.requestedReader &&
+    !isLibraryReadConsentLive(prev, now)
+  ) {
+    const forgot = await forgetLibraryReadConsent(database, userId, itemId);
+    if (forgot) deps.notify?.({ userId, itemId, metadata: meta });
+    logger.info(
+      { itemId, reader: prev.requestedReader },
+      "library light read: the person's consent for this reader has ended — not run, forgotten"
+    );
+    return { itemId, status: "skipped" };
+  }
+  const reader = args.reader ?? prev.requestedReader;
+  // "Get the pictures": the item's read stays as it is — the reader's media
+  // was copied in `readContent`; nothing of its text is written. A fresh tap
+  // carries the choice; the sweep's retry reads the one held with the consent.
+  const keepRead = args.reader
+    ? args.keepRead === true
+    : prev.requestedKeepRead === true;
+  const keepsRead = !!reader && keepRead && prev.status === "read";
+  const consentAt = args.reader ? now.toISOString() : prev.requestedAt;
+  // A fresh tap carries its own choice; the sweep's retry reads the one
+  // remembered with the consent.
+  const withVideo = args.reader
+    ? args.withVideo === true
+    : reader !== undefined && prev.requestedWithVideo === true;
+  // A read item with a live remembered consent (a re-read waiting beside its
+  // read) is run; any other final read is kept.
+  if (!args.force && !reader && everRead && isFinal(prev, item)) {
     return { itemId, status: "skipped" };
   }
 
@@ -476,8 +619,14 @@ export async function lightReadLibraryItem(args: {
     item,
     prev,
     ...(reader ? { reader } : {}),
+    ...(reader && consentAt ? { consentAt } : {}),
+    ...(reader && withVideo ? { withVideo: true } : {}),
+    ...(!args.reader && reader && prev.requestedAt
+      ? { rememberedConsentAt: prev.requestedAt }
+      : {}),
+    ...(reader && keepRead ? { keepRead: true } : {}),
     ...(args.force ? { force: true } : {}),
-    now: deps.now(),
+    now,
     title: item.title || row.title,
     cardText: [card?.title, card?.description]
       .filter((t): t is string => !!t?.trim())
@@ -501,6 +650,9 @@ export async function lightReadLibraryItem(args: {
       deps,
       ...(reader ? { reader } : {}),
       ...(prev.readCheckpoint ? { checkpoint: prev.readCheckpoint } : {}),
+      ...(reader && withVideo ? { withVideo: true } : {}),
+      // Media only: no speech-to-text for a read whose text is kept.
+      ...(keepsRead ? { mediaOnly: true } : {}),
     });
   } catch (err) {
     // A reader that threw (storage, the IS transport, the reader lookup) is a
@@ -515,9 +667,11 @@ export async function lightReadLibraryItem(args: {
     };
   }
   const result =
-    got.kind === "text"
-      ? await finishRead(job, got)
-      : await finishUnread(job, got);
+    got.kind === "text" && keepsRead
+      ? await keepTheRead(job, got.usedAi)
+      : got.kind === "text"
+        ? await finishRead(job, got)
+        : await finishUnread(job, got);
   if (result.status !== "skipped") {
     deps.notify?.({ userId, itemId, metadata: meta });
   }

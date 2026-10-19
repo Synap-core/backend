@@ -63,7 +63,6 @@ export interface PodPtyOptions {
 }
 
 export interface PodPty {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-imports
   pty: import("node-pty").IPty;
   shell: string;
 }
@@ -74,7 +73,7 @@ export interface PodPty {
  */
 export async function spawnPodPty(opts: PodPtyOptions): Promise<PodPty> {
   // Lazy-import node-pty so the module only loads when needed.
-  // eslint-disable-next-line @typescript-eslint/consistent-type-imports
+
   let ptyModule: typeof import("node-pty");
   try {
     ptyModule = await import("node-pty");

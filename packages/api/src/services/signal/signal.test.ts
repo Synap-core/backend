@@ -875,7 +875,7 @@ describe("findExtractionNodeId", () => {
       ],
       edges: [],
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(findExtractionNodeId(flow as any)).toBe("assess");
   });
 
@@ -892,7 +892,7 @@ describe("findExtractionNodeId", () => {
       ],
       edges: [],
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(findExtractionNodeId(flow as any)).toBe("interpret");
     const onlyInterpret = {
       nodes: [
@@ -905,7 +905,7 @@ describe("findExtractionNodeId", () => {
       ],
       edges: [],
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(findExtractionNodeId(onlyInterpret as any)).toBe("interpret");
   });
 
@@ -917,13 +917,13 @@ describe("findExtractionNodeId", () => {
       ],
       edges: [],
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(findExtractionNodeId(flow as any)).toBe("step-1");
   });
 
   it("returns null for an empty/absent flow (caller opens without a focused node)", () => {
     expect(findExtractionNodeId(null)).toBeNull();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(findExtractionNodeId({ nodes: [], edges: [] } as any)).toBeNull();
   });
 });

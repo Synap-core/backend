@@ -212,7 +212,7 @@ export function registerSkillExecutors(): void {
   // ── skill / delete ───────────────────────────────────────────────────────
   // `skills.delete` (routers/skills.ts:809) sits on the rung-2.5 DESTRUCTIVE
   // floor, which no rung can widen, so an agent deleting a skill ALWAYS
-  // proposes. With no `skill/delete` executor, approval fell to the `*​/*`
+  // proposes. With no `skill/delete` executor, approval fell to the `*/*`
   // catch-all — which for a gate-made proposal does not throw: it emits
   // `.validated`, flips the row APPROVED and returns success. The skill was
   // never deleted and the reviewer was told it was.

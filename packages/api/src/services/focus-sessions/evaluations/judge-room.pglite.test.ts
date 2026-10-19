@@ -167,12 +167,16 @@ describe("loadRoomMaterial — read as the session owner, through the one door",
     });
   });
 
-  it("a message cut on read is counted, and the judge is told the material is clipped", async () => {
+  it("a long message is read WHOLE — what fits is the builder's call, not the read's", async () => {
     const mine = await room("owner");
-    await post(mine, "ai_agent", `LONG-EVIDENCE ${"z".repeat(2_000)}`, 1);
+    const evidence = `LONG-EVIDENCE ${"z".repeat(2_000)} END-EVIDENCE`;
+    await post(mine, "ai_agent", evidence, 1);
 
     const out = await loadRoomMaterial({ channelId: mine, userId: "owner" });
-    expect(out).toMatchObject({ status: "ok", clippedMessages: 1 });
+    expect(out).toEqual({
+      status: "ok",
+      messages: [{ author: "agent", text: evidence }],
+    });
     const material = buildJudgeMaterial(
       { goal: "g", expectedOutputs: [], verificationReport: null },
       [],
@@ -180,10 +184,8 @@ describe("loadRoomMaterial — read as the session owner, through the one door",
       [],
       out
     );
-    expect(material).toMatch(
-      /^NOTE: CLIPPED MATERIAL — 1 section below was cut/
-    );
-    expect(material).toMatch(/\[clipped: \d+ chars omitted\]/);
+    expect(material).toContain(`[agent] ${evidence}`);
+    expect(material).not.toContain("CLIPPED MATERIAL");
   });
 
   it("no room is a true empty, not a refusal", async () => {

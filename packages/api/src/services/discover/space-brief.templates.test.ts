@@ -36,7 +36,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
   return {
     ...actual,
-    db: { selectDistinct: () => chain(() => []), select: () => chain(() => []) },
+    db: {
+      selectDistinct: () => chain(() => []),
+      select: () => chain(() => []),
+    },
   };
 });
 vi.mock("./start-here.js", () => ({
@@ -55,7 +58,10 @@ import {
 } from "./space-brief.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const WT = join(here, "../../../../../../synap-app/packages/workspace-templates/src");
+const WT = join(
+  here,
+  "../../../../../../synap-app/packages/workspace-templates/src"
+);
 const WS = "f001a1a7-56d1-4734-8b9a-cbbe9c28bb01";
 const uuid = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -231,7 +237,7 @@ describe("built brief — measured from the real templates", () => {
     expect(start, "HubBuiltSpaceBrief not found").toBeGreaterThan(-1);
     const body = src.slice(start, src.indexOf("\n}\n", start));
     const declared = new Set(
-      [...body.matchAll(/^  ([A-Za-z]+)\??:/gm)].map((m) => m[1]!)
+      [...body.matchAll(/^ {2}([A-Za-z]+)\??:/gm)].map((m) => m[1]!)
     );
     // LEFT: every top-level key a REAL built brief carries, across templates.
     const emitted = new Set<string>();
@@ -240,7 +246,13 @@ describe("built brief — measured from the real templates", () => {
     // Non-vacuity on both sides.
     expect(declared.size).toBeGreaterThan(10);
     expect([...emitted]).toEqual(
-      expect.arrayContaining(["purpose", "anchors", "rules", "keyKinds", "more"])
+      expect.arrayContaining([
+        "purpose",
+        "anchors",
+        "rules",
+        "keyKinds",
+        "more",
+      ])
     );
     expect([...emitted].filter((k) => !declared.has(k))).toEqual([]);
   });

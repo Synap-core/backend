@@ -187,14 +187,20 @@ async function ask(sessionId: string, lookedAt: unknown[]) {
           why: "Which vendor do we sign?",
           ask: {
             mode: "choose",
-            options: [{ label: "Acme", recommended: true }, { label: "Globex" }],
+            options: [
+              { label: "Acme", recommended: true },
+              { label: "Globex" },
+            ],
             lookedAt,
           },
         },
       ],
     },
   } as never);
-  return JSON.parse((res.content[0] as { text: string }).text) as Record<string, unknown>;
+  return JSON.parse((res.content[0] as { text: string }).text) as Record<
+    string,
+    unknown
+  >;
 }
 
 const storedAsk = async (sessionId: string) =>
@@ -255,7 +261,9 @@ describe('an ask carries "what I looked at"', () => {
       { kind: "document", id: pricing },
     ]);
 
-    const owed = (await owedRead(USER)).filter((s) => s.sessionId === sessionId);
+    const owed = (await owedRead(USER)).filter(
+      (s) => s.sessionId === sessionId
+    );
     expect(owed).toHaveLength(1);
     expect(owed[0]!.ask?.lookedAt).toEqual([
       { kind: "entity", id: acme, title: "Acme Corp" },
@@ -263,8 +271,12 @@ describe('an ask carries "what I looked at"', () => {
     ]);
 
     // A rename shows up: the name is read, not stored.
-    await q(`update entities set title = 'Acme Corporation' where id = $1`, [acme]);
-    const renamed = (await owedRead(USER)).find((s) => s.sessionId === sessionId);
+    await q(`update entities set title = 'Acme Corporation' where id = $1`, [
+      acme,
+    ]);
+    const renamed = (await owedRead(USER)).find(
+      (s) => s.sessionId === sessionId
+    );
     expect(renamed!.ask?.lookedAt?.[0]?.title).toBe("Acme Corporation");
   });
 
@@ -292,7 +304,10 @@ describe('an ask carries "what I looked at"', () => {
       { kind: "entity", id: acme, title: "SPOOFED" },
       { kind: "document", id: pricing },
     ]);
-    await q(`update documents set user_id = $1 where id = $2`, [OTHER, pricing]);
+    await q(`update documents set user_id = $1 where id = $2`, [
+      OTHER,
+      pricing,
+    ]);
     const res = await focusSessionsRouter
       .createCaller({ authenticated: true, userId: USER } as unknown as Context)
       .outputs({ sessionId });

@@ -44,6 +44,29 @@ import {
 const readSrc = (rel: string) =>
   readFileSync(fileURLToPath(new URL(rel, import.meta.url)), "utf8");
 
+/**
+ * Every `const [names] = await Promise.all([legs])` in `src`, with the array
+ * literal taken by bracket matching (a regex cannot see where a multi-line
+ * batch of nested queries ends).
+ */
+function awaitedBatches(src: string): { names: string; legs: string }[] {
+  const out: { names: string; legs: string }[] = [];
+  const re = /const \[([^\]]*)\]\s*=\s*await Promise\.all\(\[/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    const open = m.index + m[0].length - 1;
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === "[") depth++;
+      else if (src[i] === "]" && --depth === 0) {
+        out.push({ names: m[1]!, legs: src.slice(open + 1, i) });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 // ── Data layer for the behavioural MCP case (door 5) ───────────────────────
 // Only the three leaf reads are mocked; `resolveProposalSetups`,
 // `extractInstallParams`, `deriveConnection`, `withProposalSetup`,
@@ -175,7 +198,18 @@ describe("door 1 — enrichProposalsForDisplay (proposals.list / proposals.get)"
   const src = readSrc("../routers/proposals/display.ts");
 
   it("resolves the setups for its page", () => {
-    expect(src).toContain("await resolveProposalSetups(");
+    // Awaited either directly or as one leg of the page's parallel batch
+    // (`const [ …, setups, … ] = await Promise.all([ …, resolveProposalSetups(…), … ])`).
+    // The batch form is pinned by binding: the `setups` the spread below reads
+    // must be destructured from the SAME awaited batch that calls it.
+    expect(
+      src.includes("await resolveProposalSetups(") ||
+        awaitedBatches(src).some(
+          (b) =>
+            /\bsetups\b/.test(b.names) &&
+            b.legs.includes("resolveProposalSetups(")
+        )
+    ).toBe(true);
   });
 
   it("spreads the setup fields into the row it returns", () => {

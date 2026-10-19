@@ -3257,7 +3257,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "agent" | "playbook" | "automation";
+			data: "agent" | "human" | "automation" | "playbook";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3272,7 +3272,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "human" | "agent" | "playbook" | "automation";
+			$type: "agent" | "human" | "automation" | "playbook";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -3378,7 +3378,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "closed" | "cancelled" | "paused" | "forming" | "scheduled" | "stale";
+			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3546,7 +3546,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -3558,6 +3557,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
+			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -3840,7 +3840,7 @@ declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColum
 			tableName: "session_evaluations";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "capability" | "evidence" | "judge";
+			data: "human" | "evidence" | "capability" | "judge";
 			driverParam: string;
 			notNull: true;
 			hasDefault: false;
@@ -4637,7 +4637,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "archived" | "draft" | "paused";
+			data: "active" | "paused" | "archived" | "draft";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -7951,7 +7951,17 @@ export interface UrlReaderOffer {
 	proposalId?: string;
 	/** the reader that produced the item's current read */
 	current?: boolean;
+	/**
+	 * Per-tap choices this reader DECLARES (its verb takes the matching
+	 * parameter), e.g. `["withVideo"]`. Absent = none. A choice the reader does
+	 * not declare is never sent to it (`library.readWith` drops it).
+	 */
+	options?: ReaderOption[];
 }
+declare const READER_OPTIONS: readonly [
+	"withVideo"
+];
+export type ReaderOption = (typeof READER_OPTIONS)[number];
 declare const LIBRARY_READ_STATUSES: readonly [
 	"read",
 	"not_read",
@@ -8014,6 +8024,33 @@ export interface LibraryItemRead {
 	 * item a billed reader gave up on. Absent = the last try did not fail.
 	 */
 	failure?: LibraryReadFailure;
+	/**
+	 * The person's "Read with X" waits on this item (its read was over today's
+	 * budget, or failed and waits for its retry): the reader they chose and when
+	 * that consent ENDS. Also on a `read` item: a re-read (or "Get the
+	 * pictures") waiting BESIDE its read — the status stays `read`. Projected by
+	 * the pod's item views (`library.list` / `group` / `search`), never by
+	 * {@link readLibraryItemRead} (the end depends on the pod's setting). After
+	 * `expiresAt` the pod never runs it: the item goes back to waiting for a
+	 * reader (a read item keeps its read) and the choice is forgotten.
+	 * `library.cancelReadWith` ends it at once. Absent = no remembered choice
+	 * (or it already ended).
+	 */
+	consent?: LibraryReadConsent;
+}
+/** A remembered "Read with X" that waits to run (see {@link LibraryItemRead.consent}). */
+export interface LibraryReadConsent {
+	/** The reader id the person chose (`library.readers` offer id). */
+	readerId: string;
+	/** When the person tapped (ISO). */
+	givenAt: string;
+	/** When the consent ends (ISO): `givenAt` + the pod's consent days. */
+	expiresAt: string;
+	/**
+	 * The person also chose "with video" (`ReaderOption` `withVideo`) on that
+	 * tap: the waiting read downloads the video too. Absent = without.
+	 */
+	withVideo?: true;
 }
 /** A failed read's class, as kept on the item. */
 export interface LibraryReadFailure {
@@ -8101,6 +8138,14 @@ export interface LibraryItemView extends ImportItemView {
 	 * not a weak read, or not known (the lookup failed — never guessed false).
 	 */
 	readerAvailable?: boolean;
+	/**
+	 * The item's picture was never kept because its signed CDN link (old
+	 * Instagram / TikTok posts) had already EXPIRED: the pod skipped it quietly
+	 * — no failure, no error mark; draw the platform tile. Re-reading the post
+	 * with a reader brings fresh pictures (`library.readWith` with
+	 * `missingMedia: true`, or this item's id). Absent = not skipped.
+	 */
+	mediaExpired?: true;
 }
 export interface LibraryGroupView {
 	id: string;
@@ -8145,6 +8190,12 @@ export interface LibraryHealth {
 	/** Age in days of the oldest such waiting item, null when none waits. */
 	oldestWaitDays: number | null;
 }
+/** Result of `library.propose`: always a proposal for an agent — nothing changed yet. */
+export interface LibraryProposeResult {
+	status: "proposed";
+	proposalId: string;
+	reviewUrl?: string;
+}
 export interface LibraryAddResult {
 	runId: string;
 	staged: Array<{
@@ -8183,11 +8234,35 @@ export type LibraryReaderOffer = UrlReaderOffer & {
 export interface LibraryReadersResult {
 	offers: LibraryReaderOffer[];
 	/**
-	 * The waiting items with a link that were looked at (a group's, or the
-	 * whole Library's with `waiting: true`; at most 1 000, oldest first).
-	 * Absent for one item.
+	 * The items with a link that were looked at: a group's or the whole
+	 * Library's WAITING items (`groupId` / `waiting`), or the items missing
+	 * their pictures (`missingMedia`); at most 1 000, oldest first. Absent for
+	 * one item.
 	 */
 	waiting?: number;
+	/**
+	 * `missingMedia` only: those items by the platform of their link (a
+	 * `@synap-core/types/service-marks` id: `instagram`, `tiktok`), most first —
+	 * the "<platform>" of "Get pictures for N old <platform> posts". Items of
+	 * another site are counted in `waiting`, not here.
+	 */
+	platforms?: Array<{
+		serviceId: string;
+		count: number;
+	}>;
+	/**
+	 * `groupId` / `waiting` only: the items of that scope (the group's, or the
+	 * whole Library's; archived excluded) that hold a LIVE "Read with X" consent
+	 * — waiting for tomorrow's budget or a retry, each showing `read.consent`.
+	 * What `library.cancelReadWith` with the same scope ends: "Cancel 37
+	 * waiting reads". 0 when none.
+	 */
+	consented?: number;
+}
+/** Result of `library.cancelReadWith`. */
+export interface LibraryCancelReadWithResult {
+	/** Items whose waiting consent was ended (0 = none held one). */
+	cancelled: number;
 }
 /** Result of `library.retryMedia`: the failed copies queued to be tried again (0 = none failed). */
 export interface LibraryRetryMediaResult {
@@ -8205,6 +8280,11 @@ export interface LibraryReadWithResult {
 	overBudget: number;
 	/** Items this reader cannot read now (no link, not a link it reads, not ready, gone). */
 	skipped: number;
+	/**
+	 * When `overBudget > 0`: when the consent the tap gave for those waiting
+	 * items ends (ISO) — "waits for tomorrow's reading budget, until <date>".
+	 */
+	consentExpiresAt?: string;
 }
 export interface LibraryRunActionResult {
 	proposalId: string;
@@ -12121,6 +12201,8 @@ export interface OAuthConsentContext {
 	/** Where the code will actually be delivered — shown so the human can judge. */
 	redirectHost: string;
 	scopes: string[];
+	/** When the client registered itself with this pod (DCR) — a fresh one is worth a second look. */
+	registeredAt: Date;
 }
 /**
  * API Keys Router
@@ -17624,6 +17706,8 @@ export interface OpenTarget {
 	id: string;
 	displayName: string | null;
 	workspaceId: string | null;
+	/** When the object last changed; null when its table does not record it. */
+	updatedAt: Date | null;
 	profileSlug?: string;
 	/** Whether `type` names a surface the browser can open. */
 	openable: boolean;
@@ -21778,7 +21862,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -21832,7 +21916,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "running" | "error" | "pending" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -21849,7 +21933,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					inboxItemId: string | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "mention" | "direct" | null;
+					routedSource: "orchestrator" | "direct" | "mention" | null;
 					previousHash: string | null;
 					hash: string;
 					editedAt: Date | null;
@@ -22531,7 +22615,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22585,13 +22669,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "running" | "error" | "pending" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
 					} | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "mention" | "direct" | null;
+					routedSource: "orchestrator" | "direct" | "mention" | null;
 					userId: string;
 					timestamp: Date;
 					previousHash: string | null;
@@ -22632,7 +22716,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22686,7 +22770,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "running" | "error" | "pending" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
@@ -22703,7 +22787,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					inboxItemId: string | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "mention" | "direct" | null;
+					routedSource: "orchestrator" | "direct" | "mention" | null;
 					previousHash: string | null;
 					hash: string;
 					editedAt: Date | null;
@@ -22749,7 +22833,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "success" | "skipped";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -22803,13 +22887,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							error?: string | undefined;
 							title?: string | undefined;
 							description?: string | undefined;
-							status?: "running" | "error" | "pending" | "complete" | undefined;
+							status?: "pending" | "error" | "running" | "complete" | undefined;
 						}[] | undefined;
 						agentType?: string | undefined;
 						capturePart?: Record<string, unknown> | undefined;
 					} | null;
 					routedTeammateId: string | null;
-					routedSource: "orchestrator" | "mention" | "direct" | null;
+					routedSource: "orchestrator" | "direct" | "mention" | null;
 					userId: string;
 					timestamp: Date;
 					previousHash: string | null;
@@ -23069,7 +23153,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				offset?: number | undefined;
 				workspaceId?: string | null | undefined;
-				targetType?: "entity" | "automation" | "skill" | "playbook" | "view" | "document" | "profile" | "whiteboard" | undefined;
+				targetType?: "entity" | "automation" | "skill" | "playbook" | "view" | "document" | "profile" | "library" | "whiteboard" | undefined;
 				targetId?: string | undefined;
 				subject?: {
 					kind: "entity" | "document";
@@ -23260,7 +23344,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				agentUserId?: string | undefined;
 				agentOnly?: boolean | undefined;
-				targetType?: "entity" | "automation" | "skill" | "playbook" | "view" | "document" | "profile" | "whiteboard" | undefined;
+				targetType?: "entity" | "automation" | "skill" | "playbook" | "view" | "document" | "profile" | "library" | "whiteboard" | undefined;
 				threadId?: string | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | undefined;
@@ -24531,6 +24615,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				keyType: "system" | "hub_inbound" | "user_pat" | "service" | "is_internal";
 				hubId: string | null;
 				linkedUserId: string | null;
+				workspaceId: string | null;
 				scope: string[];
 				isActive: boolean;
 				expiresAt: Date | null;
@@ -36490,7 +36575,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				cursor?: string | undefined;
 				limit?: number | undefined;
 				groupId?: string | undefined;
-				status?: "read" | "unreadable" | "needs_file" | "title_only" | "not_read" | "over_budget" | undefined;
+				status?: "read" | "unreadable" | "not_read" | "over_budget" | "needs_file" | "title_only" | undefined;
 				archived?: boolean | undefined;
 				workspaceId?: string | undefined;
 				projectId?: string | undefined;
@@ -36557,6 +36642,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				itemId?: string | undefined;
 				groupId?: string | undefined;
 				waiting?: true | undefined;
+				missingMedia?: true | undefined;
 			};
 			output: LibraryReadersResult;
 			meta: object;
@@ -36567,8 +36653,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				itemIds?: string[] | undefined;
 				groupId?: string | undefined;
 				waiting?: true | undefined;
+				missingMedia?: true | undefined;
+				withVideo?: boolean | undefined;
 			};
 			output: LibraryReadWithResult;
+			meta: object;
+		}>;
+		cancelReadWith: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				itemIds?: string[] | undefined;
+				groupId?: string | undefined;
+				waiting?: true | undefined;
+			};
+			output: LibraryCancelReadWithResult;
 			meta: object;
 		}>;
 		retryMedia: import("@trpc/server").TRPCMutationProcedure<{
@@ -36576,6 +36673,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				itemId: string;
 			};
 			output: LibraryRetryMediaResult;
+			meta: object;
+		}>;
+		propose: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				ops: unknown[];
+				reasoning?: string | undefined;
+			};
+			output: LibraryProposeResult;
 			meta: object;
 		}>;
 		health: import("@trpc/server").TRPCQueryProcedure<{
@@ -37015,7 +37120,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					type: string;
 					category: "data" | "system" | "inbox" | "ai" | "governance";
-					priority: "normal" | "low" | "high" | "urgent";
+					priority: "low" | "normal" | "high" | "urgent";
 					title: string;
 					body: string;
 					icon: string | null;
@@ -37792,6 +37897,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					email: string;
 					linkedAt: Date;
 				}[];
+				requestIds: string[];
 				lastUsedAt: Date | null;
 				peopleCount: number;
 				issuerUrl: string;

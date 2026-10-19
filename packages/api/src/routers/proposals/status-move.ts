@@ -18,7 +18,11 @@
  * entity under the proposal's lens; no subject ⇒ no `statusMove`.
  */
 
-import { db, resolveStatusMoveTarget, findLifecycleOption } from "@synap/database";
+import {
+  db,
+  resolveStatusMoveTarget,
+  findLifecycleOption,
+} from "@synap/database";
 import type { EffectiveLifecycle, LifecycleCategory } from "@synap/database";
 import { resolveProposalAction } from "@synap-core/types/proposals";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
@@ -112,11 +116,13 @@ export async function resolveStatusMoves(
     Awaited<ReturnType<typeof resolveStatusMoveTarget>>
   >();
   await Promise.all(
-    [...new Map(plans.flatMap((p) => (p ? [[p.key, p.target]] : []))).entries()].map(
-      async ([key, target]) => {
-        resolved.set(key, await resolveStatusMoveTarget(db, target));
-      }
-    )
+    [
+      ...new Map(
+        plans.flatMap((p) => (p ? [[p.key, p.target]] : []))
+      ).entries(),
+    ].map(async ([key, target]) => {
+      resolved.set(key, await resolveStatusMoveTarget(db, target));
+    })
   );
 
   return plans.map((plan) => {

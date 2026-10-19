@@ -127,10 +127,7 @@ export type NeedsYouAiCanDoRead =
 
 /** A read the surface made — the value, or that it failed. */
 export type NeedsYouRead<T> =
-  | { status: "ok"; value: T }
-  | { status: "unavailable" }
-  | null
-  | undefined;
+  { status: "ok"; value: T } | { status: "unavailable" } | null | undefined;
 
 export interface OwedSlotContextInput {
   /** The owed slot (from `pendingExpected` / `inputs`). */
@@ -338,11 +335,7 @@ export function needsYouContextFromProposal(
 
   if (sessionId && failed(input.session)) unreadable.push("from");
   const from = sessionId
-    ? fromOf(
-        sessionId,
-        text(session?.title) ?? text(p.sessionGoal),
-        session
-      )
+    ? fromOf(sessionId, text(session?.title) ?? text(p.sessionGoal), session)
     : null;
 
   return {

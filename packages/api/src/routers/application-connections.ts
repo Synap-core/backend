@@ -6,6 +6,12 @@
  * Trust & Keys — this router does not replace issuer approval, membership, or
  * data permissions. Approving may still ensure the named CP issuer exists so
  * handshakes can verify signatures; that is a side effect, not the product.
+ *
+ * Every lifecycle act is an event (`recordConnectionEvent`): a request's on
+ * the request (`application_connection.{request|reject}.completed`), an
+ * approval's and a revoke's on the connection
+ * (`application_connection.{approve|revoke}.completed`). The connection page
+ * reads both through `get`'s `requestIds`.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -20,6 +26,7 @@ import {
   max,
   FederatedApplicationConnectionService,
   federatedAccessReceipts,
+  federatedApplicationConnectionRequests,
   federatedApplicationConnections,
   federatedIdentityLinks,
   trustedIssuers,
@@ -27,6 +34,7 @@ import {
   workspaces,
 } from "@synap/database";
 import { router, podAdminProcedure, protectedProcedure } from "../trpc.js";
+import { auditLog } from "../utils/audit-log.js";
 import {
   buildApplicationConnectionReturnUrl,
   hashOpaqueApplicationConnectionValue,
@@ -38,6 +46,30 @@ const redeemRequestSchema = requestIdSchema.extend({
 });
 
 const connectionService = new FederatedApplicationConnectionService();
+
+/** The requests one connection page shows the activity of, newest first. */
+const REQUESTS_SHOWN = 50;
+
+/** The four acts on a sign-in app's timeline. */
+type ConnectionAct = "request" | "approve" | "reject" | "revoke";
+
+/** One act as a pod-wide event (no space) by the person who did it. */
+async function recordConnectionEvent(args: {
+  action: ConnectionAct;
+  subjectId: string;
+  userId: string;
+  data: { displayName: string; clientId: string } & Record<string, unknown>;
+}): Promise<void> {
+  await auditLog({
+    subjectType: "application_connection",
+    action: args.action,
+    phase: "completed",
+    subjectId: args.subjectId,
+    userId: args.userId,
+    workspaceId: null,
+    data: args.data,
+  });
+}
 
 /**
  * Effective request status for owner UIs — must match
@@ -200,6 +232,9 @@ export const applicationConnectionsRouter = router({
     .input(redeemRequestSchema)
     .mutation(async ({ input, ctx }) => {
       try {
+        // Redeeming is idempotent (a refresh lands here again): only the
+        // first redeem is the ask.
+        const before = await connectionService.getRequest(input.requestId);
         const request = await connectionService.redeemRequest({
           requestId: input.requestId,
           redemptionHash: hashOpaqueApplicationConnectionValue(
@@ -207,6 +242,17 @@ export const applicationConnectionsRouter = router({
           ),
           requestedByUserId: ctx.userId,
         });
+        if (before?.status === "awaiting_local_auth")
+          await recordConnectionEvent({
+            action: "request",
+            subjectId: request.id,
+            userId: ctx.userId,
+            data: {
+              displayName: request.displayName,
+              clientId: request.clientId,
+              origin: request.requestedOrigin,
+            },
+          });
         return { requestId: request.id };
       } catch (error) {
         throw new TRPCError({
@@ -326,7 +372,7 @@ export const applicationConnectionsRouter = router({
         });
       }
       const issuerId = row.connection.issuerId;
-      const [usageOf, people] = await Promise.all([
+      const [usageOf, people, requests] = await Promise.all([
         issuerUsage([issuerId]),
         db
           .select({
@@ -339,12 +385,33 @@ export const applicationConnectionsRouter = router({
           .innerJoin(users, eq(federatedIdentityLinks.userId, users.id))
           .where(eq(federatedIdentityLinks.issuerId, issuerId))
           .orderBy(desc(federatedIdentityLinks.linkedAt)),
+        // Every ask from this app through this issuer — approved or turned
+        // down — since a connection is one (issuer, client) pair.
+        db
+          .select({ id: federatedApplicationConnectionRequests.id })
+          .from(federatedApplicationConnectionRequests)
+          .where(
+            and(
+              eq(
+                federatedApplicationConnectionRequests.issuerUrl,
+                row.issuerUrl
+              ),
+              eq(
+                federatedApplicationConnectionRequests.clientId,
+                row.connection.clientId
+              )
+            )
+          )
+          .orderBy(desc(federatedApplicationConnectionRequests.createdAt))
+          .limit(REQUESTS_SHOWN),
       ]);
       return {
         ...row.connection,
         issuerUrl: row.issuerUrl,
         ...usageOf(issuerId),
         people,
+        /** The asks its Activity also reads (request and turn-down events). */
+        requestIds: requests.map((r) => r.id),
       };
     }),
 
@@ -368,6 +435,17 @@ export const applicationConnectionsRouter = router({
               : "Could not approve application connection request",
         });
       }
+      await recordConnectionEvent({
+        action: "approve",
+        subjectId: approved.connection.id,
+        userId: ctx.userId,
+        data: {
+          displayName: approved.connection.displayName,
+          clientId: approved.connection.clientId,
+          requestId: approved.request.id,
+          origin: approved.request.requestedOrigin,
+        },
+      });
       return {
         requestId: approved.request.id,
         connectionId: approved.connection.id,
@@ -388,8 +466,11 @@ export const applicationConnectionsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      let rejected: Awaited<
+        ReturnType<FederatedApplicationConnectionService["reject"]>
+      >;
       try {
-        await connectionService.reject({
+        rejected = await connectionService.reject({
           requestId: input.requestId,
           reviewerUserId: ctx.userId,
           reason: input.reason,
@@ -403,6 +484,16 @@ export const applicationConnectionsRouter = router({
               : "Could not reject application connection request",
         });
       }
+      await recordConnectionEvent({
+        action: "reject",
+        subjectId: rejected.id,
+        userId: ctx.userId,
+        data: {
+          displayName: rejected.displayName,
+          clientId: rejected.clientId,
+          origin: rejected.requestedOrigin,
+        },
+      });
     }),
 
   revokeConnection: podAdminProcedure
@@ -417,13 +508,23 @@ export const applicationConnectionsRouter = router({
           updatedAt: new Date(),
         })
         .where(eq(federatedApplicationConnections.id, input.id))
-        .returning({ id: federatedApplicationConnections.id });
+        .returning({
+          id: federatedApplicationConnections.id,
+          displayName: federatedApplicationConnections.displayName,
+          clientId: federatedApplicationConnections.clientId,
+        });
       if (!revoked) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Application connection not found",
         });
       }
+      await recordConnectionEvent({
+        action: "revoke",
+        subjectId: revoked.id,
+        userId: ctx.userId,
+        data: { displayName: revoked.displayName, clientId: revoked.clientId },
+      });
       // Deliberately do not revoke the issuer here: it may serve another
       // approved client or Pod integration. Revocation immediately removes
       // this browser origin's CORS/admission route. It intentionally neither

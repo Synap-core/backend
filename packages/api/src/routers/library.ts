@@ -16,6 +16,8 @@
  *   readers    who can read an item / a group's waiting items (live offers)
  *   readWith   read items / a group's waiting items with one reader (person only)
  *   retryMedia copy an item's failed pictures again (person only)
+ *   cancelReadWith end a waiting "Read with X" consent (person only)
+ *   propose    an AGENT proposes how to organise the Library (always a proposal)
  *   health     unread / groups waiting / oldest wait (orient)
  *
  * The AI's capture door (MCP `synap_capture`) is untouched and never lands
@@ -42,11 +44,13 @@ import {
   LIBRARY_READ_STATUSES,
   type ImportBuildResult,
   type LibraryAddResult,
+  type LibraryCancelReadWithResult,
   type LibraryCurateOp,
   type LibraryCurateResult,
   type LibraryGroupResult,
   type LibraryGroupsResult,
   type LibraryHealth,
+  type LibraryProposeResult,
   type LibraryListResult,
   type LibraryReadersResult,
   type LibraryReadWithResult,
@@ -79,11 +83,16 @@ import {
 } from "../services/library/build.js";
 import { LIBRARY_READER_DOOR_LIMITS } from "../services/library/door-limits.js";
 import {
+  libraryCancelReadWith,
   libraryReaderAvailability,
   libraryReaders,
   libraryReadWith,
 } from "../services/library/readers.js";
 import { libraryRetryMedia } from "../services/library/retry-media.js";
+import {
+  LibraryProposeInputSchema,
+  proposeLibraryOrganize,
+} from "../services/library/organize.js";
 
 // ─── Schemas ────────────────────────────────────────────────────────────────
 
@@ -203,9 +212,12 @@ export const LibraryReadersInputSchema = z
     itemId: uuid.optional(),
     groupId: uuid.optional(),
     waiting: z.literal(true).optional(),
+    /** Items whose pictures were skipped as expired links. */
+    missingMedia: z.literal(true).optional(),
   })
-  .refine((v) => named(v.itemId, v.groupId, v.waiting) === 1, {
-    message: "Name one item, one group, or the waiting items.",
+  .refine((v) => named(v.itemId, v.groupId, v.waiting, v.missingMedia) === 1, {
+    message:
+      "Name one item, one group, the waiting items or the missing pictures.",
   });
 
 /**
@@ -217,8 +229,24 @@ export const LibraryReadWithInputSchema = z
     itemIds: optIds,
     groupId: uuid.optional(),
     waiting: z.literal(true).optional(),
+    /** Re-read items whose pictures expired: a read is kept, media added. */
+    missingMedia: z.literal(true).optional(),
     /** `"builtin"` or a reader verb id, from `library.readers`. */
     readerId: z.string().min(1).max(200),
+    /** Download the video too — only for a reader whose offer declares it. */
+    withVideo: z.boolean().optional(),
+  })
+  .refine((v) => named(v.itemIds, v.groupId, v.waiting, v.missingMedia) === 1, {
+    message:
+      "Name items, one group, the waiting items or the missing pictures.",
+  });
+
+/** `library.cancelReadWith`: items, one group, or every waiting consent. */
+export const LibraryCancelReadWithInputSchema = z
+  .object({
+    itemIds: optIds,
+    groupId: uuid.optional(),
+    waiting: z.literal(true).optional(),
   })
   .refine((v) => named(v.itemIds, v.groupId, v.waiting) === 1, {
     message: "Name items, one group, or the waiting items.",
@@ -452,6 +480,7 @@ export const libraryRouter = router({
         ...(input.itemId ? { itemId: input.itemId } : {}),
         ...(input.groupId ? { groupId: input.groupId } : {}),
         ...(input.waiting ? { waiting: true } : {}),
+        ...(input.missingMedia ? { missingMedia: true } : {}),
       });
     }),
 
@@ -472,6 +501,25 @@ export const libraryRouter = router({
         ...(input.itemIds?.length ? { itemIds: input.itemIds } : {}),
         ...(input.groupId ? { groupId: input.groupId } : {}),
         ...(input.waiting ? { waiting: true } : {}),
+        ...(input.missingMedia ? { missingMedia: true } : {}),
+        ...(input.withVideo ? { withVideo: true } : {}),
+      });
+    }),
+
+  /**
+   * End the remembered "Read with X" consent (items waiting on the budget or
+   * a retry): they go back to waiting for a reader. The person only.
+   */
+  cancelReadWith: personProcedure
+    .use(userRateLimitMiddleware(LIBRARY_READER_DOOR_LIMITS.readWith))
+    .input(LibraryCancelReadWithInputSchema)
+    .mutation(async ({ ctx, input }): Promise<LibraryCancelReadWithResult> => {
+      const userId = requireUserId(ctx.userId);
+      return libraryCancelReadWith({
+        userId,
+        ...(input.itemIds?.length ? { itemIds: input.itemIds } : {}),
+        ...(input.groupId ? { groupId: input.groupId } : {}),
+        ...(input.waiting ? { waiting: true } : {}),
       });
     }),
 
@@ -486,6 +534,26 @@ export const libraryRouter = router({
     .mutation(async ({ ctx, input }): Promise<LibraryRetryMediaResult> => {
       const userId = requireUserId(ctx.userId);
       return libraryRetryMedia({ userId, itemId: input.itemId });
+    }),
+
+  /**
+   * An AGENT proposes how to organise the Library (groups, their existing
+   * items, notes, target space, a build request) — ALWAYS a governed proposal,
+   * applied on approval by the same curate / build code. A person is refused
+   * (they organise directly with `curate` / `build`); adding items stays the
+   * person's (an agent's content goes to `synap_capture`).
+   */
+  propose: podProcedure
+    .use(userRateLimitMiddleware(LIBRARY_READER_DOOR_LIMITS.propose))
+    .input(LibraryProposeInputSchema)
+    .mutation(async ({ ctx, input }): Promise<LibraryProposeResult> => {
+      const userId = requireUserId(ctx.userId);
+      return proposeLibraryOrganize({
+        userId,
+        caller: { agentUserId: ctx.agentUserId, keyType: ctx.keyType },
+        ops: input.ops,
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+      });
     }),
 
   /** Unread / groups waiting / oldest wait. */

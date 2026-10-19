@@ -47,7 +47,10 @@ describe("a stored synthetic relation title names nothing", () => {
     } as never;
     expect(proposalPayloadTargetName(named)).toBe("Ada works with Grace");
     expect(
-      proposalDisplaySummary({ proposalType: "relation.create", request: named })
+      proposalDisplaySummary({
+        proposalType: "relation.create",
+        request: named,
+      })
     ).toBe('Create relation "Ada works with Grace"');
   });
 });

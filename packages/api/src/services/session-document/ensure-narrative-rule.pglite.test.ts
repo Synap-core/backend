@@ -67,7 +67,10 @@ function ddlFor(table: PgTable): string {
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
-async function verdictFor(action: string, opts: { originTrust?: "untrusted" } = {}) {
+async function verdictFor(
+  action: string,
+  opts: { originTrust?: "untrusted" } = {}
+) {
   const rule = await resolveGovernanceRule({
     db: db as never,
     agentUserId: "agent-1",
@@ -126,8 +129,12 @@ describe("ensureSessionNarrativeRule", () => {
 
 describe("the rule through the real resolver + engine", () => {
   it("neither key is floor-class — a rule can resolve both", () => {
-    expect(nonWidenableFloorFor(`document.${SESSION_NARRATIVE_ACTION}`)).toBeNull();
-    expect(nonWidenableFloorFor(`document.${SECTION_UPDATE_ACTION}`)).toBeNull();
+    expect(
+      nonWidenableFloorFor(`document.${SESSION_NARRATIVE_ACTION}`)
+    ).toBeNull();
+    expect(
+      nonWidenableFloorFor(`document.${SECTION_UPDATE_ACTION}`)
+    ).toBeNull();
   });
 
   it("without the rule, the narrative key PROPOSES", async () => {

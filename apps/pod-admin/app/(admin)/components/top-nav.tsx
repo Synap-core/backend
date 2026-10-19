@@ -138,7 +138,7 @@ export function TopNav({
           Pod Console
         </span>
         {podHost && (
-          <span className="hidden font-mono text-[11px] text-foreground/45 sm:inline">
+          <span className="hidden font-mono text-[11px] text-foreground/65 sm:inline">
             {podHost}
           </span>
         )}
@@ -156,7 +156,7 @@ export function TopNav({
             group flex h-8 w-full items-center gap-2 rounded-md
             bg-content2/40 px-3
             ring-1 ring-inset ring-foreground/[0.06]
-            text-[12.5px] text-foreground/55
+            text-[12.5px] text-foreground/65
             transition-colors hover:bg-content2/60 hover:text-foreground/85
             focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40
           "

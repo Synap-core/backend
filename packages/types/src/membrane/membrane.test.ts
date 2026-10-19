@@ -435,7 +435,10 @@ const ROWS: Row[] = [
     rulesOut: "a provider the pod cannot offer offers Connect (a dead end)",
     resolve: () =>
       resolveToolConnectionState(
-        { approved: true, connection: { required: true, state: "unavailable" } },
+        {
+          approved: true,
+          connection: { required: true, state: "unavailable" },
+        },
         NOW
       ),
   },
@@ -457,7 +460,11 @@ const ROWS: Row[] = [
       resolveToolConnectionState(
         {
           approved: true,
-          connection: { required: true, state: "unavailable", unverified: FAULT },
+          connection: {
+            required: true,
+            state: "unavailable",
+            unverified: FAULT,
+          },
         },
         NOW
       ),
@@ -466,7 +473,8 @@ const ROWS: Row[] = [
     kind: "account",
     state: "unavailable",
     rulesOut: "an account the pod cannot offer reads Not connected + Connect",
-    resolve: () => resolveAccountConnectionState({ status: "unavailable" }, NOW),
+    resolve: () =>
+      resolveAccountConnectionState({ status: "unavailable" }, NOW),
   },
   {
     kind: "account",

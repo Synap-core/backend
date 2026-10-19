@@ -328,6 +328,12 @@ export async function insertLibraryGroup(args: {
   workspaceId?: string | null;
   builtAt?: Date | null;
   buildProposalIds?: string[];
+  /**
+   * The row's id, when the caller keys the create (an approved organise
+   * proposal: one id per op, so a retried apply finds its group instead of
+   * creating a second). Absent = a fresh random id.
+   */
+  id?: string;
 }): Promise<LibraryGroupRow> {
   // The key is unique per person. Computed from what is taken, then
   // inserted with ON CONFLICT DO NOTHING: a concurrent create of the same name
@@ -345,6 +351,7 @@ export async function insertLibraryGroup(args: {
     const [row] = await args.database
       .insert(libraryGroups)
       .values({
+        ...(args.id ? { id: args.id } : {}),
         userId: args.userId,
         key,
         name: args.name,

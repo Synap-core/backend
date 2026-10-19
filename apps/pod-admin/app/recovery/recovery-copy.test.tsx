@@ -12,8 +12,14 @@ import {
   operatorResetCommand,
 } from "@synap-core/types/account-recovery";
 import { NoDoors } from "./RecoveryView";
-import { RECOVERED_COPY, securityCardOrder } from "../settings/security/SecurityView";
-import { recoveryCallDetail, redeemFailureMessage } from "../../lib/account-recovery";
+import {
+  RECOVERED_COPY,
+  securityCardOrder,
+} from "../settings/security/SecurityView";
+import {
+  recoveryCallDetail,
+  redeemFailureMessage,
+} from "../../lib/account-recovery";
 
 const APP = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 
@@ -26,7 +32,9 @@ describe("no doors → EXPLAIN with the shared copy and a copyable message", () 
   it("offers the message and the command as copy actions", () => {
     expect(html).toContain("Copy message for them");
     expect(html).toContain("Copy reset command");
-    expect(html).toContain(operatorResetCommand("").replace("<", "&lt;").replace(">", "&gt;"));
+    expect(html).toContain(
+      operatorResetCommand("").replace("<", "&lt;").replace(">", "&gt;")
+    );
   });
 });
 
@@ -36,7 +44,9 @@ describe("just recovered → the password card leads", () => {
     expect(securityCardOrder(false)[0]).toBe("codes");
   });
   it("says what to do and by when", () => {
-    expect(RECOVERED_COPY).toBe("You're back in. Set a new password within 15 minutes.");
+    expect(RECOVERED_COPY).toBe(
+      "You're back in. Set a new password within 15 minutes."
+    );
   });
 });
 
@@ -47,11 +57,17 @@ describe("failures read as fixed sentences", () => {
     expect(v.failed).toBe(true);
   });
   it("wrong code never says which part was wrong", () => {
-    expect(redeemFailureMessage("invalid_code").message).not.toMatch(/email is|unknown/i);
+    expect(redeemFailureMessage("invalid_code").message).not.toMatch(
+      /email is|unknown/i
+    );
   });
   it("the detail keeps status, code and message for Copy details", () => {
     expect(
-      recoveryCallDetail({ status: 503, error: "recovery_unavailable", message: "This pod answered 503." })
+      recoveryCallDetail({
+        status: 503,
+        error: "recovery_unavailable",
+        message: "This pod answered 503.",
+      })
     ).toBe("503 · recovery_unavailable · This pod answered 503.");
   });
 });
@@ -71,7 +87,10 @@ describe("no raw err.message in recovery/security views", () => {
     expect(RAW.test("flow.ui.messages")).toBe(false);
     expect(RAW.test("doorError.message")).toBe(false);
   });
-  for (const rel of ["recovery/RecoveryView.tsx", "settings/security/SecurityView.tsx"]) {
+  for (const rel of [
+    "recovery/RecoveryView.tsx",
+    "settings/security/SecurityView.tsx",
+  ]) {
     it(rel, () => {
       const src = readFileSync(join(APP, rel), "utf8");
       expect(src.length).toBeGreaterThan(5000); // non-vacuity: we read the real view

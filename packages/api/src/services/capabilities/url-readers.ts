@@ -92,6 +92,12 @@ export interface ReadUrlOptions {
    * a gate `propose` is a plain deny — no proposal row is filed.
    */
   interactive?: boolean;
+  /**
+   * The person's per-tap choice to download the video too. Sent to the
+   * reader's verb as its `withVideo` parameter ONLY when its offer declares
+   * the option (`UrlReaderOffer.options`); ignored for any other reader.
+   */
+  withVideo?: boolean;
 }
 
 export interface ReadUrlResult {
@@ -309,7 +315,12 @@ export async function readUrl(
   try {
     outcome = await execute({
       verbId: chosen.offer.verbId ?? chosen.offer.readerId,
-      parameters: { url: sourceUrl },
+      parameters: {
+        url: sourceUrl,
+        ...(opts.withVideo && chosen.offer.options?.includes("withVideo")
+          ? { withVideo: true }
+          : {}),
+      },
       userId: ctx.userId,
       // The verb's own space when the read saw every space (never an agent's
       // read — its rows carry no space), else the caller's lens.

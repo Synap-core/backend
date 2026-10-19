@@ -375,7 +375,7 @@ export function registerProjectExecutors(): void {
 
   // ── project / instantiate_from_playbook ──────────────────────────────────────
   // An agent binding a project to a project-scoped playbook files a proposal.
-  // Registering the executor is NOT optional: without it the `*​/*` catch-all
+  // Registering the executor is NOT optional: without it the `*/*` catch-all
   // throws NOT_IMPLEMENTED, the reviewer approves, and nothing happens — the
   // exact defect this file's `project/update` comment records having shipped
   // more than once. The tripwire in `__tripwires__/governed-writes-have-approval-
@@ -605,7 +605,7 @@ export function registerProjectExecutors(): void {
   // `projects.delete` (routers/projects.ts:1040) sits on the rung-2.5
   // DESTRUCTIVE floor, which NO governance rung can widen — so an agent
   // deleting a project ALWAYS proposes. There was no `project/delete`
-  // executor, so approval fell to the `*​/*` catch-all, which for a gate-made
+  // executor, so approval fell to the `*/*` catch-all, which for a gate-made
   // proposal does NOT throw: it emits `.validated`, flips the row APPROVED and
   // returns success. The reviewer saw green on a destructive action that never
   // happened. Same defect class as `project/update` and `playbook/archive`

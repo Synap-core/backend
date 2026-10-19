@@ -23,10 +23,12 @@ import {
 } from "@synap-core/types/membrane";
 import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 import { navHref } from "../../../../lib/console-nav";
+import { humanizeToken } from "@synap-core/types/vocabulary";
 import { formatRelative } from "../../../../lib/format";
 import { trpc } from "../../../../lib/trpc";
 import { ErrorNote, errorDetail } from "../../../_lib/copy-button";
 import type { ObjectFrame } from "../../../_lib/object/views/object-frame";
+import { SubjectActivity } from "../../../_lib/object/subject-activity";
 import { useReauthOnUnauthorized } from "../../../_lib/object/use-reauth";
 import type { DangerAction } from "../../../_lib/object/danger-zone";
 import { ResourceRowEmpty } from "../../components/resource-row";
@@ -38,6 +40,7 @@ import {
   appFailure,
 } from "./app-object-parts";
 import { SectionCard } from "../../components/section-card";
+import { appActivityLine } from "./app-activity";
 import { ViaChip } from "./via-chip";
 
 export function KeyAppObject({
@@ -169,95 +172,110 @@ export function KeyAppObject({
         ? [{ label: "Revoked", value: formatRelative(app.revoked_at) }]
         : []),
     ],
-    children: (
-      <>
-        {actError && (
-          <ErrorNote
-            message="That didn't go through. Nothing changed — try again."
-            detail={errorDetail(actError)}
-          />
-        )}
-
-        <SectionCard variant="flat" title="Identity">
-          <CopyableId
-            label="App id"
-            value={app.public_id}
-            note={
-              <>
-                The <span className="font-mono">client_id</span> its access is
-                granted to.
-              </>
-            }
-          />
-        </SectionCard>
-
-        <SectionCard
-          variant="flat"
-          title="What it can reach"
-          hint={app.revoked_at ? undefined : access.sentence}
-        >
-          {app.revoked_at ? (
-            <ResourceRowEmpty message="Nothing. Revoking an app revokes its key, so nothing it held works any more." />
-          ) : access.lines.length === 0 ? (
-            <ResourceRowEmpty message="No access yet. Nothing has been approved for it." />
-          ) : (
-            <ul className="flex flex-col gap-2">
-              {access.lines.map((line, i) => (
-                <li
-                  key={i}
-                  className="rounded-lg px-3 py-2 ring-1 ring-inset ring-foreground/10"
-                >
-                  <p className="text-[13px] text-foreground/85">
-                    {line.summary.what}
-                  </p>
-                  <p className="mt-0.5 text-[11.5px] text-foreground/65">
-                    {line.summary.where.length > 0
-                      ? line.summary.where.join(" · ")
-                      : "Anywhere"}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          )}
-          {asked && (
-            <div className="rounded-lg bg-status-stale/10 px-3 py-2 ring-1 ring-inset ring-status-stale/30">
-              <p className="text-[12.5px] font-medium text-foreground">
-                Asks for
-              </p>
-              <ul className="mt-1 flex flex-col gap-0.5">
-                {asked.lines.map((l) => (
-                  <li
-                    key={l.workspaceId ?? "anywhere"}
-                    className="text-[12.5px] text-foreground/80"
-                  >
-                    {l.text}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </SectionCard>
-
-        <SectionCard
-          variant="flat"
-          title="Who uses it"
-          hint="A key app acts as its owner, within the spaces its key names."
-        >
-          <PeopleList
-            people={app.owner ? [{ ...app.owner, note: "Owner" }] : []}
-            empty="Its owner's account is gone."
-          />
-        </SectionCard>
-
-        <SectionCard
-          variant="flat"
-          title="Keys"
-          hint="Only its owner can issue a new key, from their Connected page. Revoking the app below stops every key it holds."
-        >
-          <KeyList keys={app.keys} empty="No key has been issued yet." />
-        </SectionCard>
-      </>
+    children: actError && (
+      <ErrorNote
+        message="That didn't go through. Nothing changed — try again."
+        detail={errorDetail(actError)}
+      />
     ),
+    tabs: [
+      {
+        key: "overview",
+        label: "Overview",
+        content: (
+          <div className="flex flex-col gap-6">
+            <SectionCard variant="flat" title="Identity">
+              <CopyableId
+                label="App id"
+                value={app.public_id}
+                note={
+                  <>
+                    The <span className="font-mono">client_id</span> its access
+                    is granted to.
+                  </>
+                }
+              />
+            </SectionCard>
+
+            <SectionCard
+              variant="flat"
+              title="What it can reach"
+              hint={app.revoked_at ? undefined : access.sentence}
+            >
+              {app.revoked_at ? (
+                <ResourceRowEmpty message="Nothing. Revoking an app revokes its key, so nothing it held works any more." />
+              ) : access.lines.length === 0 ? (
+                <ResourceRowEmpty message="No access yet. Nothing has been approved for it." />
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {access.lines.map((line, i) => (
+                    <li
+                      key={i}
+                      className="rounded-lg px-3 py-2 ring-1 ring-inset ring-foreground/10"
+                    >
+                      <p className="text-[13px] text-foreground/85">
+                        {line.summary.what}
+                      </p>
+                      <p className="mt-0.5 text-[11.5px] text-foreground/65">
+                        {line.summary.where.length > 0
+                          ? line.summary.where.join(" · ")
+                          : "Anywhere"}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {asked && (
+                <div className="rounded-lg bg-status-stale/10 px-3 py-2 ring-1 ring-inset ring-status-stale/30">
+                  <p className="text-[12.5px] font-medium text-foreground">
+                    Asks for
+                  </p>
+                  <ul className="mt-1 flex flex-col gap-0.5">
+                    {asked.lines.map((l) => (
+                      <li
+                        key={l.workspaceId ?? "anywhere"}
+                        className="text-[12.5px] text-foreground/80"
+                      >
+                        {l.text}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </SectionCard>
+
+            <SectionCard
+              variant="flat"
+              title="Who uses it"
+              hint="A key app acts as its owner, within the spaces its key names."
+            >
+              <PeopleList
+                people={app.owner ? [{ ...app.owner, note: "Owner" }] : []}
+                empty="Its owner's account is gone."
+              />
+            </SectionCard>
+
+            <SectionCard
+              variant="flat"
+              title="Keys"
+              hint="Only its owner can issue a new key, from their Connected page. Revoking the app below stops every key it holds."
+            >
+              <KeyList keys={app.keys} empty="No key has been issued yet." />
+            </SectionCard>
+          </div>
+        ),
+      },
+      {
+        key: "activity",
+        label: "Activity",
+        content: (
+          <SubjectActivity
+            subjectIds={[app.id, ...app.keys.map((k) => k.id)]}
+            line={(e) => appActivityLine(e, humanizeToken)}
+          />
+        ),
+      },
+    ],
     advanced: {
       ids: [
         { label: "App id", value: app.public_id },

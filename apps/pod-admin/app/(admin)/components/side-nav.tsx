@@ -168,7 +168,7 @@ export function SideNav() {
                 aria-hidden
                 className="mx-2 my-2 h-px bg-foreground/[0.06] lg:hidden lg:nav-collapsed:block"
               />
-              <p className="hidden px-2.5 pb-1.5 pt-3.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-foreground/45 lg:block lg:nav-collapsed:hidden">
+              <p className="hidden px-2.5 pb-1.5 pt-3.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-foreground/65 lg:block lg:nav-collapsed:hidden">
                 {group.label}
               </p>
             </>
@@ -361,7 +361,7 @@ export function NavDrawer({
             {navForRole(role).map((group) => (
               <div key={group.id}>
                 {group.label && (
-                  <p className="px-3 pb-1 pt-3 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-foreground/45">
+                  <p className="px-3 pb-1 pt-3 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-foreground/65">
                     {group.label}
                   </p>
                 )}

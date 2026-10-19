@@ -262,7 +262,7 @@ function AppDetail({
       <Card shadow="none" className="border border-foreground/10 bg-content1">
         <CardBody className="gap-4 p-4">
           <div>
-            <p className="text-xs font-medium text-foreground/50">
+            <p className="text-xs font-medium text-foreground/65">
               {resolveObjectNoun("application")} id
             </p>
             <div className="mt-1.5 flex flex-wrap items-center gap-2">
@@ -271,7 +271,7 @@ function AppDetail({
               </span>
               <CopyButton text={app.public_id} label="Copy" size="sm" />
             </div>
-            <p className="mt-1.5 text-[11.5px] text-foreground/45">
+            <p className="mt-1.5 text-[11.5px] text-foreground/65">
               This id is the <span className="font-mono">client_id</span> its
               access is granted to. Share it with the app, never with anyone
               else.
@@ -328,7 +328,7 @@ function AppDetail({
                 <p className="text-[13px] text-foreground/85">
                   {line.summary.what}
                 </p>
-                <p className="mt-1 text-[11.5px] text-foreground/55">
+                <p className="mt-1 text-[11.5px] text-foreground/65">
                   {line.summary.where.length > 0
                     ? line.summary.where.join(" · ")
                     : "Anywhere"}
@@ -351,7 +351,7 @@ function AppDetail({
         >
           {resolveConnectionAction(endAct).label}
         </Button>
-        <p className="mt-2 max-w-2xl text-[11.5px] text-foreground/50">
+        <p className="mt-2 max-w-2xl text-[11.5px] text-foreground/65">
           {endConsequence(app, endAct).note}
           {revoked ? null : <> It moves under &ldquo;Revoked apps&rdquo;.</>}
         </p>
@@ -363,7 +363,7 @@ function AppDetail({
 function Field({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-xs font-medium text-foreground/50">{label}</p>
+      <p className="text-xs font-medium text-foreground/65">{label}</p>
       <p className="mt-1 text-[12.5px] text-foreground/75">{value}</p>
     </div>
   );
@@ -385,7 +385,7 @@ function Notice({
     >
       <p className="text-sm text-foreground/85">{title}</p>
       {body ? (
-        <p className="mt-1 max-w-2xl text-[12.5px] leading-5 text-foreground/55">
+        <p className="mt-1 max-w-2xl text-[12.5px] leading-5 text-foreground/65">
           {body}
         </p>
       ) : null}

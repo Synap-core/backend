@@ -108,7 +108,7 @@ import type {
   CompositeUpdateOperation,
 } from "@synap-core/types/proposals";
 import type { FlowDefinition } from "@synap/database";
-import { proposals } from "@synap/database";
+import { type proposals } from "@synap/database";
 import {
   labelFromOperations,
   withRemainder,
@@ -1687,12 +1687,18 @@ export async function enrichProposalsForDisplay(
     const automationRunId = stringProp(envelope, "automationRunId");
     const originAutomationId = (() => {
       const stamped = stringProp(envelope, "automationId");
-      const id = stamped ?? (automationRunId ? automationIdByRunId.get(automationRunId) : undefined);
+      const id =
+        stamped ??
+        (automationRunId
+          ? automationIdByRunId.get(automationRunId)
+          : undefined);
       return id && automationById.has(id) ? id : undefined;
     })();
     const automationName =
       nameResolvers.resolveAutomationName(row, payload) ??
-      (originAutomationId ? automationById.get(originAutomationId)?.name : undefined);
+      (originAutomationId
+        ? automationById.get(originAutomationId)?.name
+        : undefined);
     // WHO SAID IT: the pod's words are `policyReason`, never the WHY. A row the
     // pod wrote its own sentence into as `reasoning` (before producers moved
     // it) has it moved here and dropped from the reasoning the review draws.

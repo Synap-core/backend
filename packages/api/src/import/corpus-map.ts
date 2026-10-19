@@ -94,7 +94,7 @@ export function inferFolderIntent(
   parentIntent?: CorpusIntent | null
 ): CorpusIntent {
   const n = name.toLowerCase().trim();
-  const stripped = n.replace(/^\d+[\.\-\)\s]+/, "").trim();
+  const stripped = n.replace(/^\d+[.\-)\s]+/, "").trim();
 
   if (
     /^(projects?|projets?)$/.test(stripped) ||

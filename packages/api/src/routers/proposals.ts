@@ -58,7 +58,10 @@ import {
 } from "@synap-core/types/proposals/attention";
 import { mergeProposalRevision } from "../services/proposals/proposals-service.js";
 import { scanApprovalPatterns } from "../services/proposals/approval-patterns.js";
-import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
+import {
+  assertNotForeignLibraryProposal,
+  assertProposalVisibleTo,
+} from "../utils/proposal-visibility.js";
 import {
   PROPOSAL_SUBJECT_KINDS,
   findCreatingProposalId,
@@ -220,6 +223,10 @@ const LIST_TARGET_TYPES = [
   "automation",
   "playbook",
   "skill",
+  // An agent's Library organisation (`library/organize`): the Library lists
+  // its pending ones (proposalType "organize"); the visibility floor below
+  // still applies, so a person sees only their own.
+  "library",
 ] as const;
 
 /**
@@ -1462,6 +1469,8 @@ export const proposalsRouter = router({
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
       });
+      // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
+      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
 
       if (!proposal) {
         throw new TRPCError({
@@ -1539,6 +1548,8 @@ export const proposalsRouter = router({
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
       });
+      // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
+      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
 
       if (!proposal) {
         throw new TRPCError({
@@ -1626,6 +1637,7 @@ export const proposalsRouter = router({
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
         columns: {
+          subjectUserId: true,
           sourceMessageId: true,
           agentUserId: true,
           targetType: true,
@@ -1641,6 +1653,8 @@ export const proposalsRouter = router({
           sessionId: true,
         },
       });
+      // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
+      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
 
       // Authority — SAME ladder `approve`/`revert` enforce. Without this a
       // rejection was gated only by `requireUserId` (any member could reject
@@ -1794,6 +1808,7 @@ export const proposalsRouter = router({
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
         columns: {
+          subjectUserId: true,
           status: true,
           workspaceId: true,
           data: true,
@@ -1804,6 +1819,8 @@ export const proposalsRouter = router({
           sessionId: true,
         },
       });
+      // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
+      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
       if (!proposal)
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -1878,6 +1895,7 @@ export const proposalsRouter = router({
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
         columns: {
+          subjectUserId: true,
           status: true,
           workspaceId: true,
           data: true,
@@ -1887,6 +1905,8 @@ export const proposalsRouter = router({
           sessionId: true,
         },
       });
+      // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
+      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
       if (!proposal)
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -1942,6 +1962,7 @@ export const proposalsRouter = router({
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
         columns: {
+          subjectUserId: true,
           status: true,
           workspaceId: true,
           data: true,
@@ -1951,6 +1972,8 @@ export const proposalsRouter = router({
           sessionId: true,
         },
       });
+      // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
+      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
       if (!proposal) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -2049,6 +2072,8 @@ export const proposalsRouter = router({
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
         columns: {
+          targetType: true,
+          subjectUserId: true,
           status: true,
           workspaceId: true,
           proposedByUserId: true,
@@ -2058,6 +2083,8 @@ export const proposalsRouter = router({
           data: true,
         },
       });
+      // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
+      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
       if (!proposal) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -2214,6 +2241,8 @@ export const proposalsRouter = router({
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
       });
+      // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
+      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
 
       if (!proposal) {
         throw new TRPCError({
@@ -3082,6 +3111,8 @@ export const proposalsRouter = router({
           const proposal = await db.query.proposals.findFirst({
             where: eq(proposals.id, proposalId),
           });
+          // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
+          if (proposal) assertNotForeignLibraryProposal(proposal, userId);
 
           if (!proposal) {
             throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
@@ -3254,6 +3285,7 @@ export const proposalsRouter = router({
         const target = await db.query.proposals.findFirst({
           where: eq(proposals.id, proposalId),
           columns: {
+            subjectUserId: true,
             workspaceId: true,
             data: true,
             // `agentUserId` is a GATE INPUT, not telemetry: an agent-authored
@@ -3280,6 +3312,8 @@ export const proposalsRouter = router({
             sessionId: true,
           },
         });
+        // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
+        if (target) assertNotForeignLibraryProposal(target, userId);
         if (!target) continue;
         await assertCanReviewProposal({
           proposal: {

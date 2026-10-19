@@ -30,27 +30,22 @@ function stubRole(scope: "shared" | "system" | "workspace") {
   vi.spyOn(
     ProfileResolutionService.prototype,
     "resolveProfile"
-  ).mockResolvedValue(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    {
-      id: "role-client",
-      slug: "client",
-      scope,
-      profileKind: "role",
-      applicableKinds: null,
-    } as any
-  );
+  ).mockResolvedValue({
+    id: "role-client",
+    slug: "client",
+    scope,
+    profileKind: "role",
+    applicableKinds: null,
+  } as any);
   vi.spyOn(
     PropertyValidationService.prototype,
     "validateProperties"
   ).mockImplementation(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async (props: any) =>
       ({ valid: true, errors: [], normalized: props }) as any
   );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function recordingDb(opts: { existing?: any } = {}) {
   const inserted: Record<string, unknown>[] = [];
   const updated: Record<string, unknown>[] = [];
@@ -84,7 +79,6 @@ function recordingDb(opts: { existing?: any } = {}) {
   return { db, inserted, updated };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const repoFor = (db: any) => new FacetRepository(db, {} as any);
 
 describe("storedFacetWorkspaceId (write-side lens rule)", () => {

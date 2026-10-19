@@ -108,6 +108,31 @@ jobs:
              "${GITHUB_WORKSPACE}/../synap-control-plane-api"
           test -f "${GITHUB_WORKSPACE}/../synap-control-plane-api/src/routes/packages.ts"
 
+      # The same rule for synap-app. ~50 cross-repo tripwires and mirror tests
+      # (the official catalog in workspace-templates, design-tokens, the
+      # PlaybookParamType run-form mirror, the one-writer/one-frame scans)
+      # resolve the monorepo as the PARENT of this checkout and read
+      # `synap-app/…` and `synap-backend/…` there. Absent, they fail their
+      # non-vacuity floors — which is correct; so CI lays the monorepo out:
+      # app-bases checked out as `../synap-app`, and this checkout reachable as
+      # `../synap-backend` (a symlink; the runner names it after the repo,
+      # `backend`). Same token as above (the App is scoped to app-bases; a
+      # CROSS_REPO_TOKEN fallback needs Contents: read on it too).
+      - name: Checkout synap-app (cross-repo tripwires)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: Synap-core/app-bases
+          token: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
+          path: .app-checkout
+
+      - name: Lay out the monorepo beside this checkout
+        run: |
+          set -euo pipefail
+          mv "${GITHUB_WORKSPACE}/.app-checkout" "${GITHUB_WORKSPACE}/../synap-app"
+          ln -sfn "${GITHUB_WORKSPACE}" "${GITHUB_WORKSPACE}/../synap-backend"
+          test -d "${GITHUB_WORKSPACE}/../synap-app/packages/workspace-templates/src"
+          test -f "${GITHUB_WORKSPACE}/../synap-backend/packages/api/package.json"
+
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -130,6 +155,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
+      # pnpm 10 no longer ships node-gyp, and node-pty (apps/api, in
+      # onlyBuiltDependencies) compiles from source on linux: without this the
+      # install fails with "node-gyp: not found" (red since the pnpm 10 bump).
+      - name: Install node-gyp
+        run: npm install -g node-gyp@11.5.0
+
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
@@ -149,11 +180,20 @@ jobs:
       # hand-listed, and both scans assert non-vacuity: an empty scan FAILS rather
       # than silently passing. See ci/README.md.
       - name: CI/CD conformance gate
+        # check.mjs resolves `yaml` from the workspace root (two levels up),
+        # which in CI is the runner's work dir with no node_modules. pnpm's
+        # hidden hoist dir holds yaml (a transitive dep, 2.9.1 in the lockfile).
+        env:
+          NODE_PATH: ${{ github.workspace }}/node_modules/.pnpm/node_modules
         run: node ci/scripts/check.mjs --quiet
 
       - name: Lint
-        # Allow up to 100 warnings (errors will still fail)
-        run: pnpm lint --max-warnings=100
+        # Allow up to 100 warnings (errors will still fail). The ledger-path
+        # check first: an allowlisted path that no longer exists silently
+        # exempts nothing (see scripts/check-eslint-ledger-paths.mjs).
+        run: |
+          node scripts/check-eslint-ledger-paths.mjs
+          pnpm lint --max-warnings=100
         continue-on-error: false
 
       - name: Format Check

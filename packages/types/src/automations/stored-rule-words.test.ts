@@ -41,9 +41,9 @@ describe("the ONE WHEN / THEN phrasing", () => {
 
   it("never names the generic `entity` kind to a person", () => {
     // The pod's own picker passes the pattern's subject as the kind.
-    expect(eventPatternWhenText("entity.transition.completed", ["entity"])).toBe(
-      "Something was moved"
-    );
+    expect(
+      eventPatternWhenText("entity.transition.completed", ["entity"])
+    ).toBe("Something was moved");
     expect(eventPatternWhenText("entity.create.completed", [])).toBe(
       "Something was created"
     );

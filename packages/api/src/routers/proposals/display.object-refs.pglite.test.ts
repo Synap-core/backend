@@ -78,11 +78,18 @@ beforeAll(async () => {
   );
   await q(
     `insert into entities (id, user_id, workspace_id, type, title) values ($1,$4,$5,'lead','Acme Corp'),($2,$4,$5,'lead','Beta Ltd'),($3,$6,$7,'lead',$8)`,
-    [ACME, BETA, HIDDEN_LEAD, VIEWER, WS_SEEN, OTHER, WS_HIDDEN, HIDDEN_LEAD_NAME]
+    [
+      ACME,
+      BETA,
+      HIDDEN_LEAD,
+      VIEWER,
+      WS_SEEN,
+      OTHER,
+      WS_HIDDEN,
+      HIDDEN_LEAD_NAME,
+    ]
   );
 });
-
-
 
 function row(payload: Record<string, unknown>) {
   const now = new Date();
@@ -113,7 +120,9 @@ function row(payload: Record<string, unknown>) {
 }
 
 type Refs = Record<string, { id: string; kind: string; name: string | null }>;
-async function refsOf(payload: Record<string, unknown>): Promise<Refs | undefined> {
+async function refsOf(
+  payload: Record<string, unknown>
+): Promise<Refs | undefined> {
   const [out] = await enrichProposalsForDisplay([row(payload)], VIEWER);
   return (out as unknown as { objectRefs?: Refs }).objectRefs;
 }

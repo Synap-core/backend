@@ -1698,7 +1698,6 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
 
   it("reports the DISCOVERED audit matrix (services x doors x fields)", () => {
     for (const { spec, shape, discovery } of AUDITS) {
-      // eslint-disable-next-line no-console
       console.info(
         `[T4] ${spec.key}: ${shape.fields.length} field(s) ` +
           `[${shape.fields.join(", ")}] x ${discovery.doors.length} door(s) ` +
@@ -1712,7 +1711,7 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
   it("reports importers that are NOT doors (internal callers, unaudited)", () => {
     for (const { spec, discovery } of AUDITS) {
       if (discovery.internal.length === 0) continue;
-      // eslint-disable-next-line no-console
+
       console.warn(
         `[T4] ${spec.fn} is also imported by ${discovery.internal.length} ` +
           `non-door file(s) under routers/, NOT audited for field parity: ` +

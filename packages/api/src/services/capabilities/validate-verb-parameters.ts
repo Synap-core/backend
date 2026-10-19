@@ -52,7 +52,7 @@
  * `hints` — it is usually the one sentence that says how to fix the call.
  */
 
-import { z } from "zod";
+import { type z } from "zod";
 import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
 
 /** What the caller must change, machine-readable. */

@@ -636,6 +636,7 @@ async function ensureLocalUser(): Promise<void> {
 }
 
 let settleStartupHooks!: () => void;
+let startupHooksDone = false;
 /**
  * Resolves once `runStartupHooks` has finished (or failed). For a boot pass
  * that must read what the seeders / reconciles wrote — e.g. the media-copy
@@ -643,8 +644,13 @@ let settleStartupHooks!: () => void;
  * reconcile stamps — but that also needs pg-boss, which starts elsewhere.
  */
 export const startupHooksSettled: Promise<void> = new Promise((resolve) => {
-  settleStartupHooks = resolve;
+  settleStartupHooks = () => {
+    startupHooksDone = true;
+    resolve();
+  };
 });
+/** Synchronous twin of `startupHooksSettled`, for /health's `readiness`. */
+export const haveStartupHooksSettled = (): boolean => startupHooksDone;
 
 /**
  * Run all startup hooks

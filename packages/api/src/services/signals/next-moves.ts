@@ -63,7 +63,7 @@ import {
   isDependencyBlockerCleared,
 } from "@synap-core/types/connections";
 import { createLogger } from "@synap-core/core";
-import { AccessContext, scopedDb } from "../../access/index.js";
+import { type AccessContext, scopedDb } from "../../access/index.js";
 import { sessionListConditions } from "../focus-sessions/session-list-conditions.js";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
 import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";

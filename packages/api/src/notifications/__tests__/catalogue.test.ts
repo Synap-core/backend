@@ -146,7 +146,8 @@ describe("notification catalogue — allowedRules derive from channelCeiling", (
   });
 
   it("the phone default is DERIVED from the push contract, never the raw registry", () => {
-    const entry = (type: string) => catalogue.types.find((t) => t.type === type);
+    const entry = (type: string) =>
+      catalogue.types.find((t) => t.type === type);
     // Unclassified-to-null: declared os in the registry, never pushed.
     expect(entry("connector.sync.failed")?.defaultChannels).toEqual(["in_app"]);
     expect(entry("connector.sync.failed")?.push).toBeNull();
@@ -154,7 +155,10 @@ describe("notification catalogue — allowedRules derive from channelCeiling", (
     const storage = entry("pod.storage_warning");
     if (storage) {
       expect(storage.defaultChannels).toEqual(["in_app"]);
-      expect(storage.push).toEqual({ category: "system", onlyWhenBlocking: false });
+      expect(storage.push).toEqual({
+        category: "system",
+        onlyWhenBlocking: false,
+      });
     }
     // Pushes, but only when blocking.
     expect(entry("proposal.created")?.defaultChannels).toContain("os");
@@ -165,7 +169,12 @@ describe("notification catalogue — allowedRules derive from channelCeiling", (
     expect(entry("session.needs_you")?.defaultChannels).toContain("os");
     // An unknown type declaring os advertises none.
     expect(
-      catalogueEntryFor({ ...capped, type: "test.unclassified", defaultChannels: ["in_app", "os"], channelCeiling: undefined }).defaultChannels
+      catalogueEntryFor({
+        ...capped,
+        type: "test.unclassified",
+        defaultChannels: ["in_app", "os"],
+        channelCeiling: undefined,
+      }).defaultChannels
     ).toEqual(["in_app"]);
   });
 

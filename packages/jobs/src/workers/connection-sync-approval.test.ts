@@ -38,7 +38,6 @@ vi.mock("@synap/database", async (importOriginal) => ({
 const { handleConnectionSyncApproval } =
   await import("./connection-sync-approval.js");
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const job = (data: unknown) => ({ data }) as any;
 
 beforeEach(() => {

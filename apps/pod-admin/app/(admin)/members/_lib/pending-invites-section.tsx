@@ -75,7 +75,7 @@ export function PendingInvitesSection() {
       hint="Sent but not yet accepted"
       actions={
         pending.length > 0 ? (
-          <span className="text-[11px] tabular text-foreground/55">
+          <span className="text-[11px] tabular text-foreground/65">
             {pending.length} pending
           </span>
         ) : null

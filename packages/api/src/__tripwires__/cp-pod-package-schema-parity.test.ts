@@ -45,12 +45,16 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  siblingCheckout,
+  siblingRequired,
+  siblingSkipReason,
+} from "../../../../scripts/sibling-checkout.mjs";
 
-// From packages/api/src/__tripwires__ up to the monorepo root (Code/synap).
-const REPO_ROOT = join(import.meta.dirname, "../../../../..");
+const CP_ROOT = siblingCheckout("synap-control-plane-api");
 const CP_PACKAGES_TS = join(
-  REPO_ROOT,
-  "synap-control-plane-api/src/routes/packages.ts"
+  CP_ROOT ?? "<no synap-control-plane-api checkout>",
+  "src/routes/packages.ts"
 );
 const POD_PACKAGES_TS = join(
   import.meta.dirname,
@@ -170,8 +174,8 @@ const CP_ONLY: Record<string, string> = {
 };
 
 /**
- * The CP checkout is a HARD dependency of this guard, and its absence must fail
- * LOUDLY rather than quietly.
+ * The CP checkout is a HARD dependency of this guard wherever it is provided,
+ * and its absence there must fail LOUDLY rather than quietly.
  *
  * Reading it unguarded at module scope means a missing sibling checkout throws
  * during COLLECTION — and a file that fails to collect runs ZERO tests, which
@@ -179,8 +183,17 @@ const CP_ONLY: Record<string, string> = {
  * test names and, in any runner configured to tolerate collection errors, the
  * parity guard simply stops existing. Guarding here turns that into one named,
  * self-explaining assertion below.
+ *
+ * CI places the CP checkout beside this one (ci.yml), so in CI an absent
+ * checkout fails the first case. A checkout that exists but lost
+ * `routes/packages.ts` fails it everywhere. Only a developer machine with no
+ * CP clone at all skips, with the reason printed.
  */
 const cpAvailable = existsSync(CP_PACKAGES_TS);
+const runParity = CP_ROOT !== null || siblingRequired();
+if (!runParity) {
+  console.warn(siblingSkipReason("synap-control-plane-api", "cp-pod-parity"));
+}
 
 const cpKeys = cpAvailable
   ? topLevelObjectKeys(
@@ -193,52 +206,63 @@ const podKeys = topLevelObjectKeys(
   "const PackageApplySchema = z.object("
 );
 
-describe("CP packageDefinitionSchema ⟷ pod PackageApplySchema parity", () => {
-  it("can see the control-plane checkout it compares against", () => {
-    expect(
-      cpAvailable,
-      `Cannot find ${CP_PACKAGES_TS}. This tripwire compares the CP publish ` +
-        `schema against the pod apply schema, so it needs synap-control-plane-api ` +
-        `checked out BESIDE synap-backend. Clone it there — do not delete or ` +
-        `skip this test, that is how the two schemas silently drifted before.`
-    ).toBe(true);
-  });
+describe.runIf(runParity)(
+  "CP packageDefinitionSchema ⟷ pod PackageApplySchema parity",
+  () => {
+    it("can see the control-plane checkout it compares against", () => {
+      expect(
+        cpAvailable,
+        `Cannot find ${CP_PACKAGES_TS}. This tripwire compares the CP publish ` +
+          `schema against the pod apply schema, so it needs synap-control-plane-api ` +
+          `checked out BESIDE synap-backend (or SYNAP_CONTROL_PLANE_DIR). Clone it ` +
+          `there — do not delete or skip this test, that is how the two schemas ` +
+          `silently drifted before.`
+      ).toBe(true);
+    });
 
-  it("is non-vacuous: both key sets were really extracted", () => {
-    // A scanner that silently matched nothing would make every assertion below
-    // trivially true. These floors are well under the real counts (38 / 40).
-    expect(cpKeys.length, "CP schema keys not extracted").toBeGreaterThan(25);
-    expect(podKeys.length, "pod schema keys not extracted").toBeGreaterThan(25);
-  });
+    it("is non-vacuous: both key sets were really extracted", () => {
+      // A scanner that silently matched nothing would make every assertion below
+      // trivially true. These floors are well under the real counts (38 / 40).
+      expect(cpKeys.length, "CP schema keys not extracted").toBeGreaterThan(25);
+      expect(podKeys.length, "pod schema keys not extracted").toBeGreaterThan(
+        25
+      );
+    });
 
-  it("extracts real, recognizable keys (not comment or string noise)", () => {
-    // Anchor on fields whose loss is documented in both files' headers.
-    for (const key of ["profiles", "relationDefs", "cells", "bentoViewName"]) {
-      expect(cpKeys, `CP schema is missing "${key}"`).toContain(key);
-    }
-    for (const key of ["profiles", "playbooks", "actionPlacements"]) {
-      expect(podKeys, `pod schema is missing "${key}"`).toContain(key);
-    }
-  });
+    it("extracts real, recognizable keys (not comment or string noise)", () => {
+      // Anchor on fields whose loss is documented in both files' headers.
+      for (const key of [
+        "profiles",
+        "relationDefs",
+        "cells",
+        "bentoViewName",
+      ]) {
+        expect(cpKeys, `CP schema is missing "${key}"`).toContain(key);
+      }
+      for (const key of ["profiles", "playbooks", "actionPlacements"]) {
+        expect(podKeys, `pod schema is missing "${key}"`).toContain(key);
+      }
+    });
 
-  it("every CP-accepted field has a pod slot or an explicit CP-only reason", () => {
-    const unslotted = cpKeys.filter(
-      (k) => !podKeys.includes(k) && !(k in CP_ONLY)
-    );
-    expect(
-      unslotted,
-      "these fields pass the CP publish gate and are then SILENTLY STRIPPED by " +
-        "the pod's /api/hub/packages/apply door — add a slot to " +
-        "PackageApplySchema, or add the key to CP_ONLY with a reason"
-    ).toEqual([]);
-  });
+    it("every CP-accepted field has a pod slot or an explicit CP-only reason", () => {
+      const unslotted = cpKeys.filter(
+        (k) => !podKeys.includes(k) && !(k in CP_ONLY)
+      );
+      expect(
+        unslotted,
+        "these fields pass the CP publish gate and are then SILENTLY STRIPPED by " +
+          "the pod's /api/hub/packages/apply door — add a slot to " +
+          "PackageApplySchema, or add the key to CP_ONLY with a reason"
+      ).toEqual([]);
+    });
 
-  it("the CP-only allowlist has no stale entries", () => {
-    // An entry that CP no longer declares, or that the pod HAS since slotted,
-    // is dead weight that makes the list harder to trust.
-    const stale = Object.keys(CP_ONLY).filter(
-      (k) => !cpKeys.includes(k) || podKeys.includes(k)
-    );
-    expect(stale, "remove these from CP_ONLY").toEqual([]);
-  });
-});
+    it("the CP-only allowlist has no stale entries", () => {
+      // An entry that CP no longer declares, or that the pod HAS since slotted,
+      // is dead weight that makes the list harder to trust.
+      const stale = Object.keys(CP_ONLY).filter(
+        (k) => !cpKeys.includes(k) || podKeys.includes(k)
+      );
+      expect(stale, "remove these from CP_ONLY").toEqual([]);
+    });
+  }
+);
