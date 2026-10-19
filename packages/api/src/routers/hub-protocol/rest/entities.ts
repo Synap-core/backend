@@ -229,6 +229,17 @@ export function registerEntitiesRoutes(app: HubHono): void {
           .optional()
           .describe("Deprecated alias for profileSlug."),
         workspaceId: uuidQueryParam.optional(),
+        projectId: uuidQueryParam
+          .optional()
+          .describe(
+            "Project lens: only the project and what is filed into it."
+          ),
+        facetSlug: z
+          .string()
+          .optional()
+          .describe(
+            "Only entities carrying a live facet of this role (e.g. `client`)."
+          ),
         limit: z.string().optional(),
       }),
     },
@@ -304,6 +315,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
         workspaceId: workspaceId || undefined,
         profileSlug: profileSlug || undefined,
         limit: limit ? parseInt(limit, 10) : undefined,
+        // Declared and forwarded: the Intelligence Service sends both
+        // (`is-hub-client.ts` getEntities). Undeclared, zod stripped them and
+        // a project- or role-narrowed ask answered for the whole floor.
+        ...(query.projectId ? { projectId: query.projectId } : {}),
+        ...(query.facetSlug ? { facetSlug: query.facetSlug } : {}),
         // This is the user-wide FLOOR read (the agent's door). `list` is
         // scoped-by-default, so without this a workspace lens drops pod-wide
         // profiles (person/company/contact live at workspace_id NULL) — which

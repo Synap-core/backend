@@ -210,3 +210,47 @@ describe("GET /users/:userId/entities — the path id is the caller (O1b)", () =
     expect(res.status).toBe(403);
   });
 });
+
+describe("GET /users/:userId/entities — projectId and facetSlug narrow (O1c)", () => {
+  // The Intelligence Service sends both (`is-hub-client.ts` getEntities); the
+  // route did not declare them, zod stripped them, and a narrowed ask
+  // answered for the whole floor.
+  const PROJECT = randomUUID();
+  const CLIENT_ROLE = randomUUID();
+  beforeAll(async () => {
+    await q(
+      `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type)
+       values ($1,$2,$3,$4,$5,'belongs_to_project')`,
+      [randomUUID(), A, LIVE, IN_LIVE, PROJECT]
+    );
+    await q(
+      `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active, ui_hints, workspace_id)
+       values ($1,'client','Client','role','workspace','workspace',true,'{}'::jsonb,$2)`,
+      [CLIENT_ROLE, LIVE]
+    );
+    await q(
+      `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, properties, metadata)
+       values ($1,$2,$3,$4,$5,'{}'::jsonb,'{}'::jsonb)`,
+      [randomUUID(), POD_WIDE, CLIENT_ROLE, A, LIVE]
+    );
+  });
+
+  it("projectId ⇒ only what is filed into the project", async () => {
+    const res = await app().request(
+      `/users/${A}/entities?projectId=${PROJECT}`
+    );
+    expect(res.status).toBe(200);
+    expect(await ids(res)).toEqual([IN_LIVE]);
+  });
+
+  it("facetSlug ⇒ only the entities wearing the role", async () => {
+    const res = await app().request(`/users/${A}/entities?facetSlug=client`);
+    expect(res.status).toBe(200);
+    expect(await ids(res)).toEqual([POD_WIDE]);
+  });
+
+  it("an undeclared role is a 404, never a calm []", async () => {
+    const res = await app().request(`/users/${A}/entities?facetSlug=nope`);
+    expect(res.status).toBe(404);
+  });
+});
