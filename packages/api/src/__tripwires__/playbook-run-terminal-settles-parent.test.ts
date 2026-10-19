@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { LIVE_RUN_STATUSES } from "@synap/database";
 import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
@@ -21,8 +22,11 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * A TERMINAL STAMP is `.update(playbookRuns).set({ … status: X … })` where X is
  * a terminal literal ("completed" | "failed" | "cancelled" | "proposed") or any
  * NON-literal expression (a door forwarding a caller-supplied status can write
- * a terminal one). The two live, non-terminal literals ("running",
- * "waiting_on_you") are not stamps.
+ * a terminal one). A LIVE literal is not a stamp — the set is DERIVED from
+ * `LIVE_RUN_STATUSES` (@synap/database, the one "is this run still going?"
+ * answer: running, waiting_on_you, stale), never hand-listed here. The
+ * hand-listed copy missed `stale` (D6, 2026-10-11) and read the reaper's
+ * non-terminal stale sweep as an unsettled terminal write.
  *
  * A file passes when it calls the helper at least as many times as it stamps.
  *
@@ -42,7 +46,7 @@ const JOBS_SRC = join(API_SRC, "../../jobs/src");
 
 const HELPER_CALL =
   /\b(settleParentAutomationRunFromChild|resettleAutomationRunFromChildren)\(/g;
-const NON_TERMINAL = new Set(['"running"', '"waiting_on_you"']);
+const NON_TERMINAL = new Set(LIVE_RUN_STATUSES.map((s) => `"${s}"`));
 const SET_ON_RUNS =
   /\.update\(\s*playbookRuns\s*\)\s*\.set\(\s*\{([^{}]*?)\}\s*\)/g;
 
@@ -110,6 +114,7 @@ describe("tripwire: a playbook_runs terminal writer settles the parent automatio
     expect(terminalStamps(BAD)).toEqual(['"failed"', "nextStatus"]);
     const LIVE = `await db.update(playbookRuns).set({ status: "running" }).where(x);
       await db.update(playbookRuns).set({ status: "waiting_on_you" }).where(x);
+      await db.update(playbookRuns).set({ status: "stale" }).where(x);
       await db.update(playbookRuns).set({ summary: "x" }).where(x);`;
     expect(terminalStamps(LIVE)).toEqual([]);
   });
