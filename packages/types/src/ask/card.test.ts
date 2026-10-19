@@ -129,6 +129,37 @@ describe("askRowRegion", () => {
   ] as const)("%# → %s", (a, canAnswer, want) => {
     expect(askRowRegion(a, { canAnswer })).toBe(want);
   });
+
+  it("a provide opens its sheet only where the host declares that kind", () => {
+    const connection = ask({
+      mode: "provide",
+      provide: { kind: "connection", service: "stripe" },
+    });
+    // An old client declares nothing: today's `none`, unchanged.
+    expect(askRowRegion(provide, { canAnswer: true, canProvide: {} })).toBe(
+      "none"
+    );
+    // Declaring ANOTHER kind does not open this one.
+    expect(
+      askRowRegion(provide, {
+        canAnswer: true,
+        canProvide: { connection: true, file: true },
+      })
+    ).toBe("none");
+    expect(
+      askRowRegion(provide, { canAnswer: false, canProvide: { secret: true } })
+    ).toBe("detail");
+    expect(
+      askRowRegion(connection, {
+        canAnswer: true,
+        canProvide: { connection: true },
+      })
+    ).toBe("detail");
+    // Opting in to provide changes nothing for the other modes.
+    expect(
+      askRowRegion(confirm, { canAnswer: true, canProvide: { secret: true } })
+    ).toBe("inline");
+  });
 });
 
 describe("options ↔ chips", () => {

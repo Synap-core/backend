@@ -72,6 +72,17 @@ import { getConnectionSyncStatus } from "../services/event-sync/connection-sync.
 import { loadProviderSyncKinds } from "../connectors/sync-kinds.js";
 import type { SyncConnectorConnection } from "../connectors/SyncConnector.js";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
+import { ASK_INVALID_PREFIX } from "@synap-core/types/ask";
+import { resolveServiceName } from "@synap-core/types/service-marks";
+import {
+  describeProvideRefusal,
+  loadOwedProvideAsk,
+} from "../services/focus-sessions/provide-options.js";
+import {
+  matchIntegration,
+  recordProvideConnectIntent,
+} from "../services/focus-sessions/provide-connect.js";
 
 /**
  * A pod brokered by its control plane must never take a LOCAL Nango key: it
@@ -162,6 +173,82 @@ async function requireBroker(): Promise<ConnectionBroker> {
     code: "INTERNAL_SERVER_ERROR",
     message: `This pod's connection broker is unavailable (${resolved.reason}): ${resolved.error}`,
   });
+}
+
+/**
+ * The checks `connectors.session` runs before starting a session that will
+ * answer an ask (`answerFor`): a person (never an agent key, bounded by its
+ * key grant like the answer door), the owner of a slot the answer door would
+ * still take, whose ask is a `provide` for a connection, and an integration
+ * on this pod that IS the asked service. A `providerId` the client named must
+ * be that integration. Returns the slot's own label and the integration key.
+ */
+async function resolveConnectAnswerFor(
+  ctx: { userId: string; agentUserId?: string | null },
+  broker: ConnectionBroker,
+  input: {
+    sessionId: string;
+    expectedLabel: string;
+    askFingerprint: string;
+    providerId?: string;
+  }
+): Promise<{
+  sessionId: string;
+  expectedLabel: string;
+  askFingerprint: string;
+  providerId: string;
+}> {
+  if (ctx.agentUserId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only the person can answer — an agent key cannot.",
+    });
+  }
+  await assertKeyMayWrite({ subjectType: "focus_session", action: "update" });
+  const owed = await loadOwedProvideAsk({
+    sessionId: input.sessionId,
+    userId: ctx.userId,
+    expectedLabel: input.expectedLabel,
+    askFingerprint: input.askFingerprint,
+  });
+  if ("status" in owed) {
+    throw new TRPCError(
+      describeProvideRefusal(owed, input.expectedLabel, input.sessionId)
+    );
+  }
+  if (owed.provide.kind !== "connection") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `${ASK_INVALID_PREFIX} This question asks for ${owed.provide.kind === "secret" ? "a secret" : "a file"}, not a connection.`,
+    });
+  }
+  const serviceName = resolveServiceName(owed.provide.service);
+  const declared = await broker.listIntegrationsResult();
+  if (!declared.ok) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `Could not read which connections this pod offers (${declared.reason}).`,
+    });
+  }
+  const match = matchIntegration(owed.provide.service, declared.integrations);
+  if (!match) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `This pod does not offer a ${serviceName} connection yet. A pod admin can add it.`,
+    });
+  }
+  if (input.providerId && input.providerId !== match.uniqueKey) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `${ASK_INVALID_PREFIX} The agent asked for ${serviceName}, not this connection.`,
+    });
+  }
+  return {
+    sessionId: owed.session.id,
+    expectedLabel: owed.expectedLabel,
+    askFingerprint: owed.askFingerprint,
+    providerId: match.uniqueKey,
+  };
 }
 
 /**
@@ -472,6 +559,13 @@ export const connectorsRouter = router({
    * Get a Connect session for the OAuth UI, through the broker. On a CP-managed
    * pod the CP stamps the pod's namespace and enforces the plan's connector
    * limit; an over-limit request is FORBIDDEN.
+   *
+   * `answerFor` — CONNECT-AND-ANSWER (`provide-connect.ts`): the session is
+   * started to answer one owed `provide` ask for a connection. The person must
+   * own the slot (the answer door's floor; never an agent key), the session is
+   * pinned to the integration that IS the asked service, and when the new
+   * connection appears in the registry the pod answers the slot itself —
+   * wherever the OAuth finished (a phone's system browser included).
    */
   session: protectedProcedure
     .input(
@@ -482,11 +576,26 @@ export const connectorsRouter = router({
           providerId: z.string().min(1).optional(),
           /** Workspace context for metadata (optional, defaults to user's primary workspace). */
           workspaceId: z.string().optional(),
+          /** Answer this owed `provide` (connection) ask with the new connection. */
+          answerFor: z
+            .object({
+              sessionId: z.string().uuid(),
+              expectedLabel: z.string().min(1).max(500),
+              /** `askFingerprint(ask)` of the ask the person is answering. */
+              askFingerprint: z.string().min(1).max(64),
+            })
+            .optional(),
         })
         .optional()
     )
     .mutation(async ({ ctx, input }) => {
       const broker = await requireBroker();
+      const answerFor = input?.answerFor
+        ? await resolveConnectAnswerFor(ctx, broker, {
+            ...input.answerFor,
+            providerId: input.providerId,
+          })
+        : null;
 
       let workspaceId = input?.workspaceId ?? "";
       if (!workspaceId) {
@@ -500,8 +609,8 @@ export const connectorsRouter = router({
       // allowed_integrations — Nango rejects unknown keys. Fall back to "*" (the
       // picker) ONLY when the broker answered and genuinely doesn't declare it;
       // a failed lookup proves nothing about the key.
-      let effectiveProvider = input?.providerId ?? "*";
-      if (effectiveProvider !== "*") {
+      let effectiveProvider = answerFor?.providerId ?? input?.providerId ?? "*";
+      if (effectiveProvider !== "*" && !answerFor) {
         const declared = await broker.listIntegrationsResult();
         if (declared.ok) {
           const exists = declared.integrations.some(
@@ -538,12 +647,30 @@ export const connectorsRouter = router({
             "Could not start a connection session. A pod admin needs to check that the integration is fully configured.",
         });
       }
+      if (answerFor) {
+        await recordProvideConnectIntent({
+          sessionId: answerFor.sessionId,
+          userId: ctx.userId,
+          label: answerFor.expectedLabel,
+          provider: answerFor.providerId,
+          askFingerprint: answerFor.askFingerprint,
+        });
+      }
       return {
         token: session.sessionToken,
         // The public-facing Connect URL for browser use, never an internal API
         // host the browser cannot reach. The CP broker returns a full link.
         nangoHost: broker.getConnectUrl() ?? undefined,
         connectLink: session.redirectUrl,
+        ...(answerFor
+          ? {
+              answerFor: {
+                sessionId: answerFor.sessionId,
+                expectedLabel: answerFor.expectedLabel,
+                providerId: answerFor.providerId,
+              },
+            }
+          : {}),
       };
     }),
 

@@ -6295,6 +6295,28 @@ export interface Context {
 	 */
 	revertPass?: RevertPass;
 }
+/**
+ * Why a handed-over secret came with no read for the agent.
+ *   `agent_unknown`  — the pod cannot tell which agent asked.
+ *   `not_grantable`  — a legacy client-encrypted secret the pod cannot read.
+ *   `key_not_allowed` — the key that answered may not grant vault access.
+ */
+export type ProvideSecretGrantRefusal = "agent_unknown" | "key_not_allowed" | "not_grantable";
+/** What a secret answer did about the asking agent's access to it. */
+export type ProvideSecretGrant = {
+	status: "granted";
+	agentUserId: string;
+	agentName: string;
+	/** ISO; `null` when an existing grant with no end already covered it. */
+	expiresAt: string | null;
+} | {
+	status: "refused";
+	reason: ProvideSecretGrantRefusal;
+}
+/** The read could not be written; the hand-over stands. */
+ | {
+	status: "failed";
+};
 declare const SECRET_TYPES: readonly [
 	"password",
 	"api_key",
@@ -16963,6 +16985,74 @@ export type AnswerExpectedOutputResult = {
 	 */
 	decision?: DecisionFilingOutcome;
 };
+export type ProvideFileLanding = {
+	status: "ready";
+	workspaceId: string;
+	workspaceName: string;
+	/** Pass to the upload door so the file is filed into the project too. */
+	projectId: string | null;
+	/** `session_space` — the session's own; `project_home` — its project's home. */
+	via: "project_home" | "session_space";
+} | {
+	status: "refused";
+	message: string;
+};
+export interface ProvideSecretRow {
+	/** The answer's reference (`vault://<id>`). */
+	ref: string;
+	name: string;
+	type: string;
+}
+export interface ProvideConnectionRow {
+	/** The answer's `connectionId` (the registry row). */
+	id: string;
+	label: string;
+	/** Which account of the service, when the pod knows one. */
+	accountHint: string | null;
+	podWide: boolean;
+	isDefault: boolean;
+	needsReauth: boolean;
+}
+export type ProvideOptions = {
+	sessionId: string;
+	expectedLabel: string;
+	askFingerprint: string;
+} & ({
+	kind: "secret";
+	secret: {
+		name: string;
+		rows: ProvideSecretRow[];
+		/** What handing one over lets the asking agent do. */
+		grant: {
+			status: "will_grant";
+			agentName: string;
+			minutes: number;
+		} | {
+			status: "no_grant";
+			reason: ProvideSecretGrantRefusal;
+		};
+	};
+} | {
+	kind: "connection";
+	connection: {
+		service: string;
+		serviceName: string;
+		/** The integration key to start a connection with; `null` = none here. */
+		providerId: string | null;
+		connectable: boolean;
+		/** Why a new connection can't start here (`connectable` false). */
+		unavailable: "no_broker" | "not_offered" | "unreadable" | null;
+		rows: ProvideConnectionRow[];
+		/** P4 — several accounts: the person confirms which one. */
+		confirmAccount: boolean;
+	};
+} | {
+	kind: "file";
+	file: {
+		accept: string[] | null;
+		landing: ProvideFileLanding;
+	};
+});
 export interface SessionAnswerItem {
 	/** Stable id — dedupe on it across polls. */
 	id: string;
@@ -36839,8 +36929,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				cpUrl?: string | undefined;
 				providerId?: string | undefined;
 				workspaceId?: string | undefined;
+				answerFor?: {
+					sessionId: string;
+					expectedLabel: string;
+					askFingerprint: string;
+				} | undefined;
 			} | undefined;
 			output: {
+				answerFor?: {
+					sessionId: string;
+					expectedLabel: string;
+					providerId: string;
+				} | undefined;
 				token: string;
 				nangoHost: string | undefined;
 				connectLink: string;
@@ -41628,8 +41728,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				decision?: Extract<AnswerExpectedOutputResult, {
 					status: "answered";
 				}>["decision"];
+				secretGrant?: ProvideSecretGrant;
 				ok: true;
 			};
+			meta: object;
+		}>;
+		provideOptions: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sessionId: string;
+				expectedLabel: string;
+				askFingerprint?: string | undefined;
+			};
+			output: ProvideOptions;
 			meta: object;
 		}>;
 		askAboutSlot: import("@trpc/server").TRPCMutationProcedure<{

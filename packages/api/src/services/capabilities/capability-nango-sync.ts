@@ -197,6 +197,15 @@ export async function syncNangoConnectionsToRegistry(
             "Could not enqueue the first sync for a newly observed connection"
           )
         );
+        // A connection first observed may be the one an ask was waiting for
+        // (connect-and-answer). Never throws; the mirror stands either way.
+        const { answerPendingProvideConnects } =
+          await import("../focus-sessions/provide-connect.js");
+        await answerPendingProvideConnects({
+          userId: actorUserId,
+          provider: providerConfigKey,
+          connectionId: created.id,
+        });
       }
     }
   }
