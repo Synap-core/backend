@@ -21,7 +21,14 @@ if (!existsSync(INDEX_FILE)) {
 }
 
 // ---- Collect route files (exclude infrastructure) ----
+// A ROUTE file is one that defines a `register*Routes` function — derived from
+// the file, never a hand list. A module that defines none is a helper the
+// route files import (link-endpoint-visibility, resolve-open-target, …): it
+// registers nothing, so there is nothing to wire and no name to check.
+// (`_`-prefixed helpers were the old convention; both are skipped.)
+const REGISTER_FN = /export (?:function |const )register\w+Routes\b/;
 const routeFiles = new Set();
+const helperFiles = [];
 for (const f of readdirSync(REST_DIR)) {
   if (
     f.endsWith(".ts") &&
@@ -30,8 +37,20 @@ for (const f of readdirSync(REST_DIR)) {
     !f.endsWith(".test.ts") &&
     f !== "automation-schema-doc.ts"
   ) {
-    routeFiles.add(f.replace(/\.ts$/, ""));
+    if (REGISTER_FN.test(readFileSync(join(REST_DIR, f), "utf-8"))) {
+      routeFiles.add(f.replace(/\.ts$/, ""));
+    } else {
+      helperFiles.push(f);
+    }
   }
+}
+// Non-vacuity: 2026-10-19 there were 97 route files. A regex that stopped
+// matching would turn every route into a "helper" and pass everything.
+if (routeFiles.size < 40) {
+  console.error(
+    `ERROR: only ${routeFiles.size} route files recognised (${helperFiles.length} helpers) — the register*Routes pattern no longer matches.`
+  );
+  process.exit(1);
 }
 
 // ---- Collect register exports from index.ts ----
@@ -185,7 +204,7 @@ if (namingIssues.length > 0) {
 
 if (exitCode === 0) {
   console.log(
-    `✓ ${routeFiles.size} route files, naming convention clean, ${registerExports.size} exports, all wired in hub-protocol-rest.ts`
+    `✓ ${routeFiles.size} route files (${helperFiles.length} helpers skipped), naming convention clean, ${registerExports.size} exports, all wired in hub-protocol-rest.ts`
   );
 }
 process.exit(exitCode);

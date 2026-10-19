@@ -23,6 +23,7 @@ import {
   nounInSentence,
   resolveObjectNounPlural,
   resolveStatusLabel,
+  sentenceCaseLabel,
 } from "../vocabulary/index.js";
 import {
   AGENT_ALWAYS_ALLOWED,
@@ -214,8 +215,13 @@ function tierLabels(
 }
 
 /** A tier as a VALUE (the "Can change" fact): its labels as listed. */
+/**
+ * A tier's value as it reads beside its label ("Can read  Entities and
+ * documents"): one phrase, nouns mid-sentence after the first word — never a
+ * comma list of capitalised plurals ("Entities, Documents").
+ */
 const tierValue = (labels: readonly string[] | null) =>
-  labels ? labels.join(", ") : null;
+  labels ? sentenceCaseLabel(and(labels.map(nounInSentence))) : null;
 
 /**
  * A tier inside the header SENTENCE: nouns mid-sentence ("changes notes and

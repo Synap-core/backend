@@ -91,7 +91,7 @@ function statusForError(msg: string): 400 | 403 | 404 | 500 {
   return 500;
 }
 
-export function registerCapabilityCredentialsRoutes(app: HubHono): void {
+export function registerCapabilityConnectionsRoutes(app: HubHono): void {
   // ── GET /capabilities/:capabilityId/credentials ─────────────────────────────
   registerOpenApi(app, {
     method: "get",

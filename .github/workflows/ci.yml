@@ -18,11 +18,23 @@ env:
 permissions:
   contents: read
 
+# TWO JOBS (founder decision 2026-10-19, release gating option A):
+#   release-gate — what must hold for a commit to be RELEASED: it installs,
+#                  lints, typechecks, builds, migrates a real Postgres, boots,
+#                  and builds the image. docker-publish.yml's ci-gate reads THIS
+#                  job's check run ("Release gate") for the sha, nothing else.
+#   full-suite   — the test suites, the floor, the tripwires, the audit. Red here
+#                  is a backlog to burn down, not a release blocker.
+# They run in parallel and set up through ONE composite action
+# (.github/actions/monorepo-setup) so they can never set up differently.
+
 jobs:
-  quality:
-    name: Quality Checks
+  release-gate:
+    name: Release gate
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # ~1.5x the slower of two measured runs (15.5 min in 39176917085, 21 min
+    # in 39179071834 — runner speed varies).
+    timeout-minutes: 32
 
     services:
       postgres:
@@ -43,146 +55,26 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      # The cross-repo parity tripwire
-      # (packages/api/src/__tripwires__/cp-pod-package-schema-parity.test.ts)
-      # compares the CP publish schema against the pod apply schema by READING
-      # the CP source — the two schemas live in different pnpm workspaces, so
-      # neither can import the other. It resolves the CP checkout as a SIBLING
-      # of this one (`<backend>/../synap-control-plane-api`) and ASSERTS it
-      # exists, deliberately: a guard that skips when its input is missing is
-      # how the two schemas silently drifted the first time. So CI must provide
-      # the sibling — the test must never be taught to skip.
-      #
-      # NOTE the two steps. `actions/checkout` refuses any `path:` that resolves
-      # outside $GITHUB_WORKSPACE ("Repository path … is not under …"), and the
-      # sibling location is by definition its parent — so the repo is checked
-      # out INSIDE the workspace and then moved into place. The move happens
-      # before `pnpm install` so no workspace glob, lint or typecheck ever sees
-      # the temporary directory.
-      #
-      # The repo is `control-plane-api`; the DIRECTORY must be named
-      # `synap-control-plane-api`, which is the name the tripwire resolves.
-      #
-      # control-plane-api is PRIVATE, so this needs a read token: the Synap
-      # release App's (scoped to control-plane-api + app-bases, contents: read;
-      # app-bases is read by the api-types freshness check below), else the
-      # CROSS_REPO_TOKEN repo secret (transition fallback; fine-grained PAT,
-      # Contents: read on Synap-core/control-plane-api) until the App is live
-      # (SECURITY-RELEASE-RUNBOOK.md §5). With neither, every run died at the
-      # checkout with "Input required and not supplied: token" and no quality
-      # step ran — say so plainly instead of that one-line error.
-      - name: Mint control-plane-api read token (GitHub App)
-        id: app-token
-        if: ${{ vars.SYNAP_RELEASE_APP_ID != '' }}
-        continue-on-error: true
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+      # Cross-repo layout (../synap-control-plane-api, ../synap-app), Node,
+      # pnpm, install, and the workspace-dependency build. See the action.
+      - name: Monorepo layout + dependencies
+        uses: ./.github/actions/monorepo-setup
         with:
           app-id: ${{ vars.SYNAP_RELEASE_APP_ID }}
-          private-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
-          owner: Synap-core
-          repositories: |
-            control-plane-api
-            app-bases
-          permission-contents: read
-
-      - name: Require a control-plane-api read token
-        env:
-          CROSS_REPO_TOKEN: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
-        run: |
-          if [ -z "$CROSS_REPO_TOKEN" ]; then
-            echo "::error::No token to read Synap-core/control-plane-api. Set the repo variable SYNAP_RELEASE_APP_ID and secret SYNAP_RELEASE_APP_KEY (SECURITY-RELEASE-RUNBOOK.md §5), or, until then, the CROSS_REPO_TOKEN secret (a fine-grained PAT with Contents: read on Synap-core/control-plane-api: gh secret set CROSS_REPO_TOKEN -R Synap-core/backend). Without one the cross-repo parity tripwire cannot run, CI stays red and Publish Docker Images is skipped."
-            exit 1
-          fi
-
-      - name: Checkout Control Plane API (cross-repo parity tripwire)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: Synap-core/control-plane-api
-          token: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
-          path: .cp-checkout
-
-      - name: Place Control Plane API beside this checkout
-        run: |
-          set -euo pipefail
-          mv "${GITHUB_WORKSPACE}/.cp-checkout" \
-             "${GITHUB_WORKSPACE}/../synap-control-plane-api"
-          test -f "${GITHUB_WORKSPACE}/../synap-control-plane-api/src/routes/packages.ts"
-
-      # The same rule for synap-app. ~50 cross-repo tripwires and mirror tests
-      # (the official catalog in workspace-templates, design-tokens, the
-      # PlaybookParamType run-form mirror, the one-writer/one-frame scans)
-      # resolve the monorepo as the PARENT of this checkout and read
-      # `synap-app/…` and `synap-backend/…` there. Absent, they fail their
-      # non-vacuity floors — which is correct; so CI lays the monorepo out:
-      # app-bases checked out as `../synap-app`, and this checkout reachable as
-      # `../synap-backend` (a symlink; the runner names it after the repo,
-      # `backend`). Same token as above (the App is scoped to app-bases; a
-      # CROSS_REPO_TOKEN fallback needs Contents: read on it too).
-      - name: Checkout synap-app (cross-repo tripwires)
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: Synap-core/app-bases
-          token: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
-          path: .app-checkout
-
-      - name: Lay out the monorepo beside this checkout
-        run: |
-          set -euo pipefail
-          mv "${GITHUB_WORKSPACE}/.app-checkout" "${GITHUB_WORKSPACE}/../synap-app"
-          ln -sfn "${GITHUB_WORKSPACE}" "${GITHUB_WORKSPACE}/../synap-backend"
-          test -d "${GITHUB_WORKSPACE}/../synap-app/packages/workspace-templates/src"
-          test -f "${GITHUB_WORKSPACE}/../synap-backend/packages/api/package.json"
-
-      - name: Setup Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
+          app-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
+          cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        # Version is automatically detected from package.json "packageManager" field
-
-      - name: Get pnpm store directory
-        id: pnpm-store
-        shell: bash
-        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
-
-      - name: Setup pnpm cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ${{ steps.pnpm-store.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      # pnpm 10 no longer ships node-gyp, and node-pty (apps/api, in
-      # onlyBuiltDependencies) compiles from source on linux: without this the
-      # install fails with "node-gyp: not found" (red since the pnpm 10 bump).
-      - name: Install node-gyp
-        run: npm install -g node-gyp@11.5.0
-
-      - name: Install Dependencies
-        run: pnpm install --frozen-lockfile
-
       # CI/CD CONFORMANCE GATE. Every publish workflow across ALL repos must
-      # satisfy the shared rules in ci/repos.yml: no dual pnpm pin, id-token: write
-      # on real npm publish jobs, publish concurrency that never cancels, no
-      # NPM_TOKEN used as an auth var, no cross-repo package-name collision, and a
-      # changeset ignore list that covers every public package.
-      #
-      # This is the guard that caught a real blocker the first pass missed: the
-      # browser repo was passing `version: 9` to pnpm/action-setup while pinning
-      # packageManager: pnpm@10.28.0, which fails every browser CI run. It also
-      # caught dfa3d884 truncating the ignore list to 116 entries, leaving 51 real
-      # packages unlisted — changesets would have published them with no decision.
-      #
-      # The scan set is DERIVED (every repo with a .github/workflows dir), never
-      # hand-listed, and both scans assert non-vacuity: an empty scan FAILS rather
-      # than silently passing. See ci/README.md.
+      # satisfy the shared rules in ci/repos.yml (no dual pnpm pin, id-token:
+      # write on real npm publish jobs, publish concurrency that never cancels,
+      # no NPM_TOKEN auth var, no cross-repo package-name collision, a changeset
+      # ignore list covering every public package). The scan set is DERIVED and
+      # both scans assert non-vacuity. See ci/README.md.
       - name: CI/CD conformance gate
         # check.mjs resolves `yaml` from the workspace root (two levels up),
         # which in CI is the runner's work dir with no node_modules. pnpm's
-        # hidden hoist dir holds yaml (a transitive dep, 2.9.1 in the lockfile).
+        # hidden hoist dir holds yaml (a transitive dep).
         env:
           NODE_PATH: ${{ github.workspace }}/node_modules/.pnpm/node_modules
         run: node ci/scripts/check.mjs --quiet
@@ -194,7 +86,6 @@ jobs:
         run: |
           node scripts/check-eslint-ledger-paths.mjs
           pnpm lint --max-warnings=100
-        continue-on-error: false
 
       - name: Format Check
         # Format check is non-blocking (warnings only)
@@ -203,15 +94,13 @@ jobs:
 
       # Deploy safety tripwires (daemon-free). pgdata-safety guards the
       # 2026-10-02 pod wipe: postgres data must live on its volume, every update
-      # door must run the placement guard first, and backups must land on the host.
+      # door must run the placement guard first, and backups must land on the
+      # host. They guard what a release DOES to a pod, so they gate releases.
       - name: Deploy safety tests
         run: |
           python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
           # EVERY deploy/__tests__/*.test.sh, derived by glob: a new test joins
-          # by existing (no hand list to fall behind — 12 tests were missing from
-          # the old one). stdin is closed: a test that reads it would hang the job.
-          # No test is skipped here; the ones that need an absent sibling repo
-          # (hestia-cli, other checkouts) print their own `skip -` line.
+          # by existing. stdin is closed: a test that reads it would hang the job.
           failed=""; n=0
           for t in deploy/__tests__/*.test.sh; do
             n=$((n+1)); echo "::group::$t"
@@ -224,146 +113,63 @@ jobs:
 
       - name: Check orphaned REST route files
         run: node packages/api/src/routers/hub-protocol/rest/check-orphan-routes.mjs
-        continue-on-error: false
-
-      - name: Build workspace dependencies
-        # Build workspace packages first so TypeScript can resolve types during typecheck
-        # TypeScript project references require built .d.ts files
-        run: |
-          echo "🔨 Building workspace dependencies..."
-          pnpm turbo build \
-            --filter='@synap-core/core' \
-            --filter='@synap-core/types' \
-            --filter='@synap/storage' \
-            --filter='@synap-core/hub-protocol' \
-            --filter='@synap/database' \
-            --filter='@synap/api' \
-            --filter='@synap/jobs' \
-            --filter='@synap/auth' \
-            --filter='@synap/events' \
-            || echo "⚠️  Some builds may have failed, continuing..."
 
       - name: Typecheck
         run: pnpm typecheck
 
-      # Fail the PR if the generated API-types contract is stale (router changed
-      # but @synap-core/api-types/generated.d.ts wasn't regenerated). The
-      # frontends consume this artifact, so drift is a silent type-safety hole.
+      # Fail if the generated API-types contract is stale (router changed but
+      # @synap-core/api-types/generated.d.ts wasn't regenerated). The frontends
+      # consume this artifact, so drift is a silent type-safety hole.
       - name: Verify generated API types are up to date
         run: pnpm --filter @synap/api gen-types:check
-
-      # gen-types:check above only proves the COMMITTED generated.d.ts is
-      # fresh — it says nothing about whether that surface ever reached the
-      # PUBLISHED npm tarball, or whether synap-app's pinned range still
-      # resolves it. See check-publish-freshness.mjs's header for the full
-      # rationale. Network-degrades to a warning (never fails on a transient
-      # registry/GitHub blip) — only a genuine version/range drift fails.
-      - name: Check @synap-core/api-types publish freshness (drift tripwire)
-        run: node scripts/check-publish-freshness.mjs
-        working-directory: packages/api-types
-        env:
-          # Reads synap-app's package.json (Synap-core/app-bases, the repo's
-          # current name; the script's default is the old first-app).
-          SYNAP_APP_REPO: Synap-core/app-bases
-          CROSS_REPO_TOKEN: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
-
-      - name: Start API server for smoke tests
-        run: |
-          # Start server in background with test config
-          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/synap_test \
-          NODE_ENV=test \
-          PORT=4000 \
-          SKIP_SECRET_VALIDATION=true \
-          node apps/api/dist/index.js &
-          echo "SERVER_PID=$!" >> $GITHUB_ENV
-          # Wait for server to be healthy (up to 30s)
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:4000/health > /dev/null 2>&1; then
-              echo "Server healthy after ${i}s"
-              break
-            fi
-            sleep 1
-          done
-        continue-on-error: true
-
-      - name: Smoke test
-        run: |
-          if [ -f scripts/smoke-test.sh ]; then
-            chmod +x scripts/smoke-test.sh
-            BASE_URL=http://localhost:4000 bash scripts/smoke-test.sh || echo "Smoke tests failed (non-blocking)"
-          fi
-        continue-on-error: true
-        env:
-          BASE_URL: http://localhost:4000
 
       - name: Validate migrations
         run: pnpm --filter @synap/database migrate
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
 
-      # Catches migration drift in the PR, not at pod boot: validateSchemaCoherence()
-      # (packages/database/src/utils/schema-coherence.ts) previously only ran when the
-      # API server started up. It queries the live DB (information_schema.columns +
-      # pg_trigger) against the ~190-column tripwire list, so it needs the Postgres
-      # service above with migrations already applied (step immediately before this one).
+      # validateSchemaCoherence() (packages/database/src/utils/schema-coherence.ts)
+      # against the live, just-migrated DB: catches migration drift in CI, not
+      # at pod boot.
       - name: Schema coherence check
         run: pnpm --filter @synap/database schema:check
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
 
-      - name: Test
-        # Skip @synap-core/core tests (they require @synap/database which creates circular dependency)
-        # Other package tests should still run
-        run: pnpm test --filter='!@synap-core/core'
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
-          NODE_ENV: test
-
-      # A GREEN TEST RUN MUST MEAN TESTS ACTUALLY RAN.
-      #
-      # `pnpm test` above reports numFailedTests. It does NOT report that a whole
-      # package executed ZERO tests: `@synap/database` was measured at
-      # 475 total / 0 passed / **0 failed** — indistinguishable from green to any
-      # reader of the failure count. Nor does it report a file that collected
-      # zero assertions, which stops testing anything without turning red.
-      #
-      # `test:floor` fails on exactly those classes plus a drop below a MEASURED
-      # per-package passing floor. Without this step the script only runs when a
-      # human types it, which is not a gate.
-      #
-      # SYNAP_TEST_ALLOW_BLIND is a LOCAL-only acknowledgement for machines with
-      # no Postgres. CI provisions Postgres, so it must never be set here.
-      - name: Test floor (a green run must mean tests ran)
-        run: pnpm test:floor
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
-          NODE_ENV: test
-
-      # `pnpm test` above runs tripwire files transitively (they're plain
-      # `.test.ts` files under each package), but never reports whether
-      # tripwire COVERAGE itself silently dropped. `scripts/tripwires.mjs`
-      # discovers every tripwire BY PATTERN (never a hardcoded path list —
-      # see the script's own header for why) and prints the discovered
-      # count, which is the one signal that would catch a naming-convention
-      # drift or a directory the walk stopped seeing. Without this step
-      # that discovery report never runs anywhere but a human's terminal.
-      - name: Tripwires (architectural invariants, discovered by pattern)
-        run: pnpm tripwires
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
-          NODE_ENV: test
-
       - name: Build
         run: pnpm build
 
-      - name: Validate smoke test script
+      # The built API boots against the migrated CI Postgres and answers. Until
+      # 2026-10-19 both steps were continue-on-error and the server had in fact
+      # exited at boot (no KRATOS_PUBLIC_URL) on every run, unnoticed. Ory is
+      # never called by these probes; the URL only satisfies the boot check.
+      - name: Start API server for smoke tests
         run: |
-          if [ -f scripts/smoke-test.sh ]; then
-            bash -n scripts/smoke-test.sh && echo "✓ smoke-test.sh syntax valid"
-          else
-            echo "⚠️  scripts/smoke-test.sh not found"
-          fi
-        continue-on-error: true
+          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/synap_test \
+          NODE_ENV=test \
+          PORT=4000 \
+          SKIP_SECRET_VALIDATION=true \
+          KRATOS_PUBLIC_URL=http://localhost:4433 \
+          KRATOS_ADMIN_URL=http://localhost:4434 \
+          node apps/api/dist/index.js > "$RUNNER_TEMP/api.log" 2>&1 &
+          echo "SERVER_PID=$!" >> $GITHUB_ENV
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:4000/health > /dev/null 2>&1; then
+              echo "Server healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::API server not healthy after 60s"
+          tail -n 80 "$RUNNER_TEMP/api.log"
+          exit 1
+
+      - name: Smoke test
+        run: |
+          bash -n scripts/smoke-test.sh
+          bash scripts/smoke-test.sh || { tail -n 80 "$RUNNER_TEMP/api.log"; exit 1; }
+        env:
+          BASE_URL: http://localhost:4000
 
       - name: Test Docker Build
         run: |
@@ -371,9 +177,98 @@ jobs:
           docker run --rm synap-backend:test node --version
           docker rmi synap-backend:test
 
+  full-suite:
+    name: Full suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: synap_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Monorepo layout + dependencies
+        id: setup
+        uses: ./.github/actions/monorepo-setup
+        with:
+          app-id: ${{ vars.SYNAP_RELEASE_APP_ID }}
+          app-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
+          cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
+          node-version: ${{ env.NODE_VERSION }}
+
+      # The suites below read the migrated schema.
+      - name: Migrate the test database
+        run: pnpm --filter @synap/database migrate
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+
+      - name: Test
+        # Skip @synap-core/core tests (they require @synap/database which creates circular dependency)
+        timeout-minutes: 60
+        # --continue: turbo otherwise stops at the first red package and hides
+        # every later package's result.
+        run: pnpm test --continue --filter='!@synap-core/core'
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+          NODE_ENV: test
+
+      # A GREEN TEST RUN MUST MEAN TESTS ACTUALLY RAN. `pnpm test` reports
+      # numFailedTests, not that a package executed ZERO tests or that a file
+      # collected zero assertions. `test:floor` fails on those and on a drop
+      # below a MEASURED per-package passing floor. SYNAP_TEST_ALLOW_BLIND is
+      # LOCAL-only; CI provisions Postgres, so it must never be set here.
+      - name: Test floor (a green run must mean tests ran)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 60
+        run: pnpm test:floor
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+          NODE_ENV: test
+
+      # `scripts/tripwires.mjs` discovers every tripwire BY PATTERN and prints
+      # the discovered count — the one signal that catches a naming-convention
+      # drift or a directory the walk stopped seeing.
+      - name: Tripwires (architectural invariants, discovered by pattern)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 30
+        run: pnpm tripwires
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+          NODE_ENV: test
+
       - name: Security Audit
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
         run: pnpm audit --prod --audit-level=high
-        continue-on-error: false
+
+      # gen-types:check (release gate) only proves the COMMITTED generated.d.ts
+      # is fresh — not that the surface reached the PUBLISHED npm tarball, or
+      # that synap-app's pinned range resolves it. See
+      # check-publish-freshness.mjs's header. Network-degrades to a warning;
+      # only a genuine version/range drift fails.
+      - name: Check @synap-core/api-types publish freshness (drift tripwire)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: node scripts/check-publish-freshness.mjs
+        working-directory: packages/api-types
+        env:
+          # Reads synap-app's package.json (Synap-core/app-bases).
+          SYNAP_APP_REPO: Synap-core/app-bases
+          CROSS_REPO_TOKEN: ${{ steps.setup.outputs.token }}
 
       - name: Upload Coverage
         if: always()
