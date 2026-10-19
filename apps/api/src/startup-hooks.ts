@@ -52,6 +52,10 @@ import {
 } from "./startup/backfill-workspace-identity.js";
 import { backfillFederationOidcCredentials } from "./routers/federation.js";
 
+import {
+  createStartupTracker,
+  type StartupHooksState,
+} from "./status/startup-state.js";
 const logger = createLogger({ module: "startup-hooks" });
 
 /**
@@ -635,32 +639,24 @@ async function ensureLocalUser(): Promise<void> {
   }
 }
 
-let settleStartupHooks!: () => void;
-let startupHooksDone = false;
+const startupTracker = createStartupTracker();
 /**
  * Resolves once `runStartupHooks` has finished (or failed). For a boot pass
  * that must read what the seeders / reconciles wrote — e.g. the media-copy
  * backfill reads each kind's `uiHints.presentation`, which the template
  * reconcile stamps — but that also needs pg-boss, which starts elsewhere.
  */
-export const startupHooksSettled: Promise<void> = new Promise((resolve) => {
-  settleStartupHooks = () => {
-    startupHooksDone = true;
-    resolve();
-  };
-});
-/** Synchronous twin of `startupHooksSettled`, for /health's `readiness`. */
-export const haveStartupHooksSettled = (): boolean => startupHooksDone;
+export const startupHooksSettled: Promise<void> = startupTracker.settled;
+/** How the boot hooks ended — running | settled | failed — for /health's `readiness`. */
+export const startupHooksState = (): StartupHooksState =>
+  startupTracker.state();
 
 /**
- * Run all startup hooks
+ * Run all startup hooks. A throw is recorded (`failed`) and rethrown to the
+ * caller, which logs it; /health then reads `readiness: "failed"`.
  */
 export async function runStartupHooks(): Promise<void> {
-  try {
-    await runStartupHooksInner();
-  } finally {
-    settleStartupHooks();
-  }
+  await startupTracker.run(runStartupHooksInner);
 }
 
 async function runStartupHooksInner(): Promise<void> {

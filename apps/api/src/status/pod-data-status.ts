@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { createLogger } from "@synap-core/core";
 import type { BackupStatus, BackupRunSummary } from "@synap/database";
 import type { AuthHealth } from "./pod-auth-status.js";
+import type { StartupHooksState } from "./startup-state.js";
 import { readKitMarker } from "../backup-kit/kit-store.js";
 
 /** Where a public route's error detail goes instead of its response body. */
@@ -210,17 +211,20 @@ export function healthStatusFor(
  * ok|ready|degraded. This is an additive body field instead.
  *
  * `starting` — the post-listen boot hooks have not finished (a wedged boot
- * stays here; the 10-16 desktop wedge read "ok" forever). `unknown` — booted,
- * but the data check could not answer (users check failed or timed out).
- * `ready` — booted and the data check answered; an `empty` pod is ready (its
- * alarm is `data` + "degraded", not readiness).
+ * stays here; the 10-16 desktop wedge read "ok" forever). `failed` — the
+ * boot hooks THREW: the hooks after the failing one never ran, so the pod
+ * serves but is not set up (never `ready`; the empty-vs-failed rule).
+ * `unknown` — booted, but the data check could not answer (users check
+ * failed or timed out). `ready` — booted and the data check answered; an
+ * `empty` pod is ready (its alarm is `data` + "degraded", not readiness).
  */
-export type PodReadiness = "ready" | "starting" | "unknown";
+export type PodReadiness = "ready" | "starting" | "failed" | "unknown";
 
 export function readinessFor(
   data: Pick<DataHealth, "status">,
-  startupSettled: boolean
+  startup: StartupHooksState
 ): PodReadiness {
-  if (!startupSettled) return "starting";
+  if (startup === "running") return "starting";
+  if (startup === "failed") return "failed";
   return data.status === "unknown" ? "unknown" : "ready";
 }

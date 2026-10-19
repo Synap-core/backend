@@ -335,7 +335,7 @@ app.get("/health", async (c) => {
     status: healthStatusFor(data, authHealth),
     // ready · starting (boot hooks still running) · unknown (data check could
     // not answer). Body-only, like `data`: see readinessFor.
-    readiness: readinessFor(data, haveStartupHooksSettled()),
+    readiness: readinessFor(data, startupHooksState()),
     timestamp: new Date().toISOString(),
     version: "0.2.0-saas",
     // Published `@synap-core/api-types` version this pod's router was built
@@ -2254,9 +2254,9 @@ try {
 // imported here too but CALLED earlier (pre-serve config block above) — ES
 // imports are hoisted, so the binding is available when that block evaluates.
 import {
-  haveStartupHooksSettled,
   runStartupHooks,
   startupHooksSettled,
+  startupHooksState,
   validateCriticalSecrets,
 } from "./startup-hooks.js";
 runStartupHooks().catch((err) => {
