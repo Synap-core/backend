@@ -21,16 +21,18 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-// Pod-membership fixture — the mocked `podMemberWhere` consults this, so the
+// Pod-membership fixture — the mocked `podSharedEntityIdsFor` subquery consults
+// this (the real builder carries `podMemberWhere(userId)` inside it), so the
 // row-independent EXISTS is modelled as the caller-keyed fact it actually is.
 const POD_MEMBERS = new Set(["owner-1"]);
 
 // ── Mock @synap/database — only the surface entity-query-scope.ts imports:
-// { and, or, eq, isNull, inArray, db, entities, entityFacets, podMemberWhere }.
+// { and, or, eq, isNull, inArray, entities, podSharedEntityIdsFor }.
 // Helpers return tagged nodes the interpreter below understands; `entities`
-// exposes the three columns the predicate reads. The pod-wide-facet subquery is
-// modelled as an opaque marker (`db.select().from().where()`), and matching it
-// with `inArray(entities.id, …)` is the row's `has_pod_wide_facet` flag.
+// exposes the three columns the predicate reads. The pod-shared subquery
+// (`podSharedEntityIdsFor(userId)`, the ONE builder since 9791dfab1) is an
+// opaque marker carrying its caller; matching it with `inArray(entities.id, …)`
+// is the row's `has_pod_wide_facet` flag AND the caller's pod membership.
 const FACET_SUBQUERY = { _sub: "podWideFacetEntityIds" };
 vi.mock("@synap/database", () => ({
   and: (...args: unknown[]) => ({ _tag: "and", args }),
@@ -38,21 +40,14 @@ vi.mock("@synap/database", () => ({
   eq: (col: unknown, val: unknown) => ({ _tag: "eq", col, val }),
   isNull: (col: unknown) => ({ _tag: "isNull", col }),
   inArray: (col: unknown, sub: unknown) => ({ _tag: "inArray", col, sub }),
-  podMemberWhere: (userId: string) => ({ _tag: "podMember", userId }),
-  db: {
-    select: () => ({
-      from: () => ({ where: () => ({ _sub: "podWideFacetEntityIds" }) }),
-    }),
-  },
+  podSharedEntityIdsFor: (userId: string) => ({
+    _sub: "podWideFacetEntityIds",
+    userId,
+  }),
   entities: {
     id: { _colName: "id" },
     workspaceId: { _colName: "workspace_id" },
     userId: { _colName: "user_id" },
-  },
-  entityFacets: {
-    entityId: { _colName: "entity_id" },
-    workspaceId: { _colName: "workspace_id" },
-    deletedAt: { _colName: "deleted_at" },
   },
 }));
 
@@ -80,14 +75,15 @@ function evalPredicate(node: Node, row: Row): boolean {
     case "isNull":
       return row[node.col._colName as keyof Row] === null;
     case "inArray":
-      // The only subquery in this predicate is the pod-wide-facet entity-id set.
+      // The only subquery in this predicate is the pod-shared entity-id set.
       if (node.sub?._sub !== FACET_SUBQUERY._sub) {
         throw new Error(`evalPredicate: unknown subquery ${node.sub?._sub}`);
       }
-      return row.has_pod_wide_facet === true;
-    case "podMember":
-      // Row-INDEPENDENT: a fact about the caller, exactly like the SQL EXISTS.
-      return POD_MEMBERS.has(node.userId);
+      // Its membership gate is row-INDEPENDENT: a fact about the caller,
+      // exactly like the SQL EXISTS inside podSharedFacetGrantWhere.
+      return (
+        row.has_pod_wide_facet === true && POD_MEMBERS.has(node.sub.userId)
+      );
     default:
       throw new Error(`evalPredicate: unhandled tag ${node?._tag}`);
   }

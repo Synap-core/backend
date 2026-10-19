@@ -56,6 +56,7 @@ import {
   automationClaims,
   proposals,
   focusSessions,
+  governanceCeilings,
 } from "@synap/database/schema";
 import {
   releaseHeldWorkerRuns,
@@ -94,6 +95,9 @@ beforeAll(async () => {
     automationClaims,
     proposals,
     focusSessions,
+    // The cap is read through resolveCeiling (the caps fold, 96a76557f); an
+    // empty table = no ceiling row, so the enablement's own value decides.
+    governanceCeilings,
   ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   // The real claim boundary (automation_claims unique index).
