@@ -109,7 +109,9 @@ export function needsYouBucketOf<T extends BucketableSignal>(
   if (isFailureSignal(signal)) return "broken";
   if (signal.kind === "proposal-cluster") {
     const intent = needsYouProposalId(signal) ? opts.intentOf?.(signal) : null;
-    const single = !(Number.isFinite(signal.count) && signal.count > 1);
+    // Exactly one, or not single: a NaN / missing / null count (an untyped
+    // wire row, an older pod) must not read as single — fails closed.
+    const single = signal.count === 1;
     return single && intent && isSwipeSafe(intent) ? "routine" : "decision";
   }
   if (signal.kind === "access-request") return "decision";
