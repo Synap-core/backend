@@ -842,7 +842,76 @@ export function buildObjectActionTitle(params: {
   const head = [verb || "Proposal", preposition, noun]
     .filter(Boolean)
     .join(" ");
-  return objectName ? `${head} "${objectName}"` : head;
+  const name = nameSlot(objectName, head, verb, noun);
+  return name ? `${head} "${name}"` : head;
+}
+
+const UUID_TOKEN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** `routines_horizon`, `fal_generate_image` — a snake_case slug. */
+const SNAKE_TOKEN = /^[a-z0-9]+(?:_[a-z0-9]+)+$/;
+/** `entity.delete`, `gmail.send` — a dotted machine id. */
+const DOTTED_TOKEN = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/;
+/** `local-b88d021b7d74`, `b88d021b` — a build tag or a hash (a digit AND a hex letter). */
+const BUILD_TAG_TOKEN =
+  /^(?:[a-z]+-)?(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}$/i;
+
+/** One word shaped like a machine token: a slug, an id, a build tag. */
+function isMachineToken(text: string): boolean {
+  if (/\s/.test(text)) return false;
+  return (
+    UUID_TOKEN.test(text) ||
+    SNAKE_TOKEN.test(text) ||
+    DOTTED_TOKEN.test(text) ||
+    BUILD_TAG_TOKEN.test(text)
+  );
+}
+
+function startsWithWords(text: string, prefix: string): boolean {
+  if (!prefix) return false;
+  const t = text.toLowerCase();
+  const p = prefix.toLowerCase();
+  return t === p || t.startsWith(`${p} `);
+}
+
+/**
+ * The quoted NAME in a title, or "" for none. A name names the object; it
+ * never restates the action and is never a machine token. What reaches this
+ * slot is often a SUMMARY (a cluster's label falls back to it), so:
+ *   - a name that repeats the head or the verb loses the repeat
+ *     (`Update Space "Update Space"` → `Update Space`;
+ *     `Delete Question "Delete Question \"GRP #3\""` → `… "GRP #3"`);
+ *   - what is left is dropped when it is empty, only the noun, or a machine
+ *     token (`Run Tool "Run fal_generate_image"` → `Run Tool`,
+ *     `Create Tool "routines_horizon"` → `Create Tool`).
+ * Any other name is kept as written — except that a name opening with the
+ * verb loses that word ("Create onboarding list" under `Create Task` reads
+ * `Create Task "onboarding list"`). NOT caught: a kebab slug
+ * (`arch-client-intelligence` reads like a hyphenated name).
+ */
+function nameSlot(
+  objectName: string | null | undefined,
+  head: string,
+  verb: string,
+  noun: string
+): string {
+  let name = (objectName ?? "").trim();
+  if (!name) return "";
+  const repeat = startsWithWords(name, head)
+    ? head
+    : startsWithWords(name, verb)
+      ? verb
+      : "";
+  if (repeat) {
+    name = name
+      .slice(repeat.length)
+      .trim()
+      .replace(/^"(.*)"$/, "$1")
+      .trim();
+  }
+  if (!name) return "";
+  if (noun && name.toLowerCase() === noun.toLowerCase()) return "";
+  return isMachineToken(name) ? "" : name;
 }
 
 /**

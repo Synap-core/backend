@@ -638,7 +638,11 @@ export const NotificationService = {
         actions: def.actions ?? [],
         groupKey: groupKey ?? undefined,
         dedupeKey: dedupeKey ?? undefined,
-        expiresAt: input.expiresAt ?? undefined,
+        expiresAt:
+          input.expiresAt ??
+          (def.expiresAfterMs
+            ? new Date(Date.now() + def.expiresAfterMs)
+            : undefined),
       });
       // THE RACE GUARD (migration 0281). The read above collapses a storm; the
       // partial unique index makes the collapse hold under concurrency — at
@@ -669,6 +673,12 @@ export const NotificationService = {
             workspaceUrl: input.workspaceUrl ?? null,
             actions: def.actions ?? [],
             createdAt: drizzleSql`now()`,
+            // Re-raised news expires from its new moment, not the old one.
+            ...(def.expiresAfterMs
+              ? {
+                  expiresAt: drizzleSql`now() + (${def.expiresAfterMs}::bigint * interval '1 millisecond')`,
+                }
+              : {}),
             // New news resurfaces: a snoozed row that is re-raised comes back
             // unread (the snooze deferred the OLD occurrence, not this one).
             status: "unread",

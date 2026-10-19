@@ -20,6 +20,7 @@ vi.mock("../../services/capabilities/pod-owner.js", () => ({
 const {
   notifyPodUpdateOutcome,
   describePodUpdateOutcome,
+  humanizePodVersion,
   POD_UPDATE_FAILED_NOTIFICATION_TYPE,
 } = await import("../pod-update-outcome.js");
 const { getNotificationDef } = await import("../registry.js");
@@ -86,6 +87,32 @@ describe("pod.update_failed", () => {
       deps as never
     );
     expect(rows).toHaveLength(0);
+  });
+
+  // Catches: a host build tag leaking into the bell ("Update to
+  // local-b88d021b7d74 was rolled back", dogfood 2026-10-19).
+  it("names a local build in words, never by its tag", async () => {
+    const sent: Array<{ data?: Record<string, unknown> }> = [];
+    const { deps } = fakeDeps(["owner"]);
+    await notifyPodUpdateOutcome(
+      { ...ROLLED_BACK, from: "local-0a1b2c3d4e5f", to: "local-b88d021b7d74" },
+      {
+        ...deps,
+        create: async (input: { data?: Record<string, unknown> }) => {
+          sent.push(input);
+          return "n-1";
+        },
+      } as never
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.data!.version).toBe("a local build");
+    expect(String(sent[0]!.data!.detail)).toContain(
+      "running a local build again"
+    );
+    expect(JSON.stringify(sent)).not.toMatch(/local-[0-9a-f]/);
+    // A release keeps its own name (the discriminator).
+    expect(humanizePodVersion("v1.4.0", "x")).toBe("v1.4.0");
+    expect(humanizePodVersion(null, "the new release")).toBe("the new release");
   });
 
   it("says a failed rollback needs attention, and never claims the data is safe", () => {

@@ -474,6 +474,33 @@ describe("updateEntities — one call, one review", () => {
   });
 });
 
+describe("updateEntities — an agent's XML-escaped title is decoded at the door", () => {
+  it("the pack a reviewer approves and the write both hold `&`", async () => {
+    const { client, database } = await freshDb();
+    const auto = await insertEntity(client, "A");
+    const review = await insertEntity(client, "B", "propose");
+
+    const result = await updateEntities({
+      ctx: ctx(database),
+      agentUserId: AGENT,
+      source: "intelligence",
+      items: [auto, review].map((id) => ({
+        id,
+        patch: { title: "Doors &amp; Spec" },
+      })),
+    });
+
+    // Written through the update door: stored decoded.
+    expect(result.applied).toEqual([auto]);
+    expect(await titleOf(client, auto)).toBe("Doors & Spec");
+    // Filed for review: the pack item holds the decoded title — approving
+    // it later must not store `&amp;`.
+    const [pack] = await rows(client, "pending");
+    expect(pack!.data.data.items[0].ref).toBe(review);
+    expect(pack!.data.data.items[0].patch.title).toBe("Doors & Spec");
+  });
+});
+
 describe("entity/update_pack — the approval half", () => {
   async function filePack(client: PGlite, database: Database, n: number) {
     const ids: string[] = [];
