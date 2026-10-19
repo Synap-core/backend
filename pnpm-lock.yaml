@@ -641,6 +641,9 @@ importers:
       '@synap-core/field-crypto':
         specifier: workspace:*
         version: link:../field-crypto
+      '@synap-core/markdown-core':
+        specifier: workspace:*
+        version: link:../markdown-core
       '@synap/governance-policy':
         specifier: workspace:*
         version: link:../governance-policy
