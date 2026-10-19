@@ -708,6 +708,12 @@ export async function answerSessionSlot(p: {
   text?: string;
   value?: AskAnswerValue | SlotAnswerValue;
   askFingerprint?: string;
+  /**
+   * A secret answer: the agent the person was shown as the one who will read
+   * it (`provideOptions`). The read is granted only when it is still the
+   * asker; absent, the server's asker stands alone.
+   */
+  expectedGranteeId?: string;
 }): Promise<AnswerSessionSlotResult> {
   const session = await db.query.focusSessions.findFirst({
     where: and(
@@ -810,6 +816,9 @@ export async function answerSessionSlot(p: {
         expectedLabel: label,
         askFingerprint: seenAsk,
         secretId,
+        ...(p.expectedGranteeId !== undefined
+          ? { expectedGranteeId: p.expectedGranteeId }
+          : {}),
       });
       ({ grant: secretGrant, createdGrantId } = await grantProvidedSecret({
         plan,

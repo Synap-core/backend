@@ -61,7 +61,12 @@ describe("provideSheet · secret (P1: existing secrets only)", () => {
           { ref: "vault://a", name: "Stripe key", type: "api_key" },
           { ref: "vault://b", name: "GitHub token", type: "token" },
         ],
-        { status: "will_grant", agentName: "Scout", minutes: 60 }
+        {
+          status: "will_grant",
+          agentUserId: "agent-scout",
+          agentName: "Scout",
+          minutes: 60,
+        }
       )
     );
     expect(sheet).toEqual({
@@ -73,6 +78,8 @@ describe("provideSheet · secret (P1: existing secrets only)", () => {
       ],
       initialRef: "vault://a",
       grantNote: ASK_COPY.provideGrantNote("Scout", 60),
+      // Sent back on the answer: the read goes to Scout or to no one.
+      expectedGranteeId: "agent-scout",
     });
   });
 
@@ -89,6 +96,7 @@ describe("provideSheet · secret (P1: existing secrets only)", () => {
     expect(sheet).toMatchObject({
       initialRef: null,
       grantNote: ASK_COPY.provideNoGrantNote,
+      expectedGranteeId: null,
     });
   });
 });

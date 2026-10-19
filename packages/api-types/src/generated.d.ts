@@ -6300,8 +6300,10 @@ export interface Context {
  *   `agent_unknown`  — the pod cannot tell which agent asked.
  *   `not_grantable`  — a legacy client-encrypted secret the pod cannot read.
  *   `key_not_allowed` — the key that answered may not grant vault access.
+ *   `agent_changed`  — the agent asking now is not the one the person was
+ *                      shown (`expectedGranteeId` on the answer).
  */
-export type ProvideSecretGrantRefusal = "agent_unknown" | "key_not_allowed" | "not_grantable";
+export type ProvideSecretGrantRefusal = "agent_changed" | "agent_unknown" | "key_not_allowed" | "not_grantable";
 /** What a secret answer did about the asking agent's access to it. */
 export type ProvideSecretGrant = {
 	status: "granted";
@@ -17025,6 +17027,8 @@ export type ProvideOptions = {
 		/** What handing one over lets the asking agent do. */
 		grant: {
 			status: "will_grant";
+			/** Sent back on the answer as `expectedGranteeId`. */
+			agentUserId: string;
 			agentName: string;
 			minutes: number;
 		} | {
@@ -41706,6 +41710,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 				} | undefined;
 				askFingerprint?: string | undefined;
+				expectedGranteeId?: string | undefined;
 			};
 			output: {
 				status: "answered";

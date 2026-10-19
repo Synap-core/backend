@@ -20,6 +20,12 @@ export interface VaultSecretGrantInput {
   /** Session TTL in minutes (scope 'session' only; default 60). */
   ttlMinutes?: number | null;
   createdBy: string;
+  /**
+   * Reuse only an identical PERMANENT grant. A caller that ties its grant to
+   * something that ends (a session) writes its own instead of borrowing one
+   * whose end is someone else's.
+   */
+  reusePermanentOnly?: boolean;
 }
 
 export interface VaultSecretGrantResult {
@@ -69,7 +75,9 @@ export async function applyVaultSecretGrant(
     input.grantedTo,
     input.workspaceId
   );
-  if (reused) return reused;
+  if (reused && (!input.reusePermanentOnly || reused.scope === "permanent")) {
+    return reused;
+  }
 
   const now = Date.now();
   let expiresAt: Date | null;

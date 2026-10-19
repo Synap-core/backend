@@ -18,9 +18,11 @@ export const PROVIDE_SECRET_GRANT_MINUTES = 60;
  *   `agent_unknown`  — the pod cannot tell which agent asked.
  *   `not_grantable`  — a legacy client-encrypted secret the pod cannot read.
  *   `key_not_allowed` — the key that answered may not grant vault access.
+ *   `agent_changed`  — the agent asking now is not the one the person was
+ *                      shown (`expectedGranteeId` on the answer).
  */
 export type ProvideSecretGrantRefusal =
-  "agent_unknown" | "not_grantable" | "key_not_allowed";
+  "agent_unknown" | "not_grantable" | "key_not_allowed" | "agent_changed";
 
 /** What a secret answer did about the asking agent's access to it. */
 export type ProvideSecretGrant =

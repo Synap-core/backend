@@ -16,7 +16,8 @@
  * intent (the fingerprint guard refuses it `ask_changed`).
  *
  * An intent lives {@link PROVIDE_CONNECT_INTENT_MINUTES} minutes; an expired
- * one is dropped unanswered.
+ * one, or one dated in the future, is dropped unanswered. No client or agent
+ * metadata write carries the key (`SERVER_OWNED_SESSION_METADATA_KEYS`).
  */
 
 import { db, and, eq, drizzleSql, focusSessions } from "@synap/database";
@@ -24,13 +25,16 @@ import { createLogger } from "@synap-core/core";
 import { normalizeServiceId } from "@synap-core/types/service-marks";
 import type { NangoIntegration } from "../../connectors/NangoConnector.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
+import { PROVIDE_CONNECT_META_KEY } from "./session-metadata.js";
+
+export { PROVIDE_CONNECT_META_KEY };
 
 const logger = createLogger({ module: "provide-connect" });
 
 export const PROVIDE_CONNECT_INTENT_MINUTES = 30;
 
-/** The server-owned key under `focus_sessions.metadata`. */
-export const PROVIDE_CONNECT_META_KEY = "provideConnect";
+/** Clock skew an intent's `startedAt` may run ahead of now; further is forged. */
+export const PROVIDE_CONNECT_INTENT_SKEW_MS = 60_000;
 
 export interface ProvideConnectIntent {
   /** The slot's label, as the answer door is called with it. */
@@ -133,7 +137,10 @@ export async function recordProvideConnectIntent(p: {
   return intent;
 }
 
-/** Pure: is the intent still live at `now`, and for this provider? */
+/**
+ * Pure: is the intent still live at `now`, and for this provider? One dated
+ * in the future was never written by this server, and never answers.
+ */
 export function intentMatches(
   intent: Partial<ProvideConnectIntent> | null | undefined,
   provider: string,
@@ -145,6 +152,7 @@ export function intentMatches(
   const started = Date.parse(intent.startedAt ?? "");
   return (
     Number.isFinite(started) &&
+    started <= now + PROVIDE_CONNECT_INTENT_SKEW_MS &&
     now - started <= PROVIDE_CONNECT_INTENT_MINUTES * 60_000
   );
 }
@@ -182,10 +190,13 @@ export async function answerPendingProvideConnects(p: {
     for (const s of sessions) {
       for (const [key, intent] of Object.entries(s.intents ?? {})) {
         const live = intentMatches(intent, p.provider, now);
+        const started = Date.parse(intent?.startedAt ?? "");
         const expired =
           !live &&
-          Date.parse(intent?.startedAt ?? "") <
-            now - PROVIDE_CONNECT_INTENT_MINUTES * 60_000;
+          !(
+            started <= now + PROVIDE_CONNECT_INTENT_SKEW_MS &&
+            now - started <= PROVIDE_CONNECT_INTENT_MINUTES * 60_000
+          );
         if (!live && !expired) continue;
         const claimed = await claimIntent(s.id, key, intent);
         if (!claimed || !live) continue;

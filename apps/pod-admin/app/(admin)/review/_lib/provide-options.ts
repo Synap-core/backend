@@ -50,6 +50,11 @@ export interface SecretSheet {
   initialRef: string | null;
   /** What handing one over lets the asking agent do. */
   grantNote: string;
+  /**
+   * The agent named in `grantNote`, sent back on the answer: the pod grants
+   * the read only if that agent is still the one asking.
+   */
+  expectedGranteeId: string | null;
 }
 
 function secretSheet(o: Of<"secret">): SecretSheet {
@@ -73,6 +78,10 @@ function secretSheet(o: Of<"secret">): SecretSheet {
             o.secret.grant.minutes
           )
         : ASK_COPY.provideNoGrantNote,
+    expectedGranteeId:
+      o.secret.grant.status === "will_grant"
+        ? o.secret.grant.agentUserId
+        : null,
   };
 }
 

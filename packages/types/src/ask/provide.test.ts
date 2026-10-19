@@ -55,14 +55,16 @@ describe("provideSecretAccessLine — the receipt says who can read it", () => {
     ).toBe("Researcher can read it");
   });
 
-  it.each(["agent_unknown", "not_grantable", "key_not_allowed"] as const)(
-    "a refused grant (%s) says no agent can read it",
-    (reason) => {
-      expect(provideSecretAccessLine({ status: "refused", reason }, NOW)).toBe(
-        "No agent can read it yet"
-      );
-    }
-  );
+  it.each([
+    "agent_unknown",
+    "not_grantable",
+    "key_not_allowed",
+    "agent_changed",
+  ] as const)("a refused grant (%s) says no agent can read it", (reason) => {
+    expect(provideSecretAccessLine({ status: "refused", reason }, NOW)).toBe(
+      "No agent can read it yet"
+    );
+  });
 
   it("summarizeAnswer appends it to a secret answer, and only to one", () => {
     const value = {

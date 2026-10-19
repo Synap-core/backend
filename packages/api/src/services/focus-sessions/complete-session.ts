@@ -488,6 +488,18 @@ export async function completeFocusSession(
   // being absorbed silently.
   const expiredEphemerals = await expireSessionEphemerals(sessionId);
 
+  // A secret handed over for an ask was readable by the asking agent "in this
+  // session": the session ended, so the read does too. Never blocks the
+  // close: a failure is logged, and the read still ends with its TTL.
+  await import("./provide-secret-grant.js")
+    .then((m) => m.revokeSessionProvidedGrants(sessionId))
+    .catch((err: unknown) =>
+      logger.error(
+        { err, sessionId },
+        "could not revoke the reads granted in this session"
+      )
+    );
+
   // Proposal pack — pending rows attributed to this session.
   const pendingRows = await db
     .select()

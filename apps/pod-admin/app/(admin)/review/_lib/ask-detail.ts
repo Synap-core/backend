@@ -417,6 +417,8 @@ export interface AnswerCall {
   text?: string;
   value: AskAnswerValue;
   askFingerprint: string;
+  /** A secret answer: the agent the person was told will read it. */
+  expectedGranteeId?: string;
 }
 
 /** `attestOutput` / `askAboutSlot` input: the slot, and the ask the reader saw. */

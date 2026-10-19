@@ -283,6 +283,11 @@ const AnswerOutputInputSchema = z
     text: z.string().max(SLOT_ANSWER_TEXT_MAX).optional(),
     value: AskAnswerValueSchema.optional(),
     askFingerprint: z.string().min(1).max(64).optional(),
+    /**
+     * A secret answer: `provideOptions`' `secret.grant.agentUserId`, the
+     * agent the person was told will read it. No read for anyone else.
+     */
+    expectedGranteeId: z.string().min(1).max(200).optional(),
   })
   .refine((v) => v.value !== undefined || !!v.text?.trim(), {
     message: "An answer needs `text` or `value`.",
@@ -2881,6 +2886,7 @@ export const focusSessionsRouter = router({
         text: input.text,
         value: input.value,
         askFingerprint: input.askFingerprint,
+        expectedGranteeId: input.expectedGranteeId,
       });
       if (result.status === "answered") return { ok: true as const, ...result };
       throw new TRPCError(

@@ -375,13 +375,17 @@ export function AskAnswer({
               });
             }}
             handingBack={handBack.isPending}
-            onProvide={(ref) => {
+            onProvide={(ref, expectedGranteeId) => {
               const built = answerCall(seen, { type: "provide", ref });
               if (!built.ok) {
                 setFailure(built.message);
                 return;
               }
-              send(built.call);
+              send(
+                expectedGranteeId
+                  ? { ...built.call, expectedGranteeId }
+                  : built.call
+              );
             }}
             onStale={refused}
             onFailure={setFailure}
@@ -474,8 +478,11 @@ interface ControlsProps {
   attesting: boolean;
   onHandBack: () => void;
   handingBack: boolean;
-  /** Hand over a reference (a vault secret, a connection, a file). */
-  onProvide: (ref: AskProvideRef) => void;
+  /**
+   * Hand over a reference (a vault secret, a connection, a file); a secret
+   * carries the agent the person was told will read it.
+   */
+  onProvide: (ref: AskProvideRef, expectedGranteeId?: string) => void;
   /** A door refused: stale (moved on, changed) or a failure, as the pod said. */
   onStale: (err: DoorError) => void;
   onFailure: (message: string | null) => void;
@@ -1041,7 +1048,12 @@ function SecretProvide({
               startContent={<Check className="h-4 w-4" />}
               isLoading={pending}
               isDisabled={busy || !ref}
-              onPress={() => onProvide({ kind: "secret", vaultRef: ref })}
+              onPress={() =>
+                onProvide(
+                  { kind: "secret", vaultRef: ref },
+                  sheet.expectedGranteeId ?? undefined
+                )
+              }
             >
               Hand over this secret
             </Button>

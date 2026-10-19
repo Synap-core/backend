@@ -195,6 +195,7 @@ import {
 } from "../provide-options.js";
 import {
   answerPendingProvideConnects,
+  intentMatches,
   matchIntegration,
   recordProvideConnectIntent,
   sameService,
@@ -203,6 +204,7 @@ import { syncNangoConnectionsToRegistry } from "../../capabilities/capability-na
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
   FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE,
+  FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE,
 } from "../lifecycle-events.js";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
@@ -282,10 +284,11 @@ async function recordAsked(
   sessionId: string,
   ask: Ask,
   agentUserId: string | null,
-  label = LABEL
+  label = LABEL,
+  minutesAgo = 0
 ): Promise<void> {
   await q(
-    `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id, source) values ($1, now(), $2, $3, $4, $5::jsonb, $6, 'intelligence')`,
+    `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id, source) values ($1, now() - make_interval(mins => $7), $2, $3, $4, $5::jsonb, $6, 'intelligence')`,
     [
       randomUUID(),
       FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE,
@@ -294,6 +297,27 @@ async function recordAsked(
       JSON.stringify(
         slotAskedEventData(sessionId, slotFor(ask, label) as never, agentUserId)
       ),
+      OWNER,
+      minutesAgo,
+    ]
+  );
+}
+
+/** The durable record of an answer to the slot — what the answer door writes. */
+async function recordAnswered(
+  sessionId: string,
+  minutesAgo: number,
+  label = LABEL
+): Promise<void> {
+  await q(
+    `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id, source) values ($1, now() - make_interval(mins => $6), $2, $3, $4, $5::jsonb, $7, 'api')`,
+    [
+      randomUUID(),
+      FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE,
+      sessionId,
+      FOCUS_SESSION_SUBJECT_TYPE,
+      JSON.stringify({ sessionId, expectedLabel: label }),
+      minutesAgo,
       OWNER,
     ]
   );
@@ -340,7 +364,12 @@ const grantsFor = async (secretId: string) =>
     )
   ).rows;
 
-const answerSecret = (sessionId: string, secretId: string, userId = OWNER) =>
+const answerSecret = (
+  sessionId: string,
+  secretId: string,
+  userId = OWNER,
+  expectedGranteeId?: string
+) =>
   answerSessionSlot({
     sessionId,
     userId,
@@ -349,7 +378,16 @@ const answerSecret = (sessionId: string, secretId: string, userId = OWNER) =>
       type: "provide",
       ref: { kind: "secret", vaultRef: `vault://${secretId}` },
     },
+    ...(expectedGranteeId ? { expectedGranteeId } : {}),
   });
+
+const sessionGrantIds = async (sessionId: string) =>
+  (
+    await q<{ g: string[] | null }>(
+      `select metadata -> 'provideGrants' as g from focus_sessions where id = $1`,
+      [sessionId]
+    )
+  ).rows[0]!.g ?? [];
 
 const slotOf = async (sessionId: string) =>
   (
@@ -551,6 +589,96 @@ describe("provide asks — the server doors", () => {
       expect(await grantsFor(secretId)).toHaveLength(0);
     });
 
+    it("a second agent re-posing the identical ask later does not take the read", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const { sessionId } = await seedSession([slotFor(secretAsk())]);
+      await recordAsked(sessionId, secretAsk(), AGENT, LABEL, 10);
+      await recordAsked(sessionId, secretAsk(), OTHER_AGENT, LABEL, 1);
+      const r = await answerSecret(sessionId, secretId);
+      expect(r).toMatchObject({
+        status: "answered",
+        secretGrant: { status: "granted", agentUserId: AGENT },
+      });
+      expect((await grantsFor(secretId)).map((g) => g.granted_to)).toEqual([
+        AGENT,
+      ]);
+    });
+
+    it("once the slot was answered, the first asker AFTER that answer is the one", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const { sessionId } = await seedSession([slotFor(secretAsk())]);
+      await recordAsked(sessionId, secretAsk(), AGENT, LABEL, 30);
+      await recordAnswered(sessionId, 20);
+      await recordAsked(sessionId, secretAsk(), OTHER_AGENT, LABEL, 10);
+      await recordAsked(sessionId, secretAsk(), AGENT, LABEL, 5);
+      const r = await answerSecret(sessionId, secretId);
+      expect(r).toMatchObject({
+        secretGrant: { status: "granted", agentUserId: OTHER_AGENT },
+      });
+    });
+
+    it("the agent the person was shown must still be the asker: anyone else gets nothing", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const { sessionId } = await seedSession([slotFor(secretAsk())]);
+      await recordAsked(sessionId, secretAsk(), AGENT);
+      const refused = await answerSecret(
+        sessionId,
+        secretId,
+        OWNER,
+        OTHER_AGENT
+      );
+      expect(refused).toMatchObject({
+        status: "answered",
+        secretGrant: { status: "refused", reason: "agent_changed" },
+      });
+      expect(await grantsFor(secretId)).toHaveLength(0);
+      expect((refused as { answer: { text: string } }).answer.text).toBe(
+        'Stored the secret "STRIPE_KEY" in the vault · No agent can read it yet'
+      );
+
+      const again = await seedSession([slotFor(secretAsk())]);
+      await recordAsked(again.sessionId, secretAsk(), AGENT);
+      expect(
+        await answerSecret(again.sessionId, secretId, OWNER, AGENT)
+      ).toMatchObject({
+        secretGrant: { status: "granted", agentUserId: AGENT },
+      });
+    });
+
+    it("the read is bound to the session it was given in", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const { sessionId } = await seedSession([slotFor(secretAsk())]);
+      await recordAsked(sessionId, secretAsk(), AGENT);
+      await answerSecret(sessionId, secretId);
+      const [grant] = await grantsFor(secretId);
+      expect(await sessionGrantIds(sessionId)).toEqual([grant!.id]);
+
+      // Another session's read is its own grant, never this one borrowed.
+      const other = await seedSession([slotFor(secretAsk())]);
+      await recordAsked(other.sessionId, secretAsk(), AGENT);
+      await answerSecret(other.sessionId, secretId);
+      const ids = (await grantsFor(secretId)).map((g) => g.id);
+      expect(ids).toHaveLength(2);
+      expect(await sessionGrantIds(other.sessionId)).toEqual(
+        ids.filter((id) => id !== grant!.id)
+      );
+    });
+
+    it("a closed session grants no read: there is no session left to read in", async () => {
+      const secretId = await seedSecret({ userId: OWNER });
+      const { sessionId } = await seedSession([slotFor(secretAsk())]);
+      await recordAsked(sessionId, secretAsk(), AGENT);
+      await q(`update focus_sessions set status = 'closed' where id = $1`, [
+        sessionId,
+      ]);
+      const r = await answerSecret(sessionId, secretId);
+      if (r.status === "answered") {
+        expect(r.secretGrant).toEqual({ status: "failed" });
+      }
+      const live = (await grantsFor(secretId)).filter((g) => !g.revoked_at);
+      expect(live).toHaveLength(0);
+    });
+
     it("an answer refused at the commit takes back the read it wrote", async () => {
       const secretId = await seedSecret({ userId: OWNER });
       const { sessionId } = await seedSession([slotFor(secretAsk())]);
@@ -598,6 +726,7 @@ describe("provide asks — the server doors", () => {
       expect(JSON.stringify(o)).not.toContain('"x"');
       expect(o.secret.grant).toEqual({
         status: "will_grant",
+        agentUserId: AGENT,
         agentName: "Researcher",
         minutes: 60,
       });
@@ -797,7 +926,7 @@ describe("provide asks — the server doors", () => {
         provider: "google-mail",
         askFingerprint: askFingerprint(connAsk),
       });
-      if (opts.startedMinutesAgo) {
+      if (opts.startedMinutesAgo !== undefined) {
         await q(
           `update focus_sessions set metadata = jsonb_set(metadata, ARRAY['provideConnect', $2, 'startedAt'], to_jsonb($3::text)) where id = $1`,
           [
@@ -907,6 +1036,19 @@ describe("provide asks — the server doors", () => {
       expect(await intents(sessionId)).toEqual({});
     });
 
+    it("a future-dated intent never answers, and is dropped", async () => {
+      const sessionId = await pending({ startedMinutesAgo: -60 });
+      expect(
+        await answerPendingProvideConnects({
+          userId: OWNER,
+          provider: "google-mail",
+          connectionId: await conn(),
+        })
+      ).toBe(0);
+      expect((await slotOf(sessionId)).answer).toBeUndefined();
+      expect(await intents(sessionId)).toEqual({});
+    });
+
     it("through the real reconciler: mirroring the new connection answers the slot", async () => {
       const sessionId = await pending();
       const cap = randomUUID();
@@ -944,6 +1086,25 @@ describe("provide asks — the server doors", () => {
   });
 
   // ── which integration is the asked service (S2) ─────────────────────────
+
+  it("an intent is live from its start (a minute of skew) to 30 minutes after, never from the future", () => {
+    const now = Date.parse("2026-10-19T12:00:00.000Z");
+    const at = (minutes: number) =>
+      new Date(now + minutes * 60_000).toISOString();
+    const intent = (startedAt: string) => ({
+      label: LABEL,
+      provider: "google-mail",
+      askFingerprint: "f",
+      startedAt,
+    });
+    expect(intentMatches(intent(at(-29)), "google-mail", now)).toBe(true);
+    expect(intentMatches(intent(at(0.5)), "google-mail", now)).toBe(true);
+    expect(intentMatches(intent(at(2)), "google-mail", now)).toBe(false);
+    expect(intentMatches(intent(at(60 * 24 * 365)), "google-mail", now)).toBe(
+      false
+    );
+    expect(intentMatches(intent(at(-31)), "google-mail", now)).toBe(false);
+  });
 
   it("the ask's service meets the broker's integration key through the service registry", () => {
     expect(sameService("gmail", "google-mail")).toBe(true);

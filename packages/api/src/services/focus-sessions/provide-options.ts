@@ -249,7 +249,13 @@ export type ProvideOptions = {
         rows: ProvideSecretRow[];
         /** What handing one over lets the asking agent do. */
         grant:
-          | { status: "will_grant"; agentName: string; minutes: number }
+          | {
+              status: "will_grant";
+              /** Sent back on the answer as `expectedGranteeId`. */
+              agentUserId: string;
+              agentName: string;
+              minutes: number;
+            }
           | { status: "no_grant"; reason: ProvideSecretGrantRefusal };
       };
     }
@@ -303,6 +309,7 @@ export async function readProvideOptions(
           grant: agent
             ? {
                 status: "will_grant",
+                agentUserId: agent.agentUserId,
                 agentName: agent.agentName,
                 minutes: PROVIDE_SECRET_GRANT_MINUTES,
               }

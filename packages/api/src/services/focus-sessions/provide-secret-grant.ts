@@ -6,22 +6,42 @@
  * `vault.request`, which the person approves a second time.
  *
  * WHO ASKED is read from the durable record of the ask as posed
- * (`focus_session.slot_asked.completed`, `slot-asked-event.ts`): the newest row
- * for this slot whose fingerprint is the ask being answered, written by the
- * door that posed it with the authenticated agent. Nothing a client sends
- * names the grantee. No such row, a row with no agent (a person posed it, or
+ * (`focus_session.slot_asked.completed`, `slot-asked-event.ts`): the FIRST row
+ * for this slot whose fingerprint is the ask being answered since the slot was
+ * last answered (`slot_answered`), written by the door that posed it with the
+ * authenticated agent. The first, so a second agent re-posing the identical
+ * ask later never takes the read. Nothing a client sends names the grantee:
+ * the answer may only CONFIRM it (`expectedGranteeId`, the agent the person
+ * was shown by `provideOptions`), and a different asker then gets nothing
+ * (`agent_changed`). No such row, a row with no agent (a person posed it, or
  * the decision reactor did), or a row naming something that is not an agent
  * user: the agent is UNKNOWN and no read is granted. The hand-over itself
  * still stands: a reference gives nobody the value, and the agent can still ask
  * through the vault's request door.
+ *
+ * The read is THIS SESSION's: its grant id is kept on the session
+ * (`metadata.provideGrants`) and revoked when the session closes
+ * ({@link revokeSessionProvidedGrants}), or ends with its TTL first.
  *
  * The grant goes through the ONE grant writer (`applyVaultSecretGrant`),
  * bound to the agent (`grantedTo`) and to no workspace: the agent redeems it
  * wherever it works, and nobody else can.
  */
 
-import { db, and, eq, desc, users, assertGrantScoped } from "@synap/database";
-import { events, secrets } from "@synap/database/schema";
+import {
+  db,
+  and,
+  eq,
+  desc,
+  inArray,
+  notInArray,
+  isNull,
+  drizzleSql,
+  users,
+  focusSessions,
+  assertGrantScoped,
+} from "@synap/database";
+import { events, secrets, vaultGrants } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import {
   PROVIDE_SECRET_GRANT_MINUTES,
@@ -39,12 +59,46 @@ import { normalizeExpectedLabel } from "./expected-label.js";
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
   FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE,
+  FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE,
 } from "./lifecycle-events.js";
+import { PROVIDE_GRANTS_META_KEY } from "./session-metadata.js";
+import { TERMINAL_SESSION_STATUSES } from "./session-statuses.js";
 
 const logger = createLogger({ module: "provide-secret-grant" });
 
 /** How far back the asker read looks: one slot is asked a handful of times. */
 const SLOT_ASKED_SCAN = 50;
+
+interface SlotHistoryRow {
+  type: string;
+  data: Record<string, unknown>;
+}
+
+/**
+ * The agent id of the FIRST ask with this fingerprint since the slot was last
+ * answered, from the slot's history newest-first. Pure.
+ */
+export function firstAskerSinceAnswered(
+  rowsNewestFirst: readonly SlotHistoryRow[],
+  expectedLabel: string,
+  fingerprint: string
+): string | null {
+  const wanted = normalizeExpectedLabel(expectedLabel);
+  let first: Record<string, unknown> | null = null;
+  for (const row of rowsNewestFirst) {
+    const d = row.data;
+    if (
+      normalizeExpectedLabel(d.expectedLabel as string | undefined) !== wanted
+    ) {
+      continue;
+    }
+    if (row.type === FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE) break;
+    if (d.askFingerprint === fingerprint) first = d;
+  }
+  return typeof first?.askedByAgentUserId === "string"
+    ? first.askedByAgentUserId
+    : null;
+}
 
 export interface AskingAgent {
   agentUserId: string;
@@ -62,30 +116,29 @@ export async function resolveAskingAgent(p: {
   askFingerprint: string;
 }): Promise<AskingAgent | null> {
   try {
-    const wanted = normalizeExpectedLabel(p.expectedLabel);
     const rows = await db
-      .select({ data: events.data })
+      .select({ type: events.type, data: events.data })
       .from(events)
       .where(
         and(
           eq(events.subjectType, FOCUS_SESSION_SUBJECT_TYPE),
           eq(events.subjectId, p.sessionId),
-          eq(events.type, FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE)
+          inArray(events.type, [
+            FOCUS_SESSION_SLOT_ASKED_EVENT_TYPE,
+            FOCUS_SESSION_SLOT_ANSWERED_EVENT_TYPE,
+          ])
         )
       )
       .orderBy(desc(events.timestamp))
       .limit(SLOT_ASKED_SCAN);
-    const posed = rows
-      .map((r) => r.data as Record<string, unknown>)
-      .find(
-        (d) =>
-          normalizeExpectedLabel(d.expectedLabel as string | undefined) ===
-            wanted && d.askFingerprint === p.askFingerprint
-      );
-    const agentUserId =
-      typeof posed?.askedByAgentUserId === "string"
-        ? posed.askedByAgentUserId
-        : null;
+    const agentUserId = firstAskerSinceAnswered(
+      rows.map((r) => ({
+        type: r.type,
+        data: (r.data ?? {}) as Record<string, unknown>,
+      })),
+      p.expectedLabel,
+      p.askFingerprint
+    );
     if (!agentUserId) return null;
     const [agent] = await db
       .select({ id: users.id })
@@ -113,6 +166,8 @@ export async function planProvidedSecretGrant(p: {
   expectedLabel: string;
   askFingerprint: string;
   secretId: string;
+  /** The agent the person was shown (`provideOptions`); absent = not checked. */
+  expectedGranteeId?: string;
 }): Promise<SecretGrantPlan> {
   // A key that answers may not hand out more than its own grant allows: the
   // same rung the direct grant door applies (`vault.grant`).
@@ -131,6 +186,12 @@ export async function planProvidedSecretGrant(p: {
   }
   const agent = await resolveAskingAgent(p);
   if (!agent) return { status: "refused", reason: "agent_unknown" };
+  if (
+    p.expectedGranteeId !== undefined &&
+    p.expectedGranteeId !== agent.agentUserId
+  ) {
+    return { status: "refused", reason: "agent_changed" };
+  }
   return { status: "grant", agent };
 }
 
@@ -162,8 +223,16 @@ export async function grantProvidedSecret(p: {
       scope: "session",
       ttlMinutes: PROVIDE_SECRET_GRANT_MINUTES,
       createdBy: p.ownerId,
+      reusePermanentOnly: true,
     });
     if (!written.reused) {
+      // A read the session's close could not take back is never left behind.
+      await bindGrantToSession(p.sessionId, written.grantId).catch(
+        async (err: unknown) => {
+          await revokeVaultSecretGrant(written.grantId);
+          throw err;
+        }
+      );
       void auditLog({
         subjectType: "vault_secret",
         action: "grant_ai_access",
@@ -211,5 +280,72 @@ export async function withdrawProvidedSecretGrant(
       { err, grantId },
       "the answer was refused but its read could not be taken back"
     );
+  }
+}
+
+/**
+ * Keep the grant on the session it was given for, so its close revokes it.
+ * Only an open session: a closed one has no "this session" left to read in,
+ * and nothing would take the read back (throws, and the caller revokes).
+ */
+async function bindGrantToSession(
+  sessionId: string,
+  grantId: string
+): Promise<void> {
+  const bound = await db
+    .update(focusSessions)
+    .set({
+      metadata: drizzleSql`jsonb_set(
+        COALESCE(${focusSessions.metadata}, '{}'::jsonb),
+        ARRAY[${PROVIDE_GRANTS_META_KEY}]::text[],
+        COALESCE(${focusSessions.metadata} -> ${PROVIDE_GRANTS_META_KEY}, '[]'::jsonb)
+          || ${JSON.stringify([grantId])}::jsonb
+      )`,
+    })
+    .where(
+      and(
+        eq(focusSessions.id, sessionId),
+        notInArray(focusSessions.status, [...TERMINAL_SESSION_STATUSES])
+      )
+    )
+    .returning({ id: focusSessions.id });
+  if (bound.length === 0) {
+    throw new Error(`session ${sessionId} is closed — no session read`);
+  }
+}
+
+/**
+ * The session ended: take back every read a provide answer granted in it
+ * ("in this session" is a promise, not only a TTL). Returns how many were
+ * still live. Never throws: a failure is logged and the close stands; the TTL
+ * still ends the read.
+ */
+export async function revokeSessionProvidedGrants(
+  sessionId: string
+): Promise<number> {
+  try {
+    const [row] = await db
+      .select({
+        grantIds: drizzleSql<unknown>`${focusSessions.metadata} -> ${PROVIDE_GRANTS_META_KEY}`,
+      })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, sessionId))
+      .limit(1);
+    const ids = Array.isArray(row?.grantIds)
+      ? row.grantIds.filter((id): id is string => typeof id === "string")
+      : [];
+    if (ids.length === 0) return 0;
+    const revoked = await db
+      .update(vaultGrants)
+      .set({ revokedAt: new Date() })
+      .where(and(inArray(vaultGrants.id, ids), isNull(vaultGrants.revokedAt)))
+      .returning({ id: vaultGrants.id });
+    return revoked.length;
+  } catch (err) {
+    logger.error(
+      { err, sessionId },
+      "the session closed but the reads granted in it could not be revoked — they end with their TTL"
+    );
+    return 0;
   }
 }
