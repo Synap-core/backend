@@ -176,6 +176,8 @@ vi.mock("../services/runs/session-liveness.js", async (importOriginal) => {
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { lifecycleRouter } from "./lifecycle.js";
+import { preferencesRouter } from "./preferences.js";
+import { db as pgDb } from "@synap/database";
 
 const USER = "user-1";
 const AGENT = "agent-1";
@@ -1134,5 +1136,36 @@ describe("role-produced work + the access floor (homes review M1 / S7)", () => {
     } finally {
       await q(`update focus_sessions set status = 'closed'`);
     }
+  });
+});
+
+/**
+ * Home's LAST SEEN is pod-side (0333), so "while you were away" follows the
+ * person across devices: `preferences.markHomeSeen` stamps it (server time),
+ * `lifecycle.home` returns it. Driven through both real routers on PGlite.
+ */
+describe("home: last seen, on the pod", () => {
+  const prefs = (userId: string) =>
+    preferencesRouter.createCaller({
+      db: pgDb,
+      authenticated: true,
+      userId,
+      workspaceId: null,
+    } as never);
+
+  it("never stamped → null; markHomeSeen → the next home read returns that stamp", async () => {
+    await q(`delete from user_preferences`);
+    expect((await caller().home()).homeLastSeenAt).toBeNull();
+
+    const before = Date.now();
+    const { homeLastSeenAt } = await prefs(USER).markHomeSeen();
+    expect(Date.parse(homeLastSeenAt)).toBeGreaterThanOrEqual(before);
+    expect((await caller().home()).homeLastSeenAt).toBe(homeLastSeenAt);
+  });
+
+  it("is per person: another user's stamp never reaches this home", async () => {
+    await q(`delete from user_preferences`);
+    await prefs("someone-else").markHomeSeen();
+    expect((await caller().home()).homeLastSeenAt).toBeNull();
   });
 });

@@ -44,6 +44,7 @@ import {
   entityFacets,
   profiles,
   projects,
+  userPreferences,
   workspaces,
 } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
@@ -139,6 +140,12 @@ export interface SpaceIntent {
 
 export interface HomeRead {
   spaces: SpaceIntent[];
+  /**
+   * When this person last had Home on screen, ANY device (ISO; null = never
+   * stamped) — the brief's "while you were away" window. Written by
+   * `preferences.markHomeSeen` when Home leaves the screen.
+   */
+  homeLastSeenAt: string | null;
   needsYou: {
     total: number | null;
     /** `total` is a floor (a scan hit its cap); null when `total` is. */
@@ -719,6 +726,14 @@ async function readProducedKind(
 export const HOME_KIND_CONCURRENCY = 6;
 
 /** `fn` over `items`, at most `limit` at once, results in input order. */
+/** The person's own Home last-seen stamp (the `user` access rule floors it). */
+async function readHomeLastSeen(ctx: HomesCtx): Promise<string | null> {
+  const row = await scopedDb(AccessContext.from(ctx)).findFirst<
+    typeof userPreferences.$inferSelect
+  >(userPreferences, {});
+  return row?.homeLastSeenAt ? row.homeLastSeenAt.toISOString() : null;
+}
+
 async function mapLimit<T, R>(
   items: readonly T[],
   limit: number,
@@ -793,7 +808,7 @@ export async function readHome(
     );
     return { work, asks };
   };
-  const [words, open, needs] = await Promise.all([
+  const [words, open, needs, lastSeen] = await Promise.all([
     profileWords([...new Set(intents.flatMap((i) => i.produces))]),
     settle("open work", openWorkAndAsks),
     // ONE attention read for every scope on the page (null per failed scope).
@@ -806,6 +821,9 @@ export async function readHome(
         })),
       })
     ),
+    // Not settled: a failed read must not read as "never seen" (the brief
+    // would count today as if this were a first visit).
+    readHomeLastSeen(ctx),
   ]);
   const total = needs?.total ?? null;
   const truncated = needs?.truncated ?? null;
@@ -862,6 +880,7 @@ export async function readHome(
   );
   return {
     spaces: out,
+    homeLastSeenAt: lastSeen,
     needsYou: {
       total,
       truncated,

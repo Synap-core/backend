@@ -241,6 +241,12 @@ const spaceIntentWire = z.object({
 const homeWire = z.object({
   /** Producing spaces first (most live things first), then libraries by name. */
   spaces: z.array(spaceIntentWire),
+  /**
+   * When this person last had Home on screen, on ANY device (ISO; null =
+   * never stamped): the brief's "while you were away" window. Stamped by
+   * `preferences.markHomeSeen` when Home leaves the screen.
+   */
+  homeLastSeenAt: z.string().nullable(),
   needsYou: z.object({
     /** `signals.count` on the caller's floor (narrowed to the project). */
     total: z.number().nullable(),

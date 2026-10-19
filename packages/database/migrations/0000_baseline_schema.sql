@@ -3047,6 +3047,7 @@ CREATE TABLE IF NOT EXISTS "user_preferences" (
   "intelligence_service_preferences"  jsonb   NOT NULL DEFAULT '{}',
   "onboarding_completed"              boolean NOT NULL DEFAULT false,
   "onboarding_step"                   text,
+  "home_last_seen_at"                 timestamp with time zone,
   "updated_at"                        timestamp with time zone NOT NULL DEFAULT now()
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
@@ -3060,6 +3061,7 @@ ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "graph_preferences" json
 ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "intelligence_service_preferences" jsonb DEFAULT '{}';
 ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "onboarding_completed" boolean DEFAULT false;
 ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "onboarding_step" text;
+ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "home_last_seen_at" timestamp with time zone;
 ALTER TABLE "user_preferences" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 
 -- ─── 41. user_entity_state ───────────────────────────────────────────────────

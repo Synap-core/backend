@@ -129,6 +129,17 @@ export const userPreferences = pgTable("user_preferences", {
   onboardingCompleted: boolean("onboarding_completed").default(false).notNull(),
   onboardingStep: text("onboarding_step"),
 
+  /**
+   * When the person last had Home on screen — stamped when Home LEAVES the
+   * screen (`preferences.markHomeSeen`), read by `lifecycle.home` as the
+   * brief's "while you were away" window. Pod-side so it follows the person
+   * across devices (0333). Null = never stamped.
+   */
+  homeLastSeenAt: timestamp("home_last_seen_at", {
+    mode: "date",
+    withTimezone: true,
+  }),
+
   // Timestamps
   updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
     .defaultNow()
