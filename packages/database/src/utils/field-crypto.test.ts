@@ -14,7 +14,7 @@ import {
   randomUUID,
 } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
-import { createKeyring, FieldCryptoError } from "@synap-core/field-crypto";
+import { createKeyring, type FieldCryptoError } from "@synap-core/field-crypto";
 
 import {
   createPodFieldCrypto,

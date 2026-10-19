@@ -63,10 +63,7 @@ export const CREATE_RECOVERY_CODES_LABEL = "Create recovery codes";
 
 /** Every way back in a "Can't sign in?" screen can offer, pod doors first. */
 export type RecoveryDoorCopyKey =
-  | "recoveryCode"
-  | "email"
-  | "cloud"
-  | "cloudAccountReset";
+  "recoveryCode" | "email" | "cloud" | "cloudAccountReset";
 
 /**
  * One title + one-line body per door. `recoveryCode` / `email` / `cloud` are
@@ -110,7 +107,10 @@ export function operatorResetCommand(email: string): string {
  * What a locked-out person sends to whoever runs their pod. The command lives
  * in the MESSAGE (copied), never inline in body copy.
  */
-export function operatorResetMessage(email: string, podHost?: string | null): string {
+export function operatorResetMessage(
+  email: string,
+  podHost?: string | null
+): string {
   const pod = podHost?.trim() ? ` on ${podHost.trim()}` : "";
   return [
     `I can't sign in to my Synap pod${pod}. Could you reset my password?`,

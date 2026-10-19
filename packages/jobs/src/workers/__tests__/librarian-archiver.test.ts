@@ -149,6 +149,11 @@ describe("buildArchiveProposalData", () => {
     const data = buildArchiveProposalData({ id: "p1", name: "Old" }, 42);
     expect(data).not.toHaveProperty("reason");
     expect(data.policyReason).toMatch(/no members for 42 days/);
-    expect(data).toMatchObject({ id: "p1", name: "Old", ageDays: 42, changeType: "archive" });
+    expect(data).toMatchObject({
+      id: "p1",
+      name: "Old",
+      ageDays: 42,
+      changeType: "archive",
+    });
   });
 });

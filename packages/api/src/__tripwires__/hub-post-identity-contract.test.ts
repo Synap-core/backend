@@ -177,7 +177,11 @@ function findMutatingHandlers(
     }
     const body = extractHandlerBody(src, m.index);
     if (body) {
-      handlers.push({ method: method as MutatingMethod, label: routeName, bodyText: body });
+      handlers.push({
+        method: method as MutatingMethod,
+        label: routeName,
+        bodyText: body,
+      });
     }
   }
 
@@ -409,11 +413,15 @@ describe("tripwire: no inline apiKeyId identity decision outside mayActAsUser", 
 
   it("the scan is alive: the regex bites on literal samples and the file set is plausible", () => {
     expect(
-      INLINE_APIKEY_IDENTITY_RE.test(`const isServiceKey = !!c.get("apiKeyId");`)
+      INLINE_APIKEY_IDENTITY_RE.test(
+        `const isServiceKey = !!c.get("apiKeyId");`
+      )
     ).toBe(true);
     expect(INLINE_APIKEY_IDENTITY_RE.test(`!!c.get( 'apiKeyId' )`)).toBe(true);
     expect(
-      INLINE_APIKEY_IDENTITY_RE.test(`checkHubRateLimit(c.get("apiKeyId"), "x")`)
+      INLINE_APIKEY_IDENTITY_RE.test(
+        `checkHubRateLimit(c.get("apiKeyId"), "x")`
+      )
     ).toBe(false);
     expect(sources.length).toBeGreaterThan(50);
     expect(sources.some((s) => s.rel === "rest/entities.ts")).toBe(true);
@@ -421,13 +429,16 @@ describe("tripwire: no inline apiKeyId identity decision outside mayActAsUser", 
 
   it("the predicate is actually in use (non-vacuity: the retired sites route through it)", () => {
     const calls = (rel: string) =>
-      (sources.find((s) => s.rel === rel)?.clean.match(/\bmayActAsUser\s*\(/g) ??
-        []).length;
+      (
+        sources
+          .find((s) => s.rel === rel)
+          ?.clean.match(/\bmayActAsUser\s*\(/g) ?? []
+      ).length;
     expect(calls("rest/entities.ts")).toBeGreaterThanOrEqual(9);
     expect(calls("rest/relations.ts")).toBeGreaterThanOrEqual(1);
   });
 
-  it("no router decides identity on !!c.get(\"apiKeyId\") / isServiceKey", () => {
+  it('no router decides identity on !!c.get("apiKeyId") / isServiceKey', () => {
     const offenders = sources
       .filter((s) => INLINE_APIKEY_IDENTITY_RE.test(s.clean))
       .map((s) => s.rel);

@@ -12,7 +12,7 @@ import type { ResolvedGuideline } from "./config-settings.js";
  * travels store row → resolver → composer → instructions with nothing
  * hand-built in between.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 function makeDb(rows: any[]): any {
   return {
     select: () => ({

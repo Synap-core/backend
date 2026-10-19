@@ -9,29 +9,41 @@ describe('ask "what I looked at"', () => {
     for (const ask of [
       { mode: "confirm" },
       { mode: "choose", options: [{ label: "A" }] },
-      { mode: "form", form: { fields: [{ key: "k", label: "K", type: "text" }] } },
+      {
+        mode: "form",
+        form: { fields: [{ key: "k", label: "K", type: "text" }] },
+      },
       { mode: "act" },
       { mode: "provide", provide: { kind: "file" } },
     ]) {
       const parsed = AskSchema.safeParse({ ...ask, lookedAt });
       expect(parsed.success, ask.mode).toBe(true);
-      expect(parsed.success && parsed.data.lookedAt, ask.mode).toEqual(lookedAt);
+      expect(parsed.success && parsed.data.lookedAt, ask.mode).toEqual(
+        lookedAt
+      );
     }
   });
 
   it("is capped: at most 8 refs, more is refused (never clipped)", () => {
-    const eight = Array.from({ length: ASK_LIMITS.lookedAtMax }, (_, i) => ref(i));
+    const eight = Array.from({ length: ASK_LIMITS.lookedAtMax }, (_, i) =>
+      ref(i)
+    );
     expect(ASK_LIMITS.lookedAtMax).toBe(8);
-    expect(AskSchema.safeParse({ mode: "confirm", lookedAt: eight }).success).toBe(true);
     expect(
-      AskSchema.safeParse({ mode: "confirm", lookedAt: [...eight, ref(9)] }).success
+      AskSchema.safeParse({ mode: "confirm", lookedAt: eight }).success
+    ).toBe(true);
+    expect(
+      AskSchema.safeParse({ mode: "confirm", lookedAt: [...eight, ref(9)] })
+        .success
     ).toBe(false);
   });
 
   it("never trusts an agent's title: it is stripped at the parse", () => {
     const parsed = AskSchema.parse({
       mode: "confirm",
-      lookedAt: [{ kind: "entity", id: "e-1", title: "Totally the CEO's salary" }],
+      lookedAt: [
+        { kind: "entity", id: "e-1", title: "Totally the CEO's salary" },
+      ],
     });
     expect(parsed.lookedAt).toEqual([{ kind: "entity", id: "e-1" }]);
   });

@@ -43,7 +43,7 @@ async function visibleNames(
   const scoped = scopedDb(AccessContext.operator({ userId }));
   const read = async (
     kind: SlotAskLookedAt["kind"],
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     table: any,
     nameColumn: "title" | "name"
   ): Promise<Array<[string, string | null]>> => {
@@ -73,10 +73,7 @@ async function visibleNames(
  */
 export async function resolveLookedAtForReader<
   T extends { ask?: SlotAsk | null },
->(
-  userId: string,
-  items: T[]
-): Promise<T[]> {
+>(userId: string, items: T[]): Promise<T[]> {
   const all = items.flatMap((i) => i.ask?.lookedAt ?? []);
   if (all.length === 0) return items;
   const names = await visibleNames(userId, all);
@@ -88,7 +85,11 @@ export async function resolveLookedAtForReader<
       const key = `${ref.kind}:${ref.id}`;
       if (!names.has(key)) continue;
       const title = names.get(key);
-      resolved.push({ kind: ref.kind, id: ref.id, ...(title ? { title } : {}) });
+      resolved.push({
+        kind: ref.kind,
+        id: ref.id,
+        ...(title ? { title } : {}),
+      });
     }
     return { ...item, ask: { ...item.ask, lookedAt: resolved } };
   });

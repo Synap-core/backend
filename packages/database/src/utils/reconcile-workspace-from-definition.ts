@@ -60,7 +60,7 @@ import {
   declaredProfilePresentation,
   setProfilePresentation,
 } from "../repositories/profile-repository.js";
-import { ProfileScope } from "../schema/profiles.js";
+import { type ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
 import { normalizeProfileScope } from "./normalize-profile-scope.js";
 import {
@@ -692,7 +692,7 @@ export async function reconcileWorkspaceFromDefinition(
     if (resolution.scopeConflict)
       report.profiles.scopeConflicts.push(resolution.scopeConflict);
     let resolved = resolution.profile;
-    let profileIsReused = resolution.reused;
+    const profileIsReused = resolution.reused;
     if (resolution.reused) {
       report.profiles.reused.push(profile.slug);
       if (resolution.promoted) report.profiles.promoted.push(profile.slug);

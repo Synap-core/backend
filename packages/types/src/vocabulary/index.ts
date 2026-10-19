@@ -28,6 +28,7 @@ import type { SpaceBrief } from "../space-brief/index.js";
 import type { NextRungOutcome, TrustRung } from "../trust-ladder/index.js";
 import type { GovernanceRung, MatrixMark } from "../agent-matrix/index.js";
 import type { FilterOperator } from "../views/filters.js";
+import type { NeedsYouBucket } from "../needs-you/buckets.js";
 
 /**
  * The object-kind identity registry lives in `./object-kinds` and is re-exported
@@ -38,6 +39,9 @@ export * from "./object-kinds.js";
 
 /** AI tool name → label, in three moods (`resolveToolLabel`). */
 export * from "./tool-labels.js";
+
+/** The shell's destination words and the Inbox's filters (founder 2A / 3A). */
+export * from "./destinations.js";
 
 /**
  * Words a sentence-cased token must still spell the way people write them —
@@ -55,6 +59,9 @@ const CASED_WORDS: Readonly<Record<string, string>> = {
   pdf: "PDF",
   csv: "CSV",
   seo: "SEO",
+  crm: "CRM",
+  os: "OS",
+  grp: "GRP",
   linkedin: "LinkedIn",
   github: "GitHub",
   youtube: "YouTube",
@@ -842,7 +849,76 @@ export function buildObjectActionTitle(params: {
   const head = [verb || "Proposal", preposition, noun]
     .filter(Boolean)
     .join(" ");
-  return objectName ? `${head} "${objectName}"` : head;
+  const name = nameSlot(objectName, head, verb, noun);
+  return name ? `${head} "${name}"` : head;
+}
+
+const UUID_TOKEN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** `routines_horizon`, `fal_generate_image` — a snake_case slug. */
+const SNAKE_TOKEN = /^[a-z0-9]+(?:_[a-z0-9]+)+$/;
+/** `entity.delete`, `gmail.send` — a dotted machine id. */
+const DOTTED_TOKEN = /^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/;
+/** `local-b88d021b7d74`, `b88d021b` — a build tag or a hash (a digit AND a hex letter). */
+const BUILD_TAG_TOKEN =
+  /^(?:[a-z]+-)?(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}$/i;
+
+/** One word shaped like a machine token: a slug, an id, a build tag. */
+function isMachineToken(text: string): boolean {
+  if (/\s/.test(text)) return false;
+  return (
+    UUID_TOKEN.test(text) ||
+    SNAKE_TOKEN.test(text) ||
+    DOTTED_TOKEN.test(text) ||
+    BUILD_TAG_TOKEN.test(text)
+  );
+}
+
+function startsWithWords(text: string, prefix: string): boolean {
+  if (!prefix) return false;
+  const t = text.toLowerCase();
+  const p = prefix.toLowerCase();
+  return t === p || t.startsWith(`${p} `);
+}
+
+/**
+ * The quoted NAME in a title, or "" for none. A name names the object; it
+ * never restates the action and is never a machine token. What reaches this
+ * slot is often a SUMMARY (a cluster's label falls back to it), so:
+ *   - a name that repeats the head or the verb loses the repeat
+ *     (`Update Space "Update Space"` → `Update Space`;
+ *     `Delete Question "Delete Question \"GRP #3\""` → `… "GRP #3"`);
+ *   - what is left is dropped when it is empty, only the noun, or a machine
+ *     token (`Run Tool "Run fal_generate_image"` → `Run Tool`,
+ *     `Create Tool "routines_horizon"` → `Create Tool`).
+ * Any other name is kept as written — except that a name opening with the
+ * verb loses that word ("Create onboarding list" under `Create Task` reads
+ * `Create Task "onboarding list"`). NOT caught: a kebab slug
+ * (`arch-client-intelligence` reads like a hyphenated name).
+ */
+function nameSlot(
+  objectName: string | null | undefined,
+  head: string,
+  verb: string,
+  noun: string
+): string {
+  let name = (objectName ?? "").trim();
+  if (!name) return "";
+  const repeat = startsWithWords(name, head)
+    ? head
+    : startsWithWords(name, verb)
+      ? verb
+      : "";
+  if (repeat) {
+    name = name
+      .slice(repeat.length)
+      .trim()
+      .replace(/^"(.*)"$/, "$1")
+      .trim();
+  }
+  if (!name) return "";
+  if (noun && name.toLowerCase() === noun.toLowerCase()) return "";
+  return isMachineToken(name) ? "" : name;
 }
 
 /**
@@ -1074,6 +1150,13 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   paused: "Paused",
   draft: "Draft",
   archived: "Archived",
+  // subscription lifecycle (control plane `subscription_status`: active ·
+  // trialing · past_due · cancelled · paused). `active` / `paused` /
+  // `cancelled` resolve from the rows above. Humanized, `trialing` read
+  // "Trialing" and `past_due` read "Past due", which hides what the person
+  // must do — the Subscription page already said "Trial" and "Payment failed".
+  trialing: "Trial",
+  past_due: "Payment failed",
   // session work-state lenses (derived, never stored — a session is "waiting"
   // because an open `blocked_by` edge points at an open session, "ready" when
   // none does, "done" when closed). These are lens names over one row set,
@@ -1717,6 +1800,8 @@ export const NEEDS_YOU_ITEM_NOUNS: Readonly<
   ask: ["ask", "asks"],
   review: ["review", "reviews"],
   owed: ["thing", "things"],
+  /** The Inbox's routine bucket — a batch of reversible routine changes (`needsYouBuckets`). */
+  routine: ["routine change", "routine changes"],
 };
 
 /**
@@ -1732,6 +1817,81 @@ export function resolveNeedsYouItemCount(
   if (nouns) return `${n} ${n === 1 ? nouns[0] : nouns[1]}`;
   const noun = humanizeToken(key).toLowerCase();
   return `${n} ${n === 1 ? noun : pluralizeFallback(noun)}`;
+}
+
+/**
+ * The GLYPH of a needs-you row's REASON (`needsYouReasonOf`,
+ * `@synap-core/types/needs-you`) — what KIND of ask a row is, read before its
+ * title (ui-composition §1: state is a mark). Lucide names, as
+ * {@link BLOCKED_REASON_ICONS}: relay and the browser each bind name → glyph.
+ *
+ * It EXTENDS the blocker table (an owed slot keeps its blocker's glyph) with
+ * the reasons that are not blockers. A sibling table, never new rows in
+ * `BLOCKED_REASON_ICONS`: that key set IS the closed `BLOCKED_REASONS`, pinned
+ * by the api parity tripwire (`blocked-reason-vocabulary-parity.test.ts`).
+ * TONE is not part of it: the row's unit state keeps the colour.
+ */
+export const NEEDS_YOU_REASON_ICONS: Readonly<Record<string, string>> = {
+  ...BLOCKED_REASON_ICONS,
+  /** A question an agent or a capture asks the person. */
+  ask: "MessageCircle",
+  /** A session's work waiting to be looked at and accepted. */
+  review: "Eye",
+  /** Failed work — a run or an automation that broke. */
+  failure: "TriangleAlert",
+  /** An owed slot that recorded no reason. */
+  owed: "CircleDot",
+};
+
+/** The glyph NAME for a needs-you reason; unknown/absent ⇒ the fallback mark. */
+export function resolveNeedsYouReasonIcon(
+  reason: string | null | undefined
+): string {
+  if (!reason) return BLOCKED_REASON_FALLBACK_ICON;
+  return (
+    NEEDS_YOU_REASON_ICONS[reason.trim().toLowerCase()] ??
+    BLOCKED_REASON_FALLBACK_ICON
+  );
+}
+
+/**
+ * The reason mark's spoken name (its tooltip and accessible label). A blocker
+ * keeps its chip label ("Credential missing"); the person's own choice reads
+ * "Decision" — "Human decision" is the chip's wording beside an agent's
+ * blockers, redundant on an Inbox row that is always the person's.
+ */
+export const NEEDS_YOU_REASON_LABELS: Readonly<Record<string, string>> = {
+  ...BLOCKED_REASON_LABELS,
+  decision: "Decision",
+  ask: "Question",
+  review: "Review",
+  failure: "Failed",
+  owed: "Owed",
+};
+
+export function resolveNeedsYouReasonLabel(
+  reason: string | null | undefined
+): string {
+  if (!reason) return "";
+  const key = reason.trim().toLowerCase();
+  return NEEDS_YOU_REASON_LABELS[key] ?? humanizeToken(key);
+}
+
+/**
+ * The Inbox's four FILTERS (`NEEDS_YOU_BUCKETS`, founder decision 3A,
+ * 2026-10-19) — a closed classification of needs-you rows, plural because a
+ * filter names a population. The rule that files a row is `needsYouBucketOf`.
+ */
+export const NEEDS_YOU_BUCKET_LABELS: Readonly<Record<NeedsYouBucket, string>> =
+  {
+    decision: "Decisions",
+    question: "Questions",
+    routine: "Routine changes",
+    broken: "Broken",
+  };
+
+export function resolveNeedsYouBucketLabel(bucket: NeedsYouBucket): string {
+  return NEEDS_YOU_BUCKET_LABELS[bucket] ?? humanizeToken(bucket);
 }
 
 /**
@@ -2162,6 +2322,30 @@ export function resolveAgentReachLabel(
   return (
     (AGENT_REACH_LABELS as Readonly<Record<string, string>>)[reach] ??
     humanizeToken(reach)
+  );
+}
+
+/**
+ * WHO runs a playbook's work — its `executor` (`playbooks.executor`,
+ * `playbook_runs.executor`: `is-agent` | `external-agent` | `hybrid`). The
+ * Processes card, its service row and the playbook dashboard each kept a local
+ * map, and two of them disagreed ("Agent" / "External" beside "Synap agent" /
+ * "External agent"). The longer pair wins: "Agent" alone does not say whose.
+ */
+export const PLAYBOOK_EXECUTOR_LABELS = {
+  "is-agent": "Synap agent",
+  "external-agent": "External agent",
+  hybrid: "Hybrid",
+} as const;
+
+/** An executor's words; an unknown executor humanizes rather than leaks. */
+export function resolvePlaybookExecutorLabel(
+  executor: string | null | undefined
+): string {
+  if (!executor) return "";
+  return (
+    (PLAYBOOK_EXECUTOR_LABELS as Readonly<Record<string, string>>)[executor] ??
+    humanizeToken(executor)
   );
 }
 

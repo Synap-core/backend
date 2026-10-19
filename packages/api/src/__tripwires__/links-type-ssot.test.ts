@@ -65,16 +65,17 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * Union members allowlisted for Hub REST writes that have NO typed producer and
  * NO typed reader in source, as measured 2026-09-08.
  *
- * All three are the knowledge↔config bridge edges (`entity DATA --about/
- * documents/concerns--> config object`) minus `documents`, which does have a
- * typed producer. They were allowlisted before this tripwire existed. They are
+ * Both are knowledge↔config bridge edges (`entity DATA --concerns--> config
+ * object`, `provided_by`), allowlisted before this tripwire existed. (`about`
+ * left this list when file-answer-decision.ts became its typed producer, and
+ * `documents` always had one.) They are
  * NOT removed here because `getLinksFor` reads edges type-agnostically, so an
  * agent may well be writing them today for a traversal to consume — and
  * narrowing a live write door on the strength of a regex is the kind of
  * confident overclaim this repo pays for. They need a human decision: wire a
  * typed reader, or drop them.
  */
-const ALLOWLISTED_WITHOUT_TYPED_PRODUCER = ["about", "concerns", "provided_by"];
+const ALLOWLISTED_WITHOUT_TYPED_PRODUCER = ["concerns", "provided_by"];
 
 const SCHEMA_FILE = join(
   process.cwd(),

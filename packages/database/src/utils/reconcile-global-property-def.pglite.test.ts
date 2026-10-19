@@ -86,7 +86,6 @@ function ddlFor(table: PgTable): string {
   return `create table if not exists "${cfg.name}" (${cols.join(", ")});`;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const q = async <T = any>(sql: string, params?: unknown[]) =>
   (await h.client!.query<T>(sql, params)).rows;
 

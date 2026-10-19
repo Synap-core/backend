@@ -11,7 +11,7 @@
 
 import { z } from "zod";
 
-import { AccessContext, scopedDb } from "../../access/index.js";
+import { type AccessContext, scopedDb } from "../../access/index.js";
 
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
@@ -35,11 +35,11 @@ import {
   channelMembers,
   ChannelMemberKind,
   messages,
-  channelContextItems,
+  type channelContextItems,
   entities as entitiesTable,
   documents as documentsTable,
   ChannelType,
-  FeedScope,
+  type FeedScope,
   ChannelStatus,
   MessageRole,
   workspaceMembers,

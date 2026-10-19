@@ -39,7 +39,7 @@ import {
   workspaces,
 } from "@synap/database";
 import { max, sql as drizzleSql } from "drizzle-orm";
-import { AccessContext, scopedDb } from "../access/index.js";
+import { type AccessContext, scopedDb } from "../access/index.js";
 import { getUserWorkspaceIds } from "../utils/workspace-membership.js";
 import {
   canArchiveWorkspace,

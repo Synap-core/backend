@@ -24,11 +24,7 @@ import { userPreferences } from "./user-preferences.js";
  * build here first.
  */
 export type AgentCreatedVia =
-  | "cli"
-  | "ui"
-  | "system"
-  | "intelligence-service"
-  | "device";
+  "cli" | "ui" | "system" | "intelligence-service" | "device";
 
 export interface AgentMetadata {
   agentType: string;

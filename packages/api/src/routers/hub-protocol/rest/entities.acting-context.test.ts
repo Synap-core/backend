@@ -71,7 +71,9 @@ describe("DELETE /facets/{facetId} — identity bound by the real mayActAsUser",
     getCaller.mockClear();
     const res = await detach(makeApp(agentKey), AGENT);
     expect(res.status).toBe(200);
-    expect(getCaller).toHaveBeenCalledWith(expect.anything(), { userId: AGENT });
+    expect(getCaller).toHaveBeenCalledWith(expect.anything(), {
+      userId: AGENT,
+    });
   });
 
   it("a self-mintable service key naming another user → 403", async () => {

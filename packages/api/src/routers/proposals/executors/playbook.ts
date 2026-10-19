@@ -396,7 +396,7 @@ export function registerPlaybookExecutors(): void {
 
   // ── playbook/archive ──────────────────────────────────────────────────────
   // The gate at `routers/playbooks.ts:1727` has existed with NO executor, so an
-  // approved archive fell to the `*​/*` catch-all — which for a gate-made
+  // approved archive fell to the `*/*` catch-all — which for a gate-made
   // proposal does not throw: it emits `.validated`, flips the status to
   // APPROVED and returns success. The reviewer saw green and the playbook was
   // never archived. `archive` is on the rung-2.5 DESTRUCTIVE floor, which no
@@ -485,7 +485,7 @@ export function registerPlaybookExecutors(): void {
   // `playbooks.run` (routers/playbooks.ts:2011) says it outright in its own
   // docstring: on `"proposed"` **no run is created — the proposal IS the
   // record — and only on approval does `runPlaybook` execute**. There was no
-  // `playbook/run` executor, so approval hit the `*​/*` catch-all, which for a
+  // `playbook/run` executor, so approval hit the `*/*` catch-all, which for a
   // gate-made proposal does NOT throw: it emits `.validated`, flips the row
   // APPROVED and returns success. So the user approved a playbook run, saw
   // green, and the playbook never ran. EVERY agent-initiated run — the MCP

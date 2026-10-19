@@ -52,18 +52,18 @@ import {
 import {
   ok,
   requireScope,
-  CaptureScope,
-  CaptureWriteReceipt,
+  type CaptureScope,
+  type CaptureWriteReceipt,
   CAPTURE_CROSSKIND_PRECHECK_MAX,
   normalizeCaptureText,
   hasDurableText,
   hasDurableEntity,
   captureRejected,
   listMemberWorkspacesForAgent,
-  McpToolContext,
-  CallToolResult,
-  McpHandlerMap,
-  McpToolHandler,
+  type McpToolContext,
+  type CallToolResult,
+  type McpHandlerMap,
+  type McpToolHandler,
 } from "./shared.js";
 // Static, NOT part of the dynamic `submit-capture-graph` import in the graph
 // branch: a pure helper there would be stubbed away by any `vi.mock` of that
@@ -805,7 +805,7 @@ const captureHandler: McpToolHandler = async (
   // Domain text capture MUST NOT fall back to membership[0] (silent
   // wrong-placement — same bug link_entities stopped fabricating). Global
   // knowledge_keys may still need a concrete workspaceId column (below).
-  let captureWsId: string | undefined = requestedWorkspaceId;
+  const captureWsId: string | undefined = requestedWorkspaceId;
   const textScope: CaptureScope = {
     workspaceId: captureWsId ?? null,
     projectId: scopeProjectId,

@@ -41,18 +41,36 @@ export interface PodUpdateOutcomeInput {
 
 const NOTIFY = new Set(["rolled_back", "rollback_failed", "failed"]);
 
+/**
+ * A version as a person reads it. A release (`v1.4.0`, `1.4.0`) is its own
+ * name; a build the host made from a checkout is tagged `local-<git sha>`
+ * (`local-b88d021b7d74`), which means nothing in a sentence — it is "a local
+ * build". Absent ⇒ `fallback`.
+ */
+export function humanizePodVersion(
+  version: string | null | undefined,
+  fallback: string
+): string {
+  const v = version?.trim();
+  if (!v) return fallback;
+  if (/^local-[0-9a-f]{7,}$/i.test(v)) return "a local build";
+  return v;
+}
+
 /** The headline + detail copy for one outcome. Pure. Null ⇒ no notification. */
 export function describePodUpdateOutcome(
   o: PodUpdateOutcomeInput
 ): { headline: string; detail: string } | null {
   if (!NOTIFY.has(o.status)) return null;
   const why = o.reason ? ` (${o.reason})` : "";
-  const previous = o.from ?? "the previous version";
+  const previous = humanizePodVersion(o.from, "the previous version");
   if (o.status === "rolled_back") {
     return {
       headline: "was rolled back",
       detail: `The update failed${why}. Your pod is running ${previous} again${
-        o.dbRestored ? ", with its data restored from the pre-update backup" : ""
+        o.dbRestored
+          ? ", with its data restored from the pre-update backup"
+          : ""
       }.`,
     };
   }
@@ -71,9 +89,9 @@ export function describePodUpdateOutcome(
 export interface PodUpdateOutcomeDeps {
   recipients(): Promise<string[]>;
   alreadyNotified(sourceId: string): Promise<Set<string>>;
-  create(input: Parameters<typeof NotificationService.create>[0]): Promise<
-    string | undefined
-  >;
+  create(
+    input: Parameters<typeof NotificationService.create>[0]
+  ): Promise<string | undefined>;
 }
 
 const defaultDeps: PodUpdateOutcomeDeps = {
@@ -114,7 +132,7 @@ export async function notifyPodUpdateOutcome(
         sourceType: "system",
         sourceId,
         data: {
-          version: outcome.to ?? "the new release",
+          version: humanizePodVersion(outcome.to, "the new release"),
           headline: copy.headline,
           detail: copy.detail,
           status: outcome.status,

@@ -93,7 +93,7 @@ const StatusSchema = z.object({
 });
 
 // Route-agnostic: the helpers read only Variables, never path params.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 type Ctx = Context<{ Variables: HubVariables }, any, any>;
 
 function actorOf(c: Ctx, reasoning?: string): TrackActor {

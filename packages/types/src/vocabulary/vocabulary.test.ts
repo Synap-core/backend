@@ -124,6 +124,11 @@ describe("humanizeToken", () => {
     expect(humanizeToken("profile_url")).toBe("Profile URL");
     expect(humanizeToken("youtube-channel")).toBe("YouTube channel");
     expect(humanizeToken("urlencoded")).toBe("Urlencoded");
+    // Catalog tags that are acronyms (the marketplace's "crm", "os", "grp").
+    expect(humanizeToken("crm")).toBe("CRM");
+    expect(humanizeToken("os")).toBe("OS");
+    expect(humanizeToken("grp")).toBe("GRP");
+    expect(humanizeToken("enterprise-os")).toBe("Enterprise OS");
   });
 });
 
@@ -1280,7 +1285,8 @@ describe("resolveNotificationRoutingRuleLabel", () => {
     // row. They are the discriminating cases: `all` and `mute` would survive a
     // naive humanize, these two would not.
     expect(humanizeToken("in_app")).toBe("In app");
-    expect(humanizeToken("os")).toBe("Os");
+    // `os` humanizes to the acronym ("OS"), still not what the picker means.
+    expect(humanizeToken("os")).toBe("OS");
     expect(resolveNotificationRoutingRuleLabel("in_app")).toBe("In-app only");
     expect(resolveNotificationRoutingRuleLabel("os")).toBe("Push only");
   });
@@ -1458,5 +1464,95 @@ describe("capture list statuses", () => {
   it("an unfinished capture with unfiled suggestions reads Suggested", () => {
     expect(resolveStatusLabel("suggested")).toBe("Suggested");
     expect(resolveStatusLabel("needs_answer")).toBe("Needs your answer");
+  });
+});
+
+/**
+ * The NAME slot of a title. What reaches it is often a summary (a proposal
+ * cluster's label falls back to `data.summary`, an agent puts `data.slug`),
+ * so the slot refuses what is not a name. The strings are the ones dogfood
+ * found on the Needs-you list, verbatim. The KEPT row is the discriminator: a
+ * rule that dropped every name would pass the four drops.
+ */
+describe("buildObjectActionTitle — the name slot names, never restates", () => {
+  it.each([
+    // Repeats the verb, and what is left is a machine token.
+    [
+      {
+        action: "capability.run",
+        objectKind: "capability",
+        objectName: "Run fal_generate_image",
+      },
+      "Run Tool",
+    ],
+    // Repeats the whole head.
+    [
+      { action: "update", objectKind: "workspace", objectName: "Update Space" },
+      "Update Space",
+    ],
+    // A machine slug.
+    [
+      {
+        action: "create",
+        objectKind: "capability",
+        objectName: "routines_horizon",
+      },
+      "Create Tool",
+    ],
+    // A raw id and a build tag.
+    [
+      {
+        action: "update",
+        objectKind: "note",
+        objectName: "8a4b7c2e-1111-4111-8111-111111111111",
+      },
+      "Update Note",
+    ],
+    [
+      {
+        action: "update",
+        objectKind: "note",
+        objectName: "local-b88d021b7d74",
+      },
+      "Update Note",
+    ],
+    // Head-only is fine as it is.
+    [{ action: "run", objectKind: "playbook" }, "Run Template"],
+    // A summary that already quotes the name keeps the name, once.
+    [
+      {
+        action: "delete",
+        objectKind: "question",
+        objectName: 'Delete Question "GRP #3: Numbers"',
+      },
+      'Delete Question "GRP #3: Numbers"',
+    ],
+  ])("%j → %s", (params, title) => {
+    expect(buildObjectActionTitle(params)).toBe(title);
+  });
+
+  it("KEEPS a human name as written (the discriminator)", () => {
+    expect(
+      buildObjectActionTitle({
+        action: "create",
+        objectKind: "task",
+        objectName: "Write the brief",
+      })
+    ).toBe('Create Task "Write the brief"');
+    // A dotted product name and a version are names, not machine ids.
+    expect(
+      buildObjectActionTitle({
+        action: "update",
+        objectKind: "note",
+        objectName: "Node.js upgrade notes",
+      })
+    ).toBe('Update Note "Node.js upgrade notes"');
+    expect(
+      buildObjectActionTitle({
+        action: "create",
+        objectKind: "task",
+        objectName: "Acme",
+      })
+    ).toBe('Create Task "Acme"');
   });
 });

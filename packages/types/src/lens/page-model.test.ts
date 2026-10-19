@@ -134,7 +134,8 @@ describe("Happened — work AND data, counted in acts", () => {
   });
 
   it("Show all N is acts, and a cut read makes the number a floor", () => {
-    const rows = Array.from({ length: LENS_CAPS.happened + 1 }, (_, i) =>
+    // Two past the cap: a cap never hides exactly one row (`lensCapShown`).
+    const rows = Array.from({ length: LENS_CAPS.happened + 2 }, (_, i) =>
       sig(`a${i}`, {
         kind: "activity",
         activity: ledger(`l${i}`, "2026-10-04T10:00:00.000Z", {
@@ -144,8 +145,8 @@ describe("Happened — work AND data, counted in acts", () => {
     );
     const m = model(page({ happened: cls(rows, { hasMore: true }) }));
     expect(m.happened.items).toHaveLength(LENS_CAPS.happened);
-    expect(m.happened.rest).toHaveLength(1);
-    expect(m.happened.showAll).toBe(LENS_CAPS.happened + 1);
+    expect(m.happened.rest).toHaveLength(2);
+    expect(m.happened.showAll).toBe(LENS_CAPS.happened + 2);
     expect(m.happened.floor).toBe(true);
   });
 
@@ -203,15 +204,16 @@ describe("Show all counts the class's UNITS", () => {
         target: { kind: "session", id: "S" },
       } as Partial<Sig>)
     );
-    const singles = [1, 2, 3, 4, 5].map((i) => sig(`x${i}`));
+    const singles = [1, 2, 3, 4, 5, 6].map((i) => sig(`x${i}`));
     const m = model(page({ blocking: cls([...card, ...singles]) }));
-    // 6 rows: the card + 5 singles; 5 shown, 1 single left out.
+    // 7 rows: the card + 6 singles; 5 shown, 2 singles left out (a cap never
+    // hides exactly one row).
     expect(m.blocking.items).toHaveLength(LENS_CAPS.blocking);
     expect(m.blocking.items[0]!.row.count).toBe(3);
-    expect(m.blocking.rest).toHaveLength(1);
-    // "Show all N" is the needs-you number (8 signals), not 6 rows.
-    expect(m.blocking.showAll).toBe(8);
-    expect(m.blocking.count).toBe(8);
+    expect(m.blocking.rest).toHaveLength(2);
+    // "Show all N" is the needs-you number (9 signals), not 7 rows.
+    expect(m.blocking.showAll).toBe(9);
+    expect(m.blocking.count).toBe(9);
   });
   it("a card's items count as shown: 5 rows standing for 7 signals leave nothing out", () => {
     const card = [1, 2, 3].map((i) =>

@@ -295,11 +295,14 @@ export const LENS_UNKNOWN_COUNT = "\u2013";
 /** The strip's words for one lens-section count door. */
 export function lensCountDoorText(
   section: "blocking" | "happening" | "produced",
-  count: number | null
+  count: number | null,
+  /** `count` is a lower bound (a capped read): it reads "N+", never a bare N. */
+  floor = false
 ): string {
-  const n = count ?? LENS_UNKNOWN_COUNT;
+  const n =
+    count === null ? LENS_UNKNOWN_COUNT : floor ? `${count}+` : count;
   if (section === "blocking")
-    return `${n} ${count === 1 ? "needs" : "need"} you`;
+    return `${n} ${count === 1 && !floor ? "needs" : "need"} you`;
   if (section === "produced") return `${n} delivered`;
   return `${n} running`;
 }

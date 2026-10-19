@@ -61,7 +61,7 @@ export const provisionRouter = new Hono();
 function retiredProvisioningEndpoint(c: Context, successor?: string) {
   c.header("Deprecation", "true");
   if (successor) {
-    c.header("Link", `<${successor}>; rel=\"successor-version\"`);
+    c.header("Link", `<${successor}>; rel="successor-version"`);
   }
   return c.json(
     {

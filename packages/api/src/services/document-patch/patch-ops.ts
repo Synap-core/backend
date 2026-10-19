@@ -311,6 +311,7 @@ function changedHunk(
   const clean = (lines: string[]) =>
     lines
       .join("\n")
+      // eslint-disable-next-line no-control-regex -- NUL is this file's own section sentinel
       .replace(/\u0000section:[^\u0000]*\u0000/g, "")
       .trim();
   return {

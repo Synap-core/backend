@@ -11,6 +11,9 @@ import {
   resolveActivityRamp,
   activityCellLabel,
   activityCountLabel,
+  activityDayHeading,
+  activityDayWords,
+  activityMonthWord,
   activityDayRange,
   activityHeatSummary,
   activityLevel,
@@ -227,10 +230,34 @@ describe("words (D5: the unit is 'activity')", () => {
   it("a cell reads count + day, the day never shifted by the runtime zone", () => {
     expect(
       activityCellLabel({ date: "2026-10-03", count: 12 }, "short", "en-US")
-    ).toBe("12 activities on Sat, Oct 3");
+    ).toBe("12 activities on Sat 3 Oct");
     expect(
       activityCellLabel({ date: "2026-10-03", count: 1 }, "long", "en-US")
-    ).toBe("1 activity on Saturday, October 3, 2026");
+    ).toBe("1 activity on Saturday 3 October 2026");
+  });
+
+  it("a day reads the date ladder's words, whatever locale is passed — never ICU's 'Sept'", () => {
+    // en-GB ICU says "Thu 17 Sept"; the ladder says "Sep" (critique L P1-4).
+    for (const locale of [undefined, "en-GB", "en-US", "fr-FR"]) {
+      expect(activityDayWords("2026-09-17", "short", locale)).toBe("Thu 17 Sep");
+      expect(activityDayWords("2026-09-17", "long", locale)).toBe("Thursday 17 September 2026");
+      expect(activityMonthWord(8, 2026, locale)).toBe("Sep");
+    }
+    // Year and month edges.
+    expect(activityDayWords("2027-01-01")).toBe("Fri 1 Jan");
+    expect(activityDayWords("2026-12-31", "long")).toBe("Thursday 31 December 2026");
+    expect(activityMonthWord(0, 2026)).toBe("Jan");
+    expect(activityMonthWord(11, 2026)).toBe("Dec");
+  });
+
+  it("a day group's ONE heading: Today / Yesterday / Tomorrow, else the day's words", () => {
+    expect(activityDayHeading("2026-10-19", "2026-10-19")).toBe("Today");
+    expect(activityDayHeading("2026-10-18", "2026-10-19")).toBe("Yesterday");
+    expect(activityDayHeading("2026-10-20", "2026-10-19")).toBe("Tomorrow");
+    expect(activityDayHeading("2026-10-17", "2026-10-19")).toBe("Sat 17 Oct");
+    // Across a month and a year boundary.
+    expect(activityDayHeading("2026-12-31", "2027-01-01")).toBe("Yesterday");
+    expect(activityDayHeading("2026-11-01", "2026-10-31")).toBe("Tomorrow");
   });
 
   it("summary", () => {

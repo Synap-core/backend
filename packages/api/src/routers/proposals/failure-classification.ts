@@ -104,7 +104,7 @@ const TRPC_CODE_CLASS: Partial<Record<TRPCError["code"], FailureErrorClass>> = {
  * missing-parameter message, and that is stated rather than implied.
  */
 const REQUIRES_PARAMETER =
-  /requires (?:the )?parameters?\s+(?:["'`]([^"'`]+)["'`]|([A-Za-z0-9_.\-]+))/gi;
+  /requires (?:the )?parameters?\s+(?:["'`]([^"'`]+)["'`]|([A-Za-z0-9_.-]+))/gi;
 
 /**
  * The IN-HOUSE phrasing: `scopeProfileIds is required for structured views`,
@@ -127,7 +127,7 @@ const REQUIRES_PARAMETER =
  * are real fields this cannot see. Quote them at the throw site to be seen.
  */
 const IS_REQUIRED =
-  /(?:["'`]([^"'`]+)["'`]|([A-Za-z0-9_.\-]+))\s+(?:is|are)\s+required/gi;
+  /(?:["'`]([^"'`]+)["'`]|([A-Za-z0-9_.-]+))\s+(?:is|are)\s+required/gi;
 
 /** An unquoted token is a field name only if it is not an English word. */
 const LOOKS_LIKE_IDENTIFIER = /[A-Z]|[_.]/;
@@ -149,7 +149,7 @@ const LOOKS_LIKE_IDENTIFIER = /[A-Z]|[_.]/;
  * a hyphen-joined phrase (`approve-this-now`) — stated, not implied; that is
  * the residual, and it is why the count is capped too.
  */
-const SAFE_PARAM_NAME = /^[A-Za-z0-9_.\-]{1,64}$/;
+const SAFE_PARAM_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 
 /** How many parsed names may reach a projection. Real messages name 1–3. */
 const MAX_PARSED_MISSING_FIELDS = 10;

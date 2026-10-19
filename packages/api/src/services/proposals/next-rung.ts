@@ -79,10 +79,13 @@ export interface NextRungRow {
 }
 
 /** The `governance_rules` id a receipt's `_autoApprove` marker names. */
-function receiptRuleId(row: Pick<NextRungRow, "status" | "data">): string | null {
+function receiptRuleId(
+  row: Pick<NextRungRow, "status" | "data">
+): string | null {
   if (row.status !== "auto_approved") return null;
-  const marker = (row.data as { _autoApprove?: { governanceRuleId?: unknown } } | null)
-    ?._autoApprove;
+  const marker = (
+    row.data as { _autoApprove?: { governanceRuleId?: unknown } } | null
+  )?._autoApprove;
   return typeof marker?.governanceRuleId === "string"
     ? marker.governanceRuleId
     : null;
@@ -127,7 +130,9 @@ export async function resolveGrantedByRule(
  * `permission-check.ts`). Reading the wrong one mints a rule narrowed to a
  * slug the next write never carries, which never fires.
  */
-export function gateProfileSlug(row: Pick<NextRungRow, "status" | "data">): string | null {
+export function gateProfileSlug(
+  row: Pick<NextRungRow, "status" | "data">
+): string | null {
   const data = (row.data ?? null) as Record<string, unknown> | null;
   if (!data) return null;
   if (row.status === "auto_approved") {
@@ -251,9 +256,7 @@ export async function readNextRungs(params: {
   );
   return projections.map((p) => {
     const ruleId = p.rule ? covering.get(ruleKey(p.rule)) : undefined;
-    return ruleId
-      ? { ...p, offer: null, rule: null, covered: { ruleId } }
-      : p;
+    return ruleId ? { ...p, offer: null, rule: null, covered: { ruleId } } : p;
   });
 }
 
@@ -278,7 +281,9 @@ async function findCoveringRules(
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   const agentIds = [
-    ...new Set(drafts.map((d) => d.agentUserId).filter((a): a is string => !!a)),
+    ...new Set(
+      drafts.map((d) => d.agentUserId).filter((a): a is string => !!a)
+    ),
   ];
   if (agentIds.length === 0) return out;
   const rows = await db

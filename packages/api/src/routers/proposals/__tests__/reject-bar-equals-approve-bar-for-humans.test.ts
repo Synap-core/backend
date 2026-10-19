@@ -30,7 +30,11 @@ const VIEWER = "user-viewer";
 const OTHER = "user-other";
 const AGENT = "agent-1";
 
-const POLICIES: ProposalApprovalPolicy[] = ["admins_only", "any_editor", "owner_and_admins"];
+const POLICIES: ProposalApprovalPolicy[] = [
+  "admins_only",
+  "any_editor",
+  "owner_and_admins",
+];
 const ROLES = [undefined, "viewer", "editor", "admin", "owner"];
 const OWNER_OF_AGENT = [undefined, null, VIEWER, OTHER] as const;
 const PROPOSALS = [
@@ -60,8 +64,14 @@ function* allFacts(viewerIsAgent: boolean): Generator<ReviewAuthorityFacts> {
 const verdict = (
   proposal: (typeof PROPOSALS)[number],
   facts: ReviewAuthorityFacts,
-  purpose: "approve" | "reject",
-) => computeCanReviewApprovalFromFacts({ proposal, userId: VIEWER, purpose, facts }).allowed;
+  purpose: "approve" | "reject"
+) =>
+  computeCanReviewApprovalFromFacts({
+    proposal,
+    userId: VIEWER,
+    purpose,
+    facts,
+  }).allowed;
 
 describe("reject authority == approve authority for a human viewer", () => {
   it("every fact combination agrees, and the walk admits AND refuses someone", () => {
@@ -70,9 +80,10 @@ describe("reject authority == approve authority for a human viewer", () => {
     for (const proposal of PROPOSALS) {
       for (const facts of allFacts(false)) {
         const approve = verdict(proposal, facts, "approve");
-        expect(verdict(proposal, facts, "reject"), JSON.stringify({ proposal, facts })).toBe(
-          approve,
-        );
+        expect(
+          verdict(proposal, facts, "reject"),
+          JSON.stringify({ proposal, facts })
+        ).toBe(approve);
         checked++;
         if (approve) allowed++;
       }
@@ -87,7 +98,11 @@ describe("reject authority == approve authority for a human viewer", () => {
     let diverged = 0;
     for (const proposal of PROPOSALS) {
       for (const facts of allFacts(true)) {
-        if (verdict(proposal, facts, "approve") !== verdict(proposal, facts, "reject")) diverged++;
+        if (
+          verdict(proposal, facts, "approve") !==
+          verdict(proposal, facts, "reject")
+        )
+          diverged++;
       }
     }
     expect(diverged).toBeGreaterThan(0);

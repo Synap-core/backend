@@ -10,7 +10,9 @@ function fakeExecutor(log: string[]) {
       set: (values: Record<string, unknown>) => ({
         where: () => ({
           returning: async () => {
-            log.push(`update:${values.isActive}:${values.revokedAt instanceof Date}:${values.revokedReason}`);
+            log.push(
+              `update:${values.isActive}:${values.revokedAt instanceof Date}:${values.revokedReason}`
+            );
             return [{ id: "k1" }];
           },
         }),
@@ -37,7 +39,10 @@ describe("revokeApiKeys — the ONE revoke door", () => {
     const log: string[] = [];
     const off = onApiKeysRevoked(() => log.push("cache-cleared"));
     off();
-    await revokeApiKeys(fakeExecutor(log), { where: eq(apiKeys.id, "k1"), reason: "t" });
+    await revokeApiKeys(fakeExecutor(log), {
+      where: eq(apiKeys.id, "k1"),
+      reason: "t",
+    });
     expect(log).toEqual(["update:false:true:t"]);
   });
 

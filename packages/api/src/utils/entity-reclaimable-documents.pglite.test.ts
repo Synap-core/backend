@@ -41,10 +41,10 @@ beforeAll(async () => {
     [MEDIA, OWNER],
     [FOREIGN, OTHER],
   ]) {
-    await client.query(
-      `insert into documents (id, user_id) values ($1, $2)`,
-      [id, user]
-    );
+    await client.query(`insert into documents (id, user_id) values ($1, $2)`, [
+      id,
+      user,
+    ]);
   }
 });
 

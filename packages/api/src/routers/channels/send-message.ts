@@ -57,7 +57,7 @@ import {
   channelMembers,
   ChannelMemberKind,
   ChannelMemberRole,
-  AiReactionMode,
+  type AiReactionMode,
   messages,
   channelContextItems,
   entities as entitiesTable,

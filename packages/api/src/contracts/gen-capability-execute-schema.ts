@@ -28,7 +28,7 @@ async function main() {
   const config = await prettier.resolveConfig(OUT_PATH);
   const formatted = await prettier.format(raw, { ...config, parser: "json" });
   writeFileSync(OUT_PATH, formatted, "utf8");
-  // eslint-disable-next-line no-console
+
   console.log(`Wrote ${OUT_PATH}`);
 }
 

@@ -1272,7 +1272,14 @@ export interface NeedsYouScopes {
 /** Per-scope needs-you numbers; null = that scope's read failed (never 0). */
 export interface NeedsYouByScope {
   total: number | null;
+  /**
+   * `total` is a FLOOR: a half of its read hit its scan cap — THE count's own
+   * `truncated` (`countOf`), never a second rule. null when `total` is.
+   */
+  truncated: boolean | null;
   bySpace: Map<string, number | null>;
+  /** Per space, the same floor flag as `truncated`; null when its count is. */
+  bySpaceTruncated: Map<string, boolean | null>;
   /** workspaceId → profileSlug → count. */
   byKind: Map<string, Map<string, number | null>>;
   /**
@@ -1390,10 +1397,12 @@ export async function countNeedsYouByScope(
   const userId = requireUserId(ctx.userId);
   const lens = input.projectId ? { projectId: input.projectId } : {};
   let attentionReads = 0;
+  /** THE count for one scope (needs-you + its floor flag); null = failed. */
   const countScope = async (scope: SignalScopeInput) => {
     attentionReads += 1;
     try {
-      return (await countSignals(ctx, { ...lens, ...scope })).needsYou;
+      const c = await countSignals(ctx, { ...lens, ...scope });
+      return { needsYou: c.needsYou, truncated: c.truncated };
     } catch (err) {
       logger.warn({ err, scope }, "needs-you scope read failed — null");
       return null;
@@ -1411,10 +1420,12 @@ export async function countNeedsYouByScope(
               async (slug) =>
                 [
                   slug,
-                  await countScope({
-                    workspaceId: s.workspaceId,
-                    profileSlug: slug,
-                  }),
+                  (
+                    await countScope({
+                      workspaceId: s.workspaceId,
+                      profileSlug: slug,
+                    })
+                  )?.needsYou ?? null,
                 ] as const
             )
           ),
@@ -1422,8 +1433,14 @@ export async function countNeedsYouByScope(
       ),
     ]);
     return {
-      total,
-      bySpace: new Map(spaces.map((s) => [s.workspaceId, s.count])),
+      total: total?.needsYou ?? null,
+      truncated: total?.truncated ?? null,
+      bySpace: new Map(
+        spaces.map((s) => [s.workspaceId, s.count?.needsYou ?? null])
+      ),
+      bySpaceTruncated: new Map(
+        spaces.map((s) => [s.workspaceId, s.count?.truncated ?? null])
+      ),
       byKind: new Map(spaces.map((s) => [s.workspaceId, new Map(s.kinds)])),
       podLevel: null,
       attentionReads,
@@ -1515,10 +1532,12 @@ export async function countNeedsYouByScope(
           if (kind === "per-scope")
             return [
               slug,
-              await countScope({
-                workspaceId: s.workspaceId,
-                profileSlug: slug,
-              }),
+              (
+                await countScope({
+                  workspaceId: s.workspaceId,
+                  profileSlug: slug,
+                })
+              )?.needsYou ?? null,
             ] as const;
           return [
             slug,
@@ -1532,17 +1551,26 @@ export async function countNeedsYouByScope(
           ] as const;
         })
       );
+      const own = countOf(
+        narrowAttention(floor, { workspaceId: s.workspaceId })
+      );
       return {
         workspaceId: s.workspaceId,
-        count: countOf(narrowAttention(floor, { workspaceId: s.workspaceId }))
-          .needsYou,
+        count: { needsYou: own.needsYou, truncated: own.truncated },
         kinds: kindCounts,
       };
     })
   );
+  const whole = countOf(floor);
   return {
-    total: countOf(floor).needsYou,
-    bySpace: new Map(spaces.map((s) => [s.workspaceId, s.count])),
+    total: whole.needsYou,
+    truncated: whole.truncated,
+    bySpace: new Map(
+      spaces.map((s) => [s.workspaceId, s.count?.needsYou ?? null])
+    ),
+    bySpaceTruncated: new Map(
+      spaces.map((s) => [s.workspaceId, s.count?.truncated ?? null])
+    ),
     byKind: new Map(spaces.map((s) => [s.workspaceId, new Map(s.kinds)])),
     podLevel: countOf(narrowAttention(floor, { workspaceId: null })).needsYou,
     attentionReads,

@@ -80,7 +80,8 @@ export type TrustRung = (typeof TRUST_RUNGS)[number];
 
 export function isTrustRung(value: unknown): value is TrustRung {
   return (
-    typeof value === "string" && (TRUST_RUNGS as readonly string[]).includes(value)
+    typeof value === "string" &&
+    (TRUST_RUNGS as readonly string[]).includes(value)
   );
 }
 

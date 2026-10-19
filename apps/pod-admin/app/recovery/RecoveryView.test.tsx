@@ -68,7 +68,11 @@ const sentEmail: KratosFlow = {
       {
         type: "input",
         group: "code",
-        attributes: { name: "email", type: "submit", value: "owner@example.com" },
+        attributes: {
+          name: "email",
+          type: "submit",
+          value: "owner@example.com",
+        },
         meta: { label: { text: "Resend code" } },
       },
     ],

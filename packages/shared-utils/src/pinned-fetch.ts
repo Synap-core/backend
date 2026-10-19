@@ -182,7 +182,11 @@ function abortable<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
 }
 
 function pinnedLookup(pin: ResolvedAddress): LookupFunction {
-  return ((_host: string, opts: { all?: boolean }, cb: Function) => {
+  return ((
+    _host: string,
+    opts: { all?: boolean },
+    cb: (...args: unknown[]) => void
+  ) => {
     if (opts?.all) cb(null, [{ address: pin.address, family: pin.family }]);
     else cb(null, pin.address, pin.family);
   }) as unknown as LookupFunction;

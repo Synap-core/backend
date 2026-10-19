@@ -376,7 +376,9 @@ export function buildRunSessionStartTitle(input: {
   return buildDerivedSessionTitle({
     kind: "run",
     name: input.playbookName,
-    subject: first ? `${first} + ${count - 1} more` : `${count} ${resolveObjectNounPlural("session").toLowerCase()}`,
+    subject: first
+      ? `${first} + ${count - 1} more`
+      : `${count} ${resolveObjectNounPlural("session").toLowerCase()}`,
   });
 }
 

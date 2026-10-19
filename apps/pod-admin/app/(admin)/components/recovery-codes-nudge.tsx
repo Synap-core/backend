@@ -33,7 +33,10 @@ const SKIP_KEY = "pod-admin.recovery-codes-nudge.skipped";
  * told to re-read.
  */
 export function createRecoveryCodesStateCache(
-  readStatus: () => Promise<{ ok: boolean; data?: { recoveryCodes: { set: boolean } } }>
+  readStatus: () => Promise<{
+    ok: boolean;
+    data?: { recoveryCodes: { set: boolean } };
+  }>
 ) {
   let pending: Promise<RecoveryCodesState> | null = null;
   const listeners = new Set<() => void>();
@@ -42,7 +45,11 @@ export function createRecoveryCodesStateCache(
       if (pending) return pending;
       const p: Promise<RecoveryCodesState> = readStatus()
         .then((r) =>
-          r.ok && r.data ? (r.data.recoveryCodes.set ? "set" : "not_set") : "unknown"
+          r.ok && r.data
+            ? r.data.recoveryCodes.set
+              ? "set"
+              : "not_set"
+            : "unknown"
         )
         .catch(() => "unknown" as const)
         .then((state) => {

@@ -29,7 +29,6 @@ const capPage: CapabilityRendererPage = {
 function makeDb(opts: {
   workspaceSettings?: Record<string, unknown>;
   capabilityMetadata?: Record<string, unknown>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
 }): any {
   return {
     query: {

@@ -65,21 +65,26 @@
       "drizzle-zod": "0.8.3",
       "zod": "4.3.6",
       "zod-to-json-schema": "3.23.2",
-      "axios": ">=1.15.2",
+      "axios": ">=1.20.0",
       "fast-xml-parser": ">=5.5.6",
-      "socket.io-parser": ">=4.2.6",
+      "socket.io-parser": ">=4.2.7",
       "path-to-regexp": ">=8.4.0",
       "protobufjs": ">=8.4.1",
       "picomatch@<3": ">=2.3.2",
       "picomatch@>=4 <4.0.4": ">=4.0.4",
       "fast-uri": ">=3.1.2",
       "langsmith": ">=0.6.0",
-      "@grpc/grpc-js": ">=1.14.4",
+      "@grpc/grpc-js": ">=1.14.5",
       "form-data": ">=4.0.6",
       "ws": ">=8.21.0",
       "minimatch": ">=9.0.7",
       "fast-xml-builder": ">=1.1.7",
-      "hono": ">=4.12.25"
+      "hono": ">=4.12.25",
+      "engine.io": ">=6.6.10 <7",
+      "js-yaml@<3.15.2": ">=3.15.2 <4",
+      "js-yaml@>=4 <4.3.2": ">=4.3.2",
+      "ip-address": ">=10.3.1 <11",
+      "@opentelemetry/propagator-jaeger": ">=2.9.0 <3"
     },
     "onlyBuiltDependencies": [
       "bcrypt",
@@ -89,16 +94,7 @@
       "protobufjs",
       "sharp",
       "workerd"
-    ],
-    "auditConfig": {
-      "ignoreGhsas": [
-        "GHSA-7h2j-956f-4vf2",
-        "GHSA-3ppc-4f35-3m26",
-        "GHSA-7r86-cg39-jmmj",
-        "GHSA-23c5-xmqv-rm74",
-        "GHSA-c2c7-rcm5-vvqj"
-      ]
-    }
+    ]
   },
   "packageManager": "pnpm@10.28.0",
   "engines": {

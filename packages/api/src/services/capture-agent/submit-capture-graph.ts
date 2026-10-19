@@ -1647,7 +1647,7 @@ export async function submitCaptureGraph(
         // the row's OWN stored `data` so the fields the recorder folded in
         // (correlationId, requestedEventId, summary) survive. Best-effort: a
         // recording hiccup must never fail the already-committed capture.
-        let recordId: string | undefined = captureReceipt?.id;
+        const recordId: string | undefined = captureReceipt?.id;
         // Stored scope: the receipt row as the insert returned it. When that
         // insert FAILED there is no row — the entities were materialized under
         // exactly these values, so they are what was stored.

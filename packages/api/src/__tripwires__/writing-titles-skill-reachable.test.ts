@@ -57,7 +57,10 @@ describe("the writing-titles skill is reachable from orient", () => {
       `${pkg}/${stem}`
     ];
     expect(teaching, "no _teaching.json entry").toBeTruthy();
-    expect(teaching.delivery).toMatchObject({ autoSeed: true, cliBundle: true });
+    expect(teaching.delivery).toMatchObject({
+      autoSeed: true,
+      cliBundle: true,
+    });
     for (const tool of ["synap_capture", "create_entity", "update_entity"]) {
       expect(teaching.teachesTools).toContain(tool);
     }
@@ -78,7 +81,9 @@ describe("the writing-titles skill is reachable from orient", () => {
   it("teaches the rubric's own numbers", () => {
     const body = read(FILE);
     expect(body).toContain(`${TITLE_SOFT_MAX} characters at most`);
-    expect(body).toContain(`a question\n   may take ${QUESTION_TITLE_SOFT_MAX}`);
+    expect(body).toContain(
+      `a question\n   may take ${QUESTION_TITLE_SOFT_MAX}`
+    );
     expect(body).toContain(`over\n${TITLE_HARD_MAX} characters it refuses`);
   });
 

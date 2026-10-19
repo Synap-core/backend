@@ -14,7 +14,6 @@ import { deriveProposalProjectId } from "./insert-pending-proposal.js";
 const SESSION = "cccccccc-cccc-cccc-cccc-cccccccccccc";
 const PROJ_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function executor(): any {
   return {
     query: {

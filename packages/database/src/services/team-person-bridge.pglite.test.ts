@@ -104,7 +104,7 @@ const CRM = "f73f40f0-c023-4f2e-b55a-10d3f7539b1f";
 const OPS = "708edb59-2299-42d4-9f7b-4c8424aed5c6";
 
 let pg: PGlite;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let db: any;
 
 beforeAll(async () => {

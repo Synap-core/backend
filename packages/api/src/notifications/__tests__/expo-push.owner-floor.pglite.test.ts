@@ -17,7 +17,15 @@
  * definitions. `emitSideEffects` is stubbed (fire-and-forget audit).
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  beforeEach,
+  vi,
+} from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
@@ -48,7 +56,11 @@ vi.mock("@synap/events", async (importOriginal) => {
   return { ...actual, emitSideEffects: vi.fn(async () => undefined) };
 });
 
-import { getTableConfig, type PgTable, PgTable as PgTableClass } from "drizzle-orm/pg-core";
+import {
+  getTableConfig,
+  type PgTable,
+  PgTable as PgTableClass,
+} from "drizzle-orm/pg-core";
 import { is } from "drizzle-orm";
 import * as database from "@synap/database";
 import { MessagingAccountService } from "../../services/messaging-account-service.js";

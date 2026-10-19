@@ -432,7 +432,7 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
    */
   let admittedFirst = false;
   /** Procedural rows admitted so far — see `MAX_PROCEDURAL_ROWS`. */
-  let proceduralAdmitted = 0;
+  const proceduralAdmitted = 0;
 
   // ONE drop site, so the count and the id list CANNOT diverge.
   //

@@ -117,8 +117,7 @@ export const feedsRouter = router({
       return rows.map((row) => {
         const params = (row.params ?? {}) as Record<string, unknown>;
         const dqs = params.derivedQueries as
-          | Array<{ upstreamType: string; label: string }>
-          | undefined;
+          Array<{ upstreamType: string; label: string }> | undefined;
         return {
           ...row,
           derivedQueryCount: dqs?.length ?? 0,

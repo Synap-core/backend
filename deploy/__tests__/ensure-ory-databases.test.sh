@@ -123,8 +123,11 @@ run_test "Ory bootstrap callers abort on failure"
 # Each caller must guard the call with `|| { ... exit 1 }` / `|| die`.
 # Two call sites: `synap install` and `synap update`. install.sh carried a third
 # until PODPROV W2 made it a bootstrapper that execs `synap install`.
-_total_calls=$(grep -rc "ensure_ory_databases" "$REPO_ROOT/synap" 2>/dev/null \
-  | awk -F: '{s+=$2} END {print s+0}')
+# `grep -c` on the one file, not `grep -rc | awk -F: '{s+=$2}'`: GNU grep -r on
+# a single file prints a bare count with no `file:` prefix, so the awk summed an
+# empty field and read 0 on Linux (CI) while BSD/ugrep printed `synap:2` (macOS).
+_total_calls=$(grep -c "ensure_ory_databases" "$REPO_ROOT/synap" 2>/dev/null || true)
+_total_calls=${_total_calls:-0}
 # subtract the definitions/references themselves: every remaining occurrence is
 # a call site that must be guarded.
 if [ "$_total_calls" -lt 2 ]; then

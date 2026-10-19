@@ -28,6 +28,7 @@ import {
   entityIdentitySignals,
   entityExternalLinks,
   entityFacets,
+  profiles,
   relations,
   links,
   messageLinks,
@@ -799,12 +800,14 @@ export async function mergeEntities(
   // `skipEvent` inside the transaction.
   if (materialized.winnerFacetIds && materialized.winnerFacetIds.length > 0) {
     const moved = await db
-      .select()
+      .select({ facet: entityFacets, profileSlug: profiles.slug })
       .from(entityFacets)
+      .innerJoin(profiles, eq(profiles.id, entityFacets.profileId))
       .where(inArray(entityFacets.id, materialized.winnerFacetIds));
-    for (const facet of moved) {
+    for (const { facet, profileSlug } of moved) {
       await notifyFacetAttached({
         facet,
+        profileSlug,
         userId,
         context: { origin: "merge", fallbackWorkspaceId: winner.workspaceId },
       });

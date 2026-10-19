@@ -68,6 +68,8 @@ captureProgressStreamApp.get("/runs/:captureRunId/progress", (c) => {
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       let closed = false;
+      // Not const: close() (declared below) reads it before it is assigned.
+      // eslint-disable-next-line prefer-const
       let keepalive: ReturnType<typeof setInterval> | undefined;
       let idleClose: ReturnType<typeof setTimeout> | undefined;
       let unsubscribe = () => {};

@@ -82,8 +82,12 @@ describe("space purpose — one ladder", () => {
     ])
       expect(FORK_PURPOSE_READ.test(sample), sample).toBe(true);
     expect(FORK_BRIEF_PURPOSE.test("briefPurpose(brief)")).toBe(true);
-    expect(stripComments("a; // brief.purpose", "ts")).not.toMatch(FORK_PURPOSE_READ);
-    expect(stripComments("x = brief.purpose; /* c */", "ts")).toMatch(FORK_PURPOSE_READ);
+    expect(stripComments("a; // brief.purpose", "ts")).not.toMatch(
+      FORK_PURPOSE_READ
+    );
+    expect(stripComments("x = brief.purpose; /* c */", "ts")).toMatch(
+      FORK_PURPOSE_READ
+    );
     expect(FORK_PLACEHOLDER.test("/^\\s*domain:\\s*\\S+\\s*$/i")).toBe(true);
   });
 
@@ -102,10 +106,16 @@ describe("space purpose — one ladder", () => {
     );
     // The pinned brief (inside the ladder's file) calls it too.
     const ladder = files.find((f) => f.rel === LADDER_FILE)!.text;
-    const body = ladder.slice(ladder.indexOf("export async function buildSpaceBrief"));
-    expect(body).toMatch(/resolveSpacePurpose\(row\.description, row\.settings\)/);
+    const body = ladder.slice(
+      ladder.indexOf("export async function buildSpaceBrief")
+    );
+    expect(body).toMatch(
+      /resolveSpacePurpose\(row\.description, row\.settings\)/
+    );
     // …and the wrapper is a thin call into the leaf.
-    expect(ladder).toMatch(/return resolveSpacePurposeLeaf\(\{ description, settings \}\);/);
+    expect(ladder).toMatch(
+      /return resolveSpacePurposeLeaf\(\{ description, settings \}\);/
+    );
   });
 
   it("no pod file derives a purpose of its own", () => {
@@ -121,7 +131,9 @@ describe("space purpose — one ladder", () => {
   });
 
   it("behaviour: description > brief.purpose > goal, the same through a consumer", () => {
-    const cases: Array<[string | null, Record<string, unknown>, string | null]> = [
+    const cases: Array<
+      [string | null, Record<string, unknown>, string | null]
+    > = [
       ["Authored.", { purpose: "P", goal: "G" }, "Authored."],
       ["Domain: personal", { purpose: "P", goal: "G" }, "P"],
       [null, { purpose: "P", goal: "G" }, "P"],

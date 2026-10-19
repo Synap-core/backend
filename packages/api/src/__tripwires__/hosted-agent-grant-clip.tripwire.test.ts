@@ -67,8 +67,10 @@ function sites(): Site[] {
     const src = readFileSync(file, "utf8");
     for (const m of src.matchAll(WRITE)) {
       const at = m.index!;
-      const ends = [src.indexOf("\n}", at), src.indexOf("\n    }),", at)]
-        .filter((i) => i !== -1);
+      const ends = [
+        src.indexOf("\n}", at),
+        src.indexOf("\n    }),", at),
+      ].filter((i) => i !== -1);
       const end = ends.length ? Math.min(...ends) : src.length;
       const before = src.slice(0, at);
       const fns = [...before.matchAll(/(?:async )?function (\w+)\(/g)];
@@ -88,7 +90,8 @@ const exemptReason = (s: Site): string | null => {
   if (s.file === DEFINITION_FILE) return "the verbs' own definitions";
   if (s.enclosingFn === "clipHostedAgentGrants") return "the clip's own write";
   if (s.verb === ".carryOver(") return "rotation copies the same scopes";
-  if (s.verb === ".movePrincipal(") return "app keys: holder moves, permissions do not";
+  if (s.verb === ".movePrincipal(")
+    return "app keys: holder moves, permissions do not";
   return null;
 };
 
@@ -96,8 +99,12 @@ describe("every grant write re-clips hosted agents", () => {
   const all = sites();
 
   it("self-check: the pattern still sees a literal write", () => {
-    expect("await new GrantRepository(db).attachMany(".match(WRITE)).not.toBeNull();
-    expect("await new GrantRepository(tx).carryOver({".match(WRITE)).not.toBeNull();
+    expect(
+      "await new GrantRepository(db).attachMany(".match(WRITE)
+    ).not.toBeNull();
+    expect(
+      "await new GrantRepository(tx).carryOver({".match(WRITE)
+    ).not.toBeNull();
   });
 
   it("non-vacuous: the scan finds the known write doors", () => {
@@ -120,6 +127,8 @@ describe("every grant write re-clips hosted agents", () => {
   });
 
   it("at least one site is actually checked (not all exempt)", () => {
-    expect(all.filter((s) => !exemptReason(s)).length).toBeGreaterThanOrEqual(3);
+    expect(all.filter((s) => !exemptReason(s)).length).toBeGreaterThanOrEqual(
+      3
+    );
   });
 });

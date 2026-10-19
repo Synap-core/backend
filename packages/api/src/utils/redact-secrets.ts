@@ -36,7 +36,7 @@ export function redactSecrets(output: string): string {
       // the approver-facing sentence. Found by the round-2 test that drives
       // the real `executors/shared.ts` interpolation.
       .replace(
-        /\bAuthorization\s*:\s*([A-Za-z][A-Za-z0-9\-]*)\s+[A-Za-z0-9_\-.~+/]+=*/gi,
+        /\bAuthorization\s*:\s*([A-Za-z][A-Za-z0-9-]*)\s+[A-Za-z0-9_\-.~+/]+=*/gi,
         "Authorization: $1 ***REDACTED***"
       )
       // Bearer tokens (also outside an Authorization header)
@@ -48,7 +48,7 @@ export function redactSecrets(output: string): string {
       // Vendor-prefixed API keys (OpenAI/Anthropic `sk-…`, GitHub `ghp_…`,
       // Slack `xoxb-…`) — the shapes that reach us inside a provider's own
       // error body, where no `key=` label precedes them.
-      .replace(/\bsk-[A-Za-z0-9_\-]{16,}/g, "***REDACTED_KEY***")
+      .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, "***REDACTED_KEY***")
       .replace(/\bgh[pousr]_[A-Za-z0-9]{16,}/g, "***REDACTED_KEY***")
       .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}/g, "***REDACTED_KEY***")
       // JWTs (three base64url segments) — an expired access token is the single

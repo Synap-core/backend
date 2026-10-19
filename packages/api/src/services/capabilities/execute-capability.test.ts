@@ -82,7 +82,6 @@ describe("runResolvedSkill — the single post-gate kind-branch", () => {
   it("TIER 1: declarative WITH providerSpec routes to executeProviderVerb + threads connectionSelector", async () => {
     const spec = { tool: "google", method: "GET", pathTemplate: "/x" };
     const out = await runResolvedSkill(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       row({ kind: "declarative", providerSpec: spec as any }),
       { q: 1 },
       { ...ctx, connectionSelector: { connectionId: "c1" } }
@@ -197,7 +196,6 @@ describe('runResolvedSkill — the ONE failure channel (kind:"error")', () => {
     });
     const spec = { tool: "google", method: "GET", pathTemplate: "/x" };
     const out = await runResolvedSkill(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       row({ kind: "declarative", providerSpec: spec as any }),
       {},
       ctx
@@ -217,7 +215,6 @@ describe('runResolvedSkill — the ONE failure channel (kind:"error")', () => {
     vi.mocked(executeProviderVerb).mockResolvedValueOnce(proposed);
     const spec = { tool: "google", method: "POST", pathTemplate: "/x" };
     const out = await runResolvedSkill(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       row({ kind: "declarative", providerSpec: spec as any }),
       {},
       ctx
@@ -248,7 +245,6 @@ describe("assertApprovalTargetResolves — stale-target preflight", () => {
   });
 
   it("a workspace the user IS a member of → resolves (null), never blocks a live run", async () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     vi.mocked(getWorkspaceMembership).mockResolvedValueOnce({
       role: "owner",
     } as any);
@@ -296,11 +292,10 @@ describe("capabilityVerbHasExternalEffect — read/write classification", () => 
   });
 
   it("REST GET = read (false), REST POST = write (true)", () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(
       capabilityVerbHasExternalEffect(decl({ method: "GET" } as any))
     ).toBe(false);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(
       capabilityVerbHasExternalEffect(decl({ method: "POST" } as any))
     ).toBe(true);
@@ -314,17 +309,17 @@ describe("capabilityVerbHasExternalEffect — read/write classification", () => 
       graphql: { query: "query { x }", ...(operation ? { operation } : {}) },
     });
     // read
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(capabilityVerbHasExternalEffect(decl(gql("query") as any))).toBe(
       false
     );
     // explicit write
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(capabilityVerbHasExternalEffect(decl(gql("mutation") as any))).toBe(
       true
     );
     // default (omitted) is fail-closed → write
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     expect(capabilityVerbHasExternalEffect(decl(gql() as any))).toBe(true);
   });
 });

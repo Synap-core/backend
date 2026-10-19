@@ -52,7 +52,7 @@ async function main(): Promise<void> {
   });
 
   logger.info(result, "LinkedIn backfill finished");
-  // eslint-disable-next-line no-console
+
   console.log(JSON.stringify({ ok: true, ...result }, null, 2));
 }
 
@@ -60,7 +60,7 @@ main()
   .then(() => process.exit(0))
   .catch((err) => {
     logger.error({ err }, "LinkedIn backfill failed");
-    // eslint-disable-next-line no-console
+
     console.error("❌ LinkedIn backfill failed:", err?.message ?? err);
     process.exit(1);
   });

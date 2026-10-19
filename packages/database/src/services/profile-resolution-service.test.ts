@@ -39,7 +39,7 @@ interface BindingRow {
  * therefore exercises the EMPTY-TABLE case unchanged, which is what proves the
  * new rung is inert: same fixtures, same expectations, same output.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 function makeDb(
   workspaceSettings?: Record<string, unknown>,
   bindings: BindingRow[] = []

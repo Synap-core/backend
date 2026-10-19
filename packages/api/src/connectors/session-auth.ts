@@ -134,7 +134,8 @@ export function parseSessionAuthConfig(
     return bad("bodyFrom must map body fields to response paths");
   }
   const status = reauth.status === undefined ? 401 : reauth.status;
-  if (typeof status !== "number") return bad("reauthOn.status must be a number");
+  if (typeof status !== "number")
+    return bad("reauthOn.status must be a number");
   const codes = reauth.codes === undefined ? null : reauth.codes;
   if (
     codes !== null &&

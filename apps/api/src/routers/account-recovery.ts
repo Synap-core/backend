@@ -135,7 +135,9 @@ export interface AccountRecoveryDeps {
  * `/doors`' `podAdminUrl`: the validated origin, or undefined. Unresolved or
  * invalid config → undefined — the field is omitted, never guessed.
  */
-export function podAdminUrlFromConfig(result: PodAdminConfigResult): string | undefined {
+export function podAdminUrlFromConfig(
+  result: PodAdminConfigResult
+): string | undefined {
   return result.ok ? result.base.origin : undefined;
 }
 
@@ -285,7 +287,8 @@ export function createAccountRecoveryRouter(
         logger.error({ err }, "[account-recovery] redeem read failed");
         readFailed = true;
       }
-      if (!readFailed) matchedId = await matchRecoveryCode(normalized, candidates);
+      if (!readFailed)
+        matchedId = await matchRecoveryCode(normalized, candidates);
     } finally {
       // Released before the response floor: the cap counts derivations, not sleeps.
       limiters.derivations.release();
@@ -299,7 +302,10 @@ export function createAccountRecoveryRouter(
         // Not awaited: an extra write only for KNOWN accounts would put the
         // two failure answers in different time classes.
         void deps
-          .audit({ userId: account.userId, change: "account_recovery.code_rejected" })
+          .audit({
+            userId: account.userId,
+            change: "account_recovery.code_rejected",
+          })
           .catch(() => undefined);
       }
       await floor();
@@ -332,12 +338,14 @@ export function createAccountRecoveryRouter(
         { err: err instanceof Error ? err.message : String(err) },
         "[account-recovery] Kratos recovery failed — code released"
       );
-      await deps.codes.release(matchedId, claimedAt).catch((releaseErr) =>
-        logger.error(
-          { err: releaseErr },
-          "[account-recovery] code release failed"
-        )
-      );
+      await deps.codes
+        .release(matchedId, claimedAt)
+        .catch((releaseErr) =>
+          logger.error(
+            { err: releaseErr },
+            "[account-recovery] code release failed"
+          )
+        );
       await floor();
       return fail(c, "recovery_unavailable", 503);
     }

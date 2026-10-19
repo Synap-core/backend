@@ -1,10 +1,13 @@
 import { TRPCError } from "@trpc/server";
 import { defaultImportBuildDeps } from "../../../services/imports/build.js";
+import { ProposalStatus } from "@synap/database/schema";
 import {
   applyLibraryOrganize,
   LibraryOrganizeOpSchema,
   markOrganizeProposalApproved,
-  organizeProposalApproved,
+  OrganizeApprovalTaken,
+  organizeProposalStatus,
+  releaseOrganizeApproval,
 } from "../../../services/library/organize.js";
 import {
   registerProposalExecutor,
@@ -24,6 +27,13 @@ import { reportApproved } from "./shared.js";
  * never the payload. A row with no subject has no owner and is refused.
  * Atomic for the curate ops (a bad op writes nothing); a build that cannot
  * run (nothing new, a bundle still in review) is reported in `refusals`.
+ *
+ * ONCE, whatever door approves it (approve, batch, Hub REST — all reach this
+ * executor; dispatch itself is not status-guarded): the pending → approved
+ * transition is ONE conditional UPDATE taken inside the curate transaction
+ * (`markOrganizeProposalApproved`). A second approval racing the first matches
+ * nothing and answers `alreadyApproved`; a proposal decided otherwise
+ * (rejected, withdrawn…) applies nothing.
  */
 export async function approveLibraryOrganize(
   args: ProposalExecutorArgs,
@@ -44,11 +54,6 @@ export async function approveLibraryOrganize(
     throw refuse("the proposal holds no valid Library operations.");
   }
 
-  // Re-approve guard: dispatch is not status-guarded.
-  if (await organizeProposalApproved(input.proposalId)) {
-    return { success: true, alreadyApproved: true };
-  }
-
   const ownerUserId = proposal.subjectUserId;
   if (!ownerUserId) {
     throw refuse(
@@ -56,18 +61,40 @@ export async function approveLibraryOrganize(
     );
   }
 
-  const applied = await apply({
-    ownerUserId,
-    ops: parsed.data,
-    depsFor: (run) =>
-      defaultImportBuildDeps({
-        userId: ownerUserId,
-        workspaceId: run.workspaceId,
-        trpcCtx: { ...ctx, userId: ownerUserId },
-      }),
-  });
-
-  await markOrganizeProposalApproved(input.proposalId, userId);
+  const claimedAt = new Date();
+  let applied: Awaited<ReturnType<typeof applyLibraryOrganize>>;
+  try {
+    applied = await apply({
+      ownerUserId,
+      proposalId: input.proposalId,
+      ops: parsed.data,
+      claim: {
+        take: (tx) =>
+          markOrganizeProposalApproved(tx, input.proposalId, userId, claimedAt),
+        release: () => releaseOrganizeApproval(input.proposalId, claimedAt),
+      },
+      depsFor: (run) =>
+        defaultImportBuildDeps({
+          userId: ownerUserId,
+          workspaceId: run.workspaceId,
+          trpcCtx: { ...ctx, userId: ownerUserId },
+        }),
+    });
+  } catch (err) {
+    if (!(err instanceof OrganizeApprovalTaken)) throw err;
+    const status = await organizeProposalStatus(input.proposalId);
+    if (status === ProposalStatus.APPROVED) {
+      return { success: true, alreadyApproved: true };
+    }
+    // Decided otherwise meanwhile: never applied, never recorded as failed.
+    return {
+      success: false,
+      effect: {
+        applied: "none",
+        reason: `This proposal is ${status ?? "gone"}: nothing was applied.`,
+      },
+    };
+  }
 
   reportApproved(deps, proposal, input.proposalId);
   deps.emitProposalReviewed(

@@ -31,7 +31,7 @@ const DEAL_OPTIONS = [
 ];
 
 let h: Awaited<ReturnType<typeof makeLifecyclePglite>>;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let db: any;
 
 async function profile(slug: string, parentProfileId?: string) {

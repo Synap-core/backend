@@ -134,7 +134,7 @@ async function row(
   );
 }
 
-let ids: Record<string, string> = {};
+const ids: Record<string, string> = {};
 
 beforeAll(async () => {
   await h.client!.exec(

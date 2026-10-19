@@ -20,7 +20,7 @@ import {
 } from "./renderer-binding-service.js";
 
 let pg: PGlite;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let db: any;
 
 const USER = "u-1";

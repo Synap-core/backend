@@ -33,7 +33,9 @@ const h = vi.hoisted(() => ({
 vi.mock("@synap/database", () => ({
   db: {
     query: { entities: { findFirst: h.entityFindFirstMock } },
-    select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+    select: () => ({
+      from: () => ({ where: () => ({ limit: async () => [] }) }),
+    }),
     update: () => ({ set: () => ({ where: async () => undefined }) }),
   },
   // The where-clause is the id itself, so the mock below can answer by id.

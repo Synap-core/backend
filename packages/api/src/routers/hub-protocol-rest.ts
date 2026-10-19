@@ -31,7 +31,7 @@ import {
   registerCapabilitiesCatalogRoutes,
   registerCapabilitiesActionsRoutes,
   registerCapabilitiesExecuteRoutes,
-  registerCapabilityCredentialsRoutes,
+  registerCapabilityConnectionsRoutes,
   registerLoopsRoutes,
   registerCaptureRoutes,
   registerChannelsRoutes,
@@ -133,7 +133,6 @@ const logger = createLogger({ module: "hub-protocol-rest" });
 // which differs from `ErrorSchema` and would make response shapes inconsistent
 // across migrated vs non-migrated routes.
 const app: HubHono = new OpenAPIHono<{
-  // eslint-disable-next-line @typescript-eslint/consistent-type-imports
   Variables: import("./hub-protocol/rest/_shared.js").HubVariables;
 }>({
   defaultHook: (result, c) => {
@@ -302,7 +301,7 @@ registerCapabilitiesRoutes(app); // POST /capabilities/apply (capability-templat
 registerCapabilitiesCatalogRoutes(app); // GET /capabilities/catalog (pack-grouped, status-computed cards)
 registerCapabilitiesActionsRoutes(app); // GET /capabilities/actions (honestly executable action projection)
 registerCapabilitiesExecuteRoutes(app); // POST /capabilities/execute (agnostic capability launcher)
-registerCapabilityCredentialsRoutes(app); // GET/POST/PATCH/DELETE /capabilities/:capabilityId/credentials (W4 credential CRUD)
+registerCapabilityConnectionsRoutes(app); // GET/POST/PATCH/DELETE /capabilities/:capabilityId/credentials (W4 credential CRUD)
 registerLoopsRoutes(app); // POST /loops/apply (loop / autonomy-template applier)
 registerMemoryRoutes(app); // /memory*
 registerKnowledgeRoutes(app); // /knowledge*, /graph/traverse

@@ -90,6 +90,15 @@ csp='header Content-Security-Policy "sandbox;'
 for hdr in "$TLS_HDR" "$HTTP_HDR"; do
     block_of "$hdr" '/synap-storage/*' | grep -qF "$csp" \
         && ok "/synap-storage/* carries the sandbox CSP in ${hdr}" || bad "/synap-storage/* lacks the sandbox CSP in ${hdr}"
+    # MinIO CVE-2026-41145 / CVE-2026-40344: unsigned-trailer uploads are
+    # written without a signature check in every free MinIO build, so the
+    # public S3 route must refuse them before they reach MinIO.
+    blk="$(block_of "$hdr" '/synap-storage/*')"
+    grep -qE '^[[:space:]]*@minio_unsigned_trailer header X-Amz-Content-Sha256 STREAMING-UNSIGNED-PAYLOAD-TRAILER$' <<<"$blk" \
+        && grep -qE '^[[:space:]]*respond @minio_unsigned_trailer 403$' <<<"$blk" \
+        && ok "/synap-storage/* refuses unsigned-trailer uploads in ${hdr}" || bad "/synap-storage/* lets unsigned-trailer uploads reach MinIO in ${hdr}"
+    grep -qE '^[[:space:]]*respond @minio_snowball 403$' <<<"$blk" \
+        && ok "/synap-storage/* refuses Snowball auto-extract in ${hdr}" || bad "/synap-storage/* lets Snowball auto-extract reach MinIO in ${hdr}"
     block_of "$hdr" '/.well-known/synap-registration' | grep -q 'rewrite \* /nonce.json' \
         && ok "registration proof route present in ${hdr}" || bad "registration proof route missing in ${hdr}"
 done

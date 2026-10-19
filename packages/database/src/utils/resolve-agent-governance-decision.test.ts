@@ -28,7 +28,7 @@ import { ChannelType } from "../schema/channels.js";
  * WHERE clause had ALREADY filtered rows for the (agentUserId, workspaceId,
  * includeAgentPrincipal) tuple in play, mirroring what production SQL does.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 function makeDb(resultsQueue: any[][]): any {
   return {
     select: () => ({

@@ -1092,7 +1092,6 @@ describe("tripwire (T5): every service parameter is reachable at every door, or 
 
   it("reports the DISCOVERED audit matrix (services x doors x params)", () => {
     for (const { spec, params, discovery } of AUDITS) {
-      // eslint-disable-next-line no-console
       console.info(
         `[T5] ${spec.key}: ${params.length} param(s) [${params.join(", ")}] x ` +
           `${discovery.doors.length} door(s) ` +
@@ -1106,7 +1105,7 @@ describe("tripwire (T5): every service parameter is reachable at every door, or 
   it("reports importers that are NOT doors (internal callers, unaudited)", () => {
     for (const { spec, discovery } of AUDITS) {
       if (discovery.internal.length === 0) continue;
-      // eslint-disable-next-line no-console
+
       console.warn(
         `[T5] ${spec.fn} is also imported by ${discovery.internal.length} ` +
           `non-door file(s) under routers/, NOT audited for input parity: ` +

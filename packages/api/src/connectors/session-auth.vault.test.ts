@@ -165,7 +165,12 @@ describe("legacy static-key tools (no auth.type) — unchanged", () => {
   it("default auth: Bearer in Authorization, baseUrl + path, JSON body", async () => {
     const r = await run(
       { baseUrl: "https://api.example.com/v2/" },
-      { method: "post", path: "/things", body: { a: 1 }, headers: { "x-v": "1" } }
+      {
+        method: "post",
+        path: "/things",
+        body: { a: 1 },
+        headers: { "x-v": "1" },
+      }
     );
     expect(calls).toHaveLength(1);
     expect(calls[0]!.url).toBe("https://api.example.com/v2/things");
@@ -206,10 +211,15 @@ describe("legacy static-key tools (no auth.type) — unchanged", () => {
 
   it("query auth puts the key in the query string", async () => {
     await run(
-      { baseUrl: "https://api.example.com", auth: { in: "query", name: "key" } },
+      {
+        baseUrl: "https://api.example.com",
+        auth: { in: "query", name: "key" },
+      },
       { path: "/q?x=1" }
     );
-    expect(calls[0]!.url).toBe("https://api.example.com/q?x=1&key=s3cret-static");
+    expect(calls[0]!.url).toBe(
+      "https://api.example.com/q?x=1&key=s3cret-static"
+    );
     expect(headersOf(calls[0]!)).toEqual({});
   });
 
@@ -237,7 +247,11 @@ describe("legacy static-key tools (no auth.type) — unchanged", () => {
 
   it("SSRF guard refuses a private host", async () => {
     const r = await run({ baseUrl: "http://127.0.0.1:8080" }, { path: "/x" });
-    expect(r).toMatchObject({ success: false, status: 400, errorCode: "bad_request" });
+    expect(r).toMatchObject({
+      success: false,
+      status: 400,
+      errorCode: "bad_request",
+    });
     expect(String(r.error)).toMatch(/^Outbound URL rejected: /);
     expect(calls).toHaveLength(0);
   });
@@ -271,7 +285,10 @@ describe("legacy static-key tools (no auth.type) — unchanged", () => {
   it("a tool whose auth has an UNKNOWN type stays on the legacy path", async () => {
     // Only `type: "session"` opts in; anything else must not change behaviour.
     await run(
-      { baseUrl: "https://api.example.com", auth: { type: "other", name: "x-k", prefix: "" } },
+      {
+        baseUrl: "https://api.example.com",
+        auth: { type: "other", name: "x-k", prefix: "" },
+      },
       { path: "/x" }
     );
     expect(calls).toHaveLength(1);
@@ -283,10 +300,19 @@ describe("legacy static-key tools (no auth.type) — unchanged", () => {
 const B2_AUTH = {
   type: "session",
   signIn: { url: AUTH_URL, method: "GET", credential: "basic" },
-  token: { path: "authorizationToken", header: "Authorization", prefix: "", ttlSeconds: 86400 },
+  token: {
+    path: "authorizationToken",
+    header: "Authorization",
+    prefix: "",
+    ttlSeconds: 86400,
+  },
   baseUrlFrom: "apiInfo.storageApi.apiUrl",
   bodyFrom: { accountId: "accountId" },
-  reauthOn: { status: 401, codePath: "code", codes: ["expired_auth_token", "bad_auth_token"] },
+  reauthOn: {
+    status: 401,
+    codePath: "code",
+    codes: ["expired_auth_token", "bad_auth_token"],
+  },
 };
 const B2_CONFIG = { auth: B2_AUTH };
 
@@ -305,7 +331,11 @@ function b2Fake(
         apiInfo: { storageApi: { apiUrl: API_URL, s3ApiUrl: "https://s3.x" } },
       });
     }
-    return op(url, init, (init.headers as Record<string, string>).Authorization!);
+    return op(
+      url,
+      init,
+      (init.headers as Record<string, string>).Authorization!
+    );
   };
 }
 
@@ -332,8 +362,13 @@ describe('auth.type "session" — sign in, then call (B2 shape)', () => {
     expect(r1.success && r2.success).toBe(true);
     expect(authCalls()).toHaveLength(1);
     expect(authCalls()[0]!.init.method).toBe("GET");
-    expect(headersOf(authCalls()[0]!)).toEqual({ Authorization: `Basic ${BASIC}` });
-    expect(opCalls().map((c) => headersOf(c).Authorization)).toEqual([TOKEN_1, TOKEN_1]);
+    expect(headersOf(authCalls()[0]!)).toEqual({
+      Authorization: `Basic ${BASIC}`,
+    });
+    expect(opCalls().map((c) => headersOf(c).Authorization)).toEqual([
+      TOKEN_1,
+      TOKEN_1,
+    ]);
   });
 
   it("calls the per-account apiUrl, never the sign-in host, and fills a DECLARED accountId only", async () => {
@@ -348,7 +383,9 @@ describe('auth.type "session" — sign in, then call (B2 shape)', () => {
       path: "/b2api/v4/b2_list_file_names",
       body: { bucketId: "b1" },
     });
-    expect(JSON.parse(String(opCalls()[1]!.init.body))).toEqual({ bucketId: "b1" });
+    expect(JSON.parse(String(opCalls()[1]!.init.body))).toEqual({
+      bucketId: "b1",
+    });
     const op = opCalls()[0]!;
     expect(op.url).toBe(`${API_URL}/b2api/v4/b2_list_buckets`);
     expect(op.init.method).toBe("POST");
@@ -371,25 +408,51 @@ describe('auth.type "session" — sign in, then call (B2 shape)', () => {
   it("401 expired_auth_token → forget the token, sign in again, retry ONCE", async () => {
     responder = b2Fake((_u, _i, token) =>
       token === TOKEN_1
-        ? json(401, { status: 401, code: "expired_auth_token", message: "Authorization token has expired" })
+        ? json(401, {
+            status: 401,
+            code: "expired_auth_token",
+            message: "Authorization token has expired",
+          })
         : json(200, { buckets: [{ bucketName: "b" }] })
     );
-    const r = await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} });
-    expect(r).toMatchObject({ success: true, body: { buckets: [{ bucketName: "b" }] } });
+    const r = await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_buckets",
+      body: {},
+    });
+    expect(r).toMatchObject({
+      success: true,
+      body: { buckets: [{ bucketName: "b" }] },
+    });
     expect(authCalls()).toHaveLength(2);
-    expect(opCalls().map((c) => headersOf(c).Authorization)).toEqual([TOKEN_1, TOKEN_2]);
+    expect(opCalls().map((c) => headersOf(c).Authorization)).toEqual([
+      TOKEN_1,
+      TOKEN_2,
+    ]);
 
     // The fresh token is what the cache holds now.
-    await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_keys", body: {} });
+    await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_keys",
+      body: {},
+    });
     expect(authCalls()).toHaveLength(2);
     expect(headersOf(opCalls()[2]!).Authorization).toBe(TOKEN_2);
   });
 
   it("a second dead-token 401 is surfaced as-is — exactly one retry, never a loop", async () => {
     responder = b2Fake(() =>
-      json(401, { status: 401, code: "bad_auth_token", message: "Invalid authorization token" })
+      json(401, {
+        status: 401,
+        code: "bad_auth_token",
+        message: "Invalid authorization token",
+      })
     );
-    const r = await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} });
+    const r = await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_buckets",
+      body: {},
+    });
     expect(r).toMatchObject({ success: false, status: 401 });
     expect(String(r.error)).toContain("Invalid authorization token");
     expect(authCalls()).toHaveLength(2);
@@ -400,7 +463,11 @@ describe('auth.type "session" — sign in, then call (B2 shape)', () => {
     responder = b2Fake(() =>
       json(401, { status: 401, code: "unauthorized", message: "not entitled" })
     );
-    const r = await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_keys", body: {} });
+    const r = await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_keys",
+      body: {},
+    });
     expect(r).toMatchObject({ success: false, status: 401 });
     expect(authCalls()).toHaveLength(1);
     expect(opCalls()).toHaveLength(1);
@@ -409,27 +476,51 @@ describe('auth.type "session" — sign in, then call (B2 shape)', () => {
   it("an expired cached session signs in again", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-07T00:00:00Z"));
-    await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} });
+    await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_buckets",
+      body: {},
+    });
     vi.setSystemTime(new Date("2026-10-07T23:00:00Z")); // < 24h - 5min margin
-    await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} });
+    await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_buckets",
+      body: {},
+    });
     expect(authCalls()).toHaveLength(1);
     vi.setSystemTime(new Date("2026-10-07T23:56:00Z")); // inside the margin
-    await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} });
+    await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_buckets",
+      body: {},
+    });
     expect(authCalls()).toHaveLength(2);
     expect(headersOf(opCalls()[2]!).Authorization).toBe(TOKEN_2);
   });
 
   it("a rotated secret (new value, same id) is a new cache entry", async () => {
-    await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} });
+    await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_buckets",
+      body: {},
+    });
     mockResolveVaultSecret.mockResolvedValue(`${KEY_ID}:K005RotatedKey`);
-    await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} });
+    await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_buckets",
+      body: {},
+    });
     expect(authCalls()).toHaveLength(2);
   });
 
   it("concurrent first calls share ONE sign-in", async () => {
     await Promise.all(
       [1, 2, 3].map(() =>
-        run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} })
+        run(B2_CONFIG, {
+          method: "POST",
+          path: "/b2api/v4/b2_list_buckets",
+          body: {},
+        })
       )
     );
     expect(authCalls()).toHaveLength(1);
@@ -438,7 +529,11 @@ describe('auth.type "session" — sign in, then call (B2 shape)', () => {
 
   it("a malformed secret is refused before any network call, without echoing it", async () => {
     mockResolveVaultSecret.mockResolvedValue("no-colon-just-a-key-K005xyz");
-    const r = await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} });
+    const r = await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_buckets",
+      body: {},
+    });
     expect(r).toMatchObject({ success: false, status: 400 });
     expect(String(r.error)).toContain("<keyId>:<applicationKey>");
     expect(JSON.stringify(r)).not.toContain("K005xyz");
@@ -447,7 +542,12 @@ describe('auth.type "session" — sign in, then call (B2 shape)', () => {
 
   it("an invalid session config is a 400 naming the field", async () => {
     const r = await run(
-      { auth: { ...B2_AUTH, signIn: { url: "http://insecure.example.com", credential: "basic" } } },
+      {
+        auth: {
+          ...B2_AUTH,
+          signIn: { url: "http://insecure.example.com", credential: "basic" },
+        },
+      },
       { method: "POST", path: "/x", body: {} }
     );
     expect(r).toMatchObject({ success: false, status: 400 });
@@ -459,17 +559,29 @@ describe('auth.type "session" — sign in, then call (B2 shape)', () => {
     let fail = true;
     responder = (url, init) => {
       if (url === AUTH_URL && fail) {
-        return json(401, { status: 401, code: "bad_auth_token", message: "Invalid accountId or applicationKeyId" });
+        return json(401, {
+          status: 401,
+          code: "bad_auth_token",
+          message: "Invalid accountId or applicationKeyId",
+        });
       }
       return b2Fake()(url, init);
     };
-    const r = await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} });
+    const r = await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_buckets",
+      body: {},
+    });
     expect(r).toMatchObject({ success: false, status: 401 });
     expect(String(r.error)).toBe(
       "Sign-in failed (401 bad_auth_token): Invalid accountId or applicationKeyId"
     );
     fail = false;
-    const r2 = await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} });
+    const r2 = await run(B2_CONFIG, {
+      method: "POST",
+      path: "/b2api/v4/b2_list_buckets",
+      body: {},
+    });
     expect(r2.success).toBe(true);
   });
 
@@ -482,16 +594,36 @@ describe('auth.type "session" — sign in, then call (B2 shape)', () => {
         ? json(401, { code: "expired_auth_token", message: "expired" })
         : json(500, { code: "internal_error", message: "boom" })
     );
-    results.push(await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} }));
+    results.push(
+      await run(B2_CONFIG, {
+        method: "POST",
+        path: "/b2api/v4/b2_list_buckets",
+        body: {},
+      })
+    );
     __resetSessionCacheForTests();
     responder = () => {
       throw new Error("network down");
     };
-    results.push(await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} }));
+    results.push(
+      await run(B2_CONFIG, {
+        method: "POST",
+        path: "/b2api/v4/b2_list_buckets",
+        body: {},
+      })
+    );
     __resetSessionCacheForTests();
     responder = (url) =>
-      url === AUTH_URL ? json(401, { code: "bad_auth_token", message: "nope" }) : json(200, {});
-    results.push(await run(B2_CONFIG, { method: "POST", path: "/b2api/v4/b2_list_buckets", body: {} }));
+      url === AUTH_URL
+        ? json(401, { code: "bad_auth_token", message: "nope" })
+        : json(200, {});
+    results.push(
+      await run(B2_CONFIG, {
+        method: "POST",
+        path: "/b2api/v4/b2_list_buckets",
+        body: {},
+      })
+    );
 
     const haystack = JSON.stringify({ results, logCalls });
     for (const needle of [APP_KEY, B2_SECRET, BASIC, TOKEN_1, TOKEN_2]) {

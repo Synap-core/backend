@@ -16,7 +16,10 @@ const holder = vi.hoisted(() => ({ db: undefined as unknown }));
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const mocked = { ...actual, getDb: async () => holder.db };
-  Object.defineProperty(mocked, "db", { get: () => holder.db, enumerable: true });
+  Object.defineProperty(mocked, "db", {
+    get: () => holder.db,
+    enumerable: true,
+  });
   return mocked;
 });
 
@@ -45,10 +48,12 @@ function ddlFor(table: PgTable): string {
     const d = c.default as unknown;
     if (d !== undefined && !(d instanceof SQL)) {
       if (typeof d === "string") def = ` default '${d.replace(/'/g, "''")}'`;
-      else if (typeof d === "number" || typeof d === "boolean") def = ` default ${d}`;
+      else if (typeof d === "number" || typeof d === "boolean")
+        def = ` default ${d}`;
       else if (type.endsWith("[]")) def = ` default '{}'`;
       else def = ` default '${JSON.stringify(d).replace(/'/g, "''")}'::jsonb`;
-    } else if (type.startsWith("timestamp") && c.hasDefault) def = " default now()";
+    } else if (type.startsWith("timestamp") && c.hasDefault)
+      def = " default now()";
     else if (c.primary && type === "uuid") def = " default gen_random_uuid()";
     return `"${c.name}" ${type}${c.primary ? " primary key" : ""}${def}`;
   });
@@ -57,7 +62,16 @@ function ddlFor(table: PgTable): string {
 
 const WS = "11111111-1111-4111-8111-111111111111";
 const ADMIN_WS = "22222222-2222-4222-8222-222222222222";
-const VIEWERS = ["owner", "admin", "editor", "viewer", "stranger", "proposer", "creator", "podadmin"];
+const VIEWERS = [
+  "owner",
+  "admin",
+  "editor",
+  "viewer",
+  "stranger",
+  "proposer",
+  "creator",
+  "podadmin",
+];
 const AGENT = "agent-1";
 const ids: string[] = [];
 
@@ -90,7 +104,13 @@ beforeAll(async () => {
     await client.query(
       `insert into proposals (id, workspace_id, status, proposal_type, target_type, target_id, data, created_by, agent_user_id)
        values ($1, $2, 'pending', 'create', 'entity', $3, $4::jsonb, 'x', $5)`,
-      [id, ws, randomUUID(), JSON.stringify(sourceId ? { sourceId } : {}), agent]
+      [
+        id,
+        ws,
+        randomUUID(),
+        JSON.stringify(sourceId ? { sourceId } : {}),
+        agent,
+      ]
     );
   }
   ids.push(randomUUID()); // a missing id

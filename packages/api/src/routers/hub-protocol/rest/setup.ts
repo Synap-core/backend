@@ -332,7 +332,7 @@ async function authenticateServiceSetupRequest(
     };
   }
 
-  let jwtIssuerUrl: string | null = null;
+  const jwtIssuerUrl: string | null = null;
   const adminUrl = `${process.env.PUBLIC_URL ?? ""}/admin/trusted-issuers`;
 
   // Try 1: generic issuer JWT verified against the Pod-local issuer registry.

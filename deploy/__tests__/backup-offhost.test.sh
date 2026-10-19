@@ -201,13 +201,20 @@ chmod +x "$T/head"; [ "$(uname)" = Darwin ] && cp "$T/head" "$T/bin/head"   # GN
 
 # The backup container's context (docker-compose.yml postgres-backup env).
 ct() { env SYNAP_PG_DIRECT=1 SYNAP_BACKUPS_DIR="$T/backups" SYNAP_STATE_DIR="$T/state" \
+        SYNAP_PG_LIB_DIR="${PG_LIB:-$T/no-pg-lib}" \
         SYNAP_ENV_FILE="$T/deploy/.env" BACKUP_KEEP=5 TMPDIR="$T/tmp" PATH="$T/bin:$PATH" "$@"; }
 mkdir -p "$T/tmp"
+# Dump dirs are named to the second ($ts-auto, the format below) and a kept
+# dump blocks a second run in the SAME second (mv fails, the run returns
+# early). Real runs are an hour apart; a fast CI runner's are not, so every
+# backup run below starts in a fresh second.
+fresh_second() { local s0; s0="$(date -u +%Y%m%dT%H%M%SZ)"; while [ "$(date -u +%Y%m%dT%H%M%SZ)" = "$s0" ]; do sleep 0.1; done; }
 calls_since() { tail -n +"$(( $1 + 1 ))" "$CALLS"; }
 mark() { wc -l < "$CALLS" | tr -d ' '; }
 REPO="$T/repo"
 
 echo "── P0. push before init"
+fresh_second
 ct BACKUP_REPOSITORY="$REPO" sh "$SAFETY" run >"$T/out" 2>&1; rc=$?
 [ "$rc" = 1 ] && grep -q "synap backup init" "$T/out" && grep -q "'backup', 'failed'" "$RUNS" \
     && ok "no password yet → push fails loudly, recorded failed" || bad "push before init: rc=$rc $(cat "$T/out")"
@@ -298,6 +305,7 @@ echo "── P. push"
 echo "BACKUP_REPOSITORY=$REPO" >> "$T/deploy/.env"
 echo "stuff" > "$T/state/release"
 m=$(mark)
+fresh_second
 ct sh "$SAFETY" run >"$T/out" 2>&1; rc=$?
 snap1="$(ls "$REPO/snaps" | grep -v meta | tail -1)"
 S="$REPO/snaps/$snap1"
@@ -311,16 +319,19 @@ grep -q "'backup', 'ok'.*'$snap1'" "$RUNS" && ok "backup_runs row: ok + snapshot
 calls_since "$m" | grep -q "^curl .*https://hc.example/ping/abc" && ok "heartbeat pinged on success" || bad "no heartbeat"
 
 m=$(mark); n1="$(ls "$REPO/snaps" | grep -vc meta)"
+fresh_second
 ct FAKE_USERS=0 sh "$SAFETY" run >"$T/out" 2>&1; rc=$?
 [ "$rc" = 3 ] && ! calls_since "$m" | grep -q "^restic backup" && [ "$(ls "$REPO/snaps" | grep -vc meta)" = "$n1" ] \
     && ok "SUSPECT dump (0 users) → exit 3, NOT pushed" || bad "suspect push: rc=$rc $(calls_since "$m" | grep restic)"
 ! calls_since "$m" | grep -q "^curl" && ok "SUSPECT → no heartbeat (the dead-man alarm fires)" || bad "suspect pinged the heartbeat"
 
 m=$(mark)
+fresh_second
 ct FAKE_RESTIC_FAIL=1 sh "$SAFETY" run >"$T/out" 2>&1; rc=$?
 [ "$rc" = 1 ] && [ -s "$T/backups/.push-failed" ] && ! calls_since "$m" | grep -q "^curl" && grep -q "'backup', 'failed'.*restic backup failed" "$RUNS" \
     && ok "restic failure → exit 1, .push-failed, no heartbeat, recorded" || bad "restic fail: rc=$rc"
-ct sh "$SAFETY" run >"$T/out" 2>&1; [ ! -e "$T/backups/.push-failed" ] && ok "next good push clears .push-failed" || bad ".push-failed stuck"
+fresh_second
+ct sh "$SAFETY" run >"$T/out" 2>&1; [ ! -e "$T/backups/.push-failed" ] && ok "next good push clears .push-failed" || bad ".push-failed stuck: $(cat "$T/backups/.push-failed" 2>/dev/null) $(cat "$T/out")"
 snap_good="$(ls "$REPO/snaps" | grep -v meta | tail -1)"
 
 echo "── D. drill"

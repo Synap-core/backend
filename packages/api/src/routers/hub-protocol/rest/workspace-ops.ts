@@ -38,7 +38,6 @@ import {
   type HubVariables,
 } from "./_shared.js";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Ctx = Context<{ Variables: HubVariables }, any>;
 
 const reasoning = z.string().max(2000).optional();

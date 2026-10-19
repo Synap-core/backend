@@ -275,6 +275,44 @@ function retryPlan(
   };
 }
 
+/**
+ * A REMEMBERED re-read (a consent waiting beside the item's read) that failed
+ * TRANSIENTLY: the same {@link retryPlan} an unread item gets (backoff,
+ * `nextAttemptAt`, a billed reader's tries counted to the same cap), on the
+ * counters of THIS consent (`lastAttempt.consentAt`), never the read's. The
+ * consent waits only while the plan is `not_read`; a billed reader out of
+ * tries (`needs_file`) ends it. Null (no plan) = a permanent failure or a
+ * status (blocked, needs a file…): the consent ends. The consent's own end (7 days) and
+ * the person's cancel still stop it: the sweep forgets an ended consent before
+ * picking, the job never runs one, and a cancelled one is no longer picked.
+ */
+function rereadRetryPlan(
+  prev: StoredLibraryRead,
+  got: Exclude<Got, { kind: "text" }>,
+  now: Date
+): ReturnType<typeof retryPlan> | null {
+  if (got.kind !== "retry" || !isTransientUrlReadFailure(got.failure)) {
+    return null;
+  }
+  if (!prev.requestedAt) return null;
+  const last = prev.lastAttempt;
+  const ours =
+    last?.readerId === prev.requestedReader &&
+    last?.consentAt === prev.requestedAt;
+  const count = (n: unknown) =>
+    ours && typeof n === "number" && Number.isFinite(n) && n > 0 ? n : 0;
+  const plan = retryPlan(
+    {
+      ...prev,
+      attempts: count(last?.attempts),
+      transientFailures: count(last?.transientFailures),
+    },
+    got,
+    now
+  );
+  return plan;
+}
+
 /** The content did not read (a status, or a retry): write that, honestly. */
 async function finishUnread(
   job: ReadJob,
@@ -292,21 +330,38 @@ async function finishUnread(
   if (reader && prev.status === "read") {
     // An explicit RE-read that did not read: the read the item has stays,
     // the attempt is recorded (never silent, never an erased read).
+    const plan =
+      prev.requestedReader === reader ? rereadRetryPlan(prev, got, now) : null;
+    const again = plan?.status === "not_read" ? plan : null;
     if (prev.requestedReader) {
       // A re-read that waited beside the read: still over the budget, it
-      // keeps waiting; any other outcome ends that consent (never re-run).
+      // keeps waiting; a TRANSIENT failure keeps it too and is tried again
+      // like any transient failure (`rereadRetryPlan`); any other outcome
+      // ends that consent (never re-run).
       if (status === "over_budget") return { itemId, status };
-      await forgetLibraryReadConsent(database, job.userId, itemId);
+      if (!again) await forgetLibraryReadConsent(database, job.userId, itemId);
     }
     const noted = await recordLastAttempt(database, itemId, {
       readerId: reader,
-      status,
+      status: plan ? plan.status : status,
       ...(got.blocked ? { blocked: got.blocked } : {}),
       ...(got.error ? { error: got.error } : {}),
       at: now.toISOString(),
+      ...(again
+        ? {
+            consentAt: prev.requestedAt!,
+            attempts: again.attempts,
+            transientFailures: again.transientFailures,
+            failure: again.failure,
+          }
+        : {}),
     });
     if (!noted) return { itemId, status: "skipped" };
-    return { itemId, status, usedAi: got.usedAi ?? false };
+    return {
+      itemId,
+      status: plan ? plan.status : status,
+      usedAi: got.usedAi ?? false,
+    };
   }
   // The person's choice waits with the item until it can run.
   const waiting = status === "not_read" || status === "over_budget";

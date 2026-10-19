@@ -48,14 +48,18 @@ describe("stage: subjectStatus + onFail", () => {
       key: "a",
       name: "A",
       category: "started",
-      expectedOutputs: [{ kind: "post", label: "Post", relationToSubject: "made_for" }],
+      expectedOutputs: [
+        { kind: "post", label: "Post", relationToSubject: "made_for" },
+      ],
     });
     expect(ok.success).toBe(true);
     const bad = playbookStageSchema.safeParse({
       key: "a",
       name: "A",
       category: "started",
-      expectedOutputs: [{ kind: "post", label: "Post", relationToSubject: "Made For" }],
+      expectedOutputs: [
+        { kind: "post", label: "Post", relationToSubject: "Made For" },
+      ],
     });
     expect(bad.success).toBe(false);
   });
@@ -71,8 +75,12 @@ describe("definition: activators, humanOnlyStatuses, statusProperty, lineage", (
         { on: "enters_status", status: "published", mode: "run" },
       ],
       humanOnlyStatuses: ["published"],
-      expectedOutputs: [{ kind: "post", label: "Cut", relationToSubject: "derived_from" }],
-      metadata: { lineage: { apqc: "3.5.2", method: "Repurpose", onet: ["27-3043"] } },
+      expectedOutputs: [
+        { kind: "post", label: "Cut", relationToSubject: "derived_from" },
+      ],
+      metadata: {
+        lineage: { apqc: "3.5.2", method: "Repurpose", onet: ["27-3043"] },
+      },
     });
     expect(r.subjectProfile?.statusProperty).toBe("post-status");
     // mode defaults to propose — the public-template default.
@@ -116,18 +124,25 @@ describe("the ONE fold: activators/humanOnlyStatuses → subjectProfile", () => 
       activators: [{ on: "enters_status", status: "published" }],
       humanOnlyStatuses: ["published"],
     });
-    const projected = projectPlaybookDefinition(parsed) as Record<string, unknown>;
+    const projected = projectPlaybookDefinition(parsed) as Record<
+      string,
+      unknown
+    >;
     expect(projected.subjectProfile).toEqual({
       profileSlug: "post",
       statusProperty: "post-status",
-      activators: [{ on: "enters_status", status: "published", mode: "propose" }],
+      activators: [
+        { on: "enters_status", status: "published", mode: "propose" },
+      ],
       humanOnlyStatuses: ["published"],
     });
     // …and the stored shape reads back through the one reader.
     expect(readPlaybookProcess(projected.subjectProfile)).toEqual({
       profileSlug: "post",
       statusProperty: "post-status",
-      activators: [{ on: "enters_status", status: "published", mode: "propose" }],
+      activators: [
+        { on: "enters_status", status: "published", mode: "propose" },
+      ],
       humanOnlyStatuses: ["published"],
       activatorsInvalid: false,
     });
@@ -142,7 +157,9 @@ describe("the ONE fold: activators/humanOnlyStatuses → subjectProfile", () => 
 
   it("refuses activators with no subject kind (would fire on every entity)", () => {
     expect(() =>
-      foldProcessIntoSubjectProfile({ activators: [{ on: "created", mode: "run" }] })
+      foldProcessIntoSubjectProfile({
+        activators: [{ on: "created", mode: "run" }],
+      })
     ).toThrow(ProcessDeclarationError);
   });
 });
@@ -174,17 +191,21 @@ describe("sanitizeDeclaredOutputs carries relationToSubject onto owed slots", ()
  */
 describe("a template-shaped playbook survives the package apply parse", () => {
   it("keeps every contract field through PackageApplySchema + the projection", async () => {
-    const { PackageApplySchema } = await import(
-      "../routers/hub-protocol/rest/packages.js"
-    );
+    const { PackageApplySchema } =
+      await import("../routers/hub-protocol/rest/packages.js");
     const body = PackageApplySchema.parse({
       name: "Content",
       playbooks: [
         {
           name: "Produce Content",
           goalTemplate: "Produce the post",
-          subjectProfile: { profileSlug: "post", statusProperty: "post-status" },
-          activators: [{ on: "enters_status", status: "ready", mode: "propose" }],
+          subjectProfile: {
+            profileSlug: "post",
+            statusProperty: "post-status",
+          },
+          activators: [
+            { on: "enters_status", status: "ready", mode: "propose" },
+          ],
           humanOnlyStatuses: ["idea", "archived"],
           expectedOutputs: [
             { kind: "post", label: "Final post", relationToSubject: "none" },
@@ -199,7 +220,11 @@ describe("a template-shaped playbook survives the package apply parse", () => {
               subjectStatus: "drafting",
               onFail: { toStage: "draft" },
               expectedOutputs: [
-                { kind: "document", label: "Draft", relationToSubject: "made_for" },
+                {
+                  kind: "document",
+                  label: "Draft",
+                  relationToSubject: "made_for",
+                },
               ],
             },
           ],

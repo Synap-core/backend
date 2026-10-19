@@ -92,20 +92,21 @@ export async function loadSignableDocument(
       : undefined;
   }
 
-  const referencing = await scopedDb(AccessContext.operator({ userId }))
-    .findFirst<{ id: string }>(entities, {
-      columns: { id: true },
-      where: and(
-        isNull(entities.deletedAt),
-        eq(entities.userId, doc.userId),
-        or(
-          eq(entities.documentId, documentId),
-          drizzleSql`${entities.systemData} -> 'media' @> ${JSON.stringify([
-            { documentId },
-          ])}::jsonb`
-        )
-      ),
-    });
+  const referencing = await scopedDb(
+    AccessContext.operator({ userId })
+  ).findFirst<{ id: string }>(entities, {
+    columns: { id: true },
+    where: and(
+      isNull(entities.deletedAt),
+      eq(entities.userId, doc.userId),
+      or(
+        eq(entities.documentId, documentId),
+        drizzleSql`${entities.systemData} -> 'media' @> ${JSON.stringify([
+          { documentId },
+        ])}::jsonb`
+      )
+    ),
+  });
   return referencing ? signable : undefined;
 }
 
@@ -139,7 +140,11 @@ async function hintedEntityHoldsDocument(
   });
   if (!entity || entity.userId !== doc.userId) return false;
   if (entity.documentId === doc.id) return true;
-  if (readEntityMediaCopies(entity.systemData).some((m) => m.documentId === doc.id))
+  if (
+    readEntityMediaCopies(entity.systemData).some(
+      (m) => m.documentId === doc.id
+    )
+  )
     return true;
   if (!entity.profileId) return false;
   const profile = await db.query.profiles.findFirst({

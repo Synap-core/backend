@@ -27,7 +27,7 @@
  */
 
 import { needsYouRows, type NeedsYouRow } from "../needs-you/index.js";
-import { LENS_CAPS } from "./classes.js";
+import { LENS_CAPS, lensCapShown } from "./classes.js";
 import {
   NEXT_HOUR_PICKS,
   nextMoveCandidateOfWire,
@@ -353,7 +353,7 @@ function classModel<T>(
   count: number | null,
   more: { extra: boolean; floor: boolean }
 ): LensClassModel<T> {
-  const items = all.slice(0, cap);
+  const items = all.slice(0, lensCapShown(all.length, cap));
   const rest = all.slice(items.length);
   const status = statusOf(cls, all.length);
   const shownUnits = items.reduce((n, i) => n + units(i), 0);

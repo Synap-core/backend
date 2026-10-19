@@ -86,6 +86,19 @@ export const LENS_CAPS = {
 } as const satisfies Record<AttentionClass, number>;
 
 /**
+ * How many of `total` rows a cap of `cap` draws: never hides exactly ONE row —
+ * that row costs no more room than its "Show all", so it is drawn instead
+ * (critique L P1-3). The same rule as the shared list-cap door
+ * (`@synap-core/headless/data-utils/list-cap` `listOverflow`) and its
+ * `stripOverflow` "never +1"; a cap of 0 stays shut.
+ */
+export function lensCapShown(total: number, cap: number): number {
+  const t = Math.max(0, Math.floor(total));
+  const c = Math.max(0, Math.floor(cap));
+  return c > 0 && t === c + 1 ? t : Math.min(t, c);
+}
+
+/**
  * Cap a section by ROWS. `hiddenItems` counts in the rows' own units (a row
  * standing for a session's 3 asks counts 3), so "Show all N" adds up with the
  * header count — the same contract `capNeedsYouRows` keeps for the needs-you
@@ -95,8 +108,7 @@ export function capLensRows<T extends { count?: number }>(
   rows: readonly T[],
   cls: AttentionClass
 ): { shown: T[]; hiddenRows: number; hiddenItems: number; total: number } {
-  const limit = LENS_CAPS[cls];
-  const shown = rows.slice(0, limit);
+  const shown = rows.slice(0, lensCapShown(rows.length, LENS_CAPS[cls]));
   const hidden = rows.slice(shown.length);
   const units = (r: T) =>
     typeof r.count === "number" && Number.isFinite(r.count) && r.count > 1

@@ -12,7 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { computeMessageHash } from "@synap/database";
-import { MessageRole, messages } from "@synap/database/schema";
+import { MessageRole, type messages } from "@synap/database/schema";
 import {
   createOrGetChatTurnWithUserMessage,
   finishChatTurn,

@@ -9,7 +9,10 @@ import { authMiddleware } from "@synap/auth";
 import { refuseGuestSession } from "@synap/api";
 import { drizzleSql, eq, getDb } from "@synap/database";
 import { podSettings } from "@synap/database/schema";
-import { readLastUpdate, type PodUpdateSettings } from "../pod-updates/index.js";
+import {
+  readLastUpdate,
+  type PodUpdateSettings,
+} from "../pod-updates/index.js";
 import {
   audit,
   findAccountByIdentity,

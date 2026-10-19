@@ -87,8 +87,12 @@ describe("resolveTrustRung", () => {
   });
 
   it("reverted and unknown statuses are never guessed onto a rung", () => {
-    expect(resolveTrustRung({ kind: "proposal", status: "reverted" })).toBeNull();
-    expect(resolveTrustRung({ kind: "proposal", status: "brand_new" })).toBeNull();
+    expect(
+      resolveTrustRung({ kind: "proposal", status: "reverted" })
+    ).toBeNull();
+    expect(
+      resolveTrustRung({ kind: "proposal", status: "brand_new" })
+    ).toBeNull();
     expect(resolveTrustRung({ kind: "proposal", status: null })).toBeNull();
   });
 });
@@ -116,7 +120,12 @@ describe("nextRung", () => {
   });
 
   it("offers nothing for a no, a missing agent, an irreversible or unknown-reversibility write", () => {
-    for (const status of ["rejected", "withdrawn", "expired", "approval_failed"]) {
+    for (const status of [
+      "rejected",
+      "withdrawn",
+      "expired",
+      "approval_failed",
+    ]) {
       expect(
         nextRung(pending({ item: { kind: "proposal", status } })),
         status
@@ -143,7 +152,10 @@ describe("nextRung", () => {
 
   it("offers it when a rule (a posture) or the writes-require-proposal switch routed it", () => {
     for (const code of ["GOVERNANCE_RULE", "WRITES_REQUIRE_PROPOSAL"]) {
-      expect(nextRung(pending({ governanceReason: code })), code).not.toBeNull();
+      expect(
+        nextRung(pending({ governanceReason: code })),
+        code
+      ).not.toBeNull();
     }
   });
 
@@ -264,7 +276,9 @@ describe("the words", () => {
       expect(TRUST_RUNG_LABELS[rung].offer.length, rung).toBeGreaterThan(0);
     }
     expect(resolveTrustRungLabel("do_tell")).toBe("Does it, tells you");
-    expect(resolveTrustRungLabel("quiet", "offer")).toBe("Always let it do this");
+    expect(resolveTrustRungLabel("quiet", "offer")).toBe(
+      "Always let it do this"
+    );
     expect(resolveTrustRungLabel("some_rung")).toBe("Some rung");
   });
 });
@@ -301,8 +315,13 @@ describe("W7 review: kind, reach, outcomes, refusal", () => {
       expect(m.label, o).toBe(NEXT_RUNG_OUTCOME_LABELS[o]);
       expect(m.glyph, o).not.toBe("question");
     }
-    expect(resolveNextRungOutcomeView("needs_admin").label).toBe("Sent to a pod admin");
-    expect(resolveNextRungOutcomeView("failed")).toMatchObject({ tone: "error", glyph: "alert" });
+    expect(resolveNextRungOutcomeView("needs_admin").label).toBe(
+      "Sent to a pod admin"
+    );
+    expect(resolveNextRungOutcomeView("failed")).toMatchObject({
+      tone: "error",
+      glyph: "alert",
+    });
     expect(resolveNextRungOutcomeView("from_the_future")).toMatchObject({
       label: "From the future",
       glyph: "question",
@@ -310,10 +329,16 @@ describe("W7 review: kind, reach, outcomes, refusal", () => {
   });
 
   it("isNoNextRungError reads the typed code, and the pinned prefix for older pods", () => {
-    expect(isNoNextRungError({ data: { reasonCode: NO_NEXT_RUNG_CODE } })).toBe(true);
-    expect(isNoNextRungError({ shape: { data: { reasonCode: "NO_NEXT_RUNG" } } })).toBe(true);
+    expect(isNoNextRungError({ data: { reasonCode: NO_NEXT_RUNG_CODE } })).toBe(
+      true
+    );
+    expect(
+      isNoNextRungError({ shape: { data: { reasonCode: "NO_NEXT_RUNG" } } })
+    ).toBe(true);
     expect(isNoNextRungError({ message: "NO_NEXT_RUNG: nope" })).toBe(true);
-    expect(isNoNextRungError({ data: { reasonCode: "OTHER" }, message: "boom" })).toBe(false);
+    expect(
+      isNoNextRungError({ data: { reasonCode: "OTHER" }, message: "boom" })
+    ).toBe(false);
     expect(isNoNextRungError(null)).toBe(false);
   });
 

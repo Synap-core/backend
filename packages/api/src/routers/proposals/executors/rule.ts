@@ -8,7 +8,7 @@ import { assertApplied, reportApproved } from "./shared.js";
  * Register the rule/* approve executors (NS1 Rule Loop).
  *
  * A rule filed by an agent (or by a member whose role lacks `create`) lands
- * here on approval. Without this half, approval would fall to the `*​/*`
+ * here on approval. Without this half, approval would fall to the `*\/*`
  * catch-all — which for a gate-made proposal does NOT throw: it emits
  * `.validated`, flips the row APPROVED and returns success while NOTHING is
  * written. That silent-success defect has shipped three times in this repo.
@@ -197,7 +197,7 @@ export function registerRuleExecutors(): void {
   // ── rule/update — the EDIT half, and the one that ACTIVATES a draft ────────
   //
   // Registered for exactly the reason `rule/create` is: without it, approval
-  // falls to the `*​/*` catch-all, which for a gate-made proposal does NOT
+  // falls to the `*/*` catch-all, which for a gate-made proposal does NOT
   // throw — it emits `.validated`, flips the row APPROVED and returns success
   // while NOTHING is written. That silent-success defect has shipped three
   // times in this repo, and an edit that reports success while leaving the old

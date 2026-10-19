@@ -434,25 +434,72 @@ async function assertBuildTargets(
   }
 }
 
+/**
+ * The batch's `group.create` ops keyed by `createIds` (one id per create op,
+ * in order): a create whose id already names one of the person's groups was
+ * applied by an earlier run of the SAME batch (the whole batch is one
+ * transaction) and is dropped — a retried batch never creates a second group.
+ * The kept creates insert with their ids (`fixedIds`, in placeholder order).
+ */
+function keyedCreates(
+  ops: readonly LibraryCurateOp[],
+  createIds: readonly string[] | undefined,
+  existing: ReadonlySet<string>
+): { ops: readonly LibraryCurateOp[]; fixedIds: string[] } {
+  if (!createIds) return { ops, fixedIds: [] };
+  const kept: LibraryCurateOp[] = [];
+  const fixedIds: string[] = [];
+  let n = 0;
+  for (const op of ops) {
+    if (op.op === "group.create") {
+      const id = createIds[n++];
+      if (!id) throw new Error("curateLibrary: createIds names every create");
+      if (existing.has(id)) continue;
+      fixedIds.push(id);
+    }
+    kept.push(op);
+  }
+  return { ops: kept, fixedIds };
+}
+
 /** Apply the person's edits atomically. Bad op ⇒ BAD_REQUEST, nothing written. */
 export async function curateLibrary(args: {
   database?: LibraryDb;
   userId: string;
   ops: readonly LibraryCurateOp[];
+  /**
+   * Keys the batch's `group.create` ops (one id per create op, in order):
+   * each inserts with its id, and one whose id already exists is skipped
+   * ({@link keyedCreates}). An approved organise proposal passes ids derived
+   * from the proposal, so a retried apply never makes a second list.
+   */
+  createIds?: readonly string[];
+  /**
+   * Runs FIRST inside the edit's transaction (the organise approval's
+   * pending → approved claim): a throw writes nothing, and the claim commits
+   * or rolls back WITH the edits.
+   */
+  inTransaction?: (tx: LibraryDb) => Promise<void>;
 }): Promise<LibraryCurateResult> {
   const database = args.database ?? defaultDb;
   const written = await database.transaction(async (tx) => {
     const t = tx as unknown as LibraryDb;
-    await assertBuildTargets(t, args.userId, args.ops);
+    if (args.inTransaction) await args.inTransaction(t);
     // Every group of the person (keys must stay unique; ids are validated).
     const groupRows = await listLibraryGroupRows({
       database: t,
       userId: args.userId,
     });
     const groups = new Map(groupRows.map((g) => [g.id, toCurateGroup(g)]));
+    const { ops, fixedIds } = keyedCreates(
+      args.ops,
+      args.createIds,
+      new Set(groups.keys())
+    );
+    await assertBuildTargets(t, args.userId, ops);
     // Items: the ones named, plus every member of a group being merged.
-    const ids = new Set(itemIdsOf(args.ops));
-    for (const op of args.ops) {
+    const ids = new Set(itemIdsOf(ops));
+    for (const op of ops) {
       if (op.op !== "group.merge" || !groups.has(op.fromId)) continue;
       const members = await t
         .select({ id: documents.id })
@@ -462,7 +509,7 @@ export async function curateLibrary(args: {
     }
     // …and every item still SUGGESTING a group being archived (or merged
     // away), so the suggestion is pruned with it.
-    for (const op of args.ops) {
+    for (const op of ops) {
       const gone =
         op.op === "group.archive"
           ? op.groupId
@@ -516,7 +563,7 @@ export async function curateLibrary(args: {
 
     let change: LibraryCurateChange;
     try {
-      change = applyLibraryCurateOps({ groups, items }, args.ops);
+      change = applyLibraryCurateOps({ groups, items }, ops);
     } catch (err) {
       if (err instanceof LibraryCurateError) {
         throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
@@ -526,10 +573,11 @@ export async function curateLibrary(args: {
 
     // Insert new groups first: their real ids replace the placeholders.
     const realId = new Map<string, string>();
-    for (const placeholder of change.createdGroupIds) {
+    for (const [n, placeholder] of change.createdGroupIds.entries()) {
       const g = change.state.groups.get(placeholder)!;
       const row = await insertLibraryGroup({
         database: t,
+        ...(fixedIds[n] ? { id: fixedIds[n] } : {}),
         userId: args.userId,
         name: g.name,
         note: g.note,

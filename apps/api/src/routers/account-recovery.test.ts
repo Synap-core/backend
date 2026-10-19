@@ -49,9 +49,8 @@ function makeWorld(opts: { trust?: CloudTrustMode } = {}) {
     revoked: [] as string[],
     created: [] as string[],
   };
-  const log =
-    (level: string) => (obj: Record<string, unknown>, msg?: string) =>
-      logs.push({ level, obj, msg });
+  const log = (level: string) => (obj: Record<string, unknown>, msg?: string) =>
+    logs.push({ level, obj, msg });
 
   const authenticate: MiddlewareHandler = async (c, next) => {
     const raw = c.req.header("x-test-session");
@@ -68,7 +67,8 @@ function makeWorld(opts: { trust?: CloudTrustMode } = {}) {
     logger: { info: log("info"), warn: log("warn"), error: log("error") },
     authenticate: [authenticate],
     findAccountByEmail: async (email) => (email === OWNER_EMAIL ? OWNER : null),
-    findAccountByIdentity: async (id) => (id === OWNER.identityId ? OWNER : null),
+    findAccountByIdentity: async (id) =>
+      id === OWNER.identityId ? OWNER : null,
     codes: {
       listUnused: async (userId) =>
         rows
@@ -89,7 +89,13 @@ function makeWorld(opts: { trust?: CloudTrustMode } = {}) {
           if (rows[i]!.userId === userId) rows.splice(i, 1);
         }
         for (const codeHash of hashes) {
-          rows.push({ id: randomUUID(), userId, codeHash, usedAt: null, createdAt: at });
+          rows.push({
+            id: randomUUID(),
+            userId,
+            codeHash,
+            usedAt: null,
+            createdAt: at,
+          });
         }
       },
       summary: async (userId) => {
@@ -103,7 +109,8 @@ function makeWorld(opts: { trust?: CloudTrustMode } = {}) {
       anyUnused: async () => rows.some((r) => !r.usedAt),
     },
     createKratosRecovery: async (identityId) => {
-      if (kratos.failCreate) throw new Error("Kratos recovery code failed: 500");
+      if (kratos.failCreate)
+        throw new Error("Kratos recovery code failed: 500");
       kratos.created.push(identityId);
       return {
         recoveryLink: "https://pod-admin.example.test/recovery?flow=flow-1",
@@ -112,7 +119,8 @@ function makeWorld(opts: { trust?: CloudTrustMode } = {}) {
       };
     },
     revokeIdentitySessions: async (identityId) => {
-      if (kratos.failRevoke) throw new Error("Kratos session revoke failed: 500");
+      if (kratos.failRevoke)
+        throw new Error("Kratos session revoke failed: 500");
       kratos.revoked.push(identityId);
     },
     identityHasPodHeldCredential: async () => kratos.credential,
@@ -191,7 +199,10 @@ describe("POST /redeem — single use", () => {
     await seed(world, CODES);
     const router = app(world);
 
-    const first = await redeem(router, { email: "Owner@Example.com", code: "abcd efgh jkmn pqrs" });
+    const first = await redeem(router, {
+      email: "Owner@Example.com",
+      code: "abcd efgh jkmn pqrs",
+    });
     expect(first.status).toBe(200);
     const ok = await first.json();
     expect(ok).toEqual({
@@ -206,7 +217,9 @@ describe("POST /redeem — single use", () => {
     expect(again.status).toBe(401);
     expect((await again.json()).error).toBe("invalid_code");
     // Other codes of the batch still work.
-    expect((await redeem(router, { email: OWNER_EMAIL, code: CODES[1]! })).status).toBe(200);
+    expect(
+      (await redeem(router, { email: OWNER_EMAIL, code: CODES[1]! })).status
+    ).toBe(200);
   });
 
   it("two concurrent redeems of one code: exactly one wins (the claim is the tiebreak)", async () => {
@@ -228,7 +241,10 @@ describe("POST /redeem — single use", () => {
     expect(world.kratos.revoked).toEqual([OWNER.identityId]);
     expect(world.kratos.created).toEqual([OWNER.identityId]);
     expect(world.audits).toContainEqual(
-      expect.objectContaining({ userId: OWNER.userId, change: "account_recovery.code_redeemed" })
+      expect.objectContaining({
+        userId: OWNER.userId,
+        change: "account_recovery.code_redeemed",
+      })
     );
   });
 
@@ -237,7 +253,10 @@ describe("POST /redeem — single use", () => {
       const world = makeWorld();
       await seed(world, CODES);
       world.kratos[failure] = true;
-      const res = await redeem(app(world), { email: OWNER_EMAIL, code: CODES[0]! });
+      const res = await redeem(app(world), {
+        email: OWNER_EMAIL,
+        code: CODES[0]!,
+      });
       expect(res.status).toBe(503);
       expect((await res.json()).error).toBe("recovery_unavailable");
       expect(world.rows.every((r) => r.usedAt === null)).toBe(true);
@@ -249,7 +268,10 @@ describe("POST /redeem — a wrong code consumes nothing", () => {
   it("never claims, never touches Kratos, leaves every code unused", async () => {
     const world = makeWorld();
     await seed(world, CODES);
-    const res = await redeem(app(world), { email: OWNER_EMAIL, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" });
+    const res = await redeem(app(world), {
+      email: OWNER_EMAIL,
+      code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ",
+    });
     expect(res.status).toBe(401);
     expect(world.deps.codes.claim).not.toHaveBeenCalled();
     expect(world.kratos.created).toEqual([]);
@@ -260,7 +282,10 @@ describe("POST /redeem — a wrong code consumes nothing", () => {
   it("a malformed code is refused the same way", async () => {
     const world = makeWorld();
     await seed(world, CODES);
-    const res = await redeem(app(world), { email: OWNER_EMAIL, code: "not-a-code" });
+    const res = await redeem(app(world), {
+      email: OWNER_EMAIL,
+      code: "not-a-code",
+    });
     expect(res.status).toBe(401);
     expect(world.deps.codes.claim).not.toHaveBeenCalled();
   });
@@ -273,9 +298,15 @@ describe("POST /redeem — enumeration-safe", () => {
     const router = app(world);
 
     const t0 = Date.now();
-    const unknown = await redeem(router, { email: "nobody@example.com", code: CODES[0]! });
+    const unknown = await redeem(router, {
+      email: "nobody@example.com",
+      code: CODES[0]!,
+    });
     const t1 = Date.now();
-    const wrong = await redeem(router, { email: OWNER_EMAIL, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" });
+    const wrong = await redeem(router, {
+      email: OWNER_EMAIL,
+      code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ",
+    });
     const t2 = Date.now();
 
     expect(unknown.status).toBe(wrong.status);
@@ -287,7 +318,10 @@ describe("POST /redeem — enumeration-safe", () => {
 
   it("an account with no codes answers exactly like a wrong code", async () => {
     const world = makeWorld();
-    const res = await redeem(app(world), { email: OWNER_EMAIL, code: CODES[0]! });
+    const res = await redeem(app(world), {
+      email: OWNER_EMAIL,
+      code: CODES[0]!,
+    });
     expect(res.status).toBe(401);
     expect((await res.json()).error).toBe("invalid_code");
   });
@@ -310,7 +344,9 @@ describe("POST /redeem — rate limits", () => {
       const router = app(world, limiters);
       world.deps.sleep = async () => undefined;
       for (let i = 0; i < 5; i++) {
-        expect((await redeem(router, { email, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" })).status).toBe(401);
+        expect(
+          (await redeem(router, { email, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" })).status
+        ).toBe(401);
       }
       const limited = await redeem(router, { email, code: CODES[0]! });
       expect(limited.status).toBe(429);
@@ -319,7 +355,9 @@ describe("POST /redeem — rate limits", () => {
       expect(world.rows.every((r) => r.usedAt === null)).toBe(true);
       t = 1000; // window rolls over
       if (email === OWNER_EMAIL) {
-        expect((await redeem(router, { email, code: CODES[0]! })).status).toBe(200);
+        expect((await redeem(router, { email, code: CODES[0]! })).status).toBe(
+          200
+        );
       }
     }
   });
@@ -330,10 +368,21 @@ describe("POST /redeem — rate limits", () => {
     world.deps.sleep = async () => undefined;
     const router = app(world); // defaultLimiters(): the shipped numbers
     for (let i = 0; i < 10; i++) {
-      await redeem(router, { email: OWNER_EMAIL, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" }, ATTACKER);
+      await redeem(
+        router,
+        { email: OWNER_EMAIL, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" },
+        ATTACKER
+      );
     }
-    expect((await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! }, ATTACKER)).status).toBe(429);
-    const owner = await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! }, OWNER_IP);
+    expect(
+      (await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! }, ATTACKER))
+        .status
+    ).toBe(429);
+    const owner = await redeem(
+      router,
+      { email: OWNER_EMAIL, code: CODES[0]! },
+      OWNER_IP
+    );
     expect(owner.status).toBe(200);
   });
 
@@ -348,7 +397,15 @@ describe("POST /redeem — rate limits", () => {
     const router = app(world, limiters);
     const statuses: number[] = [];
     for (let i = 0; i < 4; i++) {
-      statuses.push((await redeem(router, { email: OWNER_EMAIL, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" }, `192.0.2.${i}`)).status);
+      statuses.push(
+        (
+          await redeem(
+            router,
+            { email: OWNER_EMAIL, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" },
+            `192.0.2.${i}`
+          )
+        ).status
+      );
     }
     expect(statuses).toEqual([401, 401, 401, 429]);
   });
@@ -359,9 +416,16 @@ describe("POST /redeem — rate limits", () => {
     world.deps.sleep = async () => undefined;
     const router = app(world);
     for (let i = 0; i < 150; i++) {
-      await redeem(router, { email: `p${i}@example.com`, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" }, ATTACKER);
+      await redeem(
+        router,
+        { email: `p${i}@example.com`, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" },
+        ATTACKER
+      );
     }
-    expect((await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! }, OWNER_IP)).status).toBe(200);
+    expect(
+      (await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! }, OWNER_IP))
+        .status
+    ).toBe(200);
   });
 
   it("derivations in flight are capped (rate_limited over the cap) and every slot is released", async () => {
@@ -381,9 +445,16 @@ describe("POST /redeem — rate limits", () => {
       derivations: new ConcurrencyCap(1),
     };
     const router = app(world, limiters);
-    const first = redeem(router, { email: OWNER_EMAIL, code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ" });
+    const first = redeem(router, {
+      email: OWNER_EMAIL,
+      code: "ZZZZ-ZZZZ-ZZZZ-ZZZZ",
+    });
     await new Promise((r) => setTimeout(r, 0));
-    const over = await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! }, "192.0.2.9");
+    const over = await redeem(
+      router,
+      { email: OWNER_EMAIL, code: CODES[0]! },
+      "192.0.2.9"
+    );
     expect(over.status).toBe(429);
     expect((await over.json()).error).toBe("rate_limited");
     open();
@@ -392,9 +463,13 @@ describe("POST /redeem — rate limits", () => {
     world.deps.findAccountByEmail = async () => {
       throw new Error("db down");
     };
-    expect((await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! })).status).toBe(503);
+    expect(
+      (await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! })).status
+    ).toBe(503);
     world.deps.findAccountByEmail = find;
-    expect((await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! })).status).toBe(200);
+    expect(
+      (await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! })).status
+    ).toBe(200);
   });
 });
 
@@ -418,7 +493,12 @@ describe("codes never reach a log or an audit event", () => {
 
     const everything = JSON.stringify([world.logs, world.audits]);
     expect(world.logs.length + world.audits.length).toBeGreaterThan(3); // non-vacuous
-    for (const code of [...CODES, ...generated, KRATOS_CODE, "ZZZZ-ZZZZ-ZZZZ-ZZZZ"]) {
+    for (const code of [
+      ...CODES,
+      ...generated,
+      KRATOS_CODE,
+      "ZZZZ-ZZZZ-ZZZZ-ZZZZ",
+    ]) {
       expect(everything).not.toContain(code);
       expect(everything).not.toContain(normalizeRecoveryCode(code) ?? code);
     }
@@ -451,7 +531,9 @@ describe("POST /codes — generation requires privilege", () => {
     const res = await app(world).request("/codes", {
       method: "POST",
       headers: {
-        "x-test-session": session({ methods: [{ method: "oidc", provider: "cp" }] }),
+        "x-test-session": session({
+          methods: [{ method: "oidc", provider: "cp" }],
+        }),
       },
     });
     expect(res.status).toBe(403);
@@ -462,12 +544,22 @@ describe("POST /codes — generation requires privilege", () => {
   it("…but may create the FIRST factor, and may regenerate when the owner trusts Cloud for recovery", async () => {
     const first = makeWorld({ trust: "sign_in" });
     first.kratos.credential = false;
-    const cloud = { "x-test-session": session({ methods: [{ method: "oidc", provider: "cp" }] }) };
-    expect((await app(first).request("/codes", { method: "POST", headers: cloud })).status).toBe(200);
+    const cloud = {
+      "x-test-session": session({
+        methods: [{ method: "oidc", provider: "cp" }],
+      }),
+    };
+    expect(
+      (await app(first).request("/codes", { method: "POST", headers: cloud }))
+        .status
+    ).toBe(200);
 
     const trusted = makeWorld({ trust: "sign_in_recovery" });
     await seed(trusted, CODES);
-    expect((await app(trusted).request("/codes", { method: "POST", headers: cloud })).status).toBe(200);
+    expect(
+      (await app(trusted).request("/codes", { method: "POST", headers: cloud }))
+        .status
+    ).toBe(200);
   });
 
   it("a fresh password session gets 10 one-time codes of 80 bits; the old batch is replaced", async () => {
@@ -483,14 +575,20 @@ describe("POST /codes — generation requires privilege", () => {
     expect(body.codes).toHaveLength(10);
     expect(new Set(body.codes).size).toBe(10);
     for (const code of body.codes as string[]) {
-      expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){3}$/);
+      expect(code).toMatch(
+        /^[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){3}$/
+      );
       expect(normalizeRecoveryCode(code)).toHaveLength(16); // 16 × 5 bits = 80
     }
     expect(world.rows).toHaveLength(10);
     // Old codes are gone; a new one redeems.
     const router = app(world);
-    expect((await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! })).status).toBe(401);
-    expect((await redeem(router, { email: OWNER_EMAIL, code: body.codes[3] })).status).toBe(200);
+    expect(
+      (await redeem(router, { email: OWNER_EMAIL, code: CODES[0]! })).status
+    ).toBe(401);
+    expect(
+      (await redeem(router, { email: OWNER_EMAIL, code: body.codes[3] })).status
+    ).toBe(200);
   });
 });
 
@@ -501,10 +599,19 @@ describe("GET /status and PUT /cloud-trust", () => {
     const world = makeWorld();
     await seed(world, CODES);
     const res = await app(world).request("/status", {
-      headers: { "x-test-session": session({ methods: [{ method: "oidc", provider: "cp" }] }) },
+      headers: {
+        "x-test-session": session({
+          methods: [{ method: "oidc", provider: "cp" }],
+        }),
+      },
     });
     expect(await res.json()).toEqual({
-      recoveryCodes: { set: true, remaining: 3, total: 3, createdAt: expect.any(String) },
+      recoveryCodes: {
+        set: true,
+        remaining: 3,
+        total: 3,
+        createdAt: expect.any(String),
+      },
       courier: { configured: false, status: "catchall" },
       cloud: { trust: "sign_in", available: true, canEdit: true },
       session: { privileged: true, cloudOnly: true, canManage: false },
@@ -516,7 +623,10 @@ describe("GET /status and PUT /cloud-trust", () => {
     world.deps.isPodAdmin = async () => false;
     const res = await app(world).request("/cloud-trust", {
       method: "PUT",
-      headers: { "x-test-session": session({}), "Content-Type": "application/json" },
+      headers: {
+        "x-test-session": session({}),
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ mode: "sign_in_recovery" }),
     });
     expect(res.status).toBe(403);
@@ -529,7 +639,9 @@ describe("GET /status and PUT /cloud-trust", () => {
     const res = await app(world).request("/cloud-trust", {
       method: "PUT",
       headers: {
-        "x-test-session": session({ methods: [{ method: "oidc", provider: "cp" }] }),
+        "x-test-session": session({
+          methods: [{ method: "oidc", provider: "cp" }],
+        }),
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ mode: "sign_in_recovery" }),
@@ -542,13 +654,19 @@ describe("GET /status and PUT /cloud-trust", () => {
     const world = makeWorld();
     const res = await app(world).request("/cloud-trust", {
       method: "PUT",
-      headers: { "x-test-session": session({}), "Content-Type": "application/json" },
+      headers: {
+        "x-test-session": session({}),
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ mode: "off" }),
     });
     expect(res.status).toBe(200);
     expect((await res.json()).cloud.trust).toBe("off");
     expect(world.audits).toContainEqual(
-      expect.objectContaining({ change: "account_recovery.cloud_trust_changed", data: { from: "sign_in", to: "off" } })
+      expect.objectContaining({
+        change: "account_recovery.cloud_trust_changed",
+        data: { from: "sign_in", to: "off" },
+      })
     );
   });
 });
@@ -573,18 +691,28 @@ describe("GET /doors", () => {
 
   it("publishes podAdminUrl when the pod's admin URL is configured", async () => {
     const world = makeWorld();
-    world.deps.podAdminConfig = () => ({ ok: true, base: new URL("https://pod-admin.example.org/") });
+    world.deps.podAdminConfig = () => ({
+      ok: true,
+      base: new URL("https://pod-admin.example.org/"),
+    });
     const body = await (await app(world).request("/doors")).json();
     expect(body.podAdminUrl).toBe("https://pod-admin.example.org");
   });
 
   it("omits podAdminUrl when unset or invalid — never a guessed fallback", async () => {
     const world = makeWorld();
-    for (const code of ["POD_ADMIN_URL_REQUIRED", "POD_ADMIN_URL_INVALID"] as const) {
+    for (const code of [
+      "POD_ADMIN_URL_REQUIRED",
+      "POD_ADMIN_URL_INVALID",
+    ] as const) {
       world.deps.podAdminConfig = () => ({ ok: false, code });
       const res = await app(world).request("/doors");
       expect(res.status).toBe(200);
-      expect(Object.keys(await res.json()).sort()).toEqual(["cloud", "email", "recoveryCode"]);
+      expect(Object.keys(await res.json()).sort()).toEqual([
+        "cloud",
+        "email",
+        "recoveryCode",
+      ]);
     }
   });
 
@@ -600,11 +728,16 @@ describe("GET /doors", () => {
 
   it("the REAL resolver drives it: env POD_ADMIN_URL set → origin, unset → absent", async () => {
     const { configuredPodAdminBase } = await import("../pod-admin-config.js");
-    const saved = { url: process.env.POD_ADMIN_URL, domain: process.env.POD_ADMIN_DOMAIN };
+    const saved = {
+      url: process.env.POD_ADMIN_URL,
+      domain: process.env.POD_ADMIN_DOMAIN,
+    };
     try {
       delete process.env.POD_ADMIN_DOMAIN;
       process.env.POD_ADMIN_URL = "https://antoinesrvt-admin.synap.live";
-      expect(podAdminUrlFromConfig(configuredPodAdminBase())).toBe("https://antoinesrvt-admin.synap.live");
+      expect(podAdminUrlFromConfig(configuredPodAdminBase())).toBe(
+        "https://antoinesrvt-admin.synap.live"
+      );
       delete process.env.POD_ADMIN_URL;
       expect(podAdminUrlFromConfig(configuredPodAdminBase())).toBeUndefined();
       process.env.POD_ADMIN_URL = "https://pod-admin.example.org/some/path";
@@ -612,7 +745,8 @@ describe("GET /doors", () => {
     } finally {
       if (saved.url === undefined) delete process.env.POD_ADMIN_URL;
       else process.env.POD_ADMIN_URL = saved.url;
-      if (saved.domain !== undefined) process.env.POD_ADMIN_DOMAIN = saved.domain;
+      if (saved.domain !== undefined)
+        process.env.POD_ADMIN_DOMAIN = saved.domain;
     }
   }, 30_000); // cold import of the @synap/api barrel takes >5s
 

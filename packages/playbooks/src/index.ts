@@ -988,7 +988,7 @@ export interface PlaybookStageFilingGate {
    * contract: the other half is an approve executor registered under
    * `focus_session/<type>`. A playbook author who typed an unregistered type
    * would file a proposal that renders, notifies, and on approval falls to the
-   * `*​/*` catch-all — flipping the row to approved while NEVER resuming the
+   * `*\/*` catch-all — flipping the row to approved while NEVER resuming the
    * paused session. The run would sit paused forever with an approved gate
    * above it. Widening this set means adding a door entry and an executor in the
    * same change; the type makes that unavoidable.

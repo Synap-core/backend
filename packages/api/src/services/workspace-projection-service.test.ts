@@ -57,7 +57,8 @@ describe("PublicProjectionInputSchema", () => {
 
   it("rejects an empty roles list (default-deny is via enabled:false)", () => {
     expect(
-      PublicProjectionInputSchema.safeParse({ enabled: true, roles: [] }).success
+      PublicProjectionInputSchema.safeParse({ enabled: true, roles: [] })
+        .success
     ).toBe(false);
   });
 

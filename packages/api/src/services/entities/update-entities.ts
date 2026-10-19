@@ -34,6 +34,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { decodeHtmlEntities } from "@synap-core/types/text";
 import { TITLE_HARD_MAX, titleTooLongReason } from "@synap-core/types/titles";
 import {
   UPDATE_PACK_MAX_ITEMS,
@@ -333,7 +334,14 @@ async function planItems(
   const seen = new Set<string>();
   const planned: PlannedItem[] = [];
   for (const item of params.items) {
-    const { id, patch } = item;
+    const { id } = item;
+    // An agent's XML-escaped title (`Doors &amp; Spec`) is decoded ONCE, here,
+    // so every half sees the same text: the governance preview, the "nothing
+    // to change" check, the pack item a reviewer approves later, and the
+    // execute write (whose door, `entities.update`, decodes it too).
+    const patch = item.patch.title
+      ? { ...item.patch, title: decodeHtmlEntities(item.patch.title) }
+      : item.patch;
     const skip = (reason: string) =>
       planned.push({ id, verdict: "skip", reason, patch });
     if (seen.has(id)) {

@@ -71,7 +71,7 @@ describe("capabilities.registry door", () => {
 
   it("routes every workspace input through resolveRegistryLens", () => {
     const procedures = body
-      .split(/\n  (?=[a-zA-Z]+: protectedProcedure)/)
+      .split(/\n {2}(?=[a-zA-Z]+: protectedProcedure)/)
       .filter((p) => p.includes(": protectedProcedure"));
     expect(procedures.length).toBeGreaterThanOrEqual(2);
     for (const p of procedures) {

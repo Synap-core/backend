@@ -25,7 +25,7 @@ const TOOL_ROW = {
   workspaceId: null,
 };
 let toolRows: unknown[] = [TOOL_ROW];
-let seededMessaging: unknown[] = [];
+const seededMessaging: unknown[] = [];
 const inserted: any[] = [];
 const sendMessage = vi.fn(async () => undefined);
 

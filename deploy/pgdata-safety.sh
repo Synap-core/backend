@@ -668,7 +668,9 @@ backup_drill() {
         if [ -z "$d" ] || [ -z "$expected" ] || ! ls "$d"/*.dump >/dev/null 2>&1; then
             detail="snapshot $sid holds no dump with a recorded fingerprint"
         else
-            pgbin="$(ls -d /usr/lib/postgresql/*/bin 2>/dev/null | tail -n 1)"
+            # SYNAP_PG_LIB_DIR: tests point it at an empty dir so a host
+            # postgres (an Ubuntu CI runner has one) never shadows their fakes.
+            pgbin="$(ls -d "${SYNAP_PG_LIB_DIR:-/usr/lib/postgresql}"/*/bin 2>/dev/null | tail -n 1)"
             [ -n "$pgbin" ] && PATH="$pgbin:$PATH"
             mkdir -p "$work/pg" "$work/sock"
             [ "$(id -u)" = 0 ] && chown postgres:postgres "$work" "$work/pg" "$work/sock"

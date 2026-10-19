@@ -29,7 +29,6 @@ const {
   FIREFLIES_BACKFILL_CRON_QUEUE,
 } = await import("../fireflies-worker.js");
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const job = (data: unknown): any => ({ id: "j1", name: "q", data });
 
 describe("fireflies-worker queue names", () => {

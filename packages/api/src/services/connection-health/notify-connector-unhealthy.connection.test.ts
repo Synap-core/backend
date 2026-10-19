@@ -7,7 +7,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const h = vi.hoisted(() => ({
-  createNotification: vi.fn(async (_input: Record<string, unknown>) => "notif-1"),
+  createNotification: vi.fn(
+    async (_input: Record<string, unknown>) => "notif-1"
+  ),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {

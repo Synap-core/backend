@@ -102,7 +102,7 @@ describe("checkLifecycleDefUpdate — the generic door", () => {
 });
 
 let h: Awaited<ReturnType<typeof makeLifecyclePglite>>;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let db: any;
 let defId: string;
 let profileId: string;

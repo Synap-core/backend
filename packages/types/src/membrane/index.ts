@@ -25,7 +25,7 @@ import {
 import type { UnitGlyph, UnitTone } from "../units/state.js";
 import {
   CONNECTION_NOTIFY_LABELS,
-  CONNECTION_STATE_LABELS,
+  type CONNECTION_STATE_LABELS,
   resolveActionLabel,
   resolveConnectionStateLabel,
 } from "../vocabulary/index.js";

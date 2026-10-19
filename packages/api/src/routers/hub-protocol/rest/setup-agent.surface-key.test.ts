@@ -192,9 +192,9 @@ describe("POST /setup/agent — a key never connects a live AI by itself", () =>
     expect(res.status).toBe(200);
     expect(setActive).toHaveBeenCalledWith({ isActive: false });
     expect(invalidateVerificationCache).toHaveBeenCalled();
-    expect(invalidateVerificationCache.mock.invocationCallOrder[0]).toBeGreaterThan(
-      setActive.mock.invocationCallOrder[0]!
-    );
+    expect(
+      invalidateVerificationCache.mock.invocationCallOrder[0]
+    ).toBeGreaterThan(setActive.mock.invocationCallOrder[0]!);
   });
 
   it("a pending key leaves the agent's working keys alone until approval", async () => {

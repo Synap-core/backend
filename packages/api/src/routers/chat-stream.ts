@@ -48,7 +48,7 @@ import {
   channels,
   agents,
   workspaceMembers,
-  messages,
+  type messages,
   ChannelStatus,
   MessageRole,
 } from "@synap/database/schema";

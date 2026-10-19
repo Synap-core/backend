@@ -1,7 +1,7 @@
 /**
  * THE CATCH-ALL MUST NOT REPORT SUCCESS IT DID NOT VERIFY.
  *
- * THE DEFECT (live, user-facing): `executors/catch-all.ts` (`key: "*​/*"`) is
+ * THE DEFECT (live, user-facing): `executors/catch-all.ts` (`key: "*\/*"`) is
  * reached whenever no executor matches `${targetType}/${proposalType}`. For a
  * GATE-MADE proposal it did not throw — `permission-check.ts` always stamps
  * `requestId`/`targetType`/`changeType`, so `isRequestShapedProposalData` is

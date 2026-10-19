@@ -124,7 +124,9 @@ describe("app agents stay out of agent rosters (notAnAppAgent)", () => {
     );
     // The classifier still recognises each shape it claims to.
     expect(
-      classifySites(`db.select().from(users)\n  .where(eq(users.userType, "agent"));`)
+      classifySites(
+        `db.select().from(users)\n  .where(eq(users.userType, "agent"));`
+      )
     ).toEqual(["UNFILTERED"]);
     expect(
       classifySites(
@@ -134,9 +136,9 @@ describe("app agents stay out of agent rosters (notAnAppAgent)", () => {
     expect(
       classifySites(`and(eq(users.id, x), eq(users.userType, "agent"))`)
     ).toEqual(["POINT"]);
-    expect(classifySites(` * a \`users\` row with \`user_type = 'agent'\``)).toEqual(
-      []
-    );
+    expect(
+      classifySites(` * a \`users\` row with \`user_type = 'agent'\``)
+    ).toEqual([]);
   });
 
   it("every unfiltered agent roster is listed with a reason — and only those", () => {

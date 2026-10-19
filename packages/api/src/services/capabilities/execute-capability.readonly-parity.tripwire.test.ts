@@ -49,7 +49,6 @@ const row = (
     name: "exa_search",
     providerSpec,
     metadata,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }) as any;
 
 // ── Part A: behavioural — the DISCRIMINATING rows ─────────────────────────────

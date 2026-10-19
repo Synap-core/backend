@@ -23,9 +23,7 @@ const ApolloPeopleSearchResponseSchema = z
   .passthrough();
 
 type ApolloEndpoint =
-  | "people/match"
-  | "organizations/enrich"
-  | "mixed_people/search";
+  "people/match" | "organizations/enrich" | "mixed_people/search";
 
 export class ApolloProvider implements EnrichmentProvider {
   readonly name = "apollo";

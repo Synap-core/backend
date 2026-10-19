@@ -72,7 +72,9 @@ describe("events.read dataLines — every lifecycle family is classified", () =>
   });
 
   it("a prefiltered family really parses into a line (behaviour, not just a label)", () => {
-    expect(parseConnectionEvent("app.approve.completed", { name: "X" })).not.toBeNull();
+    expect(
+      parseConnectionEvent("app.approve.completed", { name: "X" })
+    ).not.toBeNull();
     expect(parseConnectionEvent("apiKey.revoke.completed", {})).not.toBeNull();
     expect(parseConnectionEvent("connector.auth_expire", {})).not.toBeNull();
   });

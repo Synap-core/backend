@@ -10,16 +10,16 @@
  *   - the grid (weeks × weekdays, newest week last) and its month marks;
  *   - the colour LEVEL of a count (0 = nothing, 1–4 = quantiles of the
  *     non-zero days — decision D3, 2026-10-04);
- *   - the words ("12 activities on Thu, Oct 3") — the unit is "activity"
- *     (decision D5, 2026-10-04).
+ *   - the words ("12 activities on Sat 3 Oct") — the unit is "activity"
+ *     (decision D5, 2026-10-04) — spelled with the date ladder's words.
  *
  * The grid returns levels, never colours. The level → colour RECIPE is one
  * shared constant (`ACTIVITY_RAMP`): the web writes it as CSS `color-mix`,
  * relay resolves it to hex (`resolveActivityRamp`); both are checked against
  * the dataviz ordinal floors (`checkActivityRamp`). A day's door carries its
  * SCOPE in the address (`ActivityScope`), never in the global project lens.
- * Pure and dependency-free (only `Intl`), so it runs in the pod, Electron and
- * React Native alike.
+ * Pure and dependency-free (`Intl` only for a time zone's offset, never for
+ * words), so it runs in the pod, Electron and React Native alike.
  */
 
 /** The widest window the door reads: 53 weeks × 7 days. */
@@ -323,24 +323,65 @@ export function activityCountLabel(n: number): string {
   return `${n.toLocaleString("en-US")} ${n === 1 ? "activity" : "activities"}`;
 }
 
-/** A calendar day as words, e.g. "Thu, Oct 3" (`long`: "Thursday, October 3, 2026"). */
+// The day's words are SPELLED, never asked of `toLocaleDateString`: ICU
+// answers by the device's locale and engine (en-GB's "Sept" beside the
+// ladder's "Sep" on one screen, "Thu, Oct 3" on the desk vs "Thu 3 Oct" on the
+// phone — critique L P1-4). These are the shared date ladder's words
+// (`@synap-core/headless/value-format`: day before a month word, a 3-letter
+// weekday and month, no comma); relay pins the two equal under a parity test.
+const MONTHS_SHORT = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+] as const;
+const MONTHS_LONG = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+] as const;
+const WEEKDAYS_LONG = [
+  "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+] as const;
+
+/**
+ * A calendar day as words: "Sat 3 Oct" (`long`: "Saturday 3 October 2026") —
+ * the value-format ladder's forms (`formatWeekday` short + `formatAbsoluteDate`
+ * without the year; `formatDayLong`). Computed on the calendar day itself, so
+ * no runtime zone can shift it.
+ *
+ * `_locale` is ignored — a day reads one way on every screen. It is kept only
+ * so existing callers compile; do not pass it in new code.
+ */
 export function activityDayWords(
   date: string,
   style: "short" | "long" = "short",
-  locale?: string
+  _locale?: string
 ): string {
-  // Noon UTC of the day, formatted IN UTC: the calendar day never shifts.
-  const at = new Date(dayNumber(date) * DAY_MS + DAY_MS / 2);
-  return at.toLocaleDateString(locale, {
-    timeZone: "UTC",
-    weekday: style,
-    month: style,
-    day: "numeric",
-    ...(style === "long" ? { year: "numeric" as const } : {}),
-  });
+  const at = new Date(dayNumber(date) * DAY_MS);
+  const weekday = WEEKDAYS_LONG[at.getUTCDay()]!;
+  const day = at.getUTCDate();
+  if (style === "long") {
+    return `${weekday} ${day} ${MONTHS_LONG[at.getUTCMonth()]} ${at.getUTCFullYear()}`;
+  }
+  return `${weekday.slice(0, 3)} ${day} ${MONTHS_SHORT[at.getUTCMonth()]}`;
 }
 
-/** A cell's one-line reading: "12 activities on Thu, Oct 3". */
+/**
+ * The ONE heading of a calendar-day group (activity, history, a project's
+ * sessions, an agenda): "Today", "Yesterday", "Tomorrow", else
+ * `activityDayWords(day)` ("Sat 17 Oct"). Both days are `YYYY-MM-DD` in the
+ * viewer's zone.
+ *
+ * Rows INSIDE such a group stamp the clock time ("23:40"), never the elapsed
+ * ladder: "1h ago" under "Yesterday", just past midnight, contradicts its own
+ * heading (critique L P1-4).
+ */
+export function activityDayHeading(day: string, today: string): string {
+  if (day === today) return "Today";
+  if (day === addCalendarDays(today, -1)) return "Yesterday";
+  if (day === addCalendarDays(today, 1)) return "Tomorrow";
+  return activityDayWords(day);
+}
+
+/** A cell's one-line reading: "12 activities on Sat 3 Oct". */
 export function activityCellLabel(
   cell: Pick<ActivityDay, "date" | "count">,
   style: "short" | "long" = "short",
@@ -349,16 +390,18 @@ export function activityCellLabel(
   return `${activityCountLabel(cell.count)} on ${activityDayWords(cell.date, style, locale)}`;
 }
 
-/** A month mark's word, e.g. "Oct". */
+/**
+ * A month mark's word, e.g. "Sep" — the ladder's `formatMonthShort`, never
+ * ICU's en-GB "Sept".
+ *
+ * `_year` and `_locale` are ignored — kept only so existing callers compile.
+ */
 export function activityMonthWord(
   month: number,
-  year: number,
-  locale?: string
+  _year: number,
+  _locale?: string
 ): string {
-  return new Date(Date.UTC(year, month, 15)).toLocaleDateString(locale, {
-    timeZone: "UTC",
-    month: "short",
-  });
+  return MONTHS_SHORT[((month % 12) + 12) % 12]!;
 }
 
 /** The section's summary mark: "214 activities · active 61 days". */

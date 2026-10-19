@@ -26,9 +26,9 @@ import {
   ok,
   requireScope,
   readReasoning,
-  McpToolContext,
-  CallToolResult,
-  McpHandlerMap,
+  type McpToolContext,
+  type CallToolResult,
+  type McpHandlerMap,
 } from "./shared.js";
 
 export const capabilityHandlers: McpHandlerMap = {

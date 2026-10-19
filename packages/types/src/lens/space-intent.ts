@@ -24,8 +24,10 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveStatusLabel,
+  sentenceCaseLabel,
 } from "../vocabulary/index.js";
-import { formatKpiFraction, type LensKpiFact } from "./header.js";
+import { decodeHtmlEntities } from "../text/html-entities.js";
+import { formatKpiFraction, lensCountDoorText, type LensKpiFact } from "./header.js";
 import { lensIntentDoorText } from "./intent.js";
 import type { LensBeingWorked, LensRow } from "./rows.js";
 import type { LensSource } from "./scope.js";
@@ -219,7 +221,9 @@ function headlineOf(space: SpaceIntentInput): SpaceHeadlineModel | null {
       resolveStatusLabel(h.status))
     : null;
   const text = [
-    h.title?.trim() || resolveObjectNoun(kind.profileSlug),
+    // A row stored before the write doors decoded (`&amp;`) reads as `&`.
+    decodeHtmlEntities(h.title ?? "").trim() ||
+      resolveObjectNoun(kind.profileSlug),
     statusLabel,
     // A recent move says nothing the status does not; the others name why.
     h.reason === "recent" ? null : resolveStatusLabel(h.reason),
@@ -253,7 +257,9 @@ export function spaceIntentCardModel(
       typeof kind.needsYou === "number" && kind.needsYou > 0
         ? kind.needsYou
         : null;
-    const title = kind.plural.trim() || kind.label;
+    // Sentence case, like every other row title: a profile's stored plural
+    // ("decisions") never sits lower-case beside "Features".
+    const title = sentenceCaseLabel(kind.plural) || kind.label;
     return {
       profileSlug: kind.profileSlug,
       workspaceId: space.workspaceId,
@@ -332,19 +338,39 @@ export function projectMakingCards(
  * space (largest first), each part a door to that space. A zero total OMITS
  * the line (null); an unknown total keeps it, marked "–" (failed ≠ empty).
  * Spaces whose count is unknown or zero are left out of the parts.
+ *
+ * A capped count says so (ui-composition §11): `truncated` — the pod's own
+ * flag off `signals.count`, on the total and on each space — reads "N+"
+ * ("100+ need you · Content 60+"), and `floor` tells a renderer drawing the
+ * number itself. Absent (an older pod) reads as exact.
  */
 export function homeNeedsYouModel(
   needsYou: {
     total: number | null;
-    bySpace: ReadonlyArray<{ workspaceId: string; count: number | null }>;
+    truncated?: boolean | null;
+    bySpace: ReadonlyArray<{
+      workspaceId: string;
+      count: number | null;
+      truncated?: boolean | null;
+    }>;
   },
   spaces: ReadonlyArray<
     Pick<SpaceIntentInput, "workspaceId" | "label" | "name">
   >
 ): {
   total: number | null;
+  /** `total` is a lower bound — draw "N+". */
+  floor: boolean;
   text: string;
-  parts: Array<{ workspaceId: string; label: string; count: number }>;
+  parts: Array<{
+    workspaceId: string;
+    label: string;
+    count: number;
+    /** `count` is a lower bound. */
+    floor: boolean;
+    /** "60" / "60+" — the part's number as the line says it. */
+    countText: string;
+  }>;
 } | null {
   if (needsYou.total === 0) return null;
   const labelOf = new Map(
@@ -352,20 +378,27 @@ export function homeNeedsYouModel(
   );
   const parts = needsYou.bySpace
     .filter(
-      (b): b is { workspaceId: string; count: number } =>
+      (b): b is { workspaceId: string; count: number; truncated?: boolean | null } =>
         typeof b.count === "number" && b.count > 0
     )
-    .map((b) => ({
-      workspaceId: b.workspaceId,
-      label: labelOf.get(b.workspaceId) ?? "",
-      count: b.count,
-    }))
+    .map((b) => {
+      const floor = b.truncated === true;
+      return {
+        workspaceId: b.workspaceId,
+        label: labelOf.get(b.workspaceId) ?? "",
+        count: b.count,
+        floor,
+        countText: floor ? `${b.count}+` : `${b.count}`,
+      };
+    })
     .filter((p) => p.label !== "")
     .sort((a, b) => b.count - a.count);
-  const head = lensIntentDoorText("blocking", needsYou.total);
+  const floor = needsYou.total !== null && needsYou.truncated === true;
+  const head = lensCountDoorText("blocking", needsYou.total, floor);
   return {
     total: needsYou.total,
-    text: [head, ...parts.map((p) => `${p.label} ${p.count}`)].join(" · "),
+    floor,
+    text: [head, ...parts.map((p) => `${p.label} ${p.countText}`)].join(" · "),
     parts,
   };
 }
@@ -483,7 +516,11 @@ export function movingNowRowModel(
       cls: asksYou ? "blocking" : liveLine ? "happening" : "happened",
       state,
       objectKind: item.profileSlug ?? "entity",
-      title: item.title?.trim() || kindWord || resolveObjectNoun("entity"),
+      // A row stored before the write doors decoded (`&amp;`) reads as `&`.
+      title:
+        decodeHtmlEntities(item.title ?? "").trim() ||
+        kindWord ||
+        resolveObjectNoun("entity"),
       reason: [kindWord, statusWord].filter(Boolean).join(" · ") || null,
       repeat: null,
       source,
@@ -779,13 +816,15 @@ export function alsoInKinds(
     seen.add(p.slug);
     out.push({
       profileSlug: p.slug,
-      // The profile's own words keep their casing ("UI designs"); only a
+      // The profile's own words keep their deliberate casing ("UI designs"),
+      // sentence-cased like every title ("decisions" → "Decisions"); only a
       // nameless profile falls back to the slug's vocabulary noun.
-      title:
+      title: sentenceCaseLabel(
         p.plural?.trim() ||
-        (p.name.trim()
-          ? pluralizeNoun(p.name)
-          : resolveObjectNounPlural(p.slug)),
+          (p.name.trim()
+            ? pluralizeNoun(p.name)
+            : resolveObjectNounPlural(p.slug))
+      ),
       count,
       workspaceId: space.workspaceId,
     });

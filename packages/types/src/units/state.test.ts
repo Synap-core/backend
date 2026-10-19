@@ -274,10 +274,15 @@ describe("resolveRunUnitState — a run's status wears the unit mark", () => {
 
   it("waitingOnYou outranks a blocker and running, but not a failure", () => {
     expect(
-      resolveUnitState({ ...base, waitingOnYou: true, running: true, blockedBy: "X" }).state
+      resolveUnitState({
+        ...base,
+        waitingOnYou: true,
+        running: true,
+        blockedBy: "X",
+      }).state
     ).toBe("needs_you");
-    expect(resolveUnitState({ ...base, waitingOnYou: true, failed: true }).state).toBe(
-      "failed"
-    );
+    expect(
+      resolveUnitState({ ...base, waitingOnYou: true, failed: true }).state
+    ).toBe("failed");
   });
 });

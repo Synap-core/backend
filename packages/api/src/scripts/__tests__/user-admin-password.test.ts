@@ -139,9 +139,14 @@ describe("setPasswordAndVerify", () => {
 
   it("puts the floor exactly at MIN_PASSWORD_LENGTH characters", async () => {
     expect(MIN_PASSWORD_LENGTH).toBe(12);
-    const short = await run(fakeKratos(), "x".repeat(MIN_PASSWORD_LENGTH - 1)).catch((e) => e);
+    const short = await run(
+      fakeKratos(),
+      "x".repeat(MIN_PASSWORD_LENGTH - 1)
+    ).catch((e) => e);
     expect(short.step).toBe("password-too-weak");
-    await expect(run(fakeKratos(), "x".repeat(MIN_PASSWORD_LENGTH))).resolves.toBeUndefined();
+    await expect(
+      run(fakeKratos(), "x".repeat(MIN_PASSWORD_LENGTH))
+    ).resolves.toBeUndefined();
   });
 
   it("reports verification failure when Kratos public API is unreachable", async () => {

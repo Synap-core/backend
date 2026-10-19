@@ -1134,7 +1134,7 @@ export function registerWorkspaceExecutors(): void {
   //
   // `delete` sits on the rung-2.5 DESTRUCTIVE floor, which no rung can widen,
   // so an agent deleting a workspace ALWAYS proposes. With no executor the
-  // `*​/*` catch-all flipped it APPROVED and deleted nothing.
+  // `*/*` catch-all flipped it APPROVED and deleted nothing.
   //
   // PAYLOAD: FLAT `data: { id }` (nested as `data.data.id`); `proposal.targetId`
   // holds the same id. All three shapes are read.
@@ -1308,7 +1308,7 @@ export function registerWorkspaceExecutors(): void {
   //
   // `roles.delete` (routers/roles.ts:226) sits on the rung-2.5 DESTRUCTIVE
   // floor, so an agent deleting a role ALWAYS proposes; with no executor the
-  // `*​/*` catch-all flipped it APPROVED and the role survived.
+  // `*/*` catch-all flipped it APPROVED and the role survived.
   //
   // PAYLOAD: FLAT `data: { id }` (nested as `data.data.id`); `proposal.targetId`
   // holds the same id. Note the gate's `workspaceId` comes from the OPTIONAL
@@ -1406,7 +1406,7 @@ export function registerWorkspaceExecutors(): void {
   // declares `action: "delete"`, so the stored key is `apiKey/delete` while the
   // door to replay is `revoke`. `delete` sits on the rung-2.5 DESTRUCTIVE
   // floor, so an agent revoking a key ALWAYS proposes; with no executor the
-  // `*​/*` catch-all flipped the proposal APPROVED and the key STAYED LIVE —
+  // `*/*` catch-all flipped the proposal APPROVED and the key STAYED LIVE —
   // the worst possible false-green, because the whole point of the action is
   // to stop a credential from working.
   //
@@ -1508,7 +1508,7 @@ export function registerWorkspaceExecutors(): void {
   // ── apiKey / create ──────────────────────────────────────────────────────
   // Same home as `apiKey/delete` above (no `executors/api-key.ts`, and the
   // aggregator is off-limits). Severed since it was seeded — an approved
-  // `apiKey/create` hit the `*​/*` catch-all, which flips the row APPROVED and
+  // `apiKey/create` hit the `*/*` catch-all, which flips the row APPROVED and
   // returns success while NO KEY IS MINTED. The reviewer reads "granted" and
   // the app that asked holds nothing.
   //
@@ -1764,7 +1764,7 @@ export function registerWorkspaceExecutors(): void {
   // widen — so an agent removing a member ALWAYS proposes, by construction.
   //
   // WHAT APPROVAL USED TO DO: nothing that lands. `workspaceMember` is not in
-  // the materializer's subject switch, so the `*​/*` catch-all's honesty gate
+  // the materializer's subject switch, so the `*/*` catch-all's honesty gate
   // throws NOT_IMPLEMENTED today (it is one of the two doors that gate's own
   // test names). That throw is HONEST but it is still an unusable door: the
   // reviewer can never apply the change. These executors make it apply.

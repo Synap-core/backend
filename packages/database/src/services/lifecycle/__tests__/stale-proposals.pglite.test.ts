@@ -10,7 +10,7 @@ import { makeLifecyclePglite } from "./lifecycle-pglite.js";
 import { expireProposalsStaleAfterMove } from "../stale-proposals.js";
 
 let h: Awaited<ReturnType<typeof makeLifecyclePglite>>;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 let db: any;
 
 beforeAll(async () => {

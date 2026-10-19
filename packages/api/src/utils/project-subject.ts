@@ -26,7 +26,7 @@ import {
   eq,
   inArray,
   isNull,
-  getDb,
+  type getDb,
 } from "@synap/database";
 import { userVisibleWhere } from "./user-visible-where.js";
 import { createLink, deleteLink } from "../services/links/links-service.js";

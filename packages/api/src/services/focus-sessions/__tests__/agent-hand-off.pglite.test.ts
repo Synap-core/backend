@@ -151,7 +151,10 @@ const handOffCalls = () =>
     .map((c) => c[0])
     .filter((a) => a.action === "assign_agent");
 
-async function approveHandOff(sessionId: string, data: Record<string, unknown>) {
+async function approveHandOff(
+  sessionId: string,
+  data: Record<string, unknown>
+) {
   const executor = proposalExecRegistry.resolveExact(
     "focus_session/assign_agent"
   )!;

@@ -10,7 +10,9 @@ vi.mock("@synap/database", () => ({
   eq: vi.fn(),
   notifications: {},
 }));
-vi.mock("../NotificationService.js", () => ({ NotificationService: { create: vi.fn() } }));
+vi.mock("../NotificationService.js", () => ({
+  NotificationService: { create: vi.fn() },
+}));
 vi.mock("../../services/capabilities/pod-owner.js", () => ({
   resolvePodAdminUserIds: vi.fn(),
 }));
@@ -18,6 +20,7 @@ vi.mock("../../services/capabilities/pod-owner.js", () => ({
 const {
   notifyPodUpdateOutcome,
   describePodUpdateOutcome,
+  humanizePodVersion,
   POD_UPDATE_FAILED_NOTIFICATION_TYPE,
 } = await import("../pod-update-outcome.js");
 const { getNotificationDef } = await import("../registry.js");
@@ -38,7 +41,9 @@ function fakeDeps(admins: string[]) {
     deps: {
       recipients: async () => admins,
       alreadyNotified: async (sourceId: string) =>
-        new Set(rows.filter((r) => r.sourceId === sourceId).map((r) => r.userId)),
+        new Set(
+          rows.filter((r) => r.sourceId === sourceId).map((r) => r.userId)
+        ),
       create: async (input: { userId: string; sourceId?: string }) => {
         rows.push({ userId: input.userId, sourceId: input.sourceId! });
         return `n-${rows.length}`;
@@ -50,7 +55,9 @@ function fakeDeps(admins: string[]) {
 describe("pod.update_failed", () => {
   // Catches: a producer whose type the registry does not know — create() would skip it.
   it("is a registered type", () => {
-    expect(getNotificationDef(POD_UPDATE_FAILED_NOTIFICATION_TYPE)).toBeTruthy();
+    expect(
+      getNotificationDef(POD_UPDATE_FAILED_NOTIFICATION_TYPE)
+    ).toBeTruthy();
   });
 
   it("notifies every admin once per update id", async () => {
@@ -60,19 +67,59 @@ describe("pod.update_failed", () => {
     expect(await notifyPodUpdateOutcome(ROLLED_BACK, deps as never)).toBe(0);
     expect(rows).toHaveLength(2);
     // A different update id is news again.
-    expect(await notifyPodUpdateOutcome({ ...ROLLED_BACK, updateId: "u-2" }, deps as never)).toBe(2);
+    expect(
+      await notifyPodUpdateOutcome(
+        { ...ROLLED_BACK, updateId: "u-2" },
+        deps as never
+      )
+    ).toBe(2);
   });
 
   // Catches: the bell ringing for a good update.
   it("is silent on success and on an aborted (nothing-changed) run", async () => {
     const { rows, deps } = fakeDeps(["owner"]);
-    await notifyPodUpdateOutcome({ ...ROLLED_BACK, status: "succeeded" }, deps as never);
-    await notifyPodUpdateOutcome({ ...ROLLED_BACK, status: "aborted" }, deps as never);
+    await notifyPodUpdateOutcome(
+      { ...ROLLED_BACK, status: "succeeded" },
+      deps as never
+    );
+    await notifyPodUpdateOutcome(
+      { ...ROLLED_BACK, status: "aborted" },
+      deps as never
+    );
     expect(rows).toHaveLength(0);
   });
 
+  // Catches: a host build tag leaking into the bell ("Update to
+  // local-b88d021b7d74 was rolled back", dogfood 2026-10-19).
+  it("names a local build in words, never by its tag", async () => {
+    const sent: Array<{ data?: Record<string, unknown> }> = [];
+    const { deps } = fakeDeps(["owner"]);
+    await notifyPodUpdateOutcome(
+      { ...ROLLED_BACK, from: "local-0a1b2c3d4e5f", to: "local-b88d021b7d74" },
+      {
+        ...deps,
+        create: async (input: { data?: Record<string, unknown> }) => {
+          sent.push(input);
+          return "n-1";
+        },
+      } as never
+    );
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.data!.version).toBe("a local build");
+    expect(String(sent[0]!.data!.detail)).toContain(
+      "running a local build again"
+    );
+    expect(JSON.stringify(sent)).not.toMatch(/local-[0-9a-f]/);
+    // A release keeps its own name (the discriminator).
+    expect(humanizePodVersion("v1.4.0", "x")).toBe("v1.4.0");
+    expect(humanizePodVersion(null, "the new release")).toBe("the new release");
+  });
+
   it("says a failed rollback needs attention, and never claims the data is safe", () => {
-    const d = describePodUpdateOutcome({ ...ROLLED_BACK, status: "rollback_failed" })!;
+    const d = describePodUpdateOutcome({
+      ...ROLLED_BACK,
+      status: "rollback_failed",
+    })!;
     expect(d.headline).toMatch(/needs attention/);
     expect(d.detail).not.toMatch(/restored|safe/);
     expect(describePodUpdateOutcome(ROLLED_BACK)!.detail).toMatch(/restored/);

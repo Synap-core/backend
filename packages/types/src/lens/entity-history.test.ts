@@ -98,4 +98,32 @@ describe("entity history", () => {
       happenedItemOfTransition(move("w", "2026-10-11T10:00:00Z", {}))
     ).toBeNull();
   });
+
+  it("an edit on the thing is named by the thing's kind, from the pod's real update event", () => {
+    // The pod's `entities.update.completed`: `emitCompleted("update", entity)`
+    // stores the entity ROW as data — an id, a title, a profileId and the
+    // properties, and NO profileSlug.
+    const update: LoggedEvent = {
+      id: "u-real",
+      type: "entities.update.completed",
+      timestamp: "2026-10-11T12:00:00Z",
+      subjectType: "entities",
+      subjectId: "e1",
+      source: "api",
+      data: {
+        id: "e1",
+        title: "Lumen Atelier",
+        profileId: "8d7c2f9e-0000-4000-8000-000000000001",
+        properties: { stage: "qualified" },
+      },
+    };
+    const text = (profileSlug?: string) =>
+      dataLineText(entityHappened({ events: [update], profileSlug }, OPTS)[0]!.lines[0] as never);
+    expect(text()).toBe("Updated entity"); // the defect, without the host's kind
+    expect(text("lead")).toBe("Updated lead");
+    // An event that names its own kind keeps it.
+    const created: LoggedEvent = { ...update, id: "c1", type: "entities.create.completed", data: { profileSlug: "company" } };
+    const named = entityHappened({ events: [created], profileSlug: "lead" }, OPTS)[0]!.lines[0];
+    expect(dataLineText(named as never)).toBe("Created company");
+  });
 });
