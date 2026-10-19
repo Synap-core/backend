@@ -34,6 +34,10 @@ import {
 } from "../services/calcom/map-booking-to-graph.js";
 import { mapMailgunInboundToMessage } from "../services/mailgun/map-inbound-to-message.js";
 import { resolveToolByWebhookToken } from "../services/webhooks/resolve-tool-by-webhook-token.js";
+import {
+  postizWebhookPayload,
+  recordPostizPublished,
+} from "../services/postiz/record-postiz-published.js";
 
 const logger = createLogger({ module: "webhooks-inbound" });
 
@@ -744,6 +748,68 @@ webhooksInboundRouter.post("/mailgun/:token", async (c) => {
   }
 
   return c.json({ received: true, deduped: !result.recorded }, 200);
+});
+
+// ── Postiz inbound webhook — a published post → the Synap post is Published ──
+//
+// Postiz (upstream, not a fork) POSTs a JSON array of the published post after
+// every SUCCESSFUL publish, with NO signature header (payload and source lines:
+// services/postiz/record-postiz-published.ts). The `:token` path segment is
+// therefore the sole shared secret — the fireflies-without-secretVaultRef
+// posture. Postiz's SSRF guard refuses private targets, so the URL configured
+// in Postiz (Settings → Webhooks) is the pod's PUBLIC
+// `https://<pod>/api/webhooks/postiz/<token>`.
+//
+// Config lives on the `postiz` tool: metadata.postiz.webhook =
+//   { token, workspaceId?, ownerUserId? }
+// No `seen` map: the post's own state is the dedup (a re-delivery writes
+// nothing and the status move answers `unchanged`).
+interface PostizWebhookConfig {
+  token?: string;
+  workspaceId?: string | null;
+  ownerUserId?: string;
+}
+
+webhooksInboundRouter.post("/postiz/:token", async (c) => {
+  const token = c.req.param("token");
+
+  const contentLength = c.req.header("content-length");
+  if (
+    contentLength &&
+    Number.parseInt(contentLength, 10) > MAX_INBOUND_WEBHOOK_BODY
+  ) {
+    return c.json({ error: "Payload too large" }, 413);
+  }
+
+  const pzTool = await resolveToolByWebhookToken("postiz", "postiz", token);
+  const cfg = (
+    (pzTool?.metadata ?? {}) as { postiz?: { webhook?: PostizWebhookConfig } }
+  ).postiz?.webhook;
+  if (!pzTool || !cfg?.token || !tokensMatch(cfg.token, token)) {
+    return c.json({ error: "Not found" }, 404);
+  }
+
+  const rawBody = await c.req.text();
+  if (rawBody.length > MAX_INBOUND_WEBHOOK_BODY) {
+    return c.json({ error: "Payload too large" }, 413);
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(rawBody);
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+  const parsed = postizWebhookPayload.safeParse(json);
+  if (!parsed.success) {
+    return c.json({ error: "Unexpected payload" }, 400);
+  }
+
+  const result = await recordPostizPublished({
+    payload: parsed.data,
+    ownerUserId: cfg.ownerUserId ?? pzTool.createdBy,
+    workspaceId: cfg.workspaceId ?? pzTool.workspaceId ?? null,
+  });
+  return c.json({ received: true, ...result }, 200);
 });
 
 webhooksInboundRouter.post("/messaging", async (c) => {
