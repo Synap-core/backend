@@ -104,6 +104,19 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
     decisionDoc: "Synap experience north star (2026-10-19), decision 2A",
   },
 
+  {
+    // Founder decision (2026-10-19), completing 2A: the Files app left the
+    // default path too — its body already IS Library › Documents. The id and
+    // its deep links stay; an open lands on that tab with the same address.
+    id: "files",
+    surface: "browser",
+    since: "2026-10-19",
+    reason:
+      "The Files app (documents and whiteboards) is a tab of the one Library: Library = Data + Files + Import (founder decision 2A).",
+    replacedBy: "Library › Documents",
+    decisionDoc: "Synap experience north star (2026-10-19), decision 2A",
+  },
+
   // ── relay (React Native) ──────────────────────────────────────────────
   {
     id: "rules",

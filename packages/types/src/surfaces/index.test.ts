@@ -28,11 +28,12 @@ describe("DEPRECATED_SURFACES", () => {
     }
   });
 
-  it("contains the specific browser ids the V1 plan marks DEPRECATE, plus 2A's import", () => {
+  it("contains the specific browser ids the V1 plan marks DEPRECATE, plus 2A's import and files", () => {
     const browserIds = deprecatedSurfacesFor("browser").map((s) => s.id);
     expect(browserIds.sort()).toEqual(
-      // `import`: founder 2A (2026-10-19) — the capture Library is Library › Kept.
-      ["activity", "governance", "import", "processors", "work-map"].sort()
+      // `import` / `files`: founder 2A (2026-10-19) — the capture Library is
+      // Library › Kept, the Files app is Library › Documents.
+      ["activity", "files", "governance", "import", "processors", "work-map"].sort()
     );
   });
 
