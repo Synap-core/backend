@@ -250,13 +250,14 @@ describe("GET /webhooks — the caller's own rows only", () => {
     expect(listFindMany).not.toHaveBeenCalled();
   });
 
-  it("a full-access read key lists, filtered on the remapped owner", async () => {
+  it("a full-access read key lists, filtered on the remapped owner AND its own key (S2)", async () => {
     asKey(READ, FULL);
     expect((await list()).status).toBe(200);
     const where = listFindMany.mock.calls[0][0].where as SQL;
     const q = new PgDialect().sqlToQuery(where);
     expect(q.sql).toMatch(/"user_id" = \$1/);
-    expect(q.params).toEqual([OWNER]);
+    expect(q.sql).toMatch(/"api_key_id" = \$2/);
+    expect(q.params).toEqual([OWNER, "key-1"]);
   });
 
   it("a key with no hub scope at all cannot list", async () => {

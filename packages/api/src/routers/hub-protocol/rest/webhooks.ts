@@ -15,6 +15,10 @@
  * its grant is unbounded full access — the hub auth door refuses it
  * (`GRANT_OWNER_WIDE_REST_DOORS`, access/grant-door-fence.ts). These handlers
  * never pass the governance gate.
+ *
+ * KEY-BOUND (S2). A subscription created by a key records it (`api_key_id`);
+ * a key lists and deletes only the subscriptions it created, a session (no
+ * key) every one of its owner's (`ownSubscriptions`).
  */
 
 import { db, webhookSubscriptions, eq, and } from "@synap/database";
@@ -54,6 +58,19 @@ const WebhookListItemSchema = z.object({
 });
 
 const WebhookIdParamsSchema = z.object({ id: z.string() });
+
+/**
+ * The subscriptions a caller manages (S2): a KEY sees only those it created
+ * (`api_key_id`); a session (no key) sees every one of its owner's.
+ */
+function ownSubscriptions(userId: string, apiKeyId: string | undefined) {
+  return apiKeyId
+    ? and(
+        eq(webhookSubscriptions.userId, userId),
+        eq(webhookSubscriptions.apiKeyId, apiKeyId)
+      )
+    : eq(webhookSubscriptions.userId, userId);
+}
 
 export function registerWebhooksRoutes(app: HubHono) {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -144,6 +161,9 @@ export function registerWebhooksRoutes(app: HubHono) {
         .insert(webhookSubscriptions)
         .values({
           userId,
+          // S2: the creating key (null for a session) — delivery is then
+          // bounded by that key's liveness and grant.
+          apiKeyId: c.get("apiKeyId") ?? null,
           name: "is-webhook",
           url,
           eventTypes,
@@ -179,7 +199,7 @@ export function registerWebhooksRoutes(app: HubHono) {
 
     try {
       const subscriptions = await db.query.webhookSubscriptions.findMany({
-        where: eq(webhookSubscriptions.userId, userId),
+        where: ownSubscriptions(userId, c.get("apiKeyId")),
         orderBy: (subscriptions, { desc }) => [desc(subscriptions.createdAt)],
       });
 
@@ -214,7 +234,7 @@ export function registerWebhooksRoutes(app: HubHono) {
         .where(
           and(
             eq(webhookSubscriptions.id, id),
-            eq(webhookSubscriptions.userId, userId)
+            ownSubscriptions(userId, c.get("apiKeyId"))
           )
         )
         .returning();
