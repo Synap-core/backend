@@ -363,4 +363,33 @@ describe("countNeedsYouByScope", () => {
       await perScopeCount({ workspaceId: W1 })
     );
   });
+
+  // LAST: it fills a scan cap for every test after it.
+  it("a capped read says so: `truncated` is signals.count's own floor flag", async () => {
+    const before = await countNeedsYouByScope(ctx, SCOPES);
+    // Uncapped: the floor flag is a measured false, not an absent one.
+    expect(before.truncated).toBe(false);
+    expect(before.bySpaceTruncated.get(W1)).toBe(false);
+    // Fill the notification scan cap (100) in W1 — distinct titles, so the
+    // fold cannot shrink them below it.
+    await q(
+      `insert into notifications (id, user_id, workspace_id, type, category, title, status, created_at)
+       select gen_random_uuid(),$1,$2,'custom.note','inbox','Capped '||g,'unread',now()
+       from generate_series(1,100) g`,
+      [USER, W1]
+    );
+    const own = await signalsRouter.createCaller(ctx).count({} as never);
+    expect(own.truncated).toBe(true); // non-vacuity: the cap was reached
+    const grouped = await countNeedsYouByScope(ctx, SCOPES);
+    expect(grouped.total).toBe(own.needsYou);
+    expect(grouped.truncated).toBe(own.truncated);
+    const w1 = await signalsRouter
+      .createCaller(ctx)
+      .count({ workspaceId: W1 } as never);
+    expect(w1.truncated).toBe(true);
+    expect(grouped.bySpaceTruncated.get(W1)).toBe(w1.truncated);
+    // A space whose count failed has no floor flag either.
+    expect(grouped.bySpace.get(W3)).toBeNull();
+    expect(grouped.bySpaceTruncated.get(W3)).toBeNull();
+  });
 });

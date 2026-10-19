@@ -55,9 +55,11 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
     id: "governance",
     surface: "browser",
     since: SINCE,
+    // Founder 2A (2026-10-19): the needs-you list left Work for its own page,
+    // the Inbox (`inbox` app) — the row's successor follows it.
     reason:
-      "Governance app deprecated: it merges into Work (needs-you) and Settings (Agents, Approvals, History). Its System tab is retired outright.",
-    replacedBy: "Work › Needs you; Settings › AI & agents",
+      "Governance app deprecated: it merges into the Inbox (needs-you) and Settings (Agents, Approvals, History). Its System tab is retired outright.",
+    replacedBy: "Inbox; Settings › AI & agents",
     decisionDoc: V1_PLAN_DOC,
   },
   {
@@ -86,6 +88,20 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
       "Work map deprecated AS A STANDALONE APP: it lives on as a view, Work › Map, and on project pages.",
     replacedBy: "Work › Map",
     decisionDoc: V1_PLAN_DOC,
+  },
+
+  {
+    // Founder 2A (2026-10-19, "Library = Data + Files + Import"): the capture
+    // Library left the default path to become a TAB of the one Library (the
+    // `data` app). The id, its alias (`library` → `import`) and its deep links
+    // stay: an open of it lands on Library › Kept with the same address.
+    id: "import",
+    surface: "browser",
+    since: "2026-10-19",
+    reason:
+      "The capture Library (links, pages and files you kept) is a tab of the one Library: Library = Data + Files + Import (founder decision 2A).",
+    replacedBy: "Library › Kept",
+    decisionDoc: "Synap experience north star (2026-10-19), decision 2A",
   },
 
   // ── relay (React Native) ──────────────────────────────────────────────

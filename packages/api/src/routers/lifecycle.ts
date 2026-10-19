@@ -242,8 +242,19 @@ const homeWire = z.object({
   needsYou: z.object({
     /** `signals.count` on the caller's floor (narrowed to the project). */
     total: z.number().nullable(),
+    /**
+     * `total` is a FLOOR, not a total: a half of its read hit its scan cap
+     * (`signals.count`'s own `truncated`). Show "N+" — never a bare N. null
+     * when `total` is (not measured).
+     */
+    truncated: z.boolean().nullable(),
     bySpace: z.array(
-      z.object({ workspaceId: z.string(), count: z.number().nullable() })
+      z.object({
+        workspaceId: z.string(),
+        count: z.number().nullable(),
+        /** This space's count is a floor; null when `count` is. */
+        truncated: z.boolean().nullable(),
+      })
     ),
     /**
      * Needs-you that lives in NO space: no-workspace rows plus unfinished

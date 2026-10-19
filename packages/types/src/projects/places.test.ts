@@ -10,7 +10,7 @@ import {
 describe("place words", () => {
   it("names the two places that are no project", () => {
     expect(ALL_PROJECTS).toBe("All projects");
-    expect(NOT_IN_A_PROJECT).toBe("Not in a project");
+    expect(NOT_IN_A_PROJECT).toBe("Unfiled");
   });
 });
 

@@ -57,6 +57,7 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveStatusLabel,
+  sentenceCaseLabel,
 } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
@@ -138,7 +139,13 @@ export interface HomeRead {
   spaces: SpaceIntent[];
   needsYou: {
     total: number | null;
-    bySpace: Array<{ workspaceId: string; count: number | null }>;
+    /** `total` is a floor (a scan hit its cap); null when `total` is. */
+    truncated: boolean | null;
+    bySpace: Array<{
+      workspaceId: string;
+      count: number | null;
+      truncated: boolean | null;
+    }>;
     /** In no space (pod-level rows + unfinished captures); null = unmeasured. */
     podLevel: number | null;
   };
@@ -203,7 +210,10 @@ export type NeedsYouByScopeRead = (scopes: {
   spaces: ReadonlyArray<{ workspaceId: string; profileSlugs: string[] }>;
 }) => Promise<{
   total: number | null;
+  /** `total` is a floor — THE count's own `truncated`; null when `total` is. */
+  truncated: boolean | null;
   bySpace: Map<string, number | null>;
+  bySpaceTruncated: Map<string, boolean | null>;
   byKind: Map<string, Map<string, number | null>>;
   /** Needs-you in NO space (+ captures); null = not measured. */
   podLevel: number | null;
@@ -479,7 +489,11 @@ async function profileWords(
   for (const [slug, r] of pick) {
     out.set(slug, {
       label: r.displayName,
-      plural: r.plural?.trim() || resolveObjectNounPlural(r.displayName),
+      // Sentence case at the door: a stored plural is whatever its author
+      // typed ("decisions"), and it renders beside "Features".
+      plural: sentenceCaseLabel(
+        r.plural?.trim() || resolveObjectNounPlural(r.displayName)
+      ),
     });
   }
   return out;
@@ -786,9 +800,11 @@ export async function readHome(
     ),
   ]);
   const total = needs?.total ?? null;
+  const truncated = needs?.truncated ?? null;
   const bySpace = spaces.map((s) => ({
     workspaceId: s.id,
     count: needs?.bySpace.get(s.id) ?? null,
+    truncated: needs?.bySpaceTruncated.get(s.id) ?? null,
   }));
   const byKind = intents.map(
     (i) => needs?.byKind.get(i.space.id) ?? new Map<string, number | null>()
@@ -835,7 +851,12 @@ export async function readHome(
   );
   return {
     spaces: out,
-    needsYou: { total, bySpace, podLevel: needs?.podLevel ?? null },
+    needsYou: {
+      total,
+      truncated,
+      bySpace,
+      podLevel: needs?.podLevel ?? null,
+    },
   };
 }
 

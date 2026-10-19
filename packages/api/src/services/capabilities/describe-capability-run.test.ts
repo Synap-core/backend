@@ -53,10 +53,18 @@ describe("describeCapabilityRun", () => {
     expect(describeCapabilityRun("market.install", { slug: "x" })).toBe(
       'Install package "x"'
     );
-    // Not an install: name the verb rather than inventing detail.
+    // Not an install: name the verb rather than inventing detail — in the
+    // tool door's words, never the raw id (dogfood: "Run fal_generate_image").
     expect(describeCapabilityRun("gmail_send", { to: "a@b.c" })).toBe(
-      "Run gmail_send"
+      "Run gmail send"
     );
+    expect(describeCapabilityRun("fal_generate_image", {})).toBe(
+      "Run fal generate image"
+    );
+    // Dotted ids keep every segment ("Run send" would lose the service).
+    expect(describeCapabilityRun("gmail.send", {})).toBe("Run gmail send");
+    // A tool the door knows is its own verb phrase, not "Run create entity".
+    expect(describeCapabilityRun("create_entity", {})).toBe("Create entity");
     expect(describeCapabilityRun(null, {})).toBe("Run capability");
   });
 

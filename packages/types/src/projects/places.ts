@@ -11,15 +11,20 @@
  */
 import {
   nounInSentence,
-  resolveObjectNoun,
+  resolveDestinationLabel,
   resolveObjectNounPlural,
 } from "../vocabulary/index.js";
 
 /** "All projects" — the place that is no project: every project at once. */
 export const ALL_PROJECTS = `All ${nounInSentence(resolveObjectNounPlural("project"))}`;
 
-/** "Not in a project" — the place of the things filed into no project. */
-export const NOT_IN_A_PROJECT = `Not in a ${nounInSentence(resolveObjectNoun("project"))}`;
+/**
+ * "Unfiled" — the place of the things filed into no project (founder 2A,
+ * 2026-10-19; was "Not in a project"). The name of the constant stays, so the
+ * rail, Home, Data's narrow, Work's narrow and relay's switcher keep reading
+ * the ONE word without a rename sweep.
+ */
+export const NOT_IN_A_PROJECT = resolveDestinationLabel("unfiled");
 
 /** The fields of a project row the place rules read. */
 export interface PlaceProjectRow {

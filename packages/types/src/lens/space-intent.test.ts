@@ -328,6 +328,35 @@ describe("homeNeedsYouModel", () => {
     expect(unknown?.total).toBeNull();
     expect(unknown?.text).toMatch(/^– need you/);
   });
+  it("a capped count reads N+ — on the total and on each space, independently", () => {
+    // Rules out "copy the pod-wide flag onto every part": only Content is capped.
+    const m = homeNeedsYouModel(
+      {
+        total: 100,
+        truncated: true,
+        bySpace: [
+          { workspaceId: "w1", count: 3, truncated: false },
+          { workspaceId: "w2", count: 60, truncated: true },
+        ],
+      },
+      spaces
+    );
+    expect(m?.text).toBe("100+ need you · Content 60+ · Sales 3");
+    expect(m?.floor).toBe(true);
+    expect(m?.parts.map((p) => [p.workspaceId, p.floor, p.countText])).toEqual([
+      ["w2", true, "60+"],
+      ["w1", false, "3"],
+    ]);
+  });
+  it("1+ is plural; an unknown total is never a floor; absent flags read exact", () => {
+    expect(homeNeedsYouModel({ total: 1, truncated: true, bySpace: [] }, spaces)?.text).toBe(
+      "1+ need you"
+    );
+    const unknown = homeNeedsYouModel({ total: null, truncated: true, bySpace: [] }, spaces);
+    expect(unknown?.floor).toBe(false);
+    expect(unknown?.text).toBe("– need you");
+    expect(homeNeedsYouModel({ total: 1, bySpace: [] }, spaces)?.text).toBe("1 needs you");
+  });
 });
 
 describe("movingNowRowModel", () => {
@@ -648,7 +677,7 @@ describe("the row/space joins (one rule, browser + relay)", () => {
     expect(alsoInKinds(crm, profiles, null)).toBeNull();
   });
 
-  it("a profile's own name keeps its casing: 'UI Design' → 'UI Designs', never 'Ui designs' (S9)", () => {
+  it("a profile's own name keeps its deliberate casing: 'UI Design' → 'UI designs', never 'Ui designs' (S9)", () => {
     const space = { workspaceId: "dev", produces: [] };
     const chips = alsoInKinds(
       space,
@@ -675,8 +704,10 @@ describe("the row/space joins (one rule, browser + relay)", () => {
       ],
       { "ui-design": 3, mcp_server: 2, contact_log: 1 }
     );
+    // Sentence case keeps the acronym and lower-cases the Title Case word,
+    // like every other title ("User stories").
     expect(chips?.map((c) => c.title)).toEqual([
-      "UI Designs",
+      "UI designs",
       "MCP servers",
       resolveObjectNounPlural("contact_log"),
     ]);
@@ -815,5 +846,87 @@ describe("movingSpaceChips counts the subjectless rows in All (homes A7)", () =>
     });
     expect(total).toBe(2);
     expect(chips).toEqual([{ workspaceId: "dev", title: "dev", count: null }]);
+  });
+});
+
+describe("a title stored escaped (`&amp;`) reads as text", () => {
+  // Rows written before every write door decoded still hold `&amp;`; the
+  // lens decodes where it builds a title, so they display right without a
+  // backfill. The plain title is the discriminator: decoding must not touch it.
+  it("a moving row's title", () => {
+    const row = (title: string) =>
+      movingNowRowModel({
+        entityId: "e1",
+        title,
+        profileSlug: "devplane_feature",
+        workspaceId: "w1",
+        status: null,
+        category: null,
+        work: [],
+      }).row.title;
+    expect(row("Doors &amp; Surface Spec")).toBe("Doors & Surface Spec");
+    expect(row("Doors & Surface Spec")).toBe("Doors & Surface Spec");
+  });
+
+  it("a space card's headline", () => {
+    const m = spaceIntentCardModel(
+      space({
+        produces: [
+          kind({
+            headline: {
+              entityId: "e1",
+              title: "Q&amp;A pipeline",
+              status: null,
+              reason: "recent",
+            },
+          }),
+        ],
+      })
+    );
+    expect(m.headline?.text).toBe("Q&A pipeline");
+  });
+});
+
+describe("kind plurals are sentence-cased (a stored plural is whatever its author typed)", () => {
+  it("a card row: 'decisions' reads 'Decisions' beside 'Features'", () => {
+    const m = spaceIntentCardModel(
+      space({
+        produces: [
+          kind(),
+          kind({
+            profileSlug: "decision",
+            label: "Decision",
+            plural: "decisions",
+          }),
+          kind({
+            profileSlug: "story",
+            label: "User story",
+            plural: "User Stories",
+          }),
+        ],
+      })
+    );
+    expect(m.kinds.map((k) => k.title)).toEqual([
+      "Features",
+      "Decisions",
+      "User stories",
+    ]);
+  });
+
+  it("an also-here chip", () => {
+    const chips = alsoInKinds(
+      { workspaceId: "w1", produces: [] },
+      [
+        {
+          slug: "decision",
+          name: "Decision",
+          plural: "decisions",
+          workspaceId: "w1",
+          profileKind: "kind",
+        },
+      ],
+      { decision: 2 }
+    );
+    expect(chips?.map((c) => c.title)).toEqual(["Decisions"]);
   });
 });
