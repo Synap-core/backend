@@ -13499,6 +13499,61 @@ export interface CreateCapabilityResult {
 	};
 	proposals: string[];
 }
+declare const INBOUND_WEBHOOK_PROVIDERS: {
+	readonly calcom: {
+		readonly toolName: "cal_com";
+		readonly metadataKey: "calcom";
+		readonly requiredConfig: readonly [
+			"secretVaultRef"
+		];
+		readonly setupStep: null;
+	};
+	readonly fireflies: {
+		readonly toolName: "fireflies";
+		readonly metadataKey: "fireflies";
+		readonly requiredConfig: readonly [
+		];
+		readonly setupStep: null;
+	};
+	readonly mailgun: {
+		readonly toolName: "mailgun";
+		readonly metadataKey: "mailgun";
+		readonly requiredConfig: readonly [
+			"secretVaultRef"
+		];
+		readonly setupStep: null;
+	};
+	readonly postiz: {
+		readonly toolName: "postiz";
+		readonly metadataKey: "postiz";
+		readonly requiredConfig: readonly [
+		];
+		readonly setupStep: "In Postiz, open Settings \u2192 Webhooks \u2192 Add a webhook, paste this URL, choose All integrations, and save.";
+	};
+};
+/** The route path segment: `POST /api/webhooks/<provider>/:token`. */
+export type InboundWebhookProvider = keyof typeof INBOUND_WEBHOOK_PROVIDERS;
+export interface ProvisionedInboundWebhook {
+	provider: InboundWebhookProvider;
+	/** `<PUBLIC_URL origin>/api/webhooks/<provider>/<token>`. */
+	url: string;
+	/** True when an existing token was replaced. */
+	rotated: boolean;
+	/** Keys the route still needs before it accepts a delivery. */
+	missingConfig: string[];
+	/** The manual step on the provider's side, or null when unchecked. */
+	setupStep: string | null;
+}
+/** One installed tool's webhook, as a capability install reports it. */
+export type InstalledToolWebhook = ({
+	tool: string;
+	toolId: string;
+} & ProvisionedInboundWebhook) | {
+	tool: string;
+	toolId: string;
+	provider: InboundWebhookProvider;
+	error: string;
+};
 export interface CapabilityShadow {
 	type: "skill" | "tool";
 	id: string;
@@ -28083,7 +28138,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				definition?: any;
 				params?: Record<string, unknown> | undefined;
 			};
-			output: CreateCapabilityResult;
+			output: CreateCapabilityResult & {
+				webhooks: InstalledToolWebhook[];
+			};
 			meta: object;
 		}>;
 		uninstall: import("@trpc/server").TRPCMutationProcedure<{
@@ -32724,6 +32781,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				ok: boolean;
 			};
+			meta: object;
+		}>;
+		provisionWebhook: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				rotate?: boolean | undefined;
+			};
+			output: ProvisionedInboundWebhook;
 			meta: object;
 		}>;
 		delete: import("@trpc/server").TRPCMutationProcedure<{

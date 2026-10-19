@@ -3,6 +3,22 @@ RUN npm install -g pnpm@10.28.0
 WORKDIR /app
 
 # ============================================================================
+# Manifests: every workspace package.json, DERIVED from the tree
+#
+# This list used to be hand-written and fell behind (pod-admin's copy missed
+# markdown-core and failed `synap update` on 2026-10-19). The globs mirror
+# pnpm-workspace.yaml `packages:`. apps/pod-admin is left out on purpose: it
+# has its own image, and installing Next.js + sharp here would only slow this
+# build. Only this stage re-runs on a source change; the install layer below
+# stays cached while no manifest changes.
+# ============================================================================
+FROM base AS manifests
+COPY . /src
+RUN cd /src && for f in package.json apps/*/package.json packages/*/package.json marketplaces/*/package.json; do \
+      if [ -f "$f" ] && [ "$f" != apps/pod-admin/package.json ]; then mkdir -p "/manifests/$(dirname "$f")" && cp "$f" "/manifests/$f"; fi; \
+    done
+
+# ============================================================================
 # Builder: Install dependencies and build both services
 # ============================================================================
 FROM base AS builder
@@ -18,34 +34,8 @@ ENV npm_config_nodedir=/usr/local
 # ── Layer 1: dependency manifests (cached unless lockfile or package.json changes) ──
 # Copy workspace config and all package.json files BEFORE source code.
 # This layer is only invalidated when dependencies change, not on every commit.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
-COPY apps/api/package.json      ./apps/api/
-COPY packages/ai-embeddings/package.json ./packages/ai-embeddings/
-COPY packages/ai/package.json            ./packages/ai/
-COPY packages/api-types/package.json     ./packages/api-types/
-COPY packages/api/package.json           ./packages/api/
-COPY packages/auth/package.json          ./packages/auth/
-COPY packages/capability-gate/package.json ./packages/capability-gate/
-COPY packages/core/package.json          ./packages/core/
-COPY packages/database/package.json      ./packages/database/
-COPY packages/events/package.json        ./packages/events/
-COPY packages/external-connect-client/package.json ./packages/external-connect-client/
-COPY packages/feed-service/package.json  ./packages/feed-service/
-COPY packages/field-crypto/package.json  ./packages/field-crypto/
-COPY packages/governance-policy/package.json ./packages/governance-policy/
-COPY packages/hub-protocol/package.json  ./packages/hub-protocol/
-COPY packages/hub-rest-client/package.json ./packages/hub-rest-client/
-COPY packages/intelligence-client/package.json ./packages/intelligence-client/
-COPY packages/jobs/package.json          ./packages/jobs/
-COPY packages/markdown-core/package.json ./packages/markdown-core/
-COPY packages/playbooks/package.json     ./packages/playbooks/
-COPY packages/realtime/package.json      ./packages/realtime/
-COPY packages/scripts/package.json       ./packages/scripts/
-COPY packages/search/package.json        ./packages/search/
-COPY packages/shared-utils/package.json  ./packages/shared-utils/
-COPY packages/storage/package.json       ./packages/storage/
-COPY packages/test-e2e/package.json      ./packages/test-e2e/
-COPY packages/types/package.json         ./packages/types/
+COPY pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY --from=manifests /manifests/ ./
 
 # Install all dependencies — pnpm store is cached across builds
 RUN --mount=type=cache,id=pnpm-synap,target=/root/.local/share/pnpm/store \

@@ -15,6 +15,18 @@ WORKDIR /app
 # (turbo / pnpm). The backend Dockerfile takes the same shape — copy everything,
 # install once, let turbo handle the order.
 # ============================================================================
+# ── Manifests: every workspace package.json, DERIVED from the tree ──
+# This list used to be hand-written and fell behind: markdown-core (and seven
+# other packages) were missing, so pnpm never installed their deps and tsc
+# failed on `mdast` during `synap update` (2026-10-19). The globs mirror
+# pnpm-workspace.yaml `packages:`. Only this stage re-runs on a source change;
+# the install layer below stays cached while no manifest changes.
+FROM base AS manifests
+COPY . /src
+RUN cd /src && for f in package.json apps/*/package.json packages/*/package.json marketplaces/*/package.json; do \
+      if [ -f "$f" ]; then mkdir -p "/manifests/$(dirname "$f")" && cp "$f" "/manifests/$f"; fi; \
+    done
+
 FROM base AS builder
 
 RUN apt-get update \
@@ -22,28 +34,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # ── Layer 1: dependency manifests (cached unless lockfile or package.json changes) ──
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.json ./
-COPY apps/api/package.json          ./apps/api/
-COPY apps/pod-admin/package.json    ./apps/pod-admin/
-COPY packages/ai-embeddings/package.json    ./packages/ai-embeddings/
-COPY packages/ai/package.json               ./packages/ai/
-COPY packages/api-types/package.json        ./packages/api-types/
-COPY packages/api/package.json              ./packages/api/
-COPY packages/auth/package.json             ./packages/auth/
-COPY packages/core/package.json             ./packages/core/
-COPY packages/database/package.json         ./packages/database/
-COPY packages/events/package.json           ./packages/events/
-COPY packages/feed-service/package.json     ./packages/feed-service/
-COPY packages/hub-protocol/package.json     ./packages/hub-protocol/
-COPY packages/intelligence-client/package.json ./packages/intelligence-client/
-COPY packages/jobs/package.json             ./packages/jobs/
-COPY packages/realtime/package.json         ./packages/realtime/
-COPY packages/scripts/package.json          ./packages/scripts/
-COPY packages/search/package.json           ./packages/search/
-COPY packages/shared-utils/package.json     ./packages/shared-utils/
-COPY packages/storage/package.json          ./packages/storage/
-COPY packages/test-e2e/package.json         ./packages/test-e2e/
-COPY packages/types/package.json            ./packages/types/
+COPY pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.json ./
+COPY --from=manifests /manifests/ ./
 
 # Install ALL workspace deps — turbo build below needs every package's
 # devDeps (tsc, tsup, etc.) resolvable from the host's lockfile.
