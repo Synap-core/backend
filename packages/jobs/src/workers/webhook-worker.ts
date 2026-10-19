@@ -36,6 +36,16 @@
  * require ≥1 type, so the empty case is only reachable on legacy rows.)
  * WORKSPACE RULE — one, {@link subscriptionCoversWorkspace}, applied by BOTH
  * producers: a workspace-bound subscription gets only that workspace's events.
+ *
+ * KEY RULE (S2 + D7) — a subscription created by an API key (`api_key_id`) is
+ * delivered only while that key is LIVE ({@link liveApiKeyIds}: active, not
+ * revoked, not expired — read from `api_keys` at delivery time, by BOTH
+ * producers and again by {@link deliverWebhook} at send time), and only for an
+ * event whose SUBJECT the key's GRANT can read. The grant read is the API's
+ * access layer (`scopedDb` under the key's grant), which jobs cannot import:
+ * the API registers it here ({@link registerKeyGrantAudience}); with none
+ * registered a key-bound subscription receives nothing. A session-created
+ * subscription (`api_key_id` null) keeps the owner + workspace rule.
  */
 
 import type PgBoss from "pg-boss";
@@ -45,8 +55,13 @@ import {
   db,
   webhookSubscriptions,
   webhookDeliveries,
+  apiKeys,
   eq,
   and,
+  or,
+  gt,
+  inArray,
+  isNull,
   drizzleSql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -89,6 +104,12 @@ export interface WebhookDeliverJob {
 export interface WebhookEventFanoutJob {
   stage?: undefined;
   eventType: string;
+  /**
+   * The subject's type (`SideEffectPayload.subjectType`). Optional: a job
+   * queued before it was carried derives it from `eventType`
+   * (`<subjectType>.<action>.completed`).
+   */
+  subjectType?: string;
   subjectId: string;
   userId: string;
   workspaceId?: string | null;
@@ -127,6 +148,98 @@ export function subscriptionCoversWorkspace(
 ): boolean {
   if (!subscriptionWorkspaceId) return true;
   return subscriptionWorkspaceId === (eventWorkspaceId ?? null);
+}
+
+/**
+ * THE key-liveness rule (S2): of these key ids, the ones whose `api_keys` row
+ * is active, not revoked and not expired — the same facts the auth door
+ * refuses a key on (`getApiKeyStatus`). A missing row is not live.
+ */
+export async function liveApiKeyIds(
+  keyIds: ReadonlyArray<string | null | undefined>
+): Promise<Set<string>> {
+  const ids = [...new Set(keyIds.filter((k): k is string => !!k))];
+  if (ids.length === 0) return new Set();
+  const rows = await db
+    .select({ id: apiKeys.id })
+    .from(apiKeys)
+    .where(
+      and(
+        inArray(apiKeys.id, ids),
+        eq(apiKeys.isActive, true),
+        isNull(apiKeys.revokedAt),
+        or(isNull(apiKeys.expiresAt), gt(apiKeys.expiresAt, new Date()))
+      )
+    );
+  return new Set(rows.map((r) => r.id));
+}
+
+/** A session-created subscription (no key) is always key-live. */
+export function subscriptionKeyLive(
+  apiKeyId: string | null | undefined,
+  live: ReadonlySet<string>
+): boolean {
+  return !apiKeyId || live.has(apiKeyId);
+}
+
+/** What a key-bound subscription's grant is asked about (D7). */
+export interface KeyGrantSubject {
+  apiKeyId: string;
+  /** The subscription's owner — the read floor the grant narrows. */
+  ownerUserId: string;
+  subjectType: string;
+  subjectId: string;
+}
+
+/** Does the key's grant read this subject? Registered by `@synap/api`. */
+export type KeyGrantAudience = (subject: KeyGrantSubject) => Promise<boolean>;
+
+let keyGrantAudience: KeyGrantAudience | null = null;
+
+/**
+ * The API registers its grant read at load (`utils/webhook-delivery.ts`), the
+ * same pattern as `registerGrantReadProvider`. `null` unregisters (tests).
+ */
+export function registerKeyGrantAudience(fn: KeyGrantAudience | null): void {
+  keyGrantAudience = fn;
+}
+
+/**
+ * The subset of key-bound `subscriptions` whose grant reads the subject. A
+ * failed read (or no registered reader) drops that subscription only: a
+ * failed read is not "everything".
+ */
+async function keyBoundReaders<
+  S extends { id: string; apiKeyId?: string | null; userId: string },
+>(
+  subscriptions: readonly S[],
+  subject: { subjectType: string; subjectId: string }
+): Promise<Set<string>> {
+  const allowed = new Set<string>();
+  for (const sub of subscriptions) {
+    if (!sub.apiKeyId) continue;
+    if (!keyGrantAudience) {
+      logger.warn(
+        { subscriptionId: sub.id },
+        "No key-grant audience registered — key-bound webhook not delivered"
+      );
+      continue;
+    }
+    try {
+      const reads = await keyGrantAudience({
+        apiKeyId: sub.apiKeyId,
+        ownerUserId: sub.userId,
+        ...subject,
+      });
+      if (reads) allowed.add(sub.id);
+    } catch (err) {
+      logger.warn(
+        { err, subscriptionId: sub.id },
+        "Key-grant audience read failed — webhook not delivered"
+      );
+    }
+  }
+  return allowed;
 }
 
 /** Serialize a body in its format. */
@@ -265,6 +378,8 @@ async function fanOutDomainEvent(
   const subs = await db
     .select({
       id: webhookSubscriptions.id,
+      userId: webhookSubscriptions.userId,
+      apiKeyId: webhookSubscriptions.apiKeyId,
       workspaceId: webhookSubscriptions.workspaceId,
       eventTypes: webhookSubscriptions.eventTypes,
       retryConfig: webhookSubscriptions.retryConfig,
@@ -276,11 +391,20 @@ async function fanOutDomainEvent(
         eq(webhookSubscriptions.active, true)
       )
     );
-  const matching = subs.filter(
+  const wanted = subs.filter(
     (s) =>
       subscriptionWantsEvent(s.eventTypes, eventType) &&
       subscriptionCoversWorkspace(s.workspaceId, workspaceId)
   );
+  // Key rule: a dead key's subscription is not delivered; a live one only
+  // when its grant reads the subject.
+  const live = await liveApiKeyIds(wanted.map((s) => s.apiKeyId));
+  const keyLive = wanted.filter((s) => subscriptionKeyLive(s.apiKeyId, live));
+  const granted = await keyBoundReaders(keyLive, {
+    subjectType: job.subjectType ?? eventType.split(".")[0],
+    subjectId,
+  });
+  const matching = keyLive.filter((s) => !s.apiKeyId || granted.has(s.id));
   if (matching.length === 0) return;
 
   await enqueueWebhookDeliveries(
@@ -313,12 +437,20 @@ export async function deliverWebhook(job: WebhookDeliverJob): Promise<void> {
       url: webhookSubscriptions.url,
       secret: webhookSubscriptions.secret,
       active: webhookSubscriptions.active,
+      apiKeyId: webhookSubscriptions.apiKeyId,
     })
     .from(webhookSubscriptions)
     .where(eq(webhookSubscriptions.id, job.subscriptionId))
     .limit(1);
   // Deleted or paused since enqueue: nothing to deliver, nothing to retry.
   if (!sub || !sub.active) return;
+  // Its key revoked or expired since enqueue (S2): the same — never sent.
+  if (
+    sub.apiKeyId &&
+    !subscriptionKeyLive(sub.apiKeyId, await liveApiKeyIds([sub.apiKeyId]))
+  ) {
+    return;
+  }
 
   let responseStatus = 0;
   let failure: string | null = null;
