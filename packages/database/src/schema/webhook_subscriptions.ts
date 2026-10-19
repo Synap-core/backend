@@ -9,11 +9,23 @@ import {
 } from "drizzle-orm/pg-core";
 import { events } from "./events.js";
 import { workspaces } from "./workspaces.js";
+import { apiKeys } from "./api-keys.js";
 
 export const webhookSubscriptions = pgTable("webhook_subscriptions", {
   id: uuid("id").defaultRandom().primaryKey(),
   userId: text("user_id").notNull(),
   workspaceId: uuid("workspace_id").references(() => workspaces.id, {
+    onDelete: "cascade",
+  }),
+  /**
+   * The API key that created this subscription (S2, 0335); null = created by
+   * a human session (or the server). A key-bound subscription is delivered
+   * only while that key is live, and only what its grant can read (D7) —
+   * `@synap/jobs` webhook-worker `subscriptionKeyLive` + the key audience
+   * resolver. Cascade: a deleted key takes its subscriptions with it (a NULL
+   * here would widen the row to everything its owner can read).
+   */
+  apiKeyId: uuid("api_key_id").references(() => apiKeys.id, {
     onDelete: "cascade",
   }),
   name: text("name").notNull(),
