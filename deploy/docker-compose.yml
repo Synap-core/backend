@@ -572,7 +572,13 @@ services:
   # ============================================================================
   minio:
     logging: *default-logging
-    image: ${SYNAP_IMAGE_MINIO:-minio/minio:latest}
+    # MinIO removed its images from Docker Hub (2026-09-11) and Quay refuses
+    # anonymous pulls, so `minio/minio:latest` no longer resolves and a new pod
+    # could not start. This is the exact image pods already run
+    # (RELEASE.2025-09-07T16-13-09Z, amd64, unmodified, AGPL-3.0), mirrored to
+    # our registry. Frozen: it receives no upstream fixes; a maintained
+    # replacement is a separate decision.
+    image: ${SYNAP_IMAGE_MINIO:-ghcr.io/synap-core/minio:RELEASE.2025-09-07T16-13-09Z}
     restart: always
     command: server /data --console-address ":9001"
     environment:
