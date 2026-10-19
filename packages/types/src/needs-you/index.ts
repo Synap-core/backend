@@ -415,6 +415,7 @@ export {
   needsYouProposalId,
   needsYouReasonOf,
   orderNeedsYouByBlocking,
+  orderNeedsYouSignals,
   type BucketableSignal,
   type NeedsYouBucket,
   type NeedsYouBucketed,
