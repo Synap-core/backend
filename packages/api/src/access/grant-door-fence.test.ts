@@ -10,7 +10,9 @@ import {
 } from "@synap-core/types/grants";
 import {
   isFencedGrant,
+  isUnboundedFullAccess,
   mcpToolAllowed,
+  ownerWideDoorAllowed,
   restDoorAllowed,
   trpcProcedureAllowed,
 } from "./grant-door-fence.js";
@@ -149,5 +151,33 @@ describe("mcpToolAllowed / trpcProcedureAllowed", () => {
     expect(trpcProcedureAllowed("query", "entities.getEntities")).toBe(true);
     expect(trpcProcedureAllowed("query", "search.search")).toBe(false);
     expect(trpcProcedureAllowed("mutation", "entities.create")).toBe(true);
+  });
+});
+
+describe("owner-wide doors (webhooks)", () => {
+  const FULL = key({ permissions: ["*"] });
+  const STAR_ONE_WS = key({ permissions: ["*"], workspaceIds: ["w1"] });
+  const STAR_ONE_PROJECT = key({ permissions: ["*"], projectIds: ["p1"] });
+  it("unbounded = every scope `*` with no narrowing", () => {
+    expect(isUnboundedFullAccess(FULL)).toBe(true);
+    expect(isUnboundedFullAccess(STAR_ONE_WS)).toBe(false);
+    expect(isUnboundedFullAccess(STAR_ONE_PROJECT)).toBe(false);
+    expect(isUnboundedFullAccess(AI)).toBe(false);
+    // `isFencedGrant` does NOT see the pin — which is why this check exists.
+    expect(isFencedGrant(STAR_ONE_WS)).toBe(false);
+  });
+  it.each([
+    ["/webhooks", true],
+    ["/webhooks/", true],
+    ["/webhooks/abc", true],
+    ["/webhooks/abc/deliveries", true],
+    ["/webhooksx", false],
+    ["/entities", false],
+  ] as const)("%s is owner-wide → %s", (path, ownerWide) => {
+    expect(ownerWideDoorAllowed(path, STAR_ONE_WS)).toBe(!ownerWide);
+    expect(ownerWideDoorAllowed(path, DOC_ONLY)).toBe(!ownerWide);
+    expect(ownerWideDoorAllowed(path, FULL)).toBe(true);
+    // A signed-in session carries no grant.
+    expect(ownerWideDoorAllowed(path, null)).toBe(true);
   });
 });

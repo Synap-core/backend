@@ -234,6 +234,50 @@ export const GRANT_SAFE_TRPC_QUERIES: ReadonlySet<string> = new Set([
 export const GRANT_DOOR_UNSUPPORTED =
   "This door does not support scoped keys yet: its reads are not bounded by a grant. Use a door listed in the API keys guide, or a key with the full-access '*' grant.";
 
+/**
+ * Hub REST doors (every method, relative to /api/hub) whose EFFECT spans the
+ * whole owner and that no grant can narrow — so neither the fence's "writes
+ * are bounded by the gate" rule nor a workspace/project/object pin applies.
+ *
+ *  - `/webhooks*`: a subscription is fanned out by OWNER only
+ *    (`jobs/src/workers/webhook-worker.ts` matches `webhookSubscriptions
+ *    .userId`), so one row streams every event of the person — every
+ *    workspace, project and kind — to the URL it names. The handlers write the
+ *    table directly; they never pass the gate.
+ *
+ * Only a key whose grant is UNBOUNDED full access (`*`, no narrowing) may use
+ * them. Note this is stricter than `isFencedGrant`: a `*` scope pinned to one
+ * workspace is not fenced there (`isFullAccessGrant` reads permissions only),
+ * but it is refused here.
+ */
+export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
+  /^\/webhooks(?:\/.*)?$/,
+];
+
+export const GRANT_OWNER_WIDE_UNSUPPORTED =
+  "This door acts on everything you own (it cannot be limited to a space, project or kind), so it needs a key with unrestricted full access ('*' with no space, project or object limit).";
+
+/** Every scope is `*` and none is narrowed to a workspace, project or object. */
+export function isUnboundedFullAccess(grant: KeyGrant): boolean {
+  return (
+    isFullAccessGrant(grant) &&
+    grant.scopes.every((s) => !s.workspaceIds && !s.projectIds && !s.entityIds)
+  );
+}
+
+/**
+ * Hub REST: may a key holding `grant` use an owner-wide door? `true` for any
+ * path that is not one, and for a request with no grant (a signed-in session).
+ */
+export function ownerWideDoorAllowed(
+  path: string,
+  grant: KeyGrant | null | undefined
+): boolean {
+  if (!grant) return true;
+  if (!GRANT_OWNER_WIDE_REST_DOORS.some((r) => r.test(path))) return true;
+  return isUnboundedFullAccess(grant);
+}
+
 /** Hub REST: may a scoped key use `method path` (path relative to /api/hub)? */
 export function restDoorAllowed(
   method: string,

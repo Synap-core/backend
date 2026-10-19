@@ -7,15 +7,27 @@
  * POST /api/hub/webhooks — create a webhook subscription
  * GET  /api/hub/webhooks — list webhook subscriptions
  * DELETE /api/hub/webhooks/:id — delete a webhook subscription
+ *
+ * AUTHORITY. A subscription is fanned out by OWNER only (webhook-worker
+ * `fanOutDomainEvent`), so one row streams every event of the person to the URL
+ * it names. Managing one is a WRITE (`hub-protocol.write`; listing needs
+ * `hub-protocol.read`), and a scoped key may not use these doors at all unless
+ * its grant is unbounded full access — the hub auth door refuses it
+ * (`GRANT_OWNER_WIDE_REST_DOORS`, access/grant-door-fence.ts). These handlers
+ * never pass the governance gate.
  */
 
-import type { HubHono } from "./_shared.js";
 import { db, webhookSubscriptions, eq, and } from "@synap/database";
 import { randomBytes } from "crypto";
 import { z } from "zod";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { httpStatusForTrpcError, requireUuidParam } from "./_shared.js";
+import {
+  hasScope,
+  httpStatusForTrpcError,
+  requireUuidParam,
+  type HubHono,
+} from "./_shared.js";
 
 const CreateWebhookSchema = z.object({
   url: z.string().url(),
@@ -101,6 +113,9 @@ export function registerWebhooksRoutes(app: HubHono) {
   });
 
   app.post("/webhooks", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const userId = c.get("userId");
     let body: unknown;
     try {
@@ -157,6 +172,9 @@ export function registerWebhooksRoutes(app: HubHono) {
   });
 
   app.get("/webhooks", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
     const userId = c.get("userId");
 
     try {
@@ -184,6 +202,9 @@ export function registerWebhooksRoutes(app: HubHono) {
   });
 
   app.delete("/webhooks/:id", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const userId = c.get("userId");
     const id = requireUuidParam(c, "id");
     if (id instanceof Response) return id;
