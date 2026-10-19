@@ -72,4 +72,22 @@ describe("MarkdownView — nothing in content runs", () => {
     expect(out).toContain("Inside a section.");
     expect(out).not.toContain(":::");
   });
+
+  it("an embed reads as its fallback prose, never its config", () => {
+    const out = html(
+      [
+        "Intro.",
+        "",
+        ':::synap-cell{cellKey="chart-bar"}',
+        "```json",
+        '{"profileSlug":"task"}',
+        "```",
+        "",
+        "Tasks pile up in **Review**.",
+        ":::",
+      ].join("\n")
+    );
+    expect(out).toContain("Tasks pile up in");
+    expect(out).not.toContain("profileSlug");
+  });
 });

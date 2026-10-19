@@ -29,6 +29,8 @@ import {
    non-uuid workspace ref would fire a request that can only fail. */
 import { isUuid } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
+import { DocumentChanges } from "../../_lib/object/content/document-changes";
+import { documentChanges } from "../../_lib/object/content/document-changes-model";
 import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
 import { proposalHeading } from "./proposal-heading";
 import { proposalWhy } from "./proposal-why";
@@ -224,6 +226,9 @@ export function ProposalDecision({
   const status = String(p.status ?? "pending");
   const payload = p.request.data ?? p.data;
   const { appConnect } = proposalHeading(p, payload);
+  // A document edit carries its own before / after: the reviewer reads the
+  // change, not the request's JSON.
+  const changes = appConnect ? null : documentChanges(payload);
   const why = proposalWhy({
     governanceReason: p.governanceReason,
     reasoning: p.review.reasoning,
@@ -282,6 +287,18 @@ export function ProposalDecision({
             <ExitFallback exit={sourceFallbackExit} showWeb={false} />
           )}
         </div>
+      )}
+
+      {changes && (
+        <section
+          aria-label="What changes"
+          className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10"
+        >
+          <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/65">
+            What changes
+          </p>
+          <DocumentChanges changes={changes} />
+        </section>
       )}
 
       {appConnect ? (

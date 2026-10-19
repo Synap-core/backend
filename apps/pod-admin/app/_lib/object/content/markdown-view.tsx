@@ -16,9 +16,12 @@ import { Fragment, useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import {
   parseMarkdown,
+  readableMarkdown,
   resolvePatternMarkers,
+  type Embed,
   type MdastNode,
 } from "@synap-core/markdown-core";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { contentHref, EXTERNAL_REL } from "./markdown-model";
 
 /** The loose shape every node shares — what the fallthrough reads. */
@@ -266,13 +269,23 @@ function renderNode(node: MdastNode): ReactNode {
   }
 }
 
+/** An embed with no authored fallback reads as its noun ("*Chart*"). */
+function embedLabel(embed: Embed): string {
+  return resolveObjectNoun(embed.kind);
+}
+
 /**
- * `source` drawn read-only. Object markers (`[[entity:id|Ana]]`) become their
- * console pages; the rest follows `renderNode`.
+ * `source` drawn read-only, in its readable form: an embed (a live cell, an
+ * entity card) shows the prose its author gave it — the console runs no
+ * cells. Object markers (`[[entity:id|Ana]]`) become their console pages; the
+ * rest follows `renderNode`.
  */
 export default function MarkdownView({ source }: { source: string }) {
   const tree = useMemo(
-    () => parseMarkdown(resolvePatternMarkers(source)),
+    () =>
+      parseMarkdown(
+        resolvePatternMarkers(readableMarkdown(source, embedLabel))
+      ),
     [source]
   );
   return (
