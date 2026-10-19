@@ -24,6 +24,7 @@ import {
 import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
 import { resolveSessionTitle } from "../focus-sessions/title.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
+import type { LensRow } from "./rows.js";
 
 /** "Your next three moves". */
 export const HOME_MOVES_CAP = 3;
@@ -316,4 +317,30 @@ export function projectStandRows<P extends ProjectLite>(
         a.i - b.i
     )
     .map(({ r }) => r);
+}
+
+/**
+ * A "Where your projects stand" row as the lens kit draws it — the SAME row
+ * on Home (capped) and on every projects index ("Show all N"), desktop and
+ * phone. A project with something waiting on the person is `blocking`, else
+ * `happening`; the row IS the project, so its door is the project's place.
+ */
+export function projectStandLensRow<P extends ProjectLite>(
+  row: ProjectStandRow<P>
+): LensRow {
+  const { project, state, nextLine } = row;
+  return {
+    key: project.id,
+    cls: (state.owedFromYou ?? 0) > 0 ? "blocking" : "happening",
+    state,
+    objectKind: "project",
+    title: project.name,
+    reason: nextLine,
+    repeat: null,
+    source: null,
+    occurredAt: null,
+    verb: null,
+    door: { kind: "project", id: project.id },
+    count: 1,
+  };
 }
