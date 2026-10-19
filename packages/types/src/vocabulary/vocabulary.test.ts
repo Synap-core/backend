@@ -7,6 +7,7 @@ import {
   STATUS_LABELS,
   humanizeToken,
   sentenceCaseLabel,
+  sentenceCasePlural,
   nounInSentence,
   pluralizeNoun,
   resolveActionLabel,
@@ -1584,5 +1585,29 @@ describe("buildObjectActionTitle — the name slot names, never restates", () =>
         objectName: "entity.create",
       })
     ).toBe("Update Note");
+  });
+});
+
+describe("sentenceCasePlural — a kind's plural, words not a slug", () => {
+  // Each hyphen/camel row rules out sentenceCaseLabel's slug branch, which
+  // read these as tokens ("Follow ups", review R1 #6); the plain rows pin
+  // the shared sentence-case rule.
+  it.each([
+    ["follow-ups", "Follow-ups"],
+    ["Check-ins", "Check-ins"],
+    ["to-dos", "To-dos"],
+    ["T-shirts", "T-shirts"],
+    ["eBooks", "eBooks"],
+    ["decisions", "Decisions"],
+    ["User Stories", "User stories"],
+    ["UI designs", "UI designs"],
+    ["  MCP servers ", "MCP servers"],
+    ["", ""],
+  ])("%j → %j", (plural, expected) => {
+    expect(sentenceCasePlural(plural)).toBe(expected);
+  });
+
+  it("sentenceCaseLabel keeps humanizing a TOKEN label (its job is unchanged)", () => {
+    expect(sentenceCaseLabel("works_at")).toBe("Works at");
   });
 });

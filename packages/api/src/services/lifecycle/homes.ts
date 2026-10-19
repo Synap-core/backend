@@ -57,7 +57,7 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveStatusLabel,
-  sentenceCaseLabel,
+  sentenceCasePlural,
 } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
@@ -497,7 +497,7 @@ async function profileWords(
       label: r.displayName,
       // Sentence case at the door: a stored plural is whatever its author
       // typed ("decisions"), and it renders beside "Features".
-      plural: sentenceCaseLabel(
+      plural: sentenceCasePlural(
         r.plural?.trim() || resolveObjectNounPlural(r.displayName)
       ),
     });

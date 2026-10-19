@@ -115,7 +115,26 @@ export function sentenceCaseLabel(label: string): string {
   if (!/\s/.test(trimmed) && /[_-]|[a-z0-9][A-Z]/.test(trimmed)) {
     return humanizeToken(trimmed);
   }
-  return trimmed
+  return sentenceCaseWords(trimmed);
+}
+
+/**
+ * Sentence-case a kind's PLURAL ("decisions" → "Decisions", "User Stories" →
+ * "User stories", "UI designs" stays). A plural is words a person typed,
+ * never a token — so unlike {@link sentenceCaseLabel} there is no slug
+ * branch, and a hyphenated word keeps its hyphen: "follow-ups" →
+ * "Follow-ups", "T-shirts" stays, "eBooks" keeps its deliberate casing. A
+ * slug never reaches here: a nameless profile's plural comes from
+ * {@link resolveObjectNounPlural}.
+ */
+export function sentenceCasePlural(plural: string): string {
+  const trimmed = plural.trim();
+  return trimmed ? sentenceCaseWords(trimmed) : "";
+}
+
+/** The per-word sentence-case rule both doors share (first word capitalized). */
+function sentenceCaseWords(text: string): string {
+  return text
     .split(/\s+/)
     .map((word, i) => {
       const plain = /^[A-Z]?[a-z]*$/.test(word.replace(/[^A-Za-z]/g, ""));
