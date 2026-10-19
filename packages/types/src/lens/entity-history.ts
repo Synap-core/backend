@@ -104,6 +104,17 @@ function itemTime(item: HappenedItem): number {
 }
 
 /**
+ * A record change the event could only call "entity" takes the thing's own
+ * kind. Its door stays an entity door (that is how the thing opens); only the
+ * noun changes. Anything already named by the event keeps its name.
+ */
+function namedByOwnKind(item: HappenedItem | null, ownKind: string | null): HappenedItem | null {
+  if (!item || !ownKind || item.kind !== "data" || item.event.line) return item;
+  if (item.event.objectKind !== "entity") return item;
+  return { ...item, event: { ...item.event, objectKind: ownKind } };
+}
+
+/**
  * The thing's History: its logged events (transitions included) and any
  * ledger rows, newest first, day-grouped and batched. Events neither rule
  * can read (governance phases, unknown families) are dropped, never drawn
@@ -114,15 +125,23 @@ export function entityHappened(
     events: readonly LoggedEvent[];
     ledger?: readonly ActivityRow[];
     labelOf?: StatusLabelOf;
+    /**
+     * The thing's own kind (its `profileSlug`). A record change ON the thing
+     * is named by it ("Updated lead"). The pod's `entities.update.completed`
+     * carries the entity ROW, which has no `profileSlug`, so without this every
+     * edit read "Updated entity" on the thing's own page (critique L P0-3).
+     */
+    profileSlug?: string | null;
   },
   opts: { timeZone: string; now?: Date }
 ): HappenedDay<HappenedEntry>[] {
   const items: HappenedItem[] = [];
+  const ownKind = input.profileSlug?.trim() || null;
   for (const e of input.events) {
     const item =
       e.type === LIFECYCLE_TRANSITION_EVENT
         ? happenedItemOfTransition(e, input.labelOf)
-        : happenedItemOfEvent(e);
+        : namedByOwnKind(happenedItemOfEvent(e), ownKind);
     if (item) items.push(item);
   }
   for (const row of input.ledger ?? []) items.push({ kind: "ledger", row });
