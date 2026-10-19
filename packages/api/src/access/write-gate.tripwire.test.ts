@@ -81,8 +81,8 @@ const KNOWN_UNGATED = new Set<string>([
   "rest/mcp-redeem.ts",
   // Grant-bounded (grantWriteDenial) but not via the gate.
   "rest/agent-users.ts",
-  // tRPC hub routers: scope-checked; context.updateThreadContext has NO
-  // owner predicate (any channel by id).
+  // tRPC hub routers: scope-checked; context.updateThreadContext is floored
+  // on channel visibility since 2026-10-19 (lane/sec-w3) but not gated.
   "context.ts",
   "compacted-states.ts",
   "sessions.ts",

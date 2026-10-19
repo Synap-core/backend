@@ -906,9 +906,18 @@ export const channelsRouter = router({
       // injected message and drives the AI turn (triggerAutoRespond sourceUserId).
       // A hub PAT may act only as its own owner.
       assertMayActAs(ctx, input.userId);
-      // Verify channel exists
+      // SECURITY — the channel write floor. This used to look the channel up
+      // by id alone, so any hub write key could insert a prompt into another
+      // user's channel and make its agent take a turn. Same floor as every
+      // channel write door (`channelVisibilityWhere`, as `postChannelMessage`
+      // and the REST message-append doors), on the acting identity
+      // (`assertMayActAs` above pins it to the authenticated owner). NOT_FOUND
+      // for both "missing" and "not yours" — no existence oracle.
       const channel = await db.query.channels.findFirst({
-        where: eq(channels.id, input.channelId),
+        where: and(
+          eq(channels.id, input.channelId),
+          channelVisibilityWhere(input.userId)
+        ),
       });
 
       if (!channel) {
