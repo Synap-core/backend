@@ -1140,7 +1140,7 @@ const coreProcedures = {
       if (settings.systemSlug) {
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "System workspaces cannot be deleted from the admin panel.",
+          message: "System workspaces cannot be deleted from the Pod Console.",
         });
       }
 
