@@ -142,23 +142,13 @@ export function objectKindForMarker(scheme: string): string {
 }
 
 /**
- * The console page for an object marker, or null when the marker names no
- * kind `/open` knows or its id fails that kind's check. A hosted kind (and a
- * proposal) goes through the one exit door; any other known kind lands on
- * `/open`'s named card, which hands it to the app with the device's install
- * fallback — never a bare `synap://` drawn inside content.
+ * The console page for an object, or null when `/open` does not know the
+ * kind or the id fails that kind's check. A hosted kind (and a proposal) goes
+ * through the one exit door; any other known kind lands on `/open`'s named
+ * card, which hands it to the app with the device's install fallback — never
+ * a bare `synap://` drawn inside content.
  */
-function markerPage(url: string): string | null {
-  const m = /^([a-z][a-z0-9_-]*):\/\/([^/?#\s]+)$/i.exec(url);
-  if (!m) return null;
-  if (COMMAND_SCHEMES.has(m[1]!.toLowerCase())) return null;
-  const kind = objectKindForMarker(m[1]!);
-  let id: string;
-  try {
-    id = decodeURIComponent(m[2]!);
-  } catch {
-    return null;
-  }
+export function objectPage(kind: string, id: string): string | null {
   const parsed = parseOpenParams(kind, id);
   if (parsed.status === "host" || parsed.type === "proposal") {
     if (parsed.status === "invalid-id") return null;
@@ -169,6 +159,18 @@ function markerPage(url: string): string | null {
     return `/open/${encodeURIComponent(parsed.type)}/${encodeURIComponent(parsed.id)}`;
   }
   return null;
+}
+
+/** An object marker's console page (`entity://<id>` → `/open/entity/<id>`). */
+function markerPage(url: string): string | null {
+  const m = /^([a-z][a-z0-9_-]*):\/\/([^/?#\s]+)$/i.exec(url);
+  if (!m) return null;
+  if (COMMAND_SCHEMES.has(m[1]!.toLowerCase())) return null;
+  try {
+    return objectPage(objectKindForMarker(m[1]!), decodeURIComponent(m[2]!));
+  } catch {
+    return null;
+  }
 }
 
 /** Decide what a link in content may do. */

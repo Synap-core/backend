@@ -23,15 +23,31 @@ export function templateSummary(
 ): string | null {
   const source = description?.trim() || goalTemplate?.trim();
   if (!source) return null;
-  const text = source
-    .replace(
-      ARG_REF,
-      (_m, arg?: string, bare?: string) => `‹${(arg ?? bare ?? "").trim()}›`
-    )
-    .replace(/\s+/g, " ")
-    .trim();
+  const text = withArgNames(source).replace(/\s+/g, " ").trim();
   const sentence = /^(.+?[.!?])(\s|$)/.exec(text)?.[1] ?? text;
   return oneLine(sentence, SUMMARY_MAX);
+}
+
+/** Each goal reference read as its name (‹topic›). */
+function withArgNames(text: string): string {
+  return text.replace(
+    ARG_REF,
+    (_m, arg?: string, bare?: string) => `‹${(arg ?? bare ?? "").trim()}›`
+  );
+}
+
+/**
+ * The whole description, to read in full (markdown) — or null when the
+ * summary line already says all of it.
+ */
+export function templateDescription(
+  description: string | null | undefined
+): string | null {
+  const source = description?.trim();
+  if (!source) return null;
+  const full = withArgNames(source);
+  const flat = full.replace(/\s+/g, " ").trim();
+  return flat === templateSummary(source, null) ? null : full;
 }
 
 /** Who carries out a run (`playbooks.executor`). */

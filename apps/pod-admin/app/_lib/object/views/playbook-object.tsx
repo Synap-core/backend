@@ -45,11 +45,14 @@ import {
   failureExplanation,
   runsThisWeek,
   stageNames,
+  templateDescription,
   templateSummary,
 } from "../../../(admin)/templates/_lib/template-model";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import type { ObjectFrame } from "./object-frame";
+import { ContentBlock } from "../content/content-block";
+import { prepareContent } from "../content/markdown-model";
 
 /** One page of the template's runs — also the window the week is counted over. */
 const RUNS_PAGE = 100;
@@ -184,6 +187,7 @@ export function PlaybookObject({
       </div>
     );
 
+  const about = templateDescription(playbook.description);
   return frame.object({
     header: {
       kind: "playbook",
@@ -231,6 +235,12 @@ export function PlaybookObject({
         label: "Overview",
         content: (
           <div className="flex flex-col gap-6">
+            {about && (
+              <ContentBlock
+                title="About this template"
+                prepared={prepareContent(about, "markdown")}
+              />
+            )}
             {why && (
               <section className="flex flex-col gap-2 rounded-lg bg-status-down/[0.06] px-4 py-3 ring-1 ring-inset ring-status-down/30">
                 <h2 className="text-[13px] font-medium text-foreground">

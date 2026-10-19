@@ -4,6 +4,7 @@ import {
   contentHref,
   EXTERNAL_REL,
   objectKindForMarker,
+  objectPage,
   prepareContent,
   UNPARSED_PREVIEW_CHARS,
 } from "./markdown-model";
@@ -148,5 +149,19 @@ describe("objectKindForMarker", () => {
     expect(objectKindForMarker("person")).toBe("entity");
     expect(objectKindForMarker("widget")).toBe("cell");
     expect(objectKindForMarker("Entity")).toBe("entity");
+  });
+});
+
+describe("objectPage — where an object a page names opens", () => {
+  it("hosted kinds and proposals open on their own console page", () => {
+    expect(objectPage("document", UUID)).toBe(`/open/document/${UUID}`);
+    expect(objectPage("channel", UUID)).toBe(`/open/channel/${UUID}`);
+    expect(objectPage("proposal", UUID)).toBe(`/proposal/${UUID}`);
+  });
+
+  it("an app-only kind opens its named card; an unknown kind opens nothing", () => {
+    expect(objectPage("cell", "chart-bar")).toBe("/open/cell/chart-bar");
+    expect(objectPage("url", "https://example.com")).toBeNull();
+    expect(objectPage("entity", "../../admin")).toBeNull();
   });
 });

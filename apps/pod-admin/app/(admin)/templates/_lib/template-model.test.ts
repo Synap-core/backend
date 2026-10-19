@@ -5,6 +5,7 @@ import {
   failureExplanation,
   runsThisWeek,
   stageNames,
+  templateDescription,
   templateSummary,
 } from "./template-model";
 
@@ -25,6 +26,19 @@ describe("templateSummary", () => {
   it("is null with nothing to say and bounded when long", () => {
     expect(templateSummary("  ", null)).toBeNull();
     expect(templateSummary("x".repeat(300), null)!.length).toBe(201);
+  });
+});
+
+describe("templateDescription", () => {
+  it("is the whole description when it says more than its first sentence", () => {
+    expect(
+      templateDescription("Runs a dev task.\n\n- Then reports to {owner}.")
+    ).toBe("Runs a dev task.\n\n- Then reports to ‹owner›.");
+  });
+  it("is null when the summary line already says it all", () => {
+    expect(templateDescription("Runs a dev task.")).toBeNull();
+    expect(templateDescription("  ")).toBeNull();
+    expect(templateDescription(null)).toBeNull();
   });
 });
 
