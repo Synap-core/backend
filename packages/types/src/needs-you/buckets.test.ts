@@ -20,6 +20,8 @@ import {
   needsYouBucketOf,
   needsYouBuckets,
   needsYouReasonOf,
+  needsYouRows,
+  orderNeedsYouSignals,
   type BucketableSignal,
   type NeedsYouBucket,
 } from "./index.js";
@@ -239,6 +241,24 @@ describe("needsYouBuckets — a partition, ordered by what blocks the most", () 
     const before = page.map((r) => r.id);
     needsYouBuckets(page, { intentOf });
     expect(page.map((r) => r.id)).toEqual(before);
+  });
+});
+
+describe("orderNeedsYouSignals — the Inbox order, before grouping", () => {
+  it("a session's card lands at its most blocking item; then the rest by the rule", () => {
+    const page = [
+      // Server order: newest first — a free question leads.
+      { id: "q-free", kind: "owed-slot", count: 1, blockedReason: "credential", groupKey: null, ageBucket: "recent" as const, repeatCount: 1 },
+      { id: "q-s1", kind: "owed-slot", count: 1, blockedReason: "credential", groupKey: "session:s1", ageBucket: "recent" as const, repeatCount: 1 },
+      { id: "d-s1", kind: "access-request", count: 1, groupKey: "session:s1", ageBucket: "recent" as const, repeatCount: 1 },
+    ];
+    const ordered = orderNeedsYouSignals(page);
+    expect(ordered.map((s) => s.id)).toEqual(["d-s1", "q-s1", "q-free"]);
+    // Grouped: the session card first (it holds the decision), the free ask after.
+    const rows = needsYouRows(ordered).recent;
+    expect(rows.map((r) => r.key)).toEqual(["session:s1", "q-free"]);
+    // Rules out "group, then keep server order": that leads with the free ask.
+    expect(needsYouRows(page).recent[0]!.key).toBe("q-free");
   });
 });
 
