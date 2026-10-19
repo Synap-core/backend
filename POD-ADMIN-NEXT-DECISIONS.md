@@ -57,15 +57,20 @@ Zero URL change. Needs `CATEGORY_META` updated in the same commit.
 
 ## D3 — Is the handoff line in the right place?
 
-**Secrets vault — the handoff is CORRECT, do not reverse it.** The argument is
-cryptographic, not scope: per-user vaults are client-side encrypted with the
-user's own master password, so there is _nothing for an operator to show_.
-Bringing it back means the pod holds decryptable secrets — destroying the
-property the product sells. **But** prior art says credential _inventory_
-belongs at the trust boundary, and a `secretsVault` router already exists.
-**Option: extend the existing handoff card with metadata** — "14 entries across
-3 users · contents unreadable by design". One query, no new router. It makes
-the trust property _visible_ instead of merely asserted.
+**Secrets vault — the handoff is CORRECT, do not reverse it.** The vault is
+encrypted on the server, not end-to-end: `encryptionMode='server'` is the default
+and the only write path (`packages/api/src/routers/secrets-vault.ts` header). The
+pod holds `VAULT_SERVER_KEY` and can decrypt, because that is how an agent redeems
+a granted credential. Legacy client-mode rows are read-only. So the property the
+vault sells is **isolation, not zero-knowledge**: plaintext enters only through a
+create door a person uses, never travels in a slot, room message, event or param,
+is never shown again outside the desktop app, and an agent reads a value only
+through a grant. That is why the console does not reveal or author secrets: it
+would add a second place plaintext crosses, not because there is nothing to show.
+New secrets are added in the app; the console says so (wave 5, P1). The console
+may show metadata only — "14 entries across 3 users, values never shown here" —
+from the existing `secretsVault` router; it must never call a secret unreadable
+by the pod.
 
 **Connector re-auth — this one is arguably on the wrong side.** pod-admin
 already hosts `/oauth/consent` and `/connect`; it is the web-native OAuth host
