@@ -6,6 +6,7 @@ import {
   entitySummary,
   openPathForResolved,
   redactSecretProperties,
+  runFlowTypeOf,
   type ResolvedOpen,
 } from "./open-model";
 
@@ -61,9 +62,18 @@ describe("bounceReceipt — diagnose.resolveOpen names the bounced object", () =
 
 describe("bounceSummary", () => {
   it("names every hosted kind, from HOST_TYPES", () => {
-    expect(bounceSummary()).toBe(
-      "The web shows entities, views, rules and sessions. Open this one in the Synap app for the full surface."
+    expect(bounceSummary("document")).toBe(
+      "The web shows entities, views, rules, sessions, templates, runs, tools and agents. Open this one in the Synap app for the full surface."
     );
+  });
+
+  it("never says the web shows the word the bounced kind reads as", () => {
+    // A skill and a tool read as "Tool", like a (hosted) capability.
+    for (const type of ["tool", "skill"]) {
+      expect(bounceSummary(type)).toBe(
+        "The web shows entities, views, rules, sessions, templates, runs and agents. Open this one in the Synap app for the full surface."
+      );
+    }
   });
 });
 
@@ -166,5 +176,40 @@ describe("redactSecretProperties", () => {
         { slug: "empty", valueType: "secret" },
       ])
     ).toEqual({ apiKey: "••••••", name: "Ada", empty: null });
+  });
+});
+
+describe("runFlowTypeOf — which run a /open/run page reads", () => {
+  it("the link's own flow type wins when it is one runs.get accepts", () => {
+    expect(runFlowTypeOf("agent_write", undefined)).toBe("agent_write");
+    expect(
+      runFlowTypeOf(
+        "chat",
+        resolved({ type: "run", params: { flowType: "playbook" } })
+      )
+    ).toBe("chat");
+  });
+
+  it("falls back to the resolver when the link has none, or a bad one", () => {
+    const run = resolved({ type: "run", params: { flowType: "playbook" } });
+    expect(runFlowTypeOf(undefined, run)).toBe("playbook");
+    expect(runFlowTypeOf("playbook&x=1", run)).toBe("playbook");
+  });
+
+  it("is null when neither can tell — never a guessed automation", () => {
+    expect(runFlowTypeOf(undefined, undefined)).toBeNull();
+    expect(runFlowTypeOf(undefined, resolved({ type: "unknown" }))).toBeNull();
+    expect(
+      runFlowTypeOf(
+        undefined,
+        resolved({ type: "entity", params: { flowType: "playbook" } })
+      )
+    ).toBeNull();
+    expect(
+      runFlowTypeOf(
+        "nope",
+        resolved({ type: "run", params: { flowType: "nope" } })
+      )
+    ).toBeNull();
   });
 });

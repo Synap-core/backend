@@ -66,9 +66,9 @@ export function useProposalReview(proposalId: string) {
     { enabled: !!workspaceId && isUuid(workspaceId), retry: false }
   );
 
-  /* Provenance targets, resolved through the ONE exit door. A session or an
-     automation opens on its web page; every other kind `source` can return
-     (channel, skill, playbook, agent) lives in the desktop app. */
+  /* Provenance targets, resolved through the ONE exit door. A session, an
+     automation, a playbook or an agent opens on its web page; a channel or a
+     skill lives in the desktop app. */
   const sourceExits = (source.data?.targets ?? []).map((target) => ({
     target,
     exit: openIn({ kind: "object", objectKind: target.kind, id: target.id }),

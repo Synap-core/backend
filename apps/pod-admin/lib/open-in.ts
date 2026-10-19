@@ -108,8 +108,16 @@ export type ExitTarget =
    * An object addressed by kind + id. Web-hosted when pod-admin can render it.
    * `view` asks for a READING of it that only the apps draw (`room` = a
    * session's Intake Room), so an object with a view always hands off.
+   * `params` are address parameters both the web page and the apps read (a
+   * run's `flowType`).
    */
-  | { kind: "object"; objectKind: string; id: string; view?: ObjectNavView }
+  | {
+      kind: "object";
+      objectKind: string;
+      id: string;
+      view?: ObjectNavView;
+      params?: Record<string, string>;
+    }
   /** A section of the desktop app's Settings. */
   | { kind: "settings"; section: BrowserSettingsSection }
   /** A desktop app by manifest id (e.g. `marketplace`, `data`, `governance`). */
@@ -226,8 +234,12 @@ const SETTINGS_WEB_ALTERNATIVE: Partial<
   },
 };
 
-/** A desktop-only object's page in the console, when it has one. */
-function objectWebAlternative(
+/**
+ * A desktop-only object's page in the console, when it has one. An ADMIN page:
+ * a phone is pointed there (`placeExit`), and `/open`'s bounce card offers it
+ * to a pod admin.
+ */
+export function objectWebAlternative(
   objectKind: string,
   id: string
 ): WebAlternative | undefined {
@@ -255,6 +267,7 @@ function objectLink(
   query?: Record<string, string>
 ) {
   const href = `synap://open/${encodeURIComponent(objectKind)}/${encodeURIComponent(id)}`;
+  // An empty `query` adds nothing: `URLSearchParams({})` is "".
   const search = query ? new URLSearchParams(query).toString() : "";
   return desktop(
     search ? `${href}?${search}` : href,
@@ -285,19 +298,20 @@ export function openIn(target: ExitTarget): Exit {
       // A view is a reading only the apps draw (the Intake Room): the web
       // page would show the plain object and silently drop what was asked.
       if (WEB_HOSTED_OBJECTS.has(target.objectKind) && !target.view) {
-        return web(
-          `/open/${encodeURIComponent(target.objectKind)}/${encodeURIComponent(target.id)}`
-        );
+        const path = `/open/${encodeURIComponent(target.objectKind)}/${encodeURIComponent(target.id)}`;
+        const search = target.params
+          ? new URLSearchParams(target.params).toString()
+          : "";
+        return web(search ? `${path}?${search}` : path);
       }
-      // Everything else — workspace, channel, document, cell, project,
-      // capability, playbook — has no web renderer. Be honest about it.
-      // (`automation` / `session` are hosted since D6; a caller that means
-      // "in the desktop app" asks for `objectInApp`.)
-      return objectLink(
-        target.objectKind,
-        target.id,
-        target.view ? { view: target.view } : undefined
-      );
+      // Everything else — workspace, channel, document, cell, project, skill,
+      // tool — has no web renderer. Be honest about it. (The operational
+      // kinds are hosted; a caller that means "in the desktop app" asks for
+      // `objectInApp`.)
+      return objectLink(target.objectKind, target.id, {
+        ...target.params,
+        ...(target.view ? { view: target.view } : {}),
+      });
     }
 
     case "objectInApp":

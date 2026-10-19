@@ -13,9 +13,15 @@ import { BOUNCE_TYPES, HOST_TYPES } from "./open-params";
 /**
  * The bounce card's sentence, DERIVED from `HOST_TYPES` so it cannot keep
  * saying "only entities and views" after a kind joins the web host (it did).
+ * Several kinds share one user word (a capability, a skill and a tool are all
+ * "Tools"), so the word the bounced kind itself reads as is left out: a tool's
+ * card must not say the web shows tools.
  */
-export function bounceSummary(): string {
-  const nouns = HOST_TYPES.map((t) => resolveObjectNounPlural(t).toLowerCase());
+export function bounceSummary(bouncedType: string): string {
+  const own = resolveObjectNounPlural(bouncedType).toLowerCase();
+  const nouns = [
+    ...new Set(HOST_TYPES.map((t) => resolveObjectNounPlural(t).toLowerCase())),
+  ].filter((noun) => noun !== own);
   const list =
     nouns.length > 1
       ? `${nouns.slice(0, -1).join(", ")} and ${nouns[nouns.length - 1]}`
@@ -36,13 +42,14 @@ export interface ResolvedOpen {
   params?: Record<string, string>;
 }
 
-type RunFlowType = inferRouterInputs<AppRouter>["runs"]["get"]["flowType"];
+export type RunFlowType =
+  inferRouterInputs<AppRouter>["runs"]["get"]["flowType"];
 
 /**
  * `runs.get`'s flow types, as a runtime list. Keyed by the router's own type,
  * so a member added or removed there fails the typecheck here.
  */
-const RUN_FLOW_TYPES = Object.keys({
+const RUN_FLOW_TYPES: readonly string[] = Object.keys({
   automation: true,
   playbook: true,
   capture: true,
@@ -51,6 +58,27 @@ const RUN_FLOW_TYPES = Object.keys({
   chat: true,
   agent_write: true,
 } satisfies Record<RunFlowType, true>);
+
+/** True iff `value` is a flow type `runs.get` accepts (a link's `?flowType=`). */
+export function isRunFlowType(
+  value: string | null | undefined
+): value is RunFlowType {
+  return !!value && RUN_FLOW_TYPES.includes(value);
+}
+
+/**
+ * The flow type a run page reads: the link's own when it is valid, else the
+ * resolver's (`diagnose.resolveOpen` types automation and playbook runs), else
+ * null — the page then says it cannot tell which run this is.
+ */
+export function runFlowTypeOf(
+  fromLink: string | null | undefined,
+  resolved: ResolvedOpen | undefined
+): RunFlowType | null {
+  if (isRunFlowType(fromLink)) return fromLink;
+  const fromResolver = bounceAddressParams("run", resolved)?.flowType;
+  return isRunFlowType(fromResolver) ? fromResolver : null;
+}
 
 /**
  * The address parameters a kind's link may carry, each with the values it

@@ -8,7 +8,8 @@
  * verbs) joined on `agentUserId` with `diagnose.agents` (lifetime approve /
  * refuse standing). Both reads are floored to the viewer (D1a): agents in
  * workspaces the viewer cannot see are not listed, and standings exist only
- * for agents the viewer owns. Each row is identity + one sentence + at most
+ * for agents the viewer owns (a pod admin opens any agent's scorecard from
+ * its drawer). Each row is identity + one sentence + at most
  * one action; detail opens in a drawer.
  *
  * Pending keys and connect requests are NOT approved here — the row's one
@@ -33,6 +34,7 @@ import {
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
 import { useFocusRow } from "../components/use-focus-row";
+import { useAgentPeople } from "../../_lib/object/views/agent-object";
 import { AgentDrawer } from "./_lib/agent-drawer";
 import {
   agentReviewHref,
@@ -62,15 +64,12 @@ function AgentsInner() {
     { includeComputers: false },
     { staleTime: 30_000 }
   );
-  const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
   // Standings and owner names enrich rows; a failed read leaves them out
   // rather than failing the roster.
   const standings = trpc.diagnose.agents.useQuery(undefined, {
     staleTime: 60_000,
   });
-  const members = trpc.workspaces.listPodMembers.useQuery(undefined, {
-    staleTime: 60_000,
-  });
+  const { viewerId, ownerName } = useAgentPeople();
 
   useEffect(() => {
     if (list.isError) redirectToLoginIfUnauthorized(list.error);
@@ -81,25 +80,11 @@ function AgentsInner() {
 
   const roster = useMemo(
     () =>
-      buildAgentRoster(
-        list.data ?? [],
-        standings.data ?? [],
-        me.data?.id ?? null,
-        (iso) => formatRelative(iso)
+      buildAgentRoster(list.data ?? [], standings.data ?? [], viewerId, (iso) =>
+        formatRelative(iso)
       ),
-    [list.data, standings.data, me.data?.id]
+    [list.data, standings.data, viewerId]
   );
-
-  const ownerName = useMemo(() => {
-    const byId = new Map(
-      (members.data ?? []).map((m) => [m.id, m.name ?? m.email])
-    );
-    return (userId: string | null | undefined): string | null => {
-      if (!userId) return null;
-      if (userId === me.data?.id) return "You";
-      return byId.get(userId) ?? null;
-    };
-  }, [members.data, me.data?.id]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = roster.find((v) => v.row.id === selectedId) ?? null;
@@ -177,7 +162,7 @@ function AgentsInner() {
       <AgentDrawer
         view={selected}
         roster={roster}
-        viewerId={me.data?.id ?? null}
+        viewerId={viewerId}
         ownerName={ownerName}
         isOpen={selected !== null}
         onClose={() => setSelectedId(null)}
