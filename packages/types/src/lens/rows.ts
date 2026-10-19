@@ -216,6 +216,11 @@ export { isFailureSignal };
 /** The generic reason the lens rejects as a chip — the row's verb already says it. */
 const GENERIC_BLOCKED_REASON = "decision";
 
+/** The owed slot waits on a choice only the person can make. */
+function isPersonDecision(reason: string | null | undefined): boolean {
+  return reason?.trim().toLowerCase() === GENERIC_BLOCKED_REASON;
+}
+
 /** The notification category agent-originated work wears (`NOTIFICATION_CATEGORY_LABELS.ai`). */
 const AGENT_CATEGORY = "ai";
 
@@ -305,14 +310,24 @@ function itemShape(
         objectKind: "owed",
         // The title IS the ask (the slot's label); the chip only names a
         // SPECIFIC obstacle ("Credential missing"). "Human decision" is the
-        // generic chip the lens rejects — the verb already says "Answer" —
+        // generic chip the lens rejects — the verb already says "Decide" —
         // and the agent's `why` is a description, so it goes to `detail`.
         reason:
           s.blockedReason &&
           s.blockedReason.toLowerCase() !== GENERIC_BLOCKED_REASON
             ? resolveBlockedReasonLabel(s.blockedReason) || null
             : null,
-        verb: verb(s.slotKind === CRITERION_SLOT ? "review" : "answer"),
+        verb:
+          s.slotKind === CRITERION_SLOT
+            ? verb("review")
+            : isPersonDecision(s.blockedReason)
+              ? // Its reason mark says "Decision", so its button says Decide;
+                // the act is still the answer's (relay routes on `answer`).
+                {
+                  action: "answer",
+                  label: resolveActionLabel("decide", "imperative"),
+                }
+              : verb("answer"),
       };
     case "proposal-cluster":
       return {

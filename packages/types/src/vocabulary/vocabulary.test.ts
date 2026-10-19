@@ -10,6 +10,7 @@ import {
   sentenceCasePlural,
   nounInSentence,
   pluralizeNoun,
+  countedNoun,
   resolveActionLabel,
   resolveActionProgressive,
   resolveActionPresent,
@@ -147,6 +148,16 @@ describe("sentenceCaseLabel", () => {
     expect(sentenceCaseLabel("works_at")).toBe("Works at");
     expect(sentenceCaseLabel("worksAt")).toBe("Works at");
     expect(sentenceCaseLabel("")).toBe("");
+  });
+});
+
+describe("countedNoun", () => {
+  it("is singular at exactly 1 and plural otherwise, by the pluralizeNoun rule", () => {
+    expect(countedNoun(1, "item")).toBe("1 item");
+    expect(countedNoun(3, "item")).toBe("3 items");
+    expect(countedNoun(0, "item")).toBe("0 items");
+    expect(countedNoun(2, "analysis")).toBe("2 analyses");
+    expect(countedNoun(4, "research")).toBe("4 research");
   });
 });
 

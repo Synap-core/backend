@@ -444,6 +444,10 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // these rows `humanizeToken` spells the button right and the receipt wrong
   // ("Answer" for an act already done).
   answer: { imperative: "Answer", past: "Answered" },
+  // An owed slot whose blocker is a choice only the person can make: its
+  // verb says DECIDE, as its reason mark says "Decision" (the row's door is
+  // still the answer's — `LensVerb.action` stays `answer`).
+  decide: { imperative: "Decide", past: "Decided" },
   review: { imperative: "Review", past: "Reviewed" },
   dismiss: { imperative: "Dismiss", past: "Dismissed" },
   // The focus verbs (`lensFocus`, `@synap-core/types/lens`): a criterion the
@@ -822,6 +826,17 @@ const UNCOUNTABLE_NOUNS = new Set([
 export function pluralizeNoun(noun: string): string {
   const trimmed = noun.trim();
   return trimmed ? pluralizeFallback(trimmed) : "";
+}
+
+/**
+ * "<n> <noun>": the noun singular at exactly 1, else its plural by the same
+ * rule as {@link pluralizeNoun} ("1 item", "3 items", "2 analyses"). The one
+ * door for a counted plain noun — never a `n === 1 ? 'item' : 'items'` at a
+ * call site. A KIND's count goes through {@link resolveObjectNounPlural}
+ * instead, which knows the curated plurals ("People").
+ */
+export function countedNoun(n: number, noun: string): string {
+  return `${n} ${n === 1 ? noun.trim() : pluralizeNoun(noun)}`;
 }
 
 function pluralizeFallback(noun: string): string {
