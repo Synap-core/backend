@@ -202,8 +202,10 @@ export const MOBILE_FALLBACK = {
  * On a phone the `synap://` scheme belongs to Relay, not the desktop app, and
  * Relay resolves it through its own route table
  * (`relay-app/src/lib/object-nav.ts` `KIND_ROUTE`; its `NO_SCREEN` lists what
- * it knowingly cannot open — `workspace`, `channel`, `view`, `capability`,
- * `skill`). Every kind here has a `KIND_ROUTE` row keyed by the SAME id this
+ * it knowingly cannot open — `channel`, `view`, `capability`, `skill`). Relay
+ * also has `workspace` and `agent` screens; this table does not list them yet,
+ * so a space still points a phone at its console page and an agent at the
+ * computer. Every kind here has a `KIND_ROUTE` row keyed by the SAME id this
  * door puts in the link (a session's `?view=room` included). A kind missing
  * here is told "open on your computer" on a phone rather than handed a link
  * that lands on Relay's "not found". The `open/app/<appId>` grammar (desktop
