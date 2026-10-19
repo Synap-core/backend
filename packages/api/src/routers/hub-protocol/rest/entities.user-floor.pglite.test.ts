@@ -186,3 +186,27 @@ describe("GET /users/:userId/entities — no workspaceId reads the user floor (O
     expect(res.status).toBe(403);
   });
 });
+
+describe("GET /users/:userId/entities — the path id is the caller (O1b)", () => {
+  it("`me` is the caller, not an unknown user with no rows", async () => {
+    const res = await app().request(`/users/me/entities`);
+    expect(res.status).toBe(200);
+    expect(await ids(res)).toEqual([IN_LIVE, POD_WIDE].sort());
+  });
+
+  it("`me` with a workspaceId reads that workspace as the caller", async () => {
+    const res = await app().request(`/users/me/entities?workspaceId=${LIVE}`);
+    expect(res.status).toBe(200);
+    expect(await ids(res)).toEqual([IN_LIVE, POD_WIDE].sort());
+  });
+
+  it("another person's id is a 403, never their rows and never a calm []", async () => {
+    const res = await app().request(`/users/${B}/entities`);
+    expect(res.status).toBe(403);
+  });
+
+  it("an unknown id is a 403 too (no existence oracle, no silent [])", async () => {
+    const res = await app().request(`/users/${randomUUID()}/entities`);
+    expect(res.status).toBe(403);
+  });
+});

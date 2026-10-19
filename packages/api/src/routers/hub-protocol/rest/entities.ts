@@ -212,13 +212,16 @@ export function registerEntitiesRoutes(app: HubHono): void {
     tags: ["Entities"],
     summary: "List entities for a user",
     description:
-      "Returns entities owned by the given user, optionally filtered by " +
-      "profileSlug and workspaceId. Without workspaceId it reads every " +
-      "workspace the caller can read plus pod-wide entities; with one, that " +
-      "workspace (an archived or non-member one is a 403). Pod-wide profiles " +
-      "are returned regardless of workspaceId.",
+      "Returns the caller's entities, optionally filtered by profileSlug and " +
+      "workspaceId. Without workspaceId it reads every workspace the caller " +
+      "can read plus pod-wide entities; with one, that workspace (an archived " +
+      "or non-member one is a 403). Pod-wide profiles are returned regardless " +
+      "of workspaceId. `userId` must be the caller's own id or `me`; any other " +
+      "id is a 403.",
     request: {
-      params: z.object({ userId: z.string() }),
+      params: z.object({
+        userId: z.string().describe("The caller's own user id, or `me`."),
+      }),
       query: z.object({
         profileSlug: z.string().optional(),
         type: z
@@ -237,8 +240,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
           "application/json": { schema: z.array(RawEntityRecordSchema) },
         },
       },
+      401: {
+        description: "Unauthorized",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       403: {
-        description: "Missing scope",
+        description:
+          "Missing scope, a userId other than the caller's, or a workspace " +
+          "the caller cannot use",
         content: { "application/json": { schema: ErrorSchema } },
       },
       500: {
@@ -252,7 +261,28 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const { userId } = c.req.valid("param");
+    // The path id must be the caller — the identity the auth middleware
+    // resolved (after its remaps: agent key → linked human, IS → operator).
+    // `me` names that caller. Any other id is refused HERE: the read below
+    // runs as the caller whatever the path says (`getCaller` ignores it), so
+    // reading with a foreign id could only produce a wrong answer — it once
+    // answered `/users/me/entities` with 200 `[]` (a failed lookup read as an
+    // empty list).
+    const callerId = c.get("userId") as string | undefined;
+    const pathUserId = c.req.valid("param").userId;
+    if (!callerId) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    if (pathUserId !== "me" && pathUserId !== callerId) {
+      return c.json(
+        {
+          error:
+            "userId does not match the authenticated identity — use your own id or `me`.",
+        },
+        403
+      );
+    }
+    const userId = callerId;
     const query = c.req.valid("query");
     const profileSlug = query.profileSlug || query.type || undefined;
     const limit = query.limit;
