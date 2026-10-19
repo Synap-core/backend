@@ -21,7 +21,14 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import { db, and, eq, notifications } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  notifications,
+  podSettings,
+  drizzleSql,
+} from "@synap/database";
 import { NotificationService } from "./NotificationService.js";
 import { resolvePodAdminUserIds } from "../services/capabilities/pod-owner.js";
 
@@ -89,23 +96,94 @@ export function describePodUpdateOutcome(
 export interface PodUpdateOutcomeDeps {
   recipients(): Promise<string[]>;
   alreadyNotified(sourceId: string): Promise<Set<string>>;
+  /** Record who has been told about `sourceId` — durably, beside the bell. */
+  markNotified(sourceId: string, userIds: readonly string[]): Promise<void>;
   create(
     input: Parameters<typeof NotificationService.create>[0]
   ): Promise<string | undefined>;
 }
 
+/**
+ * WHO HAS BEEN TOLD, durably: `pod_settings.settings.podUpdateOutcomeNotified`
+ * = `{ sourceId, userIds }` for the outcome on disk (the engine keeps ONE
+ * outcome, so one record — a new update id replaces it).
+ *
+ * The bell row cannot be this record. The notice expires
+ * (`expiresAfterMs`) and the daily `notification-cleanup` worker DELETES
+ * expired read/dismissed rows — and a person can delete a notification. With
+ * the row as the only record, the next boot re-read the unchanged
+ * `last-update.json`, found no row and told everyone again, every week. The
+ * rows are still read (a pod that notified before this record existed), and
+ * the record is backfilled from them.
+ */
+export const POD_UPDATE_NOTIFIED_SETTING = "podUpdateOutcomeNotified" as const;
+
+interface PodUpdateNotifiedRecord {
+  sourceId: string;
+  userIds: string[];
+}
+
+function readNotifiedRecord(
+  settings: Record<string, unknown> | null | undefined
+): PodUpdateNotifiedRecord | null {
+  const raw = settings?.[POD_UPDATE_NOTIFIED_SETTING] as
+    Partial<PodUpdateNotifiedRecord> | undefined;
+  if (!raw || typeof raw.sourceId !== "string") return null;
+  const userIds = Array.isArray(raw.userIds)
+    ? raw.userIds.filter((u): u is string => typeof u === "string")
+    : [];
+  return { sourceId: raw.sourceId, userIds };
+}
+
 const defaultDeps: PodUpdateOutcomeDeps = {
   recipients: resolvePodAdminUserIds,
   alreadyNotified: async (sourceId) => {
-    const rows = await db.query.notifications.findMany({
-      where: and(
-        eq(notifications.sourceType, "system"),
-        eq(notifications.sourceId, sourceId),
-        eq(notifications.type, POD_UPDATE_FAILED_NOTIFICATION_TYPE)
-      ),
-      columns: { userId: true },
-    });
-    return new Set(rows.map((r) => r.userId));
+    const [settingsRow, rows] = await Promise.all([
+      db
+        .select({ settings: podSettings.settings })
+        .from(podSettings)
+        .orderBy(podSettings.createdAt)
+        .limit(1),
+      db.query.notifications.findMany({
+        where: and(
+          eq(notifications.sourceType, "system"),
+          eq(notifications.sourceId, sourceId),
+          eq(notifications.type, POD_UPDATE_FAILED_NOTIFICATION_TYPE)
+        ),
+        columns: { userId: true },
+      }),
+    ]);
+    const record = readNotifiedRecord(settingsRow[0]?.settings);
+    return new Set([
+      ...(record?.sourceId === sourceId ? record.userIds : []),
+      ...rows.map((r) => r.userId),
+    ]);
+  },
+  markNotified: async (sourceId, userIds) => {
+    const record = JSON.stringify({ sourceId, userIds: [...userIds] });
+    const [existing] = await db
+      .select({ id: podSettings.id })
+      .from(podSettings)
+      .orderBy(podSettings.createdAt)
+      .limit(1);
+    if (existing) {
+      await db
+        .update(podSettings)
+        .set({
+          settings: drizzleSql`jsonb_set(
+            coalesce(${podSettings.settings}, '{}'::jsonb),
+            '{podUpdateOutcomeNotified}',
+            ${record}::jsonb,
+            true
+          )`,
+          updatedAt: new Date(),
+        })
+        .where(eq(podSettings.id, existing.id));
+    } else {
+      await db.insert(podSettings).values({
+        settings: { [POD_UPDATE_NOTIFIED_SETTING]: JSON.parse(record) },
+      });
+    }
   },
   create: (input) => NotificationService.create(input),
 };
@@ -122,6 +200,7 @@ export async function notifyPodUpdateOutcome(
     const recipients = await deps.recipients();
     if (recipients.length === 0) return 0;
     const already = await deps.alreadyNotified(sourceId);
+    const told = new Set(already);
     let sent = 0;
     for (const userId of recipients) {
       if (already.has(userId)) continue;
@@ -138,7 +217,23 @@ export async function notifyPodUpdateOutcome(
           status: outcome.status,
         },
       });
-      if (id) sent++;
+      if (id) {
+        sent++;
+        told.add(userId);
+      }
+    }
+    // One idempotent write per boot: it also backfills a pod that notified
+    // before the record existed (its rows are the only trace). A failed
+    // write is logged, never a reason to report the sends as failed.
+    if (told.size > 0) {
+      await deps
+        .markNotified(sourceId, [...told].sort())
+        .catch((err) =>
+          logger.warn(
+            { err, updateId: outcome.updateId },
+            "Could not record who was told about the update outcome"
+          )
+        );
     }
     return sent;
   } catch (err) {

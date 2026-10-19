@@ -44,6 +44,7 @@ function fakeDeps(admins: string[]) {
         new Set(
           rows.filter((r) => r.sourceId === sourceId).map((r) => r.userId)
         ),
+      markNotified: async () => undefined,
       create: async (input: { userId: string; sourceId?: string }) => {
         rows.push({ userId: input.userId, sourceId: input.sourceId! });
         return `n-${rows.length}`;
