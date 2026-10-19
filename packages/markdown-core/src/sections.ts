@@ -436,3 +436,120 @@ export function segmentSlides(markdown: string): Slide[] {
     },
   ];
 }
+
+// ---------------------------------------------------------------------------
+// The document title — ONE name, never printed twice (founder 2026-10-19).
+//
+// A document's NAME (`documents.title`) is its one title: the header, lists,
+// search and breadcrumbs all show it. A body that OPENS with a heading equal to
+// that name would print it a second time, directly under the header. Two
+// readings of one rule, both here so they cannot drift:
+//
+//   - the PRODUCER (create / an API whole-body replace): `resolveDocumentTitle`
+//     stores the body without that heading, and, when no name was given, takes
+//     the name FROM a leading `# ` heading;
+//   - the READER (an existing document, read mode): `bodyWithoutTitleHeading`
+//     skips it at display time. The stored body is not changed.
+//
+// Only a heading EQUAL to the name is dropped (`isSameTitle`: trim, case,
+// whitespace and markdown marks ignored). A heading that differs ("Pinned
+// surfaces" under a document named "Pinned surfaces — spec") is content, and
+// stays. Read from the AST like every walker above, never a `^#` regex: a `#`
+// inside a code fence or an embed is not a heading.
+// ---------------------------------------------------------------------------
+
+/** A body's leading heading: its plain text, depth, and the body after it. */
+export interface LeadingHeading {
+  /** The heading's plain text (marks dropped), trimmed. */
+  text: string;
+  /** 1 for `# `, 2 for `## `, … (a setext `===` heading is 1). */
+  depth: number;
+  /** The markdown after the heading, leading blank lines removed. */
+  rest: string;
+}
+
+/**
+ * The heading a body OPENS with (blank lines before it allowed), or null.
+ *
+ * Parses only the body's first block: a heading never spans a blank line, and
+ * whatever the first block is (a fence, an embed, a list), it parses the same
+ * as a prefix as it does in the whole document. Offsets in the prefix are
+ * offsets in `markdown`, so `rest` is sliced from the real source.
+ */
+export function leadingHeading(markdown: string): LeadingHeading | null {
+  if (!markdown) return null;
+  const start = markdown.search(/\S/);
+  if (start < 0) return null;
+  const gap = /\n[ \t\r]*\n/.exec(markdown.slice(start));
+  const head = gap ? markdown.slice(0, start + gap.index) : markdown;
+  const first = ((parseTree(head).children ?? []) as any[])[0];
+  if (!first || first.type !== "heading") return null;
+  const end = first.position?.end?.offset;
+  if (typeof end !== "number") return null;
+  return {
+    text: headingText(first),
+    depth: first.depth,
+    rest: markdown.slice(end).replace(/^\s*\n/, ""),
+  };
+}
+
+/** A name as plain words: markdown marks dropped, whitespace collapsed, case folded. */
+function titleKey(text: string): string {
+  const oneLine = text.replace(/\s+/g, " ").trim();
+  if (!oneLine) return "";
+  // Read the NAME through the same heading walk as the body's heading, so a
+  // mark on either side ("**Plan**" vs "Plan") cannot make two equal names
+  // differ.
+  const first = ((parseTree(`# ${oneLine}`).children ?? []) as any[])[0];
+  const plain = first?.type === "heading" ? headingText(first) : oneLine;
+  return plain.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/** Two names are the same title: trim, case, whitespace and markdown marks ignored. */
+export function isSameTitle(a: string, b: string): boolean {
+  const ka = titleKey(a);
+  return ka !== "" && ka === titleKey(b);
+}
+
+/**
+ * READ mode: `markdown` without its leading heading when that heading equals
+ * `title`. Anything else (no title, no leading heading, a different heading)
+ * returns `markdown` unchanged — the same string, so a caller can compare.
+ */
+export function bodyWithoutTitleHeading(
+  markdown: string,
+  title: string | null | undefined
+): string {
+  if (!title || !title.trim()) return markdown;
+  const lead = leadingHeading(markdown);
+  return lead && isSameTitle(lead.text, title) ? lead.rest : markdown;
+}
+
+/**
+ * PRODUCER: the one title and the body to store, for a markdown document being
+ * created or replaced whole.
+ *
+ *   - a name given → kept as given; a leading heading EQUAL to it is dropped;
+ *   - no name (blank or absent) → a leading `# ` heading becomes the name and
+ *     leaves the body; `title` is null when there is none (the caller picks
+ *     its own fallback).
+ *
+ * Never renames: with a name given, the body cannot change it.
+ */
+export function resolveDocumentTitle(input: {
+  title?: string | null;
+  content: string;
+}): { title: string | null; content: string } {
+  const given = input.title?.trim() ? input.title : null;
+  if (given) {
+    return {
+      title: given,
+      content: bodyWithoutTitleHeading(input.content, given),
+    };
+  }
+  const lead = leadingHeading(input.content);
+  if (lead && lead.depth === 1 && lead.text) {
+    return { title: lead.text, content: lead.rest };
+  }
+  return { title: null, content: input.content };
+}

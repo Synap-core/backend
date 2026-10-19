@@ -72,6 +72,17 @@ const READERS: Record<string, Probe> = {
       .segmentSlides(DOC)
       .map((s) => s.title)
       .join("\n"),
+  // The document title (founder 2026-10-19): the heading TEXT is a reading
+  // (the name a list shows — "10:30" and "$5 and $10" must survive it); the
+  // rest is a source slice.
+  leadingHeading: () => {
+    const lead = core.leadingHeading(DOC);
+    return lead ? `${lead.text}\n${lead.rest}` : "";
+  },
+  resolveDocumentTitle: () => {
+    const r = core.resolveDocumentTitle({ content: DOC });
+    return `${r.title ?? ""}\n${r.content}`;
+  },
   // Markdown out (source slices around each embed): kept as a reader so a
   // readable export can never drop prose the stored document has.
   readableMarkdown: () => core.readableMarkdown(DOC, () => "embed"),
@@ -181,6 +192,8 @@ const NOT_READERS: Record<string, string> = {
   wordDiffMarkdown: "writer",
   sectionContainerBody: "container strip (source slices)",
   diffSection: "block diff (source slices)",
+  bodyWithoutTitleHeading: "source slice (leadingHeading's rest)",
+  isSameTitle: "predicate",
 };
 
 describe("every export is classified", () => {
@@ -217,6 +230,8 @@ describe("prose survives every reader", () => {
   const SOURCE_SLICES = new Set([
     "listSections",
     "segmentSlides",
+    "leadingHeading",
+    "resolveDocumentTitle",
     "readableMarkdown",
     "stripInlineFormatting",
   ]);
@@ -231,7 +246,12 @@ describe("prose survives every reader", () => {
 
   // Readers that return markdown keep `==` (a highlight is markdown there) but
   // never the Synap-only syntax; tree/text readers keep only the words.
-  const KEEPS_SOURCE = new Set(["listSections", "segmentSlides"]);
+  const KEEPS_SOURCE = new Set([
+    "listSections",
+    "segmentSlides",
+    "leadingHeading",
+    "resolveDocumentTitle",
+  ]);
   for (const [name, probe] of Object.entries(READERS)) {
     if (KEEPS_SOURCE.has(name)) continue;
     it(`${name}: :u / :color / a highlight tone read as their words`, () => {

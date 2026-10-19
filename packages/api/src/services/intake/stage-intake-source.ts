@@ -392,6 +392,8 @@ export async function stageIntakeSource(
       mimeType: "text/markdown",
       metadata: { ...extraMetadata, [INTAKE_SOURCE_METADATA_KEY]: sourceMeta },
       provenance: { createdByKind: "human" },
+      // The raw a re-structure replays: kept byte for byte (no one-title drop).
+      verbatim: true,
     }
   );
   return {

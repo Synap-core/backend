@@ -507,3 +507,58 @@ describe("suggestDocumentPatch — a person's suggestion", () => {
     expect(rows[0]).toEqual({ author: "user", author_id: USER });
   });
 });
+
+// ONE TITLE (founder 2026-10-19): the document's name is its one title. A
+// whole-body replace that opens with a heading equal to it lands without that
+// heading — in what a person reviews (the proposal's ops + preview) and in
+// what is stored on approval. A heading that differs is content.
+describe("applyDocumentPatch — one title on a whole-body replace", () => {
+  it("a person's replace_all opening with `# <name>` is stored without it", async () => {
+    const id = await newDocument();
+    const res = await applyDocumentPatch({
+      userId: USER,
+      documentId: id,
+      baseRevision: 1,
+      ops: [{ op: "replace_all", content: "# Plan\n\nWe ship on Monday.\n" }],
+    });
+    expect(res.status).toBe("applied");
+    expect((await row(id)).content).toBe("We ship on Monday.\n");
+  });
+
+  it("an agent's proposal carries the body without the name — what is reviewed is what lands", async () => {
+    // No person's section: an agent may rewrite the whole of this one.
+    const id = await newDocument("# Plan\n\nWe ship on Friday.\n");
+    const res = await applyDocumentPatch({
+      userId: USER,
+      agentUserId: AGENT,
+      documentId: id,
+      baseRevision: 1,
+      ops: [{ op: "replace_all", content: "## plan\n\nRewritten by the agent.\n" }],
+    });
+    expect(res.status).toBe("proposed");
+    expect(h.gate[0]!.data.ops).toEqual([
+      { op: "replace_all", content: "Rewritten by the agent.\n" },
+    ]);
+    await applyApprovedDocumentPatch(
+      {
+        targetId: id,
+        agentUserId: AGENT,
+        createdBy: AGENT,
+        data: h.gate[0]!.data,
+      },
+      USER
+    );
+    expect((await row(id)).content).toBe("Rewritten by the agent.\n");
+  });
+
+  it("a leading heading that DIFFERS from the name is kept", async () => {
+    const id = await newDocument();
+    await applyDocumentPatch({
+      userId: USER,
+      documentId: id,
+      baseRevision: 1,
+      ops: [{ op: "replace_all", content: "# Plan B\n\nAnother plan.\n" }],
+    });
+    expect((await row(id)).content).toBe("# Plan B\n\nAnother plan.\n");
+  });
+});
