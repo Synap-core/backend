@@ -6,6 +6,9 @@ node_modules/
 dist/
 build/
 .next/
+# Rewritten by every `next dev`/`next build` (content varies by mode + Next version);
+# Next docs: add it to .gitignore, never track it.
+next-env.d.ts
 *.tsbuildinfo
 
 # Emitted JS/declarations in src (build must output to dist only; prevent accidental commit)
