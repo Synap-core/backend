@@ -2459,7 +2459,8 @@ export interface HubCapabilityCatalogCard {
     hint: string;
     /** Where the human step happens, when there is one. */
     url?: string;
-    opensIn?: "desktop";
+    /** Which client can do it there: `connect` needs the desktop app. */
+    opensIn?: "web" | "desktop";
   };
   /**
    * The pod's built-in pack (Synap Core). Listings show it as one line; pass

@@ -20,29 +20,24 @@
  * which normalises the (connected, enabled) signals the registry/execute paths
  * carry into the same status the card computes.
  *
- * ── THE LINK IS DESKTOP-ONLY, AND IT SAYS SO ─────────────────────────────────
+ * ── WHERE THE LINK OPENS, PER ACTION ─────────────────────────────────────────
  * `openTypedLink("capability", id)` → `${PUBLIC_URL}/open/capability/<id>`.
  * Verified end to end:
  *   · `apps/api` serves `/open/:type/:id` for every `TYPED_OPEN_KIND`, and
- *     `capability` is now one (locked against pod-admin by open-kinds.lock.test).
- *   · The route BOUNCES to `synap://open/capability/<id>` (it does not 302 to
- *     pod-admin the way a proposal does — pod-admin hosts only entity/view).
- *   · `browser/`'s `resolveDeepLink` keeps NO kind allowlist and hands the head
- *     segment straight to `objectNavTarget`, whose `case 'capability'` opens
- *     `CapabilitiesApp` with `initialFocus:{kind:'capability',key:id}`; the
- *     container UUID resolves against `card.id` (focus-route.ts).
- *   · That surface carries BOTH affordances: `onToggleVerb` →
- *     `trpc.skills.setApproved` (ENABLE) and `onConnect` → Nango Connect
- *     (CONNECT). So the link lands where the thing can actually be done.
+ *     `capability` is one (locked against pod-admin by open-kinds.lock.test).
+ *   · A signed-in human is 302'd to pod-admin's `/open/capability/<id>`, which
+ *     shows the capability's state and lets whoever the pod allows turn its
+ *     verbs on (`capabilities.setToolEnabled`, the same gate as everywhere).
+ *   · A bot or a `?client=mobile` link bounces to `synap://open/capability/<id>`;
+ *     the desktop's `CapabilitiesApp` carries both affordances (ENABLE and
+ *     Nango CONNECT).
  *
- * What does NOT exist: a pod-admin (web) route for enabling a capability or
- * connecting a provider. `/proposal/<id>` has a web destination; a capability
- * does not — `(admin)/sources` is an explicitly read-only aggregate whose own
- * docstring says per-workspace connector configuration lives in Studio. So this
- * link works for a human WITH the desktop app and dead-ends for one without.
- * `opensIn: "desktop"` states that in the payload rather than implying a
- * universality the route does not have. Closing that gap is a pod-admin change,
- * not a link change — never paper over it by minting a new URL shape.
+ * CONNECTING an account is not on the web: pod-admin has no Nango Connect
+ * frontend, so its page says "Connect in the app" for that step. `opensIn`
+ * states which client can perform THIS action — `"web"` for enable / run /
+ * none (the web page does them, or there is nothing to do), `"desktop"` for
+ * connect — rather than implying a universality the web page does not have.
+ * The URL is the same either way; never mint a second URL shape for it.
  */
 
 import { openTypedLink } from "../../utils/deep-links.js";
@@ -52,12 +47,19 @@ import type {
 } from "./capability-catalog.js";
 
 /**
- * Where the link opens. Only `"desktop"` today, and it is not decoration: the
- * `/open/capability/<id>` route bounces to `synap://`, so a human without the
- * desktop app cannot follow it. A future pod-admin capability route would add a
- * `"web"` value here — until then, claiming one would be a lie.
+ * Which client can perform the action the link is for. `"web"`: the pod's own
+ * `/open/capability/<id>` page does it in any browser (turning verbs on, or
+ * reading a capability that needs nothing). `"desktop"`: only the desktop app
+ * can (connecting an account — the web has no Connect flow).
  */
-export type CapabilityActionSurface = "desktop";
+export type CapabilityActionSurface = "web" | "desktop";
+
+/** The ONE rule: connecting an account needs the app; everything else is on the web. */
+export function capabilityActionSurface(
+  kind: CapabilityNextAction["kind"]
+): CapabilityActionSurface {
+  return kind === "connect" ? "desktop" : "web";
+}
 
 export interface CapabilityNextAction {
   kind: "add" | "connect" | "enable" | "run" | "none";
@@ -73,15 +75,19 @@ export interface CapabilityNextAction {
 }
 
 /**
- * The link half, alone. `undefined` for an un-packaged brick — `containerId` is
- * legitimately null for a tool/skill in no container, and that is a real answer,
- * not a missing one (see `RegistryCapability.containerId`).
+ * The link half, alone, for the action `kind`. `{}` for an un-packaged brick —
+ * `containerId` is legitimately null for a tool/skill in no container, and that
+ * is a real answer, not a missing one (see `RegistryCapability.containerId`).
  */
 export function capabilityCardLink(
-  containerId: string | null | undefined
+  containerId: string | null | undefined,
+  kind: CapabilityNextAction["kind"]
 ): Pick<CapabilityNextAction, "url" | "opensIn"> {
   if (!containerId) return {};
-  return { url: openTypedLink("capability", containerId), opensIn: "desktop" };
+  return {
+    url: openTypedLink("capability", containerId),
+    opensIn: capabilityActionSurface(kind),
+  };
 }
 
 /**
@@ -105,7 +111,8 @@ export function capabilityNextAction(
   containerId?: string | null,
   launchable?: boolean
 ): CapabilityNextAction {
-  const link = capabilityCardLink(containerId);
+  const link = (kind: CapabilityNextAction["kind"]) =>
+    capabilityCardLink(containerId, kind);
   switch (status) {
     case "available":
       return { kind: "add", hint: `Add "${name}" to install its verbs.` };
@@ -118,7 +125,7 @@ export function capabilityNextAction(
           hint: prov
             ? `Reconnect ${prov} — its access expired or was revoked.`
             : `Reconnect the credential for "${name}" — it expired or was revoked.`,
-          ...link,
+          ...link("connect"),
         };
       }
       return {
@@ -126,7 +133,7 @@ export function capabilityNextAction(
         hint: prov
           ? `Connect ${prov} (OAuth) to enable "${name}".`
           : `Connect the credential for "${name}".`,
-        ...link,
+        ...link("connect"),
       };
     }
     // The `enable` hints are shown VERBATIM (browser activity rows read
@@ -138,29 +145,29 @@ export function capabilityNextAction(
       return {
         kind: "enable",
         hint: "Connected, but its actions are off. Turn them on to use it.",
-        ...link,
+        ...link("enable"),
       };
     case "draft":
       return {
         kind: "enable",
         hint: "Its actions are off. Turn them on to use it.",
-        ...link,
+        ...link("enable"),
       };
     case "partial":
       return {
         kind: "enable",
         hint: "Some of its actions are off. Turn them on to use them.",
-        ...link,
+        ...link("enable"),
       };
     case "ready":
       if (launchable === false) {
         return {
           kind: "none",
           hint: `Every verb of "${name}" is enabled, but none can be launched through the execute door yet — no verb has an active, approved backing skill on an approved tool.`,
-          ...link,
+          ...link("none"),
         };
       }
-      return { kind: "run", hint: `Run a verb of "${name}".`, ...link };
+      return { kind: "run", hint: `Run a verb of "${name}".`, ...link("run") };
     case "unavailable": {
       const prov = connection?.provider;
       return {
