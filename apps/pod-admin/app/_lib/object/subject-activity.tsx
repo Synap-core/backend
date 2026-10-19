@@ -2,10 +2,11 @@
 
 /**
  * `SubjectActivity` — an object page's Activity tab: what was done to the
- * object, newest first (`events.search` on its ids as the subject). The door
- * is floored to the reader: their own acts, and acts in spaces they can see —
- * so an admin reading another member's object sees what THEY did, and the
- * hint says so. The page supplies the ids and the words for each row.
+ * object, newest first, on its ids as the subject. A pod admin reads
+ * `events.adminSubjectActivity`: anyone's acts on apps and computers, which
+ * carry no space. A member reads `events.search`, floored to them — their own
+ * acts, and acts in spaces they can see — and the hint says so. The page
+ * supplies the ids and the words for each row.
  */
 
 import type { ReactNode } from "react";
@@ -17,13 +18,14 @@ import {
   ResourceRowSkeleton,
 } from "../../(admin)/components/resource-row";
 import { SectionCard } from "../../(admin)/components/section-card";
+import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 
 /** Rows the tab reads — one page, newest first. */
 const ACTIVITY_SHOWN = 25;
-/** `events.search` bounds its subject list; an object never needs more. */
+/** Both doors bound their subject list; an object never needs more. */
 const MAX_SUBJECTS = 200;
 
-/** The slice of an `events.search` row a line is written from. */
+/** The slice of an event row a line is written from. */
 export interface SubjectEventLike {
   eventType: string;
   userId: string;
@@ -33,7 +35,7 @@ export interface SubjectEventLike {
 export function SubjectActivity({
   subjectIds,
   line,
-  empty = "Nothing recorded on it that you can see yet.",
+  empty,
 }: {
   /** The object's id, plus any id its acts are recorded on (its keys). */
   subjectIds: readonly string[];
@@ -41,14 +43,30 @@ export function SubjectActivity({
   line: (e: SubjectEventLike) => string;
   empty?: string;
 }) {
+  const isAdmin = useConsoleRole() === "admin";
   const me = trpc.users.me.useQuery(undefined, { staleTime: 300_000 });
   const viewerId = me.data?.id ?? null;
-  const events = trpc.events.search.useQuery(
-    { subjectIds: subjectIds.slice(0, MAX_SUBJECTS), limit: ACTIVITY_SHOWN },
-    { staleTime: 30_000, enabled: subjectIds.length > 0 }
-  );
+  const input = {
+    subjectIds: subjectIds.slice(0, MAX_SUBJECTS),
+    limit: ACTIVITY_SHOWN,
+  };
+  const enabled = subjectIds.length > 0;
+  const adminEvents = trpc.events.adminSubjectActivity.useQuery(input, {
+    staleTime: 30_000,
+    enabled: enabled && isAdmin,
+  });
+  const memberEvents = trpc.events.search.useQuery(input, {
+    staleTime: 30_000,
+    enabled: enabled && !isAdmin,
+  });
+  const events = isAdmin ? adminEvents : memberEvents;
+  const emptyLine =
+    empty ??
+    (isAdmin
+      ? "Nothing recorded on it yet."
+      : "Nothing recorded on it that you can see yet.");
   let body: ReactNode;
-  if (subjectIds.length === 0) body = <ResourceRowEmpty message={empty} />;
+  if (subjectIds.length === 0) body = <ResourceRowEmpty message={emptyLine} />;
   else if (events.isLoading) body = <ResourceRowSkeleton count={3} />;
   else if (events.isError)
     body = (
@@ -58,7 +76,7 @@ export function SubjectActivity({
       />
     );
   else if ((events.data ?? []).length === 0)
-    body = <ResourceRowEmpty message={empty} />;
+    body = <ResourceRowEmpty message={emptyLine} />;
   else
     body = (
       <ul className="flex flex-col divide-y divide-foreground/[0.05]">
@@ -83,7 +101,11 @@ export function SubjectActivity({
   return (
     <SectionCard
       title="Activity"
-      hint="Changes you can see: yours, and those in spaces you belong to."
+      hint={
+        isAdmin
+          ? "Changes made to it by anyone on this pod."
+          : "Changes you can see: yours, and those in spaces you belong to."
+      }
     >
       {body}
     </SectionCard>
