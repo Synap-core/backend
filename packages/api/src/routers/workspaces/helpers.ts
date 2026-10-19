@@ -164,8 +164,22 @@ export function isPodReadableWorkspace(settings: unknown): boolean {
 }
 
 /**
+ * The pod's own name, when the deploy set one — sent only as a CLAIM. The CP
+ * identifies a pod-signed caller by its key, so a pod with no name (every
+ * installer-built pod: neither env var is set) is still recognised; only a
+ * legacy shared-key pod needs the name for the CP to know who it is.
+ */
+function podSubdomainClaim(): { podSubdomain?: string } {
+  const name =
+    process.env.POD_SUBDOMAIN?.trim() || process.env.SERVER_DOMAIN?.trim();
+  return name ? { podSubdomain: name } : {};
+}
+
+/**
  * POST an invite record to the CP's `/internal/*`, authenticated by the pod's
  * one pod→CP credential door. No credential (a self-hosted pod) = not sent.
+ * A non-2xx answer THROWS, so the caller's `.catch` logs a refused sync
+ * instead of reading it as a recorded one.
  */
 async function sendToCp(cpUrl: string, path: string, body: unknown) {
   const auth = await podCpAuthHeaders({
@@ -174,11 +188,88 @@ async function sendToCp(cpUrl: string, path: string, body: unknown) {
     controlPlaneUrl: cpUrl,
   });
   if (!auth) return;
-  await fetch(`${cpUrl}${path}`, {
+  const res = await fetch(`${cpUrl}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...auth.headers },
     body: JSON.stringify(body),
   });
+  if (!res.ok) {
+    throw new Error(
+      `Control Plane ${path} answered ${res.status}: ${await cpErrorText(res)}`
+    );
+  }
+}
+
+/** The `{error}` / `{reason}` a CP answer carries, else its status text. */
+async function cpErrorText(res: Response): Promise<string> {
+  const text = await res.text().catch(() => "");
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; reason?: unknown };
+    const message = parsed.error ?? parsed.reason;
+    if (typeof message === "string" && message) return message;
+  } catch {
+    /* not JSON — fall through to the raw text */
+  }
+  return text.slice(0, 200) || res.statusText || "no detail";
+}
+
+export type CpInviteEmailResult =
+  { sent: true } | { sent: false; reason: string };
+
+/**
+ * Ask the CP to email an invite, and report what actually happened. A
+ * refusal (non-2xx), a skipped send (`{sent:false, reason}` — e.g. no active
+ * subscription) and an unreachable CP are each `sent: false` WITH the reason,
+ * so the inviter learns the email did not go. Never throws: the invite row
+ * already exists and its link still works.
+ */
+export async function sendCpInviteEmail(
+  cpUrl: string,
+  body: Record<string, string>
+): Promise<CpInviteEmailResult> {
+  try {
+    const auth = await podCpAuthHeaders({
+      purpose: "invites",
+      legacy: "internal-key",
+      controlPlaneUrl: cpUrl,
+    });
+    if (!auth) {
+      return {
+        sent: false,
+        reason:
+          "This pod holds no Control Plane credential, so no invite email was sent.",
+      };
+    }
+    const res = await fetch(`${cpUrl}/internal/invite-email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...auth.headers },
+      body: JSON.stringify({ ...body, ...podSubdomainClaim() }),
+    });
+    if (!res.ok) {
+      const reason = `The Control Plane refused the invite email (${res.status}): ${await cpErrorText(res)}`;
+      logger.warn({ status: res.status, reason }, "Invite email not sent");
+      return { sent: false, reason };
+    }
+    const answer = (await res.json().catch(() => null)) as {
+      sent?: unknown;
+      reason?: unknown;
+    } | null;
+    if (answer?.sent === true) return { sent: true };
+    const reason =
+      typeof answer?.reason === "string" && answer.reason
+        ? answer.reason
+        : "The Control Plane did not send the invite email.";
+    logger.warn({ reason }, "Invite email not sent");
+    return { sent: false, reason };
+  } catch (err) {
+    logger.warn({ err }, "Invite email not sent: Control Plane unreachable");
+    return {
+      sent: false,
+      reason: `The Control Plane could not be reached: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
 }
 
 export async function notifyCpInviteSync(input: {
@@ -192,13 +283,11 @@ export async function notifyCpInviteSync(input: {
   expiresAt: Date;
 }) {
   const cpUrl = config.server.controlPlaneUrl;
-  const podSubdomain =
-    process.env.POD_SUBDOMAIN ?? process.env.SERVER_DOMAIN ?? "";
-  if (!cpUrl || !podSubdomain) return;
+  if (!cpUrl) return;
   const backendOrigin =
     process.env.PUBLIC_BACKEND_URL || process.env.SYNAP_INSTANCE_URL;
   const body = {
-    podSubdomain,
+    ...podSubdomainClaim(),
     inviteToken: input.inviteToken,
     type: input.type,
     workspaceId: input.workspaceId ?? null,
@@ -222,11 +311,9 @@ export async function notifyCpInviteLifecycle(input: {
   reason?: string;
 }) {
   const cpUrl = config.server.controlPlaneUrl;
-  const podSubdomain =
-    process.env.POD_SUBDOMAIN ?? process.env.SERVER_DOMAIN ?? "";
-  if (!cpUrl || !podSubdomain) return;
+  if (!cpUrl) return;
   const body = {
-    podSubdomain,
+    ...podSubdomainClaim(),
     inviteToken: input.inviteToken,
     event: input.event,
     actorEmail: input.actorEmail,
