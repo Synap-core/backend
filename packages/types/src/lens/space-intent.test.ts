@@ -328,6 +328,35 @@ describe("homeNeedsYouModel", () => {
     expect(unknown?.total).toBeNull();
     expect(unknown?.text).toMatch(/^– need you/);
   });
+  it("a capped count reads N+ — on the total and on each space, independently", () => {
+    // Rules out "copy the pod-wide flag onto every part": only Content is capped.
+    const m = homeNeedsYouModel(
+      {
+        total: 100,
+        truncated: true,
+        bySpace: [
+          { workspaceId: "w1", count: 3, truncated: false },
+          { workspaceId: "w2", count: 60, truncated: true },
+        ],
+      },
+      spaces
+    );
+    expect(m?.text).toBe("100+ need you · Content 60+ · Sales 3");
+    expect(m?.floor).toBe(true);
+    expect(m?.parts.map((p) => [p.workspaceId, p.floor, p.countText])).toEqual([
+      ["w2", true, "60+"],
+      ["w1", false, "3"],
+    ]);
+  });
+  it("1+ is plural; an unknown total is never a floor; absent flags read exact", () => {
+    expect(homeNeedsYouModel({ total: 1, truncated: true, bySpace: [] }, spaces)?.text).toBe(
+      "1+ need you"
+    );
+    const unknown = homeNeedsYouModel({ total: null, truncated: true, bySpace: [] }, spaces);
+    expect(unknown?.floor).toBe(false);
+    expect(unknown?.text).toBe("– need you");
+    expect(homeNeedsYouModel({ total: 1, bySpace: [] }, spaces)?.text).toBe("1 needs you");
+  });
 });
 
 describe("movingNowRowModel", () => {

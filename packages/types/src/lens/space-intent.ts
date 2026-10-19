@@ -27,7 +27,7 @@ import {
   sentenceCaseLabel,
 } from "../vocabulary/index.js";
 import { decodeHtmlEntities } from "../text/html-entities.js";
-import { formatKpiFraction, type LensKpiFact } from "./header.js";
+import { formatKpiFraction, lensCountDoorText, type LensKpiFact } from "./header.js";
 import { lensIntentDoorText } from "./intent.js";
 import type { LensBeingWorked, LensRow } from "./rows.js";
 import type { LensSource } from "./scope.js";
@@ -338,19 +338,39 @@ export function projectMakingCards(
  * space (largest first), each part a door to that space. A zero total OMITS
  * the line (null); an unknown total keeps it, marked "–" (failed ≠ empty).
  * Spaces whose count is unknown or zero are left out of the parts.
+ *
+ * A capped count says so (ui-composition §11): `truncated` — the pod's own
+ * flag off `signals.count`, on the total and on each space — reads "N+"
+ * ("100+ need you · Content 60+"), and `floor` tells a renderer drawing the
+ * number itself. Absent (an older pod) reads as exact.
  */
 export function homeNeedsYouModel(
   needsYou: {
     total: number | null;
-    bySpace: ReadonlyArray<{ workspaceId: string; count: number | null }>;
+    truncated?: boolean | null;
+    bySpace: ReadonlyArray<{
+      workspaceId: string;
+      count: number | null;
+      truncated?: boolean | null;
+    }>;
   },
   spaces: ReadonlyArray<
     Pick<SpaceIntentInput, "workspaceId" | "label" | "name">
   >
 ): {
   total: number | null;
+  /** `total` is a lower bound — draw "N+". */
+  floor: boolean;
   text: string;
-  parts: Array<{ workspaceId: string; label: string; count: number }>;
+  parts: Array<{
+    workspaceId: string;
+    label: string;
+    count: number;
+    /** `count` is a lower bound. */
+    floor: boolean;
+    /** "60" / "60+" — the part's number as the line says it. */
+    countText: string;
+  }>;
 } | null {
   if (needsYou.total === 0) return null;
   const labelOf = new Map(
@@ -358,20 +378,27 @@ export function homeNeedsYouModel(
   );
   const parts = needsYou.bySpace
     .filter(
-      (b): b is { workspaceId: string; count: number } =>
+      (b): b is { workspaceId: string; count: number; truncated?: boolean | null } =>
         typeof b.count === "number" && b.count > 0
     )
-    .map((b) => ({
-      workspaceId: b.workspaceId,
-      label: labelOf.get(b.workspaceId) ?? "",
-      count: b.count,
-    }))
+    .map((b) => {
+      const floor = b.truncated === true;
+      return {
+        workspaceId: b.workspaceId,
+        label: labelOf.get(b.workspaceId) ?? "",
+        count: b.count,
+        floor,
+        countText: floor ? `${b.count}+` : `${b.count}`,
+      };
+    })
     .filter((p) => p.label !== "")
     .sort((a, b) => b.count - a.count);
-  const head = lensIntentDoorText("blocking", needsYou.total);
+  const floor = needsYou.total !== null && needsYou.truncated === true;
+  const head = lensCountDoorText("blocking", needsYou.total, floor);
   return {
     total: needsYou.total,
-    text: [head, ...parts.map((p) => `${p.label} ${p.count}`)].join(" · "),
+    floor,
+    text: [head, ...parts.map((p) => `${p.label} ${p.countText}`)].join(" · "),
     parts,
   };
 }
