@@ -88,6 +88,10 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/users\/me\/?$/,
   /^\/auth\/status\/?$/,
   /^\/users\/[^/]+\/entities\/?$/,
+  // The list door. Every branch reads through `entities.getEntities` (the
+  // seamed `entities.list` floor) EXCEPT full-text `q` (Typesense), which the
+  // route itself refuses for a fenced grant (rest/entities.ts).
+  /^\/entities\/?$/,
   /^\/entities\/[^/]+\/?$/,
   /^\/entities\/[^/]+\/connections\/?$/,
   /^\/entities\/[^/]+\/facets\/?$/,

@@ -26,16 +26,25 @@
  *   - user    → that user's subscriptions only.
  * A failed audience read delivers to NOBODY: a failed read is not "everyone".
  *
+ * WORKSPACE — a subscription bound to a workspace (`workspace_id` set) gets
+ * only events whose SUBJECT lives in that workspace (`subscriptionCoversWorkspace`,
+ * the same rule producer 1 applies): the entity's / channel's own
+ * `workspace_id`, read from the subject row. A pod-wide subject (NULL
+ * workspace) and a `user` audience (no subject) reach unbound subscriptions
+ * only. The subject's workspace is read only when a bound subscription is a
+ * candidate, and a failed read of it is a failed audience read (nobody).
+ *
  * Failures are console.warn'd, never thrown — this must never block the API.
  */
 
 import { randomUUID } from "node:crypto";
 import { db, webhookSubscriptions, eq } from "@synap/database";
-import { entities } from "@synap/database/schema";
+import { channels, entities } from "@synap/database/schema";
 import { getBoss } from "@synap/events";
 import {
   buildWebhookBody,
   enqueueWebhookDeliveries,
+  subscriptionCoversWorkspace,
   subscriptionWantsEvent,
 } from "@synap/jobs/workers/webhook-worker.js";
 import { listChannelAudienceUserIds } from "./channel-visibility.js";
@@ -89,6 +98,37 @@ async function readersAmong(
   }
 }
 
+/**
+ * The workspace the event's SUBJECT lives in (`null` = pod-wide / no subject).
+ * Read from the subject row itself — never from the payload, which a caller
+ * may shape. A subject row that is not found is pod-wide for this rule: a
+ * bound subscription then receives nothing, the narrow side.
+ */
+async function subjectWorkspaceId(
+  audience: WebhookAudience
+): Promise<string | null> {
+  switch (audience.kind) {
+    case "user":
+      return null;
+    case "channel": {
+      const [row] = await db
+        .select({ workspaceId: channels.workspaceId })
+        .from(channels)
+        .where(eq(channels.id, audience.channelId))
+        .limit(1);
+      return row?.workspaceId ?? null;
+    }
+    case "entity": {
+      const [row] = await db
+        .select({ workspaceId: entities.workspaceId })
+        .from(entities)
+        .where(eq(entities.id, audience.entityId))
+        .limit(1);
+      return row?.workspaceId ?? null;
+    }
+  }
+}
+
 /** Awaitable core of {@link dispatchWebhooksForEvent} (exported for tests). */
 export async function deliverWebhooksForEvent(
   eventType: string,
@@ -100,6 +140,7 @@ export async function deliverWebhooksForEvent(
       .select({
         id: webhookSubscriptions.id,
         userId: webhookSubscriptions.userId,
+        workspaceId: webhookSubscriptions.workspaceId,
         eventTypes: webhookSubscriptions.eventTypes,
         retryConfig: webhookSubscriptions.retryConfig,
       })
@@ -111,10 +152,15 @@ export async function deliverWebhooksForEvent(
     if (candidates.length === 0) return;
 
     let readers: Set<string>;
+    let eventWorkspaceId: string | null = null;
     try {
       readers = await readersAmong(audience, [
         ...new Set(candidates.map((s) => s.userId)),
       ]);
+      // Only a bound candidate needs the subject's workspace.
+      if (candidates.some((s) => s.workspaceId)) {
+        eventWorkspaceId = await subjectWorkspaceId(audience);
+      }
     } catch (err) {
       console.warn(
         `[webhook] audience read failed for '${eventType}'; delivering to nobody:`,
@@ -123,7 +169,11 @@ export async function deliverWebhooksForEvent(
       return;
     }
 
-    const subscribers = candidates.filter((s) => readers.has(s.userId));
+    const subscribers = candidates.filter(
+      (s) =>
+        readers.has(s.userId) &&
+        subscriptionCoversWorkspace(s.workspaceId, eventWorkspaceId)
+    );
     if (subscribers.length === 0) return;
 
     // ONE fan-out id for this call (not one per subscription / attempt), so
