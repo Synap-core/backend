@@ -57,6 +57,7 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveStatusLabel,
+  sentenceCaseLabel,
 } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
@@ -488,7 +489,11 @@ async function profileWords(
   for (const [slug, r] of pick) {
     out.set(slug, {
       label: r.displayName,
-      plural: r.plural?.trim() || resolveObjectNounPlural(r.displayName),
+      // Sentence case at the door: a stored plural is whatever its author
+      // typed ("decisions"), and it renders beside "Features".
+      plural: sentenceCaseLabel(
+        r.plural?.trim() || resolveObjectNounPlural(r.displayName)
+      ),
     });
   }
   return out;

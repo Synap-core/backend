@@ -24,6 +24,7 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveStatusLabel,
+  sentenceCaseLabel,
 } from "../vocabulary/index.js";
 import { decodeHtmlEntities } from "../text/html-entities.js";
 import { formatKpiFraction, type LensKpiFact } from "./header.js";
@@ -256,7 +257,9 @@ export function spaceIntentCardModel(
       typeof kind.needsYou === "number" && kind.needsYou > 0
         ? kind.needsYou
         : null;
-    const title = kind.plural.trim() || kind.label;
+    // Sentence case, like every other row title: a profile's stored plural
+    // ("decisions") never sits lower-case beside "Features".
+    const title = sentenceCaseLabel(kind.plural) || kind.label;
     return {
       profileSlug: kind.profileSlug,
       workspaceId: space.workspaceId,
@@ -786,13 +789,15 @@ export function alsoInKinds(
     seen.add(p.slug);
     out.push({
       profileSlug: p.slug,
-      // The profile's own words keep their casing ("UI designs"); only a
+      // The profile's own words keep their deliberate casing ("UI designs"),
+      // sentence-cased like every title ("decisions" → "Decisions"); only a
       // nameless profile falls back to the slug's vocabulary noun.
-      title:
+      title: sentenceCaseLabel(
         p.plural?.trim() ||
-        (p.name.trim()
-          ? pluralizeNoun(p.name)
-          : resolveObjectNounPlural(p.slug)),
+          (p.name.trim()
+            ? pluralizeNoun(p.name)
+            : resolveObjectNounPlural(p.slug))
+      ),
       count,
       workspaceId: space.workspaceId,
     });

@@ -648,7 +648,7 @@ describe("the row/space joins (one rule, browser + relay)", () => {
     expect(alsoInKinds(crm, profiles, null)).toBeNull();
   });
 
-  it("a profile's own name keeps its casing: 'UI Design' → 'UI Designs', never 'Ui designs' (S9)", () => {
+  it("a profile's own name keeps its deliberate casing: 'UI Design' → 'UI designs', never 'Ui designs' (S9)", () => {
     const space = { workspaceId: "dev", produces: [] };
     const chips = alsoInKinds(
       space,
@@ -675,8 +675,10 @@ describe("the row/space joins (one rule, browser + relay)", () => {
       ],
       { "ui-design": 3, mcp_server: 2, contact_log: 1 }
     );
+    // Sentence case keeps the acronym and lower-cases the Title Case word,
+    // like every other title ("User stories").
     expect(chips?.map((c) => c.title)).toEqual([
-      "UI Designs",
+      "UI designs",
       "MCP servers",
       resolveObjectNounPlural("contact_log"),
     ]);
@@ -853,5 +855,49 @@ describe("a title stored escaped (`&amp;`) reads as text", () => {
       })
     );
     expect(m.headline?.text).toBe("Q&A pipeline");
+  });
+});
+
+describe("kind plurals are sentence-cased (a stored plural is whatever its author typed)", () => {
+  it("a card row: 'decisions' reads 'Decisions' beside 'Features'", () => {
+    const m = spaceIntentCardModel(
+      space({
+        produces: [
+          kind(),
+          kind({
+            profileSlug: "decision",
+            label: "Decision",
+            plural: "decisions",
+          }),
+          kind({
+            profileSlug: "story",
+            label: "User story",
+            plural: "User Stories",
+          }),
+        ],
+      })
+    );
+    expect(m.kinds.map((k) => k.title)).toEqual([
+      "Features",
+      "Decisions",
+      "User stories",
+    ]);
+  });
+
+  it("an also-here chip", () => {
+    const chips = alsoInKinds(
+      { workspaceId: "w1", produces: [] },
+      [
+        {
+          slug: "decision",
+          name: "Decision",
+          plural: "decisions",
+          workspaceId: "w1",
+          profileKind: "kind",
+        },
+      ],
+      { decision: 2 }
+    );
+    expect(chips?.map((c) => c.title)).toEqual(["Decisions"]);
   });
 });

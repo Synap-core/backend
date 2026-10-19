@@ -724,7 +724,7 @@ describe("lifecycle.home — pod-wide things (homes X1, review #5)", () => {
 
   it("a card counts what its board shows (pod-wide rows included); only OWNED rows make a space produce", async () => {
     await q(
-      `insert into profiles (id, slug, display_name, plural, profile_kind, entity_scope, is_active) values ($1,'decision','Decision','Decisions','kind','pod',true)`,
+      `insert into profiles (id, slug, display_name, plural, profile_kind, entity_scope, is_active) values ($1,'decision','Decision','decisions','kind','pod',true)`,
       [DECISION]
     );
     await q(
@@ -764,6 +764,13 @@ describe("lifecycle.home — pod-wide things (homes X1, review #5)", () => {
         );
       expect(cardOf(beta)).toBe(2 + 3);
       expect(cardOf(MISC)).toBe(1 + 3);
+      // The stored plural is lower-case ("decisions", as an agent typed it on
+      // a real pod): the card's word is sentence-cased like "Deals".
+      expect(
+        home.spaces
+          .find((s) => s.workspaceId === beta)!
+          .produces.find((p) => p.profileSlug === "decision")!.plural
+      ).toBe("Decisions");
       // Inference reads OWNED rows only: pod-wide decisions never make
       // Gamma (or a Finance / Foundation) a producer of decisions.
       expect(
