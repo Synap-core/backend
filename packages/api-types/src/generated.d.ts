@@ -15633,6 +15633,8 @@ export type RequesterAccountView = {
 	status: "verified";
 	email: string;
 	issuerHost: string;
+	/** The trusted issuer's display name on this Pod, when it has one. */
+	issuerName: string | null;
 	verifiedAt: string;
 } | {
 	status: "unverified";
@@ -37896,6 +37898,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				requestId: string;
+				linkedByInvite: boolean;
 			};
 			meta: object;
 		}>;
@@ -37918,7 +37921,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewedAt: Date | null;
 				canReview: boolean;
 				matchingApprovedConnection: boolean;
-				requesterAccount: null;
+				requesterAccount: RequesterAccountView | null;
+				requesterMember: null;
+				approvedByInvite: boolean;
+				returnUrl: string | null;
 			} | {
 				id: string;
 				issuerUrl: string;
@@ -37934,7 +37940,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewedAt: Date | null;
 				canReview: true;
 				matchingApprovedConnection: boolean;
-				requesterAccount: RequesterAccountView;
+				requesterAccount: RequesterAccountView | null;
+				requesterMember: {
+					name: string | null;
+					email: string | null;
+				} | null;
+				approvedByInvite: boolean;
+				returnUrl: null;
 			};
 			meta: object;
 		}>;

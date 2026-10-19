@@ -176,6 +176,45 @@ export interface VerifiedRequesterAccount {
   verifiedAt: string;
   /** The approved issuer that signed it. */
   issuerUrl: string;
+  /**
+   * The browser origin the issuer admitted for the app (its signed `origin`
+   * claim), when it sent one. The "invite is the consent" rule requires it to
+   * equal the request's origin.
+   */
+  vouchedOrigin?: string;
+}
+
+/** The verified record as stored, or null when there is none or it is malformed. */
+export function readVerifiedRequesterAccount(
+  requestMetadata: unknown
+): VerifiedRequesterAccount | null {
+  const record =
+    requestMetadata && typeof requestMetadata === "object"
+      ? (requestMetadata as { requesterAccount?: unknown }).requesterAccount
+      : undefined;
+  if (!record || typeof record !== "object") return null;
+  const { verifiedEmail, verifiedAt, issuerUrl, vouchedOrigin } =
+    record as Partial<Record<keyof VerifiedRequesterAccount, unknown>>;
+  if (
+    typeof verifiedEmail !== "string" ||
+    !verifiedEmail.includes("@") ||
+    typeof verifiedAt !== "string" ||
+    Number.isNaN(Date.parse(verifiedAt)) ||
+    typeof issuerUrl !== "string"
+  ) {
+    return null;
+  }
+  try {
+    new URL(issuerUrl);
+  } catch {
+    return null;
+  }
+  return {
+    verifiedEmail,
+    verifiedAt,
+    issuerUrl,
+    ...(typeof vouchedOrigin === "string" ? { vouchedOrigin } : {}),
+  };
 }
 
 /**
@@ -190,35 +229,56 @@ export type RequesterAccountView =
       status: "verified";
       email: string;
       issuerHost: string;
+      /** The trusted issuer's display name on this Pod, when it has one. */
+      issuerName: string | null;
       verifiedAt: string;
     }
   | { status: "unverified" };
 
 export function requesterAccountView(
-  requestMetadata: unknown
+  requestMetadata: unknown,
+  options: { issuerName?: string | null } = {}
 ): RequesterAccountView {
+  const account = readVerifiedRequesterAccount(requestMetadata);
+  if (!account) return { status: "unverified" };
+  return {
+    status: "verified",
+    email: account.verifiedEmail,
+    issuerHost: new URL(account.issuerUrl).host,
+    issuerName: options.issuerName?.trim() || null,
+    verifiedAt: account.verifiedAt,
+  };
+}
+
+/**
+ * How a request was approved, read from its metadata: by an owner, or by the
+ * invite the requester accepted (`approveByInviteIfConsented`).
+ */
+export const INVITE_APPROVAL_METADATA_KEY = "approvedByInvite" as const;
+
+export interface InviteApprovalRecord {
+  inviteId: string;
+  inviteAcceptedAt: string;
+  approvedAt: string;
+}
+
+export function readInviteApproval(
+  requestMetadata: unknown
+): InviteApprovalRecord | null {
   const record =
     requestMetadata && typeof requestMetadata === "object"
-      ? (requestMetadata as { requesterAccount?: unknown }).requesterAccount
+      ? (requestMetadata as Record<string, unknown>)[
+          INVITE_APPROVAL_METADATA_KEY
+        ]
       : undefined;
-  if (!record || typeof record !== "object") return { status: "unverified" };
-  const { verifiedEmail, verifiedAt, issuerUrl } = record as Partial<
-    Record<keyof VerifiedRequesterAccount, unknown>
+  if (!record || typeof record !== "object") return null;
+  const { inviteId, inviteAcceptedAt, approvedAt } = record as Record<
+    string,
+    unknown
   >;
-  if (
-    typeof verifiedEmail !== "string" ||
-    !verifiedEmail.includes("@") ||
-    typeof verifiedAt !== "string" ||
-    Number.isNaN(Date.parse(verifiedAt)) ||
-    typeof issuerUrl !== "string"
-  ) {
-    return { status: "unverified" };
-  }
-  let issuerHost: string;
-  try {
-    issuerHost = new URL(issuerUrl).host;
-  } catch {
-    return { status: "unverified" };
-  }
-  return { status: "verified", email: verifiedEmail, issuerHost, verifiedAt };
+  return typeof inviteId === "string" &&
+    typeof inviteAcceptedAt === "string" &&
+    typeof approvedAt === "string"
+    ? { inviteId, inviteAcceptedAt, approvedAt }
+    : null;
 }

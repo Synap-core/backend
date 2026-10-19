@@ -1021,6 +1021,18 @@ describe("application connection start — account hint", () => {
     ).toBe(false);
   });
 
+  it("keeps the origin the issuer vouched for, for the invite-consent rule", async () => {
+    mocks.verifyIssuerJwt.mockImplementation(async (token: string) =>
+      token === SIGNED
+        ? claimsFor({ origin: "https://app.example.test" })
+        : null
+    );
+    expect((await start(SIGNED)).status).toBe(303);
+    expect(storedMetadata().requesterAccount).toMatchObject({
+      vouchedOrigin: "https://app.example.test",
+    });
+  });
+
   it("ignores a forged or unsigned hint: the request starts Not verified", async () => {
     const forged = tokenFor(
       claimsFor({ email: "mallory@example.test" }),

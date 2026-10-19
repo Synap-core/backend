@@ -16,11 +16,14 @@ import {
 } from "@heroui/react";
 import { ArrowUpRight, Check, X } from "lucide-react";
 import { ReceiverShell } from "../../_lib/receiver-shell";
+import { accountLinkRequesterView } from "../../_lib/requester-account";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { navHref } from "../../../lib/console-nav";
 import {
   ConnectionRequestDetails,
+  UnverifiedAccountNotice,
   matchesApprovedConnection,
+  useAccountLinkGate,
   useConnectionRequest,
 } from "./ConnectionRequestDecision";
 
@@ -72,6 +75,7 @@ export function ConnectionRequestReview({
     },
   });
   const { request } = review;
+  const gate = useAccountLinkGate(request.data);
 
   useEffect(() => {
     if (!request.isLoading && request.data) {
@@ -129,7 +133,19 @@ export function ConnectionRequestReview({
   }
 
   const data = request.data;
+  // The person who asked, reading their own account link (not a reviewer).
+  if (!data.canReview && data.requesterAccount) {
+    return (
+      <RequesterAccountLink
+        data={data}
+        podHost={podHost}
+        identity={identity}
+        onClose={closeReview}
+      />
+    );
+  }
   const canViewRequestDetails = data.canReview;
+  const link = gate.link;
   const isPending =
     !approvedReturnUrl && !declined && data.status === "pending";
   const isExpired = data.status === "expired";
@@ -143,13 +159,21 @@ export function ConnectionRequestReview({
         "Awaiting Pod sign-in"
       : resolveStatusLabel(data.status);
   const chipColor =
-    data.status === "approved" || matchingApproved
+    data.status === "approved" ||
+    data.status === "completed" ||
+    (!link && matchingApproved)
       ? "success"
       : data.status === "pending"
         ? "warning"
         : data.status === "rejected" || data.status === "expired"
           ? "danger"
           : "default";
+  // An account link's chip follows the request; "Origin already allowed" is
+  // a transport fact and lives in its technical details.
+  const chipLabel =
+    !link && matchingApproved && data.status !== "approved"
+      ? "Origin already allowed"
+      : statusLabel;
 
   return (
     // `md`: this card renders an OBJECT with fields the reader must actually
@@ -169,8 +193,8 @@ export function ConnectionRequestReview({
       <CardHeader className="flex-col items-start gap-1 px-6 pb-3 pt-5">
         <div className="flex w-full items-start justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-xs font-medium uppercase tracking-[0.12em] text-foreground/65">
-              Browser origin request
+            <p className="text-xs font-medium text-foreground/65">
+              {link ? "Account link" : "Browser origin request"}
             </p>
             <h1
               ref={headingRef}
@@ -178,15 +202,15 @@ export function ConnectionRequestReview({
               className="mt-1.5 text-xl font-semibold tracking-tight outline-none"
             >
               {canViewRequestDetails
-                ? `Allow ${data.displayName}?`
+                ? link
+                  ? link.heading
+                  : `Allow ${data.displayName}?`
                 : "Origin request ready"}
             </h1>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <Chip color={chipColor} variant="flat" size="sm">
-              {matchingApproved && data.status !== "approved"
-                ? "Origin already allowed"
-                : statusLabel}
+              {chipLabel}
             </Chip>
             <Button
               isIconOnly
@@ -202,15 +226,42 @@ export function ConnectionRequestReview({
         </div>
         <p className="max-w-2xl text-sm leading-6 text-foreground/65">
           {canViewRequestDetails
-            ? "Decide whether this exact website address may call this Pod. This is CORS / transport admission only — not membership, and not the same as Trust & Keys (JWT issuers)."
+            ? link
+              ? link.body
+              : "Decide whether this exact website address may call this Pod. This is CORS / transport admission only — not membership, and not the same as Trust & Keys (JWT issuers)."
             : "Your local Pod sign-in prepared this request. A Pod owner must allow this browser origin; details stay private to reviewers."}
         </p>
       </CardHeader>
       <Divider />
       <CardBody className="gap-4 px-6 py-4">
+        {gate.needsAcknowledge && isPending && data.canReview ? (
+          <UnverifiedAccountNotice
+            acknowledged={gate.acknowledged}
+            onAcknowledge={gate.setAcknowledged}
+            isDisabled={isWorking}
+          />
+        ) : null}
+
         <ConnectionRequestDetails data={data} isPending={isPending} />
 
-        {matchingApproved && !isPending && data.status !== "approved" ? (
+        {data.approvedByInvite &&
+        (data.status === "approved" || data.status === "completed") ? (
+          <Alert
+            color="success"
+            variant="flat"
+            title="Linked by invite"
+            role="status"
+          >
+            This person joined the Pod by an invite sent to this address, so the
+            link was made without asking you. To undo it, revoke the app on its
+            page in Apps.
+          </Alert>
+        ) : null}
+
+        {!link &&
+        matchingApproved &&
+        !isPending &&
+        data.status !== "approved" ? (
           <Alert
             color="success"
             variant="flat"
@@ -312,7 +363,7 @@ export function ConnectionRequestReview({
               color="danger"
               variant="flat"
               className="min-h-11"
-              startContent={<X size={16} />}
+              startContent={<X aria-hidden="true" size={16} />}
               isLoading={review.rejecting}
               isDisabled={isWorking || !review.canDecline}
               onPress={() => review.reject()}
@@ -320,14 +371,14 @@ export function ConnectionRequestReview({
               Decline
             </Button>
             <Button
-              color="primary"
+              color={gate.approveColor}
               className="min-h-11"
-              startContent={<Check size={16} />}
+              startContent={<Check aria-hidden="true" size={16} />}
               isLoading={review.approving}
-              isDisabled={isWorking}
+              isDisabled={isWorking || !gate.canApprove}
               onPress={() => review.approve()}
             >
-              Allow this origin
+              {gate.approveLabel}
             </Button>
           </>
         ) : null}
@@ -341,6 +392,105 @@ export function ConnectionRequestReview({
             Open app in this browser
           </Button>
         ) : null}
+      </CardFooter>
+    </ReceiverShell>
+  );
+}
+
+/**
+ * The person who asked, reading their own request: waiting for the owner, or
+ * linked (by the owner or by their invite). Their browser goes back to the
+ * app on its own once linked; another browser gets the button only.
+ */
+function RequesterAccountLink({
+  data,
+  podHost,
+  identity,
+  onClose,
+}: {
+  data: NonNullable<ReturnType<typeof useConnectionRequest>["request"]["data"]>;
+  podHost?: string;
+  identity?: string;
+  onClose: () => void;
+}) {
+  const linked = data.status === "approved" || data.status === "completed";
+  const view = accountLinkRequesterView({
+    account: data.requesterAccount,
+    appName: data.displayName,
+    linked,
+  });
+  const returnUrl = linked ? data.returnUrl : null;
+  useEffect(() => {
+    if (!returnUrl) return;
+    let isRequesterBrowser = false;
+    try {
+      isRequesterBrowser =
+        window.sessionStorage.getItem(
+          `application-connection-requester:${data.id}`
+        ) === "1";
+    } catch {
+      // Safe default: never auto-navigate when browser storage is blocked.
+    }
+    if (!isRequesterBrowser) return;
+    const timer = window.setTimeout(
+      () => window.location.assign(returnUrl),
+      900
+    );
+    return () => window.clearTimeout(timer);
+  }, [returnUrl, data.id]);
+
+  const ended = data.status === "rejected" || data.status === "expired";
+  return (
+    <ReceiverShell podHost={podHost} identity={identity} width="sm">
+      <CardHeader className="flex-col items-start gap-1 px-6 pb-3 pt-5">
+        <div className="flex w-full items-start justify-between gap-4">
+          <h1 className="text-xl font-semibold tracking-tight">
+            {ended ? "This request ended" : view.heading}
+          </h1>
+          <Chip
+            color={linked ? "success" : ended ? "danger" : "warning"}
+            variant="flat"
+            size="sm"
+          >
+            {resolveStatusLabel(data.status)}
+          </Chip>
+        </div>
+      </CardHeader>
+      <Divider />
+      <CardBody className="gap-4 px-6 py-4">
+        {ended ? (
+          <Alert color="default" variant="flat" title="Not linked">
+            {data.decisionReason ||
+              "Start again from the app if you still want to link your account."}
+          </Alert>
+        ) : (
+          <p className="text-sm leading-6 text-foreground/80">{view.body}</p>
+        )}
+        {view.email ? (
+          <p className="text-xs text-foreground/65">
+            Synap account:{" "}
+            <span className="font-medium text-foreground">{view.email}</span>
+          </p>
+        ) : null}
+      </CardBody>
+      <Divider />
+      <CardFooter className="flex flex-wrap justify-end gap-2 px-6 py-4">
+        {returnUrl ? (
+          <Button
+            color="primary"
+            className="min-h-11"
+            endContent={
+              <ArrowUpRight aria-hidden="true" size={16} strokeWidth={1.75} />
+            }
+            onPress={() => window.location.assign(returnUrl)}
+          >
+            Return to {data.displayName}
+          </Button>
+        ) : (
+          <Button variant="flat" className="min-h-11" onPress={onClose}>
+            Close
+          </Button>
+        )}
       </CardFooter>
     </ReceiverShell>
   );

@@ -101,6 +101,12 @@ const identityLinkClaimsSchema = z.object({
   nonce: z.string().min(16).max(1024),
   /** Optional registered application client id (authorized party). */
   azp: z.string().min(3).max(128).optional(),
+  /**
+   * The browser origin the issuer admitted for `azp` (CP `authorizedOrigin`).
+   * Only the "invite is the consent" rule reads it: an approval nobody
+   * reviewed may never add an origin the issuer did not vouch for.
+   */
+  origin: z.string().url().max(2_048).optional(),
 });
 const receiptClaimsSchema = z.object({
   ...shortLivedAssertionClaims,
@@ -759,12 +765,16 @@ async function verifyRequesterAccountHint(input: {
   ) {
     return { kind: "mismatch" };
   }
+  const vouchedOrigin = claims.data.origin
+    ? normalizeApplicationOrigin(claims.data.origin)
+    : null;
   return {
     kind: "verified",
     account: {
       verifiedEmail: claims.data.email.trim().toLowerCase(),
       verifiedAt: new Date().toISOString(),
       issuerUrl: issuer.issuerUrl,
+      ...(vouchedOrigin ? { vouchedOrigin } : {}),
     },
   };
 }

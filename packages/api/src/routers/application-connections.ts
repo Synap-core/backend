@@ -30,6 +30,7 @@ import {
   federatedApplicationConnections,
   federatedIdentityLinks,
   trustedIssuers,
+  TrustedIssuerService,
   users,
   workspaces,
 } from "@synap/database";
@@ -38,8 +39,10 @@ import { auditLog } from "../utils/audit-log.js";
 import {
   buildApplicationConnectionReturnUrl,
   hashOpaqueApplicationConnectionValue,
+  readInviteApproval,
   requesterAccountView,
 } from "../utils/application-connection.js";
+import { approveByInviteIfConsented } from "../services/application-connections/invite-consent.js";
 
 const requestIdSchema = z.object({ requestId: z.string().uuid() });
 const redeemRequestSchema = requestIdSchema.extend({
@@ -110,6 +113,12 @@ async function canReviewPodApplicationConnections(
 }
 
 /** Origin allowlist only — does not require a particular trusted issuer. */
+/** The trusted issuer's own name on this Pod, or null when it has none. */
+async function issuerDisplayName(issuerUrl: string): Promise<string | null> {
+  const issuer = await new TrustedIssuerService().getByUrl(issuerUrl);
+  return issuer?.displayName?.trim() || null;
+}
+
 async function matchingApprovedConnection(input: {
   clientId: string;
   origin: string;
@@ -171,28 +180,50 @@ async function issuerUsage(issuerIds?: readonly string[]) {
   });
 }
 
+/** The Pod member who signed in to start the request, as a reviewer reads them. */
+type RequesterMember = { name: string | null; email: string | null };
+
 function reviewShape(
   request: NonNullable<
     Awaited<ReturnType<FederatedApplicationConnectionService["getRequest"]>>
   >,
   canReview: boolean,
-  options?: { matchingApprovedConnection?: boolean }
+  options: {
+    viewerUserId: string;
+    matchingApprovedConnection?: boolean;
+    /** The trusted issuer's display name, for "Verified by …". */
+    issuerName?: string | null;
+    requesterMember?: RequesterMember | null;
+  }
 ) {
   const effectiveStatus = effectiveRequestStatus(
     request.status,
     request.expiresAt
   );
-  const matching = options?.matchingApprovedConnection === true && canReview;
+  const matching = options.matchingApprovedConnection === true && canReview;
+  // An account link (the app asks to link the requester's account) versus an
+  // origin-only request. Only a link has an account to name.
+  const isAccountLink = request.requestedScopes.includes("identity:link-user");
+  const accountView = isAccountLink
+    ? requesterAccountView(request.requestMetadata, {
+        issuerName: options.issuerName,
+      })
+    : null;
+  const approvedByInvite = readInviteApproval(request.requestMetadata) !== null;
   if (!canReview) {
     // The opaque callback and exact issuer/origin pair are an owner review
     // artifact. A requester or ordinary member only needs the current state
     // and clear owner guidance, not a reconnaissance view of every pending
     // external application registration on the Pod.
+    const isRequester = request.requestedByUserId === options.viewerUserId;
+    const linked =
+      effectiveStatus === "approved" || effectiveStatus === "completed";
     return {
       id: request.id,
       issuerUrl: "Visible to Pod owners and administrators",
       clientId: "Visible to Pod owners and administrators",
-      displayName: "An application",
+      // The requester started this from their own app; they may see its name.
+      displayName: isRequester ? request.displayName : "An application",
       publisherUrl: null,
       requestedOrigin: "Visible to Pod owners and administrators",
       requestedCallbackUrl: "Visible to Pod owners and administrators",
@@ -203,8 +234,19 @@ function reviewShape(
       reviewedAt: request.reviewedAt,
       canReview: false,
       matchingApprovedConnection: false,
-      // Reviewers only: the requester already knows who they are.
-      requesterAccount: null,
+      // The requester sees their OWN account; nobody else sees it here.
+      requesterAccount: isRequester ? accountView : null,
+      requesterMember: null,
+      approvedByInvite,
+      // Back to their app once linked. Not an authority: completion still
+      // needs the continuation only the requester's app holds.
+      returnUrl:
+        isRequester && linked
+          ? buildApplicationConnectionReturnUrl({
+              callbackUrl: request.requestedCallbackUrl,
+              requestId: request.id,
+            })
+          : null,
     };
   }
   return {
@@ -222,8 +264,15 @@ function reviewShape(
     reviewedAt: request.reviewedAt,
     canReview,
     matchingApprovedConnection: matching,
-    /** The account that will receive access, verified or explicitly not. */
-    requesterAccount: requesterAccountView(request.requestMetadata),
+    /**
+     * The account that will receive access, verified or explicitly not; null
+     * for an origin-only request, which links no account.
+     */
+    requesterAccount: accountView,
+    /** The Pod member that account will sign in as. */
+    requesterMember: options.requesterMember ?? null,
+    approvedByInvite,
+    returnUrl: null,
   };
 }
 
@@ -247,18 +296,41 @@ export const applicationConnectionsRouter = router({
           ),
           requestedByUserId: ctx.userId,
         });
-        if (before?.status === "awaiting_local_auth")
+        if (before?.status !== "awaiting_local_auth") {
+          return { requestId: request.id, linkedByInvite: false };
+        }
+        await recordConnectionEvent({
+          action: "request",
+          subjectId: request.id,
+          userId: ctx.userId,
+          data: {
+            displayName: request.displayName,
+            clientId: request.clientId,
+            origin: request.requestedOrigin,
+          },
+        });
+        // The invite is the consent: a member who joined by a Pod invite and
+        // whose Synap account is verified is linked now, with no second owner
+        // approval. Anything short of every condition stays pending.
+        const consent = await approveByInviteIfConsented(request);
+        if (consent.kind === "approved") {
           await recordConnectionEvent({
-            action: "request",
-            subjectId: request.id,
-            userId: ctx.userId,
+            action: "approve",
+            subjectId: consent.connectionId,
+            userId: consent.invitedBy,
             data: {
               displayName: request.displayName,
               clientId: request.clientId,
+              requestId: request.id,
               origin: request.requestedOrigin,
+              approvedByInvite: consent.inviteId,
             },
           });
-        return { requestId: request.id };
+        }
+        return {
+          requestId: request.id,
+          linkedByInvite: consent.kind === "approved",
+        };
       } catch (error) {
         throw new TRPCError({
           code: "CONFLICT",
@@ -291,14 +363,31 @@ export const applicationConnectionsRouter = router({
           message: "Connection request not found",
         });
       }
-      const matching =
+      const [matching, issuerName, requesterMember] = await Promise.all([
         canReview &&
-        (await matchingApprovedConnection({
-          clientId: request.clientId,
-          origin: request.requestedOrigin,
-        }));
+          matchingApprovedConnection({
+            clientId: request.clientId,
+            origin: request.requestedOrigin,
+          }),
+        issuerDisplayName(request.issuerUrl),
+        canReview && request.requestedByUserId
+          ? db.query.users
+              .findFirst({
+                where: eq(users.id, request.requestedByUserId),
+                columns: { name: true, email: true },
+              })
+              .then((member) =>
+                member
+                  ? { name: member.name ?? null, email: member.email ?? null }
+                  : null
+              )
+          : null,
+      ]);
       return reviewShape(request, canReview, {
-        matchingApprovedConnection: matching,
+        viewerUserId: ctx.userId,
+        matchingApprovedConnection: matching === true,
+        issuerName,
+        requesterMember,
       });
     }),
 

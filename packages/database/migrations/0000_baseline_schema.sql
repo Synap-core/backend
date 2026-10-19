@@ -175,6 +175,20 @@ ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "created_at" timestamp with t
 CREATE UNIQUE INDEX IF NOT EXISTS "pod_members_user_unique"
   ON "pod_members" ("user_id");
 
+-- invite_acceptances — the durable trace of an accepted invite (mirrors
+-- 0334). The invites row is deleted on acceptance; this keeps who it let in.
+CREATE TABLE IF NOT EXISTS "invite_acceptances" (
+  "invite_id"         uuid PRIMARY KEY,
+  "user_id"           text NOT NULL,
+  "invite_type"       text NOT NULL,
+  "invited_email"     text NOT NULL,
+  "invited_by"        text NOT NULL,
+  "invite_expires_at" timestamp with time zone NOT NULL,
+  "accepted_at"       timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS "invite_acceptances_user_idx"
+  ON "invite_acceptances" ("user_id");
+
 -- library_groups — the Library's persistent groups (mirrors 0328,
 -- CAPTURE_LIBRARY_PLAN L2). Owner-floored; item membership lives on the item.
 CREATE TABLE IF NOT EXISTS "library_groups" (

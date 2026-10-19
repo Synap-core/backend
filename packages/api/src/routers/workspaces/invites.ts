@@ -30,6 +30,7 @@ import {
   backfillTeamPersonBridge as runBackfillTeamPersonBridge,
   notAnAppAgent,
   podCpAuthHeaders,
+  recordInviteAcceptance,
 } from "@synap/database";
 import { verifyCpJwt } from "../../utils/jwks-client.js";
 import { TRPCError } from "@trpc/server";
@@ -753,6 +754,7 @@ export const inviteProcedures = {
             inviteId: invite.id,
           },
         });
+        await recordInviteAcceptance(invite, ctx.userId);
         await db.delete(invites).where(eq(invites.id, invite.id));
         void notifyCpInviteLifecycle({
           inviteToken: invite.token,
@@ -808,6 +810,7 @@ export const inviteProcedures = {
             );
           });
         }
+        await recordInviteAcceptance(invite, ctx.userId);
         await db.delete(invites).where(eq(invites.id, invite.id));
         void notifyCpInviteLifecycle({
           inviteToken: invite.token,
@@ -1385,6 +1388,7 @@ export const inviteProcedures = {
           workspaceId: invite.workspaceId,
           data: { source: "cp-proxy", email: payload.email },
         });
+        await recordInviteAcceptance(invite, podUser.id);
         await db.delete(invites).where(eq(invites.id, invite.id));
         void notifyCpInviteLifecycle({
           inviteToken: invite.token,
@@ -1439,6 +1443,7 @@ export const inviteProcedures = {
             );
           });
         }
+        await recordInviteAcceptance(invite, podUser.id);
         await db.delete(invites).where(eq(invites.id, invite.id));
         void notifyCpInviteLifecycle({
           inviteToken: invite.token,
