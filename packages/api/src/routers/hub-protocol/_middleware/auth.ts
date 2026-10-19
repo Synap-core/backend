@@ -556,9 +556,10 @@ export const hubAuthMiddleware = async (
         );
       }
     }
-    // Owner-wide doors (webhooks): no grant narrows their effect, so only an
-    // unbounded full-access key may use them — every method.
-    if (!ownerWideDoorAllowed(rel, keyIdentity.grant)) {
+    // Owner-wide doors (webhooks, …; plus write-only owner-wide doors such as
+    // capability credentials): no grant narrows their effect, so only an
+    // unbounded full-access key may use them.
+    if (!ownerWideDoorAllowed(rel, keyIdentity.grant, c.req.method)) {
       return c.json(
         {
           error: GRANT_OWNER_WIDE_UNSUPPORTED,

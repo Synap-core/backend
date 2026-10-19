@@ -264,6 +264,34 @@ export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
   /^\/agents\/sync\/?$/,
 ];
 
+/**
+ * Owner-wide WRITES (non-GET/HEAD only — the same paths carry reads the generic
+ * fence already rules on). Each handler writes directly, never passes the
+ * gate, and its effect is not narrowed by any grant (lane/sec-w3, 2026-10-19):
+ *
+ *  - `/capabilities/:id/credentials[/:id]` POST/PATCH/DELETE: the credential
+ *    row is the owner's for EVERY workspace (`workspaceId: null`); a pod-wide
+ *    one needs pod admin but no grant check.
+ *  - `DELETE /vault/secrets/:id`: any secret the person can write, in any
+ *    workspace (`assertWorkspaceWrite`, no grant). `POST /vault/secrets` is
+ *    NOT here — agents are meant to store credentials they hold (its
+ *    docblock); that is a product decision. `/vault/secrets/:id/grant` is
+ *    gated (`checkPermissionOrPropose` → `grantWriteDenial`).
+ *  - `DELETE /connectors/connections/:id`, `POST /connectors/disconnect`:
+ *    revokes the account at the provider and detaches it from every
+ *    capability (`detachNangoConnectionRegistry`).
+ *
+ * Callers checked: the IS (unbounded keys), the browser/app (tRPC session),
+ * the CLI cap flows (reach these only after a fenced read, so only with an
+ * unbounded key today). No narrowed-grant caller works today.
+ */
+export const GRANT_OWNER_WIDE_REST_WRITES: readonly RegExp[] = [
+  /^\/capabilities\/[^/]+\/credentials(?:\/[^/]+)?\/?$/,
+  /^\/vault\/secrets\/[^/]+\/?$/,
+  /^\/connectors\/connections\/[^/]+\/?$/,
+  /^\/connectors\/disconnect\/?$/,
+];
+
 export const GRANT_OWNER_WIDE_UNSUPPORTED =
   "This door acts on everything you own (it cannot be limited to a space, project or kind), so it needs a key with unrestricted full access ('*' with no space, project or object limit).";
 
@@ -278,13 +306,21 @@ export function isUnboundedFullAccess(grant: KeyGrant): boolean {
 /**
  * Hub REST: may a key holding `grant` use an owner-wide door? `true` for any
  * path that is not one, and for a request with no grant (a signed-in session).
+ * `method` selects the write-only class (`GRANT_OWNER_WIDE_REST_WRITES`); when
+ * omitted the request is treated as a write (fail closed).
  */
 export function ownerWideDoorAllowed(
   path: string,
-  grant: KeyGrant | null | undefined
+  grant: KeyGrant | null | undefined,
+  method?: string
 ): boolean {
   if (!grant) return true;
-  if (!GRANT_OWNER_WIDE_REST_DOORS.some((r) => r.test(path))) return true;
+  const m = method?.toUpperCase();
+  const isRead = m === "GET" || m === "HEAD";
+  const ownerWide =
+    GRANT_OWNER_WIDE_REST_DOORS.some((r) => r.test(path)) ||
+    (!isRead && GRANT_OWNER_WIDE_REST_WRITES.some((r) => r.test(path)));
+  if (!ownerWide) return true;
   return isUnboundedFullAccess(grant);
 }
 
