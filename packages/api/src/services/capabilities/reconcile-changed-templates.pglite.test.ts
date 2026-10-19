@@ -12,7 +12,9 @@
  *   - the reconcile converges it: its stamp then equals the cache, and the
  *     next pass finds nothing;
  *   - a container the reconcile cannot converge is attempted ONCE per
- *     published version, not every ten minutes.
+ *     published version, not every ten minutes;
+ *   - an enforced signature freeze of Synap's catalog pauses the pass
+ *     (nothing fetched, nothing marked attempted) until it verifies again.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { is } from "drizzle-orm";
@@ -26,6 +28,8 @@ const h = vi.hoisted(() => ({
   /** The template the stubbed CP fetch serves, by key. */
   templates: new Map<string, Record<string, unknown>>(),
   fetched: [] as string[],
+  /** Synap's catalog signature check, as the pod settings would hold it. */
+  officialSignature: null as Record<string, unknown> | null,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -36,7 +40,18 @@ vi.mock("@synap/database", async (importOriginal) => {
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
   const db = drizzle(client, { schema });
-  return { ...actual, db, getDb: async () => db };
+  return {
+    ...actual,
+    db,
+    getDb: async () => db,
+    readMarketplaceSources: async () => ({
+      sources: [],
+      official: null,
+      status: {},
+      tombstones: {},
+      officialSignature: h.officialSignature,
+    }),
+  };
 });
 vi.mock("./cp-template-client.js", () => ({
   fetchCPCapabilityTemplate: vi.fn(async (key: string) => {
@@ -166,5 +181,41 @@ describe("after a catalog publish, installed templates converge", () => {
     );
     await reconcileChangedCapabilityTemplates();
     expect(h.fetched).toEqual(["apify", "apify"]);
+  });
+
+  it("an enforced signature freeze pauses every automatic update until the index verifies", async () => {
+    const env = { ...process.env };
+    const { generateKeyPairSync } = await import("node:crypto");
+    const jwk = generateKeyPairSync("ed25519").publicKey.export({
+      format: "jwk",
+    }) as { x: string };
+    process.env.SYNAP_CATALOG_PUBLIC_KEYS = Buffer.from(
+      jwk.x,
+      "base64url"
+    ).toString("base64");
+    process.env.SYNAP_CATALOG_ENFORCE_SIGNATURE = "1";
+    try {
+      const signature = (state: string) => ({
+        state,
+        lastCheckAt: new Date().toISOString(),
+        lastOkAt: new Date().toISOString(),
+        validUntil: new Date(Date.now() + 864e5).toISOString(),
+        keysVersion: null,
+        keyFingerprint: null,
+        packageCount: 1,
+        unverifiedRows: 0,
+        message: "The index is not signed by a key this pod trusts for it.",
+      });
+      h.officialSignature = signature("bad_signature");
+      expect(await reconcileChangedCapabilityTemplates()).toBeNull();
+      expect(h.fetched).toEqual([]);
+      // Verified again: the container converges (it was never marked attempted).
+      h.officialSignature = signature("ok");
+      expect((await reconcileChangedCapabilityTemplates())?.checked).toBe(1);
+      expect(h.fetched).toEqual(["apify"]);
+    } finally {
+      process.env = env;
+      h.officialSignature = null;
+    }
   });
 });

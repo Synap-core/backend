@@ -143,15 +143,21 @@ export function sourceRowAction(
   return "sync";
 }
 
-/** The Catalog's source filter: one chip per source that has anything listed. */
+/**
+ * The Catalog's source filter: one chip per source that has anything listed.
+ * Synap's catalog stays listed while its signature check pauses installs, so
+ * its chip stays too.
+ */
 export function catalogSourceChips(
   sources: Pick<
     MarketSource,
-    "id" | "name" | "enabled" | "blocked" | "packageCount"
+    "id" | "name" | "enabled" | "blocked" | "packageCount" | "official"
   >[]
 ): { key: string; label: string }[] {
   return sources
-    .filter((s) => s.enabled && !s.blocked && s.packageCount > 0)
+    .filter(
+      (s) => s.enabled && (!s.blocked || s.official) && s.packageCount > 0
+    )
     .map((s) => ({ key: s.id, label: s.name }));
 }
 

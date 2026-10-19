@@ -47,6 +47,7 @@
 import { db, and, eq } from "@synap/database";
 import { cpCatalogCache } from "@synap/database/schema";
 import { officialCatalogCondition } from "./catalog-cache-query.js";
+import { admitOfficialDefinition } from "./official-catalog-trust.js";
 import {
   getWorkspaceTemplate,
   toWorkspaceDefinition,
@@ -214,9 +215,23 @@ export async function resolveWorkspaceTemplate(
     // replacement is the person's call (retire-into).
     if (row?.retiredAt) return null;
     if (row) {
-      const packageDefinition =
+      const fetched =
         (row.definition as unknown as PackageDefinitionOutput | null) ??
         (await fetchFullDefinitionResilient(row.source, slug, row.version));
+      // Synap's signature rule: a template its signed index does not vouch
+      // for is not used (enforced), so the bundle answers instead.
+      const packageDefinition =
+        fetched &&
+        (
+          await admitOfficialDefinition({
+            kind: "template",
+            slug,
+            version: row.version,
+            definition: fetched as unknown as Record<string, unknown>,
+          })
+        ).admitted
+          ? fetched
+          : null;
       if (packageDefinition) {
         return {
           source: "cache",
@@ -226,8 +241,9 @@ export async function resolveWorkspaceTemplate(
           packageDefinition,
         };
       }
-      // Row exists but the full body could not be fetched (CP down) — fall
-      // through to the bundle rather than surfacing "template not found".
+      // Row exists but the full body could not be fetched (CP down) or was
+      // refused by the signature rule — fall through to the bundle rather
+      // than surfacing "template not found".
     }
   } catch {
     // Cache read failed — fall through to the bundle.

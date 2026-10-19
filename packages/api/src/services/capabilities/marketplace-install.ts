@@ -59,7 +59,9 @@
  * may it overwrite anything the pod already has under the same name
  * (`assertNoTakeover`), and an approved proposal installs only the exact
  * listing it disclosed (`listingSha256`).
- * The by-key Control Plane fallbacks below are official-only.
+ * The by-key Control Plane fallbacks below are official-only, and every
+ * definition the official catalog serves passes Synap's signature rule
+ * (`assertOfficialDefinition`, official-catalog-trust.ts) before it applies.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -145,6 +147,7 @@ import {
   type MarketAcknowledgement,
 } from "./market-risk.js";
 import { officialCatalogCondition } from "./catalog-cache-query.js";
+import { assertOfficialDefinition } from "./official-catalog-trust.js";
 import { interpolateDeep } from "../_shared/interpolate.js";
 import { createLogger } from "@synap-core/core";
 import { capabilityElementOf, skillElementOf } from "./package-element.js";
@@ -508,21 +511,44 @@ export async function resolveCatalogDefinition(
   if (kind === "cell") {
     // A cell's source is inline-only — the by-slug packages endpoint never
     // serves it — so a cached row is read as-is, never re-fetched.
-    return entry
-      ? entry.definition
-      : ((await resolveCellDefinitionByKey(slug)).def as Record<
-          string,
-          unknown
-        >);
+    if (entry) {
+      if (entry.definition) {
+        await assertOfficialDefinition({
+          kind,
+          slug,
+          version: entry.version,
+          definition: entry.definition,
+        });
+      }
+      return entry.definition;
+    }
+    const byKey = await resolveCellDefinitionByKey(slug);
+    const def = byKey.def as Record<string, unknown>;
+    await assertOfficialDefinition({
+      kind,
+      slug: `${byKey.packageSlug}/${byKey.cellKey}`,
+      version: byKey.packageVersion,
+      definition: def,
+    });
+    return def;
   }
-  if (entry) return resolveDefinition(entry, version);
-  if (kind === "capability") {
+  // A capability by key is checked inside `fetchCPCapabilityTemplate`.
+  if (!entry && kind === "capability") {
     return (await fetchCPCapabilityTemplate(slug)) as unknown as Record<
       string,
       unknown
     > | null;
   }
-  return resolveDefinitionByKey(slug, version);
+  const definition = entry
+    ? await resolveDefinition(entry, version)
+    : await resolveDefinitionByKey(slug, version);
+  await assertOfficialDefinition({
+    kind,
+    slug,
+    version: version ?? entry?.version ?? null,
+    definition,
+  });
+  return definition;
 }
 
 /** Shared install-time params schema — the ONE zod shape every capability-apply
@@ -1262,6 +1288,18 @@ export async function applyMarketInstall(
       const def = (supplied ??
         entry?.definition ??
         cellByKey?.def) as CellCatalogDef | null;
+      // What the catalog served (not a caller's payload) passes Synap's
+      // signature rule first.
+      if (!supplied && def) {
+        await assertOfficialDefinition({
+          kind: "cell",
+          slug: cellByKey
+            ? `${cellByKey.packageSlug}/${cellByKey.cellKey}`
+            : input.slug,
+          version: entry?.version ?? cellByKey?.packageVersion ?? null,
+          definition: def as Record<string, unknown>,
+        });
+      }
       if (!def?.code) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",

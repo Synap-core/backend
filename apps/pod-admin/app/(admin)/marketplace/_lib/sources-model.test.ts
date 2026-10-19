@@ -172,6 +172,26 @@ describe("catalog source chips", () => {
       { key: "acme", label: "Acme internal" },
     ]);
   });
+
+  it("keeps Synap's chip while its signature check pauses installs (its catalog stays listed)", () => {
+    expect(
+      catalogSourceChips([
+        source({
+          id: "synap",
+          name: "Synap",
+          official: true,
+          blocked: "Installs from it are paused.",
+        }),
+        source({
+          id: "synap-off",
+          name: "Off",
+          official: true,
+          enabled: false,
+          blocked: "Synap's catalog is turned off on this pod.",
+        }),
+      ])
+    ).toEqual([{ key: "synap", label: "Synap" }]);
+  });
 });
 
 describe("install area", () => {

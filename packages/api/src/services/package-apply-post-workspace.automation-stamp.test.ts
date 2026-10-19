@@ -51,7 +51,7 @@ const AUTO = {
   metadata: { kind: "digest", installedByPackage: "forged" },
 };
 
-const metadataOf = (fn: typeof h.create) =>
+const metadataOf = (fn: { mock: { calls: unknown[][] } }) =>
   (fn.mock.calls[0]?.[0] as { metadata?: Record<string, unknown> }).metadata;
 
 beforeEach(() => {

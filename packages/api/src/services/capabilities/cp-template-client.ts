@@ -26,6 +26,7 @@ import { db, drizzleSql, podCpAuthHeaders } from "@synap/database";
 import { workspaces } from "@synap/database/schema";
 import type { CapabilityDefinition } from "@synap/playbooks";
 import { queryCatalogCache } from "./catalog-cache-query.js";
+import { assertOfficialDefinition } from "./official-catalog-trust.js";
 
 export interface CPCapabilityTemplate {
   key: string;
@@ -233,29 +234,59 @@ export async function fetchCPCapabilityTemplates(): Promise<
   return items && items.length > 0 ? items : [];
 }
 
-/** Resolve ONE capability definition by key — cache first, CP fallback on miss. */
+/**
+ * Resolve ONE capability definition by key — cache first, CP fallback on
+ * miss. Every definition it returns has passed Synap's catalog signature
+ * rule (`assertOfficialDefinition`): this is the door installs, the capability
+ * reconcile and connector materialization read templates through, so an
+ * unverified template is refused HERE once enforcement is on (a throw naming
+ * why — never a silent "not found").
+ */
 export async function fetchCPCapabilityTemplate(
   key: string
 ): Promise<CapabilityDefinition | null> {
+  const admitted = async (
+    definition: CapabilityDefinition,
+    version: string | null
+  ): Promise<CapabilityDefinition> => {
+    await assertOfficialDefinition({
+      kind: "capability",
+      slug: key,
+      version,
+      definition: definition as unknown as Record<string, unknown>,
+    });
+    return definition;
+  };
+
   // 1. Cache hit (fast) — a cp_catalog_cache capability row whose slug IS the key.
+  let cached: {
+    definition: Record<string, unknown>;
+    version: string | null;
+  } | null = null;
   try {
     const entries = await queryCatalogCache({ kind: "capability" });
     const entry = entries.find((e) => e.slug === key);
     if (entry?.definition) {
-      return entry.definition as unknown as CapabilityDefinition;
+      cached = { definition: entry.definition, version: entry.version };
     }
   } catch {
     // Fall through to the CP fallback.
+  }
+  if (cached) {
+    return admitted(
+      cached.definition as unknown as CapabilityDefinition,
+      cached.version
+    );
   }
 
   // 2. Cache miss → try the default-sync list first (covers the common case).
   const items = await fetchCPCapabilityTemplatesFromCP();
   const fromList = items?.find((c) => c.key === key);
-  if (fromList) return fromList.definition;
+  if (fromList) return admitted(fromList.definition, null);
 
   // 3. Not in the default-sync list → it may still be a real, installable
   //    template excluded from default sync (syncByDefault=false), or a PRIVATE
   //    (isPublic=false) capability owned by this pod's owner. Direct by-key lookup.
   const byKey = await fetchCPCapabilityTemplateByKey(key);
-  return byKey?.definition ?? null;
+  return byKey ? admitted(byKey.definition, null) : null;
 }
