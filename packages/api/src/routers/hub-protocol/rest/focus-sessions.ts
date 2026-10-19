@@ -2972,6 +2972,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         wokeAgentType: result.wokeAgentType,
         triggered: result.triggered,
         ...(result.decision ? { decision: result.decision } : {}),
+        ...(result.secretGrant ? { secretGrant: result.secretGrant } : {}),
       });
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.answerOutput failed");

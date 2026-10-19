@@ -531,7 +531,10 @@ describe("W5 — param / criterion / provide / room question on the ONE answer d
       type: "provide",
       ref: { kind: "secret", vaultRef: `vault://${id}` },
     });
-    expect(answer.text).toBe('Stored the secret "STRIPE_KEY" in the vault');
+    // No record of which agent posed the ask here, so no read is granted.
+    expect(answer.text).toBe(
+      'Stored the secret "STRIPE_KEY" in the vault · No agent can read it yet'
+    );
     expect(JSON.stringify(await roomMessages(channelId))).not.toContain(id);
   });
 

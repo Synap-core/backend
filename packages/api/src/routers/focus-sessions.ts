@@ -99,6 +99,11 @@ import {
   type AttestSessionSlotResult,
 } from "../services/focus-sessions/session-answer.js";
 import {
+  describeProvideRefusal,
+  loadOwedProvideAsk,
+  readProvideOptions,
+} from "../services/focus-sessions/provide-options.js";
+import {
   askAboutSlot,
   ASK_ABOUT_SLOT_NOTE_MAX,
 } from "../services/focus-sessions/ask-about-slot.js";
@@ -2881,6 +2886,50 @@ export const focusSessionsRouter = router({
       throw new TRPCError(
         describeAnswerRefusal(result, input.expectedLabel, input.sessionId)
       );
+    }),
+
+  /**
+   * PROVIDE OPTIONS — what the person can hand over for one `provide` ask:
+   * their own vault secrets by name (and what handing one over lets the
+   * asking agent read), the connections they can use for the asked service
+   * (with account hints, and whether a new one can start here), or where an
+   * uploaded file lands. Owner-floored on the slot the answer door would take;
+   * reads only (`provide-options.ts`). The person answers through
+   * `answerOutput` with a reference from here; a NEW connection goes through
+   * `connectors.session` with `answerFor`, which answers on its own.
+   */
+  provideOptions: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        expectedLabel: z.string().min(1).max(500),
+        /** `askFingerprint(ask)` of the ask the person is looking at. */
+        askFingerprint: z.string().min(1).max(64).optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      // The person's own sheet: it names their vault entries and accounts,
+      // which an agent key never reads through this door.
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only the person can hand something over — an agent key cannot.",
+        });
+      }
+      const userId = requireUserId(ctx.userId);
+      const owed = await loadOwedProvideAsk({
+        sessionId: input.sessionId,
+        userId,
+        expectedLabel: input.expectedLabel,
+        askFingerprint: input.askFingerprint,
+      });
+      if ("status" in owed) {
+        throw new TRPCError(
+          describeProvideRefusal(owed, input.expectedLabel, input.sessionId)
+        );
+      }
+      return readProvideOptions(owed, userId);
     }),
 
   /**
