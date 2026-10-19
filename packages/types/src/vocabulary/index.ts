@@ -39,6 +39,9 @@ export * from "./object-kinds.js";
 /** AI tool name → label, in three moods (`resolveToolLabel`). */
 export * from "./tool-labels.js";
 
+/** The shell's destination words and the Inbox's filters (founder 2A / 3A). */
+export * from "./destinations.js";
+
 /**
  * Words a sentence-cased token must still spell the way people write them —
  * the casing of a NAME (a product, a format), not of a sentence. Deliberately

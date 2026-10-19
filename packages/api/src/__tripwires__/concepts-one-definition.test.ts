@@ -10,8 +10,9 @@
  * FOUR checks:
  *   1. Every glossary row (word) is CLASSIFIED against the vocabulary door
  *      (`@synap-core/types/vocabulary`): aligned (the registry label IS the user
- *      word), derived (template nouns), pending-W5 (a registry row the W5 naming
- *      pass will relabel), or no-row (with the reason). The heading set is
+ *      word), derived (template nouns), a destination or Inbox-filter word
+ *      (`resolveDestinationLabel` / `resolveInboxFilterLabel`, founder 2A/3A),
+ *      or no-row (with the reason). The heading set is
  *      DERIVED from the file, so a new concept joins by existing and fails until
  *      it is classified.
  *   2. The glossary reaches the doors: `_teaching.json` (alwaysOn — without an
@@ -36,6 +37,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  resolveDestinationLabel,
+  resolveInboxFilterLabel,
   resolveObjectLabel,
   resolveObjectNounPlural,
   resolveTemplateNoun,
@@ -67,6 +70,23 @@ const ALIGNED: Record<string, string> = {
  */
 const ALIGNED_PLURAL: Record<string, readonly string[]> = {
   Tools: ["capability", "skill", "tool"],
+};
+/**
+ * A navigation destination or a page section (founder 2A, 2026-10-19): the
+ * word IS `resolveDestinationLabel(key)`.
+ */
+const DESTINATION: Record<string, string> = {
+  Inbox: "inbox",
+  Library: "library",
+  Agents: "agents",
+  Unfiled: "unfiled",
+  "Getting started": "getting_started",
+};
+/** One of the Inbox's filters (founder 3A): the word IS `resolveInboxFilterLabel(key)`. */
+const INBOX_FILTER: Record<string, string> = {
+  Questions: "questions",
+  "Routine changes": "routine",
+  Broken: "broken",
 };
 /** No registry row carries this word, and why. */
 const NO_ROW: Record<string, string> = {
@@ -105,6 +125,8 @@ describe("tripwire: concepts.md is classified against the vocabulary", () => {
     const classified = new Set([
       ...Object.keys(ALIGNED),
       ...Object.keys(ALIGNED_PLURAL),
+      ...Object.keys(DESTINATION),
+      ...Object.keys(INBOX_FILTER),
       ...Object.keys(NO_ROW),
     ]);
     expect(headings.filter((h) => !classified.has(h))).toEqual([]);
@@ -123,6 +145,15 @@ describe("tripwire: concepts.md is classified against the vocabulary", () => {
       for (const kind of kinds) {
         expect(resolveObjectNounPlural(kind), `${word} ↔ ${kind}`).toBe(word);
       }
+    }
+  });
+
+  it("destination and Inbox-filter words ARE the vocabulary's", () => {
+    for (const [word, key] of Object.entries(DESTINATION)) {
+      expect(resolveDestinationLabel(key), `${word} ↔ ${key}`).toBe(word);
+    }
+    for (const [word, key] of Object.entries(INBOX_FILTER)) {
+      expect(resolveInboxFilterLabel(key), `${word} ↔ ${key}`).toBe(word);
     }
   });
 
