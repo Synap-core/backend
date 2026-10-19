@@ -34,6 +34,8 @@
  * MATCH RULE — one, {@link subscriptionWantsEvent}: an empty `eventTypes` list
  * means "all events", otherwise the type must be listed. (The create APIs
  * require ≥1 type, so the empty case is only reachable on legacy rows.)
+ * WORKSPACE RULE — one, {@link subscriptionCoversWorkspace}, applied by BOTH
+ * producers: a workspace-bound subscription gets only that workspace's events.
  */
 
 import type PgBoss from "pg-boss";
@@ -105,6 +107,26 @@ export function subscriptionWantsEvent(
   return (
     !eventTypes || eventTypes.length === 0 || eventTypes.includes(eventType)
   );
+}
+
+/**
+ * THE workspace rule: a subscription bound to a workspace (`workspace_id` set)
+ * receives only events OF that workspace; an unbound one receives every
+ * workspace's events (unchanged). An event with NO workspace (a pod-wide atom:
+ * a person, a pod-wide note) reaches unbound subscriptions only — a bound one
+ * asked for one space, and a pod-wide row is not in it. (Delivering by the
+ * creating key's GRANT instead — persons included when the grant reads them —
+ * is a pending decision, D7; until then a bound subscription never widens.)
+ *
+ * `undefined` workspace on the subscription is a legacy row read without the
+ * column: treated as unbound, exactly as before this rule.
+ */
+export function subscriptionCoversWorkspace(
+  subscriptionWorkspaceId: string | null | undefined,
+  eventWorkspaceId: string | null | undefined
+): boolean {
+  if (!subscriptionWorkspaceId) return true;
+  return subscriptionWorkspaceId === (eventWorkspaceId ?? null);
 }
 
 /** Serialize a body in its format. */
@@ -239,10 +261,11 @@ async function fanOutDomainEvent(
   /** The fan-out job's own id — stable across its pg-boss retries. */
   fanoutKey: string
 ): Promise<void> {
-  const { eventType, userId, subjectId, data, eventId } = job;
+  const { eventType, userId, subjectId, data, eventId, workspaceId } = job;
   const subs = await db
     .select({
       id: webhookSubscriptions.id,
+      workspaceId: webhookSubscriptions.workspaceId,
       eventTypes: webhookSubscriptions.eventTypes,
       retryConfig: webhookSubscriptions.retryConfig,
     })
@@ -253,8 +276,10 @@ async function fanOutDomainEvent(
         eq(webhookSubscriptions.active, true)
       )
     );
-  const matching = subs.filter((s) =>
-    subscriptionWantsEvent(s.eventTypes, eventType)
+  const matching = subs.filter(
+    (s) =>
+      subscriptionWantsEvent(s.eventTypes, eventType) &&
+      subscriptionCoversWorkspace(s.workspaceId, workspaceId)
   );
   if (matching.length === 0) return;
 
