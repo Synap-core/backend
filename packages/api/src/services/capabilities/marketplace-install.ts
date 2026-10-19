@@ -944,8 +944,10 @@ function loopPlaybookNames(definition: Bag): string[] {
  * Which space that is gets decided while the template installs, so the check
  * runs against every live space the installing person belongs to (closed,
  * never a guess), except the space this same package already holds
- * (`package_slug`, its own earlier install). A playbook this package itself
- * installed elsewhere (its `marketSource` stamp, as a pack does) is its own.
+ * (`package_slug`, its own earlier install). A playbook or automation this
+ * package itself installed elsewhere — a pack composes onto its base space —
+ * is its own: the playbook's `marketSource.packageSlug`, the automation's
+ * `installedByPackage` (stamped at install), compared exactly.
  */
 async function assertNoNamedClash(
   source: CatalogSource,
@@ -998,6 +1000,7 @@ async function assertNoNamedClash(
                 )
               : undefined
           ),
+          drizzleSql`${automationsTable.metadata}->>'installedByPackage' is distinct from ${target.packageSlug}`,
           notThisPackage
         )
       )

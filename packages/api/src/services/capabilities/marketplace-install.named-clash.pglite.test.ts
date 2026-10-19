@@ -3,8 +3,9 @@
  * added source may not bring an automation or playbook whose name is already
  * in one of the installing person's spaces (the applier would match it by
  * name and rewrite it). The SQL is real — the join to the person's spaces,
- * the archived filters, the `key` match and the two exemptions: the space this
- * same package already holds (`package_slug`) and a playbook it stamped.
+ * the archived filters, the `key` match and the exemptions: the space this
+ * same package already holds (`package_slug`), and a playbook or automation
+ * it stamped when it installed them (a pack composes onto its base space).
  *
  * Real: `applyMarketInstall` → the source gate (pod settings) → the catalog
  * row → `assertNoTakeover`. Stubbed: the body schema and the template applier
@@ -294,5 +295,72 @@ describe("a template's automations and playbooks, by name, on PGlite", () => {
       "Daily digest",
     ]);
     expect((await outcome()).refused).toContain('"Daily digest"');
+  });
+
+  it("a pack re-installs over its own stamped automations on its base space", async () => {
+    const base = await space({ packageSlug: "crm" });
+    await q(
+      `insert into automations (workspace_id, name, metadata) values ($1, $2, $3::jsonb)`,
+      [
+        base,
+        "Daily digest",
+        JSON.stringify({
+          templateKey: "crm.digest",
+          installedByPackage: "acme/crm",
+        }),
+      ]
+    );
+    expect(await outcome()).toEqual({ refused: null });
+    expect(h.applyTemplate).toHaveBeenCalled();
+  });
+
+  it("its own stamp exempts a case variant of the name too", async () => {
+    const base = await space({ packageSlug: "crm" });
+    await q(
+      `insert into automations (workspace_id, name, metadata) values ($1, $2, $3::jsonb)`,
+      [base, "DAILY digest", JSON.stringify({ installedByPackage: "acme/crm" })]
+    );
+    expect(await outcome()).toEqual({ refused: null });
+  });
+
+  it("another package's automation of the same name is still refused, whatever its case", async () => {
+    const base = await space({ packageSlug: "crm" });
+    await q(
+      `insert into automations (workspace_id, name, metadata) values ($1, $2, $3::jsonb)`,
+      [
+        base,
+        "daily Digest",
+        JSON.stringify({ installedByPackage: "acme/other" }),
+      ]
+    );
+    expect((await outcome()).refused).toContain('"daily Digest"');
+    expect(h.applyTemplate).not.toHaveBeenCalled();
+  });
+
+  it("the exemption is the exact stamp — a case variant of the package is foreign", async () => {
+    const base = await space({ packageSlug: "crm" });
+    for (const stamp of ["Acme/CRM", "crm"]) {
+      await q(`delete from automations`);
+      await q(
+        `insert into automations (workspace_id, name, metadata) values ($1, $2, $3::jsonb)`,
+        [base, "Daily digest", JSON.stringify({ installedByPackage: stamp })]
+      );
+      expect((await outcome()).refused).toContain('"Daily digest"');
+    }
+  });
+
+  it("a stamped automation found by the template's key under another name is its own too", async () => {
+    const base = await space({ packageSlug: "crm" });
+    await q(
+      `insert into automations (workspace_id, name, metadata) values ($1, 'Digest (renamed)', $2::jsonb)`,
+      [
+        base,
+        JSON.stringify({
+          templateKey: "crm.digest",
+          installedByPackage: "acme/crm",
+        }),
+      ]
+    );
+    expect(await outcome()).toEqual({ refused: null });
   });
 });
