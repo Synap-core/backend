@@ -65,6 +65,11 @@ export interface LensVerb {
   action: string;
   /** `resolveActionLabel(action, "imperative")`. */
   label: string;
+  /**
+   * The verb opens something outside the app (the Pod Console): the row draws
+   * the ↗ mark beside the label, hidden from screen readers.
+   */
+  leavesApp?: boolean;
 }
 
 export interface LensRow {
