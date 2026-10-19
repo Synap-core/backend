@@ -19,7 +19,13 @@ describe("PROPOSAL_BATCH_MAX is the router's own limit", () => {
   });
 
   it("both batch doors validate with it, and no batch door spells a literal cap", () => {
-    expect(router.match(/proposalIds: z\.array\(z\.string\(\)\)\.min\(1\)\.max\(PROPOSAL_BATCH_MAX\)/g)).toHaveLength(2);
-    expect(router).not.toMatch(/proposalIds: z\.array\(z\.string\(\)\)\.min\(1\)\.max\(\d+\)/);
+    expect(
+      router.match(
+        /proposalIds: z\.array\(z\.string\(\)\)\.min\(1\)\.max\(PROPOSAL_BATCH_MAX\)/g
+      )
+    ).toHaveLength(2);
+    expect(router).not.toMatch(
+      /proposalIds: z\.array\(z\.string\(\)\)\.min\(1\)\.max\(\d+\)/
+    );
   });
 });

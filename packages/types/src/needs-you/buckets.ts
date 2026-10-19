@@ -33,10 +33,7 @@
  */
 
 import { FAILURE_NOTIFICATION_TYPES } from "../lens/classes.js";
-import {
-  isSwipeSafe,
-  type ProposalIntentInput,
-} from "../proposals/intent.js";
+import { isSwipeSafe, type ProposalIntentInput } from "../proposals/intent.js";
 
 /** The four Inbox filters, in the order the filter control lists them. */
 export const NEEDS_YOU_BUCKETS = [

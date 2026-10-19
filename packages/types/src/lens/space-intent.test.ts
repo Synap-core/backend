@@ -349,13 +349,19 @@ describe("homeNeedsYouModel", () => {
     ]);
   });
   it("1+ is plural; an unknown total is never a floor; absent flags read exact", () => {
-    expect(homeNeedsYouModel({ total: 1, truncated: true, bySpace: [] }, spaces)?.text).toBe(
-      "1+ need you"
+    expect(
+      homeNeedsYouModel({ total: 1, truncated: true, bySpace: [] }, spaces)
+        ?.text
+    ).toBe("1+ need you");
+    const unknown = homeNeedsYouModel(
+      { total: null, truncated: true, bySpace: [] },
+      spaces
     );
-    const unknown = homeNeedsYouModel({ total: null, truncated: true, bySpace: [] }, spaces);
     expect(unknown?.floor).toBe(false);
     expect(unknown?.text).toBe("– need you");
-    expect(homeNeedsYouModel({ total: 1, bySpace: [] }, spaces)?.text).toBe("1 needs you");
+    expect(homeNeedsYouModel({ total: 1, bySpace: [] }, spaces)?.text).toBe(
+      "1 needs you"
+    );
   });
 });
 

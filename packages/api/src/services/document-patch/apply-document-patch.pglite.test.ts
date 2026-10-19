@@ -533,7 +533,9 @@ describe("applyDocumentPatch — one title on a whole-body replace", () => {
       agentUserId: AGENT,
       documentId: id,
       baseRevision: 1,
-      ops: [{ op: "replace_all", content: "## plan\n\nRewritten by the agent.\n" }],
+      ops: [
+        { op: "replace_all", content: "## plan\n\nRewritten by the agent.\n" },
+      ],
     });
     expect(res.status).toBe("proposed");
     expect(h.gate[0]!.data.ops).toEqual([

@@ -383,8 +383,13 @@ export function homeNeedsYouModel(
   );
   const parts = needsYou.bySpace
     .filter(
-      (b): b is { workspaceId: string; count: number; truncated?: boolean | null } =>
-        typeof b.count === "number" && b.count > 0
+      (
+        b
+      ): b is {
+        workspaceId: string;
+        count: number;
+        truncated?: boolean | null;
+      } => typeof b.count === "number" && b.count > 0
     )
     .map((b) => {
       const floor = b.truncated === true;
