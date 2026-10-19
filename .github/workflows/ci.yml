@@ -32,8 +32,9 @@ jobs:
   release-gate:
     name: Release gate
     runs-on: ubuntu-latest
-    # ~1.5x a measured full run (15.5 min, run 39176917085).
-    timeout-minutes: 25
+    # ~1.5x the slower of two measured runs (15.5 min in 39176917085, 21 min
+    # in 39179071834 — runner speed varies).
+    timeout-minutes: 32
 
     services:
       postgres:
