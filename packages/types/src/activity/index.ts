@@ -26,6 +26,7 @@
 import { resolveActionLabel, resolveObjectNoun } from "../vocabulary/index.js";
 
 export * from "./heat.js";
+export * from "./speaker.js";
 import type { UnitGlyph, UnitTone } from "../units/state.js";
 
 // ── Outcome ─────────────────────────────────────────────────────────────────
