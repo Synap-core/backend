@@ -7,10 +7,12 @@
  *   confirm / choose / form / no ask → `focusSessions.answerOutput`
  *   act                              → `attestOutput` ("I did this") ·
  *                                      `unblockOutput` ("Not mine")
- *   provide                          → nothing here can hand a secret, file
- *                                      or connection over yet: the shared
- *                                      copy, "Open in app" and "Ask the agent
- *                                      about it"
+ *   provide                          → `provideOptions`, then `answerOutput`
+ *                                      with a reference: one of the person's
+ *                                      own vault secrets (a new one is added
+ *                                      in the app), a connection (or a new
+ *                                      one, which the pod answers with by
+ *                                      itself), or an uploaded file
  *   every mode                       → `askAboutSlot`, then the session room
  *
  * The shapes and checks are `ask-detail.ts` (pure, tested); the rules and the
@@ -24,7 +26,15 @@
  * refusal is shown as the pod words it.
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type Dispatch,
+  type ReactNode,
+} from "react";
 import {
   Alert,
   Button,
@@ -34,15 +44,32 @@ import {
   RadioGroup,
   Select,
   SelectItem,
+  Spinner,
   Switch,
   Textarea,
   addToast,
 } from "@heroui/react";
-import { ArrowUpRight, Check, MessageSquare, X } from "lucide-react";
-import { ASK_COPY, classifyAskRefusal } from "@synap-core/types/ask";
-import { trpc } from "../../../../lib/trpc";
+import {
+  ArrowUpRight,
+  Check,
+  FileUp,
+  MessageSquare,
+  Plug,
+  X,
+} from "lucide-react";
+import {
+  ASK_COPY,
+  askFingerprint,
+  classifyAskRefusal,
+  type AskProvideRef,
+} from "@synap-core/types/ask";
+import { POD_URL, trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
-import { formatRelative } from "../../../../lib/format";
+import {
+  formatRelative,
+  humanizeBytes,
+  readableError,
+} from "../../../../lib/format";
 import { openIn } from "../../../../lib/open-in";
 import {
   ExitFallback,
@@ -52,6 +79,8 @@ import {
   usePlacedExit,
 } from "../../../../lib/exit-link";
 import { kindIcon } from "../../../_lib/object/kind-icon";
+import { ErrorNote } from "../../../_lib/copy-button";
+import { ResourceRowSkeleton } from "../../components/resource-row";
 import {
   OTHER_KEY,
   answerCall,
@@ -69,6 +98,31 @@ import {
   type FormFieldView,
   type LookedAtItem,
 } from "./ask-detail";
+import {
+  connectedReceipt,
+  provideReceipt,
+  provideSheet,
+  type ConnectionSheet,
+  type FileSheet,
+  type ProvideReceipt,
+  type SecretSheet,
+} from "./provide-options";
+import {
+  CONNECT_IDLE,
+  CONNECT_POLL_MS,
+  connectNoteWords,
+  connectReducer,
+  connectSessionCall,
+  safeConnectLink,
+  waitingWords,
+  type ConnectEvent,
+  type ConnectWait,
+} from "./provide-connect";
+import {
+  acceptAttribute,
+  fileProblem,
+  uploadProvidedFile,
+} from "./provide-file";
 
 /** A door's error, as tRPC hands it over. */
 type DoorError = { message: string; data?: { code?: string | null } | null };
@@ -115,8 +169,8 @@ export function AskAnswer({
     void utils.diagnose.global.invalidate();
   }
 
-  function settled(title: string) {
-    addToast({ title, color: "success" });
+  function settled(receipt: ProvideReceipt) {
+    addToast({ ...receipt, color: "success" });
     refresh();
     onSettled();
   }
@@ -140,15 +194,20 @@ export function AskAnswer({
   }
 
   const answer = trpc.focusSessions.answerOutput.useMutation({
-    onSuccess: () => settled("Answer sent"),
+    onSuccess: (data, call) =>
+      settled(
+        call.value?.type === "provide"
+          ? provideReceipt(call.value.ref.kind, data, Date.now())
+          : { title: "Answer sent" }
+      ),
     onError: refused,
   });
   const attest = trpc.focusSessions.attestOutput.useMutation({
-    onSuccess: () => settled("Marked as done"),
+    onSuccess: () => settled({ title: "Marked as done" }),
     onError: refused,
   });
   const handBack = trpc.focusSessions.unblockOutput.useMutation({
-    onSuccess: () => settled("Handed back to the agent"),
+    onSuccess: () => settled({ title: "Handed back to the agent" }),
     onError: refused,
   });
   const askAbout = trpc.focusSessions.askAboutSlot.useMutation({
@@ -182,6 +241,9 @@ export function AskAnswer({
   });
   // A chip whose object only opens in the desktop app: the install hatch,
   // once, under the chips — not once per chip.
+  // A provide this console can't hand over: talking it through is the way on.
+  const unwiredProvide =
+    view.control.mode === "provide" && !view.control.answerable;
   const lookedAtDesktop = view.lookedAt
     .map((item) =>
       openIn({ kind: "object", objectKind: item.kind, id: item.id })
@@ -313,6 +375,19 @@ export function AskAnswer({
               });
             }}
             handingBack={handBack.isPending}
+            onProvide={(ref) => {
+              const built = answerCall(seen, { type: "provide", ref });
+              if (!built.ok) {
+                setFailure(built.message);
+                return;
+              }
+              send(built.call);
+            }}
+            onStale={refused}
+            onFailure={setFailure}
+            onConnected={(serviceName) =>
+              settled(connectedReceipt(serviceName))
+            }
           />
         </>
       )}
@@ -329,8 +404,8 @@ export function AskAnswer({
           <div>
             <Button
               size="sm"
-              variant={view.control.mode === "provide" ? "solid" : "flat"}
-              color={view.control.mode === "provide" ? "primary" : "default"}
+              variant={unwiredProvide ? "solid" : "flat"}
+              color={unwiredProvide ? "primary" : "default"}
               startContent={<MessageSquare className="h-3.5 w-3.5" />}
               isLoading={askAbout.isPending}
               isDisabled={busy || staleness === "gone"}
@@ -351,9 +426,7 @@ export function AskAnswer({
 function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-1">
-      <div className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/65">
-        {label}
-      </div>
+      <div className={SECTION_LABEL}>{label}</div>
       {children}
     </div>
   );
@@ -401,6 +474,13 @@ interface ControlsProps {
   attesting: boolean;
   onHandBack: () => void;
   handingBack: boolean;
+  /** Hand over a reference (a vault secret, a connection, a file). */
+  onProvide: (ref: AskProvideRef) => void;
+  /** A door refused: stale (moved on, changed) or a failure, as the pod said. */
+  onStale: (err: DoorError) => void;
+  onFailure: (message: string | null) => void;
+  /** The pod answered the slot itself with a new connection. */
+  onConnected: (serviceName: string) => void;
 }
 
 function Controls(props: ControlsProps) {
@@ -442,7 +522,9 @@ function Controls(props: ControlsProps) {
         </div>
       );
     case "provide":
-      // Nothing here can hand a secret, file or connection over: the app can.
+      if (control.answerable) {
+        return <ProvideControl {...props} control={control} />;
+      }
       return (
         <div className="flex flex-col gap-2">
           <Alert color="default" variant="flat" title={control.title}>
@@ -515,9 +597,7 @@ function ConfirmControl({
   };
   return (
     <fieldset className="flex flex-col gap-3">
-      <legend className="mb-2 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/65">
-        Your answer
-      </legend>
+      <legend className={`mb-2 ${SECTION_LABEL}`}>Your answer</legend>
       {prompt && prompt !== slot.label && (
         <p className="text-[13px] text-foreground/85">{prompt}</p>
       )}
@@ -573,8 +653,7 @@ function ChooseControl({
         onValueChange={setKey}
         isDisabled={busy}
         classNames={{
-          label:
-            "text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/65",
+          label: SECTION_LABEL,
           wrapper: "gap-2",
         }}
       >
@@ -627,6 +706,10 @@ function ChooseControl({
   );
 }
 
+/** The small caps label over a group of controls. */
+const SECTION_LABEL =
+  "text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/65";
+
 /** A radio drawn as a card: the whole box is the hit area. */
 const RADIO_CARD = {
   base: "m-0 w-full max-w-full items-start rounded-lg px-3 py-2.5 ring-1 ring-inset ring-foreground/10 data-[selected=true]:bg-primary/[0.06] data-[selected=true]:ring-primary/50",
@@ -660,9 +743,7 @@ function FormControl({
         setErrors(onAnswer({ type: "form", draft }) ?? {});
       }}
     >
-      <div className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/65">
-        {control.title ?? "Your answer"}
-      </div>
+      <div className={SECTION_LABEL}>{control.title ?? "Your answer"}</div>
       {control.note && (
         <p className="text-[12.5px] text-foreground/75">{control.note}</p>
       )}
@@ -802,6 +883,519 @@ function LegacyControl(props: ControlsProps) {
         Or, if there is nothing to say:
       </p>
       <DidThisPair {...props} />
+    </div>
+  );
+}
+
+// ─── Provide: hand something over ───────────────────────────────────────────
+
+type ProvideControlProps = ControlsProps & {
+  control: Extract<AskControlView, { mode: "provide" }>;
+};
+
+/**
+ * What the person can hand over, read from the pod (`provideOptions`), and
+ * the control for its kind. The read is refused like the answer door: a
+ * question that moved on or changed is said as such, never as an error.
+ */
+function ProvideControl(props: ProvideControlProps) {
+  const { slot, onStale, onConnected } = props;
+  const [wait, dispatch] = useReducer(connectReducer, CONNECT_IDLE);
+  const options = trpc.focusSessions.provideOptions.useQuery(
+    {
+      sessionId: slot.sessionId,
+      expectedLabel: slot.label,
+      askFingerprint: askFingerprint(slot.ask),
+    },
+    { retry: false, staleTime: 30_000 }
+  );
+  const sheet = useMemo(
+    () => (options.data ? provideSheet(options.data) : null),
+    [options.data]
+  );
+  const refusal = options.error
+    ? classifyAskRefusal(options.error.message)
+    : null;
+
+  // A stale read: while a new connection was being made, the slot leaving
+  // the person's list IS the pod answering it with that connection.
+  const waiting = wait.phase === "waiting";
+  const connectedService =
+    sheet?.kind === "connection" ? sheet.serviceName : null;
+  useEffect(() => {
+    const err = options.error;
+    if (!err || redirectToLoginIfUnauthorized(err)) return;
+    const kind = classifyAskRefusal(err.message).kind;
+    if (kind === "failed") return;
+    dispatch({ type: "cancel" });
+    if (kind === "moved_on" && waiting && connectedService) {
+      onConnected(connectedService);
+    } else {
+      onStale(err);
+    }
+    // Once per refused read; the wait and sheet are read as they were then.
+  }, [options.error]);
+
+  if (options.isLoading) {
+    return (
+      <div aria-busy="true" aria-label="Loading what you can hand over">
+        <ResourceRowSkeleton count={2} />
+      </div>
+    );
+  }
+  if (!sheet) {
+    if (refusal?.kind !== "failed") return null;
+    return (
+      <div className="flex flex-col items-start gap-2">
+        <ErrorNote
+          message={
+            readableError(options.error?.message) ??
+            "Couldn't load what you can hand over."
+          }
+          detail={options.error?.message}
+        />
+        <Button size="sm" variant="flat" onPress={() => void options.refetch()}>
+          Try again
+        </Button>
+      </div>
+    );
+  }
+  switch (sheet.kind) {
+    case "secret":
+      return <SecretProvide {...props} sheet={sheet} />;
+    case "connection":
+      return (
+        <ConnectionProvide
+          {...props}
+          sheet={sheet}
+          wait={wait}
+          dispatch={dispatch}
+          refetch={async () => {
+            const r = await options.refetch();
+            return !r.error && r.data?.kind === "connection"
+              ? r.data.connection.rows.map((row) => row.id)
+              : null;
+          }}
+        />
+      );
+    case "file":
+      return <FileProvide {...props} sheet={sheet} />;
+  }
+}
+
+/** "Open in app" — where a new secret, or a larger file, is added. */
+function OpenInAppLink({ sessionId }: { sessionId: string }) {
+  return (
+    <ExitLink
+      exit={openIn({
+        kind: "objectInApp",
+        objectKind: "session",
+        id: sessionId,
+      })}
+      label="Open in app"
+    />
+  );
+}
+
+/** P1: one of the person's EXISTING secrets; a new one is added in the app. */
+function SecretProvide({
+  slot,
+  sheet,
+  busy,
+  pending,
+  onProvide,
+}: ProvideControlProps & { sheet: SecretSheet }) {
+  const [ref, setRef] = useState(sheet.initialRef ?? "");
+  const has = sheet.choices.length > 0;
+  return (
+    <div className="flex flex-col gap-3">
+      {has ? (
+        <>
+          <RadioGroup
+            label={ASK_COPY.providePickSecret}
+            value={ref}
+            onValueChange={setRef}
+            isDisabled={busy}
+            classNames={{ label: SECTION_LABEL, wrapper: "gap-2" }}
+          >
+            {sheet.choices.map((c) => (
+              <Radio
+                key={c.ref}
+                value={c.ref}
+                description={c.type}
+                classNames={RADIO_CARD}
+              >
+                <span className="break-all text-[13px] text-foreground">
+                  {c.name}
+                </span>
+              </Radio>
+            ))}
+          </RadioGroup>
+          <p className="text-[12.5px] leading-relaxed text-foreground/75">
+            {sheet.grantNote}
+          </p>
+          <div>
+            <Button
+              color="primary"
+              className="min-h-10"
+              startContent={<Check className="h-4 w-4" />}
+              isLoading={pending}
+              isDisabled={busy || !ref}
+              onPress={() => onProvide({ kind: "secret", vaultRef: ref })}
+            >
+              Hand over this secret
+            </Button>
+          </div>
+        </>
+      ) : (
+        <p className="text-[13px] text-foreground/85">
+          You have no secrets in your vault that you could hand over.
+        </p>
+      )}
+      <div className="flex flex-col gap-1 border-t border-foreground/[0.06] pt-3">
+        <p className="text-[12.5px] text-foreground/65">
+          {ASK_COPY.provideAddSecretInApp}
+        </p>
+        <OpenInAppLink sessionId={slot.sessionId} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * P4: an account already connected (several → the person confirms which,
+ * nothing pre-picked), or a new one. A new one opens the service's sign-in
+ * in a new tab, started with `answerFor`, and waits: the pod answers the
+ * slot itself when the connection appears.
+ */
+function ConnectionProvide({
+  slot,
+  sheet,
+  busy,
+  pending,
+  onProvide,
+  onStale,
+  onFailure,
+  wait,
+  dispatch,
+  refetch,
+}: ProvideControlProps & {
+  sheet: ConnectionSheet;
+  wait: ConnectWait;
+  dispatch: Dispatch<ConnectEvent>;
+  /** Re-read the options; the connection ids, or null when the read failed. */
+  refetch: () => Promise<string[] | null>;
+}) {
+  const [id, setId] = useState(sheet.initialId ?? "");
+  const utils = trpc.useUtils();
+  const start = trpc.connectors.session.useMutation();
+  const service = sheet.serviceName;
+
+  // The wait: ask the pod to look for the new connection (the post-sign-in
+  // refetch — it is what notices it), then re-read the slot. One tick at a
+  // time, however slow the pod is.
+  const waiting = wait.phase === "waiting";
+  useEffect(() => {
+    if (!waiting) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      await utils.connectors.connections
+        .fetch(undefined, { staleTime: 0 })
+        .catch(() => undefined);
+      const rowIds = stopped ? null : await refetch();
+      if (stopped) return;
+      if (rowIds) dispatch({ type: "tick", now: Date.now(), rowIds });
+      timer = setTimeout(() => void tick(), CONNECT_POLL_MS);
+    };
+    timer = setTimeout(() => void tick(), CONNECT_POLL_MS);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+    // `refetch` and `utils` are stable for the life of the wait.
+  }, [waiting]);
+
+  function connect() {
+    if (!sheet.connectProviderId) return;
+    onFailure(null);
+    // Opened NOW, inside the press, so the browser lets it through; it is
+    // pointed at the sign-in once the pod hands the link over.
+    const tab = window.open("", "_blank");
+    if (tab) tab.opener = null;
+    const baseline = sheet.choices.map((c) => c.id);
+    dispatch({ type: "start" });
+    start.mutate(
+      connectSessionCall({
+        providerId: sheet.connectProviderId,
+        sessionId: slot.sessionId,
+        expectedLabel: slot.label,
+        askFingerprint: askFingerprint(slot.ask),
+      }),
+      {
+        onSuccess: (data) => {
+          const link = safeConnectLink(data.connectLink);
+          if (!link) {
+            tab?.close();
+            dispatch({ type: "start_failed" });
+            onFailure(
+              `Couldn't open the ${service} sign-in. Try again, or connect it in the app.`
+            );
+            return;
+          }
+          if (tab && !tab.closed) tab.location.href = link;
+          dispatch({
+            type: "started",
+            now: Date.now(),
+            link,
+            blocked: !tab || tab.closed,
+            baseline,
+          });
+        },
+        onError: (err) => {
+          tab?.close();
+          dispatch({ type: "start_failed" });
+          onStale(err);
+        },
+      }
+    );
+  }
+
+  if (wait.phase === "waiting") {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] p-3 ring-1 ring-inset ring-foreground/10"
+      >
+        <p className="flex items-center gap-2 text-[13px] font-medium text-foreground">
+          <Spinner size="sm" aria-hidden />
+          {waitingWords(service)}
+        </p>
+        <p className="text-[12.5px] leading-relaxed text-foreground/75">
+          {ASK_COPY.provideWaitingForConnection(service)}
+        </p>
+        {wait.blocked && (
+          <a
+            href={wait.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 self-start rounded-sm text-[13px] text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          >
+            Open the {service} sign-in
+            <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+          </a>
+        )}
+        <div>
+          <Button
+            size="sm"
+            variant="flat"
+            onPress={() => dispatch({ type: "cancel" })}
+          >
+            Stop waiting
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const note =
+    wait.phase === "idle" ? connectNoteWords(wait.note, service) : null;
+  const has = sheet.choices.length > 0;
+  const starting = wait.phase === "starting";
+  return (
+    <div className="flex flex-col gap-3">
+      {note && <Alert color="default" variant="flat" title={note} />}
+      {has && (
+        <>
+          <RadioGroup
+            label={
+              sheet.confirmAccount
+                ? ASK_COPY.provideWhichAccount
+                : ASK_COPY.provideUseExisting
+            }
+            value={id}
+            onValueChange={setId}
+            isDisabled={busy || starting}
+            classNames={{ label: SECTION_LABEL, wrapper: "gap-2" }}
+          >
+            {sheet.choices.map((c) => (
+              <Radio
+                key={c.id}
+                value={c.id}
+                description={c.detail ?? undefined}
+                classNames={RADIO_CARD}
+              >
+                <span className="break-all text-[13px] text-foreground">
+                  {c.title}
+                </span>
+              </Radio>
+            ))}
+          </RadioGroup>
+          <div>
+            <Button
+              color="primary"
+              className="min-h-10"
+              startContent={<Check className="h-4 w-4" />}
+              isLoading={pending}
+              isDisabled={busy || starting || !id}
+              onPress={() =>
+                onProvide({ kind: "connection", connectionId: id })
+              }
+            >
+              Use this account
+            </Button>
+          </div>
+        </>
+      )}
+      {sheet.connectProviderId ? (
+        <div className={has ? "border-t border-foreground/[0.06] pt-3" : ""}>
+          <Button
+            color={has ? "default" : "primary"}
+            variant={has ? "bordered" : "solid"}
+            // A long service name wraps instead of overflowing at 360px.
+            className="h-auto min-h-10 max-w-full whitespace-normal py-2"
+            startContent={<Plug className="h-4 w-4" aria-hidden />}
+            isLoading={starting}
+            isDisabled={busy}
+            onPress={connect}
+          >
+            {has
+              ? `Connect another ${service} account`
+              : ASK_COPY.provideConnect(service)}
+          </Button>
+        </div>
+      ) : (
+        sheet.unavailable && (
+          <p className="text-[12.5px] leading-relaxed text-foreground/75">
+            {sheet.unavailable}
+          </p>
+        )
+      )}
+    </div>
+  );
+}
+
+/** P3: upload into the space the pod named; its refusal, plainly. */
+function FileProvide({
+  slot,
+  sheet,
+  busy,
+  pending,
+  onProvide,
+}: ProvideControlProps & { sheet: FileSheet }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const landing = sheet.landing;
+
+  if (!landing.ok) {
+    return (
+      <div className="flex flex-col gap-2">
+        <Alert
+          color="warning"
+          variant="flat"
+          title="There is nowhere to save the file"
+        >
+          {landing.message}
+        </Alert>
+        <OpenInAppLink sessionId={slot.sessionId} />
+      </div>
+    );
+  }
+
+  async function send() {
+    if (!file || !landing.ok) return;
+    setUploading(true);
+    setProblem(null);
+    const result = await uploadProvidedFile({
+      podUrl: POD_URL,
+      file,
+      landing,
+    });
+    setUploading(false);
+    if (!result.ok) {
+      if (result.status === 401) {
+        redirectToLoginIfUnauthorized({ data: { code: "UNAUTHORIZED" } });
+      }
+      setProblem(result.message);
+      return;
+    }
+    onProvide({ kind: "file", fileId: result.fileId });
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-1">
+        <div className={SECTION_LABEL}>{ASK_COPY.provideUpload}</div>
+        <p className="text-[12.5px] text-foreground/75">{landing.landsIn}</p>
+      </div>
+      <input
+        ref={input}
+        type="file"
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden
+        accept={acceptAttribute(sheet.accept)}
+        onChange={(e) => {
+          const picked = e.target.files?.[0] ?? null;
+          setFile(picked);
+          setProblem(picked ? fileProblem(picked, sheet.accept) : null);
+          e.target.value = "";
+        }}
+      />
+      {file ? (
+        <div className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg px-3 py-2.5 ring-1 ring-inset ring-foreground/10">
+          <FileUp className="h-4 w-4 shrink-0 text-foreground/65" aria-hidden />
+          <span className="min-w-0 flex-1 break-all text-[13px] text-foreground">
+            {file.name}
+            <span className="text-foreground/65">
+              {" "}
+              · {humanizeBytes(file.size)}
+            </span>
+          </span>
+          <Button
+            size="sm"
+            variant="light"
+            isDisabled={busy || uploading}
+            onPress={() => input.current?.click()}
+          >
+            Change
+          </Button>
+        </div>
+      ) : (
+        <div>
+          <Button
+            variant="bordered"
+            className="min-h-10"
+            startContent={<FileUp className="h-4 w-4" aria-hidden />}
+            isDisabled={busy}
+            onPress={() => input.current?.click()}
+          >
+            Choose a file
+          </Button>
+        </div>
+      )}
+      {problem && (
+        <p role="alert" className="text-[12.5px] text-danger">
+          {problem}
+        </p>
+      )}
+      {file && (
+        <div>
+          <Button
+            color="primary"
+            className="min-h-10"
+            startContent={<Check className="h-4 w-4" />}
+            isLoading={uploading || pending}
+            isDisabled={busy || uploading || problem !== null}
+            onPress={() => void send()}
+          >
+            Upload and send
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
