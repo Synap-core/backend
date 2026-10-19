@@ -305,6 +305,103 @@ describe("marketplace.list", () => {
     );
   });
 
+  it("Synap's catalog stays listed through a signature freeze; the sources say why, once", async () => {
+    const sentence =
+      "Synap's catalog failed its signature check: bad. Installs and automatic updates from it are paused; what is already listed stays listed.";
+    m.views.mockResolvedValue([
+      {
+        ...SYNAP,
+        gate: { trust: "official", blocked: sentence },
+        signature: {
+          standing: {
+            mode: "enforce",
+            verified: false,
+            blocked: sentence,
+            notice: sentence,
+          },
+          status: { state: "bad_signature", keyFingerprint: FP },
+        },
+      },
+      ACME,
+    ]);
+    m.query.mockResolvedValue([]);
+    const out = await caller().list({});
+    expect(m.query).toHaveBeenCalledWith(
+      expect.objectContaining({ sources: [CP, "acme"] })
+    );
+    expect(out.sources[0]).toMatchObject({
+      id: "synap",
+      state: "bad_signature",
+      blocked: sentence,
+      message: sentence,
+      // Not verified: no fingerprint is claimed.
+      keyFingerprint: null,
+    });
+  });
+
+  it("Synap's row carries the signature notice and, once verified, the signing key", async () => {
+    const unsigned =
+      "Synap's catalog isn't signed yet. Installs work as before.";
+    m.views.mockResolvedValue([
+      {
+        ...SYNAP,
+        signature: {
+          standing: {
+            mode: "unsigned",
+            verified: false,
+            blocked: null,
+            notice: unsigned,
+          },
+          status: null,
+        },
+      },
+    ]);
+    m.query.mockResolvedValue([]);
+    expect((await caller().list({})).sources[0]).toMatchObject({
+      state: "ok",
+      blocked: null,
+      message: unsigned,
+      keyFingerprint: null,
+    });
+    m.views.mockResolvedValue([
+      {
+        ...SYNAP,
+        signature: {
+          standing: {
+            mode: "enforce",
+            verified: true,
+            blocked: null,
+            notice: null,
+          },
+          status: { state: "ok", keyFingerprint: FP },
+        },
+      },
+    ]);
+    expect((await caller().list({})).sources[0]).toMatchObject({
+      state: "ok",
+      message: null,
+      keyFingerprint: FP,
+    });
+  });
+
+  it("Synap's catalog switched off lists nothing", async () => {
+    m.views.mockResolvedValue([
+      {
+        ...SYNAP,
+        source: descriptor({ enabled: false }),
+        gate: {
+          trust: "official",
+          blocked: "Synap's catalog is turned off on this pod.",
+        },
+      },
+    ]);
+    m.query.mockResolvedValue([]);
+    await caller().list({});
+    expect(m.query).toHaveBeenCalledWith(
+      expect.objectContaining({ sources: [] })
+    );
+  });
+
   it("a blocked source lists nothing, even when asked for by name", async () => {
     m.query.mockResolvedValue([]);
     await caller().list({ source: "gone" });

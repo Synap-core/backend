@@ -18,6 +18,7 @@ import {
   installCellFromDefinition,
   packageCellTypeKey,
 } from "../services/cells/install-cell-from-definition.js";
+import { assertOfficialDefinition } from "../services/capabilities/official-catalog-trust.js";
 
 function requireAdminRole(role: string | undefined | null) {
   if (!["owner", "admin"].includes(role ?? "")) {
@@ -124,6 +125,14 @@ export const cellsRouter = router({
           message: `CP returned cell key '${cell.key}' which does not match requested '${cellKey}'`,
         });
       }
+
+      // Synap's signature rule: the cell the Control Plane served must be the
+      // one its signed index lists for this package (refused once enforced).
+      await assertOfficialDefinition({
+        kind: "cell",
+        slug: `${packageSlug}/${cellKey}`,
+        definition: cell as unknown as Record<string, unknown>,
+      });
 
       // Route through the SHARED package-cell mapper (→ the one write door
       // `defineCell`) instead of a third hand-rolled insert. That raw insert

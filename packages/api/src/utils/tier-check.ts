@@ -17,6 +17,7 @@ import { config, createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
 import { t } from "../init-trpc.js";
 import { getDb } from "@synap/database";
+import { signedRequiredTier } from "../services/capabilities/official-catalog-trust.js";
 
 const logger = createLogger({ module: "tier-check" });
 
@@ -95,20 +96,30 @@ async function getLocalTier(): Promise<string> {
 }
 
 /**
- * Fetch the requiredTier for a package from the Control Plane's public endpoint.
- * Returns null (no restriction) when the package is not found or the CP is unavailable.
+ * The requiredTier of a package. Once Synap's catalog signature is enforced,
+ * the tier its verified index lists wins over the Control Plane's unsigned
+ * answer; until then the unsigned answer is used and a disagreement is
+ * logged. Returns null (no restriction) when the package is not found or the
+ * CP is unavailable.
  */
 async function fetchPackageRequiredTier(slug: string): Promise<string | null> {
   const cpUrl = config.server.controlPlaneUrl;
   if (!cpUrl) return null;
 
+  const signed = await signedRequiredTier(
+    slug,
+    (tier) => TIER_RANK[tier] ?? 0
+  ).catch(() => null);
+  if (signed?.enforce) return signed.tier;
+
+  let tier: string | null;
   try {
     const res = await fetch(`${cpUrl}/api/packages/${slug}`);
     if (!res.ok) return null;
     const data = (await res.json()) as {
       package?: { requiredTier?: string | null };
     };
-    return data.package?.requiredTier ?? null;
+    tier = data.package?.requiredTier ?? null;
   } catch (err) {
     logger.warn(
       { err, slug },
@@ -116,6 +127,13 @@ async function fetchPackageRequiredTier(slug: string): Promise<string | null> {
     );
     return null;
   }
+  if (signed && signed.tier !== tier) {
+    logger.warn(
+      { slug, unsigned: tier, signed: signed.tier },
+      "The Control Plane's tier for this package differs from Synap's signed catalog (report only)"
+    );
+  }
+  return tier;
 }
 
 // ---------------------------------------------------------------------------

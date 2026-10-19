@@ -198,6 +198,18 @@ function toWire(
         : own.every((s) => s.lastStatus === "unreachable")
           ? "unreachable"
           : "ok";
+    // Synap's catalog signature: its sentence, and — once a freeze is
+    // enforced — the state that says why.
+    const signature = view.signature;
+    message = signature?.standing.notice ?? null;
+    if (signature?.standing.blocked && signature.status) {
+      state =
+        signature.status.state === "ok"
+          ? "expired"
+          : signature.status.state === "replayed"
+            ? "invalid"
+            : signature.status.state;
+    }
   } else {
     lastSyncAt = status?.lastSyncAt ?? null;
     state = status?.state ?? "pending";
@@ -212,7 +224,12 @@ function toWire(
     official: source.official,
     enabled: source.enabled,
     lockedOff: source.lockedOff,
-    keyFingerprint: source.keyFingerprint,
+    // The official row shows the key that signed Synap's last verified index.
+    keyFingerprint:
+      source.keyFingerprint ??
+      (view.signature?.standing.verified
+        ? (view.signature.status?.keyFingerprint ?? null)
+        : null),
     agentsMayPropose: source.agentsMayPropose,
     addedBy: source.addedBy,
     addedAt: source.addedAt,
@@ -762,7 +779,7 @@ export const marketplaceRouter = router({
   /**
    * Browse the pod's catalog across the sources that may serve now (a source
    * that is off, awaiting a key re-approval or past its index's expiry lists
-   * nothing). Ranked by the shared term matcher when `query` is set,
+   * nothing; Synap's catalog stays listed through a signature freeze). Ranked by the shared term matcher when `query` is set,
    * alphabetical otherwise; offset-paged by `cursor`.
    */
   list: protectedProcedure
@@ -783,9 +800,11 @@ export const marketplaceRouter = router({
       const query = input?.query?.trim() || undefined;
       const { views, wire } = await sourcesWithViews();
       const readable = views.filter((v) => readableBy(ctx, v));
+      // Synap's catalog stays listed through a signature freeze (only its
+      // installs pause); off is off.
       const serving = readable.filter(
         (v) =>
-          !v.gate.blocked &&
+          (!v.gate.blocked || (v.source.official && v.source.enabled)) &&
           (!input?.source ||
             v.source.id === input.source ||
             v.source.cacheKey === input.source)

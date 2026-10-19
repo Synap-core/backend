@@ -8,15 +8,17 @@
  *   - a third-party definition, fetched anonymously from the signed listing
  *     and checked against its digest (`resolveListedDefinition`).
  *
- * The official source needs no settings read: it is the configured Control
- * Plane, exactly as before. Only a request that names another source reads
- * the pod settings.
+ * Resolving the official source needs no settings read: it is the configured
+ * Control Plane, exactly as before. Its gate reads the pod admin's switch and
+ * where Synap's catalog signature stands (`officialStanding`).
  */
 
 import { TRPCError } from "@trpc/server";
 import {
   readMarketplaceSources,
   type MarketplaceSourceStatus,
+  type MarketplaceSourcesSnapshot,
+  type OfficialCatalogSignature,
 } from "@synap/database";
 import type { CatalogListing } from "@synap/database/schema";
 import {
@@ -32,8 +34,10 @@ import {
   qualifiedPackageId,
   sourceBlockReason,
   type MarketSourceGate,
+  type OfficialCatalogStanding,
 } from "@synap-core/types/marketplace-source";
 import { appliedPackageVersion } from "../applied-package-version.js";
+import { officialStanding } from "./official-catalog-trust.js";
 
 /** The official source's descriptor, from the environment alone. */
 export function officialMarketSource(): CatalogSource {
@@ -74,11 +78,7 @@ export async function marketSourceGate(
 ): Promise<MarketSourceGate> {
   if (source.official) {
     const snapshot = await readMarketplaceSources().catch(() => null);
-    const off = snapshot?.official?.enabled === false;
-    return {
-      trust: "official",
-      blocked: off ? "Synap's catalog is turned off on this pod." : null,
-    };
+    return officialGate(snapshot, now);
   }
   const { status } = await readMarketplaceSources();
   const own = status[source.id];
@@ -94,10 +94,35 @@ export async function marketSourceGate(
   };
 }
 
+/**
+ * The official source's gate: the pod admin's switch, then Synap's catalog
+ * signature (`officialCatalogStanding` — only an enforced freeze blocks).
+ */
+function officialGate(
+  snapshot: MarketplaceSourcesSnapshot | null,
+  now: Date
+): MarketSourceGate {
+  if (snapshot?.official?.enabled === false) {
+    return {
+      trust: "official",
+      blocked: "Synap's catalog is turned off on this pod.",
+    };
+  }
+  return {
+    trust: "official",
+    blocked: officialStanding(snapshot, now).blocked,
+  };
+}
+
 export interface MarketSourceView {
   source: CatalogSource;
   gate: MarketSourceGate;
   status: MarketplaceSourceStatus | null;
+  /** Official only: where Synap's catalog signature stands, and its last check. */
+  signature?: {
+    standing: OfficialCatalogStanding;
+    status: OfficialCatalogSignature | null;
+  };
 }
 
 /**
@@ -112,13 +137,7 @@ export async function listMarketSources(
   return describeCatalogSources(snapshot).map((source) => {
     const status = snapshot?.status[source.id] ?? null;
     const gate: MarketSourceGate = source.official
-      ? {
-          trust: "official",
-          blocked:
-            snapshot?.official?.enabled === false
-              ? "Synap's catalog is turned off on this pod."
-              : null,
-        }
+      ? officialGate(snapshot, now)
       : {
           trust: source.trust,
           agentsMayPropose: source.agentsMayPropose,
@@ -129,7 +148,17 @@ export async function listMarketSources(
             now,
           }),
         };
-    return { source, gate, status };
+    return source.official
+      ? {
+          source,
+          gate,
+          status,
+          signature: {
+            standing: officialStanding(snapshot, now),
+            status: snapshot?.officialSignature ?? null,
+          },
+        }
+      : { source, gate, status };
   });
 }
 

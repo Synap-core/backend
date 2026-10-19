@@ -198,6 +198,29 @@ export interface MarketplaceSourceTombstone {
   removedAt: string;
 }
 
+/**
+ * Where the signature check of Synap's own catalog stands, written by the
+ * catalog sync under `officialCatalogSignature`. Same shape as
+ * `OfficialCatalogSignatureStatus` in `@synap-core/types/marketplace-source`,
+ * whose `officialCatalogStanding` reads it.
+ */
+export interface OfficialCatalogSignature {
+  state:
+    "ok" | "unreachable" | "invalid" | "bad_signature" | "expired" | "replayed";
+  lastCheckAt: string;
+  lastOkAt: string | null;
+  /** `expires` of the last verified index. */
+  validUntil: string | null;
+  /** `version` of the last verified keys statement (null: operator keys). */
+  keysVersion: number | null;
+  /** Fingerprint of the key that signed the last verified index. */
+  keyFingerprint: string | null;
+  packageCount: number;
+  /** Cached official rows the verified index does not vouch for. */
+  unverifiedRows: number | null;
+  message: string | null;
+}
+
 export interface PodSettingsBlob {
   machineDefaults?: PodMachineDefaults;
   intelligenceDefaults?: PodIntelligenceDefaults;
@@ -209,6 +232,7 @@ export interface PodSettingsBlob {
   marketplaceOfficialSource?: MarketplaceOfficialSourceSetting;
   marketplaceSourceStatus?: Record<string, MarketplaceSourceStatus>;
   marketplaceSourceTombstones?: Record<string, MarketplaceSourceTombstone>;
+  officialCatalogSignature?: OfficialCatalogSignature;
   [k: string]: unknown;
 }
 

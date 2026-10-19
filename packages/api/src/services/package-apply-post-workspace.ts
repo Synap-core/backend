@@ -616,6 +616,11 @@ export async function applyPackagePostWorkspace(
     } = await import("@synap/database");
     const caller = automationsRouter.createCaller(ctx as never);
     const autos: unknown[] = [];
+    // The package this apply installs (`_meta.slug`; an added source's is
+    // `<source>/<slug>`), stamped on every automation it creates as
+    // `metadata.installedByPackage` — what lets that same package re-install
+    // over its own automations elsewhere (`assertNoNamedClash`).
+    const installedByPackage = body._meta?.slug;
     for (const a of body.automations) {
       try {
         const [existing] = await db
@@ -656,18 +661,22 @@ export async function applyPackagePostWorkspace(
             // unconditionally: the row's existing templateKey (or the incoming
             // `a.key`) always overrides any author-supplied `metadata.templateKey`.
             metadata: (() => {
-              const systemTemplateKey =
-                (
-                  existing.metadata as
-                    { templateKey?: string } | null | undefined
-                )?.templateKey ?? a.key;
-              return a.metadata || systemTemplateKey
+              const stamps = existing.metadata as
+                | { templateKey?: string; installedByPackage?: string }
+                | null
+                | undefined;
+              const systemTemplateKey = stamps?.templateKey ?? a.key;
+              // The first package that installed the row keeps it.
+              const installedBy =
+                stamps?.installedByPackage ?? installedByPackage;
+              return a.metadata || systemTemplateKey || installedBy
                 ? {
                     ...(existing.metadata ?? {}),
                     ...a.metadata,
                     ...(systemTemplateKey
                       ? { templateKey: systemTemplateKey }
                       : {}),
+                    ...(installedBy ? { installedByPackage: installedBy } : {}),
                   }
                 : undefined;
             })(),
@@ -697,10 +706,15 @@ export async function applyPackagePostWorkspace(
           flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
           status: a.status,
           // Preserve author metadata (e.g. `metadata.kind`) alongside the
-          // system `templateKey` stamp — templateKey last so it wins.
+          // system stamps — `templateKey` and `installedByPackage` last so
+          // they win over anything the author wrote.
           metadata:
-            a.metadata || a.key
-              ? { ...a.metadata, ...(a.key ? { templateKey: a.key } : {}) }
+            a.metadata || a.key || installedByPackage
+              ? {
+                  ...a.metadata,
+                  ...(a.key ? { templateKey: a.key } : {}),
+                  ...(installedByPackage ? { installedByPackage } : {}),
+                }
               : undefined,
           agentUserId,
           source: "intelligence",

@@ -19,6 +19,7 @@ import {
 // The ONE explicit-then-derive-from-viewTypes rule for a package cell's
 // renderer slot — shared with the tRPC twin and both package appliers.
 import { resolveCellContentKind } from "../../../services/cells/install-cell-from-definition.js";
+import { admitOfficialDefinition } from "../../../services/capabilities/official-catalog-trust.js";
 // typeKey PROVENANCE FLOOR — the SAME guard the tRPC door (`widgetDefinitions.
 // upsert`) applies, not a second implementation. This door declared `typeKey`
 // and passed it straight to `defineCell`, so an operator-scoped key could MINT
@@ -203,6 +204,17 @@ export function registerCellsRoutes(app: HubHono): void {
           },
           400
         );
+      }
+
+      // Synap's signature rule: the cell the Control Plane served must be the
+      // one its signed index lists for this package (refused once enforced).
+      const admission = await admitOfficialDefinition({
+        kind: "cell",
+        slug: `${packageSlug}/${cellKey}`,
+        definition: cell as unknown as Record<string, unknown>,
+      });
+      if (!admission.admitted) {
+        return c.json({ error: admission.reason }, 412);
       }
 
       const depsError = validateDeps(cell.deps);
