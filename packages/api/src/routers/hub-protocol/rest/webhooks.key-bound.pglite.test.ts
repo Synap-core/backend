@@ -86,6 +86,8 @@ const OWNER = "owner-human";
 const AGENT = "agent-principal";
 const K1 = randomUUID();
 const K2 = randomUUID();
+/** A website-style scoped key: reads notes of one space, holds write scope. */
+const SCOPED = randomUUID();
 const RW = ["hub-protocol.read", "hub-protocol.write"];
 
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
@@ -140,6 +142,16 @@ beforeAll(async () => {
     h.keys.set(`synap_${k}`, keyRecord(k));
     await grantKey(k, ["*"]);
   }
+  await q(
+    `insert into api_keys (id, user_id, key_name, is_active) values ($1,$2,'k',true)`,
+    [SCOPED, AGENT]
+  );
+  h.keys.set(`synap_${SCOPED}`, keyRecord(SCOPED));
+  await q(
+    `insert into grants (id, api_key_id, principal_user_id, on_behalf_of, permissions, workspace_ids, created_by, created_at)
+     values ($1,$2,$3,$4,'{entity.note.read}',$5,$4, now())`,
+    [randomUUID(), SCOPED, AGENT, OWNER, [randomUUID()]]
+  );
 });
 
 beforeEach(async () => {
@@ -250,6 +262,20 @@ describe("GET /webhooks — a dead key's subscription shows inactive", () => {
         [K2]
       );
     }
+  });
+});
+
+describe("a SCOPED key manages its own subscriptions (S2/D7 fence)", () => {
+  it("creates one bound to itself, lists only it, deletes only it", async () => {
+    const mine = await create({ key: SCOPED });
+    const other = await create({ key: K1 });
+    const human = await create("session");
+    expect(await keyOf(mine)).toBe(SCOPED);
+    expect(await list({ key: SCOPED })).toEqual([mine]);
+    expect((await remove({ key: SCOPED }, other)).status).toBe(404);
+    expect((await remove({ key: SCOPED }, human)).status).toBe(404);
+    expect((await remove({ key: SCOPED }, mine)).status).toBe(200);
+    expect(await list("session")).toEqual([other, human].sort());
   });
 });
 

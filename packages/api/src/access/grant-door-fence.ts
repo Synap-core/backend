@@ -119,6 +119,9 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/projects\/?$/,
   /^\/projects\/[^/]+\/?$/,
   /^\/projects\/[^/]+\/digest\/?$/,
+  // The caller's own webhook subscriptions: a key lists only those it
+  // created (S2) — no row a grant bounds.
+  /^\/webhooks\/?$/,
   /^\/views\/?$/, // hub views.listViews: owner + grantReadPredicate(views)
   /^\/proposals\/?$/, // hub proposals.listProposals: proposalUserFloor (+ grant)
 ];
@@ -243,11 +246,13 @@ export const GRANT_DOOR_UNSUPPORTED =
  * whole owner and that no grant can narrow — so neither the fence's "writes
  * are bounded by the gate" rule nor a workspace/project/object pin applies.
  *
- *  - `/webhooks*`: a subscription is fanned out by OWNER only
- *    (`jobs/src/workers/webhook-worker.ts` matches `webhookSubscriptions
- *    .userId`), so one row streams every event of the person — every
- *    workspace, project and kind — to the URL it names. The handlers write the
- *    table directly; they never pass the gate.
+ *  - `/webhooks/:id/<anything>` (the delivery log): read by owner only
+ *    (tRPC `deliveries`), not by the subscription's key. `/webhooks` and
+ *    `/webhooks/:id` themselves are NOT owner-wide since S2/D7 (2026-10-20):
+ *    a key's subscription is bound to that key (it lists / deletes only its
+ *    own, `rest/webhooks.ts`) and delivers only what the key's grant reads
+ *    while the key lives (`utils/webhook-delivery.ts`, jobs
+ *    `webhook-worker.ts`). Creating one still needs `hub-protocol.write`.
  *  - `/calendar/feed` (+ `/rotate`): mints a bearer URL whose `.ics` read
  *    carries NO key and so no grant — it serves every calendar entity the
  *    person can read (`calendar-feed.ts` `loadOwnedCalendarEntities`), every
@@ -263,7 +268,7 @@ export const GRANT_DOOR_UNSUPPORTED =
  * but it is refused here.
  */
 export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
-  /^\/webhooks(?:\/.*)?$/,
+  /^\/webhooks\/[^/]+\/.+$/,
   /^\/calendar\/feed(?:\/rotate)?\/?$/,
   /^\/agents\/sync\/?$/,
 ];

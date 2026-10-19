@@ -8,17 +8,18 @@
  * GET  /api/hub/webhooks — list webhook subscriptions
  * DELETE /api/hub/webhooks/:id — delete a webhook subscription
  *
- * AUTHORITY. A subscription is fanned out by OWNER only (webhook-worker
- * `fanOutDomainEvent`), so one row streams every event of the person to the URL
- * it names. Managing one is a WRITE (`hub-protocol.write`; listing needs
- * `hub-protocol.read`), and a scoped key may not use these doors at all unless
- * its grant is unbounded full access — the hub auth door refuses it
- * (`GRANT_OWNER_WIDE_REST_DOORS`, access/grant-door-fence.ts). These handlers
- * never pass the governance gate.
+ * AUTHORITY. Managing a subscription is a WRITE (`hub-protocol.write`;
+ * listing needs `hub-protocol.read`). These handlers never pass the
+ * governance gate, so what bounds a subscription is who created it:
  *
- * KEY-BOUND (S2). A subscription created by a key records it (`api_key_id`);
- * a key lists and deletes only the subscriptions it created, a session (no
- * key) every one of its owner's (`ownSubscriptions`). A subscription whose
+ * KEY-BOUND (S2 + D7, 2026-10-20). A subscription created by a key records it
+ * (`api_key_id`); a key lists and deletes only the subscriptions it created,
+ * a session (no key) every one of its owner's (`ownSubscriptions`). A
+ * key-bound subscription is delivered only while its key lives and only what
+ * its grant reads (`utils/webhook-delivery.ts`, jobs `webhook-worker.ts`), so
+ * a SCOPED key may manage its own here (the fence no longer lists `/webhooks`
+ * as owner-wide; the delivery log `/webhooks/:id/deliveries` still is). A
+ * session's subscription keeps the owner-wide fan-out. A subscription whose
  * key is revoked or expired is listed inactive: it is not delivered.
  */
 
