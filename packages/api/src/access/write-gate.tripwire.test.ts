@@ -73,7 +73,8 @@ const KNOWN_UNGATED = new Set<string>([
   "rest/webhooks.ts",
   // /agents/sync — owner-wide fence since 2026-10-19; no gate.
   "rest/agents.ts",
-  // /channel-egress/:id/ack — any row by id, no owner predicate.
+  // /channel-egress/:id/ack — floored on the /pending predicate since
+  // 2026-10-19 (lane/sec-w3); no gate (no principal owns an outbox row).
   "rest/channel-egress.ts",
   // Account sync / channel delete / mark-read (write scope since 2026-10-19).
   "rest/messaging.ts",

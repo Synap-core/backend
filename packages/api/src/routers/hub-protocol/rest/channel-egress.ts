@@ -23,7 +23,9 @@ import {
   asc,
   isNull,
   drizzleSql,
+  getRequestGrant,
 } from "@synap/database";
+import type { SQL } from "drizzle-orm";
 
 import {
   hasScope,
@@ -33,6 +35,11 @@ import {
   requireUuidParam,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+import {
+  GRANT_DOOR_UNSUPPORTED,
+  isFencedGrant,
+  restDoorAllowed,
+} from "../../../access/grant-door-fence.js";
 
 // A `failed` row is RETRIABLE until it has been attempted this many times, then it
 // is dead-lettered (stays `failed`, no longer served). Without this, a single
@@ -40,6 +47,33 @@ import { getConfinedWorkspace } from "../confine-workspace.js";
 // permanently drop the outbound action. Firewall-dropped rows are acked
 // `delivered`, so they never retry.
 const MAX_EGRESS_ATTEMPTS = 5;
+
+/**
+ * The rows a consumer may PULL — and so the only rows it may ACK. The outbox
+ * has no owner column; its consumer is whoever drains `/pending`, so both
+ * routes share this ONE predicate: `pending`, or `failed` still under the retry
+ * ceiling; for a workspace-bound key, its own workspace plus pod-wide (NULL)
+ * rows, which are genuine globals.
+ */
+function servableEgressWhere(confinedWorkspaceId: string | null | undefined) {
+  return and(
+    or(
+      eq(channelEgress.status, "pending"),
+      and(
+        eq(channelEgress.status, "failed"),
+        lt(channelEgress.attempts, MAX_EGRESS_ATTEMPTS)
+      )
+    ),
+    // Only applied for a bound key (else `confinedWorkspaceId` is undefined →
+    // no filter). Pod-wide (NULL) rows stay visible.
+    confinedWorkspaceId
+      ? or(
+          eq(channelEgress.workspaceId, confinedWorkspaceId),
+          isNull(channelEgress.workspaceId)
+        )
+      : undefined
+  ) as SQL;
+}
 
 const PendingQuerySchema = z.object({
   externalSource: z.string().min(1),
@@ -95,22 +129,7 @@ export function registerChannelEgressRoutes(app: HubHono): void {
         .where(
           and(
             eq(channelEgress.externalSource, externalSource),
-            // `pending`, plus `failed` rows still under the retry ceiling.
-            or(
-              eq(channelEgress.status, "pending"),
-              and(
-                eq(channelEgress.status, "failed"),
-                lt(channelEgress.attempts, MAX_EGRESS_ATTEMPTS)
-              )
-            ),
-            // Only applied for a bound service key (else `confinedWorkspaceId`
-            // is undefined → no filter). Pod-wide (NULL) rows stay visible.
-            confinedWorkspaceId
-              ? or(
-                  eq(channelEgress.workspaceId, confinedWorkspaceId),
-                  isNull(channelEgress.workspaceId)
-                )
-              : undefined
+            servableEgressWhere(confinedWorkspaceId)
           )
         )
         .orderBy(asc(channelEgress.createdAt))
@@ -151,25 +170,59 @@ export function registerChannelEgressRoutes(app: HubHono): void {
     }
     const { status, error } = parsed.data;
 
+    // SECURITY — a consumer may ack only a row it could PULL. This used to
+    // update any row by id (delivered, dead-lettered, another workspace's),
+    // so any write key could drop or burn the retries of an outbound message
+    // it never received. A key the fence refuses on `/pending` is no consumer
+    // (the W1 fence lets this POST through as "a write bounded by the gate",
+    // but it never passes the gate); every other key acks through the SAME
+    // predicate `/pending` serves, else 404.
+    const grant = getRequestGrant();
+    if (
+      isFencedGrant(grant) &&
+      !restDoorAllowed("GET", "/channel-egress/pending", grant!)
+    ) {
+      return c.json(
+        { error: GRANT_DOOR_UNSUPPORTED, code: "GRANT_DOOR_UNSUPPORTED" },
+        403
+      );
+    }
+    let ackable: SQL;
     try {
-      if (status === "delivered") {
-        await db
-          .update(channelEgress)
-          .set({
-            status: "delivered",
-            deliveredAt: new Date(),
-            lastError: null,
-          })
-          .where(eq(channelEgress.id, id));
-      } else {
-        await db
-          .update(channelEgress)
-          .set({
-            status: "failed",
-            attempts: drizzleSql`${channelEgress.attempts} + 1`,
-            lastError: error ?? null,
-          })
-          .where(eq(channelEgress.id, id));
+      ackable = and(
+        eq(channelEgress.id, id),
+        servableEgressWhere(getConfinedWorkspace(c, undefined))
+      ) as SQL;
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Forbidden" },
+        httpStatusForTrpcError(err)
+      );
+    }
+
+    try {
+      const updated =
+        status === "delivered"
+          ? await db
+              .update(channelEgress)
+              .set({
+                status: "delivered",
+                deliveredAt: new Date(),
+                lastError: null,
+              })
+              .where(ackable)
+              .returning({ id: channelEgress.id })
+          : await db
+              .update(channelEgress)
+              .set({
+                status: "failed",
+                attempts: drizzleSql`${channelEgress.attempts} + 1`,
+                lastError: error ?? null,
+              })
+              .where(ackable)
+              .returning({ id: channelEgress.id });
+      if (updated.length === 0) {
+        return c.json({ error: "Egress row not found or not ackable" }, 404);
       }
 
       return c.json({ ok: true });
