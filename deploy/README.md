@@ -181,6 +181,14 @@ What changes for an operator when a pod updates past a release. Newest first.
   source the owner added (below) has its own switch.
 - **Marketplace sources.** An owner can add other catalogs beside Synap's.
   What a source serves and what the pod checks: `docs/marketplace-source.md`.
+- **Synap's catalog signature.** The pod checks Synap's catalog against a
+  signed index once its release carries Synap's root keys; until then it says
+  "Synap's catalog isn't signed yet" in Marketplace › Sources and blocks
+  nothing. The check only reports until `SYNAP_CATALOG_ENFORCE_SIGNATURE=1`.
+  A private mirror or re-signed catalog sets its own index keys in
+  `SYNAP_CATALOG_PUBLIC_KEYS` (logged at boot); an air-gapped pod whose
+  mirror can't be refreshed sets `SYNAP_CATALOG_ALLOW_EXPIRED=1`. Details:
+  `docs/marketplace-source.md`, "Synap's own catalog".
 - **Rate limits for signed-in people.** The API now gives each signed-in
   person their own request budget instead of sharing the per-address one. Two
   new variables tune it, read by the API process:
