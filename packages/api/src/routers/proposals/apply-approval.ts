@@ -70,7 +70,10 @@ import {
   redactForStorage,
 } from "../../utils/redact-secrets.js";
 import { registerApproveExecutors } from "./approve-executors.js";
-import { assertMayDecideProposal } from "./review-authority.js";
+import {
+  assertMayDecideProposal,
+  refuseAgentProposalApprover,
+} from "./review-authority.js";
 import {
   applyGovConfigChange,
   type SettingsUpdateProposalData,
@@ -566,6 +569,9 @@ export async function applyProposalApproval(args: {
   };
   ctx: Context;
 }): Promise<ProposalExecutorResult> {
+  // Approval is the human step — an agent caller (agent key, the IS internal
+  // key, or an acting agent in the ALS) never applies one, whichever door.
+  refuseAgentProposalApprover(args.ctx);
   assertMayDecideProposal("approve");
   const result = await applyProposalApprovalInner(args);
 

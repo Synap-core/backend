@@ -113,6 +113,7 @@ import {
   assertCanRetargetProposalDestination,
   assertCanReviewProposal,
   assertMayDecideProposal,
+  refuseAgentProposalApprover,
   reviewRefusalMessage,
 } from "./proposals/review-authority.js";
 export { type ReviewAuthorityReason } from "./proposals/review-authority.js";
@@ -1464,6 +1465,8 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Approval is the human step: an agent caller is refused before any read.
+      refuseAgentProposalApprover(ctx);
       assertMayDecideProposal("approve");
       const userId = requireUserId(ctx.userId);
 
@@ -3070,6 +3073,8 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // Approval is the human step: an agent caller is refused before any read.
+      refuseAgentProposalApprover(ctx);
       assertMayDecideProposal("approve");
       const userId = requireUserId(ctx.userId);
       /**

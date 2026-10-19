@@ -156,6 +156,13 @@ export const uuidPathParam = uuidParam;
  * default `owner_and_admins` gate's `isOwner` check (`sourceId === userId`)
  * trivially pass. Human review must come from a human session, not an agent key.
  *
+ * "An agent credential" is the existing definition `isAgentCaller`
+ * (`services/library/agent-door.ts`): an agent key OR the Intelligence
+ * Service's internal key. The IS key is remapped to its OPERATOR and (on the
+ * D4 delegation path, or a "system"-owned legacy key) carries no
+ * `agentUserId` — flooring on `agentUserId` alone let the IS approve as the
+ * human. Same definition as `rejectAgentApprover` (skills / tools).
+ *
  * Returns a 403 `Response` to return from the handler when the caller is an agent
  * credential (and logs the blocked attempt — a meaningful security signal), else
  * `null` to continue. The SINGLE source of truth for this guard across every
@@ -167,9 +174,10 @@ export function rejectAgentReviewer(
   action: "approve" | "revert"
 ): Response | null {
   const agentUserId = c.get("agentUserId");
-  if (!agentUserId) return null;
+  const keyType = c.get("keyType") as string | undefined;
+  if (!isAgentCaller({ agentUserId, keyType })) return null;
   logger.warn(
-    { agentUserId, proposalId: c.req.param("id"), action },
+    { agentUserId, keyType, proposalId: c.req.param("id"), action },
     "agent credential attempted to review a proposal — blocked (human review required)"
   );
   const Verb = action[0].toUpperCase() + action.slice(1);
