@@ -221,7 +221,10 @@ describe("machines.rename", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     await expect(
       caller(HUMAN, false).rename({ machineId: computerId, name: "mine" })
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Manage a computer while signed in.",
+    });
   });
 });
 

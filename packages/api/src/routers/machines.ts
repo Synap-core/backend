@@ -22,6 +22,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { auditLog } from "../utils/audit-log.js";
+import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import { isPodAdmin } from "../utils/workspace-role.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { revokeMachine } from "../services/machine-connect.js";
@@ -33,19 +34,7 @@ import {
   setMachineOwnKeyTtlDays,
 } from "../services/machine-roster.js";
 
-/** A person in their own session — never a key (cookie or session token). */
-function assertSignedInPerson(ctx: {
-  session?: unknown;
-  keyType?: unknown;
-  agentUserId?: unknown;
-  isHubProtocol?: unknown;
-}): void {
-  if (!ctx.session || ctx.keyType || ctx.agentUserId || ctx.isHubProtocol)
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Manage a computer while signed in.",
-    });
-}
+const MANAGE_COMPUTER_SIGNED_IN = "Manage a computer while signed in.";
 
 const MachineIdShape = z.string().min(1).max(200);
 
@@ -70,7 +59,7 @@ export const machinesRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      assertSignedInPerson(ctx);
+      assertSignedInPerson(ctx, MANAGE_COMPUTER_SIGNED_IN);
       const machine = await loadManageableMachine(
         input.machineId,
         ctx.userId,
@@ -98,7 +87,7 @@ export const machinesRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      assertSignedInPerson(ctx);
+      assertSignedInPerson(ctx, MANAGE_COMPUTER_SIGNED_IN);
       const machine = await loadManageableMachine(
         input.machineId,
         ctx.userId,
@@ -125,7 +114,7 @@ export const machinesRouter = router({
   revoke: protectedProcedure
     .input(z.object({ machineId: MachineIdShape }))
     .mutation(async ({ ctx, input }) => {
-      assertSignedInPerson(ctx);
+      assertSignedInPerson(ctx, MANAGE_COMPUTER_SIGNED_IN);
       const machine = await loadManageableMachine(
         input.machineId,
         ctx.userId,
