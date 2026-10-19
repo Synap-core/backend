@@ -18,10 +18,15 @@
  *
  * KEY-BOUND (S2). A subscription created by a key records it (`api_key_id`);
  * a key lists and deletes only the subscriptions it created, a session (no
- * key) every one of its owner's (`ownSubscriptions`).
+ * key) every one of its owner's (`ownSubscriptions`). A subscription whose
+ * key is revoked or expired is listed inactive: it is not delivered.
  */
 
 import { db, webhookSubscriptions, eq, and } from "@synap/database";
+import {
+  liveApiKeyIds,
+  subscriptionKeyLive,
+} from "@synap/jobs/workers/webhook-worker.js";
 import { randomBytes } from "crypto";
 import { z } from "zod";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -203,12 +208,15 @@ export function registerWebhooksRoutes(app: HubHono) {
         orderBy: (subscriptions, { desc }) => [desc(subscriptions.createdAt)],
       });
 
+      // A subscription whose key is revoked or expired is not delivered, so
+      // it shows inactive (S2) — the same liveness rule the delivery door uses.
+      const live = await liveApiKeyIds(subscriptions.map((s) => s.apiKeyId));
       return c.json(
         subscriptions.map((s) => ({
           id: s.id,
           url: s.url,
           eventTypes: s.eventTypes,
-          active: s.active,
+          active: s.active && subscriptionKeyLive(s.apiKeyId, live),
           createdAt: s.createdAt,
           lastTriggeredAt: s.lastTriggeredAt,
         }))

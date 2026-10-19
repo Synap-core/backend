@@ -67,6 +67,8 @@ import type { HubHono, HubVariables } from "./_shared.js";
 
 const { hubAuthMiddleware } = await import("../_middleware/auth.js");
 const { registerWebhooksRoutes } = await import("./webhooks.js");
+// The session surface (Reactions tab): tRPC `integrations.list`.
+const { webhooksRouter } = await import("../../webhooks.js");
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -209,6 +211,45 @@ describe("GET /webhooks — a key sees only its own subscriptions", () => {
     expect(await list({ key: K1 })).toEqual([mine]);
     expect(await list({ key: K2 })).toEqual([theirs]);
     expect(await list("session")).toEqual([mine, theirs, human].sort());
+  });
+});
+
+describe("GET /webhooks — a dead key's subscription shows inactive", () => {
+  it("revoking (or expiring) the key turns its row inactive; the others stay active", async () => {
+    const mine = await create({ key: K1 });
+    const theirs = await create({ key: K2 });
+    const human = await create("session");
+    await q(`update api_keys set is_active = false where id = $1`, [K2]);
+    try {
+      const res = await app().request("/api/hub/webhooks", {
+        headers: auth("session"),
+      });
+      const rows = (await res.json()) as Array<{ id: string; active: boolean }>;
+      const active = Object.fromEntries(rows.map((r) => [r.id, r.active]));
+      expect(active).toEqual({ [mine]: true, [theirs]: false, [human]: true });
+      await q(
+        `update api_keys set is_active = true, expires_at = now() - interval '1 minute' where id = $1`,
+        [K2]
+      );
+      const again = (await (
+        await app().request("/api/hub/webhooks", { headers: auth("session") })
+      ).json()) as Array<{ id: string; active: boolean }>;
+      expect(again.find((r) => r.id === theirs)?.active).toBe(false);
+      // The app's tRPC listing (a session) says the same.
+      const trpc = await webhooksRouter
+        .createCaller({ authenticated: true, userId: OWNER } as never)
+        .list();
+      expect(Object.fromEntries(trpc.map((r) => [r.id, r.active]))).toEqual({
+        [mine]: true,
+        [theirs]: false,
+        [human]: true,
+      });
+    } finally {
+      await q(
+        `update api_keys set is_active = true, expires_at = null where id = $1`,
+        [K2]
+      );
+    }
   });
 });
 
