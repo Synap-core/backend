@@ -50,6 +50,21 @@ describe("consoleHref", () => {
     );
   });
 
+  it("links the console's sign-in page for anyone, with no focus", () => {
+    expect(consoleHref(`${ORIGIN}/`, { page: "signIn" })).toBe(
+      `${ORIGIN}/login`
+    );
+    expect(
+      consoleHref(ORIGIN, {
+        page: "signIn",
+        focus: "x",
+      } as unknown as ConsoleTarget)
+    ).toBe(`${ORIGIN}/login`);
+    expect(consoleTargetVisibleTo({ page: "signIn" }, "member")).toBe(true);
+    expect(consoleHref(null, { page: "signIn" })).toBeNull();
+    expect(consoleHref("javascript:alert(1)", { page: "signIn" })).toBeNull();
+  });
+
   it("encodes focus and Review's type", () => {
     expect(consoleHref(ORIGIN, { page: "keys", focus: "a b&c=d" })).toBe(
       `${ORIGIN}/keys?focus=a%20b%26c%3Dd`
