@@ -40,6 +40,7 @@ function row(overrides: Partial<ResolvedSkillRow>): ResolvedSkillRow {
     name: "verb",
     kind: "code",
     providerSpec: null,
+    metadata: null,
     ...overrides,
   };
 }

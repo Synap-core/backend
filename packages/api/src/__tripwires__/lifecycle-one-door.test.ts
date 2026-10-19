@@ -41,6 +41,10 @@ const CLASSIFIED: Record<string, string> = {
   // Raw writes whose keys can never be a lifecycle property.
   "api/src/routers/webhooks-inbound.ts":
     "the event's lifecycle key is split out to moveStatus before the patch",
+  "api/src/services/postiz/record-postiz-published.ts":
+    "publish facts only (post-url, published-at, publish-outcome/-error); Published goes through moveStatus",
+  "api/src/services/capabilities/verb-write-back.ts":
+    "declared write-back keys; the kind's lifecycle property is skipped by name",
   "api/src/services/event-sync/run-gcal-import.ts":
     "VOLATILE_EVENT_PROPERTIES only (dates, location, links, description)",
   "api/src/routers/devplane.ts": "a vault reference (secret) property",
