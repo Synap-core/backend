@@ -44,7 +44,7 @@ const DOOR_FILE = "packages/api/src/utils/jwks-client.ts";
 /** Files allowed to call the low-level `verifyIssuerJwt`, and why. */
 const LOW_LEVEL_CALLERS: Record<string, string> = {
   "apps/api/src/routers/federation.ts":
-    "Federation bootstrap / identity-link / receipt: each resolves the APPROVED registry entry itself (bootstrap: PROVISIONING_TOKEN + pending→approved), pins it, passes audience = PUBLIC_URL, and persists a durable replay receipt with a replay context (consumeJti: false).",
+    "Federation bootstrap / identity-link / receipt: each resolves the APPROVED registry entry itself (bootstrap: PROVISIONING_TOKEN + pending→approved), pins it, passes audience = PUBLIC_URL, and persists a durable replay receipt with a replay context (consumeJti: false). The application-connection start hint (verifyRequesterAccountHint) is the one call that persists no receipt: it only records the verified account for the reviewer, authorizes nothing, and leaves the JTI to the completion that spends it.",
 };
 
 /** Files still calling the RETIRED `verifyCpJwt` (always rejects), and why. */

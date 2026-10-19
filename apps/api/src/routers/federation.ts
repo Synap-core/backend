@@ -52,6 +52,7 @@ import {
   podAudience,
   verifyIssuerJwt,
   verifyTrustedIssuerJwt,
+  type VerifiedRequesterAccount,
 } from "@synap/api";
 import { configuredPodAdminBase } from "../pod-admin-config.js";
 
@@ -135,6 +136,18 @@ const applicationConnectionStartSchema =
     issuerSubject: z.string().trim().min(1).max(512),
     continuationHash: z.string().regex(/^[a-f0-9]{64}$/i),
     redemptionHash: z.string().regex(/^[a-f0-9]{64}$/i),
+    /**
+     * The issuer's signed identity-link assertion for `issuerSubject`, so the
+     * reviewer can be told which account will receive access. A HINT: it is
+     * verified only against an issuer this Pod already approved, never
+     * consumed here, and an absent or unverifiable one leaves the request
+     * "Not verified" rather than refusing it. Completion re-checks the
+     * subject with a fresh assertion regardless.
+     */
+    assertion: z.preprocess(
+      (value) => (value === "" ? undefined : value),
+      z.string().max(MAX_ASSERTION_LENGTH).optional()
+    ),
     // This short-lived browser proof is used only to pass the Pod-owned
     // native-login boundary. It is never persisted and is sent in the
     // Location fragment, which browsers do not include in requests.
@@ -665,6 +678,7 @@ async function startApplicationConnectionRequest(input: {
   requestedScopes: string[];
   continuationHash: string;
   redemptionHash: string;
+  requesterAccount?: VerifiedRequesterAccount;
 }) {
   const proposal = normalizeApplicationConnectionProposal(input);
   if (!proposal) return null;
@@ -675,8 +689,84 @@ async function startApplicationConnectionRequest(input: {
     continuationHash: input.continuationHash.toLowerCase(),
     redemptionHash: input.redemptionHash.toLowerCase(),
     expiresAt: new Date(Date.now() + 30 * 60 * 1_000),
-    requestMetadata: { requestedVia: "browser-pod-admin-handoff" },
+    requestMetadata: {
+      requestedVia: "browser-pod-admin-handoff",
+      ...(input.requesterAccount
+        ? { requesterAccount: input.requesterAccount }
+        : {}),
+    },
   });
+}
+
+type RequesterAccountHint =
+  | { kind: "none" }
+  | { kind: "verified"; account: VerifiedRequesterAccount }
+  | { kind: "mismatch" };
+
+/**
+ * Verify the start form's account hint (see `assertion` on the start schema).
+ *
+ *  - The issuer is looked up by the URL the form names, and only an issuer
+ *    this Pod has ALREADY approved is ever contacted: a browser-named,
+ *    unapproved issuer must never make the Pod fetch its JWKS.
+ *  - Signature, issuer, audience (this Pod) and expiry are checked by
+ *    `verifyIssuerJwt`; the JTI is NOT consumed, because the same assertion
+ *    may complete the request later and that is where it is spent.
+ *  - Anything unverifiable is `none`: the request starts, "Not verified".
+ *  - A VALID signature for another subject or another app is `mismatch`:
+ *    the app committed to one account and the issuer vouched for another,
+ *    so the start is refused.
+ */
+async function verifyRequesterAccountHint(input: {
+  assertion?: string;
+  issuerUrl: string;
+  issuerSubject: string;
+  azp: string;
+}): Promise<RequesterAccountHint> {
+  const none = { kind: "none" } as const;
+  if (!input.assertion) return none;
+  const issuerUrl = canonicalIssuerUrl(input.issuerUrl);
+  const decoded = decodeShortLivedAssertion(input.assertion);
+  if (
+    !issuerUrl ||
+    !decoded ||
+    typeof decoded.iss !== "string" ||
+    canonicalIssuerUrl(decoded.iss) !== issuerUrl
+  ) {
+    return none;
+  }
+  const issuer = await new TrustedIssuerService().getByUrl(issuerUrl);
+  if (!issuer || issuer.status !== "approved") return none;
+  const audience = podAudience();
+  if (!audience) return none;
+
+  let payload: Assertion | null;
+  try {
+    payload = await verifyIssuerJwt<Assertion>(
+      input.assertion,
+      issuer.issuerUrl,
+      audience,
+      { consumeJti: false }
+    );
+  } catch {
+    return none;
+  }
+  const claims = identityLinkClaimsSchema.safeParse(payload);
+  if (!claims.success) return none;
+  if (
+    claims.data.sub !== input.issuerSubject.trim() ||
+    claims.data.azp !== normalizeApplicationClientId(input.azp)
+  ) {
+    return { kind: "mismatch" };
+  }
+  return {
+    kind: "verified",
+    account: {
+      verifiedEmail: claims.data.email.trim().toLowerCase(),
+      verifiedAt: new Date().toISOString(),
+      issuerUrl: issuer.issuerUrl,
+    },
+  };
 }
 
 /**
@@ -1078,7 +1168,25 @@ federationRouter.post("/application-connections/requests/start", async (c) => {
     );
   }
   try {
-    const request = await startApplicationConnectionRequest(parsed.data);
+    const accountHint = await verifyRequesterAccountHint(parsed.data);
+    if (accountHint.kind === "mismatch") {
+      logger.warn(
+        { requestId: parsed.data.requestId, azp: parsed.data.azp },
+        "Application connection start refused: the signed account differs from the committed subject or app"
+      );
+      return applicationConnectionStartFailure(
+        c,
+        400,
+        "INVALID_APPLICATION_HANDOFF",
+        "The signed account does not match this connection request"
+      );
+    }
+    const request = await startApplicationConnectionRequest({
+      ...parsed.data,
+      ...(accountHint.kind === "verified"
+        ? { requesterAccount: accountHint.account }
+        : {}),
+    });
     if (!request) {
       return applicationConnectionStartFailure(
         c,

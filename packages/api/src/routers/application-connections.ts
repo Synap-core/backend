@@ -38,6 +38,7 @@ import { auditLog } from "../utils/audit-log.js";
 import {
   buildApplicationConnectionReturnUrl,
   hashOpaqueApplicationConnectionValue,
+  requesterAccountView,
 } from "../utils/application-connection.js";
 
 const requestIdSchema = z.object({ requestId: z.string().uuid() });
@@ -202,6 +203,8 @@ function reviewShape(
       reviewedAt: request.reviewedAt,
       canReview: false,
       matchingApprovedConnection: false,
+      // Reviewers only: the requester already knows who they are.
+      requesterAccount: null,
     };
   }
   return {
@@ -219,6 +222,8 @@ function reviewShape(
     reviewedAt: request.reviewedAt,
     canReview,
     matchingApprovedConnection: matching,
+    /** The account that will receive access, verified or explicitly not. */
+    requesterAccount: requesterAccountView(request.requestMetadata),
   };
 }
 

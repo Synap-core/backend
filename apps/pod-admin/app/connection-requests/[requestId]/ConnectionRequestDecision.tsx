@@ -14,11 +14,12 @@
  */
 
 import { useState } from "react";
-import { Alert } from "@heroui/react";
-import { ShieldAlert } from "lucide-react";
+import { Alert, Chip } from "@heroui/react";
+import { ShieldAlert, ShieldCheck } from "lucide-react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { applicationConnectionCapabilities } from "../../_lib/application-connection-capabilities";
+import { requesterAccountLine } from "../../_lib/requester-account";
 
 export function useConnectionRequest(
   requestId: string,
@@ -110,9 +111,10 @@ export function requestExpiry(data: ConnectionRequestData): string {
 }
 
 /**
- * What the reviewer must read before deciding — origin, return URL, app id,
- * issuer — and, while the request is pending, what approving means. A member
- * who may not review sees only when it expires.
+ * What the reviewer must read before deciding — the account that will receive
+ * access, origin, return URL, app id, issuer — and, while the request is
+ * pending, what approving means. A member who may not review sees only when
+ * it expires.
  */
 export function ConnectionRequestDetails({
   data,
@@ -124,8 +126,35 @@ export function ConnectionRequestDetails({
   const expiresAt = requestExpiry(data);
   if (!data.canReview)
     return <Detail label="Request expires" value={expiresAt} />;
+  const account = requesterAccountLine(data.requesterAccount);
   return (
     <>
+      {account ? (
+        <section
+          aria-label="Account that will receive access"
+          className="flex items-start gap-3 rounded-medium border border-divider p-3"
+        >
+          {account.tone === "success" ? (
+            <ShieldCheck size={18} className="mt-0.5 shrink-0 text-success" />
+          ) : (
+            <ShieldAlert size={18} className="mt-0.5 shrink-0 text-warning" />
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-foreground/65">
+              Account that will receive access
+            </p>
+            <p className="mt-1 break-all text-sm font-medium text-foreground">
+              {account.title}
+            </p>
+            <p className="mt-0.5 text-xs text-foreground/65">
+              {account.detail}
+            </p>
+          </div>
+          <Chip color={account.tone} variant="flat" size="sm">
+            {account.mark}
+          </Chip>
+        </section>
+      ) : null}
       <dl className="grid gap-4 sm:grid-cols-2">
         <Detail
           label="Browser origin (required decision)"

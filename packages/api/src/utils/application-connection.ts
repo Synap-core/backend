@@ -161,3 +161,64 @@ export function buildApplicationConnectionReturnUrl(input: {
   url.searchParams.set("connection_request", input.requestId);
   return url.toString();
 }
+
+/**
+ * The account a connection request will link, as the Pod verified it when
+ * the handoff started: the requesting app sent the issuer's signed
+ * identity-link assertion beside its subject commitment, and the Pod checked
+ * it against an issuer it had ALREADY approved (`federation.ts`
+ * `verifyRequesterAccountHint`). Stored under
+ * `request_metadata.requesterAccount`; written by that function only.
+ */
+export interface VerifiedRequesterAccount {
+  verifiedEmail: string;
+  /** ISO time the Pod verified the assertion. */
+  verifiedAt: string;
+  /** The approved issuer that signed it. */
+  issuerUrl: string;
+}
+
+/**
+ * What a reviewer is told about that account. `unverified` covers every
+ * request without a verified record — no assertion sent, an unapproved
+ * issuer, a signature that failed — because to the reviewer they mean the
+ * same thing: nobody vouched for the account. The raw issuer subject is
+ * never shown; it is an opaque id, not something a person can recognise.
+ */
+export type RequesterAccountView =
+  | {
+      status: "verified";
+      email: string;
+      issuerHost: string;
+      verifiedAt: string;
+    }
+  | { status: "unverified" };
+
+export function requesterAccountView(
+  requestMetadata: unknown
+): RequesterAccountView {
+  const record =
+    requestMetadata && typeof requestMetadata === "object"
+      ? (requestMetadata as { requesterAccount?: unknown }).requesterAccount
+      : undefined;
+  if (!record || typeof record !== "object") return { status: "unverified" };
+  const { verifiedEmail, verifiedAt, issuerUrl } = record as Partial<
+    Record<keyof VerifiedRequesterAccount, unknown>
+  >;
+  if (
+    typeof verifiedEmail !== "string" ||
+    !verifiedEmail.includes("@") ||
+    typeof verifiedAt !== "string" ||
+    Number.isNaN(Date.parse(verifiedAt)) ||
+    typeof issuerUrl !== "string"
+  ) {
+    return { status: "unverified" };
+  }
+  let issuerHost: string;
+  try {
+    issuerHost = new URL(issuerUrl).host;
+  } catch {
+    return { status: "unverified" };
+  }
+  return { status: "verified", email: verifiedEmail, issuerHost, verifiedAt };
+}

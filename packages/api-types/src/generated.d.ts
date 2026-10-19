@@ -15623,6 +15623,21 @@ export interface BrokerTrustDiagnostics {
 	};
 }
 /**
+ * What a reviewer is told about that account. `unverified` covers every
+ * request without a verified record — no assertion sent, an unapproved
+ * issuer, a signature that failed — because to the reviewer they mean the
+ * same thing: nobody vouched for the account. The raw issuer subject is
+ * never shown; it is an opaque id, not something a person can recognise.
+ */
+export type RequesterAccountView = {
+	status: "verified";
+	email: string;
+	issuerHost: string;
+	verifiedAt: string;
+} | {
+	status: "unverified";
+};
+/**
  * The clients the pod's OWN OAuth authorization server registered (Path B:
  * claude.ai pointed straight at `https://<pod>/mcp`; `routers/oauth/*`), read
  * and cut off as a pod admin sees them — the service behind `oauthClients.*`.
@@ -37903,6 +37918,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewedAt: Date | null;
 				canReview: boolean;
 				matchingApprovedConnection: boolean;
+				requesterAccount: null;
 			} | {
 				id: string;
 				issuerUrl: string;
@@ -37918,6 +37934,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewedAt: Date | null;
 				canReview: true;
 				matchingApprovedConnection: boolean;
+				requesterAccount: RequesterAccountView;
 			};
 			meta: object;
 		}>;

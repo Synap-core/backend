@@ -211,7 +211,10 @@ export {
   hashOpaqueApplicationConnectionValue,
   createOpaqueApplicationConnectionValue,
   buildApplicationConnectionReturnUrl,
+  requesterAccountView,
   type ApplicationConnectionScope,
+  type RequesterAccountView,
+  type VerifiedRequesterAccount,
 } from "./utils/application-connection.js";
 export {
   setTrustedIssuerSeedHealth,
