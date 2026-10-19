@@ -23,7 +23,12 @@ import {
   isNull,
   getEffectiveFacets,
   notProbeEntityWhere,
+  getRequestGrant,
 } from "@synap/database";
+import {
+  GRANT_DOOR_UNSUPPORTED,
+  isUnboundedFullAccess,
+} from "../../../access/grant-door-fence.js";
 import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
@@ -411,7 +416,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
       "search; otherwise lists entities with normal scoping.",
     request: {
       query: z.object({
-        q: z.string().optional().describe("Free-text search query."),
+        q: z
+          .string()
+          .optional()
+          .describe(
+            "Free-text search query. Refused (403 GRANT_DOOR_UNSUPPORTED) " +
+              "for a scoped key: search is not bounded by a grant. List " +
+              "without `q` instead."
+          ),
         profileSlug: z.string().optional(),
         workspaceId: uuidQueryParam.optional(),
         projectId: z
@@ -569,6 +581,25 @@ export function registerEntitiesRoutes(app: HubHono): void {
       );
     }
     const hasDateWindow = Boolean(createdAfter || createdBefore);
+    // W1 fence: this door is listed as grant-safe (GRANT_SAFE_REST_READS)
+    // because every branch below reads through `entities.getEntities` → the
+    // `entities.list` floor (`accessScopeWhere`, which ANDs the key's grant).
+    // The `q` branch does NOT: it is Typesense (`search.search`), which no
+    // grant narrows — a project-limited key would search the whole person. So
+    // a key with ANY limit may list here, never search. Stricter than
+    // `isFencedGrant` on purpose: a `*` pinned to one workspace or project is
+    // not "fenced" (that reads permissions only), yet search would still
+    // escape its pin.
+    const grant = getRequestGrant();
+    if (q.length > 0 && grant && !isUnboundedFullAccess(grant)) {
+      return c.json(
+        {
+          error: `${GRANT_DOOR_UNSUPPORTED} (Full-text search \`q\` is not bounded by a grant; list without \`q\`.)`,
+          code: "GRANT_DOOR_UNSUPPORTED",
+        },
+        403
+      );
+    }
     // Same refusal as the date window: the `q` branch applies no lens, so a
     // "Not in a project" search would silently answer for every project.
     if (withoutProject && q.length > 0) {

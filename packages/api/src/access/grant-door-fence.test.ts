@@ -52,7 +52,10 @@ describe("restDoorAllowed", () => {
     ["GET", "/projects/p1", true],
     ["GET", "/projects/p1/path", false], // userVisibleWhere sessions — not migrated
     ["GET", "/search", false],
-    ["GET", "/entities", false], // ?q= goes to Typesense — not seamed
+    // The list door: seamed; its ?q= (Typesense) branch is refused by the
+    // route itself for a limited key (entities.scoped-key-list.pglite.test.ts).
+    ["GET", "/entities", true],
+    ["GET", "/entities/", true],
     ["GET", "/knowledge", false],
     ["GET", "/compacted-states/latest", false],
     ["POST", "/knowledge/ask", false],
