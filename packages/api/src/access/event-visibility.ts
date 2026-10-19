@@ -13,7 +13,7 @@
  *         so it is never reached here;
  *       - the reader's own events are always in, whatever their workspace
  *         (a workspace since left, or a malformed JSONB value).
- *  2. SESSION floor (decision D1). An event whose subject is a focus session,
+ *  2. SESSION floor. An event whose subject is a focus session,
  *     or that was recorded inside one (`session_id`), is visible only when the
  *     reader may read that session — `sessionReadableWhere`, the one session
  *     read rule.
@@ -90,7 +90,7 @@ export function eventVisibleWhere(reader: EventReader): SQL {
 }
 
 /**
- * The SESSION floor (decision D1) on its own: an event about a focus session,
+ * The SESSION floor on its own: an event about a focus session,
  * or recorded inside one, only when the reader may read that session.
  */
 export function eventSessionFloor(reader: {

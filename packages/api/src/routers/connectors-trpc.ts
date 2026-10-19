@@ -269,7 +269,7 @@ async function resolveImportWorkspaceId(
     });
     return requestedWorkspaceId;
   }
-  // D7: never the pod-admin console, never archived (the ONE fallback).
+  // Never the pod-admin console, never archived (the ONE fallback).
   const fallback = await findUserDefaultWorkspaceId(database, userId);
   if (!fallback) {
     throw new TRPCError({

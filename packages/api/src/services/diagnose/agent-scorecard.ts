@@ -64,7 +64,7 @@ export interface ScorecardProposalRow {
 }
 
 /**
- * A revision is a HUMAN CORRECTION only when no agent made it (B21): the entry
+ * A revision is a HUMAN CORRECTION only when no agent made it: the entry
  * names an acting agent when an agent key revised it on a human's behalf
  * (`computeRevisedEnvelope`), and some doors record the agent itself as `by`
  * (`subjectAgentId`, when scoring one agent). An unattributed entry

@@ -517,7 +517,7 @@ export const notifCenterRouter = router({
     return { success: true, cleared: deleted.length > 0 };
   }),
 
-  // ── Push categories (W8) ────────────────────────────────────────────────
+  // ── Push categories ─────────────────────────────────────────────────────
   //
   // `protectedProcedure`: push categories are PERSON-scoped (their pod-wide
   // row), not workspace-scoped — see `notifications/push-prefs.ts`. The floor

@@ -517,7 +517,7 @@ export async function registerCronSchedules(): Promise<void> {
   await sendSafe(boss, CP_CATALOG_SYNC_QUEUE, {});
   logger.info("Enqueued startup run: cp-catalog-sync");
 
-  // Tool demand forwarding (D2) — daily; applied demand writes also enqueue it.
+  // Tool demand forwarding — daily; applied demand writes also enqueue it.
   await scheduleSafe(
     boss,
     TOOL_DEMAND_FORWARD_QUEUE,

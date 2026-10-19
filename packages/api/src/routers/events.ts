@@ -79,7 +79,7 @@ export const LIFECYCLE_SUBJECTS_LEFT_TO_THEIR_OWN_READ = {
 
 // Temporary schemas until we refactor
 /**
- * A session's events ARE its story (decision D1: a session's goal, status and
+ * A session's events ARE its story (a session's goal, status and
  * summary are CONTENT). An event whose subject is a focus session, or that was
  * recorded inside one (`events.session_id`), is returned only when the caller
  * may read that session — `sessionReadableWhere`, the one session read rule.

@@ -2111,7 +2111,7 @@ export async function runMarketInstall(
     }
     notices = riskNotices(risks);
   } else {
-    // Tier pre-check (P2.5) — fail early, before any proposal or provisioning.
+    // Tier pre-check — fail early, before any proposal or provisioning.
     // Tiers are Synap's plans; an added source's `requiredTier` is its own.
     await assertPackageTierAccess(input.userId, input.slug);
   }

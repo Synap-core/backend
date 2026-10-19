@@ -1,6 +1,6 @@
 /**
  * Marketplace sources — the ONE vocabulary for "where the catalog comes from,
- * and how far this pod trusts it" (Pod Console wave 3, decision D11).
+ * and how far this pod trusts it".
  *
  * Shared by the pod (the sync that reads a source, the install door that
  * enforces its trust level, the `marketplace.sources.*` admin doors) and the

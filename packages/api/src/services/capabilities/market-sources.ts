@@ -1,6 +1,6 @@
 /**
  * Market sources — the install side of "sources you choose, with trust"
- * (Pod Console D11). Answers, for the install door and the console:
+ * Answers, for the install door and the console:
  *   - which source a request names (`resolveMarketSource`): a bare request is
  *     the OFFICIAL source, never "whichever source has that slug";
  *   - whether that source may serve an install right now (`marketSourceGate`,

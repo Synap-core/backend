@@ -272,7 +272,7 @@ export const apiKeysRouter = router({
       holder: holderOf(key.userId),
       /** An old CLI key whose calls are yours (`keyActsAsYou`): replace it with a computer. */
       actsAsYou: keyActsAsYou(key, ctx.userId),
-      /** What this key may touch (W1): `access` + every live grant. */
+      /** What this key may touch: `access` + every live grant. */
       ...reachOf(key.id),
       scope: key.scope,
       isActive: key.isActive,
@@ -348,7 +348,7 @@ export const apiKeysRouter = router({
         // Omitted → 90 days; a number → that many; null → never (W1f).
         expiresInDays: ExpiresInDaysSchema,
         workspaceId: z.string().uuid().optional(),
-        /** What the key may touch (W1). Required: a key without one touches nothing. */
+        /** What the key may touch. Required: a key without one touches nothing. */
         grant: GrantInputSchema,
       })
     )
@@ -1103,8 +1103,8 @@ export const apiKeysRouter = router({
           });
         }
       } else {
-        // No workspace supplied — the caller's first DOMAIN workspace (D7:
-        // never the pod-admin console); none ⇒ an unscoped key, as before.
+        // No workspace supplied — the caller's first DOMAIN workspace (never
+        // the pod-admin console); none ⇒ an unscoped key, as before.
         resolvedWorkspaceId =
           (await findUserDefaultWorkspaceId(db, ctx.userId)) ?? undefined;
       }
@@ -1494,7 +1494,7 @@ export const apiKeysRouter = router({
         expiresAt: z.date().optional(),
         // Omitted → 90 days; a number → that many; null → never (W1f).
         expiresInDays: ExpiresInDaysSchema,
-        /** What the key may touch (W1); always held inside this workspace. Required. */
+        /** What the key may touch; always held inside this workspace. Required. */
         grant: GrantInputSchema.omit({ workspaceIds: true }),
       })
     )

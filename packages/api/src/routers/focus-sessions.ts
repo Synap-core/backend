@@ -555,7 +555,7 @@ type SessionListRow = FocusSession & { parentSessionId: string | null } & {
     unitFacts?: SessionUnitCounts;
     /**
      * Present with `nextMove: true` — the liveness facts the "working right
-     * now" rule reads (D1). `null` = the liveness read FAILED (never "quiet").
+     * now" rule reads. `null` = the liveness read FAILED (never "quiet").
      */
     live?: SessionActivityLive | null;
     interactions?: SessionInteractionsSection;

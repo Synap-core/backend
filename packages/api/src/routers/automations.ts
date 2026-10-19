@@ -2550,7 +2550,7 @@ export const automationsRouter = router({
         workspaceId: existing.workspaceId,
       });
 
-      // D2: an agent moving an automation to `active` proposes the whole update.
+      // An agent moving an automation to `active` proposes the whole update.
       if (input.status === "active" && existing.status !== "active") {
         const { workspaceId: _ws, ...update } = input;
         const proposed = await proposeAgentActivation(
@@ -2813,7 +2813,7 @@ export const automationsRouter = router({
       if (existing.status === "active") {
         return { status: "already_active" };
       }
-      // D2: an agent switching it on proposes; a person activates directly.
+      // An agent switching it on proposes; a person activates directly.
       const proposed = await proposeAgentActivation(ctx.userId, existing);
       if (proposed) return proposed;
 

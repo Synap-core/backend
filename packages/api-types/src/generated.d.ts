@@ -6319,6 +6319,22 @@ export type ProvideSecretGrant = {
  | {
 	status: "failed";
 };
+/**
+ * What `provideOptions` says a secret hand-over WILL do, before the person
+ * presses: the agent it will grant a read to, or why none will be granted.
+ */
+export type ProvideSecretGrantOffer = {
+	status: "will_grant";
+	/** Sent back on the answer as `expectedGranteeId`. */
+	agentUserId: string;
+	agentName: string;
+	minutes: number;
+} | {
+	status: "no_grant";
+	reason: ProvideSecretGrantRefusal;
+};
+/** Why a new connection can't be started from this pod. */
+export type ProvideConnectUnavailableReason = "no_broker" | "not_offered" | "unreadable";
 declare const SECRET_TYPES: readonly [
 	"password",
 	"api_key",
@@ -17025,16 +17041,7 @@ export type ProvideOptions = {
 		name: string;
 		rows: ProvideSecretRow[];
 		/** What handing one over lets the asking agent do. */
-		grant: {
-			status: "will_grant";
-			/** Sent back on the answer as `expectedGranteeId`. */
-			agentUserId: string;
-			agentName: string;
-			minutes: number;
-		} | {
-			status: "no_grant";
-			reason: ProvideSecretGrantRefusal;
-		};
+		grant: ProvideSecretGrantOffer;
 	};
 } | {
 	kind: "connection";
@@ -17045,9 +17052,9 @@ export type ProvideOptions = {
 		providerId: string | null;
 		connectable: boolean;
 		/** Why a new connection can't start here (`connectable` false). */
-		unavailable: "no_broker" | "not_offered" | "unreadable" | null;
+		unavailable: ProvideConnectUnavailableReason | null;
 		rows: ProvideConnectionRow[];
-		/** P4 — several accounts: the person confirms which one. */
+		/** Several accounts: the person confirms which one before it goes. */
 		confirmAccount: boolean;
 	};
 } | {
