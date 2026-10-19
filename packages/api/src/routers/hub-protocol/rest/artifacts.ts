@@ -27,6 +27,7 @@ import {
   hasScope,
   logger,
   resolveActingContext,
+  resolveRowActingContext,
   type HubHono,
   httpStatusForTrpcError,
   requireUuidParam,
@@ -412,7 +413,8 @@ export function registerArtifactsRoutes(app: HubHono): void {
    *
    * Write-gate pattern (mirrors entities.ts PATCH):
    *   1. Load the row by id alone (never trust a caller-supplied workspaceId for scoping).
-   *   2. Verify the caller's membership in the LOADED ROW's workspace via resolveActingContext.
+   *   2. Authorize against the LOADED ROW via resolveRowActingContext (membership,
+   *      or the owner floor for a pod-personal row).
    *   3. Gate through checkPermissionOrPropose — the membrane decides approve vs propose.
    *   4. Execute the raw DB update only after gate approval.
    */
@@ -448,11 +450,10 @@ export function registerArtifactsRoutes(app: HubHono): void {
         return c.json({ error: `Artifact ${id} not found` }, 404);
       }
 
-      // Step 2: verify the caller's membership in the row's workspace.
-      // `workspaceId` is nullable since 0245 (a pod-personal artifact); `?? undefined`
-      // is the same shape the focus-sessions REST doors use for a lens-less row.
-      const acting = await resolveActingContext(c, {
-        workspaceId: existing.workspaceId ?? undefined,
+      // Step 2: membership in the row's workspace. `workspaceId` is nullable
+      // since 0245 (a pod-personal artifact): that row is floored on its owner.
+      const acting = await resolveRowActingContext(c, existing, {
+        notFound: `Artifact ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const { userId, workspaceId } = acting;

@@ -504,6 +504,44 @@ export async function resolveActingContext(
 }
 
 /**
+ * The ONE door for a hub REST route that LOADS an existing row by id and then
+ * authorizes the caller against it. `resolveActingContext` is a CREATE door:
+ * with no workspace it answers "pod-personal write, you are the owner" without
+ * comparing any identity. Fed a loaded row's NULL `workspaceId`, that let any
+ * authenticated caller who knew the id read or write ANOTHER user's personal
+ * row (a private session, an artifact, a run).
+ *
+ *   - workspace row → today's membership check, unchanged;
+ *   - pod-personal row → its owner must be an identity the caller may act as
+ *     (`mayActAsUser`: itself, its own agent principal, or an `is_internal` /
+ *     `system` key — the same identities it could already name on any write).
+ *     Otherwise the SAME 404 the route returns for a missing row (`notFound`),
+ *     so this check is not an existence oracle. A row with no owner fails closed.
+ *
+ * `row.userId` is the row's OWNER, not its creator: for a run it is the
+ * session owner, not `createdBy` (the agent attribution). Tripwire:
+ * `__tripwires__/row-acting-context-one-door.test.ts`.
+ */
+export async function resolveRowActingContext(
+  c: { get: (k: string) => unknown },
+  row: { workspaceId: string | null; userId: string | null },
+  opts: { notFound: string; userId?: string }
+): Promise<
+  | { ok: true; userId: string; workspaceId: string | null; role: string }
+  | { ok: false; status: 400 | 403 | 404; error: string }
+> {
+  const acting = await resolveActingContext(c, {
+    userId: opts.userId,
+    ...(row.workspaceId ? { workspaceId: row.workspaceId } : {}),
+  });
+  if (!acting.ok || row.workspaceId) return acting;
+  if (!row.userId || !mayActAsUser(c, row.userId)) {
+    return { ok: false, status: 404, error: opts.notFound };
+  }
+  return acting;
+}
+
+/**
  * Map a caught tRPC-door error to the real HTTP status it represents, instead
  * of a blanket 500.
  *

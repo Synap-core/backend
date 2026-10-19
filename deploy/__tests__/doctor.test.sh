@@ -113,7 +113,7 @@ export FAKE_LOG="$TMP/log" FAKE_DEPLOY="$DEPLOY" FAKE_STAMP="$SHA"
 doctor() { # <healthy|drifted> [args]
   local pod="$1"; shift
   : > "$FAKE_LOG"
-  ( cd "$TMP"; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_DOCTOR_PROBE=0 SYNAP_PROC_LOCKS="${PROC_LOCKS:-$TMP/no-proc-locks}" SYNAP_DOCTOR_MIN_FREE_PCT="${MIN_FREE:-0}" FAKE_POD="$pod" bash "$REPO/synap" doctor "$@" ) >"$TMP/out" 2>"$TMP/err"
+  ( cd "$TMP"; PATH="$TMP/bin:$PATH" SYNAP_SYSTEMD_RUN_DIR="${SYSD_RUN:-$TMP/no-systemd}" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_DOCTOR_PROBE=0 SYNAP_PROC_LOCKS="${PROC_LOCKS:-$TMP/no-proc-locks}" SYNAP_DOCTOR_MIN_FREE_PCT="${MIN_FREE:-0}" FAKE_POD="$pod" bash "$REPO/synap" doctor "$@" ) >"$TMP/out" 2>"$TMP/err"
 }
 finding() { jq -e --arg c "$1" --arg re "$2" '[.findings[] | select(.check == $c and (.message | test($re)))] | length > 0' "$TMP/out" >/dev/null 2>&1; }
 state_sum() { (cd "$DEPLOY" && find . -type f ! -path './state/update.lock*' -exec cksum {} + | sort; cd "$REPO" && git status --porcelain) | cksum; }

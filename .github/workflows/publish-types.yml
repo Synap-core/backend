@@ -5,8 +5,16 @@ on:
   # of the broken releases (an artifact was published from node 22.22.3 while
   # this workflow pins node 20) — so there must be a CI button to press instead.
   workflow_dispatch:
-  # The automatic `push: main` trigger (paths filter) was removed 2026-10-18:
-  # a package publish is a decision, run with this button when one is wanted.
+  push:
+    branches: [main]
+    # Repo-root-relative. These were once prefixed `synap-backend/` from a
+    # monorepo layout that no longer exists — with that prefix the filter could
+    # never match and this workflow never fired, which is how publishing ended
+    # up being done by hand.
+    paths:
+      - "packages/types/src/**"
+      - "packages/api/src/routers/**"
+      - "packages/api/src/root.ts"
 
 # Publishing is not idempotent at the transport layer: killing a run mid-publish
 # can leave a version half-uploaded. Serialise publishes; never cancel.
@@ -133,33 +141,25 @@ jobs:
       - name: Upgrade npm for Trusted Publishing (exact pin, >= 11.5.1)
         run: npm install -g npm@11.20.0 && npm --version
 
-      # Auth: currently the NPM_TOKEN secret; migrating to npm Trusted Publishing.
+      # Auth: npm Trusted Publishing (OIDC) only. No secret: npm mints a
+      # short-lived credential for this job from its OIDC token (the
+      # `id-token: write` permission above), and provenance comes with it.
       #
-      # Trusted Publishing is the target. Once configured in the npm UI it needs
-      # NO secret at all — npm mints short-lived OIDC credentials for this job
-      # (see the `id-token: write` permission above) and provenance attestations
-      # come for free.
-      #
-      # TO FINISH THE MIGRATION (manual, npmjs.com — cannot be automated here):
+      # Each published package must trust this workflow on npmjs.com
+      # (package → Settings → Trusted Publishers → Add — cannot be automated):
       #   for EACH package (@synap-core/types and @synap-core/api-types):
-      #     package → Settings → Trusted Publishers → Add
-      #       Organization/user : Synap-core
-      #       Repository        : Synap-core/backend
-      #       Workflow filename : publish-types.yml
-      #       Environment       : leave blank
-      # ...then delete BOTH `env:` blocks below AND the NPM_TOKEN repo secret.
-      #
-      # Do NOT delete the token before npm trusts this workflow — publishing stops.
+      #     Organization/user : Synap-core
+      #     Repository        : Synap-core/backend
+      #     Workflow filename : publish-types.yml
+      #     Environment       : leave blank
+      # Until a package trusts it, its publish step fails with E404/ENEEDAUTH.
+      # The NPM_TOKEN repo secret is no longer read; delete it.
       - name: Publish @synap-core/types
         run: cd packages/types && pnpm publish --no-git-checks --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish @synap-core/api-types
         if: steps.bump-api-types.outputs.bumped == 'true'
         run: cd packages/api-types && pnpm publish --no-git-checks --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # Backstop for the whole failure class: re-download what the registry now
       # serves and fail if any dependency range is `workspace:`/`file:` (i.e.

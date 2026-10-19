@@ -188,8 +188,12 @@ jobs:
         run: node ci/scripts/check.mjs --quiet
 
       - name: Lint
-        # Allow up to 100 warnings (errors will still fail)
-        run: pnpm lint --max-warnings=100
+        # Allow up to 100 warnings (errors will still fail). The ledger-path
+        # check first: an allowlisted path that no longer exists silently
+        # exempts nothing (see scripts/check-eslint-ledger-paths.mjs).
+        run: |
+          node scripts/check-eslint-ledger-paths.mjs
+          pnpm lint --max-warnings=100
         continue-on-error: false
 
       - name: Format Check
