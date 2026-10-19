@@ -213,8 +213,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
     summary: "List entities for a user",
     description:
       "Returns entities owned by the given user, optionally filtered by " +
-      "profileSlug and workspaceId. Pod-wide profiles are returned regardless " +
-      "of workspaceId.",
+      "profileSlug and workspaceId. Without workspaceId it reads every " +
+      "workspace the caller can read plus pod-wide entities; with one, that " +
+      "workspace (an archived or non-member one is a 403). Pod-wide profiles " +
+      "are returned regardless of workspaceId.",
     request: {
       params: z.object({ userId: z.string() }),
       query: z.object({
@@ -256,13 +258,15 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const limit = query.limit;
     const workspaceId = query.workspaceId || null;
     try {
-      const effectiveWsIds = workspaceId
-        ? [workspaceId]
-        : await getUserAccessibleWorkspaceIds(userId);
-      if (effectiveWsIds.length === 0) return c.json([], 200);
-
+      // A workspaceId PINS the caller to it (podProcedure checks membership and
+      // refuses an archived one: an explicit choice). Without one the caller
+      // lens stays NULL, so `entities.list` resolves the USER FLOOR (every
+      // readable workspace + pod-wide) — the same rule as GET /entities. It
+      // used to pin `getUserAccessibleWorkspaceIds(userId)[0]`, the first row
+      // of an UNORDERED read: an archived (or pod-visible, non-member) space
+      // there refused the whole read with a 403, depending on row order.
       const caller = await getCaller(c, {
-        workspaceId: effectiveWsIds[0],
+        workspaceId,
         userId,
       });
       const result = await caller.entities.getEntities({
