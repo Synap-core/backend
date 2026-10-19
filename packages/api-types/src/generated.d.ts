@@ -26101,7 +26101,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					mimeType: string | null;
 					currentVersion: number;
 					lastSavedVersion: number;
-					workingState: string | null;
 					workingStateUpdatedAt: Date | null;
 					contentRevision: number;
 					workingStateRevision: number | null;
