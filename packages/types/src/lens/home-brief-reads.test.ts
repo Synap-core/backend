@@ -11,6 +11,7 @@ import {
   liveSessionCount,
   resolveHomeLastSeen,
   projectStandRows,
+  projectStandLensRow,
   type HomeBriefReads,
 } from "./home-brief-reads.js";
 
@@ -243,5 +244,33 @@ describe("resolveHomeLastSeen — the pod's stamp wins; a failed read is not a f
       lastSeen: null,
       source: "none",
     });
+  });
+});
+
+describe("projectStandLensRow — ONE project row for Home and every projects index", () => {
+  it("a project waiting on the person is blocking (a 'happening for all' rule misses it), its door is the project", () => {
+    const row = projectStandLensRow({
+      project: { id: "p1", name: "Launch" },
+      state: { owedFromYou: 2 },
+      nextLine: "2 need you",
+    });
+    expect(row).toMatchObject({
+      key: "p1",
+      cls: "blocking",
+      objectKind: "project",
+      title: "Launch",
+      reason: "2 need you",
+      door: { kind: "project", id: "p1" },
+      verb: null,
+      count: 1,
+    });
+  });
+
+  it("a working or quiet project is happening, with the state passed through unchanged", () => {
+    const state = { running: true } as const;
+    const row = projectStandLensRow({ project: { id: "p2", name: "Site" }, state, nextLine: null });
+    expect(row.cls).toBe("happening");
+    expect(row.state).toBe(state);
+    expect(row.reason).toBeNull();
   });
 });
