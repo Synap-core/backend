@@ -167,8 +167,8 @@ export interface OpenSessionLite {
   live?: Parameters<typeof pathRowSessionFact>[0]["live"];
 }
 
-export interface ProjectStandRow {
-  project: ProjectLite;
+export interface ProjectStandRow<P extends ProjectLite = ProjectLite> {
+  project: P;
   state: UnitStateInput;
   /** The one line under the name ("3 need you", the work in hand); null = none. */
   nextLine: string | null;
@@ -181,8 +181,8 @@ export interface ProjectStandRow {
  * project with nothing open is quiet. Unread counts read `unmeasured`.
  * Ordered: waiting on you (most first), then working, then the rest.
  */
-export function projectStandRows(
-  projects: readonly ProjectLite[],
+export function projectStandRows<P extends ProjectLite>(
+  projects: readonly P[],
   counts: BriefRead<
     ReadonlyArray<{
       projectId: string;
@@ -191,7 +191,7 @@ export function projectStandRows(
     }>
   >,
   sessions: BriefRead<readonly OpenSessionLite[]>
-): ProjectStandRow[] {
+): ProjectStandRow<P>[] {
   const byProject = new Map<
     string,
     { needsYou: number; truncated: boolean } | null
@@ -217,7 +217,7 @@ export function projectStandRows(
     }
   }
 
-  const rows = projects.map((project): ProjectStandRow => {
+  const rows = projects.map((project): ProjectStandRow<P> => {
     const waiting =
       counts.status === "ready" ? byProject.get(project.id) : undefined;
     if (waiting === null || counts.status === "failed") {
@@ -258,7 +258,7 @@ export function projectStandRows(
     };
   });
 
-  const rank = (r: ProjectStandRow) =>
+  const rank = (r: ProjectStandRow<P>) =>
     (r.state.owedFromYou ?? 0) > 0
       ? 0
       : r.state.running
