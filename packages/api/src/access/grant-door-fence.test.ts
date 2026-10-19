@@ -30,6 +30,26 @@ describe("isFencedGrant", () => {
     expect(isFencedGrant(g(["*"], ["entity.read"]))).toBe(true);
     expect(isFencedGrant(null)).toBe(false);
   });
+  it("fences a `*` pinned to a space, project or object (S1)", () => {
+    const pinned = (narrowing: Record<string, string[]>) =>
+      ({
+        scopes: [{ permissions: ["*"], ...narrowing }],
+        clientId: null,
+      }) as never;
+    expect(isFencedGrant(pinned({ workspaceIds: ["w1"] }))).toBe(true);
+    expect(isFencedGrant(pinned({ projectIds: ["p1"] }))).toBe(true);
+    expect(isFencedGrant(pinned({ entityIds: ["e1"] }))).toBe(true);
+    // One pinned scope beside an unbounded one keeps the key fenced.
+    expect(
+      isFencedGrant({
+        scopes: [
+          { permissions: ["*"] },
+          { permissions: ["*"], workspaceIds: ["w1"] },
+        ],
+        clientId: null,
+      } as never)
+    ).toBe(true);
+  });
 });
 
 const key = (...scopes: Array<Record<string, unknown>>) =>
@@ -166,8 +186,9 @@ describe("owner-wide doors (webhooks)", () => {
     expect(isUnboundedFullAccess(STAR_ONE_WS)).toBe(false);
     expect(isUnboundedFullAccess(STAR_ONE_PROJECT)).toBe(false);
     expect(isUnboundedFullAccess(AI)).toBe(false);
-    // `isFencedGrant` does NOT see the pin — which is why this check exists.
-    expect(isFencedGrant(STAR_ONE_WS)).toBe(false);
+    // S1: a pinned `*` is narrowed, so the scoped-key fence applies too.
+    expect(isFencedGrant(STAR_ONE_WS)).toBe(true);
+    expect(isFencedGrant(STAR_ONE_PROJECT)).toBe(true);
   });
   it.each([
     ["/webhooks", true],

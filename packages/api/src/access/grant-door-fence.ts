@@ -75,7 +75,11 @@ export function grantBoundsDoor(
   );
 }
 
-/** A grant that bounds nothing beyond the human floor needs no fence. */
+/**
+ * A grant that bounds nothing beyond the human floor needs no fence. ANY limit
+ * counts as narrowing — a `*` pinned to a space, project or object is fenced
+ * like any scoped key (S1, 2026-10-20; `isFullAccessGrant` sees the pin).
+ */
 export function isFencedGrant(grant: KeyGrant | null | undefined): boolean {
   return Boolean(grant) && !isFullAccessGrant(grant!);
 }
@@ -258,9 +262,8 @@ export const GRANT_DOOR_UNSUPPORTED =
  *    no gate. Its caller is the IS's `is_internal` key (full, unbounded `*`).
  *
  * Only a key whose grant is UNBOUNDED full access (`*`, no narrowing) may use
- * them. Note this is stricter than `isFencedGrant`: a `*` scope pinned to one
- * workspace is not fenced there (`isFullAccessGrant` reads permissions only),
- * but it is refused here.
+ * them — exactly the keys `isFencedGrant` does not fence (S1: a pinned `*` is
+ * fenced, so it is refused here too).
  */
 export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
   /^\/webhooks(?:\/.*)?$/,
@@ -299,12 +302,13 @@ export const GRANT_OWNER_WIDE_REST_WRITES: readonly RegExp[] = [
 export const GRANT_OWNER_WIDE_UNSUPPORTED =
   "This door acts on everything you own (it cannot be limited to a space, project or kind), so it needs a key with unrestricted full access ('*' with no space, project or object limit).";
 
-/** Every scope is `*` and none is narrowed to a workspace, project or object. */
+/**
+ * Every scope is `*` and none is narrowed to a workspace, project or object.
+ * Since S1 this IS `isFullAccessGrant` (the one predicate); the name stays for
+ * the owner-wide doors that read as "unbounded".
+ */
 export function isUnboundedFullAccess(grant: KeyGrant): boolean {
-  return (
-    isFullAccessGrant(grant) &&
-    grant.scopes.every((s) => !s.workspaceIds && !s.projectIds && !s.entityIds)
-  );
+  return isFullAccessGrant(grant);
 }
 
 /**

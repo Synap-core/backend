@@ -102,10 +102,23 @@ const ROWS: Array<[Method, string, boolean]> = [
   ["POST", "/vault/secrets", false],
 ];
 
+/**
+ * S1 (2026-10-20): a `*` pinned to a space, project or object is NARROWED, so
+ * it goes through the scoped-key fence like any scoped key — unseamed reads
+ * and aggregate reads it cannot bound are refused; seamed reads and writes
+ * (bounded by the gate) pass. `[method, path, pinned key passes]`.
+ */
+const FENCE_ROWS: Array<[Method, string, boolean]> = [
+  ["GET", "/search", false], // unseamed read
+  ["POST", "/knowledge/ask", false], // aggregate read: a pin cannot bound it
+  ["GET", "/entities", true], // seamed read
+  ["POST", "/entities", true], // a write: bounded by the gate
+];
+
 function app() {
   const hub: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   hub.use("/*", hubAuthMiddleware as never);
-  for (const [method, path] of ROWS) {
+  for (const [method, path] of [...ROWS, ...FENCE_ROWS]) {
     hub.on(method, path, (c) => c.json({ ok: true }));
   }
   const root = new Hono();
@@ -169,11 +182,31 @@ describe("owner-wide writes need an unbounded key", () => {
     }
   );
 
-  it.each(ROWS.filter((r) => !r[2]))(
+  it.each(ROWS.filter((r) => !r[2] && r[0] !== "GET"))(
     "%s %s → not owner-wide: a `*` key pinned to one workspace passes",
     async (method, path) => {
       asKey(ONE_WORKSPACE);
       expect((await send(method, path)).status).toBe(200);
+    }
+  );
+});
+
+describe("S1 — a pinned `*` goes through the scoped-key fence", () => {
+  const ONE_PROJECT = grantRow({ projectIds: ["p-1"] });
+  const ONE_OBJECT = grantRow({ entityIds: ["e-1"] });
+  it.each(FENCE_ROWS)("%s %s → pinned key passes: %s", async (m, path, ok) => {
+    for (const row of [ONE_WORKSPACE, ONE_PROJECT, ONE_OBJECT]) {
+      asKey(row);
+      const res = await send(m, path);
+      expect(res.status).toBe(ok ? 200 : 403);
+      if (!ok) expect((await res.json()).code).toBe("GRANT_DOOR_UNSUPPORTED");
+    }
+  });
+  it.each(FENCE_ROWS)(
+    "%s %s → CONTROL: an unbounded key passes",
+    async (m, path) => {
+      asKey(FULL);
+      expect((await send(m, path)).status).toBe(200);
     }
   );
 });
