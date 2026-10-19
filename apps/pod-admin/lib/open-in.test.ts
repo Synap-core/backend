@@ -17,16 +17,35 @@ describe("openIn — web-hosted objects", () => {
     expect(exit).toEqual({ href: `/proposal/${ID}`, isDesktopLink: false });
   });
 
-  it.each(["entity", "view", "automation", "session"])(
-    "hosts %s on /open",
-    (objectKind) => {
-      const exit = openIn({ kind: "object", objectKind, id: ID });
-      expect(exit.href).toBe(`/open/${objectKind}/${ID}`);
-      expect(exit.isDesktopLink).toBe(false);
-    }
-  );
+  it.each([
+    "entity",
+    "view",
+    "automation",
+    "session",
+    "playbook",
+    "run",
+    "capability",
+    "agent",
+  ])("hosts %s on /open", (objectKind) => {
+    const exit = openIn({ kind: "object", objectKind, id: ID });
+    expect(exit.href).toBe(`/open/${objectKind}/${ID}`);
+    expect(exit.isDesktopLink).toBe(false);
+  });
 
-  it.each(["automation", "session"])(
+  it("a run's address params ride on its web page", () => {
+    const exit = openIn({
+      kind: "object",
+      objectKind: "run",
+      id: ID,
+      params: { flowType: "playbook" },
+    });
+    expect(exit).toEqual({
+      href: `/open/run/${ID}?flowType=playbook`,
+      isDesktopLink: false,
+    });
+  });
+
+  it.each(["automation", "session", "playbook", "capability", "agent"])(
     "objectInApp still reaches the desktop app for hosted %s",
     (objectKind) => {
       const exit = openIn({ kind: "objectInApp", objectKind, id: ID });
@@ -38,19 +57,15 @@ describe("openIn — web-hosted objects", () => {
 });
 
 describe("openIn — desktop links always carry a fallback", () => {
-  it.each([
-    "workspace",
-    "playbook",
-    "channel",
-    "document",
-    "cell",
-    "capability",
-  ])("%s bounces to the desktop app with a download fallback", (objectKind) => {
-    const exit = openIn({ kind: "object", objectKind, id: ID });
-    expect(exit.href).toBe(`synap://open/${objectKind}/${ID}`);
-    expect(exit.isDesktopLink).toBe(true);
-    expect(exit.fallback?.href).toContain("/download/browser");
-  });
+  it.each(["workspace", "channel", "document", "cell", "skill", "tool"])(
+    "%s bounces to the desktop app with a download fallback",
+    (objectKind) => {
+      const exit = openIn({ kind: "object", objectKind, id: ID });
+      expect(exit.href).toBe(`synap://open/${objectKind}/${ID}`);
+      expect(exit.isDesktopLink).toBe(true);
+      expect(exit.fallback?.href).toContain("/download/browser");
+    }
+  );
 
   it("never returns a desktop link without a fallback", () => {
     const targets = [

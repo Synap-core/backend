@@ -189,7 +189,7 @@ export const ProposalSetupSchema = z
         kind: z.string(),
         hint: z.string(),
         url: z.string().optional(),
-        opensIn: z.string().optional(),
+        opensIn: z.enum(["web", "desktop"]).optional(),
       })
       .passthrough()
       .optional(),

@@ -60,6 +60,7 @@ import {
 } from "../../utils/user-visible-where.js";
 import { visibleWorkspaceWhere } from "./workspace.js";
 import { authoredByUser } from "../agent-identity-service.js";
+import { agentReadableBy } from "./agent-scorecard.js";
 import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
 import { AI_DECISION } from "../../lib/ai-events.js";
@@ -346,20 +347,16 @@ export async function resolveObjectKind(
     {
       kind: "agent",
       run: async () => {
-        // Only the caller's OWN agent-users (createdByUserId floor) — the
-        // scorecard reads governance data scoped to this owner.
+        // The agent read floor (`agentReadableBy`): its owner or a pod admin
+        // — the same floor the scorecard this kind opens on applies, so a
+        // link never resolves to a page that then reads empty.
         const [r] = await db
-          .select({ name: users.name })
+          .select({ name: users.name, createdByUserId: users.createdByUserId })
           .from(users)
-          .where(
-            and(
-              eq(users.id, id),
-              eq(users.userType, "agent"),
-              eq(users.createdByUserId, userId)
-            )
-          )
+          .where(and(eq(users.id, id), eq(users.userType, "agent")))
           .limit(1);
-        return r ? { displayName: r.name ?? null } : null;
+        if (!r || !(await agentReadableBy(r, userId))) return null;
+        return { displayName: r.name ?? null };
       },
     },
     {

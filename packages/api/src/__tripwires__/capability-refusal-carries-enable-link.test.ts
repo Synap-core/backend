@@ -27,6 +27,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { capabilityNextAction } from "../services/capabilities/capability-enable-link.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const API_SRC = join(here, "..");
@@ -173,6 +174,58 @@ describe("TRIPWIRE: capability refusals carry an enable-link", () => {
     const kinds = /TYPED_DEEP_LINK_KINDS = \[([^\]]*)\]/.exec(deepLinks);
     expect(kinds).not.toBeNull();
     expect(kinds![1]).toContain('"capability"');
+  });
+
+  it("the link says which client can do the fix: connect → desktop, the rest → web", () => {
+    // Connecting an account has no web flow (pod-admin has no Connect
+    // frontend); turning verbs on does. A refusal that sends a phone-only human
+    // to the web for a connect, or a desktop-less one away from the web page
+    // that could enable it, names the wrong door.
+    const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const connection = {
+      required: true,
+      kind: "provider",
+      provider: "google",
+      state: "missing",
+    } as const;
+    expect(
+      capabilityNextAction("needs_connection", "X", connection, id).opensIn
+    ).toBe("desktop");
+    expect(
+      capabilityNextAction(
+        "needs_connection",
+        "X",
+        {
+          ...connection,
+          state: "expired",
+        },
+        id
+      ).opensIn
+    ).toBe("desktop");
+    for (const status of ["connected", "draft", "partial"] as const) {
+      const action = capabilityNextAction(status, "X", undefined, id);
+      expect(action.kind).toBe("enable");
+      expect(action.opensIn).toBe("web");
+    }
+    expect(capabilityNextAction("ready", "X", undefined, id).opensIn).toBe(
+      "web"
+    );
+    // No container, no link — and no claim about where it opens.
+    expect(
+      capabilityNextAction("draft", "X", undefined, null).opensIn
+    ).toBeUndefined();
+  });
+
+  it("a `web` claim is backed by a web host for the capability kind", () => {
+    // `opensIn: "web"` is only true while the public route 302s a human to
+    // pod-admin's capability page. Parsed (apps/api is not importable here).
+    const dispatch = readFileSync(
+      join(API_SRC, "../../../apps/api/src/open-dispatch.ts"),
+      "utf-8"
+    );
+    const hosted = /WEB_HOSTED_OPEN_KINDS = \[([^\]]*)\]/.exec(dispatch);
+    expect(hosted, "WEB_HOSTED_OPEN_KINDS not found").not.toBeNull();
+    expect(hosted![1], WHY_IT_MATTERS).toContain('"capability"');
   });
 });
 

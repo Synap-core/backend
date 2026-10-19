@@ -31,7 +31,7 @@ export interface AgentRosterRowLike
   origin?: string | null;
   direction?: string | null;
   isPersonalAgent?: boolean | null;
-  /** The person the agent acts for — the owner the scorecard is floored to. */
+  /** The person who created it — its owner (the scorecard's read floor, with pod admins). */
   createdByUserId?: string | null;
   /** Its open `agent/connect` request, when the viewer may decide it. */
   pendingProposalId?: string | null;
@@ -60,7 +60,7 @@ export interface AgentRowView<
   direction: AgentDirection;
   /** A key or connect request waits on a person — the row's one action. */
   needsReview: boolean;
-  /** The viewer is the agent's owner: its scorecard is readable. */
+  /** The viewer is the agent's owner (so its scorecard is readable to them). */
   ownedByViewer: boolean;
   /** Lifetime approve / refuse standing, when the viewer may see it. */
   standing: AgentStandingLike | null;

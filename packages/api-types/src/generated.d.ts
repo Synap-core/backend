@@ -11020,12 +11020,12 @@ export interface RunAgent {
 	source: "both" | "message" | "proposal";
 }
 /**
- * Where the link opens. Only `"desktop"` today, and it is not decoration: the
- * `/open/capability/<id>` route bounces to `synap://`, so a human without the
- * desktop app cannot follow it. A future pod-admin capability route would add a
- * `"web"` value here — until then, claiming one would be a lie.
+ * Which client can perform the action the link is for. `"web"`: the pod's own
+ * `/open/capability/<id>` page does it in any browser (turning verbs on, or
+ * reading a capability that needs nothing). `"desktop"`: only the desktop app
+ * can (connecting an account — the web has no Connect flow).
  */
-export type CapabilityActionSurface = "desktop";
+export type CapabilityActionSurface = "desktop" | "web";
 export interface CapabilityNextAction {
 	kind: "add" | "connect" | "enable" | "none" | "run";
 	hint: string;
@@ -17752,8 +17752,10 @@ export interface OpenTarget {
  * Identity + origin from the governance-actor row (`users`, keyed by the same
  * `agentUserId` the scorecard uses). Origin is now a stored fact (`created_via`,
  * migration 0225); scope (pod-wide vs workspace) is DERIVED from the presence of
- * `workspace_members` rows (none ⇒ pod-wide). Owner-floored: only the caller's own agent-users, so a
- * guessed id can't leak another owner's agent identity.
+ * `workspace_members` rows (none ⇒ pod-wide). Floored like the scorecard
+ * (`agentReadableBy`: its owner or a pod admin), so a guessed id can't leak
+ * another owner's agent identity to a member. A pod admin may already list
+ * every space, so the space names below reveal nothing new to one.
  */
 export interface AgentProfile {
 	agentUserId: string;

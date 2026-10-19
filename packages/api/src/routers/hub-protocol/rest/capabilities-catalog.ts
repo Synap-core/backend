@@ -137,11 +137,11 @@ const CapabilityCardSchema = z.object({
     hint: z.string(),
     // Deep link to THIS card — where `kind` is actually performed. Absent for an
     // available-only template (no installed container to open). `opensIn` is
-    // present exactly when `url` is, and says which client can follow it: the
-    // route bounces to `synap://`, so it is desktop-only today (there is no
-    // pod-admin capability route the way there is `/proposal/<id>`).
+    // present exactly when `url` is, and says which client can perform `kind`
+    // there: `web` (the pod's own page — turning verbs on, or nothing to do) or
+    // `desktop` (`connect`: only the app can connect an account).
     url: z.string().optional(),
-    opensIn: z.enum(["desktop"]).optional(),
+    opensIn: z.enum(["web", "desktop"]).optional(),
   }),
 });
 

@@ -630,6 +630,8 @@ function applyOpenDispatch(
     // `?view=` addresses a READING of the object (a session's Intake Room).
     // `dispatchOpen` allowlists it; an unrecognised value is dropped there.
     view: c.req.query("view"),
+    // `?flowType=` addresses a RUN (`{flowType, id}`); kept only on a run link.
+    flowType: c.req.query("flowType"),
   });
   // Same URL 302s or 200s by User-Agent — never let a CDN cache the bot bounce
   // for a human (or the reverse). `?client=` is part of the URL, so it varies
@@ -642,7 +644,12 @@ function applyOpenDispatch(
   // The "View in browser" escape when `synap://` did nothing — a phone without
   // relay, a session Intake Room link without the app. `podAdminBrowserUrl`
   // names pod-admin's page for the kind, or none.
-  const browserUrl = podAdminBrowserUrl(type, id, adminBase);
+  const browserUrl = podAdminBrowserUrl(
+    type,
+    id,
+    adminBase,
+    c.req.query("flowType")
+  );
   return c.html(renderDeepLinkPage(result.deep, browserUrl));
 }
 

@@ -2,10 +2,12 @@
  * `/open/:type/:id` param parser — keeps the page dumb.
  *
  * Host types are the kinds this surface renders itself: `entity`, `view`,
- * and — since D6 — the two operational kinds the console can safely act on
- * from a link, `automation` (pause) and `session` (cancel / run again).
- * Bounce kinds match the Hono `/open/:type/:id` ALLOWED set minus host
- * types: we never render them here, we point at `synap://open/{type}/{id}`.
+ * and the operational kinds a link must land on from any device —
+ * `automation` (pause), `session` (cancel / run again), `playbook` (archive),
+ * `run` (cancel / run again), `capability` (turn its verbs on) and `agent`
+ * (disconnect). Authoring stays in the app. Bounce kinds match the Hono
+ * `/open/:type/:id` ALLOWED set minus host types: we never render them here,
+ * we point at `synap://open/{type}/{id}`.
  *
  * HOST_TYPES ∪ BOUNCE_TYPES MUST equal TYPED_OPEN_KINDS, and HOST_TYPES MUST
  * equal WEB_HOSTED_OPEN_KINDS, in apps/api/src/open-dispatch.ts (enforced by
@@ -15,7 +17,16 @@
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { isUuid } from "../../lib/format";
 
-export const HOST_TYPES = ["entity", "view", "automation", "session"] as const;
+export const HOST_TYPES = [
+  "entity",
+  "view",
+  "automation",
+  "session",
+  "playbook",
+  "run",
+  "capability",
+  "agent",
+] as const;
 export type HostType = (typeof HOST_TYPES)[number];
 
 /** Known `synap://` bounce kinds that are not hosted on this page. */
@@ -26,13 +37,9 @@ export const BOUNCE_TYPES = [
   "channel",
   "project",
   "workspace",
-  "capability",
   "settings",
   "skill",
   "tool",
-  "playbook",
-  "agent",
-  "run",
 ] as const;
 export type BounceType = (typeof BOUNCE_TYPES)[number];
 

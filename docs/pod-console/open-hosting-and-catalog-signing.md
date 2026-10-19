@@ -96,6 +96,25 @@ Reuse first: `ObjectPage/ObjectHeader/FactsGrid/AdvancedPanel/DangerZone`, `run-
 
 pod-admin `pnpm test` (open-params / open-model / exit-door / cross-repo-parity), `vitest apps/api/src/open-*.test.ts`, `tsc -p apps/api`, `pnpm --filter pod-admin build`, plus `gen-types` + `gen-types:check` only for A4.
 
+### A.6 Note for the CLI team: `opensIn` is now per action (shipped, wave 5)
+
+A capability's `nextAction` (`GET /api/hub/capabilities/catalog` cards, the `enable` / `blocked` block on a capability refusal, and a proposal's `setup.nextAction`) carries the same `url` as before: `${PUBLIC_URL}/open/capability/<containerId>`. What changed is `opensIn`:
+
+| `nextAction.kind`            | `opensIn` before | `opensIn` now |
+| ---------------------------- | ---------------- | ------------- |
+| `connect`                    | `"desktop"`      | `"desktop"`   |
+| `enable`                     | `"desktop"`      | `"web"`       |
+| `run`                        | `"desktop"`      | `"web"`       |
+| `none` (with a container)    | `"desktop"`      | `"web"`       |
+| `add`, `none` (no container) | absent           | absent        |
+
+- The type is `"web" | "desktop"` (`CapabilityActionSurface`, `packages/api/src/services/capabilities/capability-enable-link.ts`; zod in `capabilities-catalog.ts` and `_codecs/proposal.ts`; `@synap-core/hub-rest-client` `types.ts`).
+- `"web"`: a signed-in person can follow the link in any browser. The public route 302s them to the Pod Console's `/open/capability/<id>`, which shows the capability's state and lets its space owner (or a pod admin, for a pod-wide one) turn its actions on. Bots and `?client=mobile` still bounce to `synap://`.
+- `"desktop"`: connecting an account still needs the desktop app (the web has no Connect flow).
+- What to change: any code that matches `opensIn === "desktop"` to decide whether to print "open in the desktop app" should branch on the value. Print the link for both; add "(needs the desktop app)" only for `"desktop"`. Never build a different URL from `opensIn`.
+
+Also new on the public route (A2): `/open/run/<id>?flowType=<automation|playbook|capture|capability|session|chat|agent_write>` keeps the flow type on the 302 and on the `synap://` bounce. Any other value is dropped. A link without it still works for automation and playbook runs, because the web page asks the resolver.
+
 ---
 
 ## B. Signing Synap's official catalog

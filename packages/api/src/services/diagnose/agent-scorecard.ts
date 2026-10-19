@@ -32,6 +32,7 @@ import { isPartiallyApprovedData } from "@synap-core/types/proposals";
 import { proposalReasonBucket } from "../proposals/reason-bucket.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { authoredByUser } from "../agent-identity-service.js";
+import { isPodAdmin } from "../../utils/workspace-role.js";
 import { collapseProposalsToClusters } from "../proposals/fingerprint.js";
 import type { ClusterInputRow } from "../proposals/fingerprint.js";
 import {
@@ -192,6 +193,22 @@ export function computeAgentScorecard(
   };
 }
 
+/**
+ * THE agent read floor: may `userId` read this agent-user's identity and
+ * scorecard? Its owner (the person who created it) or a pod admin — an admin
+ * answers for every agent on the pod. Shared by `agentScorecard` and the
+ * resolver's agent probe so "what is this id?" and "show me this agent" can
+ * never disagree. A failed admin read throws (`isPodAdmin`), never reads as
+ * "not readable".
+ */
+export async function agentReadableBy(
+  agent: { createdByUserId: string | null },
+  userId: string
+): Promise<boolean> {
+  if (agent.createdByUserId === userId) return true;
+  return isPodAdmin(userId);
+}
+
 /** Cap on proposals scanned to build a scorecard (bounds a chatty agent). */
 const SCORECARD_SCAN_LIMIT = 500;
 
@@ -213,23 +230,30 @@ export async function agentScorecard(params: {
       email: users.email,
       userType: users.userType,
       agentType: users.agentType,
+      createdByUserId: users.createdByUserId,
     })
     .from(users)
-    // OWNER FLOOR: only the caller's OWN agent-users. Without this, a guessed
-    // agent UUID would leak that agent's name/email/agentType cross-user (the
-    // proposal aggregation below is already user-floored, but the identity row
-    // was not). Mirrors the same floor resolveObjectKind's agent probe applies.
-    .where(and(eq(users.id, agentId), eq(users.createdByUserId, userId)))
+    .where(eq(users.id, agentId))
     .limit(1);
 
-  if (!agent || agent.userType !== "agent") {
+  // OWNER-OR-POD-ADMIN FLOOR (`agentReadableBy`). Without it, a guessed agent
+  // UUID would leak that agent's name/email/agentType cross-user. Anyone else
+  // gets the same answer as an id that is not an agent, so the door never
+  // confirms an agent exists.
+  if (
+    !agent ||
+    agent.userType !== "agent" ||
+    !(await agentReadableBy(agent, userId))
+  ) {
     return { error: `No agent-user found for id ${agentId}` };
   }
 
-  // "How has MY agent behaved?" — the agent row above is already owner-floored
-  // (`users.createdByUserId = userId`) and this keys on that agent, so every row
-  // is by construction the caller's own. LENS **or** OWNERSHIP: on the lens alone
-  // the agent's writes in an unjoinable workspace vanished from its own card.
+  // "How has this agent behaved?" — keyed on the agent, floored to what the
+  // CALLER can see: LENS **or** OWNERSHIP. An owner sees its writes everywhere
+  // they can see (on the lens alone the agent's writes in an unjoinable
+  // workspace vanished from its own card); a pod admin reading someone else's
+  // agent sees its writes in the spaces the admin can see — the admin floor
+  // widens WHO may read the card, never which proposals it counts.
   const rows = await db
     .select({
       proposalType: proposals.proposalType,
@@ -462,11 +486,10 @@ export async function allAgentsScorecard(params: {
   if (ids.length === 0) return [];
 
   // Resolve identity — DROP non-agent actors (a human owner whose proposals are
-  // visible must never show up), AND owner-floor to the caller's OWN agents. The
-  // owner floor keeps the grid consistent with the per-agent detail doors
-  // (`agentProfile`/`agentScorecard`, which are owner-floored): without it a
-  // team-pod card for a co-member's agent would be a dead link (the detail probe
-  // would miss). It also matches the identity-leak floor the detail doors apply.
+  // visible must never show up), AND owner-floor to the caller's OWN agents —
+  // the grid is "how are MY agents doing", for an admin too. The per-agent
+  // detail doors (`agentProfile`/`agentScorecard`) also admit a pod admin
+  // (`agentReadableBy`), so every card here opens; the converse is not needed.
   const identities = await db
     .select({
       id: users.id,
