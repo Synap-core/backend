@@ -122,6 +122,18 @@ describe("outcomeView", () => {
     expect(v.reason).toBe("There wasn't enough free disk space.");
   });
 
+  it("already on the release is up to date, not an unknown outcome", () => {
+    const v = outcomeView(
+      outcome({ status: "noop", from: "v1.1.0", to: "v1.1.0" })
+    );
+    expect(v).toMatchObject({
+      token: "up_to_date",
+      kind: "healthy",
+      didNotLand: false,
+    });
+    expect(v.sentence).toBe("Already on v1.1.0; nothing needed to change.");
+  });
+
   it("shows an unknown status as itself, never as success", () => {
     const v = outcomeView(outcome({ status: "paused" }));
     expect(v).toMatchObject({
@@ -151,6 +163,12 @@ describe("reasonInWords", () => {
 describe("currentRelease", () => {
   it("is the target after an applied update", () => {
     expect(currentRelease(recorded())).toBe("v1.1.0");
+  });
+
+  it("is the release asked for when the pod was already on it", () => {
+    expect(
+      currentRelease(recorded({ status: "noop", from: "v1.1.0", to: "v1.1.0" }))
+    ).toBe("v1.1.0");
   });
 
   it("is the previous release after a rollback or an abort", () => {
