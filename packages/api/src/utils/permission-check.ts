@@ -934,6 +934,15 @@ export interface PermissionCheckBaseOpts {
   agentUserId?: string;
   /** Pass null for workspace-less (hydration / pod-wide personal) operations. */
   workspaceId?: string | null;
+  /**
+   * The workspace the calling key's GRANT is checked against (rung 0), when it
+   * is not the governance home: the row's REAL placement — the stored row's
+   * workspace, or where a create lands — with null for a pod-scope row. A door
+   * that governs a pod-wide row under the caller's lens (`workspaceId` = the
+   * header) passes it so a key pinned to that lens cannot write pod-wide
+   * (S7, plan 13 §3.4). Omitted → `workspaceId`.
+   */
+  grantWorkspaceId?: string | null;
   source?: string;
   /**
    * Effective per-channel capability grant for the acting AI teammate, when the
@@ -1367,7 +1376,8 @@ async function evaluatePermission(
   const grantDenied = await grantWriteDenial({
     subjectType,
     action,
-    workspaceId,
+    workspaceId:
+      opts.grantWorkspaceId !== undefined ? opts.grantWorkspaceId : workspaceId,
     projectId,
     data: data as Record<string, unknown> | undefined,
   });

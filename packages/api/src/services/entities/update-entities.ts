@@ -435,6 +435,9 @@ async function planItems(
         userId,
         agentUserId,
         workspaceId: governanceWorkspaceId,
+        // The grant sees the row's own workspace (pod-wide = pod scope), as
+        // the `entities.update` door it previews does (S7).
+        grantWorkspaceId: row.workspaceId ?? null,
         subjectType: "entity",
         action: "update",
         source: params.source,
@@ -450,6 +453,7 @@ async function planItems(
           userId,
           agentUserId: mover.actor.agentUserId ?? undefined,
           workspaceId: move.workspaceId ?? ctx.workspaceId ?? null,
+          grantWorkspaceId: move.workspaceId,
           subjectType: "entity",
           action: "transition",
           source: agent

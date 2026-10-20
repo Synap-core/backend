@@ -39,6 +39,7 @@ import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { loadEditableDocument } from "../../utils/document-edit-access.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { auditLog } from "../../utils/audit-log.js";
+import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import {
   emitAiCorrection,
@@ -403,11 +404,25 @@ export const mutateProcs = {
       const forcePropose =
         promotesToGlobal || changesProfileType || input.forcePropose === true;
 
+      // A promotion to pod-wide lands the row pod-wide: the key's grant must
+      // allow writing there too, not only where the row lives today (S7).
+      if (promotesToGlobal) {
+        await assertKeyMayWrite({
+          subjectType: "entity",
+          action: "update",
+          workspaceId: null,
+          data: { id: input.id },
+        });
+      }
+
       // 2. Permission check
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
+        // The key's grant is checked on the row's own workspace: a pod-wide
+        // entity is pod-scope, never the caller's lens (S7).
+        grantWorkspaceId: existing.workspaceId ?? null,
         subjectType: "entity",
         action: "update",
         source: input.source,

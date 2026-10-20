@@ -201,6 +201,9 @@ export async function moveStatus(
       userId: input.actor.userId,
       agentUserId: input.actor.agentUserId ?? undefined,
       workspaceId: governanceWorkspaceId,
+      // The key's grant is checked on the row's own workspace — a pod-wide
+      // entity or role facet is pod-scope, never the caller's lens (S7).
+      grantWorkspaceId: target.workspaceId ?? null,
       subjectType: "entity",
       action: "transition",
       // An unattributed agent reaches the anonymous AI ladder; never "user".

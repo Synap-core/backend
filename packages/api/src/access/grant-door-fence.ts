@@ -449,6 +449,26 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "relationDefs.create": GATED,
     "n8nActions.analyzeContent": GATED, // writes nothing
 
+    // (c)/(d) → GATED by their W2 root fix: the gate now sees the REAL target.
+    // Each group is proven through the real Bearer door on PGlite by the test
+    // named beside it.
+    // W2a — routers/hub-protocol/gate-on-target.entities.pglite.test.ts
+    "entities.createEntity": GATED,
+    "entities.updateEntities": GATED,
+    "entities.updateEntity": GATED,
+    // W2a — routers/hub-protocol/gate-on-target.schema.pglite.test.ts
+    "relations.createRelation": GATED,
+    "relations.deleteRelation": GATED,
+    "profiles.createProfile": GATED,
+    "profiles.setRenderer": GATED,
+    "profiles.createPropertyDef": GATED,
+    "profiles.updatePropertyDef": GATED,
+    // D2 (founder 2026-10-20): the parent's workspace; a pod-wide role is pod
+    // scope — routers/hub-protocol/gate-on-target.schema.pglite.test.ts
+    "entities.attachFacet": GATED,
+    "entities.updateFacet": GATED,
+    "entities.detachFacet": GATED,
+
     // (b) OWNER-WIDE — need an unbounded `*` key.
     "channels.ensurePersonal": OWNER_WIDE(
       "The owner's pod-wide personal channel; ignores the workspace."
@@ -461,15 +481,6 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     ),
 
     // (c) REFUSED until the W2 root fix.
-    "entities.createEntity": UNBOUNDED(
-      `${HEADER_WS} A pod-scope kind lands pod-wide; strong-dedup writes before the gate.`
-    ),
-    "entities.updateEntities": UNBOUNDED(
-      `${HEADER_WS} A pod-wide row falls back to the header workspace.`
-    ),
-    "entities.updateEntity": UNBOUNDED(
-      `${HEADER_WS} The gate's kind is the input profileSlug, not the stored kind.`
-    ),
     "documents.upsertSessionSection": UNBOUNDED(
       "The session document is created before the gate."
     ),
@@ -478,22 +489,6 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     ),
     "linking.linkDocument": UNBOUNDED(
       "Inserts even when the gate answers `proposed`."
-    ),
-    "relations.createRelation": UNBOUNDED(
-      `${HEADER_WS} The edge is placed by its endpoints.`
-    ),
-    "relations.deleteRelation": UNBOUNDED(HEADER_WS),
-    "profiles.createProfile": UNBOUNDED(
-      "An existing pod-wide slug resolves to that profile; grantAccess runs before the gate."
-    ),
-    "profiles.setRenderer": UNBOUNDED(
-      `${HEADER_WS} scope pod|user binds pod-wide.`
-    ),
-    "profiles.createPropertyDef": UNBOUNDED(
-      `${HEADER_WS} A non-overlay def is stored pod-wide.`
-    ),
-    "profiles.updatePropertyDef": UNBOUNDED(
-      `${HEADER_WS} Base defs are pod-wide.`
     ),
     "views.createView": UNBOUNDED(
       "With no workspace and no project there is no gate at all."
@@ -553,12 +548,6 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
       "D1",
       "the automation-execute job carries no grant."
     ),
-    "entities.attachFacet": DECISION(
-      "D2",
-      "may a pinned key attach a pod-wide shared role?"
-    ),
-    "entities.updateFacet": DECISION("D2", "pod-wide role facets."),
-    "entities.detachFacet": DECISION("D2", "pod-wide role facets."),
     "proposals.updateProposal": DECISION(
       "D3",
       "the decision verbs ignore workspace and project pins."
