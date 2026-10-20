@@ -1832,6 +1832,8 @@ try {
               await import("@synap/jobs/utils/notification-creator.js");
             const { registerEventEndRunner } =
               await import("@synap/jobs/workers/event-end-cron.js");
+            const { registerKeyGrantAudience } =
+              await import("@synap/jobs/workers/webhook-worker.js");
             const { registerExternalAgentPoller } =
               await import("@synap/jobs/workers/external-agent-poll.js");
             const { registerTightenRecommender } =
@@ -1923,6 +1925,10 @@ try {
                 : api.runScheduledConnectionSyncs(data.reason ?? "cron")
             );
             registerEventEndRunner(() => api.runEventEnd());
+            // D7: a key-bound webhook's domain events are delivered only when
+            // the key's grant reads the subject — the API's access layer.
+            // Unfilled, the fan-out sends key-bound subscriptions nothing.
+            registerKeyGrantAudience((s) => api.keyGrantReadsSubject(s));
             registerExternalAgentPoller(() => api.pollExternalAgentRuns());
             // Learning loop: the tighten recommender (was verb-only) and the
             // prompt-version regression scan run on daily crons. Both slots

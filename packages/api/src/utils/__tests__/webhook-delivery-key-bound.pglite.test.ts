@@ -63,9 +63,14 @@ vi.mock("../channel-visibility.js", async (importOriginal) => ({
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { handleWebhookDelivery } from "@synap/jobs/workers/webhook-worker.js";
-// Importing the API module registers its grant read into the jobs fan-out.
-import { deliverWebhooksForEvent } from "../webhook-delivery.js";
+import {
+  handleWebhookDelivery,
+  registerKeyGrantAudience,
+} from "@synap/jobs/workers/webhook-worker.js";
+import {
+  deliverWebhooksForEvent,
+  keyGrantReadsSubject,
+} from "../webhook-delivery.js";
 // The grant read clause registers itself with scopedDb at load.
 import "../../access/grant-read.js";
 
@@ -194,6 +199,8 @@ beforeAll(async () => {
 beforeEach(() => {
   h.sent = [];
   h.channelReaders = [A];
+  // What apps/api fills at boot (jobs-ioc-slots tripwire pins that call).
+  registerKeyGrantAudience((s) => keyGrantReadsSubject(s));
 });
 
 const audience = () => h.sent.map((d) => d.subscriptionId!).sort();

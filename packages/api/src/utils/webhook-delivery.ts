@@ -38,9 +38,10 @@
  * is delivered only while that key is live (`liveApiKeyIds`, the jobs door's
  * one rule) and only when the key's GRANT reads the subject: the same owner
  * read floor as above (`ownerReadsRow`), entered under the key's grant
- * (`keyGrantReadsSubject` — which producer 1 calls too, registered into jobs
- * below). A pod-wide subject (a person) is then delivered exactly when the
- * grant reads it; a subject-less `user` event never reaches a key-bound
+ * (`keyGrantReadsSubject` — which producer 1 calls too, through the jobs
+ * `registerKeyGrantAudience` slot that apps/api fills at boot). A pod-wide
+ * subject (a person) is then delivered exactly when the grant reads it; a
+ * subject-less `user` event never reaches a key-bound
  * subscription (there is nothing for the grant to read). A subject type with
  * no table here is not delivered to key-bound subscriptions.
  *
@@ -73,7 +74,6 @@ import {
   buildWebhookBody,
   enqueueWebhookDeliveries,
   liveApiKeyIds,
-  registerKeyGrantAudience,
   subscriptionCoversWorkspace,
   subscriptionKeyLive,
   subscriptionWantsEvent,
@@ -150,9 +150,6 @@ export async function keyGrantReadsSubject(
     ownerReadsRow(subject.ownerUserId, table, subject.subjectId)
   );
 }
-
-// Producer 1 (the jobs fan-out) cannot import the access layer: it asks this.
-registerKeyGrantAudience(keyGrantReadsSubject);
 
 /** The subset of `ownerIds` allowed to read the event's subject. */
 async function readersAmong(
