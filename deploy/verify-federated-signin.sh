@@ -11,6 +11,7 @@
 #   4. CP /oauth/authorize      (prompt=none)     → login_required back to the pod (silent-auth)
 #   5. CP OIDC discovery        issuer self-consistent
 #   6. Pod Kratos login-init   (UNAPPROVED origin) → no ACAO (browser can't read it)
+#  6b. Pod Kratos login-init   (another TENANT's pod origin) → no ACAO
 #
 # The session-dependent tail (auto-consent → code → token-exchange → pod session)
 # needs a real .synap.live cookie and is the ONLY part a human must dogfood.
@@ -83,6 +84,14 @@ ACAO=$(curl -sS -o /dev/null -D - -H "Origin: https://not-approved.example.com" 
   "$POD/.ory/kratos/public/self-service/login/api" | grep -i '^access-control-allow-origin:' | tr -d '\r')
 [ -z "$ACAO" ] && ok "6. unapproved origin gets no ACAO (cannot read the flow)" \
   || no "6. SECURITY: unapproved origin got a CORS grant: $ACAO"
+
+# 6b. another tenant's pod under the same zone is not a first party either: the
+#     pod's Kratos lists the Synap apps by name, never https://*.synap.live.
+TENANT_ORIGIN="${TENANT_ORIGIN:-https://pod.not-this-pod.synap.live}"
+ACAO=$(curl -sS -o /dev/null -D - -H "Origin: $TENANT_ORIGIN" \
+  "$POD/.ory/kratos/public/self-service/login/api" | grep -i '^access-control-allow-origin:' | tr -d '\r')
+[ -z "$ACAO" ] && ok "6b. another tenant's origin gets no ACAO ($TENANT_ORIGIN)" \
+  || no "6b. SECURITY: another tenant's origin got a CORS grant: $ACAO (kratos.yml still has a zone wildcard: regenerate it)"
 
 # 7b. CRITICAL: the approved app origin must get ACA-Credentials on the Kratos
 #     bootstrap path, or the browser drops the `ory_kratos_continuity` cookie the

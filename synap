@@ -418,15 +418,50 @@ pod_admin_url_for_domain() {
     printf 'https://%s' "$(pod_admin_domain_for_domain "$domain")"
 }
 
-shared_cookie_domain() {
-    local api_host="$1"
-    local admin_host="$2"
+# The zones whose subdomains belong to different tenants (Synap Cloud pods).
+# synap.live is not on the Public Suffix List, so browsers treat every
+# *.synap.live host as one site: a cookie or a first-party CORS base scoped to
+# one of these zones reaches every other tenant's pod, the Control Plane and the
+# apps. They are refused like a public suffix.
+synap_tenant_zones() {
+    printf '%s\n' synap.live staging.synap.live
+}
+
+# Is <domain> a public suffix (a TLD, a Public Suffix List entry) or a Synap
+# tenant zone? Reads the host's Public Suffix List (Debian/Ubuntu package
+# `publicsuffix`; SYNAP_PSL_FILE overrides the path) when there is one. Without
+# it only TLDs and the tenant zones are known: a cookie for any other public
+# suffix is then still rejected by the browser itself.
+is_public_suffix() {
+    local d zone psl=""
+    d="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    d="${d%.}"
+    [[ "$d" == *.* ]] || return 0
+    while read -r zone; do
+        [ "$d" = "$zone" ] && return 0
+    done < <(synap_tenant_zones)
+    if [ -n "${SYNAP_PSL_FILE:-}" ]; then
+        psl="$SYNAP_PSL_FILE"
+    elif [ -r /usr/share/publicsuffix/public_suffix_list.dat ]; then
+        psl=/usr/share/publicsuffix/public_suffix_list.dat
+    elif [ -r /usr/share/publicsuffix/effective_tld_names.dat ]; then
+        psl=/usr/share/publicsuffix/effective_tld_names.dat
+    fi
+    [ -n "$psl" ] && [ -r "$psl" ] || return 1
+    grep -Fxq -- "!$d" "$psl" && return 1
+    grep -Fxq -- "$d" "$psl" && return 0
+    grep -Fxq -- "*.${d#*.}" "$psl" && return 0
+    return 1
+}
+
+# The longest DNS suffix two hosts share ("" when none).
+common_parent_domain() {
     local -a api_labels admin_labels
     local common=""
     local ai bi
 
-    IFS='.' read -r -a api_labels <<< "$api_host"
-    IFS='.' read -r -a admin_labels <<< "$admin_host"
+    IFS='.' read -r -a api_labels <<< "$1"
+    IFS='.' read -r -a admin_labels <<< "$2"
     ai=$((${#api_labels[@]} - 1))
     bi=$((${#admin_labels[@]} - 1))
     while [ "$ai" -ge 0 ] && [ "$bi" -ge 0 ] && [ "${api_labels[$ai]}" = "${admin_labels[$bi]}" ]; do
@@ -434,11 +469,38 @@ shared_cookie_domain() {
         ai=$((ai - 1))
         bi=$((bi - 1))
     done
+    printf '%s' "$common"
+}
 
-    # A domain cookie must be scoped to a registrable-style parent, not a TLD.
-    if [[ "$common" == *.* ]]; then
+# The parent the pod's session cookie (and its first-party CORS base) is scoped
+# to so the pod and its console share it: their common parent, unless that is a
+# public suffix or a tenant zone. Nothing is printed then, and the cookie stays
+# on the pod's own host. pod.<name>.synap.live + pod-admin.<name>.synap.live
+# share <name>.synap.live; the legacy <name>.synap.live + <name>-admin.synap.live
+# share only synap.live, which is refused.
+shared_cookie_domain() {
+    local common
+    common="$(common_parent_domain "$1" "$2")"
+    if [ -n "$common" ] && ! is_public_suffix "$common"; then
         printf '%s' "$common"
     fi
+}
+
+# The Synap-hosted web apps a pod's Kratos admits (CORS) and returns to
+# (return_to) for "Continue with Synap Cloud": the zone's apex and its listed
+# apps, never every host of the zone (other tenants' pods live there too). This
+# is the Control Plane's FIRST_PARTY_WEB_SUBDOMAINS
+# (control-plane-api src/lib/trusted-origins.ts): a new app is added to both.
+synap_first_party_web_origins() { # <pod domain>
+    local zone=synap.live sub d
+    d="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    case "$d" in
+        staging.synap.live|*.staging.synap.live) zone=staging.synap.live ;;
+    esac
+    printf 'https://%s\n' "$zone"
+    for sub in www app dashboard connect relay doc docs crm hub studio canvas devplane arch the-arch-grants mini-app; do
+        printf 'https://%s.%s\n' "$sub" "$zone"
+    done
 }
 
 backfill_federation_public_urls() {
@@ -485,18 +547,23 @@ backfill_federation_public_urls() {
     # CURRENT domain + pod-admin domain on every reconcile so it can never drift.
     # (Belt for the backend, which now also derives this from PUBLIC_URL at
     # runtime; keeping the env value correct keeps older images working too.)
+    # A base that is a public suffix or a tenant zone (a legacy
+    # <name>.synap.live pod derived synap.live) made every other tenant's host
+    # first-party: it is removed, and the pod then trusts only its own origins.
     if [ "$domain" != "localhost" ]; then
         local effective_pod_admin_domain
         effective_pod_admin_domain="${configured_pod_admin_domain:-$(pod_admin_domain_for_domain "$domain")}"
-        local derived_base
+        local derived_base configured_base
         derived_base="$(shared_cookie_domain "$domain" "$effective_pod_admin_domain")"
+        configured_base=$(grep "^SYNAP_BASE_DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- | tr -d ' "' || true)
         if [ -n "$derived_base" ]; then
-            local configured_base
-            configured_base=$(grep "^SYNAP_BASE_DOMAIN=" .env 2>/dev/null | cut -d'=' -f2- | tr -d ' ' || true)
             if [ "$configured_base" != "$derived_base" ]; then
                 update_env_value "SYNAP_BASE_DOMAIN" "$derived_base"
                 echo -e "${BLUE}ℹ️  Set SYNAP_BASE_DOMAIN=${derived_base} (first-party CORS base)${NC}"
             fi
+        elif [ -n "$configured_base" ] && is_public_suffix "${configured_base#.}"; then
+            SYNAP_ENV_FILE=.env envcfg_write_raw U SYNAP_BASE_DOMAIN
+            echo -e "${YELLOW}⚠️  Removed SYNAP_BASE_DOMAIN=${configured_base}: every site under it is another tenant, not part of this pod. Only this pod's own addresses are trusted now.${NC}"
         fi
     fi
 }
@@ -825,8 +892,20 @@ generate_kratos_config() {
         pod_admin_origin="${admin_scheme}://${admin_host}"
         bare_root="$(shared_cookie_domain "$domain" "$pod_admin_domain")"
         if [ -z "$bare_root" ]; then
-            echo -e "${RED}❌ POD_ADMIN_DOMAIN must share a parent domain with DOMAIN so Kratos can keep the owner session.${NC}" >&2
-            return 1
+            local shared_parent
+            shared_parent="$(common_parent_domain "$domain" "$pod_admin_domain")"
+            if [[ "$shared_parent" != *.* ]]; then
+                echo -e "${RED}❌ POD_ADMIN_DOMAIN must share a parent domain with DOMAIN so Kratos can keep the owner session.${NC}" >&2
+                return 1
+            fi
+            # A legacy pod: <name>.synap.live with its console at
+            # <name>-admin.synap.live. They share only a tenant zone, so the
+            # session cookie stays on the pod's own host, and the console,
+            # which checks the session on its own host, cannot keep anyone
+            # signed in. The pod keeps serving its apps and agents.
+            echo -e "${YELLOW}⚠️  ${domain} and its console ${pod_admin_domain} share only ${shared_parent}, where other people's pods live.${NC}" >&2
+            echo -e "${YELLOW}   Your sign-in now stays on ${domain} and is no longer sent to every ${shared_parent} site.${NC}" >&2
+            echo -e "${YELLOW}   The console at https://${pod_admin_domain} cannot keep you signed in until this pod moves to its own name: pod.<name>.${shared_parent}, console pod-admin.<name>.${shared_parent} (Control Plane runbook scripts/move-flat-pod.md).${NC}" >&2
         fi
     fi
     kratos_ui="${pod_admin_ui}/login"
@@ -852,11 +931,19 @@ generate_kratos_config() {
         - http://localhost:4000
         - http://localhost:4040"
 
+    # The pod, its console and the Synap-hosted apps — never a whole zone:
+    # *.synap.live let every other tenant's pod page make credentialed calls to
+    # this pod's sign-in API.
+    local first_party_origins="" origin
     if [ "$is_localhost" = false ]; then
+        first_party_origins="$(synap_first_party_web_origins "$domain")"
         cors_origins="$cors_origins
         - https://${domain}
-        - ${pod_admin_origin}
-        - https://*.synap.live"
+        - ${pod_admin_origin}"
+        while read -r origin; do
+            cors_origins="$cors_origins
+        - ${origin}"
+        done <<< "$first_party_origins"
     fi
 
     # Generate allowed return URLs. The relay-app (Expo/React Native) completes
@@ -878,9 +965,12 @@ generate_kratos_config() {
     - https://${domain}
     - https://${domain}/*
     - ${pod_admin_origin}
-    - ${pod_admin_origin}/*
-    - https://*.synap.live
-    - https://*.synap.live/*"
+    - ${pod_admin_origin}/*"
+        while read -r origin; do
+            return_urls="$return_urls
+    - ${origin}
+    - ${origin}/*"
+        done <<< "$first_party_origins"
     fi
 
     # OIDC method block — federate to the Control Plane ONLY when a per-pod client
@@ -905,12 +995,20 @@ generate_kratos_config() {
     fi
 
     # Cookie domain and secure settings — scoped to the bare root so the
-    # session cookie set at pod.<root> is also valid at pod-admin.<root>.
-    local cookie_domain="localhost"
+    # session cookie set at pod.<root> is also valid at pod-admin.<root>. With
+    # no shareable root (a legacy <name>.synap.live pod) there is no domain
+    # line: Kratos then sets a host-only cookie on the pod's own host.
+    local cookie_domain_line="    domain: localhost"
     local cookie_secure="false"
+    local passkey_rp_id="$bare_root"
     if [ "$is_localhost" = false ]; then
-        cookie_domain="$bare_root"
         cookie_secure="true"
+        if [ -n "$bare_root" ]; then
+            cookie_domain_line="    domain: ${bare_root}"
+        else
+            cookie_domain_line="    # No domain: host-only on ${domain} (no parent it may share)."
+            passkey_rp_id="$domain"
+        fi
     fi
     
     # Always overwrite kratos.yml (never use a static file - always generate fresh)
@@ -965,14 +1063,14 @@ $return_urls
       config:
         rp:
           display_name: "Synap"
-          id: ${bare_root}
+          id: ${passkey_rp_id}
           origins:
 $(if [ "$is_localhost" = true ]; then
 echo "            - http://localhost:3000"
 echo "            - http://localhost:4040"
 else
 echo "            - https://${domain}"
-echo "            - ${pod_admin_origin}"
+if [ -n "$bare_root" ]; then echo "            - ${pod_admin_origin}"; fi
 fi)
     oidc:
 $oidc_block
@@ -1148,7 +1246,7 @@ session:
   lifespan: 720h
   cookie:
     # Cookie domain: automatically set based on domain
-    domain: ${cookie_domain}
+${cookie_domain_line}
     same_site: Lax
     # Note: secure flag is controlled by Kratos based on cookie domain
     # For production domains, Kratos automatically sets secure=true
