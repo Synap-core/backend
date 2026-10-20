@@ -27,6 +27,10 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  AI_READ_PROPOSE_ROLE_ID,
+  GRANT_PRESETS,
+} from "@synap-core/types/grants";
 
 const { getApiKeyStatus, grant } = vi.hoisted(() => ({
   getApiKeyStatus: vi.fn(),
@@ -82,6 +86,11 @@ const grantRow = (over: Record<string, unknown>) => ({
 });
 const FULL = grantRow({});
 const ONE_WORKSPACE = grantRow({ workspaceIds: ["ws-1"] });
+// The real "AI — read & propose" preset: reads every subject, never unbounded.
+const AI_PRESET = grantRow({
+  permissions: GRANT_PRESETS.find((r) => r.id === AI_READ_PROPOSE_ROLE_ID)!
+    .grant.permissions,
+});
 const AI_PRESET_LIKE = grantRow({
   permissions: ["entity.*.read", "entity.*.create", "document.read"],
 });
@@ -100,12 +109,49 @@ const ROWS: Array<[Method, string, boolean]> = [
   // Gated / bounded siblings — not this door class.
   ["POST", "/vault/secrets/sec-1/grant", false],
   ["POST", "/vault/secrets", false],
+  // S5 (2026-10-20): /memory writes act for the whole owner — knowledge_facts
+  // are recalled in every workspace and no grant narrows them.
+  ["POST", "/memory", true],
+  ["POST", "/memory/turns", true],
+  ["POST", "/memory/sessions", true],
+  ["POST", "/memory/writes", true],
+  ["DELETE", "/memory/fact-1", true],
+  ["POST", "/memory/search", false], // a read
+  // S6 (2026-10-20): a knowledge_keys runbook is pod-wide, addressed by key,
+  // with no owner check — rewriting / archiving one needs an unbounded key.
+  ["PUT", "/knowledge/deploy%3Abackend", true],
+  ["DELETE", "/knowledge/deploy%3Abackend", true],
+  ["POST", "/knowledge", false], // governed create (checkPermissionOrPropose)
+  ["POST", "/knowledge/search", false], // reads
+  ["POST", "/knowledge/ask", false],
+  ["POST", "/knowledge/answer", false],
+];
+
+/** POST doors that READ — the generic fence rules on them, not this class. */
+const POST_READS = new Set([
+  "/memory/search",
+  "/knowledge/search",
+  "/knowledge/ask",
+  "/knowledge/answer",
+]);
+
+/**
+ * S1 (2026-10-20): a `*` pinned to a space, project or object is NARROWED, so
+ * it goes through the scoped-key fence like any scoped key — unseamed reads
+ * and aggregate reads it cannot bound are refused; seamed reads and writes
+ * (bounded by the gate) pass. `[method, path, pinned key passes]`.
+ */
+const FENCE_ROWS: Array<[Method, string, boolean]> = [
+  ["GET", "/search", false], // unseamed read
+  ["POST", "/knowledge/ask", false], // aggregate read: a pin cannot bound it
+  ["GET", "/entities", true], // seamed read
+  ["POST", "/entities", true], // a write: bounded by the gate
 ];
 
 function app() {
   const hub: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   hub.use("/*", hubAuthMiddleware as never);
-  for (const [method, path] of ROWS) {
+  for (const [method, path] of [...ROWS, ...FENCE_ROWS]) {
     hub.on(method, path, (c) => c.json({ ok: true }));
   }
   const root = new Hono();
@@ -169,11 +215,39 @@ describe("owner-wide writes need an unbounded key", () => {
     }
   );
 
-  it.each(ROWS.filter((r) => !r[2]))(
+  it.each(ROWS.filter((r) => !r[2] && r[0] !== "GET" && !POST_READS.has(r[1])))(
     "%s %s → not owner-wide: a `*` key pinned to one workspace passes",
     async (method, path) => {
       asKey(ONE_WORKSPACE);
       expect((await send(method, path)).status).toBe(200);
+    }
+  );
+
+  it.each(ROWS.filter((r) => POST_READS.has(r[1])))(
+    "%s %s → a read, not owner-wide: the AI preset (bounded, unpinned) passes",
+    async (method, path) => {
+      asKey(AI_PRESET);
+      expect((await send(method, path)).status).toBe(200);
+    }
+  );
+});
+
+describe("S1 — a pinned `*` goes through the scoped-key fence", () => {
+  const ONE_PROJECT = grantRow({ projectIds: ["p-1"] });
+  const ONE_OBJECT = grantRow({ entityIds: ["e-1"] });
+  it.each(FENCE_ROWS)("%s %s → pinned key passes: %s", async (m, path, ok) => {
+    for (const row of [ONE_WORKSPACE, ONE_PROJECT, ONE_OBJECT]) {
+      asKey(row);
+      const res = await send(m, path);
+      expect(res.status).toBe(ok ? 200 : 403);
+      if (!ok) expect((await res.json()).code).toBe("GRANT_DOOR_UNSUPPORTED");
+    }
+  });
+  it.each(FENCE_ROWS)(
+    "%s %s → CONTROL: an unbounded key passes",
+    async (m, path) => {
+      asKey(FULL);
+      expect((await send(m, path)).status).toBe(200);
     }
   );
 });

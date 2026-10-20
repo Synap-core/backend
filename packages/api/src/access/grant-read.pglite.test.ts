@@ -40,6 +40,8 @@ import { documents, entities } from "@synap/database/schema";
 import { grantOfScope, runWithGrant } from "@synap/database";
 import type { GrantScope } from "@synap/governance-policy/grants";
 import { AccessContext, scopedDb } from "./index.js";
+import { grantReadClause } from "./grant-read.js";
+import { users } from "@synap/database/schema";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { sessionReadableWhere } from "./session-visibility.js";
@@ -182,6 +184,19 @@ describe("scopedDb honours the key's grant (W1e)", () => {
       await read(entities, { permissions: ["entity.knowledge.create"] })
     ).toEqual([]);
     expect(await read(entities, { permissions: [] })).toEqual([]);
+  });
+
+  it("S1: a `*` pinned to a space, project or object is narrowed on a table no spec covers", () => {
+    // No spec → no column the pin could narrow → nothing, like any scoped key.
+    expect(grantReadClause(users, { permissions: ["*"] })).toBeUndefined();
+    for (const pin of [
+      { workspaceIds: [WA] },
+      { projectIds: [PROJ] },
+      { entityIds: [T_A] },
+    ])
+      expect(
+        grantReadClause(users, { permissions: ["*"], ...pin })
+      ).toBeDefined();
   });
 
   it("the explicit full-access grant reads like the floor", async () => {

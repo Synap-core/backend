@@ -51,6 +51,11 @@ import { ask } from "../../../services/knowledge/index.js";
 import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
 import { resolveKnowledgeLens } from "../../../services/knowledge/resolve-lens.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../../../utils/permission-check.js";
+import { jsonGoverned } from "../proposal-response.js";
 
 const ArchiveKnowledgeResponseSchema = z
   .object({ success: z.boolean() })
@@ -314,6 +319,22 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         description: "Created",
         content: { "application/json": { schema: KnowledgeEntrySchema } },
       },
+      202: {
+        // ONE proposal shape on every hub door: a governed write that became a
+        // proposal is SUCCESS, and it carries its review link.
+        description:
+          "Proposed for review — `{ status: 'proposed', proposalId, reviewUrl, key }`",
+        content: {
+          "application/json": {
+            schema: z.object({
+              status: z.literal("proposed"),
+              proposalId: z.string(),
+              reviewUrl: z.string().optional(),
+              key: z.string(),
+            }),
+          },
+        },
+      },
       400: {
         description: "Validation failed",
         content: { "application/json": { schema: ErrorSchema } },
@@ -356,13 +377,47 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         author: body.author ?? authUserId,
       });
 
-      const record = await knowledgeKeysRepository.create({
+      // GOVERNED (S6, 2026-10-20). A runbook is pod-wide and recalled by every
+      // agent, and this used to insert with no check: any hub key wrote one.
+      // Now the gate decides — a key's grant bounds it (rung 0; `knowledgeKey`
+      // folds to `document` on the grant), an agent's create follows its
+      // review rules (proposed is success), a person writes directly. The
+      // approval half is `executors/knowledge-key.ts`.
+      const fields = {
         key: parsed.key,
         value: parsed.value ?? "",
         status: parsed.status,
         workspaceId: parsed.workspaceId || undefined,
         author: parsed.author || undefined,
+      };
+      const perm = await checkPermissionOrPropose({
+        userId: authUserId,
+        agentUserId: c.get("agentUserId") as string | undefined,
+        workspaceId: fields.workspaceId ?? null,
+        subjectType: "knowledgeKey",
+        action: "create",
+        data: { ...fields, namespace: body.namespace, slug: body.slug },
       });
+      if ("denied" in perm && perm.denied) {
+        return c.json({ error: perm.reason ?? "Not permitted" }, 403);
+      }
+      if ("proposalId" in perm && perm.proposalId) {
+        return jsonGoverned(c, {
+          status: "proposed",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Knowledge entry proposed for review"
+          ),
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reasoning: perm.reasoning,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+          key: fields.key,
+        }) as never;
+      }
+
+      const record = await knowledgeKeysRepository.create(fields);
       return c.json(record, 200);
     } catch (err) {
       if (err instanceof zodCore.ZodError) {

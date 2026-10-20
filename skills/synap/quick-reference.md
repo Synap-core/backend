@@ -38,9 +38,10 @@ POST   /api/hub/relations         body: { userId, sourceEntityId, targetEntityId
 GET    /api/hub/entities?q=…&profileSlug=task&workspaceId=…
 GET    /api/hub/entities/{id}/connections?userId=…
 POST   /api/hub/knowledge/ask     body: { query, workspaceId?, limit? }   ← ONE read door, routes across substrates
-POST   /api/hub/memory            body: { userId, fact }
 GET    /api/hub/memory?userId=…&query=…
 ```
+
+A fact about the user: MCP `synap_remember_fact` (a governed write). `POST /api/hub/memory` acts for the whole owner, so it needs an unrestricted key — a restricted agent key (the AI preset) is refused.
 
 **Profile schemas are runtime-discovered — never hardcoded:**
 

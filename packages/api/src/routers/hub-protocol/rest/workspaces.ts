@@ -76,6 +76,7 @@ import {
   requireUuidParam,
   verifyWorkspaceReadAccess,
   type HubHono,
+  rejectAgentPurger,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { summarizePackageContents } from "../../../services/package-contents-summary.js";
@@ -1328,6 +1329,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
    * never collides with the static `/workspaces/*` POST routes above.
    */
   app.post("/workspaces/:workspaceId/purge", async (c) => {
+    const agentRefusal = rejectAgentPurger(c, "workspace");
+    if (agentRefusal) return agentRefusal;
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },

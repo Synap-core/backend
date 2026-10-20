@@ -23,7 +23,10 @@ import { sql, type SQL } from "drizzle-orm";
 import { PROBE_KEY_SCOPE } from "../schema/api-keys.js";
 import { entities } from "../schema/entities.js";
 import { PROFILE_ORIGIN_PROBE } from "../schema/profiles.js";
-import type { GrantScope } from "@synap/governance-policy/grants";
+import {
+  isNarrowedScope,
+  type GrantScope,
+} from "@synap/governance-policy/grants";
 
 export interface RequestWriteContext {
   /** D8 — the request's key is an explicitly declared probe key. */
@@ -171,13 +174,17 @@ export function grantOfScope(
 }
 
 /**
- * True only when EVERY scope is the explicit full-access `*` — one narrower
- * scope keeps the key fenced (fail closed).
+ * True only when EVERY scope is the explicit full-access `*` with NO space,
+ * project or object limit — one narrower scope keeps the key fenced (fail
+ * closed). A `*` pinned to a workspace used to count as full access here
+ * (permissions only), which let it skip the whole scoped-key fence (S1).
  */
 export function isFullAccessGrant(grant: KeyGrant): boolean {
   return (
     grant.scopes.length > 0 &&
-    grant.scopes.every((s) => s.permissions.includes("*"))
+    grant.scopes.every(
+      (s) => s.permissions.includes("*") && !isNarrowedScope(s)
+    )
   );
 }
 

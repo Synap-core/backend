@@ -75,7 +75,11 @@ export function grantBoundsDoor(
   );
 }
 
-/** A grant that bounds nothing beyond the human floor needs no fence. */
+/**
+ * A grant that bounds nothing beyond the human floor needs no fence. ANY limit
+ * counts as narrowing — a `*` pinned to a space, project or object is fenced
+ * like any scoped key (S1, 2026-10-20; `isFullAccessGrant` sees the pin).
+ */
 export function isFencedGrant(grant: KeyGrant | null | undefined): boolean {
   return Boolean(grant) && !isFullAccessGrant(grant!);
 }
@@ -258,9 +262,8 @@ export const GRANT_DOOR_UNSUPPORTED =
  *    no gate. Its caller is the IS's `is_internal` key (full, unbounded `*`).
  *
  * Only a key whose grant is UNBOUNDED full access (`*`, no narrowing) may use
- * them. Note this is stricter than `isFencedGrant`: a `*` scope pinned to one
- * workspace is not fenced there (`isFullAccessGrant` reads permissions only),
- * but it is refused here.
+ * them — exactly the keys `isFencedGrant` does not fence (S1: a pinned `*` is
+ * fenced, so it is refused here too).
  */
 export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
   /^\/webhooks(?:\/.*)?$/,
@@ -278,12 +281,22 @@ export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
  *    one needs pod admin but no grant check.
  *  - `DELETE /vault/secrets/:id`: any secret the person can write, in any
  *    workspace (`assertWorkspaceWrite`, no grant). `POST /vault/secrets` is
- *    NOT here — agents are meant to store credentials they hold (its
- *    docblock); that is a product decision. `/vault/secrets/:id/grant` is
- *    gated (`checkPermissionOrPropose` → `grantWriteDenial`).
+ *    NOT here — agents store credentials they hold, bounded by the key's
+ *    grant (`secret.create` in the row's workspace, S4; the AI preset holds
+ *    it). `/vault/secrets/:id/grant` is gated (`checkPermissionOrPropose` →
+ *    `grantWriteDenial`).
  *  - `DELETE /connectors/connections/:id`, `POST /connectors/disconnect`:
  *    revokes the account at the provider and detaches it from every
  *    capability (`detachNangoConnectionRegistry`).
+ *  - `/memory` writes (`POST /memory`, `/memory/turns|sessions|writes`,
+ *    `DELETE /memory/:id`; S5 2026-10-20): `knowledge_facts` about the
+ *    person, recalled in EVERY workspace, written directly — no grant narrows
+ *    them. `POST /memory/search` is a read (GRANT_REST_POST_READS). Agents
+ *    remember a fact through MCP `synap_remember_fact` (a governed write).
+ *  - `PUT` / `DELETE /knowledge/:key` (S6 2026-10-20): rewrite or archive a
+ *    pod-wide `knowledge_keys` runbook BY KEY — no owner check, recalled by
+ *    every agent everywhere. `/knowledge/(search|ask|answer)` are reads;
+ *    `POST /knowledge` (create) is governed (`checkPermissionOrPropose`).
  *
  * Callers checked: the IS (unbounded keys), the browser/app (tRPC session),
  * the CLI cap flows (reach these only after a fenced read, so only with an
@@ -294,17 +307,20 @@ export const GRANT_OWNER_WIDE_REST_WRITES: readonly RegExp[] = [
   /^\/vault\/secrets\/[^/]+\/?$/,
   /^\/connectors\/connections\/[^/]+\/?$/,
   /^\/connectors\/disconnect\/?$/,
+  /^\/memory(?:\/(?!search\/?$)[^/]+)?\/?$/,
+  /^\/knowledge\/(?!(?:search|ask|answer)\/?$)[^/]+\/?$/,
 ];
 
 export const GRANT_OWNER_WIDE_UNSUPPORTED =
   "This door acts on everything you own (it cannot be limited to a space, project or kind), so it needs a key with unrestricted full access ('*' with no space, project or object limit).";
 
-/** Every scope is `*` and none is narrowed to a workspace, project or object. */
+/**
+ * Every scope is `*` and none is narrowed to a workspace, project or object.
+ * Since S1 this IS `isFullAccessGrant` (the one predicate); the name stays for
+ * the owner-wide doors that read as "unbounded".
+ */
 export function isUnboundedFullAccess(grant: KeyGrant): boolean {
-  return (
-    isFullAccessGrant(grant) &&
-    grant.scopes.every((s) => !s.workspaceIds && !s.projectIds && !s.entityIds)
-  );
+  return isFullAccessGrant(grant);
 }
 
 /**

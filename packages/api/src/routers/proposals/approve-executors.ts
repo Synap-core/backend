@@ -37,6 +37,7 @@ import { registerSkillExecutors } from "./executors/skill.js";
 import { registerToolExecutors } from "./executors/tool.js";
 import { registerRoleExecutors } from "./executors/role.js";
 import { registerArtifactExecutors } from "./executors/artifact.js";
+import { registerKnowledgeKeyExecutors } from "./executors/knowledge-key.js";
 import { registerRuleExecutors } from "./executors/rule.js";
 import { registerAutomationExecutors } from "./executors/automation.js";
 import { registerPlaybookExecutors } from "./executors/playbook.js";
@@ -87,6 +88,7 @@ export function registerApproveExecutors(): void {
   registerToolExecutors();
   registerRoleExecutors();
   registerArtifactExecutors();
+  registerKnowledgeKeyExecutors();
   registerRuleExecutors();
   registerAutomationExecutors();
   registerPlaybookExecutors();

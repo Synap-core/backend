@@ -81,13 +81,14 @@ const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 function call(
   path: string,
   body: unknown,
-  who: { userId: string; agentUserId?: string }
+  who: { userId: string; agentUserId?: string; keyType?: string }
 ) {
   const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   app.use("*", async (c, next) => {
     c.set("userId", who.userId);
     c.set("scopes", ["hub-protocol.read", "hub-protocol.write"]);
     if (who.agentUserId) c.set("agentUserId", who.agentUserId);
+    if (who.keyType) c.set("keyType", who.keyType as never);
     await next();
   });
   registerProjectsRoutes(app);
@@ -148,6 +149,67 @@ beforeAll(async () => {
     `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $4, $5, 'owner'), ($2, $4, $6, 'viewer'), ($3, $4, $7, 'editor')`,
     [randomUUID(), randomUUID(), randomUUID(), WS, OWNER, VIEWER, EDITOR]
   );
+});
+
+/**
+ * S3 (founder, 2026-10-20): an AGENT caller never purges — not even the owner's
+ * own agent, whose key is remapped to the owner (so the ownership check below
+ * would pass). "Agent caller" = `isAgentCaller`: an agent key, or the IS's
+ * internal key (remapped to its operator, often with no `agentUserId`).
+ */
+describe("S3 — an agent caller cannot purge a workspace or a project", () => {
+  const PURGE_REFUSAL =
+    "Purging needs a human session or a personal access token (--api-key <PAT>)";
+  const AGENTS = [
+    ["the owner's agent key", { userId: OWNER, agentUserId: OWNER_AGENT }],
+    ["the IS internal key", { userId: OWNER, keyType: "is_internal" }],
+  ] as const;
+
+  it.each(AGENTS)(
+    "%s: POST /projects/:id/purge → 403, kept",
+    async (_l, who) => {
+      const p = await seedProject(OWNER);
+      const res = await call(
+        `/projects/${p.id}/purge`,
+        { confirm: p.name },
+        who
+      );
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: string }).error).toBe(
+        PURGE_REFUSAL
+      );
+      expect(await projectExists(p.id)).toBe(true);
+    }
+  );
+
+  it.each(AGENTS)(
+    "%s: POST /workspaces/:id/purge → 403, kept",
+    async (_l, who) => {
+      const res = await call(`/workspaces/${WS}/purge`, { confirm: "W" }, who);
+      expect(res.status).toBe(403);
+      expect(((await res.json()) as { error: string }).error).toBe(
+        PURGE_REFUSAL
+      );
+      const n = (
+        (await q(`select count(*)::int n from workspaces where id = $1`, [WS]))
+          .rows[0] as { n: number }
+      ).n;
+      expect(n).toBe(1);
+    }
+  );
+
+  it("CONTROL — the owner's own human credential reaches the purge (200)", async () => {
+    const p = await seedProject(OWNER);
+    const res = await call(
+      `/projects/${p.id}/purge`,
+      { confirm: p.name },
+      {
+        userId: OWNER,
+      }
+    );
+    expect(res.status).toBe(200);
+    expect(await projectExists(p.id)).toBe(false);
+  });
 });
 
 describe("POST /projects/:id/purge — creator or workspace owner/admin", () => {

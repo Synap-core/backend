@@ -586,10 +586,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // `entities.list` floor (`accessScopeWhere`, which ANDs the key's grant).
     // The `q` branch does NOT: it is Typesense (`search.search`), which no
     // grant narrows — a project-limited key would search the whole person. So
-    // a key with ANY limit may list here, never search. Stricter than
-    // `isFencedGrant` on purpose: a `*` pinned to one workspace or project is
-    // not "fenced" (that reads permissions only), yet search would still
-    // escape its pin.
+    // a key with ANY limit may list here, never search. Since S1 this is the
+    // same set `isFencedGrant` fences (a `*` pinned to one workspace or
+    // project counts as limited); kept explicit at the branch that leaks.
     const grant = getRequestGrant();
     if (q.length > 0 && grant && !isUnboundedFullAccess(grant)) {
       return c.json(

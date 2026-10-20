@@ -73,6 +73,7 @@ import { and, sql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
   allowedQualifiers,
+  isNarrowedScope,
   patternMatches,
   QUALIFIED_GRANT_SUBJECTS,
   type GrantScope,
@@ -178,7 +179,12 @@ export function grantReadClause(
   grant: GrantScope
 ): SQL | undefined {
   const s = GRANT_READ_SPECS.get(table);
-  if (!s) return grant.permissions.includes("*") ? undefined : NONE;
+  // No spec → no column a space/project/object limit could narrow: only an
+  // unlimited `*` reads such a table (S1).
+  if (!s)
+    return grant.permissions.includes("*") && !isNarrowedScope(grant)
+      ? undefined
+      : NONE;
 
   const parts: Array<SQL | undefined> = [];
   if ((QUALIFIED_GRANT_SUBJECTS as readonly string[]).includes(s.subject)) {
