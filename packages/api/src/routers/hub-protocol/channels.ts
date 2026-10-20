@@ -368,34 +368,46 @@ export const channelsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       checkHubRateLimit(ctx.apiKeyId, "sendExternalMessage");
-
-      // Verify agentUserId is a member of the workspace (prevents cross-workspace posting)
-      await assertKeyMayWrite({
-        subjectType: "message",
-        action: "create",
-        workspaceId: input.workspaceId,
-      });
-      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
-      if (agentUserId) {
-        await assertAgentInWorkspace(
-          agentUserId,
-          input.workspaceId,
-          ctx.userId ?? agentUserId
-        );
+      if (!ctx.userId) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "No caller" });
       }
 
-      // Find the approved channel
+      // SECURITY — the channel write floor. The channel used to be found by
+      // (externalSource, externalChannelId) alone and the message inserted as
+      // `channel.userId`, so any hub write key could inject a message (and an
+      // AI turn) into another person's external channel by its platform chat
+      // id. Same floor as every channel write door (`channelVisibilityWhere`,
+      // as `triggerAI` / `postChannelMessage`), on the caller. A channel the
+      // caller may not see answers `no_channel`, like a missing one.
       const channel = await db.query.channels.findFirst({
         where: and(
           eq(channels.externalSource, input.externalSource),
           eq(channels.externalChannelId, input.externalChannelId),
-          eq(channels.channelType, ChannelType.EXTERNAL)
+          eq(channels.channelType, ChannelType.EXTERNAL),
+          channelVisibilityWhere(ctx.userId)
         ),
       });
 
       if (!channel) {
         // Channel doesn't exist yet — caller must use createExternalChannel first
         return { status: "no_channel" as const };
+      }
+
+      // The grant gate and the agent check run on the CHANNEL's workspace —
+      // the one the message lands in — never the caller-supplied one.
+      const channelWorkspaceId = channel.workspaceId ?? null;
+      await assertKeyMayWrite({
+        subjectType: "message",
+        action: "create",
+        workspaceId: channelWorkspaceId,
+      });
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
+      if (agentUserId) {
+        await assertAgentInWorkspace(
+          agentUserId,
+          channelWorkspaceId ?? input.workspaceId,
+          ctx.userId
+        );
       }
 
       const messageId = randomUUID();
