@@ -39,7 +39,6 @@ import {
   or,
   isNull,
   entities,
-  projects,
   getWorkspaceMembership,
   ProfileResolutionService,
   PropertyValidationService,
@@ -50,7 +49,6 @@ import {
 } from "@synap/database";
 import { getAgentFocusProjectId } from "../agent-identity-service.js";
 import type { PendingWorkspaceSwitch } from "../../lib/workspace-decision.js";
-import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { createLogger } from "@synap-core/core";
 import {
   type HubWriteSource,
@@ -100,7 +98,10 @@ import {
   stampMaterialized,
 } from "../proposals/stamp-materialized.js";
 import { loadRelationTypeValidator } from "../../utils/relation-types.js";
-import { resolveCaptureProjectRef } from "./resolve-capture-project.js";
+import {
+  assertCaptureProjectPinVisible,
+  resolveCaptureProjectRef,
+} from "./resolve-capture-project.js";
 import {
   storedScopeOfProposal,
   type StoredCaptureScope,
@@ -478,10 +479,11 @@ export interface SubmitCaptureGraphResult {
   projectCandidate?: { name: string };
   /**
    * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
-   * membership, `not_linked` (+reason: `project-not-found` for a dead UUID pin,
-   * `project-name-unmatched` for a name-ref that matched nothing) so a requested
-   * project that did NOT link is NAMED, never a silent success. Omitted when no
-   * project was requested.
+   * membership, `not_linked` (+reason `project-name-unmatched` for a name-ref
+   * that matched nothing) so a requested project that did NOT link is NAMED,
+   * never a silent success. Omitted when no project was requested. A dead UUID
+   * pin never gets here: the whole capture is refused
+   * (`CaptureProjectNotFoundError`).
    */
   project?:
     | { status: "linked"; projectId: string }
@@ -990,34 +992,16 @@ export async function submitCaptureGraph(
     else if (projectRef.candidateName)
       projectCandidate = { name: projectRef.candidateName };
   }
-  // An EXPLICIT UUID pin (`input.projectId`) is trusted by no one: verify it
-  // references a real, visible project BEFORE it rides every create_entity op
-  // as `projectId` (which stamps `belongs_to_project` at materialization).
-  // `relations.target_entity_id` has NO FK to `projects`, so a pin to a
-  // non-existent / invisible project would write a GHOST membership edge and the
-  // receipt would falsely claim `linked` — the exact silent-drop bug. A missing
-  // pin links nothing and is reported `not_linked`. (A name-ref that matched
-  // nothing is already surfaced as `projectCandidate`, above.)
-  let explicitPinMissing = false;
+  // An EXPLICIT UUID pin (`input.projectId`) is trusted by no one: it must
+  // name a project the caller can see, or the WHOLE capture is refused here —
+  // before dedup, before any proposal — naming the closest visible projects.
+  // (It used to write every entity unlinked and report `applied`.) The ONE
+  // check, shared with tRPC `capture.execute`.
   if (resolvedProjectId && input.projectId) {
-    const [pinned] = await db
-      .select({ id: projects.id })
-      .from(projects)
-      .where(
-        and(
-          eq(projects.id, resolvedProjectId),
-          ownerPrivateVisibleWhere(
-            projects.workspaceId,
-            projects.userId,
-            userId
-          )
-        )
-      )
-      .limit(1);
-    if (!pinned) {
-      explicitPinMissing = true;
-      resolvedProjectId = null;
-    }
+    await assertCaptureProjectPinVisible(db, {
+      userId,
+      projectId: resolvedProjectId,
+    });
   }
   // Per-coordinate project outcome, surfaced on the result + writeReceipt so a
   // caller (the CLI) can state what actually happened on the project axis.
@@ -1026,11 +1010,9 @@ export async function submitCaptureGraph(
     | { status: "not_linked"; reason: string }
     | undefined = resolvedProjectId
     ? { status: "linked", projectId: resolvedProjectId }
-    : explicitPinMissing
-      ? { status: "not_linked", reason: "project-not-found" }
-      : projectCandidate
-        ? { status: "not_linked", reason: "project-name-unmatched" }
-        : undefined;
+    : projectCandidate
+      ? { status: "not_linked", reason: "project-name-unmatched" }
+      : undefined;
 
   // WITHIN-BATCH DEDUP: the producer may list the same person/company under two
   // different `ref`s (neither persisted yet). Collapse those before resolving

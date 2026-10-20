@@ -15,6 +15,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { deriveGatePairFromOperations } from "@synap/governance-policy";
 import { captureGraphEventKeys } from "../services/capture-agent/capture-graph-policy.js";
+import { assertCaptureProjectPinVisible } from "../services/capture-agent/resolve-capture-project.js";
 import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import { buildRuleLoopCallers } from "../utils/rule-loop-callers.js";
 import { router, mergeRouters, podProcedure } from "../trpc.js";
@@ -3038,6 +3039,15 @@ const captureBaseRouter = router({
       // same capture story as a granted one. Purely a move; every later use is
       // unchanged.
       const captureId = randomUUID();
+      // An explicit project pin must name a project this user can see — or the
+      // WHOLE capture is refused before anything is written, naming the closest
+      // visible projects. The ONE check, shared with `submitCaptureGraph`.
+      if (input.projectId) {
+        await assertCaptureProjectPinVisible(database, {
+          userId,
+          projectId: input.projectId,
+        });
+      }
       // Workspace placement — THE one door (WorkspaceResolutionService, I1). A
       // direct `targetWorkspaceId` override always wins (rung 1: a caller that
       // already resolved the workspace). Otherwise, when the caller forwards the
@@ -3543,40 +3553,8 @@ const captureBaseRouter = router({
         sessionId: sessionId ?? null,
         relatedEntityIds: batchRelatedEntityIds,
       });
-      let resolvedProjectId = projectPlacement.projectId;
-      // An EXPLICIT pin (rung 1) must reference a REAL, visible project before we
-      // stamp a `belongs_to_project` edge. resolveProjectPlacement is a PURE
-      // resolver — it trusts the id blindly — and `relations.target_entity_id`
-      // has NO FK to `projects`, so a pin to a non-existent / invisible project
-      // would write a GHOST membership edge the project-lens read never resolves:
-      // a SILENT DROP reported as `✓ stored`. Verify existence here (same
-      // pod-wide-owner / workspace-member visibility as this door's own project
-      // list, above) so an explicit pin either LINKS a real project or is
-      // reported `not_linked` — never silently dropped. A bare-UUID pin carries
-      // no name to create a project from (the name-ref propose-create lane is
-      // `resolveCaptureProjectRef`'s `projectCandidate`), so a missing pin links
-      // nothing and says so in the receipt.
-      let explicitPinMissing = false;
-      if (resolvedProjectId && projectPlacement.rung === 1) {
-        const [pinned] = await database
-          .select({ id: projects.id })
-          .from(projects)
-          .where(
-            and(
-              eq(projects.id, resolvedProjectId),
-              ownerPrivateVisibleWhere(
-                projects.workspaceId,
-                projects.userId,
-                userId
-              )
-            )
-          )
-          .limit(1);
-        if (!pinned) {
-          explicitPinMissing = true;
-          resolvedProjectId = null;
-        }
-      }
+      // A rung-1 pin was verified visible at the top of this procedure.
+      const resolvedProjectId = projectPlacement.projectId;
       // AI advisory: only when NO deterministic project resolved AND the AI's
       // pick clears the confidence floor. Recorded on the capture proposal (a
       // suggestion), NEVER linked and NEVER threaded into the governance gate —
@@ -4983,10 +4961,9 @@ const captureBaseRouter = router({
         // (rung 1-4), an AI suggestion was proposed (advisory, awaiting confirm),
         // or nothing. Only present when the project axis engaged at all.
         // Honest intent-vs-outcome on the project axis (the receipt the CLI
-        // surfaces): `linked` (a deterministic rung stamped membership),
-        // `not_linked` (an explicit pin that named a project this user can't see
-        // / that doesn't exist — the drop is NAMED, never silent), or `proposed`
-        // (an AI suggestion awaiting confirmation).
+        // surfaces): `linked` (a deterministic rung stamped membership) or
+        // `proposed` (an AI suggestion awaiting confirmation). A pin to a
+        // project this user can't see never gets here — the capture is refused.
         ...(resolvedProjectId
           ? {
               project: {
@@ -4995,24 +4972,16 @@ const captureBaseRouter = router({
                 status: "linked" as const,
               },
             }
-          : explicitPinMissing
+          : aiProjectAdvisoryId
             ? {
                 project: {
+                  projectId: aiProjectAdvisoryId,
                   rung: null,
-                  status: "not_linked" as const,
-                  reason: "project-not-found",
+                  status: "proposed" as const,
+                  reason: "inferred-not-pinned",
                 },
               }
-            : aiProjectAdvisoryId
-              ? {
-                  project: {
-                    projectId: aiProjectAdvisoryId,
-                    rung: null,
-                    status: "proposed" as const,
-                    reason: "inferred-not-pinned",
-                  },
-                }
-              : {}),
+            : {}),
       };
     }),
 
