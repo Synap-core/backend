@@ -1153,6 +1153,35 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "consumed_at",
     addedBy: "0207_pod_oauth_authorization_server.sql",
   },
+  // Pod app clients (0338). Every client lookup at /authorize branches on
+  // `client_kind` and a CIMD client is read from the cache columns, and every
+  // code issue and claim writes / reads `resource`: without them the whole
+  // OAuth door 500s, the MCP (DCR) flow included.
+  {
+    table: "oauth_clients",
+    column: "client_kind",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "requested_permissions",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "metadata_fetched_at",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "metadata_expires_at",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "resource",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
 
   // workspaces — soft-archive support (0020)
   {

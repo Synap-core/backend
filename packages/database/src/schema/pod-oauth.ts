@@ -10,10 +10,11 @@
  *
  * TWO tables, both pod-local:
  *
- *   oauth_clients              — RFC 7591 dynamically-registered clients. Every
- *                                row is a PUBLIC client (no secret): claude.ai
- *                                registers per connection and authenticates the
- *                                code exchange with PKCE alone.
+ *   oauth_clients              — PUBLIC clients (no secret; PKCE alone
+ *                                authenticates the code exchange): RFC 7591
+ *                                dynamically-registered ones (claude.ai
+ *                                registers per connection) and cached Client
+ *                                ID Metadata Documents (pod apps, 0338).
  *   oauth_authorization_codes  — short-lived, single-use authorization codes
  *                                bound to a PKCE challenge.
  *
@@ -50,9 +51,39 @@ export const oauthClients = pgTable("oauth_clients", {
   // requested scopes with this list.
   scopes: text("scopes").array().notNull().default([]),
 
+  // When the pod first saw this client (DCR: registration; CIMD: first fetch).
   createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
     .defaultNow()
     .notNull(),
+
+  // ── Client ID Metadata Documents (0338, spec 17 §6.1) ──────────────────────
+  //
+  // 'dcr'  — `client_id` = `dcr_<random>`, registered through POST /register.
+  // 'cimd' — `client_id` = the https URL of the app's own metadata document;
+  //          the row is a CACHE of that document, refreshed by
+  //          `routers/oauth/client-metadata.ts`, never written by a client.
+  clientKind: text("client_kind")
+    .$type<"dcr" | "cimd">()
+    .notNull()
+    .default("dcr"),
+  // Same origin as `client_id`, checked before caching. NULL for DCR rows.
+  clientUri: text("client_uri"),
+  initiateLoginUri: text("initiate_login_uri"),
+  // The grant-grammar permissions the document declares (`synap_requests`).
+  requestedPermissions: text("requested_permissions")
+    .array()
+    .notNull()
+    .default([]),
+  metadataFetchedAt: timestamp("metadata_fetched_at", {
+    mode: "date",
+    withTimezone: true,
+  }),
+  // Fresh until then: the document's Cache-Control, floored 5 min, capped 24 h.
+  metadataExpiresAt: timestamp("metadata_expires_at", {
+    mode: "date",
+    withTimezone: true,
+  }),
+  metadataSha256: text("metadata_sha256"),
 });
 
 export const oauthAuthorizationCodes = pgTable(
@@ -79,6 +110,11 @@ export const oauthAuthorizationCodes = pgTable(
     // PKCE (RFC 7636). S256 only — `plain` is not accepted anywhere in this
     // flow, so the column always holds the base64url sha256 challenge.
     codeChallenge: text("code_challenge").notNull(),
+
+    // RFC 8707 resource the authorization was for (`<issuer>/mcp` or
+    // `<issuer>/api/hub`), or NULL when the client named none (0338). /token
+    // refuses a `resource` that differs from it.
+    resource: text("resource"),
 
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()

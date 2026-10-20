@@ -285,6 +285,15 @@ ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "client_name"   text;
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "redirect_uris" text[] DEFAULT '{}';
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "scopes"        text[] DEFAULT '{}';
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "created_at"    timestamp with time zone DEFAULT now();
+-- 0338 CIMD columns. No CHECK here: 0338 adds it on fresh databases too, since
+-- it runs after this file.
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "client_kind" text NOT NULL DEFAULT 'dcr';
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "client_uri" text;
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "initiate_login_uri" text;
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_permissions" text[] NOT NULL DEFAULT '{}';
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_fetched_at" timestamp with time zone;
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_expires_at" timestamp with time zone;
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_sha256" text;
 
 CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
   "code_hash"      text PRIMARY KEY,
@@ -306,6 +315,8 @@ ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "code_challenge
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "created_at"     timestamp with time zone DEFAULT now();
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "expires_at"     timestamp with time zone;
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "consumed_at"    timestamp with time zone;
+-- 0338: the RFC 8707 resource the code was issued for.
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "resource" text;
 CREATE INDEX IF NOT EXISTS "oauth_authorization_codes_expires_at_idx"
   ON "oauth_authorization_codes" ("expires_at");
 
