@@ -262,6 +262,14 @@ export const SITE_MAX_OFFSET = 10_000;
 export const SITE_MAX_LIMIT = 100;
 export const SITE_MAX_SORT_KEYS = 3;
 
+/**
+ * A page size within the site doors' bound, 1..{@link SITE_MAX_LIMIT}: the
+ * public collection door and the owner status's member list clamp alike.
+ */
+export function clampSiteLimit(limit: number): number {
+  return Math.min(SITE_MAX_LIMIT, Math.max(1, limit));
+}
+
 export interface CollectionQuery {
   offset: number;
   limit: number;
@@ -311,7 +319,7 @@ export function parseCollectionQuery(
     if (!DIGITS.test(rawLimit)) return { invalid: "invalid limit" };
     limit = Number(rawLimit);
   }
-  limit = Math.min(SITE_MAX_LIMIT, Math.max(1, limit));
+  limit = clampSiteLimit(limit);
 
   const allowed = new Set([
     SITE_PUBLISHED_AT_SORT,

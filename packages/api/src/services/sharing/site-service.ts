@@ -55,7 +55,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { randomBytes, randomUUID } from "node:crypto";
-import { getDb, and, asc, desc, eq, inArray, isNull } from "@synap/database";
+import { getDb, and, desc, eq, inArray, isNull } from "@synap/database";
 import {
   entities,
   profiles,
@@ -64,13 +64,18 @@ import {
   resourceShares,
   workspaces,
 } from "@synap/database/schema";
-import { ne } from "drizzle-orm";
+import { count, ne, sql } from "drizzle-orm";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { grantWriteDenial } from "../../utils/grant-write-check.js";
 import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { generateShareToken, hashToken } from "../../utils/share-token.js";
+import {
+  decodeInstantCursor,
+  encodeInstantCursor,
+  INSTANT_CURSOR_FORMAT,
+} from "../../utils/keyset-cursor.js";
 import { assertAnchorAdmin } from "./anchor-admin.js";
 import {
   resolveExposurePolicy,
@@ -94,6 +99,7 @@ import {
   openMemberWorkspaces,
 } from "./site-members.js";
 import { projectPublishedProperties } from "./public-read.js";
+import { clampSiteLimit, SITE_MAX_LIMIT } from "./public-site-read.js";
 import {
   agentOf,
   assertCanNarrow,
@@ -1474,12 +1480,27 @@ export interface SiteStatus {
   /** Live members per configured collection (the manifest's own count). */
   collections: Array<{ key: string; count: number }>;
   /**
-   * The site's member rows that are not revoked (published or taken back to
-   * draft), newest publish first, at most {@link SITE_STATUS_MEMBER_CAP}.
+   * One page of the site's member rows that are not revoked (published or
+   * taken back to draft), newest member first (see {@link SiteStatusPage}).
    */
   members: SiteStatusMember[];
-  /** More member rows exist than `members` lists. */
-  membersTruncated: boolean;
+  /** Pass it back as `cursor` for the next page; null on the last page. */
+  membersNextCursor: string | null;
+  /** Every non-revoked member row of the site (the rows the pages walk). */
+  membersTotal: number;
+}
+
+/**
+ * The page of `members` a status read returns. `limit` defaults to, and
+ * clamps at, the site doors' bound ({@link SITE_MAX_LIMIT}). The order is
+ * `created_at DESC, id DESC`: a member's birth, which never moves (a
+ * republish updates `published_at` on the same row), so a walk lists every
+ * member that exists throughout it exactly once. The cursor carries
+ * `created_at` at microsecond precision.
+ */
+export interface SiteStatusPage {
+  cursor?: string;
+  limit?: number;
 }
 
 /** One record of a site, as its owner sees it (internal ids are fine here). */
@@ -1498,16 +1519,26 @@ export interface SiteStatusMember {
   stale: boolean;
 }
 
-export const SITE_STATUS_MEMBER_CAP = 500;
-
 async function statusMembers(
   database: Db,
   site: { id: string; projectId: string },
-  siteLive: boolean
-): Promise<{ members: SiteStatusMember[]; truncated: boolean }> {
+  siteLive: boolean,
+  page: SiteStatusPage
+): Promise<{
+  members: SiteStatusMember[];
+  nextCursor: string | null;
+  total: number;
+}> {
+  const limit = clampSiteLimit(page.limit ?? SITE_MAX_LIMIT);
+  const after = page.cursor ? decodeInstantCursor(page.cursor) : null;
+  const ofSite = and(
+    eq(resourceShares.siteShareId, site.id),
+    isNull(resourceShares.revokedAt)
+  );
   const rows = await database
     .select({
       id: resourceShares.id,
+      at: sql<string>`to_char(${resourceShares.createdAt} at time zone 'UTC', ${INSTANT_CURSOR_FORMAT})`,
       entityId: resourceShares.resourceId,
       title: entities.title,
       entityUpdatedAt: entities.updatedAt,
@@ -1521,13 +1552,19 @@ async function statusMembers(
     .leftJoin(entities, eq(entities.id, resourceShares.resourceId))
     .where(
       and(
-        eq(resourceShares.siteShareId, site.id),
-        isNull(resourceShares.revokedAt)
+        ofSite,
+        after
+          ? sql`(${resourceShares.createdAt}, ${resourceShares.id}) < (${after.at}::timestamptz, ${after.id}::uuid)`
+          : undefined
       )
     )
-    .orderBy(desc(resourceShares.publishedAt), asc(resourceShares.id))
-    .limit(SITE_STATUS_MEMBER_CAP + 1);
-  const listed = rows.slice(0, SITE_STATUS_MEMBER_CAP);
+    .orderBy(desc(resourceShares.createdAt), desc(resourceShares.id))
+    .limit(limit + 1);
+  const listed = rows.slice(0, limit);
+  const [{ total } = { total: 0 }] = await database
+    .select({ total: count() })
+    .from(resourceShares)
+    .where(ofSite);
   // THE public rule, not a re-derivation: the same predicate the doors serve.
   const liveIds = new Set<string>();
   if (siteLive && listed.length > 0) {
@@ -1546,6 +1583,7 @@ async function statusMembers(
       );
     for (const { id } of served) liveIds.add(id);
   }
+  const last = listed.at(-1);
   return {
     members: listed.map((r) => ({
       entityId: r.entityId,
@@ -1561,17 +1599,21 @@ async function statusMembers(
         !!r.entityUpdatedAt &&
         r.entityUpdatedAt.getTime() > r.publishedAt.getTime(),
     })),
-    truncated: rows.length > SITE_STATUS_MEMBER_CAP,
+    nextCursor:
+      rows.length > limit && last
+        ? encodeInstantCursor({ at: last.at, id: last.id })
+        : null,
+    total,
   };
 }
 
 /**
  * A site's owner-side status, by site id or by project (its live site; null
- * when it has none). Never a token or its hash.
+ * when it has none), with one page of its members. Never a token or its hash.
  */
 export async function siteStatus(
   actor: ShareActor,
-  req: { siteId: string } | { projectId: string }
+  req: ({ siteId: string } | { projectId: string }) & SiteStatusPage
 ): Promise<SiteStatus | null> {
   const database = await getDb();
   let site: SiteRow;
@@ -1617,7 +1659,7 @@ export async function siteStatus(
   const ref = { id: site.id, projectId: site.resourceId };
   const counts = await liveMemberCounts(ref, Object.keys(config.collections));
   const live = isSiteLive({ ...site, hasToken: !!site.tokenHash });
-  const { members, truncated } = await statusMembers(database, ref, live);
+  const page = await statusMembers(database, ref, live, req);
   return {
     siteId: site.id,
     projectId: site.resourceId,
@@ -1639,7 +1681,8 @@ export async function siteStatus(
       key,
       count: counts.get(key) ?? 0,
     })),
-    members,
-    membersTruncated: truncated,
+    members: page.members,
+    membersNextCursor: page.nextCursor,
+    membersTotal: page.total,
   };
 }
