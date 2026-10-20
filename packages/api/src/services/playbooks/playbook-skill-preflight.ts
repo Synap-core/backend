@@ -29,6 +29,7 @@ import {
   resolveGrantedCapabilities,
 } from "../links/links-service.js";
 import type { SkillRef } from "../capabilities/propose-capability-enable.js";
+import { openLink, openTypedLink } from "../../utils/deep-links.js";
 
 const COMPOUND_NAME = /[-_.]/;
 
@@ -67,7 +68,8 @@ export function selectUnenabledPlaybookSkills(input: {
 export async function findUnenabledPlaybookSkills(input: {
   playbook: { id: string; goalTemplate: unknown };
   userId: string;
-  workspaceId: string;
+  /** The lens the run lands in; `null` = a pod-wide playbook read on its own. */
+  workspaceId: string | null;
 }): Promise<SkillRef[]> {
   const playbookLinks = await getLinksFor(
     input.userId,
@@ -83,7 +85,7 @@ export async function findUnenabledPlaybookSkills(input: {
     .from(skills)
     .where(
       and(
-        visibleSkillsWhere(input.userId, input.workspaceId),
+        visibleSkillsWhere(input.userId, input.workspaceId ?? undefined),
         eq(skills.status, "active")
       )
     );
@@ -94,4 +96,49 @@ export async function findUnenabledPlaybookSkills(input: {
     ),
     visibleSkills,
   });
+}
+
+/** One pack (or lone skill) a playbook needs turned on, and where a person does it. */
+export interface DisabledSkillGroup {
+  pack: { id: string; name: string } | null;
+  skills: SkillRef[];
+  /** The capability card where a person enables the pack (or the skill's own page). */
+  enableLink: string;
+}
+
+/**
+ * READ-ONLY readiness — the same detection the run doors refuse on
+ * ({@link findUnenabledPlaybookSkills}), grouped by pack with the card that
+ * enables it. Files nothing: it is what `diagnose` answers, so "why did this
+ * run not start?" names the skills that are off without waiting for a run.
+ */
+export async function readPlaybookSkillReadiness(input: {
+  playbook: { id: string; goalTemplate: unknown };
+  userId: string;
+  workspaceId: string | null;
+}): Promise<{ ready: boolean; disabled: DisabledSkillGroup[] }> {
+  const unenabled = await findUnenabledPlaybookSkills(input);
+  if (unenabled.length === 0) return { ready: true, disabled: [] };
+  const { loadContainerRefs, containerMemberKey } =
+    await import("../capabilities/capability-registry.js");
+  const refs = await loadContainerRefs({
+    toolIds: [],
+    skillIds: unenabled.map((s) => s.id),
+    userId: input.userId,
+  });
+  const groups = new Map<string, DisabledSkillGroup>();
+  for (const skill of unenabled) {
+    const ref = refs.get(containerMemberKey("skill", skill.id));
+    const key = ref ? `capability:${ref.id}` : `skill:${skill.id}`;
+    const group = groups.get(key) ?? {
+      pack: ref ? { id: ref.id, name: ref.name } : null,
+      skills: [],
+      enableLink: ref
+        ? openTypedLink("capability", ref.id)
+        : openLink(skill.id),
+    };
+    group.skills.push(skill);
+    groups.set(key, group);
+  }
+  return { ready: false, disabled: [...groups.values()] };
 }

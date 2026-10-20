@@ -83,6 +83,7 @@ import {
   type CapabilityShadow,
 } from "../capabilities/capability-shadows.js";
 import { buildCapabilityComposition } from "./capability-composition.js";
+import { readPlaybookSkillReadiness } from "../playbooks/playbook-skill-preflight.js";
 import { isFullUuid, resolveObjectKind } from "./resolve-object-kind.js";
 import {
   diagnoseWorkspaceClass,
@@ -698,7 +699,11 @@ async function diagnoseObject(
 
     case "playbook": {
       const [row] = await db
-        .select({ name: playbooks.name, workspaceId: playbooks.workspaceId })
+        .select({
+          name: playbooks.name,
+          workspaceId: playbooks.workspaceId,
+          goalTemplate: playbooks.goalTemplate,
+        })
         .from(playbooks)
         .where(
           and(
@@ -708,13 +713,37 @@ async function diagnoseObject(
         )
         .limit(1);
       if (!row) return { error: "Playbook not found" };
+      // The SAME detection the run doors refuse on (D3), read-only: a run of
+      // this playbook would be blocked while any of these skills is off. A
+      // failed read says so — it is never folded into "ready".
+      const readiness = await readPlaybookSkillReadiness({
+        playbook: { id, goalTemplate: row.goalTemplate },
+        userId,
+        workspaceId: row.workspaceId,
+      }).then(
+        (r) => ({ status: "ok" as const, ...r }),
+        (err: unknown) => ({
+          status: "unavailable" as const,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
+      const off =
+        readiness.status === "ok"
+          ? readiness.disabled.flatMap((g) => g.skills.map((s) => s.name))
+          : [];
       return {
         mode: "object",
         kind,
         id,
-        summary: `Playbook "${row.name}"`,
+        summary:
+          `Playbook "${row.name}"` +
+          (off.length > 0
+            ? ` cannot run: it uses skills that are not enabled yet (${off.join(", ")})`
+            : readiness.status === "unavailable"
+              ? " (its skill readiness could not be read)"
+              : ""),
         state: { name: row.name, workspaceId: row.workspaceId },
-        why: null,
+        why: { skillReadiness: readiness },
       };
     }
 
