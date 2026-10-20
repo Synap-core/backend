@@ -163,16 +163,15 @@ export function planProposalRevert(
     // A session update: the apply site stamps a `focus_session` row patch
     // ONLY when every change is one undo can restore (`session-undo.ts`).
     if (proposal.targetType === "focus_session") {
-      const patches = (
-        (materialized as CompleteMaterializedRecord | undefined)?.rowPatches ??
-        []
-      ).filter((p) => p.kind === "focus_session");
+      const stamped = (materialized as CompleteMaterializedRecord | undefined)
+        ?.rowPatches;
+      const patches = (stamped ?? []).filter((p) => p.kind === "focus_session");
       if (patches.length > 0) {
         return creationsPlanFromRecord({ rowPatches: patches });
       }
       return {
         kind: "unsupported",
-        reason: materialized?.rowPatches
+        reason: stamped
           ? "Revert of this session update is not supported: it changed nothing, so there is nothing to undo."
           : "Revert of this session update is not supported: undo restores a session's title, goal, progress and project only, and this change also touched something else (or was applied before undo records were kept).",
       };
