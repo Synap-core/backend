@@ -967,6 +967,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0294_account_recovery_codes.sql",
   },
 
+  // invite_acceptances — who an accepted invite let in (0334). Absence means
+  // a pod is on a pre-0334 schema where every invite accept would fail to
+  // record its acceptance.
+  {
+    table: "invite_acceptances",
+    column: "user_id",
+    addedBy: "0334_invite_acceptances.sql",
+  },
+  {
+    table: "invite_acceptances",
+    column: "invite_expires_at",
+    addedBy: "0334_invite_acceptances.sql",
+  },
+
   // grants — what one credential may touch (0305, W1). Absence means a pod is
   // on a pre-0305 schema where key identity would fail to load a grant.
   {

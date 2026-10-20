@@ -86,7 +86,10 @@ vi.mock("@synap/database/schema", () => ({
   workspaces: {},
 }));
 
-vi.mock("@synap/api", () => ({
+vi.mock("@synap/api", async () => ({
+  // The real Pod Admin URL resolver (`../pod-admin-config.js` re-exports it
+  // from @synap/api). Without it every start case read a 500.
+  ...(await import("../../../../packages/api/src/utils/pod-admin-url.js")),
   // Mirrors the real contract (@synap/api jwks-client): PUBLIC_URL, no trailing slash.
   podAudience: () => process.env.PUBLIC_URL?.replace(/\/+$/, "") || null,
   createOpaqueApplicationConnectionValue: vi.fn(),
@@ -901,5 +904,199 @@ describe("application connection request boundary", () => {
         intentId: claims.intentId,
       })
     );
+  });
+});
+
+/**
+ * The account hint on the start form: the issuer's signed identity-link
+ * assertion, so Pod Admin can name the account that will receive access.
+ * `verifyIssuerJwt` is mocked to accept exactly ONE token (`SIGNED`), so a
+ * route that trusted decoded claims instead of the verifier would turn the
+ * forged case below red.
+ */
+describe("application connection start — account hint", () => {
+  const ISSUER = "https://issuer.example.test";
+  const AUDIENCE = "https://pod.example.test";
+  const nowSeconds = Math.floor(Date.now() / 1_000);
+  const claimsFor = (overrides: Record<string, unknown> = {}) => ({
+    iss: ISSUER,
+    aud: AUDIENCE,
+    sub: "issuer-user-1",
+    email: "Ada@Example.test",
+    type: "federated_assertion",
+    purpose: "identity-link",
+    intentId: "intent-1",
+    nonce: "n".repeat(32),
+    azp: "com.example.crm",
+    iat: nowSeconds,
+    exp: nowSeconds + 300,
+    jti: "jti-1",
+    ...overrides,
+  });
+  // Decodable shape only; the signature is the mocked verifier's business.
+  const tokenFor = (claims: Record<string, unknown>, key = "issuer-key") =>
+    jwt.sign(claims, key, { algorithm: "HS256" });
+  const SIGNED = tokenFor(claimsFor());
+
+  const start = (assertion?: string) => {
+    const form = new URLSearchParams({
+      requestId: "11111111-1111-4111-8111-111111111111",
+      issuerUrl: ISSUER,
+      issuerSubject: "issuer-user-1",
+      azp: "com.example.crm",
+      displayName: "Example CRM",
+      origin: "https://app.example.test",
+      callbackUrl: "https://app.example.test/login",
+      requestedScopes: JSON.stringify([
+        "auth:exchange-user",
+        "identity:link-user",
+      ]),
+      continuationHash: "a".repeat(64),
+      redemptionHash: "b".repeat(64),
+      redemptionSecret: "r".repeat(32),
+      ...(assertion !== undefined ? { assertion } : {}),
+    });
+    return federationRouter.request("/application-connections/requests/start", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Origin: "https://app.example.test",
+        Accept: "application/json",
+      },
+      body: form.toString(),
+    });
+  };
+  const storedMetadata = () =>
+    mocks.createAwaitingLocalAuth.mock.calls[0]?.[0]?.requestMetadata;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.PUBLIC_URL = AUDIENCE;
+    process.env.POD_ADMIN_URL = "https://pod-admin.example.test";
+    mocks.normalizeApplicationCallbackUrl.mockImplementation(
+      (value: string) => value
+    );
+    mocks.normalizeApplicationConnectionScopes.mockImplementation(
+      (value: string[]) => value
+    );
+    mocks.normalizePublisherUrl.mockReturnValue(null);
+    mocks.createAwaitingLocalAuth.mockResolvedValue({
+      id: "11111111-1111-4111-8111-111111111111",
+    });
+    mocks.getByUrl.mockImplementation(async (url: string) =>
+      url === ISSUER
+        ? { id: "issuer-1", issuerUrl: ISSUER, status: "approved" }
+        : null
+    );
+    mocks.verifyIssuerJwt.mockImplementation(async (token: string) =>
+      token === SIGNED ? claimsFor() : null
+    );
+  });
+
+  afterEach(() => {
+    delete process.env.PUBLIC_URL;
+    delete process.env.POD_ADMIN_URL;
+  });
+
+  it("records the verified account from an approved issuer, without spending the JTI", async () => {
+    const response = await start(SIGNED);
+
+    expect(response.status).toBe(303);
+    expect(mocks.verifyIssuerJwt).toHaveBeenCalledWith(
+      SIGNED,
+      ISSUER,
+      AUDIENCE,
+      { consumeJti: false }
+    );
+    expect(storedMetadata()).toEqual({
+      requestedVia: "browser-pod-admin-handoff",
+      requesterAccount: {
+        verifiedEmail: "ada@example.test",
+        verifiedAt: expect.any(String),
+        issuerUrl: ISSUER,
+      },
+    });
+    expect(
+      Number.isNaN(Date.parse(storedMetadata().requesterAccount.verifiedAt))
+    ).toBe(false);
+  });
+
+  it("keeps the origin the issuer vouched for, for the invite-consent rule", async () => {
+    mocks.verifyIssuerJwt.mockImplementation(async (token: string) =>
+      token === SIGNED
+        ? claimsFor({ origin: "https://app.example.test" })
+        : null
+    );
+    expect((await start(SIGNED)).status).toBe(303);
+    expect(storedMetadata().requesterAccount).toMatchObject({
+      vouchedOrigin: "https://app.example.test",
+    });
+  });
+
+  it("ignores a forged or unsigned hint: the request starts Not verified", async () => {
+    const forged = tokenFor(
+      claimsFor({ email: "mallory@example.test" }),
+      "attacker-key"
+    );
+    const unsigned = jwt.sign(claimsFor(), "", { algorithm: "none" });
+
+    for (const assertion of [forged, unsigned, "not-a-jwt"]) {
+      mocks.createAwaitingLocalAuth.mockClear();
+      const response = await start(assertion);
+      expect(response.status).toBe(303);
+      expect(storedMetadata()).toEqual({
+        requestedVia: "browser-pod-admin-handoff",
+      });
+    }
+  });
+
+  it("starts without a hint exactly as before", async () => {
+    const response = await start();
+    expect(response.status).toBe(303);
+    expect(storedMetadata()).toEqual({
+      requestedVia: "browser-pod-admin-handoff",
+    });
+    expect(mocks.getByUrl).not.toHaveBeenCalled();
+    expect(mocks.verifyIssuerJwt).not.toHaveBeenCalled();
+  });
+
+  it("never fetches keys for an issuer this Pod has not approved", async () => {
+    // Pending in the registry, unknown to it, and named only by the token.
+    mocks.getByUrl.mockResolvedValueOnce({
+      id: "issuer-1",
+      issuerUrl: ISSUER,
+      status: "pending",
+    });
+    expect((await start(SIGNED)).status).toBe(303);
+    mocks.getByUrl.mockResolvedValueOnce(null);
+    expect((await start(SIGNED)).status).toBe(303);
+    const elsewhere = tokenFor(claimsFor({ iss: "https://evil.example.test" }));
+    expect((await start(elsewhere)).status).toBe(303);
+
+    expect(mocks.verifyIssuerJwt).not.toHaveBeenCalled();
+    expect(mocks.getByUrl).not.toHaveBeenCalledWith(
+      "https://evil.example.test"
+    );
+    for (const [input] of mocks.createAwaitingLocalAuth.mock.calls) {
+      expect(input.requestMetadata).not.toHaveProperty("requesterAccount");
+    }
+  });
+
+  it.each([
+    ["another subject", { sub: "issuer-user-2" }],
+    ["another app", { azp: "com.example.other" }],
+    ["no app", { azp: undefined }],
+  ])("refuses a validly signed hint for %s", async (_label, overrides) => {
+    mocks.verifyIssuerJwt.mockImplementation(async (token: string) =>
+      token === SIGNED ? claimsFor(overrides) : null
+    );
+
+    const response = await start(SIGNED);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "INVALID_APPLICATION_HANDOFF",
+    });
+    expect(mocks.createAwaitingLocalAuth).not.toHaveBeenCalled();
   });
 });

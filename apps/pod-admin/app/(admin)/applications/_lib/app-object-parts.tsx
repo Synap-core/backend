@@ -9,6 +9,7 @@
  */
 
 import Link from "next/link";
+import { Button } from "@heroui/react";
 import { KeyRound, User } from "lucide-react";
 import type { ReactNode } from "react";
 import { navHref } from "../../../../lib/console-nav";
@@ -97,13 +98,18 @@ export interface AppPerson {
   note?: string;
 }
 
-/** Who uses the app — each person opens on Members. */
+/**
+ * Who uses the app — each person opens on Members. With `onUnlink`, each row
+ * also offers "Unlink {email}" (the caller confirms before anything happens).
+ */
 export function PeopleList({
   people,
   empty,
+  onUnlink,
 }: {
   people: readonly AppPerson[];
   empty: string;
+  onUnlink?: (person: AppPerson) => void;
 }) {
   if (people.length === 0) return <ResourceRowEmpty message={empty} />;
   return (
@@ -117,13 +123,25 @@ export function PeopleList({
               .filter(Boolean)
               .join(" · ")}
             actions={
-              <Link
-                href={navHref("members", { focus: p.id })}
-                aria-label={`Open ${personName(p) ?? "this person"} on Members`}
-                className="rounded-sm px-2 text-[12px] text-foreground/65 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-              >
-                Members
-              </Link>
+              <div className="flex items-center gap-1">
+                <Link
+                  href={navHref("members", { focus: p.id })}
+                  aria-label={`Open ${personName(p) ?? "this person"} on Members`}
+                  className="rounded-sm px-2 text-[12px] text-foreground/65 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                >
+                  Members
+                </Link>
+                {onUnlink ? (
+                  <Button
+                    size="sm"
+                    variant="light"
+                    color="danger"
+                    onPress={() => onUnlink(p)}
+                  >
+                    Unlink {p.email ?? personName(p) ?? "this person"}
+                  </Button>
+                ) : null}
+              </div>
             }
           />
         </div>

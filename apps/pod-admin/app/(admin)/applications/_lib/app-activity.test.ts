@@ -69,6 +69,22 @@ describe("appActivityLine", () => {
     );
   });
 
+  it("says when the invite approved, and who was unlinked", () => {
+    expect(
+      line("application_connection.approve.completed", {
+        approvedByInvite: "invite-1",
+      })
+    ).toBe("Approved by invite");
+    expect(
+      line("application_connection.unlink.completed", {
+        email: "ada@example.test",
+      })
+    ).toBe("Unlinked ada@example.test");
+    expect(line("application_connection.unlink.completed")).toBe(
+      "Unlinked an account"
+    );
+  });
+
   it("falls back to the event type, humanized", () => {
     expect(line("apiKey.update.completed")).toBe("H(apiKey update)");
     expect(line("api_keys.revoke.completed", null)).toBe("H(api_keys revoke)");

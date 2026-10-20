@@ -40,6 +40,12 @@ export type CreateFederatedApplicationConnectionRequestInput = {
 export type ApproveFederatedApplicationConnectionRequestInput = {
   requestId: string;
   reviewerUserId: string;
+  /**
+   * Merged into the request's `request_metadata` in the same write: how the
+   * approval was decided when no owner pressed the button (the invite the
+   * requester accepted). Omitted for an owner's approval.
+   */
+  approvalMetadata?: Record<string, unknown>;
 };
 
 export type ApplicationConnectionRequestStatus =
@@ -257,6 +263,11 @@ export class FederatedApplicationConnectionService {
           reviewedBy: input.reviewerUserId,
           reviewedAt: now,
           expiresAt: completionExpiresAt,
+          ...(input.approvalMetadata
+            ? {
+                requestMetadata: sql`coalesce(${federatedApplicationConnectionRequests.requestMetadata}, '{}'::jsonb) || ${JSON.stringify(input.approvalMetadata)}::jsonb`,
+              }
+            : {}),
         })
         .where(
           and(

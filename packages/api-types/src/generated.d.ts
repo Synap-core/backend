@@ -15677,6 +15677,23 @@ export interface BrokerTrustDiagnostics {
 	};
 }
 /**
+ * What a reviewer is told about that account. `unverified` covers every
+ * request without a verified record — no assertion sent, an unapproved
+ * issuer, a signature that failed — because to the reviewer they mean the
+ * same thing: nobody vouched for the account. The raw issuer subject is
+ * never shown; it is an opaque id, not something a person can recognise.
+ */
+export type RequesterAccountView = {
+	status: "verified";
+	email: string;
+	issuerHost: string;
+	/** The trusted issuer's display name on this Pod, when it has one. */
+	issuerName: string | null;
+	verifiedAt: string;
+} | {
+	status: "unverified";
+};
+/**
  * The clients the pod's OWN OAuth authorization server registered (Path B:
  * claude.ai pointed straight at `https://<pod>/mcp`; `routers/oauth/*`), read
  * and cut off as a pod admin sees them — the service behind `oauthClients.*`.
@@ -38003,6 +38020,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				requestId: string;
+				linkedByInvite: boolean;
 			};
 			meta: object;
 		}>;
@@ -38025,6 +38043,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewedAt: Date | null;
 				canReview: boolean;
 				matchingApprovedConnection: boolean;
+				requesterAccount: RequesterAccountView | null;
+				requesterMember: null;
+				approvedByInvite: boolean;
+				approvedConnectionId: null;
+				returnUrl: string | null;
 			} | {
 				id: string;
 				issuerUrl: string;
@@ -38040,6 +38063,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewedAt: Date | null;
 				canReview: true;
 				matchingApprovedConnection: boolean;
+				requesterAccount: RequesterAccountView | null;
+				requesterMember: {
+					name: string | null;
+					email: string | null;
+				} | null;
+				approvedByInvite: boolean;
+				approvedConnectionId: string | null;
+				returnUrl: null;
 			};
 			meta: object;
 		}>;
@@ -38098,12 +38129,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
-				people: {
+				people: ({
 					userId: string;
 					name: string | null;
 					email: string;
 					linkedAt: Date;
-				}[];
+				} & {
+					linkedByInvite: boolean;
+				})[];
 				requestIds: string[];
 				lastUsedAt: Date | null;
 				peopleCount: number;
@@ -38123,6 +38156,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				initialRequestData: unknown;
 				createdAt: Date;
 				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		unlinkAccount: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				connectionId: string;
+				userId: string;
+			};
+			output: {
+				status: "unlinked";
+				email: string | null;
+				app: {
+					displayName: string;
+					clientId: string;
+				};
+				signIn: "failed" | "not_applicable" | "removed";
+			} | {
+				status: "not_linked";
 			};
 			meta: object;
 		}>;

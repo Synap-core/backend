@@ -85,6 +85,7 @@ export * from "./utils/agent-proposal-session-memo.js";
 export * from "./utils/insert-pending-proposal.js";
 export * from "./utils/facet-visibility.js";
 export * from "./utils/pod-membership.js";
+export * from "./utils/invite-acceptance.js";
 export * from "./utils/user-visible-where.js";
 export * from "./utils/catalog-sync-stamps.js";
 export * from "./utils/marketplace-sources.js";

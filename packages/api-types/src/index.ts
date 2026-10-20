@@ -19,6 +19,7 @@ export type {
   RunDefinitionSnapshot,
   RunPathTaken,
   UnifiedRunDetail,
+  RequesterAccountView,
 } from "./generated.js";
 
 // External connect contracts are backend-owned and shared with clients.
