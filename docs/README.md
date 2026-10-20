@@ -1,25 +1,47 @@
-# Synap Backend — documentation index
+# Documentation in this repository
 
-**Canonical architecture & platform narrative:** edit **`synap-team-docs/content/team/platform/*.mdx`** (and **[DevOps](/team/devops)**, **[Control plane](/team/control-plane)** for ops). Those pages absorbed the former `synap-backend/docs/*.md` sources that **`import-all.sh`** used to copy into `content/docs/` — **those markdown files were removed** (2026-04-13) once parity was verified with team MDX.
+User, self-hosting and API documentation is published at
+<https://docs.synap.live>. The files here are the ones that sit next to the
+code they describe.
 
-**Still in this folder (pod / operator / code-adjacent):**
+## Start here
 
-| File                                  | Purpose                                                                             |
-| ------------------------------------- | ----------------------------------------------------------------------------------- |
-| **`ARCHITECTURE-OVERVIEW.md`**        | **What Synap is** — the public architecture source of truth (the README cites this) |
-| **`DEVELOPER.md`**                    | **Building on Synap** — the SDK, MCP, and self-hosting guide                        |
-| **`RSS-SETUP.md`**                    | Self-host RSS ingestion setup                                                       |
-| **`FEED-API.md`**                     | Feed HTTP API for operators / integrators                                           |
-| **`DeliveryService*.md`**             | `DeliveryService` API reference next to code                                        |
-| **`integrations/n8n-integration.md`** | n8n + Docker + webhooks                                                             |
-| **`development/README.md`**           | Short index of dev topics (long guides → team DevOps)                               |
+| File                                                   | What it is                                                                      |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| [`ARCHITECTURE-OVERVIEW.md`](ARCHITECTURE-OVERVIEW.md) | What Synap is: the data model, the unit of work, governance. Cites its sources. |
+| [`DEVELOPER.md`](DEVELOPER.md)                         | Building on a pod: the public SDK, bring-your-own-agent over MCP, self-hosting. |
+| [`../CONTRIBUTING.md`](../CONTRIBUTING.md)             | Working on this repository: setup, tests, migrations, commits.                  |
+| [`../deploy/README.md`](../deploy/README.md)           | Self-hosting a pod: install, update, back up, restore.                          |
+| [`development/README.md`](development/README.md)       | Where the engineering notes for each part of the backend live.                  |
 
-> ⚠️ **The two files above are the public entry points and must stay true.** The
-> root `README.md` claims specific structures (the unit-of-work hierarchy, the
-> view types, the auth stack) and every one of them cites a source file. If the
-> model changes, update `ARCHITECTURE-OVERVIEW.md` in the same commit — it is
-> the SSOT the README, the docs site and the pitch all agree to.
+> `ARCHITECTURE-OVERVIEW.md` is the source of truth for the public claims the
+> root `README.md` makes. If the model changes, update it in the same commit.
 
-**Import script:** `synap-team-docs/scripts/import-all.sh` still pulls **`packages/hub-protocol/README.md`** and **`packages/database/MIGRATIONS.md`** into public `content/docs/platform/` — not from `docs/` anymore.
+## Reference (generated)
 
-See **`synap-team-docs/docs/DOCUMENTATION_SOURCE_OF_TRUTH.md`**.
+Generated from source by `pnpm docs:reference`; do not edit by hand.
+
+| File                                                       | What it is                                     |
+| ---------------------------------------------------------- | ---------------------------------------------- |
+| [`reference/mcp-tools.md`](reference/mcp-tools.md)         | Every tool the pod's MCP server lists          |
+| [`reference/events.md`](reference/events.md)               | The event types an automation trigger can name |
+| [`reference/hub-openapi.json`](reference/hub-openapi.json) | OpenAPI document of the Hub Protocol REST API  |
+
+## Operating a pod
+
+| File                                                             | What it is                                                  |
+| ---------------------------------------------------------------- | ----------------------------------------------------------- |
+| [`marketplace-source.md`](marketplace-source.md)                 | Publishing a marketplace source a pod can add               |
+| [`DEPLOY-HYGIENE.md`](DEPLOY-HYGIENE.md)                         | Rules for any host running the pod's Compose stack          |
+| [`../deploy/DEPLOY-INTEGRITY.md`](../deploy/DEPLOY-INTEGRITY.md) | How a from-source deploy proves it runs the intended commit |
+| [`../deploy/runbooks/`](../deploy/runbooks/)                     | Key rotation runbooks (field-encryption key, Ory secrets)   |
+
+## Design notes
+
+| File                                                               | What it is                                                       |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| [`LIBRARY.md`](LIBRARY.md)                                         | The Library: what a pod keeps from captures, imports and links   |
+| [`IMPORT_CURATE_BUILD.md`](IMPORT_CURATE_BUILD.md)                 | The import, curate and build flow                                |
+| [`CAPTURE_IMPORT_ARCHITECTURE.md`](CAPTURE_IMPORT_ARCHITECTURE.md) | Capture and import architecture decisions                        |
+| [`CAPTURE_LIBRARY_PLAN.md`](CAPTURE_LIBRARY_PLAN.md)               | The plan that split Capture from the Library                     |
+| [`IS-HANDOFF-ANY-LINK-TO-DATA.md`](IS-HANDOFF-ANY-LINK-TO-DATA.md) | What changed for the Intelligence Service when links became data |

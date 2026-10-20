@@ -2514,7 +2514,7 @@ EOF
         if [ -z "$ADMIN_BOOTSTRAP_MODE" ]; then
             local mode_default=${DEFAULT_ADMIN_BOOTSTRAP_MODE:-preseed}
             echo "  1) Pre-seed first admin via CLI/script (recommended for operators)"
-            echo "  2) One-time bootstrap token (guided UI at /admin/bootstrap)"
+            echo "  2) Set up in the browser after install (one-hour link from './synap setup admin --magic-link')"
             echo ""
             read -p "Choice [1/2] (${mode_default}): " ADMIN_BOOTSTRAP_CHOICE
             if [ "$ADMIN_BOOTSTRAP_CHOICE" = "2" ] || [ "$mode_default" = "token" -a -z "$ADMIN_BOOTSTRAP_CHOICE" ]; then
@@ -3064,21 +3064,22 @@ EOF
         echo "  Done: the owner is the person the registration code was minted for."
         echo "  Sign in at $(_ue_env_get POD_ADMIN_URL) with your Synap account."
     elif [ "$ADMIN_BOOTSTRAP_MODE" = "token" ]; then
-        local ui_base="https://${DOMAIN}"
-        if [ "$DOMAIN" = "localhost" ]; then
-            ui_base="http://localhost:4000"
-        fi
-        echo "  1) Open: ${ui_base}/admin/bootstrap"
-        echo "  2) Use token: ${ADMIN_BOOTSTRAP_TOKEN}"
-        echo "  3) Continue to registration and set your password"
+        # The /admin/* SPA (and its /admin/bootstrap page) is retired. The
+        # first-admin door is the /setup page, opened with a magic link that
+        # POST /api/hub/setup/magic-link mints (cmd_setup_admin --magic-link).
+        echo "  1) Mint a one-hour setup link:"
+        echo "       ./synap setup admin --email <you@example.com> --magic-link"
+        echo "  2) Open the printed /setup?token=... link and create the admin account"
+        echo "  3) Sign in at $(_ue_env_get POD_ADMIN_URL)"
+        echo "  Or create the admin directly: ./synap setup admin --email <e> --password <p>"
     else
         if [ "${ADMIN_SEED_OK:-}" = "true" ]; then
-            echo "  Pre-seed finished. Sign in at /admin with ${ADMIN_EMAIL}"
+            echo "  Pre-seed finished. Sign in at $(_ue_env_get POD_ADMIN_URL) with ${ADMIN_EMAIL}"
         else
             echo "  Pre-seed manually:"
-            echo "    docker compose exec -T -e ADMIN_EMAIL='<email>' -e ADMIN_PASSWORD='<password>' backend node dist/scripts/create-admin-cli.js"
+            echo "    ./synap setup admin --email <email> --password <password>"
             echo "  Or from repo: ADMIN_EMAIL=... ADMIN_PASSWORD=... pnpm tsx scripts/create-admin-cli.ts"
-            echo "  Then open /admin"
+            echo "  Then sign in at $(_ue_env_get POD_ADMIN_URL)"
         fi
     fi
     if [ "$WITH_RSSHUB" = "true" ]; then
