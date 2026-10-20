@@ -43,7 +43,7 @@ const workspace = await synap.workspaces.get.query();
 
 | Option         | Header                    | Use for                                                                                                                                                                                                                           |
 | -------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sessionToken` | `x-session-token`         | **Preferred** — Ory Kratos session token, e.g. from `/api/federation/exchange`. For CLI tools, mobile, extensions.                                                                                                                |
+| `sessionToken` | `x-session-token`         | **Preferred** — Ory Kratos session token from a Kratos API (native) login flow. For CLI tools, mobile, extensions.                                                                                                                |
 | `apiKey`       | `Authorization: Bearer …` | Only the local-mode token of a desktop pod. A pod refuses hub and user API keys (`synap_hub_…`, `synap_user_…`) on `/trpc`, and the client throws if given one: use `@synap-core/hub-rest-client` against `/api/hub/*` for those. |
 | _(neither)_    | cookie                    | Falls back to cookie-based Kratos session auth.                                                                                                                                                                                   |
 
