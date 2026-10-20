@@ -248,20 +248,23 @@ describe("trpcProcedureAllowed (S7: the Bearer tRPC door fences mutations)", () 
     expect(trpcProcedureAllowed("subscription", "x.onEvent", FULL)).toBe(true);
   });
 
-  it("the undecided (d) product-decision mutations stay refused for a scoped key", () => {
-    // Founder, 2026-10-20: refused until decided (plan §2 D1–D5). D2 (role
-    // facets, W2a) and D4 (triggerAI, W2b) are decided and fixed: GATED.
+  it("the ten (d) product-decision mutations are decided: GATED, bounded inside", () => {
+    // Founder, 2026-10-20 (plan §2 D1–D5), applied in W2a (D2), W2b (D4) and
+    // W2d (D1, D3, D5): each door bounds the key itself.
     for (const path of [
       "automations.createAutomation",
       "automations.updateAutomation",
       "automations.activateAutomation",
       "automations.triggerAutomation",
+      "entities.attachFacet",
+      "entities.updateFacet",
+      "entities.detachFacet",
       "proposals.updateProposal",
+      "channels.triggerAI",
       "observations.append",
     ]) {
-      expect(TRPC_KEY_MUTATION_DOORS[path]?.bound, path).toBe("refused");
-      expect(trpcProcedureAllowed("mutation", path, AI), path).toBe(false);
-      expect(trpcProcedureAllowed("mutation", path, FULL), path).toBe(true);
+      expect(TRPC_KEY_MUTATION_DOORS[path]?.bound, path).toBe("gated");
+      expect(trpcProcedureAllowed("mutation", path, AI), path).toBe(true);
     }
   });
 

@@ -185,9 +185,11 @@ describe("a person writes directly", () => {
 describe("a key that is not an agent is bounded by its grant", () => {
   it("refuses update / pause / delete / activate the grant does not name", async () => {
     const g = grantOf(["automation.read", "automation.create"]);
+    // D1 (S7, 2026-10-20): editing or arming a flow is owner authority — a
+    // person's scoped key is refused before its grant is even read.
     await expect(
       runWithGrant(g, () => caller().update({ id: ID, name: "x" }))
-    ).rejects.toThrow(/automation\.update/);
+    ).rejects.toThrow(/unrestricted full access/);
     await expect(
       runWithGrant(g, () => caller().pause({ id: ID }))
     ).rejects.toThrow(/automation\.update/);
@@ -197,7 +199,7 @@ describe("a key that is not an agent is bounded by its grant", () => {
     h.automation.status = "draft";
     await expect(
       runWithGrant(g, () => caller().activate({ id: ID }))
-    ).rejects.toThrow(/automation\.activate/);
+    ).rejects.toThrow(/unrestricted full access/);
     expect(h.updates).toEqual([]);
     expect(h.deletes).toBe(0);
   });

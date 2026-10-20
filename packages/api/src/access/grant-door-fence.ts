@@ -399,11 +399,6 @@ const OWNER_WIDE = (reason: string): TrpcWriteDoor => ({
   bound: "owner_wide",
   reason,
 });
-/** Class (d): the default until the founder decides is REFUSED. */
-const DECISION = (id: string, reason: string): TrpcWriteDoor => ({
-  bound: "refused",
-  reason: `Product decision ${id}: ${reason}`,
-});
 
 /**
  * Every key-reachable tRPC MUTATION, by procedure path: the hub router
@@ -502,31 +497,18 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     // (c) REFUSED until the W2 root fix — none left: W2a–W2c fixed every one
     // and flipped it to GATED above. A new refused row needs its reason.
 
-    // (d) PRODUCT DECISION — refused until decided (plan §2 D1–D5).
-    "automations.createAutomation": DECISION(
-      "D1",
-      "a flow armed by a scoped key runs as its author with no grant."
-    ),
-    "automations.updateAutomation": DECISION(
-      "D1",
-      "a flow edited by a scoped key runs as its author with no grant."
-    ),
-    "automations.activateAutomation": DECISION(
-      "D1",
-      "arms a run that carries no grant."
-    ),
-    "automations.triggerAutomation": DECISION(
-      "D1",
-      "the automation-execute job carries no grant."
-    ),
-    "proposals.updateProposal": DECISION(
-      "D3",
-      "the decision verbs ignore workspace and project pins."
-    ),
-    "observations.append": DECISION(
-      "D5",
-      "are observations governed writes? An unknown workspace widens to pod-wide."
-    ),
+    // (d) PRODUCT DECISIONS (founder 2026-10-20, plan §2 D1–D5), applied in
+    // W2d — routers/hub-protocol/gate-on-target.decisions.pglite.test.ts.
+    // D1: arming/running a flow is owner authority — a person's key needs
+    // unbounded `*` inside the door; an agent key keeps its proposal path.
+    "automations.createAutomation": GATED,
+    "automations.updateAutomation": GATED,
+    "automations.activateAutomation": GATED,
+    "automations.triggerAutomation": GATED,
+    // D3: revising honours the key's space / project / object pins.
+    "proposals.updateProposal": GATED,
+    // D5: an observation is `event.create` where it lands; never widened.
+    "observations.append": GATED,
   };
 
 export const GRANT_WRITE_DOOR_UNSUPPORTED =
