@@ -1,6 +1,6 @@
 # The Library
 
-**Capture is your words, read now. The Library is everything you keep:** shared, saved, dropped, forwarded. Plan and decisions: [`CAPTURE_LIBRARY_PLAN.md`](CAPTURE_LIBRARY_PLAN.md). Builds on [`IMPORT_CURATE_BUILD.md`](IMPORT_CURATE_BUILD.md).
+**Capture is your words, read now. The Library is everything you keep:** shared, saved, dropped, forwarded. Decision: [`decisions/capture-vs-library.md`](decisions/capture-vs-library.md). Builds on [`IMPORT_CURATE_BUILD.md`](IMPORT_CURATE_BUILD.md).
 
 The contract every client reads is `@synap-core/types/imports` → `library.ts` (items, groups, curate ops, requests and results). Labels go through `@synap-core/types/vocabulary` (`resolveLibraryStatusLabel`).
 

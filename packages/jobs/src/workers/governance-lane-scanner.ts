@@ -11,7 +11,7 @@
  * (`packages/api/src/routers/proposals.ts`) — this scanner never writes
  * `governance_rules` directly.
  *
- * Qualification (mirrors GOVERNANCE-CONVERGENCE-PLAN.md §Phase D):
+ * Qualification (mirrors docs/decisions/agent-governance.md, trusted lane):
  *   total >= 100 && approveRate > 0.95 && duplicateRate < 0.15
  *   (approveRate counts only FULL approvals — see `computeQualification`)
  *   AND no already-PENDING widen proposal for the agent
@@ -353,7 +353,7 @@ async function hasPendingWidenProposal(agentId: string): Promise<boolean> {
  *
  * Considers BOTH `target_kind: "action"` rows (the scanner's own writes,
  * matched by exact/glob/"*" pattern as before) AND `target_kind: "capability"`
- * rows (Option B / D1, GOVERNANCE-PHASE2-PLAN.md §1) — the dominant motif for
+ * rows (Option B / D1, docs/decisions/agent-governance.md, phase 2 D1) — the dominant motif for
  * an agent whose approved proposals are mostly `capability.run`
  * (`CAPABILITY_RUN_PROPOSAL` in `@synap/capability-gate`) resolves to the
  * generic action pattern `"capability.run"`; if this agent already holds ANY

@@ -1,6 +1,6 @@
 /**
  * Hub Protocol REST — the Library for first-party clients (CLI, browser
- * extension, Raycast): CAPTURE_LIBRARY_PLAN L2/L4.
+ * extension, Raycast): capture-vs-library decision, wave L2/L4.
  *
  *   POST /library/add     keep items (hub-protocol.write) — LibraryAddRequest
  *   GET  /library/list    items, newest first (hub-protocol.read) — LibraryListRequest as query

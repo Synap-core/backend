@@ -726,7 +726,7 @@ export interface WorkspaceSettings {
    *     "task":    { list:   { kind: "view", viewId: "uuid-task-kanban" } }
    *   }
    *
-   * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+   * Spec: Synap-core/app-bases docs/architecture/profile-renderer.md
    */
   profileRenderers?: Record<
     string,

@@ -132,7 +132,7 @@ export interface CreateProfileInput {
 /**
  * THE ONE DOOR for "what entity_scope does this profile get?".
  *
- * Doctrine (APP-DOCK-MENTAL-MODEL-PLAN.md §1b, ratified 2026-08-01):
+ * Doctrine (APP-DOCK-MENTAL-MODEL-PLAN (team pod) §1b, ratified 2026-08-01):
  *
  *   KIND = POD-WIDE.  It is the entity's identity — one `person`, one
  *                     `company`, shared by the whole pod.

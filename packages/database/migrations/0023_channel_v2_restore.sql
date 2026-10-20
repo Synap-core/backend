@@ -2,7 +2,7 @@
 -- Phase 1: Restore V2 channelType vocabulary — add `personal` + `sub_thread`
 -- alongside the existing `thread | feed | external | agent_collab` types.
 --
--- Spec: synap-team-docs/content/team/platform/channel-system.mdx
+-- Spec: the team pod document "Chat, channels and AI interaction surfaces" (synap ask "channel system spec")
 --
 -- Background: V2 was meant to ship 6 canonical channelTypes. The pod drifted
 -- into 4 types + a `thread_kind` discriminator (later dropped in 0010), which

@@ -1,6 +1,6 @@
 /**
  * Capability CATALOG read-model — the pack-grouped, status-computed view that is
- * the keystone of the capability UX consolidation (see CAPABILITIES-NORTH-STAR.md).
+ * the keystone of the capability UX consolidation (see CAPABILITIES-NORTH-STAR (team pod)).
  *
  * Where `listCapabilities` (capability-registry.ts) returns a FLAT list — every
  * tool and every skill as its own (duplicated) entry — this builder returns ONE

@@ -7,7 +7,7 @@
  * fails if the TS enum drifts from the spec, if ThreadKind is ever
  * re-introduced, or if the migration vocabulary diverges from the TS enum.
  *
- * Spec: synap-team-docs/content/team/platform/channel-system.mdx
+ * Spec: the team pod document "Chat, channels and AI interaction surfaces" (synap ask "channel system spec")
  */
 
 import { describe, test, expect } from "vitest";

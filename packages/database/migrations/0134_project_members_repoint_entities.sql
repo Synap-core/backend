@@ -9,7 +9,7 @@
 -- is orphaned data — delete it before adding the new FK so the constraint
 -- does not block.
 --
--- Design doc: synap-app/synap-team-docs/content/team/platform/project-centric-scope.mdx
+-- Design doc: the team pod document "Project-centric scope, lenses and project members" (synap ask "project-centric scope")
 -- Phase: project-centric-scope Phase 0
 
 -- Step 0: ensure the table exists before repointing it.

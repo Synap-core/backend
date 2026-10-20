@@ -789,7 +789,7 @@ const captureBaseRouter = router({
         /**
          * @deprecated intake path `capture.thought.url` (person's use) — a link a person brings belongs to the Library.
          *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
-         *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+         *   docs/decisions/capture-vs-library.md. The agent path (MCP synap_capture / Hub
          *   capture with an agent key) is kept — founder 2026-10-13.
          */
         url: z.string().url().optional().describe("Optional source URL"),
@@ -1191,7 +1191,7 @@ const captureBaseRouter = router({
          *
          * @deprecated intake path `capture.file` (person's use) — a file or photo
          *   a person brings belongs to the Library. See `DEPRECATED_INTAKE_PATHS`
-         *   (`@synap-core/types/intake-route`) and docs/CAPTURE_LIBRARY_PLAN.md §2.
+         *   (`@synap-core/types/intake-route`) and docs/decisions/capture-vs-library.md.
          *   The agent path (MCP synap_capture / Hub capture with an agent key) is
          *   kept — founder 2026-10-13.
          */
@@ -1206,14 +1206,14 @@ const captureBaseRouter = router({
         /**
          * @deprecated intake path `capture.url` (person's use) — a link a person brings belongs to the Library.
          *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
-         *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+         *   docs/decisions/capture-vs-library.md. The agent path (MCP synap_capture / Hub
          *   capture with an agent key) is kept — founder 2026-10-13.
          */
         url: z.string().url().optional(),
         /**
          * @deprecated intake path `capture.html` (person's use) — a saved page a person brings belongs to the Library.
          *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
-         *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+         *   docs/decisions/capture-vs-library.md. The agent path (MCP synap_capture / Hub
          *   capture with an agent key) is kept — founder 2026-10-13.
          */
         html: z.string().max(50_000).optional(),
@@ -1343,7 +1343,7 @@ const captureBaseRouter = router({
        * @deprecated intake path `capture.linkReader` (person's use) — a link a person brings is read by the Library on save
        *   (same `readUrl` door).
        *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
-       *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+       *   docs/decisions/capture-vs-library.md. The agent path (MCP synap_capture / Hub
        *   capture with an agent key) is kept — founder 2026-10-13.
        */
       const linkUrl = loneHttpUrl(inputText);
@@ -1906,7 +1906,7 @@ const captureBaseRouter = router({
        * @deprecated intake path `capture.vision` (person's use) — photos a person brings move to the Library's light read
        *   and Build, which take over this lane and preference (wave L2).
        *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
-       *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+       *   docs/decisions/capture-vs-library.md. The agent path (MCP synap_capture / Hub
        *   capture with an agent key) is kept — founder 2026-10-13.
        */
       const visionModelId = input.file
