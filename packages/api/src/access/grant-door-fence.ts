@@ -293,6 +293,10 @@ export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
  *    person, recalled in EVERY workspace, written directly — no grant narrows
  *    them. `POST /memory/search` is a read (GRANT_REST_POST_READS). Agents
  *    remember a fact through MCP `synap_remember_fact` (a governed write).
+ *  - `PUT` / `DELETE /knowledge/:key` (S6 2026-10-20): rewrite or archive a
+ *    pod-wide `knowledge_keys` runbook BY KEY — no owner check, recalled by
+ *    every agent everywhere. `/knowledge/(search|ask|answer)` are reads;
+ *    `POST /knowledge` (create) is governed (`checkPermissionOrPropose`).
  *
  * Callers checked: the IS (unbounded keys), the browser/app (tRPC session),
  * the CLI cap flows (reach these only after a fenced read, so only with an
@@ -304,6 +308,7 @@ export const GRANT_OWNER_WIDE_REST_WRITES: readonly RegExp[] = [
   /^\/connectors\/connections\/[^/]+\/?$/,
   /^\/connectors\/disconnect\/?$/,
   /^\/memory(?:\/(?!search\/?$)[^/]+)?\/?$/,
+  /^\/knowledge\/(?!(?:search|ask|answer)\/?$)[^/]+\/?$/,
 ];
 
 export const GRANT_OWNER_WIDE_UNSUPPORTED =

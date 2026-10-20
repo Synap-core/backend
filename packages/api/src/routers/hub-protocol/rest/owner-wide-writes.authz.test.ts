@@ -117,10 +117,23 @@ const ROWS: Array<[Method, string, boolean]> = [
   ["POST", "/memory/writes", true],
   ["DELETE", "/memory/fact-1", true],
   ["POST", "/memory/search", false], // a read
+  // S6 (2026-10-20): a knowledge_keys runbook is pod-wide, addressed by key,
+  // with no owner check — rewriting / archiving one needs an unbounded key.
+  ["PUT", "/knowledge/deploy%3Abackend", true],
+  ["DELETE", "/knowledge/deploy%3Abackend", true],
+  ["POST", "/knowledge", false], // governed create (checkPermissionOrPropose)
+  ["POST", "/knowledge/search", false], // reads
+  ["POST", "/knowledge/ask", false],
+  ["POST", "/knowledge/answer", false],
 ];
 
 /** POST doors that READ — the generic fence rules on them, not this class. */
-const POST_READS = new Set(["/memory/search"]);
+const POST_READS = new Set([
+  "/memory/search",
+  "/knowledge/search",
+  "/knowledge/ask",
+  "/knowledge/answer",
+]);
 
 /**
  * S1 (2026-10-20): a `*` pinned to a space, project or object is NARROWED, so
