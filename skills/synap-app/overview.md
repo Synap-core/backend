@@ -9,8 +9,8 @@ pod, and **every write is governed** (see `governance.md`).
 | The user has… | Do this | Read |
 |---|---|---|
 | an existing app (any framework) | add the SDK | `using-the-sdk.md`, `install-commands.md` |
-| nothing yet, wants a full app fast | scaffold the base app | `creating-the-base-app.md`, `install-commands.md` |
-| a server / script / CLI (no browser) | SDK with a session token or API key | `using-the-sdk.md` |
+| nothing yet, wants a full app fast | scaffold the base app (scaffolder not published yet) | `creating-the-base-app.md`, `install-commands.md` |
+| a server / script / CLI (no browser) | SDK with a session token, or the REST client with an API key | `using-the-sdk.md` |
 
 Both paths use the same underlying packages; only the amount of scaffolding differs.
 
@@ -18,9 +18,11 @@ Both paths use the same underlying packages; only the amount of scaffolding diff
 
 - `@synap-core/sdk` — typed tRPC client. `createSynapClient({ podUrl, ... })`. **The one you almost always want.**
 - `@synap-core/react` — React/TanStack-Query bindings (`SynapProvider`, hooks).
-- `@synap-core/sdk-realtime` — Socket.IO presence/live-updates (`createRealtimeClient`).
-- `@synap-core/auth` — sign-in orchestration (Synap Cloud + pod handshake), framework-agnostic.
-- `@synap-core/auth-bootstrap` — zero-dep server helpers (`setupAgent`, `handshake`) for machine clients.
+- `@synap-core/sdk-realtime` — Socket.IO "something changed" events (`createRealtimeClient`).
+- `@synap-core/hub-rest-client` — zero-dep REST client for API-key holders (`HubRestClient`, `setupAgent`).
+
+Do not install `@synap-core/auth`: that package was retired, and its last npm
+release signs in through a pod route that no longer exists.
 
 Pin `@^1.0.0` on `sdk`/`react` so you never resolve an old, abandoned `0.x`.
 
@@ -30,13 +32,15 @@ Pin `@^1.0.0` on `sdk`/`react` so you never resolve an old, abandoned `0.x`.
    the change is queued for the pod owner's review (like a PR). Surface the review,
    don't retry. Full contract: `governance.md`.
 2. **The pod URL has no `/trpc` suffix and no trailing slash.** The SDK appends `/trpc`.
-3. **Non-browser clients (server/CLI/mobile) authenticate with a token or API key**,
-   never a cookie. Browser apps use the Synap Cloud sign-in flow (`@synap-core/auth`).
+3. **Non-browser clients (server/CLI/mobile) authenticate with a session token or
+   an API key**, never a cookie. An API key only works on the REST client and
+   realtime, not on the tRPC SDK. Browser apps use the Kratos session cookie.
 
 ## Get a pod to build against
 
-- **Self-host (free):** `git clone` the backend, `docker compose up -d` (run its
-  `install.sh` to generate secrets). Pod answers on `:4000`.
+- **Self-host (free):** run the backend's `install.sh` (it installs Docker if
+  needed, fetches a signed release bundle and runs `synap install`); see the
+  backend's `deploy/README.md`.
 - **Managed (paid):** sign up at synap.live and provision a pod.
 
 You can develop the base app with **no pod at all** using its mock mode
