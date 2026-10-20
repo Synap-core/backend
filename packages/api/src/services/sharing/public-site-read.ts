@@ -33,7 +33,8 @@ import { isSiteLive } from "./publication-live.js";
 import { publicDoorsOpenFor } from "./public-doors-switch.js";
 import { projectPublishedProperties } from "./public-read.js";
 import type { PublicShareClosed } from "./public-read.js";
-import { liveMemberCounts, resolveSiteConfig } from "./site-config.js";
+import { resolveSiteConfig } from "./site-config.js";
+import { liveMemberCounts } from "./site-members.js";
 
 /** A token longer than this cannot have been minted (32 bytes base64url = 43). */
 const MAX_TOKEN_LENGTH = 256;
@@ -116,7 +117,10 @@ export async function readPublicSite(
 
   const config = resolveSiteConfig(row.siteConfig);
   const keys = Object.keys(config.collections).sort();
-  const counts = await liveMemberCounts(row.id, keys);
+  const counts = await liveMemberCounts(
+    { id: row.id, projectId: row.resourceId },
+    keys
+  );
   const collections: PublicSiteCollection[] = keys.map((key) => {
     const c = config.collections[key]!;
     return {

@@ -1112,6 +1112,12 @@ export interface ShareListing {
     live: boolean;
     /** The snapshot's keys (never its values). */
     publishedFields: string[];
+    /**
+     * The site this row publishes the record into (0336), or null for the
+     * record's standalone publication. A member row has no token of its own:
+     * it is live through its site.
+     */
+    siteShareId: string | null;
     createdAt: Date;
     createdBy: string;
   }>;
@@ -1155,6 +1161,7 @@ export async function listShares(
     tokenPrefix: string | null;
     tokenHash: string | null;
     publishedProperties: unknown;
+    siteShareId: string | null;
     createdAt: Date;
     createdBy: string;
   }> = [];
@@ -1263,6 +1270,7 @@ export async function listShares(
           tokenPrefix: resourceShares.tokenPrefix,
           tokenHash: resourceShares.tokenHash,
           publishedProperties: resourceShares.publishedProperties,
+          siteShareId: resourceShares.siteShareId,
           createdAt: resourceShares.createdAt,
           createdBy: resourceShares.createdBy,
         })
@@ -1303,7 +1311,10 @@ export async function listShares(
       return {
         ...r,
         hasToken,
-        live: isPublicationLive({ ...r, audience, expiresAt, hasToken }, now),
+        live: isPublicationLive(
+          { ...r, audience, expiresAt, hasToken },
+          { via: r.siteShareId ? "site" : "token", now }
+        ),
         publishedFields:
           publishedProperties &&
           typeof publishedProperties === "object" &&

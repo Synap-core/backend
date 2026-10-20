@@ -45,6 +45,11 @@
  *                  and rotate mint the site token, human only, shown ONCE;
  *                  unpublish / revoke are direct for everyone (revoke also
  *                  revokes every member row, in one transaction).
+ *   - publishToSite  publish records INTO a site (batch ≤ 200, C1b): human
+ *                  owner direct; agent ONE proposal for the whole batch;
+ *                  refused records are reported per record.
+ *   - unpublishFromSite  take records off one site (or, no ids, the whole
+ *                  site back to draft). Direct for everyone.
  */
 
 import { z } from "zod";
@@ -73,9 +78,12 @@ import { registerShareExecutors } from "../services/sharing/share-executors.js";
 import {
   configureSite,
   publishSite,
+  publishToSite,
   revokeSite,
   rotateSiteToken,
   siteStatus,
+  SITE_PUBLISH_MAX_RECORDS,
+  unpublishFromSite,
   unpublishSite,
 } from "../services/sharing/site-service.js";
 import {
@@ -90,6 +98,7 @@ registerShareExecutors();
 
 const Uuid = z.string().uuid();
 const Kind = z.enum(SHARE_KINDS);
+const SiteRecordIds = z.array(Uuid).min(1).max(SITE_PUBLISH_MAX_RECORDS);
 
 /** The share door's actor, from the authenticated tRPC context. */
 export function shareActorFromCtx(ctx: {
@@ -242,6 +251,27 @@ export const sharesRouter = router({
     .input(z.object({ siteId: Uuid }))
     .mutation(({ input, ctx }) =>
       unpublishSite(shareActorFromCtx(ctx), input.siteId)
+    ),
+
+  publishToSite: protectedProcedure
+    .input(
+      z.object({
+        siteId: Uuid,
+        entityIds: SiteRecordIds,
+        reasoning: z.string().max(2000).optional(),
+      })
+    )
+    .mutation(({ input, ctx }) =>
+      publishToSite(
+        { ...shareActorFromCtx(ctx), reasoning: input.reasoning },
+        input
+      )
+    ),
+
+  unpublishFromSite: protectedProcedure
+    .input(z.object({ siteId: Uuid, entityIds: SiteRecordIds.optional() }))
+    .mutation(({ input, ctx }) =>
+      unpublishFromSite(shareActorFromCtx(ctx), input)
     ),
 
   revokeSite: protectedProcedure

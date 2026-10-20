@@ -1,8 +1,9 @@
 /**
- * SITE CONFIG — `resource_shares.site_config` (SiteConfigV1) and the live
- * member counts, shared by the owner doors (`site-service.ts`) and the public
- * manifest read (`public-site-read.ts`). Kept apart from the owner doors so
- * the credentialless read never imports the write gate.
+ * SITE CONFIG — `resource_shares.site_config` (SiteConfigV1) and a member's
+ * public addresses (public id, slug), shared by the owner doors
+ * (`site-service.ts`) and the public reads (`public-site-read.ts`). Kept apart
+ * from the owner doors so the credentialless read never imports the write
+ * gate. The live member set is `site-members.ts`.
  */
 
 import { z } from "zod";
@@ -69,17 +70,28 @@ export function resolveSiteConfig(raw: unknown): SiteConfigV1 {
   return parsed.success ? parsed.data : EMPTY_CONFIG;
 }
 
-// ── Live members ─────────────────────────────────────────────────────────────
+// ── Public addresses ─────────────────────────────────────────────────────────
+
+/** A member's public id: `p_` + 16 base62 chars. A slug never matches it (no `_`). */
+export const PUBLIC_ID_RE = /^p_[A-Za-z0-9]{16}$/;
+/** A stored slug (the 0336 `resource_shares_slug_check`). */
+export const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+export const SLUG_MAX_LENGTH = 96;
 
 /**
- * Live members per collection key. C1a: no member writer exists yet (member
- * rows are published from C1b on), so every count is 0 — C1b replaces this
- * with the narrowing-checked count the collection door's `total` uses, so the
- * manifest, the status and the list can never disagree.
+ * The slug of a snapshot value: NFKD, diacritics stripped, lowercase,
+ * `[^a-z0-9]+` → `-`, trimmed, ≤ 96 chars. Empty or not text → null (the
+ * record is then addressed by its public id only).
  */
-export async function liveMemberCounts(
-  _siteId: string,
-  keys: readonly string[]
-): Promise<Map<string, number>> {
-  return new Map(keys.map((k) => [k, 0]));
+export function slugify(value: unknown): string | null {
+  if (typeof value !== "string" && typeof value !== "number") return null;
+  const slug = String(value)
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, SLUG_MAX_LENGTH)
+    .replace(/-+$/, "");
+  return slug.length > 0 ? slug : null;
 }
