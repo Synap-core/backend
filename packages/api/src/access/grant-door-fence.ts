@@ -399,20 +399,6 @@ const OWNER_WIDE = (reason: string): TrpcWriteDoor => ({
   bound: "owner_wide",
   reason,
 });
-const UNBOUNDED = (reason: string): TrpcWriteDoor => ({
-  bound: "refused",
-  reason,
-});
-/** Class (d): the default until the founder decides is REFUSED. */
-const DECISION = (id: string, reason: string): TrpcWriteDoor => ({
-  bound: "refused",
-  reason: `Product decision ${id}: ${reason}`,
-});
-
-const HEADER_WS =
-  "The gate checks the workspace the caller picked (header/input), not the target's.";
-const READ_ONLY_CHECK =
-  "Checked only by a READ predicate; the write itself is not grant-checked.";
 
 /**
  * Every key-reachable tRPC MUTATION, by procedure path: the hub router
@@ -449,6 +435,54 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "relationDefs.create": GATED,
     "n8nActions.analyzeContent": GATED, // writes nothing
 
+    // (c)/(d) → GATED by their W2 root fix: the gate now sees the REAL target.
+    // Each group is proven through the real Bearer door on PGlite by the test
+    // named beside it.
+    // W2a — routers/hub-protocol/gate-on-target.entities.pglite.test.ts
+    "entities.createEntity": GATED,
+    "entities.updateEntities": GATED,
+    "entities.updateEntity": GATED,
+    // W2a — routers/hub-protocol/gate-on-target.schema.pglite.test.ts
+    "relations.createRelation": GATED,
+    "relations.deleteRelation": GATED,
+    "profiles.createProfile": GATED,
+    "profiles.setRenderer": GATED,
+    "profiles.createPropertyDef": GATED,
+    "profiles.updatePropertyDef": GATED,
+    // D2 (founder 2026-10-20): the parent's workspace; a pod-wide role is pod
+    // scope — routers/hub-protocol/gate-on-target.schema.pglite.test.ts
+    "entities.attachFacet": GATED,
+    "entities.updateFacet": GATED,
+    "entities.detachFacet": GATED,
+    // W2b — every channel/session/memory write passes `assertChannelWrite` on
+    // the CHANNEL's workspace (D4: an AI turn is a message.create there) —
+    // routers/hub-protocol/gate-on-target.channels.pglite.test.ts
+    "channels.resolveOrCreateChannel": GATED,
+    "channels.bindChannel": GATED,
+    "channels.sendExternalMessage": GATED,
+    "channels.postToA2AIChannel": GATED,
+    "channels.triggerAI": GATED,
+    "context.updateThreadContext": GATED,
+    "sessions.getOrCreate": GATED,
+    "sessions.update": GATED,
+    "sessions.close": GATED,
+    "compactedStates.create": GATED,
+    // W2c — the rest of class (c): linking returns the proposal instead of
+    // inserting; the pre-gate writes (pod-wide view, session document) are
+    // grant-checked; propertyDefs.create is gated (migration.migrate's last
+    // ungated sub-write); signals check the grant and the relay route —
+    // routers/hub-protocol/gate-on-target.misc.pglite.test.ts
+    "linking.linkEntity": GATED,
+    "linking.linkDocument": GATED,
+    "views.createView": GATED,
+    "documents.upsertSessionSection": GATED,
+    "migration.migrate": GATED,
+    "signals.fetch": GATED,
+    "signals.subscriptions": GATED,
+    "signals.batch": GATED,
+    "signals.capture": GATED,
+    "n8nActions.createEntity": GATED,
+
     // (b) OWNER-WIDE — need an unbounded `*` key.
     "channels.ensurePersonal": OWNER_WIDE(
       "The owner's pod-wide personal channel; ignores the workspace."
@@ -460,117 +494,21 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
       "Upserts the key principal's vault secret for a free-form serviceId; no gate."
     ),
 
-    // (c) REFUSED until the W2 root fix.
-    "entities.createEntity": UNBOUNDED(
-      `${HEADER_WS} A pod-scope kind lands pod-wide; strong-dedup writes before the gate.`
-    ),
-    "entities.updateEntities": UNBOUNDED(
-      `${HEADER_WS} A pod-wide row falls back to the header workspace.`
-    ),
-    "entities.updateEntity": UNBOUNDED(
-      `${HEADER_WS} The gate's kind is the input profileSlug, not the stored kind.`
-    ),
-    "documents.upsertSessionSection": UNBOUNDED(
-      "The session document is created before the gate."
-    ),
-    "linking.linkEntity": UNBOUNDED(
-      "Inserts even when the gate answers `proposed`."
-    ),
-    "linking.linkDocument": UNBOUNDED(
-      "Inserts even when the gate answers `proposed`."
-    ),
-    "relations.createRelation": UNBOUNDED(
-      `${HEADER_WS} The edge is placed by its endpoints.`
-    ),
-    "relations.deleteRelation": UNBOUNDED(HEADER_WS),
-    "profiles.createProfile": UNBOUNDED(
-      "An existing pod-wide slug resolves to that profile; grantAccess runs before the gate."
-    ),
-    "profiles.setRenderer": UNBOUNDED(
-      `${HEADER_WS} scope pod|user binds pod-wide.`
-    ),
-    "profiles.createPropertyDef": UNBOUNDED(
-      `${HEADER_WS} A non-overlay def is stored pod-wide.`
-    ),
-    "profiles.updatePropertyDef": UNBOUNDED(
-      `${HEADER_WS} Base defs are pod-wide.`
-    ),
-    "views.createView": UNBOUNDED(
-      "With no workspace and no project there is no gate at all."
-    ),
-    "migration.migrate": UNBOUNDED(
-      "propertyDefs.create has no gate; scope `system` is allowed."
-    ),
-    "signals.fetch": UNBOUNDED(
-      "No gate: outbound relay fetch on a caller-shaped path, history into any workspace."
-    ),
-    "signals.subscriptions": UNBOUNDED(
-      "No gate; the caller's workspace is not validated."
-    ),
-    "signals.batch": UNBOUNDED("Inherits signals.fetch and signals.capture."),
-    "signals.capture": UNBOUNDED(
-      `${HEADER_WS} Same pod-kind fallback as entities.createEntity.`
-    ),
-    "channels.resolveOrCreateChannel": UNBOUNDED(
-      "Inserts channels; the input workspace is never grant-checked."
-    ),
-    "channels.bindChannel": UNBOUNDED(
-      "The gate's workspace is caller-supplied, never compared with the channel's."
-    ),
-    "channels.sendExternalMessage": UNBOUNDED(
-      "Gates the input workspace; the channel is found by external id."
-    ),
-    "channels.postToA2AIChannel": UNBOUNDED(
-      "Gated only on first join, with the input workspace; queues an AI turn."
-    ),
-    "context.updateThreadContext": UNBOUNDED(
-      `${READ_ONLY_CHECK} Rewrites the summary injected into the next prompt.`
-    ),
-    "sessions.getOrCreate": UNBOUNDED(READ_ONLY_CHECK),
-    "sessions.update": UNBOUNDED(READ_ONLY_CHECK),
-    "sessions.close": UNBOUNDED(READ_ONLY_CHECK),
-    "compactedStates.create": UNBOUNDED(
-      `${READ_ONLY_CHECK} Plants the memory that bootstraps the next session.`
-    ),
-    "n8nActions.createEntity": UNBOUNDED(
-      "The server picks the workspace; same pod-kind fallback as entities.createEntity."
-    ),
+    // (c) REFUSED until the W2 root fix — none left: W2a–W2c fixed every one
+    // and flipped it to GATED above. A new refused row needs its reason.
 
-    // (d) PRODUCT DECISION — refused until decided (plan §2 D1–D5).
-    "automations.createAutomation": DECISION(
-      "D1",
-      "a flow armed by a scoped key runs as its author with no grant."
-    ),
-    "automations.updateAutomation": DECISION(
-      "D1",
-      "a flow edited by a scoped key runs as its author with no grant."
-    ),
-    "automations.activateAutomation": DECISION(
-      "D1",
-      "arms a run that carries no grant."
-    ),
-    "automations.triggerAutomation": DECISION(
-      "D1",
-      "the automation-execute job carries no grant."
-    ),
-    "entities.attachFacet": DECISION(
-      "D2",
-      "may a pinned key attach a pod-wide shared role?"
-    ),
-    "entities.updateFacet": DECISION("D2", "pod-wide role facets."),
-    "entities.detachFacet": DECISION("D2", "pod-wide role facets."),
-    "proposals.updateProposal": DECISION(
-      "D3",
-      "the decision verbs ignore workspace and project pins."
-    ),
-    "channels.triggerAI": DECISION(
-      "D4",
-      "an AI turn spends the owner's budget on a read grant."
-    ),
-    "observations.append": DECISION(
-      "D5",
-      "are observations governed writes? An unknown workspace widens to pod-wide."
-    ),
+    // (d) PRODUCT DECISIONS (founder 2026-10-20, plan §2 D1–D5), applied in
+    // W2d — routers/hub-protocol/gate-on-target.decisions.pglite.test.ts.
+    // D1: arming/running a flow is owner authority — a person's key needs
+    // unbounded `*` inside the door; an agent key keeps its proposal path.
+    "automations.createAutomation": GATED,
+    "automations.updateAutomation": GATED,
+    "automations.activateAutomation": GATED,
+    "automations.triggerAutomation": GATED,
+    // D3: revising honours the key's space / project / object pins.
+    "proposals.updateProposal": GATED,
+    // D5: an observation is `event.create` where it lands; never widened.
+    "observations.append": GATED,
   };
 
 export const GRANT_WRITE_DOOR_UNSUPPORTED =

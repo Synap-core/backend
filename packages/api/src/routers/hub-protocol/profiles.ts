@@ -33,6 +33,7 @@ import {
   isNull,
   or,
   widgetDefinitions,
+  propertyDefs,
   PropertyValueType,
   slugifyPropertyKey,
   RENDERER_SURFACES,
@@ -385,6 +386,9 @@ export const hubProfilesRouter = router({
         userId: input.userId,
         agentUserId,
         workspaceId,
+        // A `pod` / `user` binding is not a workspace's overlay: for the key's
+        // grant it is pod scope, whatever workspace was named (S7).
+        grantWorkspaceId: scope === "workspace" ? workspaceId : null,
         subjectType: "profile",
         action: "renderer.set",
         source: "intelligence",
@@ -402,7 +406,7 @@ export const hubProfilesRouter = router({
       });
 
       if ("denied" in perm && perm.denied) {
-        throw new Error(perm.reason);
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
         return {
@@ -497,6 +501,9 @@ export const hubProfilesRouter = router({
         userId: input.userId,
         agentUserId,
         workspaceId: input.workspaceId,
+        // Where the def LANDS for the key's grant: a base def is pod-wide
+        // schema (stored workspace NULL), only an overlay is this space's (S7).
+        grantWorkspaceId: overlay ? input.workspaceId : null,
         subjectType: "property_def",
         action: "create",
         source: "intelligence",
@@ -516,7 +523,7 @@ export const hubProfilesRouter = router({
       });
 
       if ("denied" in perm && perm.denied) {
-        throw new Error(perm.reason);
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
         return {
@@ -676,10 +683,18 @@ export const hubProfilesRouter = router({
         | "entity_id"
         | undefined;
 
+      // The key's grant is checked on the def's OWN scope (an overlay's
+      // workspace; a base / global def is pod-wide), never the named one (S7).
+      const storedDef = await db.query.propertyDefs.findFirst({
+        where: eq(propertyDefs.id, input.propertyDefId),
+        columns: { workspaceId: true },
+      });
+
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
         agentUserId,
         workspaceId: input.workspaceId,
+        grantWorkspaceId: storedDef?.workspaceId ?? null,
         subjectType: "property_def",
         action: "update",
         source: "intelligence",
@@ -697,7 +712,7 @@ export const hubProfilesRouter = router({
       });
 
       if ("denied" in perm && perm.denied) {
-        throw new Error(perm.reason);
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
         return {

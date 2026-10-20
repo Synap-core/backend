@@ -1013,6 +1013,9 @@ export const relationsRouter = router({
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         workspaceId: effectiveWorkspaceId,
+        // The key's grant is checked where the edge LANDS (its endpoints'
+        // lens; pod-wide = null), not the workspace the caller named (S7).
+        grantWorkspaceId: relationWorkspaceId,
         subjectType: "relation",
         action: "create",
         // Attribute to the acting agent so the write routes through the
@@ -1630,6 +1633,8 @@ export const relationsRouter = router({
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         workspaceId: effectiveWorkspaceId,
+        // The key's grant is checked on the edge's stored workspace (S7).
+        grantWorkspaceId: relRow.workspaceId ?? null,
         subjectType: "relation",
         action: "update",
         // Widened (gate-payload sufficiency): `{ id }` described NO change — an
@@ -1776,6 +1781,8 @@ export const relationsRouter = router({
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         workspaceId: effectiveWorkspaceId,
+        // The key's grant is checked on the edge's stored workspace (S7).
+        grantWorkspaceId: relationToDelete.workspaceId ?? null,
         subjectType: "relation",
         action: "delete",
         data: {

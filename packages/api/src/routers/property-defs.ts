@@ -32,6 +32,7 @@ import { entityPropertyIndex } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { assertProfileSchemaWrite } from "../utils/profile-schema-write-access.js";
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import {
   proposePropertyDefRetire,
   resolvePropertyDefSchemaOwner,
@@ -235,6 +236,17 @@ export const propertyDefsRouter = router({
       }
 
       const overlayWorkspaceId = input.overlay ? ctx.workspaceId : null;
+
+      // The calling key's grant bounds the write where the def LANDS: a base
+      // or global def is pod-wide schema (null), an overlay is this
+      // workspace's. Reached ungoverned by `migration.migrate`; the governed
+      // doors (`createAndLinkPropertyDef`) pass their own gate first (S7).
+      await assertKeyMayWrite({
+        subjectType: "property_def",
+        action: "create",
+        workspaceId: overlayWorkspaceId,
+        data: { profileId: input.profileId },
+      });
 
       // Return existing on slug conflict — match exactly the scope we're
       // about to create into (base vs this workspace's overlay). An overlay

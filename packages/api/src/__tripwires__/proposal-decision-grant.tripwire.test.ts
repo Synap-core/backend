@@ -215,8 +215,10 @@ describe("C — every revise door reaches the revise core, which asks the key", 
     const ra = read("routers/proposals/review-authority.ts");
     const at = ra.indexOf("export function assertMayReviseProposal(");
     const body = ra.slice(at, ra.indexOf("\n}\n", at));
+    // D3 (S7, 2026-10-20): the approve right is checked on the proposal's own
+    // space / project / object, so a key's resource pins apply.
     expect(body).toMatch(
-      /if \(actingAgentUserId && proposal\.agentUserId === actingAgentUserId\) return;\s*assertMayDecideProposal\("approve", "revise", grant\);/
+      /if \(actingAgentUserId && proposal\.agentUserId === actingAgentUserId\) return;\s*(\/\/[^\n]*\s*)*assertMayDecideProposal\("approve", "revise", grant, \{\s*workspaceId: proposal\.workspaceId/
     );
   });
 });

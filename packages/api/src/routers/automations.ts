@@ -97,6 +97,7 @@ import {
   capabilities,
   ChannelRepository,
   getActingAgentUserId,
+  getRequestGrant,
 } from "@synap/database";
 import type {
   AutomationTriggerConfig,
@@ -113,6 +114,10 @@ import {
 import { subjectEntityIdFromPayload } from "@synap/jobs/utils/run-subject.js";
 import { actingAgentUserId } from "./hub-protocol/utils.js";
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
+import {
+  GRANT_OWNER_WIDE_UNSUPPORTED,
+  isUnboundedFullAccess,
+} from "../access/grant-door-fence.js";
 import { TRPCError } from "@trpc/server";
 import {
   decodeDefinitionCursor,
@@ -731,6 +736,26 @@ async function findNonArchivedAutomationByName(
     .orderBy(desc(automations.updatedAt), desc(automations.id))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * D1 (S7, founder 2026-10-20): authoring, editing, arming or running a flow is
+ * OWNER authority — the run executes as its author and carries no grant. A
+ * PERSON's key may do it only with unbounded full access (`*`, no narrowing);
+ * an agent key keeps its governed path (proposals, inert drafts). A signed-in
+ * session (no grant) is unchanged.
+ */
+async function assertKeyMayActAsFlowOwner(ctx: {
+  userId?: string | null;
+  agentUserId?: string | null;
+}): Promise<void> {
+  const grant = getRequestGrant();
+  if (!grant || isUnboundedFullAccess(grant)) return;
+  if (await actingAgentUserId(ctx)) return;
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: GRANT_OWNER_WIDE_UNSUPPORTED,
+  });
 }
 
 /**
@@ -2383,6 +2408,7 @@ export const automationsRouter = router({
       // omitting `agentUserId` must still propose / be bounded by its grant).
       const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       const createdBy = agentUserId ?? ctx.userId!;
+      await assertKeyMayActAsFlowOwner({ ...ctx, agentUserId });
 
       await prepareAutomationForMaterialization(database, input, createdBy);
 
@@ -2515,6 +2541,7 @@ export const automationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const database = await getDb();
+      await assertKeyMayActAsFlowOwner(ctx);
       // Server-owned keys never come from the caller — nor reach a proposal.
       input.metadata = withoutServerOwnedAutomationMetadata(input.metadata);
 
@@ -2791,6 +2818,7 @@ export const automationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const database = await getDb();
+      await assertKeyMayActAsFlowOwner(ctx);
 
       const existing = await database.query.automations.findFirst({
         where: eq(automations.id, input.id),
@@ -3178,6 +3206,7 @@ export const automationsRouter = router({
       // (assertWorkspaceWrite above); the agent path additionally runs the gate,
       // which owns the agent's own RBAC + propose/execute decision.
       const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
+      await assertKeyMayActAsFlowOwner({ ...ctx, agentUserId });
       await assertKeyMayWrite({
         subjectType: "automation",
         action: "execute",

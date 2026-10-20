@@ -57,6 +57,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
 import { auditLog } from "../utils/audit-log.js";
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { deleteDocumentAndBlobs } from "../utils/delete-document-and-blobs.js";
 import { emitSideEffects } from "@synap/events";
 import { verifyPermission, getWorkspaceMembership } from "@synap/database";
@@ -502,6 +503,18 @@ export const viewsRouter = router({
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Project not found",
+        });
+      }
+
+      // No workspace and no project: a pod-wide view, which the governance
+      // gate below never sees. The calling key's grant still bounds it — as
+      // pod scope, so a key pinned to a space fails closed (S7).
+      if (!effectiveWorkspaceId && !pinnedProjectId) {
+        await assertKeyMayWrite({
+          subjectType: "view",
+          action: "create",
+          workspaceId: null,
+          data: { id: reservedViewId },
         });
       }
 
