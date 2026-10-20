@@ -70,6 +70,7 @@ import {
 } from "./cancel-session.js";
 import type { SessionVerdict } from "@synap-core/types/focus-sessions";
 import { loadSessionEvaluationSummary } from "./evaluations/record.js";
+import { sessionNameField } from "./session-update-goal.js";
 import { createLogger } from "@synap-core/core";
 import {
   isPinnedStrategy,
@@ -236,6 +237,7 @@ export async function completeFocusSession(
       id: sessionId,
       status: terminalStatus,
       goal: session.goal,
+      ...sessionNameField(session),
       previousStatus: session.status,
       ...(summary !== undefined ? { sessionSummary: summary } : {}),
       ...(verificationReport != null ? { verificationReport } : {}),

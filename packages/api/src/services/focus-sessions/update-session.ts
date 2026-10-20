@@ -1518,6 +1518,7 @@ export async function updateFocusSession(
         workspaceId: existing.workspaceId,
         sessionId,
         goal: existing.goal,
+        title: existing.title,
         agentId: handedTo,
       });
       if (handOff.status === "denied") {

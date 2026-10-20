@@ -1507,6 +1507,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             workspaceId: existing.workspaceId,
             sessionId: id,
             goal: existing.goal,
+            title: existing.title,
             agentId,
             reasoning: patch.reasoning,
           });

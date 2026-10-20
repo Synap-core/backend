@@ -38,13 +38,24 @@ export function sessionGoalPayload(
   existing: { title?: string | null; goal: string },
   requestedGoal: string | undefined
 ): { sessionName?: string; goal?: string; previousGoal?: string } {
-  const sessionName = resolveSessionTitle(existing);
   return {
-    ...(sessionName ? { sessionName } : {}),
+    ...sessionNameField(existing),
     ...(requestedGoal !== undefined && requestedGoal !== existing.goal
       ? { goal: requestedGoal, previousGoal: existing.goal }
       : {}),
   };
+}
+
+/**
+ * The display-only `sessionName` a session proposal is titled by — also carried
+ * by the close and hand-off payloads, whose executors never write the goal.
+ */
+export function sessionNameField(session: {
+  title?: string | null;
+  goal?: string | null;
+}): { sessionName?: string } {
+  const sessionName = resolveSessionTitle(session);
+  return sessionName ? { sessionName } : {};
 }
 
 /**

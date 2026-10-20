@@ -92,3 +92,28 @@ describe("buildProposalSummary — a session update names the session", () => {
     ).toContain('"Commercial foundations"');
   });
 });
+
+describe("buildProposalSummary — close and hand-off name the session too", () => {
+  it("a close is named by sessionName over its goal", () => {
+    expect(
+      buildProposalSummary("focus_session", "update", {
+        id: "s",
+        sessionName: "Commercial foundations",
+        goal: "Map and lock the commercial foundations (ICP, offer and pricing)",
+        status: "closed",
+      })
+    ).toBe('Complete session "Commercial foundations"');
+  });
+
+  it("a hand-off is named by sessionName over its goal", () => {
+    expect(
+      buildProposalSummary("focus_session", "assign_agent", {
+        id: "s",
+        sessionName: "Commercial foundations",
+        goal: "Map and lock the commercial foundations",
+        addAgentId: "a",
+        agentName: "Worker",
+      })
+    ).toBe('Hand session "Commercial foundations" to Worker');
+  });
+});
