@@ -659,7 +659,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to ATTACH the document to an existing entity. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
+      "description": "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -680,7 +680,11 @@
           },
           "entityId": {
             "type": "string",
-            "description": "Optional UUID of an EXISTING entity to attach this document to. The attach is a separate governed entity update — its own outcome comes back under `attached`."
+            "description": "Optional UUID of an EXISTING entity whose BODY this document becomes. The attach is a separate governed entity update — its own outcome comes back under `attached`. Refused when the entity already has a body (the refusal names it), unless `replaceBody` is true."
+          },
+          "replaceBody": {
+            "type": "boolean",
+            "description": "With `entityId`: replace the entity's existing body with this document on purpose. The old body document is kept but no longer attached. Omit to be refused instead."
           },
           "workspaceId": {
             "type": "string"
