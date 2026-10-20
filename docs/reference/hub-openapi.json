@@ -29465,22 +29465,22 @@
       {
         "method": "post",
         "path": "/focus-sessions",
-        "reason": "[object Object]"
+        "reason": "Unknown zod object type, please specify `type` and other OpenAPI props using `schema.openapi`. | zod type: custom"
       },
       {
         "method": "patch",
         "path": "/focus-sessions/:id",
-        "reason": "[object Object]"
+        "reason": "Unknown zod object type, please specify `type` and other OpenAPI props using `schema.openapi`. | zod type: custom"
       },
       {
         "method": "post",
         "path": "/focus-sessions/:id/outputs/block",
-        "reason": "[object Object]"
+        "reason": "Unknown zod object type, please specify `type` and other OpenAPI props using `schema.openapi`. | zod type: custom"
       },
       {
         "method": "post",
         "path": "/focus-sessions/:id/outputs/answer",
-        "reason": "[object Object]"
+        "reason": "Unknown zod object type, please specify `type` and other OpenAPI props using `schema.openapi`. | zod type: custom"
       }
     ]
   }

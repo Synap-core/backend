@@ -300,6 +300,32 @@ async function events() {
 
 // ── Hub OpenAPI ─────────────────────────────────────────────────────────────
 
+// zod-to-openapi throws plain objects (its ZodToOpenAPIError does not extend
+// Error), so `String(err)` reads "[object Object]". Use the message, and for an
+// unknown zod type also name the type and schema that stopped the generator.
+function describeGeneratorError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (err && typeof err === "object") {
+    const { message, data } = err as {
+      message?: unknown;
+      data?: { currentSchema?: { type?: unknown }; schemaName?: unknown };
+    };
+    const parts: string[] = [];
+    if (typeof message === "string") parts.push(message);
+    const zodType = data?.currentSchema?.type;
+    if (typeof zodType === "string") parts.push(`zod type: ${zodType}`);
+    if (typeof data?.schemaName === "string")
+      parts.push(`schema: ${data.schemaName}`);
+    if (parts.length) return parts.join(" | ");
+    try {
+      return JSON.stringify(err);
+    } catch {
+      // fall through
+    }
+  }
+  return String(err);
+}
+
 async function hubOpenApi() {
   const { hubProtocolRestApp: app } =
     await import("../../packages/api/src/routers/hub-protocol-rest.js");
@@ -337,7 +363,7 @@ async function hubOpenApi() {
       omitted.push({
         method: d.route?.method ?? d.type,
         path: d.route?.path ?? "",
-        reason: err instanceof Error ? err.message : String(err),
+        reason: describeGeneratorError(err),
       });
       return false;
     }
