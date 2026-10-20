@@ -337,10 +337,37 @@ export function planProposalRevert(
     return plan;
   }
 
+  // Project filing: the filing door stamps the `belongs_to_project` edges it
+  // WROTE (`materialized.relationIds`, on the approval or the receipt). Undo
+  // deletes exactly those — a record that was already in the project stays.
+  if (isProjectFiling(proposal)) {
+    const relationIds =
+      (materialized as CompleteMaterializedRecord | undefined)?.relationIds ??
+      [];
+    if (relationIds.length > 0) return creationsPlanFromRecord({ relationIds });
+    return {
+      kind: "unsupported",
+      reason: materialized
+        ? "Revert of this filing is not supported: every record was already in the project, so there is nothing to undo."
+        : "Revert of this filing is not supported: it was applied before undo records were kept, so which links it added was never recorded.",
+    };
+  }
+
   return {
     kind: "unsupported",
     reason: `Revert of proposal type '${proposal.targetType}/${proposal.proposalType}' is not supported.`,
   };
+}
+
+/** A project filing — the proposal (`file_entities`) or its receipt (`project.file_entities`). */
+function isProjectFiling(
+  proposal: Pick<RevertPlannerInput, "targetType" | "proposalType">
+): boolean {
+  return (
+    proposal.targetType === "project" &&
+    (proposal.proposalType === "file_entities" ||
+      proposal.proposalType === "project.file_entities")
+  );
 }
 
 /**
@@ -385,11 +412,12 @@ function carriesUnrevertableEntityChange(data: unknown): boolean {
  * which a pending proposal does not have yet, so it cannot be asked as-is about
  * a live row. It CAN be asked about everything that does not need that record:
  * a non-entity delete has no recoverable target, an unmapped type is
- * unsupported — all knowable from the type alone. Two cases the planner decides
- * from the record, which approval writes, are predicted from what approval
- * WILL stamp: a composite graph (created ids minted and stamped at approval)
- * and an entity update (the `entity/update` executor stamps its apply-time
- * diff). Every other update/edit is stamped by nothing, so it stays false.
+ * unsupported — all knowable from the type alone. Three cases the planner
+ * decides from the record, which approval writes, are predicted from what
+ * approval WILL stamp: a composite graph (created ids minted and stamped at
+ * approval), an entity update (the `entity/update` executor stamps its
+ * apply-time diff) and a project filing (its executor stamps the edges it
+ * wrote). Every other update/edit is stamped by nothing, so it stays false.
  *
  * The planner stays the ONE place the kind→inverse rule lives: this asks it,
  * with the status it will have, rather than mirroring its branches. `status` is
@@ -409,6 +437,8 @@ export function wouldBeRevertable(
   if (proposal.targetType === "entity" && proposal.proposalType === "update") {
     return !carriesUnrevertableEntityChange(proposal.data);
   }
+  // The `project/file_entities` executor stamps the edges it writes.
+  if (isProjectFiling(proposal)) return true;
   return (
     planProposalRevert({ ...proposal, status: "approved" }).kind !==
     "unsupported"
