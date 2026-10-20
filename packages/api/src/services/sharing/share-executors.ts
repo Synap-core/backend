@@ -6,9 +6,11 @@ import { reportApproved } from "../../routers/proposals/executors/shared.js";
 import { applyShare, planShare, SHARE_AUDIENCES } from "./share-service.js";
 import { SHARE_KINDS } from "./exposure-policy.js";
 import { applyPublish, planPublish } from "./publish-service.js";
+import { applyConfigureSite, planSite } from "./site-service.js";
 
 /**
- * Approve-executor for `share/create` — an AGENT's share.
+ * Approve-executor for `share/create` — an AGENT's share, publish, or site
+ * (`op: "configure_site"`).
  *
  * REPLAY, never reconstruct: the stored payload is re-validated and re-planned
  * through the SAME `planShare` the direct door runs, re-floored NOW on the
@@ -51,6 +53,64 @@ export function registerShareExecutors(): void {
       const resourceType = inner.resourceType;
       const audience = inner.audience;
       const ownerUserId = proposal.subjectUserId;
+
+      // A SITE (a published project, `site-service.ts`) files the same floored
+      // door with `op: "configure_site"`. Replayed through the SAME
+      // `planSite` the direct door runs, on the proposal's SUBJECT, and
+      // written WITHOUT a token: the site stays draft until the signed-in
+      // owner puts it live (an agent never holds the public secret).
+      if (inner.op === "configure_site") {
+        if (
+          audience !== "public" ||
+          typeof inner.projectId !== "string" ||
+          (inner.homeWorkspaceId !== undefined &&
+            inner.homeWorkspaceId !== null &&
+            typeof inner.homeWorkspaceId !== "string")
+        ) {
+          throw refuse("the stored site request is malformed.");
+        }
+        if (!ownerUserId) {
+          throw refuse(
+            "the proposal records no owner (subject_user_id), so whose site this is cannot be established."
+          );
+        }
+        const database = await getDb();
+        const plan = await planSite(database, ownerUserId, {
+          projectId: inner.projectId,
+          homeWorkspaceId: (inner.homeWorkspaceId as string | null) ?? null,
+          config: inner.config,
+        });
+        const site = await applyConfigureSite(database, plan, {
+          userId: ownerUserId,
+          agentUserId: proposal.agentUserId ?? null,
+          sourceProposalId: input.proposalId,
+        });
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return {
+          success: true,
+          primaryId: site.siteId,
+          effect: {
+            applied: "verified" as const,
+            rows: site.rowsWritten,
+            subject: "share",
+          },
+        };
+      }
 
       // PUBLISH files the same floored door with `audience: "public"`.
       // Replayed through the SAME `planPublish` the direct door runs, on the

@@ -117,6 +117,7 @@ import {
   registerObservabilityRoutes,
   registerPublicProjectionRoutes,
   registerPublicSharesRoutes,
+  registerPublicSitesRoutes,
   registerPublicFormsRoutes,
   registerCalendarFeedRoutes,
 } from "./hub-protocol/rest/index.js";
@@ -376,6 +377,7 @@ registerObservabilityRoutes(app); // /observability/routing-health — decision/
 registerHealthDependenciesRoutes(app);
 registerPublicProjectionRoutes(app); // /public/projection — UNAUTH facet-scoped public read (skipAuthPaths)
 registerPublicSharesRoutes(app); // /public/shares/:token — credentialless read of a PUBLISHED share (public-doors.ts)
+registerPublicSitesRoutes(app); // /public/sites/:token — credentialless manifest of a published SITE (public-doors.ts)
 registerPublicFormsRoutes(app); // /public/forms/:token — credentialless guest form (GET definition, POST → constant 202)
 registerCalendarFeedRoutes(app); // /calendar/feed — personal ICS (GET :token.ics is UNAUTH)
 

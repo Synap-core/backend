@@ -18,18 +18,41 @@ export interface PublicationLiveInput {
   hasToken: boolean;
 }
 
-export function isPublicationLive(
-  row: PublicationLiveInput,
-  now: number = Date.now()
-): boolean {
+/** Public, published, not revoked, not expired, addressable: any public row. */
+function servedNow(row: PublicationLiveInput, now: number): boolean {
   return (
     row.audience === "public" &&
-    // The public read serves entities only.
-    row.resourceType === "entity" &&
     row.state === "published" &&
     !row.revokedAt &&
     !(row.expiresAt && row.expiresAt.getTime() <= now) &&
     !!row.publishedAt &&
     row.hasToken
+  );
+}
+
+export function isPublicationLive(
+  row: PublicationLiveInput,
+  now: number = Date.now()
+): boolean {
+  // The W3 read (`/public/shares/:token`) serves entities only, so a SITE
+  // row's token is never served there.
+  return row.resourceType === "entity" && servedNow(row, now);
+}
+
+/**
+ * IS THIS SITE LIVE? — the same rule for a SITE row (collection door, 0336):
+ * a public PROJECT row that is not itself a site member, published, not
+ * revoked, not expired, with a token. The site manifest door serves a site
+ * token only when this holds (plus the project still existing, which only the
+ * read can check), and the owner's site status shows `live` from it.
+ */
+export function isSiteLive(
+  row: PublicationLiveInput & { siteShareId: string | null },
+  now: number = Date.now()
+): boolean {
+  return (
+    row.resourceType === "project" &&
+    row.siteShareId === null &&
+    servedNow(row, now)
   );
 }
