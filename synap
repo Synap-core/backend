@@ -2987,8 +2987,8 @@ EOF
             fi
         else
             echo -e "${RED}❌ Automatic admin creation failed.${NC}"
-            echo "After fixing services, run from this directory (deploy/):"
-            echo "  docker compose exec -T -e ADMIN_EMAIL='${ADMIN_EMAIL}' -e ADMIN_PASSWORD='<password>' backend node dist/scripts/create-admin-cli.js"
+            echo "After fixing services, run:"
+            echo "  ./synap setup admin --email '${ADMIN_EMAIL}' --password <password>"
             echo "Or from repo root with .env loaded: pnpm tsx scripts/create-admin-cli.ts"
         fi
         unset ADMIN_PASSWORD
