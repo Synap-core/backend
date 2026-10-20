@@ -14770,12 +14770,14 @@ export interface SiteStatus {
 		count: number;
 	}>;
 	/**
-	 * The site's member rows that are not revoked (published or taken back to
-	 * draft), newest publish first, at most {@link SITE_STATUS_MEMBER_CAP}.
+	 * One page of the site's member rows that are not revoked (published or
+	 * taken back to draft), newest member first (see {@link SiteStatusPage}).
 	 */
 	members: SiteStatusMember[];
-	/** More member rows exist than `members` lists. */
-	membersTruncated: boolean;
+	/** Pass it back as `cursor` for the next page; null on the last page. */
+	membersNextCursor: string | null;
+	/** Every non-revoked member row of the site (the rows the pages walk). */
+	membersTotal: number;
 }
 /** One record of a site, as its owner sees it (internal ids are fine here). */
 export interface SiteStatusMember {
@@ -31886,10 +31888,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 		siteStatus: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
+			input: ({
 				siteId: string;
 			} | {
 				projectId: string;
+			}) & {
+				cursor?: string | undefined;
+				limit?: number | undefined;
 			};
 			output: SiteStatus | null;
 			meta: object;
