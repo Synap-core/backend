@@ -10,7 +10,9 @@ import {
 } from "@synap-core/types/grants";
 import {
   isFencedGrant,
+  isUnboundedFullAccess,
   mcpToolAllowed,
+  ownerWideDoorAllowed,
   restDoorAllowed,
   trpcProcedureAllowed,
 } from "./grant-door-fence.js";
@@ -50,7 +52,10 @@ describe("restDoorAllowed", () => {
     ["GET", "/projects/p1", true],
     ["GET", "/projects/p1/path", false], // userVisibleWhere sessions — not migrated
     ["GET", "/search", false],
-    ["GET", "/entities", false], // ?q= goes to Typesense — not seamed
+    // The list door: seamed; its ?q= (Typesense) branch is refused by the
+    // route itself for a limited key (entities.scoped-key-list.pglite.test.ts).
+    ["GET", "/entities", true],
+    ["GET", "/entities/", true],
     ["GET", "/knowledge", false],
     ["GET", "/compacted-states/latest", false],
     ["POST", "/knowledge/ask", false],
@@ -149,5 +154,39 @@ describe("mcpToolAllowed / trpcProcedureAllowed", () => {
     expect(trpcProcedureAllowed("query", "entities.getEntities")).toBe(true);
     expect(trpcProcedureAllowed("query", "search.search")).toBe(false);
     expect(trpcProcedureAllowed("mutation", "entities.create")).toBe(true);
+  });
+});
+
+describe("owner-wide doors (webhooks)", () => {
+  const FULL = key({ permissions: ["*"] });
+  const STAR_ONE_WS = key({ permissions: ["*"], workspaceIds: ["w1"] });
+  const STAR_ONE_PROJECT = key({ permissions: ["*"], projectIds: ["p1"] });
+  it("unbounded = every scope `*` with no narrowing", () => {
+    expect(isUnboundedFullAccess(FULL)).toBe(true);
+    expect(isUnboundedFullAccess(STAR_ONE_WS)).toBe(false);
+    expect(isUnboundedFullAccess(STAR_ONE_PROJECT)).toBe(false);
+    expect(isUnboundedFullAccess(AI)).toBe(false);
+    // `isFencedGrant` does NOT see the pin — which is why this check exists.
+    expect(isFencedGrant(STAR_ONE_WS)).toBe(false);
+  });
+  it.each([
+    ["/webhooks", true],
+    ["/webhooks/", true],
+    ["/webhooks/abc", true],
+    ["/webhooks/abc/deliveries", true],
+    ["/webhooksx", false],
+    ["/calendar/feed", true],
+    ["/calendar/feed/rotate", true],
+    // The credentialless .ics read skips auth — no grant ever reaches it.
+    ["/calendar/feed/abcdef.ics", false],
+    ["/agents/sync", true],
+    ["/agents", false],
+    ["/entities", false],
+  ] as const)("%s is owner-wide → %s", (path, ownerWide) => {
+    expect(ownerWideDoorAllowed(path, STAR_ONE_WS)).toBe(!ownerWide);
+    expect(ownerWideDoorAllowed(path, DOC_ONLY)).toBe(!ownerWide);
+    expect(ownerWideDoorAllowed(path, FULL)).toBe(true);
+    // A signed-in session carries no grant.
+    expect(ownerWideDoorAllowed(path, null)).toBe(true);
   });
 });

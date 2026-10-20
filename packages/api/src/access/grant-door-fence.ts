@@ -88,6 +88,10 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/users\/me\/?$/,
   /^\/auth\/status\/?$/,
   /^\/users\/[^/]+\/entities\/?$/,
+  // The list door. Every branch reads through `entities.getEntities` (the
+  // seamed `entities.list` floor) EXCEPT full-text `q` (Typesense), which the
+  // route itself refuses for a fenced grant (rest/entities.ts).
+  /^\/entities\/?$/,
   /^\/entities\/[^/]+\/?$/,
   /^\/entities\/[^/]+\/connections\/?$/,
   /^\/entities\/[^/]+\/facets\/?$/,
@@ -233,6 +237,96 @@ export const GRANT_SAFE_TRPC_QUERIES: ReadonlySet<string> = new Set([
 
 export const GRANT_DOOR_UNSUPPORTED =
   "This door does not support scoped keys yet: its reads are not bounded by a grant. Use a door listed in the API keys guide, or a key with the full-access '*' grant.";
+
+/**
+ * Hub REST doors (every method, relative to /api/hub) whose EFFECT spans the
+ * whole owner and that no grant can narrow — so neither the fence's "writes
+ * are bounded by the gate" rule nor a workspace/project/object pin applies.
+ *
+ *  - `/webhooks*`: a subscription is fanned out by OWNER only
+ *    (`jobs/src/workers/webhook-worker.ts` matches `webhookSubscriptions
+ *    .userId`), so one row streams every event of the person — every
+ *    workspace, project and kind — to the URL it names. The handlers write the
+ *    table directly; they never pass the gate.
+ *  - `/calendar/feed` (+ `/rotate`): mints a bearer URL whose `.ics` read
+ *    carries NO key and so no grant — it serves every calendar entity the
+ *    person can read (`calendar-feed.ts` `loadOwnedCalendarEntities`), every
+ *    workspace. The credentialless `/calendar/feed/<token>.ics` read is not
+ *    matched (it skips auth; no grant reaches it).
+ *  - `/agents/sync`: rewrites the pod's agent roster for an intelligence
+ *    service and creates agent users owned by the pod owner — direct writes,
+ *    no gate. Its caller is the IS's `is_internal` key (full, unbounded `*`).
+ *
+ * Only a key whose grant is UNBOUNDED full access (`*`, no narrowing) may use
+ * them. Note this is stricter than `isFencedGrant`: a `*` scope pinned to one
+ * workspace is not fenced there (`isFullAccessGrant` reads permissions only),
+ * but it is refused here.
+ */
+export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
+  /^\/webhooks(?:\/.*)?$/,
+  /^\/calendar\/feed(?:\/rotate)?\/?$/,
+  /^\/agents\/sync\/?$/,
+];
+
+/**
+ * Owner-wide WRITES (non-GET/HEAD only — the same paths carry reads the generic
+ * fence already rules on). Each handler writes directly, never passes the
+ * gate, and its effect is not narrowed by any grant (lane/sec-w3, 2026-10-19):
+ *
+ *  - `/capabilities/:id/credentials[/:id]` POST/PATCH/DELETE: the credential
+ *    row is the owner's for EVERY workspace (`workspaceId: null`); a pod-wide
+ *    one needs pod admin but no grant check.
+ *  - `DELETE /vault/secrets/:id`: any secret the person can write, in any
+ *    workspace (`assertWorkspaceWrite`, no grant). `POST /vault/secrets` is
+ *    NOT here — agents are meant to store credentials they hold (its
+ *    docblock); that is a product decision. `/vault/secrets/:id/grant` is
+ *    gated (`checkPermissionOrPropose` → `grantWriteDenial`).
+ *  - `DELETE /connectors/connections/:id`, `POST /connectors/disconnect`:
+ *    revokes the account at the provider and detaches it from every
+ *    capability (`detachNangoConnectionRegistry`).
+ *
+ * Callers checked: the IS (unbounded keys), the browser/app (tRPC session),
+ * the CLI cap flows (reach these only after a fenced read, so only with an
+ * unbounded key today). No narrowed-grant caller works today.
+ */
+export const GRANT_OWNER_WIDE_REST_WRITES: readonly RegExp[] = [
+  /^\/capabilities\/[^/]+\/credentials(?:\/[^/]+)?\/?$/,
+  /^\/vault\/secrets\/[^/]+\/?$/,
+  /^\/connectors\/connections\/[^/]+\/?$/,
+  /^\/connectors\/disconnect\/?$/,
+];
+
+export const GRANT_OWNER_WIDE_UNSUPPORTED =
+  "This door acts on everything you own (it cannot be limited to a space, project or kind), so it needs a key with unrestricted full access ('*' with no space, project or object limit).";
+
+/** Every scope is `*` and none is narrowed to a workspace, project or object. */
+export function isUnboundedFullAccess(grant: KeyGrant): boolean {
+  return (
+    isFullAccessGrant(grant) &&
+    grant.scopes.every((s) => !s.workspaceIds && !s.projectIds && !s.entityIds)
+  );
+}
+
+/**
+ * Hub REST: may a key holding `grant` use an owner-wide door? `true` for any
+ * path that is not one, and for a request with no grant (a signed-in session).
+ * `method` selects the write-only class (`GRANT_OWNER_WIDE_REST_WRITES`); when
+ * omitted the request is treated as a write (fail closed).
+ */
+export function ownerWideDoorAllowed(
+  path: string,
+  grant: KeyGrant | null | undefined,
+  method?: string
+): boolean {
+  if (!grant) return true;
+  const m = method?.toUpperCase();
+  const isRead = m === "GET" || m === "HEAD";
+  const ownerWide =
+    GRANT_OWNER_WIDE_REST_DOORS.some((r) => r.test(path)) ||
+    (!isRead && GRANT_OWNER_WIDE_REST_WRITES.some((r) => r.test(path)));
+  if (!ownerWide) return true;
+  return isUnboundedFullAccess(grant);
+}
 
 /** Hub REST: may a scoped key use `method path` (path relative to /api/hub)? */
 export function restDoorAllowed(

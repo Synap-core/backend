@@ -16,9 +16,6 @@ import {
   inArray,
   isNull,
   getDb,
-  EventRepository,
-  sql,
-  ProjectRepository,
   or,
 } from "@synap/database";
 import { entities, relations } from "@synap/database/schema";
@@ -44,6 +41,7 @@ import {
 import { getProjectPath } from "../services/projects/project-path.js";
 import { createProjectGoverned } from "../services/projects/create-project.js";
 import { updateProjectGoverned } from "../services/projects/update-project.js";
+import { deleteProjectGoverned } from "../services/projects/delete-project.js";
 import { fileEntitiesGoverned } from "../services/projects/file-entities.js";
 import {
   listProjectOutputs,
@@ -848,55 +846,18 @@ export const projectsRouter = router({
   delete: podProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ input, ctx }) => {
-      // Same shape as `update`: pod-wide must work (a pod-personal project has
-      // no workspace to be active in), and the gate's subject is the PROJECT's
-      // workspace, never the caller's lens.
-      const db = await getDb();
-      const target = await loadVisibleProject(db, input.id, ctx.userId);
-      if (!target) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Project not found",
-        });
-      }
-
-      const perm = await checkPermissionOrPropose({
+      // The ONE governed delete, shared with Hub REST `DELETE /projects/:id`
+      // (`services/projects/delete-project.ts`): pod-wide must work (a
+      // pod-personal project has no workspace to be active in), and the gate's
+      // subject is the PROJECT's workspace, never the caller's lens.
+      const outcome = await deleteProjectGoverned({
+        id: input.id,
         userId: ctx.userId,
-        workspaceId: target.workspaceId ?? undefined,
-        subjectType: "project",
-        action: "delete",
-        data: { id: input.id },
+        agentUserId: ctx.agentUserId ?? undefined,
       });
-
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      if (outcome.status === "proposed") {
+        return { status: "proposed", proposalId: outcome.proposalId };
       }
-      if ("proposalId" in perm) {
-        return { status: "proposed", proposalId: perm.proposalId };
-      }
-
-      const eventRepo = new EventRepository(sql);
-      const projectRepo = new ProjectRepository(db, eventRepo);
-
-      await projectRepo.delete(input.id, ctx.userId);
-
-      auditLog({
-        subjectType: "project",
-        action: "delete",
-        phase: "completed",
-        subjectId: input.id,
-        userId: ctx.userId,
-        workspaceId: target.workspaceId ?? undefined,
-      });
-
-      emitSideEffects({
-        subjectType: "project",
-        action: "delete",
-        subjectId: input.id,
-        userId: ctx.userId,
-        workspaceId: target.workspaceId ?? undefined,
-      });
-
       return { status: "deleted" };
     }),
 });

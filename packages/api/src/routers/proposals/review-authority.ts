@@ -22,6 +22,7 @@ import { patternMatches } from "@synap/governance-policy/grants";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { isPodAdmin } from "../../utils/workspace-role.js";
+import { isAgentCaller } from "../../services/library/agent-door.js";
 import {
   proposalSessionIds,
   unreadableProposalSessionIds,
@@ -817,6 +818,38 @@ export function assertMayDecideProposal(
   throw new TRPCError({
     code: "FORBIDDEN",
     message: `This key may not ${act} changes. Give it the '${verb}' right in its access.`,
+  });
+}
+
+/**
+ * The CALLER half of approving a proposal: approval is the HUMAN step, so an
+ * agent caller never approves — by the one existing definition
+ * `isAgentCaller` (`services/library/agent-door.ts`): an agent key OR the
+ * Intelligence Service's internal key. The agent is read from the ctx OR the
+ * server-side acting-agent ALS every key door enters (`runWithActingAgent`;
+ * a caller cannot drop it — the Hub REST approve door builds a ctx without
+ * `agentUserId`). The IS key carries no agent and a full-access `*` grant, so
+ * neither `assertMayDecideProposal` nor the review ladder (which floors on an
+ * agent principal) saw it.
+ *
+ * Called at the `approve` / `batchApprove` entry (before any read) and inside
+ * `applyProposalApproval` — the ONE door behind both and the import apply —
+ * so any future door is floored too. The words match the Hub REST refusal
+ * (`rejectAgentReviewer`), which the CLI recognises.
+ */
+export function refuseAgentProposalApprover(ctx: {
+  agentUserId?: string | null;
+  keyType?: string | null;
+}): void {
+  const caller = {
+    agentUserId: ctx.agentUserId ?? getActingAgentUserId(),
+    keyType: ctx.keyType,
+  };
+  if (!isAgentCaller(caller)) return;
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message:
+      "An agent credential cannot approve proposals — approve is human review. Approve from a human session.",
   });
 }
 

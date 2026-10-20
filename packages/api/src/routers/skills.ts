@@ -1861,6 +1861,7 @@ export const skillsRouter = router({
         userId: requireUserId(ctx.userId),
         skillId: input.id,
         approved: input.approved,
+        agentUserId: ctx.agentUserId,
       });
       return { skill };
     }),

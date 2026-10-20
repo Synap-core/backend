@@ -42,6 +42,7 @@ import {
   resolveActingContext,
   type HubHono,
   readJsonBody,
+  rejectAgentApprover,
   requireUuidParam,
 } from "./_shared.js";
 
@@ -619,6 +620,11 @@ export function registerToolsRoutes(app: HubHono): void {
         403
       );
     }
+
+    // SECURITY — approval is the human step: an agent caller (agent key or
+    // the IS internal key) never reaches the approve, before the body is read.
+    const blocked = rejectAgentApprover(c, "tool");
+    if (blocked) return blocked;
 
     const id = requireUuidParam(c, "id");
     if (id instanceof Response) return id;

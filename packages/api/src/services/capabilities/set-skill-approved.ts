@@ -15,7 +15,14 @@
  * stale "not turned on". Best-effort — the enable itself has already landed.
  */
 import { TRPCError } from "@trpc/server";
-import { db, and, eq, skills, links } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  skills,
+  links,
+  getActingAgentUserId,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
   getWorkspaceRole,
@@ -27,11 +34,33 @@ import { invalidateUrlReaderCache } from "./url-reader-cache.js";
 
 const logger = createLogger({ module: "set-skill-approved" });
 
+/**
+ * Approval is the HUMAN step: turning a verb or a tool ON is the owner's OK
+ * that an agent-authored skill may run or load. An agent key is remapped to
+ * its human owner (`userId` = the human), so the owner-role check below reads
+ * a human and passes — an agent could approve its OWN draft. Refuse any acting
+ * agent: the server-side ALS every key door enters (`runWithActingAgent`, which
+ * a caller cannot drop) or a caller-supplied one. Same rule as
+ * `rejectAgentReviewer` on proposals (an agent may never approve).
+ */
+export function refuseAgentApprover(agentUserId?: string | null): void {
+  if (agentUserId ?? getActingAgentUserId()) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "An agent credential cannot approve — approval is the human step. Approve from a human session.",
+    });
+  }
+}
+
 export async function setSkillApproved(input: {
   userId: string;
   skillId: string;
   approved: boolean;
+  /** The caller's acting agent when the door knows it (`ctx.agentUserId`). */
+  agentUserId?: string | null;
 }) {
+  refuseAgentApprover(input.agentUserId);
   const existing = await db.query.skills.findFirst({
     where: eq(skills.id, input.skillId),
   });

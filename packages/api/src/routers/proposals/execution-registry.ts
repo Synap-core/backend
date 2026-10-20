@@ -114,7 +114,7 @@ export interface ProposalExecutorDeps {
   resolveMessagingAccountForPlatform: (
     userId: string,
     platform?: string
-  ) => Promise<{ id: string } | null>;
+  ) => Promise<{ id: string; externalId: string } | null>;
   /** Anything else an executor needs that is cheaper to inject than re-import. */
   [key: string]: unknown;
 }
