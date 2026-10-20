@@ -56,12 +56,41 @@ import {
 const logger = createLogger({ module: "official-catalog-signature" });
 
 /**
- * Synap's root keys (raw ed25519, base64): the current one and an offline
- * standby, in that order. EMPTY until the founders' key ceremony: the pod
- * then checks nothing and blocks nothing ("Synap's catalog isn't signed
- * yet"). A root change ships the new key here a release ahead of its use.
+ * The root keys a release compiles in, checked when this module loads: none
+ * (before the ceremony) or exactly two — the current root and the offline
+ * standby — each a raw ed25519 public key (base64, 44 characters), distinct.
+ * Anything else throws: a malformed root fails the tests and the boot, never
+ * a release that silently reads as "not signed yet".
  */
-export const SYNAP_CATALOG_ROOT_KEYS: readonly string[] = [];
+export function catalogRootKeys(keys: readonly string[]): readonly string[] {
+  if (keys.length !== 0 && keys.length !== 2) {
+    throw new Error(
+      `SYNAP_CATALOG_ROOT_KEYS holds ${keys.length} keys — a release carries none or exactly two (current, standby).`
+    );
+  }
+  keys.forEach((key, i) => {
+    if (ed25519PublicKey(key) === null) {
+      throw new Error(
+        `SYNAP_CATALOG_ROOT_KEYS[${i}] is not a raw ed25519 public key (base64, 44 characters).`
+      );
+    }
+  });
+  if (new Set(keys).size !== keys.length) {
+    throw new Error("SYNAP_CATALOG_ROOT_KEYS lists the same key twice.");
+  }
+  return Object.freeze([...keys]);
+}
+
+/**
+ * Synap's root keys (raw ed25519, base64): the current one and the offline
+ * standby, in that order — the public keys the founders' ceremony printed
+ * (control-plane-api ops/catalog-signing/README.md). EMPTY until that
+ * ceremony: the pod then checks nothing and blocks nothing ("Synap's catalog
+ * isn't signed yet"). A root change ships the new key here a release ahead.
+ */
+export const SYNAP_CATALOG_ROOT_KEYS: readonly string[] = catalogRootKeys([
+  // "<current root public key>", "<standby root public key>",
+]);
 
 export interface OfficialCatalogTrust {
   /** What the index is checked against: the release's roots, the operator's keys, or nothing yet. */

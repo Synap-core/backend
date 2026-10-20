@@ -119,8 +119,12 @@ Also new on the public route (A2): `/open/run/<id>?flowType=<automation|playbook
 
 ## B. Signing Synap's official catalog
 
-> **Status (wave 5):** the pod side is built (S1, report-only by default, no root keys yet). B.0–B.7 are the
-> research as written; **B.8 is the binding Control Plane contract** the CP team builds against.
+> **Status (wave 6):** both sides are built, end to end. The pod verifies (S1, report-only by default) and the
+> Control Plane signs and serves (`control-plane-api` `src/lib/catalog-signing/`). The offline ceremony tool is
+> `control-plane-api` `ops/catalog-signing/`. **What is left is the founders' root ceremony** (about 15 minutes, runbook
+> in `ops/catalog-signing/README.md`). Until then, `SYNAP_CATALOG_ROOT_KEYS` stays empty and pods say "not signed
+> yet". B.0–B.7 are the research as written; **B.8 is the binding Control Plane contract**, and §B.8.8 records what
+> was built against it.
 
 ### B.0 How the pod reads the official catalog today (verified)
 
@@ -356,14 +360,56 @@ converge (`reconcileChangedCapabilityTemplates`, paused as a whole while a freez
 
 #### 7. Open points for the owner and the CP team
 
-- **Private capabilities** reached through the pod's authenticated `/internal/capabilities/:key` door are not in a
-  public index, so once enforced they are refused. They need either a per-pod signed statement or an explicit
-  exemption.
+- **Private capabilities** (resolved in wave 6 as an explicit exemption). A capability that the pod's authenticated
+  `/internal/capabilities/:key` door serves with `isPublic: false` is not checked against the public index: the
+  authenticated connection is its trust. The exemption covers only that door's private answer, and never a key the
+  signed index lists (or one whose listing cannot be read). It shows in logs and on Marketplace › Sources as "private,
+  verified by the Control Plane connection" (`admitPrivateCapability`, `official-catalog-trust.ts`).
 - **Payload-in installs (RC4)**, where a CP-authenticated client sends the definition itself, are not catalog
   reads and are not checked.
 - The **boot** capability reconcile is checked per template (it loads through `fetchCPCapabilityTemplate`) but is
   not paused as a whole by a freeze; only the after-sync converge is.
 - The retired `capability-template-sync` worker still writes `capability_template_cache`, which nothing reads.
+- **Two public authors on one slug** (non-official only, since an official slug is reserved). The index lists the
+  row the CP's own precedence picks: per category, an official row first, then the newest public row. A pod whose
+  cache kept the other row (its dedupe keeps the "newest version") is told the row is unverified, and an enforcing
+  pod refuses that install. Rows the format cannot carry (an uppercase capability key, a cell key with `:`) are left
+  out, and listed in the CP's `GET /admin/catalog-signing` under `index.skipped`.
+
+#### 8. What was built (wave 6)
+
+**Control Plane** (`control-plane-api`):
+
+- `GET /api/marketplace/synap-catalog-keys.json[.sig]` and `synap-index.json[.sig]` serve the stored exact bytes:
+  anonymous, `200`, `Cache-Control: public, max-age=60`, never a redirect. They answer `404` before anything is
+  published, and `503` for an index the current statement does not name as usable. There is also
+  `GET /api/marketplace/synap-definitions/:kind/:slug?version=`, the canonical bytes `definitionUrl` names (for S2).
+- The index is built from the anonymous doors' own resolution (`catalog-rows.ts`, with the capability key rule and
+  `toCapabilityCard`) and hashed with the §4 rule (`content-digest.ts`, the CP's `canonicalJSON`, the pod's field
+  lists). It is checked against the pod's format before it is signed. It is signed by the online key behind the
+  `CatalogSigner` interface (env: `SYNAP_CATALOG_SIGNING_KEY`, an ed25519 PKCS#8 key; a KMS signer can replace it).
+  `expires` is now + 14 days and never earlier than the last; the CP's own `version` counter goes up by one each time.
+  Re-signing runs on every publish, edit, unpublish, retire and statement upload (pg-boss, debounced 30 s), daily
+  at 04:45 UTC, and at startup. Warnings, logged and sent to Sentry, start at 7 days left on the index and 14 days on
+  the statement or the online key.
+- The keys statement comes from the offline ceremony and is uploaded with `PUT /admin/catalog-signing/keys-statement`
+  (`{statement: base64, signature}`). The CP stores it only when a pod would accept it: signed by one of
+  `SYNAP_CATALOG_ROOT_PUBLIC_KEYS`, current, not older than the one served, a reused version refused. Status is at
+  `GET /admin/catalog-signing`; `POST /admin/catalog-signing/sign` signs now. Both files are stored in
+  `catalog_signed_files` (migration 0090).
+- `GET /internal/capabilities/:key` now also answers `isPublic` and `version`.
+- `ops/catalog-signing/cli.mjs` (no dependencies) handles the root ceremony: `root-keygen` (encrypted with scrypt and
+  AES-256-GCM), `check-root`, `online-keygen`, `sign-keys`, `verify` and `fingerprint`.
+
+**Pod:** `catalogRootKeys([...])` makes compiling the two roots a one-line change (a malformed root, or anything but
+none or two, throws). The private-capability exemption is above.
+
+**Proof:** cross-repo fixtures signed with TEST-only keys. They are committed in both repos, CP
+`src/lib/catalog-signing/__fixtures__/official-catalog/` and pod
+`packages/jobs/src/workers/__tests__/fixtures/official-catalog-cp/`, and pinned by one fixture-set sha256 on both
+sides. The CP regenerates them through the production path. The pod verifies those bytes with its own verifier,
+recomputes every digest from the definitions as the doors serve them, and runs them through
+`checkOfficialCatalogSignature` on PGlite with enforcement on, with zero unverified rows.
 
 ---
 
