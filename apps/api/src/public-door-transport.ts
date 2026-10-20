@@ -12,9 +12,14 @@
  *     `Allow-Credentials` would be inert.
  *   - `Access-Control-Allow-Credentials` is DELETED from every response here,
  *     whoever set it downstream.
- *   - `Access-Control-Allow-Headers: Content-Type` only. No Authorization,
+ *   - `Access-Control-Allow-Headers: Content-Type`, plus `If-None-Match` for a
+ *     read (GET/HEAD, or a preflight whose `Access-Control-Request-Method` is
+ *     one) so a browser can revalidate and get a 304. Decided by METHOD, not
+ *     path: a form's read and its submit share one path. No Authorization,
  *     Cookie or X-Session-Token: a public door never reads a credential, and a
  *     browser cannot even attach one cross-origin after preflight.
+ *   - `Access-Control-Expose-Headers: ETag, Retry-After`: the validator a
+ *     viewer revalidates with, and the wait a 429 asks for. Nothing else.
  *   - Methods GET, POST, OPTIONS. A preflight is answered here with 204 and
  *     never reaches the rate limiter, auth or a handler.
  *   - `Cache-Control: no-cache` on reads (store, but revalidate every time),
@@ -38,6 +43,10 @@ export const PUBLIC_DOOR_MAX_BODY_BYTES = 16 * 1024;
 
 export const PUBLIC_DOOR_ALLOW_METHODS = "GET, POST, OPTIONS";
 export const PUBLIC_DOOR_ALLOW_HEADERS = "Content-Type";
+export const PUBLIC_DOOR_READ_ALLOW_HEADERS = "Content-Type, If-None-Match";
+// Neither is CORS-safelisted: ETag so a viewer can revalidate, Retry-After so a
+// rate-limited browser knows how long to wait.
+export const PUBLIC_DOOR_EXPOSE_HEADERS = "ETag, Retry-After";
 
 // `Headers` itself is not safe to name here. The api build pulls in more than
 // one `@types/node`, and their `Headers` / `Response` globals do not agree
@@ -48,16 +57,26 @@ type PublicDoorHeaderWriter = {
   set(name: string, value: string): void;
 };
 
+const isReadMethod = (method: string) => method === "GET" || method === "HEAD";
+
+/**
+ * `readsRequest`: the request is a read, or a preflight for one. Anything
+ * else — a write, or a preflight naming no method or another one — gets
+ * `Content-Type` only.
+ */
 function applyPublicDoorHeaders(
   headers: PublicDoorHeaderWriter,
-  method: string
+  method: string,
+  readsRequest: boolean
 ): void {
   headers.delete("Access-Control-Allow-Credentials");
   headers.set("Access-Control-Allow-Origin", "*");
   headers.set("Access-Control-Allow-Methods", PUBLIC_DOOR_ALLOW_METHODS);
-  headers.set("Access-Control-Allow-Headers", PUBLIC_DOOR_ALLOW_HEADERS);
-  // ETag is not CORS-safelisted; expose it so a viewer can revalidate.
-  headers.set("Access-Control-Expose-Headers", "ETag");
+  headers.set(
+    "Access-Control-Allow-Headers",
+    readsRequest ? PUBLIC_DOOR_READ_ALLOW_HEADERS : PUBLIC_DOOR_ALLOW_HEADERS
+  );
+  headers.set("Access-Control-Expose-Headers", PUBLIC_DOOR_EXPOSE_HEADERS);
   headers.set("Access-Control-Max-Age", "600");
   headers.delete("Set-Cookie");
   if (method === "GET" || method === "HEAD" || method === "OPTIONS") {
@@ -87,12 +106,15 @@ export const publicDoorTransport: MiddlewareHandler = async (c, next) => {
           c.header(name, value);
         },
       },
-      method
+      method,
+      isReadMethod(
+        (c.req.header("Access-Control-Request-Method") ?? "").toUpperCase()
+      )
     );
     return c.body(null, 204);
   }
 
-  if (method === "GET" || method === "HEAD") {
+  if (isReadMethod(method)) {
     await next();
   } else {
     const limited = await limitBody(c, next);
@@ -105,5 +127,5 @@ export const publicDoorTransport: MiddlewareHandler = async (c, next) => {
   // policy LAST — after every inner middleware has had its say.
   // eslint-disable-next-line no-self-assign -- the setter's side effect is the point
   c.res = c.res;
-  applyPublicDoorHeaders(c.res.headers, method);
+  applyPublicDoorHeaders(c.res.headers, method, isReadMethod(method));
 };

@@ -7,7 +7,7 @@
  * - Security headers (prevent XSS, clickjacking, etc.)
  */
 import type { Context, MiddlewareHandler } from "hono";
-import { rateLimiter } from "hono-rate-limiter";
+import { rateLimiter, type RateLimitInfo } from "hono-rate-limiter";
 import { getDynamicCorsOrigins } from "@synap/api";
 import {
   buildRateLimitKey,
@@ -91,6 +91,30 @@ function classHandler(
       },
       429
     );
+}
+
+/**
+ * `classHandler` plus `Retry-After` in delta-seconds, for the public doors.
+ * In hono-rate-limiter 0.4.2 the only switch to its own Retry-After is
+ * `standardHeaders`, which also stamps `RateLimit-*` on every counted response;
+ * the public doors want the one header only. The limiter puts this bucket's
+ * info on the context (`rateLimit`) just before calling the handler, so the
+ * wait is the bucket's real reset, never under one second.
+ */
+function publicDoorHandler(
+  className: "public_read" | "public_submit",
+  limit: number,
+  retryAfter: string
+) {
+  const respond = classHandler(className, limit, retryAfter);
+  return (c: Context, _next: unknown, options: { windowMs: number }) => {
+    const info = c.get("rateLimit") as RateLimitInfo | undefined;
+    const seconds = info?.resetTime
+      ? Math.ceil((info.resetTime.getTime() - Date.now()) / 1000)
+      : Math.ceil(options.windowMs / 1000);
+    c.header("Retry-After", String(Math.max(1, seconds)));
+    return respond(c);
+  };
 }
 
 const rateLimitClassConfig = getRateLimitClassConfig();
@@ -257,7 +281,7 @@ const publicReadIpRateLimiter = rateLimiter({
   limit: publicDoorRate.readIp.max,
   standardHeaders: false,
   keyGenerator: publicDoorKeyGenerator("read_ip"),
-  handler: classHandler(
+  handler: publicDoorHandler(
     "public_read",
     publicDoorRate.readIp.max,
     publicDoorRate.readIp.retryAfter
@@ -269,7 +293,7 @@ const publicSubmitIpRateLimiter = rateLimiter({
   limit: publicDoorRate.submitIp.max,
   standardHeaders: false,
   keyGenerator: publicDoorKeyGenerator("submit_ip"),
-  handler: classHandler(
+  handler: publicDoorHandler(
     "public_submit",
     publicDoorRate.submitIp.max,
     publicDoorRate.submitIp.retryAfter
@@ -281,7 +305,7 @@ const publicSubmitShareRateLimiter = rateLimiter({
   limit: publicDoorRate.submitShare.max,
   standardHeaders: false,
   keyGenerator: publicDoorKeyGenerator("submit_share"),
-  handler: classHandler(
+  handler: publicDoorHandler(
     "public_submit",
     publicDoorRate.submitShare.max,
     publicDoorRate.submitShare.retryAfter
