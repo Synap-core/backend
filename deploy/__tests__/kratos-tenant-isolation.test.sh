@@ -126,8 +126,10 @@ https://devplane.synap.live
 https://arch.synap.live
 https://the-arch-grants.synap.live
 https://mini-app.synap.live"
-[ "$FP" = "$want" ] && ok "first-party apps = the Control Plane's FIRST_PARTY_WEB_SUBDOMAINS (+ apex)" \
-  || bad "first-party apps drifted from the CP list: $FP"
+# The list itself is pinned to FIRST_PARTY_WEB_SUBDOMAINS (@synap-core/types/tenancy)
+# by packages/types/src/tenancy/installer-parity.test.ts; this checks the shape.
+[ "$FP" = "$want" ] && ok "first-party apps = the zone's apex + the listed apps, never a wildcard" \
+  || bad "first-party apps changed: $FP"
 lib synap_first_party_web_origins pod.x.staging.synap.live | grep -qx "https://crm.staging.synap.live" \
   && ok "a staging pod admits the staging apps" || bad "staging pod: no staging apps"
 lib synap_first_party_web_origins pod.mycorp.io | grep -qx "https://crm.synap.live" \
