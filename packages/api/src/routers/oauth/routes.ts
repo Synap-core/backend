@@ -51,6 +51,7 @@ import {
   OAUTH_SUPPORTED_SCOPES,
   mapCpScopesToPodScopes,
   oauthKeyInstanceId,
+  parseOauthKeyInstanceId,
   resolveIssuer,
   resolveOAuthAgentType,
   type OAuthAgentType,
@@ -63,10 +64,12 @@ import {
 import {
   DcrError,
   OAuthError,
+  buildAuthorizationResponseUrl,
   buildAuthorizationServerMetadata,
   buildDcrResponse,
   buildProtectedResourceMetadata,
   isRegisteredRedirectUri,
+  resourceForIssuer,
   validateDcrRequest,
   verifyPkce,
 } from "./protocol.js";
@@ -214,13 +217,15 @@ oauthApp.post("/register", async (c) => {
 // sign-in surface that bounces through `/login?return=…`. Duplicating that here
 // would be a second auth path to keep correct.
 oauthApp.get("/authorize", async (c) => {
-  if (!issuerOr503()) {
+  const issuer = issuerOr503();
+  if (!issuer) {
     return c.text(
       "This pod is not configured with a canonical PUBLIC_URL",
       503
     );
   }
   const q = c.req.query();
+  const resources = c.req.queries("resource") ?? [];
   const params = {
     clientId: q.client_id,
     redirectUri: q.redirect_uri,
@@ -229,6 +234,7 @@ oauthApp.get("/authorize", async (c) => {
     state: q.state,
     codeChallenge: q.code_challenge,
     codeChallengeMethod: q.code_challenge_method,
+    resource: resources[0],
   };
 
   // ── Phase 1: client + redirect_uri. RFC 6749 §4.1.2.1 — errors here are shown
@@ -243,17 +249,25 @@ oauthApp.get("/authorize", async (c) => {
     throw err;
   }
 
-  // ── Phase 2: everything else redirects the error back to the client.
+  // ── Phase 2: everything else redirects the error back to the client, with
+  // `iss` like every authorization response (RFC 9207).
   let validated;
   try {
+    if (resources.length > 1) {
+      // RFC 8707 allows several; a token from this AS is for one pod resource.
+      throw new OAuthError("invalid_target", "Name at most one resource");
+    }
     validated = validateAuthorizeRequest(client, redirectUri, params);
   } catch (err) {
     if (err instanceof OAuthError) {
-      const back = new URL(redirectUri);
-      back.searchParams.set("error", err.code);
-      back.searchParams.set("error_description", err.message);
-      if (params.state) back.searchParams.set("state", params.state);
-      return c.redirect(back.toString(), 302);
+      return c.redirect(
+        buildAuthorizationResponseUrl(redirectUri, issuer, {
+          error: err.code,
+          error_description: err.message,
+          state: params.state || null,
+        }),
+        302
+      );
     }
     throw err;
   }
@@ -281,6 +295,9 @@ oauthApp.get("/authorize", async (c) => {
   target.searchParams.set("code_challenge", validated.codeChallenge);
   target.searchParams.set("code_challenge_method", "S256");
   if (validated.state) target.searchParams.set("state", validated.state);
+  if (validated.resource) {
+    target.searchParams.set("resource", validated.resource);
+  }
 
   return c.redirect(target.toString(), 302);
 });
@@ -312,7 +329,8 @@ oauthApp.post("/token", async (c) => {
   c.header("Cache-Control", "no-store");
   c.header("Pragma", "no-cache");
 
-  if (!issuerOr503()) return c.json(ISSUER_UNCONFIGURED, 503);
+  const issuer = issuerOr503();
+  if (!issuer) return c.json(ISSUER_UNCONFIGURED, 503);
 
   let params: Record<string, string>;
   try {
@@ -384,6 +402,28 @@ oauthApp.post("/token", async (c) => {
     // PKCE. Throws on absent, malformed, or mismatched verifier — there is no
     // branch where a missing challenge means "skip the check".
     verifyPkce(claimed.codeChallenge, params.code_verifier);
+
+    // RFC 8707 §2.2: a `resource` here must be one this pod serves, and the
+    // one the code was issued for when the authorization named one.
+    if (params.resource !== undefined) {
+      const resource = resourceForIssuer(params.resource, issuer);
+      if (claimed.resource && resource !== claimed.resource) {
+        throw new OAuthError(
+          "invalid_target",
+          "resource does not match the authorization request"
+        );
+      }
+    }
+
+    // A pod app (CIMD client) is never minted the shared `claude-web*` agent
+    // (spec 17 I3): its key belongs to the app's OWN agent, which wave PB2
+    // mints. Until then its code redeems to nothing.
+    if (client.clientKind === "cimd") {
+      throw new OAuthError(
+        "unauthorized_client",
+        "This pod cannot issue tokens to app clients yet"
+      );
+    }
 
     // ── Mint the access token: an `api_keys` row, via the ONE door. ──────────
     //
@@ -549,9 +589,8 @@ oauthApp.post("/revoke", async (c) => {
       return c.body(null, 200);
     }
 
-    const boundClient = key.instanceId?.startsWith("oauth:")
-      ? key.instanceId.slice("oauth:".length).split(":")[0]
-      : null;
+    const boundClient =
+      parseOauthKeyInstanceId(key.instanceId)?.clientId ?? null;
     if (boundClient && params.client_id && params.client_id !== boundClient) {
       logger.warn(
         { keyId: key.id, clientId: params.client_id },

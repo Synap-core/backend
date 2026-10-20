@@ -19,6 +19,8 @@
  *   RFC 9728 — Protected Resource Metadata
  *   RFC 7591 — Dynamic Client Registration (validation half)
  *   RFC 7636 — PKCE (S256 only)
+ *   RFC 8707 — Resource Indicators (the `resource` check)
+ *   RFC 9207 — Authorization Server Issuer Identification (`iss`)
  */
 
 import { createHash, timingSafeEqual } from "crypto";
@@ -33,6 +35,7 @@ export class OAuthError extends Error {
       | "invalid_client"
       | "invalid_grant"
       | "invalid_scope"
+      | "invalid_target"
       | "unauthorized_client"
       | "unsupported_grant_type"
       | "unsupported_response_type"
@@ -144,6 +147,12 @@ export function buildAuthorizationServerMetadata(
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none"],
     scopes_supported: [...supportedScopes],
+    // RFC 9207: every authorization response (code or error) carries `iss`,
+    // so a client talking to many pods can tell which one answered (T5).
+    authorization_response_iss_parameter_supported: true,
+    // A pod app's client_id is the https URL of its metadata document
+    // (client-metadata.ts); DCR above stays for MCP clients.
+    client_id_metadata_document_supported: true,
   };
 }
 
@@ -261,6 +270,27 @@ export function isRegisteredRedirectUri(
   return registered.includes(candidate);
 }
 
+/**
+ * The redirect that carries an authorization response — a code or an error —
+ * back to the client. The ONE builder for it, so every response carries `iss`
+ * (RFC 9207 §2, invariant I7): a client that talks to many pods binds its
+ * pending request to the issuer it started with and refuses a response from
+ * any other, which closes the mix-up attack (T5). `redirectUri` must already be
+ * verified against the client's registration.
+ */
+export function buildAuthorizationResponseUrl(
+  redirectUri: string,
+  issuer: string,
+  fields: Record<string, string | null | undefined>
+): string {
+  const target = new URL(redirectUri);
+  for (const [k, v] of Object.entries(fields)) {
+    if (v !== undefined && v !== null) target.searchParams.set(k, v);
+  }
+  target.searchParams.set("iss", issuer);
+  return target.toString();
+}
+
 // ─── Scopes ──────────────────────────────────────────────────────────────────
 
 /** RFC 6749 §3.3: scope is a space-delimited, order-insignificant list. */
@@ -285,6 +315,59 @@ export function narrowScopes(
   if (requested.length === 0) return [...registeredScopes];
   const granted = requested.filter((s) => registeredScopes.includes(s));
   return granted.length > 0 ? granted : [...registeredScopes];
+}
+
+/**
+ * Intersect an APP client's (CIMD) requested scopes with what its document
+ * declares. Unlike `narrowScopes`, an empty intersection is an error, never a
+ * fallback to the declared set: an app that asked for nothing it may have gets
+ * nothing, and the human is never shown a consent wider than the request.
+ */
+export function narrowAppScopes(
+  declared: readonly string[],
+  requested: readonly string[]
+): string[] {
+  const granted = [...new Set(requested.filter((s) => declared.includes(s)))];
+  if (granted.length === 0) {
+    throw new OAuthError(
+      "invalid_scope",
+      "None of the requested scopes is declared in the client's metadata document"
+    );
+  }
+  return granted;
+}
+
+// ─── Resource indicators (RFC 8707) ──────────────────────────────────────────
+
+/**
+ * The resources a token from this AS may be for: the pod's MCP endpoint and its
+ * Hub REST API. A token minted here is an `api_keys` row of THIS pod's
+ * database, so it is useless anywhere else by construction; the check exists so
+ * a client that names another resource learns at /authorize, not after.
+ */
+export function supportedResources(issuer: string): string[] {
+  return [`${issuer}/mcp`, `${issuer}/api/hub`];
+}
+
+/**
+ * Validate an RFC 8707 `resource` parameter. Absent → null. Otherwise it must
+ * name one of `supportedResources` (a trailing slash is tolerated and dropped),
+ * and the canonical spelling is returned so the code stores one form.
+ */
+export function resourceForIssuer(
+  raw: string | null | undefined,
+  issuer: string
+): string | null {
+  if (raw === undefined || raw === null) return null;
+  const candidate = raw.trim().replace(/\/+$/, "");
+  const match = supportedResources(issuer).find((r) => r === candidate);
+  if (!match) {
+    throw new OAuthError(
+      "invalid_target",
+      "resource must be this pod's /mcp or /api/hub URL"
+    );
+  }
+  return match;
 }
 
 // ─── Dynamic Client Registration (RFC 7591) ──────────────────────────────────
