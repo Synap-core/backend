@@ -182,8 +182,12 @@ describe("trpcProcedureAllowed (S7: the Bearer tRPC door fences mutations)", () 
   const STAR_ONE_WS = key({ permissions: ["*"], workspaceIds: ["w1"] });
   const GATED = "documents.patchDocument"; // (a) the gate bounds it
   const OWNER_WIDE = "services.register"; // (b)
-  // (c) cross-owner channel lookup — refused until W0 floors it on the owner.
-  const REFUSED = "channels.sendExternalMessage";
+  // A row still refused (class c/d), read from the table so the example
+  // follows the W2 flips; once none is left, the unclassified path stands in.
+  const REFUSED =
+    Object.entries(TRPC_KEY_MUTATION_DOORS).find(
+      ([, door]) => door.bound === "refused"
+    )?.[0] ?? "entities.someOtherNewMutation";
   const UNCLASSIFIED = "entities.someNewMutation";
 
   it("queries: a scoped key only when seamed; an unfenced key always", () => {
@@ -246,14 +250,13 @@ describe("trpcProcedureAllowed (S7: the Bearer tRPC door fences mutations)", () 
 
   it("the undecided (d) product-decision mutations stay refused for a scoped key", () => {
     // Founder, 2026-10-20: refused until decided (plan §2 D1–D5). D2 (role
-    // facets) is decided and fixed: those three are GATED (W2a).
+    // facets, W2a) and D4 (triggerAI, W2b) are decided and fixed: GATED.
     for (const path of [
       "automations.createAutomation",
       "automations.updateAutomation",
       "automations.activateAutomation",
       "automations.triggerAutomation",
       "proposals.updateProposal",
-      "channels.triggerAI",
       "observations.append",
     ]) {
       expect(TRPC_KEY_MUTATION_DOORS[path]?.bound, path).toBe("refused");

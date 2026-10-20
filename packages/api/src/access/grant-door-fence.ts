@@ -411,8 +411,6 @@ const DECISION = (id: string, reason: string): TrpcWriteDoor => ({
 
 const HEADER_WS =
   "The gate checks the workspace the caller picked (header/input), not the target's.";
-const READ_ONLY_CHECK =
-  "Checked only by a READ predicate; the write itself is not grant-checked.";
 
 /**
  * Every key-reachable tRPC MUTATION, by procedure path: the hub router
@@ -468,6 +466,19 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "entities.attachFacet": GATED,
     "entities.updateFacet": GATED,
     "entities.detachFacet": GATED,
+    // W2b — every channel/session/memory write passes `assertChannelWrite` on
+    // the CHANNEL's workspace (D4: an AI turn is a message.create there) —
+    // routers/hub-protocol/gate-on-target.channels.pglite.test.ts
+    "channels.resolveOrCreateChannel": GATED,
+    "channels.bindChannel": GATED,
+    "channels.sendExternalMessage": GATED,
+    "channels.postToA2AIChannel": GATED,
+    "channels.triggerAI": GATED,
+    "context.updateThreadContext": GATED,
+    "sessions.getOrCreate": GATED,
+    "sessions.update": GATED,
+    "sessions.close": GATED,
+    "compactedStates.create": GATED,
 
     // (b) OWNER-WIDE — need an unbounded `*` key.
     "channels.ensurePersonal": OWNER_WIDE(
@@ -506,27 +517,6 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "signals.capture": UNBOUNDED(
       `${HEADER_WS} Same pod-kind fallback as entities.createEntity.`
     ),
-    "channels.resolveOrCreateChannel": UNBOUNDED(
-      "Inserts channels; the input workspace is never grant-checked."
-    ),
-    "channels.bindChannel": UNBOUNDED(
-      "The gate's workspace is caller-supplied, never compared with the channel's."
-    ),
-    "channels.sendExternalMessage": UNBOUNDED(
-      "Gates the input workspace; the channel is found by external id."
-    ),
-    "channels.postToA2AIChannel": UNBOUNDED(
-      "Gated only on first join, with the input workspace; queues an AI turn."
-    ),
-    "context.updateThreadContext": UNBOUNDED(
-      `${READ_ONLY_CHECK} Rewrites the summary injected into the next prompt.`
-    ),
-    "sessions.getOrCreate": UNBOUNDED(READ_ONLY_CHECK),
-    "sessions.update": UNBOUNDED(READ_ONLY_CHECK),
-    "sessions.close": UNBOUNDED(READ_ONLY_CHECK),
-    "compactedStates.create": UNBOUNDED(
-      `${READ_ONLY_CHECK} Plants the memory that bootstraps the next session.`
-    ),
     "n8nActions.createEntity": UNBOUNDED(
       "The server picks the workspace; same pod-kind fallback as entities.createEntity."
     ),
@@ -551,10 +541,6 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "proposals.updateProposal": DECISION(
       "D3",
       "the decision verbs ignore workspace and project pins."
-    ),
-    "channels.triggerAI": DECISION(
-      "D4",
-      "an AI turn spends the owner's budget on a read grant."
     ),
     "observations.append": DECISION(
       "D5",
