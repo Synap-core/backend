@@ -55,6 +55,17 @@ export const CONSOLE_LABEL = "admin";
 export const RESERVED_POD_LABELS: readonly string[] = [CONSOLE_LABEL];
 
 /**
+ * Names no pod is given (the Control Plane reserves them): the console's label,
+ * the tenant zone's own label (`pod`, so `pod.synap.live` is never a pod) and
+ * the legacy console label.
+ */
+export const RESERVED_POD_NAMES: readonly string[] = [
+  CONSOLE_LABEL,
+  "pod",
+  "pod-admin",
+];
+
+/**
  * The Synap-hosted web apps, by subdomain of the zone a pod's Control Plane runs
  * under (`synap.live`, or `staging.synap.live`). A pod's Kratos admits them (CORS)
  * and returns to them (return_to) for "Continue with Synap Cloud", beside the
@@ -102,12 +113,27 @@ export type TenantPodHost =
       zone: LegacyTenantZone;
     });
 
-function normalize(host: string): string {
-  return host.trim().toLowerCase().replace(/\.$/, "");
+/**
+ * A hostname as every comparison here reads it: trimmed, lowercased, without
+ * leading dots (a cookie-style `.synap.live`) and one trailing dot (the DNS
+ * root, `synap.live.`). Null for an empty host, an empty label (`a..b`) or an
+ * IP literal, which are never a pod, a zone or a site base.
+ */
+export function normalizeHost(host: string): string | null {
+  const h = host.trim().toLowerCase().replace(/^\.+/, "").replace(/\.$/, "");
+  if (!h || h.split(".").some((label) => label === "")) return null;
+  if (/^\d+(\.\d+){3}$/.test(h) || h.includes(":") || h.startsWith("["))
+    return null;
+  return h;
 }
 
-function isPodName(name: string): boolean {
-  return POD_NAME_RE.test(name) && !RESERVED_POD_LABELS.includes(name);
+function normalize(host: string): string {
+  return normalizeHost(host) ?? "";
+}
+
+/** A name the Control Plane can give a pod: its grammar, and not reserved. */
+export function isPodName(name: string): boolean {
+  return POD_NAME_RE.test(name) && !RESERVED_POD_NAMES.includes(name);
 }
 
 /** Is `host` itself a zone where different tenants live (current or legacy)? */
@@ -124,8 +150,8 @@ export function isTenantZone(host: string): boolean {
  * (no dot) or a tenant zone, either of which admits hosts the pod does not own.
  */
 export function isRefusedSiteBase(base: string): boolean {
-  const b = normalize(base).replace(/^\.+/, "");
-  return !b.includes(".") || isTenantZone(b);
+  const b = normalizeHost(base);
+  return !b || !b.includes(".") || isTenantZone(b);
 }
 
 /** The most specific tenant zone (current or legacy) `host` is under, or null. */

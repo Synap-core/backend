@@ -416,10 +416,12 @@ synap_legacy_tenant_zones() {
     printf '%s\n' staging.synap.live synap.live
 }
 
-# The Control Plane's pod-name grammar (POD_NAME_RE); `admin` is the console's
-# label, never a pod's name.
+# The Control Plane's pod-name grammar (POD_NAME_RE), less the names it never
+# gives a pod: `admin` (the console's label), `pod` (the tenant zone's own label,
+# so pod.synap.live is never a pod) and `pod-admin` (the legacy console label).
 synap_pod_name_ok() {
-    [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$ ]] && [ "$1" != admin ]
+    [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$ ]] || return 1
+    case "$1" in admin|pod|pod-admin) return 1 ;; esac
 }
 
 # Is <host> itself one of the tenant zones (current or legacy)?

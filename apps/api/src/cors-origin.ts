@@ -22,6 +22,7 @@ import { isPublicDoorPath } from "@synap/api/public-doors";
 import {
   firstPartyBaseForPodHost,
   isRefusedSiteBase,
+  normalizeHost,
 } from "@synap-core/types/tenancy";
 import {
   and,
@@ -82,9 +83,7 @@ function podPublicHost(): string | null {
  * value is trusted as-is.
  */
 function getBaseDomain(): string | null {
-  const configured =
-    process.env.SYNAP_BASE_DOMAIN?.trim().replace(/^\.+/, "").toLowerCase() ||
-    null;
+  const configured = normalizeHost(process.env.SYNAP_BASE_DOMAIN ?? "");
   const explicit =
     configured && !isRefusedSiteBase(configured) ? configured : null;
   const host = podPublicHost();

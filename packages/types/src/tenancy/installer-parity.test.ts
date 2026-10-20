@@ -17,8 +17,7 @@ import {
   consoleHostForPod,
   firstPartyWebOrigins,
   LEGACY_TENANT_ZONES,
-  POD_NAME_RE,
-  RESERVED_POD_LABELS,
+  isPodName,
   sharedCookieDomain,
   TENANT_ZONES,
 } from "./index";
@@ -109,6 +108,13 @@ const HOSTS = [
   "pod.acme.co.uk",
   "localhost",
   "intranet",
+  "pod.pod.synap.live",
+  "pod-admin.pod.synap.live",
+  "pod.pod-admin.synap.live",
+  "synap.live.",
+  "pod.synap.live.",
+  "x.POD.synap.live",
+  "alice.pod.synap.live.",
 ];
 
 describe("installer parity: the zones", () => {
@@ -159,10 +165,9 @@ describe("installer parity: the naming", () => {
       "a_b",
       "admin",
       "pod",
+      "pod-admin",
     ];
-    const want = names.map((n) =>
-      POD_NAME_RE.test(n) && !RESERVED_POD_LABELS.includes(n) ? "" : "<rc 1>"
-    );
+    const want = names.map((n) => (isPodName(n) ? "" : "<rc 1>"));
     expect(
       sh(
         "synap_pod_name_ok",

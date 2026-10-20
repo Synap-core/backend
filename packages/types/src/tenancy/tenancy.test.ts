@@ -4,9 +4,11 @@ import {
   currentZoneFor,
   firstPartyBaseForPodHost,
   firstPartyWebOrigins,
+  isPodName,
   isRefusedSiteBase,
   isTenantZone,
   legacyPairFor,
+  normalizeHost,
   LEGACY_TENANT_ZONES,
   parseTenantPodHost,
   podHostsForName,
@@ -241,5 +243,68 @@ describe("firstPartyWebOrigins", () => {
     expect(firstPartyWebOrigins("pod.example.com")[0]).toBe(
       "https://synap.live"
     );
+  });
+});
+
+describe("host normalisation (case, the DNS root dot, IPs, empty labels)", () => {
+  it.each([
+    "synap.live.",
+    "SYNAP.LIVE",
+    "pod.synap.live.",
+    ".Synap.Live.",
+    " pod.STAGING.synap.live ",
+  ])("%j is still a refused zone", (zone) => {
+    expect(isTenantZone(zone)).toBe(true);
+    expect(isRefusedSiteBase(zone)).toBe(true);
+  });
+
+  it("reads x.POD.synap.live and alice.pod.synap.live. as the pod they name", () => {
+    expect(parseTenantPodHost("x.POD.synap.live")).toMatchObject({
+      scheme: "current",
+      name: "x",
+    });
+    expect(consoleHostForPod("alice.pod.synap.live.")).toBe(
+      "admin.alice.pod.synap.live"
+    );
+    expect(firstPartyBaseForPodHost("x.POD.synap.live")).toBe(
+      "x.pod.synap.live"
+    );
+  });
+
+  it.each(["", "   ", "a..b", "10.0.0.5", "[::1]", "::1", "."])(
+    "refuses %j as a site base and a pod",
+    (host) => {
+      expect(normalizeHost(host)).toBeNull();
+      expect(isRefusedSiteBase(host)).toBe(true);
+      expect(parseTenantPodHost(host)).toBeNull();
+    }
+  );
+
+  it("normalises to the bare lowercase host", () => {
+    expect(normalizeHost(" .Alice.Pod.Synap.Live. ")).toBe(
+      "alice.pod.synap.live"
+    );
+  });
+});
+
+describe("reserved pod names", () => {
+  it.each(["pod", "pod-admin", "admin"])("no pod is named %s", (name) => {
+    expect(isPodName(name)).toBe(false);
+    expect(() => podHostsForName(name)).toThrow(RangeError);
+    expect(parseTenantPodHost(`${name}.pod.synap.live`)).toBeNull();
+    expect(parseTenantPodHost(`pod.${name}.synap.live`)).toBeNull();
+  });
+
+  it("pod.synap.live is never a pod, a console or a first-party base", () => {
+    for (const host of [
+      "pod.synap.live",
+      "pod.pod.synap.live",
+      "pod-admin.pod.synap.live",
+      "pod.pod-admin.synap.live",
+    ]) {
+      expect(parseTenantPodHost(host)).toBeNull();
+      expect(consoleHostForPod(host)).toBeNull();
+      expect(firstPartyBaseForPodHost(host)).toBeNull();
+    }
   });
 });

@@ -126,6 +126,23 @@ describe("first-party base domain (self-healing from PUBLIC_URL)", () => {
     expect(isAllowedOrigin("https://pod-admin.alice.synap.live")).toBe(false);
   });
 
+  it.each(["synap.live.", "SYNAP.LIVE", "pod.synap.live.", ".Pod.Synap.Live."])(
+    "a SYNAP_BASE_DOMAIN of %j is still refused",
+    (zone) => {
+      process.env.SYNAP_BASE_DOMAIN = zone;
+      process.env.PUBLIC_URL = "https://alice.pod.synap.live";
+      expect(isAllowedOrigin("https://bob.pod.synap.live")).toBe(false);
+      expect(isAllowedOrigin("https://crm.synap.live")).toBe(false);
+      expect(isAllowedOrigin("https://admin.alice.pod.synap.live")).toBe(true);
+    }
+  );
+
+  it("an uppercase PUBLIC_URL host x.POD.synap.live derives its own base, nothing wider", () => {
+    process.env.PUBLIC_URL = "https://x.POD.synap.live";
+    expect(isAllowedOrigin("https://admin.x.pod.synap.live")).toBe(true);
+    expect(isAllowedOrigin("https://y.pod.synap.live")).toBe(false);
+  });
+
   it("pod.synap.live does not derive the whole zone", () => {
     process.env.PUBLIC_URL = "https://pod.synap.live";
     expect(isAllowedOrigin("https://pod-admin.synap.live")).toBe(false);

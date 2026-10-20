@@ -1,4 +1,4 @@
-import { isRefusedSiteBase } from "@synap-core/types/tenancy";
+import { isRefusedSiteBase, normalizeHost } from "@synap-core/types/tenancy";
 
 /**
  * The realtime server's first-party base, from SYNAP_BASE_DOMAIN. The rule is
@@ -8,7 +8,7 @@ import { isRefusedSiteBase } from "@synap-core/types/tenancy";
  * become a credentialed Socket.IO caller.
  */
 export function realtimeFirstPartyBase(raw: string | undefined): string | null {
-  const base = raw?.trim().replace(/^\.+/, "").toLowerCase();
+  const base = normalizeHost(raw ?? "");
   if (!base || isRefusedSiteBase(base)) return null;
   return base;
 }
