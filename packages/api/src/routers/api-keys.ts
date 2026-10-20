@@ -70,6 +70,7 @@ import {
 } from "./oauth/consent.js";
 import { OAuthError } from "./oauth/protocol.js";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
+import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import {
   decideDeviceRequest,
   getDeviceRequest,
@@ -81,18 +82,7 @@ import {
  * A device decision is a PERSON's, in their own session (cookie or session
  * token) — never a key's: an agent or computer key cannot approve a computer.
  */
-function assertSignedInPerson(ctx: {
-  session?: unknown;
-  keyType?: unknown;
-  agentUserId?: unknown;
-  isHubProtocol?: unknown;
-}): void {
-  if (!ctx.session || ctx.keyType || ctx.agentUserId || ctx.isHubProtocol)
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Approve a computer while signed in.",
-    });
-}
+const APPROVE_COMPUTER_SIGNED_IN = "Approve a computer while signed in.";
 
 /**
  * The authorize parameters pod-admin's consent screen round-trips.
@@ -282,7 +272,7 @@ export const apiKeysRouter = router({
       holder: holderOf(key.userId),
       /** An old CLI key whose calls are yours (`keyActsAsYou`): replace it with a computer. */
       actsAsYou: keyActsAsYou(key, ctx.userId),
-      /** What this key may touch (W1): `access` + every live grant. */
+      /** What this key may touch: `access` + every live grant. */
       ...reachOf(key.id),
       scope: key.scope,
       isActive: key.isActive,
@@ -303,29 +293,17 @@ export const apiKeysRouter = router({
 
   /**
    * Admin: list all API keys on the pod (pod-admin only).
-   * When `workspaceId` is set, filters to keys whose owner is a member of that workspace.
-   * Each row also carries the key's own `workspaceId` — set only on a key
-   * confined to one space (`createForWorkspace`) — so a surface can tell a
-   * space key from a pod-wide one without guessing from the owner.
+   * When `workspaceId` is set, returns only the keys confined to that space
+   * (their own `workspaceId`, set by `createForWorkspace` /
+   * `adminCreateServiceKey`). A member's pod-wide key is not a key of the
+   * space, even though it can reach it — it is listed on the Keys page.
    */
   adminListAll: podAdminProcedure
     .input(z.object({ workspaceId: z.string().uuid().optional() }).optional())
     .query(async ({ input }) => {
       const workspaceId = input?.workspaceId;
-
-      let userIdFilter: string[] | undefined;
-      if (workspaceId) {
-        const members = await db.query.workspaceMembers.findMany({
-          where: eq(workspaceMembers.workspaceId, workspaceId),
-          columns: { userId: true },
-        });
-        userIdFilter = members.map((m) => m.userId);
-        // No members → no keys to return.
-        if (userIdFilter.length === 0) return [];
-      }
-
       const keys = await db.query.apiKeys.findMany({
-        where: userIdFilter ? inArray(apiKeys.userId, userIdFilter) : undefined,
+        where: workspaceId ? eq(apiKeys.workspaceId, workspaceId) : undefined,
         orderBy: (apiKeys, { desc }) => [desc(apiKeys.createdAt)],
       });
       const holderOf = await loadKeyHolders(keys.map((k) => k.userId));
@@ -370,7 +348,7 @@ export const apiKeysRouter = router({
         // Omitted → 90 days; a number → that many; null → never (W1f).
         expiresInDays: ExpiresInDaysSchema,
         workspaceId: z.string().uuid().optional(),
-        /** What the key may touch (W1). Required: a key without one touches nothing. */
+        /** What the key may touch. Required: a key without one touches nothing. */
         grant: GrantInputSchema,
       })
     )
@@ -779,7 +757,7 @@ export const apiKeysRouter = router({
   getDeviceRequest: protectedProcedure
     .input(z.object({ userCode: z.string().min(4).max(32) }))
     .query(async ({ ctx, input }) => {
-      assertSignedInPerson(ctx);
+      assertSignedInPerson(ctx, APPROVE_COMPUTER_SIGNED_IN);
       return getDeviceRequest({
         userCode: input.userCode,
         personId: ctx.userId,
@@ -804,7 +782,7 @@ export const apiKeysRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      assertSignedInPerson(ctx);
+      assertSignedInPerson(ctx, APPROVE_COMPUTER_SIGNED_IN);
       return decideDeviceRequest({ ...input, personId: ctx.userId });
     }),
 
@@ -1125,8 +1103,8 @@ export const apiKeysRouter = router({
           });
         }
       } else {
-        // No workspace supplied — the caller's first DOMAIN workspace (D7:
-        // never the pod-admin console); none ⇒ an unscoped key, as before.
+        // No workspace supplied — the caller's first DOMAIN workspace (never
+        // the pod-admin console); none ⇒ an unscoped key, as before.
         resolvedWorkspaceId =
           (await findUserDefaultWorkspaceId(db, ctx.userId)) ?? undefined;
       }
@@ -1516,7 +1494,7 @@ export const apiKeysRouter = router({
         expiresAt: z.date().optional(),
         // Omitted → 90 days; a number → that many; null → never (W1f).
         expiresInDays: ExpiresInDaysSchema,
-        /** What the key may touch (W1); always held inside this workspace. Required. */
+        /** What the key may touch; always held inside this workspace. Required. */
         grant: GrantInputSchema.omit({ workspaceIds: true }),
       })
     )

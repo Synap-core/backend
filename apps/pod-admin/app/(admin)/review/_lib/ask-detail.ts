@@ -6,8 +6,8 @@
  * answer door and the desktop and phone apps apply: whether an answer fits
  * (`validateAnswerAgainstAsk`, which also sends an act to "I did this"),
  * what an act shows (`actView`), the options as
- * chips (`askOptionChips`), the fingerprint the pod checks the answer against
- * (`askFingerprint`), and the copy (`ASK_COPY`). What is left here is the
+ * chips (`askOptionChips`) and the fingerprint the pod checks the answer
+ * against (`askFingerprint`). What is left here is the
  * console's own arrangement: which controls a form field becomes, the
  * field-level hints a web form shows before a round trip, and the call shapes.
  *
@@ -18,7 +18,6 @@
  */
 
 import {
-  ASK_COPY,
   actView,
   askFingerprint,
   askOptionChips,
@@ -28,6 +27,8 @@ import {
   type Ask,
   type AskAnswerValue,
   type AskLookedAtKind,
+  type AskProvideKind,
+  type AskProvideRef,
   type DynamicFormField,
 } from "@synap-core/types/ask";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
@@ -166,10 +167,9 @@ export type AskControlView =
   | { mode: "act"; url: string | null; steps: string[] }
   | {
       mode: "provide";
+      kind: AskProvideKind;
       /** What it wants handed over, in words ("A secret: Stripe key"). */
       wants: string;
-      title: string;
-      body: string;
     }
   /** No typed ask: today's free text, "I did this" and "Not mine". */
   | { mode: "legacy" };
@@ -271,9 +271,8 @@ function controlOf(ask: Ask | null): AskControlView {
     case "provide":
       return {
         mode: "provide",
+        kind: ask.provide.kind,
         wants: provideWants(ask),
-        title: ASK_COPY.provideTitle,
-        body: ASK_COPY.provideBody,
       };
   }
 }
@@ -379,6 +378,8 @@ export type AskDraft =
   | { type: "confirm"; confirmed: boolean; note?: string }
   | { type: "choose"; key: string; other?: string }
   | { type: "form"; draft: FormDraft }
+  /** A reference to what is handed over — a vault secret, a connection, a file. */
+  | { type: "provide"; ref: AskProvideRef }
   /** A slot with no typed ask: the answer in words. */
   | { type: "text"; text: string };
 
@@ -389,6 +390,8 @@ export interface AnswerCall {
   text?: string;
   value: AskAnswerValue;
   askFingerprint: string;
+  /** A secret answer: the agent the person was told will read it. */
+  expectedGranteeId?: string;
 }
 
 /** `attestOutput` / `askAboutSlot` input: the slot, and the ask the reader saw. */
@@ -455,6 +458,8 @@ function valueOf(
         value: { type: "text" },
         text: draft.text.trim() || undefined,
       };
+    case "provide":
+      return { ok: true, value: { type: "provide", ref: draft.ref } };
   }
 }
 

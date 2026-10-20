@@ -5,7 +5,8 @@ vi.mock("./kratos-flow", () => ({
   browserSessionState: () => sessionState(),
 }));
 
-const { redirectToLoginIfUnauthorized } = await import("./auth-redirect");
+const { redirectToLogin, redirectToLoginIfUnauthorized } =
+  await import("./auth-redirect");
 
 /**
  * The return path must carry the QUERY STRING, not just the pathname.
@@ -98,5 +99,16 @@ describe("redirectToLoginIfUnauthorized", () => {
     const assign = stubLocation("https://pod.example/audit");
     expect(redirectToLoginIfUnauthorized(null)).toBe(false);
     expect(assign).not.toHaveBeenCalled();
+  });
+});
+
+describe("redirectToLogin", () => {
+  it("checks the session and goes to login, for a 401 outside tRPC", async () => {
+    sessionState.mockResolvedValue("none");
+    const assign = stubLocation("https://pod.example/updates");
+    expect(redirectToLogin()).toBe(true);
+    await settle();
+    const target = new URL(assign.mock.calls[0][0], "https://pod.example");
+    expect(target.searchParams.get("return")).toBe("/updates");
   });
 });

@@ -91,6 +91,10 @@ import {
 } from "./workers/external-agent-poll.js";
 import { FEDERATION_RECEIPT_CLEANUP_QUEUE } from "./workers/federation-receipt-cleanup.js";
 import {
+  PUSH_DEVICE_SWEEP_QUEUE,
+  PUSH_DEVICE_SWEEP_CRON,
+} from "./workers/push-devices.js";
+import {
   CONTEXT_CARD_REFRESH_QUEUE,
   CONTEXT_CARD_REFRESH_CRON,
 } from "./workers/context-card-refresh.js";
@@ -397,6 +401,10 @@ export async function registerCronSchedules(): Promise<void> {
     "Registered cron: federation-receipt-cleanup (daily at 2:15 AM UTC)"
   );
 
+  // Phones unused for 90 days stop getting pushes (daily at 2:50 AM UTC).
+  await scheduleSafe(boss, PUSH_DEVICE_SWEEP_QUEUE, PUSH_DEVICE_SWEEP_CRON, {});
+  logger.info("Registered cron: push-device-sweep (daily at 2:50 AM UTC)");
+
   // Feed scheduler (every minute — checks for due feeds and enqueues execution jobs)
   await scheduleSafe(boss, "feed-scheduler", "* * * * *", {});
   logger.info("Registered cron: feed-scheduler (every 1min)");
@@ -509,7 +517,7 @@ export async function registerCronSchedules(): Promise<void> {
   await sendSafe(boss, CP_CATALOG_SYNC_QUEUE, {});
   logger.info("Enqueued startup run: cp-catalog-sync");
 
-  // Tool demand forwarding (D2) — daily; applied demand writes also enqueue it.
+  // Tool demand forwarding — daily; applied demand writes also enqueue it.
   await scheduleSafe(
     boss,
     TOOL_DEMAND_FORWARD_QUEUE,

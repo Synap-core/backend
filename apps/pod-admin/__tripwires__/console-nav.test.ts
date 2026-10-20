@@ -3,18 +3,35 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
+import {
+  CONSOLE_APP_VIAS,
+  CONSOLE_PAGES,
+  CONSOLE_REVIEW_TYPES,
+  consolePath,
+  type ConsoleTarget,
+} from "@synap-core/types/console";
 
 import {
+  computerHref,
   consoleRedirects,
   DIAGNOSE_DESTINATION,
   NAV_ITEMS,
+  navHref,
+  pendingIssuerHref,
   SEARCH_DESTINATION,
+  type NavId,
 } from "../lib/console-nav";
 import {
   isBannedAdminPath,
   isMatcherExcluded,
   isSelfService,
+  routeAccess,
 } from "../lib/route-policy";
+import {
+  APP_VIAS,
+  appHref,
+} from "../app/(admin)/applications/_lib/app-inventory";
+import { REVIEW_FILTERS } from "../app/(admin)/review/_lib/review-rows";
 
 /**
  * The console's IA invariants. Each one is a defect that typechecks:
@@ -121,5 +138,118 @@ describe("every door has a nav home", () => {
     for (const [key, nav] of Object.entries(DIAGNOSE_DESTINATION)) {
       expect(NAV_IDS.has(nav), key).toBe(true);
     }
+  });
+});
+
+/**
+ * `@synap-core/types/console` is the table clients (desktop, Relay, app kits)
+ * build console links from. They cannot import this app, so these pins are
+ * what stops a client link from naming a page that moved, a `?focus=` the page
+ * ignores, or an admin page shown to a member.
+ */
+describe("the client link contract (@synap-core/types/console)", () => {
+  const appDir = fileURLToPath(new URL("../app", import.meta.url));
+  const navByHref = new Map(NAV_ITEMS.map((i) => [i.href, i]));
+  const pages = Object.entries(CONSOLE_PAGES) as Array<
+    [
+      keyof typeof CONSOLE_PAGES,
+      (typeof CONSOLE_PAGES)[keyof typeof CONSOLE_PAGES],
+    ]
+  >;
+
+  /** The source directory of a console route (nav pages live in `(admin)`). */
+  function routeDir(path: string): string {
+    return navByHref.has(path)
+      ? join(appDir, "(admin)", path)
+      : join(appDir, path);
+  }
+
+  /** Every source file of a page, its sub-routes (`[id]`) excluded. */
+  function pageSources(dir: string): string {
+    return readdirSync(dir, { withFileTypes: true, recursive: true })
+      .filter((e) => /\.tsx?$/.test(e.name) && !/\.test\.tsx?$/.test(e.name))
+      .map((e) => join(e.parentPath, e.name))
+      .filter((f) => !f.slice(dir.length).includes("["))
+      .map((f) => readFileSync(f, "utf8"))
+      .join("\n");
+  }
+
+  it("names only real console routes: a nav page or a signed-in/public one", () => {
+    const unknown = pages
+      .filter(
+        ([, p]) =>
+          !navByHref.has(p.path) &&
+          !(
+            routeAccess(p.path) !== "admin" &&
+            existsSync(join(routeDir(p.path), "page.tsx"))
+          )
+      )
+      .map(([id]) => id);
+    expect(unknown).toEqual([]);
+  });
+
+  it("never marks a page a member would be refused as a member page", () => {
+    const wrong = pages
+      .filter(([, p]) => {
+        const nav = navByHref.get(p.path);
+        return nav
+          ? nav.audience !== p.audience
+          : p.audience === "admin" || routeAccess(p.path) === "admin";
+      })
+      .map(([id]) => id);
+    expect(wrong).toEqual([]);
+  });
+
+  it("sends ?focus= only to pages that receive it, spelled like navHref", () => {
+    for (const [id, p] of pages) {
+      const reads = /useFocusRow\(|get\("focus"\)/.test(
+        pageSources(routeDir(p.path))
+      );
+      expect(reads, `${id} focus`).toBe(p.focus);
+      const nav = navByHref.get(p.path);
+      if (p.focus && nav) {
+        expect(
+          consolePath({ page: id, focus: "a b/c" } as ConsoleTarget),
+          id
+        ).toBe(navHref(nav.id as NavId, { focus: "a b/c" }));
+      }
+    }
+  });
+
+  it("sends ?type= only with views Review reads", () => {
+    expect(pageSources(routeDir(CONSOLE_PAGES.review.path))).toMatch(
+      /get\("type"\)/
+    );
+    const unread = CONSOLE_REVIEW_TYPES.filter(
+      (t) => !REVIEW_FILTERS.includes(t)
+    );
+    expect(unread).toEqual([]);
+    expect(
+      consolePath({ page: "review", type: "access", focus: "iss 1" })
+    ).toBe(pendingIssuerHref("iss 1"));
+  });
+
+  it("addresses object pages the way the console does", () => {
+    expect(consolePath({ page: "computer", id: "m 1" })).toBe(
+      computerHref("m 1")
+    );
+    expect([...CONSOLE_APP_VIAS]).toEqual([...APP_VIAS]);
+    for (const via of APP_VIAS) {
+      expect(consolePath({ page: "application", via, id: "a/1" })).toBe(
+        appHref(via, "a/1")
+      );
+    }
+    expect(existsSync(join(appDir, "(admin)/computers/[id]/page.tsx"))).toBe(
+      true
+    );
+    expect(
+      existsSync(join(appDir, "(admin)/applications/[via]/[id]/page.tsx"))
+    ).toBe(true);
+    const request = consolePath({ page: "connectionRequest", id: "r1" });
+    expect(request).toBe("/connection-requests/r1");
+    expect(isSelfService(request as string)).toBe(true);
+    expect(
+      existsSync(join(appDir, "connection-requests/[requestId]/page.tsx"))
+    ).toBe(true);
   });
 });

@@ -15,7 +15,14 @@
  * `cell` is never looked up: `synap://open/cell/<id>` addresses a registered
  * cell TYPE KEY, not a row. `settings` addresses a section name. Both fail the
  * uuid gate.
+ *
+ * A kind the console also has an admin page for (a space) offers a pod admin
+ * that page beside the app link ("See this space here"). A member is not
+ * offered it: the page is pod-admin only and would answer /forbidden.
  */
+
+import { Button } from "@heroui/react";
+import Link from "next/link";
 
 import { trpc } from "../../../lib/trpc";
 import {
@@ -25,13 +32,22 @@ import {
 } from "../open-model";
 import { labelForOpenType, type KnownOpenType } from "../open-params";
 import { formatRelative, isUuid } from "../../../lib/format";
+import { objectWebAlternative } from "../../../lib/open-in";
 import { OpenLoading, OpenObject } from "../open-shell";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 
 const PLACEHOLDER_UUID = "00000000-0000-4000-8000-000000000000";
 
-export function BounceView({ type, id }: { type: KnownOpenType; id: string }) {
+export function BounceView({
+  type,
+  id,
+  viewerIsPodAdmin,
+}: {
+  type: KnownOpenType;
+  id: string;
+  viewerIsPodAdmin: boolean;
+}) {
   const lookup = isUuid(id) && type !== "cell";
   const resolved = trpc.diagnose.resolveOpen.useQuery(
     { id: lookup ? id : PLACEHOLDER_UUID },
@@ -62,13 +78,16 @@ export function BounceView({ type, id }: { type: KnownOpenType; id: string }) {
   ];
 
   const noun = labelForOpenType(type);
+  const consolePage = viewerIsPodAdmin
+    ? objectWebAlternative(type, id)
+    : undefined;
   return (
     <OpenObject
       header={{
         kind: type,
         title:
           receipt?.title ?? `This ${noun.toLowerCase()} opens in the Synap app`,
-        summary: bounceSummary(),
+        summary: bounceSummary(type),
         status: { kind: "unknown", label: "Opens in app" },
         primaryAction: (
           <OpenInAppLink
@@ -77,6 +96,17 @@ export function BounceView({ type, id }: { type: KnownOpenType; id: string }) {
             params={bounceAddressParams(type, resolved.data)}
           />
         ),
+        secondaryActions: consolePage ? (
+          <Button
+            as={Link}
+            href={consolePage.href}
+            size="sm"
+            radius="md"
+            variant="light"
+          >
+            {consolePage.label}
+          </Button>
+        ) : undefined,
       }}
       facts={facts.length > 0 ? facts : undefined}
       advanced={

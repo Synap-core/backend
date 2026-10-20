@@ -174,6 +174,8 @@ export class FederatedApplicationConnectionService {
   /**
    * Pod Admin's native local session binds the requester. This is idempotent
    * for the same local user so a page refresh cannot strand the handoff.
+   * `firstRedeem` is true only for the call that moved the request out of
+   * `awaiting_local_auth`, so concurrent redeems agree on which one asked.
    */
   async redeemRequest(input: {
     requestId: string;
@@ -203,7 +205,7 @@ export class FederatedApplicationConnectionService {
           )
         )
         .returning();
-      if (redeemed) return redeemed;
+      if (redeemed) return { request: redeemed, firstRedeem: true };
 
       const existing =
         await tx.query.federatedApplicationConnectionRequests.findFirst({
@@ -235,7 +237,7 @@ export class FederatedApplicationConnectionService {
               input.requestId
             ),
           });
-        if (request) return request;
+        if (request) return { request, firstRedeem: false };
       }
       throw new Error(
         "Application connection request has already been redeemed"

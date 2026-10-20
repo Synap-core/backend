@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * One session — the ONE body, drawn in two frames (D6): `/open/session/:id`
+ * One session — the ONE body, drawn in two frames: `/open/session/:id`
  * (the receiver card, any reader of the session) and `/sessions/:id` (the
  * console, with a breadcrumb back to the list). The frame owns only the
  * chrome — how loading, a failure and the page itself are wrapped, and where a
@@ -18,11 +18,18 @@
  *     confirm's impact preview; `replace` (revert-then-rerun) stays in the app.
  *   • Revert — undo what this session applied. Secondary: in the danger zone.
  * The Intake Room (`?view=room`) is the app's; links to it keep bouncing.
+ *
+ * Below the acts, what the session left: its report (the session document,
+ * `focusSessions.document`, read-only) and its outputs
+ * (`focusSessions.outputs`), each opening on its own page. Both doors read
+ * through the same session floor as `get`.
  */
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@heroui/react";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { trpc } from "../../../../lib/trpc";
 import { formatRelative } from "../../../../lib/format";
@@ -39,11 +46,26 @@ import { couldNotLoad, loadFailure } from "../load-failure";
 import { OpenInAppLink } from "../open-in-app-link";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import type { ObjectFrame } from "./object-frame";
+import { SectionCard } from "../../../(admin)/components/section-card";
+import { ContentBlock, DocumentContentSection } from "../content/content-block";
+import { documentContent } from "../content/document-model";
+import { objectPage, prepareContent } from "../content/markdown-model";
+
+/** Outputs listed here; the rest are in the app. */
+const OUTPUTS_SHOWN = 20;
 
 export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
   const router = useRouter();
   const utils = trpc.useUtils();
   const query = trpc.focusSessions.get.useQuery({ id }, { retry: false });
+  const report = trpc.focusSessions.document.useQuery(
+    { sessionId: id },
+    { enabled: Boolean(query.data), retry: false }
+  );
+  const outputs = trpc.focusSessions.outputs.useQuery(
+    { sessionId: id },
+    { enabled: Boolean(query.data), retry: false }
+  );
   // A cancel or revert changes the session, the lists it sits in and what
   // the pod says needs attention.
   const invalidate = () =>
@@ -80,6 +102,8 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
 
   useReauthOnUnauthorized(
     query.error,
+    report.error,
+    outputs.error,
     cancel.error,
     rerunPreview.error,
     rerun.error,
@@ -226,6 +250,62 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
           </p>
         )}
         {refusal && <ErrorNote message={refusal} />}
+
+        {report.isLoading ? (
+          <DocumentContentSection title="Report" content={null} />
+        ) : report.error ? (
+          <DocumentContentSection
+            title="Report"
+            content={documentContent(report.error, undefined)}
+          />
+        ) : report.data?.content?.trim() ? (
+          <ContentBlock
+            title="Report"
+            prepared={prepareContent(report.data.content, "markdown")}
+            openInApp={<OpenInAppLink type="session" id={id} />}
+          />
+        ) : null}
+
+        {(outputs.data?.outputs.length ?? 0) > 0 && (
+          <SectionCard variant="flat" title="What it made">
+            <ul className="flex flex-col">
+              {outputs.data!.outputs.slice(0, OUTPUTS_SHOWN).map((output) => {
+                const href = objectPage(output.kind, output.refId);
+                const noun =
+                  output.entityProfile?.displayName ??
+                  resolveObjectNoun(output.kind);
+                return (
+                  <li
+                    key={output.id}
+                    className="flex flex-wrap items-baseline gap-x-2 border-b border-foreground/[0.05] py-2 last:border-b-0"
+                  >
+                    <span className="text-[12px] text-foreground/65">
+                      {noun}
+                    </span>
+                    {href ? (
+                      <Link
+                        href={href}
+                        className="break-words rounded-sm text-[13px] text-foreground underline decoration-foreground/30 underline-offset-2 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                      >
+                        {output.title || "Untitled"}
+                      </Link>
+                    ) : (
+                      <span className="break-words text-[13px] text-foreground/85">
+                        {output.title || "Untitled"}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            {outputs.data!.outputs.length > OUTPUTS_SHOWN && (
+              <p className="text-[12.5px] text-foreground/65">
+                And {outputs.data!.outputs.length - OUTPUTS_SHOWN} more in the
+                app.
+              </p>
+            )}
+          </SectionCard>
+        )}
         {[cancel.error, rerunPreview.error, rerun.error, revert.error].map(
           (err, i) =>
             err && err.data?.code !== "UNAUTHORIZED" ? (

@@ -41,6 +41,7 @@ import {
 import { isHttpUrl } from "../navigation/index.js";
 import { resolveServiceName } from "../service-marks/index.js";
 import { PARAM_SLOT_KIND } from "../focus-sessions/param-slot.js";
+import { provideSecretAccessLine, type ProvideSecretGrant } from "./provide.js";
 
 // ─── Limits ─────────────────────────────────────────────────────────────────
 
@@ -871,7 +872,15 @@ export function summarizeAnswer(
    * answer door reads the file's title after checking it is visible). Never a
    * reference, never a value.
    */
-  opts?: { refName?: string | null }
+  opts?: {
+    refName?: string | null;
+    /**
+     * Who can now read a handed-over secret — the receipt's second half
+     * (`provideSecretAccessLine`, `./provide.ts`). The pod passes it with the
+     * moment the receipt is written.
+     */
+    secretAccess?: { grant: ProvideSecretGrant; now: number };
+  }
 ): string {
   const note = typeof text === "string" ? text.trim() : "";
   const withNote = (head: string) => (note ? `${head} — ${note}` : head);
@@ -902,7 +911,11 @@ export function summarizeAnswer(
             : opts?.refName?.trim()
               ? `Attached "${opts.refName.trim()}"`
               : "Attached a file";
-      return withNote(head);
+      const access =
+        value.ref.kind === "secret" && opts?.secretAccess
+          ? ` · ${provideSecretAccessLine(opts.secretAccess.grant, opts.secretAccess.now)}`
+          : "";
+      return withNote(head + access);
     }
   }
 }
@@ -1019,6 +1032,24 @@ export {
   type PlaybookParamLike,
 } from "./param.js";
 
+/** Handing something over for a `provide` ask — see `./provide.ts`. */
+export {
+  PROVIDE_SECRET_GRANT_MINUTES,
+  provideSecretAccessLine,
+  provideGrantNote,
+  provideExpectedGranteeId,
+  provideAccountChoices,
+  providePrePickedAccount,
+  provideFileAccepts,
+  provideAcceptAttribute,
+  type ProvideSecretGrant,
+  type ProvideSecretGrantRefusal,
+  type ProvideSecretGrantOffer,
+  type ProvideConnectUnavailableReason,
+  type ProvideConnectionRowLite,
+  type ProvideAccountChoice,
+} from "./provide.js";
+
 /** The Ask card's shared surface rules and copy — see `./card.ts`. */
 export {
   ASK_COPY,
@@ -1037,6 +1068,7 @@ export {
   type AskRefusal,
   type AskRefusalKind,
   type AskRowRegion,
+  type AskRowRegionOptions,
   type AskOptionChip,
   type ActView,
 } from "./card.js";

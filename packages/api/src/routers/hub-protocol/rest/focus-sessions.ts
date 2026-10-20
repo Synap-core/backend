@@ -61,6 +61,7 @@ import {
 import { type AskAnswerValue, type Ask } from "@synap-core/types/ask";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
+import { withoutServerOwnedSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
 import {
   resolveSessionSubject,
   type SessionSubject,
@@ -223,7 +224,7 @@ const CreateBodySchema = z
      */
     params: z.record(z.string(), z.unknown()).optional(),
     /**
-     * What the session must yield (A4) — THE declaration. Written into the
+     * What the session must yield — THE declaration. Written into the
      * same storage as the deprecated `expectedOutputs` / `criteria` aliases
      * (`outcome-declarations.ts`); both may ride one call.
      */
@@ -348,7 +349,7 @@ const UpdateBodySchema = z.object({
   // cannot lose a concurrent attach; the two may be sent together, in which
   // case the wholesale assignment lands first and the append is applied on top.
   addAgentId: z.string().min(1).optional(),
-  // What the session must yield (A4): UPSERTED by key onto the stored lists,
+  // What the session must yield: UPSERTED by key onto the stored lists,
   // then written through `expectedOutputs` / `criteria` below (one merge).
   outcomes: outcomeDeclarationsSchema.optional(),
   // DEPRECATED alias — prefer `outcomes`. Wholesale replace.
@@ -456,6 +457,8 @@ const AnswerOutputBodySchema = z
     // Explicit type annotation preserves discriminated union inference.
     value: z.custom<AskAnswerValue>().optional(),
     askFingerprint: z.string().min(1).max(64).optional(),
+    // A secret answer: the agent `provideOptions` named as the reader.
+    expectedGranteeId: z.string().min(1).max(200).optional(),
   })
   .refine((v) => v.value !== undefined || !!v.text?.trim(), {
     message: "An answer needs `text` or `value`.",
@@ -1118,7 +1121,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           database: db,
           userId: acting.userId,
         }),
-        // Same section as MCP `synap_get_session` (A4): the session's
+        // Same section as MCP `synap_get_session`: the session's
         // outcomes projected at read time, or `{status:'unavailable'}` —
         // a failed read is never an empty list. Additive field.
         readSessionOutcomesSection({
@@ -1363,6 +1366,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     // workspaceId from the body is accepted for back-compat but NOT used for scoping.
 
     const { workspaceId: _ignored, ...patch } = parsed.data;
+    // Server-owned keys (a connect intent, governance, the bound client…) are
+    // never the caller's to write: dropped here, before the gate data and the
+    // write both see the bag.
+    if (patch.metadata !== undefined) {
+      const kept = withoutServerOwnedSessionMetadata(patch.metadata);
+      patch.metadata = Object.keys(kept).length > 0 ? kept : undefined;
+    }
 
     try {
       // Step 1: load by id alone — workspaceId comes from the ROW, not the body.
@@ -1382,7 +1392,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const { userId, workspaceId } = acting;
 
-      // `outcomes` (A4) → the same two fields, UPSERTED by key onto the
+      // `outcomes` → the same two fields, UPSERTED by key onto the
       // loaded row (or onto the wholesale lists this same PATCH sent). From
       // here on the patch is an ordinary `expectedOutputs` / `criteria` write:
       // the authority floor, the membrane and the merge all see it.
@@ -1719,23 +1729,19 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         set.subjectEntityId = patch.subjectEntityId;
       if (patch.criteria !== undefined) set.criteria = patch.criteria;
       if (trackFiling) Object.assign(set, trackFiling.set);
-      // Shallow-merge the metadata bag into the existing row metadata (additive).
-      if (patch.metadata !== undefined) {
-        const existingMeta =
-          (existing.metadata as Record<string, unknown> | null) ?? {};
-        set.metadata = { ...existingMeta, ...patch.metadata };
-      }
-      // Title provenance: an agent's rename is never overwritten by the
-      // background titler; a CLEAR hands the name back to it ("derived").
-      // Folded into the metadata write above when there is one (the server's
-      // stamp wins over a body key), otherwise MERGED in SQL — never assigned
-      // over the row's metadata.
-      if (patch.title !== undefined) {
-        const stamp = titleSourcePatch(set.title ? "agent" : "derived");
-        set.metadata =
-          set.metadata !== undefined
-            ? { ...(set.metadata as Record<string, unknown>), ...stamp }
-            : drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(stamp)}::jsonb`;
+      // Shallow-merge the metadata bag into the row's metadata (additive), in
+      // SQL: the server-owned keys keep their CURRENT value, never one read
+      // before this write. Title provenance rides the same merge, last, so
+      // the server's stamp wins over a body key: an agent's rename is never
+      // overwritten by the background titler; a CLEAR hands the name back.
+      const metadataPatch = {
+        ...(patch.metadata ?? {}),
+        ...(patch.title !== undefined
+          ? titleSourcePatch(set.title ? "agent" : "derived")
+          : {}),
+      };
+      if (Object.keys(metadataPatch).length > 0) {
+        set.metadata = drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(metadataPatch)}::jsonb`;
       }
 
       let [updated] = await db
@@ -2956,6 +2962,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         text: parsed.data.text,
         value: parsed.data.value,
         askFingerprint: parsed.data.askFingerprint,
+        expectedGranteeId: parsed.data.expectedGranteeId,
       });
       if (result.status !== "answered") {
         const refusal = answerRefusal(result, parsed.data.expectedLabel, id);
@@ -2972,6 +2979,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         wokeAgentType: result.wokeAgentType,
         triggered: result.triggered,
         ...(result.decision ? { decision: result.decision } : {}),
+        ...(result.secretGrant ? { secretGrant: result.secretGrant } : {}),
       });
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.answerOutput failed");

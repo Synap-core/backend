@@ -14,9 +14,9 @@
  *   preflight  — what the install would change, and what it brings (code,
  *                network reach, connectors), before anything is written
  *   install    — `runMarketInstall`: the source's trust level decides; a person
- *                installs (confirming code / network reach from a trusted
- *                source), an agent proposes where allowed. Any other key is
- *                refused.
+ *                installs (confirming code, network reach and the use of
+ *                existing connections from a trusted source), an agent
+ *                proposes where allowed. Any other key is refused.
  *   sources.*  — where the catalog comes from. Reading is for pod admins;
  *                CHANGING a source (add, trust, key re-approval, switch,
  *                remove) is for a signed-in PERSON who administers the pod —
@@ -38,11 +38,13 @@ import {
   getCatalogSyncStamps,
   getWorkspaceMembership,
   preflightWorkspaceFromDefinition,
+  readMarketplaceSources,
   updateMarketplaceSources,
   clearMarketplaceSourceStatus,
   recordMarketplaceSourceStatus,
   type CatalogSyncStamp,
   type MarketplaceSourceSetting,
+  type MarketplaceSourceTombstone,
   type WorkspaceDefinitionInput,
   type WorkspacePreflightReport,
 } from "@synap/database";
@@ -196,6 +198,18 @@ function toWire(
         : own.every((s) => s.lastStatus === "unreachable")
           ? "unreachable"
           : "ok";
+    // Synap's catalog signature: its sentence, and — once a freeze is
+    // enforced — the state that says why.
+    const signature = view.signature;
+    message = signature?.standing.notice ?? null;
+    if (signature?.standing.blocked && signature.status) {
+      state =
+        signature.status.state === "ok"
+          ? "expired"
+          : signature.status.state === "replayed"
+            ? "invalid"
+            : signature.status.state;
+    }
   } else {
     lastSyncAt = status?.lastSyncAt ?? null;
     state = status?.state ?? "pending";
@@ -210,7 +224,12 @@ function toWire(
     official: source.official,
     enabled: source.enabled,
     lockedOff: source.lockedOff,
-    keyFingerprint: source.keyFingerprint,
+    // The official row shows the key that signed Synap's last verified index.
+    keyFingerprint:
+      source.keyFingerprint ??
+      (view.signature?.standing.verified
+        ? (view.signature.status?.keyFingerprint ?? null)
+        : null),
     agentsMayPropose: source.agentsMayPropose,
     addedBy: source.addedBy,
     addedAt: source.addedAt,
@@ -314,7 +333,7 @@ export interface MarketplacePreflight extends MarketInstallSummary {
   /** What the package brings: code, network reach, connectors. */
   risks: MarketRisks;
   /** The extra confirms the install will ask for (a trusted source only). */
-  requires: { code: boolean; network: boolean };
+  requires: { code: boolean; network: boolean; connectors: boolean };
 }
 
 /** Fetch, verify and describe a source's index for a person to confirm. */
@@ -344,6 +363,30 @@ function sameFingerprint(confirmed: string | null, actual: string | null) {
   if (!confirmed || !actual) return confirmed === actual;
   return normalizeKeyFingerprint(confirmed) === actual.toLowerCase();
 }
+
+/**
+ * How an id a person is adding relates to a source they removed earlier:
+ * `fresh` (no memory, or the same key — a silent re-add), `key_changed` (a
+ * different key: added blocked on the key-change review), or `unsigned` (the
+ * old source was signed, this one is not — it cannot take the id).
+ */
+function reAddVerdict(
+  tombstone: MarketplaceSourceTombstone | undefined,
+  fingerprint: string | null
+): "fresh" | "key_changed" | "unsigned" {
+  if (!tombstone) return "fresh";
+  if (!fingerprint) return "unsigned";
+  return sameFingerprint(tombstone.keyFingerprint, fingerprint)
+    ? "fresh"
+    : "key_changed";
+}
+
+function unsignedReAddMessage(id: string): string {
+  return `A source you removed used the id "${id}" and was signed. This one isn't signed, so it can't take that id.`;
+}
+
+const RE_ADD_KEY_CHANGED_MESSAGE =
+  "A source you removed used this id with a different signing key. Nothing installs from it until you compare the new fingerprint and approve it.";
 
 function findAdded(
   sources: MarketplaceSourceSetting[],
@@ -386,8 +429,14 @@ const sourcesRouter = router({
     .input(z.object({ url: z.string().min(1).max(2000) }))
     .mutation(async ({ input }) => {
       const { indexUrl, verdict } = await inspectSource(input.url);
-      const { views } = await sourcesWithViews();
-      const taken = views.find((v) => v.source.id === verdict.index.source.id);
+      const [{ views }, { tombstones }] = await Promise.all([
+        sourcesWithViews(),
+        readMarketplaceSources(),
+      ]);
+      const id = verdict.index.source.id;
+      const taken = views.find((v) => v.source.id === id);
+      const tombstone = tombstones[id];
+      const reAdd = reAddVerdict(tombstone, verdict.fingerprint);
       return {
         url: indexUrl,
         id: verdict.index.source.id,
@@ -397,10 +446,20 @@ const sourcesRouter = router({
         expires: verdict.index.expires,
         signed: verdict.fingerprint !== null,
         keyFingerprint: verdict.fingerprint,
-        /** Set when a source with this id is already on the pod. */
+        /** Set when the id can't be added: already on the pod, or a removed signed source's. */
         conflict: taken
-          ? `"${taken.source.name}" already uses the id "${verdict.index.source.id}".`
-          : null,
+          ? `"${taken.source.name}" already uses the id "${id}".`
+          : reAdd === "unsigned"
+            ? unsignedReAddMessage(id)
+            : null,
+        /**
+         * Set when a source you removed used this id under another key: the
+         * fingerprint it had. Confirming adds it blocked on a key review.
+         */
+        previousKeyFingerprint:
+          reAdd === "key_changed" && tombstone
+            ? tombstone.keyFingerprint
+            : null,
       };
     }),
 
@@ -436,7 +495,7 @@ const sourcesRouter = router({
         });
       }
       const id = verdict.index.source.id;
-      const setting: MarketplaceSourceSetting = {
+      const confirmed: MarketplaceSourceSetting = {
         id,
         url: indexUrl,
         name: verdict.index.source.name,
@@ -449,28 +508,63 @@ const sourcesRouter = router({
         addedAt: new Date().toISOString(),
         enabled: true,
       };
-      await updateMarketplaceSources(({ sources, official }) => {
-        if (id === OFFICIAL_SOURCE_ID || sources.some((s) => s.id === id)) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: `A source with the id "${id}" is already on this pod.`,
-          });
+      // A removed source's id under a different key: pin the key that id
+      // was trusted with, so the source is held on the ONE key-change review
+      // (`approveKeyChange`) and inherits nothing stamped `<id>/…` until a
+      // person compares the new fingerprint. Decided inside the lock.
+      const reAdd = await updateMarketplaceSources(
+        ({ sources, official, tombstones }) => {
+          if (id === OFFICIAL_SOURCE_ID || sources.some((s) => s.id === id)) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `A source with the id "${id}" is already on this pod.`,
+            });
+          }
+          if (sources.some((s) => s.url === indexUrl)) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: "That source is already on this pod.",
+            });
+          }
+          const tombstone = tombstones[id];
+          const verdictForId = reAddVerdict(tombstone, verdict.fingerprint);
+          if (verdictForId === "unsigned") {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: unsignedReAddMessage(id),
+            });
+          }
+          const setting: MarketplaceSourceSetting =
+            verdictForId === "key_changed" && tombstone
+              ? {
+                  ...confirmed,
+                  publicKey: tombstone.publicKey,
+                  keyFingerprint: tombstone.keyFingerprint,
+                }
+              : confirmed;
+          return {
+            sources: [...sources, setting],
+            official,
+            tombstones: Object.fromEntries(
+              Object.entries(tombstones).filter(([key]) => key !== id)
+            ),
+            result: verdictForId,
+          };
         }
-        if (sources.some((s) => s.url === indexUrl)) {
-          throw new TRPCError({
-            code: "CONFLICT",
-            message: "That source is already on this pod.",
-          });
-        }
-        return { sources: [...sources, setting], official, result: null };
-      });
+      );
       await recordMarketplaceSourceStatus(id, {
-        state: "pending",
         lastSyncAt: new Date().toISOString(),
         lastOkAt: null,
         packageCount: 0,
         validUntil: null,
-        message: null,
+        ...(reAdd === "key_changed"
+          ? {
+              state: "key_changed" as const,
+              message: RE_ADD_KEY_CHANGED_MESSAGE,
+              pendingPublicKey: verdict.publicKey,
+              pendingFingerprint: verdict.fingerprint,
+            }
+          : { state: "pending" as const, message: null }),
       });
       await syncQuietly(id);
       const { wire } = await sourcesWithViews();
@@ -559,7 +653,11 @@ const sourcesRouter = router({
       return { ok: true as const };
     }),
 
-  /** Remove an added source and every listing the pod holds from it. */
+  /**
+   * Remove an added source and every listing the pod holds from it. The key
+   * it was pinned to is remembered under its id (written with the remove), so
+   * the id can't be handed to another publisher without a key review.
+   */
   remove: personAdminProcedure
     .input(z.object({ id: z.string().min(1).max(100) }))
     .mutation(async ({ input }) => {
@@ -569,11 +667,23 @@ const sourcesRouter = router({
           message: "Synap's source is built in — turn it off instead.",
         });
       }
-      await updateMarketplaceSources(({ sources, official }) => {
-        findAdded(sources, input.id);
+      await updateMarketplaceSources(({ sources, official, tombstones }) => {
+        const removed = findAdded(sources, input.id);
         return {
           sources: sources.filter((s) => s.id !== input.id),
           official,
+          ...(removed.publicKey && removed.keyFingerprint
+            ? {
+                tombstones: {
+                  ...tombstones,
+                  [input.id]: {
+                    publicKey: removed.publicKey,
+                    keyFingerprint: removed.keyFingerprint,
+                    removedAt: new Date().toISOString(),
+                  },
+                },
+              }
+            : {}),
           result: null,
         };
       });
@@ -669,7 +779,7 @@ export const marketplaceRouter = router({
   /**
    * Browse the pod's catalog across the sources that may serve now (a source
    * that is off, awaiting a key re-approval or past its index's expiry lists
-   * nothing). Ranked by the shared term matcher when `query` is set,
+   * nothing; Synap's catalog stays listed through a signature freeze). Ranked by the shared term matcher when `query` is set,
    * alphabetical otherwise; offset-paged by `cursor`.
    */
   list: protectedProcedure
@@ -690,9 +800,11 @@ export const marketplaceRouter = router({
       const query = input?.query?.trim() || undefined;
       const { views, wire } = await sourcesWithViews();
       const readable = views.filter((v) => readableBy(ctx, v));
+      // Synap's catalog stays listed through a signature freeze (only its
+      // installs pause); off is off.
       const serving = readable.filter(
         (v) =>
-          !v.gate.blocked &&
+          (!v.gate.blocked || (v.source.official && v.source.enabled)) &&
           (!input?.source ||
             v.source.id === input.source ||
             v.source.cacheKey === input.source)
@@ -935,16 +1047,16 @@ export const marketplaceRouter = router({
         // The extra confirm is the trusted-source rule; Synap's own catalog
         // discloses the same facts without asking twice.
         requires: view.source.official
-          ? { code: false, network: false }
+          ? { code: false, network: false, connectors: false }
           : requiredAcknowledgements(risks),
       };
     }),
 
   /**
    * Install. A person (a signed-in session, no key) installs through
-   * `runMarketInstall` — confirming code and network reach for a package from
-   * a trusted source; an agent's call files the `capability.install` proposal
-   * where its source allows (`status: "proposed"`). Any other key — an app or
+   * `runMarketInstall` — confirming code, network reach and existing
+   * connections for a package from a trusted source; an agent's call files
+   * the `capability.install` proposal where its source allows (`status: "proposed"`). Any other key — an app or
    * service key — is refused: installing is a person's decision or a
    * reviewable proposal, never a silent key action.
    */
@@ -958,6 +1070,7 @@ export const marketplaceRouter = router({
           .object({
             code: z.boolean().optional(),
             network: z.boolean().optional(),
+            connectors: z.boolean().optional(),
           })
           .optional(),
       })

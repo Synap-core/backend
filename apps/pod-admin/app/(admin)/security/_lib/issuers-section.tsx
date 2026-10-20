@@ -270,7 +270,7 @@ export function IssuersSection() {
           <button
             type="button"
             onClick={() => setActiveFilters(new Set())}
-            className="text-[11.5px] text-foreground/65 hover:text-foreground/70 transition-colors"
+            className="text-[11.5px] text-foreground/65 hover:text-foreground transition-colors"
           >
             Show all
           </button>

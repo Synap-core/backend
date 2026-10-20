@@ -120,7 +120,7 @@ export interface PodMachineDefaults {
 }
 
 /**
- * A marketplace source a pod admin added (Pod Console D11). Lives on the
+ * A marketplace source a pod admin added. Lives on the
  * singleton `pod_settings.settings.marketplaceSources` — no new table. The
  * built-in Synap source is NOT stored here (it is compiled in, read from
  * `CONTROL_PLANE_URL`); only its on/off switch is (`marketplaceOfficialSource`).
@@ -184,6 +184,43 @@ export interface MarketplaceSourceStatus {
   pendingFingerprint?: string | null;
 }
 
+/**
+ * What a pod remembers about a removed source's id: the key it was pinned to.
+ * Everything that source installed stays stamped `<id>/<slug>`, so a later
+ * source declaring the same id under a DIFFERENT key is added blocked on the
+ * key-change review (`marketplace.sources.confirm`) — it never silently
+ * inherits those spaces. Written with the remove, under the same lock; dropped
+ * when the id is added again (the pinned key then carries the memory).
+ */
+export interface MarketplaceSourceTombstone {
+  publicKey: string;
+  keyFingerprint: string;
+  removedAt: string;
+}
+
+/**
+ * Where the signature check of Synap's own catalog stands, written by the
+ * catalog sync under `officialCatalogSignature`. Same shape as
+ * `OfficialCatalogSignatureStatus` in `@synap-core/types/marketplace-source`,
+ * whose `officialCatalogStanding` reads it.
+ */
+export interface OfficialCatalogSignature {
+  state:
+    "ok" | "unreachable" | "invalid" | "bad_signature" | "expired" | "replayed";
+  lastCheckAt: string;
+  lastOkAt: string | null;
+  /** `expires` of the last verified index. */
+  validUntil: string | null;
+  /** `version` of the last verified keys statement (null: operator keys). */
+  keysVersion: number | null;
+  /** Fingerprint of the key that signed the last verified index. */
+  keyFingerprint: string | null;
+  packageCount: number;
+  /** Cached official rows the verified index does not vouch for. */
+  unverifiedRows: number | null;
+  message: string | null;
+}
+
 export interface PodSettingsBlob {
   machineDefaults?: PodMachineDefaults;
   intelligenceDefaults?: PodIntelligenceDefaults;
@@ -194,6 +231,8 @@ export interface PodSettingsBlob {
   marketplaceSources?: MarketplaceSourceSetting[];
   marketplaceOfficialSource?: MarketplaceOfficialSourceSetting;
   marketplaceSourceStatus?: Record<string, MarketplaceSourceStatus>;
+  marketplaceSourceTombstones?: Record<string, MarketplaceSourceTombstone>;
+  officialCatalogSignature?: OfficialCatalogSignature;
   [k: string]: unknown;
 }
 

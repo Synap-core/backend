@@ -4,6 +4,7 @@ import {
   confirmItems,
   installMode,
   packageCountLabel,
+  reAddKeyNotice,
   riskLines,
   signingLine,
   sourceFacts,
@@ -171,6 +172,26 @@ describe("catalog source chips", () => {
       { key: "acme", label: "Acme internal" },
     ]);
   });
+
+  it("keeps Synap's chip while its signature check pauses installs (its catalog stays listed)", () => {
+    expect(
+      catalogSourceChips([
+        source({
+          id: "synap",
+          name: "Synap",
+          official: true,
+          blocked: "Installs from it are paused.",
+        }),
+        source({
+          id: "synap-off",
+          name: "Off",
+          official: true,
+          enabled: false,
+          blocked: "Synap's catalog is turned off on this pod.",
+        }),
+      ])
+    ).toEqual([{ key: "synap", label: "Synap" }]);
+  });
 });
 
 describe("install area", () => {
@@ -204,17 +225,18 @@ describe("install area", () => {
       code: ["bar"],
       networkHosts: ["api.acme.test"],
       connectors: [],
+      connections: [],
     };
     expect(
       confirmItems({
-        requires: { code: true, network: true },
+        requires: { code: true, network: true, connectors: false },
         risks,
         sourceName: "Acme",
       }).map((i) => i.key)
     ).toEqual(["code", "network"]);
     expect(
       confirmItems({
-        requires: { code: false, network: false },
+        requires: { code: false, network: false, connectors: false },
         risks,
         sourceName: "Synap",
       })
@@ -225,25 +247,75 @@ describe("install area", () => {
     ]);
   });
 
+  it("asks before a package uses a connection the pod already has, naming it", () => {
+    const risks = {
+      code: [] as string[],
+      networkHosts: [] as string[],
+      connectors: ["nango://google-mail"],
+      connections: ["Gmail"],
+    };
+    expect(
+      confirmItems({
+        requires: { code: false, network: false, connectors: true },
+        risks,
+        sourceName: "Acme",
+      })
+    ).toEqual([
+      {
+        key: "connectors",
+        label: "I accept that it can use my existing Gmail connection.",
+      },
+    ]);
+    expect(
+      confirmItems({
+        requires: { code: false, network: false, connectors: true },
+        risks: { ...risks, connections: ["Gmail", "Notion", "Slack"] },
+        sourceName: "Acme",
+      })[0]?.label
+    ).toBe(
+      "I accept that it can use my existing Gmail, Notion and Slack connections."
+    );
+    expect(riskLines(risks)).toEqual([
+      "Connects: nango://google-mail",
+      "Uses your existing Gmail connection",
+    ]);
+  });
+
   it("words the confirms plainly when the package was too large to inspect", () => {
     const risks = {
       code: [] as string[],
       networkHosts: [] as string[],
       connectors: [] as string[],
+      connections: [] as string[],
       incomplete: true as const,
     };
     expect(
       confirmItems({
-        requires: { code: true, network: true },
+        requires: { code: true, network: true, connectors: true },
         risks,
         sourceName: "Acme",
       }).map((i) => i.label)
     ).toEqual([
       "I accept that this may run code from Acme on my pod.",
       "I accept that it may reach other sites on the internet.",
+      "I accept that it may use connections my pod already has.",
     ]);
     expect(riskLines(risks)).toEqual([
       "This package is too large to inspect fully.",
     ]);
+  });
+});
+
+describe("adding an id a removed source used", () => {
+  it("warns when its key differs, naming the old fingerprint", () => {
+    expect(reAddKeyNotice({ id: "acme", previousKeyFingerprint: FP })).toMatch(
+      /^A source you removed used the id "acme" with a different signing key \(3b9e 41c0 .*\)\. If you add this one, nothing installs from it until you compare its key and approve it\.$/
+    );
+  });
+
+  it("says nothing for a fresh id or the same key", () => {
+    expect(
+      reAddKeyNotice({ id: "acme", previousKeyFingerprint: null })
+    ).toBeNull();
   });
 });

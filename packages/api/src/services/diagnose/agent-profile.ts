@@ -4,19 +4,21 @@
  * Identity + origin from the governance-actor row (`users`, keyed by the same
  * `agentUserId` the scorecard uses). Origin is now a stored fact (`created_via`,
  * migration 0225); scope (pod-wide vs workspace) is DERIVED from the presence of
- * `workspace_members` rows (none ⇒ pod-wide). Owner-floored: only the caller's own agent-users, so a
- * guessed id can't leak another owner's agent identity.
+ * `workspace_members` rows (none ⇒ pod-wide). Floored like the scorecard
+ * (`agentReadableBy`: its owner or a pod admin), so a guessed id can't leak
+ * another owner's agent identity to a member. A pod admin may already list
+ * every space, so the space names below reveal nothing new to one.
  */
 
 import {
   db,
-  and,
   eq,
   inArray,
   users,
   workspaceMembers,
   workspaces,
 } from "@synap/database";
+import { agentReadableBy } from "./agent-scorecard.js";
 
 export interface AgentProfile {
   agentUserId: string;
@@ -35,6 +37,8 @@ export interface AgentProfile {
 export async function agentProfile(params: {
   userId: string;
   agentId: string;
+  /** A person in their own session (`isSignedInPerson`); keys are not. */
+  signedInPerson?: boolean;
 }): Promise<AgentProfile | { error: string }> {
   const { userId, agentId } = params;
 
@@ -51,11 +55,16 @@ export async function agentProfile(params: {
       createdByUserId: users.createdByUserId,
     })
     .from(users)
-    // OWNER FLOOR — only the caller's own agent-users (mirrors agentScorecard).
-    .where(and(eq(users.id, agentId), eq(users.createdByUserId, userId)))
+    .where(eq(users.id, agentId))
     .limit(1);
 
-  if (!agent || agent.userType !== "agent") {
+  if (
+    !agent ||
+    agent.userType !== "agent" ||
+    !(await agentReadableBy(agent, userId, {
+      signedInPerson: params.signedInPerson === true,
+    }))
+  ) {
     return { error: `No agent-user found for id ${agentId}` };
   }
 

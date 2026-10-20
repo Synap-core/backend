@@ -8,7 +8,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireUserId } from "../utils/user-scoped.js";
 // REMOVED: Domain package - using simple string schemas instead
@@ -24,7 +24,11 @@ import {
   sessionReadableWhere,
   type SessionReader,
 } from "../access/session-visibility.js";
-import { eventVisibleWhereFor } from "../access/event-visibility.js";
+import {
+  adminAuditEventWhere,
+  eventVisibleWhereFor,
+} from "../access/event-visibility.js";
+import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import type { EventType } from "@synap/events";
 import { randomUUID } from "crypto";
 
@@ -75,7 +79,7 @@ export const LIFECYCLE_SUBJECTS_LEFT_TO_THEIR_OWN_READ = {
 
 // Temporary schemas until we refactor
 /**
- * A session's events ARE its story (decision D1: a session's goal, status and
+ * A session's events ARE its story (a session's goal, status and
  * summary are CONTENT). An event whose subject is a focus session, or that was
  * recorded inside one (`events.session_id`), is returned only when the caller
  * may read that session — `sessionReadableWhere`, the one session read rule.
@@ -506,6 +510,41 @@ export const eventsRouter = router({
               )
             : undefined;
         return name ? { ...event, subjectName: name } : event;
+      });
+    }),
+
+  /**
+   * Pod admin: what was done to apps, sign-in apps, MCP clients and computers,
+   * by anyone. Their events carry no space, so `search` shows each only to its
+   * actor and an admin could not audit another member's app or computer.
+   *
+   * The floor is `adminAuditEventWhere` — the subject-type allowlist plus the
+   * session floor — never the whole log: an id outside the allowlist returns
+   * nothing. Person-only: a key (agent, computer, a person's own) is refused
+   * even when it acts for a pod admin.
+   */
+  adminSubjectActivity: podAdminProcedure
+    .input(
+      z.object({
+        /** The object's id plus any id its acts are recorded on (its keys). */
+        subjectIds: z.array(z.string().min(1).max(200)).min(1).max(200),
+        /** Narrow to writes made with this app's key (`events.app_id`). */
+        appId: z.string().min(1).max(200).optional(),
+        limit: z.number().int().min(1).max(100).default(50),
+        offset: z.number().int().min(0).default(0),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      assertSignedInPerson(ctx, "Read the pod's activity while signed in.");
+      return getEventRepository().searchEvents({
+        visibleWhere: adminAuditEventWhere({
+          userId: requireUserId(ctx.userId),
+          roster: rosterReadFor(ctx),
+        }),
+        subjectIds: input.subjectIds,
+        appId: input.appId,
+        limit: input.limit,
+        offset: input.offset,
       });
     }),
 

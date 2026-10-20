@@ -60,6 +60,7 @@ import {
   detachMarketSource,
 } from "./market-source.js";
 import { lookupCatalogEntry } from "./marketplace-install.js";
+import { admitOfficialDefinition } from "./official-catalog-trust.js";
 import { skillElementOf } from "./package-element.js";
 import type { Context } from "../../types/context.js";
 
@@ -378,6 +379,18 @@ export async function reconcileStandaloneConfigsToTemplates(
             ...base,
             reason: `could not resolve the definition for "${source.packageSlug}" (source unreachable or no payload)`,
           });
+          continue;
+        }
+        // An automatic update converges only what Synap's signed index vouches
+        // for (enforced; reported only until then).
+        const admission = await admitOfficialDefinition({
+          kind: adapter.catalogKind,
+          slug: source.packageSlug,
+          version: cacheRow.version,
+          definition: def,
+        });
+        if (!admission.admitted) {
+          report.skipped.push({ ...base, reason: admission.reason });
           continue;
         }
 

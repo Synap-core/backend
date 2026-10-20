@@ -214,6 +214,9 @@ importers:
       '@synap-core/external-connect-client':
         specifier: workspace:*
         version: link:../../packages/external-connect-client
+      '@synap-core/markdown-core':
+        specifier: workspace:*
+        version: link:../../packages/markdown-core
       '@synap-core/types':
         specifier: workspace:*
         version: link:../../packages/types

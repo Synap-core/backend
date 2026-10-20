@@ -66,7 +66,12 @@ import {
   installBlockedHint,
   type InstallSummary,
 } from "../_lib/catalog-model";
-import { confirmItems, installMode, riskLines } from "../_lib/sources-model";
+import {
+  confirmItems,
+  installMode,
+  riskLines,
+  type ConfirmKey,
+} from "../_lib/sources-model";
 import { TrustChip } from "../_lib/sources-tab";
 import type {
   CatalogDetail,
@@ -382,10 +387,9 @@ function Installer({ target, pkg }: { target: Target; pkg: CatalogDetail }) {
   const [stage, setStage] = useState<Stage>({ kind: "idle" });
   const [workspaceId, setWorkspaceId] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
-  const [accepted, setAccepted] = useState<{
-    code?: boolean;
-    network?: boolean;
-  }>({});
+  const [accepted, setAccepted] = useState<
+    Partial<Record<ConfirmKey, boolean>>
+  >({});
   const install = trpc.marketplace.install.useMutation();
 
   // The row's own source, so preflight and install name the exact row read.

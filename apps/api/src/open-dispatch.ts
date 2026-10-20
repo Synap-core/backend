@@ -47,7 +47,8 @@ export const TYPED_OPEN_KINDS = [
   // (`EMITTABLE_LABELS`, packages/api/src/routers/hub-protocol/rest/
   // resolve-browser-route.ts). Rejecting them with 400 made a typed link to a
   // skill / playbook / automation / tool / agent / run a dead link even though
-  // the app has a door for each. All are BOUNCED (none is hosted on pod-admin).
+  // the app has a door for each. Some are hosted on pod-admin
+  // (`WEB_HOSTED_OPEN_KINDS`); the rest bounce.
   // `open-kinds.lock.tripwire.test.ts` asserts TYPED_OPEN_KINDS ⊇
   // EMITTABLE_LABELS by parsing that file, so a new routable label cannot
   // outrun this list.
@@ -56,10 +57,9 @@ export const TYPED_OPEN_KINDS = [
   "playbook",
   "automation",
   "agent",
-  // NB: a run is addressed by {flowType, runId}; this route forwards only
-  // `?view=`, so `/open/run/<id>` reaches the app WITHOUT its flowType (the
-  // app then defaults to `automation`). No producer mints a typed run link
-  // today; carry the discriminator here before one does.
+  // A run is addressed by {flowType, runId}: `?flowType=` rides along on the
+  // 302 and on the bounce (`OPEN_FLOW_TYPE_VALUES`). Without it the web page
+  // asks the resolver and the app defaults to `automation`.
   "run",
 ] as const;
 
@@ -103,15 +103,23 @@ export function inferOpenTypeFromId(id: string): TypedOpenKind | undefined {
 /**
  * Kinds pod-admin HOSTS at `/open/<kind>/<id>` for a signed-in human. Must
  * equal pod-admin `HOST_TYPES` (`apps/pod-admin/app/open/open-params.ts`;
- * frozen copy in `open-kinds.lock.tripwire.test.ts`). `automation` and
- * `session` are hosted so the console can offer their de-escalating acts
- * (pause, cancel) on the web.
+ * frozen copy in `open-kinds.lock.tripwire.test.ts`). The operational kinds
+ * are hosted so a link lands somewhere useful on any device: their
+ * de-escalating acts (pause, cancel, disconnect), a capability's verbs turned
+ * on, and a read of the rest. A document's body and a conversation's recent
+ * messages read there too. Authoring and replying stay in the app.
  */
 export const WEB_HOSTED_OPEN_KINDS = [
   "entity",
   "view",
   "automation",
   "session",
+  "playbook",
+  "run",
+  "capability",
+  "agent",
+  "document",
+  "channel",
 ] as const;
 export type WebHostedOpenKind = (typeof WEB_HOSTED_OPEN_KINDS)[number];
 
@@ -128,10 +136,11 @@ export type OpenWebKind = "proposal" | WebHostedOpenKind;
 export function podAdminTarget(
   kind: OpenWebKind,
   id: string,
-  adminBase: string
+  adminBase: string,
+  query?: string
 ): string {
   const path = kind === "proposal" ? `/proposal/${id}` : `/open/${kind}/${id}`;
-  return new URL(path, adminBase).toString();
+  return new URL(query ? `${path}?${query}` : path, adminBase).toString();
 }
 
 /**
@@ -155,11 +164,12 @@ const UUID_RE =
 export function podAdminBrowserUrl(
   type: string | undefined,
   id: string,
-  adminBase: string | null
+  adminBase: string | null,
+  flowType?: string | null
 ): string | undefined {
   if (!adminBase) return undefined;
   if (type === "proposal" || isWebHostedOpenKind(type)) {
-    return podAdminTarget(type, id, adminBase);
+    return podAdminTarget(type, id, adminBase, addressQuery(type, flowType));
   }
   if (!type && UUID_RE.test(id)) return podAdminResolveTarget(id, adminBase);
   return undefined;
@@ -215,8 +225,48 @@ export function isOpenViewValue(
   return !!value && (OPEN_VIEW_VALUES as readonly string[]).includes(value);
 }
 
+/**
+ * The `?flowType=` values a run link may carry: a run is addressed by
+ * `{flowType, id}`, and without it the app opens the automation reader. Frozen
+ * copy of the `flowType` enum in packages/api/src/routers/runs.ts (`runs.get`),
+ * which apps/api cannot import (tsc rootDir); `open-kinds.lock.tripwire.test.ts`
+ * parses that enum and fails when the two differ.
+ */
+export const OPEN_FLOW_TYPE_VALUES = [
+  "automation",
+  "playbook",
+  "capture",
+  "capability",
+  "session",
+  "chat",
+  "agent_write",
+] as const;
+export type OpenFlowTypeValue = (typeof OPEN_FLOW_TYPE_VALUES)[number];
+
+/** True iff `value` is a run flow type. Anything else is dropped, never forwarded. */
+export function isOpenFlowTypeValue(
+  value: string | undefined | null
+): value is OpenFlowTypeValue {
+  return (
+    !!value && (OPEN_FLOW_TYPE_VALUES as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * The address query a typed link keeps on its way on — `flowType` for a run,
+ * nothing for any other kind (a `?flowType=` on an entity link is noise).
+ */
+function addressQuery(
+  type: string | undefined,
+  flowType: string | undefined | null
+): string | undefined {
+  return type === "run" && isOpenFlowTypeValue(flowType)
+    ? `flowType=${flowType}`
+    : undefined;
+}
+
 // Proposal is web-first (review already lives on pod-admin, even for bots).
-// Hosted kinds (entity / view / automation / session) 302 only for humans —
+// Hosted kinds (`WEB_HOSTED_OPEN_KINDS`) 302 only for humans —
 // unfurl HTML must never carry their bodies. A session addressed with a VIEW
 // (`?view=room`, the Intake Room) is a reading only the app has, so it keeps
 // bouncing with its view. An untyped uuid (the bare route's probe could not
@@ -236,8 +286,11 @@ export function dispatchOpen(opts: {
   client?: string | undefined | null;
   /** Raw `?view=` value off the request. Absent/unknown ⇒ dropped. */
   view?: string | undefined | null;
+  /** Raw `?flowType=` value off the request. Kept only on a run link. */
+  flowType?: string | undefined | null;
 }): OpenDispatch {
-  const { type, id, userAgent, adminBase, client, view } = opts;
+  const { type, id, userAgent, adminBase, client, view, flowType } = opts;
+  const address = addressQuery(type, flowType);
 
   const bot = isUnfurlBot(userAgent);
   const mobile = !bot && isMobileClient(client);
@@ -258,7 +311,7 @@ export function dispatchOpen(opts: {
   ) {
     return {
       action: "redirect",
-      url: podAdminTarget(type, id, adminBase),
+      url: podAdminTarget(type, id, adminBase, address),
     };
   }
 
@@ -267,8 +320,10 @@ export function dispatchOpen(opts: {
   }
 
   const base = type ? `synap://open/${type}/${id}` : `synap://open/${id}`;
-  // Only a typed link (`type` present) carries a view — `synap://open/<id>`
-  // reaches `resolveDeepLink` as a bare kind-less object anyway.
-  const deep = type && isOpenViewValue(view) ? `${base}?view=${view}` : base;
-  return { action: "bounce", deep };
+  // Only a typed link (`type` present) carries a view or a flow type —
+  // `synap://open/<id>` reaches `resolveDeepLink` as a bare kind-less object
+  // anyway, and the desktop merges the resolver's params there.
+  const query =
+    address ?? (type && isOpenViewValue(view) ? `view=${view}` : undefined);
+  return { action: "bounce", deep: query ? `${base}?${query}` : base };
 }

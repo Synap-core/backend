@@ -12,10 +12,17 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const { mockFindMany, mockSetStatusForUser, mockFetch } = vi.hoisted(() => ({
-  mockFindMany: vi.fn(),
-  mockSetStatusForUser: vi.fn(),
-  mockFetch: vi.fn(),
+const { mockFindMany, mockSetStatusForUser, mockFetch, mockSend } = vi.hoisted(
+  () => ({
+    mockFindMany: vi.fn(),
+    mockSetStatusForUser: vi.fn(),
+    mockFetch: vi.fn(),
+    mockSend: vi.fn(),
+  })
+);
+
+vi.mock("@synap/events", () => ({
+  getBoss: () => ({ send: mockSend }),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -59,14 +66,15 @@ beforeEach(() => {
   mockFindMany.mockReset();
   mockSetStatusForUser.mockReset().mockResolvedValue(true);
   mockFetch.mockReset();
+  mockSend.mockReset().mockResolvedValue("job-1");
   vi.stubGlobal("fetch", mockFetch);
 });
 
 describe("sendExpoPush — DeviceNotRegistered revocation", () => {
   it("flips ONLY the dead token's account to disconnected, and keeps the live one", async () => {
     mockFindMany.mockResolvedValue([
-      { externalId: LIVE },
-      { externalId: DEAD },
+      { id: "row-live", externalId: LIVE },
+      { id: "row-dead", externalId: DEAD },
     ]);
     expoResponds([
       { status: "ok", id: "ticket-1" },
@@ -100,7 +108,7 @@ describe("sendExpoPush — DeviceNotRegistered revocation", () => {
   it("a NON-DeviceNotRegistered ticket error does NOT revoke the device", async () => {
     // `MessageRateExceeded` is transient. Revoking on any error would let one
     // throttled send permanently unsubscribe a perfectly good phone.
-    mockFindMany.mockResolvedValue([{ externalId: LIVE }]);
+    mockFindMany.mockResolvedValue([{ id: "row-live", externalId: LIVE }]);
     expoResponds([
       { status: "error", details: { error: "MessageRateExceeded" } },
     ]);
@@ -121,7 +129,7 @@ describe("sendExpoPush — DeviceNotRegistered revocation", () => {
   });
 
   it("reads only the caller's OWN connected expo rows", async () => {
-    mockFindMany.mockResolvedValue([{ externalId: LIVE }]);
+    mockFindMany.mockResolvedValue([{ id: "row-live", externalId: LIVE }]);
     expoResponds([{ status: "ok", id: "ticket-1" }]);
 
     await sendExpoPush({ userId: USER, title: "t", body: "b" });
@@ -135,5 +143,48 @@ describe("sendExpoPush — DeviceNotRegistered revocation", () => {
       (mockFetch.mock.calls[0]![1] as { body: string }).body
     ) as Array<{ to: string }>;
     expect(body.map((m) => m.to)).toEqual([LIVE]);
+  });
+});
+
+describe("sendExpoPush — the receipt check", () => {
+  it("queues the accepted tickets with their phone rows, never the token", async () => {
+    mockFindMany.mockResolvedValue([
+      { id: "row-live", externalId: LIVE },
+      { id: "row-dead", externalId: DEAD },
+    ]);
+    expoResponds([
+      { status: "ok", id: "ticket-1" },
+      { status: "error", details: { error: "DeviceNotRegistered" } },
+    ]);
+
+    await sendExpoPush({ userId: USER, title: "t", body: "b" });
+
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    const [queue, payload, options] = mockSend.mock.calls[0]!;
+    expect(queue).toBe("push-receipts");
+    expect(payload).toEqual({
+      userId: USER,
+      tickets: [{ ticketId: "ticket-1", deviceId: "row-live" }],
+    });
+    expect(options).toEqual({ startAfter: 15 * 60 });
+    expect(JSON.stringify(payload)).not.toContain("ExponentPushToken");
+  });
+
+  it("queues nothing when no ticket was accepted", async () => {
+    mockFindMany.mockResolvedValue([{ id: "row-live", externalId: LIVE }]);
+    expoResponds([
+      { status: "error", details: { error: "MessageRateExceeded" } },
+    ]);
+    await sendExpoPush({ userId: USER, title: "t", body: "b" });
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it("a failed enqueue never fails the send", async () => {
+    mockFindMany.mockResolvedValue([{ id: "row-live", externalId: LIVE }]);
+    expoResponds([{ status: "ok", id: "ticket-1" }]);
+    mockSend.mockRejectedValue(new Error("boss down"));
+    await expect(
+      sendExpoPush({ userId: USER, title: "t", body: "b" })
+    ).resolves.toEqual({ sent: 1, revoked: 0, failed: 0 });
   });
 });

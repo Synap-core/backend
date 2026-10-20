@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  ASK_COPY,
   askFingerprint,
   classifyAskRefusal,
   type Ask,
@@ -173,7 +172,7 @@ describe("askView — one control per mode", () => {
     ).toEqual({ mode: "act", url, steps: ["Open it", "Add the record"] });
   });
 
-  it("provide: the shared 'not answerable here yet' copy, naming what it wants", () => {
+  it("provide: names what it wants handed over", () => {
     expect(
       askView(
         slot({
@@ -183,9 +182,19 @@ describe("askView — one control per mode", () => {
       ).control
     ).toEqual({
       mode: "provide",
+      kind: "secret",
       wants: "A secret: Stripe key",
-      title: ASK_COPY.provideTitle,
-      body: ASK_COPY.provideBody,
+    });
+    expect(
+      askView(
+        slot({
+          mode: "provide",
+          provide: { kind: "connection", service: "github" },
+        })
+      ).control
+    ).toMatchObject({
+      kind: "connection",
+      wants: "A connection to GitHub",
     });
     const file = askView(
       slot({ mode: "provide", provide: { kind: "file", accept: [".pdf"] } })
@@ -308,12 +317,33 @@ describe("answerCall — checked with the pod's rule, carrying the fingerprint",
     ).toBe(false);
   });
 
-  it("provide: nothing here can answer it", () => {
+  it("provide: words never answer it, a reference of the asked kind does", () => {
     const s = slot({
       mode: "provide",
       provide: { kind: "connection", service: "github" },
     });
     expect(answerCall(s, { type: "text", text: "here" }).ok).toBe(false);
+    const connectionId = "22222222-2222-4222-8222-222222222222";
+    const built = answerCall(s, {
+      type: "provide",
+      ref: { kind: "connection", connectionId },
+    });
+    expect(built.ok && built.call).toEqual({
+      sessionId: s.sessionId,
+      expectedLabel: s.label,
+      value: { type: "provide", ref: { kind: "connection", connectionId } },
+      askFingerprint: askFingerprint(s.ask),
+    });
+    // A secret handed over for a connection ask is refused before it is sent.
+    expect(
+      answerCall(s, {
+        type: "provide",
+        ref: {
+          kind: "secret",
+          vaultRef: "vault://33333333-3333-4333-8333-333333333333",
+        },
+      }).ok
+    ).toBe(false);
   });
 
   it("no ask: the answer in words", () => {

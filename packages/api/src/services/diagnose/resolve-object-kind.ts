@@ -60,6 +60,7 @@ import {
 } from "../../utils/user-visible-where.js";
 import { visibleWorkspaceWhere } from "./workspace.js";
 import { authoredByUser } from "../agent-identity-service.js";
+import { agentReadableBy } from "./agent-scorecard.js";
 import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
 import { AI_DECISION } from "../../lib/ai-events.js";
@@ -160,7 +161,9 @@ type ProbeHit = Omit<ResolvedObject, "kind" | "id">;
  */
 export async function resolveObjectKind(
   id: string,
-  userId: string
+  userId: string,
+  /** A person in their own session (`isSignedInPerson`); keys are not. */
+  viewer: { signedInPerson?: boolean } = {}
 ): Promise<ResolvedObject | null> {
   // Every column probed below — row ids AND both correlationId fallbacks — is a
   // Postgres `uuid`. A fragment ("4d3e8f37") reached them as 22P02 and surfaced
@@ -228,7 +231,7 @@ export async function resolveObjectKind(
           .where(
             and(
               eq(focusSessions.id, id),
-              // The ONE session read rule (decision D1): a session's title is
+              // The ONE session read rule: a session's title is
               // content. Callers are agent doors (Hub resolve, diagnose), so
               // no roster branch — owner-only; anything else is "unknown".
               sessionReadableWhere({ userId })
@@ -346,20 +349,23 @@ export async function resolveObjectKind(
     {
       kind: "agent",
       run: async () => {
-        // Only the caller's OWN agent-users (createdByUserId floor) — the
-        // scorecard reads governance data scoped to this owner.
+        // The agent read floor (`agentReadableBy`): its owner or a pod admin
+        // — the same floor the scorecard this kind opens on applies, so a
+        // link never resolves to a page that then reads empty.
         const [r] = await db
-          .select({ name: users.name })
+          .select({ name: users.name, createdByUserId: users.createdByUserId })
           .from(users)
-          .where(
-            and(
-              eq(users.id, id),
-              eq(users.userType, "agent"),
-              eq(users.createdByUserId, userId)
-            )
-          )
+          .where(and(eq(users.id, id), eq(users.userType, "agent")))
           .limit(1);
-        return r ? { displayName: r.name ?? null } : null;
+        if (
+          !r ||
+          !(await agentReadableBy(r, userId, {
+            signedInPerson: viewer.signedInPerson === true,
+          }))
+        ) {
+          return null;
+        }
+        return { displayName: r.name ?? null };
       },
     },
     {

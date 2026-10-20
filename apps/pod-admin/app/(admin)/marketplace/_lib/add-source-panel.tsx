@@ -36,7 +36,7 @@ import { trpc } from "../../../../lib/trpc";
 import { readableError } from "../../../../lib/format";
 import { ErrorNote, errorDetail } from "../../../_lib/copy-button";
 import { SectionCard } from "../../components/section-card";
-import { trustLabel } from "./sources-model";
+import { reAddKeyNotice, trustLabel } from "./sources-model";
 import type { SourcePreview } from "./types";
 
 export function AddSourcePanel({
@@ -95,6 +95,7 @@ export function AddSourcePanel({
   }
 
   const fingerprint = formatKeyFingerprint(preview?.keyFingerprint);
+  const keyNotice = preview ? reAddKeyNotice(preview) : null;
   const canAdd =
     !!preview &&
     !preview.conflict &&
@@ -202,6 +203,15 @@ export function AddSourcePanel({
                   <p className="text-[12.5px] leading-relaxed text-foreground/70">
                     This source isn&apos;t signed, so it can only be a showcase:
                     its packages are listed, and nothing from it runs here.
+                  </p>
+                )}
+                {keyNotice && (
+                  <p className="flex items-start gap-1.5 text-[12px] leading-relaxed text-foreground/80">
+                    <TriangleAlert
+                      size={13}
+                      className="mt-0.5 shrink-0 text-status-stale"
+                    />
+                    {keyNotice}
                   </p>
                 )}
                 {preview.conflict && (

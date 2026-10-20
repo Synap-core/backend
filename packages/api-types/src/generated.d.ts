@@ -3546,6 +3546,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
+			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -3557,7 +3558,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
-			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -6295,6 +6295,46 @@ export interface Context {
 	 */
 	revertPass?: RevertPass;
 }
+/**
+ * Why a handed-over secret came with no read for the agent.
+ *   `agent_unknown`  — the pod cannot tell which agent asked.
+ *   `not_grantable`  — a legacy client-encrypted secret the pod cannot read.
+ *   `key_not_allowed` — the key that answered may not grant vault access.
+ *   `agent_changed`  — the agent asking now is not the one the person was
+ *                      shown (`expectedGranteeId` on the answer).
+ */
+export type ProvideSecretGrantRefusal = "agent_changed" | "agent_unknown" | "key_not_allowed" | "not_grantable";
+/** What a secret answer did about the asking agent's access to it. */
+export type ProvideSecretGrant = {
+	status: "granted";
+	agentUserId: string;
+	agentName: string;
+	/** ISO; `null` when an existing grant with no end already covered it. */
+	expiresAt: string | null;
+} | {
+	status: "refused";
+	reason: ProvideSecretGrantRefusal;
+}
+/** The read could not be written; the hand-over stands. */
+ | {
+	status: "failed";
+};
+/**
+ * What `provideOptions` says a secret hand-over WILL do, before the person
+ * presses: the agent it will grant a read to, or why none will be granted.
+ */
+export type ProvideSecretGrantOffer = {
+	status: "will_grant";
+	/** Sent back on the answer as `expectedGranteeId`. */
+	agentUserId: string;
+	agentName: string;
+	minutes: number;
+} | {
+	status: "no_grant";
+	reason: ProvideSecretGrantRefusal;
+};
+/** Why a new connection can't be started from this pod. */
+export type ProvideConnectUnavailableReason = "no_broker" | "not_offered" | "unreadable";
 declare const SECRET_TYPES: readonly [
 	"password",
 	"api_key",
@@ -11020,12 +11060,12 @@ export interface RunAgent {
 	source: "both" | "message" | "proposal";
 }
 /**
- * Where the link opens. Only `"desktop"` today, and it is not decoration: the
- * `/open/capability/<id>` route bounces to `synap://`, so a human without the
- * desktop app cannot follow it. A future pod-admin capability route would add a
- * `"web"` value here — until then, claiming one would be a lie.
+ * Which client can perform the action the link is for. `"web"`: the pod's own
+ * `/open/capability/<id>` page does it in any browser (turning verbs on, or
+ * reading a capability that needs nothing). `"desktop"`: only the desktop app
+ * can (connecting an account — the web has no Connect flow).
  */
-export type CapabilityActionSurface = "desktop";
+export type CapabilityActionSurface = "desktop" | "web";
 export interface CapabilityNextAction {
 	kind: "add" | "connect" | "enable" | "none" | "run";
 	hint: string;
@@ -15387,6 +15427,25 @@ export interface EffectivePushCategory extends PushCategoryPolicy {
 	/** `true` when the person set it; `false` when it is the default. */
 	explicit: boolean;
 }
+/** One row of `notifCenter.listDevices` (dates are ISO strings over JSON). */
+export interface PushDeviceRow {
+	id: string;
+	/** The name the phone reported (`Constants.deviceName`), if any. */
+	name: string | null;
+	platform: string | null;
+	appVersion: string | null;
+	status: string;
+	/**
+	 * The last time the app registered. `null` for a phone whose app does not
+	 * register on every launch: its last registration says nothing about use,
+	 * so it is never shown as last seen and never stopped for being unused.
+	 */
+	lastSeenAt: Date | string | null;
+	createdAt: Date | string;
+	revokedAt: Date | string | null;
+	/** True only when the caller passed this phone's own token. */
+	isThisDevice: boolean;
+}
 declare const CONNECTION_NOTIFY_LEVELS: readonly [
 	"everything",
 	"problems",
@@ -15631,6 +15690,7 @@ export interface NotificationCatalogue {
 	withheldProducerlessCount: number;
 }
 export type PreferenceScope = "pod" | "workspace";
+export type RegisteredDeviceStatus = "connected" | "revoked";
 export interface LibraryKeepAliveSettings {
 	/** Quiet archive, weekly "Build one group" and resurfacing. Default false (opt-in). */
 	enabled: boolean;
@@ -17069,6 +17129,67 @@ export type AnswerExpectedOutputResult = {
 	 */
 	decision?: DecisionFilingOutcome;
 };
+export type ProvideFileLanding = {
+	status: "ready";
+	workspaceId: string;
+	workspaceName: string;
+	/** Pass to the upload door so the file is filed into the project too. */
+	projectId: string | null;
+	/** `session_space` — the session's own; `project_home` — its project's home. */
+	via: "project_home" | "session_space";
+} | {
+	status: "refused";
+	message: string;
+};
+export interface ProvideSecretRow {
+	/** The answer's reference (`vault://<id>`). */
+	ref: string;
+	name: string;
+	type: string;
+}
+export interface ProvideConnectionRow {
+	/** The answer's `connectionId` (the registry row). */
+	id: string;
+	label: string;
+	/** Which account of the service, when the pod knows one. */
+	accountHint: string | null;
+	podWide: boolean;
+	isDefault: boolean;
+	needsReauth: boolean;
+}
+export type ProvideOptions = {
+	sessionId: string;
+	expectedLabel: string;
+	askFingerprint: string;
+} & ({
+	kind: "secret";
+	secret: {
+		name: string;
+		rows: ProvideSecretRow[];
+		/** What handing one over lets the asking agent do. */
+		grant: ProvideSecretGrantOffer;
+	};
+} | {
+	kind: "connection";
+	connection: {
+		service: string;
+		serviceName: string;
+		/** The integration key to start a connection with; `null` = none here. */
+		providerId: string | null;
+		connectable: boolean;
+		/** Why a new connection can't start here (`connectable` false). */
+		unavailable: ProvideConnectUnavailableReason | null;
+		rows: ProvideConnectionRow[];
+		/** Several accounts: the person confirms which one before it goes. */
+		confirmAccount: boolean;
+	};
+} | {
+	kind: "file";
+	file: {
+		accept: string[] | null;
+		landing: ProvideFileLanding;
+	};
+});
 export interface SessionAnswerItem {
 	/** Stable id — dedupe on it across polls. */
 	id: string;
@@ -17858,8 +17979,10 @@ export interface OpenTarget {
  * Identity + origin from the governance-actor row (`users`, keyed by the same
  * `agentUserId` the scorecard uses). Origin is now a stored fact (`created_via`,
  * migration 0225); scope (pod-wide vs workspace) is DERIVED from the presence of
- * `workspace_members` rows (none ⇒ pod-wide). Owner-floored: only the caller's own agent-users, so a
- * guessed id can't leak another owner's agent identity.
+ * `workspace_members` rows (none ⇒ pod-wide). Floored like the scorecard
+ * (`agentReadableBy`: its owner or a pod admin), so a guessed id can't leak
+ * another owner's agent identity to a member. A pod admin may already list
+ * every space, so the space names below reveal nothing new to one.
  */
 export interface AgentProfile {
 	agentUserId: string;
@@ -18831,19 +18954,24 @@ export type BrandResolution = {
 /**
  * Market risk disclosure — what a package brings that a person should see
  * before it runs on their pod: CODE (cells, code skills), NETWORK reach (the
- * hosts it names) and CONNECTORS (credentials, providers, MCP servers). Read
- * off the definition the install will apply. Pure.
+ * hosts it names), CONNECTORS (credentials, providers, MCP servers) and, among
+ * those, the pod's EXISTING provider connections it would use (a `nango://`
+ * ref or a `providerConfigKey` binds a tool to the connection the pod already
+ * has for that provider — the owner's own Gmail, say). Read off the definition
+ * the install will apply. Pure.
  *
  * Deliberately over-inclusive: the walk is structural, not kind-by-kind, so a
  * template's nested cells and capabilities are found as well as a lone cell's.
  * It discloses what the definition DECLARES — it is not a sandbox and does not
  * promise the absence of anything it did not find. The walk is bounded; a
  * definition too large or too deep to read to the end is reported `incomplete`
- * and then FAILS CLOSED: code and network reach are both treated as present.
+ * and then FAILS CLOSED: code, network reach and existing connections are all
+ * treated as present.
  *
  * A package from a TRUSTED third-party source needs an extra, explicit
- * confirm for code and for network reach (`requiredAcknowledgements`); the
- * install door refuses without it (marketplace-install.ts).
+ * confirm for code, for network reach and for using existing connections
+ * (`requiredAcknowledgements`); the install door refuses without it
+ * (marketplace-install.ts).
  */
 export interface MarketRisks {
 	/** Names of the parts that carry code (a cell's renderer, a code skill). */
@@ -18853,9 +18981,15 @@ export interface MarketRisks {
 	/** Credentials, providers and servers it asks to connect. */
 	connectors: string[];
 	/**
+	 * The services whose EXISTING connection on this pod it would use, by name
+	 * (`Gmail`): every `nango://<provider>` ref and `providerConfigKey` it
+	 * carries. Those bind to the connection the pod already has, not a new one.
+	 */
+	connections: string[];
+	/**
 	 * Set (true) only when the walk ran out of budget before it read the whole
-	 * definition, so the lists above may be missing entries. Code and network
-	 * reach then count as present (`requiredAcknowledgements`).
+	 * definition, so the lists above may be missing entries. Code, network reach
+	 * and existing connections then count as present (`requiredAcknowledgements`).
 	 */
 	incomplete?: true;
 }
@@ -18950,6 +19084,7 @@ export interface MarketplacePreflight extends MarketInstallSummary {
 	requires: {
 		code: boolean;
 		network: boolean;
+		connectors: boolean;
 	};
 }
 /**
@@ -19138,6 +19273,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionId?: string;
 				appId?: string;
 			})[];
+			meta: object;
+		}>;
+		adminSubjectActivity: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				subjectIds: string[];
+				appId?: string | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: EventRecord[];
 			meta: object;
 		}>;
 		listByCorrelationId: import("@trpc/server").TRPCQueryProcedure<{
@@ -26102,7 +26247,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					mimeType: string | null;
 					currentVersion: number;
 					lastSavedVersion: number;
-					workingState: string | null;
 					workingStateUpdatedAt: Date | null;
 					contentRevision: number;
 					workingStateRevision: number | null;
@@ -37007,8 +37151,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				cpUrl?: string | undefined;
 				providerId?: string | undefined;
 				workspaceId?: string | undefined;
+				answerFor?: {
+					sessionId: string;
+					expectedLabel: string;
+					askFingerprint: string;
+				} | undefined;
 			} | undefined;
 			output: {
+				answerFor?: {
+					sessionId: string;
+					expectedLabel: string;
+					providerId: string;
+				} | undefined;
 				token: string;
 				nangoHost: string | undefined;
 				connectLink: string;
@@ -37486,8 +37640,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				platform: "android" | "ios";
 				deviceName?: string | undefined;
 				appVersion?: string | undefined;
+				reenable?: boolean | undefined;
+				everyLaunch?: boolean | undefined;
 			};
 			output: {
+				id: string;
+				status: RegisteredDeviceStatus;
 				success: boolean;
 			};
 			meta: object;
@@ -37502,16 +37660,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
-		listDevices: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+		revokeDevice: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+			};
 			output: {
 				id: string;
-				status: string;
-				metadata: Record<string, unknown>;
-				createdAt: Date;
-				updatedAt: Date;
-				displayName: string;
-			}[];
+				status: "revoked";
+			};
+			meta: object;
+		}>;
+		listDevices: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				token?: string | undefined;
+			} | undefined;
+			output: PushDeviceRow[];
 			meta: object;
 		}>;
 		requestHandoff: import("@trpc/server").TRPCMutationProcedure<{
@@ -41800,6 +41963,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					};
 				} | undefined;
 				askFingerprint?: string | undefined;
+				expectedGranteeId?: string | undefined;
 			};
 			output: {
 				status: "answered";
@@ -41821,8 +41985,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				decision?: Extract<AnswerExpectedOutputResult, {
 					status: "answered";
 				}>["decision"];
+				secretGrant?: ProvideSecretGrant;
 				ok: true;
 			};
+			meta: object;
+		}>;
+		provideOptions: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sessionId: string;
+				expectedLabel: string;
+				askFingerprint?: string | undefined;
+			};
+			output: ProvideOptions;
 			meta: object;
 		}>;
 		askAboutSlot: import("@trpc/server").TRPCMutationProcedure<{
@@ -45823,6 +45997,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				acknowledge?: {
 					code?: boolean | undefined;
 					network?: boolean | undefined;
+					connectors?: boolean | undefined;
 				} | undefined;
 			};
 			output: MarketInstallOutcome;
@@ -45873,6 +46048,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					signed: boolean;
 					keyFingerprint: string | null;
 					conflict: string | null;
+					previousKeyFingerprint: string | null;
 				};
 				meta: object;
 			}>;

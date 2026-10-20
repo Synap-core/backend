@@ -627,7 +627,7 @@ function applicationConnectionStartFailure(
   const target = podAdminConnectionFailureTarget(code);
   if (target) return c.redirect(target, 303);
   return c.html(
-    "<!doctype html><title>Pod connection needs configuration</title><main><h1>Pod connection needs configuration</h1><p>This Pod cannot open its secure Admin console yet.</p><p>A Pod owner needs to configure this Pod's Admin URL before secure application access can be set up.</p></main>",
+    "<!doctype html><title>Pod connection needs configuration</title><main><h1>Pod connection needs configuration</h1><p>This Pod cannot open its secure Pod Console yet.</p><p>A Pod owner needs to configure this Pod's Pod Console URL before secure application access can be set up.</p></main>",
     status
   );
 }

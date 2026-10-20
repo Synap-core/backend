@@ -82,6 +82,12 @@ import {
   FEDERATION_RECEIPT_CLEANUP_QUEUE,
   handleFederationReceiptCleanup,
 } from "./federation-receipt-cleanup.js";
+import {
+  PUSH_DEVICE_SWEEP_QUEUE,
+  PUSH_RECEIPTS_QUEUE,
+  handlePushDeviceSweep,
+  handlePushReceipts,
+} from "./push-devices.js";
 import { handleFeedScheduler } from "./feed-scheduler.js";
 import {
   handleFeedSourceExecute,
@@ -320,6 +326,9 @@ const ALL_QUEUES = [
   VAULT_GRANT_EXPIRY_QUEUE,
   NOTIFICATION_CLEANUP_QUEUE,
   FEDERATION_RECEIPT_CLEANUP_QUEUE,
+  // Phone push hygiene: Expo receipts per send + the daily unused-phone sweep.
+  PUSH_RECEIPTS_QUEUE,
+  PUSH_DEVICE_SWEEP_QUEUE,
   "feed-scheduler",
   FEED_SOURCE_EXECUTE_QUEUE,
   FEED_SOURCE_ITEMS_QUEUE,
@@ -754,6 +763,13 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: federation-receipt-cleanup");
 
+  // Phone push hygiene (receipts: ~15 min after each send; sweep: daily)
+  await boss.work(PUSH_RECEIPTS_QUEUE, async ([job]: any[]) =>
+    handlePushReceipts(job.data)
+  );
+  await boss.work(PUSH_DEVICE_SWEEP_QUEUE, async () => handlePushDeviceSweep());
+  logger.info("Registered workers: push-receipts, push-device-sweep");
+
   // Feed scheduler (cron: every minute — schedules due source subscription fetches)
   await boss.work("feed-scheduler", async () => handleFeedScheduler());
   logger.info("Registered worker: feed-scheduler");
@@ -978,7 +994,7 @@ export async function registerAllWorkers(): Promise<void> {
   await boss.work(CP_CATALOG_SYNC_QUEUE, async () => handleCpCatalogSync());
   logger.info("Registered worker: cp-catalog-sync");
 
-  // Tool demand forwarding (D2): normalized tool keys → CP over the relay JWT.
+  // Tool demand forwarding: normalized tool keys → CP over the relay JWT.
   // Daily cron + a debounced one-off after each applied demand write.
   await boss.work(TOOL_DEMAND_FORWARD_QUEUE, async () => {
     await handleToolDemandForward();

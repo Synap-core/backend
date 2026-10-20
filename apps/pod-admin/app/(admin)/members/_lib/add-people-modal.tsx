@@ -260,7 +260,7 @@ export function AddPeopleModal({
                       type="button"
                       onClick={() => setScope(s)}
                       disabled={sending}
-                      className={`flex-1 rounded py-1.5 text-[12px] font-medium transition-colors ${scope === s ? "bg-foreground/[0.08] text-foreground" : "text-foreground/65 hover:text-foreground/70"}`}
+                      className={`flex-1 rounded py-1.5 text-[12px] font-medium transition-colors ${scope === s ? "bg-foreground/[0.08] text-foreground" : "text-foreground/65 hover:text-foreground"}`}
                     >
                       {s === "pod" ? "Pod-wide" : "Specific workspaces"}
                     </button>

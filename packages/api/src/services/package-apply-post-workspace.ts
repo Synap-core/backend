@@ -445,8 +445,8 @@ export interface PackagePostWorkspaceBody {
      * already read at the workspace layer (`packageVersion` on the create), but
      * this local type declared only `slug`, so the cells step below could not
      * see it and every cell installed through THIS door was stamped with the
-     * `widget_definitions.version` column default. B3: door parity with
-     * `market.install({kind:"cell"})`.
+     * `widget_definitions.version` column default. Same stamp as the
+     * `market.install({kind:"cell"})` door.
      */
     version?: string;
   };
@@ -614,9 +614,21 @@ export async function applyPackagePostWorkspace(
       drizzleSql,
       automations: automationsTable,
     } = await import("@synap/database");
+    const { withoutServerOwnedAutomationMetadata, stampInstalledByPackage } =
+      await import("./automations/server-metadata.js");
     const caller = automationsRouter.createCaller(ctx as never);
     const autos: unknown[] = [];
-    for (const a of body.automations) {
+    // The package this apply installs (`_meta.slug`; an added source's is
+    // `<source>/<slug>`), stamped on every automation it creates or reuses as
+    // `metadata.installedByPackage` — what lets that same package re-install
+    // over its own automations elsewhere (`assertNoNamedClash`). Only this
+    // stamp: the author's metadata never carries the key.
+    const installedByPackage = body._meta?.slug;
+    for (const definition of body.automations) {
+      const a = {
+        ...definition,
+        metadata: withoutServerOwnedAutomationMetadata(definition.metadata),
+      };
       try {
         const [existing] = await db
           .select({
@@ -656,11 +668,9 @@ export async function applyPackagePostWorkspace(
             // unconditionally: the row's existing templateKey (or the incoming
             // `a.key`) always overrides any author-supplied `metadata.templateKey`.
             metadata: (() => {
-              const systemTemplateKey =
-                (
-                  existing.metadata as
-                    { templateKey?: string } | null | undefined
-                )?.templateKey ?? a.key;
+              const stamps = existing.metadata as
+                { templateKey?: string } | null | undefined;
+              const systemTemplateKey = stamps?.templateKey ?? a.key;
               return a.metadata || systemTemplateKey
                 ? {
                     ...(existing.metadata ?? {}),
@@ -676,6 +686,13 @@ export async function applyPackagePostWorkspace(
           // row is untouched until a person approves it.
           const proposalId = (updated as { proposalId?: string } | undefined)
             ?.proposalId;
+          // The first package that installed the row keeps it.
+          if (
+            installedByPackage &&
+            (updated as { status?: string } | undefined)?.status !== "proposed"
+          ) {
+            await stampInstalledByPackage(existing.id, installedByPackage);
+          }
           autos.push(
             (updated as { status?: string } | undefined)?.status === "proposed"
               ? {
@@ -697,10 +714,13 @@ export async function applyPackagePostWorkspace(
           flowDefinition: a.flowDefinition ?? { nodes: [], edges: [] },
           status: a.status,
           // Preserve author metadata (e.g. `metadata.kind`) alongside the
-          // system `templateKey` stamp — templateKey last so it wins.
+          // system `templateKey` stamp, last so it wins over the author's.
           metadata:
             a.metadata || a.key
-              ? { ...a.metadata, ...(a.key ? { templateKey: a.key } : {}) }
+              ? {
+                  ...a.metadata,
+                  ...(a.key ? { templateKey: a.key } : {}),
+                }
               : undefined,
           agentUserId,
           source: "intelligence",
@@ -710,6 +730,9 @@ export async function applyPackagePostWorkspace(
           status?: string;
           proposalId?: string | null;
         };
+        if (installedByPackage && created.status !== "proposed" && created.id) {
+          await stampInstalledByPackage(created.id, installedByPackage);
+        }
         autos.push(
           created.status === "proposed"
             ? {
@@ -1007,7 +1030,7 @@ export async function applyPackagePostWorkspace(
           packageSlug,
           cellKey: cell.key,
           workspaceId,
-          // B3: same stamp the `market.install({kind:"cell"})` door writes, so
+          // The same stamp the `market.install({kind:"cell"})` door writes, so
           // the two cell-install doors cannot report different versions for the
           // same row. Absent `_meta.version` ⇒ omitted ⇒ omit-is-silence in
           // `defineCell` (never clobbers a stamped version with a default).

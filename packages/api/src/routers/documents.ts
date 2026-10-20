@@ -331,8 +331,11 @@ export const documentsRouter = router({
         content = readableMarkdown(content);
       }
 
+      // The row without `workingState`: a base64 Yjs dump (often larger than
+      // the body) that only the realtime room reads, from the database.
+      const { workingState: _workingState, ...readable } = document;
       return {
-        document,
+        document: readable,
         content,
         canEdit,
         editReason,

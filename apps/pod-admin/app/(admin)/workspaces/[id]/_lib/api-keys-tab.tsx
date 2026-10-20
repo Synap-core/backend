@@ -1,8 +1,10 @@
 "use client";
 
 /**
- * API Keys tab — workspace-scoped keys.
- * Uses trpc.apiKeys.adminListAll filtered by workspaceId.
+ * API Keys tab — the keys confined to this space
+ * (`apiKeys.adminListAll({ workspaceId })` filters on the key's own space). A
+ * member's pod-wide key can reach the space too, but it is not one of its
+ * keys: it lives on the Keys page. A key made here is confined to this space.
  */
 
 import {
@@ -102,8 +104,8 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
     [keysQuery.data]
   );
 
-  // ?focus=<keyId> — the receiver for a workspace-scoped key, which the
-  // pod-wide Trust & Keys list filters out. `data-row-id` is on each KeyRow.
+  // ?focus=<keyId> — the receiver for a key confined to this space (Keys
+  // rows and ⌘K open it here, `keyHref`). `data-row-id` is on each KeyRow.
   useFocusRow({ ready: !keysQuery.isLoading });
   const active = useMemo(() => keys.filter((k) => k.isActive), [keys]);
   const revoked = useMemo(() => keys.filter((k) => !k.isActive), [keys]);
@@ -141,7 +143,7 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
     <div className="flex flex-col gap-5">
       <SectionCard
         title="API keys"
-        hint="Keys scoped to this space"
+        hint="Keys that can reach only this space. Members' pod-wide keys are on the Keys page."
         actions={
           <Button
             size="sm"
@@ -163,7 +165,7 @@ export function ApiKeysTab({ workspaceId }: { workspaceId: string }) {
             onRetry={() => void keysQuery.refetch()}
           />
         ) : keys.length === 0 ? (
-          <ResourceRowEmpty message="No keys for this space." />
+          <ResourceRowEmpty message="No keys are confined to this space yet." />
         ) : (
           <div className="flex flex-col divide-y divide-foreground/[0.05] pt-1">
             {active.map((k) => (

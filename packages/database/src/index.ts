@@ -89,6 +89,7 @@ export * from "./utils/invite-acceptance.js";
 export * from "./utils/user-visible-where.js";
 export * from "./utils/catalog-sync-stamps.js";
 export * from "./utils/marketplace-sources.js";
+export * from "./utils/official-catalog-digests.js";
 export * from "./utils/cp-relay-credential.js";
 export * from "./utils/pod-identity.js";
 export * from "./utils/pod-cp-auth.js";

@@ -6,7 +6,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
-  getRequest: vi.fn(),
   redeemRequest: vi.fn(),
   approve: vi.fn(),
   reject: vi.fn(),
@@ -26,7 +25,6 @@ vi.mock("@synap/database", async (importOriginal) => {
       }),
     },
     FederatedApplicationConnectionService: class {
-      getRequest = h.getRequest;
       redeemRequest = h.redeemRequest;
       approve = h.approve;
       reject = h.reject;
@@ -81,9 +79,15 @@ beforeEach(() => {
 
 describe("applicationConnections — lifecycle events", () => {
   it("records the ask on the first redeem only", async () => {
-    h.redeemRequest.mockResolvedValue({ ...request, status: "pending" });
-    h.getRequest.mockResolvedValueOnce({ status: "awaiting_local_auth" });
-    h.getRequest.mockResolvedValueOnce({ status: "pending" });
+    const redeemed = { ...request, status: "pending" };
+    h.redeemRequest.mockResolvedValueOnce({
+      request: redeemed,
+      firstRedeem: true,
+    });
+    h.redeemRequest.mockResolvedValueOnce({
+      request: redeemed,
+      firstRedeem: false,
+    });
     const secret = "a".repeat(40);
     await as("anna").redeemRequest({
       requestId: REQUEST,

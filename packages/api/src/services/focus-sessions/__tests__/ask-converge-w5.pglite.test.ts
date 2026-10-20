@@ -1,5 +1,5 @@
 /**
- * W5 typed asks — converge the server-minted slots onto the ask, and PROVIDE.
+ * Typed asks — converge the server-minted slots onto the ask, and PROVIDE.
  * Driven through the REAL services (and the real Hub post route) against
  * PGlite.
  *
@@ -123,7 +123,13 @@ import {
   apiKeys,
   sessionEvaluations,
 } from "@synap/database";
-import { secrets, entities } from "@synap/database/schema";
+import {
+  secrets,
+  entities,
+  capabilities,
+  links,
+  tools,
+} from "@synap/database/schema";
 import type { PlaybookParam } from "@synap/playbooks";
 import {
   PARAM_SLOT_KIND,
@@ -223,7 +229,7 @@ const paramSlots = () =>
 
 const SECRET = "sk_live_DO_NOT_STORE_123";
 
-describe("W5 — param / criterion / provide / room question on the ONE answer door", () => {
+describe("param / criterion / provide / room question on the ONE answer door", () => {
   beforeAll(async () => {
     for (const t of [
       focusSessions,
@@ -237,6 +243,9 @@ describe("W5 — param / criterion / provide / room question on the ONE answer d
       sessionEvaluations,
       secrets,
       entities,
+      capabilities,
+      links,
+      tools,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
@@ -531,7 +540,10 @@ describe("W5 — param / criterion / provide / room question on the ONE answer d
       type: "provide",
       ref: { kind: "secret", vaultRef: `vault://${id}` },
     });
-    expect(answer.text).toBe('Stored the secret "STRIPE_KEY" in the vault');
+    // No record of which agent posed the ask here, so no read is granted.
+    expect(answer.text).toBe(
+      'Stored the secret "STRIPE_KEY" in the vault · No agent can read it yet'
+    );
     expect(JSON.stringify(await roomMessages(channelId))).not.toContain(id);
   });
 
@@ -592,6 +604,10 @@ describe("W5 — param / criterion / provide / room question on the ONE answer d
 
   it("provide(connection): own or pod-wide connection accepted; another member's private one, or a plain secret, refused", async () => {
     const cap = randomUUID();
+    await q(
+      `insert into capabilities (id, created_by, name, approved, metadata, created_at, updated_at) values ($1, $2, 'Gmail', true, '{}'::jsonb, now(), now())`,
+      [cap, OWNER]
+    );
     const own = await seedSecret({ userId: OWNER, capabilityId: cap });
     const shared = await seedSecret({
       userId: OTHER,

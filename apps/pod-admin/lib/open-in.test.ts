@@ -17,16 +17,37 @@ describe("openIn — web-hosted objects", () => {
     expect(exit).toEqual({ href: `/proposal/${ID}`, isDesktopLink: false });
   });
 
-  it.each(["entity", "view", "automation", "session"])(
-    "hosts %s on /open",
-    (objectKind) => {
-      const exit = openIn({ kind: "object", objectKind, id: ID });
-      expect(exit.href).toBe(`/open/${objectKind}/${ID}`);
-      expect(exit.isDesktopLink).toBe(false);
-    }
-  );
+  it.each([
+    "entity",
+    "view",
+    "automation",
+    "session",
+    "playbook",
+    "run",
+    "capability",
+    "agent",
+    "document",
+    "channel",
+  ])("hosts %s on /open", (objectKind) => {
+    const exit = openIn({ kind: "object", objectKind, id: ID });
+    expect(exit.href).toBe(`/open/${objectKind}/${ID}`);
+    expect(exit.isDesktopLink).toBe(false);
+  });
 
-  it.each(["automation", "session"])(
+  it("a run's address params ride on its web page", () => {
+    const exit = openIn({
+      kind: "object",
+      objectKind: "run",
+      id: ID,
+      params: { flowType: "playbook" },
+    });
+    expect(exit).toEqual({
+      href: `/open/run/${ID}?flowType=playbook`,
+      isDesktopLink: false,
+    });
+  });
+
+  it.each(["automation", "session", "playbook", "capability", "agent"])(
     "objectInApp still reaches the desktop app for hosted %s",
     (objectKind) => {
       const exit = openIn({ kind: "objectInApp", objectKind, id: ID });
@@ -38,19 +59,15 @@ describe("openIn — web-hosted objects", () => {
 });
 
 describe("openIn — desktop links always carry a fallback", () => {
-  it.each([
-    "workspace",
-    "playbook",
-    "channel",
-    "document",
-    "cell",
-    "capability",
-  ])("%s bounces to the desktop app with a download fallback", (objectKind) => {
-    const exit = openIn({ kind: "object", objectKind, id: ID });
-    expect(exit.href).toBe(`synap://open/${objectKind}/${ID}`);
-    expect(exit.isDesktopLink).toBe(true);
-    expect(exit.fallback?.href).toContain("/download/browser");
-  });
+  it.each(["workspace", "project", "cell", "skill", "tool"])(
+    "%s bounces to the desktop app with a download fallback",
+    (objectKind) => {
+      const exit = openIn({ kind: "object", objectKind, id: ID });
+      expect(exit.href).toBe(`synap://open/${objectKind}/${ID}`);
+      expect(exit.isDesktopLink).toBe(true);
+      expect(exit.fallback?.href).toContain("/download/browser");
+    }
+  );
 
   it("never returns a desktop link without a fallback", () => {
     const targets = [
@@ -183,19 +200,31 @@ describe("placeExit — the device decides what a hand-off shows", () => {
   });
 
   it.each([
-    ["vault", "/my-vault"],
-    ["connectors", "/sources"],
-    ["ai-governance", "/intelligence"],
+    ["vault", "/my-vault", "My vault"],
+    ["connectors", "/sources", "Sources"],
+    ["ai-governance", "/intelligence", "Intelligence"],
+    ["developer", "/keys", "Keys"],
+    ["pod", "/members", "Members"],
+    ["extensions", "/marketplace", "Marketplace"],
   ] as const)(
     "settings/%s is unavailable on a phone and points at %s",
-    (section, href) => {
+    (section, href, label) => {
       const placed = placeExit(openIn({ kind: "settings", section }), true);
       expect(placed.href).toBeNull();
       expect(placed.fallback).toBeUndefined();
       expect(placed.unavailable?.note).toBe(PHONE_UNAVAILABLE_NOTE);
-      expect(placed.unavailable?.web?.href).toBe(href);
+      expect(placed.unavailable?.web).toEqual({ href, label });
     }
   );
+
+  it("a desktop app a console page covers points at that page on a phone", () => {
+    const placed = placeExit(
+      openIn({ kind: "app", appId: "marketplace" }),
+      true
+    );
+    expect(placed.href).toBeNull();
+    expect(placed.unavailable?.web?.href).toBe("/marketplace");
+  });
 
   it("a space is unavailable on a phone and points at its console page", () => {
     const placed = placeExit(
@@ -207,11 +236,11 @@ describe("placeExit — the device decides what a hand-off shows", () => {
   });
 
   it.each([
-    ["a channel", { kind: "object", objectKind: "channel", id: ID }],
-    ["a desktop app", { kind: "app", appId: "marketplace" }],
+    ["a cell", { kind: "object", objectKind: "cell", id: ID }],
+    ["a desktop app", { kind: "app", appId: "data" }],
     [
       "a Settings section with no web twin",
-      { kind: "settings", section: "pod" },
+      { kind: "settings", section: "subscription" },
     ],
   ] as const)(
     "%s on a phone is a plain 'open on your computer' note",

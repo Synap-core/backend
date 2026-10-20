@@ -15,7 +15,8 @@
  *     key is refused; a person's confirms reach the core, an agent's never do;
  *   • sources.*: reading is pod-admin; every CHANGE is a signed-in person's —
  *     an agent or any key is refused before anything is read or written; a
- *     key swapped between check and confirm is never pinned.
+ *     key swapped between check and confirm is never pinned; a removed id
+ *     re-added under another key is held on the key-change review.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -39,6 +40,7 @@ const m = vi.hoisted(() => ({
   update: vi.fn(),
   record: vi.fn(),
   clear: vi.fn(),
+  read: vi.fn(),
   isAdmin: vi.fn(),
 }));
 
@@ -93,6 +95,7 @@ vi.mock("@synap/database", async (importOriginal) => {
     getCatalogSyncStamps: (...a: unknown[]) => m.stamps(...a),
     getWorkspaceMembership: (...a: unknown[]) => m.membership(...a),
     preflightWorkspaceFromDefinition: (...a: unknown[]) => m.preflight(...a),
+    readMarketplaceSources: (...a: unknown[]) => m.read(...a),
     updateMarketplaceSources: (...a: unknown[]) => m.update(...a),
     recordMarketplaceSourceStatus: (...a: unknown[]) => m.record(...a),
     clearMarketplaceSourceStatus: (...a: unknown[]) => m.clear(...a),
@@ -245,8 +248,15 @@ beforeEach(() => {
           { ...ACME.source, trust: "trusted", publicKey: "k", enabled: true },
         ],
         official: null,
+        tombstones: {},
       }).result
   );
+  m.read.mockResolvedValue({
+    sources: [],
+    official: null,
+    status: {},
+    tombstones: {},
+  });
 });
 
 describe("marketplace.list", () => {
@@ -292,6 +302,103 @@ describe("marketplace.list", () => {
         kind: "capability",
         sources: ["acme"],
       })
+    );
+  });
+
+  it("Synap's catalog stays listed through a signature freeze; the sources say why, once", async () => {
+    const sentence =
+      "Synap's catalog failed its signature check: bad. Installs and automatic updates from it are paused; what is already listed stays listed.";
+    m.views.mockResolvedValue([
+      {
+        ...SYNAP,
+        gate: { trust: "official", blocked: sentence },
+        signature: {
+          standing: {
+            mode: "enforce",
+            verified: false,
+            blocked: sentence,
+            notice: sentence,
+          },
+          status: { state: "bad_signature", keyFingerprint: FP },
+        },
+      },
+      ACME,
+    ]);
+    m.query.mockResolvedValue([]);
+    const out = await caller().list({});
+    expect(m.query).toHaveBeenCalledWith(
+      expect.objectContaining({ sources: [CP, "acme"] })
+    );
+    expect(out.sources[0]).toMatchObject({
+      id: "synap",
+      state: "bad_signature",
+      blocked: sentence,
+      message: sentence,
+      // Not verified: no fingerprint is claimed.
+      keyFingerprint: null,
+    });
+  });
+
+  it("Synap's row carries the signature notice and, once verified, the signing key", async () => {
+    const unsigned =
+      "Synap's catalog isn't signed yet. Installs work as before.";
+    m.views.mockResolvedValue([
+      {
+        ...SYNAP,
+        signature: {
+          standing: {
+            mode: "unsigned",
+            verified: false,
+            blocked: null,
+            notice: unsigned,
+          },
+          status: null,
+        },
+      },
+    ]);
+    m.query.mockResolvedValue([]);
+    expect((await caller().list({})).sources[0]).toMatchObject({
+      state: "ok",
+      blocked: null,
+      message: unsigned,
+      keyFingerprint: null,
+    });
+    m.views.mockResolvedValue([
+      {
+        ...SYNAP,
+        signature: {
+          standing: {
+            mode: "enforce",
+            verified: true,
+            blocked: null,
+            notice: null,
+          },
+          status: { state: "ok", keyFingerprint: FP },
+        },
+      },
+    ]);
+    expect((await caller().list({})).sources[0]).toMatchObject({
+      state: "ok",
+      message: null,
+      keyFingerprint: FP,
+    });
+  });
+
+  it("Synap's catalog switched off lists nothing", async () => {
+    m.views.mockResolvedValue([
+      {
+        ...SYNAP,
+        source: descriptor({ enabled: false }),
+        gate: {
+          trust: "official",
+          blocked: "Synap's catalog is turned off on this pod.",
+        },
+      },
+    ]);
+    m.query.mockResolvedValue([]);
+    await caller().list({});
+    expect(m.query).toHaveBeenCalledWith(
+      expect.objectContaining({ sources: [] })
     );
   });
 
@@ -518,7 +625,11 @@ describe("marketplace.preflight", () => {
       code: ["bar"],
       networkHosts: ["api.acme.test"],
     });
-    expect(trusted.requires).toEqual({ code: true, network: true });
+    expect(trusted.requires).toEqual({
+      code: true,
+      network: true,
+      connectors: false,
+    });
     expect(trusted).toMatchObject({ source: "acme", trust: "trusted" });
 
     m.lookup.mockResolvedValue(entry("charts/bar", "Bar", "cell"));
@@ -527,7 +638,11 @@ describe("marketplace.preflight", () => {
       slug: "charts/bar",
     });
     expect(official.risks.code).toEqual(["bar"]);
-    expect(official.requires).toEqual({ code: false, network: false });
+    expect(official.requires).toEqual({
+      code: false,
+      network: false,
+      connectors: false,
+    });
   });
 
   it("a showcase entry has no preflight", async () => {
@@ -739,6 +854,7 @@ describe("marketplace.sources — adding one", () => {
     )({
       sources: [],
       official: null,
+      tombstones: {},
     }).sources[0];
     expect(written).toMatchObject({
       id: "new",
@@ -776,6 +892,7 @@ describe("marketplace.sources — adding one", () => {
     )({
       sources: [],
       official: null,
+      tombstones: {},
     }).sources[0];
     expect(written).toMatchObject({
       trust: "showcase",
@@ -796,6 +913,167 @@ describe("marketplace.sources — adding one", () => {
   });
 });
 
+describe("marketplace.sources — a removed id added again", () => {
+  const OLD_FP = "dddd".padEnd(64, "d");
+  const NEW_FP = "eeee".padEnd(64, "e");
+  const TOMBSTONE = {
+    publicKey: "old-key",
+    keyFingerprint: OLD_FP,
+    removedAt: "2026-10-01T00:00:00Z",
+  };
+  const verified = (fingerprint: string | null) => ({
+    ok: true,
+    publicKey: fingerprint ? "new-key" : null,
+    fingerprint,
+    index: {
+      source: { id: "old", name: "Old Labs" },
+      expires: "2030-01-01T00:00:00Z",
+      packages: [],
+    },
+  });
+  /** Run the confirm's locked mutate against a pod that remembers `old`. */
+  const mutateWith = (tombstones: Record<string, unknown>) =>
+    (
+      m.update.mock.calls[0]![0] as (c: unknown) => {
+        sources: Array<Record<string, unknown>>;
+        tombstones?: Record<string, unknown>;
+        result: unknown;
+      }
+    )({ sources: [], official: null, tombstones });
+
+  beforeEach(() => {
+    m.fetchIndex.mockResolvedValue({
+      ok: true,
+      indexUrl: "https://old.test/synap-index.json",
+      indexBytes: new Uint8Array(),
+      signature: "sig",
+    });
+    m.read.mockResolvedValue({
+      sources: [],
+      official: null,
+      status: {},
+      tombstones: { old: TOMBSTONE },
+    });
+    m.update.mockImplementation(
+      async (fn: (c: unknown) => { result: unknown }) =>
+        fn({ sources: [], official: null, tombstones: { old: TOMBSTONE } })
+          .result
+    );
+  });
+
+  it("remove remembers the key the id was pinned to, under the same lock", async () => {
+    m.update.mockResolvedValue(null);
+    await caller().sources.remove({ id: "acme" });
+    const out = (
+      m.update.mock.calls[0]![0] as (c: unknown) => {
+        sources: unknown[];
+        tombstones?: Record<string, Record<string, unknown>>;
+      }
+    )({
+      sources: [{ ...ACME.source }],
+      official: null,
+      tombstones: {},
+    });
+    expect(out.sources).toEqual([]);
+    expect(out.tombstones?.acme).toMatchObject({
+      publicKey: "k",
+      keyFingerprint: FP,
+    });
+  });
+
+  it("an unsigned showcase leaves no memory", async () => {
+    m.update.mockResolvedValue(null);
+    await caller().sources.remove({ id: "acme" });
+    const out = (
+      m.update.mock.calls[0]![0] as (c: unknown) => {
+        tombstones?: unknown;
+      }
+    )({
+      sources: [{ ...ACME.source, publicKey: null, keyFingerprint: null }],
+      official: null,
+      tombstones: {},
+    });
+    expect(out.tombstones).toBeUndefined();
+  });
+
+  it("add tells the person the id had another key; the same key is silent", async () => {
+    m.verify.mockReturnValue(verified(NEW_FP));
+    const changed = await caller().sources.add({ url: "https://old.test" });
+    expect(changed).toMatchObject({
+      conflict: null,
+      previousKeyFingerprint: OLD_FP,
+    });
+
+    m.verify.mockReturnValue(verified(OLD_FP));
+    const same = await caller().sources.add({ url: "https://old.test" });
+    expect(same).toMatchObject({
+      conflict: null,
+      previousKeyFingerprint: null,
+    });
+  });
+
+  it("add and confirm refuse an unsigned index for an id a signed source had", async () => {
+    m.verify.mockReturnValue(verified(null));
+    const preview = await caller().sources.add({ url: "https://old.test" });
+    expect(preview.conflict).toMatch(/isn't signed, so it can't take that id/);
+    await expect(
+      caller().sources.confirm({
+        url: "https://old.test",
+        trust: "showcase",
+        keyFingerprint: null,
+      })
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(m.record).not.toHaveBeenCalled();
+  });
+
+  it("a DIFFERENT key: added pinned to the old key, held on the key-change review", async () => {
+    m.verify.mockReturnValue(verified(NEW_FP));
+    await caller().sources.confirm({
+      url: "https://old.test",
+      trust: "trusted",
+      keyFingerprint: NEW_FP,
+    });
+    const out = mutateWith({ old: TOMBSTONE, other: TOMBSTONE });
+    expect(out.result).toBe("key_changed");
+    expect(out.sources[0]).toMatchObject({
+      id: "old",
+      publicKey: "old-key",
+      keyFingerprint: OLD_FP,
+    });
+    // The pinned key now carries the memory.
+    expect(out.tombstones).toEqual({ other: TOMBSTONE });
+    expect(m.record).toHaveBeenCalledWith(
+      "old",
+      expect.objectContaining({
+        state: "key_changed",
+        pendingPublicKey: "new-key",
+        pendingFingerprint: NEW_FP,
+      })
+    );
+    expect(m.syncNow).toHaveBeenCalledWith("old");
+  });
+
+  it("the SAME key: added as usual, no review", async () => {
+    m.verify.mockReturnValue(verified(OLD_FP));
+    await caller().sources.confirm({
+      url: "https://old.test",
+      trust: "trusted",
+      keyFingerprint: OLD_FP,
+    });
+    const out = mutateWith({ old: TOMBSTONE });
+    expect(out.result).toBe("fresh");
+    expect(out.sources[0]).toMatchObject({
+      publicKey: "new-key",
+      keyFingerprint: OLD_FP,
+    });
+    expect(out.tombstones).toEqual({});
+    expect(m.record).toHaveBeenCalledWith(
+      "old",
+      expect.objectContaining({ state: "pending", message: null })
+    );
+  });
+});
+
 describe("marketplace.sources — changing one", () => {
   it("Synap's source can be turned off, never removed", async () => {
     await expect(
@@ -811,6 +1089,7 @@ describe("marketplace.sources — changing one", () => {
     )({
       sources: [],
       official: null,
+      tombstones: {},
     }).official;
     expect(written).toMatchObject({ enabled: false, changedBy: "user-1" });
   });
@@ -845,6 +1124,7 @@ describe("marketplace.sources — changing one", () => {
             },
           ],
           official: null,
+          tombstones: {},
         });
         m.record(out.sources);
         return out.result;
@@ -897,6 +1177,7 @@ describe("marketplace.sources — changing one", () => {
     )({
       sources: [{ ...ACME.source }],
       official: null,
+      tombstones: {},
     }).sources[0];
     expect(written).toMatchObject({
       publicKey: "new-key",

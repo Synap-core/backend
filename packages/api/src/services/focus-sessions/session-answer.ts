@@ -36,7 +36,7 @@
  * reply speaks for is an OPEN founder decision (AI principal). Until it is
  * decided, a non-owner reply is an ordinary room message and nothing more.
  *
- * ── WHO IS WOKEN (M3) ───────────────────────────────────────────────────────
+ * ── WHO IS WOKEN ────────────────────────────────────────────────────────────
  * The agent that ASKED (the question's author), through the ONE turn door
  * `triggerAutoRespond` with its agent type named (session rooms are GROUP
  * rooms, which wake only a named agent). With no question to go on (the direct
@@ -81,7 +81,9 @@ import {
   SLOT_MOVED_ON_PHRASES,
   type AskAnswerValue,
   type AskAnswerRefusalCode,
+  type ProvideSecretGrant,
 } from "@synap-core/types/ask";
+import { vaultSecretIdOf } from "@synap-core/types/vault";
 import {
   ROOM_POST_META_KEY,
   readRoomPostMeta,
@@ -105,6 +107,11 @@ import {
 import { readCriteria } from "@synap/playbooks";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { checkProvideRef } from "./provide-ref.js";
+import {
+  grantProvidedSecret,
+  planProvidedSecretGrant,
+  withdrawProvidedSecretGrant,
+} from "./provide-secret-grant.js";
 import { paramValueFromAnswer } from "./param-slots.js";
 import { criterionVerdictOf } from "./evaluations/record.js";
 import {
@@ -665,11 +672,16 @@ export type AnswerSessionSlotResult =
         recorded: boolean;
         resumed: boolean;
       };
-      /** The `decision` entity this answer filed or updated (W2). */
+      /** The `decision` entity this answer filed or updated. */
       decision?: Extract<
         AnswerExpectedOutputResult,
         { status: "answered" }
       >["decision"];
+      /**
+       * A handed-over SECRET only: whether the agent that asked may now read
+       * it (`@synap-core/types/ask` `ProvideSecretGrant`) — the receipt.
+       */
+      secretGrant?: ProvideSecretGrant;
     };
 
 /**
@@ -696,6 +708,12 @@ export async function answerSessionSlot(p: {
   text?: string;
   value?: AskAnswerValue | SlotAnswerValue;
   askFingerprint?: string;
+  /**
+   * A secret answer: the agent the person was shown as the one who will read
+   * it (`provideOptions`). The read is granted only when it is still the
+   * asker; absent, the server's asker stands alone.
+   */
+  expectedGranteeId?: string;
 }): Promise<AnswerSessionSlotResult> {
   const session = await db.query.focusSessions.findFirst({
     where: and(
@@ -732,10 +750,21 @@ export async function answerSessionSlot(p: {
   const value = resolved.value;
 
   // PROVIDE — the pod's half of the rule: the reference must name a row the
-  // person owns (or, for a file, can see). The shape already refused a
-  // plaintext credential; this refuses someone else's secret.
+  // person owns (or, for a file, can see), and a connection must be for the
+  // asked service. The shape already refused a plaintext credential; this
+  // refuses someone else's secret or another service's connection.
   if (value?.type === "provide") {
-    const check = await checkProvideRef({ userId: p.userId, ref: value.ref });
+    const check =
+      ask?.mode === "provide"
+        ? await checkProvideRef({
+            userId: p.userId,
+            ref: value.ref,
+            asked: ask.provide,
+          })
+        : ({
+            ok: false,
+            message: "This question does not ask you to hand anything over.",
+          } as const);
     if (!check.ok) {
       return {
         status: "ask_invalid",
@@ -750,7 +779,7 @@ export async function answerSessionSlot(p: {
     }
   }
 
-  const text = summary.trim().slice(0, SLOT_ANSWER_TEXT_MAX);
+  let text = summary.trim().slice(0, SLOT_ANSWER_TEXT_MAX);
   if (!text) return { status: "empty_answer" };
 
   // PARAM — the answer becomes the run's param value (`answer-slot.ts`); a
@@ -783,6 +812,40 @@ export async function answerSessionSlot(p: {
     };
   }
 
+  // SECRET — handing it over also lets the agent that asked read it, for this
+  // session (`provide-secret-grant.ts`). Written BEFORE the answer commits so
+  // the receipt says exactly what exists, and taken back below if the commit
+  // is refused. An agent the pod cannot name gets no read; the hand-over
+  // still stands, and the receipt says no agent can read it.
+  let secretGrant: ProvideSecretGrant | undefined;
+  let createdGrantId: string | null = null;
+  if (value?.type === "provide" && value.ref.kind === "secret") {
+    const secretId = vaultSecretIdOf(value.ref.vaultRef);
+    if (secretId) {
+      const plan = await planProvidedSecretGrant({
+        sessionId: session.id,
+        expectedLabel: label,
+        askFingerprint: seenAsk,
+        secretId,
+        ...(p.expectedGranteeId !== undefined
+          ? { expectedGranteeId: p.expectedGranteeId }
+          : {}),
+      });
+      ({ grant: secretGrant, createdGrantId } = await grantProvidedSecret({
+        plan,
+        secretId,
+        ownerId: p.userId,
+        sessionId: session.id,
+        expectedLabel: label,
+      }));
+      text = summarizeAnswer(ask, value, p.text, {
+        secretAccess: { grant: secretGrant, now: Date.now() },
+      })
+        .trim()
+        .slice(0, SLOT_ANSWER_TEXT_MAX);
+    }
+  }
+
   // The answer is said IN the room, as the person, so the conversation the
   // agent reads is whole. The message id is MINTED here and the post lands
   // only AFTER the answer commits: a refusal at the lock (`ask_changed`, an
@@ -813,7 +876,10 @@ export async function answerSessionSlot(p: {
     // A grade keeps the slot the person's: the grade door discharges it.
     ...(verdict ? { handBack: false } : {}),
   });
-  if (answered.status !== "answered") return answered;
+  if (answered.status !== "answered") {
+    await withdrawProvidedSecretGrant(createdGrantId);
+    return answered;
+  }
 
   // Everything below runs AFTER the answer committed, and is best-effort like
   // attest's tail: a failure is logged and reported in the result, never
@@ -931,6 +997,7 @@ export async function answerSessionSlot(p: {
     ...(graded ? { graded } : {}),
     // The decision this answer filed/updated — `failed` said, never hidden.
     ...(answered.decision ? { decision: answered.decision } : {}),
+    ...(secretGrant ? { secretGrant } : {}),
   };
 }
 

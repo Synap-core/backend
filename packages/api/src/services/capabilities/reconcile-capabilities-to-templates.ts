@@ -40,6 +40,7 @@ import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import type { CapabilityDefinition } from "@synap/playbooks";
 
 import { queryCatalogCache } from "./catalog-cache-query.js";
+import { officialCatalogStandingNow } from "./official-catalog-trust.js";
 import {
   loadCapabilityTemplate,
   createCapabilityFromDefinition,
@@ -627,13 +628,27 @@ export async function containersWithChangedTemplates(): Promise<
 
 /**
  * Converge the containers a catalog publish changed — called after every
- * official catalog sync (10 min), so an installed pack picks up a new
- * template version (a reader's `urls`) without a restart. The SAME door as the
+ * official catalog sync (10 min), unless Synap's catalog signature froze it,
+ * so an installed pack picks up a new template version (a reader's `urls`)
+ * without a restart. The SAME door as the
  * boot reconcile (`reconcileCapabilitiesToTemplates`, narrowed to those
  * containers): drift policy, re-approval demotion and stamps are its own.
  * `null` = nothing changed since the last attempt.
  */
 export async function reconcileChangedCapabilityTemplates(): Promise<CapabilityReconcileReport | null> {
+  // Synap's catalog signature: a failed or lapsed signed index pauses every
+  // automatic update (enforced). Nothing is marked attempted, so the
+  // containers converge on the first sync after it verifies again. A single
+  // template the index does not vouch for is refused where it is loaded
+  // (`fetchCPCapabilityTemplate`), and its container is reported skipped.
+  const standing = await officialCatalogStandingNow();
+  if (standing.blocked) {
+    logger.warn(
+      { reason: standing.blocked },
+      "Capability reconcile paused: Synap's catalog signature does not verify"
+    );
+    return null;
+  }
   const changed = (await containersWithChangedTemplates()).filter(
     (c) => attemptedAtHash.get(c.id) !== c.contentHash
   );

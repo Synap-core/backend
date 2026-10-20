@@ -218,8 +218,10 @@ describe("redeemRequest — the invite is the consent", () => {
   const SECRET = "a".repeat(40);
 
   it("asks the rule on the FIRST redeem and says when the invite linked it", async () => {
-    h.getRequest.mockResolvedValue({ status: "awaiting_local_auth" });
-    h.redeemRequest.mockResolvedValue(row({ requesterAccount: VERIFIED }));
+    h.redeemRequest.mockResolvedValue({
+      request: row({ requesterAccount: VERIFIED }),
+      firstRedeem: true,
+    });
     h.consent.mockResolvedValue({
       kind: "approved",
       inviteId: "invite-1",
@@ -246,8 +248,7 @@ describe("redeemRequest — the invite is the consent", () => {
   });
 
   it("leaves it pending when the rule says an owner decides", async () => {
-    h.getRequest.mockResolvedValue({ status: "awaiting_local_auth" });
-    h.redeemRequest.mockResolvedValue(row({}));
+    h.redeemRequest.mockResolvedValue({ request: row({}), firstRedeem: true });
     h.consent.mockResolvedValue({ kind: "owner_review", reason: "unverified" });
     await expect(
       as("pod-user-1").redeemRequest({
@@ -258,8 +259,8 @@ describe("redeemRequest — the invite is the consent", () => {
   });
 
   it("never re-asks on a refresh redeem", async () => {
-    h.getRequest.mockResolvedValue({ status: "pending" });
-    h.redeemRequest.mockResolvedValue(row({}));
+    // The service reports the redeem that did NOT move the request.
+    h.redeemRequest.mockResolvedValue({ request: row({}), firstRedeem: false });
     await as("pod-user-1").redeemRequest({
       requestId: REQUEST,
       redemptionSecret: SECRET,

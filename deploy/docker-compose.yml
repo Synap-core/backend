@@ -80,6 +80,14 @@ x-backend-env: &backend-env
   # Marketplace catalog: the Control Plane above when set, else Synap's public
   # catalog (read anonymously). "off" ⇒ no catalog and no outbound fetch.
   SYNAP_CATALOG_SOURCE: ${SYNAP_CATALOG_SOURCE:-}
+  # Synap's catalog signature (docs/marketplace-source.md, "Synap's own
+  # catalog"). PUBLIC_KEYS: ed25519 keys (base64, comma-separated) that sign
+  # the index of a private mirror or re-signed catalog, instead of Synap's
+  # root keys. ENFORCE_SIGNATURE=1: refuse what does not verify (default:
+  # report only). ALLOW_EXPIRED=1: air-gapped pods accept expired signed files.
+  SYNAP_CATALOG_PUBLIC_KEYS: ${SYNAP_CATALOG_PUBLIC_KEYS:-}
+  SYNAP_CATALOG_ENFORCE_SIGNATURE: ${SYNAP_CATALOG_ENFORCE_SIGNATURE:-}
+  SYNAP_CATALOG_ALLOW_EXPIRED: ${SYNAP_CATALOG_ALLOW_EXPIRED:-}
   # Shared secret for the CP /internal/* push door (project-directory sync).
   # Unset = sync disabled (normal for self-hosted pods).
   SYNAP_POD_INTERNAL_KEY: ${SYNAP_POD_INTERNAL_KEY:-}
@@ -120,6 +128,11 @@ x-backend-env: &backend-env
   SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY: ${SYNAP_LIBRARY_LIGHT_READ_CONCURRENCY:-}
   SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES: ${SYNAP_LIBRARY_LIGHT_READ_EXPIRE_MINUTES:-}
   SYNAP_LIBRARY_READ_AI_PER_DAY: ${SYNAP_LIBRARY_READ_AI_PER_DAY:-}
+  # Request budget per signed-in person (15-minute window) and per client
+  # address across every budget. Empty = the code's default
+  # (apps/api/src/middleware/rate-limit-classes.ts): 3000, and five times that.
+  RATE_LIMIT_CRUD_SESSION_MAX: ${RATE_LIMIT_CRUD_SESSION_MAX:-}
+  RATE_LIMIT_CRUD_IP_CEILING: ${RATE_LIMIT_CRUD_IP_CEILING:-}
   # Mirrored only so the backend can introspect its own courier (SMTP) config
   # in /api/provision/status. Kratos reads this directly via its own service env
   # block below — the backend never sends mail itself; it just reports status.

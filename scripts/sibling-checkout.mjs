@@ -55,7 +55,16 @@ export function siblingCheckout(repo) {
   const known = SIBLINGS[repo];
   if (!known) throw new Error(`unknown sibling repo: ${repo}`);
   const override = process.env[known.env];
-  if (override) return existsSync(override) ? resolve(override) : null;
+  if (override) {
+    if (existsSync(override)) return resolve(override);
+    // An override that points nowhere would otherwise read exactly like "no
+    // checkout here", hiding a typo behind the generic skip/fail message.
+    console.warn(
+      `[sibling-checkout] ${known.env} is set to ${override}, which does not exist; ` +
+        `treating ${repo} as absent.`
+    );
+    return null;
+  }
   for (const root of checkoutRoots()) {
     const parent = dirname(root);
     for (const name of known.names) {

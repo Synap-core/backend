@@ -30,11 +30,6 @@ import {
 } from "@synap/database";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { NotificationStatus } from "@synap/database";
-import {
-  messagingAccounts,
-  MESSAGING_ACCOUNT_PROVIDER_EXPO,
-} from "@synap/database";
-import { MessagingAccountService } from "../services/messaging-account-service.js";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { OBJECT_NAV_VIEWS } from "@synap-core/types/navigation";
@@ -49,6 +44,12 @@ import {
   type PushPrefs,
 } from "@synap-core/types/push";
 import { readPushPrefs, writePushPrefs } from "../notifications/push-prefs.js";
+import {
+  listPushDevices,
+  registerPushDevice,
+  revokePushDevice,
+  unregisterPushDevice,
+} from "../notifications/push-devices.js";
 import { containerNotificationWhere } from "../services/signals/lens-containers.js";
 import { rosterReadFor } from "../access/session-visibility.js";
 
@@ -74,6 +75,21 @@ async function wakeDueSnoozes(userId: string): Promise<void> {
         lte(notifications.snoozedUntil, new Date())
       )
     );
+}
+
+/**
+ * Adding, re-enabling or turning off a phone is the person's act: an agent
+ * key is refused, and any other key is bounded by its grant.
+ */
+async function assertPersonOwnsPhones(agentUserId: string | null | undefined) {
+  if (agentUserId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Only the person can change which phones get their notifications.",
+    });
+  }
+  await assertKeyMayWrite({ subjectType: "preference", action: "update" });
 }
 
 const HANDOFF_NOTIFICATION_TYPE = "handoff.continue";
@@ -501,7 +517,7 @@ export const notifCenterRouter = router({
     return { success: true, cleared: deleted.length > 0 };
   }),
 
-  // ── Push categories (W8) ────────────────────────────────────────────────
+  // ── Push categories ─────────────────────────────────────────────────────
   //
   // `protectedProcedure`: push categories are PERSON-scoped (their pod-wide
   // row), not workspace-scoped — see `notifications/push-prefs.ts`. The floor
@@ -562,10 +578,15 @@ export const notifCenterRouter = router({
   // a lens it does not belong to.
 
   /**
-   * Register or refresh this device's Expo push token. Idempotent: the
-   * (user, provider, external_id) unique index makes a repeat call on the same
-   * device an update, and re-registering a token previously killed by a
-   * `DeviceNotRegistered` receipt flips it back to `connected`.
+   * Register or refresh this phone's Expo push token — the app calls it on
+   * every launch (`everyLaunch: true`), which is what makes "last seen" true.
+   * Answers the row's id and status:
+   *   `connected` — pushes reach this phone;
+   *   `revoked`   — the person turned this phone off from another device. It
+   *                 stays off until they turn push on FROM THIS PHONE, which
+   *                 sends `reenable: true` (`push-devices.ts`).
+   * Only the person: an agent key may not add a delivery address for their
+   * notifications, nor turn a phone back on.
    */
   registerDevice: protectedProcedure
     .input(
@@ -581,76 +602,74 @@ export const notifCenterRouter = router({
         platform: z.enum(["ios", "android"]),
         deviceName: z.string().max(200).optional(),
         appVersion: z.string().max(50).optional(),
+        reenable: z.boolean().optional(),
+        everyLaunch: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
-
-      await MessagingAccountService.upsert({
-        userId,
-        provider: MESSAGING_ACCOUNT_PROVIDER_EXPO,
-        externalId: input.token,
-        displayName: input.deviceName ?? `${input.platform} device`,
-        status: "connected",
-        metadata: {
-          platform: input.platform,
-          ...(input.deviceName ? { deviceName: input.deviceName } : {}),
-          ...(input.appVersion ? { appVersion: input.appVersion } : {}),
-        },
+      await assertPersonOwnsPhones(ctx.agentUserId);
+      const device = await registerPushDevice({
+        userId: requireUserId(ctx.userId),
+        ...input,
       });
-
-      return { success: true };
+      return { success: true, ...device };
     }),
 
   /**
-   * Revoke this device (sign-out, or the user turning push off). Flips `status`
-   * to `disconnected` — never a delete, so the row still absorbs a re-register
-   * on the same device instead of accumulating duplicates. Owner-floored, so it
-   * can only ever touch the caller's own device.
+   * This phone signing out: `disconnected`, never a delete, so the row still
+   * absorbs a re-register on the same device. A phone turned off from
+   * elsewhere stays `revoked`. Owner-floored by the token the phone holds.
    */
   unregisterDevice: protectedProcedure
     .input(z.object({ token: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
-
-      const revoked = await MessagingAccountService.setStatusForUser({
-        userId,
-        provider: MESSAGING_ACCOUNT_PROVIDER_EXPO,
-        externalId: input.token,
-        status: "disconnected",
+      const revoked = await unregisterPushDevice({
+        userId: requireUserId(ctx.userId),
+        token: input.token,
       });
-
       // `revoked: false` means there was nothing to revoke — reported rather
       // than dressed up as a success.
       return { success: true, revoked };
     }),
 
   /**
-   * The caller's registered devices, so a settings screen can show and revoke
-   * them. Floored on the caller's own `userId`; the push TOKEN is deliberately
-   * not returned (it is a delivery credential) — `unregisterDevice` is driven
-   * by the token the device already holds locally.
+   * Stop notifications to one of the caller's phones, from any other device
+   * (the console's `/my-notifications`, or another phone). The phone stays
+   * off until it is turned back on from that phone (`registerDevice` with
+   * `reenable`).
+   *
+   * Owner-floored: only the caller's own phones. Another person's phone and a
+   * missing one answer the SAME `NOT_FOUND` — a pod admin has no reach here.
+   * An agent key is refused: how the person is reached is theirs.
    */
-  listDevices: protectedProcedure.query(async ({ ctx }) => {
-    const userId = requireUserId(ctx.userId);
+  revokeDevice: protectedProcedure
+    .input(z.object({ id: z.string().min(1).max(100) }))
+    .mutation(async ({ ctx, input }) => {
+      await assertPersonOwnsPhones(ctx.agentUserId);
+      const device = await revokePushDevice({
+        userId: requireUserId(ctx.userId),
+        id: input.id,
+      });
+      if (!device) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Phone not found." });
+      }
+      return device;
+    }),
 
-    const rows = await db.query.messagingAccounts.findMany({
-      where: and(
-        eq(messagingAccounts.userId, userId),
-        eq(messagingAccounts.provider, MESSAGING_ACCOUNT_PROVIDER_EXPO)
-      ),
-      columns: {
-        id: true,
-        displayName: true,
-        status: true,
-        metadata: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
-
-    return rows;
-  }),
+  /**
+   * The caller's phones (`PushDeviceRow`, `@synap-core/types/push`): name,
+   * platform, app version, status, last seen. Floored on the caller's own
+   * `userId`; the push TOKEN is never returned (a delivery credential). A
+   * phone passes its own `token` to learn which row is itself.
+   */
+  listDevices: protectedProcedure
+    .input(z.object({ token: z.string().max(300).optional() }).optional())
+    .query(async ({ ctx, input }) =>
+      listPushDevices({
+        userId: requireUserId(ctx.userId),
+        token: input?.token,
+      })
+    ),
 
   /**
    * "Continue on desktop" — ask the caller's OWN desktops to pick up a run.

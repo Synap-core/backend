@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { withoutServerOwnedAutomationMetadata } from "../services/automations/server-metadata.js";
 import { createLogger } from "@synap-core/core";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
@@ -871,7 +872,7 @@ async function insertAutomationAfterGovernance(
         ...(nextRunAt ? { nextRunAt } : {}),
         state: input.state ?? {},
         metadata: {
-          ...(input.metadata ?? {}),
+          ...(withoutServerOwnedAutomationMetadata(input.metadata) ?? {}),
           createdVia:
             input.source === "agent" || input.source === "ai"
               ? ("ai" as const)
@@ -2376,6 +2377,8 @@ export const automationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const database = await getDb();
+      // Server-owned keys never come from the caller — nor reach a proposal.
+      input.metadata = withoutServerOwnedAutomationMetadata(input.metadata);
       // The authenticated agent governs, never only the input (an agent key
       // omitting `agentUserId` must still propose / be bounded by its grant).
       const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
@@ -2512,6 +2515,8 @@ export const automationsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const database = await getDb();
+      // Server-owned keys never come from the caller — nor reach a proposal.
+      input.metadata = withoutServerOwnedAutomationMetadata(input.metadata);
 
       // Load by id ALONE, then gate on the row's real workspace — never the
       // request-supplied workspaceId (that gates nothing).
@@ -2545,7 +2550,7 @@ export const automationsRouter = router({
         workspaceId: existing.workspaceId,
       });
 
-      // D2: an agent moving an automation to `active` proposes the whole update.
+      // An agent moving an automation to `active` proposes the whole update.
       if (input.status === "active" && existing.status !== "active") {
         const { workspaceId: _ws, ...update } = input;
         const proposed = await proposeAgentActivation(
@@ -2808,7 +2813,7 @@ export const automationsRouter = router({
       if (existing.status === "active") {
         return { status: "already_active" };
       }
-      // D2: an agent switching it on proposes; a person activates directly.
+      // An agent switching it on proposes; a person activates directly.
       const proposed = await proposeAgentActivation(ctx.userId, existing);
       if (proposed) return proposed;
 

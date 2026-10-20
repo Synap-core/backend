@@ -293,15 +293,16 @@ export const applicationConnectionsRouter = router({
       try {
         // Redeeming is idempotent (a refresh lands here again): only the
         // first redeem is the ask.
-        const before = await connectionService.getRequest(input.requestId);
-        const request = await connectionService.redeemRequest({
+        const { request, firstRedeem } = await connectionService.redeemRequest({
           requestId: input.requestId,
           redemptionHash: hashOpaqueApplicationConnectionValue(
             input.redemptionSecret
           ),
           requestedByUserId: ctx.userId,
         });
-        if (before?.status !== "awaiting_local_auth") {
+        // Only the redeem that won the service's UPDATE…RETURNING is the ask;
+        // a concurrent or repeated redeem records nothing and links nothing.
+        if (!firstRedeem) {
           return { requestId: request.id, linkedByInvite: false };
         }
         await recordConnectionEvent({

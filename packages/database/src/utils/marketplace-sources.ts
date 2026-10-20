@@ -1,13 +1,15 @@
 /**
  * Marketplace sources — the pod-settings access for the sources a pod admin
- * chose (Pod Console D11). One read for everything the sync and the install
+ * chose. One read for everything the sync and the install
  * door need, one locked read-modify-write for the admin's list, one merge per
  * source for the sync's status.
  *
- * Storage: the singleton `pod_settings.settings` blob, three keys —
- *   marketplaceSources        the admin's list (written under a row lock)
- *   marketplaceOfficialSource the built-in Synap source's on/off switch
- *   marketplaceSourceStatus   per-source sync outcome (written by the worker)
+ * Storage: the singleton `pod_settings.settings` blob, five keys —
+ *   marketplaceSources          the admin's list (written under a row lock)
+ *   marketplaceOfficialSource   the built-in Synap source's on/off switch
+ *   marketplaceSourceTombstones the key each removed id was pinned to (same lock)
+ *   marketplaceSourceStatus     per-source sync outcome (written by the worker)
+ *   officialCatalogSignature    Synap's catalog signature check (the worker)
  * Each write replaces only its own key with `jsonb_set`, so it can never
  * clobber the catalog stamps or any other setting written beside it.
  */
@@ -19,12 +21,16 @@ import {
   type MarketplaceOfficialSourceSetting,
   type MarketplaceSourceSetting,
   type MarketplaceSourceStatus,
+  type MarketplaceSourceTombstone,
+  type OfficialCatalogSignature,
 } from "../schema/pod-settings.js";
 
 export interface MarketplaceSourcesSnapshot {
   sources: MarketplaceSourceSetting[];
   official: MarketplaceOfficialSourceSetting | null;
   status: Record<string, MarketplaceSourceStatus>;
+  tombstones: Record<string, MarketplaceSourceTombstone>;
+  officialSignature: OfficialCatalogSignature | null;
 }
 
 /** Read the whole marketplace-source state. A failed read THROWS — never "no sources". */
@@ -41,22 +47,27 @@ export async function readMarketplaceSources(): Promise<MarketplaceSourcesSnapsh
       : [],
     official: settings.marketplaceOfficialSource ?? null,
     status: settings.marketplaceSourceStatus ?? {},
+    tombstones: settings.marketplaceSourceTombstones ?? {},
+    officialSignature: settings.officialCatalogSignature ?? null,
   };
 }
 
 /**
- * Change the admin-written list (and/or the official switch) atomically: the
- * singleton row is locked, `mutate` sees the CURRENT list, and only the two
- * admin keys are rewritten. `mutate` may throw to refuse the change — nothing
- * is written then.
+ * Change the admin-written list (and/or the official switch, and/or the
+ * removed ids' tombstones) atomically: the singleton row is locked, `mutate`
+ * sees the CURRENT state, and only the admin keys are rewritten — the
+ * tombstones only when `mutate` returns them. `mutate` may throw to refuse the
+ * change — nothing is written then.
  */
 export async function updateMarketplaceSources<T>(
   mutate: (current: {
     sources: MarketplaceSourceSetting[];
     official: MarketplaceOfficialSourceSetting | null;
+    tombstones: Record<string, MarketplaceSourceTombstone>;
   }) => {
     sources: MarketplaceSourceSetting[];
     official: MarketplaceOfficialSourceSetting | null;
+    tombstones?: Record<string, MarketplaceSourceTombstone>;
     result: T;
   }
 ): Promise<T> {
@@ -73,10 +84,14 @@ export async function updateMarketplaceSources<T>(
         ? settings.marketplaceSources
         : [],
       official: settings.marketplaceOfficialSource ?? null,
+      tombstones: settings.marketplaceSourceTombstones ?? {},
     });
     const patch = {
       marketplaceSources: next.sources,
       ...(next.official ? { marketplaceOfficialSource: next.official } : {}),
+      ...(next.tombstones
+        ? { marketplaceSourceTombstones: next.tombstones }
+        : {}),
     };
     if (row) {
       await tx
@@ -125,6 +140,38 @@ export async function recordMarketplaceSourceStatus(
       await db.insert(podSettings).values({
         settings: { marketplaceSourceStatus: { [sourceId]: status } },
       });
+    }
+  } catch {
+    // Observability best-effort — the next sync writes it again.
+  }
+}
+
+/**
+ * Record the official catalog's signature check. Replaces only
+ * `officialCatalogSignature`. Never throws, like the per-source status.
+ */
+export async function recordOfficialCatalogSignature(
+  status: OfficialCatalogSignature
+): Promise<void> {
+  const patch = JSON.stringify({ officialCatalogSignature: status });
+  try {
+    const [existing] = await db
+      .select({ id: podSettings.id })
+      .from(podSettings)
+      .orderBy(podSettings.createdAt)
+      .limit(1);
+    if (existing) {
+      await db
+        .update(podSettings)
+        .set({
+          settings: drizzleSql`coalesce(${podSettings.settings}, '{}'::jsonb) || ${patch}::jsonb`,
+          updatedAt: new Date(),
+        })
+        .where(eq(podSettings.id, existing.id));
+    } else {
+      await db
+        .insert(podSettings)
+        .values({ settings: { officialCatalogSignature: status } });
     }
   } catch {
     // Observability best-effort — the next sync writes it again.

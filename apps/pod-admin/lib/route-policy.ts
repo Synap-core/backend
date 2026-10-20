@@ -66,12 +66,17 @@ export function isSelfService(path: string): boolean {
     // reach — it only stops `pod_admin` being required to manage secrets that
     // are already yours.
     path === "/my-vault" ||
-    // Your OWN computers and the page of each (D9). `machines.list` is floored
+    // Your OWN computers and the page of each. `machines.list` is floored
     // to the computers you approved, and `rename` / `setKeyTtl` / `revoke`
     // re-load the computer and refuse anyone but its owner or a pod admin
     // (`loadManageableMachine`), so this grants no reach.
     path === "/my-computers" ||
     path.startsWith("/my-computers/") ||
+    // Your OWN push settings and phones. `notifCenter.pushPrefs` /
+    // `setPushPrefs` / `listDevices` / `revokeDevice` are floored on the
+    // caller's `userId` (another person's phone answers NOT_FOUND, pod admins
+    // included), so this grants no reach.
+    path === "/my-notifications" ||
     // Your OWN sign-in methods and recovery codes. Every call behind it is
     // scoped to the caller's account; the one owner-only control (Synap Cloud
     // trust) is re-checked by the pod (`PUT /api/account-recovery/cloud-trust`).
@@ -101,7 +106,7 @@ export function isSelfService(path: string): boolean {
 }
 
 /**
- * The console pages a non-admin member may open (D8): Home and Review, plus
+ * The console pages a non-admin member may open: Home and Review, plus
  * `/`, which only redirects to Home. Their data is user-floored server-side
  * (`diagnose.global`, `signals`), so opening them grants no reach — the role
  * only decides which nav the viewer is shown.

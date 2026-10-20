@@ -108,7 +108,7 @@ export function ServiceGroupCard({
             <button
               type="button"
               onClick={onAddToService}
-              className="flex items-center gap-1.5 text-[11.5px] text-foreground/65 hover:text-foreground/70 transition-colors"
+              className="flex items-center gap-1.5 text-[11.5px] text-foreground/65 hover:text-foreground transition-colors"
             >
               <Plus className="h-3 w-3" />
               Add to this service

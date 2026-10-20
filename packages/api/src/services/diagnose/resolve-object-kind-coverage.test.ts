@@ -207,7 +207,9 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
     mockDb.__push(tools, []);
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, []);
-    mockDb.__push(users, [{ one: 1 }]);
+    // The caller's own agent (the read floor's owner branch; the pod-admin
+    // branch is exercised on Postgres in agent-read-floor.pglite.test.ts).
+    mockDb.__push(users, [{ name: "Agent", createdByUserId: USER_ID }]);
     const result = await resolveObjectKind(ID, USER_ID);
     expect(result).toMatchObject({ kind: "agent", id: ID });
   });

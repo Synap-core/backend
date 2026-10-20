@@ -7,8 +7,8 @@
  * Each rule below replaced two local copies that had already drifted:
  *   · {@link askSlotStanding}   — relay showed an old receipt on a re-asked slot
  *   · {@link classifyAskRefusal} — the browser leaked a bare `ask_changed:` code
- *   · {@link askRowRegion}      — relay drew "Answer…" on a provide nobody can
- *                                 answer yet
+ *   · {@link askRowRegion}      — relay drew "Answer…" on a provide its host
+ *                                 could not answer
  *   · {@link actView}           — relay dropped a padded url instead of trimming
  *   · {@link ASK_COPY}          — the two copy tables said different words
  */
@@ -22,7 +22,9 @@ import {
   resolveAskResolution,
   type Ask,
   type AskOption,
+  type AskProvideKind,
   type AskSnapshot,
+  type ProvideConnectUnavailableReason,
 } from "./index.js";
 
 // ─── Copy ───────────────────────────────────────────────────────────────────
@@ -61,8 +63,52 @@ export const ASK_COPY = {
   choseDifferently: "Chose differently from AI",
   /** The overrode mark's detail line, when the recommended option is known. */
   aiPicked: (label: string): string => `AI picked: ${label}`,
+  /** A provide this host has not wired (`askRowRegion` → `none`). */
   provideTitle: "Not answerable here yet",
   provideBody: "Talk it through with the agent.",
+  /** Provide, connection: start a new connection to the asked service. */
+  provideConnect: (service: string): string => `Connect ${service}`,
+  /** Provide, connection: hand over one the person already has. */
+  provideUseExisting: "Use an account you already connected",
+  /** Provide, connection: several accounts, so the person picks one. */
+  provideWhichAccount: "Which account?",
+  /** Provide, connection: why a new connection can't start from this pod. */
+  provideConnectUnavailable: (
+    reason: ProvideConnectUnavailableReason,
+    service: string
+  ): string => {
+    switch (reason) {
+      case "no_broker":
+        return "This pod can't connect accounts yet. A pod admin sets that up.";
+      case "not_offered":
+        return `This pod does not offer a ${service} connection yet. A pod admin can add it.`;
+      default:
+        return "Couldn't check which connections this pod offers. Try again in a moment.";
+    }
+  },
+  /** Provide, connection: an account every member of the pod can use. */
+  provideAccountShared: "Shared with the pod",
+  /** Provide, connection: an account that is signed out (never handed over). */
+  provideAccountNeedsSignIn: "Needs signing in again",
+  /** Provide, connection: the connect flow is open somewhere else. */
+  provideWaitingForConnection: (service: string): string =>
+    `Finish connecting ${service}. This answers itself when it is done.`,
+  /** Provide, file. */
+  provideUpload: "Upload a file",
+  provideLandsIn: (space: string): string => `It will be saved in ${space}.`,
+  /** Provide, secret: pick one already in the person's vault. */
+  providePickSecret: "Pick a secret from your vault",
+  /** Provide, secret: type a new one (only where the host may author it). */
+  provideAddSecret: "Add the secret",
+  /** Provide, secret, on a host that never takes a new secret (the console). */
+  provideAddSecretInApp:
+    "New secrets are added in the Synap app, never typed here.",
+  /** Provide, secret: what handing it over lets the asking agent do. */
+  provideGrantNote: (agent: string, minutes: number): string =>
+    `${agent} will be able to read it for ${minutes} minutes, in this session only.`,
+  /** Provide, secret: the pod could not tell which agent asked. */
+  provideNoGrantNote:
+    "No agent will be able to read it yet. The agent has to ask for access.",
   /**
    * The needs-you row for an undecided agent draft that asks the person
    * something (`draft-asks` signal). Composed ONCE, server-side, into the
@@ -169,19 +215,32 @@ export function classifyAskRefusal(
  *   `inline` — a confirm, or a choose small enough to answer in place.
  *   `detail` — "Answer…" opens the ask's own page (form, wide choose, or a
  *              host that wired no inline answer runner).
- *   `none`   — `provide`: nothing here can hand it over yet, so NO answer
- *              door; the row offers "Talk it through" · "Not mine" only.
+ *   `none`   — a `provide` this host has not wired: NO answer door; the row
+ *              offers "Talk it through" · "Not mine" only.
+ *
+ * A `provide` always answers on its own sheet (`detail`) — a picker, a connect
+ * flow or an upload never fits in a row — and only where the host DECLARES it
+ * can hand that kind over (`canProvide`). A host that declares nothing keeps
+ * `none`, so a client built before provide answers changes nothing.
  */
 export type AskRowRegion = "legacy" | "act" | "inline" | "detail" | "none";
 
+export interface AskRowRegionOptions {
+  canAnswer: boolean;
+  /** The provide kinds this host can hand over. Absent ⇒ none of them. */
+  canProvide?: Partial<Record<AskProvideKind, boolean>>;
+}
+
 export function askRowRegion(
   ask: Ask | null | undefined,
-  options: { canAnswer: boolean }
+  options: AskRowRegionOptions
 ): AskRowRegion {
   const resolution = resolveAskResolution(ask);
   if (!ask || resolution === "legacy") return "legacy";
   if (resolution === "attest") return "act";
-  if (ask.mode === "provide") return "none";
+  if (ask.mode === "provide") {
+    return options.canProvide?.[ask.provide.kind] === true ? "detail" : "none";
+  }
   return options.canAnswer && askAnswersInline(ask) ? "inline" : "detail";
 }
 

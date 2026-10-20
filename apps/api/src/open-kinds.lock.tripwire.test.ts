@@ -4,14 +4,16 @@ import { describe, expect, it } from "vitest";
 import {
   OPEN_CLIENT_MOBILE,
   OPEN_CLIENT_PARAM,
+  OPEN_FLOW_TYPE_VALUES,
   TYPED_OPEN_KINDS,
   WEB_HOSTED_OPEN_KINDS,
 } from "./open-dispatch.js";
 import { stripComments } from "../../../scripts/strip-comments.mjs";
 
 // Frozen copy of pod-admin HOST_TYPES ∪ BOUNCE_TYPES (open-params.ts).
-// `automation` / `session` are HOST kinds: the console hosts them on the web
-// and `dispatchOpen` 302s humans there.
+// The operational kinds (automation, session, playbook, run, capability,
+// agent) are HOST kinds: the console hosts them on the web and `dispatchOpen`
+// 302s humans there. So are `document` and `channel` (read-only bodies).
 // Do not import that file from apps/api — tsc rootDir cannot leave src/.
 // If you change either list, update both this snapshot and open-params.ts.
 const POD_ADMIN_HOST_TYPES = [
@@ -19,21 +21,21 @@ const POD_ADMIN_HOST_TYPES = [
   "view",
   "automation",
   "session",
+  "playbook",
+  "run",
+  "capability",
+  "agent",
+  "document",
+  "channel",
 ] as const;
 const POD_ADMIN_BOUNCE_TYPES = [
   "proposal",
-  "document",
   "cell",
-  "channel",
   "project",
   "workspace",
-  "capability",
   "settings",
   "skill",
   "tool",
-  "playbook",
-  "agent",
-  "run",
 ] as const;
 
 // Frozen copy of TYPED_DEEP_LINK_KINDS (packages/api/src/utils/deep-links.ts).
@@ -196,5 +198,44 @@ describe("open route cache headers", () => {
 
   it("passes the device discriminator through from the query string", () => {
     expect(body).toContain("client: c.req.query(OPEN_CLIENT_PARAM)");
+  });
+
+  it("passes the view and a run's flow type through from the query string", () => {
+    expect(body).toContain('view: c.req.query("view")');
+    expect(body).toContain('flowType: c.req.query("flowType")');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OPEN_FLOW_TYPE_VALUES == the `runs.get` flowType enum.
+//
+// A run link forwards `?flowType=` only when it is one of these values. A flow
+// type added to `runs.ts` and missing here would be silently dropped from every
+// such link (the app then opens the automation reader); one removed there would
+// be forwarded to a door that refuses it. Parsed off `runs.ts` for the rootDir
+// reason above.
+// ---------------------------------------------------------------------------
+
+const RUNS_ROUTER_PATH = fileURLToPath(
+  new URL("../../../packages/api/src/routers/runs.ts", import.meta.url)
+);
+
+function parseFlowTypeEnum(source: string): string[] | null {
+  const m = /const flowType = z\.enum\(\[([^\]]*)\]\)/.exec(
+    stripComments(source, "ts")
+  );
+  if (!m) return null;
+  return [...m[1]!.matchAll(/"([a-z_]+)"/g)].map((v) => v[1]!);
+}
+
+describe("open flow types lock", () => {
+  it("OPEN_FLOW_TYPE_VALUES equals the runs.get flowType enum", () => {
+    const values = parseFlowTypeEnum(readFileSync(RUNS_ROUTER_PATH, "utf8"));
+    expect(
+      values,
+      "`const flowType = z.enum([...])` not found in runs.ts — did it move?"
+    ).not.toBeNull();
+    expect(values!.length).toBeGreaterThan(1);
+    expect([...OPEN_FLOW_TYPE_VALUES].sort()).toEqual([...values!].sort());
   });
 });

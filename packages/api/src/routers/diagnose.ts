@@ -22,6 +22,7 @@ import {
 } from "@synap/database";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { isSignedInPerson } from "../utils/signed-in-person.js";
 import { diagnoseGlobal } from "../services/diagnose/index.js";
 import {
   agentScorecard,
@@ -84,7 +85,9 @@ export const diagnoseRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       try {
-        return await resolveOpenTarget(input.id, userId);
+        return await resolveOpenTarget(input.id, userId, {
+          signedInPerson: isSignedInPerson(ctx),
+        });
       } catch (err) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -103,7 +106,11 @@ export const diagnoseRouter = router({
     .input(z.object({ agentId: z.string() }))
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      return agentScorecard({ userId, agentId: input.agentId });
+      return agentScorecard({
+        userId,
+        agentId: input.agentId,
+        signedInPerson: isSignedInPerson(ctx),
+      });
     }),
 
   /**
@@ -114,7 +121,11 @@ export const diagnoseRouter = router({
     .input(z.object({ agentId: z.string() }))
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      return agentProfile({ userId, agentId: input.agentId });
+      return agentProfile({
+        userId,
+        agentId: input.agentId,
+        signedInPerson: isSignedInPerson(ctx),
+      });
     }),
 
   /**

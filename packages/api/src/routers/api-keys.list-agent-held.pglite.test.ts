@@ -246,3 +246,43 @@ describe("apiKeys.adminListAll — a space key says which space", () => {
     expect(keys.find((k) => k.id === OWN_KEY)?.workspaceId).toBeNull();
   });
 });
+
+describe("apiKeys.adminListAll({ workspaceId }) — only keys confined to that space", () => {
+  // Rules out: the space's API keys tab listing every key a member owns,
+  // their pod-wide keys and their keys confined to OTHER spaces included.
+  it("lists the space's own keys, not a member's pod-wide or other-space key", async () => {
+    const SPACE = randomUUID();
+    const OTHER_SPACE = randomUUID();
+    const MEMBER = "space-member-1";
+    const inSpace = randomUUID();
+    const podWide = randomUUID();
+    const elsewhere = randomUUID();
+    await h.client!.query(
+      `insert into workspace_members (id, workspace_id, user_id, role)
+       values (gen_random_uuid(), $1, $2, 'editor')`,
+      [SPACE, MEMBER]
+    );
+    await addKey(inSpace, MEMBER, null);
+    await addKey(podWide, MEMBER, null);
+    await addKey(elsewhere, MEMBER, null);
+    await h.client!.query(
+      `update api_keys set workspace_id = $2 where id = $1`,
+      [inSpace, SPACE]
+    );
+    await h.client!.query(
+      `update api_keys set workspace_id = $2 where id = $1`,
+      [elsewhere, OTHER_SPACE]
+    );
+
+    const keys = await caller("pod-admin-1").adminListAll({
+      workspaceId: SPACE,
+    });
+    expect(keys.map((k) => k.id)).toEqual([inSpace]);
+  });
+
+  it("refuses a caller who is not a pod admin", async () => {
+    await expect(
+      caller(HUMAN).adminListAll({ workspaceId: randomUUID() })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});

@@ -1,8 +1,9 @@
 /**
  * The ONE write of a direct vault redeem grant — shared by the direct door
- * (`hub-protocol/rest/vault.ts` POST /vault/secrets/:id/grant, human owner) and
+ * (`hub-protocol/rest/vault.ts` POST /vault/secrets/:id/grant, human owner),
  * its approval half (`vault/grant` executor, after a human approved an agent's
- * request). Keeping one function means the approved grant is byte-for-byte the
+ * request) and a secret handed over for an ask (`provide-secret-grant.ts`, the
+ * session read for the agent that asked). Keeping one function means the approved grant is byte-for-byte the
  * grant the owner would have made directly.
  */
 
@@ -19,6 +20,12 @@ export interface VaultSecretGrantInput {
   /** Session TTL in minutes (scope 'session' only; default 60). */
   ttlMinutes?: number | null;
   createdBy: string;
+  /**
+   * Reuse only an identical PERMANENT grant. A caller that ties its grant to
+   * something that ends (a session) writes its own instead of borrowing one
+   * whose end is someone else's.
+   */
+  reusePermanentOnly?: boolean;
 }
 
 export interface VaultSecretGrantResult {
@@ -68,7 +75,9 @@ export async function applyVaultSecretGrant(
     input.grantedTo,
     input.workspaceId
   );
-  if (reused) return reused;
+  if (reused && (!input.reusePermanentOnly || reused.scope === "permanent")) {
+    return reused;
+  }
 
   const now = Date.now();
   let expiresAt: Date | null;
@@ -104,4 +113,16 @@ export async function applyVaultSecretGrant(
     scope: input.scope,
     expiresAt: expiresAt ? expiresAt.toISOString() : null,
   };
+}
+
+/**
+ * Revoke one grant by id (idempotent). For a caller that wrote a grant and
+ * must take it back because the act it belonged to was refused — the owner's
+ * own revoke door (`secretsVault.revokeGrant`) applies the owner check first.
+ */
+export async function revokeVaultSecretGrant(grantId: string): Promise<void> {
+  await db
+    .update(vaultGrants)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(vaultGrants.id, grantId), isNull(vaultGrants.revokedAt)));
 }

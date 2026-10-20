@@ -100,6 +100,10 @@
       "types": "./dist/account-recovery/index.d.ts",
       "import": "./dist/account-recovery/index.js"
     },
+    "./console": {
+      "types": "./dist/console/index.d.ts",
+      "import": "./dist/console/index.js"
+    },
     "./service-marks": {
       "types": "./dist/service-marks/index.d.ts",
       "import": "./dist/service-marks/index.js"

@@ -51,6 +51,7 @@ const ACCOUNT_LINKS: { page: AccountPage; label: string }[] = [
 const PERSONAL_LINKS: { href: string; label: string }[] = [
   { href: "/my-connections", label: "My connections" },
   { href: "/my-computers", label: "My computers" },
+  { href: "/my-notifications", label: "My notifications" },
   { href: "/my-vault", label: "My vault" },
 ];
 
@@ -75,7 +76,7 @@ export function TopNav({
 }: TopNavProps) {
   const role = useConsoleRole();
   const initials = (operatorEmail ?? "?").charAt(0).toUpperCase();
-  // R3: a persistent ⚠ until recovery codes are saved (the Overview card is
+  // A persistent ⚠ until recovery codes are saved (the Overview card is
   // skippable; this mark is not).
   const codesMissing = useRecoveryCodesState() === "not_set";
 

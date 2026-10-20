@@ -15,7 +15,12 @@ import {
 } from "@synap-core/types/marketplace-source";
 import { formatDate, formatRelative } from "../../../../lib/format";
 import type { StatusKind } from "../../components/status-pill";
-import type { CatalogDetail, MarketPreflight, MarketSource } from "./types";
+import type {
+  CatalogDetail,
+  MarketPreflight,
+  MarketSource,
+  SourcePreview,
+} from "./types";
 
 /** The chip word for a trust level. */
 export function trustLabel(trust: MarketplaceTrust): string {
@@ -115,6 +120,18 @@ export function trustConsequenceLine(
     : "You install its packages after a check; agents can't install from it.";
 }
 
+/**
+ * Adding an id a removed source used, under another key: what the person is
+ * told before they confirm (the pod then holds it for a key review), or null.
+ */
+export function reAddKeyNotice(
+  preview: Pick<SourcePreview, "id" | "previousKeyFingerprint">
+): string | null {
+  const previous = formatKeyFingerprint(preview.previousKeyFingerprint);
+  if (!previous) return null;
+  return `A source you removed used the id "${preview.id}" with a different signing key (${previous}). If you add this one, nothing installs from it until you compare its key and approve it.`;
+}
+
 /** The one action a row offers, by what the source needs most. */
 export type SourceRowAction = "review_key" | "turn_on" | "sync" | null;
 
@@ -126,15 +143,21 @@ export function sourceRowAction(
   return "sync";
 }
 
-/** The Catalog's source filter: one chip per source that has anything listed. */
+/**
+ * The Catalog's source filter: one chip per source that has anything listed.
+ * Synap's catalog stays listed while its signature check pauses installs, so
+ * its chip stays too.
+ */
 export function catalogSourceChips(
   sources: Pick<
     MarketSource,
-    "id" | "name" | "enabled" | "blocked" | "packageCount"
+    "id" | "name" | "enabled" | "blocked" | "packageCount" | "official"
   >[]
 ): { key: string; label: string }[] {
   return sources
-    .filter((s) => s.enabled && !s.blocked && s.packageCount > 0)
+    .filter(
+      (s) => s.enabled && (!s.blocked || s.official) && s.packageCount > 0
+    )
     .map((s) => ({ key: s.id, label: s.name }));
 }
 
@@ -159,14 +182,29 @@ export function installMode(
   return { kind: "install" };
 }
 
+/** "Gmail" / "Gmail and Slack" / "Gmail, Notion and Slack". */
+function joinNames(names: string[]): string {
+  return names.length < 2
+    ? (names[0] ?? "")
+    : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/** "my existing Gmail connection" / "my existing Gmail and Slack connections". */
+function existingConnections(names: string[], owner: "my" | "your"): string {
+  return `${owner} existing ${joinNames(names)} connection${names.length === 1 ? "" : "s"}`;
+}
+
+/** One extra confirm the install asks for — a key of `requires`. */
+export type ConfirmKey = "code" | "network" | "connectors";
+
 /**
  * The extra confirms a trusted source's package needs before Install is
  * enabled — the same `requires` the pod enforces, worded for a checkbox.
  */
 export function confirmItems(
   preflight: Pick<MarketPreflight, "requires" | "risks" | "sourceName">
-): { key: "code" | "network"; label: string }[] {
-  const items: { key: "code" | "network"; label: string }[] = [];
+): { key: ConfirmKey; label: string }[] {
+  const items: { key: ConfirmKey; label: string }[] = [];
   if (preflight.requires.code) {
     items.push({
       key: "code",
@@ -185,6 +223,15 @@ export function confirmItems(
           : "I accept that it may reach other sites on the internet.",
     });
   }
+  if (preflight.requires.connectors) {
+    items.push({
+      key: "connectors",
+      label:
+        preflight.risks.connections.length > 0
+          ? `I accept that it can use ${existingConnections(preflight.risks.connections, "my")}.`
+          : "I accept that it may use connections my pod already has.",
+    });
+  }
   return items;
 }
 
@@ -192,7 +239,7 @@ export function confirmItems(
 export function riskLines(
   risks: Pick<
     MarketPreflight["risks"],
-    "code" | "networkHosts" | "connectors"
+    "code" | "networkHosts" | "connectors" | "connections"
   > & {
     incomplete?: boolean;
   }
@@ -207,6 +254,9 @@ export function riskLines(
   }
   if (risks.connectors.length > 0) {
     lines.push(`Connects: ${risks.connectors.join(", ")}`);
+  }
+  if (risks.connections.length > 0) {
+    lines.push(`Uses ${existingConnections(risks.connections, "your")}`);
   }
   return lines;
 }

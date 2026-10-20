@@ -108,6 +108,7 @@ import {
   notifications,
   notificationPreferences,
   users,
+  vaultGrants,
 } from "@synap/database";
 import {
   completeFocusSession,
@@ -140,6 +141,7 @@ beforeAll(async () => {
     notifications,
     notificationPreferences,
     users,
+    vaultGrants,
   ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   await h.client!.query(
@@ -205,6 +207,48 @@ describe("a session's run follows the session's close status", () => {
       expect(row!.error).toBe(error);
       expect(row!.completed_at).not.toBeNull();
       expect(h.settled).toEqual([{ playbookRunId: runId }]);
+    }
+  );
+});
+
+describe("a session's close takes back the reads granted IN it", () => {
+  it.each(["closed", "cancelled"] as const)(
+    "closes as %s => the provide answer's read is revoked, another one is not",
+    async (close) => {
+      const grant = async () => {
+        const id = randomUUID();
+        await q(
+          `insert into vault_grants (id, grantable_type, grantable_id, granted_to, scope, expires_at, created_by)
+           values ($1, 'secret', $2, 'agent-1', 'session', now() + interval '60 minutes', $3)`,
+          [id, randomUUID(), USER]
+        );
+        return id;
+      };
+      const mine = await grant();
+      const elsewhere = await grant();
+      const sessionId = randomUUID();
+      await q(
+        `insert into focus_sessions (id, user_id, goal, title, status, expected_outputs, agent_ids, metadata, created_at, updated_at, started_at)
+         values ($1, $2, 'Ship', 'Ship', 'active', '[]'::jsonb, '{}', $3::jsonb, now(), now(), now())`,
+        [sessionId, USER, JSON.stringify({ provideGrants: [mine] })]
+      );
+
+      await completeFocusSession({
+        sessionId,
+        userId: USER,
+        terminalStatus: close,
+      });
+
+      const revoked = new Map(
+        (
+          await q<{ id: string; revoked_at: string | null }>(
+            `select id, revoked_at from vault_grants where id = any($1)`,
+            [[mine, elsewhere]]
+          )
+        ).rows.map((r) => [r.id, r.revoked_at])
+      );
+      expect(revoked.get(mine)).not.toBeNull();
+      expect(revoked.get(elsewhere)).toBeNull();
     }
   );
 });
