@@ -43,6 +43,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Full history: the final step rebases the bump commit onto a main that
+          # moved during the run (a shallow clone has no merge base to rebase on).
+          fetch-depth: 0
 
       # Version comes from the repo's `packageManager: pnpm@10.28.0`, which pins
       # it MORE precisely than a `version: 10` input would. Passing both makes
@@ -93,8 +97,22 @@ jobs:
       - name: Build @synap/api (and its workspace dependencies)
         run: pnpm turbo run build --filter=@synap/api
 
-      - name: Auto-bump @synap-core/types (patch)
-        run: cd packages/types && npm version patch --no-git-tag-version
+      # Bump to the next patch NOT already on npm. A run that published but
+      # failed to push its bump commit would otherwise re-bump to a version npm
+      # already holds and fail with "cannot publish over an existing version".
+      # `npm view` of a missing version exits 0 with no output on some npm
+      # versions and 1 on others, so "published" is decided on the output.
+      - name: Bump @synap-core/types to the next unpublished patch
+        run: |
+          cd packages/types
+          published() { [ -n "$(npm view "@synap-core/types@$1" version 2>/dev/null)" ]; }
+          npm version patch --no-git-tag-version >/dev/null
+          V=$(node -p "require('./package.json').version")
+          while published "$V"; do
+            npm version patch --no-git-tag-version >/dev/null
+            V=$(node -p "require('./package.json').version")
+          done
+          echo "@synap-core/types -> $V"
 
       # ONE bump authority for @synap-core/api-types (was: this workflow's own
       # blind `npm version patch`, uncoordinated with
@@ -112,14 +130,31 @@ jobs:
         id: bump-api-types
         run: |
           cd packages/api-types
+          published() { [ -n "$(npm view "@synap-core/api-types@$1" version 2>/dev/null)" ]; }
           BEFORE=$(node -p "require('./package.json').version")
           node scripts/check-and-bump.mjs
-          AFTER=$(node -p "require('./package.json').version")
-          if [ "$BEFORE" = "$AFTER" ]; then
-            echo "bumped=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "bumped=true" >> "$GITHUB_OUTPUT"
+          V=$(node -p "require('./package.json').version")
+          # Publish iff the version in the repo is not on npm yet. An unchanged
+          # surface whose version was never published (a release that failed
+          # mid-way, or a hand bump) must still go out; a surface change bumped
+          # onto a version npm already holds moves on to the next free patch.
+          if published "$V"; then
+            if [ "$BEFORE" = "$V" ]; then
+              echo "@synap-core/api-types $V is already on npm and unchanged: nothing to publish"
+              echo "bumped=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            while published "$V"; do
+              npm version patch --no-git-tag-version >/dev/null
+              V=$(node -p "require('./package.json').version")
+            done
           fi
+          # Keep every hard-coded copy of the version in lock-step with the
+          # package (check-and-bump only writes them when it bumps).
+          perl -pi -e 's/(API_TYPES_VERSION = ")[^"]+/${1}'"$V"'/' src/version.ts
+          perl -pi -e 's/(apiTypesVersion: ")[^"]+/${1}'"$V"'/' ../../apps/api/src/index.ts
+          echo "@synap-core/api-types -> $V"
+          echo "bumped=true" >> "$GITHUB_OUTPUT"
 
       - name: Build api-types package
         run: cd packages/api-types && pnpm build
@@ -193,4 +228,9 @@ jobs:
                   packages/api-types/src/generated.d.ts \
                   apps/api/src/index.ts
           git commit -m "chore: auto-publish type packages [skip ci]" || true
-          git push
+          # main moves during a run: rebase the bump commit onto it, retry twice.
+          for attempt in 1 2 3; do
+            git pull --rebase origin main && git push origin HEAD:main && break
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep 10
+          done
