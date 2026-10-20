@@ -173,7 +173,7 @@ case "$1" in
       *pg_database_size*) echo 100 ;;
       *pg_terminate_backend*) : ;;
       *"from pg_database where datname="*)
-        n="$(echo "$*" | sed -n "s/.*datname='\([^']*\)'.*/\1/p")"; grep -qx "$n" "$FAKE_DBS" && echo 1 ;;
+        n="$(echo "$*" | sed -n "s/.*datname='\([^']*\)'.*/\1/p")"; grep -qx "$n" "$FAKE_DBS" && echo 1 || echo 0 ;;
       *"alter database "*" rename to "*)
         a="$(echo "$*" | sed -n 's/.*alter database "\([^"]*\)" rename to.*/\1/p')"; b="$(echo "$*" | sed -n 's/.*rename to "\([^"]*\)".*/\1/p')"
         { grep -vx "$a" "$FAKE_DBS"; echo "$b"; } > "$FAKE_DBS.n"; mv "$FAKE_DBS.n" "$FAKE_DBS"; echo "EVENT rename $a $b" >> "$CALLS" ;;
