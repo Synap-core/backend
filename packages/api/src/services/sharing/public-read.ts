@@ -109,6 +109,56 @@ export function projectPublishedProperties(
   return out;
 }
 
+/**
+ * The snapshot as served: re-filtered by {@link projectPublishedProperties},
+ * with `title` lifted out (served only when the snapshot allowlisted it).
+ */
+export function publicTitleAndProperties(snapshot: unknown): {
+  title?: string;
+  properties: Record<string, string | number | boolean>;
+} {
+  const properties = projectPublishedProperties(snapshot);
+  const title =
+    typeof properties.title === "string" ? properties.title : undefined;
+  delete properties.title;
+  return { ...(title !== undefined ? { title } : {}), properties };
+}
+
+/**
+ * The body of a publication's PINNED checkpoint, ids redacted. `ok: false`
+ * when the pin is not a checkpoint of THIS entity's document — serving it
+ * would serve another record's body, so the caller refuses the whole read
+ * rather than guess. No pin = no body. Throws on a failed read.
+ */
+export async function readPinnedBody(
+  pinId: string | null,
+  entityDocumentId: string | null
+): Promise<
+  | { ok: true; body: { format: "markdown"; content: string } | null }
+  | { ok: false }
+> {
+  if (!pinId) return { ok: true, body: null };
+  const [version] = await db
+    .select({
+      documentId: documentVersions.documentId,
+      content: documentVersions.content,
+      storageKey: documentVersions.storageKey,
+      mimeType: documentVersions.mimeType,
+    })
+    .from(documentVersions)
+    .where(eq(documentVersions.id, pinId))
+    .limit(1);
+  if (!version || !entityDocumentId) return { ok: false };
+  if (version.documentId !== entityDocumentId) return { ok: false };
+  const content = await readDocumentVersionContent(version);
+  // Realtime (Yjs) state is not document text; never serve it.
+  if (content.startsWith("yjs:")) return { ok: true, body: null };
+  return {
+    ok: true,
+    body: { format: "markdown", content: redactInternalIds(content) },
+  };
+}
+
 export interface PublicShareView {
   resourceType: "entity";
   /** Present only when the snapshot allowlisted `title`. */
@@ -155,6 +205,7 @@ export async function readPublishedShare(
       publishedAt: resourceShares.publishedAt,
       publishedProperties: resourceShares.publishedProperties,
       publishedDocumentVersionId: resourceShares.publishedDocumentVersionId,
+      siteShareId: resourceShares.siteShareId,
     })
     .from(resourceShares)
     .where(eq(resourceShares.tokenHash, tokenHash))
@@ -183,35 +234,18 @@ export async function readPublishedShare(
     .limit(1);
   if (!entity || entity.deletedAt) return null;
 
-  let body: PublicShareView["body"] = null;
-  if (row.publishedDocumentVersionId) {
-    const [version] = await db
-      .select({
-        documentId: documentVersions.documentId,
-        content: documentVersions.content,
-        storageKey: documentVersions.storageKey,
-        mimeType: documentVersions.mimeType,
-      })
-      .from(documentVersions)
-      .where(eq(documentVersions.id, row.publishedDocumentVersionId))
-      .limit(1);
-    // A pin that is not a checkpoint of THIS entity's document would serve
-    // another record's body: refuse the whole share rather than guess.
-    if (!version || !entity.documentId) return null;
-    if (version.documentId !== entity.documentId) return null;
-    const content = await readDocumentVersionContent(version);
-    // Realtime (Yjs) state is not document text; never serve it.
-    if (!content.startsWith("yjs:")) {
-      body = { format: "markdown", content: redactInternalIds(content) };
-    }
-  }
+  const pinned = await readPinnedBody(
+    row.publishedDocumentVersionId,
+    entity.documentId
+  );
+  if (!pinned.ok) return null;
+  const body = pinned.body;
 
   if (!(await publicDoorsOpenFor(row.workspaceId))) return { closed: true };
 
-  const properties = projectPublishedProperties(row.publishedProperties);
-  const title =
-    typeof properties.title === "string" ? properties.title : undefined;
-  delete properties.title;
+  const { title, properties } = publicTitleAndProperties(
+    row.publishedProperties
+  );
 
   const view: PublicShareView = {
     resourceType: "entity",

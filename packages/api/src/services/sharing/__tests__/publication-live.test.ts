@@ -31,9 +31,9 @@ const LIVE: PublicationLiveInput = {
 
 describe("isPublicationLive", () => {
   it("a published, unrevoked, unexpired entity with a url is live (positive control)", () => {
-    expect(isPublicationLive(LIVE, NOW)).toBe(true);
+    expect(isPublicationLive(LIVE, { now: NOW })).toBe(true);
     expect(
-      isPublicationLive({ ...LIVE, expiresAt: new Date(NOW + 1) }, NOW)
+      isPublicationLive({ ...LIVE, expiresAt: new Date(NOW + 1) }, { now: NOW })
     ).toBe(true);
   });
 
@@ -48,9 +48,51 @@ describe("isPublicationLive", () => {
   ] as Array<[string, Partial<PublicationLiveInput>]>)(
     "%s ⇒ not live",
     (_l, patch) => {
-      expect(isPublicationLive({ ...LIVE, ...patch }, NOW)).toBe(false);
+      expect(isPublicationLive({ ...LIVE, ...patch }, { now: NOW })).toBe(
+        false
+      );
     }
   );
+});
+
+describe("isPublicationLive via a site (a MEMBER row of a site, C1b)", () => {
+  const MEMBER = { ...LIVE, hasToken: false, siteShareId: "site-1" };
+
+  it("a published member row is live through its site with NO token of its own (positive control)", () => {
+    expect(isPublicationLive(MEMBER, { via: "site", now: NOW })).toBe(true);
+  });
+
+  it.each([
+    ["a standalone row (no site)", { siteShareId: null }],
+    ["revoked", { revokedAt: new Date(NOW) }],
+    ["expired", { expiresAt: new Date(NOW) }],
+    ["unpublished (draft)", { state: "draft" }],
+    ["no publishedAt", { publishedAt: null }],
+    ["not an entity", { resourceType: "project" }],
+    ["not a public row", { audience: "link" }],
+  ] as Array<[string, Record<string, unknown>]>)(
+    "%s ⇒ not live via the site",
+    (_l, patch) => {
+      expect(
+        isPublicationLive({ ...MEMBER, ...patch } as typeof MEMBER, {
+          via: "site",
+          now: NOW,
+        })
+      ).toBe(false);
+    }
+  );
+
+  it("a member row is never live through a TOKEN, even one planted on it (the W3 door never serves a member)", () => {
+    expect(isPublicationLive({ ...MEMBER, hasToken: true }, { now: NOW })).toBe(
+      false
+    );
+    expect(
+      isPublicationLive(
+        { ...MEMBER, hasToken: true },
+        { via: "token", now: NOW }
+      )
+    ).toBe(false);
+  });
 });
 
 describe("isSiteLive (a SITE row: public project, not a member)", () => {
@@ -80,7 +122,7 @@ describe("isSiteLive (a SITE row: public project, not a member)", () => {
   );
 
   it("a site row is never a live W3 publication (its token 404s on /public/shares)", () => {
-    expect(isPublicationLive(SITE, NOW)).toBe(false);
+    expect(isPublicationLive(SITE, { now: NOW })).toBe(false);
   });
 });
 

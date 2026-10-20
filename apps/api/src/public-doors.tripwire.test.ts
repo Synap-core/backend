@@ -423,8 +423,28 @@ describe("public doors — every route under the prefix is covered by the ONE pr
     // Non-vacuity: the legacy projection and at least the share read exist.
     expect(routes.some((r) => r.route === "/public/projection")).toBe(true);
     expect(doors.some((r) => r.route === "/public/shares/:token")).toBe(true);
+    // The site doors (collection door C1b) are reads: the `public_read` class.
+    const siteDoors = doors.filter((r) => r.route.startsWith("/public/sites/"));
+    expect(siteDoors.map((r) => r.route).sort()).toEqual([
+      "/public/sites/:siteToken",
+      "/public/sites/:siteToken/collections/:key",
+      "/public/sites/:siteToken/collections/:key/:slugOrPublicId",
+    ]);
+    for (const { method, route } of siteDoors) {
+      expect(method, route).toBe("get");
+      for (const mount of ["/api/hub", "/api/hub-protocol"]) {
+        expect(
+          classifyRateLimitPath(mount + route.replace(/:\w+/g, "seg"), "GET"),
+          route
+        ).toBe("public_read");
+      }
+    }
     for (const { method, route, file } of doors) {
-      const concrete = route.replace(/:[A-Za-z_]+/g, "sample-capability-123");
+      // The FIRST param is the capability (the secret the logs must redact);
+      // later ones (a collection key, a public address) are public names.
+      const concrete = route
+        .replace(/:[A-Za-z_]+/, "sample-capability-123")
+        .replace(/:[A-Za-z_]+/g, "public-segment");
       for (const mount of ["/api/hub", "/api/hub-protocol"]) {
         const full = mount + concrete;
         expect(isPublicDoorPath(full), `${file} ${route}`).toBe(true);
