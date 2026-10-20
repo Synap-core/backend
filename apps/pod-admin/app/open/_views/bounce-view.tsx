@@ -18,7 +18,8 @@
  *
  * A kind the console also has an admin page for (a space) offers a pod admin
  * that page beside the app link ("See this space here"). A member is not
- * offered it: the page is pod-admin only and would answer /forbidden.
+ * offered it: the page is pod-admin only and would answer /forbidden
+ * (`objectWebAlternative` asks the console's audience rule).
  */
 
 import { Button } from "@heroui/react";
@@ -78,9 +79,11 @@ export function BounceView({
   ];
 
   const noun = labelForOpenType(type);
-  const consolePage = viewerIsPodAdmin
-    ? objectWebAlternative(type, id)
-    : undefined;
+  const consolePage = objectWebAlternative(
+    type,
+    id,
+    viewerIsPodAdmin ? "admin" : "member"
+  );
   return (
     <OpenObject
       header={{

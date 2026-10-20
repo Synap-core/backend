@@ -29,16 +29,20 @@
  * mis-routes the rest. Every desktop exit says what a phone does with it
  * (`phone`), from ONE table (`RELAY_OPENABLE_KINDS`), and `placeExit` turns
  * that into what the device shows: the link with the mobile install hatch, or
- * an honest "open this on your computer" with a web page when one covers it.
+ * an honest "open this on your computer" — either one with the console page
+ * that covers it, when the viewer may open that page.
  */
 
 import {
   consolePath,
+  consoleTargetVisibleTo,
   desktopPlaceConsoleTarget,
+  type ConsoleAudience,
+  type ConsoleTarget,
 } from "@synap-core/types/console";
 import type { ObjectNavView } from "@synap-core/types/navigation";
 import { HOST_TYPES } from "../app/open/open-params";
-import { NAV_ITEMS, navHref } from "./console-nav";
+import { NAV_ITEMS } from "./console-nav";
 
 /**
  * Landing-site origin. A CONSTANT, deliberately.
@@ -169,11 +173,24 @@ export interface WebAlternative {
   label: string;
 }
 
-export type PhoneExit =
-  /** Relay has a screen for it: the same link works, its install hatch differs. */
-  | { opens: "relay" }
-  /** Relay cannot open it. `web` is a console page that covers it, if any. */
-  | { opens: "nowhere"; web?: WebAlternative };
+/**
+ * The console page that covers an exit, before the viewer is known. It is a
+ * console TARGET, so `placeExit` asks the one audience rule
+ * (`consoleTargetVisibleTo`) whether this viewer may open it: a member is
+ * never handed an admin page that would answer /forbidden.
+ */
+export interface ConsoleCover {
+  target: ConsoleTarget;
+  label: string;
+}
+
+/**
+ * Relay has a screen for it (`relay`: the same link works, its install hatch
+ * differs) or not (`nowhere`). `web` is the console page that covers it too,
+ * if any: offered beside the Relay link, or instead of the link that a phone
+ * cannot follow.
+ */
+export type PhoneExit = { opens: "relay" | "nowhere"; web?: ConsoleCover };
 
 /**
  * The one place the "you need the app" escape hatch is spelled. Not exported:
@@ -202,11 +219,12 @@ export const MOBILE_FALLBACK = {
  * On a phone the `synap://` scheme belongs to Relay, not the desktop app, and
  * Relay resolves it through its own route table
  * (`relay-app/src/lib/object-nav.ts` `KIND_ROUTE`; its `NO_SCREEN` lists what
- * it knowingly cannot open — `channel`, `view`, `capability`, `skill`). Relay
- * also has `workspace` and `agent` screens; this table does not list them yet,
- * so a space still points a phone at its console page and an agent at the
- * computer. Every kind here has a `KIND_ROUTE` row keyed by the SAME id this
- * door puts in the link (a session's `?view=room` included). A kind missing
+ * it knowingly cannot open — `channel`, `view`, `capability`, `skill`). Every
+ * kind here has a `KIND_ROUTE` row keyed by the SAME id this door puts in the
+ * link (a session's `?view=room` included; an agent by its agent USER id, the
+ * id `/open/agent/:id` resolves). Relay also has a `workspace` screen, but it
+ * hides system and agent spaces, which the console lists — so a space is not
+ * here, and a phone is pointed at its console page instead. A kind missing
  * here is told "open on your computer" on a phone rather than handed a link
  * that lands on Relay's "not found". The `open/app/<appId>` grammar (desktop
  * apps, Settings sections) is not an object kind: Relay reads it as a desktop
@@ -223,6 +241,7 @@ const RELAY_OPENABLE_KINDS: ReadonlySet<string> = new Set([
   "entity",
   "document",
   "project",
+  "agent",
 ]);
 
 /** Console pages a desktop place can point at that are not in the nav. */
@@ -236,38 +255,61 @@ const SELF_SERVICE_PAGE_LABEL: Readonly<Record<string, string>> = {
  * (`DESKTOP_PLACE_CONSOLE_PAGE`), so a phone, which cannot reach the desktop
  * place, is pointed there instead of at nothing.
  */
-function desktopPlaceWebAlternative(
-  desktopPath: string
-): WebAlternative | undefined {
+function desktopPlaceCover(desktopPath: string): ConsoleCover | undefined {
   const target = desktopPlaceConsoleTarget(desktopPath);
   const href = target ? consolePath(target) : null;
-  if (!href) return undefined;
+  if (!target || !href) return undefined;
   const label =
     NAV_ITEMS.find((i) => i.href === href)?.label ??
     SELF_SERVICE_PAGE_LABEL[href];
-  return label ? { href, label } : undefined;
+  return label ? { target, label } : undefined;
+}
+
+/** An object's own ADMIN page in the console, when it has one. */
+function objectCover(objectKind: string, id: string): ConsoleCover | undefined {
+  switch (objectKind) {
+    case "workspace":
+      return { target: { page: "space", id }, label: "See this space here" };
+    case "agent":
+      return {
+        target: { page: "agents", focus: id },
+        label: "See this agent here",
+      };
+    default:
+      return undefined;
+  }
 }
 
 /**
- * A desktop-only object's page in the console, when it has one. An ADMIN page:
- * a phone is pointed there (`placeExit`), and `/open`'s bounce card offers it
- * to a pod admin.
+ * A cover as THIS viewer can follow it — nothing when the page would refuse
+ * them (`consoleTargetVisibleTo`, the rule every client link obeys).
+ */
+function webAlternativeFor(
+  cover: ConsoleCover | undefined,
+  role: ConsoleAudience
+): WebAlternative | undefined {
+  if (!cover || !consoleTargetVisibleTo(cover.target, role)) return undefined;
+  const href = consolePath(cover.target);
+  return href ? { href, label: cover.label } : undefined;
+}
+
+/**
+ * An object's console page for this viewer, when it has one. A phone is
+ * pointed there (`placeExit`), and `/open`'s bounce card offers it.
  */
 export function objectWebAlternative(
   objectKind: string,
-  id: string
+  id: string,
+  role: ConsoleAudience
 ): WebAlternative | undefined {
-  if (objectKind === "workspace") {
-    return {
-      href: `${navHref("spaces")}/${encodeURIComponent(id)}`,
-      label: "See this space here",
-    };
-  }
-  return undefined;
+  return webAlternativeFor(objectCover(objectKind, id), role);
 }
 
-function withWeb(web: WebAlternative | undefined): PhoneExit {
-  return web ? { opens: "nowhere", web } : { opens: "nowhere" };
+function phoneExit(
+  opens: PhoneExit["opens"],
+  web: ConsoleCover | undefined
+): PhoneExit {
+  return web ? { opens, web } : { opens };
 }
 
 function desktop(href: string, phone: PhoneExit): Exit {
@@ -284,9 +326,10 @@ function objectLink(
   const search = query ? new URLSearchParams(query).toString() : "";
   return desktop(
     search ? `${href}?${search}` : href,
-    RELAY_OPENABLE_KINDS.has(objectKind)
-      ? { opens: "relay" }
-      : withWeb(objectWebAlternative(objectKind, id))
+    phoneExit(
+      RELAY_OPENABLE_KINDS.has(objectKind) ? "relay" : "nowhere",
+      objectCover(objectKind, id)
+    )
   );
 }
 
@@ -336,13 +379,13 @@ export function openIn(target: ExitTarget): Exit {
       // `route[0]` to call `navigateToSettings()`.
       return desktop(
         `synap://open/app/settings/${target.section}`,
-        withWeb(desktopPlaceWebAlternative(`settings/${target.section}`))
+        phoneExit("nowhere", desktopPlaceCover(`settings/${target.section}`))
       );
 
     case "app":
       return desktop(
         `synap://open/app/${encodeURIComponent(target.appId)}`,
-        withWeb(desktopPlaceWebAlternative(target.appId))
+        phoneExit("nowhere", desktopPlaceCover(target.appId))
       );
 
     case "account":
@@ -386,6 +429,11 @@ export interface PlacedExit {
   isDesktopLink: boolean;
   /** The install hatch for this device's app. Only with a `synap://` href. */
   fallback?: { href: string; label: string };
+  /**
+   * On a phone, beside a link the mobile app opens: the console page that
+   * covers the same object, as a second way in.
+   */
+  web?: WebAlternative;
   unavailable?: { note: string; web?: WebAlternative };
 }
 
@@ -393,21 +441,33 @@ export interface PlacedExit {
 export const PHONE_UNAVAILABLE_NOTE = "Open this on your computer.";
 
 /**
- * Resolve an exit for the device. Desktop (and the server render) get the exit
- * exactly as `openIn` built it; a phone keeps web exits, keeps a Relay-openable
- * `synap://` link with the MOBILE install hatch, and turns everything else into
- * an `unavailable` note — never a link that lands on Relay's "not found".
+ * Resolve an exit for the device and the viewer's console `role`. Desktop (and
+ * the server render) get the exit exactly as `openIn` built it; a phone keeps
+ * web exits, keeps a Relay-openable `synap://` link with the MOBILE install
+ * hatch, and turns everything else into an `unavailable` note — never a link
+ * that lands on Relay's "not found". Either way the console page that covers
+ * it comes along only when `role` may open it.
  */
-export function placeExit(exit: Exit, onPhone: boolean): PlacedExit {
+export function placeExit(
+  exit: Exit,
+  onPhone: boolean,
+  role: ConsoleAudience
+): PlacedExit {
   if (!onPhone || !exit.isDesktopLink || !exit.phone) return exit;
+  const web = webAlternativeFor(exit.phone.web, role);
   if (exit.phone.opens === "relay") {
-    return { href: exit.href, isDesktopLink: true, fallback: MOBILE_FALLBACK };
+    return {
+      href: exit.href,
+      isDesktopLink: true,
+      fallback: MOBILE_FALLBACK,
+      ...(web ? { web } : {}),
+    };
   }
   return {
     href: null,
     isDesktopLink: true,
-    unavailable: exit.phone.web
-      ? { note: PHONE_UNAVAILABLE_NOTE, web: exit.phone.web }
+    unavailable: web
+      ? { note: PHONE_UNAVAILABLE_NOTE, web }
       : { note: PHONE_UNAVAILABLE_NOTE },
   };
 }
