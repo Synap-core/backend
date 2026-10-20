@@ -254,9 +254,9 @@ export function ConnectionRequestReview({
             title="Linked by invite"
             role="status"
           >
-            This person joined the Pod by an invite sent to this address, so
-            the link was made without asking you. To undo it for them alone,
-            unlink them on the app&apos;s page.
+            This person joined the Pod by an invite sent to this address, so the
+            link was made without asking you. To undo it for them alone, unlink
+            them on the app&apos;s page.
             {data.approvedConnectionId ? (
               <Link
                 href={appHref("sign-in", data.approvedConnectionId)}

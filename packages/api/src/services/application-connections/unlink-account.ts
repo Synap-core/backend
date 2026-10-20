@@ -136,7 +136,8 @@ export async function unlinkConnectionAccount(
   const cloudIssuer = await deps.cloudSignInIssuer();
   const isCloudSignIn =
     cloudIssuer !== null &&
-    normalizeIssuerUrl(cloudIssuer) === normalizeIssuerUrl(connection.issuerUrl);
+    normalizeIssuerUrl(cloudIssuer) ===
+      normalizeIssuerUrl(connection.issuerUrl);
   const signIn = isCloudSignIn
     ? (await deps.detachCloudSignIn({
         kratosIdentityId: input.userId,

@@ -29,14 +29,12 @@ const CLOUD = "https://api.synap.live";
 
 function deps(over: Partial<UnlinkAccountDeps> = {}) {
   const d = {
-    connection: vi
-      .fn()
-      .mockResolvedValue({
-        issuerId: "issuer-1",
-        issuerUrl: CLOUD,
-        displayName: "Studio",
-        clientId: "studio",
-      }),
+    connection: vi.fn().mockResolvedValue({
+      issuerId: "issuer-1",
+      issuerUrl: CLOUD,
+      displayName: "Studio",
+      clientId: "studio",
+    }),
     unlink: vi.fn().mockResolvedValue({ issuerSubject: "cp-ada" }),
     cloudSignInIssuer: vi.fn().mockResolvedValue(CLOUD),
     detachCloudSignIn: vi.fn().mockResolvedValue(true),
