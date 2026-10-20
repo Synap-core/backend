@@ -55,9 +55,14 @@ const DEFAULT_PACKAGE_DIRS = ["packages/types", "packages/api-types"];
  */
 const FORBIDDEN_PROTOCOLS = ["workspace:", "file:", "link:", "portal:"];
 
-/** Registry propagation is not instantaneous after `pnpm publish`. */
-const FETCH_ATTEMPTS = 5;
-const FETCH_DELAY_MS = 5000;
+/**
+ * Registry propagation is not instantaneous after `pnpm publish`: npm answers
+ * "Your package is being processed and may take a few minutes to become
+ * available". On 2026-10-20 @synap-core/types@1.12.1 (2.2 MB) took ~10 minutes,
+ * so the budget is 40 x 20 s (~13 min), not 5 x 5 s.
+ */
+const FETCH_ATTEMPTS = 40;
+const FETCH_DELAY_MS = 20000;
 
 const DEP_FIELDS = ["dependencies", "peerDependencies", "optionalDependencies"];
 
@@ -120,6 +125,7 @@ function findForbiddenRanges(manifest) {
 }
 
 let failed = false;
+let unfetched = false;
 
 for (const dir of targets) {
   const sourceManifestPath = join(repoRoot, dir, "package.json");
@@ -155,6 +161,7 @@ for (const dir of targets) {
     }
   } catch (err) {
     failed = true;
+    unfetched = true;
     console.error(`✗ ${spec} — ${err.message}`);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -163,8 +170,11 @@ for (const dir of targets) {
 
 if (failed) {
   console.error(
-    "\nPublished artifacts carry workspace-local dependency protocols. " +
-      "Publish with `pnpm publish` (it rewrites them); `npm publish` does not."
+    unfetched
+      ? "\nAt least one artifact could not be fetched from the registry, so it was not verified. " +
+          "Check that the version is live (`npm view <name>@<version>`) and re-run this script."
+      : "\nPublished artifacts carry workspace-local dependency protocols. " +
+          "Publish with `pnpm publish` (it rewrites them); `npm publish` does not."
   );
   process.exit(1);
 }

@@ -355,7 +355,7 @@ app.get("/health", async (c) => {
     //
     // DO NOT gate a deploy check on this field: it is not derived from the
     // running build, so it looks identical whether or not a deploy landed.
-    apiTypesVersion: "1.26.1",
+    apiTypesVersion: "1.31.0",
     mode: "multi-user",
     auth: "ory-stack",
     // Git SHA the running image was built from (see deploy/Dockerfile ARG
