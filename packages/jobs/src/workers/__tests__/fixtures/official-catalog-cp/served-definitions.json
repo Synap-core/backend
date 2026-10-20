@@ -1,0 +1,175 @@
+[
+  {
+    "kind": "capability",
+    "slug": "gmail",
+    "version": "h-5b4a1c2d3e4f",
+    "door": "GET /api/marketplace/capabilities[/:key] → definition",
+    "definition": {
+      "key": "gmail",
+      "name": "Gmail — courrier électronique ✉",
+      "description": "Read and send mail",
+      "contentHash": "stamped-by-the-publish-door",
+      "tools": [
+        {
+          "name": "send",
+          "credentialRef": "nango://google-mail",
+          "config": {
+            "providerConfigKey": "google-mail",
+            "retries": 3,
+            "ratio": 1.5
+          }
+        }
+      ],
+      "skills": [
+        {
+          "name": "triage",
+          "body": "Line 1\nLine 2 \"quoted\""
+        }
+      ],
+      "params": {
+        "zeta": null,
+        "alpha": true
+      }
+    }
+  },
+  {
+    "kind": "capability",
+    "slug": "unipile",
+    "version": "1.2.0",
+    "door": "GET /api/marketplace/capabilities[/:key] → definition",
+    "definition": {
+      "key": "unipile",
+      "name": "Unipile",
+      "tools": []
+    }
+  },
+  {
+    "kind": "template",
+    "slug": "crm",
+    "version": "h-68f8c9908b0c",
+    "door": "GET /api/packages/:slug → package.definition",
+    "definition": {
+      "workspaceName": "CRM",
+      "profiles": [
+        {
+          "slug": "deal",
+          "name": "Deal"
+        }
+      ],
+      "sourcePackage": {
+        "slug": "crm",
+        "version": "h-68f8c9908b0c"
+      },
+      "contentHash": "68f8c9908b0c",
+      "_meta": {
+        "slug": "crm"
+      }
+    }
+  },
+  {
+    "kind": "automation",
+    "slug": "weekly-digest",
+    "version": "2.0.1",
+    "door": "GET /api/packages/:slug → package.definition",
+    "definition": {
+      "_meta": {
+        "slug": "weekly-digest",
+        "by": "catalog"
+      },
+      "automations": [
+        {
+          "slug": "digest",
+          "trigger": {
+            "cron": "0 8 * * 1"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "kind": "skill",
+    "slug": "research-skill",
+    "version": "h-0123456789ab",
+    "door": "GET /api/packages/:slug → package.definition",
+    "definition": {
+      "skill": {
+        "name": "research",
+        "body": "Find, read, cite."
+      },
+      "_meta": {
+        "slug": "research-skill"
+      }
+    }
+  },
+  {
+    "kind": "view",
+    "slug": "timeline-view",
+    "version": "1.0.0",
+    "door": "GET /api/packages/:slug → package.definition",
+    "definition": {
+      "views": [
+        {
+          "name": "Timeline",
+          "type": "timeline",
+          "config": {}
+        }
+      ],
+      "_meta": {
+        "slug": "timeline-view"
+      }
+    }
+  },
+  {
+    "kind": "cell",
+    "slug": "kanban-cells/board",
+    "version": "3.1.0",
+    "door": "GET /api/marketplace/cells → cells[i]",
+    "definition": {
+      "key": "board",
+      "name": "Board",
+      "code": "export default () => null;",
+      "viewTypes": [
+        "kanban"
+      ],
+      "defaultSize": {
+        "w": 4,
+        "h": 3
+      },
+      "packageSlug": "kanban-cells",
+      "packageName": "Kanban cells",
+      "author": "user-acme",
+      "packageVersion": "3.1.0",
+      "installCount": 7,
+      "isVerified": false
+    }
+  },
+  {
+    "kind": "cell",
+    "slug": "kanban-cells/card",
+    "version": "3.1.0",
+    "door": "GET /api/marketplace/cells → cells[i]",
+    "definition": {
+      "key": "card",
+      "name": "Card",
+      "code": "<div></div>",
+      "runtime": "iframe",
+      "packageSlug": "kanban-cells",
+      "packageName": "Kanban cells",
+      "author": "user-acme",
+      "packageVersion": "3.1.0",
+      "installCount": 7,
+      "isVerified": false
+    }
+  },
+  {
+    "kind": "template",
+    "slug": "old-crm",
+    "version": "h-111111111111",
+    "door": "GET /api/packages/:slug → package.definition",
+    "definition": {
+      "_meta": {
+        "slug": "old-crm"
+      }
+    }
+  }
+]

@@ -288,6 +288,20 @@ export const catalogKeysStatementSchema = z.object({
 });
 export type CatalogKeysStatement = z.infer<typeof catalogKeysStatementSchema>;
 
+/**
+ * A PRIVATE capability (`isPublic: false`) owned by the pod's owner is not in
+ * Synap's public signed index — a public file must not reveal it. It reaches
+ * the pod only through the authenticated owner door of the Control Plane
+ * (`GET /internal/capabilities/:key`), so THAT connection is what it is
+ * trusted by. Never a public catalog row: a key the signed index lists is
+ * checked against it whatever door served it. The words logs and Marketplace
+ * › Sources use for it:
+ */
+export const PRIVATE_CAPABILITY_TRUST =
+  "private, verified by the Control Plane connection";
+export const PRIVATE_CAPABILITY_TRUST_LINE =
+  "Private capabilities you own aren't in Synap's public signed index: they install private, verified by the Control Plane connection.";
+
 /** Top-level fields of a served definition that are not its content. */
 export const NON_CONTENT_DEFINITION_FIELDS = [
   "_meta",
