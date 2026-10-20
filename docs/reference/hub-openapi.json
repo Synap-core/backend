@@ -1846,7 +1846,7 @@
               "kind": { "type": "string" },
               "hint": { "type": "string" },
               "url": { "type": "string" },
-              "opensIn": { "type": "string" }
+              "opensIn": { "type": "string", "enum": ["web", "desktop"] }
             },
             "required": ["kind", "hint"],
             "additionalProperties": {}
@@ -4913,6 +4913,56 @@
           }
         },
         "required": ["resourceType", "properties", "body", "publishedOn"]
+      },
+      "PublicSite": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Present only when the owner's policy publishes `title`."
+          },
+          "description": {
+            "type": "string",
+            "description": "Present only when the owner's policy publishes `description`."
+          },
+          "publishedOn": {
+            "type": "string",
+            "description": "Day the site went live, YYYY-MM-DD."
+          },
+          "collections": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/PublicSiteCollection" }
+          }
+        },
+        "required": ["publishedOn", "collections"]
+      },
+      "PublicSiteCollection": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The collection key (a profile slug)."
+          },
+          "count": {
+            "type": "integer",
+            "description": "Live published records in it."
+          },
+          "sort": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The default sort keys (`-` = descending)."
+          },
+          "pageSize": {
+            "type": "integer",
+            "description": "The default page size."
+          },
+          "addressing": {
+            "type": "string",
+            "enum": ["slug", "publicId"],
+            "description": "How a record of this collection is addressed."
+          }
+        },
+        "required": ["key", "count", "sort", "pageSize", "addressing"]
       },
       "CalendarFeedStatus": {
         "type": "object",
@@ -13622,7 +13672,7 @@
                               "url": { "type": "string" },
                               "opensIn": {
                                 "type": "string",
-                                "enum": ["desktop"]
+                                "enum": ["web", "desktop"]
                               }
                             },
                             "required": ["kind", "hint"]
@@ -16358,6 +16408,23 @@
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/KnowledgeEntry" }
+              }
+            }
+          },
+          "202": {
+            "description": "Proposed for review — `{ status: 'proposed', proposalId, reviewUrl, key }`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["proposed"] },
+                    "proposalId": { "type": "string" },
+                    "reviewUrl": { "type": "string" },
+                    "key": { "type": "string" }
+                  },
+                  "required": ["status", "proposalId", "key"]
+                }
               }
             }
           },
@@ -25178,6 +25245,1461 @@
             }
           }
         }
+      },
+      "post": {
+        "tags": ["FocusSessions"],
+        "summary": "Create a focus session",
+        "description": "IS creates a focus session, optionally with a correlationId for idempotency. If a session with the same correlationId already exists it is returned as-is.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "workspaceId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+                  },
+                  "projectId": { "type": "string", "minLength": 1 },
+                  "trackId": { "type": "string", "format": "uuid" },
+                  "trackStage": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "userId": { "type": "string", "minLength": 1 },
+                  "title": { "type": "string", "maxLength": 200 },
+                  "goal": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  "correlationId": { "type": "string" },
+                  "templateId": { "type": ["string", "null"] },
+                  "params": { "type": "object", "additionalProperties": {} },
+                  "outcomes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500
+                        },
+                        "kind": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80
+                        },
+                        "icon": { "type": "string" },
+                        "verify": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "evidence",
+                                "capability",
+                                "judge",
+                                "human"
+                              ]
+                            },
+                            "capability": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "evidenceKey": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "hint": { "type": "string", "maxLength": 1000 }
+                          },
+                          "required": ["kind"]
+                        },
+                        "required": { "type": "boolean" },
+                        "owner": {
+                          "type": "string",
+                          "enum": ["human", "agent"]
+                        },
+                        "blockedReason": {
+                          "type": "string",
+                          "enum": [
+                            "credential",
+                            "permission",
+                            "capability",
+                            "policy",
+                            "decision",
+                            "physical"
+                          ]
+                        },
+                        "why": { "type": "string", "maxLength": 500 },
+                        "ref": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "view",
+                                    "cell",
+                                    "document",
+                                    "entity",
+                                    "automation",
+                                    "playbook"
+                                  ]
+                                },
+                                "id": { "type": "string", "minLength": 1 }
+                              },
+                              "required": ["kind", "id"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": { "url": { "type": "string" } },
+                              "required": ["url"],
+                              "additionalProperties": false
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "ask": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["confirm"]
+                                },
+                                "prompt": {
+                                  "type": "string",
+                                  "maxLength": 500
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["choose"]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 80
+                                      },
+                                      "value": {
+                                        "type": "string",
+                                        "maxLength": 500
+                                      },
+                                      "icon": {
+                                        "type": "string",
+                                        "maxLength": 64
+                                      },
+                                      "recommended": { "type": "boolean" },
+                                      "description": {
+                                        "type": "string",
+                                        "maxLength": 140
+                                      }
+                                    },
+                                    "required": ["label"]
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 8
+                                },
+                                "allowOther": { "type": "boolean" },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode", "options"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": { "type": "string", "enum": ["form"] },
+                                "form": {
+                                  "type": "object",
+                                  "properties": {
+                                    "title": { "type": "string" },
+                                    "note": { "type": "string" },
+                                    "fields": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "key": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "maxLength": 200
+                                          },
+                                          "type": {
+                                            "type": "string",
+                                            "maxLength": 64
+                                          },
+                                          "constraints": {
+                                            "type": "object",
+                                            "properties": {
+                                              "enum": {
+                                                "type": "array",
+                                                "items": { "type": "string" }
+                                              },
+                                              "min": { "type": "number" },
+                                              "max": { "type": "number" },
+                                              "pattern": { "type": "string" }
+                                            }
+                                          },
+                                          "required": { "type": "boolean" },
+                                          "help": { "type": "string" }
+                                        },
+                                        "required": ["key", "label", "type"]
+                                      },
+                                      "maxItems": 20
+                                    }
+                                  },
+                                  "required": ["fields"]
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode", "form"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": { "type": "string", "enum": ["act"] },
+                                "url": { "type": "string", "maxLength": 2000 },
+                                "steps": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "maxItems": 7
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["provide"]
+                                },
+                                "provide": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["connection"]
+                                        },
+                                        "service": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120
+                                        }
+                                      },
+                                      "required": ["kind", "service"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["file"]
+                                        },
+                                        "accept": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 100
+                                          },
+                                          "maxItems": 10
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["secret"]
+                                        },
+                                        "name": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120
+                                        }
+                                      },
+                                      "required": ["kind", "name"]
+                                    }
+                                  ]
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode", "provide"]
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      },
+                      "required": ["label"],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 40
+                  },
+                  "expectedOutputs": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": { "type": "string" },
+                        "label": { "type": "string" },
+                        "icon": { "type": "string" },
+                        "optional": { "type": "boolean" },
+                        "key": { "type": "string", "maxLength": 64 },
+                        "status": {
+                          "type": "string",
+                          "enum": ["pending", "done"]
+                        },
+                        "claimedDone": { "type": "boolean" },
+                        "satisfiedByProposalId": { "type": "string" },
+                        "satisfiedByEvidence": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["output", "ref"]
+                            },
+                            "id": { "type": "string" },
+                            "at": { "type": "string" }
+                          },
+                          "required": ["kind", "id", "at"]
+                        },
+                        "delegatedTo": { "type": "string" },
+                        "delegatedAt": { "type": "string" },
+                        "returnedReason": { "type": "string" },
+                        "returnedAt": { "type": "string" },
+                        "owner": {
+                          "type": "string",
+                          "enum": ["human", "agent"]
+                        },
+                        "blockedReason": {
+                          "type": "string",
+                          "enum": [
+                            "credential",
+                            "permission",
+                            "capability",
+                            "policy",
+                            "decision",
+                            "physical"
+                          ]
+                        },
+                        "why": { "type": "string", "maxLength": 500 },
+                        "owedSince": { "type": "string" },
+                        "attestedBy": { "type": "string" },
+                        "attestedAt": { "type": "string" },
+                        "retiredAt": { "type": "string" },
+                        "retiredReason": {
+                          "type": "string",
+                          "enum": ["session_cancelled", "decision_resolved"]
+                        },
+                        "ref": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "view",
+                                    "cell",
+                                    "document",
+                                    "entity",
+                                    "automation",
+                                    "playbook"
+                                  ]
+                                },
+                                "id": { "type": "string", "minLength": 1 }
+                              },
+                              "required": ["kind", "id"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": { "url": { "type": "string" } },
+                              "required": ["url"],
+                              "additionalProperties": false
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "criterionKey": { "type": "string" },
+                        "paramName": { "type": "string" },
+                        "answer": {
+                          "type": "object",
+                          "properties": {
+                            "text": { "type": "string" },
+                            "messageId": { "type": ["string", "null"] },
+                            "answeredBy": { "type": "string" },
+                            "answeredAt": { "type": "string" },
+                            "question": { "type": "string" },
+                            "value": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["text"]
+                                    }
+                                  },
+                                  "required": ["type"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["confirm"]
+                                    },
+                                    "confirmed": { "type": "boolean" }
+                                  },
+                                  "required": ["type", "confirmed"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["chip"]
+                                    },
+                                    "chip": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": { "type": "boolean" },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        }
+                                      },
+                                      "required": ["label"]
+                                    }
+                                  },
+                                  "required": ["type", "chip"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["form"]
+                                    },
+                                    "values": {
+                                      "type": "object",
+                                      "additionalProperties": {}
+                                    }
+                                  },
+                                  "required": ["type", "values"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["provide"]
+                                    },
+                                    "ref": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["secret"]
+                                            },
+                                            "vaultRef": { "type": "string" }
+                                          },
+                                          "required": ["kind", "vaultRef"]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["connection"]
+                                            },
+                                            "connectionId": {
+                                              "type": "string",
+                                              "format": "uuid"
+                                            }
+                                          },
+                                          "required": ["kind", "connectionId"]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["file"]
+                                            },
+                                            "fileId": {
+                                              "type": "string",
+                                              "format": "uuid"
+                                            }
+                                          },
+                                          "required": ["kind", "fileId"]
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "ref"]
+                                }
+                              ]
+                            },
+                            "askSnapshot": {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "confirm",
+                                    "choose",
+                                    "form",
+                                    "act",
+                                    "provide"
+                                  ]
+                                },
+                                "prompt": {
+                                  "type": "string",
+                                  "maxLength": 500
+                                },
+                                "why": { "type": "string", "maxLength": 500 },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 80
+                                      },
+                                      "value": {
+                                        "type": "string",
+                                        "maxLength": 500
+                                      },
+                                      "icon": {
+                                        "type": "string",
+                                        "maxLength": 64
+                                      },
+                                      "recommended": { "type": "boolean" },
+                                      "description": {
+                                        "type": "string",
+                                        "maxLength": 140
+                                      }
+                                    },
+                                    "required": ["label"]
+                                  },
+                                  "maxItems": 8
+                                },
+                                "chosenKey": { "type": ["string", "null"] },
+                                "recommendedKey": {
+                                  "type": ["string", "null"]
+                                },
+                                "followedRecommendation": {
+                                  "type": ["boolean", "null"]
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": [
+                                "mode",
+                                "chosenKey",
+                                "recommendedKey",
+                                "followedRecommendation"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "text",
+                            "messageId",
+                            "answeredBy",
+                            "answeredAt"
+                          ]
+                        },
+                        "answerHistory": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "text": { "type": "string" },
+                              "messageId": { "type": ["string", "null"] },
+                              "answeredBy": { "type": "string" },
+                              "answeredAt": { "type": "string" },
+                              "question": { "type": "string" },
+                              "value": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["text"]
+                                      }
+                                    },
+                                    "required": ["type"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["confirm"]
+                                      },
+                                      "confirmed": { "type": "boolean" }
+                                    },
+                                    "required": ["type", "confirmed"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["chip"]
+                                      },
+                                      "chip": {
+                                        "type": "object",
+                                        "properties": {
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "maxLength": 500
+                                          },
+                                          "icon": {
+                                            "type": "string",
+                                            "maxLength": 64
+                                          },
+                                          "recommended": { "type": "boolean" },
+                                          "description": {
+                                            "type": "string",
+                                            "maxLength": 140
+                                          }
+                                        },
+                                        "required": ["label"]
+                                      }
+                                    },
+                                    "required": ["type", "chip"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["form"]
+                                      },
+                                      "values": {
+                                        "type": "object",
+                                        "additionalProperties": {}
+                                      }
+                                    },
+                                    "required": ["type", "values"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["provide"]
+                                      },
+                                      "ref": {
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["secret"]
+                                              },
+                                              "vaultRef": { "type": "string" }
+                                            },
+                                            "required": ["kind", "vaultRef"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["connection"]
+                                              },
+                                              "connectionId": {
+                                                "type": "string",
+                                                "format": "uuid"
+                                              }
+                                            },
+                                            "required": ["kind", "connectionId"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["file"]
+                                              },
+                                              "fileId": {
+                                                "type": "string",
+                                                "format": "uuid"
+                                              }
+                                            },
+                                            "required": ["kind", "fileId"]
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": ["type", "ref"]
+                                  }
+                                ]
+                              },
+                              "askSnapshot": {
+                                "type": "object",
+                                "properties": {
+                                  "mode": {
+                                    "type": "string",
+                                    "enum": [
+                                      "confirm",
+                                      "choose",
+                                      "form",
+                                      "act",
+                                      "provide"
+                                    ]
+                                  },
+                                  "prompt": {
+                                    "type": "string",
+                                    "maxLength": 500
+                                  },
+                                  "why": { "type": "string", "maxLength": 500 },
+                                  "options": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": { "type": "boolean" },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        }
+                                      },
+                                      "required": ["label"]
+                                    },
+                                    "maxItems": 8
+                                  },
+                                  "chosenKey": { "type": ["string", "null"] },
+                                  "recommendedKey": {
+                                    "type": ["string", "null"]
+                                  },
+                                  "followedRecommendation": {
+                                    "type": ["boolean", "null"]
+                                  },
+                                  "lookedAt": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "entity",
+                                            "document",
+                                            "view",
+                                            "automation",
+                                            "playbook"
+                                          ]
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        }
+                                      },
+                                      "required": ["kind", "id"]
+                                    },
+                                    "maxItems": 8
+                                  }
+                                },
+                                "required": [
+                                  "mode",
+                                  "chosenKey",
+                                  "recommendedKey",
+                                  "followedRecommendation"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "text",
+                              "messageId",
+                              "answeredBy",
+                              "answeredAt"
+                            ]
+                          }
+                        },
+                        "decisionId": { "type": "string" },
+                        "answerPickedUpAt": { "type": "string" },
+                        "ask": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["confirm"]
+                                },
+                                "prompt": {
+                                  "type": "string",
+                                  "maxLength": 500
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["choose"]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 80
+                                      },
+                                      "value": {
+                                        "type": "string",
+                                        "maxLength": 500
+                                      },
+                                      "icon": {
+                                        "type": "string",
+                                        "maxLength": 64
+                                      },
+                                      "recommended": { "type": "boolean" },
+                                      "description": {
+                                        "type": "string",
+                                        "maxLength": 140
+                                      }
+                                    },
+                                    "required": ["label"]
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 8
+                                },
+                                "allowOther": { "type": "boolean" },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode", "options"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": { "type": "string", "enum": ["form"] },
+                                "form": {
+                                  "type": "object",
+                                  "properties": {
+                                    "title": { "type": "string" },
+                                    "note": { "type": "string" },
+                                    "fields": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "key": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "maxLength": 200
+                                          },
+                                          "type": {
+                                            "type": "string",
+                                            "maxLength": 64
+                                          },
+                                          "constraints": {
+                                            "type": "object",
+                                            "properties": {
+                                              "enum": {
+                                                "type": "array",
+                                                "items": { "type": "string" }
+                                              },
+                                              "min": { "type": "number" },
+                                              "max": { "type": "number" },
+                                              "pattern": { "type": "string" }
+                                            }
+                                          },
+                                          "required": { "type": "boolean" },
+                                          "help": { "type": "string" }
+                                        },
+                                        "required": ["key", "label", "type"]
+                                      },
+                                      "maxItems": 20
+                                    }
+                                  },
+                                  "required": ["fields"]
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode", "form"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": { "type": "string", "enum": ["act"] },
+                                "url": { "type": "string", "maxLength": 2000 },
+                                "steps": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "maxItems": 7
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["provide"]
+                                },
+                                "provide": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["connection"]
+                                        },
+                                        "service": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120
+                                        }
+                                      },
+                                      "required": ["kind", "service"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["file"]
+                                        },
+                                        "accept": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 100
+                                          },
+                                          "maxItems": 10
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["secret"]
+                                        },
+                                        "name": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120
+                                        }
+                                      },
+                                      "required": ["kind", "name"]
+                                    }
+                                  ]
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode", "provide"]
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "relationToSubject": {
+                          "type": "string",
+                          "maxLength": 80
+                        },
+                        "subjectEdge": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["linked", "proposed", "skipped"]
+                            },
+                            "relationType": { "type": "string" },
+                            "outputEntityId": { "type": "string" },
+                            "relationId": { "type": "string" },
+                            "proposalId": { "type": "string" },
+                            "reason": { "type": "string" },
+                            "at": { "type": "string" }
+                          },
+                          "required": ["status", "relationType", "at"]
+                        }
+                      },
+                      "required": ["kind", "label"]
+                    }
+                  },
+                  "criteria": { "type": "array", "items": {} },
+                  "channelId": { "type": "string", "format": "uuid" },
+                  "agentIds": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "subjectEntityId": { "type": "string", "format": "uuid" },
+                  "parentSessionId": { "type": "string", "format": "uuid" },
+                  "suspendedIntent": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  "blockedBySessionIds": {
+                    "type": "array",
+                    "items": { "type": "string", "format": "uuid" },
+                    "maxItems": 20
+                  },
+                  "forceCreate": { "type": "boolean" }
+                },
+                "required": ["userId", "goal"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Created or existing session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "workspaceId": { "type": ["string", "null"] },
+                    "projectId": { "type": ["string", "null"] },
+                    "userId": { "type": "string" },
+                    "correlationId": { "type": ["string", "null"] },
+                    "title": { "type": ["string", "null"] },
+                    "goal": { "type": "string" },
+                    "status": { "type": "string" },
+                    "templateId": { "type": ["string", "null"] },
+                    "expectedOutputs": {},
+                    "channelId": { "type": ["string", "null"] },
+                    "progress": { "type": ["number", "null"] },
+                    "currentStage": { "type": ["string", "null"] },
+                    "agentIds": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "closedAt": { "type": ["string", "null"] },
+                    "verificationReport": {},
+                    "metadata": {},
+                    "startedAt": { "type": "string" },
+                    "createdAt": { "type": "string" },
+                    "updatedAt": { "type": "string" },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["work", "run", "receipt"]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "workspaceId",
+                    "projectId",
+                    "userId",
+                    "correlationId",
+                    "title",
+                    "goal",
+                    "status",
+                    "templateId",
+                    "channelId",
+                    "progress",
+                    "currentStage",
+                    "agentIds",
+                    "closedAt",
+                    "startedAt",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
       }
     },
     "/focus-sessions/:id": {
@@ -25255,6 +26777,1540 @@
                     "updatedAt"
                   ]
                 }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": ["FocusSessions"],
+        "summary": "Update a focus session",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "workspaceId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "paused",
+                      "forming",
+                      "scheduled",
+                      "closed",
+                      "failed",
+                      "cancelled"
+                    ]
+                  },
+                  "progress": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "channelId": { "type": "string", "format": "uuid" },
+                  "correlationId": { "type": "string" },
+                  "title": { "type": ["string", "null"], "maxLength": 200 },
+                  "goal": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000
+                  },
+                  "agentIds": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "addAgentId": { "type": "string", "minLength": 1 },
+                  "outcomes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                        },
+                        "label": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500
+                        },
+                        "kind": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80
+                        },
+                        "icon": { "type": "string" },
+                        "verify": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "evidence",
+                                "capability",
+                                "judge",
+                                "human"
+                              ]
+                            },
+                            "capability": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "evidenceKey": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "hint": { "type": "string", "maxLength": 1000 }
+                          },
+                          "required": ["kind"]
+                        },
+                        "required": { "type": "boolean" },
+                        "owner": {
+                          "type": "string",
+                          "enum": ["human", "agent"]
+                        },
+                        "blockedReason": {
+                          "type": "string",
+                          "enum": [
+                            "credential",
+                            "permission",
+                            "capability",
+                            "policy",
+                            "decision",
+                            "physical"
+                          ]
+                        },
+                        "why": { "type": "string", "maxLength": 500 },
+                        "ref": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "view",
+                                    "cell",
+                                    "document",
+                                    "entity",
+                                    "automation",
+                                    "playbook"
+                                  ]
+                                },
+                                "id": { "type": "string", "minLength": 1 }
+                              },
+                              "required": ["kind", "id"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": { "url": { "type": "string" } },
+                              "required": ["url"],
+                              "additionalProperties": false
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "ask": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["confirm"]
+                                },
+                                "prompt": {
+                                  "type": "string",
+                                  "maxLength": 500
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["choose"]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 80
+                                      },
+                                      "value": {
+                                        "type": "string",
+                                        "maxLength": 500
+                                      },
+                                      "icon": {
+                                        "type": "string",
+                                        "maxLength": 64
+                                      },
+                                      "recommended": { "type": "boolean" },
+                                      "description": {
+                                        "type": "string",
+                                        "maxLength": 140
+                                      }
+                                    },
+                                    "required": ["label"]
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 8
+                                },
+                                "allowOther": { "type": "boolean" },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode", "options"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": { "type": "string", "enum": ["form"] },
+                                "form": {
+                                  "type": "object",
+                                  "properties": {
+                                    "title": { "type": "string" },
+                                    "note": { "type": "string" },
+                                    "fields": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "key": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "maxLength": 200
+                                          },
+                                          "type": {
+                                            "type": "string",
+                                            "maxLength": 64
+                                          },
+                                          "constraints": {
+                                            "type": "object",
+                                            "properties": {
+                                              "enum": {
+                                                "type": "array",
+                                                "items": { "type": "string" }
+                                              },
+                                              "min": { "type": "number" },
+                                              "max": { "type": "number" },
+                                              "pattern": { "type": "string" }
+                                            }
+                                          },
+                                          "required": { "type": "boolean" },
+                                          "help": { "type": "string" }
+                                        },
+                                        "required": ["key", "label", "type"]
+                                      },
+                                      "maxItems": 20
+                                    }
+                                  },
+                                  "required": ["fields"]
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode", "form"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": { "type": "string", "enum": ["act"] },
+                                "url": { "type": "string", "maxLength": 2000 },
+                                "steps": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "maxItems": 7
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["provide"]
+                                },
+                                "provide": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["connection"]
+                                        },
+                                        "service": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120
+                                        }
+                                      },
+                                      "required": ["kind", "service"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["file"]
+                                        },
+                                        "accept": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 100
+                                          },
+                                          "maxItems": 10
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["secret"]
+                                        },
+                                        "name": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120
+                                        }
+                                      },
+                                      "required": ["kind", "name"]
+                                    }
+                                  ]
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode", "provide"]
+                            },
+                            { "type": "null" }
+                          ]
+                        }
+                      },
+                      "required": ["label"],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 40
+                  },
+                  "expectedOutputs": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "kind": { "type": "string" },
+                        "label": { "type": "string" },
+                        "icon": { "type": "string" },
+                        "optional": { "type": "boolean" },
+                        "key": { "type": "string", "maxLength": 64 },
+                        "status": {
+                          "type": "string",
+                          "enum": ["pending", "done"]
+                        },
+                        "claimedDone": { "type": "boolean" },
+                        "satisfiedByProposalId": { "type": "string" },
+                        "satisfiedByEvidence": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": ["output", "ref"]
+                            },
+                            "id": { "type": "string" },
+                            "at": { "type": "string" }
+                          },
+                          "required": ["kind", "id", "at"]
+                        },
+                        "delegatedTo": { "type": "string" },
+                        "delegatedAt": { "type": "string" },
+                        "returnedReason": { "type": "string" },
+                        "returnedAt": { "type": "string" },
+                        "owner": {
+                          "type": "string",
+                          "enum": ["human", "agent"]
+                        },
+                        "blockedReason": {
+                          "type": "string",
+                          "enum": [
+                            "credential",
+                            "permission",
+                            "capability",
+                            "policy",
+                            "decision",
+                            "physical"
+                          ]
+                        },
+                        "why": { "type": "string", "maxLength": 500 },
+                        "owedSince": { "type": "string" },
+                        "attestedBy": { "type": "string" },
+                        "attestedAt": { "type": "string" },
+                        "retiredAt": { "type": "string" },
+                        "retiredReason": {
+                          "type": "string",
+                          "enum": ["session_cancelled", "decision_resolved"]
+                        },
+                        "ref": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "view",
+                                    "cell",
+                                    "document",
+                                    "entity",
+                                    "automation",
+                                    "playbook"
+                                  ]
+                                },
+                                "id": { "type": "string", "minLength": 1 }
+                              },
+                              "required": ["kind", "id"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": { "url": { "type": "string" } },
+                              "required": ["url"],
+                              "additionalProperties": false
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "criterionKey": { "type": "string" },
+                        "paramName": { "type": "string" },
+                        "answer": {
+                          "type": "object",
+                          "properties": {
+                            "text": { "type": "string" },
+                            "messageId": { "type": ["string", "null"] },
+                            "answeredBy": { "type": "string" },
+                            "answeredAt": { "type": "string" },
+                            "question": { "type": "string" },
+                            "value": {
+                              "oneOf": [
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["text"]
+                                    }
+                                  },
+                                  "required": ["type"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["confirm"]
+                                    },
+                                    "confirmed": { "type": "boolean" }
+                                  },
+                                  "required": ["type", "confirmed"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["chip"]
+                                    },
+                                    "chip": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": { "type": "boolean" },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        }
+                                      },
+                                      "required": ["label"]
+                                    }
+                                  },
+                                  "required": ["type", "chip"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["form"]
+                                    },
+                                    "values": {
+                                      "type": "object",
+                                      "additionalProperties": {}
+                                    }
+                                  },
+                                  "required": ["type", "values"]
+                                },
+                                {
+                                  "type": "object",
+                                  "properties": {
+                                    "type": {
+                                      "type": "string",
+                                      "enum": ["provide"]
+                                    },
+                                    "ref": {
+                                      "oneOf": [
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["secret"]
+                                            },
+                                            "vaultRef": { "type": "string" }
+                                          },
+                                          "required": ["kind", "vaultRef"]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["connection"]
+                                            },
+                                            "connectionId": {
+                                              "type": "string",
+                                              "format": "uuid"
+                                            }
+                                          },
+                                          "required": ["kind", "connectionId"]
+                                        },
+                                        {
+                                          "type": "object",
+                                          "properties": {
+                                            "kind": {
+                                              "type": "string",
+                                              "enum": ["file"]
+                                            },
+                                            "fileId": {
+                                              "type": "string",
+                                              "format": "uuid"
+                                            }
+                                          },
+                                          "required": ["kind", "fileId"]
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": ["type", "ref"]
+                                }
+                              ]
+                            },
+                            "askSnapshot": {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": [
+                                    "confirm",
+                                    "choose",
+                                    "form",
+                                    "act",
+                                    "provide"
+                                  ]
+                                },
+                                "prompt": {
+                                  "type": "string",
+                                  "maxLength": 500
+                                },
+                                "why": { "type": "string", "maxLength": 500 },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 80
+                                      },
+                                      "value": {
+                                        "type": "string",
+                                        "maxLength": 500
+                                      },
+                                      "icon": {
+                                        "type": "string",
+                                        "maxLength": 64
+                                      },
+                                      "recommended": { "type": "boolean" },
+                                      "description": {
+                                        "type": "string",
+                                        "maxLength": 140
+                                      }
+                                    },
+                                    "required": ["label"]
+                                  },
+                                  "maxItems": 8
+                                },
+                                "chosenKey": { "type": ["string", "null"] },
+                                "recommendedKey": {
+                                  "type": ["string", "null"]
+                                },
+                                "followedRecommendation": {
+                                  "type": ["boolean", "null"]
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": [
+                                "mode",
+                                "chosenKey",
+                                "recommendedKey",
+                                "followedRecommendation"
+                              ]
+                            }
+                          },
+                          "required": [
+                            "text",
+                            "messageId",
+                            "answeredBy",
+                            "answeredAt"
+                          ]
+                        },
+                        "answerHistory": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "text": { "type": "string" },
+                              "messageId": { "type": ["string", "null"] },
+                              "answeredBy": { "type": "string" },
+                              "answeredAt": { "type": "string" },
+                              "question": { "type": "string" },
+                              "value": {
+                                "oneOf": [
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["text"]
+                                      }
+                                    },
+                                    "required": ["type"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["confirm"]
+                                      },
+                                      "confirmed": { "type": "boolean" }
+                                    },
+                                    "required": ["type", "confirmed"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["chip"]
+                                      },
+                                      "chip": {
+                                        "type": "object",
+                                        "properties": {
+                                          "label": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 80
+                                          },
+                                          "value": {
+                                            "type": "string",
+                                            "maxLength": 500
+                                          },
+                                          "icon": {
+                                            "type": "string",
+                                            "maxLength": 64
+                                          },
+                                          "recommended": { "type": "boolean" },
+                                          "description": {
+                                            "type": "string",
+                                            "maxLength": 140
+                                          }
+                                        },
+                                        "required": ["label"]
+                                      }
+                                    },
+                                    "required": ["type", "chip"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["form"]
+                                      },
+                                      "values": {
+                                        "type": "object",
+                                        "additionalProperties": {}
+                                      }
+                                    },
+                                    "required": ["type", "values"]
+                                  },
+                                  {
+                                    "type": "object",
+                                    "properties": {
+                                      "type": {
+                                        "type": "string",
+                                        "enum": ["provide"]
+                                      },
+                                      "ref": {
+                                        "oneOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["secret"]
+                                              },
+                                              "vaultRef": { "type": "string" }
+                                            },
+                                            "required": ["kind", "vaultRef"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["connection"]
+                                              },
+                                              "connectionId": {
+                                                "type": "string",
+                                                "format": "uuid"
+                                              }
+                                            },
+                                            "required": ["kind", "connectionId"]
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["file"]
+                                              },
+                                              "fileId": {
+                                                "type": "string",
+                                                "format": "uuid"
+                                              }
+                                            },
+                                            "required": ["kind", "fileId"]
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": ["type", "ref"]
+                                  }
+                                ]
+                              },
+                              "askSnapshot": {
+                                "type": "object",
+                                "properties": {
+                                  "mode": {
+                                    "type": "string",
+                                    "enum": [
+                                      "confirm",
+                                      "choose",
+                                      "form",
+                                      "act",
+                                      "provide"
+                                    ]
+                                  },
+                                  "prompt": {
+                                    "type": "string",
+                                    "maxLength": 500
+                                  },
+                                  "why": { "type": "string", "maxLength": 500 },
+                                  "options": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "label": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 80
+                                        },
+                                        "value": {
+                                          "type": "string",
+                                          "maxLength": 500
+                                        },
+                                        "icon": {
+                                          "type": "string",
+                                          "maxLength": 64
+                                        },
+                                        "recommended": { "type": "boolean" },
+                                        "description": {
+                                          "type": "string",
+                                          "maxLength": 140
+                                        }
+                                      },
+                                      "required": ["label"]
+                                    },
+                                    "maxItems": 8
+                                  },
+                                  "chosenKey": { "type": ["string", "null"] },
+                                  "recommendedKey": {
+                                    "type": ["string", "null"]
+                                  },
+                                  "followedRecommendation": {
+                                    "type": ["boolean", "null"]
+                                  },
+                                  "lookedAt": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "entity",
+                                            "document",
+                                            "view",
+                                            "automation",
+                                            "playbook"
+                                          ]
+                                        },
+                                        "id": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        }
+                                      },
+                                      "required": ["kind", "id"]
+                                    },
+                                    "maxItems": 8
+                                  }
+                                },
+                                "required": [
+                                  "mode",
+                                  "chosenKey",
+                                  "recommendedKey",
+                                  "followedRecommendation"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "text",
+                              "messageId",
+                              "answeredBy",
+                              "answeredAt"
+                            ]
+                          }
+                        },
+                        "decisionId": { "type": "string" },
+                        "answerPickedUpAt": { "type": "string" },
+                        "ask": {
+                          "oneOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["confirm"]
+                                },
+                                "prompt": {
+                                  "type": "string",
+                                  "maxLength": 500
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["choose"]
+                                },
+                                "options": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "label": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 80
+                                      },
+                                      "value": {
+                                        "type": "string",
+                                        "maxLength": 500
+                                      },
+                                      "icon": {
+                                        "type": "string",
+                                        "maxLength": 64
+                                      },
+                                      "recommended": { "type": "boolean" },
+                                      "description": {
+                                        "type": "string",
+                                        "maxLength": 140
+                                      }
+                                    },
+                                    "required": ["label"]
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 8
+                                },
+                                "allowOther": { "type": "boolean" },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode", "options"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": { "type": "string", "enum": ["form"] },
+                                "form": {
+                                  "type": "object",
+                                  "properties": {
+                                    "title": { "type": "string" },
+                                    "note": { "type": "string" },
+                                    "fields": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "object",
+                                        "properties": {
+                                          "key": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          },
+                                          "label": {
+                                            "type": "string",
+                                            "maxLength": 200
+                                          },
+                                          "type": {
+                                            "type": "string",
+                                            "maxLength": 64
+                                          },
+                                          "constraints": {
+                                            "type": "object",
+                                            "properties": {
+                                              "enum": {
+                                                "type": "array",
+                                                "items": { "type": "string" }
+                                              },
+                                              "min": { "type": "number" },
+                                              "max": { "type": "number" },
+                                              "pattern": { "type": "string" }
+                                            }
+                                          },
+                                          "required": { "type": "boolean" },
+                                          "help": { "type": "string" }
+                                        },
+                                        "required": ["key", "label", "type"]
+                                      },
+                                      "maxItems": 20
+                                    }
+                                  },
+                                  "required": ["fields"]
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode", "form"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": { "type": "string", "enum": ["act"] },
+                                "url": { "type": "string", "maxLength": 2000 },
+                                "steps": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "maxItems": 7
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "mode": {
+                                  "type": "string",
+                                  "enum": ["provide"]
+                                },
+                                "provide": {
+                                  "oneOf": [
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["connection"]
+                                        },
+                                        "service": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120
+                                        }
+                                      },
+                                      "required": ["kind", "service"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["file"]
+                                        },
+                                        "accept": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 100
+                                          },
+                                          "maxItems": 10
+                                        }
+                                      },
+                                      "required": ["kind"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "properties": {
+                                        "kind": {
+                                          "type": "string",
+                                          "enum": ["secret"]
+                                        },
+                                        "name": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120
+                                        }
+                                      },
+                                      "required": ["kind", "name"]
+                                    }
+                                  ]
+                                },
+                                "lookedAt": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "kind": {
+                                        "type": "string",
+                                        "enum": [
+                                          "entity",
+                                          "document",
+                                          "view",
+                                          "automation",
+                                          "playbook"
+                                        ]
+                                      },
+                                      "id": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      }
+                                    },
+                                    "required": ["kind", "id"]
+                                  },
+                                  "maxItems": 8
+                                }
+                              },
+                              "required": ["mode", "provide"]
+                            },
+                            { "type": "null" }
+                          ]
+                        },
+                        "relationToSubject": {
+                          "type": "string",
+                          "maxLength": 80
+                        },
+                        "subjectEdge": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["linked", "proposed", "skipped"]
+                            },
+                            "relationType": { "type": "string" },
+                            "outputEntityId": { "type": "string" },
+                            "relationId": { "type": "string" },
+                            "proposalId": { "type": "string" },
+                            "reason": { "type": "string" },
+                            "at": { "type": "string" }
+                          },
+                          "required": ["status", "relationType", "at"]
+                        }
+                      },
+                      "required": ["kind", "label"]
+                    }
+                  },
+                  "verificationReport": {},
+                  "currentStage": { "type": "string", "minLength": 1 },
+                  "subjectEntityId": {
+                    "type": ["string", "null"],
+                    "format": "uuid"
+                  },
+                  "metadata": { "type": "object", "additionalProperties": {} },
+                  "criteria": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 80,
+                          "pattern": "^[a-z0-9][a-z0-9_.-]*$"
+                        },
+                        "statement": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500
+                        },
+                        "required": { "type": "boolean" },
+                        "check": {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "enum": [
+                                "evidence",
+                                "capability",
+                                "judge",
+                                "human"
+                              ]
+                            },
+                            "capability": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "evidenceKey": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 80
+                            },
+                            "hint": { "type": "string", "maxLength": 1000 }
+                          },
+                          "required": ["kind"],
+                          "additionalProperties": false
+                        },
+                        "stageKey": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 120
+                        }
+                      },
+                      "required": ["key", "statement", "check"],
+                      "additionalProperties": false
+                    },
+                    "maxItems": 12
+                  },
+                  "followPlaybookId": {
+                    "type": ["string", "null"],
+                    "format": "uuid"
+                  },
+                  "followStageKey": {
+                    "type": ["string", "null"],
+                    "minLength": 1
+                  },
+                  "params": { "type": "object", "additionalProperties": {} },
+                  "trackId": { "type": ["string", "null"], "format": "uuid" },
+                  "trackStage": {
+                    "type": ["string", "null"],
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
+                  "agentUserId": { "type": "string", "format": "uuid" },
+                  "reasoning": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": { "type": "string" },
+                    "workspaceId": { "type": ["string", "null"] },
+                    "projectId": { "type": ["string", "null"] },
+                    "userId": { "type": "string" },
+                    "correlationId": { "type": ["string", "null"] },
+                    "title": { "type": ["string", "null"] },
+                    "goal": { "type": "string" },
+                    "status": { "type": "string" },
+                    "templateId": { "type": ["string", "null"] },
+                    "expectedOutputs": {},
+                    "channelId": { "type": ["string", "null"] },
+                    "progress": { "type": ["number", "null"] },
+                    "currentStage": { "type": ["string", "null"] },
+                    "agentIds": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "closedAt": { "type": ["string", "null"] },
+                    "verificationReport": {},
+                    "metadata": {},
+                    "startedAt": { "type": "string" },
+                    "createdAt": { "type": "string" },
+                    "updatedAt": { "type": "string" },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["work", "run", "receipt"]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "workspaceId",
+                    "projectId",
+                    "userId",
+                    "correlationId",
+                    "title",
+                    "goal",
+                    "status",
+                    "templateId",
+                    "channelId",
+                    "progress",
+                    "currentStage",
+                    "agentIds",
+                    "closedAt",
+                    "startedAt",
+                    "createdAt",
+                    "updatedAt"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },
@@ -25570,6 +28626,430 @@
         }
       }
     },
+    "/focus-sessions/:id/outputs/block": {
+      "post": {
+        "tags": ["FocusSessions"],
+        "summary": "Hand a declared deliverable to the human",
+        "description": "Stamps `owner: 'human'` + `blockedReason` + `why` + `owedSince` on the named slot. The slot stays `pending` — declaring that you cannot do the work is the opposite of having done it. When a standing guideline covers this kind of block, `blockGuidelines` carries its text.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedLabel": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "blockedReason": {
+                    "type": "string",
+                    "enum": [
+                      "credential",
+                      "permission",
+                      "capability",
+                      "policy",
+                      "decision",
+                      "physical"
+                    ]
+                  },
+                  "why": { "type": "string", "maxLength": 500 },
+                  "ref": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "view",
+                              "cell",
+                              "document",
+                              "entity",
+                              "automation",
+                              "playbook"
+                            ]
+                          },
+                          "id": { "type": "string", "minLength": 1 }
+                        },
+                        "required": ["kind", "id"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": { "url": { "type": "string" } },
+                        "required": ["url"],
+                        "additionalProperties": false
+                      },
+                      { "type": "null" }
+                    ]
+                  },
+                  "ask": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "mode": { "type": "string", "enum": ["confirm"] },
+                          "prompt": { "type": "string", "maxLength": 500 },
+                          "lookedAt": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "entity",
+                                    "document",
+                                    "view",
+                                    "automation",
+                                    "playbook"
+                                  ]
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["kind", "id"]
+                            },
+                            "maxItems": 8
+                          }
+                        },
+                        "required": ["mode"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "mode": { "type": "string", "enum": ["choose"] },
+                          "options": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "label": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                },
+                                "value": { "type": "string", "maxLength": 500 },
+                                "icon": { "type": "string", "maxLength": 64 },
+                                "recommended": { "type": "boolean" },
+                                "description": {
+                                  "type": "string",
+                                  "maxLength": 140
+                                }
+                              },
+                              "required": ["label"]
+                            },
+                            "minItems": 1,
+                            "maxItems": 8
+                          },
+                          "allowOther": { "type": "boolean" },
+                          "lookedAt": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "entity",
+                                    "document",
+                                    "view",
+                                    "automation",
+                                    "playbook"
+                                  ]
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["kind", "id"]
+                            },
+                            "maxItems": 8
+                          }
+                        },
+                        "required": ["mode", "options"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "mode": { "type": "string", "enum": ["form"] },
+                          "form": {
+                            "type": "object",
+                            "properties": {
+                              "title": { "type": "string" },
+                              "note": { "type": "string" },
+                              "fields": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "key": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 200
+                                    },
+                                    "label": {
+                                      "type": "string",
+                                      "maxLength": 200
+                                    },
+                                    "type": {
+                                      "type": "string",
+                                      "maxLength": 64
+                                    },
+                                    "constraints": {
+                                      "type": "object",
+                                      "properties": {
+                                        "enum": {
+                                          "type": "array",
+                                          "items": { "type": "string" }
+                                        },
+                                        "min": { "type": "number" },
+                                        "max": { "type": "number" },
+                                        "pattern": { "type": "string" }
+                                      }
+                                    },
+                                    "required": { "type": "boolean" },
+                                    "help": { "type": "string" }
+                                  },
+                                  "required": ["key", "label", "type"]
+                                },
+                                "maxItems": 20
+                              }
+                            },
+                            "required": ["fields"]
+                          },
+                          "lookedAt": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "entity",
+                                    "document",
+                                    "view",
+                                    "automation",
+                                    "playbook"
+                                  ]
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["kind", "id"]
+                            },
+                            "maxItems": 8
+                          }
+                        },
+                        "required": ["mode", "form"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "mode": { "type": "string", "enum": ["act"] },
+                          "url": { "type": "string", "maxLength": 2000 },
+                          "steps": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "maxItems": 7
+                          },
+                          "lookedAt": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "entity",
+                                    "document",
+                                    "view",
+                                    "automation",
+                                    "playbook"
+                                  ]
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["kind", "id"]
+                            },
+                            "maxItems": 8
+                          }
+                        },
+                        "required": ["mode"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "mode": { "type": "string", "enum": ["provide"] },
+                          "provide": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["connection"]
+                                  },
+                                  "service": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  }
+                                },
+                                "required": ["kind", "service"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["file"]
+                                  },
+                                  "accept": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 100
+                                    },
+                                    "maxItems": 10
+                                  }
+                                },
+                                "required": ["kind"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["secret"]
+                                  },
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  }
+                                },
+                                "required": ["kind", "name"]
+                              }
+                            ]
+                          },
+                          "lookedAt": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "kind": {
+                                  "type": "string",
+                                  "enum": [
+                                    "entity",
+                                    "document",
+                                    "view",
+                                    "automation",
+                                    "playbook"
+                                  ]
+                                },
+                                "id": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                }
+                              },
+                              "required": ["kind", "id"]
+                            },
+                            "maxItems": 8
+                          }
+                        },
+                        "required": ["mode", "provide"]
+                      },
+                      { "type": "null" }
+                    ]
+                  }
+                },
+                "required": ["expectedLabel", "blockedReason"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Blocked on the human",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "expectedLabel": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "blockGuidelines": {}
+                  },
+                  "required": ["ok", "expectedLabel", "kind"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/focus-sessions/:id/outputs/unblock": {
       "post": {
         "tags": ["FocusSessions"],
@@ -25636,6 +29116,229 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/focus-sessions/:id/outputs/answer": {
+      "post": {
+        "tags": ["FocusSessions"],
+        "summary": "Answer what an agent asked about a deliverable (people only)",
+        "description": "Records the person's answer on the named slot and posts it into the session room as the person. Not a delivery: `status` is untouched. A slot that was handed to the person goes back to the agent with the answer attached, and a pod-run agent that asked is woken. Emits `focus_session.slot_answered.completed`. Refused (403) for an agent key. A slot with a typed `ask` takes `value` (validated against it; 400 `ask_invalid:` when it does not fit, 409 `ask_changed:` when `askFingerprint` no longer matches the slot's ask).",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedLabel": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "text": { "type": "string", "maxLength": 4000 },
+                  "value": {
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["text"] }
+                        },
+                        "required": ["type"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["confirm"] },
+                          "confirmed": { "type": "boolean" }
+                        },
+                        "required": ["type", "confirmed"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["chip"] },
+                          "chip": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80
+                              },
+                              "value": { "type": "string", "maxLength": 500 },
+                              "icon": { "type": "string", "maxLength": 64 },
+                              "recommended": { "type": "boolean" },
+                              "description": {
+                                "type": "string",
+                                "maxLength": 140
+                              }
+                            },
+                            "required": ["label"]
+                          }
+                        },
+                        "required": ["type", "chip"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["form"] },
+                          "values": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          }
+                        },
+                        "required": ["type", "values"]
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string", "enum": ["provide"] },
+                          "ref": {
+                            "oneOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["secret"]
+                                  },
+                                  "vaultRef": { "type": "string" }
+                                },
+                                "required": ["kind", "vaultRef"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["connection"]
+                                  },
+                                  "connectionId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  }
+                                },
+                                "required": ["kind", "connectionId"]
+                              },
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "kind": {
+                                    "type": "string",
+                                    "enum": ["file"]
+                                  },
+                                  "fileId": {
+                                    "type": "string",
+                                    "format": "uuid"
+                                  }
+                                },
+                                "required": ["kind", "fileId"]
+                              }
+                            ]
+                          }
+                        },
+                        "required": ["type", "ref"]
+                      }
+                    ]
+                  },
+                  "askFingerprint": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "expectedGranteeId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": ["expectedLabel"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Answered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean" },
+                    "expectedLabel": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "answer": {},
+                    "handedBack": { "type": "boolean" },
+                    "messageId": { "type": ["string", "null"] },
+                    "questionId": { "type": ["string", "null"] },
+                    "wokeAgentType": { "type": ["string", "null"] },
+                    "triggered": { "type": "boolean" },
+                    "decision": {}
+                  },
+                  "required": [
+                    "ok",
+                    "expectedLabel",
+                    "kind",
+                    "handedBack",
+                    "messageId",
+                    "questionId",
+                    "wokeAgentType",
+                    "triggered"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "The slot's ask changed (`ask_changed:`)",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -29271,6 +32974,61 @@
         }
       }
     },
+    "/public/sites/{siteToken}": {
+      "get": {
+        "tags": ["Public"],
+        "summary": "Read a published site's manifest (credentialless)",
+        "description": "Returns a PUBLISHED site's public metadata and its configured collections. No auth; cross-origin readable; no credentials honoured. Unknown, revoked, unpublished and deleted-project tokens all return the same 404.",
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "The site token (the capability). Stored hashed; every miss is the same 404."
+            },
+            "required": true,
+            "description": "The site token (the capability). Stored hashed; every miss is the same 404.",
+            "name": "siteToken",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The site manifest",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PublicSite" }
+              }
+            }
+          },
+          "304": { "description": "Not modified (If-None-Match matched)" },
+          "403": {
+            "description": "The site is live but its home workspace's public pages are switched off (body code `public_doors_disabled`; never used for a miss)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (every kind of miss)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/calendar/feed": {
       "get": {
         "tags": ["Calendar"],
@@ -29461,27 +33219,6 @@
   "x-synap-generated": {
     "by": "scripts/docs/gen-reference.ts",
     "from": "GET /api/hub/openapi.json (packages/api/src/routers/hub-protocol-rest.ts)",
-    "omittedOperations": [
-      {
-        "method": "post",
-        "path": "/focus-sessions",
-        "reason": "Unknown zod object type, please specify `type` and other OpenAPI props using `schema.openapi`. | zod type: custom"
-      },
-      {
-        "method": "patch",
-        "path": "/focus-sessions/:id",
-        "reason": "Unknown zod object type, please specify `type` and other OpenAPI props using `schema.openapi`. | zod type: custom"
-      },
-      {
-        "method": "post",
-        "path": "/focus-sessions/:id/outputs/block",
-        "reason": "Unknown zod object type, please specify `type` and other OpenAPI props using `schema.openapi`. | zod type: custom"
-      },
-      {
-        "method": "post",
-        "path": "/focus-sessions/:id/outputs/answer",
-        "reason": "Unknown zod object type, please specify `type` and other OpenAPI props using `schema.openapi`. | zod type: custom"
-      }
-    ]
+    "omittedOperations": []
   }
 }
