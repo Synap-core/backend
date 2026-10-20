@@ -346,7 +346,7 @@ describe("owner status lists the site's members (ids are fine on the owner door)
     );
 
     const status = await owner.siteStatus({ siteId: site });
-    expect(status?.membersTruncated).toBe(false);
+    expect(status?.membersNextCursor).toBeNull();
     const byId = new Map(status!.members.map((m) => [m.entityId, m]));
     expect(byId.get(fresh)).toMatchObject({
       title: "Status Paper",

@@ -129,6 +129,11 @@ const PublishToSiteSchema = z.object({
 const UnpublishFromSiteSchema = z.object({
   entityIds: SiteRecordIds.optional(),
 });
+// One page of a status read's `members` (the service clamps `limit`).
+const SiteMembersPageQuery = z.object({
+  cursor: z.string().min(1).max(512).optional(),
+  limit: z.coerce.number().int().min(1).optional(),
+});
 
 type Ctx = Context<{ Variables: HubVariables }, any, any>;
 
@@ -187,8 +192,12 @@ export function registerSharesRoutes(app: HubHono): void {
     if (!project.success) {
       return c.json({ error: "projectId (uuid) is required" }, 400);
     }
+    const page = SiteMembersPageQuery.safeParse(c.req.query());
+    if (!page.success) return c.json({ error: "Invalid cursor or limit" }, 400);
     try {
-      return c.json(await siteStatus(actorOf(c), { projectId: project.data }));
+      return c.json(
+        await siteStatus(actorOf(c), { projectId: project.data, ...page.data })
+      );
     } catch (err) {
       return fail(c, err, "GET /shares/sites");
     }
@@ -200,8 +209,12 @@ export function registerSharesRoutes(app: HubHono): void {
     }
     const id = Uuid.safeParse(c.req.param("id"));
     if (!id.success) return c.json({ error: "Invalid site id" }, 400);
+    const page = SiteMembersPageQuery.safeParse(c.req.query());
+    if (!page.success) return c.json({ error: "Invalid cursor or limit" }, 400);
     try {
-      return c.json(await siteStatus(actorOf(c), { siteId: id.data }));
+      return c.json(
+        await siteStatus(actorOf(c), { siteId: id.data, ...page.data })
+      );
     } catch (err) {
       return fail(c, err, "GET /shares/sites/:id");
     }

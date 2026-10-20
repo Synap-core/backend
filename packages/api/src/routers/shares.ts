@@ -99,6 +99,11 @@ registerShareExecutors();
 const Uuid = z.string().uuid();
 const Kind = z.enum(SHARE_KINDS);
 const SiteRecordIds = z.array(Uuid).min(1).max(SITE_PUBLISH_MAX_RECORDS);
+// One page of a status read's `members` (the service clamps `limit`).
+const SiteMembersPage = z.object({
+  cursor: z.string().min(1).max(512).optional(),
+  limit: z.number().int().min(1).optional(),
+});
 
 /** The share door's actor, from the authenticated tRPC context. */
 export function shareActorFromCtx(ctx: {
@@ -281,7 +286,11 @@ export const sharesRouter = router({
     ),
 
   siteStatus: protectedProcedure
-    .input(z.union([z.object({ siteId: Uuid }), z.object({ projectId: Uuid })]))
+    .input(
+      z
+        .union([z.object({ siteId: Uuid }), z.object({ projectId: Uuid })])
+        .and(SiteMembersPage)
+    )
     .query(({ input, ctx }) => siteStatus(shareActorFromCtx(ctx), input)),
 
   getPolicy: protectedProcedure
