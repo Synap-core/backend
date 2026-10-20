@@ -6740,7 +6740,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Amend a pending proposal you authored (e.g. after user feedback): its summary, its reasoning, and/or the payload it will actually apply. Does not re-run the event pipeline, and does NOT approve it — a human still decides.",
+      "description": "Amend a pending proposal you authored (e.g. after user feedback): its summary, its reasoning, and/or the payload it will actually apply. A pending playbook proposal (create or update) is amended with patch {kind:'inner', fields:{ stages, goalTemplate, params, … }}; the revised payload is checked like the playbook write itself, so a bad one is refused now, not at approval. Does not re-run the event pipeline, and does NOT approve it — a human still decides.",
       "inputSchema": {
         "type": "object",
         "properties": {

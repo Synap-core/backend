@@ -413,6 +413,59 @@ export const updateInputSchema = z.object({
   metadata: jsonRecord.optional(),
 });
 
+/**
+ * A REVISION of a still-pending playbook proposal (`playbook/create` or
+ * `playbook/update`), validated with exactly what its approval will run: the
+ * procedure's own input schema over the revised payload, then the shared
+ * {@link assertPlaybookDefinitionWritable} (over the stored row, for an
+ * update). Called by the shared revise core (`mergeProposalRevision`), so a
+ * bad revised stage or goal is refused at revise time — on every revise door —
+ * instead of landing as an approval failure later.
+ */
+export async function assertRevisedPlaybookPayload(
+  changeType: "create" | "update",
+  payload: Record<string, unknown>
+): Promise<void> {
+  const parsed = (
+    changeType === "create" ? createInputSchema : updateInputSchema
+  ).safeParse(payload);
+  if (!parsed.success) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: parsed.error.issues
+        .map((i) => `${i.path.join(".") || "playbook"}: ${i.message}`)
+        .join("; "),
+    });
+  }
+  const database = await getDb();
+  let previous: Playbook | undefined;
+  if (changeType === "update") {
+    previous = (await database.query.playbooks.findFirst({
+      where: eq(playbooks.id, (parsed.data as { id: string }).id),
+    })) as Playbook | undefined;
+    if (!previous) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "The playbook this proposal edits no longer exists.",
+      });
+    }
+  }
+  const data = parsed.data as {
+    goalTemplate?: unknown;
+    params?: unknown;
+    subjectProfile?: unknown;
+  };
+  await assertPlaybookDefinitionWritable(
+    database,
+    {
+      goalTemplate: data.goalTemplate,
+      params: data.params,
+      subjectProfile: data.subjectProfile,
+    },
+    previous
+  );
+}
+
 // ── Links sub-router (read-only) ─────────────────────────────────────────────
 
 const linksRouter = router({
