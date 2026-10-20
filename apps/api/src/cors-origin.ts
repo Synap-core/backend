@@ -58,19 +58,32 @@ function podPublicHost(): string | null {
 }
 
 /**
+ * Zones whose subdomains are different tenants: every Synap Cloud pod lives
+ * under one, and so do the Control Plane and the apps. A first-party base equal
+ * to one would make every other tenant's pod a credentialed caller of this pod
+ * (a legacy `<name>.synap.live` pod derived `synap.live`). Refused, like a bare
+ * TLD. The installer refuses the same zones for the Kratos cookie
+ * (`synap_tenant_zones` in the repo's `synap`).
+ */
+const TENANT_ZONES: readonly string[] = ["synap.live", "staging.synap.live"];
+
+/** A base that would admit hosts this pod does not own: a TLD or a tenant zone. */
+function isRefusedFirstPartyBase(base: string): boolean {
+  return !base.includes(".") || TENANT_ZONES.includes(base);
+}
+
+/**
  * Derive the first-party base by dropping a pod host's conventional service
  * label (`pod.` / `pod-admin.`): `pod.thearch.synap.live` → `thearch.synap.live`,
  * so sibling surfaces (`pod-admin.thearch.synap.live`) are first-party. Returns
- * null when the host carries no known service prefix or the remainder would be a
- * bare TLD (≥2 labels required) — never widen CORS to an entire TLD.
+ * null when the host carries no known service prefix or the remainder is a bare
+ * TLD or a tenant zone — never widen CORS to an entire TLD or zone.
  */
 function deriveBaseFromHost(host: string): string | null {
   const labels = host.split(".");
-  if (
-    (labels[0] === "pod" || labels[0] === "pod-admin") &&
-    labels.length >= 3
-  ) {
-    return labels.slice(1).join(".");
+  if (labels[0] === "pod" || labels[0] === "pod-admin") {
+    const base = labels.slice(1).join(".");
+    return isRefusedFirstPartyBase(base) ? null : base;
   }
   return null;
 }
@@ -84,12 +97,15 @@ function deriveBaseFromHost(host: string): string | null {
  * or is a subdomain); a value left over from a previous domain no longer matches
  * PUBLIC_URL, so we fall back to the value derived from the current PUBLIC_URL.
  * When PUBLIC_URL can't be derived (e.g. a custom apex domain), the explicit
- * value is trusted as-is.
+ * value is trusted as-is. A TLD or a tenant zone is never a base, explicit or
+ * derived.
  */
 function getBaseDomain(): string | null {
-  const explicit =
+  const configured =
     process.env.SYNAP_BASE_DOMAIN?.trim().replace(/^\.+/, "").toLowerCase() ||
     null;
+  const explicit =
+    configured && !isRefusedFirstPartyBase(configured) ? configured : null;
   const host = podPublicHost();
   const derived = host ? deriveBaseFromHost(host) : null;
 
@@ -99,17 +115,21 @@ function getBaseDomain(): string | null {
   return derived; // explicit is stale relative to PUBLIC_URL → heal
 }
 
-/** Explicit allowlist: ALLOWED_ORIGINS + DB-dynamic + dev localhost + PUBLIC_URL. */
+/**
+ * Explicit allowlist: ALLOWED_ORIGINS + DB-dynamic + dev localhost + PUBLIC_URL
+ * + POD_ADMIN_URL (this pod's own console, first-party even when no base
+ * covers it — a legacy pod's console shares only a tenant zone with it).
+ */
 function explicitOrigins(): Set<string> {
   const set = new Set<string>();
   for (const o of getCorsOrigins()) {
     const n = normalizeOrigin(o);
     if (n) set.add(n);
   }
-  const publicUrl = process.env.PUBLIC_URL
-    ? normalizeOrigin(process.env.PUBLIC_URL)
-    : null;
-  if (publicUrl) set.add(publicUrl);
+  for (const own of [process.env.PUBLIC_URL, process.env.POD_ADMIN_URL]) {
+    const n = own ? normalizeOrigin(own.trim()) : null;
+    if (n) set.add(n);
+  }
   return set;
 }
 

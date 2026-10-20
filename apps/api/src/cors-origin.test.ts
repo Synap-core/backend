@@ -38,6 +38,7 @@ describe("first-party base domain (self-healing from PUBLIC_URL)", () => {
     "PUBLIC_URL",
     "DOMAIN",
     "ALLOWED_ORIGINS",
+    "POD_ADMIN_URL",
   ] as const;
   let saved: Record<string, string | undefined>;
 
@@ -73,10 +74,43 @@ describe("first-party base domain (self-healing from PUBLIC_URL)", () => {
   });
 
   it("honors an explicit SYNAP_BASE_DOMAIN when the pod lives under it (incl. a broader base)", () => {
-    process.env.SYNAP_BASE_DOMAIN = "synap.live"; // intentionally broad
+    process.env.SYNAP_BASE_DOMAIN = "thearch.example.com"; // broader than pod.<x>
+    process.env.PUBLIC_URL = "https://pod.team.thearch.example.com";
+    expect(isAllowedOrigin("https://app.thearch.example.com")).toBe(true);
+    expect(isAllowedOrigin("https://pod-admin.team.thearch.example.com")).toBe(
+      true
+    );
+  });
+
+  it("never takes a tenant zone as the base: other tenants' pods stay foreign", () => {
+    process.env.SYNAP_BASE_DOMAIN = "synap.live";
     process.env.PUBLIC_URL = "https://pod.thearch.synap.live";
-    expect(isAllowedOrigin("https://crm.synap.live")).toBe(true);
     expect(isAllowedOrigin("https://pod-admin.thearch.synap.live")).toBe(true);
+    expect(isAllowedOrigin("https://pod.bob.synap.live")).toBe(false);
+    expect(isAllowedOrigin("https://crm.synap.live")).toBe(false);
+  });
+
+  it("a legacy <name>.synap.live pod with SYNAP_BASE_DOMAIN=synap.live trusts only its own origins", () => {
+    process.env.SYNAP_BASE_DOMAIN = "synap.live";
+    process.env.PUBLIC_URL = "https://alice.synap.live";
+    process.env.POD_ADMIN_URL = "https://alice-admin.synap.live";
+    expect(isAllowedOrigin("https://alice.synap.live")).toBe(true);
+    expect(isAllowedOrigin("https://alice-admin.synap.live")).toBe(true);
+    expect(isAllowedOrigin("https://bob.synap.live")).toBe(false);
+    expect(isAllowedOrigin("https://bob-admin.synap.live")).toBe(false);
+    expect(isAllowedOrigin("https://api.synap.live")).toBe(false);
+  });
+
+  it("pod.synap.live does not derive the whole zone", () => {
+    process.env.PUBLIC_URL = "https://pod.synap.live";
+    expect(isAllowedOrigin("https://pod-admin.synap.live")).toBe(false);
+    expect(isAllowedOrigin("https://pod.synap.live")).toBe(true);
+  });
+
+  it("refuses a staging tenant zone too", () => {
+    process.env.SYNAP_BASE_DOMAIN = "staging.synap.live";
+    process.env.PUBLIC_URL = "https://alice.staging.synap.live";
+    expect(isAllowedOrigin("https://bob.staging.synap.live")).toBe(false);
   });
 
   it("trusts an explicit base for a custom apex domain it cannot derive", () => {
