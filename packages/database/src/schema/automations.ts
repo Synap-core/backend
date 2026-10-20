@@ -240,14 +240,13 @@ export interface TriggerNodeDef extends AutomationNodeBase {
  * @deprecated for NEW authoring — use a `capability` node with
  * `verbId: 'ai.generate'` (Synap Core's synchronous single-shot LLM verb).
  *
- * A `command` node is a DEAD END end-to-end: `executeCommandStep` calls
- * `requestTaskExecute` with `taskId: data.commandId`, which the IS resolves as a
- * BACKGROUND-TASK ROW (`tasks-route.ts`) — the shipped `'intelligence_execute'`
- * has ZERO occurrences in the IS, so the lookup 404s and the step throws. Even
- * with a row present, the prompt is only LOGGED: `executeTask(task, hubClient,
- * body.context ?? {})` never receives `body.action`, and switches on
- * `task.action` over four fixed analysis types. There is no generic
- * "run this prompt" receiver behind this node type.
+ * A `command` node RUNS its prompt (title or `promptOverride` + resolved
+ * inputs) through `ai.generate` on the canonical capability router
+ * (`executeCommandStep`); its output is the generated text. Until 2026-10-20 it
+ * posted to the IS background-task receiver, which resolves `commandId` as a
+ * `background_tasks` row — the shipped `'intelligence_execute'` is no such row,
+ * so every command step 404'd ("New Contact Enrichment": 541/541 runs failed).
+ * A `capability` node naming `ai.generate` says the same thing explicitly.
  *
  * KEPT, NOT DELETED — deliberately. Two live authoring doors still EMIT
  * `command` nodes, so deleting the executor arm would turn a dead step into a
@@ -258,8 +257,8 @@ export interface TriggerNodeDef extends AutomationNodeBase {
  *     action COMPILES to this node type, so it is reachable from the rule/
  *     sentence authoring grammar.
  * Pod-stored flows from either door are read, never rewritten, on the execution
- * path. Retiring the node type therefore requires retiring those two doors
- * first; this deprecation marks the direction without breaking stored rows.
+ * path, so they now run instead of failing. Retiring the node type still
+ * requires retiring those two doors first.
  */
 export interface CommandNodeDef extends AutomationNodeBase {
   type: "command";
