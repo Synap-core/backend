@@ -688,7 +688,9 @@ services:
       # Post-success return URL — pod-admin's /login handles the Kratos flow
       # natively; on success it navigates to the return target (default: /).
       SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: ${POD_ADMIN_URL}/
-      SELFSERVICE_ALLOWED_RETURN_URLS: ${PUBLIC_URL},${PUBLIC_URL}/*,${POD_ADMIN_URL},${POD_ADMIN_URL}/*
+      # No SELFSERVICE_ALLOWED_RETURN_URLS (nor any other list) here: an env
+      # value replaces kratos.yml's, and the installer's list there is the one
+      # source (the pod, its console, the Synap apps, the relay deep links).
       IDENTITY_SCHEMAS_0_ID: default
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
       DOMAIN: ${DOMAIN}
@@ -704,9 +706,9 @@ services:
       # on the CP's Resend domain. Unset ⇒ noreply@synap.live, the domain the
       # CP's Resend account has verified (DKIM resend._domainkey.synap.live).
       COURIER_SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-noreply@synap.live}
-      # Kratos itself sees only backend-originated traffic (Caddy routes
-      # /.ory/kratos/public/* through backend:4000). No external CORS gate
-      # needed here — ALLOWED_ORIGINS on the backend is the single source.
+      # Browsers reach Kratos directly: Caddy routes /.ory/kratos/public/*
+      # straight to kratos:4433, not through the backend. Its CORS origins are
+      # kratos.yml's `serve.public.cors.allowed_origins`, from the installer.
     command: ["serve", "-c", "/etc/config/kratos/kratos.yml", "--watch-courier"]
     # Note: --dev flag removed for production security
     # Add --dev back only for local development
