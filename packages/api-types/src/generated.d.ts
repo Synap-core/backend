@@ -14004,6 +14004,12 @@ export interface ShareListing {
 		live: boolean;
 		/** The snapshot's keys (never its values). */
 		publishedFields: string[];
+		/**
+		 * The site this row publishes the record into (0336), or null for the
+		 * record's standalone publication. A member row has no token of its own:
+		 * it is live through its site.
+		 */
+		siteShareId: string | null;
 		createdAt: Date;
 		createdBy: string;
 	}>;
@@ -14717,6 +14723,32 @@ export interface PublishSiteResult {
 	/** The keys the metadata snapshot holds. */
 	metadataFields: string[];
 }
+/** One record a batch did not publish, and why (the owner's door: ids are fine). */
+export interface SiteSkip {
+	entityId: string;
+	/** `SITE_SLUG_TAKEN`, or the refusal's tRPC code (FORBIDDEN, BAD_REQUEST…). */
+	code: string;
+	reason: string;
+}
+export interface PublishedMember {
+	entityId: string;
+	collection: string;
+	publicId: string;
+	slug: string | null;
+	status: "published" | "republished";
+}
+export type PublishToSiteResult = {
+	status: "proposed";
+	proposalId: string;
+	siteId: string;
+	skipped: SiteSkip[];
+} | {
+	status: "none" | "published";
+	siteId: string;
+	published: PublishedMember[];
+	skipped: SiteSkip[];
+	rowsWritten: number;
+};
 export interface SiteStatus {
 	siteId: string;
 	projectId: string;
@@ -14732,11 +14764,33 @@ export interface SiteStatus {
 	config: SiteConfigV1;
 	/** The metadata snapshot's keys (never its values). */
 	metadataFields: string[];
-	/** Live members per configured collection (0 until C1b publishes members). */
+	/** Live members per configured collection (the manifest's own count). */
 	collections: Array<{
 		key: string;
 		count: number;
 	}>;
+	/**
+	 * The site's member rows that are not revoked (published or taken back to
+	 * draft), newest publish first, at most {@link SITE_STATUS_MEMBER_CAP}.
+	 */
+	members: SiteStatusMember[];
+	/** More member rows exist than `members` lists. */
+	membersTruncated: boolean;
+}
+/** One record of a site, as its owner sees it (internal ids are fine here). */
+export interface SiteStatusMember {
+	entityId: string;
+	/** The record's CURRENT title (owner side; the public sees the snapshot). */
+	title: string | null;
+	collection: string | null;
+	publicId: string | null;
+	slug: string | null;
+	state: string;
+	publishedAt: Date | null;
+	/** Served on the public web right now: the site is live AND the member passes every narrowing check. */
+	live: boolean;
+	/** The record changed after its snapshot: publish it again to refresh it. */
+	stale: boolean;
 }
 declare const FormConfigSchema: z.ZodObject<{
 	name: z.ZodString;
@@ -31796,6 +31850,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				status: "none" | "unpublished";
 				siteId: string;
+			};
+			meta: object;
+		}>;
+		publishToSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				siteId: string;
+				entityIds: string[];
+				reasoning?: string | undefined;
+			};
+			output: PublishToSiteResult;
+			meta: object;
+		}>;
+		unpublishFromSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				siteId: string;
+				entityIds?: string[] | undefined;
+			};
+			output: {
+				status: "none" | "unpublished";
+				siteId: string;
+				entityIds?: string[];
 			};
 			meta: object;
 		}>;
