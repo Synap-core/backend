@@ -16,8 +16,11 @@ vi.mock("@synap/database", () => ({
   TrustedIssuerService: class {},
   findOpenPodInviteAcceptance: vi.fn(),
   db: {},
+  and: vi.fn(),
   eq: vi.fn(),
   users: {},
+  federatedApplicationConnections: {},
+  trustedIssuers: {},
 }));
 vi.mock("../../notifications/NotificationService.js", () => ({
   NotificationService: { create: vi.fn() },
@@ -65,6 +68,11 @@ function request(over: Record<string, unknown> = {}) {
 function deps(over: Partial<InviteConsentDeps> = {}) {
   const d = {
     issuerStatus: vi.fn().mockResolvedValue("approved"),
+    appConnection: vi.fn().mockResolvedValue({
+      status: "approved",
+      allowedOrigins: [ORIGIN],
+      allowedScopes: ["auth:exchange-user", "identity:link-user"],
+    }),
     findInvite: vi.fn().mockResolvedValue({
       inviteId: "invite-1",
       userId: "member-1",
@@ -156,6 +164,21 @@ describe("approveByInviteIfConsented", () => {
     await expect(approveByInviteIfConsented(request(over), d)).resolves.toEqual(
       { kind: "owner_review", reason }
     );
+    expect(d.approve).not.toHaveBeenCalled();
+    expect(d.notify).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an app an owner revoked", { status: "revoked", allowedOrigins: [ORIGIN], allowedScopes: ["auth:exchange-user", "identity:link-user"] }],
+    ["an app no owner approved yet", null],
+    ["an origin the owner did not approve", { status: "approved", allowedOrigins: ["https://other.example"], allowedScopes: ["auth:exchange-user", "identity:link-user"] }],
+    ["a scope the owner did not approve", { status: "approved", allowedOrigins: [ORIGIN], allowedScopes: ["identity:link-user"] }],
+  ])("never approves the APP: %s waits for an owner", async (_label, app) => {
+    const d = deps({ appConnection: vi.fn().mockResolvedValue(app) });
+    await expect(approveByInviteIfConsented(request(), d)).resolves.toEqual({
+      kind: "owner_review",
+      reason: "app_not_approved",
+    });
     expect(d.approve).not.toHaveBeenCalled();
     expect(d.notify).not.toHaveBeenCalled();
   });
