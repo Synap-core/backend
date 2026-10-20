@@ -7,6 +7,26 @@
     {$ACME_EMAIL_OPTION}
 }
 
+# ─── Security headers: ONE definition, imported by every site block ───────────
+# The tunnel (:80) blocks once had none of the TLS blocks' headers: a tunnelled
+# pod is served ONLY by its :80 block, so its browsers got no nosniff and no
+# frame protection (review 2026-10-20). caddy-routes.test.sh fails on a site
+# block that does not import this, or on a security header set anywhere else.
+# {args[0]} = X-Frame-Options: DENY for the API host, SAMEORIGIN for pod-admin.
+# HSTS is sent on :80 too, on purpose: behind a tunnel the browser's connection
+# is HTTPS (TLS ends at the tunnel's edge), so the header is honoured and is the
+# same promise the TLS block makes; a browser ignores it over plain HTTP (RFC
+# 6797 §8.1), and every outside cleartext client is redirected to HTTPS anyway.
+(security_headers) {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "{args[0]}"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}
+
 # ─── Cloudflare Tunnel Handler ────────────────────────────────────────────────
 # Handles HTTP traffic from cloudflared (Cloudflare Tunnel connector).
 # IMPORTANT: Place BEFORE {$DOMAIN} to prevent redirect loops.
@@ -16,6 +36,8 @@
 # flows to work properly with cookies and session handling.
 # ────────────────────────────────────────────────────────────────────────────────────────────────
 {$DOMAIN}:80 {
+    import security_headers DENY
+
     # Only the tunnel connector (cloudflared, on the compose network) is served
     # in cleartext. Anyone else reaching :80 of a directly exposed pod is sent
     # to HTTPS — this block used to answer them in plain HTTP (2026-10-19).
@@ -208,14 +230,7 @@
         reverse_proxy backend:4000
     }
 
-    # Security headers
-    header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-        X-Content-Type-Options "nosniff"
-        X-Frame-Options "DENY"
-        X-XSS-Protection "1; mode=block"
-        Referrer-Policy "strict-origin-when-cross-origin"
-    }
+    import security_headers DENY
 
     # Logging
     log {
@@ -232,6 +247,7 @@
 # The legacy admin-ui SPA (/admin/*) has been retired.
 # ─────────────────────────────────────────────────────────────────────────────
 {$POD_ADMIN_DOMAIN}:80 {
+    import security_headers SAMEORIGIN
     # Cloudflare Tunnel HTTP path — same shape as the main host's :80 block,
     # including its cleartext rule: outside clients go to HTTPS.
     @cleartext_from_outside {
@@ -245,12 +261,7 @@
 {$POD_ADMIN_DOMAIN} {
     reverse_proxy pod-admin:3000
 
-    header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-        X-Content-Type-Options "nosniff"
-        X-Frame-Options "SAMEORIGIN"
-        Referrer-Policy "strict-origin-when-cross-origin"
-    }
+    import security_headers SAMEORIGIN
 
     log {
         output file /var/log/caddy/access.log

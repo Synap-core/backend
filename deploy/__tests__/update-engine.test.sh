@@ -413,9 +413,10 @@ cmp -s "$DEPLOY/.env" "$S/env.orig" && ok "canary: .env restored byte-identical 
 setup migrate r1; publish "$R2" 0012_new.sql
 FAKE_MIGRATE_FAIL=1 run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && ok "migrate: failed update exits non-zero" || bad "migrate: rc=0"
-[ "$(restores)" = 0 ] && ! grep -q "pg_restore" "$FAKE/log" && ! grep -qE 'rename to|create database|drop database' "$FAKE/log" \
+# (the backup's own `pg_restore -l` lists the dump it wrote; it restores nothing)
+[ "$(restores)" = 0 ] && ! grep -q "pg_restore -U" "$FAKE/log" && ! grep -qE 'rename to|create database|drop database' "$FAKE/log" \
   && [ "$(cat "$FAKE/level")" = "$NEW_LEVEL" ] \
-  && ok "migrate: no restore of any kind — the database stays migrated ($NEW_LEVEL)" || bad "migrate: restores=$(restores) level=$(cat "$FAKE/level") restore-calls=$(grep -cE 'pg_restore|rename to|drop database' "$FAKE/log")"
+  && ok "migrate: no restore of any kind — the database stays migrated ($NEW_LEVEL)" || bad "migrate: restores=$(restores) level=$(cat "$FAKE/level") restore-calls=$(grep -E 'pg_restore -U|rename to|create database|drop database' "$FAKE/log")"
 grep -qE "compose stop|compose .* stop " "$FAKE/log" && bad "migrate: writers were stopped (a maintenance window for a restore that no longer happens)" || ok "migrate: writers never stopped"
 cmp -s "$DEPLOY/.env" "$S/env.orig" && [ "$(cur_id)" = "$R1" ] && ok "migrate: previous digests + current-release $R1" || bad "migrate: env/current-release not restored ($(cur_id))"
 BK="$(last backup)"
