@@ -801,6 +801,9 @@ export function registerCaptureRoutes(app: HubHono): void {
           ...(graph.unmodeledProperties
             ? { unmodeledProperties: graph.unmodeledProperties }
             : {}),
+          ...(graph.modeledFields
+            ? { modeledFields: graph.modeledFields }
+            : {}),
         });
       }
 

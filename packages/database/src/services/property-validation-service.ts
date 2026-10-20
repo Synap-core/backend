@@ -10,6 +10,7 @@ import {
 } from "./profile-resolution-service.js";
 import { PropertyValueType } from "../schema/property-defs.js";
 import { suggestClosest } from "./did-you-mean.js";
+import { resolvePropertyOptions } from "../utils/property-presentation.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "property-validation-service" });
@@ -39,6 +40,63 @@ export interface UnmodeledProperty {
   didYouMean?: string;
 }
 
+/**
+ * One field a profile MODELS, as a writer needs it before the write: the key,
+ * its type and the constraints `validateConstraints` below enforces. Without
+ * it an agent told "`price` is unmodeled" could only guess what IS modelled
+ * (fb1020: `offer` reported `price`/`description` unmodeled; a decision
+ * `summary` over its 500-char limit rejected a whole 8-entity capture).
+ * Flags are present only when true / set, so the list stays short.
+ */
+export interface ModeledField {
+  key: string;
+  /** valueType: string | number | boolean | date | entity_id | array | object | secret */
+  type: string;
+  required?: true;
+  /** The closed set of admissible values (the one option resolver). */
+  options?: string[];
+  maxLength?: number;
+  minLength?: number;
+  min?: number;
+  max?: number;
+  format?: string;
+  /** This field is the kind's lifecycle: it moves through the status door. */
+  lifecycle?: true;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+/** Project one effective property onto the {@link ModeledField} a writer reads. */
+export function describeModeledField(prop: EffectiveProperty): ModeledField {
+  const constraints =
+    prop.constraints && typeof prop.constraints === "object"
+      ? (prop.constraints as Record<string, unknown>)
+      : {};
+  const options = resolvePropertyOptions(prop);
+  const maxLength = finiteNumber(constraints.maxLength);
+  const minLength = finiteNumber(constraints.minLength);
+  const min = finiteNumber(constraints.min);
+  const max = finiteNumber(constraints.max);
+  return {
+    key: prop.slug,
+    type: String(prop.valueType),
+    ...(prop.required ? { required: true as const } : {}),
+    ...(options?.length ? { options } : {}),
+    ...(maxLength !== undefined ? { maxLength } : {}),
+    ...(minLength !== undefined ? { minLength } : {}),
+    ...(min !== undefined ? { min } : {}),
+    ...(max !== undefined ? { max } : {}),
+    ...(typeof constraints.format === "string"
+      ? { format: constraints.format }
+      : {}),
+    ...(prop.isLifecycle ? { lifecycle: true as const } : {}),
+  };
+}
+
 export interface ValidationResult {
   valid: boolean;
   errors: string[];
@@ -54,6 +112,12 @@ export interface ValidationResult {
    * Always present (possibly empty) so callers can read it without a guard.
    */
   unmodeled: UnmodeledProperty[];
+  /**
+   * Every field the profile models through this lens, in the resolver's order
+   * — what the caller COULD have written. Always present (possibly empty: a
+   * kind with no fields says so instead of leaving the caller to guess).
+   */
+  modeled: ModeledField[];
 }
 
 export class PropertyValidationService {
@@ -158,6 +222,7 @@ export class PropertyValidationService {
       // Unmodeled keys never make the result invalid — they are a receipt
       // signal, not a rejection.
       unmodeled,
+      modeled: effectiveProperties.map(describeModeledField),
     };
   }
 
@@ -192,6 +257,7 @@ export class PropertyValidationService {
     valid: boolean;
     errors: string[];
     unmodeled: UnmodeledProperty[];
+    modeled: ModeledField[];
   }> {
     const merged: Record<string, unknown> = {
       ...(opts?.profileDefaults ?? {}),
@@ -210,6 +276,7 @@ export class PropertyValidationService {
       valid: result.valid,
       errors: result.errors,
       unmodeled: result.unmodeled,
+      modeled: result.modeled,
     };
   }
 
