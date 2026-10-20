@@ -3546,7 +3546,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -3558,6 +3557,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
+			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -14644,6 +14644,60 @@ export type PublishResult = {
 	pinned: boolean;
 	rowsWritten: number;
 };
+declare const SiteConfigV1Schema: z.ZodObject<{
+	version: z.ZodLiteral<1>;
+	collections: z.ZodRecord<z.ZodString, z.ZodObject<{
+		sort: z.ZodDefault<z.ZodArray<z.ZodString>>;
+		pageSize: z.ZodDefault<z.ZodNumber>;
+		slugField: z.ZodDefault<z.ZodNullable<z.ZodString>>;
+		publishWhen: z.ZodDefault<z.ZodNullable<z.ZodObject<{
+			statuses: z.ZodArray<z.ZodString>;
+		}, z.core.$strict>>>;
+	}, z.core.$strict>>;
+}, z.core.$strict>;
+export type SiteConfigV1 = z.output<typeof SiteConfigV1Schema>;
+export type ConfigureSiteResult = {
+	status: "proposed";
+	proposalId: string;
+} | {
+	status: "created" | "updated";
+	siteId: string;
+	state: "draft" | "published";
+	/** False for a new site: the owner goes live to mint its token. */
+	hasToken: boolean;
+	rowsWritten: number;
+};
+export interface PublishSiteResult {
+	status: "published" | "republished";
+	siteId: string;
+	/** Plaintext token — present ONCE, when this call minted it. */
+	token?: string;
+	tokenPrefix: string;
+	publishedAt: Date;
+	/** The keys the metadata snapshot holds. */
+	metadataFields: string[];
+}
+export interface SiteStatus {
+	siteId: string;
+	projectId: string;
+	homeWorkspaceId: string;
+	state: string;
+	/** THE one derivation of "the site answers on the public web now". */
+	live: boolean;
+	hasToken: boolean;
+	tokenPrefix: string | null;
+	publishedAt: Date | null;
+	revokedAt: Date | null;
+	/** The stored config as the public doors read it (fail-closed). */
+	config: SiteConfigV1;
+	/** The metadata snapshot's keys (never its values). */
+	metadataFields: string[];
+	/** Live members per configured collection (0 until C1b publishes members). */
+	collections: Array<{
+		key: string;
+		count: number;
+	}>;
+}
 declare const FormConfigSchema: z.ZodObject<{
 	name: z.ZodString;
 	kind: z.ZodEnum<{
@@ -31544,6 +31598,64 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "none" | "revoked";
 				shareId?: string;
 			};
+			meta: object;
+		}>;
+		configureSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				projectId: string;
+				config: unknown;
+				homeWorkspaceId?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			output: ConfigureSiteResult;
+			meta: object;
+		}>;
+		publishSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				siteId: string;
+			};
+			output: PublishSiteResult;
+			meta: object;
+		}>;
+		rotateSiteToken: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				siteId: string;
+			};
+			output: {
+				siteId: string;
+				token: string;
+				tokenPrefix: string;
+			};
+			meta: object;
+		}>;
+		unpublishSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				siteId: string;
+			};
+			output: {
+				status: "none" | "unpublished";
+				siteId: string;
+			};
+			meta: object;
+		}>;
+		revokeSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				siteId: string;
+			};
+			output: {
+				status: "none" | "revoked";
+				siteId: string;
+				membersRevoked: number;
+			};
+			meta: object;
+		}>;
+		siteStatus: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				siteId: string;
+			} | {
+				projectId: string;
+			};
+			output: SiteStatus | null;
 			meta: object;
 		}>;
 		getPolicy: import("@trpc/server").TRPCQueryProcedure<{

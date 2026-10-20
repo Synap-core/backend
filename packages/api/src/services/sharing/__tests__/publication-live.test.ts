@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   isPublicationLive,
+  isSiteLive,
   type PublicationLiveInput,
 } from "../publication-live.js";
 
@@ -50,6 +51,37 @@ describe("isPublicationLive", () => {
       expect(isPublicationLive({ ...LIVE, ...patch }, NOW)).toBe(false);
     }
   );
+});
+
+describe("isSiteLive (a SITE row: public project, not a member)", () => {
+  const SITE = { ...LIVE, resourceType: "project", siteShareId: null };
+
+  it("a published, unrevoked site row with a token is live (positive control)", () => {
+    expect(isSiteLive(SITE, NOW)).toBe(true);
+  });
+
+  it.each([
+    [
+      "an entity row (a W3 publication is not a site)",
+      { resourceType: "entity" },
+    ],
+    ["a member row (site_share_id set)", { siteShareId: "s-1" }],
+    ["revoked", { revokedAt: new Date(NOW) }],
+    ["expired", { expiresAt: new Date(NOW) }],
+    ["no token yet (an approved agent site)", { hasToken: false }],
+    ["unpublished (draft)", { state: "draft" }],
+    ["no publishedAt", { publishedAt: null }],
+    ["a link row", { audience: "link" }],
+  ] as Array<[string, Record<string, unknown>]>)(
+    "%s ⇒ not live",
+    (_l, patch) => {
+      expect(isSiteLive({ ...SITE, ...patch } as typeof SITE, NOW)).toBe(false);
+    }
+  );
+
+  it("a site row is never a live W3 publication (its token 404s on /public/shares)", () => {
+    expect(isPublicationLive(SITE, NOW)).toBe(false);
+  });
 });
 
 describe("no second liveness rule in the sharing code", () => {

@@ -337,7 +337,11 @@ export async function applyPublish(
         eq(resourceShares.resourceType, "entity"),
         eq(resourceShares.resourceId, plan.entityId),
         eq(resourceShares.audience, "public"),
-        isNull(resourceShares.revokedAt)
+        isNull(resourceShares.revokedAt),
+        // The record's STANDALONE publication only: a site member row (0336)
+        // is the same record published into a site, under that site's token,
+        // and a standalone publish must never re-point or re-token it.
+        isNull(resourceShares.siteShareId)
       )
     )
     .limit(1);
