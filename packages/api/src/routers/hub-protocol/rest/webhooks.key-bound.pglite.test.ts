@@ -90,7 +90,8 @@ const K2 = randomUUID();
 const SCOPED = randomUUID();
 const RW = ["hub-protocol.read", "hub-protocol.write"];
 
-const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
+const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
+  h.client!.query<T>(sql, params);
 
 function keyRecord(id: string) {
   return {
