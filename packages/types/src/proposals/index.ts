@@ -815,6 +815,12 @@ export interface CompositeCreateSkillOp {
   /** Stable handle for this skill within the proposal (e.g. "fact1"). */
   ref: string;
   name: string;
+  /**
+   * The ref `synap_load_skill` resolves (e.g. "team/where-the-work-is"). A
+   * teaching skill without one is authored but unreachable; the capture doors
+   * require it (`skillAuthoringProblem`).
+   */
+  slug?: string | null;
   /** Instruction body (Markdown) — the FACT the agent reads while reasoning. */
   body: string;
   scope: "pod" | "user" | "workspace";

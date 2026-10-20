@@ -244,6 +244,8 @@ export interface CapturePlanStepReceipt extends PlanStepSummary {
   id: string | null;
   /** `create_project` only: the pod's evidence verdict. */
   evidence?: PlanProjectEvidence;
+  /** An applied skill step with a slug: the call that loads it. */
+  loadWith?: string;
 }
 
 /** True when a plan input carries any step. */
@@ -321,6 +323,9 @@ function planStepReceipts(
       id,
       ...(op.op === "create_project" && op.evidence
         ? { evidence: op.evidence }
+        : {}),
+      ...(idsByOpIndex && step.slug
+        ? { loadWith: `synap_load_skill({ ref: "${step.slug}" })` }
         : {}),
     };
   });
@@ -1693,6 +1698,17 @@ export async function submitCaptureGraph(
                       ),
                       ...materialized.views.map(
                         (v) => [v.opIndex, v.viewId] as [number, string]
+                      ),
+                      // Rule Loop config rows: a skill used to read `id: null`
+                      // as `applied`, leaving nothing to load or update it by.
+                      ...materialized.skills.map(
+                        (s) => [s.opIndex, s.skillId] as [number, string]
+                      ),
+                      ...materialized.automations.map(
+                        (a) => [a.opIndex, a.automationId] as [number, string]
+                      ),
+                      ...materialized.rules.map(
+                        (r) => [r.opIndex, r.ruleId] as [number, string]
                       ),
                     ])
                   ),

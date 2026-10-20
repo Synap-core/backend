@@ -526,6 +526,7 @@ export type RelationCreateCaller = { create: (input: any) => Promise<any> };
 export type SkillCreateCaller = {
   create: (input: {
     name: string;
+    slug?: string | null;
     body: string;
     scope: "pod" | "user" | "workspace";
     agentTypes?: string[] | null;
@@ -1053,6 +1054,7 @@ export async function materializeCompositeGraph(
       try {
         const created = await options.skillCaller.create({
           name: op.name,
+          slug: op.slug ?? null,
           body: op.body,
           scope: op.scope,
           agentTypes: op.agentTypes ?? null,
