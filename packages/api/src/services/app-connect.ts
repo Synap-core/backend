@@ -64,6 +64,7 @@ import {
   type GrantInput,
 } from "./key-grant.js";
 import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
+import { isAgentCaller } from "./library/agent-door.js";
 import { requestsWithin } from "./agent-connect.js";
 
 /**
@@ -206,12 +207,22 @@ async function loadAppToEnd(
  * bound. Refusing ANY ambient grant locked the owner's own key out of every
  * lifecycle write. A `*` limited to a space, project or object is a scoped key
  * (S1) and stays refused; `isFullAccessGrant` is the one predicate for that.
+ *
+ * "An agent's credential" is `isAgentCaller`: an agent key OR the Intelligence
+ * Service's internal key. The IS (D4 delegation) is remapped to its operator
+ * with no acting agent and the full-access `*` — without its `keyType` the
+ * `*` rule above would let it mint (and receive) an app key as the operator.
  */
 export function assertOwnerCredential(
   act: string,
-  actorAgentUserId?: string | null
+  caller: { agentUserId?: string | null; keyType?: string | null } = {}
 ): void {
-  if (actorAgentUserId ?? getActingAgentUserId()) {
+  if (
+    isAgentCaller({
+      agentUserId: caller.agentUserId ?? getActingAgentUserId(),
+      keyType: caller.keyType,
+    })
+  ) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: `An agent credential cannot ${act} — sign in as the app's owner.`,
@@ -238,8 +249,13 @@ export async function registerApp(args: {
   logoUrl?: string | null;
   mode?: "specific";
   actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
 }): Promise<AppWithGrants> {
-  assertOwnerCredential("register an app", args.actorAgentUserId);
+  assertOwnerCredential("register an app", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
   const record = await new AppRepository(db).register({
     ownerUserId: args.ownerUserId,
     name: args.name,
@@ -766,10 +782,15 @@ export async function issueKey(args: {
   publicId: string;
   ownerUserId: string;
   actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
   /** The door issuing it (the agent's provenance on first issue). */
   via: AppKeyDoor;
 }): Promise<{ apiKey: string; keyId: string }> {
-  assertOwnerCredential("mint an app key", args.actorAgentUserId);
+  assertOwnerCredential("mint an app key", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   assertNotRevoked(found);
   const approved = found.app.approvedRequests ?? [];
@@ -828,10 +849,15 @@ export async function revokeApp(args: {
   /** The caller — the app's owner, unless `podAdmin`. Events name them. */
   ownerUserId: string;
   actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
   /** Lifts the owner floor — set by a `podAdminProcedure` only (`loadAppToEnd`). */
   podAdmin?: boolean;
 }): Promise<{ publicId: string }> {
-  assertOwnerCredential("revoke an app", args.actorAgentUserId);
+  assertOwnerCredential("revoke an app", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
   const found = await loadAppToEnd(
     args.publicId,
     args.ownerUserId,
@@ -873,8 +899,13 @@ export async function renameApp(args: {
   ownerUserId: string;
   name: string;
   actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
 }): Promise<AppWithGrants> {
-  assertOwnerCredential("rename an app", args.actorAgentUserId);
+  assertOwnerCredential("rename an app", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   const to = args.name.trim();
   if (to === found.app.name) return found;
@@ -912,10 +943,15 @@ export async function removeApp(args: {
   /** The caller — the app's owner, unless `podAdmin`. Events name them. */
   ownerUserId: string;
   actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
   /** Lifts the owner floor — set by a `podAdminProcedure` only (`loadAppToEnd`). */
   podAdmin?: boolean;
 }): Promise<{ publicId: string }> {
-  assertOwnerCredential("remove an app", args.actorAgentUserId);
+  assertOwnerCredential("remove an app", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
   const found = await loadAppToEnd(
     args.publicId,
     args.ownerUserId,

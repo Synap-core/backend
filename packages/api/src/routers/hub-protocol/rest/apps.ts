@@ -97,6 +97,7 @@ export function registerAppsRoutes(app: HubHono): void {
         logoUrl: body.data.logoUrl ?? undefined,
         mode: body.data.mode ?? undefined,
         actorAgentUserId: c.get("agentUserId") as string | undefined,
+        actorKeyType: c.get("keyType") as string | undefined,
       });
       return c.json({ app: serializeApp(found) }, 201);
     } catch (err) {
@@ -175,6 +176,7 @@ export function registerAppsRoutes(app: HubHono): void {
           publicId: c.req.param("id"),
           ownerUserId: userId,
           actorAgentUserId: c.get("agentUserId") as string | undefined,
+          actorKeyType: c.get("keyType") as string | undefined,
           via: "cli",
         })
       );
@@ -195,6 +197,7 @@ export function registerAppsRoutes(app: HubHono): void {
         publicId: c.req.param("id"),
         ownerUserId: userId,
         actorAgentUserId: c.get("agentUserId") as string | undefined,
+        actorKeyType: c.get("keyType") as string | undefined,
       });
       return c.json({ revoked: true, public_id: publicId });
     } catch (err) {

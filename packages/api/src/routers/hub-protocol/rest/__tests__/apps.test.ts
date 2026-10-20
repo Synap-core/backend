@@ -1034,3 +1034,58 @@ describe("POST /apps/:id/connect — a scoped or agent caller asks within its ow
     expect(state.proposalInput!.agentUserId ?? null).toBeNull();
   });
 });
+
+/**
+ * The owner's own `*` key passes `assertOwnerCredential` (P5), so the check
+ * must still tell an AGENT holding `*` apart. Two agent shapes reach these
+ * doors with an unbounded `*`: an agent key (`agentUserId`), and the
+ * Intelligence Service's internal key — its D4 delegation is remapped to the
+ * operator with NO acting agent and the explicit full access `*`
+ * (`IS_DELEGATION_GRANT`). "An agent credential" is `isAgentCaller`: either.
+ * Without the keyType half, the IS could mint (and receive the plaintext of)
+ * an app key as the operator. (tRPC `apps.*` is session-only — no key, no
+ * keyType — so these are Hub REST rows.)
+ */
+describe("app lifecycle writes — an agent holding `*` is still an agent", () => {
+  const FULL = { scopes: [{ permissions: ["*"] }], clientId: null };
+  const approved = () =>
+    makeApp({
+      approvedRequests: [
+        { permission: "entity.person.read", workspaceId: WORKSPACE_ID },
+      ],
+    });
+  const shapes: Array<[string, Record<string, unknown>]> = [
+    ["an agent key", { agentUserId: AGENT }],
+    ["the IS internal key", { keyType: "is_internal" }],
+  ];
+
+  for (const [who, vars] of shapes) {
+    it(`REST POST /apps/:id/key refuses ${who} with \`*\` — no key minted`, async () => {
+      state.ambientGrant = FULL;
+      state.app = approved();
+      const app = makeApp_({ scopes: WRITE, userId: OWNER, ...vars });
+      const res = await post(app, `/apps/${PUBLIC_ID}/key`, {});
+      expect(res.status).toBe(403);
+      expect(state.keyInput).toBeNull();
+      expect(state.events).toHaveLength(0);
+    });
+
+    it(`REST POST /apps refuses ${who} with \`*\``, async () => {
+      state.ambientGrant = FULL;
+      const app = makeApp_({ scopes: WRITE, userId: OWNER, ...vars });
+      const res = await post(app, "/apps", { name: "synap.live" });
+      expect(res.status).toBe(403);
+      expect(state.registered).toBeNull();
+    });
+
+    it(`REST DELETE /apps/:id refuses ${who} with \`*\``, async () => {
+      state.ambientGrant = FULL;
+      state.existingKeyIds = ["old-key-1"];
+      const app = makeApp_({ scopes: WRITE, userId: OWNER, ...vars });
+      const res = await app.request(`/apps/${PUBLIC_ID}`, { method: "DELETE" });
+      expect(res.status).toBe(403);
+      expect(state.revokedKeyCalls).toHaveLength(0);
+      expect(state.revokedGrantKeyIdCalls).toHaveLength(0);
+    });
+  }
+});
