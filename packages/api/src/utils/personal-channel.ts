@@ -406,7 +406,9 @@ async function seedWelcomeMessage(
  */
 export async function ensureAgentThread(
   userId: string,
-  agentId: string
+  agentId: string,
+  /** Bounds the INSERT only (see `resolveOrCreateChannel` `beforeCreate`). */
+  beforeCreate?: (workspaceId: string | null) => Promise<void>
 ): Promise<Channel> {
   // A template DM (this function) and an agent-INSTANCE thread
   // (ensureAgentInstanceThread) both carry assignedAgentId = the same template,
@@ -430,6 +432,7 @@ export async function ensureAgentThread(
   });
 
   if (existing) return existing;
+  await beforeCreate?.(null);
 
   // Race-safe upsert against channels_user_agent_personal_uniq (migration 0182):
   // the loser of a concurrent create no-ops, then we re-SELECT the survivor.
@@ -577,7 +580,9 @@ export async function ensureAgentInstanceThread(
  */
 export async function ensureWorkspaceGroupChannel(
   userId: string,
-  workspaceId: string
+  workspaceId: string,
+  /** Bounds the INSERT only (see `resolveOrCreateChannel` `beforeCreate`). */
+  beforeCreate?: (workspaceId: string | null) => Promise<void>
 ): Promise<Channel> {
   const existing = await db.query.channels.findFirst({
     where: and(
@@ -592,6 +597,7 @@ export async function ensureWorkspaceGroupChannel(
   });
 
   if (existing) return existing;
+  await beforeCreate?.(workspaceId);
 
   // Race-safe upsert against channels_user_workspace_group_uniq (migration 0182).
   const [channel] = await db

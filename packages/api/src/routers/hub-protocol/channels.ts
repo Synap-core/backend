@@ -175,34 +175,16 @@ export const channelsRouter = router({
       // Identity floor: `input.userId` becomes the channel owner — a hub PAT may
       // act only as its own owner.
       assertMayActAs(ctx, input.userId);
-      // The key's grant must allow creating a channel where this one LANDS,
-      // before anything is resolved or inserted (S7): a personal channel is
-      // the owner's pod-wide one, a branch lands in the named workspace else
-      // its parent's, a thread in the named workspace (none named = pod scope,
-      // fail closed for a pinned key).
-      let landingWorkspaceId: string | null = input.workspaceId ?? null;
-      if (input.channelType === ChannelType.PERSONAL) {
-        landingWorkspaceId = null;
-      } else if (
-        input.channelType === ChannelType.SUB_THREAD &&
-        !input.workspaceId &&
-        input.parentChannelId
-      ) {
-        const parent = await db.query.channels.findFirst({
-          where: and(
-            eq(channels.id, input.parentChannelId),
-            eq(channels.userId, input.userId)
-          ),
-          columns: { workspaceId: true },
-        });
-        landingWorkspaceId = parent?.workspaceId ?? null;
-      }
-      await assertKeyMayWrite({
-        subjectType: "channel",
-        action: "create",
-        workspaceId: landingWorkspaceId,
-      });
+      // S7: resolving an EXISTING channel is a read; only minting one is a
+      // write. The key's grant must allow `channel.create` where a NEW channel
+      // lands (a personal one is pod-wide), checked right before the insert.
       const channel = await resolveOrCreateChannel({
+        beforeCreate: (workspaceId) =>
+          assertKeyMayWrite({
+            subjectType: "channel",
+            action: "create",
+            workspaceId,
+          }),
         userId: input.userId,
         workspaceId: input.workspaceId,
         channelType: input.channelType,
@@ -213,6 +195,21 @@ export const channelsRouter = router({
         parentChannelId: input.parentChannelId,
         branchPurpose: input.branchPurpose,
       });
+      // The channel handed back — found or minted — must be READABLE under the
+      // key's grant (the read hook's channel clause, `channelVisibilityWhere`).
+      const readable = await db
+        .select({ id: channels.id })
+        .from(channels)
+        .where(
+          and(eq(channels.id, channel.id), channelVisibilityWhere(input.userId))
+        )
+        .limit(1);
+      if (readable.length === 0) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "This key's grant does not allow reading this channel.",
+        });
+      }
       return { channel };
     }),
 

@@ -124,7 +124,17 @@ export interface ResolveOrCreateChannelParams {
    * door already returns.
    */
   origin?: ChannelOrigin;
+  /**
+   * Called with the workspace a NEW channel lands in (null = pod-wide), right
+   * before it is inserted — never when an existing channel resolves. A key
+   * door passes the grant check here (`channel.create`, S7), so resolving a
+   * channel stays a read while minting one is a write.
+   */
+  beforeCreate?: BeforeChannelCreate;
 }
+
+/** The hook a door passes to bound a channel INSERT (see `beforeCreate`). */
+export type BeforeChannelCreate = (workspaceId: string | null) => Promise<void>;
 
 /**
  * Resolve or create a channel based on its canonical type.
@@ -148,6 +158,7 @@ export async function resolveOrCreateChannel(
     externalId,
     title,
     origin,
+    beforeCreate,
   } = params;
 
   // ── PERSONAL ───────────────────────────────────────────────────────────────
@@ -165,7 +176,7 @@ export async function resolveOrCreateChannel(
           'agentId or agentSlug is required for channelType="personal" (orchestrator fallback failed)',
       });
     }
-    return ensureAgentThread(userId, resolvedAgentId);
+    return ensureAgentThread(userId, resolvedAgentId, beforeCreate);
   }
 
   // ── FEED ───────────────────────────────────────────────────────────────────
@@ -212,6 +223,7 @@ export async function resolveOrCreateChannel(
       channelId: parentChannelId,
     });
 
+    await beforeCreate?.(workspaceId ?? parent.workspaceId ?? null);
     const [branch] = await db
       .insert(channels)
       .values({
@@ -249,6 +261,7 @@ export async function resolveOrCreateChannel(
         workspaceId: workspaceId ?? null,
         projectId: projectId ?? null,
         agentSlug,
+        beforeCreate,
       });
     }
     if (!workspaceId) {
@@ -260,7 +273,7 @@ export async function resolveOrCreateChannel(
 
     // Workspace thread — one per (userId, workspaceId)
     if (!contextObjectType || contextObjectType === "workspace") {
-      return ensureWorkspaceGroupChannel(userId, workspaceId);
+      return ensureWorkspaceGroupChannel(userId, workspaceId, beforeCreate);
     }
 
     if (!contextObjectId) {
@@ -317,6 +330,7 @@ export async function resolveOrCreateChannel(
         : {}),
     });
 
+    await beforeCreate?.(workspaceId);
     const [created] = await db
       .insert(channels)
       .values({

@@ -84,6 +84,14 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { hubProtocolRouter } from "./index.js";
+import { runWithActingAgent, runWithGrant } from "@synap/database";
+import {
+  AI_READ_PROPOSE_ROLE_ID,
+  GRANT_PRESETS,
+} from "@synap-core/types/grants";
+import { createHubProtocolCaller } from "../mcp/handlers/shared.js";
+import { buildHandlers } from "../mcp/handlers/build.js";
+import { readHandlers } from "../mcp/handlers/read.js";
 
 const USER = "user-w2b";
 const AGENT = "agent-w2b";
@@ -98,6 +106,9 @@ const OTHER_EXTERNAL = randomUUID();
 const WS_SESSION = randomUUID();
 const WS_THREAD_2 = randomUUID(); // the controls' own thread and session
 const WS_SESSION_2 = randomUUID();
+const ORCHESTRATOR = randomUUID(); // an agent template (personal channels)
+const PERSONAL = randomUUID(); // the owner's existing personal channel with it
+const SESSION_ROOM = randomUUID(); // a focus-session room in WS
 const OTHER_SESSION = randomUUID();
 
 const BASIC =
@@ -128,6 +139,19 @@ const READS = scope(["channel.read", "session.read", "entity.read"], null);
 const READ_ONLY = { scopes: [READS], clientId: null };
 /** Reads anywhere; writes ANYTHING, but only in WS. */
 const WRITE_IN_WS = { scopes: [READS, scope(["*"], [WS])], clientId: null };
+/** The "AI — read & propose" preset every new agent key starts with. */
+const AI_PRESET = {
+  scopes: [
+    scope(
+      [
+        ...GRANT_PRESETS.find((r) => r.id === AI_READ_PROPOSE_ROLE_ID)!.grant
+          .permissions,
+      ],
+      null
+    ),
+  ],
+  clientId: null,
+};
 
 /** The Bearer door with `x-workspace-id: WS` (createContext → ctx.workspaceId). */
 function hub(grant: unknown, agentUserId?: string) {
@@ -194,6 +218,16 @@ beforeAll(async () => {
       WS,
       OTHER_WS,
     ]
+  );
+  await q(
+    `insert into agents (id, agent_slug, active) values ($1, 'orchestrator', true)`,
+    [ORCHESTRATOR]
+  );
+  await q(
+    `insert into channels (id, user_id, workspace_id, channel_type, status, metadata, assigned_agent_id, context_object_type, context_object_id)
+     values ($1, $3, null, 'personal', 'active', '{}', $4, null, null),
+            ($2, $3, $5, 'thread', 'active', '{}', null, 'focus_session', gen_random_uuid())`,
+    [PERSONAL, SESSION_ROOM, USER, ORCHESTRATOR, WS]
   );
   await q(
     `insert into channel_members (id, channel_id, member_id, member_kind, role)
@@ -415,13 +449,55 @@ describe("channels.bindChannel gates the channel's own workspace (W2b)", () => {
   });
 });
 
-describe("channels.resolveOrCreateChannel gates where the channel LANDS (W2b)", () => {
-  it("a personal channel is the owner's pod-wide one: refused to a W key", async () => {
+describe("channels.resolveOrCreateChannel gates only a NEW channel (W2b)", () => {
+  const VIEW = randomUUID(); // a context object nothing has a thread about yet
+  const byContext = (grant: unknown, contextObjectId: string) =>
+    hub(grant, AGENT).channels.resolveOrCreateChannel({
+      userId: USER,
+      workspaceId: WS,
+      channelType: "thread",
+      contextObjectType: "view",
+      contextObjectId,
+    });
+
+  it("a key with channel.create mints a by-context thread in W", async () => {
+    const res = await byContext(WRITE_IN_WS, VIEW);
+    expect(res.channel).toMatchObject({
+      workspaceId: WS,
+      contextObjectId: VIEW,
+    });
+  });
+
+  it("an AI-preset key RESOLVES that existing thread — a read", async () => {
+    const res = await byContext(AI_PRESET, VIEW);
+    expect(res.channel.contextObjectId).toBe(VIEW);
+  });
+
+  it("the same AI-preset key cannot MINT one where none exists", async () => {
+    const before = await count(`select id from channels`);
+    await expect(byContext(AI_PRESET, randomUUID())).rejects.toMatchObject(
+      GRANT_DENIED
+    );
+    expect(await count(`select id from channels`)).toBe(before);
+  });
+
+  it("an AI-preset key resolves the owner's EXISTING personal channel", async () => {
+    const res = await hub(AI_PRESET, AGENT).channels.resolveOrCreateChannel({
+      userId: USER,
+      workspaceId: WS,
+      channelType: "personal",
+      agentId: ORCHESTRATOR,
+    });
+    expect(res.channel.id).toBe(PERSONAL);
+  });
+
+  it("a NEW personal channel is pod-wide: refused to a W key", async () => {
     await expect(
       hub(WRITE_IN_WS).channels.resolveOrCreateChannel({
         userId: USER,
         workspaceId: WS,
         channelType: "personal",
+        agentId: randomUUID(),
       })
     ).rejects.toMatchObject(GRANT_DENIED);
   });
@@ -456,5 +532,63 @@ describe("channels.resolveOrCreateChannel gates where the channel LANDS (W2b)", 
       parentChannelId: WS_THREAD,
     });
     expect(res.channel.workspaceId).toBe(WS);
+  });
+});
+
+/**
+ * The MCP doors an agent on the AI preset uses every day (the devbox worker
+ * posts its session updates through `synap_post_message`). In-process, as the
+ * MCP handler runs them: the key's grant and agent are ambient.
+ */
+describe("MCP doors keep working for an AI-preset agent key (W2b)", () => {
+  const asAgentKey = <T>(fn: () => Promise<T>) =>
+    runWithGrant(AI_PRESET as never, () => runWithActingAgent(AGENT, fn));
+  const mcpCtx = async (toolName: string, args: Record<string, unknown>) => {
+    const caller = await createHubProtocolCaller(
+      USER,
+      ["mcp.read", "mcp.write"],
+      AGENT,
+      null,
+      WS
+    );
+    return {
+      toolName,
+      args,
+      userId: USER,
+      apiKeyScopes: ["mcp.read", "mcp.write"],
+      agentUserId: AGENT,
+      caller,
+      lensCaller: caller,
+      workspaceAccessible: true,
+    };
+  };
+
+  it("synap_post_message posts into a session room in its workspace", async () => {
+    const res = await asAgentKey(async () =>
+      buildHandlers.synap_post_message!(
+        await mcpCtx("synap_post_message", {
+          channelId: SESSION_ROOM,
+          content: "stage 2 done",
+        })
+      )
+    );
+    expect(res.isError).toBeFalsy();
+    expect(
+      await count(`select id from messages where channel_id = $1`, [
+        SESSION_ROOM,
+      ])
+    ).toBe(1);
+  });
+
+  it("synap_get_channel personal resolves the owner's existing channel", async () => {
+    const res = await asAgentKey(async () =>
+      readHandlers.synap_get_channel!(
+        await mcpCtx("synap_get_channel", {
+          mode: "personal",
+          workspaceId: WS,
+        })
+      )
+    );
+    expect(res.isError).toBeFalsy();
   });
 });

@@ -157,6 +157,8 @@ export async function ensurePrivateObjectThread(params: {
   workspaceId?: string | null;
   projectId?: string | null;
   agentSlug?: string;
+  /** Bounds the private thread's INSERT only (`resolveOrCreateChannel`). */
+  beforeCreate?: (workspaceId: string | null) => Promise<void>;
 }): Promise<Channel> {
   const { userId, ref } = params;
   const room = await ensureObjectChannelFor(userId, ref);
@@ -205,6 +207,7 @@ export async function ensurePrivateObjectThread(params: {
     ...(ref.type === "entity" ? { relatedEntityIds: [ref.id] } : {}),
   });
 
+  await params.beforeCreate?.(params.workspaceId ?? room.workspaceId ?? null);
   const [created] = await db
     .insert(channels)
     .values({
