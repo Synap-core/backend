@@ -15,10 +15,12 @@
  * only `stepRunId`; the automation is reached through `automation_step_runs`.
  */
 
+import { z } from "zod";
 import { grantReadPredicate } from "../../access/grant-read.js";
 import {
   eq,
   or,
+  inArray,
   and,
   isNull,
   isNotNull,
@@ -201,4 +203,28 @@ export async function resolveAutomationStepRunIds(
     .innerJoin(automationRuns, eq(automationRuns.id, automationStepRuns.runId))
     .where(eq(automationRuns.automationId, automationId));
   return rows.map((r) => r.stepRunId);
+}
+
+/**
+ * Most proposal ids one `proposalIds` filter may name. Shared by every list
+ * door that takes the filter (tRPC `proposals.list`, Hub `listProposals` and
+ * its REST `GET /proposals`), so they can never disagree on the bound.
+ */
+export const PROPOSAL_IDS_FILTER_MAX = 100;
+
+/**
+ * The `proposalIds` filter: a bounded, de-duplicated batch of uuids. A FILTER
+ * only — it adds no reach. Every door that takes it ANDs `proposalIdsWhere`
+ * onto its own visibility floor, so naming an id the caller cannot see in the
+ * list simply omits that row. An explicitly empty batch matches nothing (it is
+ * never read as "no filter").
+ */
+export const proposalIdsFilterSchema = z
+  .array(z.string().uuid())
+  .max(PROPOSAL_IDS_FILTER_MAX)
+  .transform((ids) => [...new Set(ids)]);
+
+/** The `proposalIds` predicate — ANDed onto a door's floor, never instead of it. */
+export function proposalIdsWhere(ids: readonly string[]): SQL {
+  return inArray(proposals.id, [...ids]);
 }

@@ -1419,6 +1419,14 @@ export class HubRestClient {
     limit?: number;
     /** Rows to skip. Pair with `listProposalsPage` to page a queue. */
     offset?: number;
+    /**
+     * Only these proposals (≤ 100 uuids). A filter on the same floor and key
+     * grant as the rest of the queue: an id the caller cannot see is simply
+     * absent from the result. Pass `status: "all"` to resolve ids whatever
+     * their status, and a `limit` at least the batch size. An empty array
+     * matches nothing.
+     */
+    proposalIds?: string[];
   }): Promise<HubProposal[]> {
     const userId = await this.resolveUserId();
     const params = new URLSearchParams({ userId });
@@ -1434,6 +1442,9 @@ export class HubRestClient {
     if (options?.limit) params.set("limit", String(options.limit));
     if (options?.offset !== undefined) {
       params.set("offset", String(options.offset));
+    }
+    if (options?.proposalIds) {
+      params.set("proposalIds", options.proposalIds.join(","));
     }
     const result = await this.request<
       HubProposal[] | HubListResponse<HubProposal>
@@ -1475,6 +1486,14 @@ export class HubRestClient {
     scope?: "workspace" | "all";
     limit?: number;
     offset?: number;
+    /**
+     * Only these proposals (≤ 100 uuids). A filter on the same floor and key
+     * grant as the rest of the queue: an id the caller cannot see is simply
+     * absent from the result. Pass `status: "all"` to resolve ids whatever
+     * their status, and a `limit` at least the batch size. An empty array
+     * matches nothing.
+     */
+    proposalIds?: string[];
   }): Promise<{
     proposals: HubProposal[];
     total: number;
@@ -1493,6 +1512,9 @@ export class HubRestClient {
       params.set("limit", String(options.limit));
     if (options?.offset !== undefined) {
       params.set("offset", String(options.offset));
+    }
+    if (options?.proposalIds) {
+      params.set("proposalIds", options.proposalIds.join(","));
     }
     const result = await this.request<Record<string, unknown>>(
       "GET",
