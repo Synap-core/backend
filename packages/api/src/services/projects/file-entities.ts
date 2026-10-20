@@ -19,7 +19,8 @@
  *      not say which, so it is no existence oracle.
  *   2. GATE: `checkPermissionOrPropose` —
  *        file   → `project/file_entities`, `forcePropose` (an ACCESS decision:
- *                 an agent ALWAYS proposes; rules cannot widen rung 2.1);
+ *                 an agent ALWAYS proposes; rules cannot widen rung 2.1). The
+ *                 engine files it under its own reason, `PROJECT_FILING`;
  *        unfile → `link/delete` (DESTRUCTIVE floor: an agent always proposes).
  *      One proposal for the whole batch.
  *   3. APPLY (`applyProjectFiling`, also the approval half): re-floors on the
@@ -298,7 +299,8 @@ export async function fileEntitiesGoverned(params: {
         subjectType: "project",
         action: "file_entities",
         // An ACCESS decision (exposes each record to the project's members):
-        // an agent always proposes, whatever rule or ownership says.
+        // an agent always proposes, whatever rule or ownership says. The
+        // engine names it `PROJECT_FILING`, never a scope/identity change.
         forcePropose: true,
         data: payload,
       });
