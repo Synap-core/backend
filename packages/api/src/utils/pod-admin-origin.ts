@@ -1,3 +1,4 @@
+import { consoleHostForPod } from "@synap-core/types/tenancy";
 import { configuredPodAdminBase } from "./pod-admin-url.js";
 
 /**
@@ -6,10 +7,14 @@ import { configuredPodAdminBase } from "./pod-admin-url.js";
  * setup door's review URL and `agentUsers.list`'s `approveUrl` both build on it.
  *
  * The configured console (`POD_ADMIN_URL`) when it is valid — the deploy
- * configuration is authoritative. Otherwise the installer's naming
- * (`pod_admin_domain_for_domain` in `synap`): `pod.<root>` → `pod-admin.<root>`,
- * a legacy `<sub>.<root>` → `<sub>-admin.<root>`, localhost → the local
- * pod-admin dev server.
+ * configuration is authoritative. Otherwise the one naming rule
+ * (`consoleHostForPod`, `@synap-core/types/tenancy`, which the installer's
+ * `pod_admin_domain_for_domain` follows): `<name>.pod.synap.live` →
+ * `admin.<name>.pod.synap.live`, a legacy `pod.<name>.synap.live` →
+ * `pod-admin.<name>.synap.live`, a self-hosted `pod.<root>` →
+ * `pod-admin.<root>` (or `<sub>.<root>` → `<sub>-admin.<root>`); localhost →
+ * the local pod-admin dev server. A host that names no console (a tenant zone
+ * itself) is returned unchanged.
  */
 export function toPodAdminOrigin(origin: string): string {
   const configured = configuredPodAdminBase();
@@ -20,14 +25,8 @@ export function toPodAdminOrigin(origin: string): string {
     if (host === "localhost" || host === "127.0.0.1") {
       return "http://localhost:4040";
     }
-    if (host.startsWith("pod.")) {
-      return `${u.protocol}//pod-admin.${host.slice("pod.".length)}`;
-    }
-    const dot = host.indexOf(".");
-    if (dot > 0) {
-      return `${u.protocol}//${host.slice(0, dot)}-admin.${host.slice(dot + 1)}`;
-    }
-    return `${u.protocol}//pod-admin.${host}`;
+    const consoleHost = consoleHostForPod(host);
+    return consoleHost ? `${u.protocol}//${consoleHost}` : origin;
   } catch {
     return origin;
   }

@@ -19,6 +19,18 @@ afterEach(() => {
 });
 
 describe("toPodAdminOrigin", () => {
+  it("a <name>.pod.synap.live pod's console is admin.<name>.pod.synap.live", () => {
+    expect(toPodAdminOrigin("https://alice.pod.synap.live")).toBe(
+      "https://admin.alice.pod.synap.live"
+    );
+  });
+
+  it("a tenant zone names no console: the origin comes back unchanged", () => {
+    expect(toPodAdminOrigin("https://pod.synap.live")).toBe(
+      "https://pod.synap.live"
+    );
+  });
+
   it("a nested pod's console is pod-admin.<name>", () => {
     expect(toPodAdminOrigin("https://pod.alice.synap.live")).toBe(
       "https://pod-admin.alice.synap.live"
@@ -60,6 +72,32 @@ describe("toPodAdminOrigin", () => {
 });
 
 describe("approval links and the console origin check", () => {
+  it("a <name>.pod.synap.live pod's approval link names admin.<name>.pod.synap.live", () => {
+    process.env.PUBLIC_URL = "https://alice.pod.synap.live";
+    expect(
+      agentApprovalPageUrl("http://backend:4000/x", "k1", "claude-code")
+    ).toBe(
+      "https://admin.alice.pod.synap.live/approve-agent/k1?agentType=claude-code"
+    );
+  });
+
+  it("a <name>.pod.synap.live pod: only its own console passes, not another tenant's nor its old name", () => {
+    process.env.PUBLIC_URL = "https://alice.pod.synap.live";
+    const req = "http://backend:4000/x";
+    expect(isPodAdminOrigin("https://admin.alice.pod.synap.live", req)).toBe(
+      true
+    );
+    expect(isPodAdminOrigin("https://admin.bob.pod.synap.live", req)).toBe(
+      false
+    );
+    expect(isPodAdminOrigin("https://pod-admin.alice.synap.live", req)).toBe(
+      false
+    );
+    expect(isPodAdminOrigin("https://shop.alice.pod.synap.live", req)).toBe(
+      false
+    );
+  });
+
   it("a flat pod's approval link names its own console", () => {
     process.env.PUBLIC_URL = "https://alice.synap.live";
     expect(

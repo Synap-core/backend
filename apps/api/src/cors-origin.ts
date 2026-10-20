@@ -20,6 +20,10 @@
 import { getCorsOrigins } from "./middleware/security.js";
 import { isPublicDoorPath } from "@synap/api/public-doors";
 import {
+  firstPartyBaseForPodHost,
+  isRefusedSiteBase,
+} from "@synap-core/types/tenancy";
+import {
   and,
   arrayContains,
   eq,
@@ -58,38 +62,16 @@ function podPublicHost(): string | null {
 }
 
 /**
- * Zones whose subdomains are different tenants: every Synap Cloud pod lives
- * under one, and so do the Control Plane and the apps. A first-party base equal
- * to one would make every other tenant's pod a credentialed caller of this pod
- * (a legacy `<name>.synap.live` pod derived `synap.live`). Refused, like a bare
- * TLD. The installer refuses the same zones for the Kratos cookie
- * (`synap_tenant_zones` in the repo's `synap`).
- */
-const TENANT_ZONES: readonly string[] = ["synap.live", "staging.synap.live"];
-
-/** A base that would admit hosts this pod does not own: a TLD or a tenant zone. */
-function isRefusedFirstPartyBase(base: string): boolean {
-  return !base.includes(".") || TENANT_ZONES.includes(base);
-}
-
-/**
- * Derive the first-party base by dropping a pod host's conventional service
- * label (`pod.` / `pod-admin.`): `pod.thearch.synap.live` → `thearch.synap.live`,
- * so sibling surfaces (`pod-admin.thearch.synap.live`) are first-party. Returns
- * null when the host carries no known service prefix or the remainder is a bare
- * TLD or a tenant zone — never widen CORS to an entire TLD or zone.
- */
-function deriveBaseFromHost(host: string): string | null {
-  const labels = host.split(".");
-  if (labels[0] === "pod" || labels[0] === "pod-admin") {
-    const base = labels.slice(1).join(".");
-    return isRefusedFirstPartyBase(base) ? null : base;
-  }
-  return null;
-}
-
-/**
  * Base domain whose subdomains count as first-party.
+ *
+ * Derived from the pod's public host by the one naming rule
+ * (`firstPartyBaseForPodHost`, `@synap-core/types/tenancy`): a Synap Cloud pod
+ * `<name>.pod.synap.live` → itself, so its console `admin.<name>.pod.synap.live`
+ * is first-party; a nested legacy `pod.<name>.synap.live` → `<name>.synap.live`;
+ * a flat legacy pod none (it shares only a tenant zone with its console); a
+ * self-hosted `pod.<root>` / `pod-admin.<root>` → `<root>`. Never a TLD or a
+ * tenant zone, explicit or derived: every other tenant's pod lives under one
+ * and would become a credentialed caller of this pod.
  *
  * SELF-HEALING: derived from the pod's live PUBLIC_URL, not a separately-stored
  * value that goes stale on a domain move. An explicit SYNAP_BASE_DOMAIN is
@@ -97,17 +79,16 @@ function deriveBaseFromHost(host: string): string | null {
  * or is a subdomain); a value left over from a previous domain no longer matches
  * PUBLIC_URL, so we fall back to the value derived from the current PUBLIC_URL.
  * When PUBLIC_URL can't be derived (e.g. a custom apex domain), the explicit
- * value is trusted as-is. A TLD or a tenant zone is never a base, explicit or
- * derived.
+ * value is trusted as-is.
  */
 function getBaseDomain(): string | null {
   const configured =
     process.env.SYNAP_BASE_DOMAIN?.trim().replace(/^\.+/, "").toLowerCase() ||
     null;
   const explicit =
-    configured && !isRefusedFirstPartyBase(configured) ? configured : null;
+    configured && !isRefusedSiteBase(configured) ? configured : null;
   const host = podPublicHost();
-  const derived = host ? deriveBaseFromHost(host) : null;
+  const derived = host ? firstPartyBaseForPodHost(host) : null;
 
   if (!explicit) return derived; // nothing stored → self-derive from PUBLIC_URL
   if (!host || !derived) return explicit; // can't derive (custom apex) → trust operator
@@ -118,7 +99,7 @@ function getBaseDomain(): string | null {
 /**
  * Explicit allowlist: ALLOWED_ORIGINS + DB-dynamic + dev localhost + PUBLIC_URL
  * + POD_ADMIN_URL (this pod's own console, first-party even when no base
- * covers it — a legacy pod's console shares only a tenant zone with it).
+ * covers it — a flat legacy pod's console shares only a tenant zone with it).
  */
 function explicitOrigins(): Set<string> {
   const set = new Set<string>();
