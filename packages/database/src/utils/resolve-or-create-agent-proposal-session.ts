@@ -25,6 +25,7 @@
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
+import { workspaces } from "../schema/workspaces.js";
 import { openRunSession } from "./open-run-session.js";
 import {
   clientKeyScope,
@@ -145,6 +146,28 @@ export async function findClientSession(
   return row ? { id: row.id, autoOpened: row.autoOpened === true } : null;
 }
 
+/**
+ * The space an auto-opened receipt is stamped with: the write's space, unless
+ * that space is ARCHIVED — then none (pod-level). A receipt groups a client's
+ * writes; it is not a placement, and every later write of the conversation is
+ * filed under it, so stamping an archived space buried a whole working stretch
+ * in a space nobody lists (live 2026-10-20: an agent moving items OUT of the
+ * archived "Radar" opened its receipt IN Radar). An id with no row is kept as
+ * given — this only refuses what is provably archived.
+ */
+async function receiptWorkspaceId(
+  database: Pick<typeof db, "select">,
+  workspaceId: string | null | undefined
+): Promise<string | null> {
+  if (!workspaceId) return null;
+  const [row] = await database
+    .select({ archivedAt: workspaces.archivedAt })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  return row?.archivedAt != null ? null : workspaceId;
+}
+
 export async function resolveOrCreateAgentProposalSession(
   input: ResolveOrCreateAgentProposalSessionInput
 ): Promise<string | null> {
@@ -189,7 +212,7 @@ export async function resolveOrCreateAgentProposalSession(
         database: tx as unknown as typeof db,
         userId: input.userId,
         agentUserId: input.agentUserId,
-        workspaceId: input.workspaceId ?? null,
+        workspaceId: await receiptWorkspaceId(tx, input.workspaceId),
         projectId: input.projectId ?? null,
         goal,
         title: input.title ?? null,

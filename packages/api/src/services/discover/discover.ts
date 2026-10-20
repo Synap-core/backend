@@ -84,6 +84,7 @@ import {
   ONE_SPACE_PER_DOMAIN_REFLEX,
   ONE_SPACE_PER_DOMAIN_RULE,
 } from "../one-space-per-domain.js";
+import { isHiddenAsArchived } from "../../utils/workspace-archived.js";
 
 export type DiscoverDetail = "light" | "full";
 
@@ -371,6 +372,11 @@ interface DiscoverWorkspace {
    * (or a person's own orient).
    */
   joined?: false;
+  /**
+   * Present (and `true`) only on a PINNED archived space — unpinned, an
+   * archived space is not listed at all (`isHiddenAsArchived`).
+   */
+  archived?: true;
   /**
    * The stored brief, read through THE reader (`readSpaceBrief`): light
    * carries `{ goal }` only; full, the whole normalized brief.
@@ -716,6 +722,7 @@ export async function discover(
             settings: workspaces.settings,
             workspaceType: workspaces.workspaceType,
             systemSlug: workspaces.systemSlug,
+            archivedAt: workspaces.archivedAt,
           })
           .from(workspaces)
           .where(inArray(workspaces.id, lensWsIds))
@@ -797,6 +804,12 @@ export async function discover(
         // workspace may HOLD domain entities is surfaced per row instead
         // (`acceptsEntities: false`), so an agent sees it and does not file there.
         .filter((w) => {
+          // A pin is answered even when archived (marked below); otherwise an
+          // archived space is left out at EVERY detail level — the same rule
+          // `workspaces.list` applies by default (`isHiddenAsArchived`), so
+          // orient and `synap_list_workspaces` can no longer disagree. It is
+          // not "empty": it never reaches the hidden-empty count.
+          if (workspaceId !== w.id && isHiddenAsArchived(w)) return false;
           if (detail === "full") return true;
           // Light hides EMPTY domains — an agent choosing where to write gains
           // nothing from a workspace holding no entities, and four of them were
@@ -844,6 +857,7 @@ export async function discover(
             out.acceptsEntities = false;
           }
           if (agentJoined && !agentJoined.has(w.id)) out.joined = false;
+          if (w.archivedAt != null) out.archived = true;
           // Light keeps `{ goal }` only where onboarding is PENDING (the
           // space is empty): elsewhere the goal already rides as the purpose
           // line below, or is subordinate to an authored one — not twice.

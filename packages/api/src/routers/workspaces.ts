@@ -86,6 +86,7 @@ import {
 } from "../utils/workspace-archive.js";
 import { AccessContext } from "../access/index.js";
 import { readSpaceStats } from "../services/workspace-stats.js";
+import { isHiddenAsArchived } from "../utils/workspace-archived.js";
 
 export { isPodReadableWorkspace } from "./workspaces/helpers.js";
 
@@ -273,7 +274,7 @@ const coreProcedures = {
       for (const m of memberships) {
         const workspace = m.workspace;
         if (!workspace) continue;
-        if (!includeArchived && workspace.archivedAt != null) continue;
+        if (isHiddenAsArchived(workspace, { includeArchived })) continue;
         if (appIdFilter) {
           const s = (workspace.settings ?? {}) as Record<string, unknown>;
           if (s.appId !== appIdFilter) continue;
@@ -296,7 +297,7 @@ const coreProcedures = {
 
       for (const workspace of podReadable) {
         if (byId.has(workspace.id)) continue;
-        if (!includeArchived && workspace.archivedAt != null) continue;
+        if (isHiddenAsArchived(workspace, { includeArchived })) continue;
         if (appIdFilter) {
           const s = (workspace.settings ?? {}) as Record<string, unknown>;
           if (s.appId !== appIdFilter) continue;
