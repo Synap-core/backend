@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  UNNAMED_AGENT_NAME,
   isAgentSpokenMessage,
   messageSpeakerIds,
   resolveMessageSpeaker,
@@ -104,5 +105,11 @@ describe("which actor spoke", () => {
         userId: "system",
       })
     ).toEqual([]);
+  });
+});
+
+describe("UNNAMED_AGENT_NAME", () => {
+  it("is the phone's word for an unknown agent, so both surfaces say the same", () => {
+    expect(UNNAMED_AGENT_NAME).toBe("AI");
   });
 });

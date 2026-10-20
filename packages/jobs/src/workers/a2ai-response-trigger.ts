@@ -51,6 +51,7 @@ import {
   messages,
   persistAssistantReply,
   agentOverridesForTurn,
+  RoutedSource,
   type AgentTurnOverrides,
 } from "@synap/database";
 import { createNotificationViaService } from "../utils/notification-creator.js";
@@ -566,6 +567,14 @@ export async function handleA2AIResponseTrigger(
         intelligenceServiceId: serviceId,
         agentType,
       },
+      // WHO SPOKE (`messageSpeakerIds`, `@synap-core/types/activity`): the
+      // agent user this turn ran as. `userId` is the owner the agent acts for,
+      // never the agent, so without this the reply stayed unnamed on the desk
+      // and the phone. DIRECT, as an agent's own post (`postChannelMessage`).
+      // No agent user resolved ⇒ nothing recorded: unnamed, never a guess.
+      routed: agentUserId
+        ? { teammateId: agentUserId, source: RoutedSource.DIRECT }
+        : null,
     });
 
     // A COMMITTED PARTIAL is not a completion. The provider died mid-stream,
