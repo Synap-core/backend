@@ -9,8 +9,10 @@
  * every other read door answers 403 GRANT_DOOR_UNSUPPORTED. Fail closed: a
  * new read door is refused until someone verifies it and lists it here.
  *
- * Writes stay open: each one passes the gate, whose rung 0 denies an
- * out-of-grant write.
+ * Writes on Hub REST and MCP stay open: each one is meant to pass the gate,
+ * whose rung 0 denies an out-of-grant write. On the Bearer tRPC door (S7,
+ * 2026-10-20) a mutation passes only when `TRPC_KEY_MUTATION_DOORS` says the
+ * gate really bounds it; every other one needs an unbounded `*` key.
  *
  * P2b — an AGGREGATE read door (ask, orient, find, …) cannot narrow its
  * results row by row yet, so it DECLARES the grant subjects it reads
@@ -376,7 +378,229 @@ export function mcpToolAllowed(
   );
 }
 
-/** tRPC: may a scoped key call this procedure? */
-export function trpcProcedureAllowed(type: string, path: string): boolean {
-  return type !== "query" || GRANT_SAFE_TRPC_QUERIES.has(path);
+/**
+ * How a key-reachable tRPC MUTATION is bounded by a grant (S7).
+ *
+ *  - `gated`: every write reaches the governed-write gate with the REAL
+ *    target (stored row or validated input) and nothing is written before
+ *    it, so rung 0 (`grantWriteDenial`) bounds it by the key's grant.
+ *  - `owner_wide`: acts for the whole owner; no grant can narrow it.
+ *  - `refused`: the gate does not bound it yet (gates a workspace the caller
+ *    picked, writes before the gate, or no grant check at all), or it waits
+ *    on a product decision. Refused for a scoped key until fixed / decided.
+ */
+export type TrpcWriteDoor =
+  | { readonly bound: "gated" }
+  | { readonly bound: "owner_wide"; readonly reason: string }
+  | { readonly bound: "refused"; readonly reason: string };
+
+const GATED: TrpcWriteDoor = { bound: "gated" };
+const OWNER_WIDE = (reason: string): TrpcWriteDoor => ({
+  bound: "owner_wide",
+  reason,
+});
+const UNBOUNDED = (reason: string): TrpcWriteDoor => ({
+  bound: "refused",
+  reason,
+});
+/** Class (d): the default until the founder decides is REFUSED. */
+const DECISION = (id: string, reason: string): TrpcWriteDoor => ({
+  bound: "refused",
+  reason: `Product decision ${id}: ${reason}`,
+});
+
+const HEADER_WS =
+  "The gate checks the workspace the caller picked (header/input), not the target's.";
+const READ_ONLY_CHECK =
+  "Checked only by a READ predicate; the write itself is not grant-checked.";
+
+/**
+ * Every key-reachable tRPC MUTATION, by procedure path: the hub router
+ * (`/api/hub/trpc`) and the core-router procedures built on
+ * `apiKeyMiddleware`. The set is DERIVED from the live routers by
+ * `__tripwires__/trpc-mutation-classification.tripwire.test.ts`; an
+ * unclassified mutation is refused for every scoped key (fail closed).
+ *
+ * Plan + evidence (file:line per row):
+ * lanes/wf-w1/_docs/13-trpc-mutation-fence-plan.md §1.2 / §2. A `refused` row
+ * moves to `gated` only with its root fix (W2) and a test proving the gate
+ * sees the real target.
+ */
+export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
+  {
+    // (a) GATED — the gate bounds them with the grant.
+    "channels.createExternalChannel": GATED,
+    "skills.createSkill": GATED,
+    "views.updateView": GATED,
+    "views.arrangeBento": GATED,
+    "views.updateContent": GATED,
+    "widgetDefinitions.upsertWidgetDef": GATED,
+    "automations.pauseAutomation": GATED,
+    "automations.deleteAutomation": GATED,
+    "signals.classify": GATED, // writes nothing
+    "playbooks.promote": GATED,
+    "playbooks.update": GATED,
+    "entities.deleteEntity": GATED,
+    "documents.createDocument": GATED,
+    "documents.patchDocument": GATED,
+    "documents.createDocumentProposal": GATED,
+    "branches.createBranch": GATED,
+    "branches.mergeBranch": GATED,
+    "relationDefs.create": GATED,
+    "n8nActions.analyzeContent": GATED, // writes nothing
+
+    // (b) OWNER-WIDE — need an unbounded `*` key.
+    "channels.ensurePersonal": OWNER_WIDE(
+      "The owner's pod-wide personal channel; ignores the workspace."
+    ),
+    "services.register": OWNER_WIDE(
+      "Rewrites a pod-global intelligence service (pod admin / is_internal)."
+    ),
+    "intelligenceRegistry.storeServiceSecret": OWNER_WIDE(
+      "Upserts the key principal's vault secret for a free-form serviceId; no gate."
+    ),
+
+    // (c) REFUSED until the W2 root fix.
+    "entities.createEntity": UNBOUNDED(
+      `${HEADER_WS} A pod-scope kind lands pod-wide; strong-dedup writes before the gate.`
+    ),
+    "entities.updateEntities": UNBOUNDED(
+      `${HEADER_WS} A pod-wide row falls back to the header workspace.`
+    ),
+    "entities.updateEntity": UNBOUNDED(
+      `${HEADER_WS} The gate's kind is the input profileSlug, not the stored kind.`
+    ),
+    "documents.upsertSessionSection": UNBOUNDED(
+      "The session document is created before the gate."
+    ),
+    "linking.linkEntity": UNBOUNDED(
+      "Inserts even when the gate answers `proposed`."
+    ),
+    "linking.linkDocument": UNBOUNDED(
+      "Inserts even when the gate answers `proposed`."
+    ),
+    "relations.createRelation": UNBOUNDED(
+      `${HEADER_WS} The edge is placed by its endpoints.`
+    ),
+    "relations.deleteRelation": UNBOUNDED(HEADER_WS),
+    "profiles.createProfile": UNBOUNDED(
+      "An existing pod-wide slug resolves to that profile; grantAccess runs before the gate."
+    ),
+    "profiles.setRenderer": UNBOUNDED(
+      `${HEADER_WS} scope pod|user binds pod-wide.`
+    ),
+    "profiles.createPropertyDef": UNBOUNDED(
+      `${HEADER_WS} A non-overlay def is stored pod-wide.`
+    ),
+    "profiles.updatePropertyDef": UNBOUNDED(
+      `${HEADER_WS} Base defs are pod-wide.`
+    ),
+    "views.createView": UNBOUNDED(
+      "With no workspace and no project there is no gate at all."
+    ),
+    "migration.migrate": UNBOUNDED(
+      "propertyDefs.create has no gate; scope `system` is allowed."
+    ),
+    "signals.fetch": UNBOUNDED(
+      "No gate: outbound relay fetch on a caller-shaped path, history into any workspace."
+    ),
+    "signals.subscriptions": UNBOUNDED(
+      "No gate; the caller's workspace is not validated."
+    ),
+    "signals.batch": UNBOUNDED("Inherits signals.fetch and signals.capture."),
+    "signals.capture": UNBOUNDED(
+      `${HEADER_WS} Same pod-kind fallback as entities.createEntity.`
+    ),
+    "channels.resolveOrCreateChannel": UNBOUNDED(
+      "Inserts channels; the input workspace is never grant-checked."
+    ),
+    "channels.bindChannel": UNBOUNDED(
+      "The gate's workspace is caller-supplied, never compared with the channel's."
+    ),
+    "channels.sendExternalMessage": UNBOUNDED(
+      "Gates the input workspace; the channel is found by external id."
+    ),
+    "channels.postToA2AIChannel": UNBOUNDED(
+      "Gated only on first join, with the input workspace; queues an AI turn."
+    ),
+    "context.updateThreadContext": UNBOUNDED(
+      `${READ_ONLY_CHECK} Rewrites the summary injected into the next prompt.`
+    ),
+    "sessions.getOrCreate": UNBOUNDED(READ_ONLY_CHECK),
+    "sessions.update": UNBOUNDED(READ_ONLY_CHECK),
+    "sessions.close": UNBOUNDED(READ_ONLY_CHECK),
+    "compactedStates.create": UNBOUNDED(
+      `${READ_ONLY_CHECK} Plants the memory that bootstraps the next session.`
+    ),
+    "n8nActions.createEntity": UNBOUNDED(
+      "The server picks the workspace; same pod-kind fallback as entities.createEntity."
+    ),
+
+    // (d) PRODUCT DECISION — refused until decided (plan §2 D1–D5).
+    "automations.createAutomation": DECISION(
+      "D1",
+      "a flow armed by a scoped key runs as its author with no grant."
+    ),
+    "automations.updateAutomation": DECISION(
+      "D1",
+      "a flow edited by a scoped key runs as its author with no grant."
+    ),
+    "automations.activateAutomation": DECISION(
+      "D1",
+      "arms a run that carries no grant."
+    ),
+    "automations.triggerAutomation": DECISION(
+      "D1",
+      "the automation-execute job carries no grant."
+    ),
+    "entities.attachFacet": DECISION(
+      "D2",
+      "may a pinned key attach a pod-wide shared role?"
+    ),
+    "entities.updateFacet": DECISION("D2", "pod-wide role facets."),
+    "entities.detachFacet": DECISION("D2", "pod-wide role facets."),
+    "proposals.updateProposal": DECISION(
+      "D3",
+      "the decision verbs ignore workspace and project pins."
+    ),
+    "channels.triggerAI": DECISION(
+      "D4",
+      "an AI turn spends the owner's budget on a read grant."
+    ),
+    "observations.append": DECISION(
+      "D5",
+      "are observations governed writes? An unknown workspace widens to pod-wide."
+    ),
+  };
+
+export const GRANT_WRITE_DOOR_UNSUPPORTED =
+  "This door does not support scoped keys yet: its writes are not bounded by a grant. Use a door listed in the API keys guide, or a key with unrestricted full access ('*' with no space, project or object limit).";
+
+/**
+ * tRPC (the Bearer door): may a key holding `grant` call this procedure?
+ *
+ *  - no grant (legacy key, session): always — unchanged;
+ *  - query: an unfenced key always; a scoped key only a seamed one;
+ *  - anything else (mutation, subscription): a `gated` mutation for any
+ *    grant (rung 0 bounds it); owner-wide, refused AND unclassified ones only
+ *    for an unbounded `*` key (a pinned `*` is scoped — S1).
+ */
+export function trpcProcedureAllowed(
+  type: string,
+  path: string,
+  grant: KeyGrant | null | undefined
+): boolean {
+  if (!grant) return true;
+  if (type === "query")
+    return !isFencedGrant(grant) || GRANT_SAFE_TRPC_QUERIES.has(path);
+  if (TRPC_KEY_MUTATION_DOORS[path]?.bound === "gated") return true;
+  return isUnboundedFullAccess(grant);
+}
+
+/** The 403 message for a procedure `trpcProcedureAllowed` refused. */
+export function trpcRefusalMessage(type: string, path: string): string {
+  if (type === "query") return GRANT_DOOR_UNSUPPORTED;
+  return TRPC_KEY_MUTATION_DOORS[path]?.bound === "owner_wide"
+    ? GRANT_OWNER_WIDE_UNSUPPORTED
+    : GRANT_WRITE_DOOR_UNSUPPORTED;
 }
