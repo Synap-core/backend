@@ -92,3 +92,6 @@ deploy/state/
 
 # Generated code-graph output from a local tool, never source.
 .strata/
+
+# pnpm pack output (scripts/contracts-publish.mjs packs here, then copies out).
+packages/*/*.tgz
