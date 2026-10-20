@@ -73,6 +73,10 @@ const REST_DIR = path.resolve(HERE, "../routers/hub-protocol/rest");
  *   - sectionId    — an identifier inside a document's JSON section list,
  *                     not a database row id.
  *   - type         — `/graph/:type/:id` entity-kind discriminator, not an id.
+ *   - slugOrPublicId — `/public/sites/:siteToken/collections/:key/
+ *                     :slugOrPublicId` (2026-10-20): matched against
+ *                     `resource_shares.public_id` / `public_slug`, both `text`
+ *                     (0336), and only after `PUBLIC_ID_RE` / `SLUG_RE` passed.
  *   - userId       — `/users/:userId/context` floors on
  *                     `assertMayActAs(ctx, userId)`: a MISMATCHED (hence any
  *                     malformed) value 403s via strict string equality
@@ -89,6 +93,7 @@ const EXCLUDE_PARAMS = new Set([
   "messageId",
   "sectionId",
   "type",
+  "slugOrPublicId",
   "userId",
 ]);
 
