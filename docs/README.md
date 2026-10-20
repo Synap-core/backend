@@ -17,6 +17,16 @@ code they describe.
 > `ARCHITECTURE-OVERVIEW.md` is the source of truth for the public claims the
 > root `README.md` makes. If the model changes, update it in the same commit.
 
+## Reference (generated)
+
+Generated from source by `pnpm docs:reference`; do not edit by hand.
+
+| File                                                       | What it is                                     |
+| ---------------------------------------------------------- | ---------------------------------------------- |
+| [`reference/mcp-tools.md`](reference/mcp-tools.md)         | Every tool the pod's MCP server lists          |
+| [`reference/events.md`](reference/events.md)               | The event types an automation trigger can name |
+| [`reference/hub-openapi.json`](reference/hub-openapi.json) | OpenAPI document of the Hub Protocol REST API  |
+
 ## Operating a pod
 
 | File                                                             | What it is                                                  |
