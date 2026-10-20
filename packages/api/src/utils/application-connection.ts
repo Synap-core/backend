@@ -282,3 +282,27 @@ export function readInviteApproval(
     ? { inviteId, inviteAcceptedAt, approvedAt }
     : null;
 }
+
+/**
+ * The people of a sign-in app, each marked when their link was made because
+ * their invite was the consent (no owner pressed Approve). `requests` are the
+ * app's asks; a person counts when any ask they made was approved by invite.
+ */
+export function markLinkedByInvite<P extends { userId: string }>(
+  people: readonly P[],
+  requests: ReadonlyArray<{
+    requestedByUserId: string | null;
+    requestMetadata: unknown;
+  }>
+): Array<P & { linkedByInvite: boolean }> {
+  const byInvite = new Set(
+    requests
+      .filter((r) => readInviteApproval(r.requestMetadata) !== null)
+      .map((r) => r.requestedByUserId)
+      .filter((id): id is string => Boolean(id))
+  );
+  return people.map((person) => ({
+    ...person,
+    linkedByInvite: byInvite.has(person.userId),
+  }));
+}

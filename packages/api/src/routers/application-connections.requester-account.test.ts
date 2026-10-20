@@ -5,8 +5,8 @@
  * assertion; this drives the stored row through the real `getReviewRequest`
  * projection, so deleting a projection line — or showing an unverified
  * record as verified — fails here. It also drives `redeemRequest` into the
- * invite-consent rule and `revokeConnection` on the connection that rule
- * approved.
+ * invite-consent rule, and `unlinkAccount` (the undo, one person) without
+ * revoking the app connection.
  *
  * NOT COVERED: the start handler (federation-application-connections.test.ts),
  * the rule's own conditions (`invite-consent.test.ts`) and the page wording
@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   member: vi.fn(),
   issuer: vi.fn(),
   consent: vi.fn(),
+  unlink: vi.fn(),
   auditLog: vi.fn(),
   revokeSet: vi.fn(),
   revokeReturning: vi.fn(),
@@ -70,6 +71,9 @@ vi.mock("../middleware/audit-log.js", async () => {
 });
 vi.mock("../services/application-connections/invite-consent.js", () => ({
   approveByInviteIfConsented: h.consent,
+}));
+vi.mock("../services/application-connections/unlink-account.js", () => ({
+  unlinkConnectionAccount: h.unlink,
 }));
 
 import { applicationConnectionsRouter } from "./application-connections.js";
@@ -121,12 +125,17 @@ beforeEach(() => {
 describe("getReviewRequest — the account that will receive access", () => {
   it("names the verified email, who verified it, and the member — never the raw subject", async () => {
     h.getRequest.mockResolvedValue(
-      row({
-        requestedVia: "browser-pod-admin-handoff",
-        requesterAccount: VERIFIED,
-      })
+      row(
+        {
+          requestedVia: "browser-pod-admin-handoff",
+          requesterAccount: VERIFIED,
+        },
+        { approvedConnectionId: CONNECTION }
+      )
     );
     const data = await review();
+    // The door to the app's page in Pod Admin.
+    expect(data.approvedConnectionId).toBe(CONNECTION);
     expect(data.requesterAccount).toEqual({
       status: "verified",
       email: "ada@example.test",
@@ -259,28 +268,50 @@ describe("redeemRequest — the invite is the consent", () => {
   });
 });
 
-describe("revoke after an invite approval", () => {
-  it("the owners' Revoke runs the ordinary revoke on that connection", async () => {
+describe("undo after an invite approval — unlink that one person", () => {
+  it("the owners' notice is a door to the app's page, never a button that acts", () => {
     const def = getNotificationDef("application_connection.linked_by_invite");
-    const revoke = def?.actions?.find((a) => a.id === "revoke");
-    // The notification's sourceId is the connection id (invite-consent.ts),
-    // and this action hands it to the procedure as `id`.
-    expect(revoke?.handler).toEqual({
-      type: "mutation",
-      procedure: "applicationConnections.revokeConnection",
-      inputKey: "id",
-    });
-
-    h.revokeReturning.mockResolvedValue([
-      { id: CONNECTION, displayName: "Studio", clientId: "studio" },
+    // The notification's sourceId is the connection id (invite-consent.ts).
+    expect(def?.actions?.map((a) => a.handler)).toEqual([
+      { type: "navigate-object", kind: "application_connection" },
     ]);
-    await as("owner").revokeConnection({ id: CONNECTION });
-    expect(h.revokeSet).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "revoked", reviewedBy: "owner" })
-    );
+  });
+
+  it("unlinks through the one door and puts it on the app's timeline", async () => {
+    h.unlink.mockResolvedValue({
+      status: "unlinked",
+      email: "ada@example.test",
+      app: { displayName: "Studio", clientId: "studio" },
+      signIn: "removed",
+    });
+    await expect(
+      as("owner").unlinkAccount({ connectionId: CONNECTION, userId: "ada" })
+    ).resolves.toMatchObject({ status: "unlinked" });
+    expect(h.unlink).toHaveBeenCalledWith({
+      connectionId: CONNECTION,
+      userId: "ada",
+    });
     expect(h.auditLog).toHaveBeenCalledWith(
-      expect.objectContaining({ action: "revoke", subjectId: CONNECTION })
+      expect.objectContaining({
+        action: "unlink",
+        subjectId: CONNECTION,
+        userId: "owner",
+        data: expect.objectContaining({
+          unlinkedUserId: "ada",
+          email: "ada@example.test",
+        }),
+      })
     );
+    // The app connection is not revoked.
+    expect(h.revokeSet).not.toHaveBeenCalled();
+  });
+
+  it("answers NOT_FOUND for an unknown connection", async () => {
+    h.unlink.mockResolvedValue({ status: "no_connection" });
+    await expect(
+      as("owner").unlinkAccount({ connectionId: CONNECTION, userId: "ada" })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(h.auditLog).not.toHaveBeenCalled();
   });
 });
 

@@ -37924,6 +37924,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				requesterAccount: RequesterAccountView | null;
 				requesterMember: null;
 				approvedByInvite: boolean;
+				approvedConnectionId: null;
 				returnUrl: string | null;
 			} | {
 				id: string;
@@ -37946,6 +37947,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					email: string | null;
 				} | null;
 				approvedByInvite: boolean;
+				approvedConnectionId: string | null;
 				returnUrl: null;
 			};
 			meta: object;
@@ -38005,12 +38007,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
-				people: {
+				people: ({
 					userId: string;
 					name: string | null;
 					email: string;
 					linkedAt: Date;
-				}[];
+				} & {
+					linkedByInvite: boolean;
+				})[];
 				requestIds: string[];
 				lastUsedAt: Date | null;
 				peopleCount: number;
@@ -38030,6 +38034,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				initialRequestData: unknown;
 				createdAt: Date;
 				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		unlinkAccount: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				connectionId: string;
+				userId: string;
+			};
+			output: {
+				status: "unlinked";
+				email: string | null;
+				app: {
+					displayName: string;
+					clientId: string;
+				};
+				signIn: "failed" | "not_applicable" | "removed";
+			} | {
+				status: "not_linked";
 			};
 			meta: object;
 		}>;

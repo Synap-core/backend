@@ -39,10 +39,12 @@ import { auditLog } from "../utils/audit-log.js";
 import {
   buildApplicationConnectionReturnUrl,
   hashOpaqueApplicationConnectionValue,
+  markLinkedByInvite,
   readInviteApproval,
   requesterAccountView,
 } from "../utils/application-connection.js";
 import { approveByInviteIfConsented } from "../services/application-connections/invite-consent.js";
+import { unlinkConnectionAccount } from "../services/application-connections/unlink-account.js";
 
 const requestIdSchema = z.object({ requestId: z.string().uuid() });
 const redeemRequestSchema = requestIdSchema.extend({
@@ -55,7 +57,7 @@ const connectionService = new FederatedApplicationConnectionService();
 const REQUESTS_SHOWN = 50;
 
 /** The four acts on a sign-in app's timeline. */
-type ConnectionAct = "request" | "approve" | "reject" | "revoke";
+type ConnectionAct = "request" | "approve" | "reject" | "revoke" | "unlink";
 
 /** One act as a pod-wide event (no space) by the person who did it. */
 async function recordConnectionEvent(args: {
@@ -238,6 +240,7 @@ function reviewShape(
       requesterAccount: isRequester ? accountView : null,
       requesterMember: null,
       approvedByInvite,
+      approvedConnectionId: null,
       // Back to their app once linked. Not an authority: completion still
       // needs the continuation only the requester's app holds.
       returnUrl:
@@ -272,6 +275,8 @@ function reviewShape(
     /** The Pod member that account will sign in as. */
     requesterMember: options.requesterMember ?? null,
     approvedByInvite,
+    /** The app's page in Pod Admin, once approved (`/applications/sign-in/<id>`). */
+    approvedConnectionId: request.approvedConnectionId,
     returnUrl: null,
   };
 }
@@ -482,7 +487,13 @@ export const applicationConnectionsRouter = router({
         // Every ask from this app through this issuer — approved or turned
         // down — since a connection is one (issuer, client) pair.
         db
-          .select({ id: federatedApplicationConnectionRequests.id })
+          .select({
+            id: federatedApplicationConnectionRequests.id,
+            requestedByUserId:
+              federatedApplicationConnectionRequests.requestedByUserId,
+            requestMetadata:
+              federatedApplicationConnectionRequests.requestMetadata,
+          })
           .from(federatedApplicationConnectionRequests)
           .where(
             and(
@@ -503,10 +514,42 @@ export const applicationConnectionsRouter = router({
         ...row.connection,
         issuerUrl: row.issuerUrl,
         ...usageOf(issuerId),
-        people,
+        // Who was linked because their invite was the consent, not an owner.
+        people: markLinkedByInvite(people, requests),
         /** The asks its Activity also reads (request and turn-down events). */
         requestIds: requests.map((r) => r.id),
       };
+    }),
+
+  /**
+   * "Unlink {email}": take one person's account off this app's issuer. Owners
+   * and admins only (`podAdminProcedure`). The app connection stays for
+   * everyone else; see `unlinkConnectionAccount` for exactly what goes.
+   */
+  unlinkAccount: podAdminProcedure
+    .input(z.object({ connectionId: z.string().uuid(), userId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const outcome = await unlinkConnectionAccount(input);
+      if (outcome.status === "no_connection") {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Application connection not found",
+        });
+      }
+      if (outcome.status === "unlinked") {
+        await recordConnectionEvent({
+          action: "unlink",
+          subjectId: input.connectionId,
+          userId: ctx.userId,
+          data: {
+            ...outcome.app,
+            unlinkedUserId: input.userId,
+            email: outcome.email,
+            signIn: outcome.signIn,
+          },
+        });
+      }
+      return outcome;
     }),
 
   approveRequest: podAdminProcedure

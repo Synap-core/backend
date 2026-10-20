@@ -267,6 +267,33 @@ export async function bindExistingFederatedIdentity(input: {
   });
 }
 
+/**
+ * Unlink ONE person's account from one issuer: the reverse of
+ * `bindExistingFederatedIdentity`, and its only door. Deletes exactly the
+ * `(issuer, user)` link (unique per pair) and nothing else — not the person,
+ * not their memberships, not the issuer, not the app connection. Returns the
+ * subject that was linked (the caller detaches the matching sign-in
+ * credential), or null when there was no link.
+ */
+export async function unlinkFederatedIdentity(
+  input: { issuerId: string; userId: string },
+  conn: Pick<typeof db, "delete"> = db
+): Promise<{ issuerSubject: string } | null> {
+  const issuerId = input.issuerId.trim();
+  const userId = input.userId.trim();
+  if (!issuerId || !userId) return null;
+  const [removed] = await conn
+    .delete(federatedIdentityLinks)
+    .where(
+      and(
+        eq(federatedIdentityLinks.issuerId, issuerId),
+        eq(federatedIdentityLinks.userId, userId)
+      )
+    )
+    .returning({ issuerSubject: federatedIdentityLinks.issuerSubject });
+  return removed ?? null;
+}
+
 export async function createIssuerIdentityLinkReceipt(input: {
   issuerId: string;
   issuerSubject: string;

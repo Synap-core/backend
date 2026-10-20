@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  markLinkedByInvite,
   buildApplicationConnectionReturnUrl,
   normalizeApplicationCallbackUrl,
   normalizeApplicationOrigin,
@@ -42,5 +43,48 @@ describe("application connection URL registration", () => {
     ).toBe(
       "https://crm.example.test/auth/pod-return?source=crm&connection_request=11111111-1111-4111-8111-111111111111"
     );
+  });
+});
+
+describe("markLinkedByInvite", () => {
+  const approval = {
+    approvedByInvite: {
+      inviteId: "invite-1",
+      inviteAcceptedAt: "2026-10-19T20:00:00.000Z",
+      approvedAt: "2026-10-19T20:05:00.000Z",
+    },
+  };
+
+  it("marks only the person whose own ask the invite approved", () => {
+    const people = [
+      { userId: "ada", email: "ada@pod.test" },
+      { userId: "bob", email: "bob@pod.test" },
+    ];
+    expect(
+      markLinkedByInvite(people, [
+        { requestedByUserId: "ada", requestMetadata: approval },
+        // Bob's ask was approved by an owner.
+        { requestedByUserId: "bob", requestMetadata: {} },
+        // An invite approval with no requester marks nobody.
+        { requestedByUserId: null, requestMetadata: approval },
+      ])
+    ).toEqual([
+      { userId: "ada", email: "ada@pod.test", linkedByInvite: true },
+      { userId: "bob", email: "bob@pod.test", linkedByInvite: false },
+    ]);
+  });
+
+  it("ignores a malformed approval record", () => {
+    expect(
+      markLinkedByInvite(
+        [{ userId: "ada" }],
+        [
+          {
+            requestedByUserId: "ada",
+            requestMetadata: { approvedByInvite: { inviteId: "invite-1" } },
+          },
+        ]
+      )
+    ).toEqual([{ userId: "ada", linkedByInvite: false }]);
   });
 });

@@ -902,9 +902,12 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     // The invite was the consent: a member who joined by a Pod invite linked
     // their Synap account through a first-party app, and no owner was asked
     // (`services/application-connections/invite-consent.ts`). News for the
-    // owners and admins, with the way back: Revoke goes through the same
-    // `applicationConnections.revokeConnection` an owner uses on the app's
-    // page; `sourceId` is the connection id.
+    // owners and admins, and a DOOR, never a button that acts from the bell:
+    // the app's page in Pod Admin says what was approved and why, and holds
+    // "Unlink {email}" (`applicationConnections.unlinkAccount`). `sourceId`
+    // is the connection id. NB the browser and relay route tables have no
+    // `application_connection` row yet, so the door resolves nowhere there
+    // until one is added (it opens Pod Admin's `/applications/sign-in/<id>`).
     type: "application_connection.linked_by_invite",
     category: "governance",
     label: "Account Linked by Invite",
@@ -912,20 +915,16 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     priority: "normal",
     titleTemplate: "{{email}} can now sign in as {{memberName}}",
     bodyTemplate:
-      "{{memberName}} joined this Pod by your invite, so {{appName}} linked their Synap account without asking you. Revoke it if this wasn't them.",
+      "{{memberName}} joined this Pod by your invite, so {{appName}} linked their Synap account without asking you. If this wasn't them, unlink it from the app's page.",
     defaultChannels: ["in_app"],
     ttl: 0,
     needsYou: "informational",
     actions: [
       {
-        id: "revoke",
-        label: "Revoke",
-        variant: "destructive",
-        handler: {
-          type: "mutation",
-          procedure: "applicationConnections.revokeConnection",
-          inputKey: "id",
-        },
+        id: "review",
+        label: "Review",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "application_connection" },
       },
     ],
   },

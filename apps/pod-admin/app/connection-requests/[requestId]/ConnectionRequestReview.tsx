@@ -15,7 +15,9 @@ import {
   Textarea,
 } from "@heroui/react";
 import { ArrowUpRight, Check, X } from "lucide-react";
+import Link from "next/link";
 import { ReceiverShell } from "../../_lib/receiver-shell";
+import { appHref } from "../../(admin)/applications/_lib/app-inventory";
 import { accountLinkRequesterView } from "../../_lib/requester-account";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { navHref } from "../../../lib/console-nav";
@@ -252,9 +254,17 @@ export function ConnectionRequestReview({
             title="Linked by invite"
             role="status"
           >
-            This person joined the Pod by an invite sent to this address, so the
-            link was made without asking you. To undo it, revoke the app on its
-            page in Apps.
+            This person joined the Pod by an invite sent to this address, so
+            the link was made without asking you. To undo it for them alone,
+            unlink them on the app&apos;s page.
+            {data.approvedConnectionId ? (
+              <Link
+                href={appHref("sign-in", data.approvedConnectionId)}
+                className="mt-2 block font-medium underline underline-offset-2"
+              >
+                Open {data.displayName} in Apps
+              </Link>
+            ) : null}
           </Alert>
         ) : null}
 

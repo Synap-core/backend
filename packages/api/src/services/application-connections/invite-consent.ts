@@ -26,7 +26,9 @@
  * Approval goes through the same door an owner's does
  * (`FederatedApplicationConnectionService.approve`), with the invite as the
  * reviewer of record (`invited_by`) and `approvedByInvite` in the request's
- * metadata. The Pod owners and admins are told, with a way to revoke.
+ * metadata. The Pod owners and admins are told; the notice is a door to the
+ * app's page in Pod Admin, where "Unlink {email}" undoes it for that one
+ * person (`unlinkConnectionAccount`).
  */
 
 import { createLogger } from "@synap-core/core";
