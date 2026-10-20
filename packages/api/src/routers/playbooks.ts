@@ -1196,6 +1196,43 @@ async function assertSubjectProfileResolves(
   await assertKnownProfileSlug(db, slug);
 }
 
+/**
+ * The ONE definition check a playbook write gets BEFORE the governance gate,
+ * shared by `create`, `update` (every door: browser, MCP `synap_create_playbook`
+ * / `synap_update_playbook`, Hub `POST`/`PATCH /playbooks`) and a revision of a
+ * pending playbook proposal (the shared revise core), so a bad definition is
+ * refused with the same message wherever it is written:
+ *   - a `subjectProfile` the write carries must name a kind that resolves;
+ *   - the goal's placeholders must be declared in `params` — over the MERGED
+ *     row (`previous` = the stored row on update), and only for what this
+ *     write INTRODUCES (see {@link assertGoalPlaceholdersDeclared}).
+ * The field SHAPES are the procedures' own input schemas
+ * (`createInputSchema` / `updateInputSchema`); this is what they cannot say.
+ */
+export async function assertPlaybookDefinitionWritable(
+  database: Parameters<typeof assertKnownProfileSlug>[0],
+  write: { goalTemplate?: unknown; params?: unknown; subjectProfile?: unknown },
+  previous?: { goalTemplate: unknown; params: unknown }
+): Promise<void> {
+  if (write.subjectProfile !== undefined) {
+    await assertSubjectProfileResolves(database, write.subjectProfile);
+  }
+  if (!previous) {
+    assertGoalPlaceholdersDeclared({
+      goalTemplate: write.goalTemplate,
+      params: write.params,
+    });
+  } else if (write.goalTemplate !== undefined || write.params !== undefined) {
+    assertGoalPlaceholdersDeclared(
+      {
+        goalTemplate: write.goalTemplate ?? previous.goalTemplate,
+        params: write.params ?? previous.params,
+      },
+      previous
+    );
+  }
+}
+
 /** How many near-duplicates to hand back. The report asked for three. */
 const OVERLAP_CANDIDATE_LIMIT = 3;
 
@@ -1809,12 +1846,12 @@ export const playbooksRouter = router({
       // INSIDE `subjectProfile` — folded ONCE, here, so the gate payload, the
       // approval replay and the insert all carry the same stored shape.
       input.subjectProfile = foldProcessDeclarationsOrRefuse(input);
-      // Dangling `subjectProfile` slugs are refused here, before the gate.
-      await assertSubjectProfileResolves(await getDb(), input.subjectProfile);
-      // …and so are goal placeholders no run will fill.
-      assertGoalPlaceholdersDeclared({
+      // Dangling `subjectProfile` slugs and goal placeholders no run will
+      // fill are refused here, before the gate.
+      await assertPlaybookDefinitionWritable(await getDb(), {
         goalTemplate: input.goalTemplate,
         params: input.params,
+        subjectProfile: input.subjectProfile,
       });
       const gateOpts = {
         userId: ctx.userId,
@@ -2136,21 +2173,17 @@ export const playbooksRouter = router({
       // refused for a dangling value it did not introduce (that is the create
       // door's job, and refusing here would make an existing broken playbook
       // uneditable — including uneditable to FIX it).
-      if (input.subjectProfile !== undefined) {
-        await assertSubjectProfileResolves(database, input.subjectProfile);
-      }
-
       // 2c. Same rule for the goal's placeholders, over the MERGED row, and
       // only for what THIS patch introduces (see the helper).
-      if (input.goalTemplate !== undefined || input.params !== undefined) {
-        assertGoalPlaceholdersDeclared(
-          {
-            goalTemplate: input.goalTemplate ?? existing.goalTemplate,
-            params: input.params ?? existing.params,
-          },
-          existing
-        );
-      }
+      await assertPlaybookDefinitionWritable(
+        database,
+        {
+          goalTemplate: input.goalTemplate,
+          params: input.params,
+          subjectProfile: input.subjectProfile,
+        },
+        existing
+      );
 
       // 2d. A pin list is an ordered whitelist on metadata. The request's
       // strategy wins over the stored one: writing ids onto a playbook that

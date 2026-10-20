@@ -44,6 +44,7 @@ import {
   createPlaybookDoor,
   listPlaybooksDoor,
   runPlaybookDoor,
+  updatePlaybookDoor,
   type PlaybookDoorIdentity,
   type PlaybookDoorOutcome,
 } from "../../hub-protocol/playbook-doors.js";
@@ -477,6 +478,64 @@ export const buildHandlers: McpHandlerMap = {
             >[1]["expectedOutputs"],
           }
         : {}),
+    });
+    return renderPlaybookDoorOutcome(outcome, userId);
+  },
+  /**
+   * Edit an EXISTING playbook through the governed `playbooks.update` (via
+   * `updatePlaybookDoor`) — always a proposal for an agent. Every field is
+   * passed through for that procedure's `updateInputSchema` and the shared
+   * definition check to validate: a malformed field is refused, never dropped.
+   */
+  synap_update_playbook: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    type Patch = Parameters<typeof updatePlaybookDoor>[1]["patch"];
+    // `subjectProfile` is ONE stored record the patch REPLACES (process keys
+    // are carried over by `playbooks.update`), so a `statusProperty` alone
+    // would drop the stored kind: it needs its slug beside it.
+    const slug =
+      typeof args.subjectProfileSlug === "string" &&
+      args.subjectProfileSlug.trim()
+        ? args.subjectProfileSlug.trim()
+        : undefined;
+    if (args.statusProperty !== undefined && !slug) {
+      return ok({
+        error:
+          "statusProperty needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.",
+      });
+    }
+    const patch: Record<string, unknown> = {};
+    for (const key of [
+      "name",
+      "description",
+      "goalTemplate",
+      "params",
+      "stages",
+      "criteria",
+      "expectedOutputs",
+      "activators",
+      "humanOnlyStatuses",
+      "status",
+      "scope",
+    ] as const satisfies ReadonlyArray<keyof Patch>) {
+      if (args[key] !== undefined) patch[key] = args[key];
+    }
+    if (slug) {
+      patch.subjectProfile = {
+        profileSlug: slug,
+        ...(args.statusProperty !== undefined
+          ? { statusProperty: args.statusProperty }
+          : {}),
+      };
+    }
+    const reasoning = readReasoning(args);
+    if (reasoning) patch.reasoning = reasoning;
+    const outcome = await updatePlaybookDoor(playbookDoorIdentity(ctx), {
+      playbookId: args.playbookId,
+      patch: patch as Patch,
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
