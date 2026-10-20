@@ -96,6 +96,7 @@ export const TOOL_GROUPS = {
     "synap_revise_proposal",
     "synap_reject_proposal",
     "synap_create_rule",
+    "synap_update_rule",
   ],
   /** Kinds, roles and who may see them. */
   schema: [
