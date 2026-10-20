@@ -86,7 +86,8 @@ const executor = proposalExecRegistry.resolveExact("playbook/run")!;
 
 const approve = (
   inner: Record<string, unknown>,
-  outer: Record<string, unknown> = {}
+  outer: Record<string, unknown> = {},
+  agentUserId: string | null = null
 ) =>
   executor.execute({
     proposal: {
@@ -94,7 +95,7 @@ const approve = (
       workspaceId: "ws-1",
       targetType: "playbook",
       proposalType: "run",
-      agentUserId: null,
+      agentUserId,
       sourceMessageId: null,
       data: { ...outer, data: { playbookId: "pb-1", params: {}, ...inner } },
     },
@@ -188,5 +189,20 @@ describe("approving a batch run proposal", () => {
     // Everything else the proposal carried is kept.
     expect(data.automationId).toBe("auto-1");
     expect(data.data).toMatchObject({ subjectId: "lead-solo" });
+  });
+});
+
+describe("approving an AGENT-filed run proposal", () => {
+  it("the person who approved owns the run; the agent that asked is on its roster", async () => {
+    await approve(
+      { subjectId: "post-1", agentIds: ["agent-extra"] },
+      {},
+      "agent-asker"
+    );
+    expect(h.runs).toHaveLength(1);
+    // No `agentUserId` reaches the run door: it would make the AGENT the
+    // session's owner (runPlaybook's actorId) and hide it from the person.
+    expect(h.runs[0]).not.toHaveProperty("agentUserId");
+    expect(h.runs[0].agentIds).toEqual(["agent-asker", "agent-extra"]);
   });
 });
