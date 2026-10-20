@@ -12,9 +12,14 @@
 #   5. CP OIDC discovery        issuer self-consistent
 #   6. Pod Kratos login-init   (UNAPPROVED origin) → no ACAO (browser can't read it)
 #  6b. Pod Kratos login-init   (another TENANT's pod origin) → no ACAO
+#  7b. Pod Kratos oidc submit  (approved app origin) → readable WITHOUT credentials
+#   7. Pod Kratos token-exchange wired + readable by the app
 #
+# No hop needs a cookie shared between the app and the pod: the app sends both
+# Kratos calls without credentials, and the callback is matched by the flow's
+# session-token-exchange code, so it works when they are different sites.
 # The session-dependent tail (auto-consent → code → token-exchange → pod session)
-# needs a real .synap.live cookie and is the ONLY part a human must dogfood.
+# needs a signed-in Synap Cloud browser and is the ONLY part a human must dogfood.
 #
 # Usage:
 #   POD=https://pod.thearch.synap.live \
@@ -93,16 +98,18 @@ ACAO=$(curl -sS -o /dev/null -D - -H "Origin: $TENANT_ORIGIN" \
 [ -z "$ACAO" ] && ok "6b. another tenant's origin gets no ACAO ($TENANT_ORIGIN)" \
   || no "6b. SECURITY: another tenant's origin got a CORS grant: $ACAO (kratos.yml still has a zone wildcard: regenerate it)"
 
-# 7b. CRITICAL: the approved app origin must get ACA-Credentials on the Kratos
-#     bootstrap path, or the browser drops the `ory_kratos_continuity` cookie the
-#     oidc submit sets and the CP→pod callback restarts a fresh flow (bounce to
-#     the pod picker). Checked on the OPTIONS preflight of the oidc-submit path.
-ACR=$(curl -sS -o /dev/null -D - -X OPTIONS -H "Origin: $APP_ORIGIN" \
+# 7b. The app sends the oidc submit WITHOUT credentials (no pod cookie: the app
+#     and the pod may be different sites), so the approved app origin only needs
+#     to READ the answer: the submit's preflight must echo it in ACAO. Check 2
+#     already proves a cookieless submit returns the CP authorize URL. Kratos
+#     never reads its continuity cookie on the callback of a native flow that
+#     holds an exchange code, so its absence cannot bounce the sign-in.
+ACAO=$(curl -sS -o /dev/null -D - -X OPTIONS -H "Origin: $APP_ORIGIN" \
   -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: content-type" \
-  "$POD/.ory/kratos/public/self-service/login?flow=x" | grep -i '^access-control-allow-credentials:' | tr -d '\r')
-echo "$ACR" | grep -qi "true" \
-  && ok "7b. approved origin gets ACA-Credentials on Kratos bootstrap (continuity cookie survives)" \
-  || no "7b. NO ACA-Credentials for $APP_ORIGIN on Kratos path → continuity cookie dropped → sign-in bounces (deploy the pod fix)"
+  "$POD/.ory/kratos/public/self-service/login?flow=x" | grep -i '^access-control-allow-origin:' | tr -d '\r' | sed 's/^[^:]*: *//')
+[ "$ACAO" = "$APP_ORIGIN" ] \
+  && ok "7b. approved origin can read the cookieless oidc submit (ACAO=$APP_ORIGIN)" \
+  || no "7b. the oidc submit is not readable by $APP_ORIGIN without credentials (ACAO='$ACAO'): the pod's Kratos CORS list misses the app"
 
 # 7. the token-exchange endpoint (callback's final hop) is wired + CORS-readable.
 #    Dummy codes → Kratos "no session yet for this code" (route exists); a REAL
