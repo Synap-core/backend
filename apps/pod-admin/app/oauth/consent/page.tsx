@@ -32,6 +32,7 @@ interface OAuthConsentPageProps {
     state?: string;
     code_challenge?: string;
     code_challenge_method?: string;
+    resource?: string;
   }>;
 }
 
@@ -59,6 +60,7 @@ export default async function OAuthConsentPage({
         state: sp.state,
         codeChallenge: sp.code_challenge,
         codeChallengeMethod: sp.code_challenge_method,
+        resource: sp.resource,
       }}
     />
   );

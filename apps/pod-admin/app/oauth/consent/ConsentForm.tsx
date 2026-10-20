@@ -30,6 +30,8 @@ export interface ConsentParams {
   state?: string;
   codeChallenge?: string;
   codeChallengeMethod?: string;
+  /** RFC 8707 — round-tripped so the code is bound to it (re-validated server-side). */
+  resource?: string;
 }
 
 type Step =

@@ -20,6 +20,7 @@ import {
   clientIp,
   getDeviceAuthRateConfig,
   getKeyStateRateConfig,
+  getOAuthPublicRateConfig,
   buildCrudIpCeilingKey,
   isDirectLoopbackCall,
 } from "./rate-limit-classes.js";
@@ -359,6 +360,32 @@ const keyStateRateLimiter = rateLimiter({
   handler: classHandler("key_state", keyStateRate.max, keyStateRate.retryAfter),
 });
 
+const oauthPublicRate = getOAuthPublicRateConfig();
+
+/**
+ * The pod authorization server's public doors (`/register`, `/authorize`,
+ * `/token`): IP-ONLY, never the Authorization header — none of them takes a
+ * Bearer, and a made-up one must not buy a fresh bucket. Loopback keeps the
+ * local bypass.
+ */
+const oauthPublicRateLimiter = rateLimiter({
+  windowMs: oauthPublicRate.windowMs,
+  limit: oauthPublicRate.max,
+  standardHeaders: "draft-7",
+  keyGenerator: (c: Context): string => {
+    const ip = clientIp(c);
+    if (isLocalCaller(c, ip)) {
+      return "localhost-bypass-oauth_public-" + Math.random();
+    }
+    return `oauth_public:ip:${ip}`;
+  },
+  handler: classHandler(
+    "oauth_public",
+    oauthPublicRate.max,
+    oauthPublicRate.retryAfter
+  ),
+});
+
 /**
  * Multi-class pod-edge rate limiting.
  *
@@ -400,6 +427,8 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
       return deviceAuthRateLimiter(c, next);
     case "key_state":
       return keyStateRateLimiter(c, next);
+    case "oauth_public":
+      return oauthPublicRateLimiter(c, next);
     case "crud":
     default:
       // Address ceiling FIRST, then the caller's own bucket — same nested-429

@@ -54,7 +54,9 @@ export const OAUTH_REVOCABLE_AGENT_TYPES: readonly OAuthAgentType[] = [
  * the client that asked for it (the agent user is shared by every client the
  * same human connects), so the token endpoint writes it and the console's
  * client inventory (`oauthClients.*`) reads it through these two functions.
- * A `dcr_` client id is base64url — it never contains `:`.
+ * A `dcr_` client id is base64url and never contains `:`, but a CIMD client id
+ * is an https URL that always does (`https://…`). A user id never does, so the
+ * parse splits at the LAST `:`.
  */
 const OAUTH_INSTANCE_PREFIX = "oauth:";
 
@@ -75,7 +77,7 @@ export function parseOauthKeyInstanceId(
 ): { clientId: string; userId: string } | null {
   if (!instanceId?.startsWith(OAUTH_INSTANCE_PREFIX)) return null;
   const rest = instanceId.slice(OAUTH_INSTANCE_PREFIX.length);
-  const cut = rest.indexOf(":");
+  const cut = rest.lastIndexOf(":");
   if (cut <= 0 || cut === rest.length - 1) return null;
   return { clientId: rest.slice(0, cut), userId: rest.slice(cut + 1) };
 }

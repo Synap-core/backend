@@ -6,7 +6,11 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { mapCpScopesToPodScopes } from "./config.js";
+import {
+  mapCpScopesToPodScopes,
+  oauthKeyInstanceId,
+  parseOauthKeyInstanceId,
+} from "./config.js";
 
 // ─── scope-grammar mapping ────────────────────────────────────────────────
 
@@ -49,5 +53,37 @@ describe("mapCpScopesToPodScopes", () => {
         "mcp.write",
       ]);
     }
+  });
+});
+
+// ─── the oauth instance id ────────────────────────────────────────────────
+
+describe("oauthKeyInstanceId / parseOauthKeyInstanceId", () => {
+  const USER = "11111111-1111-4111-8111-111111111111";
+
+  it("round-trips a DCR client", () => {
+    expect(
+      parseOauthKeyInstanceId(oauthKeyInstanceId("dcr_abc", USER))
+    ).toEqual({ clientId: "dcr_abc", userId: USER });
+  });
+
+  it("round-trips a CIMD client, whose id is a URL full of ':'", () => {
+    const app = "https://studio.example.com:8443/.well-known/synap-client.json";
+    expect(parseOauthKeyInstanceId(oauthKeyInstanceId(app, USER))).toEqual({
+      clientId: app,
+      userId: USER,
+    });
+  });
+
+  it("reads anything else as null", () => {
+    for (const v of [
+      null,
+      undefined,
+      "mcp:abc",
+      "oauth:",
+      "oauth:x:",
+      "oauth::u",
+    ])
+      expect(parseOauthKeyInstanceId(v)).toBeNull();
   });
 });

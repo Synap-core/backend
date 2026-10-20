@@ -16,14 +16,13 @@
  * between validation and the request.
  */
 
-import { request as httpsRequest } from "node:https";
-import { isIP } from "node:net";
 import { createLogger } from "@synap-core/core";
 import {
   normalizeIssuerUrl,
   resolvePublicIssuerEndpoint,
   type ResolvedIssuerEndpoint,
 } from "./issuer-url-safety.js";
+import { pinnedHttpsGet } from "./pinned-https-get.js";
 
 const logger = createLogger({ module: "federation-metadata-client" });
 
@@ -43,72 +42,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function fetchMetadataBody(
+async function fetchMetadataBody(
   target: ResolvedIssuerEndpoint,
   path: string
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    // Connect to the already-validated public IP, not the hostname. Host + SNI
-    // keep the issuer hostname so TLS certificate validation stays intact; this
-    // closes the DNS-rebinding window between validation and the request.
-    const req = httpsRequest(
-      {
-        protocol: "https:",
-        hostname: target.address,
-        port: target.port,
-        path,
-        method: "GET",
-        headers: {
-          accept: "application/json",
-          host: target.hostHeader,
-        },
-        servername: isIP(target.hostname) === 0 ? target.hostname : undefined,
-        timeout: REQUEST_TIMEOUT_MS,
-        agent: false,
-      },
-      (response) => {
-        const statusCode = response.statusCode ?? 0;
-        if (statusCode < 200 || statusCode >= 300) {
-          response.resume();
-          reject(
-            new Error(
-              `Federation metadata fetch failed: ${statusCode} from ${target.issuerUrl}`
-            )
-          );
-          return;
-        }
-
-        const chunks: Buffer[] = [];
-        let totalBytes = 0;
-        response.on("data", (chunk: Buffer) => {
-          totalBytes += chunk.length;
-          if (totalBytes > MAX_RESPONSE_BYTES) {
-            const error = new Error(
-              `Federation metadata response exceeded ${MAX_RESPONSE_BYTES} bytes from ${target.issuerUrl}`
-            );
-            response.destroy(error);
-            reject(error);
-            return;
-          }
-          chunks.push(chunk);
-        });
-        response.once("error", reject);
-        response.once("end", () => {
-          resolve(Buffer.concat(chunks).toString("utf8"));
-        });
-      }
-    );
-
-    req.once("timeout", () => {
-      req.destroy(
-        new Error(
-          `Federation metadata fetch timed out after ${REQUEST_TIMEOUT_MS}ms`
-        )
-      );
-    });
-    req.once("error", reject);
-    req.end();
+  const response = await pinnedHttpsGet(target, path, {
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    maxBytes: MAX_RESPONSE_BYTES,
   });
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(
+      `Federation metadata fetch failed: ${response.statusCode} from ${target.issuerUrl}`
+    );
+  }
+  return response.body;
 }
 
 /**

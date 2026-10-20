@@ -3546,7 +3546,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -3558,6 +3557,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
+			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -25232,6 +25232,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				state?: string | undefined;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
+				resource?: string | undefined;
 			};
 			output: OAuthConsentContext;
 			meta: object;
@@ -25246,6 +25247,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				state?: string | undefined;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
+				resource?: string | undefined;
 			};
 			output: {
 				redirectTo: string;
