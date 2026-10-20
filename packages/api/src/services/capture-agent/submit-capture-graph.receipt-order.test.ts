@@ -122,9 +122,11 @@ describe("submitCaptureGraph auto-apply — receipt is inserted BEFORE materiali
     const materializer = await import("../../utils/materialize-composite.js");
 
     let insertedId: string | undefined;
+    let receiptAgent: string | null | undefined;
     vi.spyOn(receiptWriter, "createAutoApprovedProposal").mockImplementation(
       async (input) => {
         insertedId = input.id;
+        receiptAgent = input.agentUserId;
         calls.push("receipt-insert");
         return {
           proposal: { id: input.id, data: input.data },
@@ -156,11 +158,15 @@ describe("submitCaptureGraph auto-apply — receipt is inserted BEFORE materiali
       ] as never,
     } as never);
 
-    return { result, insertedId };
+    return { result, insertedId, receiptAgent };
   }
 
   it("inserts the proposals row, then materializes, then updates it with the materialized ids", async () => {
-    const { result, insertedId } = await run();
+    const { result, insertedId, receiptAgent } = await run();
+
+    // The receipt names the AGENT whose write the policy judged (live: every
+    // auto-applied capture read as the person's own write, agentUserId null).
+    expect(receiptAgent).toBe("agent-1");
 
     // LOAD-BEARING, not a smoke check. The receipt id is pre-allocated ONLY on
     // the auto-approve branch, so a test that fell through to the PROPOSED path

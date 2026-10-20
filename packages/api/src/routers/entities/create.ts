@@ -64,7 +64,7 @@ import {
 } from "../../utils/permission-check.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { getAgentFocusProjectId } from "../../services/agent-identity-service.js";
-import { initialStatusFloor } from "../../services/lifecycle/initial-status-floor.js";
+import { initialCreateStatusFloor } from "../../services/lifecycle/initial-status-floor.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
@@ -1171,16 +1171,10 @@ export const createProcs = {
       // value it is born with is the caller's, else the kind's default.
       const initialLifecycleMove =
         input.agentUserId || (input.source && input.source !== "user")
-          ? await initialStatusFloor({
-              profileId: earlyResolvedProfile?.id,
+          ? await initialCreateStatusFloor({
+              profile: earlyResolvedProfile,
               workspaceId: permWorkspaceId,
-              properties: {
-                ...((earlyResolvedProfile?.defaultValues as Record<
-                  string,
-                  unknown
-                > | null) ?? {}),
-                ...(input.properties ?? {}),
-              },
+              properties: input.properties,
             })
           : undefined;
 

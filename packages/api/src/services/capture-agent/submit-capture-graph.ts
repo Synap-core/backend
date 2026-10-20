@@ -75,7 +75,6 @@ import {
   type CapturePlanProblem,
   type PlanStepSummary,
 } from "./capture-plan.js";
-import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import {
   createEventBackedProposal,
   createAutoApprovedProposal,
@@ -92,7 +91,7 @@ import {
   type PendingSignalMatch,
 } from "../../utils/pending-capture-dedup.js";
 import { openLink } from "../../utils/deep-links.js";
-import { captureGraphEventKeys } from "./capture-graph-policy.js";
+import { captureGraphMemberProposes } from "./capture-graph-governance.js";
 import { buildRuleLoopCallers } from "../../utils/rule-loop-callers.js";
 import {
   buildMaterializedRecord,
@@ -1387,37 +1386,16 @@ export async function submitCaptureGraph(
   // materialization, so an auto-apply that skipped them would silently drop the
   // binds.
   if (input.agentUserId && bindings.length === 0 && !planNeedsReview) {
-    const keys = captureGraphEventKeys(operations);
-    let allAutoApprove = keys.length > 0;
-    for (const {
-      subjectType,
-      action,
-      subjectProfileSlug,
-      subjectUoValidated,
-    } of keys) {
-      const gov = await resolveAgentGovernanceDecision({
-        db,
-        agentUserId: input.agentUserId,
-        workspaceId,
-        subjectType,
-        action,
-        // GOVERNANCE BY KIND: forward the op's profile slug + uo_validated so an
-        // unvalidated `user_observation` (an INFERENCE) forces `propose` here —
-        // and because the graph is atomic, the WHOLE graph then proposes. Absent
-        // for facet/relation ops (the rule no-ops). This mirrors the per-write
-        // signals `checkPermissionOrPropose`/`create_entity` already forward.
-        ...(subjectProfileSlug ? { subjectProfileSlug } : {}),
-        ...(subjectUoValidated !== undefined ? { subjectUoValidated } : {}),
-        // MCP is an agent WRITE door — prefer the agent's own metadata
-        // autoApproveFor, falling back to the workspace override (chat-door rule).
-        preferAgentMetadataAutoApproveFor: true,
-      });
-      // Any non-execute (propose / deny / not-agent) → the WHOLE graph proposes.
-      if (gov.decision !== "execute") {
-        allAutoApprove = false;
-        break;
-      }
-    }
+    // Every member scored by the ONE resolver with the signals its own door
+    // gates on — governance by kind AND the born-status lifecycle floor — so
+    // this never says "execute" where the create door it runs says "propose".
+    // Any non-execute → the WHOLE graph proposes.
+    const allAutoApprove = !(await captureGraphMemberProposes({
+      agentUserId: input.agentUserId,
+      userId,
+      workspaceId,
+      operations,
+    }));
 
     if (allAutoApprove) {
       // Materialize NOW as a DIRECT OPERATOR write, through the EXACT composite
@@ -1503,6 +1481,10 @@ export async function submitCaptureGraph(
             id: captureProposalId,
             userId,
             reviewedBy: userId,
+            // The AGENT that captured this: the policy above judged ITS write,
+            // so the receipt names it (as the pending path's row does). Without
+            // it every auto-applied capture read as the person's own write.
+            agentUserId: input.agentUserId,
             workspaceId,
             targetType: "entity",
             targetId: randomUUID(),
