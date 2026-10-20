@@ -269,7 +269,7 @@ async function setConversationFocus(
 }
 
 /**
- * WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md, Layer 2 (advisory slice).
+ * docs/decisions/agent-workspace-focus.md, Layer 2 (advisory slice).
  *
  * Read the agent-user's live runtime workspace focus (`agentMetadata.focusWorkspaceId`).
  * LIVE, not cached — the whole point of the design is that

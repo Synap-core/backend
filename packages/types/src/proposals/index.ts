@@ -56,7 +56,7 @@ export type ProposalStatusFilter = "pending" | "validated" | "rejected" | "all";
 
 /**
  * Structured whole-proposal rejection reason taxonomy — Phase 1 of the
- * reasoned-rejection loop (`PROPOSAL-GRANULAR-REASONED-REVIEW-PLAN.md`, Fork 2A).
+ * reasoned-rejection loop (`PROPOSAL-GRANULAR-REASONED-REVIEW-PLAN (team pod)`, Fork 2A).
  *
  * PINNED CONTRACT — the enum MUST be byte-identical wherever it's consumed
  * (backend `proposals.reject`/`batchReject` input, `emitAiCorrection` data,

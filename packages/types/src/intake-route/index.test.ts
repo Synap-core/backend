@@ -15,7 +15,7 @@ import {
 
 /**
  * The routing rule and the deprecation record of
- * docs/CAPTURE_LIBRARY_PLAN.md (§1, §2).
+ * docs/decisions/capture-vs-library.md.
  *
  * What these tests do NOT cover, measured: the `where` check proves the file
  * exists, names the symbol, and (for this repo's rows) carries the
@@ -124,8 +124,10 @@ describe("DEPRECATED_INTAKE_PATHS", () => {
       expect(p.stage, p.id).not.toBe("removed");
       expect(p.reason.length, p.id).toBeGreaterThan(40);
       expect(p.replacedBy.length, p.id).toBeGreaterThan(0);
-      expect(p.removalCriteria, p.id).toContain("CAPTURE_LIBRARY_PLAN.md §2");
-      expect(p.decisionDoc, p.id).toBe("docs/CAPTURE_LIBRARY_PLAN.md");
+      expect(p.removalCriteria, p.id).toContain(
+        "capture-vs-library.md#removal-criteria"
+      );
+      expect(p.decisionDoc, p.id).toBe("docs/decisions/capture-vs-library.md");
       expect(p.where, p.id).toMatch(/^[a-z-]+\/[^:]+:\S/);
     }
   });

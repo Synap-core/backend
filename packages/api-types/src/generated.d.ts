@@ -45,7 +45,7 @@ export interface AgentMetadata {
 	autoApproveFor?: string[];
 	activePersonality?: string;
 	/**
-	 * Runtime, sticky workspace focus (WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md,
+	 * Runtime, sticky workspace focus (docs/decisions/agent-workspace-focus.md,
 	 * Layer 2, advisory slice). Settable at provisioning OR at runtime via the
 	 * `synap_set_workspace_focus` MCP tool; cleared by unsetting the field.
 	 * Read LIVE at request time — no migration, no key-stamping. Read live, when
@@ -1185,7 +1185,7 @@ export interface WorkspaceSettings {
 	 *     "task":    { list:   { kind: "view", viewId: "uuid-task-kanban" } }
 	 *   }
 	 *
-	 * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+	 * Spec: Synap-core/app-bases docs/architecture/profile-renderer.md
 	 */
 	profileRenderers?: Record<string, {
 		list?: Record<string, unknown>;
@@ -6644,7 +6644,7 @@ export type EventAction = (typeof EVENT_ACTIONS)[number];
  *
  * A per-proposal escape hatch that turns a one-off approval decision into a
  * standing `governance_rules` row (Governance Convergence Plan, Phase A — see
- * `synap-backend/GOVERNANCE-CONVERGENCE-PLAN.md`). Given the handful of
+ * `docs/decisions/agent-governance.md`). Given the handful of
  * fields a proposal can resolve (a capability target, an action event key, a
  * profile slug, an authoring agent), this computes WHICH of the five
  * granularities — capability / action / profile / agent / global — are

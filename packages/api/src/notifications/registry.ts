@@ -775,7 +775,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     needsYou: "suggestion",
   },
 
-  // ── Library: keep it alive (CAPTURE_LIBRARY_PLAN L5) ──────────────────────
+  // ── Library: keep it alive (capture-vs-library decision, wave L5) ──────────────────────
   {
     /**
      * Weekly "Build one group" — the group that has waited longest, offered

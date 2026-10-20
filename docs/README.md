@@ -40,10 +40,10 @@ Generated from source by `pnpm docs:reference`; do not edit by hand.
 
 ## Design notes
 
-| File                                                               | What it is                                                       |
-| ------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| [`LIBRARY.md`](LIBRARY.md)                                         | The Library: what a pod keeps from captures, imports and links   |
-| [`IMPORT_CURATE_BUILD.md`](IMPORT_CURATE_BUILD.md)                 | The import, curate and build flow                                |
-| [`CAPTURE_IMPORT_ARCHITECTURE.md`](CAPTURE_IMPORT_ARCHITECTURE.md) | Capture and import architecture decisions                        |
-| [`CAPTURE_LIBRARY_PLAN.md`](CAPTURE_LIBRARY_PLAN.md)               | The plan that split Capture from the Library                     |
-| [`IS-HANDOFF-ANY-LINK-TO-DATA.md`](IS-HANDOFF-ANY-LINK-TO-DATA.md) | What changed for the Intelligence Service when links became data |
+| File                                               | What it is                                                     |
+| -------------------------------------------------- | -------------------------------------------------------------- |
+| [`LIBRARY.md`](LIBRARY.md)                         | The Library: what a pod keeps from captures, imports and links |
+| [`IMPORT_CURATE_BUILD.md`](IMPORT_CURATE_BUILD.md) | The import, curate and build flow                              |
+
+Plans, research and decision briefs are not kept in this repository; the team
+keeps them in its own Synap pod.

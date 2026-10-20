@@ -285,7 +285,7 @@ describe("verifyOfficialIndex", () => {
 describe("officialContentHash / checkOfficialListing", () => {
   it("is sha256 over the canonical JSON, the Control Plane's content hash", () => {
     // PARITY LITERAL — the Control Plane pins the same canonical form and
-    // digest (docs/pod-console/open-hosting-and-catalog-signing.md §B.8.4).
+    // digest (docs/architecture/official-catalog-signing.md §4).
     const canonical =
       '{"profiles":[{"name":"Deal","slug":"deal"}],"workspaceName":"CRM"}';
     expect(createHash("sha256").update(canonical).digest("hex")).toBe(

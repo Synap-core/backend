@@ -1,6 +1,6 @@
 /**
  * Library keep-alive — the daily pass that keeps a Library from becoming a
- * pile without ever becoming an inbox (CAPTURE_LIBRARY_PLAN L5): quiet
+ * pile without ever becoming an inbox (capture-vs-library decision, wave L5): quiet
  * auto-archive of items unseen for N days, the weekly "Build one group"
  * suggestion, and "From your Library, for <project>" resurfacing.
  *

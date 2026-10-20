@@ -1,7 +1,7 @@
 /**
  * Hub Protocol REST — POST /links workspace-endpoint membership tests.
  *
- * Wave 4 of WORKSPACE-RESOLUTION-PLAN.md added a security check: when either
+ * Wave 4 of WORKSPACE-RESOLUTION-PLAN (team pod) added a security check: when either
  * endpoint of a link is `workspace`, the acting user must ALSO be a member of
  * THAT endpoint workspace (not just the stamped `workspaceId`). Without it, a
  * member of consumer workspace A could wire `provider(B) --feeds--> A` and

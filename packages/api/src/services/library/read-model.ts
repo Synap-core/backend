@@ -1,6 +1,6 @@
 /**
  * The Library READ MODEL — every staged item the person kept, across import
- * runs (CAPTURE_LIBRARY_PLAN decision 3: the Library is a LENS, not a store).
+ * runs (capture-vs-library decision 3: the Library is a LENS, not a store).
  *
  * A Library item is a document with `metadata.importItem` (staged by the
  * import door). Its membership, decision, note and archive mark live on

@@ -23,7 +23,7 @@
  * New rows are written with `channelType` only — `threadKind` is left null
  * (the column was dropped in migration 0010 anyway).
  *
- * Spec: synap-team-docs/content/team/platform/channel-system.mdx
+ * Spec: the team pod document "Chat, channels and AI interaction surfaces" (synap ask "channel system spec")
  */
 
 import { TRPCError } from "@trpc/server";
