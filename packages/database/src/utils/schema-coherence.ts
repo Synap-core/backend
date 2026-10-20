@@ -705,6 +705,34 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "api_key_id",
     addedBy: "0335_webhook_subscriptions_api_key.sql",
   },
+  // Site collections (0336). Every publish lookup filters on `site_share_id`
+  // and the site doors read `site_config`, so without them every publish and
+  // every site door 500s. The three member columns are read from C1b on.
+  {
+    table: "resource_shares",
+    column: "site_share_id",
+    addedBy: "0336_site_collections.sql",
+  },
+  {
+    table: "resource_shares",
+    column: "site_config",
+    addedBy: "0336_site_collections.sql",
+  },
+  {
+    table: "resource_shares",
+    column: "public_id",
+    addedBy: "0336_site_collections.sql",
+  },
+  {
+    table: "resource_shares",
+    column: "public_slug",
+    addedBy: "0336_site_collections.sql",
+  },
+  {
+    table: "resource_shares",
+    column: "published_collection",
+    addedBy: "0336_site_collections.sql",
+  },
 
   // A session's OWN phases (0270). Every session read selects `stages`, so a
   // missing column 500s every session door exactly as `criteria` would.

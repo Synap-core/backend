@@ -3396,6 +3396,13 @@ ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "published_document_versi
 ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "published_properties" jsonb;
 ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "token_prefix" text;
 ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "revoked_by" text;
+-- 0336 site collections columns. No FK / CHECK / index / trigger here: 0336
+-- adds them on fresh databases too, since it runs after this file.
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "site_share_id" uuid;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "site_config" jsonb;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "public_id" text;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "public_slug" text;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "published_collection" text;
 
 -- ─── 48. sync tables (sync_peers, sync_state, sync_conflicts) ────────────────
 
