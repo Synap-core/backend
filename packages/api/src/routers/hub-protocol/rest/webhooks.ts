@@ -8,16 +8,26 @@
  * GET  /api/hub/webhooks — list webhook subscriptions
  * DELETE /api/hub/webhooks/:id — delete a webhook subscription
  *
- * AUTHORITY. A subscription is fanned out by OWNER only (webhook-worker
- * `fanOutDomainEvent`), so one row streams every event of the person to the URL
- * it names. Managing one is a WRITE (`hub-protocol.write`; listing needs
- * `hub-protocol.read`), and a scoped key may not use these doors at all unless
- * its grant is unbounded full access — the hub auth door refuses it
- * (`GRANT_OWNER_WIDE_REST_DOORS`, access/grant-door-fence.ts). These handlers
- * never pass the governance gate.
+ * AUTHORITY. Managing a subscription is a WRITE (`hub-protocol.write`;
+ * listing needs `hub-protocol.read`). These handlers never pass the
+ * governance gate, so what bounds a subscription is who created it:
+ *
+ * KEY-BOUND (S2 + D7, 2026-10-20). A subscription created by a key records it
+ * (`api_key_id`); a key lists and deletes only the subscriptions it created,
+ * a session (no key) every one of its owner's (`ownSubscriptions`). A
+ * key-bound subscription is delivered only while its key lives and only what
+ * its grant reads (`utils/webhook-delivery.ts`, jobs `webhook-worker.ts`), so
+ * a SCOPED key may manage its own here (the fence no longer lists `/webhooks`
+ * as owner-wide; the delivery log `/webhooks/:id/deliveries` still is). A
+ * session's subscription keeps the owner-wide fan-out. A subscription whose
+ * key is revoked or expired is listed inactive: it is not delivered.
  */
 
 import { db, webhookSubscriptions, eq, and } from "@synap/database";
+import {
+  liveApiKeyIds,
+  subscriptionKeyLive,
+} from "@synap/jobs/workers/webhook-worker.js";
 import { randomBytes } from "crypto";
 import { z } from "zod";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -54,6 +64,19 @@ const WebhookListItemSchema = z.object({
 });
 
 const WebhookIdParamsSchema = z.object({ id: z.string() });
+
+/**
+ * The subscriptions a caller manages (S2): a KEY sees only those it created
+ * (`api_key_id`); a session (no key) sees every one of its owner's.
+ */
+function ownSubscriptions(userId: string, apiKeyId: string | undefined) {
+  return apiKeyId
+    ? and(
+        eq(webhookSubscriptions.userId, userId),
+        eq(webhookSubscriptions.apiKeyId, apiKeyId)
+      )
+    : eq(webhookSubscriptions.userId, userId);
+}
 
 export function registerWebhooksRoutes(app: HubHono) {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -144,6 +167,9 @@ export function registerWebhooksRoutes(app: HubHono) {
         .insert(webhookSubscriptions)
         .values({
           userId,
+          // S2: the creating key (null for a session) — delivery is then
+          // bounded by that key's liveness and grant.
+          apiKeyId: c.get("apiKeyId") ?? null,
           name: "is-webhook",
           url,
           eventTypes,
@@ -179,16 +205,19 @@ export function registerWebhooksRoutes(app: HubHono) {
 
     try {
       const subscriptions = await db.query.webhookSubscriptions.findMany({
-        where: eq(webhookSubscriptions.userId, userId),
+        where: ownSubscriptions(userId, c.get("apiKeyId")),
         orderBy: (subscriptions, { desc }) => [desc(subscriptions.createdAt)],
       });
 
+      // A subscription whose key is revoked or expired is not delivered, so
+      // it shows inactive (S2) — the same liveness rule the delivery door uses.
+      const live = await liveApiKeyIds(subscriptions.map((s) => s.apiKeyId));
       return c.json(
         subscriptions.map((s) => ({
           id: s.id,
           url: s.url,
           eventTypes: s.eventTypes,
-          active: s.active,
+          active: s.active && subscriptionKeyLive(s.apiKeyId, live),
           createdAt: s.createdAt,
           lastTriggeredAt: s.lastTriggeredAt,
         }))
@@ -214,7 +243,7 @@ export function registerWebhooksRoutes(app: HubHono) {
         .where(
           and(
             eq(webhookSubscriptions.id, id),
-            eq(webhookSubscriptions.userId, userId)
+            ownSubscriptions(userId, c.get("apiKeyId"))
           )
         )
         .returning();

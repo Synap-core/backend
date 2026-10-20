@@ -3546,6 +3546,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
+			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -3557,7 +3558,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
-			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -25699,6 +25699,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					secret: string;
 					url: string;
+					apiKeyId: string | null;
 					eventTypes: string[];
 					retryConfig: unknown;
 					lastTriggeredAt: Date | null;
@@ -25718,6 +25719,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				secret: string;
 				url: string;
+				apiKeyId: string | null;
 				eventTypes: string[];
 				retryConfig: unknown;
 				lastTriggeredAt: Date | null;
@@ -25736,6 +25738,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				userId: string;
 				workspaceId: string | null;
+				apiKeyId: string | null;
 				name: string;
 				url: string;
 				eventTypes: string[];
@@ -25766,6 +25769,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				secret: string;
 				url: string;
+				apiKeyId: string | null;
 				eventTypes: string[];
 				retryConfig: unknown;
 				lastTriggeredAt: Date | null;
@@ -25788,6 +25792,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					secret: string;
 					url: string;
+					apiKeyId: string | null;
 					eventTypes: string[];
 					retryConfig: unknown;
 					lastTriggeredAt: Date | null;
@@ -25814,6 +25819,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				userId: string;
 				workspaceId: string | null;
+				apiKeyId: string | null;
 				name: string;
 				url: string;
 				eventTypes: string[];
@@ -25837,6 +25843,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				secret: string;
 				url: string;
+				apiKeyId: string | null;
 				eventTypes: string[];
 				retryConfig: unknown;
 				lastTriggeredAt: Date | null;
@@ -25860,6 +25867,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					secret: string;
 					url: string;
+					apiKeyId: string | null;
 					eventTypes: string[];
 					retryConfig: unknown;
 					lastTriggeredAt: Date | null;
@@ -25888,6 +25896,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				userId: string;
 				workspaceId: string | null;
+				apiKeyId: string | null;
 				name: string;
 				url: string;
 				eventTypes: string[];

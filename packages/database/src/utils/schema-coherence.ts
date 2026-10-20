@@ -698,6 +698,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "home_last_seen_at",
     addedBy: "0333_user_preferences_home_last_seen.sql",
   },
+  // A webhook subscription's creating key (0335). Every delivery selects it
+  // to decide liveness + grant, so a missing column stops every webhook.
+  {
+    table: "webhook_subscriptions",
+    column: "api_key_id",
+    addedBy: "0335_webhook_subscriptions_api_key.sql",
+  },
 
   // A session's OWN phases (0270). Every session read selects `stages`, so a
   // missing column 500s every session door exactly as `criteria` would.

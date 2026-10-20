@@ -20,6 +20,10 @@ import {
 } from "@synap/database/schema";
 import { eq, and } from "@synap/database";
 import { randomBytes } from "crypto";
+import {
+  liveApiKeyIds,
+  subscriptionKeyLive,
+} from "@synap/jobs/workers/webhook-worker.js";
 
 const logger = createLogger({ module: "webhooks-router" });
 
@@ -101,12 +105,18 @@ export const webhooksRouter = router({
         orderBy: (subscriptions, { desc }) => [desc(subscriptions.createdAt)],
       });
 
+      // A subscription whose API key is revoked or expired is not delivered
+      // (S2), so it reads inactive here — the delivery door's liveness rule.
+      const live = await liveApiKeyIds(subscriptions.map((s) => s.apiKeyId));
       // Don't return secrets in list view
       return subscriptions.map(
         (s) =>
-          Object.fromEntries(
-            Object.entries(s).filter(([k]) => k !== "secret")
-          ) as typeof s
+          ({
+            ...Object.fromEntries(
+              Object.entries(s).filter(([k]) => k !== "secret")
+            ),
+            active: s.active && subscriptionKeyLive(s.apiKeyId, live),
+          }) as typeof s
       );
     } catch (error) {
       logger.error(

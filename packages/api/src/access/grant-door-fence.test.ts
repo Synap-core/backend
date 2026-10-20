@@ -191,9 +191,11 @@ describe("owner-wide doors (webhooks)", () => {
     expect(isFencedGrant(STAR_ONE_PROJECT)).toBe(true);
   });
   it.each([
-    ["/webhooks", true],
-    ["/webhooks/", true],
-    ["/webhooks/abc", true],
+    // S2/D7: a subscription is bound to its key and delivers by its grant.
+    ["/webhooks", false],
+    ["/webhooks/", false],
+    ["/webhooks/abc", false],
+    // The delivery log is still read by owner only.
     ["/webhooks/abc/deliveries", true],
     ["/webhooksx", false],
     ["/calendar/feed", true],
@@ -209,5 +211,26 @@ describe("owner-wide doors (webhooks)", () => {
     expect(ownerWideDoorAllowed(path, FULL)).toBe(true);
     // A signed-in session carries no grant.
     expect(ownerWideDoorAllowed(path, null)).toBe(true);
+  });
+});
+
+describe("webhooks for a scoped key (S2/D7)", () => {
+  const DOC_ONLY_WS = key({
+    permissions: ["document.read"],
+    workspaceIds: ["w1"],
+  });
+  it("may list its own subscriptions (a safe read) and create / delete (writes)", () => {
+    expect(restDoorAllowed("GET", "/webhooks", DOC_ONLY_WS)).toBe(true);
+    expect(restDoorAllowed("POST", "/webhooks", DOC_ONLY_WS)).toBe(true);
+    expect(restDoorAllowed("DELETE", "/webhooks/abc", DOC_ONLY_WS)).toBe(true);
+    expect(ownerWideDoorAllowed("/webhooks", DOC_ONLY_WS, "POST")).toBe(true);
+  });
+  it("still may not read the owner's delivery log", () => {
+    expect(
+      restDoorAllowed("GET", "/webhooks/abc/deliveries", DOC_ONLY_WS)
+    ).toBe(false);
+    expect(
+      ownerWideDoorAllowed("/webhooks/abc/deliveries", DOC_ONLY_WS, "GET")
+    ).toBe(false);
   });
 });

@@ -3670,7 +3670,8 @@ CREATE TABLE IF NOT EXISTS "webhook_subscriptions" (
   "retry_config"      jsonb   DEFAULT '{"maxRetries":3}',
   "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
   "last_triggered_at" timestamp with time zone,
-  "workspace_id"      uuid REFERENCES workspaces(id) ON DELETE CASCADE
+  "workspace_id"      uuid REFERENCES workspaces(id) ON DELETE CASCADE,
+  "api_key_id"        uuid REFERENCES "api_keys"("id") ON DELETE CASCADE
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "user_id" text;
@@ -3683,6 +3684,9 @@ ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "retry_config" json
 ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "last_triggered_at" timestamp with time zone;
 ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES workspaces(id) ON DELETE CASCADE;
+ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "api_key_id" uuid REFERENCES "api_keys"("id") ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS "webhook_subscriptions_api_key_id_idx"
+  ON "webhook_subscriptions" ("api_key_id");
 
 CREATE TABLE IF NOT EXISTS "webhook_deliveries" (
   "id"               uuid    PRIMARY KEY DEFAULT gen_random_uuid(),

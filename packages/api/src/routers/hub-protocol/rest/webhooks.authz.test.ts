@@ -8,12 +8,12 @@
  *
  *  1. Creating or deleting one is a WRITE: it needs `hub-protocol.write`. A
  *     read-only key once created a subscription with no scope check at all.
- *  2. A SCOPED key (any grant short of the explicit full-access `*`) may not
- *     manage webhooks at all: nothing narrows the fan-out to a grant, so a key
- *     limited to one workspace (or one kind, or read-only) would otherwise
- *     receive the whole pod. The W1 door fence (`grant-door-fence.ts`)
- *     answered `true` for every non-read POST and every DELETE ("bounded by
- *     the gate") — but these handlers never pass the gate.
+ *  2. Since S2/D7 (2026-10-20) a SCOPED key may manage ITS OWN subscriptions:
+ *     the row records the key, it lists/deletes only those, and delivery is
+ *     bounded by the key's grant while the key lives (proved on PGlite in
+ *     `webhooks.key-bound.pglite.test.ts` and `utils/__tests__/
+ *     webhook-delivery-key-bound.pglite.test.ts`). Before that, nothing
+ *     narrowed the fan-out to a grant and these doors were owner-wide.
  *
  * Rows rule out: a fix that checks only the scope (fenced+write row), a fix
  * that fences only POST (DELETE rows), a fix that refuses everyone (full-access
@@ -192,25 +192,31 @@ describe("POST /webhooks — write scope and an unbounded grant", () => {
     expect(insertValues).not.toHaveBeenCalled();
   });
 
-  it("a workspace-narrowed key cannot create one, even holding write scope", async () => {
+  it("a workspace-narrowed key with write scope creates one bound to itself (S2)", async () => {
     asKey(READ_WRITE, ONE_WORKSPACE);
     const res = await create();
-    expect(res.status).toBe(403);
-    expect(insertValues).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(insertValues.mock.calls[0][0]).toMatchObject({
+      userId: OWNER,
+      apiKeyId: "key-1",
+    });
   });
 
-  it("a kind-narrowed (AI preset-like) key cannot create one either", async () => {
+  it("a kind-narrowed (AI preset-like) key too", async () => {
     asKey(READ_WRITE, AI_PRESET_LIKE);
-    const res = await create();
-    expect(res.status).toBe(403);
-    expect(insertValues).not.toHaveBeenCalled();
+    expect((await create()).status).toBe(201);
+    expect(insertValues.mock.calls[0][0]).toMatchObject({ apiKeyId: "key-1" });
   });
 
-  it("a fenced key cannot create one through the /api/hub-protocol alias either", async () => {
+  it("a fenced key creates one through the /api/hub-protocol alias too", async () => {
     asKey(READ_WRITE, DOC_ONLY_WS);
-    expect((await create("/api/hub-protocol")).status).toBe(403);
-    asKey(READ_WRITE, ONE_WORKSPACE);
-    expect((await create("/api/hub-protocol")).status).toBe(403);
+    expect((await create("/api/hub-protocol")).status).toBe(201);
+    expect(insertValues.mock.calls[0][0]).toMatchObject({ apiKeyId: "key-1" });
+  });
+
+  it("a fenced read-only key still cannot (write scope required)", async () => {
+    asKey(READ, DOC_ONLY_WS);
+    expect((await create()).status).toBe(403);
     expect(insertValues).not.toHaveBeenCalled();
   });
 
@@ -230,10 +236,12 @@ describe("DELETE /webhooks/:id — the same rule", () => {
     expect(deleteWhere).not.toHaveBeenCalled();
   });
 
-  it("a fenced key cannot delete, even holding write scope", async () => {
+  it("a fenced key with write scope deletes — its own rows only", async () => {
     asKey(READ_WRITE, ONE_WORKSPACE);
-    expect((await remove()).status).toBe(403);
-    expect(deleteWhere).not.toHaveBeenCalled();
+    expect((await remove()).status).toBe(200);
+    const q = new PgDialect().sqlToQuery(deleteWhere.mock.calls[0][0] as SQL);
+    expect(q.sql).toMatch(/"api_key_id" = \$\d/);
+    expect(q.params).toContain("key-1");
   });
 
   it("a full-access key with write scope can", async () => {
@@ -244,19 +252,32 @@ describe("DELETE /webhooks/:id — the same rule", () => {
 });
 
 describe("GET /webhooks — the caller's own rows only", () => {
-  it("a fenced key cannot list (fan-out config is pod-wide)", async () => {
-    asKey(READ_WRITE, ONE_WORKSPACE);
-    expect((await list()).status).toBe(403);
-    expect(listFindMany).not.toHaveBeenCalled();
+  it("a fenced key lists — its own rows only (S2)", async () => {
+    asKey(READ, DOC_ONLY_WS);
+    expect((await list()).status).toBe(200);
+    const q = new PgDialect().sqlToQuery(
+      listFindMany.mock.calls[0][0].where as SQL
+    );
+    expect(q.params).toEqual([OWNER, "key-1"]);
   });
 
-  it("a full-access read key lists, filtered on the remapped owner", async () => {
+  it("a fenced key still cannot read the owner's delivery log", async () => {
+    asKey(READ_WRITE, DOC_ONLY_WS);
+    const res = await app().request(
+      "/api/hub/webhooks/00000000-0000-4000-8000-000000000001/deliveries",
+      { headers: { authorization: "Bearer synap_test" } }
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("a full-access read key lists, filtered on the remapped owner AND its own key (S2)", async () => {
     asKey(READ, FULL);
     expect((await list()).status).toBe(200);
     const where = listFindMany.mock.calls[0][0].where as SQL;
     const q = new PgDialect().sqlToQuery(where);
     expect(q.sql).toMatch(/"user_id" = \$1/);
-    expect(q.params).toEqual([OWNER]);
+    expect(q.sql).toMatch(/"api_key_id" = \$2/);
+    expect(q.params).toEqual([OWNER, "key-1"]);
   });
 
   it("a key with no hub scope at all cannot list", async () => {

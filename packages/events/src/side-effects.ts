@@ -164,6 +164,8 @@ const webhookDeliveryReactor: Reactor = {
   async handler(payload, { boss }) {
     await boss.send("webhook-delivery", {
       eventType: `${payload.subjectType}.${payload.action}.completed`,
+      // The subject's table for a key-bound subscription's grant read (D7).
+      subjectType: payload.subjectType,
       subjectId: payload.subjectId,
       userId: payload.userId,
       workspaceId: payload.workspaceId,

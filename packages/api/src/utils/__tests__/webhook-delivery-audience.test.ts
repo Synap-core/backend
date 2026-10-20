@@ -77,7 +77,23 @@ vi.mock("@synap/events", () => ({
     },
   }),
 }));
-vi.mock("@synap/database/schema", () => ({ entities: { id: "id" } }));
+// The key-bound subject tables (D7) are read at module load; no row here is
+// key-bound, so none is queried.
+vi.mock("@synap/database/schema", () => {
+  const t = { id: "id" };
+  return {
+    entities: t,
+    channels: t,
+    documents: t,
+    relations: t,
+    proposals: t,
+    projects: t,
+    views: t,
+    focusSessions: t,
+    links: t,
+    projectTracks: t,
+  };
+});
 vi.mock("@synap/shared-utils", () => ({ safeExternalFetch: h.fetch }));
 vi.mock("../channel-visibility.js", () => ({
   listChannelAudienceUserIds: async (_db: unknown, channelId: string) =>
