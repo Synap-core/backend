@@ -122,11 +122,7 @@ import {
   type ConnectEvent,
   type ConnectWait,
 } from "./provide-connect";
-import {
-  UPLOAD_KEPT_NOTE,
-  fileProblem,
-  uploadProvidedFile,
-} from "./provide-file";
+import { fileProblem, uploadProvidedFile } from "./provide-file";
 
 /** A door's error, as tRPC hands it over. */
 type DoorError = { message: string; data?: { code?: string | null } | null };
@@ -174,7 +170,7 @@ export function AskAnswer({
   }
 
   function settled(receipt: ProvideReceipt) {
-    addToast({ ...receipt, color: "success" });
+    addToast({ color: "success", ...receipt });
     refresh();
     onSettled();
   }
@@ -199,6 +195,8 @@ export function AskAnswer({
     if (refusal.kind === "moved_on") onClose();
   }
 
+  /** Said with a refused provide answer: what already went through stays. */
+  const keptIfRefused = useRef<string | null>(null);
   const answer = trpc.focusSessions.answerOutput.useMutation({
     onSuccess: (data, call) =>
       settled(
@@ -211,7 +209,7 @@ export function AskAnswer({
       refused(
         err,
         call.value?.type === "provide" && call.value.ref.kind === "file"
-          ? UPLOAD_KEPT_NOTE
+          ? keptIfRefused.current
           : null
       ),
   });
@@ -385,12 +383,14 @@ export function AskAnswer({
               });
             }}
             handingBack={handBack.isPending}
-            onProvide={(ref, expectedGranteeId) => {
+            onProvide={(ref, extras) => {
               const built = answerCall(seen, { type: "provide", ref });
               if (!built.ok) {
                 setFailure(built.message);
                 return;
               }
+              keptIfRefused.current = extras?.keptIfRefused ?? null;
+              const expectedGranteeId = extras?.expectedGranteeId;
               send(
                 expectedGranteeId
                   ? { ...built.call, expectedGranteeId }
@@ -489,9 +489,13 @@ interface ControlsProps {
   handingBack: boolean;
   /**
    * Hand over a reference (a vault secret, a connection, a file); a secret
-   * carries the agent the person was told will read it.
+   * carries the agent the person was told will read it, an upload what to say
+   * if the answer is then refused.
    */
-  onProvide: (ref: AskProvideRef, expectedGranteeId?: string) => void;
+  onProvide: (
+    ref: AskProvideRef,
+    extras?: { expectedGranteeId?: string; keptIfRefused?: string }
+  ) => void;
   /** A door refused: stale (moved on, changed) or a failure, as the pod said. */
   onStale: (err: DoorError) => void;
   onFailure: (message: string | null) => void;
@@ -1040,7 +1044,9 @@ function SecretProvide({
               onPress={() =>
                 onProvide(
                   { kind: "secret", vaultRef: ref },
-                  sheet.expectedGranteeId ?? undefined
+                  sheet.expectedGranteeId
+                    ? { expectedGranteeId: sheet.expectedGranteeId }
+                    : undefined
                 )
               }
             >
@@ -1322,7 +1328,10 @@ function FileProvide({
       setProblem(result.message);
       return;
     }
-    onProvide({ kind: "file", fileId: result.fileId });
+    onProvide(
+      { kind: "file", fileId: result.fileId },
+      { keptIfRefused: landing.keptIfRefused }
+    );
   }
 
   return (
