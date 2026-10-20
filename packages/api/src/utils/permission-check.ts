@@ -2809,6 +2809,24 @@ export async function resolveSpaceOpNames(
 }
 
 /**
+ * The name a focus-session proposal title gives the session it acts on: the
+ * display-only `sessionName` the proposing door resolved with
+ * `resolveSessionTitle` (`session-update-goal.ts`), else `targetName` (the
+ * title door at filing, `resolveProposalTargetName`), else the payload's goal
+ * through the same resolver — rows filed before `sessionName` existed.
+ */
+function sessionLabelOf(data: Record<string, unknown>): string | null {
+  return (
+    payloadName(data.sessionName) ??
+    payloadName(data.targetName) ??
+    (resolveSessionTitle({
+      goal: typeof data.goal === "string" ? data.goal : null,
+    }) ||
+      null)
+  );
+}
+
+/**
  * Build a short human-readable summary of what's being proposed.
  * Example: `Create task "Design new onboarding flow"`
  *          `Delete entity ent_abc`
@@ -2858,26 +2876,19 @@ export function buildProposalSummary(
     action === "update" &&
     data.status === "closed"
   ) {
-    const goal =
-      (typeof data.goal === "string" && data.goal.trim()
-        ? data.goal
-        : undefined) ??
-      (typeof data.targetName === "string" && data.targetName.trim()
-        ? data.targetName
-        : undefined);
-    return goal ? `Complete session "${goal}"` : "Complete focus session";
+    const name = sessionLabelOf(data);
+    return name ? `Complete session "${name}"` : "Complete focus session";
   }
   // focus_session HAND-OFF — an agent putting another agent on the roster
   // (`services/focus-sessions/agent-hand-off.ts`). Names who gets the work.
   if (subjectType === "focus_session" && action === "assign_agent") {
-    const goal =
-      typeof data.goal === "string" && data.goal.trim() ? data.goal : undefined;
+    const name = sessionLabelOf(data);
     const agent =
       typeof data.agentName === "string" && data.agentName.trim()
         ? data.agentName
         : "another agent";
-    return goal
-      ? `Hand session "${goal}" to ${agent}`
+    return name
+      ? `Hand session "${name}" to ${agent}`
       : `Hand a session to ${agent}`;
   }
   // focus_session TRACK FILING (adopt existing work into a step). Checked
@@ -2890,10 +2901,9 @@ export function buildProposalSummary(
     action === "update" &&
     "trackId" in data
   ) {
-    const goal =
-      typeof data.goal === "string" && data.goal.trim() ? data.goal : null;
-    const what = goal
-      ? `"${goal}"`
+    const name = sessionLabelOf(data);
+    const what = name
+      ? `"${name}"`
       : resolveObjectNoun("session").toLowerCase();
     if (data.trackId === null) return `Unfile ${what} from its track`;
     const track =
@@ -2920,9 +2930,8 @@ export function buildProposalSummary(
     action === "update" &&
     "projectId" in data
   ) {
-    const goal =
-      typeof data.goal === "string" && data.goal.trim() ? data.goal : null;
-    const what = goal ? `session "${goal}"` : "session";
+    const name = sessionLabelOf(data);
+    const what = name ? `session "${name}"` : "session";
     if (data.projectId === null) return `Unfile ${what}`;
     const where =
       typeof data.projectName === "string" && data.projectName.trim()
@@ -3076,12 +3085,19 @@ export function buildProposalSummary(
   // case degrades to a readable phrase instead of a severed sentence. Rare
   // before this week: `focus_session.update` only started reaching the gate
   // when criteria updates began proposing.
+  //
+  // An update names the session by the display-only `sessionName` its door
+  // resolved when it was filed (`session-update-goal.ts`): the payload no
+  // longer carries the goal unless it changes, and a rename's `title` is the
+  // name it WILL have, not the one the reviewer knows it by.
   const sessionName =
     subjectType === "focus_session"
-      ? resolveSessionTitle({
+      ? (payloadName(data.sessionName) ??
+        (resolveSessionTitle({
           title: (data.title ?? data.targetName) as string | null | undefined,
           goal: data.goal as string | null | undefined,
-        }) || undefined
+        }) ||
+          undefined))
       : undefined;
   // goal is a first-class label for focus_session (and harmless elsewhere)
   const objectName =
@@ -4526,6 +4542,12 @@ export async function resolveProposalTargetName(
   targetId: string,
   data: Record<string, unknown>
 ): Promise<string | undefined> {
+  // A session update names its session by the display name its door resolved
+  // (`session-update-goal.ts`) — not by a goal it may be CHANGING.
+  if (subjectType === "focus_session") {
+    const named = stringField(data, "sessionName");
+    if (named) return named;
+  }
   const inline =
     stringField(data, "goal") ??
     stringField(data, "title") ??
@@ -4547,15 +4569,16 @@ export async function resolveProposalTargetName(
     }
   }
 
-  // Mirror entity title lookup for focus sessions (goal is the display name).
+  // Mirror entity title lookup for focus sessions, named by the ONE
+  // display-name door (title, else the goal's first line).
   if (subjectType === "focus_session" && isLikelyUUID(targetId)) {
     try {
       const [session] = await db
-        .select({ goal: focusSessions.goal })
+        .select({ title: focusSessions.title, goal: focusSessions.goal })
         .from(focusSessions)
         .where(eq(focusSessions.id, targetId))
         .limit(1);
-      return session?.goal ?? undefined;
+      return session ? resolveSessionTitle(session) || undefined : undefined;
     } catch {
       return undefined;
     }

@@ -60,6 +60,7 @@ import {
 } from "@synap-core/types/focus-sessions";
 import { AskAnswerValueSchema, AskSchema } from "@synap-core/types/ask";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
+import { sessionGoalPayload } from "../../../services/focus-sessions/session-update-goal.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
 import { withoutServerOwnedSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
 import {
@@ -1560,8 +1561,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         }
       }
 
-      // Gate data: always include goal from the row (proposal summary label) plus
-      // every field being patched so focus_session/update can materialize on approve.
+      // Gate data: every field being patched so focus_session/update can
+      // materialize on approve. The goal rides ONLY when it changes; the session
+      // is named by the display-only `sessionName` (`session-update-goal.ts`).
       const perm = await checkPermissionOrPropose({
         userId,
         agentUserId,
@@ -1574,7 +1576,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         ...(trackFiling ? { forcePropose: true } : {}),
         data: {
           id,
-          goal: patch.goal !== undefined ? patch.goal : existing.goal,
+          ...sessionGoalPayload(existing, patch.goal),
           ...(patch.title !== undefined ? { title: patch.title } : {}),
           ...(patch.status !== undefined ? { status: patch.status } : {}),
           ...(patch.progress !== undefined ? { progress: patch.progress } : {}),

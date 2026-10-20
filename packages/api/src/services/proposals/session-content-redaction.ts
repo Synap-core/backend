@@ -3,7 +3,8 @@
  * (decision D1, 2026-09-26: a session's title/goal/status/progress is CONTENT).
  *
  * Session proposals copy session content into the row at WRITE time:
- * `resolveProposalTargetName` stamps the goal as `data.targetName`, and
+ * `resolveProposalTargetName` stamps its name as `data.targetName`, an update
+ * carries it as `sessionName` (and a goal change its old goal), and
  * `completeFocusSession` files `{ goal, status, previousStatus,
  * sessionSummary, verificationReport }` as the proposal's data. The proposal
  * itself stays visible under its OWN rule (workspace reviewers), so the copy

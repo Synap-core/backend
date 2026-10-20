@@ -47,6 +47,7 @@ import type {
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
+import { sessionGoalPayload } from "./session-update-goal.js";
 // STATIC, like `block-output.ts` beside it. These three call sites used
 // `await import()` with no stated reason, which reads as circular-dependency
 // avoidance and is not: the static import graph rooted at
@@ -1539,9 +1540,10 @@ export async function updateFocusSession(
   }
 
   // Governance membrane — AI callers route through proposals (same gate the
-  // Hub PATCH /focus-sessions/:id and synap_complete_session use). Always carry
-  // goal (for proposal summary / targetName) plus every intended mutation so
-  // the focus_session/update executor can materialize the full patch on approve.
+  // Hub PATCH /focus-sessions/:id and synap_complete_session use). Carry every
+  // intended mutation so the focus_session/update executor can materialize the
+  // full patch on approve. The goal rides ONLY when it changes, and the session
+  // is named by the display-only `sessionName` (`session-update-goal.ts`).
   const { checkPermissionOrPropose } =
     await import("../../utils/permission-check.js");
   const perm = await checkPermissionOrPropose({
@@ -1560,8 +1562,7 @@ export async function updateFocusSession(
       : {}),
     data: {
       id: sessionId,
-      // Always include goal so summaries resolve even when goal is not changing.
-      goal: params.goal !== undefined ? params.goal : existing.goal,
+      ...sessionGoalPayload(existing, params.goal),
       ...(params.title !== undefined ? { title: params.title } : {}),
       ...(params.status !== undefined ? { status: params.status } : {}),
       ...(params.progress !== undefined ? { progress: params.progress } : {}),

@@ -489,3 +489,139 @@ describe("criteria reach the membrane only when they change", () => {
     expect((await row(sessionId)).criteria).toEqual([C1]);
   });
 });
+
+/**
+ * A filing never carries a goal it does not change, and approving an OLDER
+ * proposal never writes a stale goal back (`session-update-goal.ts`). Seen live
+ * 2026-10-20: every filing copied the session's current goal "so summaries
+ * resolve", the review diff showed "Goal: update" for nothing, and approving
+ * an older filing put a replaced goal back. Driven through the real door and
+ * the real executor; the title is the REAL `buildProposalSummary` on the gate
+ * payload the door built.
+ */
+describe("a filing carries the session's name, not its goal", () => {
+  const goalOf = async (sessionId: string) =>
+    (
+      await q<{ goal: string }>(
+        `select goal from focus_sessions where id = $1`,
+        [sessionId]
+      )
+    ).rows[0]!.goal;
+  const summaryOf = async (gate: Record<string, unknown>) => {
+    const { buildProposalSummary } = await vi.importActual<
+      typeof import("../../../utils/permission-check.js")
+    >("../../../utils/permission-check.js");
+    return buildProposalSummary("focus_session", "update", gate);
+  };
+
+  beforeEach(() => {
+    permSpy.mockImplementation(async (args) =>
+      args.forcePropose
+        ? { proposalId: randomUUID(), proposalType: "update" }
+        : {}
+    );
+  });
+
+  it("approving an older filing keeps a goal changed since", async () => {
+    const sessionId = await seedSession();
+    const projectId = await seedProject(USER);
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      projectId,
+    });
+    expect(res.status).toBe("proposed");
+    const gate = permSpy.mock.calls[0]![0].data as Record<string, unknown>;
+    expect(gate).not.toHaveProperty("goal");
+    expect(gate).not.toHaveProperty("previousGoal");
+    expect(gate.sessionName).toBe("Shell work");
+    expect(await summaryOf(gate)).toBe(
+      'File session "Shell work" into "Synap"'
+    );
+
+    // The person re-goals the session after the filing was proposed.
+    await updateFocusSession({
+      sessionId,
+      userId: USER,
+      goal: "Win the first clients",
+    });
+
+    const out = (await approve(sessionId, gate)) as { refusals?: string[] };
+    expect(await projectOf(sessionId)).toBe(projectId);
+    expect(await goalOf(sessionId)).toBe("Win the first clients");
+    expect(out.refusals).toBeUndefined();
+  });
+
+  it("a goal change carries the goal it replaces, and approval applies it", async () => {
+    const sessionId = await seedSession();
+    const projectId = await seedProject(USER);
+    await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      projectId,
+      goal: "Map the commercial foundations",
+    });
+    const gate = permSpy.mock.calls[0]![0].data as Record<string, unknown>;
+    expect(gate.goal).toBe("Map the commercial foundations");
+    expect(gate.previousGoal).toBe("Ship the work shell");
+    // Named by what the reviewer knows it as, not by the goal it is changing.
+    expect(await summaryOf(gate)).toBe(
+      'File session "Shell work" into "Synap"'
+    );
+
+    await approve(sessionId, gate);
+    expect(await goalOf(sessionId)).toBe("Map the commercial foundations");
+  });
+
+  it("an older goal change never overwrites a goal changed since, and says so", async () => {
+    const sessionId = await seedSession();
+    const projectId = await seedProject(USER);
+    await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      projectId,
+      goal: "The older plan",
+    });
+    const gate = permSpy.mock.calls[0]![0].data as Record<string, unknown>;
+    await updateFocusSession({
+      sessionId,
+      userId: USER,
+      goal: "The newer plan",
+    });
+
+    const out = (await approve(sessionId, gate)) as { refusals?: string[] };
+    expect(await goalOf(sessionId)).toBe("The newer plan");
+    expect(await projectOf(sessionId)).toBe(projectId);
+    expect(out.refusals).toEqual([
+      expect.stringMatching(/goal changed after this proposal was filed/),
+    ]);
+  });
+
+  it("a payload filed before the rule (copied goal, no previousGoal) never reverts the goal", async () => {
+    const sessionId = await seedSession();
+    const projectId = await seedProject(USER);
+    // The pre-fix wire shape: the goal copied at filing time, since replaced.
+    const out = (await approve(sessionId, {
+      id: sessionId,
+      goal: "Founder 2026-10-20: Radar is removed",
+      projectId,
+    })) as { refusals?: string[] };
+    expect(await goalOf(sessionId)).toBe("Ship the work shell");
+    expect(await projectOf(sessionId)).toBe(projectId);
+    expect(out.refusals).toEqual([
+      expect.stringMatching(/filed before goal changes were tracked/),
+    ]);
+
+    // A copied goal that still matches is a no-op, not a refusal.
+    const quiet = (await approve(sessionId, {
+      id: sessionId,
+      goal: "Ship the work shell",
+      projectId: null,
+    })) as { refusals?: string[] };
+    expect(quiet.refusals).toBeUndefined();
+    expect(await projectOf(sessionId)).toBeNull();
+  });
+});
