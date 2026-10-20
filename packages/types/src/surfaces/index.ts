@@ -170,12 +170,15 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
     // does. The registry's job is to keep people OFF a retired path, not to
     // retire a capability; keep those two apart here.
     //
-    // The `gallery` ROUTE stays registered because its doors are held outside
-    // this repo (compiled iOS widget extensions opening `relay://gallery`) or
-    // in classic-shell `mobileTabs`. See `app/(tabs)/gallery.tsx`.
+    // The `gallery` ROUTE stays registered because its door is held outside
+    // this repo (compiled iOS widget extensions opening `relay://gallery`).
+    // It is a redirect now, not a tab: `app/gallery.tsx` lands on Library ›
+    // Things, and a stored `gallery` / `data` tab value reads as `library`
+    // (wave O, founder decision 2, 2026-10-19 — the Library is the one
+    // collection on the phone).
     reason:
-      "The gallery PATH is superseded by the `data` tab; the route stays for classic-shell users, widgets and deep links.",
-    replacedBy: "The `data` tab on the phone, and the desktop Data app",
+      "The gallery PATH is superseded by the Library tab (Things); the route stays only as a redirect for installed widgets and deep links.",
+    replacedBy: "Library › Things on the phone, and the desktop Library",
     decisionDoc: V1_PLAN_DOC,
   },
   // `pipeline` (relay classic-shell kanban) left this registry on 2026-10-14:

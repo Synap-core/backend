@@ -87,6 +87,11 @@ vi.mock("@synap/database", () => ({
     requestId: "request_id",
   },
   messages: { id: "id" },
+  RoutedSource: {
+    ORCHESTRATOR: "orchestrator",
+    MENTION: "mention",
+    DIRECT: "direct",
+  },
   eq: () => ({}),
   and: () => ({}),
   gte: () => ({}),
