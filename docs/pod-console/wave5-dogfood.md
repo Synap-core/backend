@@ -33,7 +33,8 @@ cd deploy && synap update --from-source
 - All new environment settings are optional:
   - `SYNAP_CATALOG_SOURCE`: `off` turns the official catalog off.
   - `SYNAP_CATALOG_PUBLIC_KEYS`: catalog keys for a private mirror.
-  - `SYNAP_CATALOG_ENFORCE_SIGNATURE`: blocks what does not verify. Leave it unset; see "Catalog signing" below.
+  - `SYNAP_CATALOG_ENFORCE_SIGNATURE`: blocks what does not verify. Leave it unset in production until after the
+    ceremony; see "Catalog signing" below.
   - `SYNAP_CATALOG_ALLOW_EXPIRED`: accepts expired signed files, for air-gapped pods only.
   - The `RATE_LIMIT_*` settings are unchanged.
 
@@ -90,13 +91,43 @@ Desktop, phone and the apps build from their own branches at the heads above.
 - [ ] An admin can read activity on a subject. A member can't.
 - [ ] Relay billing opens the Credits screen.
 
-## Catalog signing (report-only)
+## Catalog signing
 
-The pod checks the official catalog's signatures and records what it finds, but it blocks nothing. It ships with no
-root keys: the founders hold them, offline, and the Control Plane side of the key ceremony is still to schedule (the
-contract is in `open-hosting-and-catalog-signing.md` §B.8). Do not set `SYNAP_CATALOG_ENFORCE_SIGNATURE` until roots
-and a signed catalog exist. Once enforcement is on, private capabilities served from `/internal/capabilities/:key`
-will be refused unless they are signed or exempted.
+**Live once the CP deploys (wave 6):** the Control Plane signs and serves Synap's catalog (`/api/marketplace/
+synap-catalog-keys.json`, `synap-index.json`, each with a `.sig`). Pods verify it, and record the result, in report
+mode. Private capabilities from the authenticated `/internal/capabilities/:key` door are exempt and show as
+"private, verified by the Control Plane connection". The contract and what was built are in
+`open-hosting-and-catalog-signing.md` §B.8.
+
+**Needs the founders' ceremony** (about 15 minutes; runbook in `control-plane-api` `ops/catalog-signing/README.md`):
+
+1. Each founder runs `root-keygen` on an air-gapped machine (current and standby, separate custody).
+2. CP ops run `online-keygen`, and put the PEM in the CP secret `SYNAP_CATALOG_SIGNING_KEY`.
+3. Sign the first statement with `sign-keys --first`, then upload it with `PUT /admin/catalog-signing/keys-statement`.
+4. Set `SYNAP_CATALOG_ROOT_PUBLIC_KEYS=<current>,<standby>` on the CP. In the pod release, set
+   `catalogRootKeys(["<current>", "<standby>"])` in `packages/jobs/src/workers/official-catalog-signature.ts`.
+5. Serve the files first, then ship the release. Turn on `SYNAP_CATALOG_ENFORCE_SIGNATURE=1` after report mode has
+   run clean.
+
+Until then, pods say "Synap's catalog isn't signed yet" and block nothing. Leave `SYNAP_CATALOG_ENFORCE_SIGNATURE`
+unset in production.
+
+**Staging, to dogfood enforcement before the ceremony:**
+
+- [ ] Generate a throwaway staging root and online key with the ceremony tool, and sign a statement.
+- [ ] On the staging CP, set `SYNAP_CATALOG_ROOT_PUBLIC_KEYS=<staging root>` and `SYNAP_CATALOG_SIGNING_KEY=<staging PEM>`.
+      Upload the statement. Then `GET /admin/catalog-signing` should show `serving.index: true` and no warnings.
+- [ ] On a staging pod, set `SYNAP_CATALOG_PUBLIC_KEYS=<staging online public key>` and
+      `SYNAP_CATALOG_ENFORCE_SIGNATURE=1`, then click Sync now in Marketplace › Sources.
+  - [ ] Sources shows the signing key's fingerprint and no unverified rows.
+  - [ ] An official capability, template, cell, skill, view and automation install.
+  - [ ] A private capability you own installs, and the pod log says "private, verified by the Control Plane
+        connection".
+  - [ ] Set the staging pod's `SYNAP_CATALOG_PUBLIC_KEYS` to a different key (any `online-keygen` output), then
+        Sync now. Installs and automatic updates pause, the catalog stays listed, and Sources says why in one
+        sentence. Restore the key and Sync now, and installs resume.
+- [ ] `node ops/catalog-signing/cli.mjs verify --roots <staging root> --keys <served statement> --index <served index>`
+      passes against what the staging CP serves.
 
 ## Known gaps and risks
 
