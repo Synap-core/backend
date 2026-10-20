@@ -5,9 +5,8 @@
  */
 
 import {
-  GRANT_DOOR_UNSUPPORTED,
-  isFencedGrant,
   trpcProcedureAllowed,
+  trpcRefusalMessage,
 } from "../access/grant-door-fence.js";
 import { t } from "../init-trpc.js";
 import { TRPCError } from "@trpc/server";
@@ -178,12 +177,13 @@ export const apiKeyMiddleware = t.middleware(
     const { effectiveUserId, agentUserId, grant } =
       await resolveKeyIdentity(keyRecord);
 
-    // W1 fence: a scoped key may only QUERY procedures whose reads are bounded
-    // by its grant (access/grant-door-fence.ts). Mutations pass to the gate.
-    if (isFencedGrant(grant) && !trpcProcedureAllowed(type, path, grant)) {
+    // W1 / S7 fence (access/grant-door-fence.ts): a scoped key may QUERY only
+    // seamed procedures and MUTATE only those the gate bounds by its grant
+    // (TRPC_KEY_MUTATION_DOORS); everything else needs an unbounded `*` key.
+    if (!trpcProcedureAllowed(type, path, grant)) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: GRANT_DOOR_UNSUPPORTED,
+        message: trpcRefusalMessage(type, path),
       });
     }
 
