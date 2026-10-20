@@ -103,6 +103,10 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/entities\/[^/]+\/facets\/?$/,
   /^\/documents\/[^/]+\/?$/,
   /^\/documents\/[^/]+\/raw\/?$/,
+  // A file entity's signed GET: `signFileEntityUrl` → `loadSignableFileEntity`
+  // reads the entity through `scopedDb` (grant ANDed), then only the document
+  // that entity's OWNER owns — no row beyond the granted entity is reached.
+  /^\/files\/[^/]+\/url\/?$/,
   /^\/relations\/?$/,
   /^\/projects\/[^/]+\/outputs\/?$/,
   /^\/tracks\/?$/,

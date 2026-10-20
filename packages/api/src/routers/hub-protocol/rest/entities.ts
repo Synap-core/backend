@@ -41,6 +41,7 @@ import {
   isAllowedMimeType,
   maxBufferedUploadBytes,
   parseUploadEntityFields,
+  signFileEntityUrl,
   type UploadEntityFields,
 } from "../../file-upload.js";
 import {
@@ -93,6 +94,7 @@ import {
   getUserAccessibleWorkspaceIds,
   httpStatusForTrpcError,
   hasScope,
+  isUuid,
   logger,
   mayActAsUser,
   resolveActingContext,
@@ -2249,6 +2251,41 @@ export function registerEntitiesRoutes(app: HubHono): void {
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err)
       );
+    }
+  });
+
+  // ── GET /files/{entityId}/url ───────────────────────────────────────────
+  // A signed GET for a file entity's blob — the key-usable twin of the Kratos
+  // `GET /api/files/:entityId/url`, through the SAME `signFileEntityUrl` (one
+  // read floor, one 403/404 split, one `{ url, expiresAt, mimeType }` shape).
+  // The read is `loadSignableFileEntity` → `scopedDb(entities)`, which ANDs
+  // the key's grant (`grantReadPredicate`): a key granted workspace X gets 403
+  // for a file in workspace Y. Listed grant-safe in GRANT_SAFE_REST_READS for
+  // that reason. URL only — the signer forces `attachment` and never
+  // overrides the stored type (D10), so an active blob cannot render from it.
+  app.get("/files/:entityId/url", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthorized" }, 401);
+    const entityId = c.req.param("entityId");
+    // Shape-check first: the id reaches a `uuid` column, where a typo would
+    // throw invalid-uuid-syntax and read as a server fault.
+    if (!isUuid(entityId)) {
+      return c.json(
+        { error: `Invalid entityId: "${entityId}" is not a uuid` },
+        400
+      );
+    }
+    try {
+      const result = await signFileEntityUrl(userId, entityId);
+      return result.ok
+        ? c.json(result.body)
+        : c.json({ error: result.error }, result.status);
+    } catch (err) {
+      logger.error({ err, entityId }, "Hub file URL signing failed");
+      return c.json({ error: "Failed to generate URL" }, 500);
     }
   });
 

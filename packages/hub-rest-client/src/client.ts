@@ -199,6 +199,7 @@ import type {
   HubMessage,
   HubThreadContext,
   HubProposal,
+  HubFileUrl,
   HubView,
   HubWidgetDefinition,
   HubSearchResult,
@@ -1362,6 +1363,24 @@ export class HubRestClient {
           ? { autoRespond: input.autoRespond }
           : {}),
       }
+    );
+  }
+
+  // ─── Files ────────────────────────────────────────────────────────────────
+
+  /**
+   * A short-lived signed GET for a file entity's stored blob
+   * (`GET /api/hub/files/{entityId}/url`). Bounded by the key's grant: a file
+   * the key cannot read answers 403, an unknown one 404.
+   *
+   * The URL downloads (`attachment`) and is served with the type the blob was
+   * stored with — `mimeType` says which. Never put it in an `<img>`/`<iframe>`
+   * for an active type (HTML, SVG); decide drawability on `mimeType`.
+   */
+  async getFileUrl(entityId: string): Promise<HubFileUrl> {
+    return this.request<HubFileUrl>(
+      "GET",
+      `/api/hub/files/${encodeURIComponent(entityId)}/url`
     );
   }
 
