@@ -6074,12 +6074,22 @@ cmd_compose_request() {
     while IFS= read -r n; do [ -n "$n" ] && services+=("$n"); done < <(jq -r '(.services // [])[] | tostring' "$req")
     # A profile this compose file no longer has (an older CP's retired add-on)
     # activates nothing: it is dropped, and said so — never passed through.
-    known="$(docker compose config --profiles 2>/dev/null)"
+    # A failed read is not "no such profile": refuse rather than run the request
+    # without the profiles it asked for and record it as a success.
+    known="$(docker compose config --profiles 2>/dev/null)" || {
+        _cr_record failed "$id" "could not read this pod's compose profiles (docker compose config failed)"
+        echo -e "${RED}❌ compose request ${id}: could not read the compose file — nothing was run${NC}" >&2
+        exit 1
+    }
     for n in "${profiles[@]}"; do
         if [[ "$n" =~ $_CR_NAME_RE ]] && grep -qx "$n" <<<"$known"; then pargs+=(--profile "$n"); else dropped="${dropped} ${n}"; fi
     done
     [ -z "$dropped" ] || echo -e "${YELLOW}compose request ${id}: no such profile here, ignored:${dropped}${NC}"
-    known="$(docker compose "${pargs[@]}" config --services 2>/dev/null)"
+    known="$(docker compose "${pargs[@]}" config --services 2>/dev/null)" || {
+        _cr_record failed "$id" "could not read this pod's compose services (docker compose config failed)"
+        echo -e "${RED}❌ compose request ${id}: could not read the compose file — nothing was run${NC}" >&2
+        exit 1
+    }
     for n in "${services[@]}"; do
         [[ "$n" =~ $_CR_NAME_RE ]] && grep -qx "$n" <<<"$known" || bad="${bad} service:${n}"
     done

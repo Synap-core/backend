@@ -119,6 +119,7 @@ case "$*" in
     exit 0 ;;
   "compose exec -T postgres psql"*) cat >/dev/null 2>&1; echo 1; exit 0 ;;
   "compose exec -T kratos wget"*) [ -n "${FAKE_KRATOS_DOWN:-}" ] && exit 1; exit 0 ;;
+  "compose stop"*|"compose"*" stop "*) echo armed > "$F/restores_armed"; exit 0 ;;
   "compose"*) exit 0 ;;
   "exec synap-backend-canary node -e"*)
     [ -n "${FAKE_CANARY_BAD:-}" ] && is_new "$(cat "$F/canary_image")" && exit 1; exit 0 ;;
@@ -134,7 +135,9 @@ case "$*" in
   # the live database aside and creates a fresh one is observable.
   "exec pg1 psql"*"from pg_database where datname="*)
     [ -f "$F/dbs" ] || echo synap > "$F/dbs"
-    n="$(sed -n "s/.*datname='\([^']*\)'.*/\1/p" <<<"$*")"; grep -qx "$n" "$F/dbs" && echo 1; exit 0 ;;
+    n="$(sed -n "s/.*datname='\([^']*\)'.*/\1/p" <<<"$*")"
+    [ -n "${FAKE_DB_STATE_FAIL:-}" ] && [ "$n" = "$FAKE_DB_STATE_FAIL" ] && [ -s "$F/restores_armed" ] && { echo "connection lost" >&2; exit 2; }
+    grep -qx "$n" "$F/dbs" && echo 1 || echo 0; exit 0 ;;
   "exec pg1 psql"*"alter database "*" rename to "*)
     [ -f "$F/dbs" ] || echo synap > "$F/dbs"
     a="$(sed -n 's/.*alter database "\([^"]*\)" rename to.*/\1/p' <<<"$*")"; b="$(sed -n 's/.*rename to "\([^"]*\)".*/\1/p' <<<"$*")"
@@ -421,6 +424,25 @@ setup restorefull r1; publish "$R2" 0012_new.sql
 FAKE_MIGRATE_FAIL=1 FAKE_PG_FREE_KB=1 run_update --release "$R2"; rc=$?
 [ "$(last status)" = rollback_failed ] && grep -q "not enough room to restore" "$S/out" && [ "$(cat "$FAKE/dbs" 2>/dev/null || echo synap)" = synap ] \
   && ok "restore-full: a full volume refuses the restore and leaves the database alone" || { bad "restore-full: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+
+# ── 3b-iii. the existence check FAILS during the restore → the live database
+#    is never dropped (a failed read once read as "absent", and the revert then
+#    dropped the live database it had never set aside).
+setup restoreread r1; publish "$R2" 0012_new.sql
+FAKE_MIGRATE_FAIL=1 FAKE_DB_STATE_FAIL=synap run_update --release "$R2"; rc=$?
+[ "$(last status)" = rollback_failed ] && [ "$(last dbRestored)" = false ] && grep -q "cannot tell whether 'synap' exists" "$S/out" \
+  && ! grep -q 'drop database if exists "synap"' "$FAKE/log" && ! grep -q 'drop database "synap"' "$FAKE/log" && [ "$(cat "$FAKE/dbs" 2>/dev/null || echo synap)" = synap ] \
+  && ok "restore-read: a failed existence check stops the restore and never drops the live database" || { bad "restore-read: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null) drops=$(grep -c 'drop database' "$FAKE/log")"; show; }
+
+# ── 3b-iv. a backup run holds the backup lock → the restore waits, then gives
+#    up without touching the databases (a backup must never dump a half-restored one).
+setup restorelock r1; publish "$R2" 0012_new.sql
+LK="$DEPLOY/backups/postgres"; mkdir -p "$LK"; HOLD=""
+if command -v flock >/dev/null 2>&1; then touch "$LK/.backup.flock"; flock "$LK/.backup.flock" sleep 60 & HOLD=$!; sleep 0.3; else mkdir "$LK/.backup.lock"; fi
+FAKE_MIGRATE_FAIL=1 SYNAP_RESTORE_LOCK_WAIT=2 run_update --release "$R2"; rc=$?
+[ -n "$HOLD" ] && kill "$HOLD" 2>/dev/null; rmdir "$LK/.backup.lock" 2>/dev/null
+[ "$(last status)" = rollback_failed ] && grep -q "a backup run still holds" "$S/out" && ! grep -q 'rename to "synap__pre_restore"' "$FAKE/log" && [ "$(cat "$FAKE/dbs" 2>/dev/null || echo synap)" = synap ] \
+  && ok "restore-lock: a held backup lock makes the restore wait, then refuse untouched" || { bad "restore-lock: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 
 # ── 3c. SIGHUP (ssh drop) mid-update → rolled back like INT/TERM ─────────────
 setup hup r1; publish "$R2" 0012_new.sql

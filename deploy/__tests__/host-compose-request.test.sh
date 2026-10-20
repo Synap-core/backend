@@ -45,7 +45,7 @@ cat > "$TMP/bin/docker" <<'D'
 #!/usr/bin/env bash
 echo "$PWD|$*" >> "$FAKE_LOG"
 case "$*" in
-  "compose config --profiles") printf '%s\n' pod-agent rsshub canary; exit 0 ;;
+  "compose config --profiles") [ -n "${FAKE_CONFIG_FAIL:-}" ] && { echo "yaml: line 3: bad" >&2; exit 1; }; printf '%s\n' pod-agent rsshub canary; exit 0 ;;
   "compose"*"config --services")
     printf '%s\n' postgres redis minio kratos backend realtime caddy
     case " $* " in *" --profile pod-agent "*) echo pod-agent ;; esac; exit 0 ;;
@@ -115,6 +115,11 @@ setup upfail
 agent backend & ap=$!; FAKE_UP_FAIL=1 host; hrc=$?; wait "$ap"; arc=$?
 [ "$hrc" != 0 ] && [ "$arc" != 0 ] && [ "$(rec status)" = failed ] && grep -q "boom" "$S/agent.out" \
   && ok "upfail: a compose failure is recorded failed and reaches the agent" || { bad "upfail: host=$hrc agent=$arc record=$(rec status)"; cat "$S/agent.out"; }
+
+setup configfail
+agent --profile pod-agent & ap=$!; FAKE_CONFIG_FAIL=1 host; hrc=$?; wait "$ap"; arc=$?
+[ "$hrc" != 0 ] && [ "$arc" != 0 ] && [ "$(rec status)" = failed ] && ! grep -q ' up ' "$FAKE_LOG" \
+  && ok "configfail: an unreadable compose file fails the request, nothing runs (never 'no such profile')" || { bad "configfail: host=$hrc agent=$arc record=$(rec status) reason=$(rec reason)"; cat "$S/agent.out"; }
 
 # R4. the update lock is busy: the request is consumed and recorded, not looped on
 setup busy
