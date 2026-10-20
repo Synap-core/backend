@@ -9,12 +9,17 @@ import {
   GRANT_PRESETS,
 } from "@synap-core/types/grants";
 import {
+  GRANT_DOOR_UNSUPPORTED,
+  GRANT_OWNER_WIDE_UNSUPPORTED,
+  GRANT_WRITE_DOOR_UNSUPPORTED,
   isFencedGrant,
   isUnboundedFullAccess,
   mcpToolAllowed,
   ownerWideDoorAllowed,
   restDoorAllowed,
+  TRPC_KEY_MUTATION_DOORS,
   trpcProcedureAllowed,
+  trpcRefusalMessage,
 } from "./grant-door-fence.js";
 
 describe("isFencedGrant", () => {
@@ -105,7 +110,7 @@ describe("self-introspection doors", () => {
   });
 });
 
-describe("mcpToolAllowed / trpcProcedureAllowed", () => {
+describe("mcpToolAllowed", () => {
   it("read tools only when seamed; write tools always", () => {
     expect(mcpToolAllowed("synap_get_entities", true, DOC_ONLY)).toBe(true);
     expect(mcpToolAllowed("synap_ask", true, DOC_ONLY)).toBe(false);
@@ -170,10 +175,107 @@ describe("mcpToolAllowed / trpcProcedureAllowed", () => {
     expect(restDoorAllowed("POST", "/diagnose", AI)).toBe(false);
     expect(restDoorAllowed("POST", "/capabilities/execute", AI)).toBe(false);
   });
-  it("queries only when seamed; mutations always", () => {
-    expect(trpcProcedureAllowed("query", "entities.getEntities")).toBe(true);
-    expect(trpcProcedureAllowed("query", "search.search")).toBe(false);
-    expect(trpcProcedureAllowed("mutation", "entities.create")).toBe(true);
+});
+
+describe("trpcProcedureAllowed (S7: the Bearer tRPC door fences mutations)", () => {
+  const FULL = key({ permissions: ["*"] });
+  const STAR_ONE_WS = key({ permissions: ["*"], workspaceIds: ["w1"] });
+  const GATED = "documents.patchDocument"; // (a) the gate bounds it
+  const OWNER_WIDE = "services.register"; // (b)
+  const REFUSED = "entities.createEntity"; // (c) gates the header workspace
+  const UNCLASSIFIED = "entities.someNewMutation";
+
+  it("queries: a scoped key only when seamed; an unfenced key always", () => {
+    expect(trpcProcedureAllowed("query", "entities.getEntities", AI)).toBe(
+      true
+    );
+    expect(trpcProcedureAllowed("query", "search.search", AI)).toBe(false);
+    expect(trpcProcedureAllowed("query", "search.search", FULL)).toBe(true);
+    // S1: a `*` pinned to a space is a scoped key.
+    expect(trpcProcedureAllowed("query", "search.search", STAR_ONE_WS)).toBe(
+      false
+    );
+  });
+
+  it("a scoped key passes a GATED mutation and nothing else", () => {
+    for (const grant of [AI, DOC_ONLY]) {
+      expect(trpcProcedureAllowed("mutation", GATED, grant)).toBe(true);
+      expect(trpcProcedureAllowed("mutation", OWNER_WIDE, grant)).toBe(false);
+      expect(trpcProcedureAllowed("mutation", REFUSED, grant)).toBe(false);
+      // Fail closed: a mutation nobody classified is refused.
+      expect(trpcProcedureAllowed("mutation", UNCLASSIFIED, grant)).toBe(false);
+    }
+  });
+
+  it("a deny-all key still reaches a GATED mutation (the gate denies it)", () => {
+    const denyAll = key({ permissions: [] });
+    expect(trpcProcedureAllowed("mutation", GATED, denyAll)).toBe(true);
+    expect(trpcProcedureAllowed("mutation", REFUSED, denyAll)).toBe(false);
+  });
+
+  it("an unbounded `*` key passes every mutation, classified or not", () => {
+    for (const path of [GATED, OWNER_WIDE, REFUSED, UNCLASSIFIED]) {
+      expect(trpcProcedureAllowed("mutation", path, FULL)).toBe(true);
+    }
+  });
+
+  it("a `*` pinned to a workspace is a scoped key: GATED only", () => {
+    expect(trpcProcedureAllowed("mutation", GATED, STAR_ONE_WS)).toBe(true);
+    expect(trpcProcedureAllowed("mutation", OWNER_WIDE, STAR_ONE_WS)).toBe(
+      false
+    );
+    expect(trpcProcedureAllowed("mutation", REFUSED, STAR_ONE_WS)).toBe(false);
+    expect(trpcProcedureAllowed("mutation", UNCLASSIFIED, STAR_ONE_WS)).toBe(
+      false
+    );
+  });
+
+  it("no grant (legacy key, session) passes everything, as before", () => {
+    for (const path of [GATED, OWNER_WIDE, REFUSED, UNCLASSIFIED]) {
+      expect(trpcProcedureAllowed("mutation", path, null)).toBe(true);
+      expect(trpcProcedureAllowed("mutation", path, undefined)).toBe(true);
+    }
+    expect(trpcProcedureAllowed("query", "search.search", null)).toBe(true);
+  });
+
+  it("a subscription is judged like a write (fail closed)", () => {
+    expect(trpcProcedureAllowed("subscription", "x.onEvent", AI)).toBe(false);
+    expect(trpcProcedureAllowed("subscription", "x.onEvent", FULL)).toBe(true);
+  });
+
+  it("the ten (d) product-decision mutations stay refused for a scoped key", () => {
+    // Founder, 2026-10-20: refused until decided (plan §2 D1–D5).
+    for (const path of [
+      "automations.createAutomation",
+      "automations.updateAutomation",
+      "automations.activateAutomation",
+      "automations.triggerAutomation",
+      "entities.attachFacet",
+      "entities.updateFacet",
+      "entities.detachFacet",
+      "proposals.updateProposal",
+      "channels.triggerAI",
+      "observations.append",
+    ]) {
+      expect(TRPC_KEY_MUTATION_DOORS[path]?.bound, path).toBe("refused");
+      expect(trpcProcedureAllowed("mutation", path, AI), path).toBe(false);
+      expect(trpcProcedureAllowed("mutation", path, FULL), path).toBe(true);
+    }
+  });
+
+  it("names the refusal: owner-wide doors say so, the rest is unsupported", () => {
+    expect(trpcRefusalMessage("mutation", OWNER_WIDE)).toBe(
+      GRANT_OWNER_WIDE_UNSUPPORTED
+    );
+    expect(trpcRefusalMessage("mutation", REFUSED)).toBe(
+      GRANT_WRITE_DOOR_UNSUPPORTED
+    );
+    expect(trpcRefusalMessage("mutation", UNCLASSIFIED)).toBe(
+      GRANT_WRITE_DOOR_UNSUPPORTED
+    );
+    expect(trpcRefusalMessage("query", "search.search")).toBe(
+      GRANT_DOOR_UNSUPPORTED
+    );
   });
 });
 

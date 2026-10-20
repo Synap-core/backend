@@ -180,7 +180,7 @@ export const apiKeyMiddleware = t.middleware(
 
     // W1 fence: a scoped key may only QUERY procedures whose reads are bounded
     // by its grant (access/grant-door-fence.ts). Mutations pass to the gate.
-    if (isFencedGrant(grant) && !trpcProcedureAllowed(type, path)) {
+    if (isFencedGrant(grant) && !trpcProcedureAllowed(type, path, grant)) {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: GRANT_DOOR_UNSUPPORTED,
