@@ -126,10 +126,28 @@ case "$*" in
     printf '{"migrations":{"lastApplied":"%s"},"buildStamp":"%s"}' "$(cut -d'|' -f2 "$F/level")" "$(stamp_of "$(cat "$F/backend_image")")"; exit 0 ;;
   "exec be1 node -e"*)
     [ -n "${FAKE_PROD_BAD:-}" ] && is_new "$(cat "$F/backend_image")" && exit 1; exit 0 ;;
+  "exec pg1 psql"*pg_encoding_to_char*) echo "UTF8|C.UTF-8|C.UTF-8"; exit 0 ;;
+  "exec pg1 psql"*"pg_database_size"*) case "$*" in *::bigint*) echo 100 ;; *) echo 21422.701171875000 ;; esac; exit 0 ;;  # numeric unless cast, as postgres answers
   "exec pg1 psql"*_migrations*) cat "$F/level"; exit 0 ;;
   "exec pg1 psql"*"from pg_database where not datistemplate"*) echo synap; exit 0 ;;
-  "exec pg1 psql"*"datname='synap'"*) echo 1; exit 0 ;;
-  "exec pg1 psql"*"from users)||"*) echo "1|$(cut -d'|' -f1 "$F/level")|1"; exit 0 ;;  # fingerprint follows the data
+  # A model of the cluster's database list ($F/dbs), so a restore that renames
+  # the live database aside and creates a fresh one is observable.
+  "exec pg1 psql"*"from pg_database where datname="*)
+    [ -f "$F/dbs" ] || echo synap > "$F/dbs"
+    n="$(sed -n "s/.*datname='\([^']*\)'.*/\1/p" <<<"$*")"; grep -qx "$n" "$F/dbs" && echo 1; exit 0 ;;
+  "exec pg1 psql"*"alter database "*" rename to "*)
+    [ -f "$F/dbs" ] || echo synap > "$F/dbs"
+    a="$(sed -n 's/.*alter database "\([^"]*\)" rename to.*/\1/p' <<<"$*")"; b="$(sed -n 's/.*rename to "\([^"]*\)".*/\1/p' <<<"$*")"
+    grep -qx "$a" "$F/dbs" || exit 1
+    { grep -vx "$a" "$F/dbs"; echo "$b"; } > "$F/dbs.n"; mv "$F/dbs.n" "$F/dbs"; exit 0 ;;
+  "exec pg1 psql"*"create database "*)
+    n="$(sed -n 's/.*create database "\([^"]*\)".*/\1/p' <<<"$*")"; grep -qx "$n" "$F/dbs" 2>/dev/null && exit 1; echo "$n" >> "$F/dbs"; exit 0 ;;
+  "exec pg1 psql"*"drop database "*)
+    n="$(sed -n 's/.*drop database \(if exists \)\{0,1\}"\([^"]*\)".*/\2/p' <<<"$*")"; grep -vx "$n" "$F/dbs" > "$F/dbs.n"; mv "$F/dbs.n" "$F/dbs"; exit 0 ;;
+  "exec pg1 psql"*pg_terminate_backend*) exit 0 ;;
+  "exec pg1 df "*) printf 'Filesystem 1024-blocks Used Available Capacity Mounted\n/dev/x 1 1 %s 1%% /\n' "${FAKE_PG_FREE_KB:-999999}"; exit 0 ;;
+  "exec pg1 psql"*"from users)||"*)  # fingerprint follows the data
+    if [ -n "${FAKE_FP_DRIFT:-}" ] && [ -s "$F/restores" ]; then echo "1|999|1"; else echo "1|$(cut -d'|' -f1 "$F/level")|1"; fi; exit 0 ;;
   "exec pg1 psql"*) echo 1; exit 0 ;;
   "exec pg1 pg_isready"*) exit 0 ;;
   "exec pg1 pg_dump"*) echo "LEVEL $(cat "$F/level")"; exit 0 ;;
@@ -373,20 +391,36 @@ FAKE_MIGRATE_FAIL=1 run_update --release "$R2"; rc=$?
 [ "$(restores)" = 1 ] && [ "$(cat "$FAKE/level")" = "$OLD_LEVEL" ] && ok "migrate: DB restored from the pre-update dump (level back to $OLD_LEVEL)" || bad "migrate: restores=$(restores) level=$(cat "$FAKE/level")"
 s=$(grep -n "compose stop" "$FAKE/log" | head -1 | cut -d: -f1); r=$(grep -n "pg_restore -U" "$FAKE/log" | head -1 | cut -d: -f1)
 [ -n "$s" ] && [ -n "$r" ] && [ "$s" -lt "$r" ] && ok "migrate: writers stopped (maintenance) before the restore" || bad "migrate: stop=$s restore=$r"
+a=$(grep -n 'rename to "synap__pre_restore"' "$FAKE/log" | head -1 | cut -d: -f1); cr=$(grep -n 'create database "synap"' "$FAKE/log" | head -1 | cut -d: -f1); dr=$(grep -n 'drop database "synap__pre_restore"' "$FAKE/log" | head -1 | cut -d: -f1)
+[ -n "$a" ] && [ -n "$cr" ] && [ -n "$dr" ] && [ "$a" -lt "$cr" ] && [ "$cr" -lt "$r" ] && [ "$r" -lt "$dr" ] && ! grep -q "pg_restore .*--clean" "$FAKE/log" && [ "$(cat "$FAKE/dbs")" = synap ] \
+  && ok "migrate: restored into a FRESH database (live renamed aside, new created, no --clean, aside dropped after)" || bad "migrate: rename=$a create=$cr restore=$r drop=$dr clean=$(grep -c 'pg_restore .*--clean' "$FAKE/log") dbs=$(tr '\n' ' ' < "$FAKE/dbs" 2>/dev/null)"
 cmp -s "$DEPLOY/.env" "$S/env.orig" && [ "$(cur_id)" = "$R1" ] && ok "migrate: previous digests + current-release $R1" || bad "migrate: env/current-release not restored ($(cur_id))"
 [ "$(last status)" = rolled_back ] && [ "$(last dbRestored)" = true ] && notified rolled_back && ok "migrate: rollback with DB restore recorded + notified" || { bad "migrate: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 grep -q "profile canary up" "$FAKE/log" && bad "migrate: the canary ran after a failed migration" || ok "migrate: no canary / swap after the throw"
 
 # ── 3b. migration throws AND the restore fails → never claims dbRestored ─────
-# pgdata_restore only warns on a pg_restore error; the fingerprint recorded
-# with the dump is what tells the rollback the data did not come back.
+# Any pg_restore error fails pgdata_restore, which puts the live database back
+# (the fresh copy dropped, the aside one renamed back).
 setup restorebad r1; publish "$R2" 0012_new.sql
 FAKE_MIGRATE_FAIL=1 FAKE_PG_RESTORE_FAIL=1 run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && [ "$(last status)" = rollback_failed ] && [ "$(last dbRestored)" = false ] && notified rollback_failed \
   && ok "restore-bad: a failed pg_restore records rollback_failed, dbRestored:false" || { bad "restore-bad: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
-grep -q "did not bring the data back" "$S/out" && grep -q "ROLLBACK INCOMPLETE" "$S/out" \
-  && ok "restore-bad: the operator is told the data did not come back" || { bad "restore-bad: no fingerprint-mismatch message"; show; }
+grep -q "restoring 'synap' failed" "$S/out" && grep -q "putting every database back" "$S/out" && grep -q "ROLLBACK INCOMPLETE" "$S/out" \
+  && ok "restore-bad: the operator is told the restore failed and the database was put back" || { bad "restore-bad: no restore-failed message"; show; }
+[ "$(cat "$FAKE/dbs")" = synap ] && ok "restore-bad: the live database is back under its name, no leftover copy" || bad "restore-bad: databases now: $(tr '\n' ' ' < "$FAKE/dbs")"
 grep -q "database restored" "$S/out" && bad "restore-bad: output still claims the database was restored" || ok "restore-bad: no 'database restored' claim"
+
+# ── 3b'. the restore succeeds but the data is not the dump's → never dbRestored ─
+setup restoredrift r1; publish "$R2" 0012_new.sql
+FAKE_MIGRATE_FAIL=1 FAKE_FP_DRIFT=1 run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = rollback_failed ] && [ "$(last dbRestored)" = false ] && grep -q "did not bring the data back" "$S/out" \
+  && ok "restore-drift: a fingerprint that differs from the dump's records rollback_failed" || { bad "restore-drift: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+
+# ── 3b''. no room for the fresh copy → refused before anything is stopped ────
+setup restorefull r1; publish "$R2" 0012_new.sql
+FAKE_MIGRATE_FAIL=1 FAKE_PG_FREE_KB=1 run_update --release "$R2"; rc=$?
+[ "$(last status)" = rollback_failed ] && grep -q "not enough room to restore" "$S/out" && [ "$(cat "$FAKE/dbs" 2>/dev/null || echo synap)" = synap ] \
+  && ok "restore-full: a full volume refuses the restore and leaves the database alone" || { bad "restore-full: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 
 # ── 3c. SIGHUP (ssh drop) mid-update → rolled back like INT/TERM ─────────────
 setup hup r1; publish "$R2" 0012_new.sql
