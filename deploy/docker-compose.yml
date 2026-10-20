@@ -780,6 +780,9 @@ services:
       # bundle, which updates never touch (they warn that release edge rules
       # then do not reach it).
       - ${CADDYFILE_PATH:-./Caddyfile}:/etc/caddy/Caddyfile:ro
+      # Writes the 308 blocks for the pod's previous names (SYNAP_LEGACY_*)
+      # before caddy starts; the Caddyfile imports them.
+      - ./caddy-entrypoint.sh:/usr/local/bin/synap-caddy-entrypoint:ro
       # Registration proof (served at /.well-known/synap-registration while
       # `synap install --register-token` registers; empty otherwise).
       - ./state/registration-nonce:/srv/synap-registration:ro
@@ -798,6 +801,18 @@ services:
       # `caddy validate` would refuse every release on that pod. EMAIL stays
       # for a custom CADDYFILE_PATH written against it.
       ACME_EMAIL_OPTION: ${LETSENCRYPT_EMAIL:+email ${LETSENCRYPT_EMAIL}}
+      # The pod's previous names during a move to new ones: each set one is
+      # answered with a 308 to DOMAIN / POD_ADMIN_DOMAIN (caddy-entrypoint.sh).
+      SYNAP_LEGACY_DOMAIN: ${SYNAP_LEGACY_DOMAIN:-}
+      SYNAP_LEGACY_POD_ADMIN_DOMAIN: ${SYNAP_LEGACY_POD_ADMIN_DOMAIN:-}
+    entrypoint: ["/bin/sh", "/usr/local/bin/synap-caddy-entrypoint"]
+    command:
+      - caddy
+      - run
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
     # ory-admin: proxies kratos:4433. No sandbox: it proxies no
     # sandboxed service.
     networks:

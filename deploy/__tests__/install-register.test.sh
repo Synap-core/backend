@@ -198,6 +198,8 @@ refuse "--edge tunnel no token"  "needs --tunnel-token"    --non-interactive --n
 refuse "plain-http CP"           "must be an https URL"    --non-interactive --name lab1 --register-token "$TOKEN" --control-plane http://cp.example.com
 refuse "--control-plane alone"   "only applies with"       --non-interactive --name lab1 --control-plane https://cp.example.com
 refuse "unknown edge"            "--edge must be"          --non-interactive --name lab1 --edge nginx
+refuse "a zone as --domain"      "is not a pod's address"  --non-interactive --domain pod.synap.live
+refuse "a console as --domain"   "is not a pod's address"  --non-interactive --domain admin.lab1.pod.synap.live
 
 # ── plain: unattended, no code (a self-hoster's non-interactive run) ─────────
 setup plain
@@ -224,8 +226,8 @@ run_install --non-interactive --release "$REL" --domain pod.example.org --email 
 setup happy; cp_response "$OIDC" "$INTEL"
 run_install "${REG[@]}"; rc=$?
 [ "$rc" = 0 ] && ok "happy: install --non-interactive --register-token succeeded (stdin /dev/null)" || { bad "happy: rc=$rc"; show; }
-[ "$(env_of DOMAIN)" = "pod.lab1.synap.live" ] && [ "$(env_of POD_ADMIN_DOMAIN)" = "pod-admin.lab1.synap.live" ] \
-  && ok "happy: --name → pod.lab1.synap.live + pod-admin.lab1.synap.live (P2)" || bad "happy: domains $(env_of DOMAIN) / $(env_of POD_ADMIN_DOMAIN)"
+[ "$(env_of DOMAIN)" = "lab1.pod.synap.live" ] && [ "$(env_of POD_ADMIN_DOMAIN)" = "admin.lab1.pod.synap.live" ] \
+  && ok "happy: --name → lab1.pod.synap.live + admin.lab1.pod.synap.live" || bad "happy: domains $(env_of DOMAIN) / $(env_of POD_ADMIN_DOMAIN)"
 [ "$(env_of ADMIN_BOOTSTRAP_MODE)" = token ] && ok "happy: admin bootstrap = token (never open /registration)" || bad "happy: ADMIN_BOOTSTRAP_MODE=$(env_of ADMIN_BOOTSTRAP_MODE)"
 [ "$(env_of LETSENCRYPT_EMAIL)" = "ops@synap.live" ] && ok "happy: ACME contact defaults for a registered pod" || bad "happy: LETSENCRYPT_EMAIL=$(env_of LETSENCRYPT_EMAIL)"
 [ -n "$(env_of VAULT_SERVER_KEY)" ] && [ -n "$(env_of HUB_JWT_SECRET)" ] && ok "happy: VAULT_SERVER_KEY (compose-required) + hub secrets generated" || bad "happy: VAULT_SERVER_KEY/HUB_JWT_SECRET missing"
@@ -233,7 +235,7 @@ run_install "${REG[@]}"; rc=$?
 # the register request
 [ "$(req pods_register '.body|fromjson|.token')" = "$TOKEN" ] && [ "$(req pods_register '.body|fromjson|.name')" = lab1 ] \
   && ok "happy: CP got the code + name" || bad "happy: register body $(req pods_register .body)"
-[ "$(req pods_register '.body|fromjson|.podUrl')" = "https://pod.lab1.synap.live" ] && [ "$(req pods_register '.body|fromjson|.adminUrl')" = "https://pod-admin.lab1.synap.live" ] \
+[ "$(req pods_register '.body|fromjson|.podUrl')" = "https://lab1.pod.synap.live" ] && [ "$(req pods_register '.body|fromjson|.adminUrl')" = "https://admin.lab1.pod.synap.live" ] \
   && ok "happy: CP got podUrl + adminUrl" || bad "happy: urls $(req pods_register '.body|fromjson|[.podUrl,.adminUrl]')"
 [ "$(req pods_register '.body|fromjson|.release')" = "$REL" ] && [ "$(req pods_register '.body|fromjson|.serverIp')" = 203.0.113.7 ] \
   && req pods_register '.body|fromjson|.installerVersion' | grep -qE '^synap-cli@[0-9a-f]{12}$' \
@@ -272,7 +274,7 @@ BT="$(cat "$FAKE/token-at-bootstrap" 2>/dev/null)"
 grep -q 'compose up -d --no-deps --force-recreate backend realtime kratos' "$FAKE/docker.log" && ok "happy: backend/realtime/kratos recreated to read it" || bad "happy: no recreate after the trust write"
 # W7-PODREG: a registered pod comes up with pod-agent (issuer = the response's CP issuer, audience = PUBLIC_URL).
 [ "$(env_of SYNAP_WITH_POD_AGENT)" = 1 ] && [ "$(env_of POD_AGENT_ISSUER_URL)" = "https://cp.synap.test" ] \
-  && [ "$(env_of POD_AGENT_AUDIENCE)" = "https://pod.lab1.synap.live" ] \
+  && [ "$(env_of POD_AGENT_AUDIENCE)" = "https://lab1.pod.synap.live" ] \
   && ok "happy: pod-agent trust written through the env door (issuer from the response, audience = the pod's public URL)" \
   || bad "happy: pod-agent env: $(env_of SYNAP_WITH_POD_AGENT) / $(env_of POD_AGENT_ISSUER_URL) / $(env_of POD_AGENT_AUDIENCE)"
 grep -q 'compose --profile pod-agent up -d pod-agent' "$FAKE/docker.log" \
