@@ -27,6 +27,10 @@ import {
  * - key_state: `GET /auth/key-state`, auth-SKIPPED (it answers a key that does
  *   not authenticate), so IP-keyed — a random Bearer per request must not buy
  *   a fresh `crud` budget
+ * - oauth_public: the pod authorization server's unauthenticated doors
+ *   (`/register`, `/authorize`, `/token`), IP-keyed — open DCR and the CIMD
+ *   fetch `/authorize` may trigger are a write and an outbound request any
+ *   stranger can cause (spec 17 T11)
  * - crud: everything else
  */
 export type RateLimitClass =
@@ -39,6 +43,7 @@ export type RateLimitClass =
   | "public_submit"
   | "device_auth"
   | "key_state"
+  | "oauth_public"
   | "crud";
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -59,7 +64,12 @@ export function getRateLimitClassConfig(): Record<
   // Public-door classes carry their own nested budgets (getPublicDoorRateConfig).
   Exclude<
     RateLimitClass,
-    "free" | "public_read" | "public_submit" | "device_auth" | "key_state"
+    | "free"
+    | "public_read"
+    | "public_submit"
+    | "device_auth"
+    | "key_state"
+    | "oauth_public"
   >,
   {
     max: number;
@@ -137,6 +147,13 @@ export function getRateLimitClassConfig(): Record<
   };
 }
 
+/** The unauthenticated OAuth doors budgeted per IP (`oauth_public`). */
+export const OAUTH_PUBLIC_PATHS: ReadonlySet<string> = new Set([
+  "/register",
+  "/authorize",
+  "/token",
+]);
+
 /**
  * Classify a request path into a rate-limit class.
  * Pure function — unit-tested; no env/side effects.
@@ -174,6 +191,13 @@ export function classifyRateLimitPath(
     p === "/api/hub-protocol/auth/key-state"
   ) {
     return "key_state";
+  }
+
+  // The pod AS's public doors, mounted at the ROOT (RFC 8414 puts the issuer
+  // there). `/revoke` stays in `crud`: it changes nothing a stranger can
+  // reach (possession of the token is the authority) and starts no fetch.
+  if (OAUTH_PUBLIC_PATHS.has(p)) {
+    return "oauth_public";
   }
 
   // free — probes that must never burn budget
@@ -351,6 +375,29 @@ export function getKeyStateRateConfig(): {
   );
   return {
     max: parsePositiveInt(process.env.RATE_LIMIT_KEY_STATE_MAX, 30),
+    windowMs,
+    retryAfter: formatRetryAfter(windowMs),
+  };
+}
+
+/**
+ * `oauth_public` budget, per IP: 60 requests / 10 min. A connection costs at
+ * most three calls (register, authorize, token) and a pod app refreshes about
+ * once an hour, so this leaves room for many people behind one address while
+ * bounding what a stranger can make the pod register or fetch. Keyed WITHOUT
+ * the Authorization header (a random Bearer must not buy a fresh budget).
+ */
+export function getOAuthPublicRateConfig(): {
+  max: number;
+  windowMs: number;
+  retryAfter: string;
+} {
+  const windowMs = parsePositiveInt(
+    process.env.RATE_LIMIT_OAUTH_PUBLIC_WINDOW_MS,
+    10 * 60 * 1000
+  );
+  return {
+    max: parsePositiveInt(process.env.RATE_LIMIT_OAUTH_PUBLIC_MAX, 60),
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
