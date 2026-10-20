@@ -60,6 +60,7 @@ import { auditLog } from "../utils/audit-log.js";
 import { getUserWorkspaceIds } from "../utils/workspace-membership.js";
 import {
   attachGrantsOrRevoke,
+  describeGrantLimit,
   grantWithinLive,
   type GrantInput,
 } from "./key-grant.js";
@@ -230,9 +231,15 @@ export function assertOwnerCredential(
   }
   const grant = getRequestGrant();
   if (grant && !isFullAccessGrant(grant)) {
+    // Name the limit AND the fix: "a scoped key" alone sent the owner hunting
+    // for which of their keys was scoped, and why (2026-10-20).
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: `A scoped key cannot ${act} — use your own sign-in or CLI key.`,
+      message:
+        `A scoped key cannot ${act}: this key is ${describeGrantLimit(grant)}. ` +
+        `Use a full-access key — create one in Pod Admin → Keys (Personal, ` +
+        `"Full access", with the hub-protocol.write scope), or widen this ` +
+        `key's access there. \`synap whoami\` shows what a key may touch.`,
     });
   }
 }
