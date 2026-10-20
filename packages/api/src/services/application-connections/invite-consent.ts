@@ -22,6 +22,11 @@
  *  4. The member accepted a POD invite sent to that same verified address, and
  *     that invite's OWN window (`invites.expires_at`, 7 days at creation in
  *     `workspaces.createInvite`) is still open now. No new TTL.
+ *  5. An owner already approved THIS app (issuer + client id) and that
+ *     approval covers the request's origin and every scope it asks for. The
+ *     invite consents to one person's link, never to the app: approving goes
+ *     through the owner's door, whose upsert would otherwise re-approve an app
+ *     an owner revoked, or create or widen one no owner reviewed.
  *
  * Approval goes through the same door an owner's does
  * (`FederatedApplicationConnectionService.approve`), with the invite as the
@@ -37,8 +42,11 @@ import {
   TrustedIssuerService,
   findOpenPodInviteAcceptance,
   db,
+  and,
   eq,
   users,
+  federatedApplicationConnections,
+  trustedIssuers,
   type InviteAcceptance,
 } from "@synap/database";
 import { NotificationService } from "../../notifications/NotificationService.js";
@@ -75,6 +83,7 @@ export type InviteConsentOutcome =
         | "unverified"
         | "issuer_not_approved"
         | "origin_not_vouched"
+        | "app_not_approved"
         | "no_open_invite"
         | "check_failed"
         | "approval_failed";
@@ -82,6 +91,15 @@ export type InviteConsentOutcome =
 
 export interface InviteConsentDeps {
   issuerStatus(issuerUrl: string): Promise<string | null>;
+  /** The app's connection on this Pod, as an owner left it (null: none). */
+  appConnection(input: {
+    issuerUrl: string;
+    clientId: string;
+  }): Promise<{
+    status: string;
+    allowedOrigins: string[];
+    allowedScopes: string[];
+  } | null>;
   findInvite(input: {
     userId: string;
     email: string;
@@ -103,6 +121,27 @@ const connectionService = new FederatedApplicationConnectionService();
 const defaultDeps: InviteConsentDeps = {
   issuerStatus: async (issuerUrl) =>
     (await new TrustedIssuerService().getByUrl(issuerUrl))?.status ?? null,
+  appConnection: async ({ issuerUrl, clientId }) => {
+    const [row] = await db
+      .select({
+        status: federatedApplicationConnections.status,
+        allowedOrigins: federatedApplicationConnections.allowedOrigins,
+        allowedScopes: federatedApplicationConnections.allowedScopes,
+      })
+      .from(federatedApplicationConnections)
+      .innerJoin(
+        trustedIssuers,
+        eq(trustedIssuers.id, federatedApplicationConnections.issuerId)
+      )
+      .where(
+        and(
+          eq(trustedIssuers.issuerUrl, issuerUrl),
+          eq(federatedApplicationConnections.clientId, clientId)
+        )
+      )
+      .limit(1);
+    return row ?? null;
+  },
   findInvite: (input) => findOpenPodInviteAcceptance(input),
   approve: (input) => connectionService.approve(input),
   recipients: resolvePodAdminUserIds,
@@ -159,6 +198,18 @@ async function decideAndApprove(
   }
   if (account.vouchedOrigin !== request.requestedOrigin) {
     return ownerReview("origin_not_vouched");
+  }
+  const app = await deps.appConnection({
+    issuerUrl: account.issuerUrl,
+    clientId: request.clientId,
+  });
+  if (
+    !app ||
+    app.status !== "approved" ||
+    !app.allowedOrigins.includes(request.requestedOrigin) ||
+    !request.requestedScopes.every((scope) => app.allowedScopes.includes(scope))
+  ) {
+    return ownerReview("app_not_approved");
   }
   const now = deps.now();
   const invite = await deps.findInvite({
