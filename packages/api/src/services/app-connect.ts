@@ -58,7 +58,11 @@ import { createPendingProposal } from "../utils/permission-check.js";
 import { openLink } from "../utils/deep-links.js";
 import { auditLog } from "../utils/audit-log.js";
 import { getUserWorkspaceIds } from "../utils/workspace-membership.js";
-import { attachGrantsOrRevoke, type GrantInput } from "./key-grant.js";
+import {
+  attachGrantsOrRevoke,
+  grantWithinLive,
+  type GrantInput,
+} from "./key-grant.js";
 import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
 import { requestsWithin } from "./agent-connect.js";
 
@@ -327,18 +331,67 @@ async function resolveRequests(
 }
 
 /**
+ * A request may never be wider than the credential that files it (invariant
+ * 1 at the ASKING door). A signed-in session or the owner's own unbounded `*`
+ * key asks with the owner's whole reach (`resolveRequests` bounds that to
+ * their spaces). Any narrower credential — an agent's key, a scoped key, an
+ * app's own key — may ask only for what its LIVE grant already covers, each
+ * (permission × space) by one live scope (`grantWithinLive`, the rule a
+ * hosted agent is bounded by its computer with). Otherwise one approval click
+ * would launder a wider credential than the asker holds.
+ */
+function assertRequestsWithinCaller(
+  requests: ReadonlyArray<AppApprovedRequest & { workspaceName: string }>
+): void {
+  const grant = getRequestGrant();
+  if (!grant || isFullAccessGrant(grant)) return;
+  const live = grant.scopes.map((s) => ({
+    permissions: [...s.permissions],
+    workspaceIds: s.workspaceIds ? [...s.workspaceIds] : null,
+    projectIds: s.projectIds ? [...s.projectIds] : null,
+    entityIds: s.entityIds ? [...s.entityIds] : null,
+    expiresAt: null,
+  }));
+  const beyond = requests.filter(
+    (r) =>
+      !grantWithinLive(
+        { permissions: [r.permission], workspaceIds: [r.workspaceId] },
+        live
+      )
+  );
+  if (beyond.length > 0) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `This credential cannot ask for more than it holds itself: ${beyond
+        .map((r) => `${r.permission} in ${r.workspaceName}`)
+        .join(", ")}. Ask with your own sign-in, or with a key that holds it.`,
+    });
+  }
+}
+
+/**
  * Ask for access: file ONE `app/connect` proposal (always — through
  * `createPendingProposal`, never the gate ladder, which could answer
  * `granted` and authorize reach with no review).
+ *
+ * An AGENT may ask (it is how an agent gets an app connected), but the
+ * proposal is filed AS the agent — `agentUserId` / `createdBy` the agent,
+ * `proposedByUserId` null — so the reviewer sees who is asking; it is never
+ * disguised as the person's own request. Approving stays the owner's step
+ * (the agent-approver floor + the executor's owner check).
  */
 export async function requestAccess(args: {
   publicId: string;
   ownerUserId: string;
   requests: AccessRequestInput[];
+  /** The acting agent, when an agent's key files it (else the request ALS). */
+  actorAgentUserId?: string | null;
 }): Promise<{ proposalId: string; reviewUrl: string }> {
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   assertNotRevoked(found);
   const requests = await resolveRequests(args.ownerUserId, args.requests);
+  assertRequestsWithinCaller(requests);
+  const agentUserId = args.actorAgentUserId ?? getActingAgentUserId() ?? null;
   const proposal = await createPendingProposal({
     userId: args.ownerUserId,
     workspaceId: null,
@@ -356,13 +409,15 @@ export async function requestAccess(args: {
         workspaceId,
       })),
     },
-    createdBy: args.ownerUserId,
-    proposedByUserId: args.ownerUserId,
+    agentUserId,
+    createdBy: agentUserId ?? args.ownerUserId,
+    proposedByUserId: agentUserId ? null : args.ownerUserId,
     notificationDescription: `${found.app.name} is asking for access`,
   });
   await recordAppEvent(found, args.ownerUserId, APP_EVENT_ACTIONS.requested, {
     proposalId: proposal.id,
     requests,
+    ...(agentUserId ? { requestedByAgentUserId: agentUserId } : {}),
   });
   return { proposalId: proposal.id, reviewUrl: openLink(proposal.id) };
 }

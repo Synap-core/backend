@@ -249,7 +249,10 @@ vi.mock("@synap/database/agent-governance", async (importOriginal) => ({
   },
 }));
 
-vi.mock("../../../../services/key-grant.js", () => ({
+vi.mock("../../../../services/key-grant.js", async (importOriginal) => ({
+  // The pure grant algebra (`grantWithinLive`) stays real: the connect door
+  // bounds a scoped caller's request with it.
+  ...(await importOriginal<Record<string, unknown>>()),
   attachGrantsOrRevoke: async (args: Record<string, unknown>) => {
     state.grantArgs = args;
   },
@@ -930,5 +933,104 @@ describe("app lifecycle writes — the owner's own full-access key (P5 `*`)", ()
     const res = await post(app, `/apps/${PUBLIC_ID}/key`, {});
     expect(res.status).toBe(403);
     expect(state.keyInput).toBeNull();
+  });
+});
+
+/**
+ * Invariant 1 at the ASKING door: a request is never wider than the reach of
+ * the credential that files it. The owner's own unbounded key may ask for
+ * anything in their spaces (`resolveRequests` already bounds that); an AGENT
+ * or a scoped key may ask only for what its live grant already covers — else
+ * an agent (or an app's own key, re-asking for its own app) could launder a
+ * wider credential through one approval click. And an agent's request is
+ * filed AS the agent (`agentUserId` / `createdBy`), never disguised as the
+ * person's own: the reviewer must see who is asking.
+ */
+describe("POST /apps/:id/connect — a scoped or agent caller asks within its own reach", () => {
+  const READ_OPS = {
+    scopes: [{ permissions: ["entity.*.read"], workspaceIds: [WORKSPACE_ID] }],
+    clientId: null,
+  };
+  const ask = (permission: string) => ({
+    requests: [{ permission, workspace: "Operations" }],
+  });
+
+  it("an agent asking within its grant files the proposal AS the agent", async () => {
+    state.ambientGrant = READ_OPS;
+    const app = makeApp_({ scopes: WRITE, userId: OWNER, agentUserId: AGENT });
+    const res = await post(
+      app,
+      `/apps/${PUBLIC_ID}/connect`,
+      ask("entity.person.read")
+    );
+    expect(res.status).toBe(201);
+    expect(state.proposalInput).toMatchObject({
+      userId: OWNER,
+      agentUserId: AGENT,
+      createdBy: AGENT,
+      proposedByUserId: null,
+    });
+  });
+
+  it("an agent asking for MORE than its grant is refused — no proposal", async () => {
+    state.ambientGrant = READ_OPS;
+    const app = makeApp_({ scopes: WRITE, userId: OWNER, agentUserId: AGENT });
+    const res = await post(
+      app,
+      `/apps/${PUBLIC_ID}/connect`,
+      ask("entity.person.create")
+    );
+    expect(res.status).toBe(403);
+    expect(state.proposalInput).toBeNull();
+    expect(state.events).toHaveLength(0);
+  });
+
+  it("an agent with NO live grant (deny-all) can ask for nothing", async () => {
+    state.ambientGrant = { scopes: [{ permissions: [] }], clientId: null };
+    const app = makeApp_({ scopes: WRITE, userId: OWNER, agentUserId: AGENT });
+    const res = await post(
+      app,
+      `/apps/${PUBLIC_ID}/connect`,
+      ask("entity.person.read")
+    );
+    expect(res.status).toBe(403);
+    expect(state.proposalInput).toBeNull();
+  });
+
+  it("an app's own key cannot re-ask its app for more than it holds", async () => {
+    state.ambientGrant = { ...READ_OPS, clientId: PUBLIC_ID };
+    const app = makeApp_({
+      scopes: WRITE,
+      userId: OWNER,
+      agentUserId: APP_AGENT,
+    });
+    const res = await post(app, `/apps/${PUBLIC_ID}/connect`, ask("*"));
+    expect(res.status).toBe(403);
+    expect(state.proposalInput).toBeNull();
+  });
+
+  it("a scoped (non-agent) key is bounded the same way", async () => {
+    state.ambientGrant = READ_OPS;
+    const app = makeApp_({ scopes: WRITE, userId: OWNER });
+    const res = await post(
+      app,
+      `/apps/${PUBLIC_ID}/connect`,
+      ask("entity.person.create")
+    );
+    expect(res.status).toBe(403);
+    expect(state.proposalInput).toBeNull();
+  });
+
+  it("CONTROL: the owner's unbounded key files as the owner, unbounded", async () => {
+    state.ambientGrant = { scopes: [{ permissions: ["*"] }], clientId: null };
+    const app = makeApp_({ scopes: WRITE, userId: OWNER });
+    const res = await post(app, `/apps/${PUBLIC_ID}/connect`, ask("*"));
+    expect(res.status).toBe(201);
+    expect(state.proposalInput).toMatchObject({
+      userId: OWNER,
+      createdBy: OWNER,
+      proposedByUserId: OWNER,
+    });
+    expect(state.proposalInput!.agentUserId ?? null).toBeNull();
   });
 });

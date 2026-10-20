@@ -154,6 +154,7 @@ export function registerAppsRoutes(app: HubHono): void {
         publicId: c.req.param("id"),
         ownerUserId: userId,
         requests: body.data.requests,
+        actorAgentUserId: c.get("agentUserId") as string | undefined,
       });
       return c.json(result, 201);
     } catch (err) {
