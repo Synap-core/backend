@@ -205,6 +205,19 @@ function isRequestEnvelope(data: Record<string, unknown>): boolean {
 }
 
 /**
+ * What makes two proposed creates the SAME record: the record the create door
+ * handed the gate, minus its per-attempt minted `id`. The ONE rule both the
+ * dedup hash (two pending copies) and `expirePendingCreatesOfLandedRecord`
+ * (a pending copy of a record that has since landed) apply.
+ */
+export function createdRecordIdentity(
+  record: Record<string, unknown>
+): Record<string, unknown> {
+  const { id: _mintedId, ...rest } = record;
+  return rest;
+}
+
+/**
  * Canonical exact-match dedup hash for a pending proposal:
  *   sha256( stableStringify({ workspaceId, proposalType, targetType,
  *                             targetId?, payload }) )
@@ -253,11 +266,9 @@ export function computeProposalDedupHash(p: {
     isRequestEnvelope(p.data) &&
     record !== null &&
     typeof record === "object" &&
-    !Array.isArray(record) &&
-    "id" in record
+    !Array.isArray(record)
   ) {
-    const { id: _mintedId, ...rest } = record as Record<string, unknown>;
-    payload.data = rest;
+    payload.data = createdRecordIdentity(record as Record<string, unknown>);
   }
   const canonical = {
     workspaceId: p.workspaceId ?? null,
