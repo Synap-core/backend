@@ -34,9 +34,9 @@ interface OpenPageProps {
 }
 
 /**
- * Kinds whose page offers a pod admin something more (a space's console page,
- * a template's space named from every space, pod-wide verbs to turn on,
- * removing an agent). `/open` is self-service, so
+ * Kinds whose page offers a pod admin something more (a space's or an
+ * agent's console page, a template's space named from every space, pod-wide
+ * verbs to turn on, removing an agent). `/open` is self-service, so
  * the proxy does not ask the role here; these pages ask it themselves. It only
  * shapes what is OFFERED — every act re-checks the role server-side.
  */

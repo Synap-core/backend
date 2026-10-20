@@ -235,4 +235,10 @@ describe("ASK_COPY", () => {
     );
     expect(ASK_COPY.draftAsks("  ", "Ship billing", 2)).toMatch(/^An agent /);
   });
+
+  it("provideUploadKept: names the space the file stays in", () => {
+    expect(ASK_COPY.provideUploadKept("Finance")).toBe(
+      "The file was saved in Finance, but it wasn't handed over."
+    );
+  });
 });

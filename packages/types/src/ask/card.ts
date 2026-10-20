@@ -110,6 +110,17 @@ export const ASK_COPY = {
   provideNoGrantNote:
     "No agent will be able to read it yet. The agent has to ask for access.",
   /**
+   * Provide, secret, after the answer: the agent asking is no longer the one
+   * the person was shown (`secretGrant` refused `agent_changed`), so the pod
+   * gave nobody a read of it.
+   */
+  provideAgentChangedTitle: "No agent can read your secret yet",
+  provideAgentChangedBody:
+    "The agent working on this changed. Reopen it to see who gets access.",
+  /** Provide, file: the answer was refused after the upload, which stays. */
+  provideUploadKept: (space: string): string =>
+    `The file was saved in ${space}, but it wasn't handed over.`,
+  /**
    * The needs-you row for an undecided agent draft that asks the person
    * something (`draft-asks` signal). Composed ONCE, server-side, into the
    * signal's `title`; `agent` is null when the pod cannot name who started it.
