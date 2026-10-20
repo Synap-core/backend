@@ -28,6 +28,7 @@ import {
   sql,
   getActingAgentUserId,
   getRequestGrant,
+  isFullAccessGrant,
   ApiKeyRepository,
   AppNameTakenError,
   APP_EVENT_ACTIONS,
@@ -57,8 +58,13 @@ import { createPendingProposal } from "../utils/permission-check.js";
 import { openLink } from "../utils/deep-links.js";
 import { auditLog } from "../utils/audit-log.js";
 import { getUserWorkspaceIds } from "../utils/workspace-membership.js";
-import { attachGrantsOrRevoke, type GrantInput } from "./key-grant.js";
+import {
+  attachGrantsOrRevoke,
+  grantWithinLive,
+  type GrantInput,
+} from "./key-grant.js";
 import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
+import { isAgentCaller } from "./library/agent-door.js";
 import { requestsWithin } from "./agent-connect.js";
 
 /**
@@ -193,20 +199,37 @@ async function loadAppToEnd(
  * request's ambient acting agent) nor a grant-bound key. An agent key resolves
  * `userId` to the human it acts for, so without this a scoped agent could
  * revoke its owner's apps (its own parent included) or revive a revoked one.
- * The CLI still works: `synap login` / `pods add` keys are the human's own,
- * with no agent principal and no grant. Reads stay open.
+ * Reads stay open.
+ *
+ * "Grant-bound" means a NARROWED grant. Since P5 (2026-10-11) every key
+ * carries a grant: the person's own key (`apiKeys.connectIntegration`,
+ * `pods add`) holds the explicit full-access `*` — their whole reach, not a
+ * bound. Refusing ANY ambient grant locked the owner's own key out of every
+ * lifecycle write. A `*` limited to a space, project or object is a scoped key
+ * (S1) and stays refused; `isFullAccessGrant` is the one predicate for that.
+ *
+ * "An agent's credential" is `isAgentCaller`: an agent key OR the Intelligence
+ * Service's internal key. The IS (D4 delegation) is remapped to its operator
+ * with no acting agent and the full-access `*` — without its `keyType` the
+ * `*` rule above would let it mint (and receive) an app key as the operator.
  */
 export function assertOwnerCredential(
   act: string,
-  actorAgentUserId?: string | null
+  caller: { agentUserId?: string | null; keyType?: string | null } = {}
 ): void {
-  if (actorAgentUserId ?? getActingAgentUserId()) {
+  if (
+    isAgentCaller({
+      agentUserId: caller.agentUserId ?? getActingAgentUserId(),
+      keyType: caller.keyType,
+    })
+  ) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: `An agent credential cannot ${act} — sign in as the app's owner.`,
     });
   }
-  if (getRequestGrant()) {
+  const grant = getRequestGrant();
+  if (grant && !isFullAccessGrant(grant)) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: `A scoped key cannot ${act} — use your own sign-in or CLI key.`,
@@ -226,8 +249,13 @@ export async function registerApp(args: {
   logoUrl?: string | null;
   mode?: "specific";
   actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
 }): Promise<AppWithGrants> {
-  assertOwnerCredential("register an app", args.actorAgentUserId);
+  assertOwnerCredential("register an app", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
   const record = await new AppRepository(db).register({
     ownerUserId: args.ownerUserId,
     name: args.name,
@@ -318,19 +346,125 @@ async function resolveRequests(
   });
 }
 
+/** A `workspace_members.role` that may write in its space. */
+const WRITE_ROLES = ["owner", "admin", "editor"];
+
+/**
+ * An owner gives an app only what they can do themselves (invariant 1 at the
+ * GIVING side). `resolveRequests` bounds a request by the spaces the owner can
+ * READ — member ∪ owned ∪ pod-visible — but approving a WRITE makes the app's
+ * agent an `editor` member there (`syncAppAgentMemberships`). So a write
+ * (anything but `…read`, `*` included) needs the owner to OWN the space or be
+ * an owner / admin / editor member of it; a read stays bounded by what they
+ * can read. Run when the request is filed AND when it is approved (a role can
+ * drop in between).
+ */
+export async function assertOwnerMayGrant(
+  ownerUserId: string,
+  requests: ReadonlyArray<AppApprovedRequest & { workspaceName?: string }>
+): Promise<void> {
+  const writes = requests.filter(
+    (r) => parsePermission(r.permission).at(-1) !== "read"
+  );
+  if (writes.length === 0) return;
+  const ids = [...new Set(writes.map((r) => r.workspaceId))];
+  const [owned, editing] = await Promise.all([
+    db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(
+        and(inArray(workspaces.id, ids), eq(workspaces.ownerId, ownerUserId))
+      ),
+    db
+      .select({ id: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(
+        and(
+          inArray(workspaceMembers.workspaceId, ids),
+          eq(workspaceMembers.userId, ownerUserId),
+          inArray(workspaceMembers.role, WRITE_ROLES)
+        )
+      ),
+  ]);
+  const may = new Set([...owned, ...editing].map((r) => r.id));
+  const beyond = writes.filter((r) => !may.has(r.workspaceId));
+  if (beyond.length > 0) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `You can only give an app what you can do yourself — you cannot edit in ${[
+        ...new Set(beyond.map((r) => r.workspaceName ?? r.workspaceId)),
+      ].join(", ")}: ${beyond
+        .map((r) => r.permission)
+        .join(
+          ", "
+        )}. Ask for read access there, or for edit rights in that space first.`,
+    });
+  }
+}
+
+/**
+ * A request may never be wider than the credential that files it (invariant
+ * 1 at the ASKING door). A signed-in session or the owner's own unbounded `*`
+ * key asks with the owner's whole reach (`resolveRequests` bounds that to
+ * their spaces). Any narrower credential — an agent's key, a scoped key, an
+ * app's own key — may ask only for what its LIVE grant already covers, each
+ * (permission × space) by one live scope (`grantWithinLive`, the rule a
+ * hosted agent is bounded by its computer with). Otherwise one approval click
+ * would launder a wider credential than the asker holds.
+ */
+function assertRequestsWithinCaller(
+  requests: ReadonlyArray<AppApprovedRequest & { workspaceName: string }>
+): void {
+  const grant = getRequestGrant();
+  if (!grant || isFullAccessGrant(grant)) return;
+  const live = grant.scopes.map((s) => ({
+    permissions: [...s.permissions],
+    workspaceIds: s.workspaceIds ? [...s.workspaceIds] : null,
+    projectIds: s.projectIds ? [...s.projectIds] : null,
+    entityIds: s.entityIds ? [...s.entityIds] : null,
+    expiresAt: null,
+  }));
+  const beyond = requests.filter(
+    (r) =>
+      !grantWithinLive(
+        { permissions: [r.permission], workspaceIds: [r.workspaceId] },
+        live
+      )
+  );
+  if (beyond.length > 0) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `This credential cannot ask for more than it holds itself: ${beyond
+        .map((r) => `${r.permission} in ${r.workspaceName}`)
+        .join(", ")}. Ask with your own sign-in, or with a key that holds it.`,
+    });
+  }
+}
+
 /**
  * Ask for access: file ONE `app/connect` proposal (always — through
  * `createPendingProposal`, never the gate ladder, which could answer
  * `granted` and authorize reach with no review).
+ *
+ * An AGENT may ask (it is how an agent gets an app connected), but the
+ * proposal is filed AS the agent — `agentUserId` / `createdBy` the agent,
+ * `proposedByUserId` null — so the reviewer sees who is asking; it is never
+ * disguised as the person's own request. Approving stays the owner's step
+ * (the agent-approver floor + the executor's owner check).
  */
 export async function requestAccess(args: {
   publicId: string;
   ownerUserId: string;
   requests: AccessRequestInput[];
+  /** The acting agent, when an agent's key files it (else the request ALS). */
+  actorAgentUserId?: string | null;
 }): Promise<{ proposalId: string; reviewUrl: string }> {
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   assertNotRevoked(found);
   const requests = await resolveRequests(args.ownerUserId, args.requests);
+  assertRequestsWithinCaller(requests);
+  await assertOwnerMayGrant(args.ownerUserId, requests);
+  const agentUserId = args.actorAgentUserId ?? getActingAgentUserId() ?? null;
   const proposal = await createPendingProposal({
     userId: args.ownerUserId,
     workspaceId: null,
@@ -348,13 +482,15 @@ export async function requestAccess(args: {
         workspaceId,
       })),
     },
-    createdBy: args.ownerUserId,
-    proposedByUserId: args.ownerUserId,
+    agentUserId,
+    createdBy: agentUserId ?? args.ownerUserId,
+    proposedByUserId: agentUserId ? null : args.ownerUserId,
     notificationDescription: `${found.app.name} is asking for access`,
   });
   await recordAppEvent(found, args.ownerUserId, APP_EVENT_ACTIONS.requested, {
     proposalId: proposal.id,
     requests,
+    ...(agentUserId ? { requestedByAgentUserId: agentUserId } : {}),
   });
   return { proposalId: proposal.id, reviewUrl: openLink(proposal.id) };
 }
@@ -703,10 +839,15 @@ export async function issueKey(args: {
   publicId: string;
   ownerUserId: string;
   actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
   /** The door issuing it (the agent's provenance on first issue). */
   via: AppKeyDoor;
 }): Promise<{ apiKey: string; keyId: string }> {
-  assertOwnerCredential("mint an app key", args.actorAgentUserId);
+  assertOwnerCredential("mint an app key", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   assertNotRevoked(found);
   const approved = found.app.approvedRequests ?? [];
@@ -765,10 +906,15 @@ export async function revokeApp(args: {
   /** The caller — the app's owner, unless `podAdmin`. Events name them. */
   ownerUserId: string;
   actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
   /** Lifts the owner floor — set by a `podAdminProcedure` only (`loadAppToEnd`). */
   podAdmin?: boolean;
 }): Promise<{ publicId: string }> {
-  assertOwnerCredential("revoke an app", args.actorAgentUserId);
+  assertOwnerCredential("revoke an app", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
   const found = await loadAppToEnd(
     args.publicId,
     args.ownerUserId,
@@ -810,8 +956,13 @@ export async function renameApp(args: {
   ownerUserId: string;
   name: string;
   actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
 }): Promise<AppWithGrants> {
-  assertOwnerCredential("rename an app", args.actorAgentUserId);
+  assertOwnerCredential("rename an app", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   const to = args.name.trim();
   if (to === found.app.name) return found;
@@ -849,10 +1000,15 @@ export async function removeApp(args: {
   /** The caller — the app's owner, unless `podAdmin`. Events name them. */
   ownerUserId: string;
   actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
   /** Lifts the owner floor — set by a `podAdminProcedure` only (`loadAppToEnd`). */
   podAdmin?: boolean;
 }): Promise<{ publicId: string }> {
-  assertOwnerCredential("remove an app", args.actorAgentUserId);
+  assertOwnerCredential("remove an app", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
   const found = await loadAppToEnd(
     args.publicId,
     args.ownerUserId,
