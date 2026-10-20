@@ -494,11 +494,17 @@ restore_from yes SYNAP_RESTORE_LOCK_WAIT=2; rc=$?
   && ok "restore-lock: a held backup lock makes the restore wait, then refuse untouched" || { bad "restore-lock: rc=$rc"; rshow; }
 
 # ── 3c. SIGHUP (ssh drop) mid-update → rolled back like INT/TERM ─────────────
+# A shell started with SIGHUP ignored (under nohup) cannot trap it: the scenario
+# then cannot run, and says so rather than reporting the engine broken.
+if [ "$(bash -c 'trap "echo trapped" HUP; kill -HUP $$; :' 2>/dev/null)" != trapped ]; then
+  echo "skip - hup: SIGHUP is ignored in this environment (nohup?), so no shell here can trap it"
+else
 setup hup r1; publish "$R2" 0012_new.sql
 FAKE_HUP_AT_MIGRATE=1 run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && [ "$(last status)" = rolled_back ] && [[ "$(last reason)" == "interrupted;"* ]] && [ "$(last dbRestored)" = false ] && [ "$(last schema)" = migrated ] \
   && [ "$(restores)" = 0 ] && [ "$(cat "$FAKE/level")" = "$NEW_LEVEL" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" \
   && ok "hup: SIGHUP mid-migration rolls the images back, keeps the migrated data" || { bad "hup: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null) level=$(cat "$FAKE/level")"; show; }
+fi
 
 # ── 3d. the migration ledger is unreadable → refused before anything changes ─
 setup ledgerfail r1; publish "$R2" 0012_new.sql bundle
