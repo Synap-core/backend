@@ -3029,6 +3029,8 @@ EOF
 
     jq --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg edge "$install_edge" '. + {appliedAt:$at, edge:$edge, installed:true}' \
         "$install_manifest" > state/current-release.json || true
+    _ue_caddyfile_mark_release
+    _ue_provide_backup_mc
 
     # Every pod gets its own identity key (registered or not); a registration
     # below requires it and fails loudly on its own.
@@ -3397,6 +3399,29 @@ EOF
 # (state/last-update.json + state/events.jsonl + a `SYNAP_EVENT {json}` line)
 # and handed to an optional notify hook (SYNAP_UPDATE_NOTIFY_CMD) — U4.
 #
+# UPDATE THE UPDATER FIRST (H1). A release update used to run entirely in the
+# host's PREVIOUS `synap`: a fix to the kratos render, the recreate list, verify
+# or the rollback reached a pod one update late. Now, once the manifest's
+# signature and the bundle's sha256 are verified (and the pod is not already on
+# it), this engine EXECS the staged bundle's own `synap` — the file the signed
+# manifest covers — with SYNAP_UE_HANDOFF=<release id>. That engine skips the
+# fetch (the manifest and the staged bundle are reused, the bundle's sha256
+# re-checked) and runs everything else: preflight, pull, backup, install,
+# kratos render, migrations, swap, verify, record — and the ROLLBACK. Same pid,
+# so the update lock carries over. SYNAP_UE_HANDOFF set ⇒ never hand off again.
+# The rollback stays with the engine that made the change rather than going
+# back to the previous one: the previous release's engine has no entry point
+# to finish a half-done update (it predates this one), while the release's
+# engine knows exactly what it changed; the rollback acts only on restored,
+# byte-identical previous files, and units are refreshed only after verify, so
+# nothing of the new release is left for an older engine to undo.
+# A verified update then re-renders the systemd units from the INSTALLED
+# `synap` (`synap units install`), so unit changes ship with the release.
+# The first update FROM a release without this code still runs that release's
+# engine end to end; every later one hands off. That old engine installs the
+# new `synap` and unit templates but never the units: the next heal tick does
+# (_heal_units_converge — synap-heal.timer runs the installed `synap`).
+#
 # `--from-source` (U6, open to anyone) goes through the SAME backup / canary /
 # rollback. It builds `synap-dev/*:<sha>` with `docker build -t` — the tag
 # is named here and nowhere else, so a host build can never carry the ghcr name
@@ -3458,40 +3483,65 @@ SYNAP_RELEASE_OIDC_ISSUER="https://token.actions.githubusercontent.com"
 # check, so every Control-Plane-ordered update refused a valid release
 # (lab pod, v1.1.2 → v1.1.3, 2026-10-19). Without a host cosign, run sigstore's
 # own image — the release CI signs with — pinned by its index digest. Docker is
-# on every pod.
+# on every pod. Its tag must equal docker-publish.yml's `cosign-release`
+# (release-signature.test.sh pins the two together).
 SYNAP_COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign:v2.5.3@sha256:f1946d0f30fc8e3777b02f2201e02efdba9fe38f4918162f937052fac98e083f"
 
-_ue_cosign_verify() { # <manifest> <bundle in the same directory> — cosign's verdict; 127 = no cosign, no docker
+# The ONE place that decides how cosign runs: cosign | docker | none.
+_ue_cosign_via() {
+    if command -v cosign >/dev/null 2>&1; then echo cosign
+    elif command -v docker >/dev/null 2>&1; then echo docker
+    else echo none; fi
+}
+
+# <cosign|docker> <manifest> <bundle in the same directory> — cosign's verdict.
+# Through docker: the manifest's directory is bind-mounted read-only with
+# --mount (a ':' in the path breaks -v's syntax), the container runs read-only
+# with no capabilities. cosign writes its sigstore TUF metadata under $HOME, so
+# that is a tmpfs owned by the image's nonroot user. Not persisted on purpose:
+# measured on the CP host (2026-10-19), a warm cache does not let cosign verify
+# offline (it refreshes from the TUF mirror every run), and a named volume is
+# root-owned, so keeping one would mean running cosign as root for no gain.
+# A docker exit of 125/126/127 means docker could not run cosign at all
+# (daemon down, pull failed) — the caller reports that, never "does not verify".
+_ue_cosign_verify() {
     local args=(verify-blob --certificate-identity-regexp "$SYNAP_RELEASE_SIGNER_RE"
                 --certificate-oidc-issuer "$SYNAP_RELEASE_OIDC_ISSUER")
-    if command -v cosign >/dev/null 2>&1; then
-        cosign "${args[@]}" --bundle "$2" "$1"
-    elif command -v docker >/dev/null 2>&1; then
-        local dir; dir="$(cd "$(dirname "$1")" && pwd)" || return 1
-        docker run --rm -v "$dir:/release:ro" "$SYNAP_COSIGN_IMAGE" \
-            "${args[@]}" --bundle "/release/$(basename "$2")" "/release/$(basename "$1")"
-    else
-        return 127
-    fi
+    case "$1" in
+        cosign) cosign "${args[@]}" --bundle "$3" "$2" ;;
+        docker)
+            local dir; dir="$(cd "$(dirname "$2")" && pwd)" || return 1
+            docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+                --tmpfs /home/nonroot:uid=65532,gid=65532 \
+                --mount "type=bind,src=${dir},dst=/release,readonly" "$SYNAP_COSIGN_IMAGE" \
+                "${args[@]}" --bundle "/release/$(basename "$3")" "/release/$(basename "$2")" ;;
+        *) return 1 ;;
+    esac
 }
 
 _ue_verify_manifest_sig() { # <fast|stable|release-id> <manifest> — non-zero only under enforce
-    local mode="${SYNAP_RELEASE_VERIFY:-$(_ue_env_get SYNAP_RELEASE_VERIFY)}" bundle="$2.sigstore.json" why="" out
+    local mode="${SYNAP_RELEASE_VERIFY:-$(_ue_env_get SYNAP_RELEASE_VERIFY)}" bundle="$2.sigstore.json" why="" out via rc=0
     case "${mode:=warn}" in
         warn|enforce) ;;
         off) return 0 ;;
         *) _ue_warn "SYNAP_RELEASE_VERIFY=${mode} is not warn|enforce|off — using warn"; mode=warn ;;
     esac
     rm -f "$bundle"
-    if ! command -v cosign >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
+    via="$(_ue_cosign_via)"
+    if [ "$via" = none ]; then
         why="cosign is not installed (and no docker to run it)"
     elif ! _ue_fetch "$(_ue_manifest_url "$1" release.json.sigstore.json)" "$bundle" 2>/dev/null; then
         why="no signature (release.json.sigstore.json) is published for '$1'"
-    elif ! out="$(_ue_cosign_verify "$2" "$bundle" 2>&1)"; then
-        why="the signature does not verify as Synap CI ($(printf '%s' "$out" | tail -1))"
     else
-        _ue_ok "release manifest signature verified (Synap CI, keyless)"
-        return 0
+        out="$(_ue_cosign_verify "$via" "$2" "$bundle" 2>&1)" || rc=$?
+        if [ "$rc" = 0 ]; then
+            _ue_ok "release manifest signature verified (Synap CI, keyless)"
+            return 0
+        elif [ "$via" = docker ] && [ "$rc" -ge 125 ] && [ "$rc" -le 127 ]; then
+            why="could not run the signature check (docker exited ${rc}: $(printf '%s' "$out" | tail -1))"
+        else
+            why="the signature does not verify as Synap CI ($(printf '%s' "$out" | tail -1))"
+        fi
     fi
     if [ "$mode" = enforce ]; then
         _ue_err "release manifest for '$1' refused: ${why} (SYNAP_RELEASE_VERIFY=enforce)"
@@ -3773,6 +3823,54 @@ _ue_stage_bundle() { # <manifest>
     UE_BUNDLE_DIR="$(pwd)/state/update/bundle"
 }
 
+# The handed-off engine (H1) reuses what the previous engine staged and
+# verified: the bundle's sha256 is checked again against the manifest, the
+# extracted tree is the one this engine is running from.
+_ue_adopt_staged_bundle() { # <manifest>
+    UE_BUNDLE_DIR=""
+    local m="$1" want got
+    want="$(jq -r '.bundle.sha256 // empty' "$m")"
+    [ -n "$want" ] && [ -s state/update/bundle.tgz ] && [ -f state/update/bundle/synap ] \
+        || { _ue_err "handoff: no staged deploy bundle for ${SYNAP_UE_HANDOFF}"; return 1; }
+    got="$(_ue_sha256 state/update/bundle.tgz)"
+    [ "$got" = "$want" ] || { _ue_err "handoff: staged bundle sha256 mismatch (manifest ${want}, got ${got})"; return 1; }
+    UE_BUNDLE_DIR="$(pwd)/state/update/bundle"
+}
+
+# exec the staged release's own `synap` for the rest of this update — never returns.
+_ue_handoff() {
+    local next="$UE_BUNDLE_DIR/synap"
+    _ue_log "Handing the rest of the update to release ${UE_TO}'s own engine (signed manifest, sha256-verified bundle)..."
+    exec env SYNAP_UE_HANDOFF="$UE_TO" SYNAP_LOCK_HELD_BY="$$" SYNAP_DEPLOY_DIR="$(pwd)" \
+        bash "$next" update "${UE_ARGV[@]}"
+}
+
+# The backup container's MinIO client (H2): only the host can copy it out of the
+# minio container (pgdata-safety.sh _bk_ensure_mc). Best-effort — backups are
+# never a reason to roll an update back; `synap backup status` shows "mc missing".
+_ue_provide_backup_mc() {
+    [ -n "$(_ue_env_get MINIO_ACCESS_KEY)" ] || return 0
+    local out
+    out="$(SYNAP_DEPLOY_DIR="$(pwd)" COMPOSE_CMD="command docker compose" _bk_ensure_mc 2>&1)" \
+        || _ue_warn "the backup service has no MinIO client yet ($(printf '%s' "$out" | tail -1)) — off-host snapshots fail until: synap backup init"
+}
+
+# Re-render + reinstall the systemd units from the INSTALLED `synap` (not the
+# staged copy this engine may run from: the units name the CLI's path), as the
+# installer does. Best-effort: a host without systemd/root keeps its cron line.
+_ue_units_refresh() {
+    local self out
+    self="$(cd .. && pwd)/synap"
+    [ -f "$self" ] || self="$(_units_self)"
+    _units_have_systemd || return 0
+    [ "$(id -u)" = 0 ] || [ -n "${SYNAP_SYSTEMD_DIR:-}" ] || return 0
+    if out="$(SYNAP_DEPLOY_DIR="$(pwd)" bash "$self" units install 2>&1 </dev/null)"; then
+        _ue_log "systemd units re-rendered from this release"
+    else
+        _ue_warn "could not reinstall the systemd units ($(printf '%s' "$out" | tail -1)) — run: sudo ${self} units install"
+    fi
+}
+
 _ue_install_bundle() {
     [ -n "$UE_BUNDLE_DIR" ] || return 0
     local root rel existing=()
@@ -3786,6 +3884,7 @@ _ue_install_bundle() {
     else
         tar -cf state/update/pre-bundle.tar -T /dev/null || return 1
     fi
+    _ue_caddyfile_edit_warn
     UE_BUNDLE_INSTALLED=1
     while IFS= read -r rel; do
         mkdir -p "$(dirname "$root/$rel")" || return 1
@@ -3891,7 +3990,8 @@ _ue_verify() { # <manifest> <services...>
     for svc in "$@"; do
         grep -qx "$svc" <<<"$running" || { _ue_err "verify: service ${svc} is not running"; return 1; }
     done
-    _ue_services_healthy
+    _ue_services_healthy || return 1
+    if printf '%s\n' "$@" | grep -qx caddy; then _ue_edge_verify || return 1; fi
 }
 
 # "<service> <health> <startPeriodNs>" per running/restarting container of this
@@ -3982,6 +4082,92 @@ _ue_prune_images() {
     return 0
 }
 
+# ── the edge's Caddyfile ──────────────────────────────────────────────────────
+# deploy/Caddyfile belongs to the RELEASE: every update installs the release's
+# copy over it (that is how edge fixes reach pods). A pod that needs its own
+# edge rules points CADDYFILE_PATH (deploy/.env) at a file outside the bundle;
+# the engine then never touches it — and warns that release edge rules no
+# longer reach it. state/caddyfile.release.sha256 is the release copy's hash,
+# kept by every verified update and every install, so a hand edit of
+# deploy/Caddyfile is named before the next release replaces it.
+_ue_caddyfile() { # → the absolute path of the Caddyfile caddy mounts
+    local p="${CADDYFILE_PATH:-$(_ue_env_get CADDYFILE_PATH)}"
+    p="${p:-./Caddyfile}"
+    case "$p" in /*) echo "$p" ;; *) echo "$(pwd)/${p#./}" ;; esac
+}
+
+_ue_caddyfile_mark_release() { # after a verified update / an install: deploy/Caddyfile is the release's copy
+    [ -f Caddyfile ] || return 0
+    mkdir -p state && _ue_sha256 Caddyfile > state/caddyfile.release.sha256
+}
+
+_ue_caddyfile_edit_warn() {
+    local custom="${CADDYFILE_PATH:-$(_ue_env_get CADDYFILE_PATH)}" want
+    if [ -n "$custom" ] && [ "$(_ue_caddyfile)" != "$(pwd)/Caddyfile" ]; then
+        _ue_warn "caddy serves CADDYFILE_PATH=${custom}, not the release's Caddyfile: edge rules this release ships (deploy/Caddyfile) do not reach it — merge them into your file by hand"
+    fi
+    [ -f Caddyfile ] && [ -s state/caddyfile.release.sha256 ] || return 0
+    want="$(cat state/caddyfile.release.sha256)"
+    [ "$(_ue_sha256 Caddyfile)" = "$want" ] && return 0
+    _ue_warn "deploy/Caddyfile was edited by hand; this release replaces it with its own copy (yours is kept in state/update/pre-bundle.tar until the next update). To keep custom edge rules, put them in a file outside deploy/ and set CADDYFILE_PATH=<that file> in deploy/.env"
+}
+
+# The sha256 of the Caddyfile the RUNNING caddy has mounted. A bind-mounted file
+# is pinned to the inode it was created with, and every write the engine makes
+# is an atomic rename, so this is the file caddy loaded — not the one on disk.
+# Empty when caddy is not running.
+_ue_caddy_loaded_sha() {
+    local cid
+    cid="$(docker compose ps -q caddy 2>/dev/null | head -1)"
+    [ -n "$cid" ] || return 0
+    docker exec "$cid" sha256sum /etc/caddy/Caddyfile 2>/dev/null | cut -d' ' -f1
+}
+
+# The release's Caddyfile, checked by caddy itself before anything depends on it.
+_ue_caddy_validate() {
+    local out
+    out="$(docker compose run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile 2>&1 </dev/null)" && return 0
+    _ue_err "the Caddyfile caddy would load ($(_ue_caddyfile)) does not validate:"
+    printf '%s\n' "$out" | tail -5 | sed 's/^/      /' >&2
+    return 1
+}
+
+# Recreate caddy only when the Caddyfile it loaded is not the one on disk. A
+# changed caddy image or compose definition is recreated by the `up` before
+# this (Compose sees it), and that new container already mounts the new file,
+# so this never recreates it a second time.
+_ue_caddy_converge() {
+    local want have
+    want="$(_ue_sha256 "$(_ue_caddyfile)" 2>/dev/null)"
+    have="$(_ue_caddy_loaded_sha)"
+    if [ -n "$want" ] && [ "$want" = "$have" ]; then
+        _ue_log "caddy already serves this Caddyfile — not recreated"
+        return 0
+    fi
+    docker compose up -d --force-recreate caddy
+}
+
+# Through the edge, as a client reaches it: https on 127.0.0.1:443 for DOMAIN,
+# else http :80 with Host: DOMAIN (a tunnelled pod is served only there, and a
+# direct pod whose certificate is not issued yet still proves its routing).
+_ue_edge_verify() {
+    local domain i code
+    domain="$(_ue_env_get DOMAIN)"
+    [ -n "$domain" ] || return 0
+    for i in $(seq 1 "${SYNAP_UPDATE_EDGE_TRIES:-15}"); do
+        code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --resolve "${domain}:443:127.0.0.1" "https://${domain}/health" 2>/dev/null)"
+        [ "$code" = 200 ] && return 0
+        code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 -H "Host: ${domain}" "http://127.0.0.1/health" 2>/dev/null)"
+        if [ "$code" = 200 ]; then
+            _ue_log "edge: ${domain} answers over :80 (tunnel ingress); https on :443 did not — normal on a tunnelled pod or before its certificate is issued"
+            return 0
+        fi
+        sleep "${SYNAP_UPDATE_EDGE_INTERVAL:-2}"
+    done
+    _ue_err "verify: the edge (caddy) does not serve ${domain}/health — neither https via 127.0.0.1:443 nor http :80 (last answer: ${code:-none}). Inspect: docker compose logs caddy"
+    return 1
+}
+
 # ── the engine ────────────────────────────────────────────────────────────────
 UE_FROM=""; UE_TO=""; UE_BACKUP=""; UE_EDGE=""; UE_PROFILE_ARGS=(); UE_SERVICES=()
 
@@ -3994,11 +4180,15 @@ _ue_bring_up_rest() { # every non-backend service; never stops half-way
     # PUBLIC_URL at creation: none of these changes is seen by a plain `up`.
     # Without caddy here, an edge rule a release ships (the MinIO upload refusal,
     # the backend catch-all) reached only freshly installed pods (2026-10-19).
+    # Caddy is recreated only when its loaded Caddyfile differs (_ue_caddy_converge).
     local svc
-    for svc in kratos pod-admin caddy; do
+    for svc in kratos pod-admin; do
         printf '%s\n' "${UE_SERVICES[@]}" | grep -qx "$svc" || continue
         docker compose up -d --force-recreate "$svc" || failed=1
     done
+    if printf '%s\n' "${UE_SERVICES[@]}" | grep -qx caddy; then
+        _ue_caddy_converge || failed=1
+    fi
     return "$failed"
 }
 
@@ -4069,12 +4259,14 @@ synap_update_engine() {
     local mode="$1" ref="$2" force="${3:-0}" m errors level_before level_after moved=0 rc
     mkdir -p state/update
     m="$(pwd)/state/update/manifest.json"
-    for tool in jq curl; do
-        command -v "$tool" >/dev/null 2>&1 || { _ue_err "${tool} is required by synap update. Nothing was changed."; exit 1; }
-    done
+    # Every exit records an outcome (B3): pod-agent waits for the record of the
+    # request it queued, and without one it reports UPDATE_NO_OUTCOME 3 h later.
+    # jq is the one exception: it writes the record (and reads the request).
+    command -v jq >/dev/null 2>&1 || { _ue_err "jq is required by synap update (it also writes the outcome record, so none is written). Nothing was changed."; exit 1; }
+    command -v curl >/dev/null 2>&1 || { _ue_err "curl is required by synap update. Nothing was changed."; _ue_record aborted "$(_ue_current_release_id)" "${ref:-local}" "curl is not installed" false; exit 1; }
 
-    UE_EDGE="$(_ue_edge)" || exit 1
-    _ue_edge_preflight "$UE_EDGE" || exit 1
+    UE_EDGE="$(_ue_edge)" || { _ue_record aborted "$(_ue_current_release_id)" "${ref:-local}" "edge proxy not settled (SYNAP_EDGE)" false; exit 1; }
+    _ue_edge_preflight "$UE_EDGE" || { _ue_record aborted "$(_ue_current_release_id)" "${ref:-local}" "ports 80/443 are held by another container (SYNAP_EDGE=caddy)" false; exit 1; }
     _ue_adopt_running
     _ue_prune_images   # room first: this pod's old release images, before any disk check
     UE_FROM="$(_ue_current_release_id)"
@@ -4082,6 +4274,13 @@ synap_update_engine() {
     # 1. the target release
     if [ "$mode" = source ]; then
         _ue_build_from_source "$m" || { _ue_record aborted "$UE_FROM" "local" "from-source build failed" false; exit 1; }
+    elif [ -n "${SYNAP_UE_HANDOFF:-}" ]; then
+        if [ "$(jq -r '.id // empty' "$m" 2>/dev/null)" != "$SYNAP_UE_HANDOFF" ]; then
+            _ue_err "handoff: state/update/manifest.json is not release ${SYNAP_UE_HANDOFF}. Nothing was changed."
+            _ue_record aborted "$UE_FROM" "$SYNAP_UE_HANDOFF" "handoff manifest missing or not ${SYNAP_UE_HANDOFF}" false
+            exit 1
+        fi
+        _ue_log "Release ${SYNAP_UE_HANDOFF}'s own engine is running this update"
     else
         _ue_log "Fetching release manifest: ${ref}"
         if ! _ue_fetch "$(_ue_manifest_url "$ref")" "$m"; then
@@ -4097,7 +4296,11 @@ synap_update_engine() {
     fi
     UE_TO="$(jq -r '.id // empty' "$m" 2>/dev/null)"
     [ -n "$UE_TO" ] || UE_TO="$ref"
-    _ue_stage_bundle "$m" || { _ue_record aborted "$UE_FROM" "$UE_TO" "deploy bundle invalid" false; exit 1; }
+    if [ -n "${SYNAP_UE_HANDOFF:-}" ]; then
+        _ue_adopt_staged_bundle "$m" || { _ue_record aborted "$UE_FROM" "$UE_TO" "deploy bundle invalid" false; exit 1; }
+    else
+        _ue_stage_bundle "$m" || { _ue_record aborted "$UE_FROM" "$UE_TO" "deploy bundle invalid" false; exit 1; }
+    fi
     errors="$(_ue_manifest_errors "$m" "${UE_BUNDLE_DIR:+$UE_BUNDLE_DIR/deploy/}docker-compose.yml")"
     if [ -n "$errors" ]; then
         _ue_err "release manifest ${UE_TO} is invalid — refusing it. Nothing was changed:"
@@ -4107,7 +4310,12 @@ synap_update_engine() {
     fi
     if [ "$UE_TO" = "$UE_FROM" ] && [ "$force" != 1 ]; then
         _ue_ok "Already on release ${UE_TO} — nothing to do (--force re-applies it)."
+        _ue_record noop "$UE_FROM" "$UE_TO" "already on release ${UE_TO}" false
         return 0
+    fi
+    # 1b. update the updater first (H1): the release's own engine runs the rest.
+    if [ -n "$UE_BUNDLE_DIR" ] && [ -z "${SYNAP_UE_HANDOFF:-}" ]; then
+        _ue_handoff
     fi
     _ue_log "Updating ${UE_FROM:-unrecorded} → ${UE_TO} (git $(jq -r '.gitSha[0:12]' "$m"), migrations → $(jq -r .migrations.last "$m"))"
 
@@ -4134,13 +4342,13 @@ synap_update_engine() {
     fi
 
     # 4. snapshot + verified pre-update dump (Cloudron rule: no backup, no update)
-    (umask 077 && cp -p .env state/update/env.before) || { _ue_err "cannot snapshot .env"; exit 1; }
+    (umask 077 && cp -p .env state/update/env.before) || { _ue_err "cannot snapshot .env"; _ue_record aborted "$UE_FROM" "$UE_TO" "could not snapshot .env" false; exit 1; }
     rm -f state/update/kratos.yml.before   # a previous run's snapshot is never restored
     _run_pgdata_guard
     if [ "$(SYNAP_DEPLOY_DIR="$(pwd)" COMPOSE_CMD="command docker compose" pgdata_layout)" = "ok" ]; then
         if [ -z "$(command docker compose ps -q --status running postgres 2>/dev/null)" ]; then
-            docker compose up -d postgres || { _ue_err "postgres did not start — cannot take the pre-update backup. Nothing was changed."; exit 1; }
-            _pgs_wait_ready "$(_pgs_container)" || { _ue_err "postgres not ready — no backup, no update. Nothing was changed."; exit 1; }
+            docker compose up -d postgres || { _ue_err "postgres did not start — cannot take the pre-update backup. Nothing was changed."; _ue_record aborted "$UE_FROM" "$UE_TO" "postgres did not start for the pre-update backup" false; exit 1; }
+            _pgs_wait_ready "$(_pgs_container)" || { _ue_err "postgres not ready — no backup, no update. Nothing was changed."; _ue_record aborted "$UE_FROM" "$UE_TO" "postgres not ready for the pre-update backup" false; exit 1; }
         fi
         UE_BACKUP="$(SYNAP_DEPLOY_DIR="$(pwd)" COMPOSE_CMD="command docker compose" pgdata_backup pre-update)" || {
             _ue_err "Pre-update database backup failed — aborting update before migrations. Nothing was changed."
@@ -4174,6 +4382,9 @@ synap_update_engine() {
     # left Kratos crash-looping on the previous release).
     [ -f ../kratos/kratos.yml ] && cp -p ../kratos/kratos.yml state/update/kratos.yml.before
     generate_kratos_config "$domain" || _ue_rollback "kratos config generation failed" 0
+    if printf '%s\n' "${UE_SERVICES[@]}" | grep -qx caddy; then
+        _ue_caddy_validate || _ue_rollback "the Caddyfile does not validate" 0
+    fi
     COMPOSE_CMD="docker compose" ensure_ory_databases || _ue_rollback "Ory database bootstrap failed" 0
 
     # 6. migrations (backend, kratos) — a throw restores the dump
@@ -4211,6 +4422,9 @@ synap_update_engine() {
         cp -p ../kratos/kratos.yml ../kratos/kratos.yml.good.tmp && mv -f ../kratos/kratos.yml.good.tmp ../kratos/kratos.yml.good \
             || _ue_warn "could not keep ../kratos/kratos.yml.good (the last verified Kratos config)"
     fi
+    _ue_caddyfile_mark_release
+    _ue_provide_backup_mc
+    _ue_units_refresh
     _ue_record succeeded "$UE_FROM" "$UE_TO" "" false "$UE_BACKUP"
     _ue_ok "Release ${UE_TO} is live (verified: buildStamp + migration level)."
     set -e
@@ -4281,6 +4495,7 @@ _ue_unattended_plan() {
     else
         if [ -f "$pol" ] && ! jq -e 'type == "object"' "$pol" >/dev/null 2>&1; then
             _ue_err "${pol} is not a JSON object — no automatic update until it is fixed"
+            _ue_record aborted "$(_ue_current_release_id)" "?" "update policy ${pol} is not a JSON object" false
             return 2
         fi
         if [ "$(jq -r '.auto' "$pol" 2>/dev/null || true)" = false ]; then _ue_log "automatic updates are off (${pol}: auto false)"; return 1; fi
@@ -4288,6 +4503,7 @@ _ue_unattended_plan() {
         window="$(jq -r '.window // empty' "$pol" 2>/dev/null || true)"; window="${window:-03:00-05:00}"
         if ! [[ "$window" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]-([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
             _ue_err "${pol}: window '${window}' is not HH:MM-HH:MM — no automatic update until it is fixed"
+            _ue_record aborted "$(_ue_current_release_id)" "?" "update policy window '${window}' is not HH:MM-HH:MM" false
             return 2
         fi
         if ! _ue_in_window "$window"; then _ue_log "outside the update window ${window} (now $(date +%H:%M)) — nothing to do"; return 1; fi
@@ -4296,7 +4512,9 @@ _ue_unattended_plan() {
         case "$channel" in
             source)      mode=source; ref="" ;;
             fast|stable) mode=release; ref="$channel" ;;
-            *) _ue_err "update channel '${channel}' is not stable|fast|source"; return 2 ;;
+            *) _ue_err "update channel '${channel}' is not stable|fast|source"
+               _ue_record aborted "$(_ue_current_release_id)" "?" "update channel '${channel}' is not stable|fast|source" false
+               return 2 ;;
         esac
     fi
     export SYNAP_UNATTENDED_PLAN="${mode}|${ref}"
@@ -4325,6 +4543,7 @@ cmd_update() {
 
     local mode="release" ref="" force=0 unattended=0
     local -a _update_argv=("$@")
+    UE_ARGV=("$@")   # the handoff (H1) re-runs this same command line
     while [[ $# -gt 0 ]]; do
         case $1 in
             --release|-r)
@@ -4380,7 +4599,7 @@ USAGE
     # fix to the update path (e.g. the Kratos render) only took effect one
     # update later — the failed run still used the old code (2026-10-14).
     if [ "$mode" = source ] && [ "${SYNAP_SKIP_GIT_SYNC:-}" != 1 ] && [ -z "${SYNAP_UPDATE_SYNCED:-}" ]; then
-        sync_git_before_build || exit 1
+        sync_git_before_build || { _ue_record aborted "$(_ue_current_release_id)" local "could not sync the checkout to origin" false; exit 1; }
         if [ "$(cksum < "$SYNAP_SELF" 2>/dev/null)" != "$SYNAP_SELF_CKSUM" ]; then
             echo -e "${BLUE}🔁 The installer changed with this checkout — continuing with the new one.${NC}"
             # Same pid, so the update lock this process holds carries over.
@@ -4398,6 +4617,7 @@ USAGE
     # password and lock everyone out of the existing volume data.
     if [ ! -f .env ]; then
         echo -e "${RED}❌ ${deploy_dir}/.env not found — run \`synap install\` first.${NC}"
+        _ue_record aborted "$(_ue_current_release_id)" "${ref:-local}" "deploy/.env not found" false
         exit 1
     fi
     local missing_critical="" key val
@@ -4415,6 +4635,7 @@ USAGE
         echo -e "  2. If you only want the synap CLI to populate the missing secrets WITHOUT touching"
         echo -e "     your DOMAIN/ADMIN_* values, run \`synap install\` — non-interactive mode preserves"
         echo -e "     existing values and only regenerates secrets when .env is missing entirely."
+        _ue_record aborted "$(_ue_current_release_id)" "${ref:-local}" ".env is missing critical secrets:${missing_critical}" false
         exit 1
     fi
 
@@ -5305,7 +5526,7 @@ cmd_doctor() {
     # ── units ── the timers that make this pod heal and take pushed updates
     local un ust ubad=""
     if _units_have_systemd; then
-        for un in synap-heal.timer synap-update.path; do
+        for un in synap-heal.timer synap-update.path synap-compose.path; do
             ust="$(_units_state "$un" "$deploy_dir")"
             [ "$ust" = current ] && [ "$(systemctl is-active "$un" 2>/dev/null || true)" = active ] && continue
             [ "$ust" = current ] && ust=inactive
@@ -5321,6 +5542,9 @@ cmd_doctor() {
     fi
     if [ -f state/requests/update.json ] && [ -n "$(find state/requests/update.json -mmin +10 2>/dev/null)" ]; then
         _dr units warn "an update request has waited over 10 min in state/requests/update.json — is synap-update.path active? (synap units status)"
+    fi
+    if [ -f state/requests/compose.json ] && [ -n "$(find state/requests/compose.json -mmin +10 2>/dev/null)" ]; then
+        _dr units warn "a pod-agent compose request has waited over 10 min in state/requests/compose.json — is synap-compose.path active? (synap units status)"
     fi
 
     # ── url ──
@@ -5698,6 +5922,36 @@ _heal_kratos_restore() {
     _heal_event kratos_config_restored kratos "Kratos was ${1} on a kratos.yml that differs from the last verified one: restored kratos.yml.good (the replaced file: ${keep#../kratos/})" 1
 }
 
+# The systemd units belong to the release, and synap-heal.timer runs the
+# INSTALLED `synap` — the file every update replaces. So a release whose units
+# changed reaches the host within one heal tick, whichever engine ran the
+# update: an engine without _ue_units_refresh (≤ v1.1.4, before H1) installs
+# the new templates and the new `synap`, never the units, and its pods would
+# otherwise never get synap-compose.path (every pod-agent compose request then
+# fails "the host did not take it"). Only where the owner installed the units
+# (synap-heal.timer present) and only for this deploy dir; under the update
+# lock, so never half-way through an update (busy ⇒ next tick).
+_heal_units_converge() {
+    local dst="${SYNAP_SYSTEMD_DIR:-/etc/systemd/system}" dir u stale="" out
+    _units_have_systemd || return 0
+    [ "$(id -u)" = 0 ] || [ -n "${SYNAP_SYSTEMD_DIR:-}" ] || return 0
+    [ -f "$dst/synap-heal.timer" ] || return 0
+    dir="$(pwd -P)"
+    grep -qxF "Environment=SYNAP_DEPLOY_DIR=${dir}" "$dst/synap-heal.service" 2>/dev/null || return 0
+    for u in $(_units_names systemd); do
+        [ "$(_units_state "$u" "$dir")" = current ] || stale="${stale} ${u}"
+    done
+    [ -n "$stale" ] || return 0
+    if out="$( { synap_update_lock "$dir" "synap heal (units)" 2>/dev/null || exit 3; cmd_units install; } 2>&1 </dev/null )"; then
+        echo "synap heal: systemd units re-rendered from this release (were not current:${stale})"
+    elif [ $? = 3 ]; then
+        echo "synap heal: units not current (${stale# }) — another pod operation holds the update lock; next tick"
+    else
+        echo "synap heal: could not re-render the systemd units ($(printf '%s' "$out" | tail -1)) — run: sudo $(_units_self) units install" >&2
+    fi
+    return 0
+}
+
 cmd_heal() {
     case "${1:-}" in -h|--help) echo "Usage: synap heal   (restart this pod's unhealthy containers within a budget; run by synap-heal.timer)"; return 0 ;; esac
     local deploy_dir=$(get_deploy_dir)
@@ -5705,6 +5959,7 @@ cmd_heal() {
     cd "$deploy_dir"
     command -v jq >/dev/null 2>&1 || { echo -e "${RED}synap heal needs jq${NC}" >&2; exit 2; }
     mkdir -p state/heal
+    _heal_units_converge
     local max="${SYNAP_HEAL_MAX_RESTARTS:-3}" never=" ${SYNAP_HEAL_NEVER:-postgres postgres-backup} " rows svc st h m n todo=""
     rows="$(_heal_rows)"
     while IFS='|' read -r svc st h; do
@@ -5759,10 +6014,107 @@ cmd_heal() {
     return 0
 }
 
+# ── compose requests from pod-agent (H3) ──────────────────────────────────────
+# pod-agent runs in a container with the deploy dir mounted at /deploy. A
+# `docker compose up` it runs resolves the compose file's RELATIVE binds
+# (./Caddyfile, ../kratos, ./state, …) against /deploy, and the host's docker
+# daemon then mounts the HOST's /deploy — which does not exist. The CP's
+# email-relay delivery (configure → recreate kratos + backend) brought kratos up
+# with no config, and sign-in died. So pod-agent never creates a container: it
+# writes a REQUEST and this host door runs it, with the real deploy dir, the
+# pgdata guard, the update lock and the kratos render — one door, like updates.
+#
+# COMPOSE REQUEST CONTRACT (schema 1), written atomically (tmp + rename) to
+# <deploy dir>/state/requests/compose.json (writer: deploy/host-request.sh):
+#   {"schema":1, "id":"<opaque>", "services":["kratos",…] (empty = every service),
+#    "recreate":true|false, "noDeps":true|false, "profiles":["pod-agent",…]}
+# Names are compose services / profiles of THIS compose file (checked). Taken
+# (renamed to compose.taken.json) before anything else; the outcome is
+# state/last-compose-request.json {kind:"pod.compose-request", status:
+# succeeded|failed|aborted, request:<id>, reason}. Started by synap-compose.path.
+_CR_NAME_RE='^[a-z0-9][a-z0-9_-]{0,63}$'
+_CR_ID_RE='^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'
+
+_cr_take() {
+    local f=state/requests/compose.json t=state/requests/compose.taken.json
+    [ -f "$f" ] || return 0
+    mv -f "$f" "$t" && echo "$t"
+}
+
+_cr_record() { # <status> <request-id> <reason> [services]
+    _synap_event "$(jq -cn --arg s "$1" --arg r "$2" --arg why "$3" --arg svc "${4:-}" \
+        '{kind:"pod.compose-request", status:$s, request:$r, reason:$why, services:$svc}')" 0 state/last-compose-request.json >/dev/null
+}
+
+_cr_busy() { # the update lock was busy: consume the request, say so
+    local req
+    req="$(_cr_take)"
+    [ -n "$req" ] || return 0
+    _cr_record aborted "$(jq -r '.id // empty' "$req" 2>/dev/null || true)" "another pod operation held the update lock — the request was not run; send it again"
+}
+
+cmd_compose_request() {
+    local deploy_dir req id known profiles=() services=() pargs=() args=(up -d --no-build) n bad="" dropped="" domain rc=0 out
+    deploy_dir="$(get_deploy_dir)"
+    [ -n "$deploy_dir" ] || { echo -e "${RED}Error: Not in Synap installation directory${NC}"; exit 1; }
+    cd "$deploy_dir"
+    command -v jq >/dev/null 2>&1 || { echo -e "${RED}jq is required${NC}"; exit 1; }
+    req="$(_cr_take)"
+    [ -n "$req" ] || { echo "no compose request waiting"; return 0; }
+    id="$(jq -r '.id // empty' "$req" 2>/dev/null || true)"
+    if ! [[ "$id" =~ $_CR_ID_RE ]] || [ "$(jq -r '.schema // empty' "$req" 2>/dev/null)" != 1 ] \
+        || ! jq -e '(.services // []) | type == "array"' "$req" >/dev/null 2>&1 \
+        || ! jq -e '(.profiles // []) | type == "array"' "$req" >/dev/null 2>&1; then
+        _cr_record aborted "$id" "invalid compose request: it must be {\"schema\":1, \"id\":…, \"services\":[…], \"profiles\":[…]}"
+        echo -e "${RED}❌ invalid compose request ${id:-<no id>} — nothing was run${NC}" >&2
+        exit 1
+    fi
+    while IFS= read -r n; do [ -n "$n" ] && profiles+=("$n"); done < <(jq -r '(.profiles // [])[] | tostring' "$req")
+    while IFS= read -r n; do [ -n "$n" ] && services+=("$n"); done < <(jq -r '(.services // [])[] | tostring' "$req")
+    # A profile this compose file no longer has (an older CP's retired add-on)
+    # activates nothing: it is dropped, and said so — never passed through.
+    known="$(docker compose config --profiles 2>/dev/null)"
+    for n in "${profiles[@]}"; do
+        if [[ "$n" =~ $_CR_NAME_RE ]] && grep -qx "$n" <<<"$known"; then pargs+=(--profile "$n"); else dropped="${dropped} ${n}"; fi
+    done
+    [ -z "$dropped" ] || echo -e "${YELLOW}compose request ${id}: no such profile here, ignored:${dropped}${NC}"
+    known="$(docker compose "${pargs[@]}" config --services 2>/dev/null)"
+    for n in "${services[@]}"; do
+        [[ "$n" =~ $_CR_NAME_RE ]] && grep -qx "$n" <<<"$known" || bad="${bad} service:${n}"
+    done
+    if [ -n "$bad" ]; then
+        _cr_record aborted "$id" "unknown names in the compose request:${bad}" "${services[*]}"
+        echo -e "${RED}❌ compose request ${id} names what this compose file does not have:${bad} — nothing was run${NC}" >&2
+        exit 1
+    fi
+    # --no-build: a pod never builds; a request only ever runs pinned images.
+    # Kratos reads a GENERATED kratos.yml: render it for the current .env first
+    # (what configure-pod.sh used to reach through `synap start kratos`).
+    if [ "${#services[@]}" = 0 ] || printf '%s\n' "${services[@]}" | grep -qx kratos; then
+        domain="$(_ue_env_get DOMAIN)"
+        if [ -n "$domain" ] && ! generate_kratos_config "$domain"; then
+            _cr_record failed "$id" "kratos config generation failed" "${services[*]}"
+            exit 1
+        fi
+    fi
+    [ "$(jq -r '.recreate // false' "$req")" = true ] && args+=(--force-recreate)
+    [ "$(jq -r '.noDeps // false' "$req")" = true ] && args+=(--no-deps)
+    [ "${#services[@]}" = 0 ] && args+=(--remove-orphans)
+    echo -e "${BLUE}🔁 compose request ${id}: docker compose ${pargs[*]} ${args[*]} ${services[*]}${NC}"
+    out="$(docker compose "${pargs[@]}" "${args[@]}" "${services[@]}" 2>&1 </dev/null)" || rc=$?
+    printf '%s\n' "$out" | tail -20
+    if [ "$rc" = 0 ]; then
+        _cr_record succeeded "$id" "${dropped:+ignored unknown profiles:${dropped}}" "${services[*]}"
+    else
+        _cr_record failed "$id" "docker compose up failed: $(printf '%s' "$out" | tail -1 | cut -c1-300)" "${services[*]}"
+        exit 1
+    fi
+}
+
 # ── units (systemd) ───────────────────────────────────────────────────────────
 # deploy/systemd/ holds the unit TEMPLATES (@SYNAP@ = this CLI, @DEPLOY_DIR@ =
 # this deploy dir); the set is whatever is in that directory. Installed:
-# synap-heal.timer and synap-update.path enabled;
+# synap-heal.timer, synap-update.path and synap-compose.path enabled;
 # synap-update.timer written but left as the owner set it (off on a fresh
 # install; --enable-auto-update turns it on). Hosts without systemd get the
 # cron lines to add by hand.
@@ -5821,7 +6173,7 @@ cmd_units() {
                     || { echo -e "${RED}could not write ${dst}/${u}${NC}"; exit 1; }
             done
             systemctl daemon-reload
-            systemctl enable --now synap-heal.timer synap-update.path
+            systemctl enable --now synap-heal.timer synap-update.path synap-compose.path
             [ "$auto" = 1 ] && systemctl enable --now synap-update.timer
             echo -e "${GREEN}✓ units installed in ${dst}: heal every 2 min, update requests watched$([ "$auto" = 1 ] && echo ', automatic updates ON (03:00–05:00, state/update-policy.json)' || echo '; automatic updates: see synap units status')${NC}"
             _synap_event "$(jq -cn --arg d "$dst" --argjson auto "$auto" '{kind:"pod.units", status:"installed", dir:$d, autoUpdateEnabledNow:($auto == 1)}')" 0 >/dev/null
@@ -6887,10 +7239,11 @@ export COMPOSE_PROJECT_NAME
 
 # Pod-mutating commands serialise on <deploy_dir>/state/update.lock.
 case "${1:-help}" in
-    install|update|rebuild|reset|restore|apply)
+    install|update|rebuild|reset|restore|apply|compose-request)
         if ! synap_update_lock "$(get_deploy_dir)" "synap $1"; then
             # An unattended run must still consume its request (no .path loop).
             case " $* " in *" --unattended "*) [ "$1" = update ] && ( cd "$(get_deploy_dir)" && _ue_unattended_busy ) ;; esac
+            [ "$1" = compose-request ] && ( cd "$(get_deploy_dir)" && _cr_busy )
             exit 1
         fi
         ;;
@@ -6993,6 +7346,10 @@ case "${1:-help}" in
     units)
         shift
         cmd_units "$@"
+        ;;
+    compose-request)
+        shift
+        cmd_compose_request "$@"
         ;;
     shell)
         shift

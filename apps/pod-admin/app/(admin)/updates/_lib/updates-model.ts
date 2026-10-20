@@ -124,6 +124,7 @@ export function parsePodUpdates(body: unknown): PodUpdatesView | null {
 
 export type OutcomeToken =
   | "applied"
+  | "up_to_date"
   | "rolled_back"
   | "rollback_failed"
   | "failed"
@@ -219,6 +220,18 @@ export function outcomeView(o: UpdateOutcome): OutcomeView {
         reason: null,
         didNotLand: false,
       };
+    case "noop":
+      // The engine was asked for the release the pod already runs.
+      return {
+        token: "up_to_date",
+        kind: "healthy",
+        label: "Up to date",
+        sentence: o.to
+          ? `Already on ${o.to}; nothing needed to change.`
+          : "Already on the requested release; nothing needed to change.",
+        reason: null,
+        didNotLand: false,
+      };
     case "rolled_back":
       return {
         token: "rolled_back",
@@ -284,7 +297,7 @@ export function outcomeView(o: UpdateOutcome): OutcomeView {
 export function currentRelease(last: LastUpdate): string | null {
   if (last.kind !== "recorded") return null;
   const { status, from, to } = last.outcome;
-  if (status === "succeeded") return to;
+  if (status === "succeeded" || status === "noop") return to;
   if (status === "rolled_back" || status === "aborted") return from;
   return null;
 }

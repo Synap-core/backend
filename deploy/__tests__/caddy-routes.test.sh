@@ -151,4 +151,56 @@ grep -qE "^[[:space:]]*- \./state/registration-nonce:${root}:ro\$" "$HERE/docker
     && ok "compose mounts ./state/registration-nonce at ${root} (read-only) for Caddy" \
     || bad "compose does not mount ./state/registration-nonce at '${root}'"
 
+# ── the ACME email: an empty LETSENCRYPT_EMAIL must not make the Caddyfile invalid ──
+# `email {$EMAIL}` with EMAIL="" is `email` with no argument: caddy refuses to
+# load it (measured, caddy 2.11: "wrong argument count ... after 'email'"), and
+# `synap update` validates the Caddyfile with caddy, so such a pod could never
+# take a release. The option comes whole from compose (ACME_EMAIL_OPTION =
+# "email <addr>" or nothing). Behavioural parts run when their tool exists:
+# `docker compose config` (offline, no daemon) and a caddy binary (CADDY_BIN or
+# `caddy` on PATH); each says when it was skipped.
+COMPOSE_FILE_UNDER_TEST="${CADDY_ROUTES_COMPOSE:-$HERE/docker-compose.yml}"
+EMAIL_RE='^[^#]*(^|[[:space:]])email[[:space:]]+\{\$'
+printf '    email {$EMAIL}\n' | grep -qE "$EMAIL_RE" && ! printf '    # email {$EMAIL}\n' | grep -qE "$EMAIL_RE" \
+    && ok "the email scan sees a literal 'email {\$EMAIL}' and ignores a comment" || bad "the email scan regex cannot see what it hunts"
+if grep -qE "$EMAIL_RE" "$CADDYFILE"; then
+    bad "the Caddyfile passes an env placeholder as the argument of email (empty ⇒ caddy cannot load it): $(grep -nE "$EMAIL_RE" "$CADDYFILE")"
+else
+    ok "no email directive takes a bare env placeholder"
+fi
+awk 'NR==1 && $0 !~ /^\{/ {exit 1} /^\}/ {exit} {print}' "$CADDYFILE" | grep -qE '^[[:space:]]*\{\$ACME_EMAIL_OPTION\}[[:space:]]*$' \
+    && ok "the global options block takes the whole email option from ACME_EMAIL_OPTION" \
+    || bad "the global options block does not read {\$ACME_EMAIL_OPTION}"
+grep -qF 'ACME_EMAIL_OPTION: ${LETSENCRYPT_EMAIL:+email ${LETSENCRYPT_EMAIL}}' "$COMPOSE_FILE_UNDER_TEST" \
+    && ok "compose sets ACME_EMAIL_OPTION only when LETSENCRYPT_EMAIL is non-empty" \
+    || bad "compose does not derive ACME_EMAIL_OPTION from LETSENCRYPT_EMAIL (\${LETSENCRYPT_EMAIL:+email \${LETSENCRYPT_EMAIL}})"
+ET="$(mktemp -d)"
+env_base='DOMAIN=pod.example.com\nPOD_ADMIN_DOMAIN=admin.example.com\nPOD_ADMIN_URL=https://admin.example.com\nPUBLIC_URL=https://pod.example.com\nVAULT_SERVER_KEY=x\nBACKEND_VERSION=v0\n'
+if docker compose version >/dev/null 2>&1; then
+    for case in "ops@example.com|email ops@example.com" "|"; do
+        addr="${case%%|*}"; want="${case#*|}"
+        printf "${env_base}LETSENCRYPT_EMAIL=%s\n" "$addr" > "$ET/.env"
+        got="$(docker compose --env-file "$ET/.env" -f "$COMPOSE_FILE_UNDER_TEST" config --format json caddy 2>/dev/null \
+            | jq -r '.services.caddy.environment.ACME_EMAIL_OPTION // "<unset>"')"
+        [ "$got" = "$want" ] && ok "compose: LETSENCRYPT_EMAIL='${addr}' → ACME_EMAIL_OPTION='${want}'" \
+            || bad "compose: LETSENCRYPT_EMAIL='${addr}' → ACME_EMAIL_OPTION='${got}', want '${want}'"
+    done
+else
+    echo "skip - docker compose is not installed: ACME_EMAIL_OPTION interpolation not exercised"
+fi
+CADDY="${CADDY_BIN:-$(command -v caddy || true)}"
+if [ -n "$CADDY" ] && [ -x "$CADDY" ]; then
+    # /var/log/caddy is the container's; point the access log at a temp dir.
+    sed "s#/var/log/caddy#$ET/log#g" "$CADDYFILE" > "$ET/Caddyfile"; mkdir -p "$ET/log" "$ET/home"
+    for opt in "" "email ops@example.com"; do
+        out="$(cd "$ET" && HOME="$ET/home" XDG_DATA_HOME="$ET/home" XDG_CONFIG_HOME="$ET/home" DOMAIN=pod.example.com POD_ADMIN_DOMAIN=admin.example.com \
+            EMAIL="${opt#email }" ACME_EMAIL_OPTION="$opt" "$CADDY" validate --config "$ET/Caddyfile" --adapter caddyfile 2>&1)" \
+            && ok "caddy validates the Caddyfile with ACME_EMAIL_OPTION='${opt}'" \
+            || bad "caddy refuses the Caddyfile with ACME_EMAIL_OPTION='${opt}': $(printf '%s' "$out" | tail -1)"
+    done
+else
+    echo "skip - no caddy binary (CADDY_BIN / PATH): the Caddyfile is not loaded by caddy here"
+fi
+rm -rf "$ET"
+
 exit $fail

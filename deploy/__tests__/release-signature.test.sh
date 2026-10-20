@@ -22,7 +22,7 @@ extract() { awk -v f="$1" '$0 ~ "^"f"\\(\\) \\{" {p=1} p{print} p&&/^}/{exit}' "
 {
   echo 'RED=""; GREEN=""; YELLOW=""; BLUE=""; NC=""'
   grep -E '^_ue_(log|ok|warn|err)\(\) +\{.*\}$' "$HERE/synap"   # one-line loggers
-  for fn in _ue_env_get _ue_manifest_url _ue_fetch _ue_cosign_verify _ue_verify_manifest_sig; do
+  for fn in _ue_env_get _ue_manifest_url _ue_fetch _ue_cosign_via _ue_cosign_verify _ue_verify_manifest_sig; do
     extract "$fn"
   done
   grep -E '^(SYNAP_RELEASE_BASE_URL_DEFAULT|SYNAP_RELEASE_SIGNER_RE|SYNAP_RELEASE_OIDC_ISSUER|SYNAP_COSIGN_IMAGE)=' "$HERE/synap"
@@ -48,10 +48,16 @@ printf '%s\n' "$@" > "$STUB_COSIGN_ARGS"
 echo "Error: none of the expected identities matched what was in the certificate" >&2
 exit 1
 C
-# A docker that stands in for sigstore's image: records its args, answers like cosign.
+# A docker that stands in for sigstore's image: records its args (in its OWN
+# file, so which of the two ran is observable), answers like cosign — or, with
+# STUB_DOCKER_RC, like a docker that could not run the container at all.
 cat > "$TMP/bin/docker" <<'C'
 #!/usr/bin/env bash
-printf '%s\n' "$@" > "$STUB_COSIGN_ARGS"
+printf '%s\n' "$@" > "$STUB_DOCKER_ARGS"
+if [ -n "${STUB_DOCKER_RC:-}" ]; then
+  echo "docker: Error response from daemon: Head \"https://ghcr.io/v2/sigstore/cosign/cosign/manifests/sha256:f194\": dial tcp: lookup ghcr.io: no such host." >&2
+  exit "$STUB_DOCKER_RC"
+fi
 [ "${STUB_COSIGN_RESULT:-ok}" = ok ] && { echo "Verified OK" >&2; exit 0; }
 echo "Error: none of the expected identities matched what was in the certificate" >&2
 exit 1
@@ -74,20 +80,22 @@ done
 
 echo '{"schema":1,"id":"main-abc1234"}' > "$TMP/rel/channel-fast/release.json"
 
-# run <path-dir> <mode|""> [with-bundle 0|1] [cosign-result] — prints rc + output
+# run <path-dir> <mode|""> [with-bundle 0|1] [cosign-result] [manifest subdir] — prints rc + output
+# The manifest lives in <work>/<subdir> while the cwd is <work>, so the docker
+# path must mount the manifest's OWN directory, not the cwd.
 run() {
-  local dir="$1" mode="$2" with_bundle="${3:-1}" res="${4:-ok}" w="$TMP/work"
-  rm -rf "$w" "$TMP/args"; mkdir -p "$w"
+  local dir="$1" mode="$2" with_bundle="${3:-1}" res="${4:-ok}" w="$TMP/work" md="$TMP/work${5:+/$5}"
+  rm -rf "$w" "$TMP/args" "$TMP/dargs"; mkdir -p "$md"
   rm -f "$TMP/rel/channel-fast/release.json.sigstore.json"
   [ "$with_bundle" = 1 ] && echo '{"bundle":"fake"}' > "$TMP/rel/channel-fast/release.json.sigstore.json"
-  cp "$TMP/rel/channel-fast/release.json" "$w/manifest.json"
-  ( cd "$w" && export PATH="$TMP/$dir:$SYS_PATH" STUB_REL="$TMP/rel" STUB_COSIGN_ARGS="$TMP/args" \
-      STUB_COSIGN_RESULT="$res" SYNAP_RELEASE_BASE_URL="https://rel.test"
+  cp "$TMP/rel/channel-fast/release.json" "$md/manifest.json"
+  ( cd "$w" && export PATH="$TMP/$dir:$SYS_PATH" STUB_REL="$TMP/rel" STUB_COSIGN_ARGS="$TMP/args" STUB_DOCKER_ARGS="$TMP/dargs" \
+      STUB_COSIGN_RESULT="$res" SYNAP_RELEASE_BASE_URL="https://rel.test" STUB_DOCKER_RC="${STUB_DOCKER_RC:-}"
     [ -n "$mode" ] && export SYNAP_RELEASE_VERIFY="$mode"
     set +u -e   # synap's own options (set -e, no -u)
     # shellcheck source=/dev/null
     . "$TMP/lib.sh"
-    rc=0; _ue_verify_manifest_sig fast "$w/manifest.json" > "$TMP/out" 2>&1 || rc=$?; echo "rc=$rc" >> "$TMP/out" )
+    rc=0; _ue_verify_manifest_sig fast "$md/manifest.json" > "$TMP/out" 2>&1 || rc=$?; echo "rc=$rc" >> "$TMP/out" )
 }
 expect() { # <label> <want-rc> <want-substring>
   if grep -q "rc=$2" "$TMP/out" && grep -qF -- "$3" "$TMP/out"; then ok "$1"
@@ -108,15 +116,35 @@ run bin enforce 0          ; expect "enforce: no bundle → refused"            
 run bin enforce 1 fail     ; expect "enforce: bad signature → refused"                 1 "refused: the signature does not verify"
 run bin enforce 1 ok       ; expect "enforce: good signature → accepted"               0 "signature verified"
 # No host cosign (nothing installs one on a pod host): sigstore's image through docker.
-run dockeronly enforce 1 ok  ; expect "enforce: no cosign, docker → verified through the pinned image" 0 "signature verified"
-dargs="$(tr '\n' ' ' < "$TMP/args")"
-for want in "run --rm" "ghcr.io/sigstore/cosign/cosign:" "verify-blob" "--certificate-identity-regexp" \
+# The manifest sits in a SUBDIRECTORY of the cwd whose name holds a ':' (which
+# `-v src:dst` would split): the mount must name that directory, whole.
+run dockeronly enforce 1 ok "sub:dir" ; expect "enforce: no cosign, docker → verified through the pinned image" 0 "signature verified"
+dargs="$(tr '\n' ' ' < "$TMP/dargs" 2>/dev/null)"
+for want in "run --rm" "--read-only" "--cap-drop ALL" "--security-opt no-new-privileges" \
+            "--tmpfs /home/nonroot:uid=65532,gid=65532" \
+            "--mount type=bind,src=$TMP/work/sub:dir,dst=/release,readonly" \
+            "ghcr.io/sigstore/cosign/cosign:" "verify-blob" "--certificate-identity-regexp" \
             "--certificate-oidc-issuer https://token.actions.githubusercontent.com" \
             "--bundle /release/manifest.json.sigstore.json /release/manifest.json"; do
   grep -qF -- "$want" <<<"$dargs" && ok "docker cosign called with $want" || bad "docker cosign args lack '$want': $dargs"
 done
-grep -qE ":/release:ro( |$)" <<<"$dargs" && ok "docker cosign mounts the manifest directory read-only" || bad "manifest dir not mounted read-only: $dargs"
+grep -qE '(^| )-v ' <<<"$dargs" && bad "docker cosign still uses -v (a ':' in the path breaks it): $dargs" || ok "docker cosign uses --mount, never -v"
 run dockeronly enforce 1 fail; expect "enforce: no cosign, docker, bad signature → refused" 1 "refused: the signature does not verify"
+# docker could not run the container (daemon down, pull failed: 125/126/127):
+# still fails closed, but it is NOT a bad signature and must not read as one.
+for drc in 125 126 127; do
+  STUB_DOCKER_RC=$drc run dockeronly enforce 1 ok
+  expect "enforce: docker exits $drc → refused as 'could not run the signature check'" 1 "refused: could not run the signature check (docker exited $drc"
+  grep -q "does not verify" "$TMP/out" && bad "docker $drc reported as a bad signature" || ok "docker $drc is not called a bad signature"
+done
+STUB_DOCKER_RC=125 run dockeronly "" 1 ok; expect "warn: docker exits 125 → warning, continues" 0 "NOT signature-verified: could not run the signature check"
+# A host cosign wins over docker: only cosign runs.
+run bin enforce 1 ok
+[ -s "$TMP/args" ] && [ ! -e "$TMP/dargs" ] && ok "a host cosign is used, docker run is never called" || bad "precedence: cosign args=$([ -s "$TMP/args" ] && echo y || echo n), docker called=$([ -e "$TMP/dargs" ] && echo y || echo n)"
+# The image CI signs with and the image pods verify with are the same cosign.
+ci_ver="$(sed -n 's/^[[:space:]]*cosign-release:[[:space:]]*"\{0,1\}\(v[0-9][0-9.]*\)"\{0,1\}.*/\1/p' "$HERE/.github/workflows/docker-publish.yml" | head -1)"
+img_ver="$(sed -n 's/^SYNAP_COSIGN_IMAGE="ghcr\.io\/sigstore\/cosign\/cosign:\(v[0-9][0-9.]*\)@.*/\1/p' "$HERE/synap")"
+[ -n "$ci_ver" ] && [ "$ci_ver" = "$img_ver" ] && ok "CI cosign-release ($ci_ver) = SYNAP_COSIGN_IMAGE tag ($img_ver)" || bad "CI cosign-release '$ci_ver' != SYNAP_COSIGN_IMAGE tag '$img_ver'"
 grep -qE '^SYNAP_COSIGN_IMAGE="ghcr\.io/sigstore/cosign/cosign:v[0-9.]+@sha256:[0-9a-f]{64}"$' "$HERE/synap" \
   && ok "the cosign image is pinned by digest" || bad "SYNAP_COSIGN_IMAGE is not pinned by a sha256 digest"
 run bin off     1 fail     ; expect "off: skipped"                                     0 "rc=0"
