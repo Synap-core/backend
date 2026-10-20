@@ -95,7 +95,7 @@ const AI_PRESET_LIKE = grantRow({
   permissions: ["entity.*.read", "entity.*.create", "document.read"],
 });
 
-type Method = "GET" | "POST" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 const ROWS: Array<[Method, string, boolean]> = [
   ["POST", "/capabilities/cap-1/credentials", true],
   ["PATCH", "/capabilities/cap-1/credentials/cred-1", true],

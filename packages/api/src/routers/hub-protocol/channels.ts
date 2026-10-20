@@ -372,6 +372,16 @@ export const channelsRouter = router({
         throw new TRPCError({ code: "UNAUTHORIZED", message: "No caller" });
       }
 
+      // Fail closed before any read: a key that may not create messages in the
+      // workspace it names is refused here, so the lookup below never tells it
+      // whether a channel exists. The channel's OWN workspace is gated again
+      // after the lookup (the message lands there, not in the named one).
+      await assertKeyMayWrite({
+        subjectType: "message",
+        action: "create",
+        workspaceId: input.workspaceId,
+      });
+
       // SECURITY — the channel write floor. The channel used to be found by
       // (externalSource, externalChannelId) alone and the message inserted as
       // `channel.userId`, so any hub write key could inject a message (and an
