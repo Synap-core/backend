@@ -1,31 +1,33 @@
 import { configuredPodAdminBase } from "./pod-admin-url.js";
 
 /**
- * The pod-admin app's origin for a pod origin — where the key-approval pages
- * live (`/approve-agent/:keyId`, `/approve-agents?keys=`). ONE rule: the setup
- * door's review URL and `agentUsers.list`'s `approveUrl` both build on it.
+ * The pod-admin app's origin for this pod's origin — where the key-approval
+ * pages live (`/approve-agent/:keyId`, `/approve-agents?keys=`). ONE rule: the
+ * setup door's review URL and `agentUsers.list`'s `approveUrl` both build on it.
  *
- * `pod.<root>` → `pod-admin.<root>`; `<sub>.<root>` → `pod-admin.<root>`;
- * localhost → the local pod-admin dev server.
+ * The configured console (`POD_ADMIN_URL`) when it is valid — the deploy
+ * configuration is authoritative. Otherwise the installer's naming
+ * (`pod_admin_domain_for_domain` in `synap`): `pod.<root>` → `pod-admin.<root>`,
+ * a legacy `<sub>.<root>` → `<sub>-admin.<root>`, localhost → the local
+ * pod-admin dev server.
  */
 export function toPodAdminOrigin(origin: string): string {
+  const configured = configuredPodAdminBase();
+  if (configured.ok) return configured.base.origin;
   try {
     const u = new URL(origin);
-    const host = u.host; // host:port
-    if (host.startsWith("localhost") || host.startsWith("127.0.0.1")) {
+    const host = u.hostname;
+    if (host === "localhost" || host === "127.0.0.1") {
       return "http://localhost:4040";
     }
     if (host.startsWith("pod.")) {
-      const root = host.slice("pod.".length).replace(/:\d+$/, "");
-      return `${u.protocol}//pod-admin.${root}`;
+      return `${u.protocol}//pod-admin.${host.slice("pod.".length)}`;
     }
-    // `<sub>.<root>` → swap the leading label for `pod-admin`.
     const dot = host.indexOf(".");
-    const root =
-      dot > 0
-        ? host.slice(dot + 1).replace(/:\d+$/, "")
-        : host.replace(/:\d+$/, "");
-    return `${u.protocol}//pod-admin.${root}`;
+    if (dot > 0) {
+      return `${u.protocol}//${host.slice(0, dot)}-admin.${host.slice(dot + 1)}`;
+    }
+    return `${u.protocol}//pod-admin.${host}`;
   } catch {
     return origin;
   }
