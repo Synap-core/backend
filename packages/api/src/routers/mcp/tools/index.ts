@@ -5012,6 +5012,69 @@ export const tools = {
         },
       },
       {
+        name: "synap_update_rule",
+        annotations: {
+          title: "Update rule",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Propose a CORRECTION to an existing rule — the governed edit door, the same one the app's rule editor uses. Reach for it when a rule you (or anyone) wrote no longer matches the facts: change its wording, its WHEN/WHERE/THEN, its scope or its review date. Never delete-and-recreate a rule to change it — that loses its id, its run history and its lineage.\n" +
+          "FULL SHAPE, not a patch: send the rule as it should be stored. `intent` and `scope` are REQUIRED and replace the stored ones (send the old wording/scope unchanged if you are only fixing the sentence). `expiresAt` and `sentence` have THREE states: omit to KEEP the stored value, `null` to CLEAR it (a `null` sentence makes the rule prose-only and retires its automation), a value to REPLACE it. `draft` defaults to false — editing a draft rule therefore ACTIVATES it, which recompiles the sentence and is refused by clause if it still has a hole; pass `draft: true` to keep it a draft.\n" +
+          "`ruleId`: the `ruleId` on synap_create_rule's receipt. If that create came back `proposed`, call synap_get_proposal with its proposalId after a person approved it — the id is `data.materialized.ruleId`. There is no dedicated rule listing on MCP. A workspace rule is only found under its workspace (pass its `workspaceId`); `not_found` means no rule with that id is visible to you.\n" +
+          "Refusals are the same as synap_create_rule's: status='denied' with `failure.clause` (WHEN | WHERE | THEN) — fix that clause and resend.\n" +
+          "Governed like every write: status='proposed' is SUCCESS, not an error — nothing changes until a person approves it. Surface the returned link as a markdown link and never report a proposed edit as already in effect.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            ruleId: {
+              type: "string",
+              description:
+                "UUID of the rule to edit (the `ruleId` from synap_create_rule's receipt, or `data.materialized.ruleId` on its approved proposal).",
+            },
+            intent: {
+              type: "string",
+              description:
+                "The rule's wording as it should READ after the edit — in the user's own words. Required: it replaces the stored intent.",
+            },
+            sentence: {
+              ...RULE_SENTENCE_JSON_SCHEMA,
+              type: ["object", "null"],
+              description:
+                "The WHEN / WHERE / THEN as it should be after the edit — same grammar as synap_create_rule's `sentence`. OMIT to keep the stored one (it is recompiled); `null` REMOVES the behaviour (prose-only rule, its automation retired).",
+            },
+            scope: {
+              type: "string",
+              enum: ["pod", "workspace", "user"],
+              description:
+                "Where the rule applies AFTER the edit. Required — send the current scope to keep it.",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "The rule's workspace, for a workspace-scoped rule (the ambient workspace focus is used when omitted). Also the lens the rule is looked up in.",
+            },
+            projectId: {
+              type: "string",
+              description:
+                "Optional cross-cutting project lens — same limits as on synap_create_rule.",
+            },
+            expiresAt: {
+              type: ["string", "null"],
+              description:
+                "ISO-8601 instant with offset after which the rule stops applying. OMIT to keep the stored date; `null` clears it.",
+            },
+            draft: {
+              type: "boolean",
+              description:
+                "true keeps (or returns) the rule to DRAFT — nothing compiled, nothing can fire. Omitted/false = live: a draft is ACTIVATED (recompiled, refused by clause if it has a hole).",
+            },
+          },
+          required: ["ruleId", "intent", "scope"],
+        },
+      },
+      {
         name: "synap_run_playbook",
         annotations: {
           title: "Run template",

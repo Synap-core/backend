@@ -24,9 +24,18 @@
  * throwing — pinned by `skills.createRule.contract.test.ts`. This handler
  * forwards that arm VERBATIM. An agent told "your WHEN names an event no
  * emitter produces" can fix that clause and resend; one told "invalid" cannot.
+ *
+ * THE EDIT DOOR (`synap_update_rule`). Same reasoning, one procedure over:
+ * `skillsRouter.updateRule`, which calls `updateRuleGoverned`. Without it an
+ * agent could create a rule but never propose a correction to one — a rule it
+ * wrote, a person approved, and the facts then outgrew could only be fixed by a
+ * person. The edit is FULL SHAPE (see that door's header): `intent` and `scope`
+ * are stored as sent, which is why `scope` is REQUIRED here rather than
+ * defaulted — a default would silently move a workspace rule pod-wide.
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
@@ -61,6 +70,67 @@ const createRuleArgsSchema = z.object({
   sentence: z.unknown().optional(),
 });
 
+/**
+ * Parse a tool's `sentence` arg against the same exported schema the tRPC
+ * input declares — one grammar, two readers. Doing it up front is what buys
+ * the agent a usable message: the tRPC zod input would throw a BAD_REQUEST
+ * (flattened by `toSafeToolError`), and the door's own `readRuleSentence`
+ * fallback reports only "did not match the expected shape" with no field.
+ * Neither tells an agent which key to fix. `null` passes through: on the edit
+ * door it means "remove the behaviour".
+ */
+function readSentenceArg(raw: unknown):
+  | {
+      ok: true;
+      sentence: z.infer<typeof ruleSentenceSchema> | null | undefined;
+    }
+  | { ok: false; refusal: Record<string, unknown> } {
+  if (raw === undefined || raw === null) return { ok: true, sentence: raw };
+  const sentenceParsed = ruleSentenceSchema.safeParse(raw);
+  if (sentenceParsed.success)
+    return { ok: true, sentence: sentenceParsed.data };
+  return {
+    ok: false,
+    refusal: {
+      status: "denied",
+      reason:
+        "This rule's WHEN/WHERE/THEN could not be read, so nothing was saved — a rule stored with an unreadable sentence would silently never run.",
+      // Deliberately NOT dressed up as a `failure.clause`: the compiler names
+      // the clause, this is a wire-shape error and pretending it is a WHEN
+      // failure would point the author at the wrong row.
+      invalidSentence: sentenceParsed.error.issues.map((i) => ({
+        path: i.path.join("."),
+        message: i.message,
+      })),
+    },
+  };
+}
+
+function invalidArgs(toolName: string, error: z.ZodError): CallToolResult {
+  return ok({
+    error: `Invalid ${toolName} args: ${error.issues
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ")}`,
+  });
+}
+
+/**
+ * `synap_update_rule`'s wire shape. Flat like the create tool's, for the same
+ * reason (`workspaceId` is a flat arg on every MCP tool). Unlike create,
+ * `scope` is required — see the header — and `expiresAt` / `sentence` accept
+ * `null`: absent keeps the stored value, `null` clears it.
+ */
+const updateRuleArgsSchema = z.object({
+  ruleId: z.string().uuid(),
+  intent: z.string().min(1),
+  scope: z.enum(["pod", "workspace", "user"]),
+  workspaceId: z.string().uuid().optional(),
+  projectId: z.string().uuid().optional(),
+  expiresAt: z.string().datetime({ offset: true }).nullish(),
+  sentence: z.unknown().optional(),
+  draft: z.boolean().optional(),
+});
+
 export const ruleHandlers: McpHandlerMap = {
   synap_create_rule: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const {
@@ -75,13 +145,7 @@ export const ruleHandlers: McpHandlerMap = {
     requireScope(apiKeyScopes, "mcp.write", toolName);
 
     const parsed = createRuleArgsSchema.safeParse(args);
-    if (!parsed.success) {
-      return ok({
-        error: `Invalid ${toolName} args: ${parsed.error.issues
-          .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
-          .join("; ")}`,
-      });
-    }
+    if (!parsed.success) return invalidArgs(toolName, parsed.error);
 
     // The ambient MCP lens (`?workspaceId=`, or the agent's focus) is already
     // resolved and access-checked by the adapter. An EXPLICIT arg still wins —
@@ -101,31 +165,9 @@ export const ruleHandlers: McpHandlerMap = {
       });
     }
 
-    // Parsed HERE, against the same exported schema the tRPC input declares —
-    // one grammar, two readers. Doing it up front is what buys the agent a
-    // usable message: `skills.createRule`'s zod input would throw a tRPC
-    // BAD_REQUEST (flattened by `toSafeToolError`), and the door's own
-    // `readRuleSentence` fallback reports only "did not match the expected
-    // shape" with no field. Neither tells an agent which key to fix.
-    let sentence: z.infer<typeof ruleSentenceSchema> | undefined;
-    if (parsed.data.sentence !== undefined && parsed.data.sentence !== null) {
-      const sentenceParsed = ruleSentenceSchema.safeParse(parsed.data.sentence);
-      if (!sentenceParsed.success) {
-        return ok({
-          status: "denied",
-          reason:
-            "This rule's WHEN/WHERE/THEN could not be read, so nothing was saved — a rule stored with an unreadable sentence would silently never run.",
-          // Deliberately NOT dressed up as a `failure.clause`: the compiler
-          // names the clause, this is a wire-shape error and pretending it is a
-          // WHEN failure would point the author at the wrong row.
-          invalidSentence: sentenceParsed.error.issues.map((i) => ({
-            path: i.path.join("."),
-            message: i.message,
-          })),
-        });
-      }
-      sentence = sentenceParsed.data;
-    }
+    const sentenceRead = readSentenceArg(parsed.data.sentence);
+    if (!sentenceRead.ok) return ok(sentenceRead.refusal);
+    const sentence = sentenceRead.sentence ?? undefined;
 
     const ruleCtx = await createHubProtocolCallerContext(
       userId,
@@ -162,5 +204,90 @@ export const ruleHandlers: McpHandlerMap = {
       ...(sentence ? { sentence } : {}),
     });
     return ok(result);
+  },
+
+  synap_update_rule: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const {
+      toolName,
+      args,
+      userId,
+      apiKeyScopes,
+      agentUserId,
+      sessionId,
+      lensWorkspaceId,
+    } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+
+    const parsed = updateRuleArgsSchema.safeParse(args);
+    if (!parsed.success) return invalidArgs(toolName, parsed.error);
+
+    // Same precedence as `synap_create_rule`: an explicit arg wins over the
+    // ambient lens. It is also the caller context's workspace, which
+    // `skills.updateRule` uses as the VISIBILITY lens — not an authorization:
+    // the read is floored on `visibleSkillsWhere`, so naming a workspace never
+    // grants a rule the caller cannot see.
+    const workspaceId = parsed.data.workspaceId ?? lensWorkspaceId;
+    if (parsed.data.scope === "workspace" && !workspaceId) {
+      return ok({
+        error:
+          "scope 'workspace' needs a workspaceId — pass one or call synap_set_workspace_focus. Send the scope the rule should have AFTER the edit.",
+      });
+    }
+
+    const sentenceRead = readSentenceArg(parsed.data.sentence);
+    if (!sentenceRead.ok) return ok(sentenceRead.refusal);
+
+    const ruleCtx = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      workspaceId ?? null,
+      undefined,
+      sessionId,
+      agentUserId ?? null
+    );
+    const rulesCaller = regularSkillsRouter.createCaller(ruleCtx as never);
+
+    try {
+      // GOVERNED (`updateRuleGoverned` → `checkPermissionOrPropose {rule,
+      // update}`): with `agentUserId` set the edit files a `rule/update`
+      // proposal the `rule/update` executor replays on approval. "proposed" is
+      // SUCCESS — `ok()` attaches the review link.
+      const result = await rulesCaller.updateRule({
+        id: parsed.data.ruleId,
+        intent: parsed.data.intent,
+        scope: {
+          kind: parsed.data.scope,
+          // Only for a workspace scope — see the same note in
+          // `synap_create_rule`: a pod rule must not carry a workspace.
+          ...(parsed.data.scope === "workspace" && workspaceId
+            ? { workspaceId }
+            : {}),
+          ...(parsed.data.projectId
+            ? { projectId: parsed.data.projectId }
+            : {}),
+        },
+        // THREE states each: absent is NOT sent (keep the stored value), `null`
+        // IS sent (clear it). A truthiness check here would collapse them.
+        ...(parsed.data.expiresAt !== undefined
+          ? { expiresAt: parsed.data.expiresAt }
+          : {}),
+        ...(sentenceRead.sentence !== undefined
+          ? { sentence: sentenceRead.sentence }
+          : {}),
+        ...(parsed.data.draft !== undefined
+          ? { draft: parsed.data.draft }
+          : {}),
+        automationIds: [],
+      });
+      return ok(result);
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "NOT_FOUND") {
+        return ok({
+          status: "not_found",
+          error: `No rule ${parsed.data.ruleId} that you can see. A rule id is the \`ruleId\` on synap_create_rule's receipt; if that create was proposed, synap_get_proposal on its proposalId returns \`data.materialized.ruleId\` once a person approved it. A workspace rule is only visible under its workspace — pass its workspaceId.`,
+        });
+      }
+      throw err;
+    }
   },
 };
