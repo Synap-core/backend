@@ -100,6 +100,7 @@ import {
 } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
 import { trpcSessionGate } from "./trpc-session-gate.js";
+import { trpcAiRateLimit } from "./trpc-ai-rate-limit.js";
 import { createRequire } from "node:module";
 import {
   DEFAULT_POD_STATE_DIR,
@@ -1179,9 +1180,9 @@ app.route("/api/files", fileUploadApp);
 app.use("/api/media/transcribe", aiRateLimitMiddleware);
 app.route("/api/media", mediaTranscribeApp);
 
-// AI rate limiting for chat/send message path
-app.use("/trpc/chat.sendMessage", aiRateLimitMiddleware);
-app.use("/trpc/channels.sendMessage", aiRateLimitMiddleware);
+// AI rate limiting — charged once per AI procedure in the request, batched or
+// not (chat.sendMessage, channels.sendMessage). See trpc-ai-rate-limit.ts.
+app.use("/trpc/*", trpcAiRateLimit(aiRateLimitMiddleware));
 
 // tRPC endpoint
 // NOTE: Using fetchRequestHandler directly from @trpc/server instead of
