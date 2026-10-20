@@ -220,6 +220,35 @@ export function rejectAgentApprover(
   );
 }
 
+export const AGENT_CANNOT_PURGE =
+  "Purging needs a human session or a personal access token (--api-key <PAT>)";
+
+/**
+ * SECURITY — refuse a HARD PURGE (`POST /workspaces/:id/purge`,
+ * `POST /projects/:id/purge`) by an agent caller (founder S3, 2026-10-20).
+ * Purge bypasses the proposal flow by design (an explicit, confirm-gated
+ * owner action), and the agent-key remap makes `userId` the human owner — so
+ * the ownership checks behind these doors passed for the owner's agent.
+ * "An agent caller" is the existing definition `isAgentCaller`: an agent key
+ * or the Intelligence Service's internal key. A human session or a human
+ * personal access token still purges. The tRPC twin
+ * (`workspaces.adminDelete`) is session-only (`podAdminProcedure` →
+ * `protectedProcedure`, never an API key), and no MCP tool purges.
+ */
+export function rejectAgentPurger(
+  c: Context<{ Variables: HubVariables }>,
+  what: "workspace" | "project"
+): Response | null {
+  const agentUserId = c.get("agentUserId");
+  const keyType = c.get("keyType") as string | undefined;
+  if (!isAgentCaller({ agentUserId, keyType })) return null;
+  logger.warn(
+    { agentUserId, keyType, what },
+    "agent credential attempted a hard purge — blocked (human credential required)"
+  );
+  return c.json({ error: AGENT_CANNOT_PURGE, code: "AGENT_CANNOT_PURGE" }, 403);
+}
+
 /**
  * Is `raw` a syntactically valid uuid?
  *

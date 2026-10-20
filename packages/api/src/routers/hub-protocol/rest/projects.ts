@@ -34,6 +34,7 @@ import {
   logger,
   requireUuidParam,
   type HubHono,
+  rejectAgentPurger,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -430,6 +431,8 @@ export function registerProjectsRoutes(app: HubHono): void {
   // Registered BEFORE /projects/:id (the `/:id/purge` literal suffix is a
   // distinct path so it resolves cleanly ahead of the dynamic catch-all).
   app.post("/projects/:id/purge", async (c) => {
+    const agentRefusal = rejectAgentPurger(c, "project");
+    if (agentRefusal) return agentRefusal;
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },
