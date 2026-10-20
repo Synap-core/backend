@@ -46,4 +46,4 @@ Learned 2026-07-28: an `rsync --delete` without env excludes **wiped** `/opt/syn
 
 - If `deploy/.env` is missing: restore from backup, or reconstruct from **running container env** + known derived fields (`POSTGRES_PASSWORD`, `DOMAIN`) — then **backup immediately**.
 - Preferred update path: `synap update --release <id>` (canary-first; no volume wipe).
-- See also: `deploy/DEPLOY-INTEGRITY.md`, root `DEPLOY-AND-TEST-GUIDE-2026-07-28.md`.
+- See also: `deploy/DEPLOY-INTEGRITY.md`, `deploy/README.md`.

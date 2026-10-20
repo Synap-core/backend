@@ -3,7 +3,7 @@
  * that refuses minting a new twin — against a REAL Postgres (PGlite), DDL
  * derived from the drizzle schema.
  *
- * Pinned (SCHEMA-CONVERGENCE-PLAN.md, Defect A; founder decision 3/4):
+ * Pinned (SCHEMA-CONVERGENCE-PLAN (team pod), Defect A; founder decision 3/4):
  *  - `getBySlug(slug, undefined, userId)` — a pod-wide write — resolves a KIND
  *    to its system/shared row, never to a workspace twin, even an OLDER one
  *    (the live `knowledge` twin predates the system row by nine hours);

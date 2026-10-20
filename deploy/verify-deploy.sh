@@ -9,9 +9,12 @@
 # with no signal anywhere that it happened. This script closes that gap with
 # two independent, fail-closed assertions run AFTER the pod reports healthy:
 #
-#   (a) migrations — /status/release's `migrations.lastApplied` MUST equal
-#       the newest migration file in this checkout. Needs NO image change;
-#       this half works today against any already-deployed image.
+#   (a) migrations — /status/release's `migrations.lastApplied` (the newest
+#       APPLIED migration by name, apps/api/src/status/migration-ledger.ts)
+#       MUST equal the newest migration file in this checkout. By name, not
+#       by time: a branch can land a migration numbered below ones a pod
+#       already has, and the runner then applies it last (2026-10-20, 0331
+#       after 0336 rolled pod.antoinesrvt back).
 #   (b) build commit — IF /status/release reports a non-null `buildStamp`
 #       (i.e. the image was built with the GIT_SHA build-arg introduced
 #       alongside this script — see deploy/Dockerfile + docker-compose.yml),

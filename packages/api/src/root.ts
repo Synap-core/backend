@@ -177,7 +177,7 @@ export const coreRouter = router({
   cellInstances: cellInstancesRouter,
   channelGateway: channelGatewayRouter,
   import: importRouter,
-  // The Library — everything the person keeps (CAPTURE_LIBRARY_PLAN L2).
+  // The Library — everything the person keeps (capture-vs-library decision, wave L2).
   library: libraryRouter,
   connectors: connectorsRouter,
   notifCenter: notifCenterRouter,

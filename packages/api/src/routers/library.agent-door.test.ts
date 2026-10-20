@@ -1,6 +1,6 @@
 /**
  * `library.*` over tRPC — nothing an agent sends lands in the Library
- * (CAPTURE_LIBRARY_PLAN §1). Every WRITE (add, curate, readNow, build,
+ * (capture-vs-library decision). Every WRITE (add, curate, readNow, build,
  * runAction) refuses an agent key or the IS's internal key BEFORE any service
  * runs — the same rule as the Hub door (`services/library/agent-door.ts`).
  * A person's call reaches the service; reads stay open. A rebuild refused

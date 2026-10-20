@@ -8,7 +8,7 @@ vaults) reaches the pod through several entry points but is written through one
 path. This page covers that path and the deduplication behind it. The product
 flow of an import (analyze, curate, build) is in
 [IMPORT_CURATE_BUILD.md](../IMPORT_CURATE_BUILD.md); the capture and import
-boundary is in [CAPTURE_IMPORT_ARCHITECTURE.md](../CAPTURE_IMPORT_ARCHITECTURE.md)
+boundary is in [decisions/capture-vs-library.md](../decisions/capture-vs-library.md)
 and [LIBRARY.md](../LIBRARY.md).
 
 ## Entry points

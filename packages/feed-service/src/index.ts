@@ -111,7 +111,7 @@ export type { SourceProviderRegistry } from "./providers/SourceProviderRegistry.
 // Mirror plan (2026-09-13): no code creates `providerType:"nango-sync"`, a
 // managed pod holds no Nango key after D1 (CP is the sole broker), and sync
 // now writes through `EntityUpsertService` in `services/event-sync/`, not
-// this feed-provider door. See CONNECT-AND-MIRROR-PLAN.md §W6.
+// this feed-provider door. See CONNECT-AND-MIRROR-PLAN (team pod) §W6.
 import { sourceProviderRegistry as _registry } from "./providers/SourceProviderRegistry.js";
 import { HTTPAPIProvider as _HTTPAPIProvider } from "./providers/HTTPAPIProvider.js";
 import { CPRelayProvider as _CPRelayProvider } from "./providers/CPRelayProvider.js";

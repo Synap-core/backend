@@ -24,7 +24,7 @@
  * grant-door-classification.tripwire.test.ts` derives the set from the live
  * tool list); an unclassified one stays refused.
  *
- * Inventory + migration order: CONNECT-RESEARCH/13-w1-grants-design-2026-10-06.md.
+ * Inventory + migration order: the W1 grants design of 2026-10-06 (team pod).
  */
 
 import { isFullAccessGrant, type KeyGrant } from "@synap/database";

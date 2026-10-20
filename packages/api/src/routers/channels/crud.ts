@@ -83,7 +83,7 @@ export const crudProcedures = {
    * Speaks the spec's model directly — channelType + optional contextObjectType
    * + scope — so there's no translation layer between the wire and the database.
    *
-   * Spec: synap-team-docs/content/team/platform/channel-system.mdx
+   * Spec: the team pod document "Chat, channels and AI interaction surfaces" (synap ask "channel system spec")
    */
   resolveOrCreateChannel: protectedProcedure
     .input(

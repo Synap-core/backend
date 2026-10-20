@@ -9,7 +9,7 @@
  * `channelPurpose` is removed — absorbed into channelType.
  * `scope` and `feedScope` are new.
  *
- * See synap-team-docs/content/team/platform/channel-system.mdx for the spec.
+ * See the team pod document "Chat, channels and AI interaction surfaces" (synap ask "channel system spec") for the spec.
  */
 
 import {

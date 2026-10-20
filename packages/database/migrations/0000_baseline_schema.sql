@@ -190,7 +190,7 @@ CREATE INDEX IF NOT EXISTS "invite_acceptances_user_idx"
   ON "invite_acceptances" ("user_id");
 
 -- library_groups — the Library's persistent groups (mirrors 0328,
--- CAPTURE_LIBRARY_PLAN L2). Owner-floored; item membership lives on the item.
+-- capture-vs-library decision, wave L2). Owner-floored; item membership lives on the item.
 CREATE TABLE IF NOT EXISTS "library_groups" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"             text NOT NULL,

@@ -132,7 +132,7 @@ export async function executeMCPToolViaHubProtocol(
       keyWorkspaceId,
       rawRequestedWorkspaceId
     ) ?? undefined;
-  // ADVISORY WORKSPACE FOCUS (WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md, Layer 2):
+  // ADVISORY WORKSPACE FOCUS (docs/decisions/agent-workspace-focus.md, Layer 2):
   // only consulted when NEITHER an explicit `args.workspaceId` NOR a bound
   // service-key pin resolved anything above — priority is explicit-per-call >
   // service-key pin > agent's live focus. MCP *write* tools that need a

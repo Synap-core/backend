@@ -408,7 +408,7 @@ describe("stage", () => {
     expect((await view(sessionId)).items).toHaveLength(2);
   });
 
-  // CAPTURE_LIBRARY_PLAN decision 4 (changed on purpose): a built item stays
+  // capture-vs-library decision 4 (changed on purpose): a built item stays
   // in the Library — it never joins "my captures" or the documents list.
   it("no capture or document list sees a staged item, nor a built one", async () => {
     const { outcome } = await openAndStage([

@@ -10,7 +10,7 @@
 -- belongs_to_project relations are entity→entity (not entity→workspace), so they
 -- are unaffected.
 --
--- Design doc: synap-app/synap-team-docs/content/team/platform/project-centric-scope.mdx
+-- Design doc: the team pod document "Project-centric scope, lenses and project members" (synap ask "project-centric scope")
 -- Phase: project-centric-scope Phase 1
 
 UPDATE entities

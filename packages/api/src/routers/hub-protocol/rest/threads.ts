@@ -5,7 +5,7 @@
  * `channels` table (`channelType="thread"` and friends). The `/threads/*` wire
  * paths and the `threadId` path params are KEPT for backward compatibility —
  * browser, CLI, and IS clients depend on them, so renaming the wire surface to
- * channel vocabulary is intentionally deferred (see WAVE4-ROUTES-REPORT.md).
+ * channel vocabulary is intentionally deferred (see WAVE4-ROUTES-REPORT (team pod)).
  * Internally the data is channel rows.
  *
  * Routes are wired via `app.openapi(routeDef, handler)` so request bodies /
