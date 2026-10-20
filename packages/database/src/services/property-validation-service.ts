@@ -205,9 +205,11 @@ export class PropertyValidationService {
         const casted = await this.castPropertyValue(value, prop);
         normalized[key] = casted;
 
-        // Validate constraints
+        // Validate constraints. Each message names the key: "String length
+        // 612 is greater than maximum 500" alone did not say WHICH of an
+        // 8-entity capture's fields broke the limit.
         const constraintErrors = this.validateConstraints(casted, prop);
-        errors.push(...constraintErrors);
+        errors.push(...constraintErrors.map((e) => `Property '${key}': ${e}`));
       } catch (error) {
         errors.push(
           `Property '${key}': ${error instanceof Error ? error.message : String(error)}`
@@ -392,8 +394,15 @@ export class PropertyValidationService {
           );
         }
       } else if (!constraints.enum.includes(value)) {
+        // `in_progress` for `in-progress`: the same case/separator fold the
+        // key suggestion uses names the option the caller meant.
+        const closest =
+          typeof value === "string"
+            ? suggestClosest(value, constraints.enum.map(String))
+            : undefined;
         errors.push(
-          `Value '${value}' not in enum: ${constraints.enum.join(", ")}`
+          `Value '${value}' not in enum: ${constraints.enum.join(", ")}` +
+            (closest ? ` (did you mean '${closest}'?)` : "")
         );
       }
     }

@@ -103,4 +103,27 @@ describe("capture dry run — what each kind models", () => {
       finding: [],
     });
   });
+
+  it("shows a limit before the write, and names the key when the value breaks it", async () => {
+    const out = await run([
+      {
+        ref: "d",
+        profileSlug: "decision",
+        title: "Ship it",
+        properties: { summary: "y".repeat(612) },
+      },
+    ]);
+    expect(out.modeledFields.decision).toEqual([
+      { key: "summary", type: "string", maxLength: 500 },
+    ]);
+    expect(out.invalidEntities).toEqual([
+      {
+        label: "Ship it",
+        profileSlug: "decision",
+        errors: [
+          "Property 'summary': String length 612 is greater than maximum 500",
+        ],
+      },
+    ]);
+  });
 });

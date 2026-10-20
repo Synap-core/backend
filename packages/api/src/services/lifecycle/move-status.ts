@@ -29,6 +29,7 @@
 import {
   db,
   applyStatusMove,
+  canonicalLifecycleOptionKey,
   classifyStatusMove,
   resolveStatusMoveTarget,
   expireProposalsStaleAfterMove,
@@ -165,7 +166,12 @@ export async function moveStatus(
       reason: `"${input.property}" is not the lifecycle of ${target.role ?? target.entityType ?? "this kind"} ("${target.lifecycle.propertySlug}" is)`,
     };
   }
-  const lifecycleMove = classifyStatusMove(target.lifecycle, input.to);
+  // INPUT NORMALISER: `in_progress` for a declared `in-progress` (case or
+  // separator only) moves to the declared option; everything below — the
+  // governance classification, the proposal, the write, the event — sees the
+  // canonical key. Anything else is refused, naming the options.
+  const to = canonicalLifecycleOptionKey(target.lifecycle, input.to);
+  const lifecycleMove = classifyStatusMove(target.lifecycle, to);
   if (!lifecycleMove) {
     return {
       status: "refused",
@@ -190,8 +196,8 @@ export async function moveStatus(
       actual: target.current,
     };
   }
-  if (target.current === input.to) {
-    return { status: "unchanged", current: input.to };
+  if (target.current === to) {
+    return { status: "unchanged", current: to };
   }
 
   const governanceWorkspaceId = target.workspaceId ?? input.workspaceId ?? null;
@@ -216,7 +222,7 @@ export async function moveStatus(
       forcePropose: input.forcePropose,
       reasoning:
         input.reason ??
-        `Move ${target.lifecycle.propertySlug} from "${target.current ?? "none"}" to "${input.to}".`,
+        `Move ${target.lifecycle.propertySlug} from "${target.current ?? "none"}" to "${to}".`,
       sessionId: input.sessionId ?? undefined,
       data: {
         id: input.entityId,
@@ -226,7 +232,7 @@ export async function moveStatus(
         property: target.lifecycle.propertySlug,
         // The belief the approval replays against (strict CAS).
         expectedFrom: target.current,
-        to: input.to,
+        to,
         reason: input.reason ?? null,
       },
     });
@@ -247,7 +253,7 @@ export async function moveStatus(
   const result = await applyStatusMove(db, {
     target,
     expectedFrom: input.expectedFrom,
-    to: input.to,
+    to,
     actor: input.actor,
     strict,
     sessionId: input.sessionId,

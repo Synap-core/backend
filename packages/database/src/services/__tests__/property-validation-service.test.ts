@@ -216,6 +216,28 @@ describe("PropertyValidationService tells the writer what the kind models", () =
     ]);
   });
 
+  it("names the key whose limit a value breaks", async () => {
+    const res = await svc.validateProperties(
+      { summary: "x".repeat(612) },
+      "p",
+      "ws-1",
+      { enforceRequired: false }
+    );
+    expect(res.errors).toEqual([
+      "Property 'summary': String length 612 is greater than maximum 500",
+    ]);
+  });
+
+  it("suggests the option a near-miss value meant", async () => {
+    const res = await svc.validateProperties(
+      { decisionStatus: "Accepted_" },
+      "p",
+      "ws-1",
+      { enforceRequired: false }
+    );
+    expect(res.errors[0]).toMatch(/\(did you mean 'accepted'\?\)$/);
+  });
+
   it("suggests the prefixed field a bare key meant (`status` → `decisionStatus`)", async () => {
     const res = await svc.validateProperties(
       { status: "accepted" },

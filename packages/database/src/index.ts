@@ -381,6 +381,7 @@ export {
   STUCK_AFTER_DAYS_MAX,
   parseLifecycleOptions,
   findLifecycleOption,
+  canonicalLifecycleOptionKey,
   classifyLifecycleMove,
   type LifecycleCategory,
   type LifecycleOption,
