@@ -2,7 +2,7 @@
  * Hub Protocol REST — GET /capabilities/catalog
  *
  * The pack-grouped, status-computed capability CATALOG — the keystone of the
- * capability UX consolidation (CAPABILITIES-NORTH-STAR.md §8 Phase 1). Where
+ * capability UX consolidation (CAPABILITIES-NORTH-STAR (team pod) §8 Phase 1). Where
  * `GET /capabilities` returns the FLAT verb × grant matrix (every tool/skill its
  * own, duplicated, entry), this door returns ONE `CapabilityCard` per PACK:
  *   - one card per installed capability CONTAINER (member tools → connection,

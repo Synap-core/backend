@@ -249,7 +249,7 @@ export const API_KEY_SCOPES = [
   // rooms to receive event broadcasts (chat:stream, openclaw:message:received [legacy name: external message ingress],
   // agent:task:status, etc). Does NOT grant the right to emit events back —
   // the bridge HTTP endpoint stays guarded by BRIDGE_SECRET as before. See
-  // synap-team-docs/content/team/platform/eve-os-vision.mdx §9 Phase 3A.
+  // the team pod document "Eve (hestia-cli), Hermes and the Eve OS: design history" (synap ask "Eve OS vision").
   "realtime:observe",
   // Probe key (D8). Writes made with it are marked as dogfood probes, hidden
   // from listings and swept. Declared explicitly at mint — never inferred from

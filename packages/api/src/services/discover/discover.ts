@@ -214,7 +214,7 @@ export interface StartHere {
       }
     | StartHereUnavailable;
   /**
-   * The person's Library (what they KEEP, CAPTURE_LIBRARY_PLAN L5): items not
+   * The person's Library (what they KEEP, capture-vs-library decision, wave L5): items not
    * read yet, groups waiting to be built, the oldest wait. State, not a queue —
    * there is no inbox counter to clear. `library.health` is the same read.
    */

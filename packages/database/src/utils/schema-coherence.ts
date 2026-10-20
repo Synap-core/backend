@@ -2244,7 +2244,7 @@ export async function validateSchemaCoherence(): Promise<void> {
   // the failure mode here is not an error — it is a silent INVERSION: with the
   // old 'workspace' default, every kind a template or an agent creates without
   // an explicit entityScope lands workspace-scoped, and nothing ever complains.
-  // See APP-DOCK-MENTAL-MODEL-PLAN.md §1b.
+  // See APP-DOCK-MENTAL-MODEL-PLAN (team pod) §1b.
   const entityScopeDefault = await sql<
     Array<{ column_default: string | null }>
   >`

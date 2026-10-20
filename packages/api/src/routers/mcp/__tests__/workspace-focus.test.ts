@@ -1,5 +1,5 @@
 /**
- * Advisory workspace focus — WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md, Layer 2.
+ * Advisory workspace focus — docs/decisions/agent-workspace-focus.md, Layer 2.
  *
  * Two things are pinned here:
  *   1. `pickAdvisoryWorkspaceId` — the pure precedence rule: an explicit

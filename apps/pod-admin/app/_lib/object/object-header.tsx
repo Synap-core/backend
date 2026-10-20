@@ -6,7 +6,7 @@
  * registry), its name, one sentence on its state, its status, and ONE primary
  * action with any secondaries beside it.
  *
- * Prior-art rule (POD-ADMIN-CONSOLE-DECISIONS §4): one header, status as a
+ * Prior-art rule (Pod Console decisions, 2026-10): one header, status as a
  * sentence, one primary action. Wave-2 pages compose this rather than each
  * building their own title block.
  */

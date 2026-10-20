@@ -1,6 +1,6 @@
 /**
- * `library.*` — the Library: everything the person KEEPS (CAPTURE_LIBRARY_PLAN
- * L2). Thin doors over `services/library/*`; every procedure is OWNER-FLOORED
+ * `library.*` — the Library: everything the person KEEPS (capture-vs-library
+ * decision, wave L2). Thin doors over `services/library/*`; every procedure is OWNER-FLOORED
  * (a foreign or missing id reads NOT_FOUND) and Zod-validated.
  *
  *   add        keep items (appends to the open "Kept from <device>, <day>" run);

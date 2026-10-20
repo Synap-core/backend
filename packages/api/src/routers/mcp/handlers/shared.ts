@@ -243,7 +243,7 @@ export function ok(data: unknown): CallToolResult {
 }
 
 /**
- * ADVISORY WORKSPACE FOCUS precedence (WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md,
+ * ADVISORY WORKSPACE FOCUS precedence (docs/decisions/agent-workspace-focus.md,
  * Layer 2) — pulled out as a pure function so the priority rule is unit-testable
  * without a database: explicit-per-call / service-key pin (`confinedWorkspaceId`)
  * ALWAYS wins; the agent's live focus is consulted ONLY when that resolved to

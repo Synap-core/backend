@@ -273,8 +273,8 @@ function principalEligible(
  * explicitly here.
  *
  * `target_kind: "capability"` rows match by exact `capabilityId` OR the
- * capability's stable VERB NAME (Phase 3, Option B — GOVERNANCE-PHASE2-PLAN.md
- * §1/D1; verb-name matching added 2026-07-27 so a rule survives a reinstall,
+ * capability's stable VERB NAME (Phase 3, Option B — docs/decisions/agent-governance.md
+ * phase 2 D1; verb-name matching added 2026-07-27 so a rule survives a reinstall,
  * which re-creates the skill/tool row with a new id — see capability-gate's
  * KNOWN LIMITATION note). Both are only threaded in from the capability-gate
  * call site (`gateCapabilityExecution` → `@synap/capability-gate`); every

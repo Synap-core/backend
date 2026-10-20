@@ -1,5 +1,5 @@
 /**
- * Library KEEP-ALIVE (CAPTURE_LIBRARY_PLAN L5) — the daily pass that keeps a
+ * Library KEEP-ALIVE (capture-vs-library decision, wave L5) — the daily pass that keeps a
  * Library from becoming a pile, without ever becoming an inbox.
  *
  * Three things, all QUIET (no counters, no pending approvals — a pending

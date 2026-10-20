@@ -43,7 +43,7 @@ import { join, resolve } from "node:path";
  * This is a POST-publish gate: a package listed here must already exist on the
  * registry at its on-disk version, or the run fails. Add
  * `packages/auth-bootstrap`, `packages/hub-rest-client` and
- * `packages/hub-protocol` here once Wave 1 of SDK-AND-BASE-APP-PLAN.md
+ * `packages/hub-protocol` here once Wave 1 of SDK-AND-BASE-APP-PLAN (team pod)
  * publishes them (today they have no registry entry at all).
  */
 const DEFAULT_PACKAGE_DIRS = ["packages/types", "packages/api-types"];
