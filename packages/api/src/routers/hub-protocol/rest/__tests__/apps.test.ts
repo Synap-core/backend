@@ -872,3 +872,63 @@ describe("app lifecycle writes — the owner's own credential only", () => {
     expect(state.removed).toBe(true);
   });
 });
+
+/**
+ * P5 (2026-10-11) gave EVERY minted key an explicit grant — the person's own
+ * CLI key (`connectIntegration`) carries the full-access `*`. The owner
+ * credential check was written (2026-10-07) when such keys had no grant, so
+ * it refused ANY ambient grant: the owner's own unbounded key could no longer
+ * register, mint or revoke from the CLI. The discriminating rows: an
+ * unbounded `*` (the person's full reach) passes; the SAME `*` pinned to one
+ * workspace is a scoped key (S1) and is still refused.
+ */
+describe("app lifecycle writes — the owner's own full-access key (P5 `*`)", () => {
+  const FULL = { scopes: [{ permissions: ["*"] }], clientId: null };
+  const PINNED = {
+    scopes: [{ permissions: ["*"], workspaceIds: [WORKSPACE_ID] }],
+    clientId: null,
+  };
+
+  it("REST POST /apps registers with the owner's unbounded key", async () => {
+    state.ambientGrant = FULL;
+    const app = makeApp_({ scopes: WRITE, userId: OWNER });
+    const res = await post(app, "/apps", { name: "synap.live" });
+    expect(res.status).toBe(201);
+    expect(state.registered).toMatchObject({ ownerUserId: OWNER });
+  });
+
+  it("REST POST /apps/:id/key mints with the owner's unbounded key", async () => {
+    state.ambientGrant = FULL;
+    state.app = makeApp({
+      approvedRequests: [
+        { permission: "entity.person.read", workspaceId: WORKSPACE_ID },
+      ],
+    });
+    const app = makeApp_({ scopes: WRITE, userId: OWNER });
+    const res = await post(app, `/apps/${PUBLIC_ID}/key`, {});
+    expect(res.status).toBe(200);
+    expect(state.keyInput).toMatchObject({ userId: APP_AGENT });
+  });
+
+  it("REST DELETE /apps/:id revokes with the owner's unbounded key", async () => {
+    state.ambientGrant = FULL;
+    state.existingKeyIds = ["old-key-1"];
+    const app = makeApp_({ scopes: WRITE, userId: OWNER });
+    const res = await app.request(`/apps/${PUBLIC_ID}`, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    expect(state.revokedGrantKeyIdCalls).toEqual([["old-key-1"]]);
+  });
+
+  it("a `*` pinned to one workspace is a scoped key — still refused", async () => {
+    state.ambientGrant = PINNED;
+    state.app = makeApp({
+      approvedRequests: [
+        { permission: "entity.person.read", workspaceId: WORKSPACE_ID },
+      ],
+    });
+    const app = makeApp_({ scopes: WRITE, userId: OWNER });
+    const res = await post(app, `/apps/${PUBLIC_ID}/key`, {});
+    expect(res.status).toBe(403);
+    expect(state.keyInput).toBeNull();
+  });
+});

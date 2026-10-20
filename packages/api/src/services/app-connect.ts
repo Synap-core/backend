@@ -28,6 +28,7 @@ import {
   sql,
   getActingAgentUserId,
   getRequestGrant,
+  isFullAccessGrant,
   ApiKeyRepository,
   AppNameTakenError,
   APP_EVENT_ACTIONS,
@@ -193,8 +194,14 @@ async function loadAppToEnd(
  * request's ambient acting agent) nor a grant-bound key. An agent key resolves
  * `userId` to the human it acts for, so without this a scoped agent could
  * revoke its owner's apps (its own parent included) or revive a revoked one.
- * The CLI still works: `synap login` / `pods add` keys are the human's own,
- * with no agent principal and no grant. Reads stay open.
+ * Reads stay open.
+ *
+ * "Grant-bound" means a NARROWED grant. Since P5 (2026-10-11) every key
+ * carries a grant: the person's own key (`apiKeys.connectIntegration`,
+ * `pods add`) holds the explicit full-access `*` — their whole reach, not a
+ * bound. Refusing ANY ambient grant locked the owner's own key out of every
+ * lifecycle write. A `*` limited to a space, project or object is a scoped key
+ * (S1) and stays refused; `isFullAccessGrant` is the one predicate for that.
  */
 export function assertOwnerCredential(
   act: string,
@@ -206,7 +213,8 @@ export function assertOwnerCredential(
       message: `An agent credential cannot ${act} — sign in as the app's owner.`,
     });
   }
-  if (getRequestGrant()) {
+  const grant = getRequestGrant();
+  if (grant && !isFullAccessGrant(grant)) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: `A scoped key cannot ${act} — use your own sign-in or CLI key.`,
