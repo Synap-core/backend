@@ -165,7 +165,7 @@ export function siteWorld(client: PgClient) {
     ): Promise<string> {
       const id = randomUUID();
       await q(
-        `insert into profiles (id, slug, display_name, profile_kind, entity_scope) values ($1,$2,$2,$3,$4)`,
+        `insert into profiles (id, slug, display_name, profile_kind, entity_scope, origin) values ($1,$2,$2,$3,$4,'authored')`,
         [id, slug, kind, scope]
       );
       return id;
