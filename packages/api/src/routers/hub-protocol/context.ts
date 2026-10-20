@@ -300,13 +300,34 @@ export const contextRouter = router({
         contextSummary: z.string(),
       })
     )
-    .mutation(async ({ input }) => {
-      // This is a simple metadata update (contextSummary is not part of event sourcing)
-      // We could extend the regular API to support this, but for now we keep it direct
-      // since it's a specialized Hub Protocol operation
-      const { db, eq } = await import("@synap/database");
-      const { channels } = await import("@synap/database/schema");
+    .mutation(async ({ input, ctx }) => {
+      // SECURITY — the channel WRITE floor. This used to update any channel
+      // by id: any hub write key could rewrite another user's summary, which
+      // is injected into that channel's next AI turn. The floor is the one
+      // every channel write door uses (`channelVisibilityWhere` — see
+      // `callerMayWriteToChannel` in rest/threads.ts and `postChannelMessage`;
+      // a READ predicate standing in for a write one, same caveat) and the
+      // same one `getThreadContext` above reads through, so a caller that may
+      // read a thread's context may also write its summary. NOT_FOUND, never
+      // a distinguishable 403 — no existence oracle.
+      const visible = ctx.userId
+        ? await db
+            .select({ id: channels.id })
+            .from(channels)
+            .where(
+              and(
+                eq(channels.id, input.threadId),
+                channelVisibilityWhere(ctx.userId)
+              )
+            )
+            .limit(1)
+        : [];
+      if (visible.length === 0) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
+      }
 
+      // A simple metadata update (contextSummary is not event-sourced); kept
+      // direct as a specialized Hub Protocol operation.
       await db
         .update(channels)
         .set({

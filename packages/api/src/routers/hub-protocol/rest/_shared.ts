@@ -35,6 +35,7 @@ import { authoredByUser } from "../../../services/agent-identity-service.js";
 import { ownLibraryProposalWhere } from "../../proposals/scope-conditions.js";
 import { getUserWorkspaceIds } from "../../../utils/workspace-membership.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+import { isAgentCaller } from "../../../services/library/agent-door.js";
 
 /**
  * Module-scoped pino logger.
@@ -155,6 +156,13 @@ export const uuidPathParam = uuidParam;
  * default `owner_and_admins` gate's `isOwner` check (`sourceId === userId`)
  * trivially pass. Human review must come from a human session, not an agent key.
  *
+ * "An agent credential" is the existing definition `isAgentCaller`
+ * (`services/library/agent-door.ts`): an agent key OR the Intelligence
+ * Service's internal key. The IS key is remapped to its OPERATOR and (on the
+ * D4 delegation path, or a "system"-owned legacy key) carries no
+ * `agentUserId` — flooring on `agentUserId` alone let the IS approve as the
+ * human. Same definition as `rejectAgentApprover` (skills / tools).
+ *
  * Returns a 403 `Response` to return from the handler when the caller is an agent
  * credential (and logs the blocked attempt — a meaningful security signal), else
  * `null` to continue. The SINGLE source of truth for this guard across every
@@ -166,9 +174,10 @@ export function rejectAgentReviewer(
   action: "approve" | "revert"
 ): Response | null {
   const agentUserId = c.get("agentUserId");
-  if (!agentUserId) return null;
+  const keyType = c.get("keyType") as string | undefined;
+  if (!isAgentCaller({ agentUserId, keyType })) return null;
   logger.warn(
-    { agentUserId, proposalId: c.req.param("id"), action },
+    { agentUserId, keyType, proposalId: c.req.param("id"), action },
     "agent credential attempted to review a proposal — blocked (human review required)"
   );
   const Verb = action[0].toUpperCase() + action.slice(1);
@@ -178,6 +187,66 @@ export function rejectAgentReviewer(
     },
     403
   );
+}
+
+/**
+ * SECURITY — reject a non-proposal APPROVAL (turning a skill verb or a tool
+ * ON: `/skills/:id/approve`, `/tools/:id/approve`) performed by an agent
+ * caller. The sibling of `rejectAgentReviewer`, for the same reason: the
+ * agent-key remap makes `userId` the human owner, so the owner-role check
+ * behind these doors passes for the agent and it could approve its OWN draft
+ * skill. "An agent caller" is the existing definition `isAgentCaller`
+ * (`services/library/agent-door.ts`): an agent key OR the Intelligence
+ * Service's internal key — no first-party IS flow approves a skill or tool.
+ * The canonical procedures refuse an acting agent too (`refuseAgentApprover`);
+ * this door answers first, before any read.
+ */
+export function rejectAgentApprover(
+  c: Context<{ Variables: HubVariables }>,
+  what: "skill" | "tool"
+): Response | null {
+  const agentUserId = c.get("agentUserId");
+  const keyType = c.get("keyType") as string | undefined;
+  if (!isAgentCaller({ agentUserId, keyType })) return null;
+  logger.warn(
+    { agentUserId, keyType, id: c.req.param("id"), what },
+    "agent credential attempted to approve — blocked (human approval required)"
+  );
+  return c.json(
+    {
+      error: `An agent credential cannot approve a ${what} — approval is the human step. Approve from a human session.`,
+    },
+    403
+  );
+}
+
+export const AGENT_CANNOT_PURGE =
+  "Purging needs a human session or a personal access token (--api-key <PAT>)";
+
+/**
+ * SECURITY — refuse a HARD PURGE (`POST /workspaces/:id/purge`,
+ * `POST /projects/:id/purge`) by an agent caller (founder S3, 2026-10-20).
+ * Purge bypasses the proposal flow by design (an explicit, confirm-gated
+ * owner action), and the agent-key remap makes `userId` the human owner — so
+ * the ownership checks behind these doors passed for the owner's agent.
+ * "An agent caller" is the existing definition `isAgentCaller`: an agent key
+ * or the Intelligence Service's internal key. A human session or a human
+ * personal access token still purges. The tRPC twin
+ * (`workspaces.adminDelete`) is session-only (`podAdminProcedure` →
+ * `protectedProcedure`, never an API key), and no MCP tool purges.
+ */
+export function rejectAgentPurger(
+  c: Context<{ Variables: HubVariables }>,
+  what: "workspace" | "project"
+): Response | null {
+  const agentUserId = c.get("agentUserId");
+  const keyType = c.get("keyType") as string | undefined;
+  if (!isAgentCaller({ agentUserId, keyType })) return null;
+  logger.warn(
+    { agentUserId, keyType, what },
+    "agent credential attempted a hard purge — blocked (human credential required)"
+  );
+  return c.json({ error: AGENT_CANNOT_PURGE, code: "AGENT_CANNOT_PURGE" }, 403);
 }
 
 /**

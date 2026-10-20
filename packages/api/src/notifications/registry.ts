@@ -899,6 +899,36 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ttl: 0,
   },
   {
+    // The invite was the consent: a member who joined by a Pod invite linked
+    // their Synap account through a first-party app, and no owner was asked
+    // (`services/application-connections/invite-consent.ts`). News for the
+    // owners and admins, and a DOOR, never a button that acts from the bell:
+    // the app's page in Pod Admin says what was approved and why, and holds
+    // "Unlink {email}" (`applicationConnections.unlinkAccount`). `sourceId`
+    // is the connection id. NB the browser and relay route tables have no
+    // `application_connection` row yet, so the door resolves nowhere there
+    // until one is added (it opens Pod Admin's `/applications/sign-in/<id>`).
+    type: "application_connection.linked_by_invite",
+    category: "governance",
+    label: "Account Linked by Invite",
+    icon: "user-check",
+    priority: "normal",
+    titleTemplate: "{{email}} can now sign in as {{memberName}}",
+    bodyTemplate:
+      "{{memberName}} joined this Pod by your invite, so {{appName}} linked their Synap account without asking you. If this wasn't them, unlink it from the app's page.",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    needsYou: "informational",
+    actions: [
+      {
+        id: "review",
+        label: "Review",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "application_connection" },
+      },
+    ],
+  },
+  {
     type: "system.capability_update_available",
     category: "system",
     label: "Capability Updates Available",

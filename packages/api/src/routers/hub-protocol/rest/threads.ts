@@ -373,6 +373,15 @@ export function registerThreadsRoutes(app: HubHono): void {
     }
     const { threadId } = c.req.valid("param");
     const body = c.req.valid("json");
+    // SECURITY — the channel write floor, BEFORE either branch: the
+    // fingerprint branch below writes the row directly, and both used to
+    // accept any channel id (the summary + fingerprint are injected into that
+    // channel's next AI turn). Same floor + answer as the message-append
+    // doors in this file — see `callerMayWriteToChannel`.
+    const authUserId = c.get("userId") as string | undefined;
+    if (!authUserId || !(await callerMayWriteToChannel(threadId, authUserId))) {
+      return c.json({ error: "Thread not found or not accessible" }, 403);
+    }
     try {
       if (body.contextSummary !== undefined) {
         const caller = await getCaller(c);
@@ -386,8 +395,8 @@ export function registerThreadsRoutes(app: HubHono): void {
           .update(channels)
           .set({
             metadata: drizzleSql`COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
-            'personalityFingerprint', ${body.personalityFingerprint},
-            'personalityFingerprintAt', ${new Date().toISOString()}
+            'personalityFingerprint', ${body.personalityFingerprint}::text,
+            'personalityFingerprintAt', ${new Date().toISOString()}::text
           )`,
           })
           .where(eq(channels.id, threadId));

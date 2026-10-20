@@ -60,10 +60,19 @@ export function messageSpeakerIds(message: SpokenMessage): string[] {
 }
 
 /**
+ * The ONE word for an agent no directory can name (an unknown agent, a reply
+ * that recorded no speaker, an agent row with no name). Every surface — desk
+ * and phone — reads this, so an unknown agent is "AI" everywhere, never
+ * "Agent" on one surface, "Synap" or "AI teammate" on another. The AI MARK
+ * beside it carries the provenance; this is only the name.
+ */
+export const UNNAMED_AGENT_NAME = "AI";
+
+/**
  * The speaker as the caller's directory knows it: the first id of
  * `messageSpeakerIds` that `lookup` resolves. `undefined` when none does — the
- * caller then shows its unnamed mark (an agent's message stays an agent's:
- * never a guess, never the owner).
+ * caller then shows its unnamed mark (an agent's message stays an agent's,
+ * named `UNNAMED_AGENT_NAME`: never a guess, never the owner).
  */
 export function resolveMessageSpeaker<P>(
   message: SpokenMessage,

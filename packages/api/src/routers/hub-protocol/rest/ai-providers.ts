@@ -207,6 +207,7 @@ function maskSecret(secret: string | null): string | null {
  * prompt the IS sends for its scope, so it is never a default-scope write:
  *  - an AGENT key needs the narrow `providers.write` scope (not in the default
  *    bundle, same treatment as provider CRUD above);
+ *  - any other key needs `hub-protocol.write`;
  *  - a workspace-level override needs workspace owner/admin;
  *  - a user-level override is always the caller's OWN row;
  *  - every key is bounded by its grant (`ai_provider.update` / `.delete`).
@@ -226,6 +227,18 @@ async function credentialWriteGate(
       ok: false,
       status: 403,
       error: `Missing scope: ${PROVIDER_SCOPE} (agent keys cannot change provider credentials by default)`,
+    };
+  }
+  // Every other key still needs a WRITE scope: a read-only human or service
+  // key reached this write with no scope check at all.
+  if (
+    !agentUserId &&
+    !hasScope(c.get("scopes") as string[], "hub-protocol.write")
+  ) {
+    return {
+      ok: false,
+      status: 403,
+      error: "Missing scope: hub-protocol.write",
     };
   }
   const workspaceId = c.req.query("workspaceId") || undefined;

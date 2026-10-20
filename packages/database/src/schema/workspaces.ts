@@ -13,6 +13,7 @@ import {
   text,
   timestamp,
   jsonb,
+  index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
@@ -1249,6 +1250,40 @@ export const invites = pgTable("invites", {
     .defaultNow()
     .notNull(),
 });
+
+/**
+ * The durable trace of an ACCEPTED invite. The `invites` row is deleted on
+ * acceptance (every accept path), so nothing else records which person a
+ * given invite let in, or when. One row per invite, written by
+ * `recordInviteAcceptance` (`@synap/database`) at each accept path, just
+ * before the invite row goes.
+ *
+ * Read by the application-connection "invite is the consent" rule: a person
+ * who joined this Pod by invite may link their Synap account without a second
+ * owner approval, while the invite's OWN validity window (`invite_expires_at`,
+ * copied from `invites.expires_at`) has not closed.
+ */
+export const inviteAcceptances = pgTable(
+  "invite_acceptances",
+  {
+    inviteId: uuid("invite_id").primaryKey(),
+    userId: text("user_id").notNull(),
+    inviteType: text("invite_type").notNull().$type<"workspace" | "pod">(),
+    /** The address the invite was sent to, lower-cased. */
+    invitedEmail: text("invited_email").notNull(),
+    invitedBy: text("invited_by").notNull(),
+    inviteExpiresAt: timestamp("invite_expires_at", {
+      mode: "date",
+      withTimezone: true,
+    }).notNull(),
+    acceptedAt: timestamp("accepted_at", { mode: "date", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    userIdx: index("invite_acceptances_user_idx").on(table.userId),
+  })
+);
 
 // Relations
 export const workspacesRelations = relations(workspaces, ({ many }) => ({

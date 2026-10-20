@@ -9,10 +9,17 @@ import {
   GRANT_PRESETS,
 } from "@synap-core/types/grants";
 import {
+  GRANT_DOOR_UNSUPPORTED,
+  GRANT_OWNER_WIDE_UNSUPPORTED,
+  GRANT_WRITE_DOOR_UNSUPPORTED,
   isFencedGrant,
+  isUnboundedFullAccess,
   mcpToolAllowed,
+  ownerWideDoorAllowed,
   restDoorAllowed,
+  TRPC_KEY_MUTATION_DOORS,
   trpcProcedureAllowed,
+  trpcRefusalMessage,
 } from "./grant-door-fence.js";
 
 describe("isFencedGrant", () => {
@@ -27,6 +34,26 @@ describe("isFencedGrant", () => {
     // A key is unfenced only when EVERY scope is full access.
     expect(isFencedGrant(g(["*"], ["entity.read"]))).toBe(true);
     expect(isFencedGrant(null)).toBe(false);
+  });
+  it("fences a `*` pinned to a space, project or object (S1)", () => {
+    const pinned = (narrowing: Record<string, string[]>) =>
+      ({
+        scopes: [{ permissions: ["*"], ...narrowing }],
+        clientId: null,
+      }) as never;
+    expect(isFencedGrant(pinned({ workspaceIds: ["w1"] }))).toBe(true);
+    expect(isFencedGrant(pinned({ projectIds: ["p1"] }))).toBe(true);
+    expect(isFencedGrant(pinned({ entityIds: ["e1"] }))).toBe(true);
+    // One pinned scope beside an unbounded one keeps the key fenced.
+    expect(
+      isFencedGrant({
+        scopes: [
+          { permissions: ["*"] },
+          { permissions: ["*"], workspaceIds: ["w1"] },
+        ],
+        clientId: null,
+      } as never)
+    ).toBe(true);
   });
 });
 
@@ -50,7 +77,10 @@ describe("restDoorAllowed", () => {
     ["GET", "/projects/p1", true],
     ["GET", "/projects/p1/path", false], // userVisibleWhere sessions — not migrated
     ["GET", "/search", false],
-    ["GET", "/entities", false], // ?q= goes to Typesense — not seamed
+    // The list door: seamed; its ?q= (Typesense) branch is refused by the
+    // route itself for a limited key (entities.scoped-key-list.pglite.test.ts).
+    ["GET", "/entities", true],
+    ["GET", "/entities/", true],
     ["GET", "/knowledge", false],
     ["GET", "/compacted-states/latest", false],
     ["POST", "/knowledge/ask", false],
@@ -80,7 +110,7 @@ describe("self-introspection doors", () => {
   });
 });
 
-describe("mcpToolAllowed / trpcProcedureAllowed", () => {
+describe("mcpToolAllowed", () => {
   it("read tools only when seamed; write tools always", () => {
     expect(mcpToolAllowed("synap_get_entities", true, DOC_ONLY)).toBe(true);
     expect(mcpToolAllowed("synap_ask", true, DOC_ONLY)).toBe(false);
@@ -145,9 +175,164 @@ describe("mcpToolAllowed / trpcProcedureAllowed", () => {
     expect(restDoorAllowed("POST", "/diagnose", AI)).toBe(false);
     expect(restDoorAllowed("POST", "/capabilities/execute", AI)).toBe(false);
   });
-  it("queries only when seamed; mutations always", () => {
-    expect(trpcProcedureAllowed("query", "entities.getEntities")).toBe(true);
-    expect(trpcProcedureAllowed("query", "search.search")).toBe(false);
-    expect(trpcProcedureAllowed("mutation", "entities.create")).toBe(true);
+});
+
+describe("trpcProcedureAllowed (S7: the Bearer tRPC door fences mutations)", () => {
+  const FULL = key({ permissions: ["*"] });
+  const STAR_ONE_WS = key({ permissions: ["*"], workspaceIds: ["w1"] });
+  const GATED = "documents.patchDocument"; // (a) the gate bounds it
+  const OWNER_WIDE = "services.register"; // (b)
+  const REFUSED = "entities.createEntity"; // (c) gates the header workspace
+  const UNCLASSIFIED = "entities.someNewMutation";
+
+  it("queries: a scoped key only when seamed; an unfenced key always", () => {
+    expect(trpcProcedureAllowed("query", "entities.getEntities", AI)).toBe(
+      true
+    );
+    expect(trpcProcedureAllowed("query", "search.search", AI)).toBe(false);
+    expect(trpcProcedureAllowed("query", "search.search", FULL)).toBe(true);
+    // S1: a `*` pinned to a space is a scoped key.
+    expect(trpcProcedureAllowed("query", "search.search", STAR_ONE_WS)).toBe(
+      false
+    );
+  });
+
+  it("a scoped key passes a GATED mutation and nothing else", () => {
+    for (const grant of [AI, DOC_ONLY]) {
+      expect(trpcProcedureAllowed("mutation", GATED, grant)).toBe(true);
+      expect(trpcProcedureAllowed("mutation", OWNER_WIDE, grant)).toBe(false);
+      expect(trpcProcedureAllowed("mutation", REFUSED, grant)).toBe(false);
+      // Fail closed: a mutation nobody classified is refused.
+      expect(trpcProcedureAllowed("mutation", UNCLASSIFIED, grant)).toBe(false);
+    }
+  });
+
+  it("a deny-all key still reaches a GATED mutation (the gate denies it)", () => {
+    const denyAll = key({ permissions: [] });
+    expect(trpcProcedureAllowed("mutation", GATED, denyAll)).toBe(true);
+    expect(trpcProcedureAllowed("mutation", REFUSED, denyAll)).toBe(false);
+  });
+
+  it("an unbounded `*` key passes every mutation, classified or not", () => {
+    for (const path of [GATED, OWNER_WIDE, REFUSED, UNCLASSIFIED]) {
+      expect(trpcProcedureAllowed("mutation", path, FULL)).toBe(true);
+    }
+  });
+
+  it("a `*` pinned to a workspace is a scoped key: GATED only", () => {
+    expect(trpcProcedureAllowed("mutation", GATED, STAR_ONE_WS)).toBe(true);
+    expect(trpcProcedureAllowed("mutation", OWNER_WIDE, STAR_ONE_WS)).toBe(
+      false
+    );
+    expect(trpcProcedureAllowed("mutation", REFUSED, STAR_ONE_WS)).toBe(false);
+    expect(trpcProcedureAllowed("mutation", UNCLASSIFIED, STAR_ONE_WS)).toBe(
+      false
+    );
+  });
+
+  it("no grant (legacy key, session) passes everything, as before", () => {
+    for (const path of [GATED, OWNER_WIDE, REFUSED, UNCLASSIFIED]) {
+      expect(trpcProcedureAllowed("mutation", path, null)).toBe(true);
+      expect(trpcProcedureAllowed("mutation", path, undefined)).toBe(true);
+    }
+    expect(trpcProcedureAllowed("query", "search.search", null)).toBe(true);
+  });
+
+  it("a subscription is judged like a write (fail closed)", () => {
+    expect(trpcProcedureAllowed("subscription", "x.onEvent", AI)).toBe(false);
+    expect(trpcProcedureAllowed("subscription", "x.onEvent", FULL)).toBe(true);
+  });
+
+  it("the ten (d) product-decision mutations stay refused for a scoped key", () => {
+    // Founder, 2026-10-20: refused until decided (plan §2 D1–D5).
+    for (const path of [
+      "automations.createAutomation",
+      "automations.updateAutomation",
+      "automations.activateAutomation",
+      "automations.triggerAutomation",
+      "entities.attachFacet",
+      "entities.updateFacet",
+      "entities.detachFacet",
+      "proposals.updateProposal",
+      "channels.triggerAI",
+      "observations.append",
+    ]) {
+      expect(TRPC_KEY_MUTATION_DOORS[path]?.bound, path).toBe("refused");
+      expect(trpcProcedureAllowed("mutation", path, AI), path).toBe(false);
+      expect(trpcProcedureAllowed("mutation", path, FULL), path).toBe(true);
+    }
+  });
+
+  it("names the refusal: owner-wide doors say so, the rest is unsupported", () => {
+    expect(trpcRefusalMessage("mutation", OWNER_WIDE)).toBe(
+      GRANT_OWNER_WIDE_UNSUPPORTED
+    );
+    expect(trpcRefusalMessage("mutation", REFUSED)).toBe(
+      GRANT_WRITE_DOOR_UNSUPPORTED
+    );
+    expect(trpcRefusalMessage("mutation", UNCLASSIFIED)).toBe(
+      GRANT_WRITE_DOOR_UNSUPPORTED
+    );
+    expect(trpcRefusalMessage("query", "search.search")).toBe(
+      GRANT_DOOR_UNSUPPORTED
+    );
+  });
+});
+
+describe("owner-wide doors (webhooks)", () => {
+  const FULL = key({ permissions: ["*"] });
+  const STAR_ONE_WS = key({ permissions: ["*"], workspaceIds: ["w1"] });
+  const STAR_ONE_PROJECT = key({ permissions: ["*"], projectIds: ["p1"] });
+  it("unbounded = every scope `*` with no narrowing", () => {
+    expect(isUnboundedFullAccess(FULL)).toBe(true);
+    expect(isUnboundedFullAccess(STAR_ONE_WS)).toBe(false);
+    expect(isUnboundedFullAccess(STAR_ONE_PROJECT)).toBe(false);
+    expect(isUnboundedFullAccess(AI)).toBe(false);
+    // S1: a pinned `*` is narrowed, so the scoped-key fence applies too.
+    expect(isFencedGrant(STAR_ONE_WS)).toBe(true);
+    expect(isFencedGrant(STAR_ONE_PROJECT)).toBe(true);
+  });
+  it.each([
+    // S2/D7: a subscription is bound to its key and delivers by its grant.
+    ["/webhooks", false],
+    ["/webhooks/", false],
+    ["/webhooks/abc", false],
+    // The delivery log is still read by owner only.
+    ["/webhooks/abc/deliveries", true],
+    ["/webhooksx", false],
+    ["/calendar/feed", true],
+    ["/calendar/feed/rotate", true],
+    // The credentialless .ics read skips auth — no grant ever reaches it.
+    ["/calendar/feed/abcdef.ics", false],
+    ["/agents/sync", true],
+    ["/agents", false],
+    ["/entities", false],
+  ] as const)("%s is owner-wide → %s", (path, ownerWide) => {
+    expect(ownerWideDoorAllowed(path, STAR_ONE_WS)).toBe(!ownerWide);
+    expect(ownerWideDoorAllowed(path, DOC_ONLY)).toBe(!ownerWide);
+    expect(ownerWideDoorAllowed(path, FULL)).toBe(true);
+    // A signed-in session carries no grant.
+    expect(ownerWideDoorAllowed(path, null)).toBe(true);
+  });
+});
+
+describe("webhooks for a scoped key (S2/D7)", () => {
+  const DOC_ONLY_WS = key({
+    permissions: ["document.read"],
+    workspaceIds: ["w1"],
+  });
+  it("may list its own subscriptions (a safe read) and create / delete (writes)", () => {
+    expect(restDoorAllowed("GET", "/webhooks", DOC_ONLY_WS)).toBe(true);
+    expect(restDoorAllowed("POST", "/webhooks", DOC_ONLY_WS)).toBe(true);
+    expect(restDoorAllowed("DELETE", "/webhooks/abc", DOC_ONLY_WS)).toBe(true);
+    expect(ownerWideDoorAllowed("/webhooks", DOC_ONLY_WS, "POST")).toBe(true);
+  });
+  it("still may not read the owner's delivery log", () => {
+    expect(
+      restDoorAllowed("GET", "/webhooks/abc/deliveries", DOC_ONLY_WS)
+    ).toBe(false);
+    expect(
+      ownerWideDoorAllowed("/webhooks/abc/deliveries", DOC_ONLY_WS, "GET")
+    ).toBe(false);
   });
 });

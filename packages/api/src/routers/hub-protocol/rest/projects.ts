@@ -23,9 +23,6 @@ import {
   inArray,
   desc,
   drizzleSql,
-  ProjectRepository,
-  EventRepository,
-  sql,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { storage } from "@synap/storage";
@@ -37,6 +34,7 @@ import {
   logger,
   requireUuidParam,
   type HubHono,
+  rejectAgentPurger,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -47,6 +45,9 @@ import {
   type CreateProjectGovernedOutcome,
 } from "../../../services/projects/create-project.js";
 import { updateProjectGoverned } from "../../../services/projects/update-project.js";
+import { deleteProjectGoverned } from "../../../services/projects/delete-project.js";
+import { getWorkspaceRole } from "../../../utils/workspace-role.js";
+import { isSpaceManageRole } from "@synap-core/types/workspaces";
 import {
   listProjectOutputs,
   PROJECT_OUTPUTS_MAX_LIMIT,
@@ -56,7 +57,6 @@ import {
   hydrateUsedWorkspaces,
   listWorkspacesUsedByProjects,
 } from "../../../utils/project-workspace.js";
-import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import {
   accessScopeWhere,
@@ -431,6 +431,8 @@ export function registerProjectsRoutes(app: HubHono): void {
   // Registered BEFORE /projects/:id (the `/:id/purge` literal suffix is a
   // distinct path so it resolves cleanly ahead of the dynamic catch-all).
   app.post("/projects/:id/purge", async (c) => {
+    const agentRefusal = rejectAgentPurger(c, "project");
+    if (agentRefusal) return agentRefusal;
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },
@@ -459,7 +461,7 @@ export function registerProjectsRoutes(app: HubHono): void {
     // 404 — project must exist.
     const exists = await db.query.projects.findFirst({
       where: eq(projects.id, id),
-      columns: { id: true, name: true },
+      columns: { id: true, name: true, userId: true, workspaceId: true },
     });
     if (!exists) return c.json({ error: "Project not found" }, 404);
 
@@ -477,6 +479,26 @@ export function registerProjectsRoutes(app: HubHono): void {
         { error: "Access denied: you do not own this project." },
         403
       );
+    }
+    // 403 — teardown authority. Visibility above is a READ predicate: it
+    // admits every member of a workspace project (a viewer included), and
+    // this used to be the only check, so any member hard-purged a project
+    // with the pod-wide entities filed into it. The project's creator may
+    // purge it; otherwise a workspace owner/admin — the same rule as
+    // POST /workspaces/:id/purge.
+    if (exists.userId !== userId) {
+      const role = exists.workspaceId
+        ? await getWorkspaceRole(userId, exists.workspaceId)
+        : undefined;
+      if (!isSpaceManageRole(role)) {
+        return c.json(
+          {
+            error:
+              "Access denied: only the project's creator or a workspace owner/admin can purge it.",
+          },
+          403
+        );
+      }
     }
 
     // 400 — confirm must equal the project name exactly.
@@ -777,6 +799,9 @@ export function registerProjectsRoutes(app: HubHono): void {
 
   // Create a project
   app.post("/projects", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const userId = c.get("userId");
     const parsedBody = CreateProjectSchema.safeParse(
       await c.req.json().catch(() => null)
@@ -891,6 +916,9 @@ export function registerProjectsRoutes(app: HubHono): void {
 
   // Update a project
   app.patch("/projects/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const userId = c.get("userId");
     const id = requireUuidParam(c, "id");
     if (id instanceof Response) return id;
@@ -927,37 +955,31 @@ export function registerProjectsRoutes(app: HubHono): void {
 
   // Delete a project
   app.delete("/projects/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const userId = c.get("userId");
     const id = requireUuidParam(c, "id");
     if (id instanceof Response) return id;
 
-    const perm = await checkPermissionOrPropose({
-      userId,
-      subjectType: "project",
-      action: "delete",
-      data: { id },
-    });
-
-    if ("denied" in perm && perm.denied) {
-      return c.json({ error: perm.reason }, 403);
-    }
-    if ("proposalId" in perm) {
-      return jsonGoverned(c, {
-        status: "proposed",
-        proposalId: perm.proposalId,
-        ...(perm.reviewPath ? { reviewPath: perm.reviewPath } : {}),
-        ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
-      });
-    }
-
-    const eventRepo = new EventRepository(sql);
-    const repo = new ProjectRepository(db, eventRepo);
-
+    // The ONE governed delete (`services/projects/delete-project.ts`), shared
+    // with tRPC `projects.delete`: visibility floor first (a foreign id is 404
+    // before governance), then the gate on the PROJECT's workspace, then the
+    // write + audit + side effects. This door used to give the gate no
+    // workspace and delete by id alone — any write key deleted any project.
     try {
-      await repo.delete(id, userId);
+      const outcome = await deleteProjectGoverned({
+        id,
+        userId,
+        agentUserId: c.get("agentUserId") as string | undefined,
+      });
+      if (outcome.status === "proposed") return jsonGoverned(c, outcome);
       return c.json({ status: "deleted" });
-    } catch (e) {
-      return c.json({ error: (e as Error).message }, 404);
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
     }
   });
 }

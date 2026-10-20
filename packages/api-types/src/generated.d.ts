@@ -14684,6 +14684,60 @@ export type PublishResult = {
 	pinned: boolean;
 	rowsWritten: number;
 };
+declare const SiteConfigV1Schema: z.ZodObject<{
+	version: z.ZodLiteral<1>;
+	collections: z.ZodRecord<z.ZodString, z.ZodObject<{
+		sort: z.ZodDefault<z.ZodArray<z.ZodString>>;
+		pageSize: z.ZodDefault<z.ZodNumber>;
+		slugField: z.ZodDefault<z.ZodNullable<z.ZodString>>;
+		publishWhen: z.ZodDefault<z.ZodNullable<z.ZodObject<{
+			statuses: z.ZodArray<z.ZodString>;
+		}, z.core.$strict>>>;
+	}, z.core.$strict>>;
+}, z.core.$strict>;
+export type SiteConfigV1 = z.output<typeof SiteConfigV1Schema>;
+export type ConfigureSiteResult = {
+	status: "proposed";
+	proposalId: string;
+} | {
+	status: "created" | "updated";
+	siteId: string;
+	state: "draft" | "published";
+	/** False for a new site: the owner goes live to mint its token. */
+	hasToken: boolean;
+	rowsWritten: number;
+};
+export interface PublishSiteResult {
+	status: "published" | "republished";
+	siteId: string;
+	/** Plaintext token — present ONCE, when this call minted it. */
+	token?: string;
+	tokenPrefix: string;
+	publishedAt: Date;
+	/** The keys the metadata snapshot holds. */
+	metadataFields: string[];
+}
+export interface SiteStatus {
+	siteId: string;
+	projectId: string;
+	homeWorkspaceId: string;
+	state: string;
+	/** THE one derivation of "the site answers on the public web now". */
+	live: boolean;
+	hasToken: boolean;
+	tokenPrefix: string | null;
+	publishedAt: Date | null;
+	revokedAt: Date | null;
+	/** The stored config as the public doors read it (fail-closed). */
+	config: SiteConfigV1;
+	/** The metadata snapshot's keys (never its values). */
+	metadataFields: string[];
+	/** Live members per configured collection (0 until C1b publishes members). */
+	collections: Array<{
+		key: string;
+		count: number;
+	}>;
+}
 declare const FormConfigSchema: z.ZodObject<{
 	name: z.ZodString;
 	kind: z.ZodEnum<{
@@ -15682,6 +15736,23 @@ export interface BrokerTrustDiagnostics {
 		reason: string | null;
 	};
 }
+/**
+ * What a reviewer is told about that account. `unverified` covers every
+ * request without a verified record — no assertion sent, an unapproved
+ * issuer, a signature that failed — because to the reviewer they mean the
+ * same thing: nobody vouched for the account. The raw issuer subject is
+ * never shown; it is an opaque id, not something a person can recognise.
+ */
+export type RequesterAccountView = {
+	status: "verified";
+	email: string;
+	issuerHost: string;
+	/** The trusted issuer's display name on this Pod, when it has one. */
+	issuerName: string | null;
+	verifiedAt: string;
+} | {
+	status: "unverified";
+};
 /**
  * The clients the pod's OWN OAuth authorization server registered (Path B:
  * claude.ai pointed straight at `https://<pod>/mcp`; `routers/oauth/*`), read
@@ -25844,6 +25915,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					secret: string;
 					url: string;
+					apiKeyId: string | null;
 					eventTypes: string[];
 					retryConfig: unknown;
 					lastTriggeredAt: Date | null;
@@ -25863,6 +25935,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				secret: string;
 				url: string;
+				apiKeyId: string | null;
 				eventTypes: string[];
 				retryConfig: unknown;
 				lastTriggeredAt: Date | null;
@@ -25881,6 +25954,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				userId: string;
 				workspaceId: string | null;
+				apiKeyId: string | null;
 				name: string;
 				url: string;
 				eventTypes: string[];
@@ -25911,6 +25985,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				secret: string;
 				url: string;
+				apiKeyId: string | null;
 				eventTypes: string[];
 				retryConfig: unknown;
 				lastTriggeredAt: Date | null;
@@ -25933,6 +26008,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					secret: string;
 					url: string;
+					apiKeyId: string | null;
 					eventTypes: string[];
 					retryConfig: unknown;
 					lastTriggeredAt: Date | null;
@@ -25959,6 +26035,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				userId: string;
 				workspaceId: string | null;
+				apiKeyId: string | null;
 				name: string;
 				url: string;
 				eventTypes: string[];
@@ -25982,6 +26059,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				active: boolean;
 				secret: string;
 				url: string;
+				apiKeyId: string | null;
 				eventTypes: string[];
 				retryConfig: unknown;
 				lastTriggeredAt: Date | null;
@@ -26005,6 +26083,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					active: boolean;
 					secret: string;
 					url: string;
+					apiKeyId: string | null;
 					eventTypes: string[];
 					retryConfig: unknown;
 					lastTriggeredAt: Date | null;
@@ -26033,6 +26112,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				userId: string;
 				workspaceId: string | null;
+				apiKeyId: string | null;
 				name: string;
 				url: string;
 				eventTypes: string[];
@@ -31679,6 +31759,64 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "none" | "revoked";
 				shareId?: string;
 			};
+			meta: object;
+		}>;
+		configureSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				projectId: string;
+				config: unknown;
+				homeWorkspaceId?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			output: ConfigureSiteResult;
+			meta: object;
+		}>;
+		publishSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				siteId: string;
+			};
+			output: PublishSiteResult;
+			meta: object;
+		}>;
+		rotateSiteToken: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				siteId: string;
+			};
+			output: {
+				siteId: string;
+				token: string;
+				tokenPrefix: string;
+			};
+			meta: object;
+		}>;
+		unpublishSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				siteId: string;
+			};
+			output: {
+				status: "none" | "unpublished";
+				siteId: string;
+			};
+			meta: object;
+		}>;
+		revokeSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				siteId: string;
+			};
+			output: {
+				status: "none" | "revoked";
+				siteId: string;
+				membersRevoked: number;
+			};
+			meta: object;
+		}>;
+		siteStatus: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				siteId: string;
+			} | {
+				projectId: string;
+			};
+			output: SiteStatus | null;
 			meta: object;
 		}>;
 		getPolicy: import("@trpc/server").TRPCQueryProcedure<{
@@ -38045,6 +38183,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				requestId: string;
+				linkedByInvite: boolean;
 			};
 			meta: object;
 		}>;
@@ -38067,6 +38206,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewedAt: Date | null;
 				canReview: boolean;
 				matchingApprovedConnection: boolean;
+				requesterAccount: RequesterAccountView | null;
+				requesterMember: null;
+				approvedByInvite: boolean;
+				approvedConnectionId: null;
+				returnUrl: string | null;
 			} | {
 				id: string;
 				issuerUrl: string;
@@ -38082,6 +38226,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewedAt: Date | null;
 				canReview: true;
 				matchingApprovedConnection: boolean;
+				requesterAccount: RequesterAccountView | null;
+				requesterMember: {
+					name: string | null;
+					email: string | null;
+				} | null;
+				approvedByInvite: boolean;
+				approvedConnectionId: string | null;
+				returnUrl: null;
 			};
 			meta: object;
 		}>;
@@ -38140,12 +38292,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
-				people: {
+				people: ({
 					userId: string;
 					name: string | null;
 					email: string;
 					linkedAt: Date;
-				}[];
+				} & {
+					linkedByInvite: boolean;
+				})[];
 				requestIds: string[];
 				lastUsedAt: Date | null;
 				peopleCount: number;
@@ -38165,6 +38319,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				initialRequestData: unknown;
 				createdAt: Date;
 				updatedAt: Date;
+			};
+			meta: object;
+		}>;
+		unlinkAccount: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				connectionId: string;
+				userId: string;
+			};
+			output: {
+				status: "unlinked";
+				email: string | null;
+				app: {
+					displayName: string;
+					clientId: string;
+				};
+				signIn: "failed" | "not_applicable" | "removed";
+			} | {
+				status: "not_linked";
 			};
 			meta: object;
 		}>;

@@ -111,6 +111,7 @@ export { registerCentralityRoutes } from "./centrality.js";
 export { registerObservabilityRoutes } from "./observability.js";
 export { registerPublicProjectionRoutes } from "./public-projection.js";
 export { registerPublicSharesRoutes } from "./public-shares.js";
+export { registerPublicSitesRoutes } from "./public-sites.js";
 export { registerPublicFormsRoutes } from "./public-forms.js";
 // Kept as its OWN export statement: check-orphan-routes.mjs recognises a
 // route file only via an `export { register*Routes }` block containing nothing

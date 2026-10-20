@@ -78,3 +78,16 @@ synap_update_lock() {
     trap 'rm -rf "$_SYNAP_LOCK_DIR"' EXIT
     return 0
 }
+
+# Release the lock this process holds — for an agent script that hands the
+# rest of its work to the host engine (host-request.sh), which takes the lock
+# itself. flock: closing fd 9 drops it (no child keeps fd 9 open past here);
+# mkdir: remove the dir and its EXIT trap.
+synap_update_unlock() {
+    if [ -n "${_SYNAP_LOCK_DIR:-}" ]; then
+        rm -rf "$_SYNAP_LOCK_DIR"; _SYNAP_LOCK_DIR=""; trap - EXIT
+    else
+        exec 9>&- 2>/dev/null || true
+    fi
+    return 0
+}

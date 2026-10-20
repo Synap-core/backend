@@ -65,6 +65,7 @@ import {
   DependencyResolutionError,
 } from "../../../services/workspace-materialization-service.js";
 import { enrollAgentInWorkspace } from "../../../services/enroll-agent-in-workspace.js";
+import { agentBelongsTo } from "../agent-belongs-to.js";
 import {
   buildDigestSummary,
   getCaller,
@@ -75,6 +76,7 @@ import {
   requireUuidParam,
   verifyWorkspaceReadAccess,
   type HubHono,
+  rejectAgentPurger,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { summarizePackageContents } from "../../../services/package-contents-summary.js";
@@ -210,6 +212,14 @@ const eveProviderRoutingPolicySchema = z.object({
     .optional(),
   syncToSynap: z.boolean().optional(),
 });
+
+/** Workspace role order for the enroll ceiling (an agent never outranks its enroller). */
+const ENROLL_ROLE_RANK: Record<string, number> = {
+  viewer: 1,
+  editor: 2,
+  admin: 3,
+  owner: 4,
+};
 
 export function registerWorkspacesRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -768,6 +778,17 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         400
       );
     }
+    // SECURITY — only YOUR agent, and never the acting agent itself. This used
+    // to enroll any agent of the pod into the caller's workspaces, and an
+    // agent key could enroll ITSELF (at admin) into every workspace of its
+    // human. `synap connect` enrolls the human's own freshly provisioned
+    // agent (created by the human), which `agentBelongsTo` admits.
+    if (agentUserId === (c.get("agentUserId") as string | undefined)) {
+      return c.json({ error: "An agent cannot enroll itself." }, 403);
+    }
+    if (!(await agentBelongsTo(callerId, agentUserId))) {
+      return c.json({ error: "This agent is not yours to enroll." }, 403);
+    }
 
     try {
       // Resolve target workspaces: one specific workspace or all caller's workspaces
@@ -779,15 +800,20 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       const skipped: string[] = [];
 
       for (const wsId of targetIds) {
-        // Verify caller is a member (skip workspaces they don't belong to)
+        // Verify caller is a member (skip workspaces they don't belong to),
+        // and never grant above the caller's own role there — a viewer used
+        // to enroll an agent as admin (no escalation by enrolling).
         const membership = await db.query.workspaceMembers.findFirst({
           where: and(
             eq(workspaceMembers.workspaceId, wsId),
             eq(workspaceMembers.userId, callerId)
           ),
-          columns: { id: true },
+          columns: { id: true, role: true },
         });
-        if (!membership) {
+        if (
+          !membership ||
+          (ENROLL_ROLE_RANK[membership.role] ?? 0) < ENROLL_ROLE_RANK[role]
+        ) {
           skipped.push(wsId);
           continue;
         }
@@ -864,6 +890,14 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         },
         400
       );
+    }
+
+    // SECURITY — only YOUR agent. The apply below is idempotent on the agent
+    // (`agent-workspace-<agentUserId>`), so naming someone else's agent
+    // returned THEIR agent's existing space and added the caller as its
+    // admin. The CLI provisions the human's own agent (`agentBelongsTo`).
+    if (!(await agentBelongsTo(callerId, agentUserId))) {
+      return c.json({ error: "This agent is not yours to provision." }, 403);
     }
 
     const metadata = agentRow.agentMetadata as AgentMetadata | null;
@@ -1295,6 +1329,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
    * never collides with the static `/workspaces/*` POST routes above.
    */
   app.post("/workspaces/:workspaceId/purge", async (c) => {
+    const agentRefusal = rejectAgentPurger(c, "workspace");
+    if (agentRefusal) return agentRefusal;
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json(
         { error: "Insufficient scope: hub-protocol.write required" },

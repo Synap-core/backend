@@ -415,17 +415,35 @@ _bk_ensure_restic() {
     chmod 755 "$tmp" && mv "$tmp" "$dest"
 }
 
-# The MinIO client, copied out of the running minio container (its image ships
-# /usr/bin/mc; nothing is pulled), into state/bin for the backup container.
+# The MinIO client the backup container mirrors buckets with, in state/bin
+# (the container mounts ./state). It is copied out of this pod's OWN running
+# minio container (its image ships /usr/bin/mc and is pinned by digest in the
+# release: nothing new is downloaded or trusted, and the client matches the
+# server). That needs docker, which only the HOST has: the backup container
+# has no docker CLI and no socket, so its auto-init used to die here and CP
+# pods never initialised off-host backups (lab, 2026-10-19). The host now
+# provides it on `synap install` and on every `synap update` (and `synap
+# backup init`); the copy is refreshed when the minio image changes
+# (state/bin/mc.image). Without docker this only checks the copy is there.
 _bk_ensure_mc() {
-    local dest c
+    local dest c img
     dest="$(_bk_state_dir)/bin/mc"
-    [ -x "$dest" ] && return 0
+    if ! command -v docker >/dev/null 2>&1; then
+        [ -x "$dest" ] && return 0
+        _pgs_err "mc is not in $(dirname "$dest") yet — the pod host provides it: run synap update (or synap backup init) there"
+        return 1
+    fi
     c="$(cd "$(_pgs_deploy_dir)" && $COMPOSE_CMD ps -q minio 2>/dev/null | head -1)"
-    [ -n "$c" ] || { _pgs_err "minio is not running — cannot copy its mc client"; return 1; }
+    if [ -z "$c" ]; then
+        [ -x "$dest" ] && return 0
+        _pgs_err "minio is not running — cannot copy its mc client"; return 1
+    fi
+    img="$(docker inspect -f '{{.Image}}' "$c" 2>/dev/null)"
+    [ -x "$dest" ] && [ -n "$img" ] && [ "$img" = "$(cat "$dest.image" 2>/dev/null)" ] && return 0
     mkdir -p "$(dirname "$dest")" || return 1
     docker cp "$c:/usr/bin/mc" "$dest.tmp" && chmod 755 "$dest.tmp" && mv "$dest.tmp" "$dest" \
         || { _pgs_err "could not copy mc out of the minio container"; rm -f "$dest.tmp"; return 1; }
+    printf '%s\n' "$img" > "$dest.image"
 }
 
 # mc with a throwaway config dir and the pod's MinIO as alias `synapbk`.
@@ -837,7 +855,12 @@ backup_init() {
         return 1
     fi
     _bk_ensure_restic || return 1
-    if [ -n "$(_bk_cfg MINIO_ACCESS_KEY)" ]; then _bk_ensure_mc || return 1; fi
+    # mc is needed by a PUSH (the MinIO export), not by creating the repository:
+    # without it the repository and the kit still come to exist, and each push
+    # fails loudly (.push-failed) until the host provides mc.
+    if [ -n "$(_bk_cfg MINIO_ACCESS_KEY)" ]; then
+        _bk_ensure_mc || _pgs_warn "continuing without mc: snapshots need it for MinIO files, and each push fails until the host provides it"
+    fi
     dir="$(dirname "$pw")"
     (umask 077 && mkdir -p "$dir" && chmod 700 "$dir" \
         && od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "$pw.new" && chmod 600 "$pw.new") \

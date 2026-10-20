@@ -50,7 +50,12 @@ export function appActivityLine(
       case "request":
         return "Asked to sign in";
       case "approve":
-        return "Approved";
+        // The invite was the consent: say so, an owner did not press Approve.
+        return data.approvedByInvite ? "Approved by invite" : "Approved";
+      case "unlink":
+        return typeof data.email === "string"
+          ? `Unlinked ${data.email}`
+          : "Unlinked an account";
       case "reject":
         return "Turned down";
       case "revoke":

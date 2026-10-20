@@ -71,6 +71,7 @@ import {
   resolveActorId,
   type HubHono,
   httpStatusForTrpcError,
+  rejectAgentReviewer,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -1211,6 +1212,15 @@ export function registerCaptureRoutes(app: HubHono): void {
       );
     }
     const body = parsed.data;
+
+    // SECURITY — applying a NAMED import proposal IS approving it (the
+    // orchestrator routes it through applyProposalApproval). Approval is the
+    // human step: an agent caller (agent key or the IS internal key) is
+    // refused here, before any read. A proposal-less apply is a direct write.
+    if (body.proposalId) {
+      const blocked = rejectAgentReviewer(c, "approve");
+      if (blocked) return blocked;
+    }
 
     const acting = await resolveActingContext(c, body);
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);

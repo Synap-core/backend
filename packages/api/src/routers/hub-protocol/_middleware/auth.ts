@@ -17,7 +17,9 @@
 
 import {
   GRANT_DOOR_UNSUPPORTED,
+  GRANT_OWNER_WIDE_UNSUPPORTED,
   isFencedGrant,
+  ownerWideDoorAllowed,
   restDoorAllowed,
 } from "../../../access/grant-door-fence.js";
 import type { Context, Next } from "hono";
@@ -545,14 +547,26 @@ export const hubAuthMiddleware = async (
     // into THIS client's session (never the IS's shared key — see the helper).
     // W1 fence: a scoped key may only READ through doors whose reads are
     // bounded by its grant (access/grant-door-fence.ts). Fail closed.
+    // `rel` (computed above) is the path with the mount stripped — both mounts.
     if (isFencedGrant(keyIdentity.grant)) {
-      const rel = c.req.path.replace(/^\/api\/hub(?=\/)/, "");
       if (!restDoorAllowed(c.req.method, rel, keyIdentity.grant!)) {
         return c.json(
           { error: GRANT_DOOR_UNSUPPORTED, code: "GRANT_DOOR_UNSUPPORTED" },
           403
         );
       }
+    }
+    // Owner-wide doors (webhooks, …; plus write-only owner-wide doors such as
+    // capability credentials): no grant narrows their effect, so only an
+    // unbounded full-access key may use them.
+    if (!ownerWideDoorAllowed(rel, keyIdentity.grant, c.req.method)) {
+      return c.json(
+        {
+          error: GRANT_OWNER_WIDE_UNSUPPORTED,
+          code: "GRANT_DOOR_UNSUPPORTED",
+        },
+        403
+      );
     }
     // W1: the key's grant bounds every write gate and scoped read below.
     return runWithProbeWrites(isProbeApiKey(keyRecord), () =>

@@ -205,6 +205,9 @@ describe("an agent holding the preset", () => {
     );
     expect(await grantAllows("vault", "grant")).toBe(false);
     expect(capabilityAllows("vault", "grant")).toBe(false);
+    // S4: it stores a credential it already holds, and never reads one back.
+    expect(await grantAllows("secret", "create")).toBe(true);
+    expect(permits(SCOPE, { subject: "vault", action: "read" })).toBe(false);
     // The read hook narrows secrets to nothing (a full `*` grant adds no clause).
     expect(grantReadClause(secrets, SCOPE)).toBeDefined();
     expect(grantReadClause(secrets, { permissions: ["*"] })).toBeUndefined();

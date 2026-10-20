@@ -47,7 +47,9 @@ import {
 } from "../../../approve-agent/[keyId]/AgentConnectDecision";
 import {
   ConnectionRequestDetails,
+  UnverifiedAccountNotice,
   matchesApprovedConnection,
+  useAccountLinkGate,
   requestExpiry,
   useConnectionRequest,
 } from "../../../connection-requests/[requestId]/ConnectionRequestDecision";
@@ -302,6 +304,7 @@ function Unreadable({ message }: { message: string }) {
  */
 function DecideButtons({
   approveLabel,
+  approveColor = "success",
   canApprove = true,
   approving,
   rejecting,
@@ -310,6 +313,8 @@ function DecideButtons({
   minReason = 1,
 }: {
   approveLabel: string;
+  /** `danger` for a risky approve (an unverified account); never warning. */
+  approveColor?: "success" | "danger";
   canApprove?: boolean;
   approving: boolean;
   rejecting: boolean;
@@ -359,7 +364,7 @@ function DecideButtons({
     <DecisionBar>
       <div className="flex flex-wrap items-center gap-2">
         <Button
-          color="success"
+          color={approveColor}
           className="min-h-10"
           startContent={<Check size={16} />}
           isLoading={approving}
@@ -722,6 +727,7 @@ function AppRequestBody({
     },
   });
   const { request } = review;
+  const gate = useAccountLinkGate(request.data);
   useEffect(() => {
     if (request.error) redirectToLoginIfUnauthorized(request.error);
   }, [request.error]);
@@ -733,6 +739,51 @@ function AppRequestBody({
       <Unreadable message="This request couldn't be opened — it may have expired or already been decided." />
     );
   const isPending = data.status === "pending";
+
+  // An account link: the decision is about a person, not an origin.
+  if (gate.link) {
+    return (
+      <div className="flex flex-col gap-5 pb-4">
+        <div className="flex flex-col gap-1">
+          <p className="text-sm font-medium text-foreground">
+            {gate.link.heading}
+          </p>
+          <p className="text-sm text-foreground/65">{gate.link.body}</p>
+        </div>
+        {gate.needsAcknowledge && isPending && data.canReview ? (
+          <UnverifiedAccountNotice
+            acknowledged={gate.acknowledged}
+            onAcknowledge={gate.setAcknowledged}
+            isDisabled={review.isWorking}
+          />
+        ) : null}
+        <ConnectionRequestDetails data={data} isPending={isPending} />
+        {review.actionError && (
+          <Alert color="danger" title="Action couldn’t be completed">
+            {review.actionError}
+          </Alert>
+        )}
+        {isPending && data.canReview ? (
+          <DecideButtons
+            approveLabel={gate.approveLabel}
+            approveColor={gate.needsAcknowledge ? "danger" : "success"}
+            canApprove={gate.canApprove}
+            approving={review.approving}
+            rejecting={review.rejecting}
+            onApprove={review.approve}
+            onReject={review.reject}
+            minReason={3}
+          />
+        ) : null}
+        <AdvancedPanel
+          ids={[
+            { label: "Request id", value: data.id },
+            { label: "App id", value: data.clientId },
+          ]}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-5 pb-4">

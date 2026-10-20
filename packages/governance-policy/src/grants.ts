@@ -96,6 +96,15 @@ export interface GrantScope {
   clientId?: string | null;
 }
 
+/**
+ * Is this scope limited to some spaces, projects or objects? ANY limit counts —
+ * an empty list included (it narrows to nothing). A `*` scope with a limit is
+ * NOT full access: it is a scoped key like any other (S1, 2026-10-20).
+ */
+export function isNarrowedScope(scope: GrantScope): boolean {
+  return Boolean(scope.workspaceIds || scope.projectIds || scope.entityIds);
+}
+
 export interface GrantRequest {
   subject: string;
   /** The kind (profile slug) for a qualified subject; unknown → omit. */

@@ -155,6 +155,8 @@ test("collect: nothing until the host records THIS request", () => {
 test("collect: each host outcome maps to its CP result; settle forgets the order", () => {
   const cases = [
     ["succeeded", { status: "completed", version: "main-abc1234" }],
+    // Already on the ordered release: fulfilled, so success — not UPDATE_FAILED.
+    ["noop", { status: "completed", version: "main-abc1234" }],
     ["rolled_back", { status: "rolled_back", code: "UPDATE_ROLLED_BACK" }],
     ["aborted", { status: "rolled_back", code: "UPDATE_NOT_APPLIED" }],
     ["rollback_failed", { status: "failed", code: "UPDATE_ROLLBACK_FAILED" }],

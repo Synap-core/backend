@@ -36,7 +36,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
@@ -59,6 +59,20 @@ const BASELINE = readFileSync(
   resolve(HERE, "../migrations/0000_baseline_schema.sql"),
   "utf8"
 );
+/**
+ * The LATER migrations that add `resource_shares` columns (0336, …), derived
+ * from the folder. The REACHABILITY cases insert through today's Drizzle table,
+ * which names every column a later migration added; they run these first so
+ * the table is the one a pod at HEAD has (each is idempotent).
+ */
+const LATER_SHARE_COLUMNS = readdirSync(resolve(HERE, "../migrations"))
+  .filter((f) => /^\d{4}_.*\.sql$/.test(f) && f > MIGRATION_FILE)
+  .sort()
+  .map((f) => readFileSync(resolve(HERE, `../migrations/${f}`), "utf8"))
+  .filter((text) =>
+    text.includes('ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS')
+  )
+  .join("\n");
 
 /** `ALTER TABLE "t" ADD COLUMN IF NOT EXISTS "c"` pairs in a SQL text. */
 function addedColumns(
@@ -291,6 +305,7 @@ describe("migration 0276 on a pre-0276 database", () => {
   });
 
   it("REACHABILITY: a link row with every new column round-trips through Drizzle", async () => {
+    await pg.exec(LATER_SHARE_COLUMNS);
     const id = randomUUID();
     await db.insert(resourceShares).values({
       id,
@@ -332,6 +347,7 @@ describe("migration 0276 on a pre-0276 database", () => {
   });
 
   it("REACHABILITY: a published row stores its pinned revision and property snapshot", async () => {
+    await pg.exec(LATER_SHARE_COLUMNS);
     const id = randomUUID();
     const snapshot = { title: "Menu", price: 12, tags: ["a"] };
     const pin = await seedVersion(pg, 3);

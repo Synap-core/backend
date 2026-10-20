@@ -41,6 +41,7 @@ import { createEventBackedProposal } from "../../../utils/event-backed-proposal.
 import { secretsVaultRouter } from "../../secrets-vault.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import {
   applyVaultSecretGrant,
   findActiveSecretGrant,
@@ -557,7 +558,9 @@ export function registerVaultRoutes(app: HubHono): void {
 
   // ── POST /vault/secrets ────────────────────────────────────────────────────
   // Agents STORE a credential they already possess. Direct write (not proposal-
-  // gated — gating adds no security when the agent already holds the value).
+  // gated — gating adds no security when the agent already holds the value),
+  // but bounded by the key's grant (`secret.create`, S4 — the AI preset holds
+  // it; it never holds `vault.read`).
   // Always server-encrypted (encryptionMode 'server', the schema default).
   registerOpenApi(app, {
     method: "post",
@@ -622,6 +625,16 @@ export function registerVaultRoutes(app: HubHono): void {
         workspaceId: confinedWorkspaceId,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      // S4: the key's grant bounds this write exactly as it bounds the tRPC
+      // twin `secretsVault.create` (`secret` + `create`), in the workspace the
+      // row is written to. A signed-in session carries no grant.
+      const denial = await grantWriteDenial({
+        subjectType: "secret",
+        action: "create",
+        workspaceId: acting.workspaceId ?? null,
+      });
+      if (denial) return c.json({ error: denial }, 403);
 
       // The agent actor that performed the write (for audit). Falls back to the
       // resolved acting user when no explicit agent key is in play.

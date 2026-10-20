@@ -1067,6 +1067,12 @@ export function isAutoApproved(
 const GRANT_SUBJECT_FOLDS: Readonly<Record<string, string>> = {
   workspaces: "workspace",
   focus_session: "session",
+  // A `knowledge_keys` runbook is a pod-wide DOCUMENT of how-to text
+  // (`POST /knowledge`, S6 2026-10-20). Its door exists to be GOVERNED, not
+  // granted differently: a key that may create documents may ASK to write one,
+  // so keys minted with the AI preset before the door existed keep working
+  // (`synap capture --global`).
+  knowledgeKey: "document",
 };
 
 /**
@@ -2040,6 +2046,9 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "focus_session/create": "reversible",
   "focus_session/grant_capability": "disruptive", // egress
   "focus_session/update": "reversible", // a criteria change is floored (2.1)
+  // A pod-wide runbook (`POST /knowledge`): a create, archivable — the same
+  // class as the document it folds to on the grant (S6).
+  "knowledgeKey/create": "reversible",
   "link/create": "reversible",
   "link/delete": "disruptive", // destroy (and un-filing)
   // An agent's proposal to ORGANISE the person's Library (groups, membership,
@@ -2255,6 +2264,9 @@ export const GATE_WRITE_DOORS = {
   "focus_session/create": "gate",
   "focus_session/grant_capability": "gate",
   "focus_session/update": "gate+automation",
+  // `POST /knowledge` (S6, 2026-10-20): a pod-wide runbook create, replayed on
+  // approval by `routers/proposals/executors/knowledge-key.ts`.
+  "knowledgeKey/create": "gate",
   "library/organize": "gate",
   "link/create": "gate",
   // Removing an edge — today only `project --uses--> workspace` (MCP

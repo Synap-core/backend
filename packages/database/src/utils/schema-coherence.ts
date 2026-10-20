@@ -698,6 +698,41 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "home_last_seen_at",
     addedBy: "0333_user_preferences_home_last_seen.sql",
   },
+  // A webhook subscription's creating key (0335). Every delivery selects it
+  // to decide liveness + grant, so a missing column stops every webhook.
+  {
+    table: "webhook_subscriptions",
+    column: "api_key_id",
+    addedBy: "0335_webhook_subscriptions_api_key.sql",
+  },
+  // Site collections (0336). Every publish lookup filters on `site_share_id`
+  // and the site doors read `site_config`, so without them every publish and
+  // every site door 500s. The three member columns are read from C1b on.
+  {
+    table: "resource_shares",
+    column: "site_share_id",
+    addedBy: "0336_site_collections.sql",
+  },
+  {
+    table: "resource_shares",
+    column: "site_config",
+    addedBy: "0336_site_collections.sql",
+  },
+  {
+    table: "resource_shares",
+    column: "public_id",
+    addedBy: "0336_site_collections.sql",
+  },
+  {
+    table: "resource_shares",
+    column: "public_slug",
+    addedBy: "0336_site_collections.sql",
+  },
+  {
+    table: "resource_shares",
+    column: "published_collection",
+    addedBy: "0336_site_collections.sql",
+  },
 
   // A session's OWN phases (0270). Every session read selects `stages`, so a
   // missing column 500s every session door exactly as `criteria` would.
@@ -930,6 +965,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "account_recovery_codes",
     column: "used_at",
     addedBy: "0294_account_recovery_codes.sql",
+  },
+
+  // invite_acceptances — who an accepted invite let in (0334). Absence means
+  // a pod is on a pre-0334 schema where every invite accept would fail to
+  // record its acceptance.
+  {
+    table: "invite_acceptances",
+    column: "user_id",
+    addedBy: "0334_invite_acceptances.sql",
+  },
+  {
+    table: "invite_acceptances",
+    column: "invite_expires_at",
+    addedBy: "0334_invite_acceptances.sql",
   },
 
   // grants — what one credential may touch (0305, W1). Absence means a pod is

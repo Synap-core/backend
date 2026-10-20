@@ -23,7 +23,12 @@ import {
   isNull,
   getEffectiveFacets,
   notProbeEntityWhere,
+  getRequestGrant,
 } from "@synap/database";
+import {
+  GRANT_DOOR_UNSUPPORTED,
+  isUnboundedFullAccess,
+} from "../../../access/grant-door-fence.js";
 import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
@@ -212,11 +217,16 @@ export function registerEntitiesRoutes(app: HubHono): void {
     tags: ["Entities"],
     summary: "List entities for a user",
     description:
-      "Returns entities owned by the given user, optionally filtered by " +
-      "profileSlug and workspaceId. Pod-wide profiles are returned regardless " +
-      "of workspaceId.",
+      "Returns the caller's entities, optionally filtered by profileSlug and " +
+      "workspaceId. Without workspaceId it reads every workspace the caller " +
+      "can read plus pod-wide entities; with one, that workspace (an archived " +
+      "or non-member one is a 403). Pod-wide profiles are returned regardless " +
+      "of workspaceId. `userId` must be the caller's own id or `me`; any other " +
+      "id is a 403.",
     request: {
-      params: z.object({ userId: z.string() }),
+      params: z.object({
+        userId: z.string().describe("The caller's own user id, or `me`."),
+      }),
       query: z.object({
         profileSlug: z.string().optional(),
         type: z
@@ -224,6 +234,17 @@ export function registerEntitiesRoutes(app: HubHono): void {
           .optional()
           .describe("Deprecated alias for profileSlug."),
         workspaceId: uuidQueryParam.optional(),
+        projectId: uuidQueryParam
+          .optional()
+          .describe(
+            "Project lens: only the project and what is filed into it."
+          ),
+        facetSlug: z
+          .string()
+          .optional()
+          .describe(
+            "Only entities carrying a live facet of this role (e.g. `client`)."
+          ),
         limit: z.string().optional(),
       }),
     },
@@ -235,8 +256,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
           "application/json": { schema: z.array(RawEntityRecordSchema) },
         },
       },
+      401: {
+        description: "Unauthorized",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
       403: {
-        description: "Missing scope",
+        description:
+          "Missing scope, a userId other than the caller's, or a workspace " +
+          "the caller cannot use",
         content: { "application/json": { schema: ErrorSchema } },
       },
       500: {
@@ -250,19 +277,42 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const { userId } = c.req.valid("param");
+    // The path id must be the caller — the identity the auth middleware
+    // resolved (after its remaps: agent key → linked human, IS → operator).
+    // `me` names that caller. Any other id is refused HERE: the read below
+    // runs as the caller whatever the path says (`getCaller` ignores it), so
+    // reading with a foreign id could only produce a wrong answer — it once
+    // answered `/users/me/entities` with 200 `[]` (a failed lookup read as an
+    // empty list).
+    const callerId = c.get("userId") as string | undefined;
+    const pathUserId = c.req.valid("param").userId;
+    if (!callerId) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    if (pathUserId !== "me" && pathUserId !== callerId) {
+      return c.json(
+        {
+          error:
+            "userId does not match the authenticated identity — use your own id or `me`.",
+        },
+        403
+      );
+    }
+    const userId = callerId;
     const query = c.req.valid("query");
     const profileSlug = query.profileSlug || query.type || undefined;
     const limit = query.limit;
     const workspaceId = query.workspaceId || null;
     try {
-      const effectiveWsIds = workspaceId
-        ? [workspaceId]
-        : await getUserAccessibleWorkspaceIds(userId);
-      if (effectiveWsIds.length === 0) return c.json([], 200);
-
+      // A workspaceId PINS the caller to it (podProcedure checks membership and
+      // refuses an archived one: an explicit choice). Without one the caller
+      // lens stays NULL, so `entities.list` resolves the USER FLOOR (every
+      // readable workspace + pod-wide) — the same rule as GET /entities. It
+      // used to pin `getUserAccessibleWorkspaceIds(userId)[0]`, the first row
+      // of an UNORDERED read: an archived (or pod-visible, non-member) space
+      // there refused the whole read with a 403, depending on row order.
       const caller = await getCaller(c, {
-        workspaceId: effectiveWsIds[0],
+        workspaceId,
         userId,
       });
       const result = await caller.entities.getEntities({
@@ -270,6 +320,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
         workspaceId: workspaceId || undefined,
         profileSlug: profileSlug || undefined,
         limit: limit ? parseInt(limit, 10) : undefined,
+        // Declared and forwarded: the Intelligence Service sends both
+        // (`is-hub-client.ts` getEntities). Undeclared, zod stripped them and
+        // a project- or role-narrowed ask answered for the whole floor.
+        ...(query.projectId ? { projectId: query.projectId } : {}),
+        ...(query.facetSlug ? { facetSlug: query.facetSlug } : {}),
         // This is the user-wide FLOOR read (the agent's door). `list` is
         // scoped-by-default, so without this a workspace lens drops pod-wide
         // profiles (person/company/contact live at workspace_id NULL) — which
@@ -361,7 +416,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
       "search; otherwise lists entities with normal scoping.",
     request: {
       query: z.object({
-        q: z.string().optional().describe("Free-text search query."),
+        q: z
+          .string()
+          .optional()
+          .describe(
+            "Free-text search query. Refused (403 GRANT_DOOR_UNSUPPORTED) " +
+              "for a scoped key: search is not bounded by a grant. List " +
+              "without `q` instead."
+          ),
         profileSlug: z.string().optional(),
         workspaceId: uuidQueryParam.optional(),
         projectId: z
@@ -519,6 +581,24 @@ export function registerEntitiesRoutes(app: HubHono): void {
       );
     }
     const hasDateWindow = Boolean(createdAfter || createdBefore);
+    // W1 fence: this door is listed as grant-safe (GRANT_SAFE_REST_READS)
+    // because every branch below reads through `entities.getEntities` → the
+    // `entities.list` floor (`accessScopeWhere`, which ANDs the key's grant).
+    // The `q` branch does NOT: it is Typesense (`search.search`), which no
+    // grant narrows — a project-limited key would search the whole person. So
+    // a key with ANY limit may list here, never search. Since S1 this is the
+    // same set `isFencedGrant` fences (a `*` pinned to one workspace or
+    // project counts as limited); kept explicit at the branch that leaks.
+    const grant = getRequestGrant();
+    if (q.length > 0 && grant && !isUnboundedFullAccess(grant)) {
+      return c.json(
+        {
+          error: `${GRANT_DOOR_UNSUPPORTED} (Full-text search \`q\` is not bounded by a grant; list without \`q\`.)`,
+          code: "GRANT_DOOR_UNSUPPORTED",
+        },
+        403
+      );
+    }
     // Same refusal as the date window: the `q` branch applies no lens, so a
     // "Not in a project" search would silently answer for every project.
     if (withoutProject && q.length > 0) {
@@ -1128,30 +1208,24 @@ export function registerEntitiesRoutes(app: HubHono): void {
       getConfinedWorkspace(c, body.workspaceId ?? null) ?? null;
 
     try {
-      // The CATALOG (for type inference) needs a concrete workspace — listProfiles
-      // requires one — so resolve the user's first accessible workspace when no
-      // lens is pinned. But RECALL keeps the caller's requested lens: a null
-      // workspaceId means user-scoped / pod-wide results, NOT workspace-0 results.
-      // (Catalog from one workspace + pod-wide recall is fine: profile slugs are
-      // largely shared, and a missing slug just means no type-scoped boost.)
-      let catalogWs = workspaceId;
-      if (!catalogWs) {
-        const wsIds = await getUserAccessibleWorkspaceIds(userId);
-        catalogWs = wsIds[0] ?? null;
-      }
-
-      let catalog: ProfileCatalogEntry[] = [];
-      if (catalogWs) {
-        const caller = await getCaller(c, { workspaceId: catalogWs });
-        const { profiles: profileRows } = await caller.profiles.listProfiles({
-          userId,
-          workspaceId: catalogWs,
-        });
-        catalog = profileRows.flatMap((p) => {
-          const entry = toProfileCatalogEntry(p);
-          return entry ? [entry] : [];
-        });
-      }
+      // The CATALOG (for type inference) tracks the caller's lens, like recall.
+      // A workspaceId PINS both (podProcedure checks membership and refuses an
+      // archived one: an explicit choice). Without one the lens stays NULL and
+      // listProfiles reads the caller's POD FLOOR — the union of every readable
+      // workspace's profiles, the same `getAccessibleProfiles(userId, "")` the
+      // knowledge doors use (resolveKnowledgeLens). It used to pin
+      // `getUserAccessibleWorkspaceIds(userId)[0]`, the first row of an
+      // UNORDERED read: an archived space there refused the whole read with a
+      // 403, and otherwise a kind living in any other workspace was unnameable.
+      const caller = await getCaller(c, { workspaceId });
+      const { profiles: profileRows } = await caller.profiles.listProfiles({
+        userId,
+        workspaceId,
+      });
+      const catalog: ProfileCatalogEntry[] = profileRows.flatMap((p) => {
+        const entry = toProfileCatalogEntry(p);
+        return entry ? [entry] : [];
+      });
 
       const result = await retrieve({
         query: body.query,

@@ -9,6 +9,7 @@
  * does not remove people or end their pod sessions (the consequence says so).
  */
 
+import { useState } from "react";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { ExitLink } from "../../../../lib/exit-link";
 import { formatRelative } from "../../../../lib/format";
@@ -24,6 +25,7 @@ import {
   SIGN_IN_REACH,
   hostOf,
   peopleWord,
+  personName,
   signInState,
   statePill,
 } from "./app-inventory";
@@ -32,7 +34,9 @@ import {
   ExactValues,
   PeopleList,
   appFailure,
+  type AppPerson,
 } from "./app-object-parts";
+import { ConfirmModal } from "../../components/confirm-modal";
 import { SectionCard } from "../../components/section-card";
 import { appActivityLine } from "./app-activity";
 import { ViaChip } from "./via-chip";
@@ -56,7 +60,19 @@ export function SignInAppObject({
         utils.applicationConnections.list.invalidate(),
       ]),
   });
-  useReauthOnUnauthorized(query.error, revoke.error);
+  // "Unlink {email}": one person off this app's issuer; the app stays.
+  // The person stays set while the confirm plays its exit, so its title does
+  // not change under the closing modal; `unlinkOpen` decides visibility.
+  const [unlinking, setUnlinking] = useState<AppPerson | null>(null);
+  const [unlinkOpen, setUnlinkOpen] = useState(false);
+  const unlink = trpc.applicationConnections.unlinkAccount.useMutation({
+    onSuccess: () =>
+      Promise.all([
+        utils.applicationConnections.get.invalidate({ id }),
+        utils.applicationConnections.list.invalidate(),
+      ]),
+  });
+  useReauthOnUnauthorized(query.error, revoke.error, unlink.error);
 
   if (query.isLoading) return frame.loading("Loading app…");
   const conn = query.data;
@@ -131,11 +147,56 @@ export function SignInAppObject({
         value: formatRelative(conn.reviewedAt ?? conn.updatedAt),
       },
     ],
-    children: revoke.error && (
-      <ErrorNote
-        message="We couldn't revoke this app. Nothing changed — try again."
-        detail={errorDetail(revoke.error)}
-      />
+    children: (
+      <>
+        {revoke.error && (
+          <ErrorNote
+            message="We couldn't revoke this app. Nothing changed — try again."
+            detail={errorDetail(revoke.error)}
+          />
+        )}
+        {unlink.error && (
+          <ErrorNote
+            message="We couldn't unlink that account. Nothing changed — try again."
+            detail={errorDetail(unlink.error)}
+          />
+        )}
+        {unlink.data?.status === "unlinked" &&
+        unlink.data.signIn === "failed" ? (
+          <ErrorNote
+            message={`${unlink.data.email ?? "That account"} is unlinked, but their Synap Cloud sign-in could not be removed from their Pod account. Remove it from Members.`}
+          />
+        ) : null}
+        <ConfirmModal
+          isOpen={unlinkOpen}
+          onClose={() => setUnlinkOpen(false)}
+          onConfirm={() => {
+            if (!unlinking) return;
+            unlink
+              .mutateAsync({ connectionId: id, userId: unlinking.id })
+              .then(() => setUnlinkOpen(false))
+              // The error note above says it did not happen; the confirm
+              // stays up.
+              .catch(() => undefined);
+          }}
+          title={`Unlink ${unlinking?.email ?? personName(unlinking) ?? "this account"}`}
+          consequence={
+            <>
+              <p>
+                Their Synap account stops signing in to this Pod through{" "}
+                {conn.displayName}.
+              </p>
+              <p className="mt-2 text-foreground/65">
+                Their Pod account, memberships and password stay. Everyone else
+                keeps using {conn.displayName}.
+              </p>
+            </>
+          }
+          confirmLabel="Unlink"
+          confirmColor="danger"
+          isPending={unlink.isPending}
+        />
+      </>
     ),
     tabs: [
       {
@@ -176,9 +237,15 @@ export function SignInAppObject({
                   id: p.userId,
                   name: p.name,
                   email: p.email,
-                  note: `signed in ${formatRelative(p.linkedAt)}`,
+                  note: p.linkedByInvite
+                    ? `linked by invite ${formatRelative(p.linkedAt)}, without an owner's approval`
+                    : `signed in ${formatRelative(p.linkedAt)}`,
                 }))}
                 empty="No one has signed in through it yet."
+                onUnlink={(person) => {
+                  setUnlinking(person);
+                  setUnlinkOpen(true);
+                }}
               />
             </SectionCard>
           </div>

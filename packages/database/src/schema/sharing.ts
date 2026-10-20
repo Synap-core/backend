@@ -6,9 +6,10 @@
  * into a guest membership) or a PUBLICATION (`audience = 'public'`).
  * DB-enforced by 0276: audience/state CHECKs, a live link needs an anchor, a
  * published row needs `published_at` + a `published_properties` object, one
- * live link per (resource, anchor), one live publication per resource, a
- * unique token-hash index, and REVOKE IS PERMANENT (a BEFORE UPDATE trigger
- * freezes a revoked row).
+ * live link per (resource, anchor), one live STANDALONE publication per
+ * resource (0336: site members are counted per site instead), a unique
+ * token-hash index, and REVOKE IS PERMANENT (a BEFORE UPDATE trigger freezes a
+ * revoked row; 0336 extends it to the site columns and freezes `public_id`).
  */
 
 import {
@@ -67,6 +68,24 @@ export const resourceShares = pgTable("resource_shares", {
   /** Display-only prefix of a link token; the token is stored hashed only. */
   tokenPrefix: text("token_prefix"),
   revokedBy: text("revoked_by"),
+
+  /**
+   * SITES (0336). A site is a public PROJECT row (`resource_type = 'project'`,
+   * `site_share_id` NULL) carrying `site_config`; a record in a site is its own
+   * public ENTITY row whose `site_share_id` names the site row (C1b). The FK
+   * (ON DELETE CASCADE), the CHECKs and the extended revoke trigger live in SQL.
+   * NULL = a standalone publication, or a site row itself.
+   */
+  siteShareId: uuid("site_share_id"),
+  /** SiteConfigV1 (`services/sharing/site-service.ts`): site rows only,
+   *  written only by the site doors, read fail-closed. */
+  siteConfig: jsonb("site_config").$type<Record<string, unknown>>(),
+  /** Member rows: `p_` + 16 base62, random, minted once, never changed. */
+  publicId: text("public_id"),
+  /** Member rows: the normalized slug, or NULL (addressed by public id only). */
+  publicSlug: text("public_slug"),
+  /** Member rows: the collection key (a profile slug) it was published under. */
+  publishedCollection: text("published_collection"),
 
   // Sharing mode
   /** @deprecated legacy, never written after 0276 */

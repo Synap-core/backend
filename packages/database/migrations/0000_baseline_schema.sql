@@ -175,6 +175,20 @@ ALTER TABLE "pod_members" ADD COLUMN IF NOT EXISTS "created_at" timestamp with t
 CREATE UNIQUE INDEX IF NOT EXISTS "pod_members_user_unique"
   ON "pod_members" ("user_id");
 
+-- invite_acceptances — the durable trace of an accepted invite (mirrors
+-- 0334). The invites row is deleted on acceptance; this keeps who it let in.
+CREATE TABLE IF NOT EXISTS "invite_acceptances" (
+  "invite_id"         uuid PRIMARY KEY,
+  "user_id"           text NOT NULL,
+  "invite_type"       text NOT NULL,
+  "invited_email"     text NOT NULL,
+  "invited_by"        text NOT NULL,
+  "invite_expires_at" timestamp with time zone NOT NULL,
+  "accepted_at"       timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS "invite_acceptances_user_idx"
+  ON "invite_acceptances" ("user_id");
+
 -- library_groups — the Library's persistent groups (mirrors 0328,
 -- CAPTURE_LIBRARY_PLAN L2). Owner-floored; item membership lives on the item.
 CREATE TABLE IF NOT EXISTS "library_groups" (
@@ -3396,6 +3410,13 @@ ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "published_document_versi
 ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "published_properties" jsonb;
 ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "token_prefix" text;
 ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "revoked_by" text;
+-- 0336 site collections columns. No FK / CHECK / index / trigger here: 0336
+-- adds them on fresh databases too, since it runs after this file.
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "site_share_id" uuid;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "site_config" jsonb;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "public_id" text;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "public_slug" text;
+ALTER TABLE "resource_shares" ADD COLUMN IF NOT EXISTS "published_collection" text;
 
 -- ─── 48. sync tables (sync_peers, sync_state, sync_conflicts) ────────────────
 
@@ -3670,7 +3691,8 @@ CREATE TABLE IF NOT EXISTS "webhook_subscriptions" (
   "retry_config"      jsonb   DEFAULT '{"maxRetries":3}',
   "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
   "last_triggered_at" timestamp with time zone,
-  "workspace_id"      uuid REFERENCES workspaces(id) ON DELETE CASCADE
+  "workspace_id"      uuid REFERENCES workspaces(id) ON DELETE CASCADE,
+  "api_key_id"        uuid REFERENCES "api_keys"("id") ON DELETE CASCADE
 );
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "user_id" text;
@@ -3683,6 +3705,9 @@ ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "retry_config" json
 ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "last_triggered_at" timestamp with time zone;
 ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "workspace_id" uuid REFERENCES workspaces(id) ON DELETE CASCADE;
+ALTER TABLE "webhook_subscriptions" ADD COLUMN IF NOT EXISTS "api_key_id" uuid REFERENCES "api_keys"("id") ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS "webhook_subscriptions_api_key_id_idx"
+  ON "webhook_subscriptions" ("api_key_id");
 
 CREATE TABLE IF NOT EXISTS "webhook_deliveries" (
   "id"               uuid    PRIMARY KEY DEFAULT gen_random_uuid(),

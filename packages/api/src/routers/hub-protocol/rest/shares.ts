@@ -24,6 +24,16 @@
  *   POST /shares/publication/revoke            { resourceType, resourceId } —
  *                                              kill the public url for good
  *                                              direct
+ *   GET  /shares/sites?projectId=…             a project's live site status
+ *                                              (null when it has none)
+ *   GET  /shares/sites/:id                     one site's status
+ *   POST /shares/sites                         { projectId, homeWorkspaceId?,
+ *                                              config, reasoning? } — create or
+ *                                              configure a project's site; an
+ *                                              agent key gets 202 proposed
+ *   POST /shares/sites/:id/unpublish           the site back to draft — direct
+ *   POST /shares/sites/:id/revoke              the site (and every member row)
+ *                                              revoked for good — direct
  *
  * Every rule lives in `services/sharing/share-service.ts` (the same core the
  * tRPC `shares` router calls). An agent key's share is ALWAYS `status:
@@ -31,7 +41,8 @@
  * an approved agent link carries no token.
  *
  * DELIBERATELY ABSENT here: minting a link secret (`rotateLink`), redeeming one
- * (`redeemLink`) and setting the policy (`setPolicy`). All three are a
+ * (`redeemLink`), setting the policy (`setPolicy`), and putting a site live or
+ * rotating its token (`publishSite`, `rotateSiteToken`). All of them are a
  * signed-in person's act (the core refuses agents and API keys), so a Hub route
  * for them would be a door nobody it serves may walk through.
  */
@@ -57,6 +68,12 @@ import {
 } from "../../../services/sharing/share-service.js";
 import { SHARE_KINDS } from "../../../services/sharing/exposure-policy.js";
 import { registerShareExecutors } from "../../../services/sharing/share-executors.js";
+import {
+  configureSite,
+  revokeSite,
+  siteStatus,
+  unpublishSite,
+} from "../../../services/sharing/site-service.js";
 import {
   publishResource,
   revokePublication,
@@ -88,6 +105,13 @@ const PublishSchema = z.object({
 });
 const UnpublishSchema = z.object({ resourceType: Kind, resourceId: Uuid });
 const RevokeLinkSchema = z.object({ removeGuests: z.boolean().optional() });
+// The config is validated (strictly) by the site service, which owns its schema.
+const ConfigureSiteSchema = z.object({
+  projectId: Uuid,
+  homeWorkspaceId: Uuid.optional(),
+  config: z.unknown(),
+  reasoning: z.string().max(2000).optional(),
+});
 
 type Ctx = Context<{ Variables: HubVariables }, any, any>;
 
@@ -124,6 +148,87 @@ export function registerSharesRoutes(app: HubHono): void {
       return c.json(await getExposurePolicy(actorOf(c), ws.data));
     } catch (err) {
       return fail(c, err, "GET /shares/policy");
+    }
+  });
+
+  app.get("/shares/sites", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const project = Uuid.safeParse(c.req.query("projectId"));
+    if (!project.success) {
+      return c.json({ error: "projectId (uuid) is required" }, 400);
+    }
+    try {
+      return c.json(await siteStatus(actorOf(c), { projectId: project.data }));
+    } catch (err) {
+      return fail(c, err, "GET /shares/sites");
+    }
+  });
+
+  app.get("/shares/sites/:id", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid site id" }, 400);
+    try {
+      return c.json(await siteStatus(actorOf(c), { siteId: id.data }));
+    } catch (err) {
+      return fail(c, err, "GET /shares/sites/:id");
+    }
+  });
+
+  app.post("/shares/sites", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const body = ConfigureSiteSchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const { reasoning, homeWorkspaceId, ...rest } = body.data;
+      return jsonGoverned(
+        c,
+        await configureSite(actorOf(c, reasoning), {
+          ...rest,
+          homeWorkspaceId: homeWorkspaceId ?? null,
+        })
+      );
+    } catch (err) {
+      return fail(c, err, "POST /shares/sites");
+    }
+  });
+
+  app.post("/shares/sites/:id/unpublish", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid site id" }, 400);
+    try {
+      return c.json(await unpublishSite(actorOf(c), id.data));
+    } catch (err) {
+      return fail(c, err, "POST /shares/sites/:id/unpublish");
+    }
+  });
+
+  app.post("/shares/sites/:id/revoke", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid site id" }, 400);
+    try {
+      return c.json(await revokeSite(actorOf(c), id.data));
+    } catch (err) {
+      return fail(c, err, "POST /shares/sites/:id/revoke");
     }
   });
 

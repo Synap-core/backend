@@ -1376,6 +1376,32 @@ export function resolveConnectionStateLabel(
 }
 
 /**
+ * Whether an issuer vouched for an ACCOUNT — the mark beside the account a
+ * Pod connection request will link (`RequesterAccountView.status`, @synap/api
+ * `utils/application-connection.ts`). Its own table, NOT
+ * `CONNECTION_STATE_LABELS`: that table's `unverified` is "Couldn't check"
+ * (the pod failed to READ a connection), while here `unverified` means nobody
+ * signed for the account. Same token, different fact; one table would make the
+ * account mark say the pod is broken.
+ */
+export const ACCOUNT_TRUST_LABELS = {
+  verified: "Verified",
+  unverified: "Not verified",
+} as const;
+
+/** The mark word for an account's trust state. Unknown states humanize. */
+export function resolveAccountTrustLabel(
+  state: string | null | undefined
+): string {
+  if (!state) return "";
+  return (
+    (ACCOUNT_TRUST_LABELS as Readonly<Record<string, string>>)[
+      state.toLowerCase()
+    ] ?? humanizeToken(state)
+  );
+}
+
+/**
  * What the person hears about one connection (`connectionPrefs`, 0316) — the
  * words of each notify level. Keyed by every `ConnectionNotifyLevel`;
  * `membrane/index.ts` holds the compile-time floor and the ordered options.

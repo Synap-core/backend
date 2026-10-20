@@ -161,3 +161,148 @@ export function buildApplicationConnectionReturnUrl(input: {
   url.searchParams.set("connection_request", input.requestId);
   return url.toString();
 }
+
+/**
+ * The account a connection request will link, as the Pod verified it when
+ * the handoff started: the requesting app sent the issuer's signed
+ * identity-link assertion beside its subject commitment, and the Pod checked
+ * it against an issuer it had ALREADY approved (`federation.ts`
+ * `verifyRequesterAccountHint`). Stored under
+ * `request_metadata.requesterAccount`; written by that function only.
+ */
+export interface VerifiedRequesterAccount {
+  verifiedEmail: string;
+  /** ISO time the Pod verified the assertion. */
+  verifiedAt: string;
+  /** The approved issuer that signed it. */
+  issuerUrl: string;
+  /**
+   * The browser origin the issuer admitted for the app (its signed `origin`
+   * claim), when it sent one. The "invite is the consent" rule requires it to
+   * equal the request's origin.
+   */
+  vouchedOrigin?: string;
+}
+
+/** The verified record as stored, or null when there is none or it is malformed. */
+export function readVerifiedRequesterAccount(
+  requestMetadata: unknown
+): VerifiedRequesterAccount | null {
+  const record =
+    requestMetadata && typeof requestMetadata === "object"
+      ? (requestMetadata as { requesterAccount?: unknown }).requesterAccount
+      : undefined;
+  if (!record || typeof record !== "object") return null;
+  const { verifiedEmail, verifiedAt, issuerUrl, vouchedOrigin } =
+    record as Partial<Record<keyof VerifiedRequesterAccount, unknown>>;
+  if (
+    typeof verifiedEmail !== "string" ||
+    !verifiedEmail.includes("@") ||
+    typeof verifiedAt !== "string" ||
+    Number.isNaN(Date.parse(verifiedAt)) ||
+    typeof issuerUrl !== "string"
+  ) {
+    return null;
+  }
+  try {
+    new URL(issuerUrl);
+  } catch {
+    return null;
+  }
+  return {
+    verifiedEmail,
+    verifiedAt,
+    issuerUrl,
+    ...(typeof vouchedOrigin === "string" ? { vouchedOrigin } : {}),
+  };
+}
+
+/**
+ * What a reviewer is told about that account. `unverified` covers every
+ * request without a verified record — no assertion sent, an unapproved
+ * issuer, a signature that failed — because to the reviewer they mean the
+ * same thing: nobody vouched for the account. The raw issuer subject is
+ * never shown; it is an opaque id, not something a person can recognise.
+ */
+export type RequesterAccountView =
+  | {
+      status: "verified";
+      email: string;
+      issuerHost: string;
+      /** The trusted issuer's display name on this Pod, when it has one. */
+      issuerName: string | null;
+      verifiedAt: string;
+    }
+  | { status: "unverified" };
+
+export function requesterAccountView(
+  requestMetadata: unknown,
+  options: { issuerName?: string | null } = {}
+): RequesterAccountView {
+  const account = readVerifiedRequesterAccount(requestMetadata);
+  if (!account) return { status: "unverified" };
+  return {
+    status: "verified",
+    email: account.verifiedEmail,
+    issuerHost: new URL(account.issuerUrl).host,
+    issuerName: options.issuerName?.trim() || null,
+    verifiedAt: account.verifiedAt,
+  };
+}
+
+/**
+ * How a request was approved, read from its metadata: by an owner, or by the
+ * invite the requester accepted (`approveByInviteIfConsented`).
+ */
+export const INVITE_APPROVAL_METADATA_KEY = "approvedByInvite" as const;
+
+export interface InviteApprovalRecord {
+  inviteId: string;
+  inviteAcceptedAt: string;
+  approvedAt: string;
+}
+
+export function readInviteApproval(
+  requestMetadata: unknown
+): InviteApprovalRecord | null {
+  const record =
+    requestMetadata && typeof requestMetadata === "object"
+      ? (requestMetadata as Record<string, unknown>)[
+          INVITE_APPROVAL_METADATA_KEY
+        ]
+      : undefined;
+  if (!record || typeof record !== "object") return null;
+  const { inviteId, inviteAcceptedAt, approvedAt } = record as Record<
+    string,
+    unknown
+  >;
+  return typeof inviteId === "string" &&
+    typeof inviteAcceptedAt === "string" &&
+    typeof approvedAt === "string"
+    ? { inviteId, inviteAcceptedAt, approvedAt }
+    : null;
+}
+
+/**
+ * The people of a sign-in app, each marked when their link was made because
+ * their invite was the consent (no owner pressed Approve). `requests` are the
+ * app's asks; a person counts when any ask they made was approved by invite.
+ */
+export function markLinkedByInvite<P extends { userId: string }>(
+  people: readonly P[],
+  requests: ReadonlyArray<{
+    requestedByUserId: string | null;
+    requestMetadata: unknown;
+  }>
+): Array<P & { linkedByInvite: boolean }> {
+  const byInvite = new Set(
+    requests
+      .filter((r) => readInviteApproval(r.requestMetadata) !== null)
+      .map((r) => r.requestedByUserId)
+      .filter((id): id is string => Boolean(id))
+  );
+  return people.map((person) => ({
+    ...person,
+    linkedByInvite: byInvite.has(person.userId),
+  }));
+}

@@ -368,34 +368,56 @@ export const channelsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       checkHubRateLimit(ctx.apiKeyId, "sendExternalMessage");
+      if (!ctx.userId) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "No caller" });
+      }
 
-      // Verify agentUserId is a member of the workspace (prevents cross-workspace posting)
+      // Fail closed before any read: a key that may not create messages in the
+      // workspace it names is refused here, so the lookup below never tells it
+      // whether a channel exists. The channel's OWN workspace is gated again
+      // after the lookup (the message lands there, not in the named one).
       await assertKeyMayWrite({
         subjectType: "message",
         action: "create",
         workspaceId: input.workspaceId,
       });
-      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
-      if (agentUserId) {
-        await assertAgentInWorkspace(
-          agentUserId,
-          input.workspaceId,
-          ctx.userId ?? agentUserId
-        );
-      }
 
-      // Find the approved channel
+      // SECURITY — the channel write floor. The channel used to be found by
+      // (externalSource, externalChannelId) alone and the message inserted as
+      // `channel.userId`, so any hub write key could inject a message (and an
+      // AI turn) into another person's external channel by its platform chat
+      // id. Same floor as every channel write door (`channelVisibilityWhere`,
+      // as `triggerAI` / `postChannelMessage`), on the caller. A channel the
+      // caller may not see answers `no_channel`, like a missing one.
       const channel = await db.query.channels.findFirst({
         where: and(
           eq(channels.externalSource, input.externalSource),
           eq(channels.externalChannelId, input.externalChannelId),
-          eq(channels.channelType, ChannelType.EXTERNAL)
+          eq(channels.channelType, ChannelType.EXTERNAL),
+          channelVisibilityWhere(ctx.userId)
         ),
       });
 
       if (!channel) {
         // Channel doesn't exist yet — caller must use createExternalChannel first
         return { status: "no_channel" as const };
+      }
+
+      // The grant gate and the agent check run on the CHANNEL's workspace —
+      // the one the message lands in — never the caller-supplied one.
+      const channelWorkspaceId = channel.workspaceId ?? null;
+      await assertKeyMayWrite({
+        subjectType: "message",
+        action: "create",
+        workspaceId: channelWorkspaceId,
+      });
+      const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
+      if (agentUserId) {
+        await assertAgentInWorkspace(
+          agentUserId,
+          channelWorkspaceId ?? input.workspaceId,
+          ctx.userId
+        );
       }
 
       const messageId = randomUUID();
@@ -906,9 +928,18 @@ export const channelsRouter = router({
       // injected message and drives the AI turn (triggerAutoRespond sourceUserId).
       // A hub PAT may act only as its own owner.
       assertMayActAs(ctx, input.userId);
-      // Verify channel exists
+      // SECURITY — the channel write floor. This used to look the channel up
+      // by id alone, so any hub write key could insert a prompt into another
+      // user's channel and make its agent take a turn. Same floor as every
+      // channel write door (`channelVisibilityWhere`, as `postChannelMessage`
+      // and the REST message-append doors), on the acting identity
+      // (`assertMayActAs` above pins it to the authenticated owner). NOT_FOUND
+      // for both "missing" and "not yours" — no existence oracle.
       const channel = await db.query.channels.findFirst({
-        where: eq(channels.id, input.channelId),
+        where: and(
+          eq(channels.id, input.channelId),
+          channelVisibilityWhere(input.userId)
+        ),
       });
 
       if (!channel) {

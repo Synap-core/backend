@@ -211,7 +211,10 @@ export {
   hashOpaqueApplicationConnectionValue,
   createOpaqueApplicationConnectionValue,
   buildApplicationConnectionReturnUrl,
+  requesterAccountView,
   type ApplicationConnectionScope,
+  type RequesterAccountView,
+  type VerifiedRequesterAccount,
 } from "./utils/application-connection.js";
 export {
   setTrustedIssuerSeedHealth,
@@ -465,6 +468,9 @@ export {
 // every other IS turn uses (the `a2ai-one-door` tripwire forbids a second
 // enqueue), and jobs cannot import this package statically.
 export { triggerAutoRespond } from "./utils/trigger-auto-respond.js";
+// Exported for @synap/jobs' `registerKeyGrantAudience` IoC slot: the domain-
+// event webhook fan-out asks the SAME key-grant read producer 2 uses (D7).
+export { keyGrantReadsSubject } from "./utils/webhook-delivery.js";
 export {
   runPlaybook,
   type RunPlaybookInput,

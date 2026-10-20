@@ -108,9 +108,10 @@ export function agentOf(actor: ShareActor): string | null {
  * The doors only a SIGNED-IN HUMAN may use: set the policy, mint a secret,
  * redeem one. An agent (attributed or ambient), an AI-sourced call and any
  * API-key request are refused — an agent must never hold a link secret, and
- * "agents get no set_policy door".
+ * "agents get no set_policy door". Shared with `site-service.ts` (going live
+ * and rotating a site token mint the site's public secret).
  */
-function assertHumanSession(actor: ShareActor, what: string): void {
+export function assertHumanSession(actor: ShareActor, what: string): void {
   if (
     agentOf(actor) ||
     actor.keyType ||
@@ -1244,35 +1245,37 @@ export async function listShares(
       eq(resourceShares.resourceType, target.kind),
       eq(resourceShares.resourceId, target.id)
     );
-    // Publications. A document resolved to its entity above, and a
+    // Publications. A document resolved to its entity above, and a RECORD
     // publication row is always `resource_type = 'entity'`, so this is the one
-    // lookup for both kinds; a view / project has none.
-    publicationRows = await database
-      .select({
-        id: resourceShares.id,
-        audience: resourceShares.audience,
-        resourceType: resourceShares.resourceType,
-        resourceId: resourceShares.resourceId,
-        state: resourceShares.state,
-        publishedAt: resourceShares.publishedAt,
-        revokedAt: resourceShares.revokedAt,
-        expiresAt: resourceShares.expiresAt,
-        tokenPrefix: resourceShares.tokenPrefix,
-        tokenHash: resourceShares.tokenHash,
-        publishedProperties: resourceShares.publishedProperties,
-        createdAt: resourceShares.createdAt,
-        createdBy: resourceShares.createdBy,
-      })
-      .from(resourceShares)
-      .where(
-        and(
-          eq(resourceShares.resourceType, target.kind),
-          eq(resourceShares.resourceId, target.id),
-          eq(resourceShares.audience, "public")
+    // lookup for both kinds; a view has none. A project's public row is its
+    // SITE (0336), which the site doors report (`siteStatus`), not this list.
+    if (target.kind === "entity")
+      publicationRows = await database
+        .select({
+          id: resourceShares.id,
+          audience: resourceShares.audience,
+          resourceType: resourceShares.resourceType,
+          resourceId: resourceShares.resourceId,
+          state: resourceShares.state,
+          publishedAt: resourceShares.publishedAt,
+          revokedAt: resourceShares.revokedAt,
+          expiresAt: resourceShares.expiresAt,
+          tokenPrefix: resourceShares.tokenPrefix,
+          tokenHash: resourceShares.tokenHash,
+          publishedProperties: resourceShares.publishedProperties,
+          createdAt: resourceShares.createdAt,
+          createdBy: resourceShares.createdBy,
+        })
+        .from(resourceShares)
+        .where(
+          and(
+            eq(resourceShares.resourceType, target.kind),
+            eq(resourceShares.resourceId, target.id),
+            eq(resourceShares.audience, "public")
+          )
         )
-      )
-      .orderBy(desc(resourceShares.createdAt))
-      .limit(cap);
+        .orderBy(desc(resourceShares.createdAt))
+        .limit(cap);
   }
 
   const rows = await database

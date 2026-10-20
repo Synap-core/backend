@@ -236,15 +236,19 @@ beforeAll(async () => {
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await h.client!.exec(ddlFor(t));
   const here = path.dirname(fileURLToPath(import.meta.url));
-  await h.client!.exec(
-    readFileSync(
-      path.resolve(
-        here,
-        "../../../../../database/migrations/0276_exposure_substrate.sql"
-      ),
-      "utf8"
-    )
-  );
+  // 0336 replaces 0276's one-live-public-row index with a standalone-only one,
+  // so a record can also be a site member (the T14 case below).
+  for (const m of [
+    "0276_exposure_substrate.sql",
+    "0336_site_collections.sql",
+  ]) {
+    await h.client!.exec(
+      readFileSync(
+        path.resolve(here, `../../../../../database/migrations/${m}`),
+        "utf8"
+      )
+    );
+  }
   for (const u of [A, R]) {
     await q(`insert into users (id, email, user_type) values ($1,$2,'human')`, [
       u,
@@ -865,5 +869,54 @@ describe("tightening the policy never retracts what is already published", () =>
     }
     // No signal: served as before.
     expect((await readPublic(liveToken)).status).toBe(200);
+  });
+});
+
+describe("a SITE member is not the record's standalone publication (0336, T14)", () => {
+  it("publishing a record that is a site member makes a NEW standalone row; the member row is untouched", async () => {
+    await human(A).setPolicy({ workspaceId: W, policy: ALLOW_ENTITY_PUBLIC });
+    const entity = randomUUID();
+    await q(
+      `insert into entities (id, user_id, workspace_id, title, properties) values ($1,$2,$3,'Member record','{}'::jsonb)`,
+      [entity, A, W]
+    );
+    const { rows: siteRow } = await q<{ id: string }>(
+      `insert into resource_shares (resource_type, resource_id, workspace_id, audience, state, created_by, published_at, published_properties, site_config, token_hash, token_prefix)
+       values ('project', $1, $2, 'public', 'published', $3, now(), '{}'::jsonb, '{"version":1,"collections":{}}'::jsonb, 'site-token-hash', 'sitetk') returning id`,
+      [randomUUID(), W, A]
+    );
+    const siteId = siteRow[0]!.id;
+    const { rows: memberRow } = await q<{ id: string }>(
+      `insert into resource_shares (resource_type, resource_id, workspace_id, audience, state, created_by, published_at, published_properties, site_share_id, published_collection, public_id)
+       values ('entity', $1, $2, 'public', 'published', $3, now() - interval '1 day', '{"title":"old snapshot"}'::jsonb, $4, 'paper', 'p_0123456789abcdef') returning id`,
+      [entity, W, A, siteId]
+    );
+    const memberId = memberRow[0]!.id;
+
+    const res = await human(A).publish({
+      resourceType: "entity",
+      resourceId: entity,
+    });
+    if (res.status === "proposed") throw new Error("unreachable");
+    expect(res.status).toBe("published");
+    expect(typeof res.token).toBe("string");
+    expect(res.shareId).not.toBe(memberId);
+
+    const rows = await publicRow(entity);
+    expect(rows).toHaveLength(2);
+    const member = rows.find((r) => r.id === memberId)!;
+    const standalone = rows.find((r) => r.id !== memberId)!;
+    expect(member).toMatchObject({
+      site_share_id: siteId,
+      token_hash: null,
+      public_id: "p_0123456789abcdef",
+      published_properties: { title: "old snapshot" },
+    });
+    expect(standalone).toMatchObject({
+      site_share_id: null,
+      state: "published",
+      token_hash: createHash("sha256").update(res.token!, "utf8").digest("hex"),
+      published_properties: { title: "Member record" },
+    });
   });
 });

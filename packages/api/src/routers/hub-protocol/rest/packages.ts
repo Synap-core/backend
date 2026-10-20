@@ -7,7 +7,7 @@
  */
 
 import { z } from "zod";
-import { type HubHono, httpStatusForTrpcError } from "./_shared.js";
+import { type HubHono, hasScope, httpStatusForTrpcError } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import {
   ComposeBaseUnavailableError,
@@ -569,6 +569,9 @@ export function registerPackagesRoutes(app: HubHono): void {
   // stay with reconcile's own `dryRun` (a follow-up can thread this through
   // `materializeWorkspaceCore` for full-fidelity dep/compose preview).
   app.post("/packages/preflight", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
     const userId = c.get("userId");
     const raw = (await c.req.json()) as Record<string, unknown>;
     const body = PackageApplySchema.parse(raw);
@@ -620,6 +623,11 @@ export function registerPackagesRoutes(app: HubHono): void {
   });
 
   app.post("/packages/apply", async (c) => {
+    // A write (it creates/updates workspaces through the gate): a read-only key
+    // reached it — no scope was checked here.
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
     const userId = c.get("userId");
     const raw = (await c.req.json()) as Record<string, unknown>;
     const body = PackageApplySchema.parse(raw);

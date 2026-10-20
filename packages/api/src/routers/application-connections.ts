@@ -30,6 +30,7 @@ import {
   federatedApplicationConnections,
   federatedIdentityLinks,
   trustedIssuers,
+  TrustedIssuerService,
   users,
   workspaces,
 } from "@synap/database";
@@ -38,7 +39,12 @@ import { auditLog } from "../utils/audit-log.js";
 import {
   buildApplicationConnectionReturnUrl,
   hashOpaqueApplicationConnectionValue,
+  markLinkedByInvite,
+  readInviteApproval,
+  requesterAccountView,
 } from "../utils/application-connection.js";
+import { approveByInviteIfConsented } from "../services/application-connections/invite-consent.js";
+import { unlinkConnectionAccount } from "../services/application-connections/unlink-account.js";
 
 const requestIdSchema = z.object({ requestId: z.string().uuid() });
 const redeemRequestSchema = requestIdSchema.extend({
@@ -51,7 +57,7 @@ const connectionService = new FederatedApplicationConnectionService();
 const REQUESTS_SHOWN = 50;
 
 /** The four acts on a sign-in app's timeline. */
-type ConnectionAct = "request" | "approve" | "reject" | "revoke";
+type ConnectionAct = "request" | "approve" | "reject" | "revoke" | "unlink";
 
 /** One act as a pod-wide event (no space) by the person who did it. */
 async function recordConnectionEvent(args: {
@@ -109,6 +115,12 @@ async function canReviewPodApplicationConnections(
 }
 
 /** Origin allowlist only — does not require a particular trusted issuer. */
+/** The trusted issuer's own name on this Pod, or null when it has none. */
+async function issuerDisplayName(issuerUrl: string): Promise<string | null> {
+  const issuer = await new TrustedIssuerService().getByUrl(issuerUrl);
+  return issuer?.displayName?.trim() || null;
+}
+
 async function matchingApprovedConnection(input: {
   clientId: string;
   origin: string;
@@ -170,28 +182,50 @@ async function issuerUsage(issuerIds?: readonly string[]) {
   });
 }
 
+/** The Pod member who signed in to start the request, as a reviewer reads them. */
+type RequesterMember = { name: string | null; email: string | null };
+
 function reviewShape(
   request: NonNullable<
     Awaited<ReturnType<FederatedApplicationConnectionService["getRequest"]>>
   >,
   canReview: boolean,
-  options?: { matchingApprovedConnection?: boolean }
+  options: {
+    viewerUserId: string;
+    matchingApprovedConnection?: boolean;
+    /** The trusted issuer's display name, for "Verified by …". */
+    issuerName?: string | null;
+    requesterMember?: RequesterMember | null;
+  }
 ) {
   const effectiveStatus = effectiveRequestStatus(
     request.status,
     request.expiresAt
   );
-  const matching = options?.matchingApprovedConnection === true && canReview;
+  const matching = options.matchingApprovedConnection === true && canReview;
+  // An account link (the app asks to link the requester's account) versus an
+  // origin-only request. Only a link has an account to name.
+  const isAccountLink = request.requestedScopes.includes("identity:link-user");
+  const accountView = isAccountLink
+    ? requesterAccountView(request.requestMetadata, {
+        issuerName: options.issuerName,
+      })
+    : null;
+  const approvedByInvite = readInviteApproval(request.requestMetadata) !== null;
   if (!canReview) {
     // The opaque callback and exact issuer/origin pair are an owner review
     // artifact. A requester or ordinary member only needs the current state
     // and clear owner guidance, not a reconnaissance view of every pending
     // external application registration on the Pod.
+    const isRequester = request.requestedByUserId === options.viewerUserId;
+    const linked =
+      effectiveStatus === "approved" || effectiveStatus === "completed";
     return {
       id: request.id,
       issuerUrl: "Visible to Pod owners and administrators",
       clientId: "Visible to Pod owners and administrators",
-      displayName: "An application",
+      // The requester started this from their own app; they may see its name.
+      displayName: isRequester ? request.displayName : "An application",
       publisherUrl: null,
       requestedOrigin: "Visible to Pod owners and administrators",
       requestedCallbackUrl: "Visible to Pod owners and administrators",
@@ -202,6 +236,20 @@ function reviewShape(
       reviewedAt: request.reviewedAt,
       canReview: false,
       matchingApprovedConnection: false,
+      // The requester sees their OWN account; nobody else sees it here.
+      requesterAccount: isRequester ? accountView : null,
+      requesterMember: null,
+      approvedByInvite,
+      approvedConnectionId: null,
+      // Back to their app once linked. Not an authority: completion still
+      // needs the continuation only the requester's app holds.
+      returnUrl:
+        isRequester && linked
+          ? buildApplicationConnectionReturnUrl({
+              callbackUrl: request.requestedCallbackUrl,
+              requestId: request.id,
+            })
+          : null,
     };
   }
   return {
@@ -219,6 +267,17 @@ function reviewShape(
     reviewedAt: request.reviewedAt,
     canReview,
     matchingApprovedConnection: matching,
+    /**
+     * The account that will receive access, verified or explicitly not; null
+     * for an origin-only request, which links no account.
+     */
+    requesterAccount: accountView,
+    /** The Pod member that account will sign in as. */
+    requesterMember: options.requesterMember ?? null,
+    approvedByInvite,
+    /** The app's page in Pod Admin, once approved (`/applications/sign-in/<id>`). */
+    approvedConnectionId: request.approvedConnectionId,
+    returnUrl: null,
   };
 }
 
@@ -241,18 +300,41 @@ export const applicationConnectionsRouter = router({
           ),
           requestedByUserId: ctx.userId,
         });
-        if (firstRedeem)
+        if (!firstRedeem) {
+          return { requestId: request.id, linkedByInvite: false };
+        }
+        await recordConnectionEvent({
+          action: "request",
+          subjectId: request.id,
+          userId: ctx.userId,
+          data: {
+            displayName: request.displayName,
+            clientId: request.clientId,
+            origin: request.requestedOrigin,
+          },
+        });
+        // The invite is the consent: a member who joined by a Pod invite and
+        // whose Synap account is verified is linked now, with no second owner
+        // approval. Anything short of every condition stays pending.
+        const consent = await approveByInviteIfConsented(request);
+        if (consent.kind === "approved") {
           await recordConnectionEvent({
-            action: "request",
-            subjectId: request.id,
-            userId: ctx.userId,
+            action: "approve",
+            subjectId: consent.connectionId,
+            userId: consent.invitedBy,
             data: {
               displayName: request.displayName,
               clientId: request.clientId,
+              requestId: request.id,
               origin: request.requestedOrigin,
+              approvedByInvite: consent.inviteId,
             },
           });
-        return { requestId: request.id };
+        }
+        return {
+          requestId: request.id,
+          linkedByInvite: consent.kind === "approved",
+        };
       } catch (error) {
         throw new TRPCError({
           code: "CONFLICT",
@@ -285,14 +367,31 @@ export const applicationConnectionsRouter = router({
           message: "Connection request not found",
         });
       }
-      const matching =
+      const [matching, issuerName, requesterMember] = await Promise.all([
         canReview &&
-        (await matchingApprovedConnection({
-          clientId: request.clientId,
-          origin: request.requestedOrigin,
-        }));
+          matchingApprovedConnection({
+            clientId: request.clientId,
+            origin: request.requestedOrigin,
+          }),
+        issuerDisplayName(request.issuerUrl),
+        canReview && request.requestedByUserId
+          ? db.query.users
+              .findFirst({
+                where: eq(users.id, request.requestedByUserId),
+                columns: { name: true, email: true },
+              })
+              .then((member) =>
+                member
+                  ? { name: member.name ?? null, email: member.email ?? null }
+                  : null
+              )
+          : null,
+      ]);
       return reviewShape(request, canReview, {
-        matchingApprovedConnection: matching,
+        viewerUserId: ctx.userId,
+        matchingApprovedConnection: matching === true,
+        issuerName,
+        requesterMember,
       });
     }),
 
@@ -387,7 +486,13 @@ export const applicationConnectionsRouter = router({
         // Every ask from this app through this issuer — approved or turned
         // down — since a connection is one (issuer, client) pair.
         db
-          .select({ id: federatedApplicationConnectionRequests.id })
+          .select({
+            id: federatedApplicationConnectionRequests.id,
+            requestedByUserId:
+              federatedApplicationConnectionRequests.requestedByUserId,
+            requestMetadata:
+              federatedApplicationConnectionRequests.requestMetadata,
+          })
           .from(federatedApplicationConnectionRequests)
           .where(
             and(
@@ -408,10 +513,42 @@ export const applicationConnectionsRouter = router({
         ...row.connection,
         issuerUrl: row.issuerUrl,
         ...usageOf(issuerId),
-        people,
+        // Who was linked because their invite was the consent, not an owner.
+        people: markLinkedByInvite(people, requests),
         /** The asks its Activity also reads (request and turn-down events). */
         requestIds: requests.map((r) => r.id),
       };
+    }),
+
+  /**
+   * "Unlink {email}": take one person's account off this app's issuer. Owners
+   * and admins only (`podAdminProcedure`). The app connection stays for
+   * everyone else; see `unlinkConnectionAccount` for exactly what goes.
+   */
+  unlinkAccount: podAdminProcedure
+    .input(z.object({ connectionId: z.string().uuid(), userId: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      const outcome = await unlinkConnectionAccount(input);
+      if (outcome.status === "no_connection") {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Application connection not found",
+        });
+      }
+      if (outcome.status === "unlinked") {
+        await recordConnectionEvent({
+          action: "unlink",
+          subjectId: input.connectionId,
+          userId: ctx.userId,
+          data: {
+            ...outcome.app,
+            unlinkedUserId: input.userId,
+            email: outcome.email,
+            signIn: outcome.signIn,
+          },
+        });
+      }
+      return outcome;
     }),
 
   approveRequest: podAdminProcedure

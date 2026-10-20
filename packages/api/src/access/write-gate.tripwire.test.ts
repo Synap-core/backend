@@ -60,9 +60,57 @@ const ALLOWLIST = new Set<string>([
   // + workspace membership. Not proposal-gated entity content, but should be
   // reviewed for governance coverage eventually.
   "rest/vault.ts",
+  // CP→pod OIDC federation push (POST /federation/oidc-config). NO principal
+  // exists to govern: the route is in the hub auth skip-list and runs before
+  // any user/agent identity — its only credential is a single-use assertion
+  // signed by an APPROVED Control Plane issuer (`verifyTrustedIssuerJwt`: CP
+  // scope set, aud = this pod, type `oidc-config-push`, jti once), whose OIDC
+  // `issuer` must equal the signer and whose podOrigin must be this pod. It
+  // writes ONE key of the `pod_settings` singleton (pod infra config, secret
+  // via field-crypto), never entity content. `checkPermissionOrPropose` needs
+  // a userId to evaluate, so routing it through the gate is not possible —
+  // the issuer verification IS its authorization. Same class as setup.ts.
+  "rest/federation.ts",
 ]);
 
-const RAW_WRITE = /\bdb\.(insert|update|delete)\s*\(/;
+// NOT justified — DEBT made visible on 2026-10-19 when RAW_WRITE learned to
+// see multi-line chains. Each writes directly with no governance gate; listed
+// so the tripwire is green for every OTHER file while these are fixed. May
+// only shrink; never move an entry to ALLOWLIST without fixing or justifying.
+// (Findings per route: lane/sec-webhooks sweep report.)
+const KNOWN_UNGATED = new Set<string>([
+  // Scope + owner-wide fence (GRANT_OWNER_WIDE_REST_DOORS) since 2026-10-19;
+  // still no gate.
+  "rest/webhooks.ts",
+  // /agents/sync — owner-wide fence since 2026-10-19; no gate.
+  "rest/agents.ts",
+  // /channel-egress/:id/ack — floored on the /pending predicate since
+  // 2026-10-19 (lane/sec-w3); no gate (no principal owns an outbox row).
+  "rest/channel-egress.ts",
+  // Account sync / channel delete / mark-read (write scope since 2026-10-19).
+  "rest/messaging.ts",
+  // CP-JWT door (one-time consent code) — likely by design; unreviewed here.
+  "rest/mcp-redeem.ts",
+  // Grant-bounded (grantWriteDenial) but not via the gate.
+  "rest/agent-users.ts",
+  // tRPC hub routers: scope-checked; context.updateThreadContext is floored
+  // on channel visibility since 2026-10-19 (lane/sec-w3) but not gated.
+  "context.ts",
+  "compacted-states.ts",
+  "sessions.ts",
+]);
+
+/**
+ * Tolerates whitespace around the dot: prettier breaks a long chain as
+ * `db\n  .insert(table)`, and the previous `\bdb\.(insert|…)` never saw that
+ * shape — it was blind to nine files (webhooks.ts among them, whose ungated
+ * insert let a read-only key subscribe to every event of the owner) and to the
+ * allowlisted memory.ts it claimed to watch. A self-check below pins the
+ * multi-line sample. Still blind to `tx.` / repository writes (measured: the
+ * scan is file-granular, not route-granular — one gated route in a file
+ * clears every other route in it).
+ */
+const RAW_WRITE = /\bdb\s*\.\s*(insert|update|delete)\s*\(/;
 const GATE = /checkPermissionOrPropose|getCaller/;
 
 function collect(dir: string): string[] {
@@ -87,6 +135,25 @@ describe("write-gate tripwire — no hub raw write bypasses governance", () => {
     expect(FILES.length).toBeGreaterThan(3);
   });
 
+  it("RAW_WRITE sees the prettier-broken chain shape (self-check)", () => {
+    expect(
+      RAW_WRITE.test("await db\n        .insert(webhookSubscriptions)")
+    ).toBe(true);
+    expect(RAW_WRITE.test("db.update(x)")).toBe(true);
+    expect(RAW_WRITE.test("db.query.x.findMany(")).toBe(false);
+  });
+
+  it("every KNOWN_UNGATED entry still writes raw and skips the gate", () => {
+    // A fixed file must leave the debt list (it may only shrink).
+    const stale = [...KNOWN_UNGATED].filter((id) => {
+      const file = FILES.find((f) => f.endsWith(`/hub-protocol/${id}`));
+      if (!file) return true;
+      const src = readFileSync(file, "utf8");
+      return !RAW_WRITE.test(src) || GATE.test(src);
+    });
+    expect(stale).toEqual([]);
+  });
+
   it("every hub file with a raw db write also routes through the gate", () => {
     const violations: string[] = [];
     for (const file of FILES) {
@@ -94,7 +161,7 @@ describe("write-gate tripwire — no hub raw write bypasses governance", () => {
       if (!RAW_WRITE.test(src)) continue;
       if (GATE.test(src)) continue;
       const id = file.split("/hub-protocol/")[1] ?? file;
-      if (!ALLOWLIST.has(id)) violations.push(id);
+      if (!ALLOWLIST.has(id) && !KNOWN_UNGATED.has(id)) violations.push(id);
     }
     expect(
       violations,

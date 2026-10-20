@@ -39,6 +39,7 @@ import {
   workspaceMembers,
   invites,
   users,
+  recordInviteAcceptance,
   EventRepository,
   eventRepository,
   ApiKeyRepository,
@@ -2334,6 +2335,7 @@ export function registerSetupRoutes(app: HubHono): void {
       }
     }
 
+    await recordInviteAcceptance(invite, identityId);
     await db.delete(invites).where(eq(invites.id, invite.id));
     logger.info(
       { identityId, email, inviteId: invite.id },

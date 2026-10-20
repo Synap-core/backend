@@ -38,6 +38,13 @@
  *   - revokePublication  kill a record's public url for good: revoked
  *                  + frozen by the 0276 trigger; publishing again mints a NEW
  *                  url. Direct for everyone, agents included.
+ *   - configureSite / publishSite / rotateSiteToken / unpublishSite /
+ *     revokeSite / siteStatus   a published PROJECT is a site
+ *                  (`services/sharing/site-service.ts`): configure = owner
+ *                  direct, agent one proposal (no token on approval); go live
+ *                  and rotate mint the site token, human only, shown ONCE;
+ *                  unpublish / revoke are direct for everyone (revoke also
+ *                  revokes every member row, in one transaction).
  */
 
 import { z } from "zod";
@@ -63,6 +70,14 @@ import {
   SHARE_KINDS,
 } from "../services/sharing/exposure-policy.js";
 import { registerShareExecutors } from "../services/sharing/share-executors.js";
+import {
+  configureSite,
+  publishSite,
+  revokeSite,
+  rotateSiteToken,
+  siteStatus,
+  unpublishSite,
+} from "../services/sharing/site-service.js";
 import {
   publishResource,
   revokePublication,
@@ -189,6 +204,55 @@ export const sharesRouter = router({
     .mutation(({ input, ctx }) =>
       revokePublication(shareActorFromCtx(ctx), input)
     ),
+
+  // The config is validated (strictly) by the service, which owns its schema.
+  configureSite: protectedProcedure
+    .input(
+      z.object({
+        projectId: Uuid,
+        homeWorkspaceId: Uuid.optional(),
+        config: z.unknown(),
+        reasoning: z.string().max(2000).optional(),
+      })
+    )
+    .mutation(({ input, ctx }) =>
+      configureSite(
+        { ...shareActorFromCtx(ctx), reasoning: input.reasoning },
+        {
+          projectId: input.projectId,
+          homeWorkspaceId: input.homeWorkspaceId ?? null,
+          config: input.config,
+        }
+      )
+    ),
+
+  publishSite: protectedProcedure
+    .input(z.object({ siteId: Uuid }))
+    .mutation(({ input, ctx }) =>
+      publishSite(shareActorFromCtx(ctx), input.siteId)
+    ),
+
+  rotateSiteToken: protectedProcedure
+    .input(z.object({ siteId: Uuid }))
+    .mutation(({ input, ctx }) =>
+      rotateSiteToken(shareActorFromCtx(ctx), input.siteId)
+    ),
+
+  unpublishSite: protectedProcedure
+    .input(z.object({ siteId: Uuid }))
+    .mutation(({ input, ctx }) =>
+      unpublishSite(shareActorFromCtx(ctx), input.siteId)
+    ),
+
+  revokeSite: protectedProcedure
+    .input(z.object({ siteId: Uuid }))
+    .mutation(({ input, ctx }) =>
+      revokeSite(shareActorFromCtx(ctx), input.siteId)
+    ),
+
+  siteStatus: protectedProcedure
+    .input(z.union([z.object({ siteId: Uuid }), z.object({ projectId: Uuid })]))
+    .query(({ input, ctx }) => siteStatus(shareActorFromCtx(ctx), input)),
 
   getPolicy: protectedProcedure
     .input(z.object({ workspaceId: Uuid }))
