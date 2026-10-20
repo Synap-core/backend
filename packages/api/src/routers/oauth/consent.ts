@@ -78,6 +78,11 @@ export interface ValidatedAuthorizeRequest {
   state: string | null;
   /** Canonical RFC 8707 resource, or null when the client named none. */
   resource: string | null;
+  /**
+   * A DCR client's `resource` that names no resource of this pod, dropped
+   * (see `resourceFor`). Set only so /authorize can log it once.
+   */
+  ignoredResource: string | null;
 }
 
 /**
@@ -183,7 +188,11 @@ export function validateAuthorizeRequest(
         )
       : narrowScopes(client.scopes, requested);
 
-  const resource = resourceForIssuer(params.resource, requireIssuer());
+  const { resource, ignoredResource } = resourceFor(
+    client,
+    params.resource,
+    requireIssuer()
+  );
 
   return {
     client,
@@ -194,7 +203,36 @@ export function validateAuthorizeRequest(
     // client — it is the client's CSRF token, not ours to interpret.
     state: params.state ?? null,
     resource,
+    ignoredResource,
   };
+}
+
+/**
+ * RFC 8707 `resource`, by client kind.
+ *
+ * STRICT for an app (CIMD) client: anything but this pod's `/mcp` or
+ * `/api/hub` is `invalid_target`.
+ *
+ * LENIENT for a DCR client (claude.ai, the Control Plane connector) until
+ * claude.ai's real value has been observed in the logs (/authorize warns with
+ * it): an unrecognised value is treated as ABSENT — not refused, not bound to
+ * the code, so /token does not check it. Refusing it would break live MCP
+ * logins over a value nobody has seen yet. Tighten later. A RECOGNISED value is
+ * bound and re-checked for both kinds.
+ */
+export function resourceFor(
+  client: Pick<StoredClient, "clientKind">,
+  raw: string | null | undefined,
+  issuer: string
+): { resource: string | null; ignoredResource: string | null } {
+  try {
+    return { resource: resourceForIssuer(raw, issuer), ignoredResource: null };
+  } catch (err) {
+    if (err instanceof OAuthError && client.clientKind !== "cimd") {
+      return { resource: null, ignoredResource: raw ?? "" };
+    }
+    throw err;
+  }
 }
 
 /** Both phases, in order. Used by the consent surface (which needs both). */

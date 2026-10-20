@@ -230,8 +230,15 @@ vi.mock("./client-metadata.js", async () => {
   };
 });
 
+// One shared logger so a test can assert what the routes WARNED about.
+const log = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+}));
 vi.mock("@synap-core/core", () => ({
-  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => log,
 }));
 
 // Import AFTER the mocks are registered.
@@ -254,6 +261,7 @@ beforeEach(() => {
   store.issuersFail = false;
   store.keys.clear();
   store.cimd.clear();
+  log.warn.mockClear();
   revokeSpy.mockReset();
   claimWhere.length = 0;
   store.users.set(HUMAN_ID, { id: HUMAN_ID, userType: "human" });
@@ -1273,59 +1281,110 @@ describe("RFC 9207 — every authorization response carries iss", () => {
 });
 
 // ─── (j) RFC 8707 — the resource parameter (PB1) ─────────────────────────────
+//
+// STRICT for app (CIMD) clients; LENIENT for DCR clients (claude.ai, the CP
+// connector) until claude.ai's real value is observed in the logs: an
+// unrecognised resource from a DCR client is logged and treated as absent,
+// never refused. A RECOGNISED resource is bound to the code for both kinds.
 
 describe("RFC 8707 — resource", () => {
-  async function authorizeWith(resource: string | string[]) {
-    const { body: client } = await register();
+  /** /authorize for a DCR client (`dcr`) or the cached app client (`cimd`). */
+  async function authorizeWith(
+    kind: "dcr" | "cimd",
+    resource: string | string[]
+  ) {
+    let clientId = APP_ID;
+    let redirectUri = APP_CALLBACK;
+    let scope = "entity.post.read";
+    if (kind === "dcr") {
+      const { body: client } = await register();
+      clientId = client.client_id;
+      redirectUri = CALLBACK;
+      scope = "mcp.read";
+    } else {
+      cacheApp();
+    }
     const qs = new URLSearchParams({
       response_type: "code",
-      client_id: client.client_id,
-      redirect_uri: CALLBACK,
-      scope: "mcp.read",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope,
       state: "st-r",
       code_challenge: CHALLENGE,
       code_challenge_method: "S256",
     });
     for (const r of [resource].flat()) qs.append("resource", r);
-    return oauthApp.request(`/authorize?${qs.toString()}`);
+    return {
+      res: await oauthApp.request(`/authorize?${qs.toString()}`),
+      clientId,
+      redirectUri,
+    };
   }
 
   it("accepts this pod's /mcp and forwards it to the consent screen", async () => {
-    const res = await authorizeWith(`${ISSUER}/mcp`);
+    const { res } = await authorizeWith("dcr", `${ISSUER}/mcp`);
     const target = new URL(res.headers.get("location")!);
     expect(target.origin).toBe(POD_ADMIN);
     expect(target.searchParams.get("resource")).toBe(`${ISSUER}/mcp`);
   });
 
   it("accepts this pod's /api/hub, a trailing slash dropped", async () => {
-    const res = await authorizeWith(`${ISSUER}/api/hub/`);
+    const { res } = await authorizeWith("cimd", `${ISSUER}/api/hub/`);
     const target = new URL(res.headers.get("location")!);
     expect(target.searchParams.get("resource")).toBe(`${ISSUER}/api/hub`);
   });
 
-  for (const foreign of [
+  const FOREIGN = [
+    "https://claude.ai/whatever",
     "https://other-pod.synap.live/mcp",
     `${ISSUER}/admin`,
     ISSUER,
     "",
-  ]) {
-    it(`refuses resource=${JSON.stringify(foreign)} with invalid_target (redirected, with iss)`, async () => {
-      const res = await authorizeWith(foreign);
+  ];
+
+  for (const foreign of FOREIGN) {
+    it(`CIMD: refuses resource=${JSON.stringify(foreign)} with invalid_target (redirected, with iss)`, async () => {
+      const { res } = await authorizeWith("cimd", foreign);
       expect(res.status).toBe(302);
       const back = new URL(res.headers.get("location")!);
-      expect(back.origin + back.pathname).toBe(CALLBACK);
+      expect(back.origin + back.pathname).toBe(APP_CALLBACK);
       expect(back.searchParams.get("error")).toBe("invalid_target");
       expect(back.searchParams.get("iss")).toBe(ISSUER);
     });
+
+    it(`DCR: resource=${JSON.stringify(foreign)} is logged and treated as absent, never refused`, async () => {
+      const { res, clientId } = await authorizeWith("dcr", foreign);
+      const target = new URL(res.headers.get("location")!);
+      expect(target.origin).toBe(POD_ADMIN);
+      expect(target.searchParams.has("resource")).toBe(false);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ clientId, resource: foreign }),
+        expect.stringMatching(/unrecognised resource/)
+      );
+    });
   }
 
-  it("refuses a repeated resource parameter", async () => {
-    const res = await authorizeWith([`${ISSUER}/mcp`, `${ISSUER}/api/hub`]);
+  it("CIMD: refuses a repeated resource parameter", async () => {
+    const { res } = await authorizeWith("cimd", [
+      `${ISSUER}/mcp`,
+      `${ISSUER}/api/hub`,
+    ]);
     const back = new URL(res.headers.get("location")!);
     expect(back.searchParams.get("error")).toBe("invalid_target");
   });
 
-  async function codeFor(resource?: string) {
+  it("DCR: a repeated resource parameter is logged and treated as absent", async () => {
+    const { res } = await authorizeWith("dcr", [
+      `${ISSUER}/mcp`,
+      `${ISSUER}/api/hub`,
+    ]);
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin).toBe(POD_ADMIN);
+    expect(target.searchParams.has("resource")).toBe(false);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+  });
+
+  async function dcrCodeFor(resource?: string) {
     const { body: client } = await register();
     const { redirectTo } = await decideOAuthAuthorization(
       {
@@ -1347,19 +1406,59 @@ describe("RFC 8707 — resource", () => {
   }
 
   it("binds the canonical resource to the code", async () => {
-    await codeFor(`${ISSUER}/mcp/`);
+    await dcrCodeFor(`${ISSUER}/mcp/`);
     const [row] = [...store.codes.values()];
     expect(row!.resource).toBe(`${ISSUER}/mcp`);
   });
 
-  it("the consent decision re-validates resource (a tampered round-trip is refused)", async () => {
-    const { body: client } = await register();
+  it("DCR end to end: an unrecognised resource → authorize, code and token all issued, unbound, warned", async () => {
+    const odd = "https://claude.ai/whatever";
+    const { res: authRes, clientId } = await authorizeWith("dcr", odd);
+    expect(new URL(authRes.headers.get("location")!).origin).toBe(POD_ADMIN);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ clientId, resource: odd }),
+      expect.stringMatching(/unrecognised resource/)
+    );
+
+    // The consent screen round-trips the same value; it is dropped again.
+    const { redirectTo } = await decideOAuthAuthorization(
+      {
+        clientId,
+        redirectUri: CALLBACK,
+        responseType: "code",
+        scope: "mcp.read",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        resource: odd,
+        approve: true,
+      },
+      HUMAN_ID
+    );
+    const code = new URL(redirectTo).searchParams.get("code")!;
+    expect(code).toBeTruthy();
+    expect([...store.codes.values()][0]!.resource ?? null).toBeNull();
+
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: clientId,
+      redirect_uri: CALLBACK,
+      code_verifier: VERIFIER,
+      resource: odd,
+    });
+    expect(res.status).toBe(200);
+    expect(body.access_token).toBeTruthy();
+  });
+
+  it("CIMD: the consent decision re-validates resource (a tampered round-trip is refused)", async () => {
+    cacheApp();
     await expect(
       decideOAuthAuthorization(
         {
-          clientId: client.client_id,
-          redirectUri: CALLBACK,
+          clientId: APP_ID,
+          redirectUri: APP_CALLBACK,
           responseType: "code",
+          scope: "entity.post.read",
           codeChallenge: CHALLENGE,
           codeChallengeMethod: "S256",
           resource: "https://evil.example/mcp",
@@ -1371,8 +1470,8 @@ describe("RFC 8707 — resource", () => {
     expect(store.codes.size).toBe(0);
   });
 
-  it("/token refuses a resource that differs from the code's, and mints nothing", async () => {
-    const { clientId, code } = await codeFor(`${ISSUER}/mcp`);
+  it("DCR: a code bound to /mcp refuses a DIFFERENT recognised resource at /token, and mints nothing", async () => {
+    const { clientId, code } = await dcrCodeFor(`${ISSUER}/mcp`);
     const { res, body } = await token({
       grant_type: "authorization_code",
       code,
@@ -1386,23 +1485,50 @@ describe("RFC 8707 — resource", () => {
     expect(provisionSpy).not.toHaveBeenCalled();
   });
 
-  it("/token refuses a foreign resource even when the code named none", async () => {
-    const { clientId, code } = await codeFor();
+  it("DCR: a code bound to /mcp refuses a FOREIGN resource at /token (the binding holds)", async () => {
+    const { clientId, code } = await dcrCodeFor(`${ISSUER}/mcp`);
     const { res, body } = await token({
       grant_type: "authorization_code",
       code,
       client_id: clientId,
       redirect_uri: CALLBACK,
       code_verifier: VERIFIER,
-      resource: "https://other-pod.synap.live/mcp",
+      resource: "https://claude.ai/whatever",
     });
     expect(res.status).toBe(400);
     expect(body.error).toBe("invalid_target");
     expect(provisionSpy).not.toHaveBeenCalled();
   });
 
+  it("CIMD: /token refuses a foreign resource even when the code named none", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    const { redirectTo } = await decideOAuthAuthorization(
+      {
+        clientId: APP_ID,
+        redirectUri: APP_CALLBACK,
+        responseType: "code",
+        scope: "entity.post.read",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        approve: true,
+      },
+      HUMAN_ID
+    );
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code: new URL(redirectTo).searchParams.get("code")!,
+      client_id: APP_ID,
+      redirect_uri: APP_CALLBACK,
+      code_verifier: VERIFIER,
+      resource: "https://other-pod.synap.live/mcp",
+    });
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_target");
+  });
+
   it("/token accepts the matching resource", async () => {
-    const { clientId, code } = await codeFor(`${ISSUER}/mcp`);
+    const { clientId, code } = await dcrCodeFor(`${ISSUER}/mcp`);
     const { res } = await token({
       grant_type: "authorization_code",
       code,
@@ -1412,6 +1538,14 @@ describe("RFC 8707 — resource", () => {
       resource: `${ISSUER}/mcp`,
     });
     expect(res.status).toBe(200);
+  });
+
+  it("a missing resource stays accepted for both kinds", async () => {
+    const dcr = await authorizeWith("dcr", []);
+    expect(new URL(dcr.res.headers.get("location")!).origin).toBe(POD_ADMIN);
+    const app = await authorizeWith("cimd", []);
+    expect(new URL(app.res.headers.get("location")!).origin).toBe(POD_ADMIN);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });
 

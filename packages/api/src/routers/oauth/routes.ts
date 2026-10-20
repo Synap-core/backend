@@ -59,6 +59,7 @@ import {
 import {
   AuthorizeUserError,
   resolveClientAndRedirect,
+  resourceFor,
   validateAuthorizeRequest,
 } from "./consent.js";
 import {
@@ -69,7 +70,6 @@ import {
   buildDcrResponse,
   buildProtectedResourceMetadata,
   isRegisteredRedirectUri,
-  resourceForIssuer,
   validateDcrRequest,
   verifyPkce,
 } from "./protocol.js";
@@ -255,9 +255,21 @@ oauthApp.get("/authorize", async (c) => {
   try {
     if (resources.length > 1) {
       // RFC 8707 allows several; a token from this AS is for one pod resource.
-      throw new OAuthError("invalid_target", "Name at most one resource");
+      // An app is refused; a DCR client gets the lenient rule (`resourceFor`).
+      if (client.clientKind === "cimd") {
+        throw new OAuthError("invalid_target", "Name at most one resource");
+      }
+      params.resource = resources.join(" ");
     }
     validated = validateAuthorizeRequest(client, redirectUri, params);
+    if (validated.ignoredResource !== null) {
+      // The value claude.ai (or any DCR client) really sends — the evidence
+      // the lenient rule waits on. Public request data, no secret.
+      logger.warn(
+        { clientId: client.clientId, resource: validated.ignoredResource },
+        "pod-oauth: unrecognised resource from a DCR client — treated as absent"
+      );
+    }
   } catch (err) {
     if (err instanceof OAuthError) {
       return c.redirect(
@@ -403,10 +415,12 @@ oauthApp.post("/token", async (c) => {
     // branch where a missing challenge means "skip the check".
     verifyPkce(claimed.codeChallenge, params.code_verifier);
 
-    // RFC 8707 §2.2: a `resource` here must be one this pod serves, and the
-    // one the code was issued for when the authorization named one.
+    // RFC 8707 §2.2: a code bound to a resource accepts only that resource.
+    // Otherwise an app is held to the strict rule, and a DCR client's
+    // unrecognised value reads as absent (`resourceFor`) — which still fails
+    // the match below when the code IS bound.
     if (params.resource !== undefined) {
-      const resource = resourceForIssuer(params.resource, issuer);
+      const resource = resourceFor(client, params.resource, issuer).resource;
       if (claimed.resource && resource !== claimed.resource) {
         throw new OAuthError(
           "invalid_target",
