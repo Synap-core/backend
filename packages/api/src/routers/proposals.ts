@@ -2790,6 +2790,7 @@ export const proposalsRouter = router({
           (creations.undone.automationIds?.length ?? 0) +
           (creations.undone.ruleIds?.length ?? 0) +
           (creations.undone.propertyDiffs?.length ?? 0) +
+          (creations.undone.rowPatches?.length ?? 0) +
           (creations.undone.sessionIds?.length ?? 0) +
           (creations.undone.projectIds?.length ?? 0) +
           (creations.undone.linkIds?.length ?? 0) +

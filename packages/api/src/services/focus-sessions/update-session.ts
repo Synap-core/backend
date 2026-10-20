@@ -47,6 +47,11 @@ import type {
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
+import { isUndoableSessionPatch } from "./session-undo.js";
+import {
+  readSessionUndoSnapshot,
+  stampSessionUpdate,
+} from "../proposals/stamp-materialized.js";
 // STATIC, like `block-output.ts` beside it. These three call sites used
 // `await import()` with no stated reason, which reads as circular-dependency
 // avoidance and is not: the static import graph rooted at
@@ -1721,6 +1726,16 @@ export async function updateFocusSession(
   let outputsBefore: OutputItem[] = [];
   let outputsAfter: OutputItem[] = [];
 
+  // UNDO RECORD for an AUTO-APPROVED write: its receipt was minted by the gate
+  // above, so the before-state is only knowable here. Stamped only when every
+  // change is one undo can restore (`session-undo.ts`); otherwise the receipt
+  // stays unstamped and revert says it cannot be undone.
+  const receiptId = "granted" in perm ? perm.autoApprovedProposalId : undefined;
+  const undoBefore =
+    receiptId && isUndoableSessionPatch(params)
+      ? await readSessionUndoSnapshot(db, sessionId)
+      : null;
+
   const [updated] = await db.transaction(async (tx) => {
     if (params.workspaceId !== undefined) {
       const { applySessionWorkspaceMove } =
@@ -1756,6 +1771,12 @@ export async function updateFocusSession(
       .set(set)
       .where(eq(focusSessions.id, sessionId))
       .returning();
+  });
+  await stampSessionUpdate({
+    proposalId: receiptId,
+    sessionId,
+    before: undoBefore,
+    after: updated,
   });
 
   // ── EVIDENCE VERDICT ────────────────────────────────────────────────────────
