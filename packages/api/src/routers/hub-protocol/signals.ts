@@ -17,6 +17,7 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
+import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 import { config } from "@synap-core/core";
 import { db, eq, and, desc, isNull, sqlTemplate as sql } from "@synap/database";
 import {
@@ -50,6 +51,22 @@ export interface RssHubItem {
   pubDate?: string;
   author?: string;
   guid?: string;
+}
+
+/**
+ * `fetch` appends `sourceRoute` to the control-plane relay URL. Only a plain
+ * path reaches it: no traversal (`..`, `//`, percent-encoding), query,
+ * fragment, backslash or whitespace — the caller shapes WHICH feed, never the
+ * relay request itself (S7).
+ */
+const RELAY_ROUTE_RE = /^\/[A-Za-z0-9][A-Za-z0-9._~\-/:@+,=&]*$/;
+function isSafeRelayRoute(route: string): boolean {
+  return (
+    route.length <= 512 &&
+    RELAY_ROUTE_RE.test(route) &&
+    !route.includes("..") &&
+    !route.includes("//")
+  );
 }
 
 function formatErrorResponse(
@@ -149,6 +166,24 @@ export const signalsRouter = router({
       }> => {
         const startTime = Date.now();
         checkHubRateLimit(ctx.apiKeyId, "signals.fetch");
+        if (!isSafeRelayRoute(input.sourceRoute)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              "sourceRoute must be a plain feed path (e.g. /hackernews/best): no '..', '//', '%', query or fragment.",
+          });
+        }
+        // A context records the fetch in that workspace's history: the caller
+        // acts as itself only, and the key's grant must allow writing a source
+        // record there (S7). Without one nothing is written.
+        if (input.context) {
+          assertMayActAs(ctx, input.context.userId);
+          await assertKeyMayWrite({
+            subjectType: "source",
+            action: "create",
+            workspaceId: input.context.workspaceId,
+          });
+        }
 
         const cpUrl = config.server.controlPlaneUrl;
         if (!cpUrl) {
@@ -514,6 +549,23 @@ export const signalsRouter = router({
 
         const { workspaceId, userId } = input.capture;
         assertMayActAs(ctx, userId);
+        // The entity create below is gated on where it lands; the feed post and
+        // the auto-links that follow it write into `workspaceId` — the key's
+        // grant must allow both there, before anything is written (S7).
+        if (input.capture.createNotification) {
+          await assertKeyMayWrite({
+            subjectType: "feed",
+            action: "create",
+            workspaceId,
+          });
+        }
+        if (input.capture.autoLinkEntities) {
+          await assertKeyMayWrite({
+            subjectType: "link",
+            action: "create",
+            workspaceId,
+          });
+        }
 
         const callerContext = await createHubProtocolCallerContext(
           userId,
@@ -1291,6 +1343,29 @@ export const signalsRouter = router({
 
         for (const op of input.operations) {
           try {
+            // The key's grant bounds every operation (S7): a new subscription
+            // where it is created, an existing one where it is STORED.
+            if (op.operation === "create") {
+              await assertKeyMayWrite({
+                subjectType: "source",
+                action: "create",
+                workspaceId: input.workspaceId,
+              });
+            } else {
+              const stored = await db.query.signalSubscriptions.findFirst({
+                where: and(
+                  eq(signalSubscriptions.id, op.subscriptionId),
+                  eq(signalSubscriptions.userId, actingUserId)
+                ),
+                columns: { workspaceId: true },
+              });
+              await assertKeyMayWrite({
+                subjectType: "source",
+                action: op.operation === "delete" ? "delete" : "update",
+                workspaceId: stored?.workspaceId ?? null,
+                data: { id: op.subscriptionId },
+              });
+            }
             if (op.operation === "create") {
               const id = randomUUID();
               await db.insert(signalSubscriptions).values({

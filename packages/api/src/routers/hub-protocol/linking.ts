@@ -99,6 +99,17 @@ export const linkingRouter = router({
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
+      // Filed for review: NOTHING is written now. Falling through to the insert
+      // applied the link the gate had just withheld (S7, plan 13 §3.4).
+      if ("proposalId" in perm) {
+        return {
+          success: false,
+          linked: false,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          message: "Link filed for review — nothing was linked yet.",
+        };
+      }
 
       // Idempotent insert — skip if already linked with same relationship
       const existing = await db.query.channelContextItems.findFirst({
@@ -194,6 +205,17 @@ export const linkingRouter = router({
 
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      // Filed for review: NOTHING is written now. Falling through to the insert
+      // applied the link the gate had just withheld (S7, plan 13 §3.4).
+      if ("proposalId" in perm) {
+        return {
+          success: false,
+          linked: false,
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+          message: "Link filed for review — nothing was linked yet.",
+        };
       }
 
       // Idempotent insert — skip if already linked with same relationship

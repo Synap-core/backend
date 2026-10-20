@@ -399,18 +399,11 @@ const OWNER_WIDE = (reason: string): TrpcWriteDoor => ({
   bound: "owner_wide",
   reason,
 });
-const UNBOUNDED = (reason: string): TrpcWriteDoor => ({
-  bound: "refused",
-  reason,
-});
 /** Class (d): the default until the founder decides is REFUSED. */
 const DECISION = (id: string, reason: string): TrpcWriteDoor => ({
   bound: "refused",
   reason: `Product decision ${id}: ${reason}`,
 });
-
-const HEADER_WS =
-  "The gate checks the workspace the caller picked (header/input), not the target's.";
 
 /**
  * Every key-reachable tRPC MUTATION, by procedure path: the hub router
@@ -479,6 +472,21 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "sessions.update": GATED,
     "sessions.close": GATED,
     "compactedStates.create": GATED,
+    // W2c — the rest of class (c): linking returns the proposal instead of
+    // inserting; the pre-gate writes (pod-wide view, session document) are
+    // grant-checked; propertyDefs.create is gated (migration.migrate's last
+    // ungated sub-write); signals check the grant and the relay route —
+    // routers/hub-protocol/gate-on-target.misc.pglite.test.ts
+    "linking.linkEntity": GATED,
+    "linking.linkDocument": GATED,
+    "views.createView": GATED,
+    "documents.upsertSessionSection": GATED,
+    "migration.migrate": GATED,
+    "signals.fetch": GATED,
+    "signals.subscriptions": GATED,
+    "signals.batch": GATED,
+    "signals.capture": GATED,
+    "n8nActions.createEntity": GATED,
 
     // (b) OWNER-WIDE — need an unbounded `*` key.
     "channels.ensurePersonal": OWNER_WIDE(
@@ -491,35 +499,8 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
       "Upserts the key principal's vault secret for a free-form serviceId; no gate."
     ),
 
-    // (c) REFUSED until the W2 root fix.
-    "documents.upsertSessionSection": UNBOUNDED(
-      "The session document is created before the gate."
-    ),
-    "linking.linkEntity": UNBOUNDED(
-      "Inserts even when the gate answers `proposed`."
-    ),
-    "linking.linkDocument": UNBOUNDED(
-      "Inserts even when the gate answers `proposed`."
-    ),
-    "views.createView": UNBOUNDED(
-      "With no workspace and no project there is no gate at all."
-    ),
-    "migration.migrate": UNBOUNDED(
-      "propertyDefs.create has no gate; scope `system` is allowed."
-    ),
-    "signals.fetch": UNBOUNDED(
-      "No gate: outbound relay fetch on a caller-shaped path, history into any workspace."
-    ),
-    "signals.subscriptions": UNBOUNDED(
-      "No gate; the caller's workspace is not validated."
-    ),
-    "signals.batch": UNBOUNDED("Inherits signals.fetch and signals.capture."),
-    "signals.capture": UNBOUNDED(
-      `${HEADER_WS} Same pod-kind fallback as entities.createEntity.`
-    ),
-    "n8nActions.createEntity": UNBOUNDED(
-      "The server picks the workspace; same pod-kind fallback as entities.createEntity."
-    ),
+    // (c) REFUSED until the W2 root fix — none left: W2a–W2c fixed every one
+    // and flipped it to GATED above. A new refused row needs its reason.
 
     // (d) PRODUCT DECISION — refused until decided (plan §2 D1–D5).
     "automations.createAutomation": DECISION(
