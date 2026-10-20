@@ -21,7 +21,8 @@ import { parsePermission } from "./grammar.js";
 /**
  * "AI — read & propose" — the limits every NEW AI agent starts with (founder
  * Option A, 2026-10-11): read everything, create and change anything, never
- * delete, never approve, no secrets, keys, space administration or governance.
+ * delete, never approve, no secret reads (it may store one it holds), keys,
+ * space administration or governance.
  * Its writes still follow the review rules (ask first by default).
  *
  * Built from two subject lists, each pinned to its real source by the api
@@ -94,6 +95,9 @@ export const AI_WRITE_SUBJECTS: Readonly<
   property_def: ["create", "update"],
   relation: ["create", "update"],
   relation_def: ["create"],
+  // Store a credential the agent already holds (`POST /vault/secrets`, S4
+  // 2026-10-20). Never `vault.read`: it never reads one back.
+  secret: ["create"],
   session: ["create", "update"],
   skill: ["create", "update"],
   track: ["create", "update"],
@@ -230,7 +234,7 @@ export const GRANT_PRESETS: readonly GrantRole[] = [
     id: AI_READ_PROPOSE_ROLE_ID,
     name: "AI — read & propose",
     description:
-      "Reads everything and creates or changes records, documents, sessions, links, views and kinds; runs playbooks and may reject a proposal. Never deletes, never approves, and has no secrets, keys, sharing or space settings. Its writes still follow your review rules.",
+      "Reads everything and creates or changes records, documents, sessions, links, views and kinds; runs playbooks and may reject a proposal. May store a credential it already holds, never read one. Never deletes, never approves, and has no keys, sharing or space settings. Its writes still follow your review rules.",
     grant: { permissions: AI_READ_PROPOSE_PERMISSIONS },
   },
   {

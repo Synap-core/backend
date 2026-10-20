@@ -281,9 +281,10 @@ export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
  *    one needs pod admin but no grant check.
  *  - `DELETE /vault/secrets/:id`: any secret the person can write, in any
  *    workspace (`assertWorkspaceWrite`, no grant). `POST /vault/secrets` is
- *    NOT here — agents are meant to store credentials they hold (its
- *    docblock); that is a product decision. `/vault/secrets/:id/grant` is
- *    gated (`checkPermissionOrPropose` → `grantWriteDenial`).
+ *    NOT here — agents store credentials they hold, bounded by the key's
+ *    grant (`secret.create` in the row's workspace, S4; the AI preset holds
+ *    it). `/vault/secrets/:id/grant` is gated (`checkPermissionOrPropose` →
+ *    `grantWriteDenial`).
  *  - `DELETE /connectors/connections/:id`, `POST /connectors/disconnect`:
  *    revokes the account at the provider and detaches it from every
  *    capability (`detachNangoConnectionRegistry`).
