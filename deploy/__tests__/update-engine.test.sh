@@ -127,7 +127,7 @@ case "$*" in
   "exec be1 node -e"*)
     [ -n "${FAKE_PROD_BAD:-}" ] && is_new "$(cat "$F/backend_image")" && exit 1; exit 0 ;;
   "exec pg1 psql"*pg_encoding_to_char*) echo "UTF8|C.UTF-8|C.UTF-8"; exit 0 ;;
-  "exec pg1 psql"*"pg_database_size"*) echo 100; exit 0 ;;
+  "exec pg1 psql"*"pg_database_size"*) case "$*" in *::bigint*) echo 100 ;; *) echo 21422.701171875000 ;; esac; exit 0 ;;  # numeric unless cast, as postgres answers
   "exec pg1 psql"*_migrations*) cat "$F/level"; exit 0 ;;
   "exec pg1 psql"*"from pg_database where not datistemplate"*) echo synap; exit 0 ;;
   # A model of the cluster's database list ($F/dbs), so a restore that renames

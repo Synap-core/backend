@@ -280,9 +280,12 @@ pgdata_restore() {
     done
     # The fresh copies sit beside the live ones until the restore is proven:
     # refuse up front (nothing stopped yet) when the volume cannot hold both.
-    need="$(_pgs_psql "$c" postgres "select coalesce(sum(pg_database_size(datname)),0)/1024 from pg_database where not datistemplate and datname <> 'postgres'" 2>/dev/null)"
+    # sum(bigint) is numeric in postgres: cast, and only ever do shell
+    # arithmetic on what is digits (a decimal aborted the restore under bash).
+    need="$(_pgs_psql "$c" postgres "select (coalesce(sum(pg_database_size(datname)),0)/1024)::bigint from pg_database where not datistemplate and datname <> 'postgres'" 2>/dev/null)"
     avail="$(_pgs_x "$c" df -Pk "$PGDATA_MOUNT_TARGET" 2>/dev/null | awk 'NR==2{print $4}')"
-    if [ -n "$need" ] && [ -n "$avail" ] && [ "$avail" -lt $(( need + need / 10 )) ] 2>/dev/null; then
+    case "${need}:${avail}" in *[!0-9:]*|:*|*:) need=""; avail="" ;; esac
+    if [ -n "$need" ] && [ "$avail" -lt $(( need + need / 10 )) ]; then
         _pgs_err "not enough room to restore beside the live databases: need ~$(( need / 1024 )) MB free on the postgres volume, have $(( avail / 1024 )) MB — nothing was changed"
         return 1
     fi
