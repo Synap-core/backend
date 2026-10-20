@@ -31,6 +31,7 @@ const ROLES = read("0307_grant_roles.sql"); // grants.role_id — written by att
 const APPS = read("0309_apps.sql");
 const APPS_REMOVED = read("0312_apps_removed_at.sql");
 const APPS_AGENT = read("0313_apps_agent_user.sql");
+const APPS_OAUTH = read("0338b_pod_app_oauth_apps.sql");
 
 const OWNER = "owner-1";
 const OTHER_OWNER = "owner-2";
@@ -68,6 +69,11 @@ beforeAll(async () => {
   await pg.exec(APPS);
   await pg.exec(APPS_REMOVED);
   await pg.exec(APPS_AGENT);
+  // 0338b also alters the two OAuth tables (codes.app_id → apps); only their
+  // keys are needed for it to run.
+  await pg.exec(`CREATE TABLE oauth_clients (client_id text PRIMARY KEY);
+    CREATE TABLE oauth_authorization_codes (code_hash text PRIMARY KEY);`);
+  await pg.exec(APPS_OAUTH);
   // The pending projection reads only these `proposals` columns.
   await pg.exec(`CREATE TABLE proposals (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -706,5 +712,82 @@ describe("AppRepository.remove — 'Remove for good'", () => {
     expect(again.publicId).toBe(app.publicId);
     expect(again.removedAt).toBeNull();
     expect(again.revokedAt).toBeNull();
+  });
+});
+
+describe("AppRepository.registerOAuth — one pod app connection per (person, app)", () => {
+  const STUDIO = "https://studio.example.com/.well-known/synap-client.json";
+  const OTHER_APP = "https://other.example.com/.well-known/synap-client.json";
+
+  it("upserts by (owner, client id), never by name, and keeps the row's identity", async () => {
+    const first = await repo.registerOAuth({
+      ownerUserId: OWNER,
+      oauthClientId: STUDIO,
+      name: "Studio (studio.example.com)",
+    });
+    expect(first).toMatchObject({ mode: "oauth", oauthClientId: STUDIO });
+    await repo.rename(first.id, "My studio");
+    const again = await repo.registerOAuth({
+      ownerUserId: OWNER,
+      oauthClientId: STUDIO,
+      name: "Studio (studio.example.com)",
+    });
+    expect(again.id).toBe(first.id);
+    expect(again.publicId).toBe(first.publicId);
+    // The owner's rename stands.
+    expect(again.name).toBe("My studio");
+  });
+
+  it("two apps for one person, and one app for two people, are distinct rows", async () => {
+    const a = await repo.registerOAuth({
+      ownerUserId: OWNER,
+      oauthClientId: STUDIO,
+      name: "Studio",
+    });
+    const b = await repo.registerOAuth({
+      ownerUserId: OWNER,
+      oauthClientId: OTHER_APP,
+      // Same display name: the second row is named after its client id.
+      name: "Studio",
+    });
+    const c = await repo.registerOAuth({
+      ownerUserId: OTHER_OWNER,
+      oauthClientId: STUDIO,
+      name: "Studio",
+    });
+    expect(new Set([a.id, b.id, c.id]).size).toBe(3);
+    expect(b.name).toBe(`Studio — ${OTHER_APP}`);
+    expect(c.name).toBe("Studio");
+  });
+
+  it("revives a revoked connection WITHOUT its old approval", async () => {
+    const app = await repo.registerOAuth({
+      ownerUserId: OWNER,
+      oauthClientId: STUDIO,
+      name: "Studio",
+    });
+    await repo.setApprovedRequests(app.id, [
+      { permission: "entity.post.read", workspaceId: "ws-1" },
+    ]);
+    await repo.revoke(app.id);
+    const revived = await repo.registerOAuth({
+      ownerUserId: OWNER,
+      oauthClientId: STUDIO,
+      name: "Studio",
+    });
+    expect(revived.id).toBe(app.id);
+    expect(revived.revokedAt).toBeNull();
+    expect(revived.approvedRequests).toBeNull();
+  });
+
+  it("a developer's register by name never adopts a person's pod app row", async () => {
+    await repo.registerOAuth({
+      ownerUserId: OWNER,
+      oauthClientId: STUDIO,
+      name: "Studio",
+    });
+    await expect(
+      repo.register({ ownerUserId: OWNER, name: "Studio" })
+    ).rejects.toBeInstanceOf(AppNameTakenError);
   });
 });

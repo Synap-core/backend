@@ -49,8 +49,21 @@ export const apps = pgTable(
     name: text("name").notNull(),
     description: text("description"),
     logoUrl: text("logo_url"),
-    /** v1 supports ONLY `specific` (no global mode, no runtime OAuth). */
-    mode: text("mode").notNull().default("specific"),
+    /**
+     * `specific` — an App Connect app its developer registered; `oauth` — a
+     * pod app connection (0338b): the row a person's consent at the pod's
+     * OAuth door made for one app (`oauth_client_id`). CHECK: `oauth` iff
+     * `oauth_client_id` is set.
+     */
+    mode: text("mode")
+      .$type<"specific" | "oauth">()
+      .notNull()
+      .default("specific"),
+    /**
+     * The pod app's Client ID Metadata Document URL (its OAuth `client_id`),
+     * for `mode = 'oauth'` only. One row per (owner, oauth_client_id).
+     */
+    oauthClientId: text("oauth_client_id"),
     /** Set on approval: `[{ permission, workspaceId }]`. */
     approvedRequests: jsonb("approved_requests").$type<
       AppApprovedRequest[] | null
@@ -86,6 +99,10 @@ export const apps = pgTable(
       t.name
     ),
     ownerIdx: index("apps_owner_idx").on(t.ownerUserId),
+    // One pod app connection per (person, app) — the consent door upserts on it.
+    ownerOAuthClientUnique: uniqueIndex("apps_owner_oauth_client_uidx")
+      .on(t.ownerUserId, t.oauthClientId)
+      .where(sql`${t.oauthClientId} IS NOT NULL`),
   })
 );
 

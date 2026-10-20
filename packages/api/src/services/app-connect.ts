@@ -256,13 +256,21 @@ export async function registerApp(args: {
     agentUserId: args.actorAgentUserId,
     keyType: args.actorKeyType,
   });
-  const record = await new AppRepository(db).register({
-    ownerUserId: args.ownerUserId,
-    name: args.name,
-    description: args.description,
-    logoUrl: args.logoUrl,
-    mode: args.mode,
-  });
+  let record;
+  try {
+    record = await new AppRepository(db).register({
+      ownerUserId: args.ownerUserId,
+      name: args.name,
+      description: args.description,
+      logoUrl: args.logoUrl,
+      mode: args.mode,
+    });
+  } catch (err) {
+    // The name belongs to a pod app the owner connected (`connectOAuthApp`).
+    if (err instanceof AppNameTakenError)
+      throw new TRPCError({ code: "CONFLICT", message: err.message });
+    throw err;
+  }
   return loadOwnedApp(record.publicId, args.ownerUserId);
 }
 

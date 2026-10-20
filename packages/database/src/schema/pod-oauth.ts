@@ -30,7 +30,8 @@
  * and only bearer-token model.
  */
 
-import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, index, uuid } from "drizzle-orm/pg-core";
+import { apps } from "./apps.js";
 
 export const oauthClients = pgTable("oauth_clients", {
   // RFC 7591 §3.2.1 `client_id`. Generated (`dcr_<random>`), never client-chosen.
@@ -84,6 +85,10 @@ export const oauthClients = pgTable("oauth_clients", {
     withTimezone: true,
   }),
   metadataSha256: text("metadata_sha256"),
+  // The workspace templates the document declares (`synap_templates`, Contract
+  // B slugs, 0338b): the consent screen offers to create a space from one when
+  // the person has none to give the app. Empty for DCR rows.
+  requestedTemplates: text("requested_templates").array().notNull().default([]),
 });
 
 export const oauthAuthorizationCodes = pgTable(
@@ -115,6 +120,10 @@ export const oauthAuthorizationCodes = pgTable(
     // `<issuer>/api/hub`), or NULL when the client named none (0338). /token
     // refuses a `resource` that differs from it.
     resource: text("resource"),
+
+    // The approved `apps` row (mode 'oauth') a pod app's code redeems to:
+    // /token mints THAT app's key (0338b). NULL for an MCP (DCR) client.
+    appId: uuid("app_id").references(() => apps.id, { onDelete: "cascade" }),
 
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()

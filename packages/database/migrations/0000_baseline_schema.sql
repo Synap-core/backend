@@ -294,6 +294,8 @@ ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_permissions" tex
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_fetched_at" timestamp with time zone;
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_expires_at" timestamp with time zone;
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_sha256" text;
+-- 0338b: the workspace templates a pod app declares (`synap_templates`).
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_templates" text[] NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
   "code_hash"      text PRIMARY KEY,
@@ -317,6 +319,9 @@ ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "expires_at"   
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "consumed_at"    timestamp with time zone;
 -- 0338: the RFC 8707 resource the code was issued for.
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "resource" text;
+-- 0338b: the approved app a pod app's code redeems to. No foreign key here
+-- (apps is created further down): 0338b adds it on fresh databases too.
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "app_id" uuid;
 CREATE INDEX IF NOT EXISTS "oauth_authorization_codes_expires_at_idx"
   ON "oauth_authorization_codes" ("expires_at");
 
@@ -5053,6 +5058,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS "apps_owner_name_unique"
 CREATE INDEX IF NOT EXISTS "apps_owner_idx" ON "apps" ("owner_user_id");
 CREATE UNIQUE INDEX IF NOT EXISTS "apps_agent_user_unique"
   ON "apps" ("agent_user_id") WHERE "agent_user_id" IS NOT NULL;
+-- 0338b: a pod app connection (mode 'oauth') names its CIMD client_id. The
+-- mode CHECK is 0338b's, on fresh databases too.
+ALTER TABLE "apps" ADD COLUMN IF NOT EXISTS "oauth_client_id" text;
+CREATE UNIQUE INDEX IF NOT EXISTS "apps_owner_oauth_client_uidx"
+  ON "apps" ("owner_user_id", "oauth_client_id")
+  WHERE "oauth_client_id" IS NOT NULL;
 
 -- 0319: lifecycle columns (work model W12–W14). The columns are the truth;
 -- `properties[<lifecycle slug>]` is the read projection written by moveStatus.
