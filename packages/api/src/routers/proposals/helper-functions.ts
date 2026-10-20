@@ -9,6 +9,7 @@
 // unaffected.
 import { isLikelyUUID } from "@synap-core/types/proposals";
 import { agentDisplayName } from "@synap-core/types/agents";
+import { resolveServiceName } from "@synap-core/types/service-marks";
 
 export function stringProp(
   record: Record<string, unknown> | undefined,
@@ -37,7 +38,9 @@ export function displayNameForUser(row: {
  * `agentDisplayName` — "Claude Code on devbox" — so it never reads the same as
  * its twin on another computer. `hostNames` is `loadMachineNames`
  * (`services/machine-roster.ts`) over the rows' `hostUserId`s; a computer it
- * could not name leaves the agent's own name.
+ * could not name leaves the agent's own name. An agent with no name of its own
+ * is named from its type the way the rosters name it (`resolveServiceName`:
+ * "Claude Code", "Orchestrator"), never the raw token.
  */
 export function actorDisplayName(
   row: Parameters<typeof displayNameForUser>[0] & {
@@ -45,7 +48,13 @@ export function actorDisplayName(
   },
   hostNames: ReadonlyMap<string, { name: string }>
 ): string | undefined {
-  const name = displayNameForUser(row);
+  const unnamedType =
+    row.userType === "agent" && !row.name?.trim()
+      ? row.agentMetadata?.agentType
+      : undefined;
+  const name = unnamedType
+    ? resolveServiceName(unnamedType)
+    : displayNameForUser(row);
   const host =
     row.userType === "agent" && row.hostUserId
       ? hostNames.get(row.hostUserId)?.name

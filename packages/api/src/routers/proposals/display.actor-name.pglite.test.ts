@@ -9,7 +9,8 @@
  *
  * Discriminating fixtures: two agents with the SAME `users.name`, one on a
  * computer and one on none — the exact input on which "read `users.name`" and
- * the host-aware rule disagree.
+ * the host-aware rule disagree — and an agent with no name (the pod's system
+ * orchestrator), which `displayNameForUser` alone names "orchestrator".
  *
  * What this cannot see: the surfaces that render the name (pod-admin Review,
  * browser, relay) — they read `agentActorName` / `authorName` as served.
@@ -43,6 +44,7 @@ const WS = randomUUID();
 const COMPUTER = "computer-user";
 const ON_COMPUTER = "agent-on-computer";
 const NO_COMPUTER = "agent-on-no-computer";
+const UNNAMED = "agent-with-no-name";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -106,8 +108,9 @@ beforeAll(async () => {
       ($1,'devbox','m@x','agent','machine','{"agentType":"machine"}'::jsonb,$4,null),
       ($2,'Claude Code','a@x','agent','claude-code','{"agentType":"claude-code"}'::jsonb,$4,$1),
       ($3,'Claude Code','b@x','agent','claude-code','{"agentType":"claude-code"}'::jsonb,$4,null),
-      ($4,'Owner','o@x','human',null,null,null,null)`,
-    [COMPUTER, ON_COMPUTER, NO_COMPUTER, VIEWER]
+      ($4,'Owner','o@x','human',null,null,null,null),
+      ($5,null,'u@x','agent','orchestrator','{"agentType":"orchestrator"}'::jsonb,$4,null)`,
+    [COMPUTER, ON_COMPUTER, NO_COMPUTER, VIEWER, UNNAMED]
   );
 });
 
@@ -122,6 +125,12 @@ describe("enrichProposalsForDisplay — the asking agent's name", () => {
     const row = await enrichAs(NO_COMPUTER);
     expect(row.agentActorName).toBe("Claude Code");
     expect(row.authorName).toBe("Claude Code");
+  });
+
+  it("an agent with no name is named from its type, never the raw token", async () => {
+    const row = await enrichAs(UNNAMED);
+    expect(row.agentActorName).toBe("Orchestrator");
+    expect(row.authorName).toBe("Orchestrator");
   });
 
   it("a person's proposal names the person and has no agent actor", async () => {
