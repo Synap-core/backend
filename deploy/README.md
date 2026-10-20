@@ -1,153 +1,127 @@
-# Self-Hosting Synap Backend
+# Self-hosting a Synap pod
 
-Deploy your own Synap instance in 5 minutes with our unified CLI.
+This directory holds everything a pod runs in production: the Compose stack
+(`docker-compose.yml`), the Caddy edge, the environment schema (`env.schema`),
+and the scripts the `synap` operator CLI calls. The CLI itself is the
+[`synap`](../synap) script at the repository root.
 
-## 🚀 Quick Start
+The same guide is published in the Run section of the documentation:
+<https://docs.synap.live/docs/run>.
 
-### Option 1: Download CLI and Install (Recommended)
+Two tools are both called `synap`. Do not mix them up:
+
+| Tool                                     | Where it runs     | What it does                                              |
+| ---------------------------------------- | ----------------- | --------------------------------------------------------- |
+| `synap` (the script in this repository)  | On the pod's host | Install, update, back up, restore and operate the pod     |
+| `@synap-core/cli` (npm package, `synap`) | On your laptop    | Connect AI agents and tools to a pod (`synap init`, etc.) |
+
+## Requirements
+
+- A Linux host with Docker and Docker Compose v2. `install.sh` installs Docker
+  (from get.docker.com) and `curl`, `tar`, `jq`, `openssl` (with `apt-get`) when
+  they are missing, so it needs root on a bare host.
+- A domain whose DNS points at the host, and an email address for the TLS
+  certificate. Caddy obtains and renews the certificate.
+
+## Install
+
+Install the latest stable release on a bare host:
 
 ```bash
-# Download the unified CLI
-curl -fsSL https://raw.githubusercontent.com/synap-core/backend/main/synap -o synap
-chmod +x synap
-
-# Install (interactive prompts)
-./synap install --clone --from-image latest --domain example.com --email me@example.com
+curl -fsSL https://github.com/synap-core/backend/releases/download/channel-stable/install.sh \
+  | sudo bash -s -- --domain pod.example.com --email you@example.com
 ```
 
-### Option 2: Clone Repository First
+What `install.sh` does (see its header for the full contract):
+
+1. Installs the prerequisites above if they are missing.
+2. Fetches the release manifest for `--release` (default `stable`; `fast` is
+   the latest green `main` build; a release id such as `v1.1.3` pins one).
+3. Downloads that release's deploy bundle, checks its sha256 against the
+   manifest, and unpacks it into `--dir` (default `/opt/synap`).
+4. Links the operator CLI to `/usr/local/bin/synap`.
+5. Runs `synap install --non-interactive --release <id>` with every other flag
+   you passed. Images are pulled by digest; nothing is built on the host.
+
+`SYNAP_RELEASE_VERIFY=warn|enforce|off` (default `warn`) controls the check of
+the release manifest's signature.
+
+Every flag other than `--release` and `--dir` goes to `synap install`. The
+common ones:
+
+| Flag                                         | Meaning                                                                    |
+| -------------------------------------------- | -------------------------------------------------------------------------- |
+| `--domain <domain>`                          | The pod's domain                                                           |
+| `--email <email>`                            | Contact for the TLS certificate                                            |
+| `--admin-email <e>` + `--admin-password <p>` | Create the first admin during install (otherwise see "First admin" below)  |
+| `--with-rsshub`                              | Also start RSSHub and browserless (Compose profile `rsshub`)               |
+| `--tunnel cloudflare\|pangolin`              | Expose the pod through a tunnel; pair with `--tunnel-token-file <path>`    |
+| `--intelligence-url <url>`                   | An Intelligence Service for the pod to use (with `--intelligence-key <k>`) |
+| `--smtp-uri <uri>`                           | SMTP relay for sign-in and recovery emails (see "Email" below)             |
+
+`synap install --help` lists them all.
+
+### Install from a clone
+
+From a checkout of this repository, the same engine installs the pod. Inside a
+git checkout it builds the images from source by default; add `--from-image`
+to use published images instead.
 
 ```bash
-# Clone repository
 git clone https://github.com/synap-core/backend.git
 cd backend
-
-# Make CLI executable
-chmod +x synap
-
-# Install (use existing repo, no cloning)
-./synap install --no-clone --from-image latest --domain example.com --email me@example.com
+./synap install --domain localhost                  # build from source
+./synap install --from-image --domain pod.example.com --email you@example.com
 ```
 
-### Option 3: Development Mode (Build from Source)
+### First admin
+
+Unless you passed `--admin-email` and `--admin-password`, the pod starts with
+no owner. Create one from the host:
 
 ```bash
-# Clone repository
-git clone https://github.com/synap-core/backend.git
-cd backend
-chmod +x synap
-
-# Install and build from source
-./synap install --no-clone --from-source --domain localhost
+synap setup admin --status                            # needed | ready
+synap setup admin --email you@example.com --magic-link # prints a one-hour sign-in link
 ```
 
-## 📋 Requirements
+### Connect an agent
 
-- **Linux server** (Ubuntu 22.04+ recommended)
-- **4GB RAM** minimum (8GB recommended)
-- **20GB disk space** minimum
-- **Docker** & **Docker Compose** installed
-- **Domain name** with DNS access (for production)
-- **OpenAI API key** (required for AI features)
-
-## 🎯 Installation Options
-
-### Production (Docker Images)
+Agents connect from your own machine, not from the server:
 
 ```bash
-# Clone repo and use pre-built images
-./synap install --clone --from-image latest --domain example.com --email me@example.com
+npm install -g @synap-core/cli
+synap init --pod-url https://pod.example.com
 ```
 
-### Development (Build from Source)
+## Operate
+
+On the host, `synap help` lists every command. The ones used most:
 
 ```bash
-# Use existing repo and build locally
-./synap install --no-clone --from-source --domain localhost
+synap health                    # local health check (Docker + services)
+synap doctor                    # read-only checks: env drift, release, backups, pgdata
+synap ps                        # services and their status
+synap logs backend --tail 100   # logs of one service (no service: pick from a list)
+synap restart backend           # restart one service (no service: pick from a list)
+synap config list               # the one validated writer of deploy/.env
+synap config set KEY=VALUE      # then `synap apply` to recreate services with it
+synap users list                # pod users (also add-admin, reset-password, delete)
 ```
 
-### Automated (Non-Interactive)
+## Update
 
 ```bash
-# All parameters provided, no prompts
-./synap install --clone --from-image latest --domain example.com --email me@example.com --non-interactive
+synap update                     # SYNAP_UPDATE_CHANNEL from deploy/.env, else stable
+synap update --release fast      # the latest green main build
+synap update --release v1.1.3    # one specific release
+synap update --from-source       # build this checkout and apply it as a release
 ```
 
-## 🔧 Management
-
-Use the unified `synap` CLI to manage your instance:
-
-```bash
-# Check system health
-./synap health
-
-# View logs (all services or specific)
-./synap logs
-./synap logs backend
-
-# Restart services
-./synap restart
-./synap restart backend
-
-# Start/stop services
-./synap start
-./synap stop
-
-# Update to latest version
-./synap update
-
-# Update to specific version
-./synap update v1.2.3
-
-# Build from source
-./synap update --build
-
-# Backups (see "Data & backups" below)
-./synap backup init            # once: off-host repository + recovery kit
-./synap backup status
-
-# Restore
-./synap restore --from-snapshot latest
-
-# Manage configuration
-./synap config list
-./synap config get DOMAIN
-./synap config set DOMAIN new-domain.com
-./synap config edit
-```
-
-## 🆙 Updating
-
-### Standard Update (Pull Image)
-
-```bash
-./synap update
-```
-
-This will:
-
-1. Create automatic backup
-2. Pull latest Docker image from registry
-3. Run database migrations
-4. Restart services
-
-### Update to Specific Version
-
-```bash
-./synap update v1.2.3
-```
-
-### Build from Source
-
-```bash
-./synap update --build
-```
-
-Useful when:
-
-- Image not available in registry
-- Testing local changes
-- Development workflow
+Every update takes a lock, reads the release manifest, runs preflight checks,
+pulls images by digest, takes a verified backup, runs the migrations, starts a
+canary, swaps services, and verifies. Any failure rolls back to the previous
+images (and to the pre-update dump when the migration level moved). The outcome
+is recorded in `deploy/state/last-update.json`.
 
 ### Automatic updates (owner setting) and failed updates
 
@@ -180,7 +154,8 @@ What changes for an operator when a pod updates past a release. Newest first.
   stops fetching Synap's catalog, and the console cannot switch it back on. A
   source the owner added (below) has its own switch.
 - **Marketplace sources.** An owner can add other catalogs beside Synap's.
-  What a source serves and what the pod checks: `docs/marketplace-source.md`.
+  What a source serves and what the pod checks:
+  [`docs/marketplace-source.md`](../docs/marketplace-source.md).
 - **Rate limits for signed-in people.** The API now gives each signed-in
   person their own request budget instead of sharing the per-address one. Two
   new variables tune it, read by the API process:
@@ -194,7 +169,7 @@ What changes for an operator when a pod updates past a release. Newest first.
 - **Console URL.** The Apps page moved from `/origins` to `/applications`. Old
   links and bookmarks redirect.
 
-## ✉️ Email (Kratos courier)
+## Email (Kratos courier)
 
 Recovery codes and verification emails are sent by Kratos through
 `SMTP_CONNECTION_URI` (+ optional `SMTP_FROM_ADDRESS`, which must be on a
@@ -221,18 +196,18 @@ Synap now uses one controlled execution path for pod lifecycle operations:
 
 If provisioning/update fails, inspect packet metadata first in pod diagnostics, then follow the linked ticket.
 
-## 💾 Data & backups
+## Data & backups
 
 ### Where the data lives (and why it matters)
 
 | Data                             | Where                                                                                                     | Survives `prune --volumes` / `down -v`? |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| Postgres cluster (synap, kratos) | volume `<project>_postgres_data` mounted at `/home/postgres/pgdata` (`PGDATA=/home/postgres/pgdata/data`) | ❌ no — that is why dumps exist         |
-| Scheduled dumps (hourly)         | `deploy/backups/postgres/<UTC>-auto/<db>.dump` (host directory; older ones are `-daily`)                  | ✅ yes                                  |
-| Pre-update / manual dumps        | `deploy/backups/postgres/<UTC>-pre-update/…`                                                              | ✅ yes                                  |
-| "This pod has data" marker       | `deploy/state/postgres-initialized` (host directory)                                                      | ✅ yes                                  |
-| Files (MinIO)                    | volume `minio_data`; exported to `deploy/backups/postgres/.minio-mirror` and pushed off-host              | ❌ no — the off-host snapshot has them  |
-| Search (Typesense)               | volume `typesense_data` — rebuilt from Postgres                                                           | ❌ no (not backed up)                   |
+| Postgres cluster (synap, kratos) | volume `<project>_postgres_data` mounted at `/home/postgres/pgdata` (`PGDATA=/home/postgres/pgdata/data`) | No — that is why dumps exist            |
+| Scheduled dumps (hourly)         | `deploy/backups/postgres/<UTC>-auto/<db>.dump` (host directory; older ones are `-daily`)                  | Yes                                     |
+| Pre-update / manual dumps        | `deploy/backups/postgres/<UTC>-pre-update/…`                                                              | Yes                                     |
+| "This pod has data" marker       | `deploy/state/postgres-initialized` (host directory)                                                      | Yes                                     |
+| Files (MinIO)                    | volume `minio_data`; exported to `deploy/backups/postgres/.minio-mirror` and pushed off-host              | No — the off-host snapshot has them     |
+| Search (Typesense)               | volume `typesense_data` — rebuilt from Postgres                                                           | No (not backed up)                      |
 
 **2026-10-02 incident.** The volume used to be mounted at `/var/lib/postgresql/data`,
 which `timescaledb-ha` does not use. The volume stayed empty and the whole database
@@ -317,6 +292,7 @@ All optional services are gated behind Compose profiles. Enable with `--profile 
 | `rsshub`            | rsshub, browserless                       | RSS aggregation                                          |
 | `cloudflare-tunnel` | cloudflared                               | Expose pod via Cloudflare Tunnel                         |
 | `pangolin-tunnel`   | pangolin-tunnel                           | Expose pod via Pangolin                                  |
+| `pod-agent`         | pod-agent                                 | Control Plane-managed operations (`--with-pod-agent`)    |
 
 Example:
 
@@ -326,71 +302,35 @@ docker compose --profile monitoring --profile rsshub up -d
 
 Services with `restart: always` (backend, postgres, etc.) always start by default.
 
-## 📚 Documentation
+## Security defaults
 
-- **[Installation Guide](./docs/installation.md)** - Detailed installation steps
-- **[Configuration Options](./docs/configuration.md)** - All configuration variables
-- **[Backup & Restore](./docs/backups.md)** - Backup strategies
-- **[Troubleshooting](./docs/troubleshooting.md)** - Common issues and solutions
-- **[DevOps Guide](./docs/DEVOPS.md)** - Complete deployment and operations guide
+- Secrets in `deploy/.env` are generated during installation. Keep a copy of
+  `.env` somewhere safe: the off-host backup includes it, encrypted.
+- Caddy terminates TLS with automatically provisioned and renewed certificates.
+- Services talk to each other on an internal Docker network. Only Caddy
+  publishes ports on all interfaces (80 and 443); every other published port
+  is bound to `127.0.0.1`.
 
-## 🔐 Security
+To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
-- **Auto-generated secrets**: All passwords and keys generated during installation
-- **Automatic SSL**: Let's Encrypt certificates auto-provisioned and renewed
-- **Isolated network**: Services communicate via internal Docker network
-- **Security headers**: Enforced by Caddy reverse proxy
-
-**Important**: After installation, backup your secrets and delete them from the server!
-
-## 🌐 Connecting Your Frontend
-
-Point your Synap frontend to your self-hosted backend:
-
-```env
-# In your frontend .env
-NEXT_PUBLIC_API_URL=https://your-domain.com/trpc
-NEXT_PUBLIC_REALTIME_URL=https://your-domain.com/realtime
-```
-
-## 🐛 Troubleshooting
-
-### Services Won't Start
+## Troubleshooting
 
 ```bash
-# Check health
-./synap health
-
-# View logs
-./synap logs
-
-# Check Docker
-docker compose ps
+synap health              # what is down
+synap diagnose            # full diagnostics
+synap errors backend 200  # errors in the last 200 lines of the backend log
+synap connectivity        # DNS + /health probe for the pod's domain
+docker compose ps         # from the deploy directory
 ```
 
-### SSL Certificate Issues
+- **TLS certificate not issued:** check that the domain's DNS record points at
+  the host, wait a minute or two, then read `synap logs caddy`.
+- **Database connection errors:** `docker compose ps postgres`, then
+  `synap restart backend`. If Postgres refuses to start, read "Data & backups"
+  above before doing anything else.
 
-- Ensure DNS is properly configured (A record pointing to your server)
-- Wait 1-2 minutes for Let's Encrypt to provision certificate
-- Check Caddy logs: `./synap logs caddy`
+## Support
 
-### Database Connection Errors
-
-- Check PostgreSQL is running: `docker compose ps postgres`
-- Verify password in `.env` matches
-- Restart backend: `./synap restart backend`
-
-### AI Features Not Working
-
-- Verify `OPENAI_API_KEY` is set in `.env`
-- Check intelligence service logs: `./synap logs intelligence-service`
-
-## 💬 Support
-
-- **Documentation**: [docs.synap.live](https://docs.synap.live)
-- **Discord Community**: [discord.gg/xhRdQ7hG5h](https://discord.gg/xhRdQ7hG5h)
-- **GitHub Issues**: [github.com/synap-labs/synap-backend/issues](https://github.com/synap-labs/synap-backend/issues)
-
----
-
-**Made with ❤️ by the Synap team**
+- Documentation: <https://docs.synap.live>
+- Issues: <https://github.com/Synap-core/backend/issues>
+- Discord: <https://discord.gg/xhRdQ7hG5h>

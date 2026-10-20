@@ -30,7 +30,7 @@ import { createSynapClient } from "@synap-core/sdk";
 
 const synap = createSynapClient({
   podUrl: "https://pod.example.com", // base URL, no trailing slash, no /trpc
-  apiKey: process.env.SYNAP_API_KEY, // a scoped key you issued
+  sessionToken: process.env.SYNAP_SESSION_TOKEN, // an Ory Kratos session token
   workspaceId: "ws_...", // scopes every request to one workspace
 });
 
@@ -41,11 +41,11 @@ const workspace = await synap.workspaces.get.query();
 
 **Auth, in order of preference:**
 
-| Option         | Header                    | Use for                                                                                                            |
-| -------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `sessionToken` | `x-session-token`         | **Preferred** — Ory Kratos session token, e.g. from `/api/federation/exchange`. For CLI tools, mobile, extensions. |
-| `apiKey`       | `Authorization: Bearer …` | Scoped API key from your workspace developer settings.                                                             |
-| _(neither)_    | cookie                    | Falls back to cookie-based Kratos session auth.                                                                    |
+| Option         | Header                    | Use for                                                                                                                                                                                                                           |
+| -------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sessionToken` | `x-session-token`         | **Preferred** — Ory Kratos session token, e.g. from `/api/federation/exchange`. For CLI tools, mobile, extensions.                                                                                                                |
+| `apiKey`       | `Authorization: Bearer …` | Only the local-mode token of a desktop pod. A pod refuses hub and user API keys (`synap_hub_…`, `synap_user_…`) on `/trpc`, and the client throws if given one: use `@synap-core/hub-rest-client` against `/api/hub/*` for those. |
+| _(neither)_    | cookie                    | Falls back to cookie-based Kratos session auth.                                                                                                                                                                                   |
 
 Pass `onAuthError` to handle a `401` gracefully — the client rewrites the pod's
 plain-JSON auth error into a proper tRPC error so your query rejects cleanly
@@ -113,7 +113,7 @@ Your pod is a real PostgreSQL database. Export it with `pg_dump` whenever you
 like — the data is yours.
 
 For the full self-host guide (domains, backups, upgrades, hardening), see
-[`docs/README.md`](./README.md).
+[`deploy/README.md`](../deploy/README.md).
 
 ---
 
