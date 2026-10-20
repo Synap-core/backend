@@ -727,6 +727,10 @@ export function registerPlaybookExecutors(): void {
             : {}),
         });
       let batch: BatchRunReceipt | undefined;
+      // What this approval started — EVERY approval, not only a batch: the
+      // session is the door the person opens next, and a single run used to
+      // drop it (the receipt named nothing it had created).
+      let receipt: BatchRunReceipt | undefined;
 
       // At-most-once: `runPlaybook` is NOT idempotent here (verified — see the
       // note above), so the dispatch is CAS-claimed. A thrown failure keeps the
@@ -734,7 +738,8 @@ export function registerPlaybookExecutors(): void {
       await dispatchExternalOnce(input.proposalId, async () => {
         // The FIRST run proves the approver may run it; a re-propose there
         // means nothing was started, so the claim is released (see below).
-        const result = await runFor(subjects[0] ?? carriedSubjectId);
+        const firstSubject = subjects[0] ?? carriedSubjectId;
+        const result = await runFor(firstSubject);
         if (result.status === "running" && subjects.length > 1) {
           batch = await runBatchRest(
             subjects.slice(1),
@@ -742,12 +747,23 @@ export function registerPlaybookExecutors(): void {
             startedRun(subjects[0]!, result)
           );
         }
-        if (result.status === "running") return { delivered: true as const };
+        if (result.status === "running") {
+          receipt = batch ?? {
+            started: [startedRun(firstSubject, result)],
+            failed: [],
+          };
+          return { delivered: true as const };
+        }
         // Nothing started, so the claim is released and the person can approve
         // again once the reason is fixed.
         return { delivered: false as const, reason: notStartedReason(result) };
       });
 
+      // A run that starts now supersedes an earlier failed attempt: the
+      // approval's own failure record (`rejectionReason`, `data.failure`,
+      // written by `onApprovalFailed`) would otherwise sit on an APPROVED
+      // row and read "Couldn't apply" beside the session it did create.
+      const { failure: _staleFailure, ...rawWithoutFailure } = raw;
       await db
         .update(proposals)
         .set({
@@ -755,11 +771,14 @@ export function registerPlaybookExecutors(): void {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-          // A batch records every run it started ON the proposal — the
-          // outcome every renderer already shows (`data.runResult`) — so the
-          // person can find each one. Not `materialized`: approving a batch
-          // does not opt its sessions into undo.
-          ...(batch ? { data: { ...raw, runResult: batch } } : {}),
+          rejectionReason: null,
+          // Every run the approval started is recorded ON the proposal — the
+          // outcome renderers already read (`data.runResult`) — so the person
+          // can open each session. Not `materialized`: approving a run does
+          // not opt its session into undo.
+          data: receipt
+            ? { ...rawWithoutFailure, runResult: receipt }
+            : rawWithoutFailure,
         })
         .where(eq(proposals.id, input.proposalId));
 
@@ -771,8 +790,11 @@ export function registerPlaybookExecutors(): void {
         "approved",
         userId
       );
+      const firstSessionId = receipt?.started[0]?.sessionId;
       return {
         success: true,
+        // The approve response's "what this created" (REST/CLI callers).
+        ...(firstSessionId ? { primaryId: firstSessionId } : {}),
         ...(batch
           ? { batch: { started: batch.started.length, failed: batch.failed } }
           : {}),
@@ -929,26 +951,29 @@ export function registerPlaybookExecutors(): void {
 /** At most this many runs of one batch start at once — sane for 100+ leads. */
 export const BATCH_RUN_CONCURRENCY = 3;
 
-/** One run a batch approval started: its subject and the session to open. */
+/** One run an approval started: its subject (absent = subjectless) and the session to open. */
 export interface StartedRun {
-  subjectId: string;
+  subjectId?: string;
   sessionId?: string;
   runId?: string;
 }
 
-/** What a batch approval did — stamped on the proposal as `data.runResult`. */
+/** What a run approval started — stamped on the proposal as `data.runResult`. */
 export interface BatchRunReceipt {
   started: StartedRun[];
   failed: string[];
 }
 
-function startedRun(subjectId: string, result: unknown): StartedRun {
+function startedRun(
+  subjectId: string | undefined,
+  result: unknown
+): StartedRun {
   const r = result as {
     session?: { id?: unknown };
     run?: { id?: unknown };
   };
   return {
-    subjectId,
+    ...(subjectId ? { subjectId } : {}),
     ...(typeof r.session?.id === "string" ? { sessionId: r.session.id } : {}),
     ...(typeof r.run?.id === "string" ? { runId: r.run.id } : {}),
   };

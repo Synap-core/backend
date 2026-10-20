@@ -84,6 +84,7 @@ import {
 } from "../capabilities/capability-shadows.js";
 import { buildCapabilityComposition } from "./capability-composition.js";
 import { readPlaybookSkillReadiness } from "../playbooks/playbook-skill-preflight.js";
+import { openLink } from "../../utils/deep-links.js";
 import { isFullUuid, resolveObjectKind } from "./resolve-object-kind.js";
 import {
   diagnoseWorkspaceClass,
@@ -263,6 +264,16 @@ export async function diagnoseRouter(
   });
 }
 
+/** The session ids a run approval's receipt (`data.runResult.started[]`) names. */
+function readStartedSessionIds(runResult: unknown): string[] {
+  const started = (runResult as { started?: unknown } | null | undefined)
+    ?.started;
+  if (!Array.isArray(started)) return [];
+  return started
+    .map((r) => (r as { sessionId?: unknown } | null)?.sessionId)
+    .filter((id): id is string => typeof id === "string");
+}
+
 // ── OBJECT dispatch ──────────────────────────────────────────────────────────
 
 async function diagnoseObject(
@@ -335,10 +346,19 @@ async function diagnoseObject(
       // A `capability.run` proposal stores its executed output in
       // `data.runResult` (approve-executors.ts). Surface a bounded view so
       // diagnose(proposalId) shows the RESULT, not just the proposal state.
+      const isPlaybookRun =
+        row.targetType === "playbook" && row.proposalType === "run";
       const runResult =
-        row.proposalType === CAPABILITY_RUN_PROPOSAL_TYPE
+        row.proposalType === CAPABILITY_RUN_PROPOSAL_TYPE || isPlaybookRun
           ? (row.data as Record<string, unknown> | null)?.runResult
           : undefined;
+      // An approved playbook run names the sessions it started — each a door.
+      const startedSessions = isPlaybookRun
+        ? readStartedSessionIds(runResult).map((sessionId) => ({
+            sessionId,
+            link: openLink(sessionId),
+          }))
+        : [];
       return {
         mode: "object",
         kind,
@@ -360,6 +380,7 @@ async function diagnoseObject(
           ...(runResult !== undefined
             ? { runResult: boundDiagnoseValue(runResult) }
             : {}),
+          ...(startedSessions.length > 0 ? { startedSessions } : {}),
         },
       };
     }

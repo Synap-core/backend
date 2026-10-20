@@ -84,7 +84,10 @@ import { proposalExecRegistry } from "../../execution-registry.js";
 registerPlaybookExecutors();
 const executor = proposalExecRegistry.resolveExact("playbook/run")!;
 
-const approve = (inner: Record<string, unknown>) =>
+const approve = (
+  inner: Record<string, unknown>,
+  outer: Record<string, unknown> = {}
+) =>
   executor.execute({
     proposal: {
       id: "p-1",
@@ -93,7 +96,7 @@ const approve = (inner: Record<string, unknown>) =>
       proposalType: "run",
       agentUserId: null,
       sourceMessageId: null,
-      data: { data: { playbookId: "pb-1", params: {}, ...inner } },
+      data: { ...outer, data: { playbookId: "pb-1", params: {}, ...inner } },
     },
     userId: "owner-1",
     input: { proposalId: "p-1" },
@@ -154,10 +157,36 @@ describe("approving a batch run proposal", () => {
     expect(stampedRunResult()?.failed).toEqual(["lead-2"]);
   });
 
-  it("a single proposal starts exactly its one run, as before", async () => {
+  it("a single proposal starts exactly its one run and records its session", async () => {
     const res = await approve({ subjectId: "lead-solo" });
     expect(h.runs.map((r) => r.subjectId)).toEqual(["lead-solo"]);
     expect(res).not.toHaveProperty("batch");
-    expect(stampedRunResult()).toBeUndefined();
+    // The session the approval created is on the proposal (the door the
+    // person opens next) and in the approve response.
+    expect(stampedRunResult()).toEqual({
+      started: [
+        {
+          subjectId: "lead-solo",
+          sessionId: "session-lead-solo",
+          runId: "run-lead-solo",
+        },
+      ],
+      failed: [],
+    });
+    expect(res).toMatchObject({ primaryId: "session-lead-solo" });
+  });
+
+  it("a run that starts after an earlier failed attempt clears that failure", async () => {
+    await approve(
+      { subjectId: "lead-solo" },
+      { failure: { errorClass: "validation" }, automationId: "auto-1" }
+    );
+    const approved = h.sets.find((v) => v.status === "approved")!;
+    expect(approved.rejectionReason).toBeNull();
+    const data = approved.data as Record<string, unknown>;
+    expect(data).not.toHaveProperty("failure");
+    // Everything else the proposal carried is kept.
+    expect(data.automationId).toBe("auto-1");
+    expect(data.data).toMatchObject({ subjectId: "lead-solo" });
   });
 });

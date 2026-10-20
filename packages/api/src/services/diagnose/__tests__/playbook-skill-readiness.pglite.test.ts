@@ -7,6 +7,10 @@
  * `resolveObjectKind` → the playbook arm → `readPlaybookSkillReadiness` →
  * `findUnenabledPlaybookSkills` + `loadContainerRefs`). Nothing hand-built
  * between the rows and the report.
+ *
+ * Also: an approved playbook-run proposal names the sessions it started
+ * (`data.runResult.started[]`, stamped by the `playbook/run` executor), each
+ * with its `/open/<id>` door.
  */
 import { describe, it, expect, beforeAll, vi } from "vitest";
 
@@ -134,5 +138,40 @@ describe("diagnose(playbook) — skill readiness", () => {
       ready: true,
       disabled: [],
     });
+  });
+});
+
+describe("diagnose(approved run proposal) — the sessions it started", () => {
+  it("names each started session as a door", async () => {
+    const proposalId = "77777777-7777-4777-8777-777777777777";
+    const sessionId = "88888888-8888-4888-8888-888888888888";
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, status, created_by, data, created_at, updated_at)
+       values ($1, $2, 'playbook', $3, 'run', 'approved', $4, $5::jsonb, now(), now())`,
+      [
+        proposalId,
+        WS,
+        PB,
+        USER,
+        JSON.stringify({
+          data: { playbookId: PB },
+          runResult: {
+            started: [{ subjectId: SKILL_ON, sessionId, runId: PACK }],
+            failed: [],
+          },
+        }),
+      ]
+    );
+    const out = (await diagnoseRouter({ userId: USER, id: proposalId })) as {
+      kind: string;
+      why: { startedSessions?: Array<{ sessionId: string; link: string }> };
+    };
+    expect(out.kind).toBe("proposal");
+    expect(out.why.startedSessions).toEqual([
+      {
+        sessionId,
+        link: expect.stringMatching(new RegExp(`/open/${sessionId}$`)),
+      },
+    ]);
   });
 });
