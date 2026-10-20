@@ -8,6 +8,7 @@
 // (`routers/proposals.ts`, `services/focus-sessions/participants.ts`) is
 // unaffected.
 import { isLikelyUUID } from "@synap-core/types/proposals";
+import { agentDisplayName } from "@synap-core/types/agents";
 
 export function stringProp(
   record: Record<string, unknown> | undefined,
@@ -28,6 +29,28 @@ export function displayNameForUser(row: {
     return row.agentMetadata?.agentType ?? row.agentMetadata?.description;
   }
   return row.email || undefined;
+}
+
+/**
+ * WHO ACTED, as a person reads it: `displayNameForUser`, and for an agent that
+ * runs on a computer (`users.host_user_id`) the ONE phrasing of
+ * `agentDisplayName` — "Claude Code on devbox" — so it never reads the same as
+ * its twin on another computer. `hostNames` is `loadMachineNames`
+ * (`services/machine-roster.ts`) over the rows' `hostUserId`s; a computer it
+ * could not name leaves the agent's own name.
+ */
+export function actorDisplayName(
+  row: Parameters<typeof displayNameForUser>[0] & {
+    hostUserId?: string | null;
+  },
+  hostNames: ReadonlyMap<string, { name: string }>
+): string | undefined {
+  const name = displayNameForUser(row);
+  const host =
+    row.userType === "agent" && row.hostUserId
+      ? hostNames.get(row.hostUserId)?.name
+      : undefined;
+  return host ? agentDisplayName({ name, hostName: host }) : name;
 }
 
 // ProposalRow type - minimal shape needed by resolvers.

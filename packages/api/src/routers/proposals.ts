@@ -119,9 +119,10 @@ import {
 export { type ReviewAuthorityReason } from "./proposals/review-authority.js";
 import {
   enrichProposalsForDisplay,
-  displayNameForUser,
+  actorDisplayName,
   findFlowNode,
 } from "./proposals/display.js";
+import { loadMachineNames } from "../services/machine-roster.js";
 import {
   rosterReadFor,
   sessionReadableWhere,
@@ -877,10 +878,17 @@ export const proposalsRouter = router({
             email: users.email,
             userType: users.userType,
             agentMetadata: users.agentMetadata,
+            hostUserId: users.hostUserId,
           })
           .from(users)
           .where(inArray(users.id, agentIds));
-        for (const u of urows) agentLabelById.set(u.id, displayNameForUser(u));
+        const hostNames = await loadMachineNames(
+          urows
+            .map((u) => u.hostUserId)
+            .filter((id): id is string => typeof id === "string")
+        );
+        for (const u of urows)
+          agentLabelById.set(u.id, actorDisplayName(u, hostNames));
       }
 
       // A cluster's label is read off `data` — withhold session content the
@@ -1202,14 +1210,18 @@ export const proposalsRouter = router({
             email: users.email,
             userType: users.userType,
             agentMetadata: users.agentMetadata,
+            hostUserId: users.hostUserId,
           })
           .from(users)
           .where(eq(users.id, proposal.agentUserId))
           .limit(1);
+        const hostNames = await loadMachineNames(
+          u?.hostUserId ? [u.hostUserId] : []
+        );
         targets.push({
           kind: "agent",
           id: proposal.agentUserId,
-          label: (u && displayNameForUser(u)) || "Agent",
+          label: (u && actorDisplayName(u, hostNames)) || "Agent",
         });
       }
 
