@@ -1,6 +1,10 @@
 {
-    # Global options
-    email {$EMAIL}
+    # Global options. The ACME account email, or none: ACME_EMAIL_OPTION is
+    # "email <LETSENCRYPT_EMAIL>" or empty (docker-compose.yml, caddy's
+    # environment). Never the EMAIL variable as the option's argument: an
+    # empty one leaves `email` with no argument, which caddy refuses to load.
+    # (caddy expands env placeholders before parsing, comments included.)
+    {$ACME_EMAIL_OPTION}
 }
 
 # ─── Cloudflare Tunnel Handler ────────────────────────────────────────────────

@@ -129,6 +129,9 @@ function outcomeResult(record) {
   };
   switch (record.status) {
     case "succeeded":
+    case "noop":
+      // noop: the pod was already on the release it was asked for — the order
+      // is fulfilled, nothing had to change.
       return { status: "completed", version: String(record.to || ""), data };
     case "rolled_back":
       return {

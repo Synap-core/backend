@@ -17,6 +17,11 @@ CALLBACK_JWT="$3"
 CD="$(dirname "$0")"
 AGE_IDENTITY_FILE="${ARCHIVE_AGE_IDENTITY_FILE:-$CD/state/archive-identity.txt}"
 COMPOSE="docker compose -p synap-backend -f $CD/docker-compose.yml"
+SYNAP_DEPLOY_DIR="$(cd "$CD" && pwd)"; export SYNAP_DEPLOY_DIR
+# Containers are created by the HOST engine (host-request.sh): a compose `up`
+# run in this container mounts the host's nonexistent /deploy paths.
+# shellcheck source=/dev/null
+. "$CD/host-request.sh"
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [restore-archive] $*"; }
 
@@ -31,7 +36,7 @@ report() {
 
 if [ -z "$ARCHIVE_URL" ]; then
   log "No archive URL — starting fresh"
-  $COMPOSE up -d 2>&1
+  host_compose
   report "completed"
   exit 0
 fi
@@ -47,7 +52,7 @@ wget -q -O /tmp/pod-archive.tar.gz "$ARCHIVE_URL" 2>&1 || {
   log "ERROR: Download failed"
   report "failed" "\"archive download failed\""
   # Start fresh instead
-  $COMPOSE up -d 2>&1
+  host_compose
   exit 1
 }
 
@@ -81,7 +86,7 @@ if [ -f "$TMPDIR/database.sql.gz" ]; then
   log "Restoring database..."
   gzip -t "$TMPDIR/database.sql.gz" 2>/dev/null || fatal "database dump is corrupt"
   [ -s "$TMPDIR/database.sql.gz" ] || fatal "database dump is empty"
-  $COMPOSE up -d postgres 2>&1 || fatal "could not start postgres for restore"
+  host_compose postgres || fatal "could not start postgres for restore"
   sleep "${RESTORE_PG_WAIT_SECS:-10}"
   PSQL_ERR="$TMPDIR/psql.err"
   # psql keeps going past SQL errors, so a non-zero exit means the replay could
@@ -114,7 +119,7 @@ rm -rf "$TMPDIR"
 
 # Start all services
 log "Starting services..."
-$COMPOSE up -d --remove-orphans 2>&1 || fatal "could not start services"
+host_compose || fatal "could not start services"
 
 # Health check
 log "Waiting for health..."

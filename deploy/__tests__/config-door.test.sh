@@ -120,7 +120,7 @@ REPO="$TMP/repo"; DEPLOY="$REPO/deploy"
 mkdir -p "$TMP/bin" "$DEPLOY"
 cp "$HERE/synap" "$REPO/synap"
 cp "$HERE/deploy/ensure-ory-databases.sh" "$HERE/deploy/pgdata-safety.sh" "$HERE/deploy/update-lock.sh" \
-   "$HERE/deploy/env-config.sh" "$HERE/deploy/env.schema" "$HERE/deploy/docker-compose.yml" "$DEPLOY/"
+   "$HERE/deploy/env-config.sh" "$HERE/deploy/env.schema" "$HERE/deploy/docker-compose.yml" "$HERE/deploy/host-request.sh" "$DEPLOY/"
 BASE_ENV='DOMAIN=pod.example.com
 PUBLIC_URL=https://pod.example.com
 POD_AGENT_ISSUER_URL=https://api.synap.live
@@ -139,6 +139,9 @@ cat > "$TMP/bin/docker" <<'D'
 echo "$*" >> "$FAKE_LOG"
 case "$*" in
   "compose ps --status running --services") printf 'backend\nkratos\npostgres\nbackend-migrate\n' ;;
+  "compose config --profiles") echo pod-agent ;;
+  "compose"*"config --services") printf 'backend\nkratos\npostgres\ncaddy\n'; case " $* " in *" --profile pod-agent "*) echo pod-agent ;; esac ;;
+  "compose"*" up "*) echo "${COMPOSE_PROJECT_NAME:-}" > "$FAKE_LOG.project" ;;
 esac
 exit 0
 D
@@ -282,10 +285,16 @@ awk '/^cmd_update\(\) \{/{p=1} p&&/^}/{exit} p' "$HERE/synap" | grep -A6 'synap_
 #     through the door, all-or-nothing, and uses the PINNED compose project.
 cp "$HERE/deploy/configure-pod.sh" "$DEPLOY/"
 reset_env; sed -i.x 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=pinned-proj/' "$DEPLOY/.env"; rm -f "$DEPLOY/.env.x"
-configure() { : > "$FAKE_LOG"; ( cd "$TMP"; PATH="$TMP/bin:$PATH" SYNAP_LOCK_IMPL=mkdir dash "$DEPLOY/configure-pod.sh" "" "" "$@" ) >"$TMP/out" 2>&1; }
-configure DOMAIN=new.example.com PUBLIC_URL=https://new.example.com POD_AGENT_AUDIENCE=https://new.example.com --recreate backend; rc=$?
-[ "$rc" = 0 ] && [ "$(envval PUBLIC_URL)" = https://new.example.com ] && [ "$(baks)" = 1 ] && ok "configure-pod: CP payload written through the door (backup kept)" || bad "configure-pod (rc=$rc): $(cat "$TMP/out")"
-grep -q -- "-p pinned-proj " "$FAKE_LOG" && ! grep -q -- "-p synap-backend" "$FAKE_LOG" && ok "configure-pod uses the pinned compose project" || bad "configure-pod project: $(cat "$FAKE_LOG")"
+configure() { : > "$FAKE_LOG"; rm -f "$FAKE_LOG.project"; ( cd "$TMP"; PATH="$TMP/bin:$PATH" SYNAP_LOCK_IMPL=mkdir HOST_REQUEST_PICKUP_SECONDS=20 HOST_REQUEST_POLL_SECONDS=1 dash "$DEPLOY/configure-pod.sh" "" "" "$@" ) >"$TMP/out" 2>&1; }
+# The host's synap-compose.path, played by hand: run `synap compose-request`
+# once the agent's request exists (H3 — the agent never runs compose up).
+host_takes() { local i; for i in $(seq 1 60); do [ -e "$DEPLOY/state/requests/compose.json" ] && break; sleep 0.2; done
+  ( cd "$TMP"; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_LOCK_IMPL=mkdir bash "$REPO/synap" compose-request ) >"$TMP/host.out" 2>&1 </dev/null; }
+configure DOMAIN=new.example.com PUBLIC_URL=https://new.example.com POD_AGENT_AUDIENCE=https://new.example.com --recreate backend & cp_pid=$!
+host_takes; wait "$cp_pid"; rc=$?
+[ "$rc" = 0 ] && [ "$(envval PUBLIC_URL)" = https://new.example.com ] && [ "$(baks)" = 1 ] && ok "configure-pod: CP payload written through the door (backup kept)" || bad "configure-pod (rc=$rc): $(cat "$TMP/out") $(cat "$TMP/host.out")"
+grep -qx "compose up -d --no-build --force-recreate --no-deps backend" "$FAKE_LOG" && [ "$(cat "$FAKE_LOG.project" 2>/dev/null)" = pinned-proj ] \
+  && ok "configure-pod: the recreate runs on the HOST, under the pinned compose project" || bad "configure-pod recreate: $(cat "$FAKE_LOG") project=$(cat "$FAKE_LOG.project" 2>/dev/null)"
 reset_env; before="$(cat "$DEPLOY/.env")"
 configure DOMAIN=x.example.com PATH=/usr/bin --recreate backend; rc=$?
 [ "$rc" != 0 ] && [ "$(cat "$DEPLOY/.env")" = "$before" ] && ! grep -q "compose" "$FAKE_LOG" && grep -q "PATH: unknown key" "$TMP/out" \
@@ -295,18 +304,19 @@ configure OPENAI_API_KEY=sk-CONFIGSECRET; grep -q CONFIGSECRET "$TMP/out" && bad
 # An older Control Plane's retired OpenClaw add-on configure: accepted, the
 # retired keys dropped, the profile (no service carries it now) harmless.
 reset_env
-configure OPENCLAW_HUB_API_KEY=k SYNAP_AGENT_USER_ID=u SYNAP_WORKSPACE_ID=w --profile openclaw; rc=$?
+configure OPENCLAW_HUB_API_KEY=k SYNAP_AGENT_USER_ID=u SYNAP_WORKSPACE_ID=w --profile openclaw & cp_pid=$!
+host_takes; wait "$cp_pid"; rc=$?
 [ "$rc" = 0 ] && ! grep -qE '^(OPENCLAW_HUB_API_KEY|SYNAP_AGENT_USER_ID|SYNAP_WORKSPACE_ID)=' "$DEPLOY/.env" && [ "$(baks)" = 0 ] \
   && ok "configure-pod: an old CP's retired OpenClaw payload succeeds and writes nothing" || bad "configure-pod retired payload (rc=$rc): $(cat "$TMP/out")"
 
 # 16. update-agent.sh: pod-agent comes from the release's DIGEST pin, never a host build
 cp "$HERE/deploy/update-agent.sh" "$DEPLOY/"
-agent_update() { : > "$FAKE_LOG"; ( cd "$TMP"; PATH="$TMP/bin:$PATH" dash "$DEPLOY/update-agent.sh" ) >"$TMP/out" 2>&1; }
+agent_update() { : > "$FAKE_LOG"; ( cd "$TMP"; PATH="$TMP/bin:$PATH" HOST_REQUEST_PICKUP_SECONDS=20 HOST_REQUEST_POLL_SECONDS=1 dash "$DEPLOY/update-agent.sh" ) >"$TMP/out" 2>&1; }
 reset_env; D="ghcr.io/synap-core/pod-agent@sha256:$(printf 'd%.0s' $(seq 1 64))"
 printf 'SYNAP_IMAGE_POD_AGENT=%s\n' "$D" >> "$DEPLOY/.env"
-agent_update; rc=$?
-[ "$rc" = 0 ] && grep -qx "pull $D" "$FAKE_LOG" && grep -q -- "up -d --no-build --no-deps --force-recreate pod-agent" "$FAKE_LOG" \
-  && ok "update-agent pulls the pinned digest and recreates without building" || bad "update-agent (rc=$rc): $(cat "$FAKE_LOG" "$TMP/out")"
+agent_update & au_pid=$!; host_takes; wait "$au_pid"; rc=$?
+[ "$rc" = 0 ] && grep -qx "pull $D" "$FAKE_LOG" && grep -qx "compose --profile pod-agent up -d --no-build --force-recreate --no-deps pod-agent" "$FAKE_LOG" \
+  && ok "update-agent pulls the pinned digest; the HOST recreates pod-agent from it (no build)" || bad "update-agent (rc=$rc): $(cat "$FAKE_LOG" "$TMP/out" "$TMP/host.out")"
 grep -E "(^| )build( |$)" "$FAKE_LOG" && bad "update-agent built an image" || ok "update-agent never builds"
 reset_env; printf 'SYNAP_IMAGE_POD_AGENT=ghcr.io/synap-core/pod-agent:latest\n' >> "$DEPLOY/.env"
 agent_update; [ $? != 0 ] && ! grep -q "compose" "$FAKE_LOG" && ok "update-agent refuses a mutable tag" || bad "update-agent accepted a tag: $(cat "$FAKE_LOG")"
