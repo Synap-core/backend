@@ -346,6 +346,62 @@ async function resolveRequests(
   });
 }
 
+/** A `workspace_members.role` that may write in its space. */
+const WRITE_ROLES = ["owner", "admin", "editor"];
+
+/**
+ * An owner gives an app only what they can do themselves (invariant 1 at the
+ * GIVING side). `resolveRequests` bounds a request by the spaces the owner can
+ * READ — member ∪ owned ∪ pod-visible — but approving a WRITE makes the app's
+ * agent an `editor` member there (`syncAppAgentMemberships`). So a write
+ * (anything but `…read`, `*` included) needs the owner to OWN the space or be
+ * an owner / admin / editor member of it; a read stays bounded by what they
+ * can read. Run when the request is filed AND when it is approved (a role can
+ * drop in between).
+ */
+export async function assertOwnerMayGrant(
+  ownerUserId: string,
+  requests: ReadonlyArray<AppApprovedRequest & { workspaceName?: string }>
+): Promise<void> {
+  const writes = requests.filter(
+    (r) => parsePermission(r.permission).at(-1) !== "read"
+  );
+  if (writes.length === 0) return;
+  const ids = [...new Set(writes.map((r) => r.workspaceId))];
+  const [owned, editing] = await Promise.all([
+    db
+      .select({ id: workspaces.id })
+      .from(workspaces)
+      .where(
+        and(inArray(workspaces.id, ids), eq(workspaces.ownerId, ownerUserId))
+      ),
+    db
+      .select({ id: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(
+        and(
+          inArray(workspaceMembers.workspaceId, ids),
+          eq(workspaceMembers.userId, ownerUserId),
+          inArray(workspaceMembers.role, WRITE_ROLES)
+        )
+      ),
+  ]);
+  const may = new Set([...owned, ...editing].map((r) => r.id));
+  const beyond = writes.filter((r) => !may.has(r.workspaceId));
+  if (beyond.length > 0) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `You can only give an app what you can do yourself — you cannot edit in ${[
+        ...new Set(beyond.map((r) => r.workspaceName ?? r.workspaceId)),
+      ].join(", ")}: ${beyond
+        .map((r) => r.permission)
+        .join(
+          ", "
+        )}. Ask for read access there, or for edit rights in that space first.`,
+    });
+  }
+}
+
 /**
  * A request may never be wider than the credential that files it (invariant
  * 1 at the ASKING door). A signed-in session or the owner's own unbounded `*`
@@ -407,6 +463,7 @@ export async function requestAccess(args: {
   assertNotRevoked(found);
   const requests = await resolveRequests(args.ownerUserId, args.requests);
   assertRequestsWithinCaller(requests);
+  await assertOwnerMayGrant(args.ownerUserId, requests);
   const agentUserId = args.actorAgentUserId ?? getActingAgentUserId() ?? null;
   const proposal = await createPendingProposal({
     userId: args.ownerUserId,

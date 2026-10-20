@@ -34,6 +34,7 @@ import { auditLog } from "../../../utils/audit-log.js";
 import {
   appApprovalWithinAsked,
   applyApprovedReach,
+  assertOwnerMayGrant,
 } from "../../../services/app-connect.js";
 
 export function registerAppExecutors(): void {
@@ -105,6 +106,10 @@ export function registerAppExecutors(): void {
             "This app was revoked — register it again to ask for access.",
         });
       }
+
+      // The owner's own rights, read NOW: a role dropped since the request
+      // was filed must not reach the app's agent.
+      await assertOwnerMayGrant(app.ownerUserId, requests);
 
       const updated = await repo.setApprovedRequests(appId, requests);
       if (!updated) {

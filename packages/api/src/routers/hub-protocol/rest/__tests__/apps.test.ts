@@ -568,7 +568,10 @@ describe("approve executor — app/connect writes approved_requests", () => {
     const executor = proposalExecRegistry.resolveExact("app/connect");
     expect(executor).toBeDefined();
 
-    state.selectResult = []; // no already-approved row
+    // One row for every select: not an already-approved proposal (no
+    // status), and the owner's own space (`assertOwnerMayGrant` reads the
+    // spaces the owner may edit in — the real rule is pinned on PGlite).
+    state.selectResult = [{ id: WORKSPACE_ID }];
     const result = await executor!.execute({
       proposal: {
         id: PROPOSAL_ID,

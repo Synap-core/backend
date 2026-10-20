@@ -384,3 +384,129 @@ describe("invariant 4 — revoke stops the key at once", () => {
     );
   });
 });
+
+describe("invariant 1 — an owner grants an app only what they can do themselves", () => {
+  /**
+   * `resolveRequests` bounds a request by the spaces the owner can READ —
+   * member ∪ owned ∪ pod-visible. Approving a WRITE there makes the app's
+   * agent an `editor` member (`syncAppAgentMemberships`): a pod member who
+   * may only read a pod-visible space (or is a viewer in it) would hand
+   * their app edit rights they never had. Writes need the owner to hold
+   * edit rights in that space; reads stay bounded by what they can read.
+   */
+  const OTHER = "other-human";
+  const COMMONS = randomUUID();
+  const SHARED = randomUUID();
+  const DEMOTED = randomUUID();
+
+  beforeAll(async () => {
+    await q(
+      `insert into users (id, email, user_type) values ($1, 'other@x', 'human')`,
+      [OTHER]
+    );
+    // Pod-visible, owned by someone else, the owner is NOT a member.
+    await q(
+      `insert into workspaces (id, name, owner_id, settings) values ($1, 'Commons', $2, $3)`,
+      [COMMONS, OTHER, JSON.stringify({ workspaceVisibility: "pod_visible" })]
+    );
+    // Someone else's; the owner is a VIEWER member.
+    for (const [id, name] of [
+      [SHARED, "Shared"],
+      [DEMOTED, "Demoted"],
+    ] as const) {
+      await q(
+        `insert into workspaces (id, name, owner_id, settings) values ($1, $2, $3, '{}')`,
+        [id, name, OTHER]
+      );
+    }
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'viewer')`,
+      [randomUUID(), SHARED, OWNER]
+    );
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'editor')`,
+      [randomUUID(), DEMOTED, OWNER]
+    );
+  });
+
+  const ask = async (name: string, permission: string, workspace: string) =>
+    requestAccess({
+      publicId: (await registered(name)).publicId,
+      ownerUserId: OWNER,
+      requests: [{ permission, workspace }],
+    });
+  const proposalsFor = async (workspaceId: string) =>
+    (
+      await q<{ id: string }>(
+        `select id from proposals where target_type = 'app' and data::text like $1`,
+        [`%${workspaceId}%`]
+      )
+    ).rows;
+
+  it("a write in a pod-visible space the owner only reads is refused — nothing filed", async () => {
+    await expect(
+      ask("commons-write", "entity.note.create", "Commons")
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await proposalsFor(COMMONS)).toHaveLength(0);
+  });
+
+  it("a write where the owner is a viewer is refused", async () => {
+    await expect(
+      ask("viewer-write", "entity.note.create", "Shared")
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await proposalsFor(SHARED)).toHaveLength(0);
+  });
+
+  it("the full-access `*` counts as a write — refused where the owner reads", async () => {
+    await expect(ask("viewer-star", "*", "Shared")).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+
+  it("CONTROL: a read in the pod-visible space is filed", async () => {
+    const { proposalId } = await ask(
+      "commons-read",
+      "entity.note.read",
+      "Commons"
+    );
+    expect(proposalId).toBeTruthy();
+  });
+
+  it("CONTROL: a write in the owner's own space is filed", async () => {
+    const { proposalId } = await ask(
+      "own-write",
+      "entity.note.create",
+      "Sales"
+    );
+    expect(proposalId).toBeTruthy();
+  });
+
+  it("approving is re-checked: demoted after filing → refused, the app agent joins nothing", async () => {
+    const app = await registered("demoted-write");
+    const { proposalId } = await requestAccess({
+      publicId: app.publicId,
+      ownerUserId: OWNER,
+      requests: [{ permission: "entity.note.create", workspace: "Demoted" }],
+    });
+    await q(
+      `update workspace_members set role = 'viewer' where workspace_id = $1 and user_id = $2`,
+      [DEMOTED, OWNER]
+    );
+    await expect(
+      applyProposalApproval({
+        proposal: (await loadProposal(proposalId)) as never,
+        userId: OWNER,
+        input: { proposalId },
+        ctx: { authenticated: true, userId: OWNER } as never,
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await approvedOf(app.id)).toBeNull();
+    const editors = (
+      await q(
+        `select id from workspace_members where workspace_id = $1 and role = 'editor'`,
+        [DEMOTED]
+      )
+    ).rows;
+    expect(editors).toHaveLength(0);
+  });
+});
