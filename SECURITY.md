@@ -2,13 +2,8 @@
 
 ## Reporting a vulnerability
 
-Please report security problems privately. Do not open a public issue, pull
-request or discussion for them.
-
-- **Preferred:** GitHub private vulnerability reporting. Open the repository's
-  **Security** tab and choose **Report a vulnerability**. The report is visible
-  only to you and the maintainers.
-- **Or by email:** security@synap.live.
+Please report security problems privately, by email to
+**security@synap.live**. Do not open a public issue or pull request for them.
 
 Include what you can of:
 
