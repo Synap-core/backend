@@ -32645,13 +32645,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		updateRule: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				id: string;
 				intent: string;
 				scope: {
 					kind: "pod" | "user" | "workspace";
 					workspaceId?: string | undefined;
 					projectId?: string | undefined;
 				};
+				id: string;
 				expiresAt?: string | null | undefined;
 				factSkillId?: string | undefined;
 				automationIds?: string[] | undefined;
