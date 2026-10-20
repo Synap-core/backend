@@ -167,11 +167,25 @@ case "$1" in
       *pg_restore*) cat >/dev/null; echo "EVENT pg_restore" >> "$CALLS" ;;
       *"from api_keys"*) echo "EVENT fingerprint" >> "$CALLS"; cat "$FAKE_LIVE_FP_FILE" ;;
       *"count(*) from users"*) echo 5 ;;
-      *"from pg_database where datname"*) echo 1 ;;
+      # A model of the cluster's database list ($FAKE_DBS): a restore renames
+      # the live database aside, creates a fresh one, then drops the aside one.
+      *pg_encoding_to_char*) echo "UTF8|C.UTF-8|C.UTF-8" ;;
+      *pg_database_size*) echo 100 ;;
+      *pg_terminate_backend*) : ;;
+      *"from pg_database where datname="*)
+        n="$(echo "$*" | sed -n "s/.*datname='\([^']*\)'.*/\1/p")"; grep -qx "$n" "$FAKE_DBS" && echo 1 ;;
+      *"alter database "*" rename to "*)
+        a="$(echo "$*" | sed -n 's/.*alter database "\([^"]*\)" rename to.*/\1/p')"; b="$(echo "$*" | sed -n 's/.*rename to "\([^"]*\)".*/\1/p')"
+        { grep -vx "$a" "$FAKE_DBS"; echo "$b"; } > "$FAKE_DBS.n"; mv "$FAKE_DBS.n" "$FAKE_DBS"; echo "EVENT rename $a $b" >> "$CALLS" ;;
+      *"create database "*)
+        n="$(echo "$*" | sed -n 's/.*create database "\([^"]*\)".*/\1/p')"; echo "$n" >> "$FAKE_DBS"; echo "EVENT create $n" >> "$CALLS" ;;
+      *"drop database "*)
+        n="$(echo "$*" | sed -n 's/.*drop database \(if exists \)\{0,1\}"\([^"]*\)".*/\2/p')"; grep -vx "$n" "$FAKE_DBS" > "$FAKE_DBS.n"; mv "$FAKE_DBS.n" "$FAKE_DBS"; echo "EVENT drop $n" >> "$CALLS" ;;
       *psql*) [ -n "$stdin" ] && cat > "$T_STDIN_SINK"; echo "EVENT psql-stdin" >> "$CALLS" ;;
     esac ;;
 esac
 SH
+export FAKE_DBS="$T/dbs"; printf 'synap\nkratos\n' > "$FAKE_DBS"
 cat > "$T/bin/fake-compose" <<'SH'
 #!/bin/sh
 echo "compose $*" >> "$CALLS"
@@ -399,6 +413,10 @@ a="$(pos 'restic restore')"; e="$(pos 'postgres-up')"; p="$(pos 'pg_restore')"; 
 [ "$rc" = 0 ] && [ -n "$a" ] && [ -n "$e" ] && [ -n "$p" ] && [ -n "$i" ] && [ -n "$fpos" ] \
     && [ "$a" -lt "$e" ] && [ "$e" -lt "$p" ] && [ "$p" -lt "$i" ] && [ "$i" -lt "$fpos" ] \
     && ok "order: fetch → secrets → DBs → MinIO → fingerprint" || bad "restore order/rc=$rc: $(printf '%s' "$ev" | tr '\n' ';') $(tail -3 "$T/out")"
+rn="$(pos 'EVENT rename synap synap__pre_restore')"; cr="$(pos 'EVENT create synap$')"; dr="$(pos 'EVENT drop synap__pre_restore')"
+pl="$(pos 'EVENT pg_restore' last)"
+[ -n "$rn" ] && [ -n "$cr" ] && [ -n "$dr" ] && [ "$rn" -lt "$cr" ] && [ "$cr" -lt "$pl" ] && [ "$pl" -lt "$dr" ] && [ "$(sort "$FAKE_DBS" | tr '\n' ' ')" = "kratos synap " ] \
+    && ok "DBs restore into FRESH databases (live renamed aside → created → restored → aside dropped)" || bad "fresh restore: rename=$rn create=$cr restore=$pl drop=$dr dbs=$(tr '\n' ' ' < "$FAKE_DBS")"
 calls_since "$m" | grep -q "EVENT postgres-up env-present" && cmp -s "$F/.env" "$T/deploy/.env" && [ "$(perm "$F/.env")" = 600 ] \
     && ok "restored .env (0600) is in place before postgres starts" || bad ".env not restored first"
 [ -f "$F/state/release" ] && [ -e "$F/state/postgres-initialized" ] && ok "state/ restored; init marker written after the data" || bad "state: $(ls -A "$F/state")"
