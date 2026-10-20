@@ -331,12 +331,20 @@ describe("focus_session/update — the deliverables half of an approval", () => 
   it("says nothing when there was nothing to refuse", async () => {
     const done = await approve({ completeOutput: "Launch brief" });
     expect(done.refusals).toBeUndefined();
-    const scalarOnly = await approve({ goal: "A new goal" });
+    // A goal change rides with the goal it replaces (`session-update-goal.ts`).
+    const scalarOnly = await approve({
+      goal: "A new goal",
+      previousGoal: "Ship the ownership pair",
+    });
     expect(scalarOnly.refusals).toBeUndefined();
   });
 
   it("takes no output lock at all when the proposal carried none", async () => {
-    await approve({ goal: "A new goal", progress: 60 });
+    await approve({
+      goal: "A new goal",
+      previousGoal: "Ship the ownership pair",
+      progress: 60,
+    });
     expect(writtenOutputs()).toBeUndefined();
     const scalar = updates.find((u) => u.table === "focus_sessions")!;
     expect(scalar.values).toMatchObject({ goal: "A new goal", progress: 60 });
