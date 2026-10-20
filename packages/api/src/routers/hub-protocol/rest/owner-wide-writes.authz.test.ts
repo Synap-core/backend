@@ -27,6 +27,10 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  AI_READ_PROPOSE_ROLE_ID,
+  GRANT_PRESETS,
+} from "@synap-core/types/grants";
 
 const { getApiKeyStatus, grant } = vi.hoisted(() => ({
   getApiKeyStatus: vi.fn(),
@@ -82,6 +86,11 @@ const grantRow = (over: Record<string, unknown>) => ({
 });
 const FULL = grantRow({});
 const ONE_WORKSPACE = grantRow({ workspaceIds: ["ws-1"] });
+// The real "AI — read & propose" preset: reads every subject, never unbounded.
+const AI_PRESET = grantRow({
+  permissions: GRANT_PRESETS.find((r) => r.id === AI_READ_PROPOSE_ROLE_ID)!
+    .grant.permissions,
+});
 const AI_PRESET_LIKE = grantRow({
   permissions: ["entity.*.read", "entity.*.create", "document.read"],
 });
@@ -100,7 +109,18 @@ const ROWS: Array<[Method, string, boolean]> = [
   // Gated / bounded siblings — not this door class.
   ["POST", "/vault/secrets/sec-1/grant", false],
   ["POST", "/vault/secrets", false],
+  // S5 (2026-10-20): /memory writes act for the whole owner — knowledge_facts
+  // are recalled in every workspace and no grant narrows them.
+  ["POST", "/memory", true],
+  ["POST", "/memory/turns", true],
+  ["POST", "/memory/sessions", true],
+  ["POST", "/memory/writes", true],
+  ["DELETE", "/memory/fact-1", true],
+  ["POST", "/memory/search", false], // a read
 ];
+
+/** POST doors that READ — the generic fence rules on them, not this class. */
+const POST_READS = new Set(["/memory/search"]);
 
 /**
  * S1 (2026-10-20): a `*` pinned to a space, project or object is NARROWED, so
@@ -182,10 +202,18 @@ describe("owner-wide writes need an unbounded key", () => {
     }
   );
 
-  it.each(ROWS.filter((r) => !r[2] && r[0] !== "GET"))(
+  it.each(ROWS.filter((r) => !r[2] && r[0] !== "GET" && !POST_READS.has(r[1])))(
     "%s %s → not owner-wide: a `*` key pinned to one workspace passes",
     async (method, path) => {
       asKey(ONE_WORKSPACE);
+      expect((await send(method, path)).status).toBe(200);
+    }
+  );
+
+  it.each(ROWS.filter((r) => POST_READS.has(r[1])))(
+    "%s %s → a read, not owner-wide: the AI preset (bounded, unpinned) passes",
+    async (method, path) => {
+      asKey(AI_PRESET);
       expect((await send(method, path)).status).toBe(200);
     }
   );

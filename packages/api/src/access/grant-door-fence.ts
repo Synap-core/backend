@@ -288,6 +288,11 @@ export const GRANT_OWNER_WIDE_REST_DOORS: readonly RegExp[] = [
  *  - `DELETE /connectors/connections/:id`, `POST /connectors/disconnect`:
  *    revokes the account at the provider and detaches it from every
  *    capability (`detachNangoConnectionRegistry`).
+ *  - `/memory` writes (`POST /memory`, `/memory/turns|sessions|writes`,
+ *    `DELETE /memory/:id`; S5 2026-10-20): `knowledge_facts` about the
+ *    person, recalled in EVERY workspace, written directly — no grant narrows
+ *    them. `POST /memory/search` is a read (GRANT_REST_POST_READS). Agents
+ *    remember a fact through MCP `synap_remember_fact` (a governed write).
  *
  * Callers checked: the IS (unbounded keys), the browser/app (tRPC session),
  * the CLI cap flows (reach these only after a fenced read, so only with an
@@ -298,6 +303,7 @@ export const GRANT_OWNER_WIDE_REST_WRITES: readonly RegExp[] = [
   /^\/vault\/secrets\/[^/]+\/?$/,
   /^\/connectors\/connections\/[^/]+\/?$/,
   /^\/connectors\/disconnect\/?$/,
+  /^\/memory(?:\/(?!search\/?$)[^/]+)?\/?$/,
 ];
 
 export const GRANT_OWNER_WIDE_UNSUPPORTED =
