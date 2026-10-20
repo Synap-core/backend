@@ -94,7 +94,7 @@ const ProfileScopeSchema = z.enum(["system", "shared", "workspace", "user"]);
  *   - file path   → 'iframe-srcdoc' | 'external-app'
  *   - 'url' is a passthrough used by some link-style surfaces
  *
- * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+ * Spec: synap-app/docs/architecture/profile-renderer.md
  */
 const RendererRefSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -1769,7 +1769,7 @@ export const profilesRouter = router({
    * Additive key: existing consumers that read `result[contentKind]` are
    * unaffected.
    *
-   * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+   * Spec: synap-app/docs/architecture/profile-renderer.md
    */
   getEffectiveRenderers: podProcedure
     .input(

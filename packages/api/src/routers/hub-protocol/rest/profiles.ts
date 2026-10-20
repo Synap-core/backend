@@ -634,7 +634,7 @@ export function registerProfilesRoutes(app: HubHono): void {
     tags: ["Profiles"],
     summary: "Get the effective renderer(s) for a profile",
     description:
-      "Returns the RendererTarget resolved for the given profile in the given workspace. Resolution order: workspace overlay → profile system default → hardcoded fallback. Omit `contentKind` to receive all profile renderer kinds in one round trip. Spec: synap-team-docs/content/team/platform/profile-renderer.mdx",
+      "Returns the RendererTarget resolved for the given profile in the given workspace. Resolution order: workspace overlay → profile system default → hardcoded fallback. Omit `contentKind` to receive all profile renderer kinds in one round trip.",
     request: {
       query: z.object({
         userId: z.string(),
