@@ -1605,8 +1605,8 @@ _swap_backend_canary() {
 
     # Unexpected: the canary passed but production didn't (env diff / race).
     # Return 2 so the caller knows production WAS touched. Rollback is the
-    # update engine's job (previous images + .env, the dump when the migration
-    # level moved) — the old by-tag rollback here could never work for `:local`.
+    # update engine's job (previous images + .env; never the data, see
+    # _ue_rollback) — the old by-tag rollback here could never work for `:local`.
     echo -e "${RED}  ✗ Production health failed after swap (unexpected — the canary had passed).${NC}"
     return 2
 }
@@ -3395,8 +3395,8 @@ EOF
 #
 # Any failure after the snapshot ROLLS BACK: the previous images (still cached
 # locally — Kamal-style, the last two releases are kept), the previous .env and
-# deploy files, and — when the migration level moved — the pre-update dump,
-# restored in maintenance mode (writers stopped). Every outcome is RECORDED
+# deploy files. It never restores data: the schema stays migrated and the
+# pre-update dump is offered to the operator (_ue_rollback). Every outcome is RECORDED
 # (state/last-update.json + state/events.jsonl + a `SYNAP_EVENT {json}` line)
 # and handed to an optional notify hook (SYNAP_UPDATE_NOTIFY_CMD) — U4.
 #
@@ -3637,12 +3637,32 @@ _ue_services() { # <edge> [profile args...]
         | { if [ "$edge" = traefik ]; then grep -vx caddy; else cat; fi; } || true
 }
 
-# "count|lastApplied" of the synap _migrations ledger; empty when unreadable.
+# "count|newest" of the synap _migrations ledger. newest is the newest BY
+# FILENAME (byte order, as apps/api/src/status/migration-ledger.ts compares),
+# never the latest applied: a migration merged late is applied last without
+# being the newest (0331 after 0336, 2026-10-20). "0|" = no ledger table yet.
+# Returns 1 when the ledger cannot be read: a caller must never read that as
+# "no migrations" nor as "the level moved".
 _ue_migration_level() {
-    local c
+    local c has out
     c="$(_pgs_container)"
-    [ -n "$c" ] || return 0
-    _pgs_psql "$c" synap "select count(*)||'|'||coalesce((select filename from _migrations order by applied_at desc, id desc limit 1),'') from _migrations" 2>/dev/null || true
+    [ -n "$c" ] || return 1
+    has="$(_pgs_psql "$c" synap "select to_regclass('public._migrations') is not null" 2>/dev/null)" || return 1
+    case "$has" in
+        f) echo "0|"; return 0 ;;
+        t) ;;
+        *) return 1 ;;
+    esac
+    out="$(_pgs_psql "$c" synap "select count(*)||'|'||coalesce(max(filename collate \"C\"),'') from _migrations" 2>/dev/null)" || return 1
+    case "$out" in [0-9]*'|'*) echo "$out" ;; *) return 1 ;; esac
+}
+
+# The synap schema now, against UE_LEVEL_BEFORE: migrated | unchanged | unknown.
+# Only the synap ledger is measured; Kratos keeps its own (kratos-migrate).
+_ue_schema_state() {
+    local now
+    now="$(_ue_migration_level)" || { echo unknown; return 0; }
+    if [ "$now" = "${UE_LEVEL_BEFORE:-}" ]; then echo unchanged; else echo migrated; fi
 }
 
 _ue_backend_healthy() { # waits up to SYNAP_UPDATE_HEALTH_TRIES × SYNAP_HEALTH_INTERVAL
@@ -3666,11 +3686,16 @@ _ue_backend_healthy() { # waits up to SYNAP_UPDATE_HEALTH_TRIES × SYNAP_HEALTH_
 # An unattended run started by a request carries the request's `id` as
 # `request` (UE_REQUEST_ID, set by _ue_unattended_plan / _ue_unattended_busy):
 # pod-agent matches it to report the outcome of the order it queued.
-_ue_record() { # <status> <from> <to> <reason> <dbRestored true|false> [backup]
+# `dbRestored` is false for every record this engine writes (a rollback swaps
+# images only, see _ue_rollback); records from older engines may carry true.
+# [schema] (rollbacks): migrated | unchanged | unknown — where the synap schema
+# was left; `backup` is then the dump an operator may restore by hand.
+_ue_record() { # <status> <from> <to> <reason> <dbRestored true|false> [backup] [schema]
     local ev
     ev="$(jq -cn --arg status "$1" --arg from "$2" --arg to "$3" \
-        --arg reason "$4" --argjson db "${5:-false}" --arg backup "${6:-}" --arg req "${UE_REQUEST_ID:-}" \
+        --arg reason "$4" --argjson db "${5:-false}" --arg backup "${6:-}" --arg schema "${7:-}" --arg req "${UE_REQUEST_ID:-}" \
         '{kind:"pod.update", status:$status, from:$from, to:$to, reason:$reason, dbRestored:$db, backup:$backup}
+         + (if $schema == "" then {} else {schema:$schema} end)
          + (if $req == "" then {} else {request:$req} end)')"
     _synap_event "$ev" 1 state/last-update.json
 }
@@ -4170,7 +4195,7 @@ _ue_edge_verify() {
 }
 
 # ── the engine ────────────────────────────────────────────────────────────────
-UE_FROM=""; UE_TO=""; UE_BACKUP=""; UE_EDGE=""; UE_PROFILE_ARGS=(); UE_SERVICES=()
+UE_FROM=""; UE_TO=""; UE_BACKUP=""; UE_LEVEL_BEFORE=""; UE_EDGE=""; UE_PROFILE_ARGS=(); UE_SERVICES=()
 
 _ue_bring_up_rest() { # every non-backend service; never stops half-way
     local failed=0
@@ -4193,34 +4218,27 @@ _ue_bring_up_rest() { # every non-backend service; never stops half-way
     return "$failed"
 }
 
-_ue_rollback() { # <reason> <restore_db 0|1>  — never returns
+# A rollback swaps IMAGES ONLY; it never restores data (founder, 2026-10-20).
+# Migrations are forward-only (expand/contract): a release only adds to the
+# schema, and what it removes or reshapes (a contract step) stopped being used
+# by an EARLIER release — the CI guard
+# deploy/__tests__/migration-forward-only.test.sh refuses any other destructive
+# migration. So the previous release's images run on the newer schema, and the
+# data written since the update started is kept. Restoring the pre-update dump
+# is the operator's deliberate choice (`synap restore <dump>`), never automatic:
+# the automatic pg_restore of 2026-10-20 lost the events primary key on
+# pod.antoinesrvt while its checks passed.
+_ue_rollback() { # <reason>  — never returns
     set +e
-    local reason="$1" restore_db="$2" status=rolled_back db=false
+    local reason="$1" status=rolled_back schema
     _ue_err "update ${UE_FROM:-?} → ${UE_TO} failed: ${reason}"
-    _ue_log "↩ Rolling back to ${UE_FROM:-the previous release}..."
+    _ue_log "↩ Rolling back to ${UE_FROM:-the previous release} (images and deploy files; the data is kept)..."
     docker rm -f synap-backend-canary >/dev/null 2>&1
-    if [ "$restore_db" = 1 ]; then
-        if [ -z "$UE_BACKUP" ]; then
-            _ue_err "the migration level moved but there is no pre-update dump to restore"
-            status=rollback_failed
-        else
-            _ue_log "Maintenance mode: stopping writers, restoring ${UE_BACKUP}..."
-            docker compose stop backend realtime pod-admin >/dev/null 2>&1
-            # pgdata_restore restores into fresh databases and fails on ANY
-            # pg_restore error (putting the databases back as they were); the
-            # fingerprint recorded with the dump is the second, independent proof.
-            if SYNAP_DEPLOY_DIR="$(pwd)" pgdata_restore "$UE_BACKUP"; then
-                local want got
-                want="$(cat "$UE_BACKUP/fingerprint" 2>/dev/null)"
-                got="$(SYNAP_DEPLOY_DIR="$(pwd)" _pgs_fingerprint "$(SYNAP_DEPLOY_DIR="$(pwd)" _pgs_container)")"
-                if [ -n "$want" ] && [ "$got" = "$want" ]; then db=true
-                else
-                    _ue_err "restoring ${UE_BACKUP} did not bring the data back: the dump recorded users|entities|api_keys=${want:-<none>}, the database now has ${got:-<unreadable>}"
-                    status=rollback_failed
-                fi
-            else _ue_err "restoring ${UE_BACKUP} failed"; status=rollback_failed; fi
-        fi
-    fi
+    schema="$(_ue_schema_state)"
+    case "$schema" in
+        migrated) reason="${reason}; the database schema stays migrated (forward-only), its data kept" ;;
+        unknown)  reason="${reason}; the migration ledger could not be read, so whether the schema moved is unknown" ;;
+    esac
     cp -p state/update/env.before .env || status=rollback_failed
     _ue_restore_bundle || { _ue_err "could not restore the previous deploy files from state/update/pre-bundle.tar"; status=rollback_failed; }
     if [ -f state/update/kratos.yml.before ]; then
@@ -4246,18 +4264,28 @@ _ue_rollback() { # <reason> <restore_db 0|1>  — never returns
         status=rollback_failed
         reason="${reason}; after the rollback Kratos (sign-in) is not ready"
     fi
-    _ue_record "$status" "$UE_FROM" "$UE_TO" "$reason" "$db" "$UE_BACKUP"
+    _ue_record "$status" "$UE_FROM" "$UE_TO" "$reason" false "$UE_BACKUP" "$schema"
     if [ "$status" = rolled_back ]; then
-        _ue_warn "Rolled back: the pod is serving ${UE_FROM:-its previous release} again$([ "$db" = true ] && echo ', database restored from the pre-update dump')."
+        _ue_warn "Rolled back: the pod is serving ${UE_FROM:-its previous release} again. Its data was not touched."
     else
-        _ue_err "ROLLBACK INCOMPLETE — the pod needs attention. Pre-update dump: ${UE_BACKUP:-none}"
+        _ue_err "ROLLBACK INCOMPLETE — the pod needs attention (synap doctor). Its data was not touched."
+    fi
+    if [ "$schema" != unchanged ]; then
+        if [ "$schema" = migrated ]; then _ue_warn "The database keeps the schema ${UE_TO}'s migrations left it in, with all its data."
+        else _ue_warn "Whether ${UE_TO}'s migrations changed the database is unknown (the migration ledger could not be read)."; fi
+        if [ -n "$UE_BACKUP" ]; then
+            _ue_warn "Only to put the database back exactly as it was before the update — this DISCARDS everything written since — run, while the pod still runs ${UE_FROM:-this release}:"
+            _ue_warn "    synap restore ${UE_BACKUP}"
+        else
+            _ue_warn "There is no pre-update dump: the pod had no database before this update."
+        fi
     fi
     exit 1
 }
 
 # <release|source> <ref> <force 0|1>  — cwd = deploy dir, update lock held
 synap_update_engine() {
-    local mode="$1" ref="$2" force="${3:-0}" m errors level_before level_after moved=0 rc
+    local mode="$1" ref="$2" force="${3:-0}" m errors level_before level_after rc
     mkdir -p state/update
     m="$(pwd)/state/update/manifest.json"
     # Every exit records an outcome (B3): pod-agent waits for the record of the
@@ -4320,17 +4348,9 @@ synap_update_engine() {
     fi
     _ue_log "Updating ${UE_FROM:-unrecorded} → ${UE_TO} (git $(jq -r '.gitSha[0:12]' "$m"), migrations → $(jq -r .migrations.last "$m"))"
 
-    # 2. preflight — nothing changes before every check passed
+    # 2. preflight — nothing changes before every check passed (the migration
+    #    ledger and minFrom: in 4, once postgres is surely running)
     local min_from current_last
-    min_from="$(jq -r '.minFrom // empty' "$m")"
-    if [ -n "$min_from" ]; then
-        current_last="$(_ue_migration_level | cut -d'|' -f2)"
-        if [ -n "$current_last" ] && [[ "$current_last" < "$min_from" ]]; then
-            _ue_err "release ${UE_TO} requires a pod already at migration ${min_from} (this pod: ${current_last}). Update to an intermediate release first. Nothing was changed."
-            _ue_record aborted "$UE_FROM" "$UE_TO" "below minFrom ${min_from}" false
-            exit 1
-        fi
-    fi
     _ue_disk_ok || { _ue_record aborted "$UE_FROM" "$UE_TO" "not enough disk" false; exit 1; }
     _preflight_compose_check "$(pwd)" || { _ue_record aborted "$UE_FROM" "$UE_TO" "compose preflight failed" false; exit 1; }
 
@@ -4351,6 +4371,21 @@ synap_update_engine() {
             docker compose up -d postgres || { _ue_err "postgres did not start — cannot take the pre-update backup. Nothing was changed."; _ue_record aborted "$UE_FROM" "$UE_TO" "postgres did not start for the pre-update backup" false; exit 1; }
             _pgs_wait_ready "$(_pgs_container)" || { _ue_err "postgres not ready — no backup, no update. Nothing was changed."; _ue_record aborted "$UE_FROM" "$UE_TO" "postgres not ready for the pre-update backup" false; exit 1; }
         fi
+        # The level before anything changes. Unreadable refuses the update: a
+        # failed read is neither "no migrations" (minFrom would pass) nor
+        # "moved" (the rollback would report a schema change that never ran).
+        level_before="$(_ue_migration_level)" || {
+            _ue_err "cannot read the migration ledger (_migrations) — refusing to update a pod whose schema level is unknown. Nothing was changed."
+            _ue_record aborted "$UE_FROM" "$UE_TO" "migration ledger unreadable" false
+            exit 1
+        }
+        min_from="$(jq -r '.minFrom // empty' "$m")"
+        current_last="${level_before#*|}"
+        if [ -n "$min_from" ] && [[ "$current_last" < "$min_from" ]]; then
+            _ue_err "release ${UE_TO} requires a pod already at migration ${min_from} (this pod: ${current_last:-none}). Update to an intermediate release first. Nothing was changed."
+            _ue_record aborted "$UE_FROM" "$UE_TO" "below minFrom ${min_from}" false
+            exit 1
+        fi
         UE_BACKUP="$(SYNAP_DEPLOY_DIR="$(pwd)" COMPOSE_CMD="command docker compose" pgdata_backup pre-update)" || {
             _ue_err "Pre-update database backup failed — aborting update before migrations. Nothing was changed."
             _ue_record aborted "$UE_FROM" "$UE_TO" "pre-update backup failed" false
@@ -4358,19 +4393,20 @@ synap_update_engine() {
         }
     else
         _ue_warn "no postgres data yet (fresh pod) — no pre-update dump to take"
+        level_before="0|"
     fi
-    level_before="$(_ue_migration_level)"
+    UE_LEVEL_BEFORE="$level_before"
     # Services already unhealthy now are not the release's doing (verify warns, never rolls back for them).
     UE_UNHEALTHY_BEFORE="$(_ue_health_states | awk '$2 == "unhealthy" {print $1}')"
 
     # 5. from here on every failure rolls back
-    trap '_ue_rollback "interrupted" "$([ "$(_ue_migration_level)" != "$level_before" ] && echo 1 || echo 0)"' INT TERM HUP
+    trap '_ue_rollback "interrupted"' INT TERM HUP
     set +e
-    _ue_install_bundle || _ue_rollback "installing the release's deploy files failed" 0
-    _ue_write_release_env "$m" .env || _ue_rollback "writing the release image pins failed" 0
+    _ue_install_bundle || _ue_rollback "installing the release's deploy files failed"
+    _ue_write_release_env "$m" .env || _ue_rollback "writing the release image pins failed"
     UE_PROFILE_ARGS=()
     if should_start_pod_agent; then UE_PROFILE_ARGS=(--profile pod-agent)
-    elif [ $? -eq 2 ]; then _ue_rollback "pod-agent misconfigured" 0; fi
+    elif [ $? -eq 2 ]; then _ue_rollback "pod-agent misconfigured"; fi
     UE_SERVICES=()
     local _svc
     while IFS= read -r _svc; do [ -n "$_svc" ] && UE_SERVICES+=("$_svc"); done < <(_ue_services "$UE_EDGE" "${UE_PROFILE_ARGS[@]}")
@@ -4382,32 +4418,32 @@ synap_update_engine() {
     # one so a rollback restores it (a bad render once outlived the rollback and
     # left Kratos crash-looping on the previous release).
     [ -f ../kratos/kratos.yml ] && cp -p ../kratos/kratos.yml state/update/kratos.yml.before
-    generate_kratos_config "$domain" || _ue_rollback "kratos config generation failed" 0
+    generate_kratos_config "$domain" || _ue_rollback "kratos config generation failed"
     if printf '%s\n' "${UE_SERVICES[@]}" | grep -qx caddy; then
-        _ue_caddy_validate || _ue_rollback "the Caddyfile does not validate" 0
+        _ue_caddy_validate || _ue_rollback "the Caddyfile does not validate"
     fi
-    COMPOSE_CMD="docker compose" ensure_ory_databases || _ue_rollback "Ory database bootstrap failed" 0
+    COMPOSE_CMD="docker compose" ensure_ory_databases || _ue_rollback "Ory database bootstrap failed"
 
-    # 6. migrations (backend, kratos) — a throw restores the dump
+    # 6. migrations (backend, kratos) — a throw rolls the images back; the
+    #    schema stays where the migration left it (see _ue_rollback)
     _ue_log "Running migrations..."
-    docker compose run --rm backend-migrate || _ue_rollback "backend migration failed" 1
-    docker compose run --rm kratos-migrate  || _ue_rollback "kratos migration failed" 1
-    level_after="$(_ue_migration_level)"
-    [ "$level_after" != "$level_before" ] && moved=1
-    _ue_log "Migration level: ${level_before:-none} → ${level_after:-none}"
+    docker compose run --rm backend-migrate || _ue_rollback "backend migration failed"
+    docker compose run --rm kratos-migrate  || _ue_rollback "kratos migration failed"
+    level_after="$(_ue_migration_level)" || level_after="<unreadable>"
+    _ue_log "Migration level: ${level_before} → ${level_after}"
 
     # 7. canary-gated swap, then EVERY other service — never stop in between
     _UE_MIGRATED=1 _swap_backend_canary; rc=$?
     case "$rc" in
         0) ;;
-        2) _ue_rollback "production backend unhealthy after the swap (the canary had passed)" "$moved" ;;
-        *) _ue_rollback "the new backend image failed its canary health check" "$moved" ;;
+        2) _ue_rollback "production backend unhealthy after the swap (the canary had passed)" ;;
+        *) _ue_rollback "the new backend image failed its canary health check" ;;
     esac
     _ue_log "Bringing up the other services (edge: ${UE_EDGE})..."
-    _ue_bring_up_rest || _ue_rollback "some services failed to start" "$moved"
+    _ue_bring_up_rest || _ue_rollback "some services failed to start"
 
     # 8. verify the release actually landed
-    _ue_verify "$m" "${UE_SERVICES[@]}" || _ue_rollback "post-update verification failed" "$moved"
+    _ue_verify "$m" "${UE_SERVICES[@]}" || _ue_rollback "post-update verification failed"
 
     # 9. record
     trap - INT TERM HUP
@@ -4577,8 +4613,8 @@ synap update [--release <id|fast|stable>] [--from-source] [--force] [--unattende
 
 Every update: lock → manifest → preflight → pull by digest → verified backup →
 migrate → canary → swap → all services → verify → record. Any failure rolls
-back (previous images; the pre-update dump when the migration level moved) and
-is recorded in deploy/state/last-update.json.
+back the images and deploy files (never the data: the pre-update dump is kept
+and `synap restore <dump>` is printed) and is recorded in deploy/state/last-update.json.
 USAGE
                 return 0 ;;
             *)
@@ -5102,6 +5138,20 @@ cmd_restore() {
         read -p "Continue? (yes/no): " CONFIRM
         [ "$CONFIRM" = "yes" ] || { echo "Restore cancelled"; exit 0; }
         SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_restore "$target" || exit 1
+        # The fingerprint recorded with the dump is the second, independent
+        # proof (as for a snapshot): the stack starts only when it matches.
+        local want got
+        want="$(cat "$target/fingerprint" 2>/dev/null)"
+        if [ -n "$want" ]; then
+            got="$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" _pgs_fingerprint "$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" _pgs_container)")"
+            if [ "$got" != "$want" ]; then
+                echo -e "${RED}❌ Restoring ${target} did not bring the data back: the dump recorded users|entities|api_keys=${want}, the database now has ${got:-<unreadable>}. The stack was NOT restarted — inspect before starting it.${NC}"
+                exit 1
+            fi
+            echo -e "${GREEN}  fingerprint matches the dump (users|entities|api_keys=${got})${NC}"
+        else
+            echo -e "${YELLOW}⚠️  ${target} has no recorded fingerprint: the restore could not be checked against it${NC}"
+        fi
         docker compose up -d --remove-orphans
         echo -e "${GREEN}✅ Restore complete!${NC}"
         return 0

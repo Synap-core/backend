@@ -10,11 +10,15 @@
 #
 # Scenarios (each asserts the release record AND a notification record):
 #   happy       adopted legacy pod → release R2 (bundle installed, verified)
-#   canary      R1 → R2, new image fails health  → previous digests, NO DB restore
-#   migrate     R1 → R2, backend-migrate throws  → dump restored + previous digests
-#   prod        R1 → R2, canary ok, prod fails   → rollback (dump restored: level moved)
-#   restore-bad migrate throws AND pg_restore fails → rollback_failed, dbRestored:false
+#   canary      R1 → R2, new image fails health  → previous digests, schema unchanged
+#   migrate     R1 → R2, backend-migrate throws  → previous digests, data KEPT migrated,
+#                                                  the dump + `synap restore` command offered
+#   restore-*   the operator's `synap restore <dump>`: confirm, fresh-db restore,
+#               failed/drifted/full/unreadable/locked restores change nothing
+#   prod        R1 → R2, canary ok, prod fails   → rollback, schema stays migrated
 #   hup         SIGHUP mid-migration             → rolled back like INT/TERM
+#   ledger*     unreadable ledger → refused before anything; lost after → schema:unknown
+#   minfrom*    minFrom compares the newest migration by NAME
 #   pull        a pull fails                     → nothing changes at all
 #   source      --from-source                    → synap-dev/* only, never ghcr
 #   traefik     SYNAP_EDGE=traefik               → caddy never touched, every service up
@@ -97,6 +101,7 @@ case "$*" in
   "compose ps -q") [ -n "${FAKE_HEALTH:-}" ] && printf '%s\n' c-backend c-kratos c-postgres-backup; exit 0 ;;
   "compose ps"*) exit 0 ;;
   "compose run --rm backend-migrate"*)
+    : > "$F/migrated"
     if [ -n "${FAKE_HUP_AT_MIGRATE:-}" ]; then echo "$FAKE_NEW_LEVEL" > "$F/level"; kill -HUP "$PPID"; exit 0; fi
     if [ -n "${FAKE_MIGRATE_FAIL:-}" ]; then echo "$FAKE_NEW_LEVEL" > "$F/level"; echo "migration 0012 threw" >&2; exit 1; fi
     echo "$FAKE_NEW_LEVEL" > "$F/level"; exit 0 ;;
@@ -129,7 +134,21 @@ case "$*" in
     [ -n "${FAKE_PROD_BAD:-}" ] && is_new "$(cat "$F/backend_image")" && exit 1; exit 0 ;;
   "exec pg1 psql"*pg_encoding_to_char*) echo "UTF8|C.UTF-8|C.UTF-8"; exit 0 ;;
   "exec pg1 psql"*"pg_database_size"*) case "$*" in *::bigint*) echo 100 ;; *) echo 21422.701171875000 ;; esac; exit 0 ;;  # numeric unless cast, as postgres answers
-  "exec pg1 psql"*_migrations*) cat "$F/level"; exit 0 ;;
+  # The synap _migrations ledger. $F/level is the newest BY NAME; a ledger
+  # where a late-merged migration was applied last also has $F/level_by_time.
+  # Only the two query shapes are modelled; any other ledger query is refused,
+  # so a reader that changes its SQL cannot pass on a canned answer.
+  # FAKE_LEDGER_FAIL=1 → every ledger read fails; =after-migrate → only once
+  # backend-migrate ran.
+  "exec pg1 psql"*_migrations*)
+    case "${FAKE_LEDGER_FAIL:-}" in 1) echo "psql: connection refused" >&2; exit 2 ;;
+      after-migrate) [ -e "$F/migrated" ] && { echo "psql: connection refused" >&2; exit 2; } ;; esac
+    case "$*" in
+      *"to_regclass('public._migrations')"*) [ -n "${FAKE_NO_LEDGER:-}" ] && echo f || echo t ;;
+      *'max(filename collate "C")'*) [ -n "${FAKE_NO_LEDGER:-}" ] && { echo 'ERROR: relation "_migrations" does not exist' >&2; exit 1; }; cat "$F/level" ;;
+      *"order by applied_at desc"*) cat "$F/level_by_time" 2>/dev/null || cat "$F/level" ;;
+      *) echo "fake psql: unmodelled ledger query: $*" >&2; exit 1 ;;
+    esac; exit 0 ;;
   "exec pg1 psql"*"from pg_database where not datistemplate"*) echo synap; exit 0 ;;
   # A model of the cluster's database list ($F/dbs), so a restore that renames
   # the live database aside and creates a fresh one is observable.
@@ -376,80 +395,142 @@ SYNAP_UE_HANDOFF="main-9999999" run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [[ "$(last reason)" == *"handoff manifest"* ]] && ! grep -qE '^pull |compose (run|up)' "$FAKE/log" \
   && ok "handoffbad: a handoff naming another release is refused before anything changes" || { bad "handoffbad: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 
-# ── 2. image fails health (canary) → previous digests, NO DB restore ─────────
+# ── 2. image fails health (canary) → previous digests, schema unchanged ──────
 setup canary r1; publish "$R2" 0011_old.sql bundle
 FAKE_NEW_LEVEL="$OLD_LEVEL" FAKE_CANARY_BAD=1 run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && ok "canary: failed update exits non-zero" || bad "canary: rc=0"
 [ "$(cur_id)" = "$R1" ] && ok "canary: current-release is back to $R1" || bad "canary: current-release=$(cur_id)"
 cmp -s "$DEPLOY/.env" "$S/env.orig" && ok "canary: .env restored byte-identical (previous digests)" || bad "canary: .env differs: $(diff "$S/env.orig" "$DEPLOY/.env" | head -4)"
 [ "$(cat "$FAKE/backend_image")" = "$(grep '^SYNAP_IMAGE_BACKEND=' "$S/env.orig" | cut -d= -f2-)" ] && ok "canary: backend runs the previous digest" || bad "canary: backend runs $(cat "$FAKE/backend_image")"
-[ "$(restores)" = 0 ] && [ "$(last dbRestored)" = false ] && ok "canary: no DB restore (migration level unchanged)" || bad "canary: restores=$(restores) dbRestored=$(last dbRestored)"
+[ "$(restores)" = 0 ] && [ "$(last dbRestored)" = false ] && [ "$(last schema)" = unchanged ] && ! grep -q "synap restore" "$S/out" \
+  && ok "canary: no DB restore, schema unchanged, no restore command offered" || bad "canary: restores=$(restores) dbRestored=$(last dbRestored) schema=$(last schema)"
 ! grep -q "release-marker" "$DEPLOY/docker-compose.yml" && [ ! -e "$DEPLOY/added-by-$R2.txt" ] && ok "canary: deploy files restored, bundle-added file removed" || bad "canary: bundle not rolled back"
 [ "$(last status)" = rolled_back ] && notified rolled_back && ok "canary: rollback recorded + notified" || { bad "canary: record=$(last status)"; show; }
 
-# ── 3. migration throws → dump restored + previous digests ───────────────────
+# ── 3. migration throws → images roll back, the DATA IS KEPT ─────────────────
+# A rollback swaps images only (founder, 2026-10-20): the schema stays where the
+# migration left it, the pre-update dump is kept and offered to the operator.
 setup migrate r1; publish "$R2" 0012_new.sql
 FAKE_MIGRATE_FAIL=1 run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && ok "migrate: failed update exits non-zero" || bad "migrate: rc=0"
-[ "$(restores)" = 1 ] && [ "$(cat "$FAKE/level")" = "$OLD_LEVEL" ] && ok "migrate: DB restored from the pre-update dump (level back to $OLD_LEVEL)" || bad "migrate: restores=$(restores) level=$(cat "$FAKE/level")"
-s=$(grep -n "compose stop" "$FAKE/log" | head -1 | cut -d: -f1); r=$(grep -n "pg_restore -U" "$FAKE/log" | head -1 | cut -d: -f1)
-[ -n "$s" ] && [ -n "$r" ] && [ "$s" -lt "$r" ] && ok "migrate: writers stopped (maintenance) before the restore" || bad "migrate: stop=$s restore=$r"
-a=$(grep -n 'rename to "synap__pre_restore"' "$FAKE/log" | head -1 | cut -d: -f1); cr=$(grep -n 'create database "synap"' "$FAKE/log" | head -1 | cut -d: -f1); dr=$(grep -n 'drop database "synap__pre_restore"' "$FAKE/log" | head -1 | cut -d: -f1)
-[ -n "$a" ] && [ -n "$cr" ] && [ -n "$dr" ] && [ "$a" -lt "$cr" ] && [ "$cr" -lt "$r" ] && [ "$r" -lt "$dr" ] && ! grep -q "pg_restore .*--clean" "$FAKE/log" && [ "$(cat "$FAKE/dbs")" = synap ] \
-  && ok "migrate: restored into a FRESH database (live renamed aside, new created, no --clean, aside dropped after)" || bad "migrate: rename=$a create=$cr restore=$r drop=$dr clean=$(grep -c 'pg_restore .*--clean' "$FAKE/log") dbs=$(tr '\n' ' ' < "$FAKE/dbs" 2>/dev/null)"
+[ "$(restores)" = 0 ] && ! grep -q "pg_restore" "$FAKE/log" && ! grep -qE 'rename to|create database|drop database' "$FAKE/log" \
+  && [ "$(cat "$FAKE/level")" = "$NEW_LEVEL" ] \
+  && ok "migrate: no restore of any kind — the database stays migrated ($NEW_LEVEL)" || bad "migrate: restores=$(restores) level=$(cat "$FAKE/level") restore-calls=$(grep -cE 'pg_restore|rename to|drop database' "$FAKE/log")"
+grep -qE "compose stop|compose .* stop " "$FAKE/log" && bad "migrate: writers were stopped (a maintenance window for a restore that no longer happens)" || ok "migrate: writers never stopped"
 cmp -s "$DEPLOY/.env" "$S/env.orig" && [ "$(cur_id)" = "$R1" ] && ok "migrate: previous digests + current-release $R1" || bad "migrate: env/current-release not restored ($(cur_id))"
-[ "$(last status)" = rolled_back ] && [ "$(last dbRestored)" = true ] && notified rolled_back && ok "migrate: rollback with DB restore recorded + notified" || { bad "migrate: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+BK="$(last backup)"
+[ "$(last status)" = rolled_back ] && [ "$(last dbRestored)" = false ] && [ "$(last schema)" = migrated ] && [ -d "$BK" ] && [ -s "$BK/synap.dump" ] && notified rolled_back \
+  && ok "migrate: rolled_back recorded + notified: dbRestored:false, schema:migrated, backup = the kept pre-update dump" || { bad "migrate: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+[[ "$(last reason)" == "backend migration failed; the database schema stays migrated"* ]] \
+  && ok "migrate: the reason says the schema stayed migrated" || bad "migrate: reason=$(last reason)"
+grep -qF "synap restore $BK" "$S/out" && grep -q "DISCARDS everything written since" "$S/out" && grep -q "data was not touched" "$S/out" \
+  && ok "migrate: the operator is given the exact restore command and what it costs" || { bad "migrate: no restore command printed"; show; }
 grep -q "profile canary up" "$FAKE/log" && bad "migrate: the canary ran after a failed migration" || ok "migrate: no canary / swap after the throw"
 
-# ── 3b. migration throws AND the restore fails → never claims dbRestored ─────
-# Any pg_restore error fails pgdata_restore, which puts the live database back
-# (the fresh copy dropped, the aside one renamed back).
+# ── 3b. restoring the kept dump is the operator's door: `synap restore <dir>` ─
+# These were the rollback's restore checks; they now guard the door it offers.
+# restore_from <answer> [env...] — runs `synap restore $BK` against this pod.
+restore_from() {
+  local answer="$1"; shift
+  : > "$FAKE/log"
+  ( cd "$S"; env "$@" PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" bash "$REPO/synap" restore "$BK" ) >"$S/rout" 2>&1 <<<"$answer"
+}
+started() { grep -q "^compose up -d --remove-orphans$" "$FAKE/log"; }
+rshow()   { echo "      --- tail of restore output ---"; tail -10 "$S/rout" | sed 's/^/      /'; }
+
+restore_from no; rc=$?
+[ "$rc" = 0 ] && grep -q "Restore cancelled" "$S/rout" && ! grep -qE "pg_restore|rename to|compose stop" "$FAKE/log" \
+  && ok "restore-no: answering anything but yes restores nothing" || { bad "restore-no: rc=$rc"; rshow; }
+
+restore_from yes; rc=$?
+[ "$rc" = 0 ] && [ "$(restores)" = 1 ] && [ "$(cat "$FAKE/level")" = "$OLD_LEVEL" ] && started \
+  && ok "restore-ok: the pre-update dump is restored (level back to $OLD_LEVEL), then the stack starts" || { bad "restore-ok: rc=$rc restores=$(restores) level=$(cat "$FAKE/level")"; rshow; }
+s=$(grep -n "compose stop" "$FAKE/log" | head -1 | cut -d: -f1); r=$(grep -n "pg_restore -U" "$FAKE/log" | head -1 | cut -d: -f1)
+[ -n "$s" ] && [ -n "$r" ] && [ "$s" -lt "$r" ] && ok "restore-ok: writers stopped before the restore" || bad "restore-ok: stop=$s restore=$r"
+a=$(grep -n 'rename to "synap__pre_restore"' "$FAKE/log" | head -1 | cut -d: -f1); cr=$(grep -n 'create database "synap"' "$FAKE/log" | head -1 | cut -d: -f1); dr=$(grep -n 'drop database "synap__pre_restore"' "$FAKE/log" | head -1 | cut -d: -f1)
+[ -n "$a" ] && [ -n "$cr" ] && [ -n "$dr" ] && [ "$a" -lt "$cr" ] && [ "$cr" -lt "$r" ] && [ "$r" -lt "$dr" ] && ! grep -q "pg_restore .*--clean" "$FAKE/log" && [ "$(cat "$FAKE/dbs")" = synap ] \
+  && ok "restore-ok: restored into a FRESH database (live renamed aside, new created, no --clean, aside dropped after)" || bad "restore-ok: rename=$a create=$cr restore=$r drop=$dr clean=$(grep -c 'pg_restore .*--clean' "$FAKE/log") dbs=$(tr '\n' ' ' < "$FAKE/dbs" 2>/dev/null)"
+grep -q "fingerprint matches the dump" "$S/rout" && ok "restore-ok: the dump's fingerprint is checked" || { bad "restore-ok: no fingerprint check"; rshow; }
+
+# Any pg_restore error puts the live database back (fresh copy dropped, aside renamed back).
 setup restorebad r1; publish "$R2" 0012_new.sql
-FAKE_MIGRATE_FAIL=1 FAKE_PG_RESTORE_FAIL=1 run_update --release "$R2"; rc=$?
-[ "$rc" != 0 ] && [ "$(last status)" = rollback_failed ] && [ "$(last dbRestored)" = false ] && notified rollback_failed \
-  && ok "restore-bad: a failed pg_restore records rollback_failed, dbRestored:false" || { bad "restore-bad: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
-grep -q "restoring 'synap' failed" "$S/out" && grep -q "putting every database back" "$S/out" && grep -q "ROLLBACK INCOMPLETE" "$S/out" \
-  && ok "restore-bad: the operator is told the restore failed and the database was put back" || { bad "restore-bad: no restore-failed message"; show; }
-[ "$(cat "$FAKE/dbs")" = synap ] && ok "restore-bad: the live database is back under its name, no leftover copy" || bad "restore-bad: databases now: $(tr '\n' ' ' < "$FAKE/dbs")"
-grep -q "database restored" "$S/out" && bad "restore-bad: output still claims the database was restored" || ok "restore-bad: no 'database restored' claim"
+FAKE_MIGRATE_FAIL=1 run_update --release "$R2"; BK="$(last backup)"
+restore_from yes FAKE_PG_RESTORE_FAIL=1; rc=$?
+[ "$rc" != 0 ] && grep -q "putting every database back" "$S/rout" && [ "$(cat "$FAKE/dbs")" = synap ] && ! started && ! grep -q "Restore complete" "$S/rout" \
+  && ok "restore-bad: a failed pg_restore puts the live database back, claims nothing, starts nothing" || { bad "restore-bad: rc=$rc dbs=$(tr '\n' ' ' < "$FAKE/dbs" 2>/dev/null)"; rshow; }
 
-# ── 3b'. the restore succeeds but the data is not the dump's → never dbRestored ─
+# The restore succeeds but the data is not the dump's → refused, stack not started.
 setup restoredrift r1; publish "$R2" 0012_new.sql
-FAKE_MIGRATE_FAIL=1 FAKE_FP_DRIFT=1 run_update --release "$R2"; rc=$?
-[ "$rc" != 0 ] && [ "$(last status)" = rollback_failed ] && [ "$(last dbRestored)" = false ] && grep -q "did not bring the data back" "$S/out" \
-  && ok "restore-drift: a fingerprint that differs from the dump's records rollback_failed" || { bad "restore-drift: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+FAKE_MIGRATE_FAIL=1 run_update --release "$R2"; BK="$(last backup)"
+restore_from yes FAKE_FP_DRIFT=1; rc=$?
+[ "$rc" != 0 ] && grep -q "did not bring the data back" "$S/rout" && ! started \
+  && ok "restore-drift: a fingerprint that differs from the dump's is refused, the stack is not started" || { bad "restore-drift: rc=$rc"; rshow; }
 
-# ── 3b''. no room for the fresh copy → refused before anything is stopped ────
+# No room for the fresh copy → refused before anything is stopped.
 setup restorefull r1; publish "$R2" 0012_new.sql
-FAKE_MIGRATE_FAIL=1 FAKE_PG_FREE_KB=1 run_update --release "$R2"; rc=$?
-[ "$(last status)" = rollback_failed ] && grep -q "not enough room to restore" "$S/out" && [ "$(cat "$FAKE/dbs" 2>/dev/null || echo synap)" = synap ] \
-  && ok "restore-full: a full volume refuses the restore and leaves the database alone" || { bad "restore-full: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+FAKE_MIGRATE_FAIL=1 run_update --release "$R2"; BK="$(last backup)"
+restore_from yes FAKE_PG_FREE_KB=1; rc=$?
+[ "$rc" != 0 ] && grep -q "not enough room to restore" "$S/rout" && ! grep -q "compose stop" "$FAKE/log" && [ "$(cat "$FAKE/dbs" 2>/dev/null || echo synap)" = synap ] \
+  && ok "restore-full: a full volume refuses the restore and leaves the database alone" || { bad "restore-full: rc=$rc"; rshow; }
 
-# ── 3b-iii. the existence check FAILS during the restore → the live database
-#    is never dropped (a failed read once read as "absent", and the revert then
-#    dropped the live database it had never set aside).
+# The existence check FAILS during the restore → the live database is never
+# dropped (a failed read once read as "absent", and the revert then dropped it).
 setup restoreread r1; publish "$R2" 0012_new.sql
-FAKE_MIGRATE_FAIL=1 FAKE_DB_STATE_FAIL=synap run_update --release "$R2"; rc=$?
-[ "$(last status)" = rollback_failed ] && [ "$(last dbRestored)" = false ] && grep -q "cannot tell whether 'synap' exists" "$S/out" \
+FAKE_MIGRATE_FAIL=1 run_update --release "$R2"; BK="$(last backup)"
+restore_from yes FAKE_DB_STATE_FAIL=synap; rc=$?
+[ "$rc" != 0 ] && grep -q "cannot tell whether 'synap' exists" "$S/rout" \
   && ! grep -q 'drop database if exists "synap"' "$FAKE/log" && ! grep -q 'drop database "synap"' "$FAKE/log" && [ "$(cat "$FAKE/dbs" 2>/dev/null || echo synap)" = synap ] \
-  && ok "restore-read: a failed existence check stops the restore and never drops the live database" || { bad "restore-read: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null) drops=$(grep -c 'drop database' "$FAKE/log")"; show; }
+  && ok "restore-read: a failed existence check stops the restore and never drops the live database" || { bad "restore-read: rc=$rc drops=$(grep -c 'drop database' "$FAKE/log")"; rshow; }
 
-# ── 3b-iv. a backup run holds the backup lock → the restore waits, then gives
-#    up without touching the databases (a backup must never dump a half-restored one).
+# A backup run holds the backup lock → the restore waits, then gives up untouched.
 setup restorelock r1; publish "$R2" 0012_new.sql
+FAKE_MIGRATE_FAIL=1 run_update --release "$R2"; BK="$(last backup)"
 LK="$DEPLOY/backups/postgres"; mkdir -p "$LK"; HOLD=""
 if command -v flock >/dev/null 2>&1; then touch "$LK/.backup.flock"; flock "$LK/.backup.flock" sleep 60 & HOLD=$!; sleep 0.3; else mkdir "$LK/.backup.lock"; fi
-FAKE_MIGRATE_FAIL=1 SYNAP_RESTORE_LOCK_WAIT=2 run_update --release "$R2"; rc=$?
+restore_from yes SYNAP_RESTORE_LOCK_WAIT=2; rc=$?
 [ -n "$HOLD" ] && kill "$HOLD" 2>/dev/null; rmdir "$LK/.backup.lock" 2>/dev/null
-[ "$(last status)" = rollback_failed ] && grep -q "a backup run still holds" "$S/out" && ! grep -q 'rename to "synap__pre_restore"' "$FAKE/log" && [ "$(cat "$FAKE/dbs" 2>/dev/null || echo synap)" = synap ] \
-  && ok "restore-lock: a held backup lock makes the restore wait, then refuse untouched" || { bad "restore-lock: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+[ "$rc" != 0 ] && grep -q "a backup run still holds" "$S/rout" && ! grep -q 'rename to "synap__pre_restore"' "$FAKE/log" && [ "$(cat "$FAKE/dbs" 2>/dev/null || echo synap)" = synap ] \
+  && ok "restore-lock: a held backup lock makes the restore wait, then refuse untouched" || { bad "restore-lock: rc=$rc"; rshow; }
 
 # ── 3c. SIGHUP (ssh drop) mid-update → rolled back like INT/TERM ─────────────
 setup hup r1; publish "$R2" 0012_new.sql
 FAKE_HUP_AT_MIGRATE=1 run_update --release "$R2"; rc=$?
-[ "$rc" != 0 ] && [ "$(last status)" = rolled_back ] && [ "$(last reason)" = interrupted ] && [ "$(last dbRestored)" = true ] \
-  && [ "$(cat "$FAKE/level")" = "$OLD_LEVEL" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" \
-  && ok "hup: SIGHUP mid-migration rolls back (dump restored, previous digests)" || { bad "hup: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null) level=$(cat "$FAKE/level")"; show; }
+[ "$rc" != 0 ] && [ "$(last status)" = rolled_back ] && [[ "$(last reason)" == "interrupted;"* ]] && [ "$(last dbRestored)" = false ] && [ "$(last schema)" = migrated ] \
+  && [ "$(restores)" = 0 ] && [ "$(cat "$FAKE/level")" = "$NEW_LEVEL" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" \
+  && ok "hup: SIGHUP mid-migration rolls the images back, keeps the migrated data" || { bad "hup: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null) level=$(cat "$FAKE/level")"; show; }
+
+# ── 3d. the migration ledger is unreadable → refused before anything changes ─
+setup ledgerfail r1; publish "$R2" 0012_new.sql bundle
+cp "$DEPLOY/docker-compose.yml" "$S/compose.orig"
+FAKE_LEDGER_FAIL=1 run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [ "$(last reason)" = "migration ledger unreadable" ] \
+  && cmp -s "$DEPLOY/.env" "$S/env.orig" && cmp -s "$DEPLOY/docker-compose.yml" "$S/compose.orig" \
+  && ! grep -qE "pg_dump|run --rm backend-migrate" "$FAKE/log" && [ "$(cur_id)" = "$R1" ] \
+  && ok "ledgerfail: an unreadable ledger refuses the update (no dump, no migration, nothing changed)" || { bad "ledgerfail: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+# … readable before, unreadable after a failed migration → "unknown", never "moved"/"unchanged"
+setup ledgerlost r1; publish "$R2" 0012_new.sql
+FAKE_MIGRATE_FAIL=1 FAKE_LEDGER_FAIL=after-migrate run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = rolled_back ] && [ "$(last schema)" = unknown ] && [ "$(last dbRestored)" = false ] && [[ "$(last reason)" == *"whether the schema moved is unknown"* ]] \
+  && [ "$(restores)" = 0 ] && grep -qF "synap restore $(last backup)" "$S/out" \
+  && ok "ledgerlost: a ledger lost after the migration is recorded as schema:unknown, with the restore command" || { bad "ledgerlost: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+# … a database without a ledger table yet is level 0, not unreadable
+setup noledger r1; publish "$R2" 0012_new.sql
+FAKE_NO_LEDGER=1 run_update --release "$R2"; rc=$?
+grep -q "Migration level: 0| →" "$S/out" && ! grep -q "ledger unreadable" "$S/out" \
+  && ok "noledger: no _migrations table yet reads as level 0 (not as unreadable)" || { bad "noledger: rc=$rc"; show; }
+
+# ── 3e. minFrom compares the newest migration BY NAME, never the latest applied
+# 0331 merged after 0336 was applied: it is the latest by time, 0336 the newest.
+minfrom() { jq --arg m "$1" '.minFrom = $m' "$TMP/rel/$R2/release.json" > "$TMP/x" && mv "$TMP/x" "$TMP/rel/$R2/release.json"; }
+setup minfromlate r1; publish "$R2" 0337_new.sql; minfrom 0335_x.sql
+echo "13|0336_y.sql" > "$FAKE/level"; echo "13|0331_late.sql" > "$FAKE/level_by_time"
+FAKE_NEW_LEVEL="14|0337_new.sql" run_update --release "$R2"; rc=$?
+[ "$(last status)" != aborted ] && grep -q "Migration level: 13|0336_y.sql →" "$S/out" \
+  && ok "minfromlate: a late-merged migration does not make the pod look below minFrom" || { bad "minfromlate: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+setup minfromlow r1; publish "$R2" 0012_new.sql; minfrom 0012_new.sql
+run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [ "$(last reason)" = "below minFrom 0012_new.sql" ] && ! grep -qE "pg_dump|run --rm backend-migrate" "$FAKE/log" \
+  && ok "minfromlow: a pod below minFrom is refused before the dump and the migration" || { bad "minfromlow: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 
 # ── 4. canary passes, production fails → rollback ────────────────────────────
 setup prod r1; publish "$R2" 0012_new.sql
@@ -458,7 +539,7 @@ FAKE_PROD_BAD=1 run_update --release "$R2"; rc=$?
 grep -q "compose --profile canary up -d backend-canary" "$FAKE/log" && ok "prod: the canary ran (and passed)" || bad "prod: no canary"
 [ "$(cur_id)" = "$R1" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" && [ "$(cat "$FAKE/backend_image")" != "ghcr.io/synap-core/backend@sha256:$NEW_DIGEST" ] \
   && ok "prod: back on $R1's digests" || bad "prod: current=$(cur_id) backend=$(cat "$FAKE/backend_image")"
-[ "$(restores)" = 1 ] && [ "$(cat "$FAKE/level")" = "$OLD_LEVEL" ] && ok "prod: level had moved → dump restored" || bad "prod: restores=$(restores)"
+[ "$(restores)" = 0 ] && [ "$(cat "$FAKE/level")" = "$NEW_LEVEL" ] && [ "$(last schema)" = migrated ] && ok "prod: level had moved → kept migrated, no restore" || bad "prod: restores=$(restores) schema=$(last schema)"
 [ "$(last status)" = rolled_back ] && notified rolled_back && ok "prod: rollback recorded + notified" || { bad "prod: record=$(last status)"; show; }
 
 # ── 4a. a rollback restores the kratos.yml that was running ──────────────────
