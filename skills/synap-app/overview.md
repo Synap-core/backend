@@ -39,8 +39,11 @@ Pin `@^1.0.0` on `sdk`/`react` so you never resolve an old, abandoned `0.x`.
 ## Get a pod to build against
 
 - **Self-host (free):** run the backend's `install.sh` (it installs Docker if
-  needed, fetches a signed release bundle and runs `synap install`); see the
-  backend's `deploy/README.md`.
+  needed, fetches the release bundle, checks it against the release manifest's
+  sha256 and runs `synap install`); see the backend's `deploy/README.md`. It
+  also checks the manifest's signature: by default
+  (`SYNAP_RELEASE_VERIFY=warn`) it only warns and carries on when the signature
+  is missing or does not verify; `SYNAP_RELEASE_VERIFY=enforce` refuses.
 - **Managed (paid):** sign up at synap.live and provision a pod.
 
 You can develop the base app with **no pod at all** using its mock mode

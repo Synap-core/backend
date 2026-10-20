@@ -27,7 +27,7 @@ const result = await synap.entities.create.mutate({ /* ... */ });
   (`credentials: "include"`). Browser only.
 - **`apiKey`** — only the local-mode token of a desktop pod, sent as
   `Authorization: Bearer`. `/trpc` refuses hub and user API keys
-  (`synap_hub_…`, `synap_user_…`), and `createSynapClient` throws if you pass
+  (keys starting with synap_hub_ or synap_user_), and `createSynapClient` throws if you pass
   one. For an API key, use `@synap-core/hub-rest-client` (below).
 
 Other options: `extraHeaders`, and `onAuthError({ status, message })`, called on a
