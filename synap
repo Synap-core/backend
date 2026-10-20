@@ -4206,9 +4206,9 @@ _ue_rollback() { # <reason> <restore_db 0|1>  — never returns
         else
             _ue_log "Maintenance mode: stopping writers, restoring ${UE_BACKUP}..."
             docker compose stop backend realtime pod-admin >/dev/null 2>&1
-            # pgdata_restore downgrades a pg_restore error to a warning (TimescaleDB
-            # catalog noise), so its exit status cannot prove the data came back:
-            # only the fingerprint recorded with the dump can (as restore-snapshot 5/5).
+            # pgdata_restore restores into fresh databases and fails on ANY
+            # pg_restore error (putting the databases back as they were); the
+            # fingerprint recorded with the dump is the second, independent proof.
             if SYNAP_DEPLOY_DIR="$(pwd)" pgdata_restore "$UE_BACKUP"; then
                 local want got
                 want="$(cat "$UE_BACKUP/fingerprint" 2>/dev/null)"
