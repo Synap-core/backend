@@ -213,7 +213,13 @@ vi.mock("./client-metadata.js", async () => {
   );
   return {
     ...actual,
-    resolveCimdClient: (clientId: string) => {
+    resolveCimdClient: (clientId: string, issuer: string | null) => {
+      // The real URL rules run first (length, https, canonical form…).
+      try {
+        actual.assertClientMetadataUrl(clientId, issuer);
+      } catch (err) {
+        return Promise.reject(err);
+      }
       const row = store.cimd.get(clientId);
       return row
         ? Promise.resolve(row)
@@ -1535,6 +1541,24 @@ describe("CIMD clients", () => {
     expect(body.error).toBe("unauthorized_client");
     expect(body).not.toHaveProperty("access_token");
     expect(provisionSpy).not.toHaveBeenCalled();
+  });
+
+  it("validation stays bounded: a 513-char client_id is refused at /authorize, a 512-char one is not", async () => {
+    const url = (n: number) => {
+      const base = "https://studio.example.com/";
+      return base + "a".repeat(n - base.length);
+    };
+    const long = await authorizeApp({ client_id: url(513) });
+    expect(long.status).toBe(400);
+    expect(long.headers.get("location")).toBeNull();
+    expect(await long.text()).toMatch(/longer than 512/);
+
+    const max = url(512);
+    cacheApp();
+    store.cimd.set(max, { ...store.cimd.get(APP_ID)!, clientId: max });
+    const ok = await authorizeApp({ client_id: max });
+    expect(ok.status).toBe(302);
+    expect(new URL(ok.headers.get("location")!).origin).toBe(POD_ADMIN);
   });
 
   it("a DCR-shaped client_id never resolves to a cached document's row", async () => {
