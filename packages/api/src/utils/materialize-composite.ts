@@ -13,6 +13,7 @@
  * never discard the created entities.
  */
 
+import { TRPCError } from "@trpc/server";
 import {
   isPlanBatch,
   isPlanOperation,
@@ -1296,16 +1297,27 @@ export async function materializeCompositeGraph(
             ref: resolvedRef,
           };
         }
-        // A door that answers "proposed" did not create anything. Outside a
-        // plan the historic behaviour stands; inside one it is a failed step.
-        if (
-          planMode &&
-          (result as { status?: string } | undefined)?.status === "proposed"
-        ) {
+        // A door that answers "proposed" did not create anything. Inside a
+        // plan it is a failed step. Outside one there is no entity to carry on
+        // with: the old path kept going with an undefined id and died later on
+        // whatever wrote it first (live 2026-10-18: "No values to set" from the
+        // idempotency link), so the failure now names what happened.
+        const proposedInstead =
+          (result as { status?: string } | undefined)?.status === "proposed";
+        if (planMode && proposedInstead) {
           failPlanStep(
             i,
             "the entity create was routed to a proposal instead of being created"
           );
+        } else if (proposedInstead) {
+          const filed = (result as { proposalId?: string }).proposalId;
+          // A TRPCError, so the receipt's stored sentence IS this one (the
+          // failure classifier keeps a tRPC message; a plain Error reads
+          // "an internal error occurred") and its class is `conflict`.
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `"${op.title || op.profileSlug}" was routed to review${filed ? ` (proposal ${filed})` : ""} instead of being created, so this graph could not be applied.`,
+          });
         }
         realId = (result as { id: string }).id;
         // A caller may report the ACTUAL profile it created (e.g. capture's
