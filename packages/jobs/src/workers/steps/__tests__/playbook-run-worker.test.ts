@@ -50,7 +50,10 @@ vi.mock("@synap-core/core", () => ({
 }));
 
 import { executePlaybookRun } from "../playbook-run.js";
-import { registerPlaybookRunner } from "../../capability-dispatch.js";
+import {
+  registerPlaybookReadinessGate,
+  registerPlaybookRunner,
+} from "../../capability-dispatch.js";
 import type { StepContext } from "../../automation-executor-types.js";
 
 const context = () =>
@@ -80,6 +83,7 @@ beforeEach(() => {
   h.proposeMock.mockClear();
   h.pending = 0;
   registerPlaybookRunner(h.runnerMock as never);
+  registerPlaybookReadinessGate(async () => ({ ready: true }));
 });
 
 describe("A. a worker node hands the spine its spec + enablement", () => {

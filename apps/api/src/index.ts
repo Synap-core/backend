@@ -1787,6 +1787,7 @@ try {
             const {
               registerCapabilityExecutor,
               registerPlaybookRunner,
+              registerPlaybookReadinessGate,
               registerSessionScheduler,
             } = await import("@synap/jobs/workers/automation-executor.js");
             const { registerAgentWaker } =
@@ -1843,6 +1844,12 @@ try {
             // to api's runPlaybook via this slot, so is-agent | external-agent |
             // hybrid all dispatch through the executor spine + triggerAutoRespond.
             registerPlaybookRunner((input) => api.runPlaybook(input));
+            // ONE unattended readiness rule: a propose-mode rule checks the
+            // playbook's skills with the spine's own preflight before it files
+            // a run proposal (an unrunnable one is the enable request instead).
+            registerPlaybookReadinessGate((input) =>
+              api.checkUnattendedPlaybookReadiness(input)
+            );
             // ONE appointment materializer: a `playbook_run` node whose mode is
             // "appointment" creates a `status:'scheduled'` focus_session that
             // WAITS for the human — it never reaches the runner above, so no

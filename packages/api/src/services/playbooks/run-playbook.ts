@@ -713,6 +713,68 @@ async function resolveRunFiling(input: RunPlaybookInput): Promise<RunFiling> {
 }
 
 /**
+ * D3 — the ONE unattended readiness rule. An unattended door (a scheduled run,
+ * a propose-mode rule) has no caller to answer, so a playbook depending on
+ * not-enabled skills files ONE enable request per pack on behalf of the owner
+ * and returns the refusal sentence; `null` = ready. Both unattended doors call
+ * this: `runPlaybook` (run mode) and {@link checkUnattendedPlaybookReadiness}
+ * (propose mode, before a run proposal is filed that could only fail on
+ * approval). Attended doors refuse up front instead (`playbooks.run`).
+ */
+export async function refuseUnattendedRunIfSkillsOff(input: {
+  playbook: Pick<Playbook, "id" | "name" | "goalTemplate">;
+  userId: string;
+  workspaceId: string;
+  agentUserId: string | null;
+}): Promise<string | null> {
+  const unenabled = await findUnenabledPlaybookSkills({
+    playbook: input.playbook,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+  });
+  if (unenabled.length === 0) return null;
+  const offers = await proposeCapabilityEnable({
+    refused: unenabled,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    agentUserId: input.agentUserId,
+  });
+  const review = offers
+    .filter((o) => o.status === "proposed")
+    .map((o) => o.reviewUrl);
+  const names = unenabled.map((s) => s.name).join(", ");
+  return review.length > 0
+    ? `Nothing ran: "${input.playbook.name}" uses skills that are not enabled yet (${names}). A request to enable them is waiting for the owner's review: ${review.join(" ")}`
+    : `Nothing ran: "${input.playbook.name}" uses skills that are not enabled yet (${names}), and the request to enable them could not be filed. Enable them in Settings → Capabilities.`;
+}
+
+/**
+ * The propose-mode rule's readiness gate (the `registerPlaybookReadinessGate`
+ * slot, @synap/jobs): the same playbook resolution as {@link runPlaybook}, then
+ * the same unattended rule. Without it an automation filed run proposals that
+ * could only fail on approval while the owner's manual run was blocked.
+ */
+export async function checkUnattendedPlaybookReadiness(input: {
+  playbookId?: string;
+  playbookName?: string;
+  workspaceId: string;
+  userId: string;
+}): Promise<{ ready: true } | { ready: false; message: string }> {
+  const playbook = await resolveRunnablePlaybook({
+    playbookId: input.playbookId,
+    playbookName: input.playbookName,
+    workspaceId: input.workspaceId,
+  });
+  const message = await refuseUnattendedRunIfSkillsOff({
+    playbook,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    agentUserId: null,
+  });
+  return message ? { ready: false, message } : { ready: true };
+}
+
+/**
  * Run a playbook end-to-end. Caller MUST gate (checkPermissionOrPropose) first.
  *
  * Honors the playbook's `inputStrategy` (S9): `none` runs once; `static`/`query`
@@ -747,28 +809,13 @@ export async function runPlaybook(
   // on behalf of the owner and FAILS the step with that reason, before any
   // session, channel, run row or input-cursor advance exists.
   if (input.unenabledSkillPreflight) {
-    const unenabled = await findUnenabledPlaybookSkills({
+    const refusal = await refuseUnattendedRunIfSkillsOff({
       playbook,
       userId: input.userId,
       workspaceId: input.workspaceId,
+      agentUserId: input.agentUserId ?? null,
     });
-    if (unenabled.length > 0) {
-      const offers = await proposeCapabilityEnable({
-        refused: unenabled,
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        agentUserId: input.agentUserId ?? null,
-      });
-      const review = offers
-        .filter((o) => o.status === "proposed")
-        .map((o) => o.reviewUrl);
-      const names = unenabled.map((s) => s.name).join(", ");
-      throw new Error(
-        review.length > 0
-          ? `Nothing ran: "${playbook.name}" uses skills that are not enabled yet (${names}). A request to enable them is waiting for the owner's review: ${review.join(" ")}`
-          : `Nothing ran: "${playbook.name}" uses skills that are not enabled yet (${names}), and the request to enable them could not be filed. Enable them in Settings → Capabilities.`
-      );
-    }
+    if (refusal) throw new Error(refusal);
   }
 
   // STAGE WORKER: decide whether this fire starts anything, before any

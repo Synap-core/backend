@@ -188,6 +188,7 @@ export { evaluateCondition } from "./condition-eval.js";
 export {
   registerCapabilityExecutor,
   registerPlaybookRunner,
+  registerPlaybookReadinessGate,
   registerSessionScheduler,
   type CapabilityExecutorInput,
   type PlaybookRunnerChainContext,
