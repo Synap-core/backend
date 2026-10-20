@@ -11,6 +11,13 @@
  *
  * Security model:
  * - Requires hub-protocol.write scope
+ * - Only a POD ADMIN or the Intelligence Service's own `is_internal` key may
+ *   register (W0). `intelligence_services` is pod-global: its rows decide where
+ *   the pod sends chat turns and whose MCP tools it injects, so a plain write
+ *   key could otherwise re-point another service's `webhookUrl` and force it
+ *   `active`. A row may be UPDATED only by the identity that registered it
+ *   here (`metadata.registeredByUserId`, never taken from caller metadata),
+ *   unless the caller is a pod admin.
  * - The registering service is auto-approved for MCP (mcpApproved: true) because
  *   it is authenticating with a key that was provisioned by Synap's own control plane
  *   or the workspace owner — this is a trusted provisioning path.
@@ -27,12 +34,28 @@ import { db, eq } from "@synap/database";
 import { intelligenceServices } from "@synap/database/schema";
 import { validateExternalUrl } from "@synap/shared-utils";
 import { createLogger } from "@synap-core/core";
+import { isPodAdmin } from "../../utils/workspace-role.js";
 
 const logger = createLogger({ module: "hub-protocol-services" });
 
 /** Simple ID generator matching intelligence-registry.ts pattern */
 const generateId = () =>
   `svc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+/** The provenance this door stamps. A caller's metadata never sets it. */
+const PROVENANCE_KEYS = [
+  "registeredVia",
+  "registeredByUserId",
+  "registeredAt",
+] as const;
+
+function callerMetadata(
+  metadata: Record<string, unknown> | undefined
+): Record<string, unknown> {
+  const rest = { ...(metadata ?? {}) };
+  for (const key of PROVENANCE_KEYS) delete rest[key];
+  return rest;
+}
 
 export const servicesRouter = router({
   /**
@@ -60,6 +83,19 @@ export const servicesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const callerId = ctx.userId;
+      if (!callerId) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "No caller" });
+      }
+      const podAdmin = await isPodAdmin(callerId);
+      if (!podAdmin && ctx.keyType !== "is_internal") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only a pod admin or the Intelligence Service may register intelligence services",
+        });
+      }
+
       // SSRF guard on webhookUrl
       const webhookCheck = validateExternalUrl(input.webhookUrl);
       if (!webhookCheck.valid) {
@@ -85,6 +121,14 @@ export const servicesRouter = router({
       });
 
       if (existing) {
+        const existingMetadata =
+          (existing.metadata as Record<string, unknown> | null) ?? {};
+        if (!podAdmin && existingMetadata.registeredByUserId !== callerId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: `Service "${input.serviceId}" was not registered by this caller`,
+          });
+        }
         // Idempotent update — re-registration on pod redeploy or service restart
         await db
           .update(intelligenceServices)
@@ -99,8 +143,8 @@ export const servicesRouter = router({
             // Keep mcpApproved as-is (preserves admin decisions on re-registration).
             // First-time Hub Protocol registration already set it to true — preserve that.
             metadata: {
-              ...((existing.metadata as Record<string, unknown>) ?? {}),
-              ...(input.metadata ?? {}),
+              ...existingMetadata,
+              ...callerMetadata(input.metadata),
             },
             updatedAt: new Date(),
           })
@@ -135,7 +179,7 @@ export const servicesRouter = router({
         // Hub Protocol registration = trusted provisioning path → auto-approve MCP tools
         mcpApproved: true,
         metadata: {
-          ...(input.metadata ?? {}),
+          ...callerMetadata(input.metadata),
           registeredVia: "hub-protocol",
           registeredByUserId: ctx.userId,
           registeredAt: new Date().toISOString(),
