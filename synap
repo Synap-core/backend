@@ -504,14 +504,14 @@ is_public_suffix() {
     return 1
 }
 
-# The longest DNS suffix two hosts share ("" when none).
+# The longest DNS suffix two hosts share ("" when none), case-insensitively.
 common_parent_domain() {
     local -a api_labels admin_labels
     local common=""
     local ai bi
 
-    IFS='.' read -r -a api_labels <<< "$1"
-    IFS='.' read -r -a admin_labels <<< "$2"
+    IFS='.' read -r -a api_labels <<< "$(printf '%s' "${1%.}" | tr '[:upper:]' '[:lower:]')"
+    IFS='.' read -r -a admin_labels <<< "$(printf '%s' "${2%.}" | tr '[:upper:]' '[:lower:]')"
     ai=$((${#api_labels[@]} - 1))
     bi=$((${#admin_labels[@]} - 1))
     while [ "$ai" -ge 0 ] && [ "$bi" -ge 0 ] && [ "${api_labels[$ai]}" = "${admin_labels[$bi]}" ]; do
