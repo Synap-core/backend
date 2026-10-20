@@ -1,0 +1,16 @@
+# Synap compose request (H3): pod-agent runs in a container and must never
+# create a container itself — its compose resolves the relative binds against
+# its own /deploy, which does not exist on the host. It writes
+# state/requests/compose.json; this unit runs it with the real deploy dir.
+# Started by synap-compose.path. Template: synap units install.
+[Unit]
+Description=Synap pod compose request (from pod-agent)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+Environment=SYNAP_DEPLOY_DIR=@DEPLOY_DIR@
+Environment=SYNAP_ASSUME_YES=1
+ExecStart=@SYNAP@ compose-request
+TimeoutStartSec=20min

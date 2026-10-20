@@ -158,7 +158,7 @@ cat > "$T/bin/docker" <<'SH'
 #!/bin/sh
 echo "docker $*" >> "$CALLS"
 case "$1" in
-  inspect) echo true ;;
+  inspect) case "$*" in *"{{.Image}}"*) echo "${FAKE_MINIO_IMAGE:-sha256:minio-1}" ;; *) echo true ;; esac ;;
   cp) printf '#!/bin/sh\nexit 0\n' > "$3"; chmod +x "$3" ;;
   exec)
     shift; stdin=""; [ "$1" = -i ] && { stdin=1; shift; }; shift
@@ -268,6 +268,36 @@ ni sh "$SAFETY" init --non-interactive >"$T/ni.out" 2>"$T/ni.err" </dev/null; rc
     && ok "re-run is a no-op (rc 0, no restic call, kit + password unchanged, nothing printed)" || bad "ni re-run: rc=$rc $(calls_since "$m" | head -3)"
 ni sh -c '. "$1"; _bk_kit_mark saved' _ "$SAFETY"
 [ "$(cat "$S2/kit/status")" = saved ] && ok "kit-saved clears the pending marker" || bad "kit-saved: $(cat "$S2/kit/status")"
+
+echo "── M. mc: the backup container has no docker; the host provides mc"
+# The system tools minus any docker (a CI runner has /usr/bin/docker), so the
+# backup container's real shape — no docker CLI, no socket — can be staged.
+mkdir -p "$T/sys" "$T/ctbin"
+for d in /usr/bin /bin; do for f in "$d"/*; do b="${f##*/}"; [ "$b" = docker ] && continue; [ -e "$T/sys/$b" ] || ln -s "$f" "$T/sys/$b"; done; done
+for f in "$T/bin/"*; do [ "${f##*/}" = docker ] || ln -s "$f" "$T/ctbin/${f##*/}"; done
+NOD="$T/ctbin:$T/sys"
+PATH="$NOD" command -v docker >/dev/null 2>&1 && bad "a docker is still on the staged container PATH — the case cannot be staged"
+S4="$T/state4"; REPO4="$T/repo4"; mkdir -p "$S4/bin" && cp "$T/bin/restic" "$S4/bin/restic"; m=$(mark)
+ct SYNAP_STATE_DIR="$S4" BACKUP_REPOSITORY="$REPO4" env PATH="$NOD" sh "$SAFETY" init --non-interactive >"$T/m.out" 2>"$T/m.err" </dev/null; rc=$?
+[ "$rc" = 0 ] && [ -s "$S4/backup/restic-password" ] && calls_since "$m" | grep -q "^restic init" && ! calls_since "$m" | grep -qE "^(docker|compose) " \
+    && grep -q "the pod host provides it" "$T/m.err" \
+    && ok "in the backup container (no docker): init creates the repository + kit, says the host provides mc, never calls docker" \
+    || bad "container init without docker: rc=$rc $(cat "$T/m.err")"
+cp "$T/bin/mc" "$S4/bin/mc"; m=$(mark)
+ct SYNAP_STATE_DIR="$S4" env PATH="$NOD" sh -c '. "$1"; _bk_ensure_mc' _ "$SAFETY" >"$T/m.out" 2>&1; rc=$?
+[ "$rc" = 0 ] && ! calls_since "$m" | grep -q "^docker" && ok "in the container, a host-provided state/bin/mc is used as is" || bad "container mc present: rc=$rc"
+# host side: copy once per minio image
+S5="$T/state5"; mkdir -p "$S5"; m=$(mark)
+host_mc() { env SYNAP_STATE_DIR="$S5" SYNAP_DEPLOY_DIR="$T/deploy" COMPOSE_CMD="$T/bin/fake-compose" PATH="$T/bin:$PATH" "$@" sh -c '. "$1"; _bk_ensure_mc' _ "$SAFETY"; }
+host_mc >/dev/null 2>&1; rc=$?
+[ "$rc" = 0 ] && [ -x "$S5/bin/mc" ] && [ "$(cat "$S5/bin/mc.image")" = sha256:minio-1 ] && calls_since "$m" | grep -q "^docker cp minio-cid:/usr/bin/mc" \
+    && ok "host: mc copied out of this pod's minio container, its image recorded" || bad "host mc copy: rc=$rc $(calls_since "$m")"
+m=$(mark); host_mc >/dev/null 2>&1
+! calls_since "$m" | grep -q "^docker cp" && ok "host: same minio image → mc not copied again" || bad "host: mc re-copied for an unchanged image"
+m=$(mark); host_mc FAKE_MINIO_IMAGE=sha256:minio-2 >/dev/null 2>&1
+calls_since "$m" | grep -q "^docker cp" && [ "$(cat "$S5/bin/mc.image")" = sha256:minio-2 ] && ok "host: a new minio image → mc refreshed" || bad "host: mc not refreshed for a new minio image"
+grep -q '_ue_provide_backup_mc$' "$SCRIPT_DIR/../../synap" && [ "$(grep -c '^    _ue_provide_backup_mc$' "$SCRIPT_DIR/../../synap")" -ge 2 ] \
+    && ok "synap provides mc at install AND after every verified update" || bad "synap does not call _ue_provide_backup_mc on both doors"
 
 echo "── K. recovery kit: read-back, W7 layout migration, owner uid"
 rb() { ni sh -c '. "$1"; _bk_kit_readback_ok "$2" "$3" && echo yes || echo no' _ "$SAFETY" "$1" "$S2/backup/restic-password"; }

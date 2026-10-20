@@ -1,6 +1,10 @@
 {
-    # Global options
-    email {$EMAIL}
+    # Global options. The ACME account email, or none: ACME_EMAIL_OPTION is
+    # "email <LETSENCRYPT_EMAIL>" or empty (docker-compose.yml, caddy's
+    # environment). Never the EMAIL variable as the option's argument: an
+    # empty one leaves `email` with no argument, which caddy refuses to load.
+    # (caddy expands env placeholders before parsing, comments included.)
+    {$ACME_EMAIL_OPTION}
 }
 
 # ─── Cloudflare Tunnel Handler ────────────────────────────────────────────────
@@ -12,6 +16,16 @@
 # flows to work properly with cookies and session handling.
 # ────────────────────────────────────────────────────────────────────────────────────────────────
 {$DOMAIN}:80 {
+    # Only the tunnel connector (cloudflared, on the compose network) is served
+    # in cleartext. Anyone else reaching :80 of a directly exposed pod is sent
+    # to HTTPS — this block used to answer them in plain HTTP (2026-10-19).
+    # ACME HTTP-01 challenges stay reachable.
+    @cleartext_from_outside {
+        not remote_ip private_ranges
+        not path /.well-known/acme-challenge/*
+    }
+    redir @cleartext_from_outside https://{host}{uri} 308
+
     # Ory Kratos public API - route direct to bypass backend CORS issues
     handle_path /.ory/kratos/public/* {
         reverse_proxy kratos:4433
@@ -53,10 +67,6 @@
     # this block). Every TLS `handle` path must reach the same upstream here —
     # explicitly, or through the backend catch-all; caddy-routes.test.sh fails
     # on drift.
-    handle /storage/* {
-        reverse_proxy minio:9001
-    }
-
     # Presigned S3 path — same sandbox CSP as the TLS block (see there).
     handle /synap-storage/* {
         # MinIO CVE-2026-41145 / CVE-2026-40344 (high, never fixed in the free
@@ -91,27 +101,11 @@
 }
 
 {$DOMAIN} {
-    # Automatic HTTPS with Let's Encrypt
-
-    # Backend API
-    handle /trpc/* {
-        reverse_proxy backend:4000
-    }
-
-    handle /api/* {
-        reverse_proxy backend:4000
-    }
-
-    # MCP endpoint — JSON-RPC over HTTP for Claude Desktop, Cursor, and other
-    # MCP-capable clients (typically reached via the `mcp-remote` stdio bridge).
-    # Without an explicit route, Caddy's catch-all below serves plain text and
-    # breaks the MCP handshake.
-    handle /mcp {
-        reverse_proxy backend:4000
-    }
-    handle /mcp/* {
-        reverse_proxy backend:4000
-    }
+    # Automatic HTTPS with Let's Encrypt.
+    # THE RULE: the backend owns access control. This block names only what does
+    # NOT go to backend:4000 (realtime, Kratos public, MinIO S3, pod-agent, the
+    # registration proof) and what is never public (/internal/*, /metrics);
+    # everything else reaches the backend through the catch-all at the end.
 
     # Realtime WebSocket (Socket.IO)
     # Caddy v2 automatically detects and upgrades WebSocket connections
@@ -147,13 +141,11 @@
     # backend reaches it on the compose network; port-exposure.test.sh fails
     # if a reverse_proxy to an admin upstream comes back.
 
-    # MinIO (Object Storage) - Admin UI
-    handle /storage/* {
-        reverse_proxy minio:9001
-    }
+    # No route to the MinIO CONSOLE (minio:9001): it is a full admin UI behind
+    # one root key. Operators reach it on the host at 127.0.0.1:9001.
 
     # MinIO S3 API for PRESIGNED URLs (large uploads PUT straight to storage,
-    # downloads GET). /storage/* above is the CONSOLE (9001) and can never serve
+    # downloads GET). The CONSOLE (9001) is never routed and could never serve
     # a signed URL: SigV4 signs host + path, so the bucket must sit at the root
     # path and the Host header must reach MinIO unchanged (Caddy's default).
     # Active once the backend has MINIO_PUBLIC_URL = this pod's origin; the
@@ -191,33 +183,6 @@
         file_server
     }
 
-    # Health check
-    handle /health {
-        reverse_proxy backend:4000
-    }
-
-    # Public pod status (metadata only): the CP's backup-staleness monitor and
-    # release check read these. Without them the catch-all answers 200 text and
-    # every pod reads as "unknown". Exact paths, never /status/* — a future
-    # /status route must opt in here deliberately.
-    handle /status/backup {
-        reverse_proxy backend:4000
-    }
-    handle /status/release {
-        reverse_proxy backend:4000
-    }
-
-    # Portable object locator — Discord/email click-to-app bounce (and later
-    # signed-in render). Without this, the HTTPS catch-all returns static API
-    # text. The Cloudflare-tunnel :80 block already proxies /open via its
-    # catch-all; keep both ingresses in lock-step.
-    handle /open {
-        reverse_proxy backend:4000
-    }
-    handle /open/* {
-        reverse_proxy backend:4000
-    }
-
     # Pod home (exact / only): lightweight landing.
     @site_root path /
     handle @site_root {
@@ -235,12 +200,10 @@
         respond 404
     }
 
-    # Everything else goes to backend, exactly like the :80 block. This was a
-    # static "Synap Backend API" answer, so every path the backend mounts
-    # outside /api, /trpc and /mcp was dead on a directly exposed pod while
-    # working on a tunnelled one: /admin/connect (the Claude connect link),
-    # the MCP OAuth endpoints, /setup, /v1 (2026-10-19, lab pod).
-    # caddy-routes.test.sh pins this catch-all.
+    # Everything else goes to backend, exactly like the :80 block. It was a
+    # static "Synap Backend API" answer, which killed /admin/connect, the MCP
+    # OAuth endpoints and /setup on direct pods (2026-10-19). caddy-routes.test.sh
+    # pins it as a bare `handle` (no matcher).
     handle {
         reverse_proxy backend:4000
     }
@@ -269,7 +232,13 @@
 # The legacy admin-ui SPA (/admin/*) has been retired.
 # ─────────────────────────────────────────────────────────────────────────────
 {$POD_ADMIN_DOMAIN}:80 {
-    # Cloudflare Tunnel HTTP path — same shape as the main host's :80 block.
+    # Cloudflare Tunnel HTTP path — same shape as the main host's :80 block,
+    # including its cleartext rule: outside clients go to HTTPS.
+    @cleartext_from_outside {
+        not remote_ip private_ranges
+        not path /.well-known/acme-challenge/*
+    }
+    redir @cleartext_from_outside https://{host}{uri} 308
     reverse_proxy pod-admin:3000
 }
 

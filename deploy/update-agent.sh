@@ -41,17 +41,18 @@ case "$IMAGE" in
   *)  die "SYNAP_IMAGE_POD_AGENT=${IMAGE} is not pinned by digest — refusing to recreate from a mutable tag" ;;
 esac
 
-PROJECT="$(envcfg_value COMPOSE_PROJECT_NAME)"
-if [ -z "$PROJECT" ]; then
-  PROJECT="synap-backend"
-  echo "[update-agent] WARN: COMPOSE_PROJECT_NAME is not pinned in .env — using ${PROJECT}"
-fi
-COMPOSE="docker compose -p ${PROJECT} -f ${DEPLOY_DIR}/docker-compose.yml --profile pod-agent"
+# shellcheck source=/dev/null
+. "$DEPLOY_DIR/host-request.sh"
 
 echo "[update-agent] Pulling ${IMAGE}..."
 docker pull "$IMAGE" || die "pull failed: ${IMAGE}"
-echo "[update-agent] Recreating pod-agent from the pinned digest..."
-$COMPOSE up -d --no-build --no-deps --force-recreate pod-agent || die "compose up pod-agent failed"
+# The HOST recreates pod-agent: from in here, compose would mount the host's
+# nonexistent /deploy into the new agent, and the recreate ends this process
+# half-way. So the request is handed over and this returns once the host has
+# TAKEN it — "success" here means accepted by the host engine; the recreate
+# itself replaces this container (outcome: state/last-compose-request.json).
+echo "[update-agent] Asking the host to recreate pod-agent from the pinned digest..."
+host_compose --no-wait --recreate --no-deps --profile pod-agent pod-agent || die "the host did not take the pod-agent recreate request"
 
-echo "[update-agent] Done."
+echo "[update-agent] Handed to the host engine."
 notify true

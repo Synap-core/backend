@@ -1,0 +1,13 @@
+# Runs synap-compose.service when pod-agent asks the host to (re)create
+# services (contract: the COMPOSE REQUEST comment above cmd_compose_request in
+# `synap`). The engine takes the file before running, so this can never loop.
+# Template: synap units install.
+[Unit]
+Description=Synap pod compose requests (from pod-agent)
+
+[Path]
+PathExists=@DEPLOY_DIR@/state/requests/compose.json
+Unit=synap-compose.service
+
+[Install]
+WantedBy=multi-user.target

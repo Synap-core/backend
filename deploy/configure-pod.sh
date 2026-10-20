@@ -36,7 +36,7 @@ report() {
 
 log "=== Configuring pod ==="
 
-for helper in env-config.sh update-lock.sh; do
+for helper in env-config.sh update-lock.sh host-request.sh; do
   if [ ! -f "${DEPLOY_DIR}/${helper}" ]; then
     log "ERROR: ${DEPLOY_DIR}/${helper} is missing — refusing to write .env without the config door. Nothing was changed."
     report "failed" "${helper} missing from the deploy dir"
@@ -48,16 +48,10 @@ SYNAP_DEPLOY_DIR="$DEPLOY_DIR"; export SYNAP_DEPLOY_DIR
 . "${DEPLOY_DIR}/env-config.sh"
 # shellcheck source=/dev/null
 . "${DEPLOY_DIR}/update-lock.sh"
+# shellcheck source=/dev/null
+. "${DEPLOY_DIR}/host-request.sh"
 synap_update_lock "$DEPLOY_DIR" "configure-pod" || { report "failed" "another pod operation is running"; exit 1; }
 
-# The pod's pinned compose project — never a hard-coded guess (a guess is how a
-# second, empty stack gets created next to the real one).
-PROJECT="$(envcfg_value COMPOSE_PROJECT_NAME)"
-if [ -z "$PROJECT" ]; then
-  PROJECT="synap-backend"
-  log "WARN: COMPOSE_PROJECT_NAME is not pinned in .env — using ${PROJECT} (run synap update on the host to pin it)"
-fi
-COMPOSE="docker compose -p ${PROJECT} -f ${DEPLOY_DIR}/docker-compose.yml"
 PAIRS="$(umask 077 && mktemp)"
 trap 'rm -f "$PAIRS"' EXIT
 
@@ -102,47 +96,33 @@ if [ -s "$PAIRS" ]; then
   printf '%s\n' "$CONFIG_OUT" | while IFS= read -r l; do log "$l"; done
 fi
 
-# Activate profiles if requested
-if [ -n "$PROFILES" ]; then
-  log "Starting profile services..."
-  $COMPOSE $PROFILES up -d 2>&1
+# Containers are (re)created by the HOST engine, never from inside this
+# container: compose run here resolves the relative binds (../kratos,
+# ./Caddyfile, ./state) against /deploy, which the host's docker daemon reads
+# as the host's /deploy — kratos once came up with no config and sign-in died
+# (2026-10-19). host_compose (host-request.sh) hands the request to
+# `synap compose-request` on the host, which also re-renders kratos.yml for the
+# new .env (DOMAIN → CORS list) whenever kratos is in the list. The host takes
+# the update lock itself, so ours is released first.
+if [ -n "$PROFILES" ] || [ -n "$RECREATE_SERVICES" ]; then
+  # The values are written; the unlock may drop the EXIT trap that removes them.
+  rm -f "$PAIRS"
+  synap_update_unlock
 fi
 
-# Force-recreate specific services so they pick up new .env values.
-# Using `up -d --force-recreate` rather than `restart` because Compose
-# only re-evaluates env vars on recreate.
-#
-# Special case for kratos: this script can mutate .env's DOMAIN (the
-# `KEY=VALUE` loop above). If DOMAIN changed and we just force-recreate
-# kratos with the existing kratos.yml on disk, kratos comes up with a
-# stale CORS list — and the next pod-admin login flow rejects with "No
-# Access-Control-Allow-Origin." Route kratos through the canonical synap
-# CLI which regenerates kratos.yml against the current DOMAIN before
-# bringing the container up. Other services are recreated directly since
-# they read .env via compose's env-file mechanism.
+# Activate profiles if requested (every service of those profiles comes up)
+if [ -n "$PROFILES" ]; then
+  log "Starting profile services (on the host)..."
+  # shellcheck disable=SC2086
+  host_compose $PROFILES || { report "failed" "the host could not start profiles:$(echo "$PROFILES" | sed 's/--profile//g')"; exit 1; }
+fi
+
+# Force-recreate specific services so they pick up new .env values (Compose
+# re-reads env only on recreate, never on restart).
 if [ -n "$RECREATE_SERVICES" ]; then
-  log "Force-recreating services:$RECREATE_SERVICES"
-  # Split kratos out so we can route it through the synap CLI for regen.
-  NON_KRATOS=""
-  KRATOS_REQUESTED=""
-  for svc in $RECREATE_SERVICES; do
-    if [ "$svc" = "kratos" ]; then
-      KRATOS_REQUESTED="1"
-    else
-      NON_KRATOS="$NON_KRATOS $svc"
-    fi
-  done
-  if [ -n "$NON_KRATOS" ]; then
-    # shellcheck disable=SC2086
-    $COMPOSE up -d --force-recreate --no-deps $NON_KRATOS 2>&1 | tail -20
-  fi
-  if [ -n "$KRATOS_REQUESTED" ]; then
-    log "Recreating kratos via canonical synap CLI (regenerates kratos.yml)..."
-    if ! (cd "$DEPLOY_DIR/.." && ./synap start kratos); then
-      log "WARN: synap CLI failed to start kratos — falling back to direct compose recreate"
-      $COMPOSE up -d --force-recreate --no-deps kratos 2>&1 | tail -20
-    fi
-  fi
+  log "Force-recreating services (on the host):$RECREATE_SERVICES"
+  # shellcheck disable=SC2086
+  host_compose --recreate --no-deps $RECREATE_SERVICES || { report "failed" "the host could not recreate:$RECREATE_SERVICES"; exit 1; }
 fi
 
 log "=== Configuration complete ==="
