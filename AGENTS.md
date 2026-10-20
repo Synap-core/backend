@@ -1,3 +1,11 @@
+# AGENTS.md
+
+The instructions for agents working in this repository are in
+[CLAUDE.md](CLAUDE.md); contributor setup and checks are in
+[CONTRIBUTING.md](CONTRIBUTING.md). One copy on purpose: two drift.
+
+The block below is written by `turbo` and is kept as it is.
+
 <!-- BEGIN:turborepo-agent-rules -->
 
 # This is NOT the Turborepo you know

@@ -30,7 +30,9 @@ import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
   ASK_LOOKED_AT_KINDS,
+  AskAnswerValueSchema,
   AskSchema,
+  AskSnapshotSchema,
   type Ask,
   type AskAnswerValue,
   type AskSnapshot,
@@ -332,10 +334,12 @@ const slotAnswerWireSchema = z.object({
   question: z.string().optional(),
   // The typed half (`@synap-core/types/ask`). Round-trip only, like the
   // rest of `answer`: stamped by the answer door, never authored here.
-  // Explicitly type the value to preserve discriminated union inference.
-  value: z.custom<AskAnswerValue>().optional(),
+  // The real schemas, never `z.custom<T>()`: that validates nothing and
+  // zod-to-openapi cannot express it — the Hub POST/PATCH `/focus-sessions`
+  // bodies use this schema, and one `custom` 500s the whole `/openapi.json`.
+  value: AskAnswerValueSchema.optional(),
   // The ask as posed, frozen at answer time. Round-trip only.
-  askSnapshot: z.custom<AskSnapshot>().optional(),
+  askSnapshot: AskSnapshotSchema.optional(),
 });
 
 export const expectedOutputWireSchema = z.object({
@@ -418,8 +422,7 @@ export const expectedOutputWireSchema = z.object({
   // recommended, flat forms with AI-authored credential fields dropped, http(s)
   // act urls. `.nullable()` for the same reason as `ref`: silence KEEPS it, so
   // "clear the ask" needs an explicit `null`.
-  // Explicitly type the ask to preserve discriminated union inference.
-  ask: z.custom<Ask>().nullable().optional(),
+  ask: AskSchema.nullable().optional(),
   // The relation type written output → subject on satisfy. DECLARED (a
   // playbook slot's own declaration carried onto the session), never stamped.
   relationToSubject: z.string().max(80).optional(),
