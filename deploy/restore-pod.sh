@@ -9,7 +9,11 @@ set -e
 CALLBACK_URL="$1"
 CALLBACK_JWT="$2"
 DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
-COMPOSE="docker compose -p synap-backend -f ${DEPLOY_DIR}/docker-compose.yml"
+# Containers are created by the HOST engine (host-request.sh): a compose `up`
+# run in this container mounts the host's nonexistent /deploy paths.
+SYNAP_DEPLOY_DIR="$DEPLOY_DIR"; export SYNAP_DEPLOY_DIR
+# shellcheck source=/dev/null
+. "$DEPLOY_DIR/host-request.sh"
 
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [restore] $*"; }
 
@@ -27,8 +31,8 @@ report() {
 
 log "=== Restoring pod services ==="
 
-# Start all core services
-$COMPOSE up -d --remove-orphans 2>&1
+# Start all core services (on the host)
+host_compose || { report "failed" "the host could not start the services"; exit 1; }
 
 # Wait for backend health (up to 3 minutes)
 log "Waiting for health check..."

@@ -20,6 +20,11 @@ CALLBACK_URL="$2"
 CALLBACK_JWT="$3"
 DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE="docker compose -p synap-backend -f ${DEPLOY_DIR}/docker-compose.yml"
+# Containers are created by the HOST engine (host-request.sh): a compose `up`
+# run in this container mounts the host's nonexistent /deploy paths.
+SYNAP_DEPLOY_DIR="$DEPLOY_DIR"; export SYNAP_DEPLOY_DIR
+# shellcheck source=/dev/null
+. "$DEPLOY_DIR/host-request.sh"
 
 WORK="${ARCHIVE_WORK_DIR:-/tmp}"
 ARCHIVE="${WORK}/pod-archive.tar.gz"
@@ -92,7 +97,7 @@ dump_failed() {
   log "ERROR: $1 — aborting archive (nothing uploaded, pod kept running)"
   cleanup
   # Step 1 stopped the app services; bring them back so the pod stays usable.
-  $COMPOSE up -d 2>&1 || log "WARN: could not restart services after failed dump"
+  host_compose || log "WARN: could not restart services after failed dump"
   trap - EXIT
   report "failed" "\"$1\""
   log "=== Pod archive finished (upload=false) ==="

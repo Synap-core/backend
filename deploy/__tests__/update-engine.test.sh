@@ -58,10 +58,18 @@ manifest() { # <id> <sha> <digest-char> <last-migration> [bundle-asset bundle-sh
 
 mkdir -p "$TMP/bin" "$TMP/rel"
 # ── fake curl: serves $TMP/rel/<path> for https://rel.test/<path> ──────────────
+# Edge probes (…/health through 127.0.0.1): FAKE_EDGE=down → nothing answers,
+# http-only → only :80 answers (a tunnelled pod); default → https answers.
 cat > "$TMP/bin/curl" <<'C'
 #!/usr/bin/env bash
-out=""; url=""
-while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2;; -H|--max-time|--retry) shift 2;; -*) shift;; *) url="$1"; shift;; esac; done
+out=""; url=""; w=""
+while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2;; -w) w="$2"; shift 2;; -H|--max-time|--retry|--resolve) shift 2;; -*) shift;; *) url="$1"; shift;; esac; done
+case "$url" in */health)
+  [ -n "${FAKE:-}" ] && echo "edge $url" >> "$FAKE/curl_edge"
+  code=200
+  case "${FAKE_EDGE:-ok}" in down) code=000 ;; http-only) case "$url" in https:*) code=000 ;; esac ;; esac
+  [ -n "$w" ] && printf '%s' "$code"; [ "$code" = 200 ]; exit $? ;;
+esac
 src="$FAKE_REL/${url#https://rel.test/}"
 [ -f "$src" ] || exit 22
 cp "$src" "$out"
@@ -80,6 +88,10 @@ case "$*" in
   "compose ps --status running --services"*)
     printf '%s\n' postgres postgres-backup redis minio typesense kratos backend realtime pod-admin; [ -s "$F/caddy_up" ] && echo caddy; exit 0 ;;
   "compose ps -q backend"*) echo be1; exit 0 ;;
+  "compose ps -q caddy"*) [ -s "$F/caddy_up" ] && echo caddy1; exit 0 ;;
+  "exec caddy1 sha256sum /etc/caddy/Caddyfile") printf '%s  /etc/caddy/Caddyfile\n' "$(cat "$F/caddy_loaded" 2>/dev/null)"; exit 0 ;;
+  "compose run --rm --no-deps caddy caddy validate"*)
+    [ -n "${FAKE_CADDY_INVALID:-}" ] && { echo "Error: adapting config using caddyfile: unrecognized directive: reverse_prox" >&2; exit 1; }; exit 0 ;;
   "compose ps -q pod-admin"*) echo pa1; exit 0 ;;
   "compose ps"*postgres*) echo pg1; exit 0 ;;
   "compose ps -q") [ -n "${FAKE_HEALTH:-}" ] && printf '%s\n' c-backend c-kratos c-postgres-backup; exit 0 ;;
@@ -92,7 +104,18 @@ case "$*" in
   "compose --profile canary up -d backend-canary"*) cur_image > "$F/canary_image"; exit 0 ;;
   "compose up -d --force-recreate --remove-orphans backend realtime"*) cur_image > "$F/backend_image"; exit 0 ;;
   "compose"*" up "*)
-    case " $* " in *" caddy "*) [ -n "${FAKE_CADDY_FAIL:-}" ] && { echo "Bind for 0.0.0.0:80 failed: port is already allocated" >&2; exit 1; }; echo up > "$F/caddy_up";; esac
+    # caddy (re)creation, the way Compose does it: a new container mounts the
+    # Caddyfile on disk now; a plain `up` recreates only when the service's
+    # definition changed (modelled as: docker-compose.yml changed).
+    case " $* " in *" caddy "*)
+      [ -n "${FAKE_CADDY_FAIL:-}" ] && { echo "Bind for 0.0.0.0:80 failed: port is already allocated" >&2; exit 1; }
+      dd="$(dirname "$FAKE_ENV")"; cs="$(cksum < "$dd/docker-compose.yml")"
+      if [ ! -s "$F/caddy_up" ] || [[ " $* " == *" --force-recreate "* ]] || [ "$cs" != "$(cat "$F/caddy_def" 2>/dev/null)" ]; then
+        echo up > "$F/caddy_up"; echo "$cs" > "$F/caddy_def"; echo create >> "$F/caddy_creates"
+        cf="$(grep '^CADDYFILE_PATH=' "$FAKE_ENV" | tail -1 | cut -d= -f2-)"; cf="${cf:-$dd/Caddyfile}"
+        { shasum -a 256 "$cf" 2>/dev/null || sha256sum "$cf"; } | cut -d' ' -f1 > "$F/caddy_loaded"
+      fi;;
+    esac
     exit 0 ;;
   "compose exec -T postgres psql"*) cat >/dev/null 2>&1; echo 1; exit 0 ;;
   "compose exec -T kratos wget"*) [ -n "${FAKE_KRATOS_DOWN:-}" ] && exit 1; exit 0 ;;
@@ -163,7 +186,7 @@ setup() {
   S="$TMP/$1"; REPO="$S/repo"; DEPLOY="$REPO/deploy"; FAKE="$S/fake"
   mkdir -p "$DEPLOY" "$FAKE"
   cp "$HERE/synap" "$REPO/synap"
-  cp "$HERE/deploy/"*.sh "$HERE/deploy/docker-compose.yml" "$DEPLOY/"
+  cp "$HERE/deploy/"*.sh "$HERE/deploy/docker-compose.yml" "$HERE/deploy/Caddyfile" "$DEPLOY/"
   base_env "$2" > "$DEPLOY/.env"
   echo "$OLD_LEVEL" > "$FAKE/level"
   echo "ghcr.io/synap-core/backend:local" > "$FAKE/backend_image"
@@ -174,17 +197,30 @@ setup() {
     mkdir -p "$DEPLOY/state"
     manifest "$R1" "$OLD_SHA" a 0011_old.sql > "$DEPLOY/state/current-release.json"
     grep '^SYNAP_IMAGE_BACKEND=' "$DEPLOY/.env" | cut -d= -f2- > "$FAKE/backend_image"
+    # caddy runs, created from this compose file and this Caddyfile
+    echo up > "$FAKE/caddy_up"; cksum < "$DEPLOY/docker-compose.yml" > "$FAKE/caddy_def"
+    { shasum -a 256 "$DEPLOY/Caddyfile" 2>/dev/null || sha256sum "$DEPLOY/Caddyfile"; } | cut -d' ' -f1 > "$FAKE/caddy_loaded"
   fi
   cp "$DEPLOY/.env" "$S/env.orig"
   export FAKE FAKE_ENV="$DEPLOY/.env" FAKE_NEW_LEVEL="$NEW_LEVEL" LOCAL_SHA="${LOCAL_SHA:-x}"
 }
-publish() { # <id> <last-migration> [with-bundle]
+# bundle = new compose AND a new Caddyfile; bundle-caddy = only the Caddyfile
+# changes; bundle-same = neither does.
+publish() { # <id> <last-migration> [bundle|bundle-caddy|bundle-same]
   local asset="" bsha=""
   mkdir -p "$TMP/rel/$1"
-  if [ "${3:-}" = bundle ]; then
+  if [ -n "${3:-}" ]; then
     local b="$TMP/bundle-$1"; rm -rf "$b"; mkdir -p "$b/deploy"
-    cp "$HERE/synap" "$b/synap"; cp "$HERE/deploy/"*.sh "$b/deploy/"
-    { cat "$HERE/deploy/docker-compose.yml"; echo "# release-marker $1"; } > "$b/deploy/docker-compose.yml"
+    cp "$HERE/synap" "$b/synap"; cp "$HERE/deploy/"*.sh "$HERE/deploy/Caddyfile" "$HERE/deploy/docker-compose.yml" "$b/deploy/"
+    cp -R "$HERE/deploy/systemd" "$b/deploy/systemd"
+    # PUBLISH_MARK_ENGINE=1: the release's engine marks the step that installs
+    # its own files, so a test can see WHICH engine ran the post-bundle steps.
+    if [ -n "${PUBLISH_MARK_ENGINE:-}" ]; then
+      awk '{print} /^_ue_install_bundle\(\) \{$/{print "    echo \"engine=$0 handoff=${SYNAP_UE_HANDOFF:-} pid=$$\" >> \"$FAKE/engine_marks\""}' "$HERE/synap" > "$b/synap"
+      grep -q 'engine_marks' "$b/synap" || { echo "FAIL - could not mark the release engine"; exit 1; }
+    fi
+    [ "$3" = bundle ] && echo "# release-marker $1" >> "$b/deploy/docker-compose.yml"
+    [ "$3" != bundle-same ] && echo "# caddy-marker $1" >> "$b/deploy/Caddyfile"
     echo "new in $1" > "$b/deploy/added-by-$1.txt"
     asset="synap-deploy-$1.tar.gz"
     tar -czf "$TMP/rel/$1/$asset" -C "$b" .
@@ -196,6 +232,7 @@ run_update() { # <args...>
   ( cd "$S"; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_RELEASE_BASE_URL=https://rel.test \
     SYNAP_HEALTH_INTERVAL=0 SYNAP_UPDATE_HEALTH_TRIES=2 SYNAP_UPDATE_MIN_FREE_MB=1 SYNAP_UPDATE_MIN_FREE_SOURCE_MB=1 SYNAP_ASSUME_YES=1 \
     SYNAP_UPDATE_HEALTHY_WAIT=0 SYNAP_UPDATE_HEALTHY_INTERVAL=0 SYNAP_KRATOS_READY_TRIES=2 SYNAP_KRATOS_READY_INTERVAL=0 \
+    SYNAP_UPDATE_EDGE_TRIES=2 SYNAP_UPDATE_EDGE_INTERVAL=0 \
     SYNAP_UPDATE_NOTIFY_CMD="cat >> '$S/notified'" bash "$REPO/synap" update "$@" ) >"$S/out" 2>&1 </dev/null
 }
 cur_id()  { jq -r .id "$DEPLOY/state/current-release.json" 2>/dev/null; }
@@ -218,7 +255,9 @@ grep -q "^tag sha256:f* synap-adopted/backend:ffffffffffff" "$FAKE/log" && ok "h
   && ok "happy: .env pins the release's backend digest + id" || bad "happy: .env pins: $(grep -E 'SYNAP_IMAGE_BACKEND|BACKEND_VERSION' "$DEPLOY/.env")"
 [ "$(grep -c '^BACKEND_VERSION=' "$DEPLOY/.env")" = 1 ] && ok "happy: one BACKEND_VERSION line (legacy line replaced)" || bad "happy: duplicate BACKEND_VERSION"
 grep -q "release-marker $R2" "$DEPLOY/docker-compose.yml" && [ -f "$DEPLOY/added-by-$R2.txt" ] && ok "happy: the release's deploy bundle was installed" || bad "happy: bundle not installed"
-grep -q "up -d --force-recreate caddy" "$FAKE/log" && ok "happy: caddy recreated, so the release's Caddyfile is live" || bad "happy: caddy not recreated: the release's Caddyfile never loads"
+grep -q "caddy-marker $R2" "$DEPLOY/Caddyfile" && [ "$(cat "$FAKE/caddy_loaded")" = "$(shasum -a 256 "$DEPLOY/Caddyfile" | cut -d' ' -f1)" ] \
+  && ok "happy: caddy serves the release's Caddyfile" || bad "happy: caddy does not serve the release's Caddyfile"
+grep -q "edge https://pod.example.com/health" "$FAKE/curl_edge" 2>/dev/null && ok "happy: verified through the edge (https on 127.0.0.1:443)" || bad "happy: no edge probe"
 ls -d "$DEPLOY"/backups/postgres/*-pre-update >/dev/null 2>&1 && ok "happy: verified pre-update dump taken" || bad "happy: no pre-update dump"
 b=$(grep -n "pg_dump" "$FAKE/log" | head -1 | cut -d: -f1); m=$(grep -n "run --rm backend-migrate" "$FAKE/log" | head -1 | cut -d: -f1)
 p=$(grep -n "^pull " "$FAKE/log" | tail -1 | cut -d: -f1)
@@ -233,6 +272,88 @@ grep -q '^SYNAP_EVENT {' "$S/out" && ok "happy: SYNAP_EVENT line emitted" || bad
 # second run on the same release is a no-op
 : > "$FAKE/log"; run_update --release "$R2"
 grep -q "Already on release $R2" "$S/out" && ! grep -q "run --rm" "$FAKE/log" && ok "happy: re-running the same release is a no-op" || { bad "happy: same-release re-run did work"; show; }
+[ "$(last status)" = noop ] && [ "$(last to)" = "$R2" ] && notified noop \
+  && ok "happy: the no-op is RECORDED (status noop), so a waiting pod-agent hears back" || bad "happy: no-op not recorded: $(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"
+
+# ── 1b. caddy: recreated only when its loaded Caddyfile differs, validated
+#        first, verified through the edge (review should-fix 3) ───────────────
+creates() { [ -f "$FAKE/caddy_creates" ] && wc -l < "$FAKE/caddy_creates" | tr -d ' ' || echo 0; }
+sha() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1 || sha256sum "$1" | cut -d' ' -f1; }
+setup caddyonly r1; publish "$R2" 0011_old.sql bundle-caddy
+FAKE_NEW_LEVEL="$OLD_LEVEL" run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && [ "$(creates)" = 1 ] && grep -q "up -d --force-recreate caddy" "$FAKE/log" && [ "$(cat "$FAKE/caddy_loaded")" = "$(sha "$DEPLOY/Caddyfile")" ] \
+  && ok "caddyonly: a new Caddyfile alone recreates caddy once, and it serves it" || { bad "caddyonly: rc=$rc creates=$(creates)"; show; }
+grep -q "run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile" "$FAKE/log" && ok "caddyonly: the Caddyfile is validated by caddy" || bad "caddyonly: no caddy validate"
+v=$(grep -n "caddy caddy validate" "$FAKE/log" | head -1 | cut -d: -f1); m=$(grep -n "run --rm backend-migrate" "$FAKE/log" | head -1 | cut -d: -f1)
+[ -n "$v" ] && [ -n "$m" ] && [ "$v" -lt "$m" ] && ok "caddyonly: validated before any migration" || bad "caddyonly: validate=$v migrate=$m"
+setup caddyboth r1; publish "$R2" 0011_old.sql bundle
+FAKE_NEW_LEVEL="$OLD_LEVEL" run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && [ "$(creates)" = 1 ] && ! grep -q "force-recreate caddy" "$FAKE/log" \
+  && ok "caddyboth: compose definition + Caddyfile changed → caddy recreated ONCE (by compose), never twice" || { bad "caddyboth: rc=$rc creates=$(creates) forced=$(grep -c 'force-recreate caddy' "$FAKE/log")"; show; }
+setup caddysame r1; publish "$R2" 0011_old.sql bundle-same
+FAKE_NEW_LEVEL="$OLD_LEVEL" run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && [ "$(creates)" = 0 ] && grep -q "caddy already serves this Caddyfile" "$S/out" \
+  && ok "caddysame: nothing changed for caddy → not recreated (no TLS/connection blip)" || { bad "caddysame: rc=$rc creates=$(creates)"; show; }
+setup caddybad r1; publish "$R2" 0012_new.sql bundle-caddy
+FAKE_CADDY_INVALID=1 run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = rolled_back ] && [ "$(last reason)" = "the Caddyfile does not validate" ] && [ "$(last dbRestored)" = false ] \
+  && ! grep -q "run --rm backend-migrate" "$FAKE/log" && [ "$(creates)" = 0 ] && ! grep -q "caddy-marker" "$DEPLOY/Caddyfile" \
+  && grep -q "unrecognized directive" "$S/out" \
+  && ok "caddybad: an invalid Caddyfile rolls back before migrating; caddy never loads it; caddy's reason is shown" || { bad "caddybad: rc=$rc record=$(last status)/$(last reason) creates=$(creates)"; show; }
+setup edgedown r1; publish "$R2" 0011_old.sql bundle-caddy
+FAKE_NEW_LEVEL="$OLD_LEVEL" FAKE_EDGE=down run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = rolled_back ] && [ "$(last reason)" = "post-update verification failed" ] && grep -q "does not serve pod.example.com/health" "$S/out" \
+  && [ "$(cat "$FAKE/caddy_loaded")" = "$(sha "$DEPLOY/Caddyfile")" ] && ! grep -q "caddy-marker" "$DEPLOY/Caddyfile" \
+  && ok "edgedown: an edge that does not answer /health rolls back, and caddy is back on the previous Caddyfile" || { bad "edgedown: rc=$rc record=$(last status)/$(last reason)"; show; }
+setup edgehttp r1; publish "$R2" 0011_old.sql bundle-caddy
+FAKE_NEW_LEVEL="$OLD_LEVEL" FAKE_EDGE=http-only run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && grep -q "answers over :80" "$S/out" && ok "edgehttp: a pod served only on :80 (tunnel, or no certificate yet) passes, and says so" || { bad "edgehttp: rc=$rc"; show; }
+# H6: a hand-edited deploy/Caddyfile is named before the release replaces it;
+# CADDYFILE_PATH is the escape hatch, and updates leave it alone.
+setup caddyedit r1; publish "$R2" 0011_old.sql bundle-caddy
+mkdir -p "$DEPLOY/state"; sha "$DEPLOY/Caddyfile" > "$DEPLOY/state/caddyfile.release.sha256"
+echo "# my own rule" >> "$DEPLOY/Caddyfile"
+FAKE_NEW_LEVEL="$OLD_LEVEL" run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && grep -q "deploy/Caddyfile was edited by hand" "$S/out" && grep -q "CADDYFILE_PATH" "$S/out" \
+  && [ "$(cat "$DEPLOY/state/caddyfile.release.sha256")" = "$(sha "$DEPLOY/Caddyfile")" ] \
+  && ok "caddyedit: a hand edit is warned about (with the CADDYFILE_PATH escape hatch); the marker follows the new release copy" || { bad "caddyedit: rc=$rc"; show; }
+setup caddycustom r1; publish "$R2" 0011_old.sql bundle-caddy
+printf '{$DOMAIN} {\n  respond "mine"\n}\n' > "$S/custom.Caddyfile"; echo "CADDYFILE_PATH=$S/custom.Caddyfile" >> "$DEPLOY/.env"
+sha "$S/custom.Caddyfile" > "$FAKE/caddy_loaded"; cp "$S/custom.Caddyfile" "$S/custom.orig"
+FAKE_NEW_LEVEL="$OLD_LEVEL" run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && grep -q "caddy serves CADDYFILE_PATH=" "$S/out" && [ "$(creates)" = 0 ] && cmp -s "$S/custom.Caddyfile" "$S/custom.orig" \
+  && ok "caddycustom: a CADDYFILE_PATH file is left alone, not reloaded, and the operator is told release rules miss it" || { bad "caddycustom: rc=$rc creates=$(creates)"; show; }
+
+# ── 1c. update the updater first (H1) ─────────────────────────────────────────
+# The release's bundle carries a `synap` that marks _ue_install_bundle; the
+# host runs the plain (unmarked) one. A mark proves the release's OWN engine
+# ran the post-bundle steps; units are re-rendered from the INSTALLED synap.
+setup handoff r1; PUBLISH_MARK_ENGINE=1 publish "$R2" 0012_new.sql bundle
+mkdir -p "$S/fakesys" "$S/run" "$S/units"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/systemctl.log"\n' "$S" > "$S/fakesys/systemctl"; chmod +x "$S/fakesys/systemctl"
+PATH="$S/fakesys:$PATH" SYNAP_SYSTEMD_RUN_DIR="$S/run" SYNAP_SYSTEMD_DIR="$S/units" run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && ok "handoff: update to $R2 succeeded" || { bad "handoff: rc=$rc"; show; }
+grep -q "engine=.*state/update/bundle/synap handoff=$R2 " "$FAKE/engine_marks" 2>/dev/null \
+  && ok "handoff: the release's OWN synap (staged bundle) ran the post-bundle steps" || { bad "handoff: the host's old engine ran them: $(cat "$FAKE/engine_marks" 2>/dev/null)"; show; }
+[ "$(grep -c 'Handing the rest of the update' "$S/out")" = 1 ] && ok "handoff: exactly one handoff (the new engine never hands off again)" || bad "handoff: $(grep -c 'Handing the rest' "$S/out") handoffs"
+! grep -q "already running" "$S/out" && ok "handoff: the new engine keeps the update lock (same pid)" || bad "handoff: lock refused after the exec"
+[ -s "$S/units/synap-update.service" ] && grep -qE "^ExecStart=/.*/handoff/repo/synap update --unattended$" "$S/units/synap-update.service" \
+  && ! grep -rq "state/update/bundle" "$S/units" && grep -q "daemon-reload" "$S/systemctl.log" \
+  && ok "handoff: systemd units re-rendered from the INSTALLED synap after the verified update" || { bad "handoff: units not refreshed: $(ls "$S/units" 2>/dev/null | tr '\n' ' ') $(grep ExecStart "$S/units/synap-update.service" 2>/dev/null)"; show; }
+# rollback through the handed-off engine: still a clean rollback, units untouched
+setup handoffrb r1; PUBLISH_MARK_ENGINE=1 publish "$R2" 0012_new.sql bundle
+mkdir -p "$S/fakesys" "$S/run" "$S/units"
+printf '#!/usr/bin/env bash\necho "$*" >> "%s/systemctl.log"\n' "$S" > "$S/fakesys/systemctl"; chmod +x "$S/fakesys/systemctl"
+FAKE_PROD_BAD=1 PATH="$S/fakesys:$PATH" SYNAP_SYSTEMD_RUN_DIR="$S/run" SYNAP_SYSTEMD_DIR="$S/units" run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = rolled_back ] && [ "$(cur_id)" = "$R1" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" \
+  && grep -q "handoff=$R2" "$FAKE/engine_marks" 2>/dev/null && [ -z "$(ls "$S/units")" ] \
+  && ok "handoffrb: the release's engine rolls back cleanly; units are only refreshed after a verified update" || { bad "handoffrb: rc=$rc status=$(last status) units=$(ls "$S/units")"; show; }
+# A stale or foreign handoff never runs: the manifest on disk must be that release.
+setup handoffbad r1; publish "$R2" 0012_new.sql bundle
+mkdir -p "$DEPLOY/state/update"; manifest "$R2" "$NEW_SHA" d 0012_new.sql > "$DEPLOY/state/update/manifest.json"
+SYNAP_UE_HANDOFF="main-9999999" run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [[ "$(last reason)" == *"handoff manifest"* ]] && ! grep -qE '^pull |compose (run|up)' "$FAKE/log" \
+  && ok "handoffbad: a handoff naming another release is refused before anything changes" || { bad "handoffbad: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 
 # ── 2. image fails health (canary) → previous digests, NO DB restore ─────────
 setup canary r1; publish "$R2" 0011_old.sql bundle
@@ -421,6 +542,7 @@ echo "# Marker: eve-managed:synap-loopback-override:v3" > "$DEPLOY/docker-compos
 run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && grep -q "SYNAP_EDGE=traefik" "$S/out" && cmp -s "$DEPLOY/.env" "$S/env.orig" && [ -z "$(grep -E '^pull|compose (run|up)' "$FAKE/log")" ] \
   && ok "eve-unpinned: refused with the SYNAP_EDGE hint, nothing changed" || { bad "eve-unpinned: rc=$rc"; show; }
+[ "$(last status)" = aborted ] && [[ "$(last reason)" == *SYNAP_EDGE* ]] && ok "eve-unpinned: the refusal is recorded (aborted)" || bad "eve-unpinned: no outcome record: $(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"
 ( cd "$S"; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_RELEASE_BASE_URL=https://rel.test SYNAP_SKIP_EDGE=1 \
   SYNAP_HEALTH_INTERVAL=0 SYNAP_UPDATE_HEALTH_TRIES=2 SYNAP_UPDATE_MIN_FREE_MB=1 bash "$REPO/synap" update --release "$R2" ) >"$S/out" 2>&1 </dev/null; rc=$?
 [ "$rc" = 0 ] && [ "$(grep -c '^SYNAP_EDGE=traefik' "$DEPLOY/.env")" = 1 ] && ! grep -qE " up .*caddy" "$FAKE/log" \
@@ -430,6 +552,7 @@ setup port80 r1; publish "$R2" 0012_new.sql
 FAKE_PORT_HOLDER="eve-legs-traefik||" run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && grep -q "eve-legs-traefik" "$S/out" && cmp -s "$DEPLOY/.env" "$S/env.orig" && [ -z "$(grep -E '^pull|compose (run|up)' "$FAKE/log")" ] \
   && ok "port80: edge=caddy with :80 held elsewhere is refused before anything changes" || { bad "port80: rc=$rc"; show; }
+[ "$(last status)" = aborted ] && [[ "$(last reason)" == *"80/443"* ]] && ok "port80: the refusal is recorded (aborted)" || bad "port80: no outcome record: $(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"
 
 # ── 9. an invalid manifest is refused before anything changes ────────────────
 setup invalid r1; publish "$R2" 0012_new.sql
@@ -437,6 +560,28 @@ jq '.images.SYNAP_IMAGE_REDIS = "redis:7-alpine"' "$TMP/rel/$R2/release.json" > 
 run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && grep -q "SYNAP_IMAGE_REDIS is not pinned by digest" "$S/out" && cmp -s "$DEPLOY/.env" "$S/env.orig" \
   && ok "invalid: an unpinned image refuses the manifest, nothing changed" || { bad "invalid: rc=$rc"; show; }
+
+# ── 9b. every early exit records an outcome (B3) ─────────────────────────────
+# A pod-agent order waits for the record carrying its request id; an exit
+# without one is reported as UPDATE_NO_OUTCOME three hours later.
+setup secrets r1; publish "$R2" 0012_new.sql
+grep -v '^JWT_SECRET=' "$DEPLOY/.env" > "$S/x" && cp "$S/x" "$DEPLOY/.env"
+run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [[ "$(last reason)" == *"missing critical secrets: JWT_SECRET"* ]] \
+  && ok "secrets: a .env missing critical secrets is refused AND recorded" || { bad "secrets: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+mkdir -p "$TMP/cosignok"; printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/cosignok/cosign"; chmod +x "$TMP/cosignok/cosign"
+setup noopreq r1; publish "$R1" 0011_old.sql
+echo '{"bundle":"fake"}' > "$TMP/rel/$R1/release.json.sigstore.json"
+mkdir -p "$DEPLOY/state/requests"
+printf '{"schema":1,"release":"%s","requestedBy":"pod-agent","requestedAt":"2026-10-19T00:00:00Z","id":"req-noop"}\n' "$R1" > "$DEPLOY/state/requests/update.json"
+PATH="$TMP/cosignok:$PATH" run_update --unattended; rc=$?
+[ "$rc" = 0 ] && [ "$(last status)" = noop ] && [ "$(last request)" = req-noop ] && [ "$(last to)" = "$R1" ] \
+  && ok "noopreq: a request for the release the pod runs is recorded noop with its request id" || { bad "noopreq: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+setup policy r1
+mkdir -p "$DEPLOY/state"; echo '{"auto": true, "window": "25:00-26:00"}' > "$DEPLOY/state/update-policy.json"
+run_update --unattended; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [[ "$(last reason)" == *"is not HH:MM-HH:MM"* ]] \
+  && ok "policy: a broken update policy is recorded, not only printed" || { bad "policy: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 
 # ── 10. channels resolve through channel-<name>/release.json ──────────────────
 setup channel r1; publish "$R2" 0012_new.sql

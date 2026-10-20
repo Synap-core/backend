@@ -100,10 +100,33 @@ export ARCHIVE_AGE_IDENTITY_FILE="$TMP/identity.txt"; echo "AGE-SECRET-KEY-1TEST
 export ARCHIVE_WORK_DIR="$TMP/work"; mkdir -p "$ARCHIVE_WORK_DIR"
 export RESTORE_PG_WAIT_SECS=0 RESTORE_HEALTH_INTERVAL=0 RESTORE_HEALTH_TRIES=2
 
+# The scripts run from a COPY of the deploy dir: they hand every container
+# start to the host (host-request.sh → state/requests/compose.json), and that
+# state must land here, never in the checkout. A fake HOST takes each request,
+# logs it as "host-compose <services>" (empty = every service) and records
+# success, the way `synap compose-request` does (host-compose-request.test.sh
+# covers the real host side).
+D="$TMP/deploy"; mkdir -p "$D"
+cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR/docker-compose.yml" "$D/"
+export HOST_REQUEST_POLL_SECONDS=1 HOST_REQUEST_PICKUP_SECONDS=10
+fake_host() {
+  while :; do
+    if [ -f "$D/state/requests/compose.json" ] && mv -f "$D/state/requests/compose.json" "$D/state/requests/taken.json" 2>/dev/null; then
+      id="$(jq -r .id "$D/state/requests/taken.json")"
+      echo "host-compose $(jq -r '.services | join(" ")' "$D/state/requests/taken.json")" >> "$DOCKER_LOG"
+      printf '{"kind":"pod.compose-request","status":"succeeded","request":"%s","reason":""}\n' "$id" > "$D/state/last-compose-request.json"
+    fi
+    sleep 0.2
+  done
+}
+command -v jq >/dev/null 2>&1 || { echo "FAIL - jq is required"; exit 1; }
+fake_host & HOST_PID=$!; disown "$HOST_PID" 2>/dev/null
+trap 'kill "$HOST_PID" 2>/dev/null; rm -rf "$TMP"' EXIT
+
 reset() { : > "$CB_LOG"; : > "$UPLOAD_LOG"; : > "$DOCKER_LOG"; rm -f "$UPLOADED"; }
 last_status() { grep -o '"status":"[a-z]*"' "$CB_LOG" | tail -1; }
-run_archive() { reset; ( PATH="$TMP/bin:$PATH"; sh "$SCRIPT_DIR/archive-pod.sh" http://up http://cb jwt ) >"$TMP/out" 2>&1; }
-run_restore() { reset; ( PATH="$TMP/bin:$PATH"; sh "$SCRIPT_DIR/restore-archive-pod.sh" http://arch http://cb jwt ) >"$TMP/out" 2>&1; }
+run_archive() { reset; ( PATH="$TMP/bin:$PATH"; sh "$D/archive-pod.sh" http://up http://cb jwt ) >"$TMP/out" 2>&1; }
+run_restore() { reset; ( PATH="$TMP/bin:$PATH"; sh "$D/restore-archive-pod.sh" http://arch http://cb jwt ) >"$TMP/out" 2>&1; }
 
 # ── archive ──
 DUMP_MODE=ok run_archive; rc=$?
@@ -130,6 +153,8 @@ for mode in fail empty; do
   [ "$(last_status)" = '"status":"failed"' ] && ok "archive[$mode]: reports failed" || bad "archive[$mode]: status=$(last_status)"
   grep -q '"completed"' "$CB_LOG" && bad "archive[$mode]: reported completed" || ok "archive[$mode]: never reports completed"
   [ ! -s "$UPLOAD_LOG" ] && ok "archive[$mode]: nothing uploaded" || bad "archive[$mode]: uploaded a placeholder"
+  grep -qx 'host-compose ' "$DOCKER_LOG" && ! grep -qE '(^| )up( |$)' "$DOCKER_LOG" \
+    && ok "archive[$mode]: services are brought back by the HOST, not from the agent" || bad "archive[$mode]: restart path: $(cat "$DOCKER_LOG" | tr '\n' '|')"
 done
 
 # ── archive: volumes (minio/typesense) ──
@@ -164,6 +189,8 @@ tar czf "$FAKE_ARCHIVE" -C "$TMP/pk" database.sql.gz volumes.tar.gz
 
 HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
 [ $rc -eq 0 ] && [ "$(last_status)" = '"status":"completed"' ] && ok "restore: clean -> exit 0 + completed" || bad "restore: clean rc=$rc status=$(last_status): $(tail -3 "$TMP/out")"
+grep -qx 'host-compose postgres' "$DOCKER_LOG" && grep -qx 'host-compose ' "$DOCKER_LOG" && ! grep -qE '(^| )up( |$)' "$DOCKER_LOG" \
+  && ok "restore: postgres, then every service, are started by the HOST (none by the agent)" || bad "restore: start path: $(cat "$DOCKER_LOG" | tr '\n' '|')"
 HEALTH_RC=0 PSQL_MODE=exists run_restore; rc=$?
 [ $rc -eq 0 ] && ok "restore: 'already exists' notice is allow-listed" || bad "restore: 'already exists' was fatal (rc=$rc)"
 
