@@ -25,9 +25,10 @@
  *    empty / keep existing / use these values / keep both);
  *  - never the copy that IS the landing record (same minted `record.id`): on
  *    an approval replay that proposal is still pending while `entities.create`
- *    runs. Matched on the MINTED id, not the landed entity id — the repository
- *    does not reuse the minted id (live: a45e9a3a minted 00348b58, landed as
- *    b0588fc6).
+ *    runs. Matched on the MINTED id, which is not always the landed id (a
+ *    strong identity merge lands on an existing entity; before 2026-10-20 the
+ *    repository never reused the minted id: a45e9a3a minted 00348b58, landed
+ *    as b0588fc6).
  */
 import { and, eq, inArray, isNotNull, ne, sql } from "drizzle-orm";
 import { db } from "../client-pg.js";

@@ -217,7 +217,50 @@ export const createProcs = {
       const externalIdSignal = input.externalId?.trim()
         ? [{ type: "external_id", value: input.externalId.trim() }]
         : [];
-      const entityId = input.proposedEntityId ?? randomUUID();
+      // The minted id IS the id the entity lands under (the repository pins it
+      // below), so a `proposedEntityId` handed to an agent resolves once the
+      // proposal is approved. A caller-named id that already names a row:
+      //  - the caller's own live entity ⇒ this create already landed (an
+      //    approval replayed after a later step failed): return it, never a
+      //    second row, never a primary-key crash;
+      //  - any other row (another person's, or a deleted one) ⇒ not ours to
+      //    reuse: mint a fresh id, and say nothing about that row.
+      let entityId = input.proposedEntityId ?? randomUUID();
+      if (input.proposedEntityId) {
+        const database = await getDb();
+        const [taken] = await database
+          .select({ id: entities.id })
+          .from(entities)
+          .where(eq(entities.id, input.proposedEntityId))
+          .limit(1);
+        if (taken) {
+          const [landed] = await database
+            .select()
+            .from(entities)
+            .where(
+              and(
+                eq(entities.id, input.proposedEntityId),
+                isNull(entities.deletedAt),
+                entityWriteVisibleWhere(ctx.userId)
+              )
+            )
+            .limit(1);
+          if (landed) {
+            return {
+              status: "created",
+              message: "Entity already created under this id — returning it",
+              id: landed.id,
+              entity: toApiEntity(landed),
+              // Additive: nothing new was written (same flag the strong
+              // identity merge uses; the approval executor reads an equal id
+              // as its own earlier create, not a merge).
+              deduplicated: true,
+              facets: [],
+            };
+          }
+          entityId = randomUUID();
+        }
+      }
       const correlationId = randomUUID();
       /**
        * The ACTOR — the agent whose work this write is, as distinct from
@@ -1473,6 +1516,9 @@ export const createProcs = {
       try {
         createdEntity = await entityRepo.create(
           {
+            // The minted id (above): what the proposal stored, what the body,
+            // the events and the receipt already name.
+            id: entityId,
             workspaceId: entityWorkspaceId ?? undefined,
             userId: ctx.userId,
             title: input.title || undefined,
@@ -1786,9 +1832,8 @@ export const createProcs = {
       }
 
       // Undo record for an AUTO-APPROVED create: the receipt was minted by the
-      // gate BEFORE this write and its `targetId` is the pre-minted
-      // `entityId`, which the row above does NOT carry — so the created id is
-      // only knowable here. Stamped LAST, after every write this handler makes
+      // gate BEFORE this write (its `targetId` is the pre-minted `entityId`,
+      // which the row now carries too). Stamped LAST, after every write this handler makes
       // to the new entity (facets, project filing), so none of them reads as an
       // edit made after the create. Only `entityIds`, mirroring the approval
       // executor (`executors/entity.ts`): the entity is what undo retires.
