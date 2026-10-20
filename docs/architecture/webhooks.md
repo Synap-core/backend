@@ -1,8 +1,7 @@
 # Webhooks
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Originally from
-> `content/team/platform/webhook-architecture.mdx` and the webhook section of
-> `content/team/platform/hub-protocol.mdx` (Synap-core/doc).
+> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
+> internal team docs on 2026-10-20.
 
 Inbound webhooks let other systems push events into a pod; outbound webhooks
 let a pod notify other systems. Both go through the same event chain as any

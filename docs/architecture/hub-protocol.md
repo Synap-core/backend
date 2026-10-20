@@ -1,7 +1,7 @@
 # Hub Protocol REST surface
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Originally from
-> `content/team/platform/hub-protocol.mdx` (Synap-core/doc).
+> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
+> internal team docs on 2026-10-20.
 
 The Hub Protocol is the REST API every non-browser client of a pod uses: the
 Intelligence Service, external agents, sidecars and the CLI. It is mounted at

@@ -1,7 +1,7 @@
 # Backend code map
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Originally from
-> `content/team/backend/backend-product.mdx` (Synap-core/doc).
+> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
+> internal team docs on 2026-10-20.
 
 This page maps the backend's processes and packages and the path a write takes.
 What a pod is (the data model, the unit of work, governance) is in

@@ -1,7 +1,7 @@
 # API keys, scopes and grants
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Originally from
-> `content/team/platform/api-keys.mdx` (Synap-core/doc).
+> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
+> internal team docs on 2026-10-20.
 
 An API key authenticates a machine caller (an agent, the CLI, an integration)
 to a pod. What the key may do is decided in two layers: **scopes** say which
@@ -93,7 +93,7 @@ human behind the key may do.
   (`entity.knowledge.update`).
 - The shared model for displaying grants (catalog, presets, `summarizeGrant`,
   `AGENT_GRANT_CATALOG`) is in `packages/types/src/grants/`. The editor UI lives
-  in synap-app (`@synap-core/web/grant-selector`).
+  in Synap's web client, outside this repository.
 
 ## Lifetime, rotation, revocation
 

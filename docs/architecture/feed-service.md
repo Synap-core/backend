@@ -1,9 +1,8 @@
 # Feeds and pluggable sources
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Originally from
-> `content/team/backend/feed-api.mdx` and `content/team/backend/rss-setup.mdx`
-> (Synap-core/doc). Most of both pages described a REST API and environment
-> variables that no longer exist; see "History".
+> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
+> internal team docs on 2026-10-20. Most of the original pages described a REST
+> API and environment variables that no longer exist; see "History".
 
 A pod pulls external content (feeds, search results, filings, any JSON API)
 through one pluggable source system: a **source config** says how to reach a

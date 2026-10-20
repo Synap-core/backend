@@ -12,3 +12,5 @@ The engineering notes for each part of the backend live next to its code:
 | Migration runner contract                                    | header of [`packages/database/src/scripts/migrate.ts`](../../packages/database/src/scripts/migrate.ts) |
 | Deployment, Compose stack, operator CLI                      | [`deploy/README.md`](../../deploy/README.md)                                                           |
 | Building an app or agent on a pod                            | [`docs/DEVELOPER.md`](../DEVELOPER.md)                                                                 |
+| Architecture notes per subsystem                             | [`docs/architecture/README.md`](../architecture/README.md)                                             |
+| Decision records                                             | [`docs/decisions/README.md`](../decisions/README.md)                                                   |

@@ -1,8 +1,8 @@
 # Event chain and signal routing
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Originally from
-> `content/team/platform/event-chain.mdx` (Synap-core/doc). The realtime naming
-> section of that page now lives in [realtime.md](realtime.md) and
+> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
+> internal team docs on 2026-10-20. The realtime naming section of the original page now
+> lives in [realtime.md](realtime.md) and
 > [../decisions/realtime-event-naming.md](../decisions/realtime-event-naming.md).
 
 Every state change in a pod reaches two places: the `events` table (the

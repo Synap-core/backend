@@ -1,10 +1,7 @@
 # Authentication and federation
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Originally from
-> `content/team/platform/auth-architecture.mdx`,
-> `content/team/platform/authentication.mdx`,
-> `content/team/platform/connections.mdx` and
-> `content/team/platform/trusted-issuers.mdx` (Synap-core/doc).
+> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
+> internal team docs on 2026-10-20.
 
 A pod authenticates its own users. An external account service (Synap's
 hosted control plane is one) can help a person reach a pod, but it never holds

@@ -1,8 +1,7 @@
 # Realtime
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Originally from
-> `content/team/platform/realtime.mdx` and the realtime half of
-> `content/team/platform/event-chain.mdx` (Synap-core/doc).
+> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
+> internal team docs on 2026-10-20.
 
 The realtime service (`packages/realtime`) is a separate Node process that
 carries presence, server-to-client domain events and Yjs co-editing over
@@ -114,10 +113,9 @@ state is a cache in `documents.working_state`, trusted only while
 `content_revision` through `claimDocumentRevision`, which invalidates the cache.
 A room with no trusted cache starts empty and asks one client to seed it from
 the markdown (the `synap-room` Y.Map: `revision`, `seedRevision`, `seedClaim`,
-`loadError`, `schemaVersion`; its client mirror is
-`synap-app/packages/web/src/document/roomMeta.ts` and the key sets must stay
-identical). A room that failed to load sets `loadError`; clients must not seed
-or write back into it.
+`loadError`, `schemaVersion`; the web client keeps a mirror of these keys, and
+the two key sets must stay identical). A room that failed to load sets
+`loadError`; clients must not seed or write back into it.
 
 **Persistence** (`yjs-server.ts`, interval 10 s from `server.ts`):
 

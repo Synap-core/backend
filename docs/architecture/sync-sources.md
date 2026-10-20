@@ -1,7 +1,7 @@
 # Adding a sync source
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Originally from
-> `content/team/platform/adding-a-sync-source.mdx` (Synap-core/doc).
+> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
+> internal team docs on 2026-10-20.
 
 A sync source mirrors records from a connected provider (Google Calendar,
 Gmail, Google Contacts today) into the pod. It is configuration plus one pure
@@ -13,9 +13,8 @@ Code: `packages/api/src/services/event-sync/`.
 ## 1. Declare the sync kinds on the capability template
 
 Sync settings live on the provider's capability template, under
-`tools[<provider>].metadata.sync`. Official templates are authored in synap-app
-(`packages/workspace-templates/capabilities/`, for example
-`nango-google.capability.json`).
+`tools[<provider>].metadata.sync`. Synap's official templates are maintained
+outside this repository (for example `nango-google.capability.json`).
 
 ```json
 {

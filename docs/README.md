@@ -6,13 +6,15 @@ code they describe.
 
 ## Start here
 
-| File                                                   | What it is                                                                      |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| [`ARCHITECTURE-OVERVIEW.md`](ARCHITECTURE-OVERVIEW.md) | What Synap is: the data model, the unit of work, governance. Cites its sources. |
-| [`DEVELOPER.md`](DEVELOPER.md)                         | Building on a pod: the public SDK, bring-your-own-agent over MCP, self-hosting. |
-| [`../CONTRIBUTING.md`](../CONTRIBUTING.md)             | Working on this repository: setup, tests, migrations, commits.                  |
-| [`../deploy/README.md`](../deploy/README.md)           | Self-hosting a pod: install, update, back up, restore.                          |
-| [`development/README.md`](development/README.md)       | Where the engineering notes for each part of the backend live.                  |
+| File                                                   | What it is                                                                         |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| [`ARCHITECTURE-OVERVIEW.md`](ARCHITECTURE-OVERVIEW.md) | What Synap is: the data model, the unit of work, governance. Cites its sources.    |
+| [`DEVELOPER.md`](DEVELOPER.md)                         | Building on a pod: the public SDK, bring-your-own-agent over MCP, self-hosting.    |
+| [`../CONTRIBUTING.md`](../CONTRIBUTING.md)             | Working on this repository: setup, tests, migrations, commits.                     |
+| [`../deploy/README.md`](../deploy/README.md)           | Self-hosting a pod: install, update, back up, restore.                             |
+| [`development/README.md`](development/README.md)       | Where the engineering notes for each part of the backend live.                     |
+| [`architecture/README.md`](architecture/README.md)     | Design notes per subsystem: write path, event chain, realtime, Hub Protocol, keys. |
+| [`decisions/README.md`](decisions/README.md)           | Decision records: context, decision, alternatives, state today.                    |
 
 > `ARCHITECTURE-OVERVIEW.md` is the source of truth for the public claims the
 > root `README.md` makes. If the model changes, update it in the same commit.
