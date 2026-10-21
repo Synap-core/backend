@@ -484,38 +484,12 @@ export const inviteProcedures = {
         }
       }
 
-      // If a stale account exists for this email (no workspace memberships),
-      // clean it up so the new invite can be accepted without a Kratos 409.
-      const staleUser = await db.query.users.findFirst({
-        where: eq(users.email, input.email.trim().toLowerCase()),
-        columns: { id: true },
-      });
-      if (staleUser) {
-        const hasAnyMembership = await db.query.workspaceMembers.findFirst({
-          where: eq(workspaceMembers.userId, staleUser.id),
-          columns: { workspaceId: true },
-        });
-        if (!hasAnyMembership) {
-          // The account's connections go before the account does.
-          try {
-            await disconnectAllUserConnections(staleUser.id);
-          } catch (err) {
-            throw new TRPCError({
-              code: "PRECONDITION_FAILED",
-              message: `The existing account for this email still has connections that could not be removed, so it was not replaced: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-              cause: err,
-            });
-          }
-          try {
-            await kratosAdmin.deleteIdentity({ id: staleUser.id });
-          } catch {
-            // Identity may have already been removed — proceed with DB cleanup.
-          }
-          await db.delete(users).where(eq(users.id, staleUser.id));
-        }
-      }
+      // An existing account for this email is never touched here. Naming an
+      // email must not let an inviter delete, or later re-password, an account
+      // (an identity with no workspace membership can still be a pod member, a
+      // linked Synap account or the author of data). The invitee signs in to
+      // accept instead (`/setup/accept-invite` answers 409 for an existing
+      // identity).
 
       const token = randomBytes(32).toString("hex");
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
@@ -562,6 +536,10 @@ export const inviteProcedures = {
           role: input.role,
           inviteToken: invite.token,
           clientHint: "auto",
+          // This pod redeems its own invites: the CP links the email to this
+          // pod's console invite page (`<console>/invite/<token>`), derived
+          // from the CP's row for this pod, never from anything sent here.
+          orchestration: "pod_local",
         };
         const backendOrigin =
           process.env.PUBLIC_BACKEND_URL || process.env.SYNAP_INSTANCE_URL;
