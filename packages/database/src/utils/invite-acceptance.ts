@@ -47,6 +47,7 @@ export async function recordInviteAcceptance(
       .onConflictDoNothing();
     return true;
   } catch (error) {
+    if (/*NC*/ error) throw error;
     logger.error(
       { error, inviteId: invite.id, userId },
       "Invite accepted, but its record could not be kept; a link by this invite will wait for an owner"
