@@ -33,10 +33,12 @@ import {
 import {
   db,
   extractIdentitySignals,
+  and,
   eq,
   or,
   isNull,
   entities,
+  ownerPrivateVisibleWhere,
   getWorkspaceMembership,
   ProfileResolutionService,
   PropertyValidationService,
@@ -93,6 +95,7 @@ import {
   type PendingQueue,
 } from "../duplicates/find-duplicate-candidates.js";
 import { openLink } from "../../utils/deep-links.js";
+import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
 import { captureGraphMemberProposes } from "./capture-graph-governance.js";
 import { buildRuleLoopCallers } from "../../utils/rule-loop-callers.js";
 import {
@@ -1214,13 +1217,19 @@ export async function submitCaptureGraph(
   // same-kind name or an in-flight twin in the caller's own pending queue is
   // a `possible` duplicate: never auto-linked (the old weak exact-title link
   // silently merged two different things), filed for the reviewer instead.
-  // Weak matches are scoped to this workspace's visible rows + pod-wide ones.
+  // Weak matches are scoped to this workspace's rows + pod-wide ones, and
+  // only ever rows the CALLER may see (FB1020 review M3): `entities` is
+  // owner-private, and a bare `isNull(workspaceId)` admitted every user's
+  // pod-personal rows — their titles then rode the proposal and the receipt.
   const itemChecks: DuplicateCheck[] = [];
   const toResolve = graphEntities.filter((e) => !e.existingEntityId);
   if (toResolve.length > 0) {
-    const weakScope = workspaceId
-      ? or(eq(entities.workspaceId, workspaceId), isNull(entities.workspaceId))
-      : isNull(entities.workspaceId);
+    const weakScope = and(
+      ownerPrivateVisibleWhere(entities.workspaceId, entities.userId, userId),
+      workspaceId
+        ? or(eq(entities.workspaceId, workspaceId), isNull(entities.workspaceId))
+        : isNull(entities.workspaceId)
+    );
     // One read of the caller's pending queue for the whole graph. A failed
     // read is left to the door, which then reports `unchecked` per item.
     let pending: PendingQueue | undefined;
@@ -1243,8 +1252,25 @@ export async function submitCaptureGraph(
         ...(pending ? { pending } : {}),
       });
       if (answer.identity?.match === "strong" && answer.identity.entity) {
-        e.existingEntityId = answer.identity.entity.id; // link, don't create
-        continue;
+        // The strong index is pod-wide by design: link only onto a record the
+        // caller may write, as the entity door does — never wire the graph to
+        // (or name) another user's private record. An invisible match falls
+        // through to a normal create.
+        const [visible] = await db
+          .select({ id: entities.id })
+          .from(entities)
+          .where(
+            and(
+              eq(entities.id, answer.identity.entity.id),
+              isNull(entities.deletedAt),
+              entityWriteVisibleWhere(userId)
+            )
+          )
+          .limit(1);
+        if (visible) {
+          e.existingEntityId = visible.id; // link, don't create
+          continue;
+        }
       }
       itemChecks.push(answer.check);
     }

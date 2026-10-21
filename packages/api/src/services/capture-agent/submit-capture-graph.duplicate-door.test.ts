@@ -19,7 +19,9 @@ import {
  *  - no match → the agent's graph still auto-applies (rules out "every agent
  *    capture is a proposal");
  *  - a STRONG identity match still links and auto-applies (the one automatic
- *    outcome is untouched).
+ *    outcome is untouched) — on PGlite in
+ *    `submit-capture-graph.dedup-scope.pglite.test.ts`, since the link now
+ *    reads the record's visibility (FB1020 review M3).
  */
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -61,7 +63,13 @@ vi.mock(
       await importOriginal<
         typeof import("../duplicates/find-duplicate-candidates.js")
       >();
-    return { ...actual, loadOwnPendingCreates: vi.fn(async () => []) };
+    return {
+      ...actual,
+      loadOwnPendingCreates: vi.fn(async () => ({
+        creates: [],
+        truncated: false,
+      })),
+    };
   }
 );
 
@@ -174,18 +182,5 @@ describe("submitCaptureGraph — the one duplicate door", () => {
     const data = receipt.mock.calls[0]![0].data as Record<string, unknown>;
     expect(data.duplicateCheck).toMatchObject({ status: "clear" });
     expect(result.duplicateCheck).toBeUndefined();
-  });
-
-  it("a strong identity match still links and auto-applies", async () => {
-    vi.mocked(resolveIdentity).mockResolvedValue({
-      match: "strong",
-      entity: JANE,
-      candidates: [],
-      crossKindCandidates: [],
-    } as never);
-    const { result, materialize } = await capture();
-    expect(result.applied).toBe(true);
-    const ops = materialize.mock.calls[0]![0] as Array<Record<string, unknown>>;
-    expect(ops[0]!.existingEntityId).toBe(JANE.id);
   });
 });
