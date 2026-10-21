@@ -448,6 +448,36 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     expect((await ledger(sessionId)).autoContinues).toBe(0);
   });
 
+  it("a RETRIED report of one turn (same turnKey) is settled once: one stop, one continuation (S9)", async () => {
+    // Before: the room post's idempotency key was the stop count, which the
+    // retry had ALREADY incremented — so the retry counted a second stop and
+    // posted (and dispatched) a second continuation.
+    const { sessionId, channelId } = await seedRun();
+    const report = { ...STOPPED, turnKey: "msg-turn-1" };
+    expect((await completeRun(sessionId, report)).json).toEqual({
+      status: "continued",
+    });
+    const retry = await completeRun(sessionId, report);
+    expect(retry).toEqual({ code: 200, json: { status: "duplicate" } });
+    expect(h.triggers).toHaveLength(1);
+    expect(await ledger(sessionId)).toMatchObject({
+      stops: 1,
+      autoContinues: 1,
+    });
+    const notices = (await roomMessages(channelId)).filter(
+      (m) => m.role === "system"
+    );
+    expect(notices).toHaveLength(1);
+
+    // A DIFFERENT turn is a real stop.
+    expect(
+      (await completeRun(sessionId, { ...STOPPED, turnKey: "msg-turn-2" }))
+        .json
+    ).toEqual({ status: "continued" });
+    expect(h.triggers).toHaveLength(2);
+    expect((await ledger(sessionId)).stops).toBe(2);
+  });
+
   it("a FORCED-FINAL turn (budgetAction final) is a stop too, never a completion", async () => {
     const { sessionId, runId } = await seedRun();
     const r = await completeRun(sessionId, {

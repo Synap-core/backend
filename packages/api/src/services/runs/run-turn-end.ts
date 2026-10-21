@@ -88,6 +88,14 @@ export const completeRunBodySchema = z
      * turn's outcome and leave a finished run `running` for the 24-h reaper.
      */
     agentType: z.string().trim().min(1).max(200).optional().catch(undefined),
+    /**
+     * The IS's id for THIS turn, the same on every retry of its report: the
+     * message that triggered the turn when the pod dispatched it, else an id
+     * the IS minted once for the turn. A report whose key the ledger already
+     * holds is a RETRY — recorded once, continued once. Lenient like
+     * `agentType`: an unusable key reads as absent (the old, stop-count key).
+     */
+    turnKey: z.string().trim().min(1).max(256).optional().catch(undefined),
     turn: z
       .object({
         budgetAction: z.enum(["final", "stop"]).optional(),
@@ -122,7 +130,9 @@ export type CompleteRunStatus =
   | "no-running-run"
   | "continued"
   | "waiting_on_you"
-  | "left_running";
+  | "left_running"
+  /** A retried report of a turn already settled: nothing done again. */
+  | "duplicate";
 
 /** One turn's end, as stored. */
 export interface RunTurnRecord {
@@ -130,6 +140,8 @@ export interface RunTurnRecord {
   outcome: "completed" | "stopped";
   reason?: "turn_budget";
   agentType?: string;
+  /** The IS's id for the turn (`CompleteRunBody.turnKey`). */
+  turnKey?: string;
   budgetAction?: "final" | "stop";
   ceiling?: number;
   spentInputTokens?: number;
@@ -141,7 +153,7 @@ export interface RunTurnRecord {
 /** `metadata.runTurns` — one run's turn ledger. */
 export interface RunTurnsState {
   runId: string;
-  /** Budget stops over the whole run (the continuation idempotency key). */
+  /** Stops over the whole run (the idempotency key when no `turnKey`). */
   stops: number;
   /** Automatic continuations since an ask last LANDED with the person. */
   autoContinues: number;
@@ -207,6 +219,8 @@ async function recordTurnEnd(
 ): Promise<{
   decision: ReturnType<typeof nextAfterStop> | null;
   state: RunTurnsState;
+  /** This turn's report was already recorded (a retry): nothing written. */
+  duplicate: boolean;
 } | null> {
   return db.transaction(async (tx) => {
     const [locked] = await tx
@@ -216,6 +230,14 @@ async function recordTurnEnd(
       .for("update");
     if (!locked) return null;
     const state = readRunTurns(locked.metadata, runId);
+    if (
+      body.turnKey &&
+      [state.firstTurn, ...state.turns].some(
+        (t) => t?.turnKey === body.turnKey
+      )
+    ) {
+      return { decision: null, state, duplicate: true };
+    }
     const stopped = body.outcome === "stopped";
     const decision = stopped ? nextAfterStop(state) : null;
     const record: RunTurnRecord = {
@@ -223,6 +245,7 @@ async function recordTurnEnd(
       outcome: body.outcome,
       ...(body.reason ? { reason: body.reason } : {}),
       ...(body.agentType ? { agentType: body.agentType } : {}),
+      ...(body.turnKey ? { turnKey: body.turnKey } : {}),
       ...(body.turn?.budgetAction
         ? { budgetAction: body.turn.budgetAction }
         : {}),
@@ -253,7 +276,7 @@ async function recordTurnEnd(
       .update(focusSessions)
       .set({ metadata: mergeSessionMetadata({ [RUN_TURNS_META_KEY]: next }) })
       .where(eq(focusSessions.id, sessionId));
-    return { decision, state: next };
+    return { decision, state: next, duplicate: false };
   });
 }
 
@@ -310,7 +333,8 @@ async function continueRun(p: {
   session: SessionRoom;
   agentType: string;
   continuation: number;
-  stops: number;
+  /** The turn's id for idempotency (`turnRefOf`). */
+  turnRef: string;
 }): Promise<boolean> {
   if (!p.session.channelId) return false;
   const content =
@@ -324,7 +348,7 @@ async function continueRun(p: {
       content,
       userId: p.session.userId,
       role: "system",
-      idempotencyKey: `run-continue:${p.run.id}:${p.stops}`,
+      idempotencyKey: `run-continue:${p.run.id}:${p.turnRef}`,
     });
     if (posted.ackState === "duplicate-ignored") return true;
     return await triggerAutoRespond({
@@ -357,6 +381,7 @@ async function askToKeepGoing(p: {
   session: SessionRoom;
   askingAgentUserId: string | null;
   stops: number;
+  turnRef: string;
 }): Promise<boolean> {
   const question =
     `This run stopped at its token budget ${p.stops} times ` +
@@ -387,7 +412,7 @@ async function askToKeepGoing(p: {
         kind: "question",
         slotLabel: RUN_CONTINUE_SLOT_LABEL,
         ask,
-        idempotencyKey: `run-ask:${p.run.id}:${p.stops}`,
+        idempotencyKey: `run-ask:${p.run.id}:${p.turnRef}`,
       });
       if (posted.slot?.status === "blocked") return true;
       logger.warn(
@@ -425,6 +450,8 @@ export async function settleRunTurnEnd(p: {
   const { run, session, body } = p;
   const recorded = await recordTurnEnd(session.id, run.id, body);
 
+  // Completing is idempotent (only a LIVE run completes), so a retried
+  // `completed` report still settles a run its first attempt failed to.
   if (body.outcome === "completed") {
     const updated = await applyRunCapture({ run, status: "completed" });
     return updated ? "completed" : "no-running-run";
@@ -432,8 +459,13 @@ export async function settleRunTurnEnd(p: {
 
   // Stopped on its budget: the run stays LIVE whatever happens below — even
   // when the turn could not be recorded (session row gone mid-call).
+  if (recorded?.duplicate) return "duplicate";
   if (!recorded?.decision) return "left_running";
   const { decision, state } = recorded;
+  // Idempotency for the room posts: the IS's turn id, else (an older IS) the
+  // stop count — which a retried report re-increments, so only `turnKey`
+  // makes a retry recognisable.
+  const turnRef = body.turnKey ?? String(state.stops);
   if (decision.next === "continue") {
     if (run.status !== "running") {
       await applyRunCapture({ run, status: "running" });
@@ -443,7 +475,7 @@ export async function settleRunTurnEnd(p: {
       session,
       agentType: body.agentType ?? "meta",
       continuation: decision.continuation,
-      stops: state.stops,
+      turnRef,
     });
     if (continued) return "continued";
   }
@@ -453,6 +485,7 @@ export async function settleRunTurnEnd(p: {
     session,
     askingAgentUserId: p.askingAgentUserId,
     stops: state.stops,
+    turnRef,
   });
   if (asked) {
     await resetAfterAsk(session.id, run.id);
