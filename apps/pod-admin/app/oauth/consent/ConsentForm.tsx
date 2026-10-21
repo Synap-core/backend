@@ -58,6 +58,27 @@ export interface ConsentParams {
   codeChallengeMethod?: string;
   /** RFC 8707 — round-tripped so the code is bound to it (re-validated server-side). */
   resource?: string;
+  /** OIDC step-up: a fresh sign-in is required first (enforced server-side). */
+  maxAge?: string;
+  prompt?: string;
+}
+
+/**
+ * Sign in again, then come back to this same request. `refresh=1` makes the
+ * login page re-authenticate a signed-in person (a step-up), and the server
+ * re-checks the new sign-in's time when the person decides.
+ */
+function signInAgain(): void {
+  const here = window.location.pathname + window.location.search;
+  window.location.href = `/login?refresh=1&return=${encodeURIComponent(here)}`;
+}
+
+/** The decision was refused because the sign-in is too old for this request. */
+function isLoginRequired(err: unknown): boolean {
+  return (
+    (err as { data?: { reasonCode?: unknown } } | null)?.data?.reasonCode ===
+    "LOGIN_REQUIRED"
+  );
 }
 
 type Step =
@@ -87,6 +108,13 @@ export function ConsentForm({
 
   const decide = trpc.apiKeys.decideOAuthAuthorization.useMutation();
 
+  // `prompt=login` / `max_age` and the current sign-in is too old: sign in
+  // again before anything is shown to decide on.
+  const reauthenticate = context.data?.reauthenticate ?? false;
+  useEffect(() => {
+    if (reauthenticate) signInAgain();
+  }, [reauthenticate]);
+
   // A pod app (CIMD client): the person narrows what it may touch, per space.
   const app = context.data?.app ?? null;
   const [selection, setSelection] = useState<Selection>(new Set());
@@ -114,6 +142,10 @@ export function ConsentForm({
             window.location.href = redirectTo;
           },
           onError: (err) => {
+            if (isLoginRequired(err)) {
+              signInAgain();
+              return;
+            }
             if (!approve) {
               // Deny should never strand the user on an error screen; the
               // authorization simply did not happen.

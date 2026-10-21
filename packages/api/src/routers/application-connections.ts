@@ -39,7 +39,7 @@ import {
   podAdminProcedure,
   protectedProcedure,
   credentialProcedure,
-  refuseDeviceSession,
+  requireFreshAuthentication,
 } from "../trpc.js";
 import { auditLog } from "../utils/audit-log.js";
 import {
@@ -560,7 +560,7 @@ export const applicationConnectionsRouter = router({
     }),
 
   approveRequest: podAdminProcedure
-    .use(refuseDeviceSession)
+    .use(requireFreshAuthentication)
     .input(requestIdSchema)
     .mutation(async ({ input, ctx }) => {
       let approved: Awaited<

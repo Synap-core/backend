@@ -325,6 +325,46 @@ async function awaitSuccessor(id: string): Promise<string> {
   throw new OAuthError("invalid_grant", INVALID);
 }
 
+/** How long after its use a DEVICE's refresh token may be retried. */
+export const DEVICE_REFRESH_RETRY_GRACE_MS = 30_000;
+
+/**
+ * A Synap app's DEVICE presents a refresh token again: on a flaky phone
+ * connection the first refresh's RESPONSE can be lost after the token was
+ * spent. Within `DEVICE_REFRESH_RETRY_GRACE_MS` of its use, and while its
+ * successor was NEVER redeemed, that is a retry, not a theft: the unused
+ * successor is retired (atomically, only if still unused) and the caller
+ * mints a fresh pair from this token, in the same family. Anything else —
+ * outside the window, the successor already used, or retired by someone
+ * else first — is a reuse (false: the caller kills the family AND the
+ * device). A successor not issued yet (the first refresh still minting) is
+ * waited for briefly, then refused without a revoke. Never touches the
+ * device's step-up clock (`auth_time`). Pod apps keep their own PB3b grace
+ * (`reuseGrace`), which answers the SAME pair.
+ */
+async function deviceRetryGrace(row: RefreshRow): Promise<boolean> {
+  if (
+    !row.lastUsedAt ||
+    Date.now() - row.lastUsedAt.getTime() >= DEVICE_REFRESH_RETRY_GRACE_MS
+  ) {
+    return false;
+  }
+  const successorId = row.replacedBy ?? (await awaitSuccessor(row.id));
+  const retired = await db
+    .update(oauthRefreshTokens)
+    .set({ revokedAt: new Date() })
+    .where(
+      and(
+        eq(oauthRefreshTokens.id, successorId),
+        eq(oauthRefreshTokens.familyId, row.familyId),
+        isNull(oauthRefreshTokens.lastUsedAt),
+        isNull(oauthRefreshTokens.revokedAt)
+      )
+    )
+    .returning({ id: oauthRefreshTokens.id });
+  return retired.length > 0;
+}
+
 /**
  * The reuse grace for a token already used, named with its own client_id
  * (the caller checked): its successor and that successor's raw token, when
@@ -336,9 +376,8 @@ async function awaitSuccessor(id: string): Promise<string> {
 async function reuseGrace(
   row: RefreshRow
 ): Promise<RedeemedRefreshToken["grace"] | null> {
-  // A Synap app's DEVICE gets no grace: a native app refreshes single-flight
-  // in one process (join plan §6.3), so a second presentation is two holders
-  // and ends the device (person-device-token.ts, R1).
+  // A Synap app's DEVICE has its own retry grace (`deviceRetryGrace`: a NEW
+  // pair, the unused successor retired), never this one (the SAME pair).
   if (row.deviceId) return null;
   if (
     !row.lastUsedAt ||
@@ -409,7 +448,23 @@ export async function redeemRefreshToken(
     }
     throw new OAuthError("invalid_grant", INVALID);
   }
-  if (row.revokedAt) throw new OAuthError("invalid_grant", INVALID);
+  if (row.revokedAt) {
+    // A DEVICE's token revoked while its device lives was retired by a
+    // retry (`deviceRetryGrace`): someone else continued this family. Two
+    // holders — a reuse: the family and the device end (R7).
+    if (
+      row.deviceId &&
+      found.deviceRevokedAt === null &&
+      found.deviceExpiresAt
+    ) {
+      await revokeRefreshFamily(
+        row,
+        "A retired refresh token was presented: every token of its family is revoked"
+      );
+      throw new RefreshTokenReuseError(row.familyId);
+    }
+    throw new OAuthError("invalid_grant", INVALID);
+  }
   // A device's token lives only as long as its device: revoked (signed out,
   // removed from the devices list) or past its absolute cap, it is dead.
   if (
@@ -421,6 +476,12 @@ export async function redeemRefreshToken(
     throw new OAuthError("invalid_grant", INVALID);
   }
   if (row.lastUsedAt) {
+    // A Synap app's DEVICE retrying after a lost response: its unused
+    // successor is retired and the grant proceeds from this token, so the
+    // family lives on (deviceRetryGrace). Outside it: a reuse, below.
+    if (row.deviceId && (await deviceRetryGrace(row))) {
+      return redeemedOf(row, found.deviceExpiresAt);
+    }
     const grace = await reuseGrace(row);
     if (grace) return { ...redeemedOf(row), grace };
     await revokeRefreshFamily(

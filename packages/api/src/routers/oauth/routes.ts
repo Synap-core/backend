@@ -367,12 +367,19 @@ oauthApp.get("/authorize", async (c) => {
   if (validated.resource) {
     target.searchParams.set("resource", validated.resource);
   }
-  // Sign-in HINTS for the consent screen (never trusted, never a credential):
-  // OIDC `login_hint` pre-fills who signs in; `prompt=create` (OIDC
-  // Initiating User Registration) asks for the make-an-account path.
+  // Sign-in HINTS for the consent screen (never a credential): OIDC
+  // `login_hint` pre-fills who signs in; `prompt=create` (OIDC Initiating
+  // User Registration) asks for the make-an-account path. A STEP-UP asks for
+  // a fresh sign-in: `prompt=login` and/or `max_age` — the consent decision
+  // ENFORCES them server-side (consent.ts `reauthenticationRequired`).
   const loginHint = loginHintFrom(q.login_hint);
   if (loginHint) target.searchParams.set("login_hint", loginHint);
-  if (q.prompt === "create") target.searchParams.set("prompt", "create");
+  if (q.prompt === "create" || q.prompt === "login") {
+    target.searchParams.set("prompt", q.prompt);
+  }
+  if (q.max_age !== undefined && /^[0-9]{1,9}$/.test(q.max_age)) {
+    target.searchParams.set("max_age", q.max_age);
+  }
 
   return c.redirect(target.toString(), 302);
 });
@@ -770,13 +777,30 @@ oauthApp.post("/token", async (c) => {
     // device with a 1 h access token and a rotating refresh token — the one
     // door, which states the threat model (services/person-device-token.ts).
     if (client.clientKind === "first_party") {
-      const { signInPersonDevice } =
+      const { signInPersonDevice, stepUpPersonDevice } =
         await import("../../services/person-device-token.js");
+      // A STEP-UP of a device the app already holds: the code's fresh sign-in
+      // moves THAT device's clock; the device's refresh token proves which
+      // device (and its family). Never a second device.
+      if (params.synap_device_refresh_token) {
+        const steppedUp = await stepUpPersonDevice({
+          refreshToken: params.synap_device_refresh_token,
+          clientId: client.clientId,
+          personUserId: claimed.userId,
+          authTime: claimed.authTime,
+        });
+        logger.info(
+          { clientId: claimed.clientId, deviceId: steppedUp.deviceId },
+          "pod-oauth: device re-confirmed (step-up)"
+        );
+        return c.json(personDeviceTokenResponse(steppedUp));
+      }
       const signedIn = await signInPersonDevice({
         personUserId: claimed.userId,
         clientId: client.clientId,
         label: params.synap_device_label,
         userAgent: c.req.header("user-agent"),
+        authTime: claimed.authTime,
       });
       if (!signedIn.ok) {
         logger.warn(

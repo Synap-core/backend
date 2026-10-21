@@ -18,7 +18,7 @@
  */
 
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -942,7 +942,7 @@ export const secretsVaultRouter = router({
    *
    * Returns the vault:// reference for the approved secret.
    */
-  grantAIAccess: protectedProcedure
+  grantAIAccess: credentialProcedure
     .input(
       z.object({
         secretId: z.string().uuid(),

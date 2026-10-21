@@ -34,7 +34,7 @@ import {
   podAdminProcedure,
   protectedProcedure,
   credentialProcedure,
-  refuseDeviceSession,
+  requireFreshAuthentication,
 } from "../trpc.js";
 import {
   adminPodApps,
@@ -378,7 +378,7 @@ export const appsRouter = router({
    * lifted (`podAdmin`). The event names the admin who did it.
    */
   adminRevoke: podAdminProcedure
-    .use(refuseDeviceSession)
+    .use(requireFreshAuthentication)
     .input(z.object({ publicId: PublicId }))
     .mutation(async ({ ctx, input }) => {
       const { publicId } = await revokeApp({
@@ -391,7 +391,7 @@ export const appsRouter = router({
 
   /** Remove anyone's REVOKED app for good — the same service as `remove`. */
   adminRemove: podAdminProcedure
-    .use(refuseDeviceSession)
+    .use(requireFreshAuthentication)
     .input(z.object({ publicId: PublicId }))
     .mutation(async ({ ctx, input }) => {
       const { publicId } = await removeApp({
@@ -416,7 +416,7 @@ export const appsRouter = router({
 
   /** End one pod app for EVERY member (each through `revokeApp`). */
   adminRevokeClient: podAdminProcedure
-    .use(refuseDeviceSession)
+    .use(requireFreshAuthentication)
     .input(z.object({ clientId: z.string().url().max(512) }))
     .mutation(({ ctx, input }) =>
       adminRevokePodAppClient({

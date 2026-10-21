@@ -36,10 +36,12 @@ export interface KratosSession {
   /**
    * Set ONLY when the person came in on a Synap app's device token
    * (`appSessionMiddleware`, join plan target A): the device it was minted
-   * for. Absent on a Kratos session. Such a session has no `authenticated_at`,
-   * so it never counts as a recent sign-in.
+   * for, and when the person last really authenticated for it (`authTime`,
+   * the step-up clock). Absent on a Kratos session. Such a session has no
+   * `authenticated_at`, so account recovery never counts it as a recent
+   * sign-in.
    */
-  device?: { id: string; clientId: string };
+  device?: { id: string; clientId: string; authTime: Date | null };
 }
 
 /**
@@ -64,8 +66,9 @@ export interface Context {
    * What kind of PERSON session `session` is: a Kratos session (browser
    * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
    * `createContext`, from what the app session gate resolved from the row
-   * (`middleware/app-session.ts`); null when there is no session. Credential
-   * doors refuse anything but `kratos` (`refuseDeviceSession`, trpc.ts).
+   * (`middleware/app-session.ts`); null when there is no session. A credential
+   * door takes a `person_device` session only shortly after a real sign-in
+   * (`requireFreshAuthentication`, trpc.ts).
    */
   sessionKind?: "kratos" | "person_device" | null;
   req?: Request;

@@ -324,6 +324,9 @@ ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "resource" text
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "app_id" uuid;
 -- 0339: the app grant a person consented to (app clients only).
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "app_grant" jsonb;
+-- 0340: the consenting session's real `authenticated_at`, which a Synap
+-- app's device takes as its step-up clock.
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "auth_time" timestamp with time zone;
 CREATE INDEX IF NOT EXISTS "oauth_authorization_codes_expires_at_idx"
   ON "oauth_authorization_codes" ("expires_at");
 
@@ -5157,8 +5160,15 @@ CREATE TABLE IF NOT EXISTS "person_devices" (
   "last_used_at"   timestamp with time zone,
   "expires_at"     timestamp with time zone NOT NULL,
   "revoked_at"     timestamp with time zone,
-  "revoked_reason" text
+  "revoked_reason" text,
+  "auth_time"      timestamp with time zone
 );
+
+-- When the person last really AUTHENTICATED for this device (a password,
+-- passkey or Cloud login at /authorize; a step-up refreshes it, a token
+-- refresh never does). Credential doors accept a device only within minutes
+-- of it. ADD COLUMN too, for a pod that ran an earlier draft of this file.
+ALTER TABLE "person_devices" ADD COLUMN IF NOT EXISTS "auth_time" timestamp with time zone;
 
 -- A person's devices (the devices list, revoke-all).
 CREATE INDEX IF NOT EXISTS "person_devices_user_idx"

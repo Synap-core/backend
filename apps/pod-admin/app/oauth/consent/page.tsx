@@ -33,6 +33,8 @@ interface OAuthConsentPageProps {
     code_challenge?: string;
     code_challenge_method?: string;
     resource?: string;
+    max_age?: string;
+    prompt?: string;
   }>;
 }
 
@@ -61,6 +63,8 @@ export default async function OAuthConsentPage({
         codeChallenge: sp.code_challenge,
         codeChallengeMethod: sp.code_challenge_method,
         resource: sp.resource,
+        maxAge: sp.max_age,
+        prompt: sp.prompt,
       }}
     />
   );

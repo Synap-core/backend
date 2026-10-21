@@ -45,8 +45,12 @@ export function hashPersonDeviceToken(raw: string): string {
 export interface PersonDeviceSession {
   identity: { id: string; traits: { email: string; name?: string } };
   active: true;
-  /** The device it was minted for: what the devices list marks as "this one". */
-  device: { id: string; clientId: string };
+  /**
+   * The device it was minted for (what the devices list marks as "this
+   * one"), with its step-up clock: when the person last really authenticated
+   * for it (`person_devices.auth_time`; null = unknown, never fresh).
+   */
+  device: { id: string; clientId: string; authTime: Date | null };
 }
 
 /** Anything that can run the queries — the pool, or a transaction. */
@@ -68,6 +72,7 @@ export async function resolvePersonDeviceSession(
     .select({
       deviceId: personDevices.id,
       clientId: personDevices.clientId,
+      authTime: personDevices.authTime,
       userId: users.id,
       email: users.email,
       name: users.name,
@@ -92,7 +97,11 @@ export async function resolvePersonDeviceSession(
       traits: { email: row.email, ...(row.name ? { name: row.name } : {}) },
     },
     active: true,
-    device: { id: row.deviceId, clientId: row.clientId },
+    device: {
+      id: row.deviceId,
+      clientId: row.clientId,
+      authTime: row.authTime ?? null,
+    },
   };
 }
 

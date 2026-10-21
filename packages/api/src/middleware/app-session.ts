@@ -34,6 +34,7 @@ import {
   isPersonDeviceToken,
   resolvePersonDeviceSession,
 } from "@synap/database/person-devices";
+import { runAsDeviceSession } from "../utils/device-session.js";
 
 /** The bearer credential of `Authorization`, or null. Scheme is case-insensitive. */
 export function bearerCredential(header: string | undefined): string | null {
@@ -82,6 +83,11 @@ export function appSessionMiddleware(
     // copies it to `ctx.sessionKind`; credential doors refuse it).
     c.set("sessionKind" as never, "person_device" as never);
     c.set("authenticated" as never, true as never);
-    return next();
+    // The request's async scope knows it too, so a credential write deep in
+    // a service (no ctx at hand) can ask for fresh authentication.
+    return runAsDeviceSession(
+      { id: session.device.id, authTime: session.device.authTime },
+      () => next()
+    );
   };
 }

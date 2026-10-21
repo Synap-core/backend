@@ -164,6 +164,10 @@ export const oauthAuthorizationCodes = pgTable(
       mode: "date",
       withTimezone: true,
     }),
+
+    // The consenting session's real `authenticated_at` (0340): a Synap app's
+    // device takes it as its step-up clock. NULL when unknown.
+    authTime: timestamp("auth_time", { mode: "date", withTimezone: true }),
   },
   (table) => ({
     expiresAtIdx: index("oauth_authorization_codes_expires_at_idx").on(
@@ -274,6 +278,11 @@ export const personDevices = pgTable(
     }).notNull(),
     revokedAt: timestamp("revoked_at", { mode: "date", withTimezone: true }),
     revokedReason: text("revoked_reason"),
+    // When the person last really AUTHENTICATED for this device: copied from
+    // the consenting Kratos session's `authenticated_at` (via the code), moved
+    // only by a step-up (`prompt=login`), never by a refresh. Credential doors
+    // accept the device only shortly after it (api utils/device-session.ts).
+    authTime: timestamp("auth_time", { mode: "date", withTimezone: true }),
   },
   (table) => ({
     userIdx: index("person_devices_user_idx").on(table.userId),

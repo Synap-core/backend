@@ -63,6 +63,7 @@ import {
 } from "./lifecycle-events.js";
 import { PROVIDE_GRANTS_META_KEY } from "./session-metadata.js";
 import { TERMINAL_SESSION_STATUSES } from "./session-statuses.js";
+import { assertFreshAuthentication } from "../../utils/device-session.js";
 
 const logger = createLogger({ module: "provide-secret-grant" });
 
@@ -214,6 +215,10 @@ export async function grantProvidedSecret(p: {
     };
   }
   const { agent } = p.plan;
+  // Asked BEFORE the try below (which keeps the hand-over when the grant
+  // fails): a stale Synap app session must re-confirm it is the person, and
+  // the answer must not land without its read (utils/device-session.ts).
+  assertFreshAuthentication();
   try {
     assertGrantScoped({ grantedTo: agent.agentUserId, workspaceId: null });
     const written = await applyVaultSecretGrant({

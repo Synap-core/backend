@@ -50,14 +50,28 @@
  *     devices list shows every sign-in with its label and user agent.
  *     Accepted residual: a malicious program that starts its own flow and
  *     gets the person to click "Sign in".
+ *  M5 The step-up clock (`person_devices.auth_time`) set from the wrong time.
+ *     It is the consenting KRATOS session's `authenticated_at`, read
+ *     server-side at the decision and carried by the code — never mint time,
+ *     never anything the app sends. A device minted from an hours-old
+ *     browser session is stale at once. → "a device minted from an old
+ *     sign-in needs a step-up at once".
+ *  M6 A step-up minting a second device, or moving another device's clock.
+ *     `stepUpPersonDevice` needs the code (a fresh sign-in, `prompt=login` /
+ *     `max_age` enforced at the decision) AND that device's refresh token,
+ *     checked — before anything is spent — to belong to this client and to
+ *     the person who just signed in; it moves only that device's clock, only
+ *     forward, and creates nothing. → "a step-up re-confirms the SAME
+ *     device".
  *
  * ── The REFRESH path (rotation, refresh.ts) ──
  *  R1 Refresh-token theft. Every token is SINGLE-USE: the redeem claims it
  *     with one UPDATE that flips `last_used_at` from NULL. When the thief and
  *     the app both redeem, the second presentation is a REUSE (RFC 9700
  *     §4.14.2): the whole family is revoked AND the device ends
- *     (`revokePersonDevice`), access tokens included. → "a reused refresh
- *     token ends the device".
+ *     (`revokePersonDevice`), access tokens included — once the successor
+ *     was used, or past the retry grace (R7). → "a reused refresh token ends
+ *     the device", "a retry after 30 s ends the device".
  *  R2 Two honest refreshes at once (two windows). The UPDATE lets exactly one
  *     win; the loser gets `invalid_grant` WITHOUT a family revoke (a retrying
  *     client is not a thief). The apps refresh single-flight (plan §6.3).
@@ -75,18 +89,35 @@
  *  R6 The person stops being a person (agent conversion, removal). The
  *     refresh re-checks `userType === "human"` and ends the device; the
  *     lookup joins `users` with `user_type = 'human'` on every request.
+ *  R7 A LOST refresh response (a phone dropping off the network after the
+ *     token was spent). Within 30 s of its use, while its successor was NEVER
+ *     redeemed, the same token is a RETRY (`deviceRetryGrace`, refresh.ts):
+ *     the unused successor is retired, a fresh pair is minted, the family and
+ *     the device live on. Residual: a thief replaying within those 30 s,
+ *     before the app's next refresh, gets a pair — and the app's own next
+ *     refresh, presenting the retired successor, then ends the device (R1),
+ *     so the theft is loud within the hour. → "a lost response, then a retry
+ *     within 30 s, keeps the device".
+ *  R8 A refresh renewing the step-up clock. It never does: `auth_time` lives
+ *     on the device row and only a step-up moves it. → "a refreshed token
+ *     stays stale".
  *
  * ── The TOKEN on the wire ──
  *  T1 Access-token theft. One hour of the person on the app API only: `/mcp`
  *     and Hub REST resolve `api_keys` rows, which this is not ("(c)"); no door
  *     counts it as a recent sign-in (no `authenticated_at`), so account
  *     recovery and credential changes stay behind a real Kratos session; and
- *     NO credential door takes it — a procedure that creates, rotates, widens
- *     or approves a key, grant, computer, app, connection or governance rule
- *     refuses a device session (`credentialProcedure` /
- *     `refuseDeviceSession`, an executor's `widensCredential`, the privileged
- *     approval floor; tripwire `credential-doors-refuse-device-session`,
- *     "(i)"). Revoking the device stops it at once.
+ *     NO credential door takes it unless the person REALLY signed in for this
+ *     device within the last 5 minutes (a step-up: `prompt=login` at
+ *     /authorize, then this device's refresh token at /token) — a door that
+ *     creates, rotates, widens or approves a key, grant, secret grant,
+ *     computer, app, connection or governance rule answers FORBIDDEN
+ *     `STEP_UP_REQUIRED` otherwise (`credentialProcedure` /
+ *     `requireFreshAuthentication`, an executor's `widensCredential`, the
+ *     privileged approval floor, the secret-grant writers; tripwire
+ *     `credential-doors-refuse-device-session`, "(i)", "(j)"). So a stolen
+ *     token, five minutes after the person's last real sign-in, cannot hand
+ *     an agent a key or a secret. Revoking the device stops it at once.
  *  T2 A bearer path into the HUMAN context accepting other credentials.
  *     `appSessionMiddleware` accepts a bearer ONLY with the device prefix and
  *     resolves it ONLY through `resolvePersonDeviceSession`; any other bearer
@@ -99,7 +130,18 @@
  */
 
 import { randomBytes } from "crypto";
-import { db, and, desc, eq, gt, isNull, lte, users } from "@synap/database";
+import {
+  db,
+  and,
+  desc,
+  eq,
+  gt,
+  isNull,
+  lt,
+  lte,
+  or,
+  users,
+} from "@synap/database";
 import { personDeviceTokens, personDevices } from "@synap/database/schema";
 import {
   PERSON_DEVICE_TOKEN_PREFIX,
@@ -112,6 +154,7 @@ import {
   type FirstPartyClientId,
 } from "../routers/oauth/config.js";
 import {
+  findRefreshToken,
   redeemRefreshToken,
   rotateRefreshToken,
   startRefreshFamily,
@@ -193,6 +236,12 @@ export async function signInPersonDevice(args: {
   clientId: string;
   label?: string | null;
   userAgent?: string | null;
+  /**
+   * When the person REALLY authenticated for this sign-in: the consenting
+   * Kratos session's `authenticated_at`, carried by the code. The device's
+   * step-up clock; null = unknown, never fresh.
+   */
+  authTime?: Date | null;
 }): Promise<SignInPersonDeviceResult> {
   if (!isFirstPartyClientId(args.clientId)) {
     return { ok: false, reason: "not_first_party" };
@@ -209,6 +258,7 @@ export async function signInPersonDevice(args: {
       label: clip(args.label, LABEL_MAX),
       userAgent: clip(args.userAgent, USER_AGENT_MAX),
       expiresAt: capAt,
+      authTime: args.authTime ?? null,
     })
     .returning({ id: personDevices.id });
   if (!device) throw new Error("person device: the insert returned no row");
@@ -260,6 +310,54 @@ export async function refreshPersonDevice(args: {
     .set({ lastUsedAt: new Date() })
     .where(eq(personDevices.id, redeemed.deviceId));
   return { deviceId: redeemed.deviceId, ...access, refreshToken };
+}
+
+/**
+ * A STEP-UP of a device the app already holds (`prompt=login` at /authorize,
+ * then /token with the code AND the device's refresh token): the code's fresh
+ * sign-in moves THAT device's step-up clock; nothing else changes and no
+ * device is created. The refresh token proves which device (and that its
+ * family is live); it is redeemed and rotated like any refresh. Refused —
+ * before anything is spent — when it is not a device of this client and of
+ * the person who just signed in.
+ */
+export async function stepUpPersonDevice(args: {
+  refreshToken: string;
+  clientId: string;
+  personUserId: string;
+  authTime: Date | null;
+}): Promise<PersonDeviceTokens> {
+  const held = await findRefreshToken(args.refreshToken);
+  if (
+    !held?.deviceId ||
+    held.clientId !== args.clientId ||
+    held.userId !== args.personUserId ||
+    !args.authTime
+  ) {
+    throw new OAuthError(
+      "invalid_grant",
+      "This sign-in does not match the device it re-confirms"
+    );
+  }
+  const tokens = await refreshPersonDevice({
+    refreshToken: args.refreshToken,
+    clientId: args.clientId,
+  });
+  // Only ever forward: an older sign-in never rewinds the clock.
+  await db
+    .update(personDevices)
+    .set({ authTime: args.authTime })
+    .where(
+      and(
+        eq(personDevices.id, tokens.deviceId),
+        isNull(personDevices.revokedAt),
+        or(
+          isNull(personDevices.authTime),
+          lt(personDevices.authTime, args.authTime)
+        )
+      )
+    );
+  return tokens;
 }
 
 /** One signed-in device, as the person's devices list shows it. */

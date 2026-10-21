@@ -1,16 +1,18 @@
 /**
  * TRIPWIRE `credential-doors-refuse-device-session` — no door a Synap app's
- * DEVICE token reaches may create, rotate, widen or approve a CREDENTIAL.
+ * DEVICE token reaches may create, rotate, widen or approve a CREDENTIAL
+ * unless the person REALLY authenticated minutes ago (a step-up).
  *
  * WHY (join plan target A; PR #59 review by console-security): a device
  * access token (`synap_pd_…`) lives 1 h and is the PERSON on the app API. Any
  * app-API door that writes an API key, a grant, an app's reach, a governance
  * rule, a computer's approval, an OAuth/MCP connection, a refresh family or a
  * secret's grant would let a leaked token become a long-lived credential.
- * Those acts belong to the console, in a Kratos session. The refusal is ONE
- * predicate (`utils/device-session.ts`), applied by `credentialProcedure` /
- * `.use(refuseDeviceSession)` (trpc.ts), a proposal executor's
- * `widensCredential` (dispatch), or an explicit `assertNotDeviceSession(ctx)`.
+ * Such a door takes a Kratos session, or a device whose person REALLY signed
+ * in within the step-up window. The check is ONE predicate
+ * (`utils/device-session.ts`), applied by `credentialProcedure` /
+ * `.use(requireFreshAuthentication)` (trpc.ts), a proposal executor's
+ * `widensCredential` (dispatch), or an explicit `assertFreshAuthentication(ctx)`.
  *
  * HOW (derived — nothing below lists a door):
  *  1. Parse every non-test source file of packages/api, packages/database and
@@ -28,12 +30,12 @@
  *     plain call `f()` or `x.f()` resolves when exactly one unit is named `f`;
  *     `obj.m()` where `obj` was bound to `new C(...)` (in the same file, or a
  *     module-level singleton anywhere) resolves to `C.m`. A unit that calls
- *     `assertNotDeviceSession` is GUARDED and does not propagate.
+ *     `assertFreshAuthentication` is GUARDED and does not propagate.
  *  4. The DOORS a device token reaches: every tRPC procedure (`router({...})`
  *     entries) and every Hono handler mounted with `appSessionMiddleware()`.
  *     A door that reaches a credential unit must be guarded: its builder is
- *     `credentialProcedure`, its chain has `.use(refuseDeviceSession)`, or its
- *     body calls `assertNotDeviceSession`. A proposal EXECUTOR that reaches one
+ *     `credentialProcedure`, its chain has `.use(requireFreshAuthentication)`, or its
+ *     body calls `assertFreshAuthentication`. A proposal EXECUTOR that reaches one
  *     must declare `widensCredential: true`.
  *
  * NON-VACUITY: the scan parses > 400 files; every credential table has at
@@ -67,17 +69,16 @@ const SKIP = new Set(["node_modules", "dist", "__tests__", "__tripwires__"]);
  * list of doors: each must still have a widening writer (checked below), so
  * a renamed table cannot silently drop out.
  *
- * NOT here, by decision (PR #59, named in the report): `vault_grants` — a
- * capability's or a session's access to ONE secret, created by installing a
- * template or capability and by answering a "provide" ask. Those stay open to
- * a Synap app (the desktop is the workbench) and are governed by their own
- * doors.
+ * `vault_grants` IS one (lead decision on PR #59): a grant hands an agent a
+ * secret's VALUE. Installing a template or answering a "provide" ask from a
+ * Synap app therefore asks for a fresh sign-in, only when a grant is written.
  */
 const CREDENTIAL_TABLES: Record<string, string> = {
   apiKeys: "api_keys",
   grants: "grants",
   governanceRules: "governance_rules",
   apps: "apps",
+  vaultGrants: "vault_grants",
   trustedIssuers: "trusted_issuers",
   deviceAuthRequests: "device_auth_requests",
   mcpConnectCodes: "mcp_connect_codes",
@@ -128,9 +129,9 @@ const NARROWING_SQL_COLUMNS = new Set([
   "use_count",
 ]);
 
-const GUARD_CALL = "assertNotDeviceSession";
+const GUARD_CALL = "assertFreshAuthentication";
 const GUARDED_BUILDERS = new Set(["credentialProcedure"]);
-const GUARD_MIDDLEWARE = "refuseDeviceSession";
+const GUARD_MIDDLEWARE = "requireFreshAuthentication";
 
 // ─── Parsing ─────────────────────────────────────────────────────────────────
 
@@ -634,7 +635,7 @@ describe("credential doors refuse a Synap app's device session", () => {
               apiKeyService.generateApiKey(ctx.userId, "x", [])),
             fine: credentialProcedure.mutation(({ ctx }) =>
               apiKeyService.generateApiKey(ctx.userId, "x", [])),
-            alsoFine: protectedProcedure.use(refuseDeviceSession).mutation(({ ctx }) =>
+            alsoFine: protectedProcedure.use(requireFreshAuthentication).mutation(({ ctx }) =>
               apiKeyService.generateApiKey(ctx.userId, "x", [])),
             read: protectedProcedure.query(() => 1),
           });

@@ -11,7 +11,7 @@ import {
   podAdminProcedure,
   workspaceProcedure,
   credentialProcedure,
-  refuseDeviceSession,
+  requireFreshAuthentication,
 } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -67,6 +67,7 @@ import { createAndVerifyHubInboundKey } from "../services/external-registration.
 import { toRegistrationTrace } from "../services/external-registration.js";
 import {
   AuthorizeUserError,
+  ReauthenticationRequiredError,
   decideOAuthAuthorization,
   getOAuthConsentContext,
 } from "./oauth/consent.js";
@@ -107,6 +108,10 @@ const oauthAuthorizeParamsSchema = z.object({
   codeChallengeMethod: z.string().max(64).optional(),
   // RFC 8707; validated against this pod's resources in oauth/consent.ts.
   resource: z.string().max(2048).optional(),
+  // OIDC step-up: `max_age` (seconds) and `prompt=login` ask for a FRESH
+  // sign-in before the decision (oauth/consent.ts reauthenticationRequired).
+  maxAge: z.union([z.number().int().min(0), z.string().max(16)]).optional(),
+  prompt: z.string().max(32).optional(),
 });
 
 /**
@@ -118,6 +123,14 @@ const oauthAuthorizeParamsSchema = z.object({
  * propagates unchanged so a genuine bug is never disguised as a client error.
  */
 function toConsentTrpcError(err: unknown): unknown {
+  if (err instanceof ReauthenticationRequiredError) {
+    // The screen reads the code and sends the person to sign in again.
+    return new TRPCError({
+      code: "FORBIDDEN",
+      message: err.message,
+      cause: { reasonCode: err.reasonCode },
+    });
+  }
   if (err instanceof AuthorizeUserError) {
     return new TRPCError({ code: "BAD_REQUEST", message: err.message });
   }
@@ -800,7 +813,7 @@ export const apiKeysRouter = router({
   getMachineDefaults: podAdminProcedure.query(() => readMachineDefaults()),
 
   setMachineDefaults: podAdminProcedure
-    .use(refuseDeviceSession)
+    .use(requireFreshAuthentication)
     .input(z.object({ keyTtlDays: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       await setMachineKeyTtlDays(input.keyTtlDays);
@@ -933,7 +946,7 @@ export const apiKeysRouter = router({
    * Pod-admin only. Tied to the operator's userId for audit purposes.
    */
   createSystemKey: podAdminProcedure
-    .use(refuseDeviceSession)
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         keyName: z.string().min(1).max(100),
@@ -1000,7 +1013,7 @@ export const apiKeysRouter = router({
    * Use this when provisioning credentials for external services via the connections UI.
    */
   adminCreateServiceKey: podAdminProcedure
-    .use(refuseDeviceSession)
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         keyName: z.string().min(1).max(100),
@@ -1333,7 +1346,7 @@ export const apiKeysRouter = router({
     .query(async ({ ctx, input }) => {
       try {
         // The viewer: an app sign-in shows THEIR spaces, nobody else's.
-        return await getOAuthConsentContext(input, ctx.userId);
+        return await getOAuthConsentContext(input, ctx.userId, ctx.session);
       } catch (err) {
         throw toConsentTrpcError(err);
       }
@@ -1527,7 +1540,7 @@ export const apiKeysRouter = router({
    * of the key (`userId = ctx.userId`).
    */
   createForWorkspace: workspaceProcedure
-    .use(refuseDeviceSession)
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         name: z.string().min(1).max(100),

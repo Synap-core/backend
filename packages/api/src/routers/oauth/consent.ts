@@ -36,7 +36,10 @@ import {
 } from "../../services/app-connect.js";
 import { podAppMayConnect } from "../../services/pod-app-policy.js";
 import type { Context } from "../../types/context.js";
-import { isDeviceSession } from "../../utils/device-session.js";
+import {
+  STEP_UP_WINDOW_MS,
+  isDeviceSession,
+} from "../../utils/device-session.js";
 
 import {
   OAuthError,
@@ -104,6 +107,67 @@ export interface AuthorizeParams {
   codeChallengeMethod?: string | null;
   /** RFC 8707. One value; /authorize refuses a repeated parameter itself. */
   resource?: string | null;
+  /**
+   * OIDC `max_age` (seconds): the person must have REALLY authenticated
+   * within it, else they sign in again first (`reauthenticationRequired`).
+   */
+  maxAge?: number | string | null;
+  /** OIDC `prompt`; `login` forces a fresh sign-in (a step-up). */
+  prompt?: string | null;
+}
+
+/**
+ * The consenting person's sign-in is too old for this request (`max_age` /
+ * `prompt=login`): the consent screen sends them to sign in again
+ * (`reasonCode: LOGIN_REQUIRED`), then asks again.
+ */
+export class ReauthenticationRequiredError extends AuthorizeUserError {
+  readonly reasonCode = "LOGIN_REQUIRED";
+  constructor() {
+    super("Sign in again to confirm it's you, then continue.");
+    this.name = "ReauthenticationRequiredError";
+  }
+}
+
+/** A Kratos session's `authenticated_at`, or null when absent/unreadable. */
+export function sessionAuthenticatedAt(
+  session: { authenticated_at?: string | null } | null | undefined
+): Date | null {
+  const raw = session?.authenticated_at;
+  if (!raw) return null;
+  const at = new Date(raw);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/**
+ * Must the person sign in again before deciding? Only when the request asks
+ * for it: `prompt=login`, or `max_age`. "Fresh" is within `max_age`, never
+ * tighter than the step-up window (the time from signing in to clicking), so
+ * `max_age=0` and `prompt=login` both mean "within the last few minutes".
+ * An unknown sign-in time is never fresh.
+ */
+export function reauthenticationRequired(
+  params: Pick<AuthorizeParams, "maxAge" | "prompt">,
+  authenticatedAt: Date | null,
+  now: number = Date.now()
+): boolean {
+  const maxAgeSeconds =
+    params.maxAge === undefined ||
+    params.maxAge === null ||
+    params.maxAge === ""
+      ? null
+      : Number(params.maxAge);
+  const hasMaxAge =
+    maxAgeSeconds !== null &&
+    Number.isInteger(maxAgeSeconds) &&
+    maxAgeSeconds >= 0;
+  if (params.prompt !== "login" && !hasMaxAge) return false;
+  if (!authenticatedAt) return true;
+  const limit = Math.max(
+    params.prompt === "login" || !hasMaxAge ? 0 : maxAgeSeconds! * 1000,
+    STEP_UP_WINDOW_MS
+  );
+  return now - authenticatedAt.getTime() > limit;
 }
 
 /** An authorize request that passed BOTH validation phases. */
@@ -365,6 +429,11 @@ export interface OAuthConsentContext {
    * client (an MCP agent connection).
    */
   appSignIn: AppSignInDescription | null;
+  /**
+   * The request asks for a fresh sign-in (`prompt=login` / `max_age`) and
+   * the viewer's is older: the screen sends them to sign in again first.
+   */
+  reauthenticate: boolean;
 }
 
 /**
@@ -426,7 +495,9 @@ export async function getOAuthConsentContext(
    * The person deciding. Required for a pod app (its offer is per person) and
    * for an app sign-in (its grant is this person's reach).
    */
-  callerUserId?: string
+  callerUserId?: string,
+  /** The viewer's Kratos session, for `prompt=login` / `max_age`. */
+  callerSession?: { authenticated_at?: string | null } | null
 ): Promise<OAuthConsentContext> {
   const req = await resolveAuthorizeRequest(params);
   let appSignIn: AppSignInDescription | null = null;
@@ -452,6 +523,10 @@ export async function getOAuthConsentContext(
     scopes: req.grantedScopes,
     registeredAt: req.client.createdAt,
     appSignIn,
+    reauthenticate: reauthenticationRequired(
+      params,
+      sessionAuthenticatedAt(callerSession)
+    ),
   };
   if (req.client.clientKind !== "cimd") return { ...base, app: null };
   if (!callerUserId) {
@@ -547,6 +622,15 @@ export async function decideOAuthAuthorization(
     );
   }
 
+  // `prompt=login` / `max_age`: a decision on an old sign-in is refused
+  // BEFORE anything is written; the screen signs the person in again. The
+  // real time of that sign-in travels with the code (a Synap app's device
+  // takes it as its step-up clock).
+  const authTime = sessionAuthenticatedAt(ctx?.session);
+  if (reauthenticationRequired(input, authTime)) {
+    throw new ReauthenticationRequiredError();
+  }
+
   // A pod app: the consent files AND approves its `app/connect` request (F9)
   // before any code exists; the code then redeems to THAT approved app.
   let appId: string | null = null;
@@ -599,6 +683,7 @@ export async function decideOAuthAuthorization(
     resource: req.resource,
     appId,
     appGrant,
+    authTime,
   });
 
   return {

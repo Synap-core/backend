@@ -93,6 +93,12 @@ export interface IssuedCodeInput {
    * approved. /token never mints wider than this. Omitted for other clients.
    */
   appGrant?: AppGrantRequest[] | null;
+  /**
+   * When the consenting person REALLY authenticated (their Kratos session's
+   * `authenticated_at`): a Synap app's device takes it as its step-up clock.
+   * Null when unknown.
+   */
+  authTime?: Date | null;
 }
 
 /** One permission in one space — the shape of `apps.approved_requests`. */
@@ -111,6 +117,8 @@ export interface ClaimedCode {
   appId: string | null;
   /** The consented app grant (app clients), else null. */
   appGrant: AppGrantRequest[] | null;
+  /** The consenting session's real authentication time, else null. */
+  authTime: Date | null;
 }
 
 function hashCode(raw: string): string {
@@ -209,6 +217,7 @@ export async function issueAuthorizationCode(
     resource: input.resource,
     appId: input.appId ?? null,
     appGrant: input.appGrant ?? null,
+    authTime: input.authTime ?? null,
     expiresAt: new Date(Date.now() + AUTH_CODE_TTL_MS),
   });
   return code;
@@ -252,6 +261,9 @@ export async function claimAuthorizationCode(
       resource: oauthAuthorizationCodes.resource,
       appId: oauthAuthorizationCodes.appId,
       appGrant: oauthAuthorizationCodes.appGrant,
+      authTime: oauthAuthorizationCodes.authTime,
     });
-  return row ? { ...row, appGrant: row.appGrant ?? null } : null;
+  return row
+    ? { ...row, appGrant: row.appGrant ?? null, authTime: row.authTime ?? null }
+    : null;
 }

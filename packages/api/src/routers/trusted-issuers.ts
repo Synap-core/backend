@@ -1,4 +1,8 @@
-import { router, podAdminProcedure, refuseDeviceSession } from "../trpc.js";
+import {
+  router,
+  podAdminProcedure,
+  requireFreshAuthentication,
+} from "../trpc.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { TrustedIssuerService, db, eq, and } from "@synap/database";
@@ -27,7 +31,7 @@ export const trustedIssuersRouter = router({
    * CONFLICT when the status moved, NOT_FOUND when there is no such issuer.
    */
   approve: podAdminProcedure
-    .use(refuseDeviceSession)
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         id: z.string().uuid(),
@@ -100,7 +104,7 @@ export const trustedIssuersRouter = router({
     }),
 
   adminRegister: podAdminProcedure
-    .use(refuseDeviceSession)
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         issuerUrl: z.string().url(),

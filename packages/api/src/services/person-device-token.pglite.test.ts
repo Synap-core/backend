@@ -72,7 +72,11 @@ import { router } from "../trpc.js";
 import { devicesRouter } from "../routers/devices.js";
 import { apiKeysRouter } from "../routers/api-keys.js";
 import { machinesRouter } from "../routers/machines.js";
-import { DEVICE_SESSION_REFUSED } from "../utils/device-session.js";
+import {
+  STEP_UP_REQUIRED,
+  runAsDeviceSession,
+} from "../utils/device-session.js";
+import { applyVaultSecretGrant } from "./vault-secret-grant.js";
 import { mcpHttpApp } from "../routers/mcp/http-handler.js";
 import { hubAuthMiddleware } from "../routers/hub-protocol/_middleware/auth.js";
 import type {
@@ -238,8 +242,29 @@ const revokeRequest = (params: Record<string, string>) =>
     body: new URLSearchParams(params).toString(),
   });
 
-/** The consent click by `userId` → the code it redirects with. */
-async function consent(userId = PERSON): Promise<string> {
+const MIN_MS = 60 * 1000;
+
+/** A Kratos session (as the consent procedure sees it) signed in `ago` ms back. */
+const kratosCtx = (userId: string, agoMs: number) =>
+  ({
+    authenticated: true,
+    userId,
+    sessionKind: "kratos",
+    session: {
+      identity: { id: userId, traits: { email: `${userId}@x` } },
+      active: true,
+      authenticated_at: new Date(Date.now() - agoMs).toISOString(),
+    },
+  }) as never;
+
+/**
+ * The consent click by `userId` → the code it redirects with. By default the
+ * person signed in to the console a minute ago (a FRESH sign-in).
+ */
+async function consent(
+  userId = PERSON,
+  opts: { signedInAgoMs?: number; prompt?: string; maxAge?: number } = {}
+): Promise<string> {
   const { redirectTo } = await decideOAuthAuthorization(
     {
       clientId: DESKTOP,
@@ -250,8 +275,11 @@ async function consent(userId = PERSON): Promise<string> {
       state: "st",
       resource: ISSUER,
       approve: true,
+      ...(opts.prompt ? { prompt: opts.prompt } : {}),
+      ...(opts.maxAge !== undefined ? { maxAge: opts.maxAge } : {}),
     },
-    userId
+    userId,
+    kratosCtx(userId, opts.signedInAgoMs ?? MIN_MS)
   );
   const url = new URL(redirectTo);
   expect(url.searchParams.get("iss")).toBe(ISSUER);
@@ -259,13 +287,16 @@ async function consent(userId = PERSON): Promise<string> {
 }
 
 /** Consent + the code exchange: a new device. */
-async function signIn(label = "Ada's MacBook"): Promise<{
+async function signIn(
+  label = "Ada's MacBook",
+  signedInAgoMs = MIN_MS
+): Promise<{
   access: string;
   refresh: string;
   deviceId: string;
   body: any;
 }> {
-  const code = await consent();
+  const code = await consent(PERSON, { signedInAgoMs });
   const { status, body } = await tokenRequest({
     grant_type: "authorization_code",
     code,
@@ -445,14 +476,83 @@ describe("(d) refresh rotates; a reused refresh token ends the device", () => {
     const s = await signIn();
     const r = await refresh(s.refresh);
     expect(r.status).toBe(200);
+    // Its successor has been used: no retry grace (R7) can apply.
+    const next = await refresh(r.body.refresh_token);
+    expect(next.status).toBe(200);
     const replay = await refresh(s.refresh);
     expect(replay.status).toBe(400);
     expect(replay.body.error).toBe("invalid_grant");
     expect((await device(s.deviceId)).revoked_at).not.toBeNull();
     expect(
-      (await trpc({ bearer: r.body.access_token }, "devices.list")).status
+      (await trpc({ bearer: next.body.access_token }, "devices.list")).status
     ).toBe(401);
-    expect((await refresh(r.body.refresh_token)).status).toBe(400);
+    expect((await refresh(next.body.refresh_token)).status).toBe(400);
+  });
+});
+
+// ─── (k) a lost refresh response (R7) ────────────────────────────────────────
+
+describe("(k) a retry after a lost refresh response", () => {
+  const refreshRows = async (deviceId: string) =>
+    (
+      await q<{
+        id: string;
+        revoked_at: Date | null;
+        last_used_at: Date | null;
+      }>(
+        `select id, revoked_at, last_used_at from oauth_refresh_tokens where device_id = $1 order by created_at, id`,
+        [deviceId]
+      )
+    ).rows;
+
+  it("within 30 s, the successor unused: a fresh pair, the device and family live on", async () => {
+    const s = await signIn();
+    const lost = await refresh(s.refresh); // the response never reaches the app
+    expect(lost.status).toBe(200);
+    const retry = await refresh(s.refresh);
+    expect(retry.status).toBe(200);
+    expect(retry.body.synap_device_id).toBe(s.deviceId);
+    expect((await device(s.deviceId)).revoked_at).toBeNull();
+    // The lost successor is retired. Presenting it later means TWO parties
+    // hold this device's tokens (the retry could have been a thief's): a
+    // reuse, and the device ends.
+    expect((await refresh(lost.body.refresh_token)).status).toBe(400);
+    expect((await device(s.deviceId)).revoked_at).not.toBeNull();
+  });
+
+  it("the retry's own successor works (the family lives on)", async () => {
+    const s = await signIn();
+    await refresh(s.refresh);
+    const retry = await refresh(s.refresh);
+    expect(retry.status).toBe(200);
+    const onward = await refresh(retry.body.refresh_token);
+    expect(onward.status).toBe(200);
+    expect(await listDevices({ bearer: onward.body.access_token })).not.toEqual(
+      []
+    );
+    const rows = await refreshRows(s.deviceId);
+    expect(rows.filter((r) => !r.revoked_at && !r.last_used_at)).toHaveLength(
+      1
+    );
+  });
+
+  it("once the successor was used, the retry is a reuse: the device ends", async () => {
+    const s = await signIn();
+    const first = await refresh(s.refresh);
+    expect((await refresh(first.body.refresh_token)).status).toBe(200);
+    expect((await refresh(s.refresh)).status).toBe(400);
+    expect((await device(s.deviceId)).revoked_at).not.toBeNull();
+  });
+
+  it("at 31 s the retry is a reuse: the device ends", async () => {
+    const s = await signIn();
+    expect((await refresh(s.refresh)).status).toBe(200);
+    await q(
+      `update oauth_refresh_tokens set last_used_at = now() - interval '31 seconds' where device_id = $1 and last_used_at is not null`,
+      [s.deviceId]
+    );
+    expect((await refresh(s.refresh)).status).toBe(400);
+    expect((await device(s.deviceId)).revoked_at).not.toBeNull();
   });
 });
 
@@ -548,7 +648,7 @@ describe("(f) signing a device out stops it at once", () => {
 
 // ─── (i) credential doors ────────────────────────────────────────────────────
 
-describe("(i) a device token cannot create, widen or approve a credential", () => {
+describe("(i) a STALE device token cannot create, widen or approve a credential", () => {
   const DOORS: Array<[string, unknown, "query" | "mutation"]> = [
     [
       "apiKeys.create",
@@ -576,12 +676,12 @@ describe("(i) a device token cannot create, widen or approve a credential", () =
   ];
 
   it.each(DOORS)(
-    "%s answers 403 to a device token",
+    "%s answers 403 STEP_UP_REQUIRED to a device whose sign-in is 6 minutes old",
     async (path, input, kind) => {
-      const s = await signIn();
+      const s = await signIn("stale", 6 * MIN_MS);
       const res = await trpc({ bearer: s.access }, path, input, kind);
       expect(res.status).toBe(403);
-      expect(res.body.error.json.message).toBe(DEVICE_SESSION_REFUSED);
+      expect(res.body.error.json.data.reasonCode).toBe(STEP_UP_REQUIRED);
     }
   );
 
@@ -589,9 +689,173 @@ describe("(i) a device token cannot create, widen or approve a credential", () =
     "CONTROL — %s is not refused that way to the same person's browser session",
     async (path, input, kind) => {
       const res = await trpc({ cookie: BROWSER_COOKIE }, path, input, kind);
-      expect(res.body.error?.json?.message).not.toBe(DEVICE_SESSION_REFUSED);
+      expect(res.body.error?.json?.data?.reasonCode).not.toBe(STEP_UP_REQUIRED);
     }
   );
+
+  it.each(DOORS)(
+    "CONTROL — %s is not refused that way to a device that signed in a minute ago",
+    async (path, input, kind) => {
+      const s = await signIn("fresh", MIN_MS);
+      const res = await trpc({ bearer: s.access }, path, input, kind);
+      expect(res.body.error?.json?.data?.reasonCode).not.toBe(STEP_UP_REQUIRED);
+    }
+  );
+});
+
+// ─── (j) step-up ─────────────────────────────────────────────────────────────
+
+describe("(j) step-up: the clock is the device's real sign-in", () => {
+  const DECIDE = {
+    requestId: randomUUID(),
+    userCode: "ABCD-1234",
+    decision: "approve",
+  };
+  const decideDevice = (bearer: string) =>
+    trpc({ bearer }, "apiKeys.decideDeviceRequest", DECIDE, "mutation");
+  const stepUpRequired = (res: { status: number; body: any }) =>
+    res.status === 403 &&
+    res.body.error?.json?.data?.reasonCode === STEP_UP_REQUIRED;
+  const age = async (deviceId: string, minutes: number) =>
+    q(
+      `update person_devices set auth_time = now() - ($2 || ' minutes')::interval where id = $1`,
+      [deviceId, String(minutes)]
+    );
+
+  it("a fresh device passes decideDeviceRequest's door (the request itself is unknown)", async () => {
+    const s = await signIn("fresh", MIN_MS);
+    const res = await decideDevice(s.access);
+    expect(stepUpRequired(res)).toBe(false);
+  });
+
+  it("6 minutes after its sign-in it gets 403 STEP_UP_REQUIRED", async () => {
+    const s = await signIn("aging", MIN_MS);
+    await age(s.deviceId, 6);
+    expect(stepUpRequired(await decideDevice(s.access))).toBe(true);
+  });
+
+  it("a refreshed token stays stale: a refresh never renews the clock", async () => {
+    const s = await signIn("refreshing", MIN_MS);
+    await age(s.deviceId, 6);
+    const r = await refresh(s.refresh);
+    expect(r.status).toBe(200);
+    expect(stepUpRequired(await decideDevice(r.body.access_token))).toBe(true);
+  });
+
+  it("a device minted from an old sign-in needs a step-up at once", async () => {
+    const s = await signIn("old session", 3 * 60 * MIN_MS);
+    expect(stepUpRequired(await decideDevice(s.access))).toBe(true);
+  });
+
+  it("the clock is the sign-in, not the mint: minted 4 minutes after a sign-in, it passes", async () => {
+    const s = await signIn("recent session", 4 * MIN_MS);
+    expect(stepUpRequired(await decideDevice(s.access))).toBe(false);
+    const row = await q<{ auth_time: Date }>(
+      `select auth_time from person_devices where id = $1`,
+      [s.deviceId]
+    );
+    const lag = Date.now() - new Date(row.rows[0]!.auth_time).getTime();
+    expect(lag).toBeGreaterThan(3.5 * MIN_MS);
+  });
+
+  it("a step-up re-confirms the SAME device: its clock moves, no device is added", async () => {
+    const s = await signIn("phone", 3 * 60 * MIN_MS);
+    expect(stepUpRequired(await decideDevice(s.access))).toBe(true);
+    const before = await q<{ n: number }>(
+      `select count(*)::int as n from person_devices where user_id = $1`,
+      [PERSON]
+    );
+    const code = await consent(PERSON, {
+      prompt: "login",
+      signedInAgoMs: 10_000,
+    });
+    const { status, body } = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: DESKTOP,
+      redirect_uri: LOOPBACK,
+      code_verifier: VERIFIER,
+      synap_device_refresh_token: s.refresh,
+    });
+    expect(status).toBe(200);
+    expect(body.synap_device_id).toBe(s.deviceId);
+    const after = await q<{ n: number }>(
+      `select count(*)::int as n from person_devices where user_id = $1`,
+      [PERSON]
+    );
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
+    expect(stepUpRequired(await decideDevice(body.access_token))).toBe(false);
+  });
+
+  it("a step-up with another person's device refresh token is refused and spends nothing", async () => {
+    const bobs = await signInPersonDevice({
+      personUserId: OTHER,
+      clientId: DESKTOP,
+      authTime: new Date(Date.now() - 3 * 60 * MIN_MS),
+    });
+    if (!bobs.ok) throw new Error("bob signs in");
+    const code = await consent(PERSON, {
+      prompt: "login",
+      signedInAgoMs: 10_000,
+    });
+    const res = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: DESKTOP,
+      redirect_uri: LOOPBACK,
+      code_verifier: VERIFIER,
+      synap_device_refresh_token: bobs.refreshToken,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_grant");
+    // Bob's token was not spent: it still refreshes.
+    expect((await refresh(bobs.refreshToken)).status).toBe(200);
+    const bobDevice = await device(bobs.deviceId);
+    expect(new Date(bobDevice.created_at).getTime()).toBeGreaterThan(0);
+  });
+
+  it("prompt=login on an old console sign-in is refused (LOGIN_REQUIRED), before any code", async () => {
+    await expect(
+      consent(PERSON, { prompt: "login", signedInAgoMs: 30 * MIN_MS })
+    ).rejects.toMatchObject({ reasonCode: "LOGIN_REQUIRED" });
+    await expect(
+      consent(PERSON, { maxAge: 0, signedInAgoMs: 30 * MIN_MS })
+    ).rejects.toMatchObject({ reasonCode: "LOGIN_REQUIRED" });
+    // max_age wider than the sign-in's age is satisfied.
+    await expect(
+      consent(PERSON, { maxAge: 3600, signedInAgoMs: 30 * MIN_MS })
+    ).resolves.toBeTruthy();
+  });
+
+  it("a secret grant asks for it where it is written (a service with no ctx)", async () => {
+    const secretId = randomUUID();
+    const grant = () =>
+      applyVaultSecretGrant({
+        secretId,
+        grantedTo: PERSON,
+        workspaceId: null,
+        scope: "session",
+        ttlMinutes: 5,
+        createdBy: PERSON,
+      });
+    await expect(
+      runAsDeviceSession(
+        { id: "d", authTime: new Date(Date.now() - 6 * MIN_MS) },
+        grant
+      )
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const none = await q<{ n: number }>(
+      `select count(*)::int as n from vault_grants where grantable_id = $1`,
+      [secretId]
+    );
+    expect(none.rows[0]!.n).toBe(0);
+    await runAsDeviceSession({ id: "d", authTime: new Date() }, grant);
+    const one = await q<{ n: number }>(
+      `select count(*)::int as n from vault_grants where grantable_id = $1`,
+      [secretId]
+    );
+    expect(one.rows[0]!.n).toBe(1);
+  });
 });
 
 // ─── (g) binding ─────────────────────────────────────────────────────────────

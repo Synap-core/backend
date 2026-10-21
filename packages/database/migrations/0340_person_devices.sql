@@ -21,6 +21,9 @@
 -- (`device_id`). `app_id` therefore loses its NOT NULL; the CHECK keeps every
 -- existing row valid (each has an `app_id` and no `device_id`).
 --
+-- `person_devices.auth_time` (and the code's `auth_time` that feeds it) is
+-- the step-up clock: when the person last really signed in for that device.
+--
 -- Forward-only and idempotent (IF [NOT] EXISTS throughout). Fresh installs get
 -- the same statements from 0000_baseline_schema.sql.
 
@@ -34,8 +37,15 @@ CREATE TABLE IF NOT EXISTS "person_devices" (
   "last_used_at"   timestamp with time zone,
   "expires_at"     timestamp with time zone NOT NULL,
   "revoked_at"     timestamp with time zone,
-  "revoked_reason" text
+  "revoked_reason" text,
+  "auth_time"      timestamp with time zone
 );
+
+-- When the person last really AUTHENTICATED for this device (a password,
+-- passkey or Cloud login at /authorize; a step-up refreshes it, a token
+-- refresh never does). Credential doors accept a device only within minutes
+-- of it. ADD COLUMN too, for a pod that ran an earlier draft of this file.
+ALTER TABLE "person_devices" ADD COLUMN IF NOT EXISTS "auth_time" timestamp with time zone;
 
 -- A person's devices (the devices list, revoke-all).
 CREATE INDEX IF NOT EXISTS "person_devices_user_idx"
@@ -53,6 +63,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS "person_device_tokens_token_hash_uidx"
   ON "person_device_tokens" ("token_hash");
 CREATE INDEX IF NOT EXISTS "person_device_tokens_device_idx"
   ON "person_device_tokens" ("device_id");
+
+-- The authorization code carries the consenting session's real
+-- `authenticated_at` to /token, which copies it onto the device.
+ALTER TABLE "oauth_authorization_codes"
+  ADD COLUMN IF NOT EXISTS "auth_time" timestamp with time zone;
 
 ALTER TABLE "oauth_refresh_tokens" ALTER COLUMN "app_id" DROP NOT NULL;
 ALTER TABLE "oauth_refresh_tokens"
