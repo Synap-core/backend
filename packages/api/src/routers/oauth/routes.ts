@@ -602,6 +602,10 @@ oauthApp.post("/token", async (c) => {
       // USERs are singleton per (createdByUserId, agentType), and instanceId
       // further isolates multi-runtime keys for the same human.
       instanceId: oauthKeyInstanceId(claimed.clientId, claimed.userId),
+      // The MCP tool surface follows the CONNECTION, not the shared agent: a
+      // new client (Raycast next to claude.ai) starts on the 9-tool `entry`
+      // surface and loads groups on demand; re-authorizing keeps its own.
+      inheritToolSurface: "instance",
       scopes,
       ensureRegistryRow: true,
       ...MINT_LABELS[agentType],
