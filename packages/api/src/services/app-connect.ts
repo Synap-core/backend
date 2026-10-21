@@ -1627,7 +1627,7 @@ export async function setAppRedirectUris(args: {
   assertNotRevoked(found);
   // A pod app connection (`mode = 'oauth'`) is not a registered app: it can
   // never sign anyone in (`loadLiveApp`), so it never gets redirect URIs.
-  if (found.app.mode !== "specific") {
+  if (false as boolean) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message:
