@@ -11,8 +11,10 @@
  * (`playbook-run-reaper.ts`) never saw it, because both only look at LIVE runs.
  *
  * NOW the IS says how the turn ended (`outcome`). `completed` is unchanged. A
- * `stopped` + `turn_budget` turn leaves the run LIVE and:
- *   1. continues on its own with a fresh budget — a pod notice in the room,
+ * `stopped` turn — its token budget (`turn_budget`) or its step limit
+ * (`max_steps`: the agent still had tool calls to make when the SDK's
+ * `maxSteps` ended the turn) — leaves the run LIVE and:
+ *   1. continues on its own with a fresh turn — a pod notice in the room,
  *      dispatched through the ONE turn door `triggerAutoRespond` to the same
  *      agent type — up to {@link MAX_AUTO_CONTINUATIONS} times in a row;
  *   2. then ASKS the person, through the existing ask/slot door: a `decision`
@@ -79,7 +81,12 @@ const count = z.number().int().nonnegative();
 export const completeRunBodySchema = z
   .object({
     outcome: z.enum(["completed", "stopped"]).default("completed"),
-    reason: z.literal("turn_budget").optional(),
+    /**
+     * Why a `stopped` turn stopped: its token budget, or its step limit (the
+     * founder default 2026-10-21: a step-limit stop is wired exactly like the
+     * budget stop, never marked completed).
+     */
+    reason: z.enum(["turn_budget", "max_steps"]).optional(),
     /**
      * The agent type that ran the turn — the continuation wakes the same one.
      * A FREE string (root CLAUDE.md "agentType = free string"), so no pattern;
@@ -117,12 +124,20 @@ export const completeRunBodySchema = z
       })
       .optional(),
   })
-  .refine((b) => b.outcome !== "stopped" || b.reason === "turn_budget", {
-    message: "outcome 'stopped' needs a reason ('turn_budget')",
+  .refine((b) => b.outcome !== "stopped" || b.reason !== undefined, {
+    message: "outcome 'stopped' needs a reason ('turn_budget' | 'max_steps')",
     path: ["reason"],
   });
 
 export type CompleteRunBody = z.infer<typeof completeRunBodySchema>;
+
+/** Why a turn stopped before the run was finished. */
+export type RunStopReason = NonNullable<CompleteRunBody["reason"]>;
+
+/** The limit a stopped turn hit, in the words the room reads. */
+function stopLimitWords(reason: RunStopReason | undefined): string {
+  return reason === "max_steps" ? "step limit" : "token budget";
+}
 
 /** What complete-run did with the run (the response `status`). */
 export type CompleteRunStatus =
@@ -138,7 +153,7 @@ export type CompleteRunStatus =
 export interface RunTurnRecord {
   at: string;
   outcome: "completed" | "stopped";
-  reason?: "turn_budget";
+  reason?: RunStopReason;
   agentType?: string;
   /** The IS's id for the turn (`CompleteRunBody.turnKey`). */
   turnKey?: string;
@@ -333,13 +348,14 @@ async function continueRun(p: {
   session: SessionRoom;
   agentType: string;
   continuation: number;
-  /** The turn's id for idempotency (`turnRefOf`). */
+  /** The turn's id for idempotency (see `settleRunTurnEnd`). */
   turnRef: string;
+  reason: RunStopReason | undefined;
 }): Promise<boolean> {
   if (!p.session.channelId) return false;
   const content =
     `Automatic continuation ${p.continuation} of ${MAX_AUTO_CONTINUATIONS}: ` +
-    "the last turn stopped at its token budget before this run was finished. " +
+    `the last turn stopped at its ${stopLimitWords(p.reason)} before this run was finished. ` +
     "Pick up from where it stopped; do not start over.";
   try {
     // A POD notice (role system), not the person speaking: nobody typed this.
@@ -382,10 +398,12 @@ async function askToKeepGoing(p: {
   askingAgentUserId: string | null;
   stops: number;
   turnRef: string;
+  reason: RunStopReason | undefined;
 }): Promise<boolean> {
   const question =
-    `This run stopped at its token budget ${p.stops} times ` +
-    `(it continued on its own ${MAX_AUTO_CONTINUATIONS} times). Keep it going?`;
+    `This run stopped before it was finished ${p.stops} times ` +
+    `(the last turn hit its ${stopLimitWords(p.reason)}; ` +
+    `it continued on its own ${MAX_AUTO_CONTINUATIONS} times). Keep it going?`;
   const ask: SlotAsk = { mode: "confirm", prompt: question };
   const wanted = normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL);
   try {
@@ -457,8 +475,8 @@ export async function settleRunTurnEnd(p: {
     return updated ? "completed" : "no-running-run";
   }
 
-  // Stopped on its budget: the run stays LIVE whatever happens below — even
-  // when the turn could not be recorded (session row gone mid-call).
+  // Stopped (budget or step limit): the run stays LIVE whatever happens
+  // below — even when the turn could not be recorded (row gone mid-call).
   if (recorded?.duplicate) return "duplicate";
   if (!recorded?.decision) return "left_running";
   const { decision, state } = recorded;
@@ -476,6 +494,7 @@ export async function settleRunTurnEnd(p: {
       agentType: body.agentType ?? "meta",
       continuation: decision.continuation,
       turnRef,
+      reason: body.reason,
     });
     if (continued) return "continued";
   }
@@ -486,6 +505,7 @@ export async function settleRunTurnEnd(p: {
     askingAgentUserId: p.askingAgentUserId,
     stops: state.stops,
     turnRef,
+    reason: body.reason,
   });
   if (asked) {
     await resetAfterAsk(session.id, run.id);

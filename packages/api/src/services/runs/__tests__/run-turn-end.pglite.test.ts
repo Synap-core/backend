@@ -356,8 +356,9 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
       ask: { mode: "confirm" },
     });
     expect(String(slot.why)).toContain(
-      `stopped at its token budget ${MAX_AUTO_CONTINUATIONS + 1} times`
+      `stopped before it was finished ${MAX_AUTO_CONTINUATIONS + 1} times`
     );
+    expect(String(slot.why)).toContain("hit its token budget");
     // The other declared slot is untouched.
     expect(
       (await sessionRow(sessionId)).expected_outputs.find(
@@ -486,6 +487,33 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     });
     expect(r.json).toEqual({ status: "continued" });
     expect((await runRow(runId)).status).toBe("running");
+  });
+
+  it("a turn that stopped at its STEP limit is a stop too: the run stays live and continues (founder default 3)", async () => {
+    // Before: the IS reported a step-limit turn as `completed` and the pod
+    // only knew `turn_budget`, so the run read completed with its work undone.
+    const { sessionId, channelId, runId } = await seedRun();
+    const r = await completeRun(sessionId, {
+      outcome: "stopped",
+      reason: "max_steps",
+      agentType: "researcher",
+      turnKey: "msg-steps-1",
+      turn: { ceiling: 250_000, spentInputTokens: 40_000 },
+    });
+    expect(r).toEqual({ code: 200, json: { status: "continued" } });
+    const run = await runRow(runId);
+    expect(run.status).toBe("running");
+    expect(run.completed_at).toBeNull();
+    expect(h.settled).toHaveLength(0);
+    const notice = (await roomMessages(channelId)).find(
+      (m) => m.id === h.triggers[0]!.userMessageId
+    )!;
+    expect(notice.content).toContain("stopped at its step limit");
+    expect((await ledger(sessionId)).turns[0]).toMatchObject({
+      outcome: "stopped",
+      reason: "max_steps",
+      next: "continue",
+    });
   });
 
   it("a malformed report is refused and changes nothing", async () => {
