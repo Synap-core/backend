@@ -376,6 +376,7 @@ function hubApp(register: (app: HubHono) => void): HubHono {
     c.set("apiKeyId", rec.id);
     c.set("scopes", rec.scope ?? []);
     await next();
+    return undefined;
   });
   register(app);
   return app;
