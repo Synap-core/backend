@@ -825,8 +825,21 @@ export interface KnowledgeAnswerFailure {
  * POST /knowledge/answer — retrieve (same as ask) then synthesize.
  * `answer` is null when synthesis is unavailable; sources/pending still return.
  */
+/**
+ * How much answer to ask for: `full` (default) the provenance-rich answer,
+ * `brief` a few sentences for a lookup, `sources` no synthesis (answer null,
+ * the ranked matches only).
+ */
+export type KnowledgeAnswerDetail = "sources" | "brief" | "full";
+
 export interface KnowledgeAnswerResponse {
   answer: string | null;
+  /**
+   * Which answer this is, as the pod produced it (an IS too old for `brief`
+   * answers in full and this says `full`). Absent with `error`, and from a pod
+   * older than the field.
+   */
+  detail?: KnowledgeAnswerDetail;
   sources: KnowledgeAnswerSource[];
   routedTo: string[];
   degraded: string[];

@@ -48,7 +48,10 @@ import {
   httpStatusForTrpcError,
 } from "./_shared.js";
 import { ask } from "../../../services/knowledge/index.js";
-import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
+import {
+  ASK_DETAILS,
+  synthesizeAnswer,
+} from "../../../services/knowledge/synthesize.js";
 import { resolveKnowledgeLens } from "../../../services/knowledge/resolve-lens.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
 import {
@@ -1008,6 +1011,9 @@ export function registerKnowledgeRoutes(app: HubHono): void {
               workspaceId: uuidQueryParam.optional(),
               projectId: z.string().optional(),
               limit: z.number().int().min(1).max(100).optional(),
+              // sources = matches only, no synthesis; brief = a short answer;
+              // full (default) = the provenance-rich answer.
+              detail: z.enum(ASK_DETAILS).optional(),
             }),
           },
         },
@@ -1021,6 +1027,10 @@ export function registerKnowledgeRoutes(app: HubHono): void {
           "application/json": {
             schema: z.object({
               answer: z.string().nullable(),
+              // Which answer this is — read from what happened (an IS that
+              // predates `brief` answers in full and this says so). Absent
+              // with `error`.
+              detail: z.enum(ASK_DETAILS).optional(),
               sources: z.array(SourceSchema),
               routedTo: z.array(z.string()),
               // SAME shape `POST /knowledge/search` already publishes (see
@@ -1108,7 +1118,8 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         // Degradation must reach the prose on EVERY door, not just one —
         // a parameter with a single producer is the severance this repo keeps
         // re-finding.
-        result.degraded ?? []
+        result.degraded ?? [],
+        body.detail
       );
       if (synthesis.error) {
         logger.error({ userId }, "knowledge/answer IS call failed");
@@ -1120,6 +1131,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       return c.json(
         {
           answer: synthesis.answer,
+          ...(synthesis.detail ? { detail: synthesis.detail } : {}),
           sources: synthesis.sources,
           routedTo: synthesis.routedTo,
           // Forward the retrieval-health signal `ask()` already computed —

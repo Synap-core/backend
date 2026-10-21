@@ -185,6 +185,7 @@ export type {
   KnowledgeAnswerPending,
   KnowledgeAnswerFailure,
   KnowledgeAnswerResponse,
+  KnowledgeAnswerDetail,
   HubAskSpaceHint,
   HubAskSpacesHint,
   // Diagnose (third door)

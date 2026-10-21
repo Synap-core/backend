@@ -170,6 +170,7 @@ import type {
   CaptureExecuteResponse,
   AskResponse,
   KnowledgeAnswerResponse,
+  KnowledgeAnswerDetail,
   HubDiagnoseInput,
   HubDiagnoseResult,
   CreateFocusSessionInput,
@@ -2074,6 +2075,8 @@ export class HubRestClient {
     workspaceId?: string;
     projectId?: string;
     limit?: number;
+    /** sources | brief | full (default) — see `KnowledgeAnswerDetail`. */
+    detail?: KnowledgeAnswerDetail;
   }): Promise<KnowledgeAnswerResponse> {
     return this.request<KnowledgeAnswerResponse>(
       "POST",
@@ -2083,6 +2086,7 @@ export class HubRestClient {
         workspaceId: input.workspaceId ?? this.workspaceId,
         projectId: input.projectId,
         limit: input.limit,
+        detail: input.detail,
       }
     );
   }

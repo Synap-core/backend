@@ -17,6 +17,7 @@ import {
 } from "../../../services/capability-briefs/compose-capability-brief.js";
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
+import { ASK_DETAILS } from "../../../services/knowledge/synthesize.js";
 import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
 import { ROOM_POST_KINDS } from "../../../services/messaging/room-post-kind.js";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
@@ -592,6 +593,12 @@ export const tools = {
             query: {
               type: "string",
               description: "Your question, in natural language",
+            },
+            detail: {
+              type: "string",
+              enum: [...ASK_DETAILS],
+              description:
+                "How much answer you want. full (default) = the provenance-rich answer. brief = a few sentences, no capture suggestions — use it for lookups (who/what/where). sources = no synthesis: the ranked { substrate, id, title } matches only, answer null; read one with synap_get_entity.",
             },
             workspaceId: {
               type: "string",
