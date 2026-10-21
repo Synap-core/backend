@@ -138,6 +138,12 @@ export interface UpdateFocusSessionParams {
    */
   completeOutput?: string;
   /**
+   * WITHDRAW one deliverable, named by its LABEL (exact) or KEY: it is stamped
+   * retired (`withdrawn`) and stops being owed — never deleted. The explicit
+   * removal verb: an agent's `expectedOutputs` list adds and updates only.
+   */
+  retireOutput?: string;
+  /**
    * APPEND one agent to the session roster. Mirrors `addOutput`: incremental
    * and idempotent, as against the wholesale `agentIds` assignment the tRPC and
    * Hub PATCH doors expose. Applied through the ONE append door,
@@ -244,6 +250,8 @@ export type UpdateFocusSessionResult =
        * moves on believing the work is delivered.
        */
       completeOutput?: CompleteOutputOutcome;
+      /** What the patch's `retireOutput` did — present only when it carried one. */
+      retireOutput?: RetireOutputOutcome;
       /**
        * Standing guidelines for any slot this patch newly handed to the human
        * (`block-guidelines.ts`). Absent when nothing was blocked or nothing
@@ -708,14 +716,24 @@ void _serverStampedCoverage;
  *
  * Matching uses `normalizeExpectedLabel`, the same trim+casefold every other
  * slot lookup uses (delegation, return, satisfy). A label the stored array does
- * not carry is a NEW slot and lands verbatim; a stored slot the incoming array
- * omits is DELETED — that is the existing, deliberate semantic of a wholesale
- * assignment, and the merge does not change it.
+ * not carry is a NEW slot and lands verbatim.
+ *
+ * A stored slot the incoming array omits is DELETED — the semantic of a
+ * wholesale assignment by a PERSON (the browser board edits the list it shows).
+ * An AGENT's list is add-or-update only (`keepUnlisted`, C6 2026-10-21): an
+ * agent filed `expectedOutputs: []` beside a rename and, on approval, every
+ * declared deliverable of the session was gone (live, session 9dc5da0c). The
+ * same upsert-by-key the `outcomes` declaration does ({@link keepUnlistedSlots});
+ * withdrawing a slot is its own verb, `retireOutput`.
  */
 export function mergeExpectedOutputs(
   current: OutputItem[],
-  incoming: OutputItem[]
+  rawIncoming: OutputItem[],
+  opts: { keepUnlisted?: boolean } = {}
 ): OutputItem[] {
+  const incoming = opts.keepUnlisted
+    ? keepUnlistedSlots(current, rawIncoming)
+    : rawIncoming;
   const violations = detectServerStampedWrites(current, incoming);
   if (violations.length > 0) {
     throw serverStampedWriteError(violations);
@@ -822,6 +840,31 @@ const logger = createLogger({ module: "update-session" });
 const SERVER_STAMPED_FIELD_SET: ReadonlySet<string> = new Set(
   SERVER_STAMPED_OUTPUT_FIELDS
 );
+
+/**
+ * An AGENT's wholesale list as an UPSERT: every stored slot stays, in its
+ * place, unless the list names it (then the listed item stands there); a
+ * listed slot the store does not carry is appended. Matched by the ONE matcher
+ * (`storedTwins` — key, then casefolded label), the same identity the merge and
+ * the `outcomes` upsert (`findSlotIndex`) use. The result then goes through the
+ * ordinary merge, which carries every receipt — so nothing is deleted and
+ * nothing is forged. Pure; exported so the door can show the reviewer the list
+ * as it will land.
+ */
+export function keepUnlistedSlots(
+  current: OutputItem[],
+  incoming: OutputItem[]
+): OutputItem[] {
+  const { twinOf } = storedTwins(current);
+  const placed = new Map<OutputItem, OutputItem>();
+  const added: OutputItem[] = [];
+  for (const item of incoming) {
+    const prior = twinOf(item);
+    if (prior && !placed.has(prior)) placed.set(prior, item);
+    else added.push(item);
+  }
+  return [...current.map((slot) => placed.get(slot) ?? slot), ...added];
+}
 
 /**
  * The stored twin of an incoming slot — by KEY first (stored or derived, the
@@ -1160,6 +1203,8 @@ export interface OutputMutationResult {
   outputs: OutputItem[];
   /** Present only when the patch carried a `completeOutput`. */
   completeOutput?: CompleteOutputOutcome;
+  /** Present only when the patch carried a `retireOutput`. */
+  retireOutput?: RetireOutputOutcome;
 }
 
 /**
@@ -1219,13 +1264,21 @@ export function applyOutputMutations(
     expectedOutputs?: OutputItem[];
     addOutput?: UpdateFocusSessionParams["addOutput"];
     completeOutput?: string;
-  }
+    retireOutput?: string;
+  },
+  /**
+   * `keepUnlisted`: the patch is an AGENT's — its `expectedOutputs` list adds
+   * and updates, never deletes ({@link mergeExpectedOutputs}). Both callers
+   * decide it from WHO wrote the patch: the direct door from its
+   * `agentUserId`, the approval executor from the proposal's.
+   */
+  opts: { keepUnlisted?: boolean } = {}
 ): OutputMutationResult {
   // Wholesale replace goes through the ONE merge, so a client that sends back
   // the four fields it knows about cannot erase a delegation, a return note or
   // an approval's lineage.
   let next: OutputItem[] = patch.expectedOutputs
-    ? mergeExpectedOutputs(current, patch.expectedOutputs)
+    ? mergeExpectedOutputs(current, patch.expectedOutputs, opts)
     : current;
 
   if (patch.addOutput) {
@@ -1281,9 +1334,74 @@ export function applyOutputMutations(
     completeOutput = describeCompleteOutput(label, completed, refused);
   }
 
+  // WITHDRAW a slot — the explicit verb an agent's upsert-only list leaves for
+  // removal. Never deleted: stamped retired (`withdrawn`), so the slot stops
+  // being owed by anyone and the record of having declared it stays. A slot
+  // already DONE is a delivery receipt and is not withdrawn.
+  let retireOutput: RetireOutputOutcome | undefined;
+  if (typeof patch.retireOutput === "string") {
+    const label = patch.retireOutput;
+    const keys = deriveSlotKeys(next);
+    const now = new Date().toISOString();
+    let retired = 0;
+    let refusedDone = 0;
+    next = next.map((o, i) => {
+      if (o.label !== label && keys[i] !== label) return o;
+      if (o.status === "done") {
+        refusedDone += 1;
+        return o;
+      }
+      retired += 1;
+      if (o.retiredAt != null) return o;
+      return { ...o, retiredAt: now, retiredReason: SLOT_WITHDRAWN_REASON };
+    });
+    retireOutput = describeRetireOutput(label, retired, refusedDone);
+  }
+
   return {
     outputs: carrySlotKeys(current, next),
     ...(completeOutput ? { completeOutput } : {}),
+    ...(retireOutput ? { retireOutput } : {}),
+  };
+}
+
+/** The retired reason the `retireOutput` verb stamps. */
+export const SLOT_WITHDRAWN_REASON =
+  "withdrawn" as const satisfies (typeof OUTPUT_RETIRED_REASONS)[number];
+
+/** What a `retireOutput` did — the same tellable-apart shape as `completeOutput`. */
+export type RetireOutputOutcome = {
+  /** The label (or slot key) the caller asked to withdraw, verbatim. */
+  label: string;
+  /** Matching slots now retired (already-retired ones count, idempotent). */
+  retired: number;
+  /** Matching slots NOT withdrawn because they were already delivered. */
+  refusedDone: number;
+  result: "retired" | "refused" | "no_match";
+  message?: string;
+};
+
+export function describeRetireOutput(
+  label: string,
+  retired: number,
+  refusedDone: number
+): RetireOutputOutcome {
+  if (retired > 0) return { label, retired, refusedDone, result: "retired" };
+  if (refusedDone > 0) {
+    return {
+      label,
+      retired,
+      refusedDone,
+      result: "refused",
+      message: `"${label}" is already delivered (done), so it was not withdrawn. Nothing was changed.`,
+    };
+  }
+  return {
+    label,
+    retired,
+    refusedDone,
+    result: "no_match",
+    message: `No deliverable is labelled exactly "${label}" (or has that key). Nothing was changed. List the session's deliverables and resend the exact label or key.`,
   };
 }
 
@@ -1398,6 +1516,20 @@ export async function updateFocusSession(
       return {
         status: "denied",
         reason: serverStampedWriteError(violations).message,
+      };
+    }
+    // An AGENT's list is add-or-update (C6): expanded HERE to the list as it
+    // will land, so a proposal carries — and its review diff shows — every
+    // slot it keeps, never a shorter list that reads as deletions. The locked
+    // write (and the executor on approval) re-apply the same upsert against
+    // the row as it is THEN, so a slot added in between is not lost either.
+    if (agentUserId) {
+      params = {
+        ...params,
+        expectedOutputs: keepUnlistedSlots(
+          storedOutputs,
+          params.expectedOutputs
+        ),
       };
     }
   }
@@ -1640,6 +1772,9 @@ export async function updateFocusSession(
       ...(params.completeOutput !== undefined
         ? { completeOutput: params.completeOutput }
         : {}),
+      ...(params.retireOutput !== undefined
+        ? { retireOutput: params.retireOutput }
+        : {}),
       // Carried so the PROPOSED path is not a silent no-op: the
       // `focus_session/update` executor re-applies it through the same append
       // door on approval.
@@ -1745,11 +1880,13 @@ export async function updateFocusSession(
   const mutatesOutputs =
     params.addOutput !== undefined ||
     typeof params.completeOutput === "string" ||
+    typeof params.retireOutput === "string" ||
     params.expectedOutputs !== undefined;
 
   // Captured out of the transaction so the RETURN can report it — see the
   // `completeOutput` field on UpdateFocusSessionResult.
   let completeOutputOutcome: CompleteOutputOutcome | undefined;
+  let retireOutputOutcome: RetireOutputOutcome | undefined;
   // Diffed against the LOCKED base, so only blocks this patch declared count.
   let blockedByThisPatch: BlockedSlotRef[] = [];
   // The same locked base + result, for the needs-you notification below.
@@ -1785,13 +1922,20 @@ export async function updateFocusSession(
       const current: OutputItem[] = Array.isArray(locked?.expectedOutputs)
         ? (locked.expectedOutputs as OutputItem[])
         : [];
-      const applied = applyOutputMutations(current, {
-        expectedOutputs: params.expectedOutputs,
-        addOutput: params.addOutput,
-        completeOutput: params.completeOutput,
-      });
+      const applied = applyOutputMutations(
+        current,
+        {
+          expectedOutputs: params.expectedOutputs,
+          addOutput: params.addOutput,
+          completeOutput: params.completeOutput,
+          retireOutput: params.retireOutput,
+        },
+        // An agent's list adds and updates, never deletes (C6).
+        { keepUnlisted: !!agentUserId }
+      );
       set.expectedOutputs = applied.outputs;
       completeOutputOutcome = applied.completeOutput;
+      retireOutputOutcome = applied.retireOutput;
       blockedByThisPatch = newlyBlockedSlots(current, applied.outputs);
       outputsBefore = current;
       outputsAfter = applied.outputs;
@@ -1984,6 +2128,7 @@ export async function updateFocusSession(
       ? { ...finalSession, status: gatedStatus }
       : finalSession,
     ...(completeOutputOutcome ? { completeOutput: completeOutputOutcome } : {}),
+    ...(retireOutputOutcome ? { retireOutput: retireOutputOutcome } : {}),
     ...(blockGuidelines ? { blockGuidelines } : {}),
     ...(followOutcome ? { follow: followOutcome } : {}),
     ...(followRefusal ? { followRefusal } : {}),

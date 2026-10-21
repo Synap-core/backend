@@ -279,6 +279,10 @@ export const OUTPUT_RETIRED_REASONS = [
   // (accepted / rejected / superseded on the entity itself) — the question is
   // moot (api `services/decisions/decision-ask-reactor.ts`).
   "decision_resolved",
+  // The agent WITHDREW a slot it declared (`retireOutput` on
+  // `synap_update_session`) — the one removal verb, since an agent's
+  // `expectedOutputs` list only adds and updates (api `update-session.ts`).
+  "withdrawn",
 ] as const;
 
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];

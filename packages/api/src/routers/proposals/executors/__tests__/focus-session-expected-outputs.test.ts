@@ -107,7 +107,10 @@ import { registerFocusSessionExecutors } from "../focus-session.js";
 const SESSION_ID = "11111111-2222-4333-8444-555555555555";
 const KEY = "focus_session/update";
 
-function args(data: Record<string, unknown>): ProposalExecutorArgs {
+function args(
+  data: Record<string, unknown>,
+  agentUserId: string | null = "agent-1"
+): ProposalExecutorArgs {
   return {
     proposal: {
       id: "p-1",
@@ -117,7 +120,7 @@ function args(data: Record<string, unknown>): ProposalExecutorArgs {
       workspaceId: "ws-1",
       sessionId: SESSION_ID,
       projectId: null,
-      agentUserId: "agent-1",
+      agentUserId,
       sourceMessageId: null,
       // The gate payload lives at `proposals.data.data` — the request-shaped
       // envelope wraps it, and the executor reads the inner object.
@@ -145,9 +148,12 @@ function writtenOutputs(): Record<string, unknown>[] | undefined {
   return row?.values.expectedOutputs as Record<string, unknown>[] | undefined;
 }
 
-async function approve(data: Record<string, unknown>) {
+async function approve(
+  data: Record<string, unknown>,
+  agentUserId: string | null = "agent-1"
+) {
   const executor = proposalExecRegistry.resolveExact(KEY)!;
-  return (await executor.execute(args(data))) as unknown as Record<
+  return (await executor.execute(args(data, agentUserId))) as unknown as Record<
     string,
     unknown
   >;
@@ -203,6 +209,72 @@ describe("focus_session/update — the SUBJECT anchor half of an approval", () =
   it("leaves the anchor alone when the proposal carried none", async () => {
     await approve({ goal: "g", progress: 60 });
     expect(sessionSet()).not.toHaveProperty("subjectEntityId");
+  });
+});
+
+/**
+ * C6 (2026-10-21). Live: an agent filed a rename carrying `expectedOutputs: []`;
+ * the founder approved it and every declared deliverable of session 9dc5da0c
+ * was deleted ("Founder approves both specs" among them). An AGENT's list adds
+ * and updates; only a person's list replaces; withdrawing is its own verb.
+ */
+describe("focus_session/update — an agent's list never deletes (C6)", () => {
+  it("an AGENT's empty list keeps every stored slot", async () => {
+    await approve({ expectedOutputs: [] });
+    expect(writtenOutputs()!.map((o) => o.label)).toEqual(["Launch brief"]);
+  });
+
+  it("an AGENT's partial list updates what it names and keeps the rest", async () => {
+    lockedOutputs = [
+      { kind: "document", label: "Launch brief", delegatedTo: "researcher" },
+      {
+        kind: "decision",
+        label: "Founder approves both specs",
+        owner: "human",
+      },
+    ];
+    await approve({
+      expectedOutputs: [
+        { kind: "report", label: "Launch brief" },
+        { kind: "entity", label: "Signed NDA" },
+      ],
+    });
+    const written = writtenOutputs()!;
+    expect(written.map((o) => o.label)).toEqual([
+      "Launch brief",
+      "Founder approves both specs",
+      "Signed NDA",
+    ]);
+    expect(written[0]).toMatchObject({
+      kind: "report",
+      delegatedTo: "researcher",
+    });
+  });
+
+  it("CONTROL — a PERSON's list still replaces (the browser board's edit)", async () => {
+    await approve({ expectedOutputs: [] }, null);
+    expect(writtenOutputs()).toEqual([]);
+  });
+
+  it("retireOutput withdraws a slot: kept, stamped, no longer owed", async () => {
+    const result = await approve({ retireOutput: "Launch brief" });
+    expect(result.success).toBe(true);
+    const [slot] = writtenOutputs()!;
+    expect(slot).toMatchObject({
+      label: "Launch brief",
+      retiredReason: "withdrawn",
+      delegatedTo: "researcher",
+    });
+    expect(typeof slot!.retiredAt).toBe("string");
+  });
+
+  it("retireOutput never withdraws a delivered slot, and says so", async () => {
+    lockedOutputs = [
+      { kind: "document", label: "Launch brief", status: "done" },
+    ];
+    const result = await approve({ retireOutput: "Launch brief" });
+    expect(writtenOutputs()![0]).not.toHaveProperty("retiredAt");
+    expect(JSON.stringify(result)).toContain("already delivered");
   });
 });
 

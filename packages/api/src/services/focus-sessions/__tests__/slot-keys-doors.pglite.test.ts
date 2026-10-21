@@ -154,6 +154,51 @@ describe("slot keys reach storage through the write doors", () => {
     ]);
   });
 
+  // C6 (2026-10-21): an AGENT's list adds and updates, never deletes — the
+  // same call that replaces for a person (the case above) keeps the slot an
+  // agent left out. Withdrawing one is `retireOutput`.
+  it("an AGENT's wholesale list keeps the slot it left out, keys intact", async () => {
+    const id = await seedLegacy([
+      { kind: "document", label: "Intro", key: "intro" },
+      {
+        kind: "decision",
+        label: "Founder approves both specs",
+        key: "approve",
+        owner: "human",
+      },
+    ]);
+    const r = await updateFocusSession({
+      sessionId: id,
+      userId: USER,
+      agentUserId: "agent-1",
+      expectedOutputs: [{ kind: "report", label: "Intro" }],
+    });
+    expect(r.status).toBe("updated");
+    expect((await stored(id)).map((s) => [s.label, s.key, s.kind])).toEqual([
+      ["Intro", "intro", "report"],
+      ["Founder approves both specs", "approve", "decision"],
+    ]);
+  });
+
+  it("retireOutput withdraws by key through the direct door, and reports it", async () => {
+    const id = await seedLegacy([
+      { kind: "document", label: "Intro", key: "intro" },
+      { kind: "document", label: "Outro", key: "outro" },
+    ]);
+    const r = await updateFocusSession({
+      sessionId: id,
+      userId: USER,
+      agentUserId: "agent-1",
+      retireOutput: "outro",
+    });
+    expect(r.status).toBe("updated");
+    expect(r.status === "updated" && r.retireOutput?.result).toBe("retired");
+    const [intro, outro] = await stored(id);
+    expect(intro).not.toHaveProperty("retiredAt");
+    expect(outro).toMatchObject({ key: "outro", retiredReason: "withdrawn" });
+    expect(typeof outro!.retiredAt).toBe("string");
+  });
+
   it("completeOutput names the slot by its key — and records a CLAIM, not a verdict", async () => {
     const id = await seedLegacy([
       { kind: "document", label: "Spec", key: "spec" },

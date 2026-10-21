@@ -866,6 +866,9 @@ export const sessionHandlers: McpHandlerMap = {
       currentStage: args.currentStage as string | undefined,
       addOutput: slots.addOutput,
       completeOutput: args.completeOutput as string | undefined,
+      ...(typeof args.retireOutput === "string"
+        ? { retireOutput: args.retireOutput }
+        : {}),
       addAgentId: args.addAgentId as string | undefined,
       // NARROWED, not cast: this field has THREE meanings on the wire and a
       // blanket cast collapses two of them. `undefined` leaves the anchor,
@@ -977,6 +980,7 @@ export const sessionHandlers: McpHandlerMap = {
         return ok({
           status: "updated",
           session: result.session,
+          ...(result.retireOutput ? { retireOutput: result.retireOutput } : {}),
           ...(result.completeOutput
             ? { completeOutput: result.completeOutput }
             : {}),

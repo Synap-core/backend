@@ -2147,7 +2147,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`addOutput` appends, `completeOutput` CLAIMS one by key — evidence or review marks it met), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
+          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2275,7 +2275,7 @@ export const tools = {
                 required: ["kind", "label"],
               },
               description:
-                "DEPRECATED alias — prefer `outcomes` (upserts by key). Replaces the full deliverable list (optional).",
+                "DEPRECATED alias — prefer `outcomes` (upserts by key). Adds or updates the listed deliverables (matched by key, then label); a deliverable you leave out is KEPT, never deleted. To drop one, use `retireOutput`.",
             },
             addOutput: {
               type: "object",
@@ -2332,6 +2332,11 @@ export const tools = {
               required: ["kind", "label"],
               description:
                 "DEPRECATED alias — prefer `outcomes` (one entry upserts one deliverable). Append ONE new deliverable (stored with status 'pending'). This is also how you HAND WORK BACK: set owner='human' with a blockedReason, a one-line why AND an `ask` (confirm yes/no, choose options, ...) so the person answers in one tap instead of a bare 'I did this' button.",
+            },
+            retireOutput: {
+              type: "string",
+              description:
+                "WITHDRAW the deliverable with this key (or exact label): it stops being owed by anyone and is kept as 'Withdrawn', never deleted. The only way to remove a deliverable you declared. Not for a delivered (done) one. The reply carries `retireOutput.result`: 'retired', 'refused' (already done; nothing changed) or 'no_match' (nothing changed).",
             },
             completeOutput: {
               type: "string",
