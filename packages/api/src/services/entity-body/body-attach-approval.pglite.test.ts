@@ -392,6 +392,28 @@ describe("a proposed body REPLACE applies on approval; Undo brings the old body 
     ]);
     expect(await bodyOf(entityId)).toBe(next);
   });
+
+  it("a previous body that became ANOTHER entity's body is never re-linked (M10)", async () => {
+    const old = await insertDocument("Foundation");
+    const entityId = await insertEntity(old);
+    const next = await insertDocument("Foundation v2");
+    const proposalId = await agentProposes({
+      id: entityId,
+      documentId: next,
+      replaceBody: true,
+    });
+    await approve(proposalId);
+    // The detached document is re-attached to another entity since.
+    const other = await insertEntity(old);
+
+    const result = await revert(proposalId);
+
+    expect((result.skipped ?? []).map((s) => [s.kind, s.reason])).toEqual([
+      ["entity_body", "edited_since"],
+    ]);
+    expect(await bodyOf(entityId)).toBe(next);
+    expect(await bodyOf(other)).toBe(old);
+  });
 });
 
 describe("a proposed ATTACH onto an entity with no body", () => {

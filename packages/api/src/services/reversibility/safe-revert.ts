@@ -68,6 +68,7 @@ import {
   type EntityDiffField,
 } from "../../utils/entity-property-diff.js";
 import { SESSION_UNDO_COLUMNS } from "../focus-sessions/session-undo.js";
+import { documentOwnedByAnotherObject } from "../entity-body/document-ownership.js";
 
 export type RevertTarget =
   | { kind: "entity"; id: string }
@@ -716,6 +717,23 @@ async function inspectProperty(
           target,
           "not_found",
           "the previous body document no longer exists"
+        );
+      }
+      // ...and only while nothing else took it since (FB1020 review M10): the
+      // attach door's ownership rule. Re-linking a document that is now the
+      // body of another entity (or a view's canvas) would make it the body
+      // of two objects, shown to both audiences and edited through both.
+      if (
+        await documentOwnedByAnotherObject(
+          reader,
+          target.previousDocumentId,
+          target.entityId
+        )
+      ) {
+        return skip(
+          target,
+          "edited_since",
+          "the previous body is now the body of another object"
         );
       }
     }
