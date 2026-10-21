@@ -180,7 +180,16 @@ describe.skipIf(!dbAvailable)(
       subA = randomUUID();
       await db
         .insert(signalSubscriptions)
-        .values({ id: subA, userId: A, workspaceId: WS_A, topic: "a-secret" })
+        .values({
+          id: subA,
+          userId: A,
+          workspaceId: WS_A,
+          topic: "a-secret",
+          // Both are in the primary key, so Postgres holds them NOT NULL even
+          // though the Drizzle column reads optional.
+          sourcePlatform: "rss",
+          sourceRoute: "/a-secret",
+        })
         .onConflictDoNothing();
     });
 

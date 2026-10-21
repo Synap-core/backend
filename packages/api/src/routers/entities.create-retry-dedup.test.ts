@@ -41,9 +41,9 @@ import {
 } from "@synap/database";
 import { entitiesRouter } from "./entities.js";
 
-const USER = "e0000000-0000-0000-0000-0000000000a1";
-const AGENT_USER = "e0000000-0000-0000-0000-0000000000a2";
-const WS = "e0000000-0000-0000-0000-0000000000f1";
+const USER = "e0000000-0000-4000-8000-0000000000a1";
+const AGENT_USER = "e0000000-0000-4000-8000-0000000000a2";
+const WS = "e0000000-0000-4000-8000-0000000000f1";
 const TITLE = "Retry Dedup Note";
 
 async function checkDb(): Promise<boolean> {

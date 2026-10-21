@@ -44,11 +44,11 @@ import {
 } from "@synap/database";
 import { relationsRouter } from "./relations.js";
 
-const USER = "e0000000-0000-0000-0000-0000000000b1";
-const OTHER_USER = "e0000000-0000-0000-0000-0000000000b2";
-const WS = "e0000000-0000-0000-0000-0000000000f2";
-const SRC = "e0000000-0000-0000-0000-0000000000c1";
-const TGT = "e0000000-0000-0000-0000-0000000000c2";
+const USER = "e0000000-0000-4000-8000-0000000000b1";
+const OTHER_USER = "e0000000-0000-4000-8000-0000000000b2";
+const WS = "e0000000-0000-4000-8000-0000000000f2";
+const SRC = "e0000000-0000-4000-8000-0000000000c1";
+const TGT = "e0000000-0000-4000-8000-0000000000c2";
 
 async function checkDb(): Promise<boolean> {
   try {

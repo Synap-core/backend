@@ -41,9 +41,9 @@ import {
 } from "@synap/database";
 import { entitiesRouter } from "./entities.js";
 
-const USER = "e0000000-0000-0000-0000-0000000000b1";
-const AGENT_USER = "e0000000-0000-0000-0000-0000000000b2";
-const WS = "e0000000-0000-0000-0000-0000000000c1";
+const USER = "e0000000-0000-4000-8000-0000000000b1";
+const AGENT_USER = "e0000000-0000-4000-8000-0000000000b2";
+const WS = "e0000000-0000-4000-8000-0000000000c1";
 const NAME = "Ada B1 Dedup";
 const EXT = `discord:b1-${randomUUID()}`;
 
