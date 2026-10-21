@@ -35,7 +35,20 @@ vi.mock("@synap/database", async (importOriginal) => {
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
   h.db = drizzle(client, { schema });
-  return { ...actual, db: h.db, getDb: async () => h.db };
+  // `unlinkFederatedIdentity` closes over the package's OWN `db`, which this
+  // mock does not replace; hand it the PGlite executor so the REAL delete runs.
+  return {
+    ...actual,
+    db: h.db,
+    getDb: async () => h.db,
+    unlinkFederatedIdentity: (input: { issuerId: string; userId: string }) =>
+      (
+        actual.unlinkFederatedIdentity as (
+          input: { issuerId: string; userId: string },
+          conn: unknown
+        ) => Promise<unknown>
+      )(input, h.db),
+  };
 });
 vi.mock("@synap/auth", async (importOriginal) => {
   const deleteCredentials = vi.fn(async () => undefined);
