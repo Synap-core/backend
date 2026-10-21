@@ -23,7 +23,13 @@ import type { PlaybookRun } from "@synap/database/schema";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
 import { createLinks } from "../links/links-service.js";
 
-export type CaptureRunStatus = "running" | "completed" | "failed" | "proposed";
+export type CaptureRunStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "proposed"
+  // Not terminal: the run waits on the person (`run-turn-end.ts` asks them).
+  | "waiting_on_you";
 
 export async function applyRunCapture(p: {
   run: Pick<
