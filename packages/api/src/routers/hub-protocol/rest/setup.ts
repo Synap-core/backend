@@ -95,6 +95,7 @@ import {
   settleRejectedAgentConnect,
   type PendingKeyOutcome,
 } from "../../../services/agent-connect.js";
+import { disconnectAllUserConnections } from "../../../services/capabilities/capability-nango-sync.js";
 import {
   API_KEY_SCOPES,
   API_KEY_TOOL_PROFILES,
@@ -2225,20 +2226,99 @@ export function registerSetupRoutes(app: HubHono): void {
       const status = (err as { response?: { status?: number } })?.response
         ?.status;
       if (status === 409) {
-        // An account with this email already exists on this pod. It is never
-        // deleted or re-passworded here: whoever holds the invite token (the
-        // inviter included) would otherwise choose the password of an account
-        // that is not theirs, and an account with no workspace membership can
-        // still be a pod member, a linked Synap account or the author of data.
-        // The person signs in with that account and accepts.
-        return c.json(
-          {
-            error:
-              "An account with this email already exists on this pod. Sign in with it to accept the invite.",
-            code: "ACCOUNT_EXISTS",
-          },
-          409
-        );
+        // Identity already exists. Two stale cases we can safely clean up:
+        //   A) users row exists + no workspace memberships (removed without cleanup)
+        //   B) orphaned Kratos identity with no users row at all
+        // Active accounts (has memberships) keep the security guard.
+        const existingUser = await db.query.users.findFirst({
+          where: eq(users.email, email),
+          columns: { id: true },
+        });
+
+        let kratosIdentityId: string | null = existingUser?.id ?? null;
+
+        if (!existingUser) {
+          // Orphaned identity — look it up in Kratos directly.
+          const { data: matches } = await kratosAdmin.listIdentities({
+            credentialsIdentifier: email,
+            pageSize: 1,
+          });
+          kratosIdentityId = matches?.[0]?.id ?? null;
+        }
+
+        const hasActiveMembership =
+          existingUser &&
+          !!(await db.query.workspaceMembers.findFirst({
+            where: eq(workspaceMembers.userId, existingUser.id),
+            columns: { workspaceId: true },
+          }));
+
+        const isStale = kratosIdentityId && !hasActiveMembership;
+
+        if (isStale) {
+          try {
+            // The stale account's connections go before the account does; a
+            // failure lands in the cleanup error below.
+            if (existingUser) {
+              await disconnectAllUserConnections(existingUser.id);
+            }
+            await kratosAdmin.deleteIdentity({ id: kratosIdentityId! });
+            if (existingUser) {
+              await db.delete(users).where(eq(users.id, existingUser.id));
+            }
+          } catch (cleanupErr) {
+            logger.warn(
+              { cleanupErr, email },
+              "accept-invite: stale identity cleanup failed"
+            );
+            return c.json(
+              { error: "Failed to clean up stale account" },
+              httpStatusForTrpcError(cleanupErr) as never
+            );
+          }
+          // Retry identity creation with the new credentials.
+          try {
+            const { data: identity } = await kratosAdmin.createIdentity({
+              createIdentityBody: {
+                schema_id: "default",
+                traits: { email, name },
+                credentials: { password: { config: { password } } },
+                verifiable_addresses: [
+                  {
+                    value: email,
+                    verified: true,
+                    via: "email",
+                    status: "completed",
+                  },
+                ],
+              },
+            });
+            identityId = identity.id;
+            logger.info(
+              { identityId, email },
+              "accept-invite: stale identity replaced"
+            );
+          } catch (retryErr) {
+            const msg =
+              retryErr instanceof Error ? retryErr.message : String(retryErr);
+            logger.error(
+              { retryErr, email },
+              "accept-invite: createIdentity retry failed"
+            );
+            return c.json(
+              { error: "Failed to create account", detail: msg.slice(0, 200) },
+              httpStatusForTrpcError(retryErr) as never
+            );
+          }
+        } else {
+          return c.json(
+            {
+              error:
+                "An account with this email already exists. Use the Sign in tab to accept the invite.",
+            },
+            409
+          );
+        }
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error({ err, email }, "accept-invite: createIdentity failed");

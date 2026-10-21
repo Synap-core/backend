@@ -451,7 +451,7 @@ export function pairExit(podUrl: string, email?: string): Exit | null {
   // which the console never names publicly. Refuse it rather than mirror the
   // LAN list: no invite email links to a LAN console.
   if (url.protocol === "http:") return null;
-  const params = new URLSearchParams({ v: "1", pod: url.origin });
+  const params = new URLSearchParams({ v: "1", podUrl: url.origin });
   if (email) params.set("email", email);
   return desktop(
     `synap://pair?${params.toString()}`,
