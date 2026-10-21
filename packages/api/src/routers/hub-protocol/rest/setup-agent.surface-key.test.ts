@@ -162,6 +162,31 @@ beforeEach(() => {
   fileAgentConnectProposal.mockResolvedValue({ proposalId: "prop-1" });
 });
 
+describe("POST /setup/agent — a person's app sign-in token connects nothing (T1)", () => {
+  it("an app_person key → 403, nothing provisioned; the same human's PAT connects (control)", async () => {
+    callerKey(false);
+    validateApiKey.mockResolvedValue({
+      id: "caller-key",
+      userId: HUMAN,
+      linkedUserId: null,
+      isActive: true,
+      scope: ["hub-protocol.read", "hub-protocol.write"],
+      keyType: "app_person",
+    });
+    const refused = await connect();
+    expect(refused.status).toBe(403);
+    expect((await refused.json()).error).toContain(
+      "app sign-in cannot connect an AI"
+    );
+    expect(provisionSurfaceAgentKey).not.toHaveBeenCalled();
+
+    callerKey(false);
+    const control = await connect();
+    expect(control.status).toBe(200);
+    expect(provisionSurfaceAgentKey).toHaveBeenCalled();
+  });
+});
+
 describe("POST /setup/agent — a key never connects a live AI by itself", () => {
   it.each([
     ["an AGENT key", true],

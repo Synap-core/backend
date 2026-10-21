@@ -7,7 +7,11 @@
  *     → agentType `claude-web-direct`;
  *   - the Control Plane's MCP connector, an OAuth client of this AS whose
  *     redirect_uri sits on the approved Control Plane's origin → `claude-web`
- *     (see `resolveOAuthAgentType`, config.ts).
+ *     (see `resolveOAuthAgentType`, config.ts);
+ *   - "Sign in with Synap" (founder A1, 2026-10-20): an app registered AND
+ *     approved on this pod, client_id = its `public_id`, redirect_uris set by
+ *     its owner → a token HELD BY THE SIGNING-IN PERSON, bounded by the app's
+ *     grant (services/app-person-token.ts).
  * The legacy consent-code path (hub-protocol/rest/mcp-redeem.ts) still mints
  * `claude-web` until the CP moves onto this AS; it is retired after that.
  *
@@ -39,6 +43,7 @@ import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
 
 import { db, eq, users } from "@synap/database";
+import { APP_PERSON_KEY_TYPE } from "@synap/database/schema";
 
 import { provisionSurfaceAgentKey } from "../../services/agent-identity-service.js";
 import { apiKeyService } from "../../services/api-keys.js";
@@ -74,6 +79,11 @@ import {
   verifyPkce,
 } from "./protocol.js";
 import { claimAuthorizationCode, findClient, insertClient } from "./store.js";
+import {
+  APP_PERSON_SCOPES,
+  isAppClientId,
+  resolveAppClient,
+} from "./app-client.js";
 
 /** See the `: any` rationale in hub-protocol/rest/_shared.ts (TS2742). */
 const logger: any = createLogger({ module: "pod-oauth" });
@@ -256,7 +266,7 @@ oauthApp.get("/authorize", async (c) => {
     if (resources.length > 1) {
       // RFC 8707 allows several; a token from this AS is for one pod resource.
       // An app is refused; a DCR client gets the lenient rule (`resourceFor`).
-      if (client.clientKind === "cimd") {
+      if (client.clientKind !== "dcr") {
         throw new OAuthError("invalid_target", "Name at most one resource");
       }
       params.resource = resources.join(" ");
@@ -400,7 +410,11 @@ oauthApp.post("/token", async (c) => {
     // §4.1.3 requires redirect_uri to be identical to the authorize request's.
     // Re-checked against the client's registered list too, so a client whose
     // registration changed cannot redeem against a URI it no longer owns.
-    const client = await findClient(claimed.clientId);
+    // A sign-in app is re-resolved from `apps`: revoked, unapproved or with
+    // the URI removed since consent → no client, no token.
+    const client = isAppClientId(claimed.clientId)
+      ? await resolveAppClient(claimed.clientId)
+      : await findClient(claimed.clientId);
     if (!client) {
       throw new OAuthError("invalid_client", "Unknown client");
     }
@@ -427,6 +441,50 @@ oauthApp.post("/token", async (c) => {
           "resource does not match the authorization request"
         );
       }
+    }
+
+    // "Sign in with Synap" (A1): a registered, approved app's code mints a
+    // token HELD BY THE PERSON, never an agent key — the one door, which
+    // states the threat model (services/app-person-token.ts).
+    if (client.clientKind === "app") {
+      // Loaded on use: the mint pulls the app + grant services, which the
+      // protocol endpoints (and their tests) otherwise never need.
+      const { mintAppPersonToken } =
+        await import("../../services/app-person-token.js");
+      const minted = await mintAppPersonToken({
+        publicId: client.clientId,
+        personUserId: claimed.userId,
+        consented: claimed.appGrant ?? [],
+      });
+      if (!minted.ok) {
+        logger.warn(
+          { clientId: claimed.clientId, reason: minted.reason },
+          "pod-oauth: app sign-in refused at mint"
+        );
+        throw new OAuthError(
+          "invalid_grant",
+          minted.reason === "app_unavailable"
+            ? "This app can no longer sign anyone in"
+            : "Nothing is left of what was approved — sign in again"
+        );
+      }
+      logger.info(
+        {
+          clientId: claimed.clientId,
+          podUserId: claimed.userId,
+          keyId: minted.keyId,
+        },
+        "pod-oauth: app sign-in token issued"
+      );
+      return c.json({
+        access_token: minted.plainKey,
+        token_type: "Bearer",
+        expires_in: Math.max(
+          0,
+          Math.floor((minted.expiresAt.getTime() - Date.now()) / 1000)
+        ),
+        scope: APP_PERSON_SCOPES.join(" "),
+      });
     }
 
     // A pod app (CIMD client) is never minted the shared `claude-web*` agent
@@ -543,9 +601,10 @@ oauthApp.post("/token", async (c) => {
 // The holder of an access token retires it. Every client of this AS is public
 // (no client secret), so POSSESSION of the token is the authority — the same
 // authority that lets the holder use it. What it may reach is floored to the
-// keys this AS mints: a token whose owner is not a `claude-web*` agent is
-// treated as unknown, so presenting a human PAT, an IS key or any other key
-// here can never kill it.
+// keys this AS mints: a `claude-web*` agent's key, or a person's app sign-in
+// token (`app_person` — the app's "sign out"). Any other key is treated as
+// unknown, so presenting a human PAT, an IS key or any other key here can
+// never kill it.
 //
 // RFC 7009 §2.2: an invalid, unknown, expired or already-revoked token is a
 // 200 too — the client's goal (the token is dead) is met, and the answer is no
@@ -590,11 +649,13 @@ oauthApp.post("/revoke", async (c) => {
       where: eq(users.id, key.userId),
       columns: { userType: true, agentType: true },
     });
+    // A person's app sign-in token (the app's "sign out") is this AS's too.
     const revocable =
-      owner?.userType === "agent" &&
-      (OAUTH_REVOCABLE_AGENT_TYPES as readonly string[]).includes(
-        owner.agentType ?? ""
-      );
+      key.keyType === APP_PERSON_KEY_TYPE ||
+      (owner?.userType === "agent" &&
+        (OAUTH_REVOCABLE_AGENT_TYPES as readonly string[]).includes(
+          owner.agentType ?? ""
+        ));
     if (!revocable) {
       logger.warn(
         { keyId: key.id },

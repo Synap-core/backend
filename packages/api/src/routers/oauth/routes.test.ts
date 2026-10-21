@@ -163,6 +163,9 @@ vi.mock("@synap/database", async () => {
       },
     },
     users: { id: "users.id" },
+    // The consent decision refuses any request that entered a key door.
+    getActingAgentUserId: () => undefined,
+    getRequestGrant: () => undefined,
     and: (...args: unknown[]) => ({ _and: args }),
     eq: (a: unknown, b: unknown) => ({ _eq: [a, b] }),
     isNull: (a: unknown) => ({ _isNull: a }),
@@ -524,15 +527,19 @@ describe("consent context", () => {
     const { body: client } = await register();
     const registeredAt = new Date("2026-10-17T09:00:00Z");
     store.clients.get(client.client_id)!.createdAt = registeredAt;
-    const context = await getOAuthConsentContext({
-      clientId: client.client_id,
-      redirectUri: CALLBACK,
-      responseType: "code",
-      codeChallenge: CHALLENGE,
-      codeChallengeMethod: "S256",
-      state: null,
-    });
+    const context = await getOAuthConsentContext(
+      {
+        clientId: client.client_id,
+        redirectUri: CALLBACK,
+        responseType: "code",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        state: null,
+      },
+      HUMAN_ID
+    );
     expect(context).toMatchObject({
+      appSignIn: null,
       clientName: "Claude",
       redirectHost: "claude.ai",
       registeredAt,

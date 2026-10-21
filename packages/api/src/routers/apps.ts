@@ -35,6 +35,7 @@ import {
   revokeApp,
   serializeApp,
   serializeAppsForAdmin,
+  setAppRedirectUris,
 } from "../services/app-connect.js";
 
 const PublicId = z.string().min(1).max(200);
@@ -165,6 +166,27 @@ export const appsRouter = router({
           publicId: input.publicId,
           ownerUserId: ctx.userId,
           name: input.name,
+        })
+      )
+    ),
+
+  /**
+   * "Sign in with Synap": replace where a person's sign-in code for this app
+   * may be delivered (exact match; `[]` = the app signs no one in). Owner only.
+   */
+  setRedirectUris: protectedProcedure
+    .input(
+      z.object({
+        publicId: PublicId,
+        redirectUris: z.array(z.string().min(1).max(2048)).max(8),
+      })
+    )
+    .mutation(async ({ ctx, input }) =>
+      serializeApp(
+        await setAppRedirectUris({
+          publicId: input.publicId,
+          ownerUserId: ctx.userId,
+          redirectUris: input.redirectUris,
         })
       )
     ),

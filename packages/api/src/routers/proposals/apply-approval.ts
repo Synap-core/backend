@@ -576,6 +576,15 @@ export async function applyProposalApproval(args: {
   // key, or an acting agent in the ALS) never applies one, whichever door.
   refuseAgentProposalApprover(args.ctx);
   assertMayDecideProposal("approve");
+  // D3: this door has the proposal, so it NAMES it — a key bounded to some
+  // spaces / projects / objects approves only there (a person's app sign-in
+  // token "cannot approve outside these spaces"). A signed-in session holds
+  // no grant and is unaffected.
+  assertMayDecideProposal("approve", "approve", undefined, {
+    workspaceId: args.proposal.workspaceId ?? null,
+    projectId: args.proposal.projectId ?? null,
+    targetId: args.proposal.targetId ?? null,
+  });
   const result = await applyProposalApprovalInner(args);
 
   // THE REVIEWER'S NOTE. `approve` / `batchApprove` accepted `comment` and,

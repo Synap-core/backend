@@ -43,6 +43,7 @@ import {
   verifyIsDelegationToken,
   type VerifiedIsDelegation,
 } from "@synap/database";
+import { APP_PERSON_KEY_TYPE } from "@synap/database/schema";
 import { isIntelligenceServiceOrigin } from "@synap/intelligence-client";
 
 import { apiKeyService } from "../../../services/api-keys.js";
@@ -386,7 +387,13 @@ export const hubAuthMiddleware = async (
     // already encodes the resolved Synap user; layering a header remap on
     // top would be ambiguous (whose user wins?) and would silently swap the
     // identity of legitimate child-key callers. The child key wins.
-    if (isSubTokenFeatureEnabled() && !keyRecord.parentKeyId) {
+    // A person's app sign-in token (`app_person`) is that person and nobody
+    // else: it never acts for an external user (app-person-token.ts, T1).
+    if (
+      isSubTokenFeatureEnabled() &&
+      !keyRecord.parentKeyId &&
+      keyRecord.keyType !== APP_PERSON_KEY_TYPE
+    ) {
       const externalUserId = c.req.header("x-external-user-id");
       if (externalUserId) {
         // The source label is optional metadata (best-effort hint for the

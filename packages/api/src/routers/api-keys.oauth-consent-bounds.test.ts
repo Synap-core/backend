@@ -110,3 +110,16 @@ describe("consent procedures — client_id length is bounded", () => {
     expect(resolveCimdClient).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("consent decision — a cross-site form cannot drive it (T8, app-person-token.ts)", () => {
+  it("a multipart (FormData) body, the one shape a plain HTML form can POST that tRPC parses, fails the input schema", async () => {
+    // tRPC answers text/plain and url-encoded with 415 before any procedure;
+    // multipart reaches the procedure as a FormData, which must not pass.
+    const form = new FormData();
+    for (const [k, v] of Object.entries(params(urlOf(100)))) form.set(k, v);
+    form.set("approve", "true");
+    const err = await errorOf(caller().decideOAuthAuthorization(form as never));
+    expect(err.code).toBe("BAD_REQUEST");
+    expect(resolveCimdClient).not.toHaveBeenCalled();
+  });
+});

@@ -22,6 +22,14 @@
  * Costs ONE indexed PK lookup on `users` — `keyRecord` (a plain `api_keys` row)
  * does not carry the owner's `userType`.
  *
+ * ONE exception, "Sign in with Synap" (founder A1, 2026-10-20): a key of type
+ * `app_person` is a PERSON's own token for the app, minted only by the OAuth
+ * token door (`services/app-person-token.ts`, which states the threat model).
+ * It resolves as the person, bounded by its grant, and is never adopted. The
+ * type is read from the ROW and the key must match the app it was minted for
+ * (`classifyAppPersonKey`); a hand-made person key naming an app has no such
+ * type and is adopted as below.
+ *
  * APP KEYS are agent keys: an Application acts as its own agent user, linked
  * to its owner (`apps.agent_user_id`), so its writes run the agent ladder. A
  * key whose grant names an app (`isAppPublicId`) but whose holder is not an
@@ -86,6 +94,30 @@ export async function resolveKeyIdentity(
     ? await new GrantRepository(db).resolveForKey(keyRecord.id)
     : null;
   if (!isAgent && keyRecord.id && isAppPublicId(grant?.clientId)) {
+    // "Sign in with Synap" (A1): a PERSON's own token for the app, minted only
+    // by the OAuth token door — read from the row, never from the caller. It
+    // acts as the person, within its grant. Every other person-held key that
+    // names an app is adopted below (0313), exactly as before.
+    const { classifyAppPersonKey } =
+      await import("../services/app-person-token.js");
+    const personKey = await classifyAppPersonKey({
+      apiKeyId: keyRecord.id,
+      holderUserId: keyRecord.userId,
+      publicId: grant!.clientId!,
+    });
+    if (personKey === "person") {
+      return {
+        effectiveUserId: keyRecord.userId,
+        agentUserId: undefined,
+        isAgent: false,
+        grant,
+      };
+    }
+    if (personKey === "dead") {
+      throw new UnauthorizedError(
+        "This sign-in can no longer be used — sign in to the app again."
+      );
+    }
     const { adoptLegacyAppKey } = await import("../services/app-connect.js");
     const appAgentUserId = await adoptLegacyAppKey({
       apiKeyId: keyRecord.id,

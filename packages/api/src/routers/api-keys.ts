@@ -1324,9 +1324,10 @@ export const apiKeysRouter = router({
    */
   getOAuthConsentContext: protectedProcedure
     .input(oauthAuthorizeParamsSchema)
-    .query(async ({ input }) => {
+    .query(async ({ ctx, input }) => {
       try {
-        return await getOAuthConsentContext(input);
+        // The viewer: an app sign-in shows THEIR spaces, nobody else's.
+        return await getOAuthConsentContext(input, ctx.userId);
       } catch (err) {
         throw toConsentTrpcError(err);
       }
@@ -1345,7 +1346,14 @@ export const apiKeysRouter = router({
    * become an open redirect.
    */
   decideOAuthAuthorization: protectedProcedure
-    .input(oauthAuthorizeParamsSchema.extend({ approve: z.boolean() }))
+    .input(
+      oauthAuthorizeParamsSchema.extend({
+        approve: z.boolean(),
+        // "Sign in with Synap": the `appSignIn.fingerprint` the screen
+        // rendered — an approval is only for exactly what was shown.
+        appSignInFingerprint: z.string().max(128).optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
       try {
         const result = await decideOAuthAuthorization(input, ctx.userId);

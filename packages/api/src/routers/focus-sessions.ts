@@ -93,6 +93,7 @@ import {
 } from "../services/focus-sessions/block-output.js";
 import { BLOCKED_REASONS } from "@synap/playbooks";
 import {
+  answerGrantWrite,
   answerSessionSlot,
   attestSessionSlot,
   describeAnswerRefusal,
@@ -2875,10 +2876,8 @@ export const focusSessionsRouter = router({
           message: "Only the person can answer — an agent key cannot.",
         });
       }
-      await assertKeyMayWrite({
-        subjectType: "focus_session",
-        action: "update",
-      });
+      // The session's own space + project name the key's reach (D3).
+      await assertKeyMayWrite(await answerGrantWrite(input.sessionId));
       const result = await answerSessionSlot({
         sessionId: input.sessionId,
         userId: requireUserId(ctx.userId),

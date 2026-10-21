@@ -23,8 +23,13 @@ export const AUTH_CODE_TTL_MS = 10 * 60 * 1000;
 
 export interface StoredClient {
   clientId: string;
-  /** 'dcr' — registered at /register; 'cimd' — a cached metadata document. */
-  clientKind: "dcr" | "cimd";
+  /**
+   * 'dcr' — registered at /register; 'cimd' — a cached metadata document;
+   * 'app' — an app registered and approved ON THIS POD (`apps`, client_id =
+   * its `public_id`), resolved from `apps` and never stored in
+   * `oauth_clients` ("Sign in with Synap", `app-client.ts`).
+   */
+  clientKind: "dcr" | "cimd" | "app";
   clientName: string;
   redirectUris: string[];
   scopes: string[];
@@ -66,6 +71,17 @@ export interface IssuedCodeInput {
   codeChallenge: string;
   /** RFC 8707 resource, canonical (`resourceForIssuer`), or null. */
   resource: string | null;
+  /**
+   * App clients only: the `[{ permission, workspaceId }]` the person saw and
+   * approved. /token never mints wider than this. Omitted for other clients.
+   */
+  appGrant?: AppGrantRequest[] | null;
+}
+
+/** One permission in one space — the shape of `apps.approved_requests`. */
+export interface AppGrantRequest {
+  permission: string;
+  workspaceId: string;
 }
 
 export interface ClaimedCode {
@@ -75,6 +91,8 @@ export interface ClaimedCode {
   scopes: string[];
   codeChallenge: string;
   resource: string | null;
+  /** The consented app grant (app clients), else null. */
+  appGrant: AppGrantRequest[] | null;
 }
 
 function hashCode(raw: string): string {
@@ -170,6 +188,7 @@ export async function issueAuthorizationCode(
     scopes: input.scopes,
     codeChallenge: input.codeChallenge,
     resource: input.resource,
+    appGrant: input.appGrant ?? null,
     expiresAt: new Date(Date.now() + AUTH_CODE_TTL_MS),
   });
   return code;
@@ -211,6 +230,7 @@ export async function claimAuthorizationCode(
       scopes: oauthAuthorizationCodes.scopes,
       codeChallenge: oauthAuthorizationCodes.codeChallenge,
       resource: oauthAuthorizationCodes.resource,
+      appGrant: oauthAuthorizationCodes.appGrant,
     });
-  return row ?? null;
+  return row ? { ...row, appGrant: row.appGrant ?? null } : null;
 }

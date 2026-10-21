@@ -19,7 +19,13 @@
  * There is no signed request token to forge because nothing is trusted.
  */
 
-import { db, eq, users } from "@synap/database";
+import {
+  db,
+  eq,
+  getActingAgentUserId,
+  getRequestGrant,
+  users,
+} from "@synap/database";
 
 import {
   OAuthError,
@@ -40,8 +46,20 @@ import {
 import {
   findClient,
   issueAuthorizationCode,
+  type AppGrantRequest,
   type StoredClient,
 } from "./store.js";
+import {
+  APP_CANNOT_SIGN_IN,
+  APP_PERSON_SCOPES,
+  appGrantFingerprint,
+  currentAppApproval,
+  describeAppSignIn,
+  isAppClientId,
+  personAppGrant,
+  resolveAppClient,
+  type AppSignInDescription,
+} from "./app-client.js";
 
 /**
  * An error that must be shown to the USER rather than redirected to the client.
@@ -119,7 +137,12 @@ export async function resolveClientAndRedirect(
   // document is fetched (or read from cache) here, before the redirect_uri is
   // trusted, because the document IS the list of redirect_uris.
   let client: StoredClient | null;
-  if (isClientMetadataUrl(clientId)) {
+  if (isAppClientId(clientId)) {
+    // "Sign in with Synap": an app registered AND approved on this pod,
+    // resolved from `apps` — never from `oauth_clients`, which DCR writes.
+    client = await resolveAppClient(clientId);
+    if (!client) throw new AuthorizeUserError(APP_CANNOT_SIGN_IN);
+  } else if (isClientMetadataUrl(clientId)) {
     try {
       client = await resolveCimdClient(clientId, resolveIssuer());
     } catch (err) {
@@ -180,13 +203,17 @@ export function validateAuthorizeRequest(
   // An app (CIMD) gets only what it asked for AND declared — an empty
   // intersection is `invalid_scope`. An MCP (DCR) client keeps today's
   // drop-unknown + fall-back-to-registered rule, which claude.ai relies on.
+  // A sign-in app (`app`) always gets the Hub door's two scopes: what its
+  // token may touch is the GRANT, decided at consent, not a scope string.
   const grantedScopes =
-    client.clientKind === "cimd"
-      ? narrowAppScopes(
-          [...client.scopes, ...client.requestedPermissions],
-          requested
-        )
-      : narrowScopes(client.scopes, requested);
+    client.clientKind === "app"
+      ? [...APP_PERSON_SCOPES]
+      : client.clientKind === "cimd"
+        ? narrowAppScopes(
+            [...client.scopes, ...client.requestedPermissions],
+            requested
+          )
+        : narrowScopes(client.scopes, requested);
 
   const { resource, ignoredResource } = resourceFor(
     client,
@@ -210,8 +237,8 @@ export function validateAuthorizeRequest(
 /**
  * RFC 8707 `resource`, by client kind.
  *
- * STRICT for an app (CIMD) client: anything but this pod's `/mcp` or
- * `/api/hub` is `invalid_target`.
+ * STRICT for an app (CIMD, or a sign-in `app`) client: anything but this
+ * pod's `/mcp` or `/api/hub` is `invalid_target`.
  *
  * LENIENT for a DCR client (claude.ai, the Control Plane connector) until
  * claude.ai's real value has been observed in the logs (/authorize warns with
@@ -228,7 +255,7 @@ export function resourceFor(
   try {
     return { resource: resourceForIssuer(raw, issuer), ignoredResource: null };
   } catch (err) {
-    if (err instanceof OAuthError && client.clientKind !== "cimd") {
+    if (err instanceof OAuthError && client.clientKind === "dcr") {
       return { resource: null, ignoredResource: raw ?? "" };
     }
     throw err;
@@ -255,6 +282,32 @@ export interface OAuthConsentContext {
   scopes: string[];
   /** When the client registered itself with this pod (DCR) — a fresh one is worth a second look. */
   registeredAt: Date;
+  /**
+   * "Sign in with Synap" (an `app_…` client): what the app will do AS the
+   * viewer, derived from the grant they would receive. null for every other
+   * client (an MCP agent connection).
+   */
+  appSignIn: AppSignInDescription | null;
+}
+
+/**
+ * The grant a person would receive signing in to an app: its approval
+ * narrowed to the spaces they can reach. Empty → they cannot sign in.
+ */
+async function appGrantFor(
+  client: StoredClient,
+  viewerUserId: string
+): Promise<AppGrantRequest[]> {
+  const grant = await personAppGrant(
+    await currentAppApproval(client.clientId),
+    viewerUserId
+  );
+  if (grant.length === 0) {
+    throw new AuthorizeUserError(
+      `You are not in any space ${client.clientName} was approved for, so it cannot act as you here.`
+    );
+  }
+  return grant;
 }
 
 /**
@@ -262,9 +315,17 @@ export interface OAuthConsentContext {
  * so the screen can never show a name or scope set the pod would not honor.
  */
 export async function getOAuthConsentContext(
-  params: AuthorizeParams
+  params: AuthorizeParams,
+  viewerUserId: string
 ): Promise<OAuthConsentContext> {
   const req = await resolveAuthorizeRequest(params);
+  const appSignIn =
+    req.client.clientKind === "app"
+      ? await describeAppSignIn(
+          req.client.clientName,
+          await appGrantFor(req.client, viewerUserId)
+        )
+      : null;
   return {
     clientId: req.client.clientId,
     clientName: req.client.clientName,
@@ -272,11 +333,14 @@ export async function getOAuthConsentContext(
     redirectHost: new URL(req.redirectUri).host,
     scopes: req.grantedScopes,
     registeredAt: req.client.createdAt,
+    appSignIn,
   };
 }
 
 export interface OAuthDecisionInput extends AuthorizeParams {
   approve: boolean;
+  /** App sign-in only: `appSignIn.fingerprint` of the screen the person saw. */
+  appSignInFingerprint?: string | null;
 }
 
 /**
@@ -308,6 +372,16 @@ export async function decideOAuthAuthorization(
     };
   }
 
+  // Consent is a person's own act in their own browser session. A request
+  // carrying a key's grant or an acting agent (any key door) never decides
+  // it — otherwise an agent key, remapped to the human it acts for, could
+  // mint a sign-in as that human (threat T4, app-person-token.ts).
+  if (getActingAgentUserId() || getRequestGrant()) {
+    throw new AuthorizeUserError(
+      "Only a person signed in to this pod can authorize a connection."
+    );
+  }
+
   const caller = await db.query.users.findFirst({
     where: eq(users.id, callerUserId),
     columns: { id: true, userType: true },
@@ -318,6 +392,21 @@ export async function decideOAuthAuthorization(
     );
   }
 
+  // An app sign-in records EXACTLY what this person was shown (the same
+  // derivation the consent screen rendered); /token never mints wider.
+  const appGrant =
+    req.client.clientKind === "app"
+      ? await appGrantFor(req.client, caller.id)
+      : null;
+  if (
+    appGrant &&
+    input.appSignInFingerprint !== appGrantFingerprint(appGrant)
+  ) {
+    throw new AuthorizeUserError(
+      `What ${req.client.clientName} may do changed since this page was shown — review it again.`
+    );
+  }
+
   const code = await issueAuthorizationCode({
     clientId: req.client.clientId,
     userId: caller.id,
@@ -325,6 +414,7 @@ export async function decideOAuthAuthorization(
     scopes: req.grantedScopes,
     codeChallenge: req.codeChallenge,
     resource: req.resource,
+    appGrant,
   });
 
   return {

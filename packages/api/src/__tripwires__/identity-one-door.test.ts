@@ -80,6 +80,8 @@ const INTROSPECTION_ONLY: Record<string, string> = {
     "verifies a key it just minted (owner + scopes); no request runs as the key",
   "src/routers/hub-protocol/rest/auth.ts":
     "/auth/key-state reads the bearer's status for its holder; no handler runs as the key",
+  "src/routers/oauth/routes.ts":
+    "OAuth /revoke (RFC 7009) reads the presented token's status only to retire it; no handler runs as the key",
 };
 
 /**
