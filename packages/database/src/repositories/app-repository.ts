@@ -237,8 +237,12 @@ export class AppRepository {
       // `revoke`) keeps the revoked row's record of what it had, while
       // `issueKey` refuses until a human approves again — which is what the
       // revoke copy ("register it again to ask for access") promises.
-      if (existing.revokedAt || existing.removedAt)
+      // Where it may sign people in (0339) is part of that ask: a revived app
+      // signs no one in until its owner registers redirect URIs again.
+      if (existing.revokedAt || existing.removedAt) {
         patch.approvedRequests = null;
+        patch.redirectUris = [];
+      }
       if (input.description !== undefined)
         patch.description = input.description;
       if (input.logoUrl !== undefined) patch.logoUrl = input.logoUrl;
@@ -626,6 +630,26 @@ export class AppRepository {
    * is also what `register` is idempotent by): a name the owner already uses
    * on another app is an `AppNameTakenError`, never a raw unique violation.
    */
+  /**
+   * "Sign in with Synap": may a person signed in to this app decide (approve)
+   * proposals the app's OWN agent filed? Stored in `metadata`
+   * (`personMayDecideOwnAgentProposals`, absent = true). The owner's write
+   * only — the service checks the credential.
+   */
+  async setPersonMayDecideOwnAgentProposals(
+    appId: string,
+    allowed: boolean
+  ): Promise<AppRecord | null> {
+    const [row] = await this.db
+      .update(apps)
+      .set({
+        metadata: sql`COALESCE(${apps.metadata}, '{}'::jsonb) || jsonb_build_object('personMayDecideOwnAgentProposals', ${allowed}::boolean)`,
+      })
+      .where(eq(apps.id, appId))
+      .returning();
+    return row ?? null;
+  }
+
   /**
    * "Sign in with Synap" (0339): replace where an authorization code for this
    * app may be delivered. The OWNER's write only — the service

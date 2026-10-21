@@ -206,6 +206,19 @@ describe("AppRepository.register — idempotent by owner+name", () => {
     expect(theirs.publicId).not.toBe(mine.publicId);
   });
 
+  it("a revived app signs no one in until its owner registers redirect URIs again (PR #29 L4)", async () => {
+    const first = await repo.register({ ownerUserId: OWNER, name: "studio" });
+    await repo.setRedirectUris(first.id, ["https://studio.example.com/cb"]);
+    // A live re-register (idempotent upsert) keeps them.
+    await repo.register({ ownerUserId: OWNER, name: "studio" });
+    expect((await repo.get(first.id))!.redirectUris).toEqual([
+      "https://studio.example.com/cb",
+    ]);
+    await repo.revoke(first.id);
+    await repo.register({ ownerUserId: OWNER, name: "studio" });
+    expect((await repo.get(first.id))!.redirectUris).toEqual([]);
+  });
+
   it("REVIVES a revoked app in place (clears revoked_at, same id + public_id)", async () => {
     const first = await repo.register({
       ownerUserId: OWNER,
