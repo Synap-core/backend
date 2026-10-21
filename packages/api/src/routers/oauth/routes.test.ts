@@ -217,11 +217,13 @@ vi.mock("../../services/agent-identity-service.js", () => ({
 const appConnect = vi.hoisted(() => ({
   connect: vi.fn(),
   mint: vi.fn(),
+  reuse: vi.fn(),
   isPodAppAgent: vi.fn(),
 }));
 vi.mock("../../services/app-connect.js", () => ({
   connectOAuthApp: (args: unknown) => appConnect.connect(args),
   mintAppOAuthAccessKey: (args: unknown) => appConnect.mint(args),
+  reuseAppOAuthAccessKey: (args: unknown) => appConnect.reuse(args),
   isPodAppAgent: (id: string) => appConnect.isPodAppAgent(id),
   oauthAppOffer: async (_user: string, permissions: string[]) =>
     permissions.map((permission) => ({ permission, workspaces: [] })),
@@ -250,6 +252,7 @@ const refresh = vi.hoisted(() => ({
   rotate: vi.fn(),
   find: vi.fn(),
   revokeFamily: vi.fn(),
+  confirmGrace: vi.fn(),
 }));
 vi.mock("./refresh.js", async () => {
   const { OAuthError } =
@@ -264,7 +267,10 @@ vi.mock("./refresh.js", async () => {
     startRefreshFamily: (c: unknown) => refresh.start(c),
     redeemRefreshToken: (raw: string, clientId: string) =>
       refresh.redeem(raw, clientId),
-    rotateRefreshToken: (prev: unknown) => refresh.rotate(prev),
+    rotateRefreshToken: (prev: unknown, id: string) => refresh.rotate(prev, id),
+    // PB3b: the key a successor re-derives (refresh.ts derives it by HMAC).
+    successorAccessToken: (id: string) => `derived-key:${id}`,
+    confirmGraceSuccessor: (r: unknown) => refresh.confirmGrace(r),
     findRefreshToken: (raw: string) => refresh.find(raw),
     revokeRefreshFamily: (t: unknown, reason: string) =>
       refresh.revokeFamily(t, reason),
@@ -345,6 +351,7 @@ beforeEach(() => {
     proposalId: "proposal-1",
   });
   appConnect.mint.mockReset();
+  appConnect.reuse.mockReset();
   appConnect.isPodAppAgent.mockReset();
   appConnect.isPodAppAgent.mockResolvedValue(false);
   for (const spy of Object.values(refresh)) spy.mockReset();
@@ -2231,13 +2238,17 @@ describe("CIMD clients", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(refresh.redeem).toHaveBeenCalledWith("RT-1", APP_ID);
-    expect(appConnect.mint).toHaveBeenCalledWith({
+    // PB3b: the key is the one the successor re-derives (the reuse grace).
+    const [[minted]] = appConnect.mint.mock.calls;
+    expect(minted).toEqual({
       appId: APP_ROW_ID,
       ownerUserId: HUMAN_ID,
       oauthClientId: APP_ID,
       instanceId: `oauth:${APP_ID}:${HUMAN_ID}`,
+      plainKey: expect.stringMatching(/^derived-key:/),
     });
-    expect(refresh.rotate).toHaveBeenCalledWith(REDEEMED);
+    const successorId = minted.plainKey.slice("derived-key:".length);
+    expect(refresh.rotate).toHaveBeenCalledWith(REDEEMED, successorId);
     expect(body).toMatchObject({
       access_token: "synap_hub_live_APPKEY",
       token_type: "Bearer",
@@ -2282,6 +2293,75 @@ describe("CIMD clients", () => {
     expect(res.status).toBe(400);
     expect(body.error).toBe("invalid_grant");
     expect(refresh.rotate).not.toHaveBeenCalled();
+  });
+
+  it("refresh within the reuse grace (PB3b): the live key handed back, the successor answered, nothing minted or rotated", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    const grace = { successorId: "rt-row-2", refreshToken: "RT-2" };
+    refresh.redeem.mockResolvedValue({ ...REDEEMED, grace });
+    refresh.confirmGrace.mockResolvedValue(undefined);
+    // The same answer a mint gives, handed back by the reuse door instead.
+    mintAnswers();
+    appConnect.reuse.mockImplementation(
+      appConnect.mint.getMockImplementation()!
+    );
+    const { res, body } = await refreshGrant();
+    expect(res.status).toBe(200);
+    expect(appConnect.reuse).toHaveBeenCalledWith({
+      appId: APP_ROW_ID,
+      ownerUserId: HUMAN_ID,
+      oauthClientId: APP_ID,
+      instanceId: `oauth:${APP_ID}:${HUMAN_ID}`,
+      accessToken: "derived-key:rt-row-2",
+    });
+    expect(appConnect.mint).not.toHaveBeenCalled();
+    expect(refresh.rotate).not.toHaveBeenCalled();
+    expect(refresh.confirmGrace).toHaveBeenCalledWith({ ...REDEEMED, grace });
+    expect(body).toMatchObject({
+      access_token: "synap_hub_live_APPKEY",
+      refresh_token: "RT-2",
+    });
+  });
+
+  it("refresh within the reuse grace, the live key not reusable: one is minted (random, same slot), not rotated", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    const grace = { successorId: "rt-row-2", refreshToken: "RT-2" };
+    refresh.redeem.mockResolvedValue({ ...REDEEMED, grace });
+    refresh.confirmGrace.mockResolvedValue(undefined);
+    appConnect.reuse.mockResolvedValue(null);
+    mintAnswers();
+    const { res, body } = await refreshGrant();
+    expect(res.status).toBe(200);
+    expect(appConnect.mint).toHaveBeenCalledWith({
+      appId: APP_ROW_ID,
+      ownerUserId: HUMAN_ID,
+      oauthClientId: APP_ID,
+      instanceId: `oauth:${APP_ID}:${HUMAN_ID}`,
+    });
+    expect(refresh.rotate).not.toHaveBeenCalled();
+    expect(body.refresh_token).toBe("RT-2");
+  });
+
+  it("refresh within the reuse grace, the successor spent meanwhile: invalid_grant", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    const grace = { successorId: "rt-row-2", refreshToken: "RT-2" };
+    refresh.redeem.mockResolvedValue({ ...REDEEMED, grace });
+    appConnect.reuse.mockResolvedValue(null);
+    mintAnswers();
+    const { OAuthError } = await import("./protocol.js");
+    refresh.confirmGrace.mockRejectedValue(
+      new OAuthError(
+        "invalid_grant",
+        "Invalid, expired, or revoked refresh token"
+      )
+    );
+    const { res, body } = await refreshGrant();
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_grant");
+    expect(body).not.toHaveProperty("refresh_token");
   });
 
   it("refresh: an MCP (DCR) client is unauthorized_client and never reaches the store", async () => {
