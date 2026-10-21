@@ -26,6 +26,8 @@
  *    allowed, but reviewed (rules out a blanket cross-space refusal that
  *    would break agent uploads);
  *  - an attributed agent too (not only the unattributed key);
+ *  - CONTROL: an agent's FIRST attach of a document it wrote itself stays on
+ *    the ordinary lane (`synap_create_document({ entityId })`);
  *  - CONTROL: a person attaching their own document from another space still
  *    applies directly (the human rule is unchanged).
  */
@@ -127,12 +129,15 @@ function hub(agentUserId?: string) {
   } as never);
 }
 
-async function doc(workspaceId: string | null): Promise<string> {
+async function doc(
+  workspaceId: string | null,
+  agentUserId: string | null = null
+): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into documents (id, user_id, workspace_id, title, type, created_at, updated_at)
-     values ($1, $2, $3, 'private notes', 'markdown', now(), now())`,
-    [id, USER, workspaceId]
+    `insert into documents (id, user_id, workspace_id, title, type, agent_user_id, created_at, updated_at)
+     values ($1, $2, $3, 'private notes', 'markdown', $4, now(), now())`,
+    [id, USER, workspaceId, agentUserId]
   );
   return id;
 }
@@ -253,6 +258,22 @@ describe("every AI body attach is reviewed (M2)", () => {
     });
     expect(res.status).toBe("proposed");
     expect(await bodyOf(entityId)).toBeNull();
+  });
+});
+
+describe("CONTROL — an agent attaching a document IT wrote", () => {
+  it("a first attach of the agent's own document stays on the ordinary lane", async () => {
+    // `synap_create_document({ entityId })`: the agent writes a document and
+    // attaches it — nothing of the person's is handed over.
+    const entityId = await record(W2);
+    const documentId = await doc(W2, AGENT);
+    const res = await hub(AGENT).entities.updateEntity({
+      entityId,
+      userId: USER,
+      documentId,
+    });
+    expect(res.status).toBe("updated");
+    expect(await bodyOf(entityId)).toBe(documentId);
   });
 });
 

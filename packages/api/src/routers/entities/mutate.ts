@@ -102,7 +102,7 @@ export async function assertDocumentAttachable(
   entity: { id: string; workspaceId: string | null },
   documentId: string,
   opts: { aiWrite?: boolean } = {}
-): Promise<void> {
+): Promise<{ agentUserId: string | null }> {
   const doc = await loadEditableDocument(userId, documentId);
   const sameScope = opts.aiWrite
     ? doc.workspaceId === entity.workspaceId ||
@@ -122,6 +122,9 @@ export async function assertDocumentAttachable(
       message: "That document is already the body of another object.",
     });
   }
+  // Who wrote it: an AI's attach of a document that same agent wrote is not
+  // a hand-over of the person's text (see `entities.update`).
+  return { agentUserId: doc.agentUserId ?? null };
 }
 
 export const mutateProcs = {
@@ -223,14 +226,19 @@ export const mutateProcs = {
       }
       // Repointing the body is validated BEFORE the permission check, so a
       // proposal can never carry an unchecked document id either.
+      let attachedDocumentAuthor: string | null = null;
       if (input.documentId && input.documentId !== existing.documentId) {
         await assertBodyNotReplacedSilently({
           entity: existing,
           replaceBody: input.replaceBody,
         });
-        await assertDocumentAttachable(ctx.userId, existing, input.documentId, {
-          aiWrite: isAiWriteRequest(input),
-        });
+        ({ agentUserId: attachedDocumentAuthor } =
+          await assertDocumentAttachable(
+            ctx.userId,
+            existing,
+            input.documentId,
+            { aiWrite: isAiWriteRequest(input) }
+          ));
       }
 
       // KIND CHANGE (c-kind-convert): the target kind must resolve NOW, the
@@ -416,18 +424,27 @@ export const mutateProcs = {
         input.global === true && existing.workspaceId !== null;
       const changesProfileType =
         input.profileSlug !== undefined && input.profileSlug !== existing.type;
-      // An AI write that points the body at a document is always reviewed
-      // (FB1020 review M2). A body follows its entity on the read floors, so
-      // the attach hands the document to everyone who reads the entity — a
-      // scope change, which an agent never auto-applies, even onto an entity
-      // with no body yet and even from the entity's own space (exposure
-      // edges and pod-wide shares reach further than the space). A
-      // replacement also detaches the old body (B9g). Clearing the body
-      // (`documentId: null`) hands nothing out and stays on the ordinary lane.
+      // An AI write that points the body at a document is reviewed (FB1020
+      // review M2). A body follows its entity on the read floors, so the
+      // attach hands the document to everyone who reads the entity — a scope
+      // change, which an agent never auto-applies, even onto an entity with
+      // no body yet and even from the entity's own space (exposure edges and
+      // pod-wide shares reach further than the space). ONE exception: a
+      // FIRST attach of a document this same agent wrote (`synap_create_
+      // document({ entityId })`, a merge's recovered body) hands over nothing
+      // of the person's — the agent could have written that text onto the
+      // entity directly. A replacement also detaches the old body (B9g), so
+      // it is always reviewed. Clearing the body (`documentId: null`) hands
+      // nothing out and stays on the ordinary lane.
+      const agentAttachesOwnDocument =
+        !!input.agentUserId &&
+        attachedDocumentAuthor === input.agentUserId &&
+        !existing.documentId;
       const aiAttachesBody =
         isAiWriteRequest(input) &&
         !!input.documentId &&
-        input.documentId !== existing.documentId;
+        input.documentId !== existing.documentId &&
+        !agentAttachesOwnDocument;
       const forcePropose =
         promotesToGlobal ||
         changesProfileType ||
