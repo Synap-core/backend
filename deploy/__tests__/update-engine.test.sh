@@ -49,6 +49,7 @@ images_json() {
   for k in $KEYS; do
     repo="$(echo "${k#SYNAP_IMAGE_}" | tr 'A-Z_' 'a-z-')"; d="$(D64 c)"
     case "$k" in SYNAP_IMAGE_BACKEND|SYNAP_IMAGE_POD_ADMIN) repo="ghcr.io/synap-core/$repo"; d="$(D64 "$1")" ;; esac
+    [ "$k" = SYNAP_IMAGE_POSTGRES ] && [ -n "${PG_DIGEST:-}" ] && d="$(D64 "$PG_DIGEST")"   # a release that moves postgres
     out="$(jq -c --arg k "$k" --arg v "$repo@sha256:$d" '. + {($k): $v}' <<<"$out")"
   done
   echo "$out"
@@ -151,6 +152,11 @@ case "$*" in
       *) echo "fake psql: unmodelled ledger query: $*" >&2; exit 1 ;;
     esac; exit 0 ;;
   "exec pg1 psql"*"from pg_database where not datistemplate"*) echo synap; exit 0 ;;
+  "exec pg1 psql"*"where datallowconn and not datistemplate"*) printf '%s\n' postgres synap; exit 0 ;;
+  "exec pg1 psql -U synap -d synap "*"extname = 'timescaledb'"*)
+    [ -n "${FAKE_TSDB_READ_FAIL:-}" ] && { echo "psql: connection refused" >&2; exit 2; }
+    echo "${FAKE_TSDB_EXT:-2.26.4}"; exit 0 ;;
+  "exec pg1 psql"*"extname = 'timescaledb'"*) exit 0 ;;   # no extension in the other databases
   # A model of the cluster's database list ($F/dbs), so a restore that renames
   # the live database aside and creates a fresh one is observable.
   "exec pg1 psql"*"from pg_database where datname="*)
@@ -202,6 +208,14 @@ case "$*" in
     t=""; prev=""; for a in "$@"; do [ "$prev" = -t ] && t="$a"; prev="$a"; done
     [ -n "${FAKE_BUILD_FAIL:-}" ] && { echo "build failed (injected)" >&2; exit 1; }
     echo "$t" >> "$F/images"; exit 0 ;;
+  "run --rm --entrypoint sh "*" -c ls /usr/lib/postgresql/*/lib/")
+    # the postgres image's TimescaleDB libraries: FAKE_TSDB_LIBS_NEW for a
+    # release's moved postgres image (PG_DIGEST=b), FAKE_TSDB_LIBS otherwise
+    libs="${FAKE_TSDB_LIBS:-2.26.4}"; case "$*" in *"@sha256:$(printf 'b%.0s' $(seq 1 64))"*) libs="${FAKE_TSDB_LIBS_NEW:-$libs}" ;; esac
+    echo plpgsql.so; for v in $libs; do echo "timescaledb-$v.so"; done; echo timescaledb.so; exit 0 ;;
+  "exec pg1 sh -c ls /usr/lib/postgresql/*/lib/")   # the running postgres: the image .env pins
+    libs="${FAKE_TSDB_LIBS:-2.26.4}"; grep -q "^SYNAP_IMAGE_POSTGRES=.*@sha256:$(printf 'b%.0s' $(seq 1 64))" "$FAKE_ENV" && libs="${FAKE_TSDB_LIBS_NEW:-$libs}"
+    for v in $libs; do echo "timescaledb-$v.so"; done; exit 0 ;;
   "ps --filter publish"*) [ -n "${FAKE_PORT_HOLDER:-}" ] && echo "$FAKE_PORT_HOLDER"; exit 0 ;;
 esac
 exit 0
@@ -548,6 +562,33 @@ setup noledger r1; publish "$R2" 0012_new.sql
 FAKE_NO_LEDGER=1 run_update --release "$R2"; rc=$?
 grep -q "Migration level: 0| →" "$S/out" && ! grep -q "ledger unreadable" "$S/out" \
   && ok "noledger: no _migrations table yet reads as level 0 (not as unreadable)" || { bad "noledger: rc=$rc"; show; }
+
+# ── 3d'. TimescaleDB: a postgres image must load the extension the database runs
+# A newer image ships every older library: the update goes on and the lag is a
+# notice. An image without the database's version would leave postgres unable
+# to start (and a rollback swaps images only): refused before anything changes.
+# An unreadable extension version refuses too (never read as "no extension").
+setup tsdbnewer r1; PG_DIGEST=b publish "$R2" 0012_new.sql bundle
+FAKE_TSDB_EXT=2.26.4 FAKE_TSDB_LIBS_NEW="2.26.4 2.27.0 2.28.3" run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && [[ "$(envpin SYNAP_IMAGE_POSTGRES)" == *"@sha256:$(D64 b)" ]] \
+  && grep -q "database 'synap' runs 2.26.4; this postgres image ships up to 2.28.3" "$S/out" && ! grep -q "ALTER EXTENSION" "$FAKE/log" \
+  && ok "tsdbnewer: a newer postgres image is taken; the extension lag is a notice, never an automatic ALTER EXTENSION" || { bad "tsdbnewer: rc=$rc"; show; }
+setup tsdbolder r1; PG_DIGEST=b publish "$R2" 0012_new.sql bundle
+cp "$DEPLOY/docker-compose.yml" "$S/compose.orig"
+FAKE_TSDB_EXT=2.28.3 FAKE_TSDB_LIBS_NEW="2.25.0 2.26.4" run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [ "$(last reason)" = "postgres image cannot load TimescaleDB 2.28.3 (database synap)" ] \
+  && grep -q "ships TimescaleDB up to 2.26.4, but database 'synap' runs 2.28.3" "$S/out" \
+  && cmp -s "$DEPLOY/.env" "$S/env.orig" && cmp -s "$DEPLOY/docker-compose.yml" "$S/compose.orig" \
+  && ! grep -qE "pg_dump|run --rm backend-migrate" "$FAKE/log" && [ "$(cur_id)" = "$R1" ] \
+  && ok "tsdbolder: an image that lacks the database's TimescaleDB is refused before anything changes" || { bad "tsdbolder: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+setup tsdbunread r1; PG_DIGEST=b publish "$R2" 0012_new.sql bundle
+FAKE_TSDB_READ_FAIL=1 run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last reason)" = "TimescaleDB extension versions unreadable" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" && ! grep -q "run --rm backend-migrate" "$FAKE/log" \
+  && ok "tsdbunread: an unreadable extension version refuses the image change (never read as 'no extension')" || { bad "tsdbunread: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+setup tsdbsame r1; publish "$R2" 0012_new.sql bundle
+FAKE_TSDB_READ_FAIL=1 FAKE_TSDB_LIBS="2.25.0" run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && ! grep -q "postgres image cannot load" "$S/out" \
+  && ok "tsdbsame: a release that keeps the postgres image is not checked (nothing to load anew)" || { bad "tsdbsame: rc=$rc"; show; }
 
 # ── 3e. minFrom compares the newest migration BY NAME, never the latest applied
 # 0331 merged after 0336 was applied: it is the latest by time, 0336 the newest.

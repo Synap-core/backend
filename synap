@@ -3878,6 +3878,102 @@ _ue_min_from_check() {
     return 1
 }
 
+# ── TimescaleDB: the extension a database runs vs the postgres image ─────────
+# A timescaledb-ha image ships the library of every OLDER TimescaleDB too
+# (measured: the 2.28.3 image carries timescaledb-2.13.0 … 2.28.3.so), and a
+# database keeps the extension version it was created or last updated at
+# (pg_extension.extversion), loading that version's library. So a NEWER image
+# is safe: the database runs on, unchanged. An OLDER image that lacks the
+# database's version cannot start it, and a rollback swaps images only — so an
+# update to such an image is refused before anything changes.
+# The extension is never updated automatically: `ALTER EXTENSION timescaledb
+# UPDATE` mid-update would make that update's rollback fatal, and after it the
+# live backend sessions still hold the old library. Behind the image = a notice
+# (here and in `synap doctor`); the procedure is deploy/runbooks/timescaledb-update.md.
+
+# "<db>|<extversion>" per database that has the extension; non-zero on a failed read.
+_ue_tsdb_versions() {
+    local c dbs db v out=""
+    c="$(_pgs_container)"
+    [ -n "$c" ] || return 1
+    dbs="$(_pgs_psql "$c" synap "select datname from pg_database where datallowconn and not datistemplate order by 1" 2>/dev/null)" || return 1
+    [ -n "$dbs" ] || return 1
+    for db in $dbs; do
+        v="$(_pgs_psql "$c" "$db" "select extversion from pg_extension where extname = 'timescaledb'" 2>/dev/null)" || return 1
+        [ -z "$v" ] || out="${out}${db}|${v}"$'\n'
+    done
+    printf '%s' "$out"
+}
+
+# The TimescaleDB versions a postgres image ships a library for, oldest first;
+# non-zero when it could not be read (never "ships none"). Of an image not
+# running yet (a release's), or of the running postgres container (read-only).
+_ue_tsdb_libs_of() { # <command...> that runs `sh` in the image (gets -c '<script>')
+    local out
+    out="$("$@" -c 'ls /usr/lib/postgresql/*/lib/' 2>/dev/null)" || return 1
+    out="$(printf '%s\n' "$out" | sed -n 's/^timescaledb-\([0-9][0-9.]*\)\.so$/\1/p' | sort -V)"
+    [ -n "$out" ] || return 1
+    printf '%s\n' "$out"
+}
+_ue_image_tsdb_libs() { _ue_tsdb_libs_of docker run --rm --entrypoint sh "$1"; }
+
+# Refuses (records + returns 1) a release whose postgres image cannot load a
+# database's TimescaleDB version. Postgres must be running. <manifest>
+_ue_tsdb_check() {
+    local m="$1" img rows libs row db v
+    img="$(jq -r '.images.SYNAP_IMAGE_POSTGRES // empty' "$m")"
+    [ -n "$img" ] || return 0                              # no pin: compose keeps the image it has
+    [ "$img" != "$(_ue_env_get SYNAP_IMAGE_POSTGRES)" ] || return 0   # the pin this pod already runs
+    rows="$(_ue_tsdb_versions)" || {
+        _ue_err "cannot read which TimescaleDB version each database runs — refusing to change the postgres image. Nothing was changed."
+        _ue_record aborted "$UE_FROM" "$UE_TO" "TimescaleDB extension versions unreadable" false
+        return 1
+    }
+    [ -n "$rows" ] || return 0
+    libs="$(_ue_image_tsdb_libs "$img")" || {
+        _ue_err "cannot read the TimescaleDB libraries of release ${UE_TO}'s postgres image (${img}). Nothing was changed."
+        _ue_record aborted "$UE_FROM" "$UE_TO" "postgres image unreadable" false
+        return 1
+    }
+    while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        db="${row%%|*}"; v="${row#*|}"
+        grep -qxF "$v" <<<"$libs" && continue
+        _ue_err "release ${UE_TO}'s postgres image ships TimescaleDB up to $(tail -n 1 <<<"$libs"), but database '${db}' runs ${v}: postgres could not start it. Nothing was changed."
+        _ue_err "Take a release whose postgres image carries TimescaleDB ${v} or newer."
+        _ue_record aborted "$UE_FROM" "$UE_TO" "postgres image cannot load TimescaleDB ${v} (database ${db})" false
+        return 1
+    done <<<"$rows"
+    return 0
+}
+
+# One line per database whose extension is older than the newest library of
+# the running postgres container ("<db>|<extversion>|<newest>"); non-zero on a failed read.
+_ue_tsdb_behind() {
+    local c rows libs newest row v
+    c="$(_pgs_container)"
+    [ -n "$c" ] && [ "$c" != direct ] || return 1
+    rows="$(_ue_tsdb_versions)" || return 1
+    [ -n "$rows" ] || return 0
+    libs="$(_ue_tsdb_libs_of docker exec "$c" sh)" || return 1
+    newest="$(tail -n 1 <<<"$libs")"
+    while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        v="${row#*|}"
+        [ "$v" = "$newest" ] || [ "$(printf '%s\n%s\n' "$v" "$newest" | sort -V | tail -n 1)" = "$v" ] || echo "${row}|${newest}"
+    done <<<"$rows"
+}
+
+_ue_tsdb_notice() { # after a verified update: say so when a database's extension lags the image
+    local rows db v newest
+    rows="$(_ue_tsdb_behind)" || { _ue_warn "could not compare the TimescaleDB extension with the postgres image (synap doctor re-checks)"; return 0; }
+    while IFS='|' read -r db v newest; do
+        [ -n "$db" ] || continue
+        _ue_warn "TimescaleDB: database '${db}' runs ${v}; this postgres image ships up to ${newest}. It keeps working; update it in a maintenance window: deploy/runbooks/timescaledb-update.md"
+    done <<<"$rows"
+    return 0
+}
+
 # The synap schema now, against UE_LEVEL_BEFORE: migrated | unchanged | unknown.
 # Only the synap ledger is measured; Kratos keeps its own (kratos-migrate).
 _ue_schema_state() {
@@ -4618,6 +4714,7 @@ synap_update_engine() {
             exit 1
         }
         _ue_min_from_check "$m" "${level_before#*|}" || exit 1
+        _ue_tsdb_check "$m" || exit 1
         UE_BACKUP="$(SYNAP_DEPLOY_DIR="$(pwd)" COMPOSE_CMD="command docker compose" pgdata_backup pre-update)" || {
             _ue_err "Pre-update database backup failed — aborting update before migrations. Nothing was changed."
             _ue_record aborted "$UE_FROM" "$UE_TO" "pre-update backup failed" false
@@ -4694,6 +4791,7 @@ synap_update_engine() {
     _ue_caddyfile_mark_release
     _ue_provide_backup_mc
     _ue_units_refresh
+    _ue_tsdb_notice
     _ue_record succeeded "$UE_FROM" "$UE_TO" "" false "$UE_BACKUP"
     _ue_ok "Release ${UE_TO} is live (verified: buildStamp + migration level)."
     set -e
@@ -4714,8 +4812,10 @@ synap_update_engine() {
 #   {"schema": 1, "release": "<release id | fast | stable>",
 #    "requestedBy": "<free text>", "requestedAt": "<ISO-8601>", "id": "<opaque, e.g. the order's jti>"}
 # `release` follows pod-agent's validateUpdateTargetVersion: ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$,
-# never "latest". The engine TAKES the file (renames it to update.taken.json)
-# before anything else, so the .path unit can never loop on it, and the outcome
+# never "latest". The file is TAKEN (renamed to update.taken.json) before
+# anything acts on it — by synap-update.service's ExecStartPre, or by the
+# engine on a manual run (_synap_take_request) — so the .path unit can never
+# loop on it, and the outcome
 # lands in state/last-update.json like every update's, with `request: <id>` —
 # an invalid request, or one that met a busy lock, is recorded `aborted` and is
 # not retried. pod-agent (update-request.js) is the writer and reads that record
@@ -5699,6 +5799,20 @@ cmd_doctor() {
             else _dr pgdata info "no postgres container (fresh pod)"; fi ;;
         *) _dr pgdata warn "could not read the postgres layout" ;;
     esac
+
+    # ── timescaledb ── (the update engine's own reader, _ue_tsdb_behind)
+    if [ "$layout" = ok ] && [ -n "$(command docker compose ps -q --status running postgres 2>/dev/null)" ]; then
+        local tsdb tdb tv tnew
+        if tsdb="$(_ue_tsdb_behind)"; then
+            [ -n "$tsdb" ] || _dr timescaledb ok "no database lags the TimescaleDB its postgres image ships"
+            while IFS='|' read -r tdb tv tnew; do
+                [ -n "$tdb" ] || continue
+                _dr timescaledb info "database '${tdb}' runs TimescaleDB ${tv}; the postgres image ships up to ${tnew}. It keeps working; update it in a maintenance window: deploy/runbooks/timescaledb-update.md"
+            done <<<"$tsdb"
+        else
+            _dr timescaledb warn "could not read the TimescaleDB extension versions or the postgres image's libraries"
+        fi
+    fi
 
     # ── disk ──
     local pct
