@@ -32,6 +32,7 @@
  * Prints {"minFrom": …, "minFromRelease": …, "expands": [...]} on stdout.
  * Exit: 0 · 2 cannot derive.
  */
+import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
@@ -52,6 +53,27 @@ export function markedExpands(repo) {
   return [...expands].sort();
 }
 
+/**
+ * The migrations a release shipped. A release whose (readable) tree has no
+ * migrations dir predates it (v1.0.x) and shipped none of these — that is
+ * not a failed read, which throws.
+ */
+function releaseMigrations(repo, ref) {
+  const has = (spec) => {
+    try {
+      execFileSync("git", ["-C", repo, "cat-file", "-e", spec], {
+        stdio: "ignore",
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (has(`${ref}:${MIGRATIONS_DIR}`)) return shippedMigrations(repo, ref);
+  if (has(`${ref}^{tree}`)) return [];
+  throw new Error(`cannot read the tree of ${ref}`);
+}
+
 /** { minFrom, minFromRelease, expands } — throws when it cannot be derived. */
 export function deriveMinFrom(repo, { exclude } = {}) {
   const expands = markedExpands(repo);
@@ -63,7 +85,7 @@ export function deriveMinFrom(repo, { exclude } = {}) {
   // Oldest → newest: the first release holding an expand is the one that
   // shipped it; the newest such release is the floor.
   for (const tag of tags.filter((t) => t !== exclude)) {
-    const shipped = shippedMigrations(repo, ensureTagTree(repo, tag)).sort();
+    const shipped = releaseMigrations(repo, ensureTagTree(repo, tag)).sort();
     const found = shipped.filter((f) => pending.has(f));
     if (found.length) {
       floor = { minFrom: shipped.at(-1), minFromRelease: tag };

@@ -75,12 +75,14 @@ fi
 command -v git >/dev/null 2>&1 && command -v node >/dev/null 2>&1 || { echo "FAIL - git and node are required"; exit 1; }
 G() { git -c user.email=t@t -c user.name=t -c init.defaultBranch=main "$@"; }
 M=packages/database/migrations
-# origin: v1.0.0 ships 0001_init; v1.1.0 ships 0002_expand + 0003_other; main
-# adds 0004_contract (contract-of 0002_expand.sql AND of 0001_init.sql).
-O="$TMP/mf-src"; mkdir -p "$O/$M" "$O/deploy" "$O/scripts"
+# origin: v0.9.0 predates the migrations dir (like the real v1.0.x); v1.0.0
+# ships 0001_init; v1.1.0 ships 0002_expand + 0003_other; main adds
+# 0004_contract (contract-of 0002_expand.sql AND of 0001_init.sql).
+O="$TMP/mf-src"; mkdir -p "$O/deploy" "$O/scripts"
 cp "$HERE/deploy/docker-compose.yml" "$HERE/deploy/.env.example" "$O/deploy/"
 cp "$HERE/scripts/release-min-from.mjs" "$HERE/scripts/check-migrations-forward-only.mjs" "$O/scripts/"
-( cd "$O" && printf 'CREATE TABLE t (id int, old_col text);\n' > "$M/0001_init.sql" && G init -q && G add -A && G commit -qm v1.0 && G tag v1.0.0 \
+( cd "$O" && G init -q && G add -A && G commit -qm v0.9 && G tag v0.9.0 && mkdir -p "$M" \
+  && printf 'CREATE TABLE t (id int, old_col text);\n' > "$M/0001_init.sql" && G add -A && G commit -qm v1.0 && G tag v1.0.0 \
   && printf 'ALTER TABLE t ADD COLUMN new_col text;\n' > "$M/0002_expand.sql" && printf 'SELECT 1;\n' > "$M/0003_other.sql" \
   && G add -A && G commit -qm v1.1 && G tag v1.1.0 \
   && printf -- '-- synap:contract-of 0002_expand.sql\n-- synap:contract-of 0001_init.sql\nALTER TABLE t DROP COLUMN old_col;\n' > "$M/0004_contract.sql" \
