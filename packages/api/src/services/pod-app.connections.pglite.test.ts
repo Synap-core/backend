@@ -555,6 +555,13 @@ describe("V — revoke kills keys, refresh families and waiting codes", () => {
       [app.id]
     );
     expect(live).toEqual([]);
+    // The waiting code is burned at the row (I6), not only refused later by
+    // the revoked app: /token's own app check must not be the only guard.
+    const unburned = await q<{ code_hash: string }>(
+      `select code_hash from oauth_authorization_codes where app_id = $1 and consumed_at is null`,
+      [app.id]
+    );
+    expect(unburned).toEqual([]);
     const code = await exchange(waiting, NOTES, NOTES_CB);
     expect(code.status).toBe(400);
     expect(code.body.access_token).toBeUndefined();
@@ -765,13 +772,18 @@ describe("M — 'apply automatically' is the owner's, after connecting", () => {
     expect(await posture()).toBe("ask-first");
     // A scoped key the owner holds — a "Sign in with Synap" token is one — is
     // the owner within a grant only: it cannot flip the app's AI there either.
-    const scopedDoor = new OpenAPIHono<{ Variables: HubVariables }>() as HubHono;
+    const scopedDoor = new OpenAPIHono<{
+      Variables: HubVariables;
+    }>() as HubHono;
     scopedDoor.use("*", async (c, next) => {
       c.set("userId", OWNER);
       c.set("keyType", "app_person");
       c.set("scopes", ["hub-protocol.read", "hub-protocol.write"]);
       await runWithGrant(
-        { scopes: [{ permissions: [READ, CREATE], workspaceIds: [BRAND] }] },
+        {
+          scopes: [{ permissions: [READ, CREATE], workspaceIds: [BRAND] }],
+          clientId: null,
+        },
         () => next()
       );
     });
