@@ -222,7 +222,12 @@ export interface UpdateFocusSessionParams {
 
 export type UpdateFocusSessionResult =
   | { status: "not_found" }
-  | { status: "denied"; reason: string }
+  | {
+      status: "denied";
+      reason: string;
+      /** A filing the pod applied on its own receipt before the rest was refused. */
+      filing?: SessionFilingDecision;
+    }
   | {
       status: "proposed";
       proposalId: string;
@@ -1756,6 +1761,31 @@ export async function updateFocusSession(
   const filingAlone =
     !!filingReceiptId &&
     !patchAsksForMore({ ...params, projectId: undefined }, criteriaChange);
+  // A GRANTED filing beside other fields is applied NOW, on its own receipt,
+  // and leaves the patch: the gate already minted that receipt as applied, so
+  // the rest's own verdict (a criteria change that proposes, a session that
+  // forces proposals, a cap, a join gate, a denial) must not hold it back —
+  // that left a receipt claiming a filing that was never written, with no
+  // Undo (FB1020 w2 review M1). Its Undo restores the project only. The
+  // own-organise class grants a PROJECT filing only (`own-organise.ts`); a
+  // space move or a track filing is never granted with a receipt here.
+  if (filingReceiptId && !filingAlone && params.projectId !== undefined) {
+    const before = await readSessionUndoSnapshot(db, sessionId);
+    const [filed] = await db
+      .update(focusSessions)
+      .set({ projectId: params.projectId, updatedAt: new Date() })
+      .where(eq(focusSessions.id, sessionId))
+      .returning({ projectId: focusSessions.projectId });
+    await stampSessionUpdate({
+      proposalId: filingReceiptId,
+      sessionId,
+      before,
+      after: before
+        ? { ...before, projectId: filed?.projectId ?? null }
+        : undefined,
+    });
+    params = { ...params, projectId: undefined };
+  }
   const perm = filingAlone
     ? ({ granted: true, autoApprovedProposalId: filingReceiptId } as const)
     : await checkPermissionOrPropose({
@@ -1825,7 +1855,12 @@ export async function updateFocusSession(
         },
       });
   if ("denied" in perm && perm.denied) {
-    return { status: "denied", reason: perm.reason };
+    // A filing granted above has landed: say so beside the refusal.
+    return {
+      status: "denied",
+      reason: perm.reason,
+      ...(filing?.status === "granted" ? { filing } : {}),
+    };
   }
   if ("proposalId" in perm) {
     return {
@@ -1912,8 +1947,7 @@ export async function updateFocusSession(
   // stays unstamped and revert says it cannot be undone.
   const receiptId = "granted" in perm ? perm.autoApprovedProposalId : undefined;
   const undoBefore =
-    (receiptId && isUndoableSessionPatch(params)) ||
-    (filingReceiptId && filingReceiptId !== receiptId)
+    receiptId && isUndoableSessionPatch(params)
       ? await readSessionUndoSnapshot(db, sessionId)
       : null;
 
@@ -1967,16 +2001,6 @@ export async function updateFocusSession(
     before: undoBefore,
     after: updated,
   });
-  // The filing's own receipt (B3), when the rest of the patch had another:
-  // its Undo restores the project only.
-  if (filingReceiptId && filingReceiptId !== receiptId && undoBefore) {
-    await stampSessionUpdate({
-      proposalId: filingReceiptId,
-      sessionId,
-      before: undoBefore,
-      after: { ...undoBefore, projectId: updated?.projectId ?? null },
-    });
-  }
 
   // ── EVIDENCE VERDICT ────────────────────────────────────────────────────────
   // A claim (`completeOutput`) is never a verdict: the ONE evidence door
