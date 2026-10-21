@@ -5,7 +5,8 @@
  * (reachability, not shape). Same seam as playbook-definition-round-trip:
  * driven from the WT SOURCE module, not the backend's pinned npm bundle.
  *
- * Also parses the W4a role REFERENCES (crm / business-developer / ecosystem —
+ * Also parses the W4a role REFERENCES (crm / ecosystem — business-developer
+ * was folded into crm and retired 2026-10-12, retired.yaml —
  * slug + displayName + scope + profileKind, no body) through the tRPC
  * createFromDefinition input, which REQUIRES `displayName` on every profile: a
  * reference that dropped it would be refused at the browser install door.
@@ -172,8 +173,8 @@ describe("business-model.yaml (canonical GRP) — dry-run parse at every door", 
     }
   });
 
-  it("role REFERENCES pass the tRPC door (displayName kept) for crm / business-developer / ecosystem", async () => {
-    for (const slug of ["crm", "business-developer", "ecosystem"]) {
+  it("role REFERENCES pass the tRPC door (displayName kept) for crm / ecosystem", async () => {
+    for (const slug of ["crm", "ecosystem"]) {
       const def = await wsDef(slug);
       const refs = (def.profiles as Array<Record<string, unknown>>).filter(
         (p) =>

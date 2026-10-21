@@ -23,7 +23,6 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { TRPCError } from "@trpc/server";
 import {
   LIBRARY_LIMITS,
   LIBRARY_READ_STATUSES,
@@ -84,10 +83,12 @@ function failure(
   c: { json: (b: unknown, s: number) => Response },
   err: unknown
 ) {
-  if (!(err instanceof TRPCError)) logger.error({ err }, "library REST failed");
+  // A typed refusal is the caller's answer, not a fault: only a 500 is logged.
+  const status = httpStatusForTrpcError(err);
+  if (status === 500) logger.error({ err }, "library REST failed");
   return c.json(
     { error: err instanceof Error ? err.message : "Unknown error" },
-    httpStatusForTrpcError(err) as 400
+    status as 400
   );
 }
 

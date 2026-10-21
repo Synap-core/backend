@@ -272,10 +272,10 @@ function buildOutputSlotsJsonSchema(
     properties?: Record<string, Record<string, unknown>>;
   };
   if (item.properties?.ask) {
-    item.properties.ask = {
-      description:
-        "Optional, for a slot the PERSON fills: how they answer in one tap — the same `ask` shape as synap_start_session outcomes.",
-    };
+    // The ONE derived ask shape, in full (mcp-slot-schema-parity): a
+    // description-only pointer told a model nothing it could send. The stage
+    // schema's `.nullable()` is not advertised, same as the session tools.
+    item.properties.ask = ASK_JSON_SCHEMA;
   }
   if (item.properties?.relationToSubject) {
     item.properties.relationToSubject.description =

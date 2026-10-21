@@ -223,12 +223,16 @@ describe("every offered rule subject can actually fire", () => {
     // Condition 2 is derived from ONE line in ONE file. If that line changes,
     // every "inert because workspace-less" verdict below is wrong and the
     // withheld subject (`user`) must be reconsidered.
+    // Re-derived 2026-10-21: since 6cf88a105 (2026-10-13) the reactor also
+    // admits a workspace-less `entity_facet` ATTACH (a pod-wide role starts its
+    // process). `user` is still workspace-gated; `entity_facet` is still not a
+    // picker subject (pinned below). The window now covers the reactor's comment.
     const src = fs.readFileSync(
       path.join(REPO, "packages/events/src/side-effects.ts"),
       "utf8"
     );
     const reactor =
-      /id:\s*["'`]automation-trigger-match["'`][\s\S]{0,600}?match:\s*\(payload\)\s*=>\s*([\s\S]{0,200}?)async handler/.exec(
+      /id:\s*["'`]automation-trigger-match["'`][\s\S]{0,1500}?match:\s*\(payload\)\s*=>\s*([\s\S]{0,200}?)async handler/.exec(
         src
       );
     expect(
@@ -241,7 +245,7 @@ describe("every offered rule subject can actually fire", () => {
         "subject). The subject withheld for passing no workspace — `user` — " +
         "may now be fireable, and this guard's condition 2 is stale."
     ).toBe(
-      'Boolean(payload.workspaceId) || payload.subjectType === "external_message",'
+      'Boolean(payload.workspaceId) || payload.subjectType === "external_message" || (payload.subjectType === "entity_facet" && payload.action === "attach"),'
     );
   });
 

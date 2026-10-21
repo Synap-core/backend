@@ -400,6 +400,7 @@ describe("tripwire: the MCP door advertises no server-stamped field", () => {
 
     // Non-vacuity: the scan must actually find the schemas it judges.
     let inspected = 0;
+    let handOffDoors = 0;
     for (const tool of list) {
       const schema = tool.inputSchema as
         { properties?: Record<string, unknown> } | undefined;
@@ -413,9 +414,17 @@ describe("tripwire: the MCP door advertises no server-stamped field", () => {
         advertised,
         `${tool.name} advertises a server-stamped field`
       ).toEqual([]);
-      // And it still advertises what an agent IS meant to send.
-      expect(Object.keys(props)).toContain("owner");
+      // And a slot that can be HANDED to the person (it advertises
+      // `blockedReason`: the session doors) still advertises what an agent IS
+      // meant to send. A playbook TEMPLATE's slots (`synap_create_playbook`,
+      // `playbookStageSchema`, e692fe363) declare no owner and are judged by
+      // the stamp check above only.
+      if ("blockedReason" in props) {
+        handOffDoors += 1;
+        expect(Object.keys(props), tool.name).toContain("owner");
+      }
     }
-    expect(inspected).toBeGreaterThanOrEqual(2);
+    expect(inspected).toBeGreaterThanOrEqual(3);
+    expect(handOffDoors).toBeGreaterThanOrEqual(2);
   });
 });
