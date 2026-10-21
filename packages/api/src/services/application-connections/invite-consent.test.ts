@@ -169,10 +169,31 @@ describe("approveByInviteIfConsented", () => {
   });
 
   it.each([
-    ["an app an owner revoked", { status: "revoked", allowedOrigins: [ORIGIN], allowedScopes: ["auth:exchange-user", "identity:link-user"] }],
+    [
+      "an app an owner revoked",
+      {
+        status: "revoked",
+        allowedOrigins: [ORIGIN],
+        allowedScopes: ["auth:exchange-user", "identity:link-user"],
+      },
+    ],
     ["an app no owner approved yet", null],
-    ["an origin the owner did not approve", { status: "approved", allowedOrigins: ["https://other.example"], allowedScopes: ["auth:exchange-user", "identity:link-user"] }],
-    ["a scope the owner did not approve", { status: "approved", allowedOrigins: [ORIGIN], allowedScopes: ["identity:link-user"] }],
+    [
+      "an origin the owner did not approve",
+      {
+        status: "approved",
+        allowedOrigins: ["https://other.example"],
+        allowedScopes: ["auth:exchange-user", "identity:link-user"],
+      },
+    ],
+    [
+      "a scope the owner did not approve",
+      {
+        status: "approved",
+        allowedOrigins: [ORIGIN],
+        allowedScopes: ["identity:link-user"],
+      },
+    ],
   ])("never approves the APP: %s waits for an owner", async (_label, app) => {
     const d = deps({ appConnection: vi.fn().mockResolvedValue(app) });
     await expect(approveByInviteIfConsented(request(), d)).resolves.toEqual({
