@@ -1,39 +1,21 @@
 /**
- * THE duplicate door (FB1020 B2, founder-approved 2026-10-21).
- *
- * ONE question, asked by every create door at FILE time: "does the thing this
- * write would create already exist — as a record, or in the caller's own
- * pending queue?" ONE answer shape, `DuplicateCheck`
- * (`@synap-core/types/proposals`), persisted on the proposal and shown on the
- * review card. What a door DOES with the answer is the door's (Salesforce's
- * split of matching rules from duplicate rules):
- *   - a strong identity atom on a visible record → the entity door merges
- *     (the only automatic outcome; `IdentityResolutionService` decides it);
- *   - a name that IS the object's identity (a project's normalized name, a
- *     playbook's name in its space — both unique by construction) → reused;
- *   - every other hit is `possible`: an agent's write is FILED ANYWAY as a
- *     proposal (`POSSIBLE_DUPLICATE`), and the reviewer decides with the
- *     existing verbs; a person's own create is warned, never blocked.
- *
- * Legs (the meaning-based leg — embeddings — is LATER, B2 of the plan):
- *   1. records  — strong identity + exact same-kind name through
- *                 `resolveIdentity` (entities), the project matcher (projects),
- *                 the pod-wide slug probe (kinds). Never re-derived here.
- *   2. pending  — the caller's OWN pending creates (owner floor below), same
- *                 kind, matched on the same normalized name or an overlapping
- *                 strong identity atom (`normalizeIdentitySignal`).
- * The exact PAYLOAD hash against pending rows stays where the unique index is
- * (`insertPendingProposal`, migration 0208): an identical create returns the
- * existing proposal before a second row exists.
- *
- * A failed leg is `unchecked`, never `clear` (an empty result and a failed read
- * are different facts). Same kind only (B2d): a note and a decision with one
- * title are not duplicates.
- *
- * Replaces: `findPendingSignalMatches` (capture's pending scan, strong signals
- * only and capture graphs only), the capture door's weak auto-link, the entity
- * door's weak refusal, the playbook term-overlap refusal and
- * `ProjectNearDuplicateError`.
+ * THE duplicate door. One question, asked by every create door at file time:
+ * "does the thing this write would create already exist, as a record or in the
+ * caller's own pending queue?" One answer shape, `DuplicateCheck`
+ * (`@synap-core/types/proposals`), persisted on the proposal and shown on the review
+ * card. What a door does with the answer is the door's:
+ *   - a strong identity atom on a visible record: the entity door merges (the only
+ *     automatic outcome; `IdentityResolutionService` decides it);
+ *   - a name that is the object's identity (a project's normalized name, a playbook's
+ *     name in its space): reused;
+ *   - every other hit is `possible`: an agent's write is filed anyway as a proposal
+ *     (`POSSIBLE_DUPLICATE`) and the reviewer decides; a person's own create is warned,
+ *     never blocked.
+ * Legs: records (strong identity + exact same-kind name via `resolveIdentity`, the
+ * project matcher, the pod-wide kind slug probe) and pending (the caller's own pending
+ * creates, same kind, same normalized name or an overlapping strong atom).
+ * The exact payload hash stays in `insertPendingProposal` (migration 0208).
+ * A failed leg is `unchecked`, never `clear`. Same kind only.
  */
 import {
   and,
@@ -241,7 +223,7 @@ export async function loadOwnPendingCreates(
 }
 
 /**
- * Fold candidates into the persisted answer: capped, honest about clipping.
+ * Fold candidates into the persisted answer, capped; says when it was clipped.
  * `failed` — a leg failed OR could not look at everything (a truncated
  * pending scan): with no candidate that is `unchecked`, never `clear`.
  */
