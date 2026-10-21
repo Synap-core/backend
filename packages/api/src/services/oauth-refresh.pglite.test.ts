@@ -984,6 +984,11 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
     async () => {
       const { refresh: rt } = await connect();
       await redeemRefreshToken(rt, STUDIO);
+      // This test's family only: the file shares one connection, and each
+      // connect() ends the earlier tests' families (startRefreshFamily).
+      const live = (await refreshRows()).filter((r) => r.revoked_at === null);
+      expect(live).toHaveLength(1);
+      const familyId = live[0]!.family_id;
       const startedAt = Date.now();
       const replay = await refresh(rt);
       expect(Date.now() - startedAt).toBeGreaterThanOrEqual(
@@ -991,9 +996,11 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
       );
       expect(replay.status).toBe(400);
       expect(replay.body.error).toBe("invalid_grant");
-      expect((await refreshRows()).every((r) => r.revoked_at === null)).toBe(
-        true
+      const family = (await refreshRows()).filter(
+        (r) => r.family_id === familyId
       );
+      expect(family.length).toBeGreaterThan(0);
+      expect(family.every((r) => r.revoked_at === null)).toBe(true);
     },
     REFRESH_SUCCESSOR_WAIT_MS + 10_000
   );
