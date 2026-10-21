@@ -604,12 +604,32 @@ describe("credential doors refuse a Synap app's device session", () => {
   });
 
   it("POSITIVE CONTROL — an unguarded procedure that mints a key is flagged", () => {
+    // Self-contained (a mint, a grant writer, a singleton), so the control
+    // exercises write detection, singleton method resolution, the builder and
+    // `.use` guards and the executor flag, in milliseconds.
     const sample = analyse([
-      ...sources,
+      {
+        rel: "packages/api/src/services/__sample_mint__.ts",
+        code: `
+          class ApiKeyService {
+            async generateApiKey(userId, name, scopes) {
+              return db.insert(apiKeys).values({ userId, name, scopes });
+            }
+          }
+          export const apiKeyService = new ApiKeyService();
+          export async function attachGrantsOrRevoke(input) {
+            await db.insert(grants).values(input);
+          }
+          export async function revokeEverything(id) {
+            await db.update(apiKeys).set({ isActive: false, revokedAt: new Date() });
+          }
+        `,
+      },
       {
         rel: "packages/api/src/routers/__sample__.ts",
         code: `
           export const sampleRouter = router({
+            narrowOnly: protectedProcedure.mutation(() => revokeEverything("k")),
             mint: protectedProcedure.mutation(({ ctx }) =>
               apiKeyService.generateApiKey(ctx.userId, "x", [])),
             fine: credentialProcedure.mutation(({ ctx }) =>
