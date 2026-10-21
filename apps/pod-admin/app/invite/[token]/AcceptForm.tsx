@@ -10,6 +10,7 @@ import {
   extractInitialValues,
   FLOW_RESET_ERROR_IDS,
   mergeHiddenValues,
+  passwordLoginBody,
   submitLoginFlow,
   whoami,
   type KratosFlow,
@@ -17,6 +18,12 @@ import {
 } from "../../../lib/kratos-flow";
 import { trpc, POD_URL } from "../../../lib/trpc";
 import { formatRelative, formatTimestamp } from "../../../lib/format";
+import { pairExit } from "../../../lib/open-in";
+import {
+  externalProps,
+  PlacedFallback,
+  usePlacedExit,
+} from "../../../lib/exit-link";
 
 type InvitePreview =
   | {
@@ -40,7 +47,13 @@ type PageState =
       preview: Extract<InvitePreview, { expired: false }>;
       session: KratosSession | null;
     }
-  | { status: "done" };
+  /**
+   * Joined. `signedIn`: this browser holds a pod session (sign-in path, or the
+   * new account's automatic sign-in worked), so the console is one click away.
+   */
+  | { status: "done"; email: string; signedIn: boolean };
+
+type AcceptTab = "register" | "login";
 
 export function AcceptForm({
   token,
@@ -50,6 +63,10 @@ export function AcceptForm({
   podHost?: string;
 }) {
   const [state, setState] = useState<PageState>({ status: "loading" });
+  const [tab, setTab] = useState<AcceptTab>("register");
+  // Set when "Create account" found an account for this email already: the
+  // person is moved to "Sign in" and told why.
+  const [accountExists, setAccountExists] = useState(false);
 
   const previewQuery = trpc.workspaces.previewInvite.useQuery(
     { token },
@@ -58,7 +75,11 @@ export function AcceptForm({
 
   const acceptMutation = trpc.workspaces.acceptInvite.useMutation({
     onSuccess: () => {
-      window.location.assign("/");
+      setState((prev) =>
+        prev.status === "ready"
+          ? { status: "done", email: prev.preview.email, signedIn: true }
+          : prev
+      );
     },
   });
 
@@ -143,7 +164,7 @@ export function AcceptForm({
   if (state.status === "done")
     return (
       <Shell podHost={podHost}>
-        <DoneBody />
+        <DoneBody email={state.email} signedIn={state.signedIn} />
       </Shell>
     );
 
@@ -190,6 +211,8 @@ export function AcceptForm({
       <Tabs
         aria-label="Accept options"
         variant="underlined"
+        selectedKey={tab}
+        onSelectionChange={(key) => setTab(key as AcceptTab)}
         classNames={{
           base: "w-full",
           tabList: "gap-4 border-b border-foreground/[0.08] pb-0",
@@ -207,15 +230,19 @@ export function AcceptForm({
           <RegisterPanel
             token={token}
             inviteEmail={preview.email}
-            onSuccess={() => {
+            onSuccess={(signedIn) => {
               const crmUrl = process.env.NEXT_PUBLIC_CRM_URL;
               if (crmUrl) {
                 window.location.assign(
                   `${crmUrl}/login?podUrl=${encodeURIComponent(POD_URL)}`
                 );
               } else {
-                window.location.assign("/login?return=/");
+                setState({ status: "done", email: preview.email, signedIn });
               }
+            }}
+            onAccountExists={() => {
+              setAccountExists(true);
+              setTab("login");
             }}
           />
         </Tab>
@@ -228,6 +255,19 @@ export function AcceptForm({
             </span>
           }
         >
+          {accountExists ? (
+            <p className="mt-4 text-[13px] leading-relaxed text-foreground/70">
+              This pod already has an account for this email. Sign in with it to
+              accept. Forgot the password?{" "}
+              <a
+                href="/recovery"
+                className="text-foreground/85 underline underline-offset-2"
+              >
+                Reset it
+              </a>
+              .
+            </p>
+          ) : null}
           <LoginPanel
             inviteEmail={preview.email}
             onSuccess={onLoginSuccess}
@@ -243,14 +283,46 @@ export function AcceptForm({
 
 // ─── Register panel ──────────────────────────────────────────────────────────
 
+/**
+ * Sign the new account in, so the done screen can open the console as them.
+ * `passwordLoginBody` posts only the hidden fields + the password method.
+ * `false` when it did not work: the account exists and the invite
+ * is accepted either way, the person signs in later.
+ */
+async function signInNewAccount(
+  identifier: string,
+  password: string
+): Promise<boolean> {
+  try {
+    const started = await createLoginFlow();
+    // A session already in this browser counts only if it is this account
+    // (an inviter testing their own invite is signed in as themselves).
+    if (started.existingSession) {
+      const held = started.existingSession.identity.traits?.email;
+      return held?.toLowerCase() === identifier.toLowerCase();
+    }
+    if (!started.flow) return false;
+    const r = await submitLoginFlow(
+      started.flow,
+      passwordLoginBody(started.flow, identifier, password)
+    );
+    return Boolean(r.session);
+  } catch {
+    return false;
+  }
+}
+
 function RegisterPanel({
   token,
   inviteEmail,
   onSuccess,
+  onAccountExists,
 }: {
   token: string;
   inviteEmail: string;
-  onSuccess: () => void;
+  /** `signedIn`: the new account's automatic sign-in worked. */
+  onSuccess: (signedIn: boolean) => void;
+  onAccountExists: () => void;
 }) {
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -274,23 +346,36 @@ function RegisterPanel({
             inviteToken: token,
           }),
         });
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          code?: string;
+        };
+        if (res.status === 409 && data.code === "ACCOUNT_EXISTS") {
+          onAccountExists();
+          return;
+        }
         if (!res.ok) {
           setError(data.error ?? `Failed (${res.status})`);
           return;
         }
-        onSuccess();
+        onSuccess(await signInNewAccount(inviteEmail, password));
       } catch (err) {
         setError(err instanceof Error ? err.message : "Request failed");
       } finally {
         setSubmitting(false);
       }
     },
-    [inviteEmail, password, name, token, onSuccess]
+    [inviteEmail, password, name, token, onSuccess, onAccountExists]
   );
 
   return (
     <form className="mt-4 flex flex-col gap-4" onSubmit={onSubmit}>
+      {/* Honest about what this makes (2026-10-21): an account on THIS pod
+          with its own password. Joining with a Synap Cloud account is not
+          offered to invitees yet. */}
+      <p className="text-[13px] leading-relaxed text-foreground/70">
+        This makes your account on this pod, with its own password.
+      </p>
       {error ? <ErrorBanner message={error} /> : null}
       <Input
         label="Email"
@@ -666,17 +751,59 @@ function ExpiredBody() {
   );
 }
 
-function DoneBody() {
+/**
+ * Joined. One primary: "Open in Synap" (`pairExit`: the app opens THIS pod's
+ * sign-in with the email filled in; a hint, never a secret), with the device's
+ * install hatch beside it, and the console as the web way in.
+ */
+function DoneBody({ email, signedIn }: { email: string; signedIn: boolean }) {
+  const exit = pairExit(POD_URL, email);
   return (
     <>
       <CheckCircle2 className="h-10 w-10 text-success" />
       <div className="flex flex-col gap-1.5">
         <h1 className="font-heading text-[20px] font-medium text-foreground">
-          Invite accepted
+          You're in
         </h1>
-        <p className="text-[13.5px] text-foreground/65">Redirecting…</p>
+        <p className="text-[13.5px] leading-relaxed text-foreground/65">
+          In the Synap app, sign in as{" "}
+          <span className="font-medium text-foreground/85">{email}</span> with
+          this pod's password.
+        </p>
       </div>
+      {exit ? <OpenInSynap exit={exit} /> : null}
+      <a
+        href={signedIn ? "/" : "/login?return=/"}
+        className="inline-flex min-h-10 items-center self-start text-[13px] text-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
+      >
+        {signedIn ? "Continue in the browser" : "Sign in in the browser"}
+      </a>
     </>
+  );
+}
+
+function OpenInSynap({
+  exit,
+}: {
+  exit: NonNullable<ReturnType<typeof pairExit>>;
+}) {
+  const placed = usePlacedExit(exit);
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      {placed.href !== null ? (
+        <Button
+          as="a"
+          href={placed.href}
+          {...externalProps(placed.href)}
+          color="primary"
+          radius="md"
+          size="md"
+        >
+          Open in Synap
+        </Button>
+      ) : null}
+      <PlacedFallback placed={placed} />
+    </div>
   );
 }
 

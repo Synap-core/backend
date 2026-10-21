@@ -553,6 +553,29 @@ export async function revokeOtherSessions(): Promise<number> {
   }
 }
 
+/**
+ * The body of a password sign-in posted by code, not by the rendered form:
+ * the flow's hidden fields (CSRF token) + `method: "password"` + the
+ * credentials, and NOTHING else. A flow that also offers Synap Cloud or a
+ * passkey carries other method nodes (`provider`, passkey triggers) whose
+ * values must not ride along, or Kratos routes the submit to that method.
+ */
+export function passwordLoginBody(
+  flow: KratosFlow,
+  identifier: string,
+  password: string
+): Record<string, string> {
+  const hidden: Record<string, string> = {};
+  for (const n of flow.ui.nodes) {
+    const name = n.attributes?.name;
+    if (typeof name === "string" && n.attributes?.type === "hidden") {
+      const v = n.attributes.value;
+      hidden[name] = typeof v === "string" ? v : "";
+    }
+  }
+  return { ...hidden, method: "password", identifier, password };
+}
+
 export async function submitLoginFlow(
   flow: KratosFlow,
   body: Record<string, unknown>

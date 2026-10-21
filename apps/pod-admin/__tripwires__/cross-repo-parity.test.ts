@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BROWSER_SETTINGS_SECTIONS, openIn } from "../lib/open-in";
+import { BROWSER_SETTINGS_SECTIONS, openIn, pairExit } from "../lib/open-in";
 import { stripComments } from "../../../scripts/strip-comments.mjs";
 
 /**
@@ -265,6 +265,44 @@ describe("synap:// grammar matches deep-link-constants", () => {
     expect(
       openIn({ kind: "objectInApp", objectKind: "proposal", id: ID }).href
     ).toBe(mirror.proposal(ID));
+  });
+
+  /**
+   * The invite's "Open in Synap" (`pairExit`) mirrors `buildPairLink`. Its
+   * receivers are the two apps' `parsePairLink` readers; a drift in the
+   * version, the host or a param name would leave the done screen minting a
+   * link both apps refuse as "update the app" or ignore.
+   */
+  it.skipIf(!present)("pairExit matches buildPairLink", () => {
+    expect(literal("PAIR_LINK_VERSION")).toBe("1");
+    expect(literal("DeepLinkScheme")).toBe("synap");
+    expect(src).toContain("Pair: 'pair',");
+    expect(src).toContain("export const PAIR_HOST = DeepLinkPaths.Pair;");
+    expect(src).toContain("export function buildPairLink(");
+    for (const fragment of [
+      "const params = new URLSearchParams({ v: PAIR_LINK_VERSION, pod: url.origin });",
+      "if (email) params.set('email', email);",
+      "return { ok: true, link: `${DeepLinkScheme}://${PAIR_HOST}?${params.toString()}` };",
+      "if (isLoopbackHost(host)) return { ok: false, reason: 'loopback' };",
+    ])
+      expect(src).toContain(fragment);
+
+    const mirror = (pod: string, email?: string) => {
+      const params = new URLSearchParams({ v: "1", pod: new URL(pod).origin });
+      if (email) params.set("email", email);
+      return `synap://pair?${params.toString()}`;
+    };
+    // A path and an email with characters that must be encoded.
+    expect(
+      pairExit("https://lab.pod.synap.live/x", "a+b@example.com")?.href
+    ).toBe(mirror("https://lab.pod.synap.live/x", "a+b@example.com"));
+    expect(pairExit("https://lab.pod.synap.live")?.href).toBe(
+      mirror("https://lab.pod.synap.live")
+    );
+    // Refused where buildPairLink refuses (loopback, public http).
+    expect(pairExit("http://localhost:4000")).toBeNull();
+    expect(pairExit("http://lab.pod.synap.live")).toBeNull();
+    expect(pairExit("not a url")).toBeNull();
   });
 
   it("web-hosted kinds stay web, and every desktop link carries a fallback", () => {

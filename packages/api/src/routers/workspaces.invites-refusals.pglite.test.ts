@@ -51,6 +51,16 @@ vi.mock("@synap/database", async (importOriginal) => {
     // and the audit line off a real database.
     eventRepository: { append: async () => undefined },
     ensureTeamPersonForMember: async () => undefined,
+    // The REAL recorder, on this PGlite: its default writer is the package's
+    // own `db`, which the export swap above does not reach.
+    recordInviteAcceptance: (invite: unknown, userId: string) =>
+      (
+        actual.recordInviteAcceptance as (
+          i: unknown,
+          u: string,
+          c: unknown
+        ) => Promise<void>
+      )(invite, userId, h.db),
     podCpAuthHeaders: async () => ({
       via: "pod-jwt",
       headers: { Authorization: "Bearer pod-signed" },
