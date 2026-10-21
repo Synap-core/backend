@@ -8,7 +8,7 @@
  * separable in the data by the agent type they mint (`claude-web` vs
  * `claude-web-direct`).
  *
- * TWO tables, both pod-local:
+ * THREE tables, all pod-local:
  *
  *   oauth_clients              — PUBLIC clients (no secret; PKCE alone
  *                                authenticates the code exchange): RFC 7591
@@ -17,6 +17,8 @@
  *                                ID Metadata Documents (pod apps, 0338).
  *   oauth_authorization_codes  — short-lived, single-use authorization codes
  *                                bound to a PKCE challenge.
+ *   oauth_refresh_tokens       — a pod app's rotating, single-use refresh
+ *                                tokens (0339); MCP (DCR) clients get none.
  *
  * SECURITY: like `mcp_connect_codes`, only a sha256 HASH of the authorization
  * code is stored (`code_hash` PK, the same lookup-hash pattern as
@@ -30,7 +32,14 @@
  * and only bearer-token model.
  */
 
-import { pgTable, text, timestamp, index, uuid } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  timestamp,
+  index,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { apps } from "./apps.js";
 
 export const oauthClients = pgTable("oauth_clients", {
@@ -145,5 +154,59 @@ export const oauthAuthorizationCodes = pgTable(
     expiresAtIdx: index("oauth_authorization_codes_expires_at_idx").on(
       table.expiresAt
     ),
+  })
+);
+
+/**
+ * A pod app's refresh tokens (0339, spec 17 §6.6, F5): only sha256(token) is
+ * stored, like a code. Each one is SINGLE-USE: redeeming it (`last_used_at`,
+ * set atomically) mints a new access key and a successor in the same
+ * `family_id`, pointed at by `replaced_by`. A token presented again after its
+ * use is a reuse (RFC 9700 §4.14.2): the whole family is revoked, with the
+ * connection's live access key. Idle expiry: each token lives 30 d from its
+ * issue, so a connection used within every 30 days lives on (no absolute cap).
+ *
+ * `revoked_at` means KILLED (reuse, /revoke, a newer consent, the app revoked),
+ * never "used"; a used token keeps its row until it expires, so a late replay
+ * is still recognised as one. Logic: `routers/oauth/refresh.ts` (api).
+ */
+export const oauthRefreshTokens = pgTable(
+  "oauth_refresh_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // sha256(rawToken) — the only representation of the token we store.
+    tokenHash: text("token_hash").notNull(),
+    // Every token rotated from one authorization code shares it.
+    familyId: uuid("family_id").notNull(),
+    // The pod app (CIMD client_id) it was issued to; /token refuses another.
+    clientId: text("client_id").notNull(),
+    // The HUMAN whose connection this is (the key's `linkedUserId`).
+    userId: text("user_id").notNull(),
+    // The connection (`apps` row, mode 'oauth'); deleting it deletes these.
+    appId: uuid("app_id")
+      .notNull()
+      .references(() => apps.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", {
+      mode: "date",
+      withTimezone: true,
+    }).notNull(),
+    // Single-use marker: set when the token was redeemed. NULL = unused.
+    lastUsedAt: timestamp("last_used_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
+    revokedAt: timestamp("revoked_at", { mode: "date", withTimezone: true }),
+    // The successor minted when this token was redeemed.
+    replacedBy: uuid("replaced_by"),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    tokenHashUnique: uniqueIndex("oauth_refresh_tokens_token_hash_uidx").on(
+      table.tokenHash
+    ),
+    appIdx: index("oauth_refresh_tokens_app_idx").on(table.appId),
+    familyIdx: index("oauth_refresh_tokens_family_idx").on(table.familyId),
   })
 );

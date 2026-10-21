@@ -1053,6 +1053,24 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "requested_templates",
     addedBy: "0338b_pod_app_oauth_apps.sql",
   },
+  // Pod app refresh tokens (0339). /token's refresh grant and /revoke read
+  // and write them, and revoking an app revokes them: without the table the
+  // pod app refresh grant, a pod app's /token and every app revoke 500.
+  {
+    table: "oauth_refresh_tokens",
+    column: "token_hash",
+    addedBy: "0339_oauth_refresh_tokens.sql",
+  },
+  {
+    table: "oauth_refresh_tokens",
+    column: "family_id",
+    addedBy: "0339_oauth_refresh_tokens.sql",
+  },
+  {
+    table: "oauth_refresh_tokens",
+    column: "last_used_at",
+    addedBy: "0339_oauth_refresh_tokens.sql",
+  },
   // Computers (0320, MACHINE-IDENTITY-PLAN): the host link every governed
   // agent write reads (host step), and the class principal column both rule
   // stores select. Missing means every agent write would 42703.

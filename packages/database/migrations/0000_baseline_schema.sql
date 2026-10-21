@@ -5116,3 +5116,26 @@ CREATE TABLE IF NOT EXISTS "lifecycle_transition_outbox" (
 
 CREATE INDEX IF NOT EXISTS "lifecycle_transition_outbox_pending_idx"
   ON "lifecycle_transition_outbox" ("created_at") WHERE "emitted_at" IS NULL;
+
+-- 0339: a pod app's rotating, single-use refresh tokens (mirrors
+-- 0339_oauth_refresh_tokens.sql). Here, after `apps`, so the key is inline.
+CREATE TABLE IF NOT EXISTS "oauth_refresh_tokens" (
+  "id"           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "token_hash"   text NOT NULL,
+  "family_id"    uuid NOT NULL,
+  "client_id"    text NOT NULL,
+  "user_id"      text NOT NULL,
+  "app_id"       uuid NOT NULL REFERENCES "apps"("id") ON DELETE CASCADE,
+  "expires_at"   timestamp with time zone NOT NULL,
+  "last_used_at" timestamp with time zone,
+  "revoked_at"   timestamp with time zone,
+  "replaced_by"  uuid,
+  "created_at"   timestamp with time zone NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "oauth_refresh_tokens_token_hash_uidx"
+  ON "oauth_refresh_tokens" ("token_hash");
+CREATE INDEX IF NOT EXISTS "oauth_refresh_tokens_app_idx"
+  ON "oauth_refresh_tokens" ("app_id");
+CREATE INDEX IF NOT EXISTS "oauth_refresh_tokens_family_idx"
+  ON "oauth_refresh_tokens" ("family_id");
