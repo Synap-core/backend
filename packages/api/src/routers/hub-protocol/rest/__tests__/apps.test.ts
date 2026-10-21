@@ -937,6 +937,46 @@ describe("app lifecycle writes — the owner's own full-access key (P5 `*`)", ()
     expect(res.status).toBe(403);
     expect(state.keyInput).toBeNull();
   });
+
+  // The owner hit "A scoped key cannot register an app — use your own sign-in
+  // or CLI key." holding a key they believed was theirs: the refusal named no
+  // limit and no fix. It must say WHAT bounds the key and WHERE to get one
+  // that is not bounded.
+  it("the refusal names the key's limit and the fix (a pinned space)", async () => {
+    state.ambientGrant = PINNED;
+    const caller = appsRouter.createCaller({
+      authenticated: true,
+      userId: OWNER,
+    } as never);
+    await expect(caller.create({ name: "synap.live" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining(
+        `this key is limited to 1 space (${WORKSPACE_ID})`
+      ),
+    });
+    await expect(caller.create({ name: "synap.live" })).rejects.toMatchObject({
+      message: expect.stringContaining("Pod Admin → Keys"),
+    });
+    expect(state.registered).toBeNull();
+  });
+
+  it("the refusal names a permission-narrowed grant (no `*`)", async () => {
+    state.ambientGrant = {
+      scopes: [{ permissions: ["entity.person.create"] }],
+      clientId: null,
+    };
+    const caller = appsRouter.createCaller({
+      authenticated: true,
+      userId: OWNER,
+    } as never);
+    await expect(caller.create({ name: "synap.live" })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining(
+        "this key is not granted `*` (it allows: entity.person.create)"
+      ),
+    });
+    expect(state.registered).toBeNull();
+  });
 });
 
 /**
