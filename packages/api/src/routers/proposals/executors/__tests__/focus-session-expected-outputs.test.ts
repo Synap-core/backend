@@ -63,11 +63,30 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db: {
       query: { focusSessions: { findFirst: async () => sessionRow } },
-      // The executor's own idempotency read: this proposal is still pending.
+      // Two reads go through `db.select`: the executor's idempotency read
+      // (awaited after `.where`: this proposal is still pending) and the undo
+      // snapshot (`readSessionUndoSnapshot`, `.where(...).limit(1)`: the
+      // session's restorable columns, read from the same row as the executor).
       select: () => {
         const b: Record<string, unknown> = {
           from: () => b,
-          where: async () => [{ status: "pending" }],
+          where: () => ({
+            then: (
+              resolve: (v: unknown) => unknown,
+              reject?: (e: unknown) => unknown
+            ) => Promise.resolve([{ status: "pending" }]).then(resolve, reject),
+            limit: async () =>
+              sessionRow
+                ? [
+                    {
+                      title: sessionRow.title ?? null,
+                      goal: sessionRow.goal ?? null,
+                      progress: sessionRow.progress ?? null,
+                      projectId: sessionRow.projectId ?? null,
+                    },
+                  ]
+                : [],
+          }),
         };
         return b;
       },
