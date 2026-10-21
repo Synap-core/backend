@@ -126,6 +126,7 @@ import { oauthApp } from "../routers/oauth/routes.js";
 import {
   decideOAuthAuthorization,
   getOAuthConsentContext,
+  verifyAuthRequestTime,
 } from "../routers/oauth/consent.js";
 import { appSessionMiddleware } from "../middleware/app-session.js";
 import { createContext } from "../context.js";
@@ -148,6 +149,7 @@ import type {
 } from "../routers/hub-protocol/rest/_shared.js";
 import {
   PERSON_DEVICE_ABSOLUTE_CAP_MS,
+  PERSON_DEVICE_MAX_ACTIVE,
   signInPersonDevice,
 } from "./person-device-token.js";
 
@@ -166,6 +168,8 @@ const EVE = "person-eve";
 const FRAN = "person-fran";
 const GIL = "person-gil";
 const NOBODY = "person-nobody";
+const IVY = "person-ivy";
+const HAL = "person-hal";
 const WS_ADMIN = randomUUID();
 const WS_TEAM = randomUUID();
 const WS_BOBS = randomUUID();
@@ -219,8 +223,9 @@ beforeAll(async () => {
        ($1, 'founder@x', 'Founder', 'human'), ($2, 'carol@x', 'Carol', 'human'),
        ($3, 'dan@x', 'Dan', 'human'), ($4, 'eve@x', 'Eve', 'human'),
        ($5, 'fran@x', 'Fran', 'human'), ($6, 'gil@x', 'Gil', 'human'),
-       ($7, 'nobody@x', 'Nobody', 'human')`,
-    [FOUNDER, CAROL, DAN, EVE, FRAN, GIL, NOBODY]
+       ($7, 'nobody@x', 'Nobody', 'human'), ($8, 'ivy@x', 'Ivy', 'human'),
+       ($9, 'hal@x', 'Hal', 'human')`,
+    [FOUNDER, CAROL, DAN, EVE, FRAN, GIL, NOBODY, IVY, HAL]
   );
   // Every person here holds access (a space); NOBODY holds none.
   await q(
@@ -237,7 +242,7 @@ beforeAll(async () => {
     );
   await member(WS_ADMIN, FOUNDER, "owner");
   await member(WS_TEAM, FOUNDER, "owner");
-  for (const person of [PERSON, OTHER, CAROL, DAN, EVE, FRAN, GIL]) {
+  for (const person of [PERSON, OTHER, CAROL, DAN, EVE, FRAN, GIL, IVY, HAL]) {
     await member(WS_TEAM, person, "editor");
   }
   await member(WS_BOBS, OTHER, "owner");
@@ -460,6 +465,19 @@ describe("(a) /authorize for a Synap app", () => {
     expect(to.searchParams.get("login_hint")).toBe("ada@x");
     expect(to.searchParams.get("prompt")).toBe("create");
     expect(to.searchParams.get("resource")).toBe(ISSUER);
+  });
+
+  it("a request for a fresh sign-in carries its own signed time (auth_req); others do not", async () => {
+    const fresh = new URL(
+      (await authorize({ prompt: "login" })).headers.get("location")!
+    );
+    const stamped = verifyAuthRequestTime(fresh.searchParams.get("auth_req"));
+    expect(stamped).not.toBeNull();
+    expect(Math.abs(Date.now() - stamped!)).toBeLessThan(10_000);
+    const plain = new URL(
+      (await authorize({ prompt: "create" })).headers.get("location")!
+    );
+    expect(plain.searchParams.has("auth_req")).toBe(false);
   });
 
   it("a `localhost` redirect is refused and shown, never redirected", async () => {
@@ -1262,6 +1280,28 @@ describe("(l) every way a person loses access to the pod ends their devices", ()
     kratos.identity.delete(GIL);
   });
 
+  it("a removed person's step-up is refused, and ends the device", async () => {
+    const ivy = await signedIn(IVY);
+    connections.failFor.add(IVY);
+    await expect(asFounder().removeFromPod({ userId: IVY })).rejects.toThrow(
+      /account was kept/
+    );
+    // Ivy's Kratos identity was kept, so she can still sign in to the
+    // console and click "Confirm it's you" — the step-up must not revive her.
+    const code = await consent(IVY, { prompt: "login", signedInAgoMs: 10_000 });
+    const res = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: DESKTOP,
+      redirect_uri: LOOPBACK,
+      code_verifier: VERIFIER,
+      synap_device_refresh_token: ivy.refresh,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_grant");
+    expect((await device(ivy.deviceId)).revoked_at).not.toBeNull();
+  });
+
   it("a person with no access to the pod gets no device", async () => {
     const res = await deviceFor(NOBODY);
     expect(res.status).toBe(400);
@@ -1270,5 +1310,58 @@ describe("(l) every way a person loses access to the pod ends their devices", ()
       (await q(`select 1 from person_devices where user_id = $1`, [NOBODY]))
         .rows
     ).toHaveLength(0);
+  });
+});
+
+// ─── (m) at most 20 live devices per person ─────────────────────────────────
+
+describe("(m) a person holds at most 20 live devices", () => {
+  it("the 21st sign-in ends the least recently used device, and only it", async () => {
+    const ids: string[] = [];
+    const tokens: string[] = [];
+    for (let i = 0; i < PERSON_DEVICE_MAX_ACTIVE; i++) {
+      const d = await signInPersonDevice({
+        personUserId: HAL,
+        clientId: DESKTOP,
+        authTime: new Date(),
+      });
+      if (!d.ok) throw new Error("hal signs in");
+      ids.push(d.deviceId);
+      tokens.push(d.accessToken);
+    }
+    // Every device was used recently except the 6th, the least recent.
+    await q(
+      `update person_devices set last_used_at = now() - interval '1 minute' where user_id = $1`,
+      [HAL]
+    );
+    await q(
+      `update person_devices set last_used_at = now() - interval '9 days' where id = $1`,
+      [ids[5]]
+    );
+    const live = async () =>
+      (
+        await q<{ id: string }>(
+          `select id from person_devices where user_id = $1 and revoked_at is null`,
+          [HAL]
+        )
+      ).rows.map((r) => r.id);
+    expect(await live()).toHaveLength(PERSON_DEVICE_MAX_ACTIVE);
+
+    const newest = await signInPersonDevice({
+      personUserId: HAL,
+      clientId: DESKTOP,
+      authTime: new Date(),
+    });
+    if (!newest.ok) throw new Error("hal signs in again");
+    const after = await live();
+    expect(after).toHaveLength(PERSON_DEVICE_MAX_ACTIVE);
+    expect(after).toContain(newest.deviceId);
+    expect(after).not.toContain(ids[5]);
+    expect((await trpc({ bearer: tokens[5]! }, "devices.list")).status).toBe(
+      401
+    );
+    expect((await trpc({ bearer: tokens[4]! }, "devices.list")).status).toBe(
+      200
+    );
   });
 });

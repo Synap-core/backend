@@ -88,6 +88,7 @@ import {
   AuthorizeUserError,
   resolveClientAndRedirect,
   resourceFor,
+  signAuthRequestTime,
   validateAuthorizeRequest,
 } from "./consent.js";
 import {
@@ -379,6 +380,14 @@ oauthApp.get("/authorize", async (c) => {
   }
   if (q.max_age !== undefined && /^[0-9]{1,9}$/.test(q.max_age)) {
     target.searchParams.set("max_age", q.max_age);
+  }
+  // When this request was made, signed: a third-party `prompt=login` /
+  // `max_age=0` needs a sign-in made after it (consent.ts).
+  if (
+    target.searchParams.has("max_age") ||
+    target.searchParams.get("prompt") === "login"
+  ) {
+    target.searchParams.set("auth_req", signAuthRequestTime());
   }
 
   return c.redirect(target.toString(), 302);

@@ -61,6 +61,8 @@ export interface ConsentParams {
   /** OIDC step-up: a fresh sign-in is required first (enforced server-side). */
   maxAge?: string;
   prompt?: string;
+  /** /authorize's signed request time (`auth_req`), round-tripped. */
+  authRequest?: string;
 }
 
 /**

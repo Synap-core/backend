@@ -156,7 +156,9 @@
  *     (middleware/app-session.test.ts).
  *  T3 A device nobody watches. The devices list (`devices.list`) shows each
  *     sign-in; signing one out is a console act (`devices.revoke`), the app's
- *     own sign-out is RFC 7009 `/revoke` with either token.
+ *     own sign-out is RFC 7009 `/revoke` with either token. A person holds
+ *     at most `PERSON_DEVICE_MAX_ACTIVE` (20) live devices: a sign-in beyond
+ *     it ends the least recently used. → "(m)".
  */
 
 import { randomBytes } from "crypto";
@@ -170,6 +172,7 @@ import {
   lt,
   lte,
   or,
+  drizzleSql,
   users,
 } from "@synap/database";
 import { personDeviceTokens, personDevices } from "@synap/database/schema";
@@ -199,6 +202,13 @@ export const PERSON_DEVICE_ACCESS_TTL_MS = 60 * 60 * 1000;
 
 /** No device outlives 180 days from its sign-in, however often it refreshes. */
 export const PERSON_DEVICE_ABSOLUTE_CAP_MS = 180 * 24 * 60 * 60 * 1000;
+
+/**
+ * At most this many live devices per person (lead decision 2026-10-22): a new
+ * sign-in beyond it ends the least recently used one, so a leaked or scripted
+ * sign-in loop cannot pile up devices nobody watches.
+ */
+export const PERSON_DEVICE_MAX_ACTIVE = 20;
 
 /** The longest device label kept (app-supplied text). */
 const LABEL_MAX = 80;
@@ -326,6 +336,7 @@ export async function signInPersonDevice(args: {
     })
     .returning({ id: personDevices.id });
   if (!device) throw new Error("person device: the insert returned no row");
+  await endDevicesBeyondCap(args.personUserId);
 
   const access = await mintAccessToken(device.id, capAt);
   const refreshToken = await startRefreshFamily(
@@ -338,6 +349,36 @@ export async function signInPersonDevice(args: {
     { capAt }
   );
   return { ok: true, deviceId: device.id, ...access, refreshToken };
+}
+
+/**
+ * Keep the person's live devices at `PERSON_DEVICE_MAX_ACTIVE`: the least
+ * recently used (last refresh, else sign-in) end. The device just signed in
+ * is the most recent, so it is never the one ended.
+ */
+async function endDevicesBeyondCap(userId: string): Promise<void> {
+  const live = await db
+    .select({ id: personDevices.id })
+    .from(personDevices)
+    .where(
+      and(
+        eq(personDevices.userId, userId),
+        isNull(personDevices.revokedAt),
+        gt(personDevices.expiresAt, new Date())
+      )
+    )
+    .orderBy(
+      desc(
+        drizzleSql`coalesce(${personDevices.lastUsedAt}, ${personDevices.createdAt})`
+      ),
+      desc(personDevices.createdAt)
+    );
+  for (const { id } of live.slice(PERSON_DEVICE_MAX_ACTIVE)) {
+    await revokePersonDevice(db, {
+      deviceId: id,
+      reason: `Signed out: more than ${PERSON_DEVICE_MAX_ACTIVE} devices, the least recently used ends`,
+    });
+  }
 }
 
 /**

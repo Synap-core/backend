@@ -20506,6 +20506,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					permission: string;
 					workspaceId: string;
 				}[] | undefined;
+				authRequest?: string | undefined;
 				clientId: string;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
@@ -20542,6 +20543,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		getOAuthConsentContext: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				authRequest?: string | undefined;
 				clientId: string;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;

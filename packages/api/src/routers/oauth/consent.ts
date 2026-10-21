@@ -16,9 +16,13 @@
  * a tampered round-trip can only ever produce an authorization the pod would
  * have granted from a fresh /authorize anyway — and one whose real client name,
  * real redirect host and real scopes were on screen when the human approved.
- * There is no signed request token to forge because nothing is trusted.
+ * Nothing in the round-trip is trusted, with ONE signed exception: `auth_req`,
+ * the time /authorize received a request asking for a fresh sign-in
+ * (`signAuthRequestTime`, HMAC'd) — forged or missing, it only asks the person
+ * to sign in again.
  */
 
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
   db,
   eq,
@@ -114,6 +118,11 @@ export interface AuthorizeParams {
   maxAge?: number | string | null;
   /** OIDC `prompt`; `login` forces a fresh sign-in (a step-up). */
   prompt?: string | null;
+  /**
+   * When /authorize received this request, signed (`signAuthRequestTime`):
+   * what a third-party `prompt=login` / `max_age=0` is measured against.
+   */
+  authRequest?: string | null;
 }
 
 /**
@@ -154,15 +163,69 @@ export function isDeviceReconfirm(
 }
 
 /**
+ * When the authorize request was made, signed by this pod: `/authorize`
+ * stamps it on the consent URL (`auth_req`) whenever the request asks for a
+ * fresh sign-in, so a third-party client's `prompt=login` / `max_age=0` can
+ * demand a sign-in made AFTER the request (OIDC), and survive the round trip
+ * through /login without looping. Derived from JWT_SECRET like the refresh
+ * successor key; per process without one (dev/test).
+ */
+const AUTH_REQUEST_KEY = process.env.JWT_SECRET
+  ? createHmac("sha256", process.env.JWT_SECRET)
+      .update("oauth-authorize-request-time")
+      .digest()
+  : randomBytes(32);
+/** A stamp older than this is refused: the flow starts again. */
+const AUTH_REQUEST_MAX_AGE_MS = 60 * 60 * 1000;
+/** Kratos' clock and this pod's may differ by a little. */
+const CLOCK_SKEW_MS = 2_000;
+
+const authRequestMac = (at: number) =>
+  createHmac("sha256", AUTH_REQUEST_KEY)
+    .update(`authorize|${at}`)
+    .digest("base64url");
+
+/** The signed `auth_req` value for a request made at `at` (ms). */
+export function signAuthRequestTime(at: number = Date.now()): string {
+  return `${at}.${authRequestMac(at)}`;
+}
+
+/** The request time an `auth_req` value proves, or null (absent, forged, stale). */
+export function verifyAuthRequestTime(
+  raw: string | null | undefined,
+  now: number = Date.now()
+): number | null {
+  const match = /^([0-9]{1,15})\.([A-Za-z0-9_-]{43})$/.exec(raw ?? "");
+  if (!match) return null;
+  const at = Number(match[1]);
+  const expected = Buffer.from(authRequestMac(at));
+  const given = Buffer.from(match[2]!);
+  if (expected.length !== given.length || !timingSafeEqual(expected, given)) {
+    return null;
+  }
+  if (at > now + CLOCK_SKEW_MS || now - at > AUTH_REQUEST_MAX_AGE_MS) {
+    return null;
+  }
+  return at;
+}
+
+/**
  * Must the person sign in again before deciding? Only when the request asks
- * for it: `prompt=login`, or `max_age`. "Fresh" is within `max_age`, never
- * tighter than the step-up window (the time from signing in to clicking), so
- * `max_age=0` and `prompt=login` both mean "within the last few minutes".
- * An unknown sign-in time is never fresh.
+ * for it: `prompt=login`, or `max_age`. An unknown sign-in time is never
+ * fresh. Two rules, by who asks:
+ *  - a Synap app (`first_party`): "fresh" is within `max_age`, never tighter
+ *    than the step-up window (the time from signing in to clicking), so
+ *    `max_age=0` and `prompt=login` both mean "within the last 5 minutes" —
+ *    the device's step-up clock is what a credential door then checks;
+ *  - any other client: OIDC as written. `prompt=login` and `max_age=0` need
+ *    a sign-in made AFTER the authorize request (its signed time,
+ *    `auth_req`; missing or forged → sign in again); `max_age=N` needs one
+ *    within N seconds, with no floor.
  */
 export function reauthenticationRequired(
-  params: Pick<AuthorizeParams, "maxAge" | "prompt">,
+  params: Pick<AuthorizeParams, "maxAge" | "prompt" | "authRequest">,
   authenticatedAt: Date | null,
+  clientKind: string,
   now: number = Date.now()
 ): boolean {
   const maxAgeSeconds =
@@ -175,13 +238,25 @@ export function reauthenticationRequired(
     maxAgeSeconds !== null &&
     Number.isInteger(maxAgeSeconds) &&
     maxAgeSeconds >= 0;
-  if (params.prompt !== "login" && !hasMaxAge) return false;
+  const login = params.prompt === "login";
+  if (!login && !hasMaxAge) return false;
   if (!authenticatedAt) return true;
-  const limit = Math.max(
-    params.prompt === "login" || !hasMaxAge ? 0 : maxAgeSeconds! * 1000,
-    STEP_UP_WINDOW_MS
-  );
-  return now - authenticatedAt.getTime() > limit;
+  const age = now - authenticatedAt.getTime();
+  if (clientKind === "first_party") {
+    const limit = Math.max(
+      login || !hasMaxAge ? 0 : maxAgeSeconds! * 1000,
+      STEP_UP_WINDOW_MS
+    );
+    return age > limit;
+  }
+  if (login || maxAgeSeconds === 0) {
+    const requestedAt = verifyAuthRequestTime(params.authRequest, now);
+    if (requestedAt === null) return true;
+    if (authenticatedAt.getTime() < requestedAt - CLOCK_SKEW_MS) return true;
+    // Signed in after the request: that IS `max_age=0`.
+    if (!hasMaxAge || maxAgeSeconds === 0) return false;
+  }
+  return hasMaxAge && age > maxAgeSeconds! * 1000;
 }
 
 /** An authorize request that passed BOTH validation phases. */
@@ -544,7 +619,8 @@ export async function getOAuthConsentContext(
     appSignIn,
     reauthenticate: reauthenticationRequired(
       params,
-      sessionAuthenticatedAt(callerSession)
+      sessionAuthenticatedAt(callerSession),
+      req.client.clientKind
     ),
     reconfirmDevice: isDeviceReconfirm(req.client.clientKind, params.prompt),
   };
@@ -647,7 +723,7 @@ export async function decideOAuthAuthorization(
   // real time of that sign-in travels with the code (a Synap app's device
   // takes it as its step-up clock).
   const authTime = sessionAuthenticatedAt(ctx?.session);
-  if (reauthenticationRequired(input, authTime)) {
+  if (reauthenticationRequired(input, authTime, req.client.clientKind)) {
     throw new ReauthenticationRequiredError();
   }
 
