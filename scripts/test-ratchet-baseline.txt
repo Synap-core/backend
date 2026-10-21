@@ -1,0 +1,12 @@
+# Known-red test files on main. Read by scripts/test-ratchet.mjs (CI "Full suite").
+# One line per file:  <repo-relative test file> | <owner> | <cause> | <note>
+# The list may only SHRINK: a file not listed here that fails turns CI red, and a
+# listed file that passes (or no longer runs) turns CI red until its line is removed.
+# Never add a line to make a new failure green. Recorded from a real run with
+# `node scripts/test-ratchet.mjs --record`, never by hand.
+#
+# owner  — who fixes it: infra (CI cannot provide the service/sibling), wave6
+#          (file changed by the in-flight Pod Console wave 6 branch), or the code
+#          area (api, database, jobs, types, pod-admin, …).
+# cause  — live-service | sibling-repo | stale-mock | db-fixture | pg-boss |
+#          tripwire | product-bug | assertion-drift | flaky | unknown
