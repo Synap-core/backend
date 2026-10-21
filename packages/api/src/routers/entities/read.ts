@@ -30,7 +30,7 @@ import {
   facetRoleExists,
   profileSlugScopeConditionFromRows,
   drizzleSql,
-  notProbeEntityWhere,
+  listableEntityWhere,
 } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { EntitySchema } from "@synap-core/types";
@@ -133,7 +133,8 @@ export const readProcs = {
         .where(
           and(
             isNull(entities.deletedAt),
-            notProbeEntityWhere(),
+            // THE listing rule: no probe rows, no demo (sample-project) rows.
+            listableEntityWhere(),
             entityReadVisibleWhere(ctx.userId),
             notInAnyProjectWhere(entities.id, ctx.userId)
           )
@@ -450,10 +451,11 @@ export const readProcs = {
       // `entityLensWhere`/`entityWriteVisibleWhere`, which restrict rows to the user floor
       // (workspace membership + pod-personal + project membership). `userId` is a
       // security predicate there, not mere attribution.
-      // D8: test-key probe rows are not LISTED (still readable by id).
+      // THE listing rule (D8 probe rows + B5 demo rows) — still readable by
+      // id. The project lens is the demo toggle: lensed, demo rows show.
       const conditions: any[] = [
         isNull(entities.deletedAt),
-        notProbeEntityWhere(),
+        listableEntityWhere({ projectLens: input.projectId }),
       ];
 
       if (input.sourceProposalId) {
@@ -655,6 +657,8 @@ export const readProcs = {
       const conditions: any[] = [
         eq(entities.userId, ctx.userId),
         isNull(entities.workspaceId),
+        // THE listing rule: no probe rows, no demo (sample-project) rows.
+        listableEntityWhere(),
       ];
 
       if (input.profileSlug) {
@@ -751,11 +755,19 @@ export const readProcs = {
           profileSlug: input.profileSlug,
           limit: input.limit,
           includeGlobal: input.includeGlobal,
-          ...(input.projectId
-            ? { narrow: projectLensWhere(entities.id, input.projectId) }
+          // THE listing rule rides every narrow; the project lens is the
+          // demo toggle.
+          narrow: input.projectId
+            ? and(
+                projectLensWhere(entities.id, input.projectId),
+                listableEntityWhere({ projectLens: input.projectId })
+              )!
             : input.withoutProject
-              ? { narrow: notInAnyProjectWhere(entities.id, ctx.userId) }
-              : {}),
+              ? and(
+                  notInAnyProjectWhere(entities.id, ctx.userId),
+                  listableEntityWhere()
+                )!
+              : listableEntityWhere(),
         }
       );
 
@@ -867,10 +879,11 @@ export const readProcs = {
       // from leaking through — both the pod-scoped-profile branch (which
       // previously skipped the workspace filter) and the workspace branch
       // (which had no per-user guard on the NULL case).
-      // D8: test-key probe rows are never search hits.
+      // THE listing rule: probe and demo (sample-project) rows are never
+      // search hits.
       const conditions: any[] = [
         entityReadVisibleWhere(ctx.userId),
-        notProbeEntityWhere(),
+        listableEntityWhere(),
       ];
 
       // The advertised contract: input.query MATCHES. (This was silently
@@ -991,10 +1004,11 @@ export const readProcs = {
       // Floor: every result must belong to the caller (spans all their
       // workspaces + globals + own pod-personal). This is the ONLY scope
       // predicate — there is no workspace narrow, by design.
-      // D8: test-key probe rows are never search hits.
+      // THE listing rule: probe and demo (sample-project) rows are never
+      // search hits.
       const conditions: any[] = [
         entityReadVisibleWhere(ctx.userId),
-        notProbeEntityWhere(),
+        listableEntityWhere(),
       ];
 
       const trimmedQuery = input.query.trim();

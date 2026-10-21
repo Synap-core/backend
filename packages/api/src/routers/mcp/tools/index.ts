@@ -4049,7 +4049,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update a project: rename, re-describe, change status, move its phase, set/clear its target date, or move its home workspace. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
+          "Update a project: rename, re-describe, change status, move its phase, set/clear its target date, mark it as sample (demo) data, or move its home workspace. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4069,6 +4069,11 @@ export const tools = {
               type: ["string", "null"],
               description:
                 "Deadline as an ISO-8601 date (e.g. '2026-12-15'). null clears it; omit to leave it.",
+            },
+            sample: {
+              type: "boolean",
+              description:
+                "true = this project holds demo data: its records leave every list, count, search and recall (still readable by id and when this project is the focus) and fire only automations scoped to this project. false = real data again.",
             },
             homeWorkspaceId: {
               type: "string",

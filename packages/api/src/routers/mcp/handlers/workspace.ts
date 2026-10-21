@@ -598,6 +598,8 @@ export const workspaceHandlers: McpHandlerMap = {
           phase: p.phase,
           phaseCategory: p.phaseCategory,
           targetDate: p.targetDate,
+          // 0347: a sample (demo) project — its records leave every listing.
+          sample: p.sample,
           homeWorkspaceId: p.workspaceId,
           usedWorkspaceIds: p.usedWorkspaceIds,
           subject: p.subject
@@ -724,6 +726,8 @@ export const workspaceHandlers: McpHandlerMap = {
       ...(typeof args.targetDate === "string" || args.targetDate === null
         ? { targetDate: args.targetDate as unknown as Date | null }
         : {}),
+      // 0347: sample (demo) data — governed with the rest of the patch.
+      ...(typeof args.sample === "boolean" ? { sample: args.sample } : {}),
       // D6: governed home change (target write-checked in projects.update).
       ...(typeof args.homeWorkspaceId === "string"
         ? { homeWorkspaceId: args.homeWorkspaceId }

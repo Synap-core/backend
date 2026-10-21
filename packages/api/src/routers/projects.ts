@@ -348,6 +348,7 @@ export const projectsRouter = router({
         status: string;
         colorSlot: number | null;
         icon: string | null;
+        sample: boolean;
       }>(projects, {
         where: inArray(projects.id, filedInto),
         columns: {
@@ -356,6 +357,8 @@ export const projectsRouter = router({
           status: true,
           colorSlot: true,
           icon: true,
+          // 0347: lets a record's project chip wear the Demo mark.
+          sample: true,
         },
         orderBy: [asc(projects.name)],
       });
@@ -597,6 +600,11 @@ export const projectsRouter = router({
         colorSlot: z.number().int().min(1).max(12).nullable().optional(),
         /** The place's mark (0328). `null` clears it. */
         icon: projectIconInput,
+        /**
+         * SAMPLE (demo) data (0347): its records leave every listing and fire
+         * only automations scoped to this project. Governed like the rest.
+         */
+        sample: z.boolean().optional(),
         /**
          * Rebind the container's subject entity. `null` unbinds it (the project
          * falls back to its plain typed name). Omitted = untouched.

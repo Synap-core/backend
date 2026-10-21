@@ -22,7 +22,7 @@ import {
   and,
   isNull,
   getEffectiveFacets,
-  notProbeEntityWhere,
+  listableEntityWhere,
   getRequestGrant,
 } from "@synap/database";
 import {
@@ -1113,8 +1113,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
             inArray(entities.id, rankedIds),
             isNull(entities.deletedAt),
             floor,
-            // D8: a test-key probe row is never a search hit.
-            notProbeEntityWhere()
+            // THE listing rule: a probe or demo (sample-project) row is
+            // never a search hit.
+            listableEntityWhere()
           )
         );
 
