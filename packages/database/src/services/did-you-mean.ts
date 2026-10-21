@@ -84,7 +84,43 @@ export function suggestClosest(
     }
   }
 
-  return best;
+  return best ?? uniqueTokenMatch(input, candidates);
+}
+
+/**
+ * The words of a key: split on `-`, `_`, whitespace and camelCase humps,
+ * lower-cased. `decisionStatus` → [decision, status]; `offer-price-model` →
+ * [offer, price, model].
+ */
+function keyTokens(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[-_\s]+/)
+    .filter(Boolean);
+}
+
+/**
+ * The ONE candidate whose words contain the input's words, in order — the
+ * prefixed-slug near-miss an edit distance cannot see: `status` for a kind
+ * whose field is `decisionStatus`, `summary` for `offer-summary`. Measured on
+ * the live pod 2026-10-20: both came back unmodeled with no suggestion. Two
+ * or more candidates is ambiguous and suggests nothing.
+ */
+function uniqueTokenMatch(
+  input: string,
+  candidates: readonly string[]
+): string | undefined {
+  const words = keyTokens(input);
+  if (words.length === 0) return undefined;
+  const hits = candidates.filter((candidate) => {
+    const tokens = keyTokens(candidate);
+    for (let i = 0; i + words.length <= tokens.length; i++) {
+      if (words.every((w, j) => tokens[i + j] === w)) return true;
+    }
+    return false;
+  });
+  return hits.length === 1 ? hits[0] : undefined;
 }
 
 /**

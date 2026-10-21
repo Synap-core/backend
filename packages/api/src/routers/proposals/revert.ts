@@ -19,6 +19,7 @@ import type {
   RowPatchRecord,
 } from "../../services/proposals/stamp-materialized.js";
 import type { EntityPropertyDiff } from "../../utils/entity-property-diff.js";
+import { isUndoableSessionPatch } from "../../services/focus-sessions/session-undo.js";
 
 // ---------------------------------------------------------------------------
 // Revert planning (pure — no DB, fully unit-testable)
@@ -159,6 +160,22 @@ export function planProposalRevert(
   // A row with no stamp (written before this existed, or a non-entity update)
   // has no before-state, so it stays `unsupported` and the mutation fails loud.
   if (isUpdate) {
+    // A session update: the apply site stamps a `focus_session` row patch
+    // ONLY when every change is one undo can restore (`session-undo.ts`).
+    if (proposal.targetType === "focus_session") {
+      const stamped = (materialized as CompleteMaterializedRecord | undefined)
+        ?.rowPatches;
+      const patches = (stamped ?? []).filter((p) => p.kind === "focus_session");
+      if (patches.length > 0) {
+        return creationsPlanFromRecord({ rowPatches: patches });
+      }
+      return {
+        kind: "unsupported",
+        reason: stamped
+          ? "Revert of this session update is not supported: it changed nothing, so there is nothing to undo."
+          : "Revert of this session update is not supported: undo restores a session's title, goal, progress and project only, and this change also touched something else (or was applied before undo records were kept).",
+      };
+    }
     if (
       proposal.targetType === "entity" &&
       carriesUnrevertableEntityChange(proposal.data)
@@ -337,10 +354,37 @@ export function planProposalRevert(
     return plan;
   }
 
+  // Project filing: the filing door stamps the `belongs_to_project` edges it
+  // WROTE (`materialized.relationIds`, on the approval or the receipt). Undo
+  // deletes exactly those — a record that was already in the project stays.
+  if (isProjectFiling(proposal)) {
+    const relationIds =
+      (materialized as CompleteMaterializedRecord | undefined)?.relationIds ??
+      [];
+    if (relationIds.length > 0) return creationsPlanFromRecord({ relationIds });
+    return {
+      kind: "unsupported",
+      reason: materialized
+        ? "Revert of this filing is not supported: every record was already in the project, so there is nothing to undo."
+        : "Revert of this filing is not supported: it was applied before undo records were kept, so which links it added was never recorded.",
+    };
+  }
+
   return {
     kind: "unsupported",
     reason: `Revert of proposal type '${proposal.targetType}/${proposal.proposalType}' is not supported.`,
   };
+}
+
+/** A project filing — the proposal (`file_entities`) or its receipt (`project.file_entities`). */
+function isProjectFiling(
+  proposal: Pick<RevertPlannerInput, "targetType" | "proposalType">
+): boolean {
+  return (
+    proposal.targetType === "project" &&
+    (proposal.proposalType === "file_entities" ||
+      proposal.proposalType === "project.file_entities")
+  );
 }
 
 /**
@@ -385,11 +429,14 @@ function carriesUnrevertableEntityChange(data: unknown): boolean {
  * which a pending proposal does not have yet, so it cannot be asked as-is about
  * a live row. It CAN be asked about everything that does not need that record:
  * a non-entity delete has no recoverable target, an unmapped type is
- * unsupported — all knowable from the type alone. Two cases the planner decides
- * from the record, which approval writes, are predicted from what approval
- * WILL stamp: a composite graph (created ids minted and stamped at approval)
- * and an entity update (the `entity/update` executor stamps its apply-time
- * diff). Every other update/edit is stamped by nothing, so it stays false.
+ * unsupported — all knowable from the type alone. Four cases the planner
+ * decides from the record, which approval writes, are predicted from what
+ * approval WILL stamp: a composite graph (created ids minted and stamped at
+ * approval), an entity update (the `entity/update` executor stamps its
+ * apply-time diff), a project filing (its executor stamps the edges it
+ * wrote) and a session update carrying only undoable changes (its executor
+ * stamps the columns). Every other update/edit is stamped by nothing, so it
+ * stays false.
  *
  * The planner stays the ONE place the kind→inverse rule lives: this asks it,
  * with the status it will have, rather than mirroring its branches. `status` is
@@ -408,6 +455,20 @@ export function wouldBeRevertable(
   // planner will refuse once applied (`carriesUnrevertableEntityChange`).
   if (proposal.targetType === "entity" && proposal.proposalType === "update") {
     return !carriesUnrevertableEntityChange(proposal.data);
+  }
+  // The `project/file_entities` executor stamps the edges it writes.
+  if (isProjectFiling(proposal)) return true;
+  // The `focus_session/update` executor stamps an undoable patch, and only one.
+  if (
+    proposal.targetType === "focus_session" &&
+    proposal.proposalType === "update"
+  ) {
+    return (
+      isNestedEnvelope(proposal.data) &&
+      isUndoableSessionPatch(
+        (proposal.data as { data: Record<string, unknown> }).data
+      )
+    );
   }
   return (
     planProposalRevert({ ...proposal, status: "approved" }).kind !==

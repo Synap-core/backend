@@ -1,9 +1,10 @@
 /**
  * The ONE list / create / run door for playbooks, shared by every agent surface.
  *
- * MCP `synap_list_playbooks` / `synap_create_playbook` / `synap_run_playbook`
- * and Hub REST `GET /playbooks`, `POST /playbooks`, `POST /playbooks/:id/run`
- * all call these. The logic that used to live inline in the MCP handler — name
+ * MCP `synap_list_playbooks` / `synap_create_playbook` / `synap_update_playbook`
+ * / `synap_run_playbook` and Hub REST `GET /playbooks`, `POST /playbooks`,
+ * `POST /playbooks/:id/run` all call these (Hub `PATCH /playbooks/:id` reaches
+ * the same `playbooks.update` through the hub router). The logic that used to live inline in the MCP handler — name
  * resolution on the user floor, the run write-home ladder, the create defaults —
  * exists here once, and each door only renders the outcome in its own shape.
  *
@@ -174,6 +175,59 @@ export async function createPlaybookDoor(
     ...(input.expectedOutputs !== undefined
       ? { expectedOutputs: input.expectedOutputs }
       : {}),
+  });
+  return { kind: "result", result: withReviewUrl(result) };
+}
+
+/**
+ * Edit an EXISTING playbook's definition — the governed `playbooks.update`,
+ * the same procedure Hub REST `PATCH /playbooks/:id` and the browser editor
+ * reach. It loads the row by id, gates on the LOADED row's workspace, runs the
+ * shared definition check (`assertPlaybookDefinitionWritable`) and then
+ * `checkPermissionOrPropose` — `playbook/update` is FLOORED for agents
+ * (governance-policy), so an agent's edit is always a proposal a person
+ * approves. The patch is validated by `updateInputSchema`; absent keys stay
+ * untouched. To amend a still-PENDING playbook proposal instead, revise it
+ * (`synap_revise_proposal`), which runs the same check.
+ */
+export async function updatePlaybookDoor(
+  identity: PlaybookDoorIdentity,
+  input: {
+    playbookId: unknown;
+    /** The PATCH: only the definition keys to change. */
+    patch: Omit<
+      Parameters<ReturnType<typeof playbooksRouter.createCaller>["update"]>[0],
+      "id" | "agentUserId"
+    >;
+  }
+): Promise<
+  PlaybookDoorOutcome<
+    Awaited<
+      ReturnType<ReturnType<typeof playbooksRouter.createCaller>["update"]>
+    >
+  >
+> {
+  if (typeof input.playbookId !== "string" || !input.playbookId.trim()) {
+    return {
+      kind: "invalid",
+      error: "playbookId is required — discover it via synap_list_playbooks",
+    };
+  }
+  const changed = Object.entries(input.patch).filter(
+    ([key, value]) => key !== "reasoning" && value !== undefined
+  );
+  if (changed.length === 0) {
+    return {
+      kind: "invalid",
+      error:
+        "Nothing to change — pass at least one field (name, goalTemplate, params, stages, criteria, …).",
+    };
+  }
+  const caller = await callerFor(identity, null);
+  const result = await caller.update({
+    ...input.patch,
+    id: input.playbookId.trim(),
+    ...(identity.agentUserId ? { agentUserId: identity.agentUserId } : {}),
   });
   return { kind: "result", result: withReviewUrl(result) };
 }

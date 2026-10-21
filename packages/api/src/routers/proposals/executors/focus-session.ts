@@ -50,6 +50,12 @@ import {
   sessionTwinLockKey,
 } from "../../../services/focus-sessions/find-open-session-twin.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
+import { approvedSessionGoal } from "../../../services/focus-sessions/session-update-goal.js";
+import { isUndoableSessionPatch } from "../../../services/focus-sessions/session-undo.js";
+import {
+  readSessionUndoSnapshot,
+  stampSessionUpdate,
+} from "../../../services/proposals/stamp-materialized.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -782,9 +788,11 @@ export function registerFocusSessionExecutors(): void {
         if (typeof innerData.progress === "number") {
           set.progress = innerData.progress;
         }
-        if (typeof innerData.goal === "string") {
-          set.goal = innerData.goal;
-        }
+        // GOAL — written only for a real, still-current change: a payload's
+        // `goal` is never re-applied over a goal the session changed since
+        // the filing (`session-update-goal.ts`). Never reads `sessionName`.
+        const goalChange = approvedSessionGoal(innerData, session.goal);
+        if (goalChange.goal !== undefined) set.goal = goalChange.goal;
         // `null` (or blank) is the CLEAR — same explicit arm as the subject.
         if (innerData.title === null || typeof innerData.title === "string") {
           set.title = storedTitle(innerData.title);
@@ -907,6 +915,7 @@ export function registerFocusSessionExecutors(): void {
           innerData,
           session.userId
         );
+        if (goalChange.refusal) outputRefusals.push(goalChange.refusal);
 
         // CRITERIA. Carried by the proposing doors and, until now, applied by
         // none — an approved criteria change returned success and changed
@@ -954,11 +963,22 @@ export function registerFocusSessionExecutors(): void {
           );
         }
 
+        // UNDO RECORD — only for a patch every change of which undo can
+        // restore (`session-undo.ts`); read right before the write.
+        const undoBefore = isUndoableSessionPatch(innerData)
+          ? await readSessionUndoSnapshot(db, sessionId)
+          : null;
         let [updated] = await db
           .update(focusSessions)
           .set(set)
           .where(eq(focusSessions.id, sessionId))
           .returning();
+        await stampSessionUpdate({
+          proposalId: input.proposalId,
+          sessionId,
+          before: undoBefore,
+          after: updated,
+        });
 
         if (trackFiling && updated) {
           const { stampTrackFilingUses } =

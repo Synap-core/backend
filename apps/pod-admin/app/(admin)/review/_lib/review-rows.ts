@@ -32,6 +32,10 @@ import { isObjectNavView } from "@synap-core/types/navigation";
 import type { Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import { askSlotOf, type AskSlot } from "./ask-detail";
+import {
+  proposalRequester,
+  type ProposalPrincipalView,
+} from "../../../proposal/[id]/proposal-requester";
 
 export type ReviewGroup = "access" | "changes" | "asks";
 
@@ -77,6 +81,10 @@ export interface ProposalFacts {
   appName?: string | null;
   agentName?: string | null;
   authorName?: string | null;
+  /** The roles `proposalRequester` names — see `proposal-requester.ts`. */
+  agentActorName?: string | null;
+  principal?: ProposalPrincipalView | null;
+  actorKind?: string | null;
   workspaceName?: string | null;
   data?: unknown;
 }
@@ -204,7 +212,7 @@ function proposalRow(
   const changes = group === "changes";
   return {
     nounKind: sample?.targetType || "proposal",
-    who: sample?.appName || sample?.agentName || sample?.authorName || null,
+    who: (sample && proposalRequester(sample)) || sample?.agentName || null,
     where: sample?.workspaceName || s.source?.label || null,
     reason: null,
     expiresAt: null,

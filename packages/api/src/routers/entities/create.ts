@@ -51,6 +51,7 @@ import {
   pickUnderlyingKind,
   promoteMultiKindRoleCreate,
   isProfileKindTwinError,
+  expirePendingCreatesOfLandedRecord,
 } from "@synap/database";
 import { reconcileKindWithPlacement } from "./kind-placement.js";
 import { entities, workspaces, links } from "@synap/database/schema";
@@ -63,8 +64,9 @@ import {
 } from "../../utils/permission-check.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { getAgentFocusProjectId } from "../../services/agent-identity-service.js";
-import { initialStatusFloor } from "../../services/lifecycle/initial-status-floor.js";
+import { initialCreateStatusFloor } from "../../services/lifecycle/initial-status-floor.js";
 import { auditLog } from "../../utils/audit-log.js";
+import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { emitSideEffects, getBoss } from "@synap/events";
@@ -215,7 +217,50 @@ export const createProcs = {
       const externalIdSignal = input.externalId?.trim()
         ? [{ type: "external_id", value: input.externalId.trim() }]
         : [];
-      const entityId = input.proposedEntityId ?? randomUUID();
+      // The minted id IS the id the entity lands under (the repository pins it
+      // below), so a `proposedEntityId` handed to an agent resolves once the
+      // proposal is approved. A caller-named id that already names a row:
+      //  - the caller's own live entity ⇒ this create already landed (an
+      //    approval replayed after a later step failed): return it, never a
+      //    second row, never a primary-key crash;
+      //  - any other row (another person's, or a deleted one) ⇒ not ours to
+      //    reuse: mint a fresh id, and say nothing about that row.
+      let entityId = input.proposedEntityId ?? randomUUID();
+      if (input.proposedEntityId) {
+        const database = await getDb();
+        const [taken] = await database
+          .select({ id: entities.id })
+          .from(entities)
+          .where(eq(entities.id, input.proposedEntityId))
+          .limit(1);
+        if (taken) {
+          const [landed] = await database
+            .select()
+            .from(entities)
+            .where(
+              and(
+                eq(entities.id, input.proposedEntityId),
+                isNull(entities.deletedAt),
+                entityWriteVisibleWhere(ctx.userId)
+              )
+            )
+            .limit(1);
+          if (landed) {
+            return {
+              status: "created",
+              message: "Entity already created under this id — returning it",
+              id: landed.id,
+              entity: toApiEntity(landed),
+              // Additive: nothing new was written (same flag the strong
+              // identity merge uses; the approval executor reads an equal id
+              // as its own earlier create, not a merge).
+              deduplicated: true,
+              facets: [],
+            };
+          }
+          entityId = randomUUID();
+        }
+      }
       const correlationId = randomUUID();
       /**
        * The ACTOR — the agent whose work this write is, as distinct from
@@ -1169,18 +1214,45 @@ export const createProcs = {
       // value it is born with is the caller's, else the kind's default.
       const initialLifecycleMove =
         input.agentUserId || (input.source && input.source !== "user")
-          ? await initialStatusFloor({
-              profileId: earlyResolvedProfile?.id,
+          ? await initialCreateStatusFloor({
+              profile: earlyResolvedProfile,
               workspaceId: permWorkspaceId,
-              properties: {
-                ...((earlyResolvedProfile?.defaultValues as Record<
-                  string,
-                  unknown
-                > | null) ?? {}),
-                ...(input.properties ?? {}),
-              },
+              properties: input.properties,
             })
           : undefined;
+
+      // The RECORD this create proposes, named once: the gate stores it (as the
+      // proposal's `data.data`) and, once it lands, the pending agent copies of
+      // the same record are expired against it (below).
+      const gateRecord = {
+        id: entityId,
+        profileSlug,
+        title: input.title,
+        description: input.description,
+        properties: input.properties,
+        documentId: input.documentId,
+        content: input.content,
+        global: input.global,
+        // I3 (resolve-early-and-persist): the RESOLVED placement (may be an
+        // explicit null for pod-scope kinds). The materializer reads this back
+        // verbatim; a present key — including null — beats its legacy
+        // `data.global ? null : workspaceId` derivation.
+        resolvedWorkspaceId: resolvedEntityWorkspaceId,
+        // R2: carry facets on the proposal so approve attaches them (same
+        // shape as create input / composite op.facets). No longer dropped.
+        ...(input.facets?.length
+          ? {
+              facets: input.facets.map((f) => ({
+                profileSlug: f.profileSlug,
+                ...(f.status ? { status: f.status } : {}),
+                ...(f.properties ? { properties: f.properties } : {}),
+                ...(f.contextEntityId
+                  ? { contextEntityId: f.contextEntityId }
+                  : {}),
+              })),
+            }
+          : {}),
+      };
 
       // 2. Permission check (may create proposal with correlationId)
       const perm = await checkPermissionOrPropose({
@@ -1204,35 +1276,7 @@ export const createProcs = {
         // The declared slot this entity fulfils — the claim the approval
         // stamps by, the same label the session artifact records.
         expectedLabel: input.expectedLabel,
-        data: {
-          id: entityId,
-          profileSlug,
-          title: input.title,
-          description: input.description,
-          properties: input.properties,
-          documentId: input.documentId,
-          content: input.content,
-          global: input.global,
-          // I3 (resolve-early-and-persist): the RESOLVED placement (may be an
-          // explicit null for pod-scope kinds). The materializer reads this back
-          // verbatim; a present key — including null — beats its legacy
-          // `data.global ? null : workspaceId` derivation.
-          resolvedWorkspaceId: resolvedEntityWorkspaceId,
-          // R2: carry facets on the proposal so approve attaches them (same
-          // shape as create input / composite op.facets). No longer dropped.
-          ...(input.facets?.length
-            ? {
-                facets: input.facets.map((f) => ({
-                  profileSlug: f.profileSlug,
-                  ...(f.status ? { status: f.status } : {}),
-                  ...(f.properties ? { properties: f.properties } : {}),
-                  ...(f.contextEntityId
-                    ? { contextEntityId: f.contextEntityId }
-                    : {}),
-                })),
-              }
-            : {}),
-        },
+        data: gateRecord,
       });
 
       if ("denied" in perm && perm.denied) {
@@ -1472,6 +1516,9 @@ export const createProcs = {
       try {
         createdEntity = await entityRepo.create(
           {
+            // The minted id (above): what the proposal stored, what the body,
+            // the events and the receipt already name.
+            id: entityId,
             workspaceId: entityWorkspaceId ?? undefined,
             userId: ctx.userId,
             title: input.title || undefined,
@@ -1785,9 +1832,8 @@ export const createProcs = {
       }
 
       // Undo record for an AUTO-APPROVED create: the receipt was minted by the
-      // gate BEFORE this write and its `targetId` is the pre-minted
-      // `entityId`, which the row above does NOT carry — so the created id is
-      // only knowable here. Stamped LAST, after every write this handler makes
+      // gate BEFORE this write (its `targetId` is the pre-minted `entityId`,
+      // which the row now carries too). Stamped LAST, after every write this handler makes
       // to the new entity (facets, project filing), so none of them reads as an
       // edit made after the create. Only `entityIds`, mirroring the approval
       // executor (`executors/entity.ts`): the entity is what undo retires.
@@ -1797,6 +1843,33 @@ export const createProcs = {
         door: "entities.create",
         database,
       });
+
+      // The record LANDED, by whichever door reached here (a direct write, a
+      // capture graph, an approval replay): the agent's pending copies of the
+      // SAME record can only fail the same-name gate now, and each still counts
+      // toward its pending cap. Expire them (never scored). The copy carrying
+      // this record's minted id (the proposal being approved right now) is never
+      // matched. Best-effort: the entity already landed.
+      try {
+        const expired = await expirePendingCreatesOfLandedRecord(
+          {
+            record: gateRecord,
+            entityId: createdEntity.id,
+            ownerUserId: ctx.userId,
+            landedByProposalId:
+              ("granted" in perm ? perm.autoApprovedProposalId : undefined) ??
+              ctx.governanceProposalId ??
+              null,
+          },
+          database
+        );
+        if (expired.length) markProposalNotificationsActioned(expired);
+      } catch (err) {
+        logger.warn(
+          { err, entityId: createdEntity.id },
+          "[entities.create] pending copies of the landed record were not expired"
+        );
+      }
 
       return {
         status: "created",
