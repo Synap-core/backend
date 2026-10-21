@@ -144,7 +144,10 @@ import {
   documentVersions,
   focusSessions,
   proposals,
+  skills,
 } from "@synap/database/schema";
+import { resolveSkillContent } from "../../capability-briefs/load-skill.js";
+import { librarySkillSlug } from "../../skills/skill-authoring.js";
 import {
   IMPORT_STAGED_MARKER,
   type ImportGroup,
@@ -224,14 +227,20 @@ async function sessionRow(id: string) {
 
 beforeAll(async () => {
   await h.client!.exec(
-    pgliteSchemaDdl([focusSessions, documents, documentVersions, proposals])
+    pgliteSchemaDdl([
+      focusSessions,
+      documents,
+      documentVersions,
+      proposals,
+      skills,
+    ])
   );
 });
 beforeEach(async () => {
   h.objects.clear();
   h.urlReads.length = 0;
   await h.client!.exec(
-    `delete from document_versions; delete from documents; delete from focus_sessions; delete from proposals;`
+    `delete from document_versions; delete from documents; delete from focus_sessions; delete from proposals; delete from skills;`
   );
 });
 
@@ -781,6 +790,8 @@ describe("build", () => {
     expect(bundle.plan?.skills?.[0]).toMatchObject({
       ref: "tool",
       name: "Bread technique",
+      // B9f: the ref synap_load_skill resolves — it used to be absent.
+      slug: `library/${sessionId}/baking`,
     });
     expect(bundle.plan?.skills?.[0]!.body).toMatch(/your group note/);
     // No space ⇒ no automation (it needs one); the rule rides the Tool.
@@ -817,6 +828,63 @@ describe("build", () => {
     });
     expect(again).toMatchObject({ status: "refused", reason: "already_built" });
     expect(submitted).toHaveLength(1);
+  });
+
+  it("B9f: a slug an undone Build left behind is skipped, never collided with", async () => {
+    const { sessionId, outcome } = await openAndStage([
+      { kind: "url", url: "https://example.com/sourdough" },
+    ]);
+    await storeRead(outcome.staged[0]!.itemId, "Feed the starter daily.");
+    await curateImport({
+      userId: USER,
+      sessionId,
+      ops: [
+        {
+          op: "createGroup",
+          name: "Baking",
+          itemIds: [outcome.staged[0]!.itemId],
+        },
+        {
+          op: "setGroupOutputs",
+          groupKey: "baking",
+          outputs: ["things", "tool"],
+        },
+      ],
+    });
+    // An earlier Build's skill, undone: inactive, slug kept (safe-revert).
+    await q(
+      `insert into skills (id, user_id, name, kind, scope, slug, body, status, approved)
+       values (gen_random_uuid(), $1, 'Old helper', 'instruction', 'user', $2, 'old', 'inactive', true)`,
+      [USER, `library/${sessionId}/baking`]
+    );
+    const submitted: SubmitCaptureGraphInput[] = [];
+    await buildImportGroup({
+      userId: USER,
+      sessionId,
+      groupKey: "baking",
+      deps: deps(submitted),
+    });
+    expect(submitted[0]!.plan?.skills?.[0]?.slug).toBe(
+      `library/${sessionId}/baking-2`
+    );
+  });
+
+  it("B9f: synap_load_skill resolves a Library skill by its derived slug", async () => {
+    const sessionId = "3f2a9c1e-0b7d-4e21-9a55-6c0d1e2f3a4b";
+    const slug = librarySkillSlug(sessionId, "baking");
+    expect(slug).toBe(`library/${sessionId}/baking`);
+    // Stored the way the plan's create_skill step stores it (rule-loop-callers
+    // → insertSkillGoverned: kind instruction, the op's scope and slug).
+    await q(
+      `insert into skills (id, user_id, name, kind, scope, slug, body, status, approved)
+       values (gen_random_uuid(), $1, 'Bread technique', 'instruction', 'user', $2, 'Use a long cold proof.', 'active', true)`,
+      [USER, slug]
+    );
+    await expect(resolveSkillContent(slug, USER)).resolves.toBe(
+      "Use a long cold proof."
+    );
+    // …and the catalog an agent browses advertises it under that ref.
+    await expect(resolveSkillContent("catalog", USER)).resolves.toContain(slug);
   });
 
   it("reads the file attached to a needs_file item", async () => {
