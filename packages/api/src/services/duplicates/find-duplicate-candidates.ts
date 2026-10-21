@@ -40,6 +40,7 @@ import {
   desc,
   eq,
   inArray,
+  entities,
   proposals,
   ProposalStatus,
   ProfileRepository,
@@ -48,6 +49,7 @@ import {
   normalizeIdentitySignal,
   normalizeProjectName,
   resolveIdentity,
+  sampleEntityWhere,
   type db as Database,
   type IdentitySignal,
 } from "@synap/database";
@@ -143,6 +145,17 @@ function entityCreate(
 }
 
 /**
+ * The caller's pending queue as the door read it. `truncated`: the queue is
+ * longer than the scan ({@link PENDING_SCAN_LIMIT} newest rows), so "no
+ * pending twin" was not checked against all of it — the answer is then never
+ * `clear` (FB1020 review S11).
+ */
+export interface PendingQueue {
+  creates: PendingCreate[];
+  truncated: boolean;
+}
+
+/**
  * The caller's OWN pending creates — the ONE pending scan of the duplicate
  * door. OWNER FLOOR, unchanged from the scan it replaces (`authoredByUser`,
  * the ONE "this proposal is mine" predicate): rows the person authored, or
@@ -153,7 +166,7 @@ function entityCreate(
 export async function loadOwnPendingCreates(
   database: Db,
   userId: string
-): Promise<PendingCreate[]> {
+): Promise<PendingQueue> {
   const rows = await database
     .select({
       id: proposals.id,
@@ -223,10 +236,14 @@ export async function loadOwnPendingCreates(
       });
     }
   }
-  return creates;
+  return { creates, truncated: rows.length >= PENDING_SCAN_LIMIT };
 }
 
-/** Fold candidates into the persisted answer: capped, honest about clipping. */
+/**
+ * Fold candidates into the persisted answer: capped, honest about clipping.
+ * `failed` — a leg failed OR could not look at everything (a truncated
+ * pending scan): with no candidate that is `unchecked`, never `clear`.
+ */
 export function toDuplicateCheck(
   subject: DuplicateSubjectType,
   candidates: DuplicateCandidate[],
@@ -279,7 +296,7 @@ export type DuplicateQuery =
       /** Capture graphs: the op this check is about (stamped on its candidates). */
       forRef?: string;
       /** Preloaded pending queue (a capture checks many items against one read). */
-      pending?: PendingCreate[];
+      pending?: PendingQueue;
     }
   | {
       subject: "playbook";
@@ -287,13 +304,13 @@ export type DuplicateQuery =
       name: string;
       /** A playbook's name is unique per space: only that space's queue counts. */
       workspaceId: string | null;
-      pending?: PendingCreate[];
+      pending?: PendingQueue;
     }
   | {
       subject: "project";
       userId: string;
       name: string;
-      pending?: PendingCreate[];
+      pending?: PendingQueue;
     }
   | { subject: "kind"; userId: string; slug: string };
 
@@ -307,9 +324,13 @@ export interface DuplicateAnswer {
 
 async function pendingLeg(
   database: Db,
-  query: { userId: string; pending?: PendingCreate[] }
+  query: { userId: string; pending?: PendingQueue },
+  onTruncated: () => void
 ): Promise<PendingCreate[]> {
-  return query.pending ?? loadOwnPendingCreates(database, query.userId);
+  const queue =
+    query.pending ?? (await loadOwnPendingCreates(database, query.userId));
+  if (queue.truncated) onTruncated();
+  return queue.creates;
 }
 
 /**
@@ -331,6 +352,10 @@ export async function findDuplicateCandidates(
       "duplicate door leg failed"
     );
   };
+  // A pending queue longer than the scan was not fully looked at.
+  const truncatedPending = () => {
+    failed = true;
+  };
 
   if (query.subject === "entity") {
     const kinds = new Set(
@@ -351,9 +376,58 @@ export async function findDuplicateCandidates(
         kindSlug: query.profileSlug,
         name: query.title ?? null,
         signals: query.signals,
-        userScope: query.recordScope,
+        // Same kind only, IN the query (FB1020 review S1): the weak path
+        // orders oldest-first and limits BEFORE any kind filter, so five older
+        // same-name rows of other kinds crowded a newer same-kind twin out and
+        // the answer read `clear`.
+        userScope:
+          query.recordScope && kinds.size > 0
+            ? and(query.recordScope, inArray(entities.type, [...kinds]))
+            : query.recordScope,
         limit: DUPLICATE_CHECK_MAX_CANDIDATES,
       });
+      // Never merge onto DEMO data silently (founder default 1): a strong
+      // match on a sample-only record the caller can see is a `possible`
+      // twin, marked as sample, for a person to decide. The read is floored
+      // by `recordScope`, so an invisible record is never named here (the
+      // entity door then creates beside it, as before).
+      if (identity.match === "strong" && identity.entity && query.recordScope) {
+        const strong = identity.entity;
+        let demo: boolean | "unknown";
+        try {
+          const [row] = await database
+            .select({ id: entities.id })
+            .from(entities)
+            .where(
+              and(
+                eq(entities.id, strong.id),
+                query.recordScope,
+                sampleEntityWhere()
+              )
+            )
+            .limit(1);
+          demo = Boolean(row);
+        } catch (err) {
+          fail("sample", err);
+          demo = "unknown";
+        }
+        if (demo === true) {
+          candidates.push({
+            ref: "record",
+            id: strong.id,
+            kind: strong.type,
+            title: strong.title ?? null,
+            why: "same_identity",
+            sample: true,
+            ...tag,
+          });
+        }
+        // Unknown ⇒ no merge either (a failed read is `unchecked`, never a
+        // guess that the record is real).
+        if (demo !== false) {
+          identity = { match: null, candidates: [], crossKindCandidates: [] };
+        }
+      }
       if (identity.match !== "strong") {
         const sameKind = identity.candidates.filter(
           (c) => c.type === query.profileSlug
@@ -377,13 +451,36 @@ export async function findDuplicateCandidates(
     } catch (err) {
       fail("records", err);
     }
+    // Mark the record candidates that are demo data (founder default 1): "use
+    // existing" on one would put real work on a row every list hides.
+    const unmarked = candidates.filter((c) => c.ref === "record" && !c.sample);
+    if (unmarked.length > 0) {
+      try {
+        const sampleRows = await database
+          .select({ id: entities.id })
+          .from(entities)
+          .where(
+            and(
+              inArray(
+                entities.id,
+                unmarked.map((c) => c.id)
+              ),
+              sampleEntityWhere()
+            )
+          );
+        const sampleIds = new Set(sampleRows.map((r) => r.id));
+        for (const c of unmarked) if (sampleIds.has(c.id)) c.sample = true;
+      } catch (err) {
+        fail("sample", err);
+      }
+    }
     // A strong match is the entity door's to merge (or, when the caller cannot
     // see it, to create beside without leaking it): nothing pending to add.
     if (identity?.match !== "strong") {
       try {
         const wantedName = nameKey(query.title);
         const wantedSignals = signalKeysOf(query.signals);
-        for (const p of await pendingLeg(database, query)) {
+        for (const p of await pendingLeg(database, query, truncatedPending)) {
           if (p.subject !== "entity" || !kinds.has(p.kind)) continue;
           const sameIdentity = [...p.signalKeys].some((k) =>
             wantedSignals.has(k)
@@ -433,7 +530,7 @@ export async function findDuplicateCandidates(
     }
     try {
       const wanted = normalizeProjectName(query.name);
-      for (const p of await pendingLeg(database, query)) {
+      for (const p of await pendingLeg(database, query, truncatedPending)) {
         if (p.subject !== "project" || !wanted || p.nameKey !== wanted)
           continue;
         candidates.push({
@@ -460,7 +557,7 @@ export async function findDuplicateCandidates(
     // proposal (AGENT_STRUCTURE_WRITE), so that is where its twins pile up.
     try {
       const wanted = nameKey(query.name);
-      for (const p of await pendingLeg(database, query)) {
+      for (const p of await pendingLeg(database, query, truncatedPending)) {
         if (p.subject !== "playbook" || !wanted || p.nameKey !== wanted)
           continue;
         if ((p.workspaceId ?? null) !== (query.workspaceId ?? null)) continue;
@@ -525,7 +622,7 @@ export async function findPendingIdentityMatches(
   const wanted = signalKeysOf(signals);
   if (wanted.size === 0) return [];
   const matches: PendingIdentityMatch[] = [];
-  for (const p of await loadOwnPendingCreates(database, userId)) {
+  for (const p of (await loadOwnPendingCreates(database, userId)).creates) {
     if (p.subject !== "entity") continue;
     const hit = [...p.signalKeys].filter((k) => wanted.has(k));
     if (hit.length === 0) continue;

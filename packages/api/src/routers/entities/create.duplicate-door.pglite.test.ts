@@ -73,6 +73,11 @@ const AGENT = randomUUID();
 const ADA = randomUUID();
 const RETRY = randomUUID();
 const PENDING = randomUUID();
+const ACME_CO = randomUUID();
+const DANA = randomUUID();
+const SAM = randomUUID();
+const RHEA = randomUUID();
+const DEMO_PROJECT = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -134,6 +139,59 @@ beforeAll(async () => {
     `insert into entities (id, user_id, agent_user_id, type, profile_id, title, properties, workspace_id)
      values ($1,$2,$3,'person',$4,'Bo Retry','{"city":"Paris"}'::jsonb,null)`,
     [RETRY, USER, AGENT, personId]
+  );
+  // S1: five OLDER same-name rows of another kind, then the same-kind twin.
+  const kinds = await q(
+    `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints)
+     values (gen_random_uuid(),'note','Note','kind','system','pod',null,true,'{}'::jsonb),
+            (gen_random_uuid(),'company','Company','kind','system','pod',null,true,'{}'::jsonb)
+     returning id, slug`
+  );
+  const kindId = (slug: string) =>
+    (kinds.rows as Array<{ id: string; slug: string }>).find(
+      (r) => r.slug === slug
+    )!.id;
+  for (let i = 0; i < 5; i++) {
+    await q(
+      `insert into entities (id, user_id, type, profile_id, title, properties, workspace_id, created_at)
+       values (gen_random_uuid(),$1,'note',$2,'Acme','{}'::jsonb,null, now() - interval '3 days')`,
+      [USER, kindId("note")]
+    );
+  }
+  await q(
+    `insert into entities (id, user_id, type, profile_id, title, properties, workspace_id, created_at)
+     values ($1,$2,'company',$3,'Acme','{}'::jsonb,null, now() - interval '1 hour')`,
+    [ACME_CO, USER, kindId("company")]
+  );
+  // Founder default 1: DEMO records (only in a sample project), one with a
+  // strong identity atom, one by name; and a REAL record with an atom.
+  await q(
+    `insert into projects (id, user_id, name, status, sample) values ($1,$2,'Demo','active',true)`,
+    [DEMO_PROJECT, USER]
+  );
+  for (const [id, title] of [
+    [DANA, "Dana Demo"],
+    [SAM, "Sam Sample"],
+    [RHEA, "Rhea Real"],
+  ] as const) {
+    await q(
+      `insert into entities (id, user_id, type, profile_id, title, properties, workspace_id, created_at)
+       values ($1,$2,'person',$3,$4,'{}'::jsonb,null, now() - interval '1 day')`,
+      [id, USER, personId, title]
+    );
+  }
+  for (const id of [DANA, SAM]) {
+    await q(
+      `insert into relations (id, user_id, source_entity_id, target_entity_id, type)
+       values (gen_random_uuid(),$1,$2,$3,'belongs_to_project')`,
+      [USER, id, DEMO_PROJECT]
+    );
+  }
+  await q(
+    `insert into entity_identity_signals (id, entity_id, signal_type, signal_value, source)
+     values (gen_random_uuid(),$1,'email','dana@demo.test','seed'),
+            (gen_random_uuid(),$2,'email','rhea@real.test','seed')`,
+    [DANA, RHEA]
   );
   // A create the agent filed earlier, still waiting for review.
   await q(
@@ -292,6 +350,58 @@ describe("entities.create: the one duplicate door", () => {
     const args = gateArgs();
     expect(args.duplicateCheck?.status).toBe("possible");
     expect(args.possibleDuplicate).toBe(false);
+  });
+
+  it("older same-name rows of OTHER kinds never crowd out the same-kind twin (S1)", async () => {
+    await create({
+      profileSlug: "company",
+      title: "Acme",
+      agentUserId: AGENT,
+      source: "ai",
+    });
+    const args = gateArgs();
+    expect(args.possibleDuplicate).toBe(true);
+    expect(args.duplicateCheck?.candidates).toEqual([
+      expect.objectContaining({ ref: "record", id: ACME_CO, why: "same_name" }),
+    ]);
+  });
+
+  it("a strong match on DEMO data is never merged: a possible twin, marked sample (default 1)", async () => {
+    const res = await create({
+      title: "D. Demo",
+      properties: { email: "dana@demo.test" },
+      agentUserId: AGENT,
+      source: "ai",
+    });
+    const args = gateArgs();
+    expect(args.possibleDuplicate).toBe(true);
+    expect(args.duplicateCheck?.candidates).toEqual([
+      expect.objectContaining({
+        ref: "record",
+        id: DANA,
+        why: "same_identity",
+        sample: true,
+      }),
+    ]);
+    expect(res.deduplicated).toBeUndefined();
+    expect(res.id).not.toBe(DANA);
+  });
+
+  it("a same-name twin that is DEMO data carries the sample mark (default 1)", async () => {
+    await create({ title: "Sam Sample", agentUserId: AGENT, source: "ai" });
+    expect(gateArgs().duplicateCheck?.candidates).toEqual([
+      expect.objectContaining({ id: SAM, why: "same_name", sample: true }),
+    ]);
+  });
+
+  it("CONTROL — a strong match on a REAL record still merges", async () => {
+    const res = await create({
+      title: "R. Real",
+      properties: { email: "rhea@real.test" },
+      source: "user",
+    });
+    expect(res.deduplicated).toBe(true);
+    expect(res.id).toBe(RHEA);
   });
 
   it("the same agent re-filing the name with OTHER content is floored", async () => {

@@ -90,7 +90,7 @@ import {
   findDuplicateCandidates,
   loadOwnPendingCreates,
   mergeDuplicateChecks,
-  type PendingCreate,
+  type PendingQueue,
 } from "../duplicates/find-duplicate-candidates.js";
 import { openLink } from "../../utils/deep-links.js";
 import { captureGraphMemberProposes } from "./capture-graph-governance.js";
@@ -1223,7 +1223,7 @@ export async function submitCaptureGraph(
       : isNull(entities.workspaceId);
     // One read of the caller's pending queue for the whole graph. A failed
     // read is left to the door, which then reports `unchecked` per item.
-    let pending: PendingCreate[] | undefined;
+    let pending: PendingQueue | undefined;
     try {
       pending = await loadOwnPendingCreates(db, userId);
     } catch (err) {

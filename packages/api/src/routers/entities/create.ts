@@ -586,7 +586,9 @@ export const createProcs = {
           ),
           // A replay's own proposal is still pending while it runs; its
           // pending siblings are expired once it lands. Records only.
-          ...(approvalDuplicate ? { pending: [] } : {}),
+          ...(approvalDuplicate
+            ? { pending: { creates: [], truncated: false } }
+            : {}),
         });
         duplicateCheck = answer.check;
         // A failed record lookup reads as "nothing matched" here — it is

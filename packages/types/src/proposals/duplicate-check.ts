@@ -21,8 +21,10 @@ export const DUPLICATE_CHECK_MAX_CANDIDATES = 5;
 /**
  * - `clear`     — the door looked and found nothing.
  * - `possible`  — at least one candidate; the write is filed for review.
- * - `unchecked` — the lookup FAILED. Never folded into `clear`: an empty
- *                 result and a failed read are different facts.
+ * - `unchecked` — the lookup FAILED, or could not look at everything (the
+ *                 caller's pending queue is longer than the scan). Never
+ *                 folded into `clear`: an empty result and a failed or
+ *                 partial read are different facts.
  */
 export type DuplicateCheckStatus = "clear" | "possible" | "unchecked";
 
@@ -53,6 +55,14 @@ export interface DuplicateCandidate {
   forRef?: string;
   /** Capture graphs only: that proposed item's title. */
   forTitle?: string;
+  /**
+   * The candidate record is DEMO data (it sits only in sample projects).
+   * Founder default 1 (FB1020): a strong identity match on demo data is never
+   * merged silently — it is listed here, marked, for a person to decide; a
+   * renderer shows a "Sample" mark so "use existing" never puts real work on
+   * a row every list hides.
+   */
+  sample?: true;
 }
 
 export interface DuplicateCheck {
@@ -102,6 +112,7 @@ function readCandidate(value: unknown): DuplicateCandidate | null {
     why: row.why as DuplicateMatchReason,
     ...(typeof row.forRef === "string" ? { forRef: row.forRef } : {}),
     ...(typeof row.forTitle === "string" ? { forTitle: row.forTitle } : {}),
+    ...(row.sample === true ? { sample: true as const } : {}),
   };
 }
 
