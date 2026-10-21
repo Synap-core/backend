@@ -128,6 +128,8 @@ describe("Hub PATCH — server-owned session metadata is never the caller's", ()
         governance: { forceProposeWrites: false },
         clientKey: "key:someone-else",
         automationChainContext: { depth: 0 },
+        // B8: an agent resetting this would make a run continue itself forever.
+        runTurns: { runId: "r", stops: 0, autoContinues: 0, turns: [] },
       },
     });
     expect(

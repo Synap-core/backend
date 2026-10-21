@@ -126,8 +126,9 @@ describe("tripwire: a playbook_runs terminal writer settles the parent automatio
     for (const known of [
       // The capture write moved out of the Hub route into the ONE applier it
       // now shares with the external-agent status poll (2026-10-08).
+      // complete-run's own write moved into it too (B8, 2026-10-21:
+      // `services/runs/run-turn-end.ts` settles a turn's end through it).
       "api/src/services/runs/apply-run-capture.ts",
-      "api/src/routers/hub-protocol/rest/focus-sessions.ts",
       "api/src/routers/proposals/executors/playbook.ts",
       "api/src/services/focus-sessions/follow-playbook.ts",
       "api/src/services/focus-sessions/complete-session.ts",

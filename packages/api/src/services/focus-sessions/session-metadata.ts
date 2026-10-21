@@ -18,6 +18,13 @@ export const PROVIDE_CONNECT_META_KEY = "provideConnect";
 export const PROVIDE_GRANTS_META_KEY = "provideGrants";
 
 /**
+ * A playbook run's turn ledger (`services/runs/run-turn-end.ts`): how each IS
+ * turn ended, and the automatic-continuation count. Server-owned: an agent that
+ * could reset the count could make a run continue itself forever.
+ */
+export const RUN_TURNS_META_KEY = "runTurns";
+
+/**
  * The `focus_sessions.metadata` keys ONLY the server writes, because the
  * server decides on them: an intent that answers an ask by itself, the reads
  * revoked at close, the propose-only governance of a playbook run, the client
@@ -31,6 +38,7 @@ export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   "governance",
   "clientKey",
   "automationChainContext",
+  RUN_TURNS_META_KEY,
 ] as const;
 
 /** A client/agent metadata bag with every server-owned key dropped. Pure. */

@@ -153,7 +153,10 @@ import { createHubProtocolCallerContext } from "../utils.js";
 import { revertSession } from "../../../services/focus-sessions/revert-session.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { canUserSeeChannel } from "../../../utils/channel-visibility.js";
-import { settleParentAutomationRunFromChild } from "@synap/jobs";
+import {
+  completeRunBodySchema,
+  settleRunTurnEnd,
+} from "../../../services/runs/run-turn-end.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -3249,9 +3252,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   /**
    * POST /focus-sessions/:sessionId/complete-run
    *
-   * Fire-and-forget provenance: when an IS agent finishes working on a
-   * session-scoped channel, it calls this to close any running playbook_run
-   * for that session. Best-effort — if there's no running run, that's fine.
+   * The IS ends a turn on a session-scoped channel: settle the session's LIVE
+   * playbook_run from how the turn ended (`run-turn-end.ts`, B8 2026-10-21).
+   * No body / `outcome: 'completed'` → the run completes (the old behaviour).
+   * `outcome: 'stopped'` + `reason: 'turn_budget'` → the run stays LIVE: it
+   * continues on its own up to N times, then the person is asked. Best-effort
+   * on "no run": a session that is not a playbook run is a normal 200.
    */
   app.post("/focus-sessions/:sessionId/complete-run", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -3261,6 +3267,28 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const sessionId = c.req.param("sessionId");
     if (!isUuid(sessionId)) {
       return c.json({ error: `Focus session ${sessionId} not found` }, 404);
+    }
+
+    // An empty body is an IS that predates the report: `completed`.
+    const rawText = await c.req.text().catch(() => "");
+    let raw: unknown = {};
+    if (rawText.trim()) {
+      try {
+        raw = JSON.parse(rawText);
+      } catch {
+        return c.json({ error: "Body is not valid JSON" }, 400);
+      }
+    }
+    const parsed = completeRunBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        {
+          error: `Invalid complete-run body: ${parsed.error.issues
+            .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
+            .join("; ")}`,
+        },
+        400
+      );
     }
 
     try {
@@ -3294,15 +3322,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         return c.json({ status: "no-running-run" as const });
       }
 
-      // Mark as completed.
-      await db
-        .update(playbookRuns)
-        .set({ status: "completed", completedAt: new Date() })
-        .where(eq(playbookRuns.id, run.id));
-      // The parent automation run settles from its children (never throws).
-      await settleParentAutomationRunFromChild({ playbookRunId: run.id });
-
-      return c.json({ status: "completed" as const });
+      const status = await settleRunTurnEnd({
+        run,
+        session: {
+          id: session.id,
+          userId: session.userId,
+          channelId: session.channelId ?? null,
+        },
+        body: parsed.data,
+        askingAgentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+      });
+      return c.json({ status });
     } catch (err) {
       logger.error({ err, sessionId }, "focus-sessions.complete-run failed");
       return c.json(
