@@ -125,7 +125,10 @@ import {
   actorDisplayName,
   findFlowNode,
 } from "./proposals/display.js";
-import { loadMachineNames } from "../services/machine-roster.js";
+import {
+  loadKeyComputerNames,
+  loadMachineNames,
+} from "../services/machine-roster.js";
 import {
   rosterReadFor,
   sessionReadableWhere,
@@ -822,6 +825,8 @@ export const proposalsRouter = router({
           targetId: proposals.targetId,
           data: proposals.data,
           agentUserId: proposals.agentUserId,
+          // The key that filed it names the computer (B7) — "on MacBook".
+          apiKeyId: proposals.apiKeyId,
           sessionId: proposals.sessionId,
           stepRunId: proposals.stepRunId,
           workspaceId: proposals.workspaceId,
@@ -868,7 +873,16 @@ export const proposalsRouter = router({
           rows.map((r) => r.agentUserId).filter((x): x is string => Boolean(x))
         ),
       ];
-      const agentLabelById = new Map<string, string | undefined>();
+      // Labelled per (agent, key): one agent user serves every computer it is
+      // connected from, and the filing key names which one (B7).
+      const agentRowById = new Map<
+        string,
+        Parameters<typeof actorDisplayName>[0]
+      >();
+      let agentHostNames: Parameters<typeof actorDisplayName>[1] = new Map();
+      const keyComputers = await loadKeyComputerNames(
+        rows.map((r) => r.apiKeyId)
+      );
       if (agentIds.length > 0) {
         const urows = await db
           .select({
@@ -886,9 +900,23 @@ export const proposalsRouter = router({
             .map((u) => u.hostUserId)
             .filter((id): id is string => typeof id === "string")
         );
-        for (const u of urows)
-          agentLabelById.set(u.id, actorDisplayName(u, hostNames));
+        for (const u of urows) agentRowById.set(u.id, u);
+        agentHostNames = hostNames;
       }
+      const agentLabelOf = (r: {
+        agentUserId: string | null;
+        apiKeyId: string | null;
+      }): string | null => {
+        const u = r.agentUserId ? agentRowById.get(r.agentUserId) : undefined;
+        if (!u) return null;
+        return (
+          actorDisplayName(
+            u,
+            agentHostNames,
+            r.apiKeyId ? keyComputers.get(r.apiKeyId) : undefined
+          ) ?? null
+        );
+      };
 
       // A cluster's label is read off `data` — withhold session content the
       // viewer may not read (decision D1) before it is fingerprinted/labelled.
@@ -904,9 +932,7 @@ export const proposalsRouter = router({
         data: r.data,
         createdAt: r.createdAt,
         workspaceId: r.workspaceId ?? null,
-        agentLabel: r.agentUserId
-          ? (agentLabelById.get(r.agentUserId) ?? null)
-          : null,
+        agentLabel: agentLabelOf(r),
         agentUserId: r.agentUserId ?? null,
         sessionId: r.sessionId ?? null,
         automationId: r.stepRunId
@@ -1217,10 +1243,16 @@ export const proposalsRouter = router({
         const hostNames = await loadMachineNames(
           u?.hostUserId ? [u.hostUserId] : []
         );
+        // The filing key names the computer (B7): "Claude Code on MacBook".
+        const keyComputer = proposal.apiKeyId
+          ? (await loadKeyComputerNames([proposal.apiKeyId])).get(
+              proposal.apiKeyId
+            )
+          : undefined;
         targets.push({
           kind: "agent",
           id: proposal.agentUserId,
-          label: (u && actorDisplayName(u, hostNames)) || "Agent",
+          label: (u && actorDisplayName(u, hostNames, keyComputer)) || "Agent",
         });
       }
 

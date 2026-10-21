@@ -56,7 +56,6 @@ import {
   agents,
   governanceRules,
   apps,
-  apiKeys,
 } from "@synap/database/schema";
 import { visibleAgentsWhere } from "../hub-protocol/rest/link-endpoint-visibility.js";
 import {
@@ -133,7 +132,10 @@ import {
   type ProposalSessionBefore,
 } from "./session-before.js";
 import { guestProvenanceFor } from "../../services/forms/guest-provenance.js";
-import { loadMachineNames } from "../../services/machine-roster.js";
+import {
+  loadKeyComputerNames,
+  loadMachineNames,
+} from "../../services/machine-roster.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 import {
   createNameResolvers,
@@ -1413,17 +1415,10 @@ export async function enrichProposalsForDisplay(
             )
         : Promise.resolve([] as Array<{ publicId: string; name: string }>),
       loadMachineNames(hostUserIds),
-      apiKeyIds.length > 0
-        ? db
-            .select({ id: apiKeys.id, label: apiKeys.instanceLabel })
-            .from(apiKeys)
-            .where(inArray(apiKeys.id, apiKeyIds))
-        : Promise.resolve([] as Array<{ id: string; label: string | null }>),
+      loadKeyComputerNames(apiKeyIds),
     ]
   );
-  const keyComputerById = new Map(
-    keyRows.map((row) => [row.id, row.label ?? null])
-  );
+  const keyComputerById = keyRows;
   for (const row of ownerRows) userById.set(row.id, row);
   const appNameByPublicId = new Map(
     appRows.map((row) => [row.publicId, row.name])
