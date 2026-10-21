@@ -75,7 +75,46 @@
               "is_internal"
             ]
           },
-          "workspaceId": { "type": ["string", "null"], "format": "uuid" }
+          "workspaceId": { "type": ["string", "null"], "format": "uuid" },
+          "access": {
+            "type": ["object", "null"],
+            "properties": {
+              "isFullAccess": { "type": "boolean" },
+              "summary": { "type": "string" },
+              "scopes": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "permissions": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    },
+                    "workspaceIds": {
+                      "type": ["array", "null"],
+                      "items": { "type": "string" }
+                    },
+                    "projectIds": {
+                      "type": ["array", "null"],
+                      "items": { "type": "string" }
+                    },
+                    "entityIds": {
+                      "type": ["array", "null"],
+                      "items": { "type": "string" }
+                    }
+                  },
+                  "required": [
+                    "permissions",
+                    "workspaceIds",
+                    "projectIds",
+                    "entityIds"
+                  ]
+                }
+              },
+              "clientId": { "type": ["string", "null"] }
+            },
+            "required": ["isFullAccess", "summary", "scopes", "clientId"]
+          }
         },
         "required": [
           "keyId",
@@ -91,7 +130,8 @@
           "parentKeyId",
           "isActive",
           "keyType",
-          "workspaceId"
+          "workspaceId",
+          "access"
         ]
       },
       "HubError": {
@@ -5095,7 +5135,7 @@
       "get": {
         "tags": ["Auth"],
         "summary": "Introspect the calling bearer credential",
-        "description": "Returns metadata about the API key that authenticated this request — id, owning user, scopes, expiry, last-used-at. Used by Eve CLI and external operators to verify their credential without making privileged calls. Returns 401 if no valid bearer was supplied.",
+        "description": "Returns metadata about the API key that authenticated this request — id, owning user, scopes, expiry, last-used-at, and `access` (the key's grant: full access or what limits it). Used by Eve CLI and external operators to verify their credential without making privileged calls. Returns 401 if no valid bearer was supplied.",
         "security": [{ "bearerAuth": [] }],
         "responses": {
           "200": {
@@ -9309,6 +9349,16 @@
           },
           {
             "schema": {
+              "type": "string",
+              "description": "Only these proposals: uuids, comma-separated and/or repeated, at most 100. A filter on the same visibility floor and key grant as the rest of the list — an id the caller cannot see is omitted. Combine with `status=all` to resolve ids whatever their status, and a `limit` at least the batch size."
+            },
+            "required": false,
+            "description": "Only these proposals: uuids, comma-separated and/or repeated, at most 100. A filter on the same visibility floor and key grant as the rest of the list — an id the caller cannot see is omitted. Combine with `status=all` to resolve ids whatever their status, and a `limit` at least the batch size.",
+            "name": "proposalIds",
+            "in": "query"
+          },
+          {
+            "schema": {
               "type": "integer",
               "minimum": 1,
               "maximum": 200,
@@ -9372,7 +9422,7 @@
             }
           },
           "400": {
-            "description": "Malformed sessionId/workspaceId, or unknown status / view",
+            "description": "Malformed sessionId/workspaceId/proposalIds, or unknown status / view",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
