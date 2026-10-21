@@ -1278,6 +1278,33 @@ export const tools = {
         },
       },
       {
+        name: "synap_delete_entity",
+        annotations: {
+          title: "Delete entity",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Propose deleting an entity. For you, this is ALWAYS a proposal the person reviews — 'proposed' is success, never retry it. Nothing is removed until they approve; then the entity is hidden (soft delete), its body document is kept, and they can undo it. Use it to clean up what you created by mistake or what the person asked you to remove. To remove only a role, use synap_detach_facet; to change an entity, synap_update_entity.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityId: {
+              type: "string",
+              description:
+                "UUID of the entity to delete (from synap_ask, synap_find or synap_get_entity).",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why it should go, in the person's words — shown to the human who reviews it. One line.",
+            },
+          },
+          required: ["entityId"],
+        },
+      },
+      {
         name: "synap_create_document",
         annotations: {
           title: "Create document",
