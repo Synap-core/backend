@@ -163,7 +163,6 @@ import type {
   UpdateEntityInput,
   StoreMemoryInput,
   SendToChannelInput,
-  CaptureProposal,
   CaptureStructureInput,
   CaptureStructureResponse,
   CaptureExecuteInput,
