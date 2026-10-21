@@ -242,6 +242,7 @@ describe("an AGENT key rejects only what its agent authored", () => {
       targetType: "entity",
       targetId: null,
       sessionId: null,
+      projectId: null,
     }) as const;
   async function review(
     agent: string | undefined,
@@ -311,6 +312,7 @@ describe("a key bounded to some spaces decides only there (D3, PR #29 M1)", () =
       targetType: "entity",
       targetId: null,
       sessionId: null,
+      projectId: null,
     }) as const;
   async function review(
     workspaceId: string,

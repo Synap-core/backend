@@ -1060,6 +1060,46 @@ describe("M1 — undo is fenced by the proposal's own space", () => {
   });
 });
 
+describe("M1 — a PROJECT-bounded key rejects in its project, not outside it (re-review)", () => {
+  it("through the real reject door: in-project passes the key check; another project is refused", async () => {
+    const PROJECT = randomUUID();
+    const OTHER = randomUUID();
+    const inProject = randomUUID();
+    const elsewhere = randomUUID();
+    for (const [id, project] of [
+      [inProject, PROJECT],
+      [elsewhere, OTHER],
+    ] as const) {
+      await q(
+        `insert into proposals (id, target_type, target_id, proposal_type, workspace_id, project_id, status, data, created_by, agent_user_id)
+         values ($1,'probe','probe-target','noop',$2,$3,'pending','{}'::jsonb,$4,null)`,
+        [id, SALES, project, OWNER]
+      );
+    }
+    const projectKey: KeyGrant = {
+      scopes: [{ permissions: ["proposal.reject"], projectIds: [PROJECT] }],
+      clientId: null,
+    };
+    const caller = proposalsRouter.createCaller({
+      authenticated: true,
+      userId: OWNER,
+      req: undefined,
+      workspaceId: null,
+    } as never);
+    const rejectAs = (proposalId: string) =>
+      runWithGrant(projectKey, () =>
+        caller.reject({ proposalId, reason: "not now" })
+      ).then(
+        () => null,
+        (e: unknown) => (e as Error).message
+      );
+    expect((await rejectAs(inProject)) ?? "").not.toMatch(
+      /may not reject changes here/
+    );
+    expect(await rejectAs(elsewhere)).toMatch(/may not reject changes here/);
+  });
+});
+
 describe("M2 — approving the app's OWN AI's proposals: visible, and switchable by the owner", () => {
   it("off: refused for the app's AI's proposal, still allowed for anyone else's", async () => {
     const t = await signIn(OWNER);

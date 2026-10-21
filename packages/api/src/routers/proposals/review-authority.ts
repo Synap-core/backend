@@ -750,7 +750,12 @@ export async function assertCanRetargetProposalDestination(args: {
  * agent's proposal — the common case — is admitted by the agent-owner rung.
  */
 export async function assertCanReviewProposal(args: {
-  proposal: ReviewedProposal;
+  /**
+   * `projectId` REQUIRED here: this core fences the key by the proposal's
+   * project (D3), and an omitted project read as "none" — refusing every
+   * project-bounded key on every proposal that has one (PR #29 re-review).
+   */
+  proposal: ReviewedProposal & { projectId: string | null };
   userId: string;
   action: "reject" | "reopen";
   /** `rosterReadFor(ctx)` — see `computeCanReviewApproval`. */
