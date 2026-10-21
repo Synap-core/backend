@@ -138,10 +138,12 @@ function classifyReport(report) {
   };
 }
 
+// ANSI colour codes (ESC [ … m), built without a control character literal.
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
 function firstLine(s) {
-  // eslint-disable-next-line no-control-regex
   return String(s)
-    .replace(/\x1b\[[0-9;]*m/g, "")
+    .replace(ANSI, "")
     .replaceAll(`${REPO_ROOT}/`, "")
     .split("\n")[0]
     .slice(0, 160);
