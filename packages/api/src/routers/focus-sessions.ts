@@ -134,6 +134,7 @@ import {
   type SessionEdges,
 } from "../services/focus-sessions/session-blocked-by.js";
 import { recordSessionSpawn } from "@synap/database";
+import { recordSessionEdited } from "../services/focus-sessions/session-edited-event.js";
 import {
   attachSessionOutputDependencies,
   type SessionOutputDependencies,
@@ -2210,6 +2211,24 @@ export const focusSessionsRouter = router({
         .set(set)
         .where(eq(focusSessions.id, input.id))
         .returning();
+
+      // The spine record of this edit — the signal "touched by a person
+      // since" reads (`isOwnFreshWork`, FB1020 B3). Without it a person
+      // re-filing, renaming or re-scoping the session in the app left no
+      // trace, and the agent could re-file it on its own within 24 h (w2
+      // review M8). Attributed to the acting agent when an agent key made
+      // the call, so an agent's edit never reads as the person's.
+      if (updated) {
+        await recordSessionEdited({
+          sessionId: updated.id,
+          userId: ctx.userId,
+          agentUserId: ctx.agentUserId ?? null,
+          workspaceId: updated.workspaceId ?? null,
+          fields: Object.keys(patch).filter(
+            (k) => (patch as Record<string, unknown>)[k] !== undefined
+          ),
+        });
+      }
 
       if (trackFiling && updated) {
         await trackFilingModule.stampTrackFilingUses({

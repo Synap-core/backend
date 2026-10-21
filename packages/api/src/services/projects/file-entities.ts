@@ -49,6 +49,7 @@ import {
   unlinkEntitiesFromProject,
 } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { auditLog } from "../../utils/audit-log.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
@@ -198,6 +199,12 @@ export async function applyProjectFiling(params: {
   projectId: string;
   entityIds: readonly string[];
   remove: boolean;
+  /**
+   * WHO filed: the agent (and the proposal it went through) when an agent's
+   * filing is applied — directly, or on a person's approval. Absent = the
+   * owner filed it themselves. Recorded on each record's spine event.
+   */
+  actor?: { agentUserId?: string | null; proposalId?: string | null };
 }): Promise<ProjectFilingApplied> {
   const database = await getDb();
   const plan = await loadProjectFilingPlan(database, {
@@ -212,6 +219,11 @@ export async function applyProjectFiling(params: {
       entityIds: ids,
       projectId: plan.project.id,
     });
+    // Which records lost their edge is not returned; an un-file that removed
+    // nothing changed nothing and records nothing.
+    if (removedIds.length > 0) {
+      await recordFilingOnRecords(params, plan, ids, "unfiled");
+    }
     return {
       status: "unfiled",
       projectId: plan.project.id,
@@ -219,7 +231,7 @@ export async function applyProjectFiling(params: {
     };
   }
 
-  return database.transaction(async (tx) => {
+  const applied = await database.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     // Already-filed records are skipped explicitly: the partial unique index
     // dedupes on a real pod, but the receipt must say "already there" rather
@@ -264,6 +276,46 @@ export async function applyProjectFiling(params: {
       filedRelationIds,
     };
   });
+  if (applied.filed.length > 0) {
+    await recordFilingOnRecords(params, plan, applied.filed, "filed");
+  }
+  return applied;
+}
+
+/**
+ * The spine record of a filing, ON EACH RECORD it changed —
+ * `entity.update.completed` with `projectFiling`. "Untouched by a person
+ * since" (`isOwnFreshWork`, the FB1020 B3 proof) reads a record's
+ * `entity.%.completed` events that carry no agent; a filing wrote only the
+ * edge, so a person un-filing the agent's record was invisible and the agent
+ * could file it straight back on its own (w2 review M8). Attributed to the
+ * agent when it is the agent's filing (direct or approved), so it never reads
+ * as a person's. Log only (no automation fan-out); best-effort like every
+ * `auditLog` append. After the write, never inside its transaction.
+ */
+async function recordFilingOnRecords(
+  params: {
+    ownerUserId: string;
+    actor?: { agentUserId?: string | null; proposalId?: string | null };
+  },
+  plan: ProjectFilingPlan,
+  entityIds: readonly string[],
+  change: "filed" | "unfiled"
+): Promise<void> {
+  const byId = new Map(plan.entities.map((e) => [e.id, e]));
+  for (const id of entityIds) {
+    await auditLog({
+      subjectType: "entity",
+      action: "update",
+      phase: "completed",
+      subjectId: id,
+      userId: params.ownerUserId,
+      agentUserId: params.actor?.agentUserId ?? null,
+      proposalId: params.actor?.proposalId ?? null,
+      workspaceId: byId.get(id)?.workspaceId ?? null,
+      data: { projectFiling: { projectId: plan.project.id, change } },
+    });
+  }
 }
 
 export type FileEntitiesResult =
@@ -353,6 +405,11 @@ export async function fileEntitiesGoverned(params: {
     projectId: plan.project.id,
     entityIds: plan.entities.map((e) => e.id),
     remove,
+    actor: {
+      agentUserId: params.agentUserId ?? null,
+      proposalId:
+        "granted" in perm ? (perm.autoApprovedProposalId ?? null) : null,
+    },
   });
   // An auto-approved filing's receipt records the edges it wrote, so its Undo
   // removes exactly those (`planProposalRevert`). No receipt ⇒ nothing to stamp.

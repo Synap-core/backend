@@ -27,6 +27,12 @@
  * person deleted meanwhile does not come back. The review still sees the
  * list as it would land (`withAgentOutputsLanding`).
  *
+ * M8 — "untouched by a person since" (`isOwnFreshWork`) sees a person's
+ * real edits through the doors a person uses: the app's session edit (tRPC
+ * `focusSessions.update`) and a record's un-filing (`fileEntitiesGoverned`).
+ * Their events are written by the REAL `auditLog` → `EventRepository` into
+ * PGlite (the repository's `sql.unsafe` is routed onto PGlite).
+ *
  * Stubbed, and why:
  *  - `getAgentFocusProjectId` reads the agent's declared focus from a value
  *    the test sets. PGlite runs ONE connection, and the real read runs on the
@@ -85,11 +91,25 @@ vi.mock("@synap/database", async (importOriginal) => {
     {},
     { get: () => async () => ({ id: globalThis.crypto.randomUUID() }) }
   );
+  await h.init();
+  // `auditLog` appends through a fresh `EventRepository(sql)`, which speaks
+  // `sql.unsafe(text, params)` (postgres.js). Routed onto PGlite so the REAL
+  // log writer lands its rows in `events`, where `isOwnFreshWork` reads them.
+  const sql = Object.assign(
+    () => {
+      throw new Error("tagged sql is not available in this suite");
+    },
+    {
+      unsafe: async (text: string, params: unknown[] = []) =>
+        (await h.client!.query(text, params)).rows,
+    }
+  );
   return {
     ...actual,
     db: await h.init(),
     getDb: async () => h.init(),
     eventRepository,
+    sql,
   };
 });
 vi.mock("../../agent-identity-service.js", async (importOriginal) => ({
@@ -125,6 +145,9 @@ import { updateFocusSession } from "../update-session.js";
 import { registerFocusSessionExecutors } from "../../../routers/proposals/executors/focus-session.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
 import { withAgentOutputsLanding } from "../../../routers/proposals/session-before.js";
+import { focusSessionsRouter } from "../../../routers/focus-sessions.js";
+import { fileEntitiesGoverned } from "../../projects/file-entities.js";
+import { ownWorkOrganiseForFiling } from "../../governance/own-organise.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -256,7 +279,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    "delete from focus_sessions; delete from projects; delete from proposals; delete from governance_rules;"
+    "delete from focus_sessions; delete from projects; delete from proposals; delete from governance_rules; delete from events; delete from entities; delete from relations;"
   );
   await h.client!.exec(migration("0282_governance_reversible_default.sql"));
   await h.client!.exec(migration("0346b_governance_own_organise_default.sql"));
@@ -536,5 +559,104 @@ describe("M5: an agent's outputs proposal is applied against the row as it is at
     await approveRow(row, sessionId);
 
     expect((await outputsOf(sessionId)).map((o) => o.key)).toEqual(["a", "b"]);
+  });
+});
+
+describe("M8: a person's edit through their own doors counts as 'touched by a person'", () => {
+  const personCaller = () =>
+    focusSessionsRouter.createCaller({
+      db: h.db,
+      authenticated: true,
+      userId: USER,
+      workspaceId: null,
+    } as never);
+
+  it("the person renames the agent's session in the app: the agent's own filing now proposes", async () => {
+    const projectId = await seedProject();
+    h.focus = projectId;
+    const sessionId = await seedOwnFreshSession();
+
+    await personCaller().update({ id: sessionId, title: "My session now" });
+
+    const res = await runWithCallingKey(KEY, () =>
+      updateFocusSession({
+        sessionId,
+        userId: USER,
+        agentUserId: AGENT,
+        projectId,
+      })
+    );
+    expect(res.status).toBe("proposed");
+    expect((await sessionRow(sessionId)).project_id).toBeNull();
+  });
+
+  it("CONTROL: untouched, the same filing applies on its receipt", async () => {
+    const projectId = await seedProject();
+    h.focus = projectId;
+    const sessionId = await seedOwnFreshSession();
+
+    const res = await runWithCallingKey(KEY, () =>
+      updateFocusSession({
+        sessionId,
+        userId: USER,
+        agentUserId: AGENT,
+        projectId,
+      })
+    );
+    expect(res.status).toBe("updated");
+    expect((await sessionRow(sessionId)).project_id).toBe(projectId);
+  });
+
+  /** A record THIS agent made through THIS key, filed into `projectId`. */
+  async function seedOwnFiledRecord(projectId: string): Promise<string> {
+    const entityId = randomUUID();
+    const receipt = randomUUID();
+    await q(
+      `insert into entities (id, user_id, workspace_id, type, title, created_at, updated_at)
+       values ($1, $2, null, 'note', 'Agent note', now(), now())`,
+      [entityId, USER]
+    );
+    await q(
+      `insert into proposals (id, status, target_type, target_id, proposal_type, data, subject_user_id, agent_user_id, api_key_id)
+       values ($1, 'auto_approved', 'entity', $2, 'create', '{}'::jsonb, $3, $4, $5)`,
+      [receipt, entityId, USER, AGENT, KEY]
+    );
+    await q(
+      `insert into events (id, type, subject_id, subject_type, user_id, agent_user_id, is_agent, proposal_id, source, data, timestamp)
+       values ($1, 'entity.create.completed', $2, 'entity', $3, $4, true, $5, 'intelligence', '{}'::jsonb, now())`,
+      [randomUUID(), entityId, USER, AGENT, receipt]
+    );
+    await q(
+      `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type, created_at, updated_at)
+       values ($1, $2, null, $3, $4, 'belongs_to_project', now(), now())`,
+      [randomUUID(), USER, entityId, projectId]
+    );
+    return entityId;
+  }
+  const proof = (projectId: string, entityId: string) =>
+    runWithCallingKey(KEY, () =>
+      ownWorkOrganiseForFiling({
+        agentUserId: AGENT,
+        projectId,
+        entityIds: [entityId],
+      })
+    );
+
+  it("the person un-files the agent's record: it is no longer the agent's to re-file on its own", async () => {
+    const projectId = await seedProject();
+    h.focus = projectId;
+    const entityId = await seedOwnFiledRecord(projectId);
+    // CONTROL inside the case: before the person acts, the proof holds.
+    expect(await proof(projectId, entityId)).toBe(true);
+
+    const res = await fileEntitiesGoverned({
+      userId: USER,
+      projectId,
+      entityIds: [entityId],
+      remove: true,
+    });
+    expect(res.status).toBe("unfiled");
+
+    expect(await proof(projectId, entityId)).toBe(false);
   });
 });

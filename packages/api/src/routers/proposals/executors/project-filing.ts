@@ -65,6 +65,12 @@ export async function approveProjectFiling(
     projectId,
     entityIds,
     remove,
+    // The filing is the proposer's (an agent's, when one filed it): the
+    // records' spine events say so, never "the person filed it" (M8).
+    actor: {
+      agentUserId: proposal.agentUserId ?? null,
+      proposalId: input.proposalId,
+    },
   });
 
   const approved = {
