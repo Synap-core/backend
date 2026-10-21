@@ -53,6 +53,7 @@ import {
   storedVersionValues,
   uploadDocumentVersionSnapshot,
   projectMembers,
+  listableEntityWhere,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
@@ -1353,6 +1354,15 @@ export const viewsRouter = router({
               projectWide ? undefined : null,
               true
             )
+      );
+      // THE listing rule (probe + demo rows). A project lens — the view's pin
+      // or the caller's — is the demo toggle: a demo project's view shows it.
+      conditions.push(
+        listableEntityWhere({
+          projectLens: [pinnedProjectId, input.projectId].filter(
+            (p): p is string => !!p
+          ),
+        })
       );
 
       // LIVE SET — a List built from a Library group names its container

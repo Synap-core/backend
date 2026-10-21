@@ -18,6 +18,7 @@ import {
   drizzleSql,
   resolveSlugKind,
   loadFacetSlugsBatch,
+  listableEntityWhere,
   type FacetVisibilityScope,
 } from "@synap/database";
 import { searchService } from "@synap/search";
@@ -268,6 +269,12 @@ export async function hybridRecall(
             ownerColumn: entities.userId,
             userId,
             facetLens: true,
+          }),
+          // THE listing rule, once for BOTH halves: no probe rows, no demo
+          // (sample-project) rows — unless a project lens is set (the lens is
+          // the demo toggle; `projectIds` is that lens, already resolved).
+          listableEntityWhere({
+            projectLens: projectIds ? [...projectIds] : undefined,
           })
         )
       );

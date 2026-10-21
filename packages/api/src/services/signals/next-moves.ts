@@ -47,6 +47,7 @@ import {
   focusSessions,
   profileSlugScopeCondition,
   projectTracks,
+  listableEntityWhere,
 } from "@synap/database";
 import { userPreferences } from "@synap/database/schema";
 import {
@@ -251,6 +252,9 @@ export async function readNextMovePicks(
         .where(
           and(
             lensed.predicate(entities),
+            // THE listing rule (probe + demo rows); the project lens on the
+            // access context is the demo toggle.
+            listableEntityWhere({ projectLens: ctx.access.projectLens }),
             isTask,
             isNull(entities.deletedAt),
             or(

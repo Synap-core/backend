@@ -33,6 +33,7 @@ import {
   entities,
   userResourceState,
   ownerPrivateVisibleWhere,
+  listableEntityWhere,
 } from "@synap/database";
 
 export interface EntityUsageRow {
@@ -91,6 +92,9 @@ function entityFloor(params: EntityUsageParams) {
   return and(
     isNull(entities.deletedAt),
     ownerPrivateVisibleWhere(entities.workspaceId, entities.userId, userId),
+    // THE listing rule: orient / discover counts leave probe and demo
+    // (sample-project) rows out, silently (FB1020 B5 b).
+    listableEntityWhere(),
     lens,
     ...(profileIds ? [inArray(entities.profileId, [...profileIds])] : [])
   );

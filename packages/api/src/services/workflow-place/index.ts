@@ -42,6 +42,7 @@ import {
   links,
   events,
   entities,
+  listableEntityWhere,
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import {
@@ -375,7 +376,10 @@ async function loadResults(
           ownerColumn: entities.userId,
           userId,
           facetLens: true,
-        })
+        }),
+        // THE listing rule: a demo session's outputs are not this workflow's
+        // results (probe + demo rows left out).
+        listableEntityWhere()
       )
     );
   const byId = new Map(rows.map((r) => [r.id, r]));

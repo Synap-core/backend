@@ -23,6 +23,7 @@ import {
   inArray,
   desc,
   drizzleSql,
+  listableEntityWhere,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { storage } from "@synap/storage";
@@ -207,7 +208,9 @@ export function registerProjectsRoutes(app: HubHono): void {
         ownerColumn: entities.userId,
         userId,
       }),
-      projectLensWhere(entities.id, projectId)
+      projectLensWhere(entities.id, projectId),
+      // THE listing rule (probe rows); the project lens keeps demo rows.
+      listableEntityWhere({ projectLens: projectId })
     );
 
     const [countRows, byWorkspaceRows, recentRows] = await Promise.all([

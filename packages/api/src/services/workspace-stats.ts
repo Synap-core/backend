@@ -37,6 +37,7 @@ import {
   inArray,
   isNull,
   workspaces,
+  listableEntityWhere,
 } from "@synap/database";
 import { max, sql as drizzleSql } from "drizzle-orm";
 import { type AccessContext, scopedDb } from "../access/index.js";
@@ -73,7 +74,10 @@ export async function readWorkspaceEntityStats(
       and(
         inArray(entities.workspaceId, [...workspaceIds]),
         isNull(entities.deletedAt),
-        scopedDb(access).predicate(entities)
+        scopedDb(access).predicate(entities),
+        // THE listing rule: a space's count leaves probe and demo rows out,
+        // silently (FB1020 B5 b); a project lens on `access` keeps demo rows.
+        listableEntityWhere({ projectLens: access.projectLens })
       )
     )
     .groupBy(entities.workspaceId);

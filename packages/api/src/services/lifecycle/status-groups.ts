@@ -25,7 +25,7 @@ import {
   notInArray,
   drizzleSql,
   facetVisibilityConditions,
-  notProbeEntityWhere,
+  listableEntityWhere,
   profileSlugRows,
 } from "@synap/database";
 import { entities, entityFacets, events } from "@synap/database/schema";
@@ -80,6 +80,8 @@ export async function roleVisibilityConditions(input: {
   return [
     ...facetVisibilityConditions(facetVisibilityScope),
     entityReadVisibleWhere(input.userId),
+    // THE listing rule (probe + demo rows); the project lens is the toggle.
+    listableEntityWhere({ projectLens: input.projectId }),
     ...(input.projectId
       ? [projectLensWhere(entities.id, input.projectId)]
       : []),
@@ -101,7 +103,8 @@ export function kindVisibilityConditions(input: {
   projectId?: string;
   podScopeKind: boolean;
 }): SQL[] {
-  const conds: SQL[] = [notProbeEntityWhere() as SQL];
+  // THE listing rule (probe + demo rows); the project lens is the toggle.
+  const conds: SQL[] = [listableEntityWhere({ projectLens: input.projectId })];
   if (input.projectId) {
     conds.push(
       input.explicitWorkspace && input.lensWorkspaceId
