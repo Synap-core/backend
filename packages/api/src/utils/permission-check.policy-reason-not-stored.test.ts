@@ -93,7 +93,7 @@ vi.mock("../lib/event-helpers.js", () => ({
 import { checkPermissionOrPropose } from "./permission-check.js";
 
 const POLICY =
-  "An agent is creating a workspace, cell, playbook or automation (or switching one on), which changes what the pod does; a person must approve it, and no governance rule can widen it.";
+  "An agent wants to create or switch on a workspace, cell, playbook or automation, which changes what your pod does, so you approve it, and no rule can skip that.";
 
 const agentWrite = (reasoning?: string) => ({
   userId: "user-abc",
