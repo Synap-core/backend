@@ -70,6 +70,7 @@ import {
   type DeferredWrite,
 } from "@synap-core/types/proposals/deferred-writes";
 import type { RequestShapedProposalData } from "@synap-core/types";
+import type { DuplicateCheck } from "@synap-core/types/proposals";
 import type { ExpectedOutput } from "@synap/playbooks";
 import {
   normalizeObjectKind,
@@ -1038,6 +1039,20 @@ export interface PermissionCheckBaseOpts {
    */
   ownWorkOrganise?: boolean;
   /**
+   * The duplicate door (`findDuplicateCandidates`) found a possible twin of
+   * this create (same kind, same name or strong identity, as a record or a
+   * pending proposal). An AI write is then proposed with the
+   * `POSSIBLE_DUPLICATE` reason (rung 2.1) and the reviewer decides; a
+   * person's write is never forced. Pair it with `data.duplicateCheck`.
+   */
+  possibleDuplicate?: boolean;
+  /**
+   * The duplicate door's answer for this create, stored at the TOP LEVEL of the
+   * proposal's `data` (pending row AND auto-approve receipt) so the review card
+   * can show "looks like X". Read back with `readDuplicateCheck`.
+   */
+  duplicateCheck?: DuplicateCheck;
+  /**
    * The write MOVES a lifecycle status (work model W14) — set ONLY by the
    * `moveStatus` door and the create/attach doors for an initial status. Feeds
    * rungs 2.075 (human-only option) / 2.85 (into done/lost: propose by default)
@@ -1181,6 +1196,8 @@ interface AnonymousPolicyFacts {
   forcePropose: boolean;
   /** rung 2.1 (criteria) — an AI write that changes a session's criteria. */
   criteriaChange: boolean;
+  /** rung 2.1 (duplicate) — an AI create the duplicate door found a possible twin of. */
+  possibleDuplicate: boolean;
   /** rungs 2.075/2.85/2.86 — a lifecycle move, classified by the moveStatus door. */
   lifecycleMove: { intoTerminal: boolean; humanOnly: boolean } | undefined;
   /** rung 2.07 — 4d's pod-admin schema-change floor, resolved on the human principal. */
@@ -1230,6 +1247,7 @@ type ExhaustiveAgentPolicyInput = AgentPolicyInput &
  *                            write acts for — not on an agent row.
  *   2.1  forcePropose      — FIRES (previously hand-mirrored here).
  *   2.1  criteriaChange    — FIRES (an AI write changing a session's criteria).
+ *   2.1  possibleDuplicate — FIRES (an AI create with a possible twin).
  *   2.5  DESTRUCTIVE       — FIRES (previously hand-mirrored here).
  *   2.55 UNTRUSTED ORIGIN  — FIRES. **THIS IS THE FIX.** This path never
  *                            resolved an acting channel at all, so a write from
@@ -1284,6 +1302,7 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     subjectUoValidated: facts.subjectUoValidated,
     forcePropose: facts.forcePropose,
     criteriaChange: facts.criteriaChange,
+    possibleDuplicate: facts.possibleDuplicate,
     lifecycleMove: facts.lifecycleMove,
     podAdminSchemaChange: facts.podAdminSchemaChange,
     governanceRuleVerdict: facts.governanceRuleVerdict,
@@ -1546,6 +1565,7 @@ async function evaluatePermission(
               subjectType,
               action,
               data,
+              duplicateCheck: opts.duplicateCheck,
               // The caller's reasoning only — the role line is the POD's
               // sentence, so it answers the caller and the notification
               // (`policyReason`), never the row's WHY.
@@ -1620,6 +1640,7 @@ async function evaluatePermission(
               subjectType,
               action,
               data,
+              duplicateCheck: opts.duplicateCheck,
               // As the agent branch above: the role line is policy, not the
               // proposer's WHY.
               reasoning: opts.reasoning,
@@ -1660,6 +1681,7 @@ async function evaluatePermission(
         subjectType,
         action,
         data,
+        duplicateCheck: opts.duplicateCheck,
         reasoning: opts.reasoning,
       });
     }
@@ -1801,6 +1823,11 @@ async function evaluatePermission(
     // all three axes.
     const isAgentCriteriaChange =
       isAiWrite && isFocusSessionCriteriaUpdate(subjectType, action, data);
+    // A create the duplicate door found a possible twin of (B2c): an AI write
+    // is filed anyway, as a proposal, and the reviewer decides. A person's own
+    // create is never forced (B2e) — `isAiWrite` keeps the human path out.
+    const isAgentPossibleDuplicate =
+      isAiWrite && opts.possibleDuplicate === true;
 
     const effectiveForcePropose =
       opts.forcePropose === true || isLooseningSettingsChange
@@ -1901,6 +1928,7 @@ async function evaluatePermission(
         subjectUoValidated,
         forcePropose: effectiveForcePropose,
         criteriaChange: isAgentCriteriaChange,
+        possibleDuplicate: isAgentPossibleDuplicate,
         lifecycleMove: opts.lifecycleMove,
         // B3: a session that forces every write keeps forcing (effective
         // forcePropose above wins at 2.1); the proof only reaches the store.
@@ -2060,6 +2088,7 @@ async function evaluatePermission(
           subjectType,
           action,
           data,
+          duplicateCheck: opts.duplicateCheck,
           // The caller's reasoning only. gov.reason is the POLICY's sentence (why
           // a person must approve) — never the proposer's why; it rides beside
           // it as `policyReason` (undefined for the plain default-propose case).
@@ -2169,6 +2198,11 @@ async function evaluatePermission(
                   : {}),
                 ...(sessionSlotClaimKey
                   ? { expectedKey: sessionSlotClaimKey }
+                  : {}),
+                // The duplicate door's answer (B2): a clear check on a landed
+                // write still says it was checked.
+                ...(opts.duplicateCheck
+                  ? { duplicateCheck: opts.duplicateCheck }
                   : {}),
                 ...(correlationId ? { correlationId } : {}),
                 ...(requestedEventId ? { requestedEventId } : {}),
@@ -2371,6 +2405,7 @@ async function evaluatePermission(
           subjectUoValidated,
           forcePropose: effectiveForcePropose,
           criteriaChange: isAgentCriteriaChange,
+          possibleDuplicate: isAgentPossibleDuplicate,
           lifecycleMove: opts.lifecycleMove,
           podAdminSchemaChange,
           governanceRuleVerdict: ruleMatch?.verdict,
@@ -2542,6 +2577,7 @@ async function evaluatePermission(
         subjectType,
         action,
         data,
+        duplicateCheck: opts.duplicateCheck,
         // The caller's reasoning; the engine's per-rung sentence + its
         // structured reasonCode ride beside it — parity with the agent path.
         // Both are undefined for the plain default-propose case.
@@ -3822,6 +3858,8 @@ async function createProposal(args: {
   nodeId?: string | null;
   /** See `SessionSource` (@synap/database). Carried beside the envelope, which has no such slot. */
   sessionSource?: "explicit" | "derived";
+  /** The duplicate door's answer (B2) — top level, beside the envelope, like `expectedLabel`. */
+  duplicateCheck?: DuplicateCheck;
   // Returns PermissionResult — the proposed envelope on success, OR a denial
   // when the agent's daily proposal budget is exhausted (the F2 safety floor).
 }): Promise<PermissionResult> {
@@ -3840,6 +3878,7 @@ async function createProposal(args: {
     stepRunId,
     nodeId,
     sessionSource,
+    duplicateCheck,
   } = args;
   // Identity off the boundary-minted AccessContext; provenance off the frozen
   // per-request slice. Same values as the old loose params — now single-sourced.
@@ -4129,6 +4168,8 @@ async function createProposal(args: {
     // — `readProposalExpectedLabel` is the ONE reader.
     ...(expectedLabel ? { expectedLabel } : {}),
     ...(expectedKey ? { expectedKey } : {}),
+    // The duplicate door's answer (B2) — `readDuplicateCheck` is the one reader.
+    ...(duplicateCheck ? { duplicateCheck } : {}),
   };
 
   // G1 PEEK-BEFORE-EVENT: for an agent-authored write that exactly matches an

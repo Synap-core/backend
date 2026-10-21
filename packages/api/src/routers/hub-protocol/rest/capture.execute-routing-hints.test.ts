@@ -179,7 +179,7 @@ describe("POST /capture/execute — a domain REFUSAL is not a 500", () => {
     executeMock.mockRejectedValue(
       Object.assign(
         new Error(
-          "A company with this name already exists: Acme (abc). Reuse an existing id (enrich / attach facet), or pass forceCreate: true if this is genuinely a different subject."
+          "A company with this name already exists: Acme (abc). Choose how to resolve it: keep both, use the existing one, or fill its empty fields."
         ),
         { code: "CONFLICT" }
       )
@@ -192,7 +192,7 @@ describe("POST /capture/execute — a domain REFUSAL is not a 500", () => {
       }),
     });
     expect(res.status).toBe(409);
-    expect((await res.json()).error).toContain("forceCreate");
+    expect((await res.json()).error).toContain("already exists: Acme");
   });
 
   it("an unknown failure still answers 500", async () => {

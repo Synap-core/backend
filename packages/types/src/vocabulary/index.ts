@@ -2281,6 +2281,7 @@ export const GOVERNANCE_RUNG_LABELS: Readonly<Record<GovernanceRung, string>> =
     "force-propose": "A change of scope or identity",
     "project-filing": "Filing into a project",
     "criteria-change": "Changing its own criteria",
+    "possible-duplicate": "Looks like an existing one",
     "pod-admin-schema-change": "A pod-wide schema change",
     "agent-schema-definition": "Defining a new kind",
     "agent-structure-write": "Changing how the pod works",

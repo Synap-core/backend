@@ -31,6 +31,12 @@ export interface CreateEventBackedProposalInput {
    *  materialization this stamps `entity --belongs_to_project--> project`. */
   projectId?: string | null;
   expiresAt?: Date | null;
+  /**
+   * Structured governance reason (a `PROPOSE_REASON` key) when the producer
+   * itself knows why the write waits — e.g. the capture door's
+   * `POSSIBLE_DUPLICATE` (B2). Pending rows only.
+   */
+  governanceReason?: string | null;
 }
 
 /**
@@ -122,6 +128,9 @@ export async function createEventBackedProposal(
     sessionSource: input.sessionSource,
     projectId: input.projectId ?? null,
     expiresAt: input.expiresAt,
+    ...(input.governanceReason
+      ? { governanceReason: input.governanceReason }
+      : {}),
     notificationDescription: input.summary,
   });
 

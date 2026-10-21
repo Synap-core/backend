@@ -7,9 +7,9 @@ import {
 } from "@synap/database";
 import { ownerPrivateVisibleWhere } from "./user-visible-where.js";
 import {
-  findPendingSignalMatches,
-  type PendingSignalMatch,
-} from "./pending-capture-dedup.js";
+  findPendingIdentityMatches,
+  type PendingIdentityMatch,
+} from "../services/duplicates/find-duplicate-candidates.js";
 
 type IdentityResolution = Awaited<ReturnType<typeof resolveIdentity>>;
 
@@ -64,7 +64,7 @@ export async function buildIdentityResolveResponse(
    * revise, not file a second copy. Owner-floored; present only when signals
    * were supplied and something collided.
    */
-  pendingCandidates?: PendingSignalMatch[];
+  pendingCandidates?: PendingIdentityMatch[];
 }> {
   let strongVisible = true;
   if (resolution.match === "strong" && resolution.entity) {
@@ -101,10 +101,8 @@ export async function buildIdentityResolveResponse(
     // committed match wasn't the whole story. Additive: never alters `match`.
     ...(signals && signals.length > 0
       ? await (async () => {
-          const pending = await findPendingSignalMatches(db, {
-            userId,
-            signals,
-          });
+          // The duplicate door's own pending leg (one owner-floored scan).
+          const pending = await findPendingIdentityMatches(db, userId, signals);
           return pending.length > 0 ? { pendingCandidates: pending } : {};
         })()
       : {}),

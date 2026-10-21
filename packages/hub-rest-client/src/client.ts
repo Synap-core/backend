@@ -749,9 +749,9 @@ export class HubRestClient {
 
   /**
    * Create a project. Governed: an agent key may get `proposed` (with
-   * `reviewUrl`), or `deduped` when an exact-name project already exists. A
-   * near-duplicate (409) comes back as `near_duplicate` with its
-   * `dedupCandidates`, not as a throw. Agent keys must pass `evidenceEntityIds`.
+   * `reviewUrl`, and `duplicateCheck` when a similar project or the same one
+   * still waiting for review is why), or `deduped` when an exact-name project
+   * already exists. Agent keys must pass `evidenceEntityIds`.
    * The pod reads the acting user from the key, so no userId is sent. Placement
    * is a write decision: the client default workspace is NOT stamped, and an
    * omitted workspace means pod-wide.
@@ -760,20 +760,6 @@ export class HubRestClient {
     input: CreateProjectInput
   ): Promise<HubCreateProjectResult> {
     const res = await this.requestRaw("POST", "/api/hub/projects", input);
-    if (res.status === 409) {
-      const body = (await res.json().catch(() => ({}))) as {
-        error?: string;
-        dedupCandidates?: Array<Record<string, unknown>>;
-      };
-      if (Array.isArray(body.dedupCandidates)) {
-        return {
-          status: "near_duplicate",
-          error: body.error ?? "A similar project already exists",
-          dedupCandidates: body.dedupCandidates,
-        };
-      }
-      throw new HubApiError(body.error ?? "Conflict", 409, body);
-    }
     if (!res.ok) throw await this.toHubError(res);
     return this.parseBody<HubCreateProjectResult>(res);
   }

@@ -1070,7 +1070,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a SINGLE typed entity — no relations parameter exists here. Use when you already know the exact profileSlug + fields: the structured, deterministic sibling of synap_capture (which parses free text). Discover slugs with synap_list_profiles; synap_ask first to avoid duplicates. Same-profile same-name creates are REJECTED with candidates (reuse the existing id, enrich, or attach a facet) unless forceCreate=true. Placeholder person/company titles (e.g. 'Not publicly disclosed', 'unknown') are rejected. To create an entity TOGETHER WITH its edge to another entity in one reviewable unit, use synap_capture instead, passing both `entities` and `relations` — synap_link_entities cannot target an entity this call just proposed (its id isn't live until approved). A `decision` with `decisionStatus:'proposed'` ASKS the person automatically: pass `decisionOptions` (≤8 of {label, value?, description?}) + `recommendedOption`, and `sourceSessionId` to keep the question in your session; their answer updates it. Never create a decision for an answered confirm/choose — the pod already filed it (`slot.decisionId`).",
+          "Create a SINGLE typed entity — no relations parameter exists here. Use when you already know the exact profileSlug + fields: the structured, deterministic sibling of synap_capture (which parses free text). Discover slugs with synap_list_profiles; synap_ask first to avoid duplicates. A same-kind record, or one of your own pending proposals, with the same name or identity does not block: the create is filed as a proposal and the person decides (keep both, use the existing one, fill its empty fields), so reuse the existing id when it is the same thing, and say in `reasoning` why a twin is separate. Placeholder person/company titles (e.g. 'Not publicly disclosed', 'unknown') are rejected. To create an entity TOGETHER WITH its edge to another entity in one reviewable unit, use synap_capture instead, passing both `entities` and `relations` — synap_link_entities cannot target an entity this call just proposed (its id isn't live until approved). A `decision` with `decisionStatus:'proposed'` ASKS the person automatically: pass `decisionOptions` (≤8 of {label, value?, description?}) + `recommendedOption`, and `sourceSessionId` to keep the question in your session; their answer updates it. Never create a decision for an answered confirm/choose — the pod already filed it (`slot.decisionId`).",
         inputSchema: {
           type: "object",
           properties: {
@@ -1100,11 +1100,6 @@ export const tools = {
               type: "string",
               description:
                 "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
-            },
-            forceCreate: {
-              type: "boolean",
-              description:
-                "Bypass the weak same-name gate when a same-profile entity with this title already exists. Prefer reusing the existing id. Does NOT bypass strong-signal auto-merge (email/phone/url). Default false.",
             },
             facets: {
               type: "array",
@@ -1814,11 +1809,6 @@ export const tools = {
              * reviewer. Without it the proposal detail reads "No reason was
              * given for this write."
              */
-            forceCreate: {
-              type: "boolean",
-              description:
-                "Only after a CONFLICT naming an existing twin. The pod refuses an AI-initiated slug that already exists anywhere, because a twin silently splits a kind's properties in two. Read the candidates it named; set this ONLY if a separate one is genuinely right.",
-            },
             reasoning: {
               type: "string",
               description:
@@ -1945,11 +1935,6 @@ export const tools = {
              * reviewer. Without it the proposal detail reads "No reason was
              * given for this write."
              */
-            forceCreate: {
-              type: "boolean",
-              description:
-                "Only after a CONFLICT naming an existing twin. The pod refuses an AI-initiated slug that already exists anywhere, because a twin silently splits a kind's properties in two. Read the candidates it named; set this ONLY if a separate one is genuinely right.",
-            },
             reasoning: {
               type: "string",
               description:
@@ -2966,11 +2951,6 @@ export const tools = {
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
             humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
             expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
-            forceCreate: {
-              type: "boolean",
-              description:
-                "Only after a CONFLICT naming an overlapping playbook. The pod refuses a near-twin name so processes don't silently fork. Read the candidates it named; set this ONLY if a separate playbook is genuinely right.",
-            },
             scope: {
               type: "string",
               enum: ["session", "project"],
@@ -3684,7 +3664,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional). A PROJECT IS A COMMITMENT WITH GRAVITY: never create one per git-repo, per-feature, or per-task — those are entities (task/plan/note). You MUST pass evidenceEntityIds: at least 5 existing entity ids that would belong to this project, or the create is rejected. If a same/similar project already exists it is reused (or surfaced) — reuse it instead of making a near-duplicate. An agent call lands as a proposal unless governance has widened it: status="proposed" is SUCCESS — say it is awaiting review, do not retry.',
+          'Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional). A PROJECT IS A COMMITMENT WITH GRAVITY: never create one per git-repo, per-feature, or per-task — those are entities (task/plan/note). You MUST pass evidenceEntityIds: at least 5 existing entity ids that would belong to this project, or the create is rejected. A project with the same name is reused; a similar one, or the same one still waiting for review, does not block: the create is filed for review showing it, so reuse it instead of making a near-duplicate. An agent call lands as a proposal unless governance has widened it: status="proposed" is SUCCESS — say it is awaiting review, do not retry.',
         inputSchema: {
           type: "object",
           properties: {

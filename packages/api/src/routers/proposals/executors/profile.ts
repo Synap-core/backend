@@ -9,6 +9,7 @@ import type {
   RendererSlot,
 } from "../../../services/profiles/renderer-slots.js";
 import type { Context } from "../../../context.js";
+import { readDuplicateCheck } from "@synap-core/types/proposals";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 
@@ -107,6 +108,14 @@ export function registerProfileExecutors(): void {
           ownerKind: "proposal",
           ownerId: input.proposalId,
         },
+        // The reviewer was SHOWN the existing kinds (the duplicate door's
+        // answer rides this proposal, B2): approving is their "keep both", so
+        // the replay's twin check stands down. Server-only ctx, never input.
+        // A legacy row filed with the agent's old `forceCreate` judgement
+        // (before B2) keeps it.
+        duplicateReviewed:
+          readDuplicateCheck(proposal.data)?.status === "possible" ||
+          innerData.forceCreate === true,
       } as unknown as Context);
       const result = await profileCaller.create({
         slug,
@@ -121,7 +130,6 @@ export function registerProfileExecutors(): void {
         profileKind: innerData.profileKind as "kind" | "role" | undefined,
         applicableKinds: innerData.applicableKinds as string[] | undefined,
         roleCategory: innerData.roleCategory as string | undefined,
-        forceCreate: innerData.forceCreate === true ? true : undefined,
       });
       // The approver IS the authority — the re-entrant gate should auto-grant.
       // A nested proposal means the approver lacks profile.create rights; surface

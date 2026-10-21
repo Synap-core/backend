@@ -30,6 +30,8 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import type { DuplicateCheck } from "@synap-core/types/proposals";
+import { findDuplicateCandidates } from "../duplicates/find-duplicate-candidates.js";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { isProjectColorSlot, isProjectIcon } from "@synap-core/types/projects";
 import {
@@ -41,9 +43,7 @@ import {
   EventRepository,
   sql,
   ProjectRepository,
-  findProjectDedupCandidates,
   assessEvidenceGravity,
-  buildNearMatchMessage,
   buildProjectProvenance,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
@@ -64,9 +64,6 @@ import { setProjectWorkspaceMembershipGoverned } from "./project-workspace-membe
 type Db = Awaited<ReturnType<typeof getDb>>;
 type ProjectStatus = "active" | "archived" | "completed";
 type CreatedRow = Awaited<ReturnType<ProjectRepository["create"]>>;
-type NearCandidates = Awaited<
-  ReturnType<typeof findProjectDedupCandidates>
->["near"];
 
 export interface CreateProjectGovernedInput {
   userId: string;
@@ -131,6 +128,7 @@ export type CreateProjectGovernedOutcome =
       proposalId: string;
       reviewPath?: string;
       reviewUrl?: string;
+      duplicateCheck?: DuplicateCheck;
     }
   | {
       status: "created";
@@ -142,20 +140,6 @@ export type CreateProjectGovernedOutcome =
       /** Present ONLY when used spaces were requested — one entry each. */
       usedWorkspaces?: UsedWorkspaceOutcome[];
     };
-
-/**
- * An agent's create refused because a near-duplicate exists. A `CONFLICT`
- * (409 on REST) that also carries the candidates, so the REST door can hand
- * them back as `dedupCandidates` — the shape `HubRestClient.createProject`
- * turns into `{ status: "near_duplicate" }`.
- */
-export class ProjectNearDuplicateError extends TRPCError {
-  readonly dedupCandidates: NearCandidates;
-  constructor(candidates: NearCandidates) {
-    super({ code: "CONFLICT", message: buildNearMatchMessage(candidates) });
-    this.dedupCandidates = candidates;
-  }
-}
 
 /**
  * How many of `entityIds` exist and are visible to `userId`, on the canonical
@@ -249,20 +233,29 @@ export async function createProjectGoverned(
     }
   }
 
-  // 2. Agent guardrails (P1).
+  // 2. Agent guardrails (P1) + the one duplicate door (B2).
+  let duplicateCheck: DuplicateCheck | undefined;
   if (isAgent) {
-    const match = await findProjectDedupCandidates(db, { userId, name });
+    const answer = await findDuplicateCandidates(db, {
+      subject: "project",
+      userId,
+      name,
+    });
+    duplicateCheck = answer.check;
 
-    // Exact-normalized match → reuse idempotently; never a second project.
-    if (match.exact) {
+    // Exact-normalized name IS a project's identity → reuse it; never a second.
+    if (answer.sameIdentity) {
       return {
         status: "deduped",
         existing: true,
-        projectId: match.exact.id,
-        reusedProjectId: match.exact.id,
-        name: match.exact.name,
+        projectId: answer.sameIdentity.id,
+        reusedProjectId: answer.sameIdentity.id,
+        name: answer.sameIdentity.name,
       };
     }
+    const near = answer.check.candidates
+      .filter((c) => c.ref === "record")
+      .map((c) => ({ id: c.id, name: c.title ?? "", score: 1 }));
 
     // Gravity: a project is a commitment. Require ≥5 caller-visible entities.
     const evidence = input.evidenceEntityIds ?? [];
@@ -270,16 +263,14 @@ export async function createProjectGoverned(
     const gravity = assessEvidenceGravity({
       providedCount: evidence.length,
       visibleCount,
-      near: match.near,
+      near,
     });
     if (!gravity.ok) {
       throw new TRPCError({ code: "BAD_REQUEST", message: gravity.message });
     }
 
-    // Gravity satisfied but a near-duplicate exists → surface it, don't create.
-    if (match.near.length > 0) {
-      throw new ProjectNearDuplicateError(match.near);
-    }
+    // A near name (or the same project still waiting for review) no longer
+    // refuses (B2a): the create is FILED for review, with "looks like X".
   }
 
   // 3. Governance. The FULL create payload rides the proposal: the
@@ -294,6 +285,12 @@ export async function createProjectGoverned(
     action: "create",
     ...(input.source ? { source: input.source } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+    ...(duplicateCheck
+      ? {
+          duplicateCheck,
+          possibleDuplicate: duplicateCheck.status === "possible",
+        }
+      : {}),
     data: {
       name,
       ...(input.description !== undefined
@@ -327,6 +324,10 @@ export async function createProjectGoverned(
       proposalId: perm.proposalId,
       ...(perm.reviewPath ? { reviewPath: perm.reviewPath } : {}),
       ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
+      // Why it waits, when the duplicate door is why.
+      ...(duplicateCheck && duplicateCheck.status !== "clear"
+        ? { duplicateCheck }
+        : {}),
     };
   }
 

@@ -160,43 +160,35 @@ describe("orient pendingReview aggregate matches the list population", () => {
 
 describe("the in-flight dedup scan shares the SAME author floor", () => {
   /*
-   * `findPendingSignalMatches` flags a duplicate an agent is ABOUT to file.
-   * It floored on `createdBy = <human>` while `createdBy` is overloaded, so an
-   * agent could not see ITS OWN in-flight duplicate — blind to the majority
-   * row shape (measured: 4 of 6 pending) and to the team pod's 32 duplicate
-   * clusters. Widened to the same lineage predicate as the queue.
-   *
-   * The file's stated guarantee — "never another user's queue" — is the thing
-   * these assertions defend. It is preserved by CONSTRUCTION, not by comment:
-   * `ownAgentUserFilter` floors on `users.createdByUserId = me`.
+   * The duplicate door's pending leg (`loadOwnPendingCreates`, FB1020 B2 —
+   * formerly `findPendingSignalMatches`) flags a twin an agent is ABOUT to
+   * file. It once floored on `createdBy = <human>` while `createdBy` is
+   * overloaded, so an agent could not see ITS OWN in-flight duplicate — blind
+   * to the majority row shape (measured: 4 of 6 pending) and to the team
+   * pod's 32 duplicate clusters. It uses the ONE "this proposal is mine"
+   * predicate, `authoredByUser`, which floors on `users.createdByUserId = me`.
    */
-  const dedupPath = join(here, "../../utils/pending-capture-dedup.ts");
+  const doorPath = join(here, "../duplicates/find-duplicate-candidates.ts");
 
-  it("uses the shared lineage helper, not a re-derived subquery", () => {
-    const src = readFileSync(dedupPath, "utf8");
-    expect(src).toMatch(
-      /ownAgentUserFilter\(proposals\.agentUserId, params\.userId\)/
-    );
-    expect(src).toMatch(
-      /ownAgentUserFilter\(proposals\.createdBy, params\.userId\)/
-    );
+  it("uses the shared author-floor helper, not a re-derived subquery", () => {
+    const src = readFileSync(doorPath, "utf8");
+    expect(src).toMatch(/authoredByUser\(userId\)/);
     // No re-derived copy of the users subquery: ONE definition of the set.
     expect(src).not.toMatch(/eq\(users\.createdByUserId/);
     expect(src).not.toMatch(/\.from\(users\)/);
   });
 
   it("carries NO workspace term — a workspace floor is what it rules out", () => {
-    const src = readFileSync(dedupPath, "utf8");
-    // This is the boundary the file's own comment defends, and the trap that
-    // was caught three separate times in one session. A membership term here
-    // would leak a teammate's unreviewed queue through a dedup hint.
+    const src = readFileSync(doorPath, "utf8");
+    // A membership term here would leak a teammate's unreviewed queue through
+    // a duplicate hint.
     expect(src).not.toMatch(/workspaceMembers/);
     expect(src).not.toMatch(/userVisibleWhere/);
     expect(src).not.toMatch(/eq\(proposals\.workspaceId/);
   });
 
   it("still floors STRICTLY on pending — an approved row is already committed", () => {
-    const src = readFileSync(dedupPath, "utf8");
+    const src = readFileSync(doorPath, "utf8");
     expect(src).toMatch(/eq\(proposals\.status, ProposalStatus\.PENDING\)/);
   });
 });
@@ -255,56 +247,51 @@ describe("EVERY author floor in the dedup/recall file uses the shared helper", (
 
 describe("recall and dedup lanes have DIFFERENT type floors, on purpose", () => {
   /*
-   * `findPendingSignalMatches` (dedup) KEEPS `CAPTURE_GRAPH_PROPOSAL_TYPES`: it
-   * compares create-ops to avoid filing a duplicate, so it must only consider
-   * rows whose `operations[]` it can read.
+   * The duplicate door's pending leg KEEPS a type floor: it compares create
+   * ops (`operations[]` of a graph, or an entity/playbook/project create), so
+   * it reads only the row shapes it understands.
    *
    * `findPendingTextMatches` (recall) has NO type floor: it answers "is there
    * pending work bearing on this question?". Measured live, the graph-only
    * floor admitted 7 of 16 pending rows, so an agent asking about a workspace
    * with a pending `join` was told nothing was pending.
    *
-   * A future reader will be tempted to unify them — they sit in one file and
-   * look like near-duplicates. They are not. This pins the asymmetry and says
-   * why, so unifying has to be a decision rather than a tidy-up.
+   * B2 folded the dedup scan into the door; the recall lane is a different
+   * question and stays where it is. This pins the asymmetry.
    */
-  const dedupPath = join(here, "../../utils/pending-capture-dedup.ts");
-  const src = readFileSync(dedupPath, "utf8");
-  const slice = (from: string, to: string): string =>
-    src.slice(src.indexOf(from), src.indexOf(to));
+  const recallSrc = readFileSync(
+    join(here, "../../utils/pending-capture-dedup.ts"),
+    "utf8"
+  );
+  const doorSrc = readFileSync(
+    join(here, "../duplicates/find-duplicate-candidates.ts"),
+    "utf8"
+  );
+  const recallFn = recallSrc.slice(
+    recallSrc.indexOf("export async function findPendingTextMatches"),
+    recallSrc.indexOf("export function computeCaptureGraphIdempotencyKey")
+  );
+  const doorFn = doorSrc.slice(
+    doorSrc.indexOf("export async function loadOwnPendingCreates"),
+    doorSrc.indexOf("export function toDuplicateCheck")
+  );
 
   it("reads two real, distinct function bodies", () => {
-    const dedupFn = slice(
-      "export async function findPendingSignalMatches",
-      "export function extractQueryTerms"
-    );
-    const recallFn = slice(
-      "export async function findPendingTextMatches",
-      "export function computeCaptureGraphIdempotencyKey"
-    );
-    expect(dedupFn.length).toBeGreaterThan(200);
+    expect(doorFn.length).toBeGreaterThan(200);
     expect(recallFn.length).toBeGreaterThan(200);
   });
 
-  it("DEDUP keeps the capture-graph type floor", () => {
-    const dedupFn = slice(
-      "export async function findPendingSignalMatches",
-      "export function extractQueryTerms"
-    );
+  it("DEDUP keeps a proposal-type floor", () => {
     expect(
-      dedupFn,
-      "the dedup lane must keep CAPTURE_GRAPH_PROPOSAL_TYPES — it reads " +
-        "operations[] to compare create-ops, and cannot do that for a row shape " +
-        "it does not understand."
-    ).toContain("CAPTURE_GRAPH_PROPOSAL_TYPES");
+      stripComments(doorFn, "ts"),
+      "the duplicate door must floor on the create row shapes it reads"
+    ).toMatch(
+      /inArray\(proposals\.proposalType, \["create", \.\.\.GRAPH_PROPOSAL_TYPES\]\)/
+    );
   });
 
   it("RECALL has no type floor", () => {
-    const recallFn = slice(
-      "export async function findPendingTextMatches",
-      "export function computeCaptureGraphIdempotencyKey"
-    );
-    // Strip comments: the WHY is written in prose right there and names the const.
+    // Strip comments: the WHY is written in prose right there.
     const code = stripComments(recallFn, "ts");
     expect(
       code,

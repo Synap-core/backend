@@ -54,9 +54,8 @@ export async function createDecisionEntity(
     properties: input.properties,
     ...(scope.workspaceId ? { targetWorkspaceId: scope.workspaceId } : {}),
     ...(input.projectId ? { projectId: input.projectId } : {}),
-    // Two decisions may share a question across time — the weak same-name
-    // gate must not fold a new decision into an old one.
-    forceCreate: true,
+    // Two decisions may share a question across time. A system create is
+    // never blocked by a same-name twin (founder B2e): at most it is warned.
     source: "system",
   } as never)) as { status?: string; id?: string };
   if (res?.status !== "created" || !res.id) {

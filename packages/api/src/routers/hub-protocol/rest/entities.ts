@@ -1296,7 +1296,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       },
       409: {
         description:
-          "Weak same-name conflict — a same-profile entity with this title already exists (pass forceCreate or reuse the candidate id)",
+          "Conflict — the write cannot land as sent; the message names why. A same-name twin is NOT a conflict: an agent's create is filed for review with `duplicateCheck`.",
         content: { "application/json": { schema: ErrorSchema } },
       },
       500: {
@@ -1430,7 +1430,6 @@ export function registerEntitiesRoutes(app: HubHono): void {
         // Kind + Facets: attach roles in the same call (handled by the governed
         // createEntity door, which attaches each after the entity materializes).
         ...(body.facets?.length ? { facets: body.facets } : {}),
-        ...(body.forceCreate ? { forceCreate: true } : {}),
         // Strong `external_id` identity anchor (`provider:id`) — registered as a
         // signal so a repeat create with the same value dedups. This is the ONLY
         // door that exposes external_id over Hub REST; the weak email/phone/url

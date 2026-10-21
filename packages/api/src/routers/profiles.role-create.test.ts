@@ -276,8 +276,9 @@ describe("profiles.create — role (facet type) minting", () => {
 });
 
 /**
- * A kind may not be minted by an AGENT when the slug already exists elsewhere
- * on the pod.
+ * A kind an AGENT defines when the slug already exists elsewhere on the pod is
+ * shown to a person, never minted silently (and, since B2, never refused at
+ * filing: the reviewer decides).
  *
  * MEASURED DEFECT (live, 2026-09-21). `profiles.create` checks
  * `getBySlug(slug, ctx.workspaceId)`, which only sees profiles VISIBLE FROM
@@ -290,13 +291,14 @@ describe("profiles.create — role (facet type) minting", () => {
  * concepts, one slug. Resolution then depends on the lens, and 44 rows split
  * across two schemas.
  *
- * WHY REFUSE AND NOT SILENTLY REUSE: they are genuinely different concepts.
- * Returning the Research profile would file defect reports against a research
- * kind — worse than either alternative.
+ * WHY NOT SILENTLY REUSE: they are genuinely different concepts. Returning the
+ * Research profile would file defect reports against a research kind. So the
+ * filing carries the twin to the reviewer (`duplicateCheck`, POSSIBLE_DUPLICATE)
+ * and the approval replay refuses only a twin the reviewer was never shown.
  *
  * WHAT THIS DOES NOT COVER, measured: the repository is stubbed, so this
- * proves the DOOR's control flow (probe consulted, refusal raised, escape
- * honoured), not that `findActiveBySlugAnyScope` returns the right rows —
+ * proves the DOOR's control flow (probe consulted, twin handed to the gate,
+ * replay refusal raised or stood down), not that `findActiveBySlugAnyScope` returns the right rows —
  * that is its own contract and it is the pre-existing probe the template-apply
  * resolver already relies on.
  */
@@ -332,36 +334,66 @@ beforeEach(() => {
   h.updates.length = 0;
 });
 
-describe("profiles.create refuses a cross-workspace twin slug", () => {
-  it("NON-VACUITY: with no twin on the pod, the SAME create succeeds", () => {
-    // Without this, a create failing for any unrelated reason would satisfy
-    // every rejection assertion below while proving nothing.
-    return expect(caller().create({ ...base } as never)).resolves.toBeTruthy();
+function replay(duplicateReviewed: boolean) {
+  return profilesRouter.createCaller({
+    authenticated: true,
+    userId: "user-1",
+    workspaceId: "808939d1-86b3-4c52-a153-ae06ece2c54e",
+    profileProvenance: {
+      origin: "agent",
+      ownerKind: "proposal",
+      ownerId: "proposal-1",
+    },
+    duplicateReviewed,
+  } as never);
+}
+
+/** What the door handed the governance gate on its last call. */
+function lastGate(): Record<string, unknown> {
+  return vi.mocked(checkPermissionOrPropose).mock.calls.at(-1)![0] as never;
+}
+
+describe("profiles.create: a cross-workspace twin slug goes to the reviewer", () => {
+  it("NON-VACUITY: with no twin on the pod, the SAME filing is clear", async () => {
+    await expect(caller().create({ ...base } as never)).resolves.toBeTruthy();
+    expect(lastGate()).toMatchObject({
+      possibleDuplicate: false,
+      duplicateCheck: { status: "clear", subject: "kind", candidates: [] },
+    });
   });
 
-  it("THE LIVE CASE: a twin owned by ANOTHER workspace is refused, naming it", async () => {
+  it("THE LIVE CASE: an agent's twin is FILED with the existing kind on its card", async () => {
     h.slugElsewhere = [TWIN];
-    await expect(caller().create({ ...base } as never)).rejects.toThrow(
-      /already exists on this pod/
-    );
-    expect(h.createCalls, "a twin profile was minted anyway").toHaveLength(0);
+    await expect(caller().create({ ...base } as never)).resolves.toBeTruthy();
+    expect(lastGate()).toMatchObject({
+      possibleDuplicate: true,
+      duplicateCheck: {
+        status: "possible",
+        subject: "kind",
+        candidates: [
+          { ref: "record", id: TWIN.id, kind: "kind", title: "Finding" },
+        ],
+      },
+    });
   });
 
-  it("the refusal names the existing profile so the agent can act on it", async () => {
-    h.slugElsewhere = [TWIN];
-    const err = await caller()
-      .create({ ...base } as never)
-      .catch((e: TRPCError) => e);
-    expect((err as TRPCError).message).toContain(TWIN.id);
-    expect((err as TRPCError).message).toContain("forceCreate");
-  });
-
-  it("forceCreate escapes it — a separate concept sharing a name is allowed", async () => {
+  it("the approval replay of a twin the reviewer was SHOWN creates it (keep both)", async () => {
     h.slugElsewhere = [TWIN];
     await expect(
-      caller().create({ ...base, forceCreate: true } as never)
+      replay(true).create({ slug: "finding", displayName: "Finding" } as never)
     ).resolves.toBeTruthy();
     expect(h.createCalls).toHaveLength(1);
+  });
+
+  it("the approval replay of a twin nobody was shown refuses, naming it, no agent advice", async () => {
+    h.slugElsewhere = [TWIN];
+    const err = await replay(false)
+      .create({ slug: "finding", displayName: "Finding" } as never)
+      .catch((e: TRPCError) => e);
+    expect((err as TRPCError).message).toMatch(/already exists on this pod/);
+    expect((err as TRPCError).message).toContain(TWIN.id);
+    expect((err as TRPCError).message).not.toContain("forceCreate");
+    expect(h.createCalls, "a twin profile was minted anyway").toHaveLength(0);
   });
 
   it("a HUMAN caller is never second-guessed", async () => {
@@ -371,6 +403,7 @@ describe("profiles.create refuses a cross-workspace twin slug", () => {
     await expect(
       caller().create({ slug: "finding", displayName: "Finding" } as never)
     ).resolves.toBeTruthy();
+    expect(lastGate().duplicateCheck).toBeUndefined();
   });
 });
 
@@ -378,7 +411,7 @@ describe("profiles.create refuses a cross-workspace twin slug", () => {
  * W2b ROLE PRINCIPLE — one role per name, pod-wide; never a twin. A ROLE whose
  * slug already exists elsewhere is REUSED + SHARED into the calling workspace
  * (the same `resolveProfileForApply` decision template apply makes), for every
- * caller, `forceCreate` included. Drives the REAL resolver against the stub repo.
+ * caller. Drives the REAL resolver against the stub repo.
  */
 const CALLER_WS = "808939d1-86b3-4c52-a153-ae06ece2c54e";
 const CRM_WS = "f73f40f0-c023-4f2e-b55a-10d3f7539b1f";
@@ -403,12 +436,11 @@ const roleCall = {
 };
 
 describe("profiles.create — a role slug that exists elsewhere is SHARED, never twinned (W2b)", () => {
-  it("an AGENT with forceCreate reuses the shared role: grant + widen, no second row", async () => {
+  it("an AGENT reuses the shared role: grant + widen, no second row", async () => {
     h.slugElsewhere = [sharedPartner];
     const result = (await caller().create({
       ...roleCall,
       agentUserId: AGENT,
-      forceCreate: true,
     } as never)) as Record<string, unknown>;
     expect(h.createCalls, "a twin role was minted").toHaveLength(0);
     expect(h.grants).toContainEqual([sharedPartner.id, CALLER_WS]);
@@ -441,11 +473,11 @@ describe("profiles.create — a role slug that exists elsewhere is SHARED, never
     expect(result).toMatchObject({ shared: true, promoted: true });
   });
 
-  it("a KIND already holding the slug refuses the role (forceCreate included) — never a twin name", async () => {
+  it("a KIND already holding the slug refuses the role — never a twin name", async () => {
     h.slugElsewhere = [{ ...sharedPartner, profileKind: "kind" }];
-    await expect(
-      caller().create({ ...roleCall, forceCreate: true } as never)
-    ).rejects.toThrow(/cannot be created/);
+    await expect(caller().create({ ...roleCall } as never)).rejects.toThrow(
+      /cannot be created/
+    );
     expect(h.createCalls).toHaveLength(0);
   });
 

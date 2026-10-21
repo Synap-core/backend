@@ -55,8 +55,10 @@ describe("the decision entity door", () => {
       properties: { summary: "US" },
       targetWorkspaceId: "w1",
       projectId: "p1",
-      forceCreate: true,
     });
+    // A system create is never blocked by a same-name twin (B2e): no escape
+    // flag is needed, and none may be sent.
+    expect(h.input).not.toHaveProperty("forceCreate");
   });
 
   it("anything but a created row THROWS — a proposal is not a filed decision", async () => {

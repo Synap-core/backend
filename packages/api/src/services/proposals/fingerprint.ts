@@ -246,6 +246,8 @@ const ATTENTION_FLOOR_KEYS = [
   "PROJECT_FILING",
   // An agent rewriting the criteria its own work is graded against.
   "CRITERIA_CHANGE",
+  // A possible twin of a record or a pending proposal: a person decides.
+  "POSSIBLE_DUPLICATE",
   "UNTRUSTED_ORIGIN",
   "POD_ADMIN_SCHEMA_CHANGE",
   // D6: an agent defining a kind/role — the whole point is that a person looks.
