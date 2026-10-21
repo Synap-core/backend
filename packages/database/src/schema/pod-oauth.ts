@@ -37,6 +37,7 @@ import {
   text,
   timestamp,
   index,
+  jsonb,
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
@@ -133,6 +134,14 @@ export const oauthAuthorizationCodes = pgTable(
     // The approved `apps` row (mode 'oauth') a pod app's code redeems to:
     // /token mints THAT app's key (0338b). NULL for an MCP (DCR) client.
     appId: uuid("app_id").references(() => apps.id, { onDelete: "cascade" }),
+    // "Sign in with Synap" (0339): the `[{ permission, workspaceId }]` the
+    // person saw and approved for an APP client (`client_id` = `app_…`). /token
+    // mints this ∩ the app's approval ∩ the person's reach at mint time, so the
+    // token is never wider than the consent. NULL for every other client.
+    appGrant:
+      jsonb("app_grant").$type<
+        Array<{ permission: string; workspaceId: string }>
+      >(),
 
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()

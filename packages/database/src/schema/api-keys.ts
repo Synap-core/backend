@@ -54,7 +54,12 @@ export const apiKeys = pgTable(
       .notNull()
       .default("hub_inbound")
       .$type<
-        "hub_inbound" | "user_pat" | "system" | "service" | "is_internal"
+        | "hub_inbound"
+        | "user_pat"
+        | "system"
+        | "service"
+        | "is_internal"
+        | "app_person"
       >(), // Categorical purpose label
     // 'service' is a first-class, product-neutral machine credential. Minted by
     // POST /api/hub/setup/service (NOT /setup/agent), it is owned directly by a
@@ -73,6 +78,14 @@ export const apiKeys = pgTable(
     // (apps/api/src/routers/provision.ts). No public key-mint path can set it —
     // every public path hardcodes a non-is_internal literal and none reads
     // keyType from caller input.
+    //
+    // 'app_person' is a PERSON's "Sign in with Synap" token for an app their
+    // pod approved (0339): held by the person (`user_id`, no linked user),
+    // grant `client_id` = the app's public id. It is the ONE marker that keeps
+    // `resolveKeyIdentity` from adopting a person-held key that names an app
+    // onto the app's agent (the 0313 rule). Minted EXCLUSIVELY by the OAuth
+    // /token door (api services/app-person-token.ts); like is_internal, no
+    // other mint path can set it (tripwire app-person-key-type).
     description: text("description"), // Human-readable explanation of what this key does
 
     // Metadata
@@ -172,6 +185,13 @@ export const apiKeys = pgTable(
     ),
   })
 );
+
+/**
+ * The `key_type` of a person's "Sign in with Synap" token for an app (0339).
+ * Its ONE mint site is api `services/app-person-token.ts`; every reader
+ * compares against this constant (tripwire `app-person-key-type`).
+ */
+export const APP_PERSON_KEY_TYPE = "app_person" as const;
 
 /** The MCP tool profiles a key can carry (`api_keys.tool_profile`, 0280). */
 export const API_KEY_TOOL_PROFILES = ["entry", "builder"] as const;

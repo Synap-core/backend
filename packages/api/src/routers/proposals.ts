@@ -113,6 +113,7 @@ import {
   assertCanRetargetProposalDestination,
   assertCanReviewProposal,
   assertMayDecideProposal,
+  assertMayDecideProposalAt,
   refuseAgentProposalApprover,
   reviewRefusalMessage,
 } from "./proposals/review-authority.js";
@@ -1667,6 +1668,7 @@ export const proposalsRouter = router({
           // return below. Without it a rejection cannot find the board it
           // should hand the deliverable back to.
           sessionId: true,
+          projectId: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -1681,6 +1683,7 @@ export const proposalsRouter = router({
         await assertCanReviewProposal({
           proposal: {
             workspaceId: proposal.workspaceId,
+            projectId: proposal.projectId,
             data: proposal.data,
             agentUserId: proposal.agentUserId,
             targetType: proposal.targetType,
@@ -1833,6 +1836,7 @@ export const proposalsRouter = router({
           targetType: true,
           targetId: true,
           sessionId: true,
+          projectId: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -1845,6 +1849,7 @@ export const proposalsRouter = router({
       await assertCanReviewProposal({
         proposal: {
           workspaceId: proposal.workspaceId,
+          projectId: proposal.projectId,
           data: proposal.data,
           agentUserId: proposal.agentUserId,
           targetType: proposal.targetType,
@@ -1919,6 +1924,7 @@ export const proposalsRouter = router({
           targetType: true,
           targetId: true,
           sessionId: true,
+          projectId: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -1931,6 +1937,7 @@ export const proposalsRouter = router({
       await assertCanReviewProposal({
         proposal: {
           workspaceId: proposal.workspaceId,
+          projectId: proposal.projectId,
           data: proposal.data,
           agentUserId: proposal.agentUserId,
           targetType: proposal.targetType,
@@ -1986,6 +1993,7 @@ export const proposalsRouter = router({
           targetType: true,
           targetId: true,
           sessionId: true,
+          projectId: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -2022,6 +2030,7 @@ export const proposalsRouter = router({
       await assertCanReviewProposal({
         proposal: {
           workspaceId: proposal.workspaceId,
+          projectId: proposal.projectId,
           data: proposal.data,
           agentUserId: proposal.agentUserId,
           targetType: proposal.targetType,
@@ -2266,6 +2275,8 @@ export const proposalsRouter = router({
           message: "Proposal not found",
         });
       }
+      // D3: undo executes with the reviewer's authority — where the key reaches.
+      assertMayDecideProposalAt("approve", "undo", proposal);
 
       // Recovery: a proposal already in the TERMINAL `reverted` status can be
       // re-proposed back to PENDING — but ONLY via reopen (a plain `revert({})`
@@ -3332,6 +3343,7 @@ export const proposalsRouter = router({
             sourceMessageId: true,
             // Slot-return input — parity with the single `reject` door.
             sessionId: true,
+            projectId: true,
           },
         });
         // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -3340,6 +3352,7 @@ export const proposalsRouter = router({
         await assertCanReviewProposal({
           proposal: {
             workspaceId: target.workspaceId,
+            projectId: target.projectId,
             data: target.data,
             agentUserId: target.agentUserId,
             targetType: target.targetType,
