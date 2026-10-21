@@ -12,7 +12,6 @@ import { workspaceProcedure, podProcedure } from "../../trpc.js";
 import {
   db,
   eq,
-  ne,
   and,
   isNull,
   getDb,
@@ -38,6 +37,8 @@ import {
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { loadEditableDocument } from "../../utils/document-edit-access.js";
 import { assertBodyNotReplacedSilently } from "../../services/entity-body/body-replace-guard.js";
+import { documentOwnedByAnotherObject } from "../../services/entity-body/document-ownership.js";
+import { isAiWriteRequest } from "../../utils/ai-write.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
@@ -85,44 +86,45 @@ const logger = createLogger({ module: "entities-router" });
  *      the body of is pod-wide (e.g. the `file` kind), so "authored by the
  *      caller" is the real invariant, not "workspace-less";
  *   3. unowned: not the body of another live entity, nor a view's canvas.
+ *
+ * AN AI WRITE (`aiWrite`, the gate's own predicate `isAiWriteRequest`) gets
+ * the narrower rule (FB1020 review M2): an agent writes AS its person, so
+ * "authored by the caller" admits every document the person ever wrote, in
+ * any space. An agent may attach only a document of the entity's OWN space;
+ * the one exception is a pod-wide (owner-private) entity, which may take the
+ * person's own document — an agent's file upload stores the document in the
+ * caller's space while the `file` kind is pod-wide, and that narrows the
+ * audience, it never widens it. Anything else is refused: the person attaches
+ * it themselves.
  */
 export async function assertDocumentAttachable(
   userId: string,
   entity: { id: string; workspaceId: string | null },
-  documentId: string
-): Promise<void> {
+  documentId: string,
+  opts: { aiWrite?: boolean } = {}
+): Promise<{ agentUserId: string | null }> {
   const doc = await loadEditableDocument(userId, documentId);
-  const sameScope =
-    doc.workspaceId === entity.workspaceId || doc.userId === userId;
+  const sameScope = opts.aiWrite
+    ? doc.workspaceId === entity.workspaceId ||
+      (entity.workspaceId === null && doc.userId === userId)
+    : doc.workspaceId === entity.workspaceId || doc.userId === userId;
   if (!sameScope) {
     throw new TRPCError({
       code: "FORBIDDEN",
-      message:
-        "That document belongs to another workspace; an entity's body must live in the entity's own workspace.",
+      message: opts.aiWrite
+        ? "That document is in another space than this record, and attaching it would show it to the record's readers. An agent can only attach a document from the record's own space; ask the person to attach this one."
+        : "That document belongs to another workspace; an entity's body must live in the entity's own workspace.",
     });
   }
-  const [otherEntity] = await db
-    .select({ id: entities.id })
-    .from(entities)
-    .where(
-      and(
-        eq(entities.documentId, documentId),
-        ne(entities.id, entity.id),
-        isNull(entities.deletedAt)
-      )
-    )
-    .limit(1);
-  const [owningView] = await db
-    .select({ id: views.id })
-    .from(views)
-    .where(eq(views.documentId, documentId))
-    .limit(1);
-  if (otherEntity || owningView) {
+  if (await documentOwnedByAnotherObject(db, documentId, entity.id)) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "That document is already the body of another object.",
     });
   }
+  // Who wrote it: an AI's attach of a document that same agent wrote is not
+  // a hand-over of the person's text (see `entities.update`).
+  return { agentUserId: doc.agentUserId ?? null };
 }
 
 export const mutateProcs = {
@@ -224,12 +226,19 @@ export const mutateProcs = {
       }
       // Repointing the body is validated BEFORE the permission check, so a
       // proposal can never carry an unchecked document id either.
+      let attachedDocumentAuthor: string | null = null;
       if (input.documentId && input.documentId !== existing.documentId) {
         await assertBodyNotReplacedSilently({
           entity: existing,
           replaceBody: input.replaceBody,
         });
-        await assertDocumentAttachable(ctx.userId, existing, input.documentId);
+        ({ agentUserId: attachedDocumentAuthor } =
+          await assertDocumentAttachable(
+            ctx.userId,
+            existing,
+            input.documentId,
+            { aiWrite: isAiWriteRequest(input) }
+          ));
       }
 
       // KIND CHANGE (c-kind-convert): the target kind must resolve NOW, the
@@ -415,19 +424,31 @@ export const mutateProcs = {
         input.global === true && existing.workspaceId !== null;
       const changesProfileType =
         input.profileSlug !== undefined && input.profileSlug !== existing.type;
-      // An AGENT replacing an existing body (decision B9g): the old document is
-      // detached, so it is always reviewed — like `synap_update_entity`'s full
-      // `content` replacement. A plain attach onto an entity with no body
-      // stays on the ordinary lane (undoable either way).
-      const agentReplacesBody =
+      // An AI write that points the body at a document is reviewed (FB1020
+      // review M2). A body follows its entity on the read floors, so the
+      // attach hands the document to everyone who reads the entity — a scope
+      // change, which an agent never auto-applies, even onto an entity with
+      // no body yet and even from the entity's own space (exposure edges and
+      // pod-wide shares reach further than the space). ONE exception: a
+      // FIRST attach of a document this same agent wrote (`synap_create_
+      // document({ entityId })`, a merge's recovered body) hands over nothing
+      // of the person's — the agent could have written that text onto the
+      // entity directly. A replacement also detaches the old body (B9g), so
+      // it is always reviewed. Clearing the body (`documentId: null`) hands
+      // nothing out and stays on the ordinary lane.
+      const agentAttachesOwnDocument =
         !!input.agentUserId &&
+        attachedDocumentAuthor === input.agentUserId &&
+        !existing.documentId;
+      const aiAttachesBody =
+        isAiWriteRequest(input) &&
         !!input.documentId &&
-        !!existing.documentId &&
-        input.documentId !== existing.documentId;
+        input.documentId !== existing.documentId &&
+        !agentAttachesOwnDocument;
       const forcePropose =
         promotesToGlobal ||
         changesProfileType ||
-        agentReplacesBody ||
+        aiAttachesBody ||
         input.forcePropose === true;
 
       // A promotion to pod-wide lands the row pod-wide: the key's grant must

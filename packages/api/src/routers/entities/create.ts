@@ -55,7 +55,10 @@ import {
   expirePendingCreatesOfLandedRecord,
 } from "@synap/database";
 import { reconcileKindWithPlacement } from "./kind-placement.js";
-import { findDuplicateCandidates } from "../../services/duplicates/find-duplicate-candidates.js";
+import {
+  findDuplicateCandidates,
+  toDuplicateCheck,
+} from "../../services/duplicates/find-duplicate-candidates.js";
 import { entities, workspaces, links } from "@synap/database/schema";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import { TRPCError } from "@trpc/server";
@@ -79,6 +82,7 @@ import { idempotencyWindowSeconds } from "../../utils/write-door-idempotency.js"
 import { createLogger } from "@synap-core/core";
 import { entityWriteVisibleWhere, toApiEntity } from "./helpers.js";
 import { assertDocumentAttachable } from "./mutate.js";
+import { isAiWriteRequest } from "../../utils/ai-write.js";
 import { entitiesRouter } from "../entities.js";
 import { entityBodyDocumentIdFrom } from "../../utils/store-entity-source-blob.js";
 import { computeEntityPropertyDiff } from "../../utils/entity-property-diff.js";
@@ -185,6 +189,16 @@ export const createProcs = {
          * Absent ⇒ a person's or the system's create: warned, never blocked.
          */
         approvalDuplicate: z.enum(["ask_reviewer", "keep_both"]).optional(),
+        /**
+         * APPROVAL REPLAY ONLY, with `ask_reviewer` — the twin records the
+         * review card SHOWED for this create (the proposal's persisted
+         * `duplicateCheck`). A plain approve with no verb on a twin the
+         * reviewer saw is "approve as proposed" = keep both (FB1020
+         * BLOCKER-2: without it a capture naming any existing record could
+         * only be rejected). A twin NOT shown (it appeared after filing)
+         * still refuses, so the card asks. Ignored on an AI's own filing.
+         */
+        approvalReviewedTwinIds: z.array(z.string().uuid()).max(100).optional(),
         /**
          * Strong cross-source identity anchor for this subject, as `provider:id`
          * (e.g. `discord:123…`). Registered as an `external_id` identity signal
@@ -562,9 +576,15 @@ export const createProcs = {
       // "Alice" person #47.
       const needsIdentityResolve =
         dedupSignals.length > 0 || (!!profileSlug && !!input.title?.trim());
-      // The agent's own inline door: a replay never names `agentUserId`, so
-      // `approvalDuplicate` can never ride an agent's filing.
-      const isAgentFiling = !!input.agentUserId;
+      // An AI's own filing — the GATE's predicate (FB1020 review M4), so an
+      // unattributed hub key / IS call (`source: "intelligence"`, no
+      // `agentUserId`) is floored like an attributed agent and can never pass
+      // the reviewer's `approvalDuplicate`. NOT a write inside a decided
+      // proposal (`ctx.governanceProposalId`, an internal-only channel): a
+      // composite approval replays each op with the proposal's OWN source —
+      // often `intelligence` — and it is the reviewer's, not the agent's.
+      const isAgentFiling =
+        isAiWriteRequest(input) && !ctx.governanceProposalId;
       const approvalDuplicate = isAgentFiling
         ? undefined
         : input.approvalDuplicate;
@@ -585,7 +605,9 @@ export const createProcs = {
           ),
           // A replay's own proposal is still pending while it runs; its
           // pending siblings are expired once it lands. Records only.
-          ...(approvalDuplicate ? { pending: [] } : {}),
+          ...(approvalDuplicate
+            ? { pending: { creates: [], truncated: false } }
+            : {}),
         });
         duplicateCheck = answer.check;
         // A failed record lookup reads as "nothing matched" here — it is
@@ -595,6 +617,9 @@ export const createProcs = {
           candidates: [],
           crossKindCandidates: [],
         };
+        let visibleMatch:
+          | Awaited<ReturnType<typeof resolveDb.query.entities.findFirst>>
+          | undefined;
         try {
           // SECURITY GATE — the strong identity index is deliberately GLOBAL
           // (frozen policy: one subject per email/phone pod-wide), so the
@@ -606,7 +631,7 @@ export const createProcs = {
           // (the enrich/attach doors deny the writes, but the read leaked).
           // Invisible strong matches also must NOT be surfaced as weak
           // candidates below — candidates come only from the scoped weak path.
-          const visibleMatch =
+          visibleMatch =
             identity.match === "strong" && identity.entity
               ? await resolveDb.query.entities.findFirst({
                   where: and(
@@ -905,6 +930,29 @@ export const createProcs = {
             { mergeErr },
             "[entities.create] strong identity merge failed — proceeding to create"
           );
+          // The create below is a same-identity twin, never a `clear` one
+          // (FB1020 review S2): name the record the merge was for, so an
+          // agent's filing is floored and the card shows it. A failure before
+          // its visibility was known names nothing and reads `unchecked`.
+          duplicateCheck =
+            visibleMatch && identity.entity
+              ? toDuplicateCheck(
+                  "entity",
+                  [
+                    {
+                      ref: "record",
+                      id: visibleMatch.id,
+                      kind: identity.entity.type,
+                      title: identity.entity.title ?? null,
+                      why: "same_identity",
+                    },
+                    ...answer.check.candidates,
+                  ],
+                  false
+                )
+              : answer.check.candidates.length > 0
+                ? answer.check
+                : { ...answer.check, status: "unchecked" as const };
         }
 
         // ── A possible twin (B2): same kind, same name or identity ──────────
@@ -913,7 +961,12 @@ export const createProcs = {
           const twinRecords = duplicateCheck.candidates
             .filter((c) => c.ref === "record")
             .map((c) => ({ id: c.id, title: c.title, type: c.kind }));
-          if (approvalDuplicate === "ask_reviewer" && twinRecords.length > 0) {
+          // Twins the reviewer saw on the card and approved past = keep both.
+          const reviewed = new Set(
+            isAgentFiling ? [] : (input.approvalReviewedTwinIds ?? [])
+          );
+          const unseenTwins = twinRecords.filter((t) => !reviewed.has(t.id));
+          if (approvalDuplicate === "ask_reviewer" && unseenTwins.length > 0) {
             logger.info(
               {
                 event: "identity_resolve_merge",
@@ -939,7 +992,9 @@ export const createProcs = {
               outcome:
                 approvalDuplicate === "keep_both"
                   ? "keep_both"
-                  : isAgentFiling
+                  : approvalDuplicate === "ask_reviewer"
+                    ? "reviewed_keep_both"
+                    : isAgentFiling
                     ? "possible_duplicate_proposed"
                     : "possible_duplicate_warned",
               userId: ctx.userId,
@@ -1171,7 +1226,8 @@ export const createProcs = {
         await assertDocumentAttachable(
           ctx.userId,
           { id: entityId, workspaceId: resolvedEntityWorkspaceId ?? null },
-          input.documentId
+          input.documentId,
+          { aiWrite: isAiWriteRequest(input) }
         );
       }
 

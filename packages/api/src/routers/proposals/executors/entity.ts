@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { twinsShownOnCard } from "../../../services/duplicates/find-duplicate-candidates.js";
 import {
   db,
   proposals,
@@ -415,6 +416,14 @@ export function registerEntityExecutors(): void {
           ...(entityHome ? { targetWorkspaceId: entityHome } : {}),
           source: "system",
           approvalDuplicate: decision?.keepBoth ? "keep_both" : "ask_reviewer",
+          // No verb: keep both for the twins the card showed; an unseen twin
+          // still refuses so the card asks (the composite's rule, BLOCKER-2).
+          ...(!decision
+            ? {
+                approvalReviewedTwinIds: twinsShownOnCard(proposal.data)
+                  .single,
+              }
+            : {}),
         })) as { id?: string; deduplicated?: boolean };
         if (decision?.keepBoth && createdEntity.id) {
           identity = { verb: "separate", entityId: createdEntity.id };

@@ -71,10 +71,11 @@ const singleRow = {
 
 describe("loadOwnPendingCreates", () => {
   it("reads graph ops AND single entity creates; a linking op proposes nothing", async () => {
-    const creates = await loadOwnPendingCreates(
+    const { creates, truncated } = await loadOwnPendingCreates(
       stubDb([graphRow, singleRow]).db,
       "user-1"
     );
+    expect(truncated).toBe(false);
     expect(creates.map((c) => [c.proposalId, c.kind, c.nameKey])).toEqual([
       ["prop-graph", "person", "ada lovelace"],
       ["prop-single", "decision", "ship on monday"],
@@ -171,6 +172,32 @@ describe("findDuplicateCandidates — pending leg (preloaded queue)", () => {
         why: "same_identity",
       }),
     ]);
+  });
+
+  it("a pending queue longer than the scan is unchecked, never clear (S11)", async () => {
+    // 200 = the scan's cap: the queue may hold the twin past the rows read.
+    const full = Array.from({ length: 200 }, (_, i) => ({
+      ...singleRow,
+      id: `prop-${i}`,
+    }));
+    const { check } = await findDuplicateCandidates(stubDb(full).db, {
+      subject: "playbook",
+      userId: "user-1",
+      name: "Weekly review",
+      workspaceId: null,
+    });
+    expect(check.status).toBe("unchecked");
+    // CONTROL: the same miss under the cap is a real `clear`.
+    const { check: under } = await findDuplicateCandidates(
+      stubDb(full.slice(0, 199)).db,
+      {
+        subject: "playbook",
+        userId: "user-1",
+        name: "Weekly review",
+        workspaceId: null,
+      }
+    );
+    expect(under.status).toBe("clear");
   });
 
   it("a failed pending read is unchecked, never clear", async () => {

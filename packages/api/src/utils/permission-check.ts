@@ -11,6 +11,7 @@
  */
 
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import { isAiWriteRequest } from "./ai-write.js";
 import { classifySpaceOperation } from "@synap-core/types/workspaces";
 import {
   db,
@@ -1739,8 +1740,9 @@ async function evaluatePermission(
     // apply door checks. A missing/unresolvable profile is left to apply
     // (NOT_FOUND there), mirroring 4c. A FAILED membership read throws into the
     // catch below (deny); it never reads as "not an admin".
-    const isAiWrite =
-      Boolean(agentUserId) || source === "ai" || source === "intelligence";
+    // ONE predicate, shared with the doors that decide before the gate
+    // (utils/ai-write.ts), so a door and the gate never disagree on "AI".
+    const isAiWrite = isAiWriteRequest({ agentUserId, source });
     let podAdminSchemaChange = false;
     if (
       subjectType === "property_def" &&
