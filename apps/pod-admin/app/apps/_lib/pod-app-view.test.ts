@@ -10,7 +10,11 @@ import {
 const BRAND = "w-brand";
 const SHARED = "w-shared";
 const APPROVED: PodAppPair[] = [
-  { permission: "entity.post.read", workspaceId: BRAND, workspaceName: "Brand" },
+  {
+    permission: "entity.post.read",
+    workspaceId: BRAND,
+    workspaceName: "Brand",
+  },
   {
     permission: "entity.post.create",
     workspaceId: BRAND,
@@ -73,7 +77,10 @@ describe("narrow only takes away", () => {
   it("the last pair cannot be removed here (that is Revoke), and an unknown pair changes nothing", () => {
     expect(keepWithout([APPROVED[0]!], { workspaceId: BRAND })).toBeNull();
     expect(
-      keepWithout(APPROVED, { permission: "entity.post.delete", workspaceId: BRAND })
+      keepWithout(APPROVED, {
+        permission: "entity.post.delete",
+        workspaceId: BRAND,
+      })
     ).toBeNull();
   });
 });

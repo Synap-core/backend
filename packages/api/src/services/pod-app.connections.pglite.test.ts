@@ -276,7 +276,10 @@ async function consent(
   const userId = opts.userId ?? OWNER;
   const { redirectTo } = await decideOAuthAuthorization(
     {
-      ...authorizeParams(opts.clientId ?? STUDIO, opts.redirectUri ?? STUDIO_CB),
+      ...authorizeParams(
+        opts.clientId ?? STUDIO,
+        opts.redirectUri ?? STUDIO_CB
+      ),
       approve: true,
       approved,
     },
@@ -590,13 +593,15 @@ describe("P — the pod admin's switch for unverified apps (F4)", () => {
     await expect(
       getOAuthConsentContext(authorizeParams(STUDIO, STUDIO_CB), OWNER)
     ).rejects.toThrow(/turned off apps that are not Synap apps/);
-    const codesBefore = await q(`select code_hash from oauth_authorization_codes`);
+    const codesBefore = await q(
+      `select code_hash from oauth_authorization_codes`
+    );
     await expect(
       consent([{ permission: READ, workspaceId: BRAND }])
     ).rejects.toThrow(/turned off apps that are not Synap apps/);
-    expect(await q(`select code_hash from oauth_authorization_codes`)).toHaveLength(
-      codesBefore.length
-    );
+    expect(
+      await q(`select code_hash from oauth_authorization_codes`)
+    ).toHaveLength(codesBefore.length);
 
     const synap = await authorize(SYNAP_APP, SYNAP_CB);
     expect(synap.status).toBe(302);
@@ -714,8 +719,10 @@ describe("M — 'apply automatically' is the owner's, after connecting", () => {
     ]);
     const app = await connection();
     const posture = async () =>
-      (await readAgentGovernance({ db: h.db as never, agentUserId: app.agent_user_id }))!
-        .posture;
+      (await readAgentGovernance({
+        db: h.db as never,
+        agentUserId: app.agent_user_id,
+      }))!.posture;
 
     // Never set at consent.
     const [listed] = (await caller(OWNER).list()).filter(

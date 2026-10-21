@@ -81,7 +81,8 @@ export function approvalSentence(approved: readonly PodAppPair[]): string {
   if (approved.length === 0) return "No access.";
   return approvalBySpace(approved)
     .map(
-      (s) => `${s.permissions.map((p) => p.label).join(", ")} in ${s.workspaceName}`
+      (s) =>
+        `${s.permissions.map((p) => p.label).join(", ")} in ${s.workspaceName}`
     )
     .join(" · ");
 }

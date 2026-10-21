@@ -349,40 +349,40 @@ function AppDetail({
       {pod && !revoked ? (
         <PodAppSettings app={app} pod={pod} onChanged={onChanged} />
       ) : (
-      <section className="mt-6" aria-labelledby="reach">
-        <h2 id="reach" className="mb-2 text-sm font-medium text-foreground">
-          What it may touch
-        </h2>
-        {revoked ? (
-          <p className="text-[12.5px] text-foreground/65">
-            Access removed. Revoking an app revokes its key, so nothing it held
-            works any more.
-          </p>
-        ) : lines.length === 0 ? (
-          <p className="text-[12.5px] text-foreground/65">
-            No access yet. The app has registered but nothing has been approved
-            for it.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-3">
-            {lines.map((line, i) => (
-              <li
-                key={i}
-                className="rounded-lg border border-foreground/10 bg-content1 px-4 py-3"
-              >
-                <p className="text-[13px] text-foreground/85">
-                  {line.summary.what}
-                </p>
-                <p className="mt-1 text-[11.5px] text-foreground/65">
-                  {line.summary.where.length > 0
-                    ? line.summary.where.join(" · ")
-                    : "Anywhere"}
-                </p>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+        <section className="mt-6" aria-labelledby="reach">
+          <h2 id="reach" className="mb-2 text-sm font-medium text-foreground">
+            What it may touch
+          </h2>
+          {revoked ? (
+            <p className="text-[12.5px] text-foreground/65">
+              Access removed. Revoking an app revokes its key, so nothing it
+              held works any more.
+            </p>
+          ) : lines.length === 0 ? (
+            <p className="text-[12.5px] text-foreground/65">
+              No access yet. The app has registered but nothing has been
+              approved for it.
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {lines.map((line, i) => (
+                <li
+                  key={i}
+                  className="rounded-lg border border-foreground/10 bg-content1 px-4 py-3"
+                >
+                  <p className="text-[13px] text-foreground/85">
+                    {line.summary.what}
+                  </p>
+                  <p className="mt-1 text-[11.5px] text-foreground/65">
+                    {line.summary.where.length > 0
+                      ? line.summary.where.join(" · ")
+                      : "Anywhere"}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       )}
 
       <div className="mt-8 border-t border-foreground/10 pt-5">
@@ -467,7 +467,11 @@ function PodAppSettings({
     setNarrowing(false);
     setDrop(null);
     if (!r.ok) {
-      addToast({ title: "Couldn't change its access", description: r.error, color: "danger" });
+      addToast({
+        title: "Couldn't change its access",
+        description: r.error,
+        color: "danger",
+      });
       return;
     }
     addToast({ title: "Access narrowed", color: "default" });
@@ -483,7 +487,11 @@ function PodAppSettings({
     });
     setSwitching(false);
     if (!r.ok) {
-      addToast({ title: "Couldn't change it", description: r.error, color: "danger" });
+      addToast({
+        title: "Couldn't change it",
+        description: r.error,
+        color: "danger",
+      });
       return;
     }
     setMode(r.data as PodAppInfo["write_mode"]);
@@ -571,7 +579,10 @@ function PodAppSettings({
       </section>
 
       <section className="mt-6" aria-labelledby="pod-writes">
-        <h2 id="pod-writes" className="mb-2 text-sm font-medium text-foreground">
+        <h2
+          id="pod-writes"
+          className="mb-2 text-sm font-medium text-foreground"
+        >
           Its changes
         </h2>
         <div className="flex items-start justify-between gap-4 rounded-lg border border-foreground/10 bg-content1 px-4 py-3">
@@ -579,9 +590,7 @@ function PodAppSettings({
             <p className="text-[13px] text-foreground/85">
               Apply automatically
             </p>
-            <p className="mt-1 text-[11.5px] text-foreground/65">
-              {mode.line}
-            </p>
+            <p className="mt-1 text-[11.5px] text-foreground/65">{mode.line}</p>
           </div>
           <Switch
             size="sm"
@@ -600,8 +609,8 @@ function PodAppSettings({
         title={`Remove ${drop?.what ?? "this"}?`}
         consequence={
           <p>
-            {pod.domain} loses it now. Its current access stops; the next one
-            it gets carries only what is left.
+            {pod.domain} loses it now. Its current access stops; the next one it
+            gets carries only what is left.
           </p>
         }
         confirmLabel="Remove"

@@ -1673,7 +1673,9 @@ export async function narrowApp(args: {
   await recordAppEvent(found, args.ownerUserId, APP_EVENT_ACTIONS.approved, {
     via: "narrow",
     approved: keep,
-    removed: current.filter((r) => !keep.some((k) => pairKey(k) === pairKey(r))),
+    removed: current.filter(
+      (r) => !keep.some((k) => pairKey(k) === pairKey(r))
+    ),
   });
   return loadOwnedApp(args.publicId, args.ownerUserId);
 }
@@ -1797,7 +1799,9 @@ export async function podAppViews(
   if (pod.length === 0) return new Map();
   const spaceIds = [
     ...new Set(
-      pod.flatMap((r) => (r.app.approvedRequests ?? []).map((a) => a.workspaceId))
+      pod.flatMap((r) =>
+        (r.app.approvedRequests ?? []).map((a) => a.workspaceId)
+      )
     ),
   ];
   const names = new Map(

@@ -28,10 +28,7 @@ import {
 } from "../../components/resource-row";
 import { SectionCard } from "../../components/section-card";
 import { StatusPill } from "../../components/status-pill";
-import {
-  approvalSentence,
-  tierLabel,
-} from "../../../apps/_lib/pod-app-view";
+import { approvalSentence, tierLabel } from "../../../apps/_lib/pod-app-view";
 import { appHref } from "./app-inventory";
 
 export function PodAppsCard() {
