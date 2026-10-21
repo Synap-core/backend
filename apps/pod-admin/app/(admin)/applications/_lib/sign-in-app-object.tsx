@@ -60,7 +60,8 @@ export function SignInAppObject({
         utils.applicationConnections.list.invalidate(),
       ]),
   });
-  // "Unlink {email}": one person off this app's issuer; the app stays.
+  // "Unlink {email}": one person off this app's issuer (so off every app of
+  // that issuer, `unlinkReach`); the app stays.
   // The person stays set while the confirm plays its exit, so its title does
   // not change under the closing modal; `unlinkOpen` decides visibility.
   const [unlinking, setUnlinking] = useState<AppPerson | null>(null);
@@ -79,6 +80,11 @@ export function SignInAppObject({
   if (query.error || !conn) return appFailure(frame, id, query.error);
 
   const state = signInState(conn);
+  // What else "Unlink" takes away: the link is per sign-in service, not per app.
+  const alsoGoes = [
+    ...conn.unlinkReach.otherApps.map((app) => app.displayName),
+    ...(conn.unlinkReach.cloudSignIn ? ["Continue with Synap Cloud"] : []),
+  ];
   const publisher = hostOf(conn.publisherUrl);
   // Only an https address is followed (`publisherExit`); anything else is
   // named, never linked.
@@ -184,8 +190,17 @@ export function SignInAppObject({
             <>
               <p>
                 Their Synap account stops signing in to this Pod through{" "}
-                {conn.displayName}.
+                {conn.displayName}
+                {alsoGoes.length > 0
+                  ? `, and through ${new Intl.ListFormat("en", { type: "conjunction" }).format(alsoGoes)}: they share one sign-in service, so the account is unlinked from all of them at once.`
+                  : "."}
               </p>
+              {conn.unlinkReach.cloudSignIn ? (
+                <p className="mt-2">
+                  If they have no password on this Pod, they can no longer sign
+                  in at all.
+                </p>
+              ) : null}
               <p className="mt-2 text-foreground/65">
                 Their Pod account, memberships and password stay. Everyone else
                 keeps using {conn.displayName}.

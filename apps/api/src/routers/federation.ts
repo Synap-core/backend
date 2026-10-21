@@ -23,7 +23,8 @@ import {
   eq,
   getDb,
   podSettings,
-  projectPodUserAccess,
+  readPodUserAccess,
+  hasActivePodAccess,
   PodOwnerAlreadyClaimedError,
   FederatedApplicationConnectionService,
   seedAdminUser,
@@ -35,8 +36,6 @@ import {
 import {
   federatedIdentityLinks,
   federatedApplicationConnections,
-  projectMembers,
-  projects,
   users,
   workspaceMembers,
   workspaces,
@@ -999,47 +998,11 @@ export async function hasDifferentHumanPodOwner(
   );
 }
 
-async function accessForUser(userId: string): Promise<PodUserAccess> {
-  const db = await getDb();
-  const [memberships, projectMemberships] = await Promise.all([
-    db
-      .select({
-        workspaceId: workspaceMembers.workspaceId,
-        role: workspaceMembers.role,
-        systemSlug: workspaces.systemSlug,
-        workspaceArchivedAt: workspaces.archivedAt,
-      })
-      .from(workspaceMembers)
-      .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
-      .where(eq(workspaceMembers.userId, userId)),
-    db
-      .select({
-        projectId: projectMembers.projectId,
-        workspaceId: projects.workspaceId,
-        role: projectMembers.role,
-        status: projects.status,
-        workspaceArchivedAt: workspaces.archivedAt,
-        workspaceSystemSlug: workspaces.systemSlug,
-      })
-      .from(projectMembers)
-      .innerJoin(projects, eq(projects.id, projectMembers.projectId))
-      .leftJoin(workspaces, eq(workspaces.id, projects.workspaceId))
-      .where(eq(projectMembers.userId, userId)),
-  ]);
-  return projectPodUserAccess(memberships, projectMemberships);
-}
-
 function canUseScope(
   access: PodUserAccess,
   scope: z.infer<typeof requestedScopeSchema> | undefined
 ): boolean {
-  const hasActiveScope =
-    access.workspaceScopes.length > 0 || access.projectScopes.length > 0;
-  if (!scope || scope.kind === "pod") {
-    return (
-      hasActiveScope || access.podRole === "owner" || access.podRole === "admin"
-    );
-  }
+  if (!scope || scope.kind === "pod") return hasActivePodAccess(access);
   return scope.kind === "workspace"
     ? access.workspaceScopes.some((entry) => entry.workspaceId === scope.id)
     : access.projectScopes.some((entry) => entry.projectId === scope.id);
@@ -1718,7 +1681,7 @@ federationRouter.post("/identity-links/consume", async (c) => {
       409
     );
   }
-  const access = await accessForUser(receipt.userId);
+  const access = await readPodUserAccess(receipt.userId);
   if (!canUseScope(access, undefined)) {
     return c.json({ error: "Linked Pod user has no active access" }, 403);
   }
@@ -2149,7 +2112,7 @@ federationRouter.post("/bootstrap", async (c) => {
     return c.json({ error: "Could not approve bootstrap issuer" }, 409);
   }
 
-  const access = await accessForUser(seeded.userId);
+  const access = await readPodUserAccess(seeded.userId);
   return c.json({
     success: true,
     userId: seeded.userId,
