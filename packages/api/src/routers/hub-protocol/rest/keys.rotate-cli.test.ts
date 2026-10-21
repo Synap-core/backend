@@ -50,7 +50,8 @@ const { carryOver } = vi.hoisted(() => ({
   carryOver: vi.fn(async (_args: unknown) => undefined),
 }));
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     query: {
       apiKeys: {

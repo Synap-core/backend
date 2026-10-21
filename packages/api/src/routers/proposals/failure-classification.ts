@@ -49,6 +49,11 @@ import {
 } from "@synap-core/types/failures";
 import { redactForStorage } from "../../utils/redact-secrets.js";
 import { isSetupRequiredLike } from "../../services/proposals/setup-required-error.js";
+import {
+  nounInSentence,
+  resolveObjectNoun,
+  resolveObjectNounPlural,
+} from "@synap-core/types/vocabulary";
 
 /**
  * The structured failure scalars a failed proposal carries.
@@ -65,6 +70,51 @@ export interface ProposalFailureMeta {
   missingFields?: string[];
   /** REDACTED raw error text. AGENT-ONLY — never projected to a user. */
   detail?: string;
+  /**
+   * A `create` refused because the record ALREADY EXISTS (the entity create
+   * door's same-name gate): the existing records, so the person gets a door to
+   * them instead of the agent's "pass forceCreate" instruction. Caller-scoped
+   * by the gate that produced them (at most 5).
+   */
+  existing?: ExistingRecordRef[];
+}
+
+/** A record that already exists — a door, never a sentence. */
+export interface ExistingRecordRef {
+  id: string;
+  title: string | null;
+  /** The record's kind (profile slug). */
+  kind: string;
+}
+
+/**
+ * The same-name gate's refusal, read by SHAPE: `routers/entities/create.ts`
+ * throws `TRPCError({ code: "CONFLICT", cause: buildWeakDedupCause(...) })`
+ * (`@synap/database` entity-create-guardrails, `ENTITY_WEAK_DEDUP_CODE`). Read
+ * structurally so this pure module does not import the database package; the
+ * test drives the REAL producer, so a renamed code or field fails there.
+ */
+function existingRecordsOf(err: unknown): ExistingRecordRef[] | undefined {
+  if (!(err instanceof TRPCError) || err.code !== "CONFLICT") return undefined;
+  const cause = err.cause as
+    { code?: unknown; candidates?: unknown } | undefined;
+  if (cause?.code !== "ENTITY_WEAK_DEDUP" || !Array.isArray(cause.candidates)) {
+    return undefined;
+  }
+  const refs = cause.candidates
+    .filter(
+      (c): c is { id: string; title?: unknown; type: string } =>
+        !!c &&
+        typeof (c as { id?: unknown }).id === "string" &&
+        typeof (c as { type?: unknown }).type === "string"
+    )
+    .slice(0, 5)
+    .map((c) => ({
+      id: c.id,
+      title: typeof c.title === "string" ? c.title : null,
+      kind: c.type,
+    }));
+  return refs.length > 0 ? refs : undefined;
 }
 
 /** Duck-typed shape any thrower may carry; nothing imports anything for this. */
@@ -330,11 +380,13 @@ export function classifyThrownFailure(err: unknown): ProposalFailureMeta {
     (regexMissing.length > 0 ? regexMissing : undefined);
 
   const providerRef = attached?.providerRef ?? duckProvider;
+  const existing = existingRecordsOf(err);
 
   return {
     errorClass,
     ...(providerRef !== undefined ? { providerRef } : {}),
     ...(missingFields !== undefined ? { missingFields } : {}),
+    ...(existing !== undefined ? { existing } : {}),
     ...(detail ? { detail } : {}),
   };
 }
@@ -381,6 +433,19 @@ export function safeFailureSentence(
 }
 
 function rawFailureSentence(err: unknown, meta: ProposalFailureMeta): string {
+  // "Already exists" is said to the PERSON, naming the record. The gate's own
+  // message is the agent's instruction ("pass forceCreate: true …") — it stays
+  // in the agent-only `detail`; the existing records ride as `existing` doors.
+  if (meta.existing && meta.existing.length > 0) {
+    const first = meta.existing[0]!;
+    const noun = nounInSentence(
+      meta.existing.length > 1
+        ? resolveObjectNounPlural(first.kind)
+        : resolveObjectNoun(first.kind)
+    );
+    const name = first.title ? `"${first.title}"` : "It";
+    return `Couldn't create — ${name} already exists. Open the existing ${noun} instead.`;
+  }
   if (err instanceof TRPCError) return err.message;
 
   // A DUCK-TYPED setup-required failure declares its own message and declares
@@ -518,6 +583,7 @@ export function failureRecord(
     ...(meta.missingFields !== undefined
       ? { missingFields: meta.missingFields }
       : {}),
+    ...(meta.existing !== undefined ? { existing: meta.existing } : {}),
     ...(meta.detail !== undefined ? { detail: meta.detail } : {}),
   };
 }

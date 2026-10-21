@@ -151,7 +151,9 @@ describe("EntityRepository.update — validates only the keys the patch writes",
   it("still refuses an invalid value in a key the patch writes", async () => {
     await expect(
       repo.update("e1", { properties: { priority: "urgent" } }, "u1")
-    ).rejects.toThrow(/Property validation failed: Value 'urgent' not in enum/);
+    ).rejects.toThrow(
+      /Property validation failed: Property 'priority': Value 'urgent' not in enum/
+    );
     expect(written).toBeUndefined();
   });
 

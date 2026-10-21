@@ -120,10 +120,6 @@ import { drizzle } from "drizzle-orm/pglite";
 import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
-  entities,
-  relations,
-  entityFacets,
-  links,
   proposals,
   focusSessions,
   chatTurns,
@@ -145,6 +141,7 @@ import {
   revertSession,
   type ProposalRevertOutput,
 } from "../../focus-sessions/revert-session.js";
+import { allSchemaTables } from "../../../__tests__/pglite-ddl.js";
 
 const USER = "user-1";
 type Database = typeof DatabaseHandle;
@@ -177,24 +174,11 @@ function ddlFor(table: PgTable): string {
 
 async function freshDb() {
   const client = new PGlite();
-  // `secrets` is read by the idempotency lookup (connection-scoped link keys).
-  // Workspace membership backs the Hub acting-context check (REST cancel test).
-  const { secrets, workspaces, workspaceMembers } =
-    await import("@synap/database");
-  for (const table of [
-    entities,
-    relations,
-    entityFacets,
-    links,
-    proposals,
-    focusSessions,
-    chatTurns,
-    playbookRuns,
-    secrets,
-    workspaces,
-    workspaceMembers,
-  ]) {
-    await client.exec(ddlFor(table as unknown as PgTable));
+  // Every schema table: a hand-picked list rots the day the code under test
+  // reads one more (pglite-ddl.ts allSchemaTables) — governance_rules and users
+  // (the governed close), secrets (link keys), workspace membership (REST).
+  for (const table of allSchemaTables()) {
+    await client.exec(ddlFor(table));
   }
   await client.exec(`
     create schema pgboss;

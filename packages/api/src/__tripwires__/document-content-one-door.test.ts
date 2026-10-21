@@ -44,8 +44,9 @@ const DOOR = "packages/database/src/utils/claim-document-revision.ts";
 
 const EXEMPT: Record<string, { count: number; reason: string }> = {
   "packages/api/src/routers/views.ts": {
-    count: 1,
-    reason: "whiteboard view content (tldraw JSON), not the text content plane",
+    count: 2,
+    reason:
+      "whiteboard view content (tldraw JSON), not the text content plane — `save` and `updateContent` (the hub/MCP/approval canvas door, 32710558d) each push it to the Yjs canonical key",
   },
   "packages/api/src/routers/sync.ts": {
     count: 1,
@@ -159,8 +160,9 @@ describe("document content has ONE write door", () => {
  */
 const CREATE_EXEMPT: Record<string, { count: number; reason: string }> = {
   "packages/api/src/routers/views.ts": {
-    count: 3,
-    reason: "whiteboard/canvas VIEW content (tldraw JSON)",
+    count: 4,
+    reason:
+      "whiteboard/canvas VIEW content (tldraw JSON) — create ×2, `save` and `updateContent` canvas writes",
   },
   "packages/database/src/utils/create-default-whiteboard.ts": {
     count: 1,

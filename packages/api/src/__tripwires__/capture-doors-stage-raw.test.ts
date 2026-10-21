@@ -51,6 +51,8 @@ const EXEMPT: Record<string, string> = {
     "builds from import items ALREADY staged by the Collect step (services/imports/stage.ts → stageIntakeSource), and forwards their ids (`sourceDocumentIds: builtIds`)",
   "services/connector-import-bridge.ts":
     "connection sync — wave 2 (founder: keep a COPY of each provider record); out of wave 1 scope",
+  "services/library/run-action.ts":
+    "a Library chip files ONE proposal from a Library item — a document ALREADY staged as the raw (library/add.ts, imports/stage.ts → stageIntakeSource) — and forwards its id (`sourceDocumentIds: [args.itemId]`)",
 };
 
 function walk(dir: string): string[] {

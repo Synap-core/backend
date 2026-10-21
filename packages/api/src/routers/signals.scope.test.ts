@@ -27,7 +27,8 @@ const reviewSpy = vi.fn();
 const activitySpy = vi.fn();
 const landedSpy = vi.fn();
 
-vi.mock("./proposals.js", () => ({
+vi.mock("./proposals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./proposals.js")>()),
   proposalsRouter: { createCaller: () => ({ groups: groupsSpy }) },
 }));
 

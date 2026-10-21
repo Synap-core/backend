@@ -50,7 +50,8 @@ vi.mock("../services/agent-identity-service.js", async (importOriginal) => {
     >();
   return { ...actual, getAgentFocusProjectId: mockGetFocusProject };
 });
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: vi.fn(() => ({
     info: vi.fn(),
     warn: vi.fn(),

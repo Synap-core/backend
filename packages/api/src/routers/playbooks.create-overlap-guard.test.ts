@@ -73,7 +73,8 @@ const {
   };
 });
 
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({
     warn: vi.fn(),
     info: vi.fn(),
@@ -94,9 +95,13 @@ vi.mock("@synap/database", async (importOriginal) => {
     isNull: vi.fn((a: unknown) => ({ isNull: a })),
     asc: vi.fn((a: unknown) => ({ asc: a })),
     desc: vi.fn((a: unknown) => ({ desc: a })),
-    drizzleSql: vi.fn((strings: TemplateStringsArray, ..._v: unknown[]) => ({
-      sql: strings.join("?"),
-    })),
+    drizzleSql: Object.assign(
+      vi.fn((strings: TemplateStringsArray, ..._v: unknown[]) => ({
+        sql: strings.join("?"),
+      })),
+      // session-kind.ts builds a module-level drizzleSql.raw
+      { raw: vi.fn((s: string) => ({ sql: s })) }
+    ),
   };
 });
 
@@ -211,8 +216,13 @@ const THE_DUPLICATE = {
   name: "Lead → qualified (discovery)",
   description:
     "The repeatable motion for taking one sourced lead through to qualified-or-dead, for both the Architech firm segment and the creator/operator segment.",
+  // {name} placeholders, declared (assertGoalPlaceholdersDeclared, 1c6193456).
   goalTemplate:
-    "Qualify {{lead}} ({{segment}}) — source, enrich, reach out, run discovery, decide",
+    "Qualify {lead} ({segment}) — source, enrich, reach out, run discovery, decide",
+  params: [
+    { name: "lead", type: "text" },
+    { name: "segment", type: "text" },
+  ],
   status: "active" as const,
   executor: "is-agent" as const,
   agentUserId: "00000000-0000-4000-8000-00000000a9e7",

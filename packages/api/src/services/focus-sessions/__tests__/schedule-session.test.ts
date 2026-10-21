@@ -106,7 +106,8 @@ vi.mock("@synap/database", async (importOriginal) => {
     },
   };
 });
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock("../../playbooks/playbook-lifecycle.js", () => ({

@@ -25,10 +25,11 @@ const h = vi.hoisted(() => ({
   triageEmails: vi.fn(async () => []),
 }));
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
   const channels = {};
   const views = {};
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     db: {
       select: () => ({
         from: (table: unknown) => ({

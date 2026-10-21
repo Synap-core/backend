@@ -33,6 +33,7 @@ import { DocumentChanges } from "../../_lib/object/content/document-changes";
 import { documentChanges } from "../../_lib/object/content/document-changes-model";
 import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
 import { proposalHeading } from "./proposal-heading";
+import { proposalRequester } from "./proposal-requester";
 import { proposalWhy } from "./proposal-why";
 
 /**
@@ -91,25 +92,20 @@ export type ProposalSourceExit = ReturnType<
   typeof useProposalReview
 >["sourceExits"][number];
 
-/** "Requested by Acme (for Ana) · in Builder · 2h ago" — only parts the pod resolved. */
+/** "Requested by Acme, for Ana · in Builder · 2h ago" — only parts the pod resolved. */
 export function proposalRequestedParts(
   p: ProposalReviewData,
   workspaceName: string | null,
   when: (at: Date | string) => string
 ): string[] {
-  /* Built from fields the payload GENUINELY carries. `authorName` is the
-     enrichment's resolved display name (the raw row has only ids); a segment
-     whose source is missing is dropped, never defaulted, so this line can
-     never assert a requester nobody resolved. An Application is the requester
-     — name it, and keep the human it acts for. `appName` rides the display
-     projection; read defensively because the published types may lag. */
-  const appName = (p as { appName?: string }).appName;
+  /* Built from fields the payload GENUINELY carries; a segment whose source
+     is missing is dropped, never defaulted, so this line can never assert a
+     requester nobody resolved. Who asked is the ONE derivation
+     (`proposalRequester`): the agent and the person it acts for, an
+     Application, or a guest. */
+  const requester = proposalRequester(p);
   return [
-    appName
-      ? `Requested by ${appName}${p.authorName ? ` (for ${p.authorName})` : ""}`
-      : p.authorName
-        ? `Requested by ${p.authorName}`
-        : undefined,
+    requester ? `Requested by ${requester}` : undefined,
     workspaceName ? `in ${workspaceName}` : undefined,
     p.createdAt ? when(p.createdAt) : undefined,
   ].filter((part): part is string => !!part);

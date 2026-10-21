@@ -24,6 +24,7 @@ import type {
 } from "../../../services/profiles/renderer-slots.js";
 import { getDb } from "@synap/database";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
+import { skillAuthoringProblem } from "../../../services/skills/skill-authoring.js";
 import {
   updateSkillGoverned,
   type SkillUpdatePatch,
@@ -44,6 +45,7 @@ import {
   createPlaybookDoor,
   listPlaybooksDoor,
   runPlaybookDoor,
+  updatePlaybookDoor,
   type PlaybookDoorIdentity,
   type PlaybookDoorOutcome,
 } from "../../hub-protocol/playbook-doors.js";
@@ -480,6 +482,64 @@ export const buildHandlers: McpHandlerMap = {
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
+  /**
+   * Edit an EXISTING playbook through the governed `playbooks.update` (via
+   * `updatePlaybookDoor`) — always a proposal for an agent. Every field is
+   * passed through for that procedure's `updateInputSchema` and the shared
+   * definition check to validate: a malformed field is refused, never dropped.
+   */
+  synap_update_playbook: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    type Patch = Parameters<typeof updatePlaybookDoor>[1]["patch"];
+    // `subjectProfile` is ONE stored record the patch REPLACES (process keys
+    // are carried over by `playbooks.update`), so a `statusProperty` alone
+    // would drop the stored kind: it needs its slug beside it.
+    const slug =
+      typeof args.subjectProfileSlug === "string" &&
+      args.subjectProfileSlug.trim()
+        ? args.subjectProfileSlug.trim()
+        : undefined;
+    if (args.statusProperty !== undefined && !slug) {
+      return ok({
+        error:
+          "statusProperty needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.",
+      });
+    }
+    const patch: Record<string, unknown> = {};
+    for (const key of [
+      "name",
+      "description",
+      "goalTemplate",
+      "params",
+      "stages",
+      "criteria",
+      "expectedOutputs",
+      "activators",
+      "humanOnlyStatuses",
+      "status",
+      "scope",
+    ] as const satisfies ReadonlyArray<keyof Patch>) {
+      if (args[key] !== undefined) patch[key] = args[key];
+    }
+    if (slug) {
+      patch.subjectProfile = {
+        profileSlug: slug,
+        ...(args.statusProperty !== undefined
+          ? { statusProperty: args.statusProperty }
+          : {}),
+      };
+    }
+    const reasoning = readReasoning(args);
+    if (reasoning) patch.reasoning = reasoning;
+    const outcome = await updatePlaybookDoor(playbookDoorIdentity(ctx), {
+      playbookId: args.playbookId,
+      patch: patch as Patch,
+    });
+    return renderPlaybookDoorOutcome(outcome, userId);
+  },
   synap_create_view: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const {
       toolName,
@@ -854,22 +914,18 @@ export const buildHandlers: McpHandlerMap = {
       typeof args.body === "string" && args.body.trim() !== ""
         ? args.body
         : undefined;
-    if (!skillCode && !skillBody) {
-      return ok({
-        error:
-          "a skill needs documentation or code — pass `body` (Markdown) to author a teaching skill, `code` to author a runnable one, or both.",
-      });
-    }
     const skillSlug =
       typeof args.slug === "string" && args.slug.trim() !== ""
         ? args.slug.trim()
         : undefined;
-    if (!skillCode && !skillSlug) {
-      return ok({
-        error:
-          "slug is required for a documentation-only skill — it is the ref synap_load_skill resolves (e.g. 'biz/business-plan'). Without one the skill is authored but unreachable.",
-      });
-    }
+    // The ONE authoring rule (documentation-or-code, a slug for a teaching
+    // skill, the slug's shape) — shared with Hub REST and capture `skills[]`.
+    const authoringProblem = skillAuthoringProblem({
+      body: skillBody,
+      code: skillCode,
+      slug: skillSlug,
+    });
+    if (authoringProblem) return ok({ error: authoringProblem });
     const skillWorkspaceId =
       typeof args.workspaceId === "string" ? args.workspaceId : undefined;
     const skillsCtx = await createHubProtocolCallerContext(

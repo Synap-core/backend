@@ -75,6 +75,11 @@ const PLUMBING_KEYS = new Set([
   "governanceReason",
   // The proposal's own target — the card's header already names it.
   "entityId",
+  // A session update's display-only name, and the goal it had when a goal
+  // change was filed — the latter is drawn as the `goal` row's before
+  // (`services/focus-sessions/session-update-goal.ts`).
+  "sessionName",
+  "previousGoal",
 ]);
 
 /** Keys the entity-shape walk above the fallback already turned into rows. */
@@ -309,7 +314,10 @@ export function buildProposalChanges(
       path: key,
       label: labelFromPath(key),
       operation,
-      before: undefined,
+      before:
+        key === "goal" && operation === "update" && "previousGoal" in data
+          ? data.previousGoal
+          : undefined,
       after: value,
       valueType: valueTypeOf(value),
     });

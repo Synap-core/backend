@@ -8,14 +8,15 @@
  */
 import {
   getDb,
-  eq,
   and,
   asc,
   desc,
   inArray,
   entities,
   drizzleSql,
+  profileSlugScopeCondition,
 } from "@synap/database";
+import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import { entityQueryVisibilityWhere } from "@synap/jobs/workers/entity-query-scope.js";
 import {
   numericPropertyExpr,
@@ -81,7 +82,17 @@ export async function loadVisibleEntityIds(args: {
     inArray(entities.id, [...args.ids]),
     visibilityFor(args.workspaceId, args.ownerId),
   ];
-  if (args.profileSlug) conditions.push(eq(entities.type, args.profileSlug));
+  if (args.profileSlug) {
+    // The kind-aware door: a role-subject playbook's pins are its WEARERS,
+    // whose `entities.type` is their primary kind, never the role slug.
+    conditions.push(
+      await profileSlugScopeCondition(
+        db,
+        args.profileSlug,
+        await resolveFacetVisibilityScope(args.ownerId, args.workspaceId)
+      )
+    );
+  }
   const rows = await db
     .select({ id: entities.id })
     .from(entities)
@@ -102,7 +113,12 @@ export async function findFallbackSubject(args: {
 }): Promise<string | null> {
   const db = await getDb();
   const conditions = [
-    eq(entities.type, args.profileSlug),
+    // The kind-aware door: a role's wearers carry their primary kind in `type`.
+    await profileSlugScopeCondition(
+      db,
+      args.profileSlug,
+      await resolveFacetVisibilityScope(args.ownerId, args.workspaceId)
+    ),
     visibilityFor(args.workspaceId, args.ownerId),
   ];
   for (const condition of parseQueryFilterConditions(

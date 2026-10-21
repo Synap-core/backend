@@ -100,9 +100,14 @@ vi.mock("../../../utils/chat-realtime-broadcast.js", () => ({
 vi.mock("../../../utils/domain-event-bridge.js", () => ({
   emitHubRealtimeEvent: () => undefined,
 }));
-vi.mock("../../../utils/channel-visibility.js", async () => {
+vi.mock("../../../utils/channel-visibility.js", async (importOriginal) => {
   const { sql } = await import("drizzle-orm");
-  return { channelVisibilityWhere: () => sql`true` };
+  return {
+    ...(await importOriginal<
+      typeof import("../../../utils/channel-visibility.js")
+    >()),
+    channelVisibilityWhere: () => sql`true`,
+  };
 });
 vi.mock("../../../lib/event-helpers.js", () => ({
   logEvent: async (

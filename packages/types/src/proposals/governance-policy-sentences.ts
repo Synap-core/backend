@@ -27,6 +27,8 @@ export const GOVERNANCE_POLICY_SENTENCES = {
   CAPABILITY_PROPOSE: "Capability execution requires human approval.",
   SCOPE_IDENTITY_CHANGE:
     "This change alters the record's scope or identity and requires human approval.",
+  PROJECT_FILING:
+    "Filing these records into a project shows them to the project's members, so a person approves it.",
   CRITERIA_CHANGE:
     "An agent is changing the acceptance criteria its own work is graded against; a person must approve them.",
   DESTRUCTIVE_HARD_FLOOR:

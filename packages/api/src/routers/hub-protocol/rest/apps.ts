@@ -6,6 +6,8 @@
  *   GET    /apps/:id           one app + its grants (owner-floored)
  *   POST   /apps/:id/connect   { requests } → ONE proposal → { proposalId, reviewUrl }
  *   POST   /apps/:id/key       AFTER approval: mint a fresh key + grant, plaintext ONCE
+ *   PUT    /apps/:id/redirect-uris  { redirectUris } — where a person's "Sign in
+ *                              with Synap" code may go (owner only) → { app }
  *   DELETE /apps/:id           revoke the app (revokes its keys → its grants)
  *
  * Pod apps (spec 17 PB4) — the connections manager the browser/settings call:
@@ -51,6 +53,7 @@ import {
   requestAccess,
   revokeApp,
   serializeApp,
+  setAppRedirectUris,
   setAppWriteMode,
 } from "../../../services/app-connect.js";
 
@@ -89,6 +92,10 @@ const NarrowBody = z.object({
 });
 
 const WriteModeBody = z.object({ applyAutomatically: z.boolean() });
+
+const RedirectUrisBody = z.object({
+  redirectUris: z.array(z.string().min(1).max(2048)).max(8),
+});
 
 function fail(c: Ctx, err: unknown, what: string) {
   const status = httpStatusForTrpcError(err);
@@ -210,6 +217,36 @@ export function registerAppsRoutes(app: HubHono): void {
       );
     } catch (err) {
       return fail(c, err, "POST /apps/:id/key");
+    }
+  });
+
+  // ── PUT /apps/:id/redirect-uris — where sign-in codes go (the owner) ──────
+  app.put("/apps/:id/redirect-uris", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const body = RedirectUrisBody.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const found = await setAppRedirectUris({
+        publicId: c.req.param("id"),
+        ownerUserId: userId,
+        redirectUris: body.data.redirectUris,
+        actorAgentUserId: c.get("agentUserId") as string | undefined,
+        actorKeyType: c.get("keyType") as string | undefined,
+      });
+      return c.json({ app: serializeApp(found) });
+    } catch (err) {
+      return fail(c, err, "PUT /apps/:id/redirect-uris");
     }
   });
 

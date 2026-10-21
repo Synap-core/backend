@@ -36,6 +36,9 @@ import { PRODUCERLESS_NOTIFICATION_TYPES } from "./catalogue.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const API_SRC = join(HERE, "..", "..");
+// Producers also live in @synap/jobs (automation.notification:
+// jobs/src/workers/steps/output.ts).
+const JOBS_SRC = join(HERE, "..", "..", "..", "jobs", "src");
 
 /**
  * The explicit, human-reviewed allowlist of registry types with NO producer
@@ -79,7 +82,10 @@ function collectSourceFiles(dir: string): string[] {
 const COMPOSED_TYPE_PREFIXES = ["ai.proactive."] as const;
 
 function findProducerlessTypes(): Set<string> {
-  const files = collectSourceFiles(API_SRC);
+  const files = [
+    ...collectSourceFiles(API_SRC),
+    ...collectSourceFiles(JOBS_SRC),
+  ];
   const contents = files.map((f) => readFileSync(f, "utf8"));
 
   const producerless = new Set<string>();

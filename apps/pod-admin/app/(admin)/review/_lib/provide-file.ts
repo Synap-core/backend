@@ -31,13 +31,6 @@ export function fileProblem(
   return null;
 }
 
-/**
- * Said with a refused answer after the upload went through: the file is
- * already saved in the space, and the refusal does not take it back.
- */
-export const UPLOAD_KEPT_NOTE =
-  "The file you uploaded is still saved in the space.";
-
 /** The door's refusal, in words. */
 export function uploadRefusalWords(status: number): string {
   switch (status) {

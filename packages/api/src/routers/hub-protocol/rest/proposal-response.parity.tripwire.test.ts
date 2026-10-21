@@ -80,6 +80,31 @@ function enclosingResponder(src: string, at: number): string | null {
   return null;
 }
 
+/**
+ * Offset of the first `return c.json(<var>…` in `tail` that could answer a
+ * proposal, or -1 — the plain forward and the RESHAPED `c.json({ ...var })`.
+ * ONE shape is skipped: a return NARROWED on the same line to a named
+ * non-proposal status, `if (result.status === "conflict") return c.json(result, 409);`
+ * (PATCH /entities/:id's stale-move answer, 66dcf23de) — the `if` has already
+ * ruled `status: "proposed"` out. Any other guard (`!==`, a second condition,
+ * `=== "proposed"`) is NOT skipped.
+ */
+function firstBareReturn(tail: string, varName: string): number {
+  const bare = new RegExp(
+    `return c\\.json\\(\\s*\\{?\\s*(\\.\\.\\.)?${varName}[),.\\s]`,
+    "g"
+  );
+  const narrowed = new RegExp(
+    `\\bif \\(\\s*${varName}\\.status === "(?!proposed")[\\w-]+"\\s*\\)\\s*$`
+  );
+  for (const m of tail.matchAll(bare)) {
+    const lineStart = tail.lastIndexOf("\n", m.index) + 1;
+    if (narrowed.test(tail.slice(lineStart, m.index))) continue;
+    return m.index;
+  }
+  return -1;
+}
+
 describe("jsonGoverned — the one proposal shape", () => {
   const ctx = () => {
     const seen: { body: unknown; status: unknown } = {
@@ -249,6 +274,35 @@ describe("every hub REST forwarder of a proposal-capable tRPC door uses jsonGove
     expect(proposalProcedures.has("updateView")).toBe(true);
   });
 
+  it("SELF-CHECK: a status-narrowed bare return is skipped, any other is not", () => {
+    const r = "result";
+    expect(
+      firstBareReturn(
+        `if (result.status === "conflict") return c.json(result, 409);`,
+        r
+      )
+    ).toBe(-1);
+    expect(firstBareReturn(`return c.json(result, 200);`, r)).toBe(0);
+    expect(
+      firstBareReturn(
+        `if (result.status === "proposed") return c.json(result, 403);`,
+        r
+      )
+    ).toBeGreaterThan(-1);
+    expect(
+      firstBareReturn(
+        `if (result.status !== "conflict") return c.json(result);`,
+        r
+      )
+    ).toBeGreaterThan(-1);
+    expect(
+      firstBareReturn(
+        `if (result.status === "conflict") return c.json(result, 409);\n  return c.json({ ...result, x });`,
+        r
+      )
+    ).toBeGreaterThan(0);
+  });
+
   it("no REST handler returns such a result through a bare c.json", () => {
     const offenders: string[] = [];
     let forwards = 0;
@@ -270,11 +324,7 @@ describe("every hub REST forwarder of a proposal-capable tRPC door uses jsonGove
         // version of this scan — they spread the governed result into a new
         // object, so neither the literal scan nor a `c.json(result)` pattern
         // could see them, and both answered 200 on a proposal.
-        const bare = tail.search(
-          new RegExp(
-            `return c\\.json\\(\\s*\\{?\\s*(\\.\\.\\.)?${varName}[),.\\s]`
-          )
-        );
+        const bare = firstBareReturn(tail, varName);
         const governed = tail.search(
           new RegExp(
             `return jsonGoverned\\(c, \\s*\\{?\\s*(\\.\\.\\.)?${varName}[),.\\s]`

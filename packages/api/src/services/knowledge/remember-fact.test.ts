@@ -5,7 +5,8 @@ const state = vi.hoisted(() => ({
   savedFactId: "fact-new",
 }));
 
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }),
 }));
 
@@ -13,7 +14,7 @@ vi.mock("@synap/ai-embeddings", () => ({
   generateEmbedding: vi.fn(() => Promise.resolve(new Array(1536).fill(0))),
 }));
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
   const selectChain = {
     from: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
@@ -21,6 +22,7 @@ vi.mock("@synap/database", () => {
     limit: vi.fn(() => Promise.resolve(state.priorFactRows)),
   };
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     db: { select: vi.fn(() => selectChain) },
     knowledgeFacts: {
       id: "id",

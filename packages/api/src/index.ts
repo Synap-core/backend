@@ -473,6 +473,8 @@ export { triggerAutoRespond } from "./utils/trigger-auto-respond.js";
 export { keyGrantReadsSubject } from "./utils/webhook-delivery.js";
 export {
   runPlaybook,
+  // The propose-mode rule's readiness gate (`registerPlaybookReadinessGate`).
+  checkUnattendedPlaybookReadiness,
   type RunPlaybookInput,
   type RunPlaybookResult,
   type RunChainContext,

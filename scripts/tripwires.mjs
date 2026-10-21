@@ -26,50 +26,16 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  discoverTripwires,
+  tripwiresByPackage,
+} from "./tripwire-discovery.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-// Never descend into these: build output and agent worktrees both contain stale
-// COPIES of the suite. Running them forges the count and replays fixed failures.
-const SKIP_DIRS = new Set([
-  "node_modules",
-  "dist",
-  "build",
-  ".next",
-  ".turbo",
-  ".git",
-  "coverage",
-  "worktrees",
-]);
-
-const isTripwire = (path) =>
-  /\.tsx?$/.test(path) &&
-  /\.test\.tsx?$/.test(path) &&
-  (path.includes("/__tripwires__/") || /tripwire/i.test(path.split("/").pop()));
-
-function walk(dir, found = []) {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return found;
-  }
-  for (const e of entries) {
-    const full = join(dir, e.name);
-    if (e.isDirectory()) {
-      if (SKIP_DIRS.has(e.name)) continue;
-      walk(full, found);
-    } else if (isTripwire(full)) {
-      found.push(full);
-    }
-  }
-  return found;
-}
-
-const files = walk(REPO_ROOT).sort();
+const files = discoverTripwires(REPO_ROOT);
 
 if (files.length === 0) {
   console.error(
@@ -80,16 +46,9 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-// Group by the package that owns them, so each runs under its own vitest config
-// (mocks, env and setupFiles differ per package).
-const byPackage = new Map();
-for (const f of files) {
-  const rel = relative(REPO_ROOT, f);
-  const m = rel.match(/^((?:packages|apps)\/[^/]+)\//);
-  const pkgDir = m ? m[1] : ".";
-  if (!byPackage.has(pkgDir)) byPackage.set(pkgDir, []);
-  byPackage.get(pkgDir).push(relative(join(REPO_ROOT, pkgDir), f));
-}
+// Grouped by the package that owns them, so each runs under its own vitest
+// config (mocks, env and setupFiles differ per package).
+const byPackage = tripwiresByPackage(REPO_ROOT);
 
 console.log(
   `Discovered ${files.length} tripwire file(s) across ${byPackage.size} package(s):`

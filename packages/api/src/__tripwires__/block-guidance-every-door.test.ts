@@ -51,6 +51,12 @@ const WITHHELD: Record<string, string> = {
     "slots at birth (the author's own definition, not an agent's hand-off " +
     "in this turn). It returns a row, not an agent response — there is " +
     "nothing to annotate with a guideline here.",
+  "services/focus-sessions/stage-slots.ts":
+    "Merges a STAGE's declared slots (the playbook author's definition) into " +
+    "the session on stage ENTRY — the same template-declared slots " +
+    "`playbook-lifecycle.ts` seeds at birth, not an agent's hand-off in this " +
+    "turn. It returns the added labels to `advanceSessionStage`, not an " +
+    "agent block response.",
 };
 
 function walk(dir: string, out: string[] = []): string[] {

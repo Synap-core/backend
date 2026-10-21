@@ -92,13 +92,17 @@ beforeEach(() => {
 });
 
 describe("approving an agent's run proposal", () => {
-  it("replays WITH the approval, and the agent still owns the run", async () => {
+  it("replays WITH the approval; the approver owns the run, the agent is on its roster", async () => {
     await expect(approve()).resolves.toMatchObject({ success: true });
     expect(h.ctxs[0]).toMatchObject({
       userId: "owner-1",
       governanceProposalId: "p-1",
     });
-    expect(h.runs[0]).toMatchObject({ agentUserId: "agent-raycast" });
+    // Approving is the person accepting the agent's draft (draft-asks.ts):
+    // an `agentUserId` here would make the agent own a session nobody else
+    // can read (executors/playbook.ts, OWNERSHIP).
+    expect(h.runs[0]).not.toHaveProperty("agentUserId");
+    expect(h.runs[0]).toMatchObject({ agentIds: ["agent-raycast"] });
   });
 
   it("skills not enabled → names them and says approve again", async () => {

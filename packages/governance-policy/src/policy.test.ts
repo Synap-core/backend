@@ -855,6 +855,29 @@ describe("decideAgentPolicy — forcePropose (scope/identity change)", () => {
     });
   });
 
+  it("a forced FILING carries its own reason: it shows records to the project's members", () => {
+    const v = decideAgentPolicy({
+      subjectType: "project",
+      action: "file_entities",
+      forcePropose: true,
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.PROJECT_FILING,
+      reasonCode: "PROJECT_FILING",
+    });
+    // Words only: an `auto` rule still cannot reach the forced filing.
+    expect(
+      decideAgentPolicy({
+        subjectType: "project",
+        action: "file_entities",
+        forcePropose: true,
+        governanceRuleVerdict: "auto",
+        governanceRuleNamesWrite: true,
+      }).verdict
+    ).toBe("propose");
+  });
+
   it("CBAC deny still wins over forcePropose (deny-precedence preserved)", () => {
     const v = decideAgentPolicy({
       subjectType: "entity",

@@ -6,6 +6,7 @@ import {
   ACCOUNT_PAGES,
   MOBILE_FALLBACK,
   PHONE_UNAVAILABLE_NOTE,
+  objectWebAlternative,
   publisherExit,
 } from "./open-in";
 
@@ -166,22 +167,24 @@ describe("openIn — a viewed object hands off with its view", () => {
 describe("placeExit — the device decides what a hand-off shows", () => {
   it("leaves every exit untouched off a phone", () => {
     const exit = openIn({ kind: "settings", section: "vault" });
-    expect(placeExit(exit, false)).toBe(exit);
+    expect(placeExit(exit, false, "admin")).toBe(exit);
+    expect(placeExit(exit, false, "member")).toBe(exit);
   });
 
   it("leaves web exits untouched on a phone", () => {
     const exit = openIn({ kind: "object", objectKind: "proposal", id: ID });
-    expect(placeExit(exit, true)).toBe(exit);
+    expect(placeExit(exit, true, "member")).toBe(exit);
     const account = openIn({ kind: "account", page: "billing" });
-    expect(placeExit(account, true)).toBe(account);
+    expect(placeExit(account, true, "member")).toBe(account);
   });
 
-  it.each(["playbook", "session", "automation", "owed"])(
+  it.each(["playbook", "session", "automation", "owed", "agent"])(
     "keeps the link for %s, which the mobile app opens, with the mobile hatch",
     (objectKind) => {
       const placed = placeExit(
         openIn({ kind: "objectInApp", objectKind, id: ID }),
-        true
+        true,
+        "member"
       );
       expect(placed.href).toBe(`synap://open/${objectKind}/${ID}`);
       expect(placed.fallback).toEqual(MOBILE_FALLBACK);
@@ -193,10 +196,41 @@ describe("placeExit — the device decides what a hand-off shows", () => {
   it("keeps the Intake Room link on a phone (Relay routes session?view=room)", () => {
     const placed = placeExit(
       openIn({ kind: "object", objectKind: "session", id: ID, view: "room" }),
-      true
+      true,
+      "admin"
     );
     expect(placed.href).toBe(`synap://open/session/${ID}?view=room`);
     expect(placed.fallback).toEqual(MOBILE_FALLBACK);
+    expect(placed.web).toBeUndefined();
+  });
+
+  describe("an agent opens in the mobile app (keyed by its agent user id)", () => {
+    const exit = openIn({ kind: "objectInApp", objectKind: "agent", id: ID });
+
+    it("an admin also gets the agent's console page as a second way in", () => {
+      const placed = placeExit(exit, true, "admin");
+      expect(placed.href).toBe(`synap://open/agent/${ID}`);
+      expect(placed.fallback).toEqual(MOBILE_FALLBACK);
+      expect(placed.web).toEqual({
+        href: `/agents?focus=${ID}`,
+        label: "See this agent here",
+      });
+      expect(placed.unavailable).toBeUndefined();
+    });
+
+    it("a member gets the mobile link and no admin page", () => {
+      const placed = placeExit(exit, true, "member");
+      expect(placed.href).toBe(`synap://open/agent/${ID}`);
+      expect(placed.fallback).toEqual(MOBILE_FALLBACK);
+      expect(placed.web).toBeUndefined();
+    });
+
+    it("the desktop keeps the desktop link and its hatch", () => {
+      const placed = placeExit(exit, false, "admin");
+      expect(placed.href).toBe(`synap://open/agent/${ID}`);
+      expect(placed.fallback?.href).toContain("/download/browser");
+      expect(placed.web).toBeUndefined();
+    });
   });
 
   it.each([
@@ -207,9 +241,13 @@ describe("placeExit — the device decides what a hand-off shows", () => {
     ["pod", "/members", "Members"],
     ["extensions", "/marketplace", "Marketplace"],
   ] as const)(
-    "settings/%s is unavailable on a phone and points at %s",
+    "settings/%s is unavailable on a phone and points an admin at %s",
     (section, href, label) => {
-      const placed = placeExit(openIn({ kind: "settings", section }), true);
+      const placed = placeExit(
+        openIn({ kind: "settings", section }),
+        true,
+        "admin"
+      );
       expect(placed.href).toBeNull();
       expect(placed.fallback).toBeUndefined();
       expect(placed.unavailable?.note).toBe(PHONE_UNAVAILABLE_NOTE);
@@ -217,22 +255,76 @@ describe("placeExit — the device decides what a hand-off shows", () => {
     }
   );
 
-  it("a desktop app a console page covers points at that page on a phone", () => {
+  describe("a member is never pointed at an admin page", () => {
+    it("settings/developer: the plain note, no Keys link", () => {
+      const placed = placeExit(
+        openIn({ kind: "settings", section: "developer" }),
+        true,
+        "member"
+      );
+      expect(placed.href).toBeNull();
+      expect(placed.unavailable).toEqual({ note: PHONE_UNAVAILABLE_NOTE });
+    });
+
+    it("settings/vault: their own vault, a member page", () => {
+      const placed = placeExit(
+        openIn({ kind: "settings", section: "vault" }),
+        true,
+        "member"
+      );
+      expect(placed.unavailable).toEqual({
+        note: PHONE_UNAVAILABLE_NOTE,
+        web: { href: "/my-vault", label: "My vault" },
+      });
+    });
+
+    it.each([
+      ["connectors"],
+      ["ai-governance"],
+      ["pod"],
+      ["extensions"],
+    ] as const)("settings/%s: the plain note", (section) => {
+      const placed = placeExit(
+        openIn({ kind: "settings", section }),
+        true,
+        "member"
+      );
+      expect(placed.unavailable).toEqual({ note: PHONE_UNAVAILABLE_NOTE });
+    });
+
+    it("a desktop app and a space: the plain note", () => {
+      for (const target of [
+        { kind: "app", appId: "marketplace" },
+        { kind: "object", objectKind: "workspace", id: ID },
+      ] as const) {
+        const placed = placeExit(openIn(target), true, "member");
+        expect(placed.href).toBeNull();
+        expect(placed.unavailable).toEqual({ note: PHONE_UNAVAILABLE_NOTE });
+      }
+    });
+  });
+
+  it("a desktop app a console page covers points an admin at that page on a phone", () => {
     const placed = placeExit(
       openIn({ kind: "app", appId: "marketplace" }),
-      true
+      true,
+      "admin"
     );
     expect(placed.href).toBeNull();
     expect(placed.unavailable?.web?.href).toBe("/marketplace");
   });
 
-  it("a space is unavailable on a phone and points at its console page", () => {
+  it("a space is unavailable on a phone and points an admin at its console page", () => {
     const placed = placeExit(
       openIn({ kind: "object", objectKind: "workspace", id: ID }),
-      true
+      true,
+      "admin"
     );
     expect(placed.href).toBeNull();
-    expect(placed.unavailable?.web?.href).toBe(`/workspaces/${ID}`);
+    expect(placed.unavailable?.web).toEqual({
+      href: `/workspaces/${ID}`,
+      label: "See this space here",
+    });
   });
 
   it.each([
@@ -245,7 +337,7 @@ describe("placeExit — the device decides what a hand-off shows", () => {
   ] as const)(
     "%s on a phone is a plain 'open on your computer' note",
     (_label, target) => {
-      const placed = placeExit(openIn(target), true);
+      const placed = placeExit(openIn(target), true, "admin");
       expect(placed.href).toBeNull();
       expect(placed.unavailable).toEqual({ note: PHONE_UNAVAILABLE_NOTE });
     }
@@ -262,10 +354,32 @@ describe("placeExit — the device decides what a hand-off shows", () => {
       ),
     ];
     for (const target of targets) {
-      const placed = placeExit(openIn(target), true);
-      expect(placed.href).toBeNull();
-      expect(placed.fallback).toBeUndefined();
+      for (const role of ["admin", "member"] as const) {
+        const placed = placeExit(openIn(target), true, role);
+        expect(placed.href).toBeNull();
+        expect(placed.fallback).toBeUndefined();
+      }
     }
+  });
+});
+
+describe("objectWebAlternative — an object's console page, for this viewer", () => {
+  it("offers an admin a space's and an agent's page", () => {
+    expect(objectWebAlternative("workspace", ID, "admin")?.href).toBe(
+      `/workspaces/${ID}`
+    );
+    expect(objectWebAlternative("agent", ID, "admin")?.href).toBe(
+      `/agents?focus=${ID}`
+    );
+  });
+
+  it("offers a member neither (both pages are pod-admin only)", () => {
+    expect(objectWebAlternative("workspace", ID, "member")).toBeUndefined();
+    expect(objectWebAlternative("agent", ID, "member")).toBeUndefined();
+  });
+
+  it("is nothing for a kind with no console page", () => {
+    expect(objectWebAlternative("cell", ID, "admin")).toBeUndefined();
   });
 });
 

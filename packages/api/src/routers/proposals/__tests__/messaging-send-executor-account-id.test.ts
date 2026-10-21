@@ -36,7 +36,8 @@ vi.mock("../../../connectors/external-dispatch.js", () => ({
     return { success: true };
   },
 }));
-vi.mock("../../../connectors/index.js", () => ({
+vi.mock("../../../connectors/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../connectors/index.js")>()),
   // A per-account connector (Unipile / Stalwart).
   getMessagingConnector: async () => ({ requiresAccount: () => true }),
 }));

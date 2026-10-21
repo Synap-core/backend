@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  canonicalLifecycleOptionKey,
   classifyLifecycleMove,
   parseLifecycleOptions,
   LIFECYCLE_CATEGORIES,
@@ -61,5 +62,46 @@ describe("lifecycle model", () => {
       humanOnly: true,
     });
     expect(classifyLifecycleMove(decl, "nope")).toBeNull();
+  });
+});
+
+describe("canonicalLifecycleOptionKey (the status door's input normaliser)", () => {
+  const task = {
+    options: [
+      { key: "todo", category: "open" as const },
+      { key: "in-progress", category: "active" as const },
+      { key: "done", category: "done" as const },
+    ],
+  };
+
+  it("keeps an exact key", () => {
+    expect(canonicalLifecycleOptionKey(task, "in-progress")).toBe(
+      "in-progress"
+    );
+  });
+
+  it("maps a case or separator variant to the declared key", () => {
+    expect(canonicalLifecycleOptionKey(task, "in_progress")).toBe(
+      "in-progress"
+    );
+    expect(canonicalLifecycleOptionKey(task, "In Progress")).toBe(
+      "in-progress"
+    );
+    expect(canonicalLifecycleOptionKey(task, "DONE")).toBe("done");
+  });
+
+  it("never guesses past case and separators", () => {
+    expect(canonicalLifecycleOptionKey(task, "doing")).toBe("doing");
+    expect(canonicalLifecycleOptionKey(task, "dones")).toBe("dones");
+  });
+
+  it("leaves an ambiguous variant unchanged so the door refuses it", () => {
+    const twins = {
+      options: [
+        { key: "in-review", category: "active" as const },
+        { key: "in_review", category: "paused" as const },
+      ],
+    };
+    expect(canonicalLifecycleOptionKey(twins, "InReview")).toBe("InReview");
   });
 });

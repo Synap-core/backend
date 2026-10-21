@@ -23,7 +23,6 @@ import {
 import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
-import { TRPCError } from "@trpc/server";
 import { PENDING_APPROVAL_BATCH_MAX } from "@synap-core/types/external-connect";
 
 import {
@@ -100,6 +99,7 @@ import { disconnectAllUserConnections } from "../../../services/capabilities/cap
 import {
   API_KEY_SCOPES,
   API_KEY_TOOL_PROFILES,
+  APP_PERSON_KEY_TYPE,
   type ApiKeyToolProfile,
   isValidScope,
   isPrivilegedMintScope,
@@ -447,6 +447,21 @@ async function authenticateServiceSetupRequest(
     // Path 4: any human-owned `hub-protocol.write` key can mint a service key
     // owned by itself (the key's userId becomes the service key's owner).
     if (keyRecord?.isActive && keyRecord.scope.includes("hub-protocol.write")) {
+      // A person's app sign-in token never mints keys: it is the person
+      // inside ONE app, for 30 days — a key minted from it would outlive the
+      // sign-in and the app's revocation (threat T1, app-person-token.ts).
+      if (keyRecord.keyType === APP_PERSON_KEY_TYPE) {
+        return {
+          ok: false,
+          response: c.json(
+            {
+              error:
+                "An app sign-in cannot mint keys. Mint it from your own session or personal key.",
+            },
+            403
+          ),
+        };
+      }
       // An AGENT key may not: the minted `service` key carries no linked human
       // and no agent shaping, so minting would launder the agent's attribution
       // into a key the governance membrane no longer reads as the agent's.
@@ -692,6 +707,16 @@ export function registerSetupRoutes(app: HubHono): void {
         keyRecord?.isActive &&
         keyRecord.scope.includes("hub-protocol.write")
       ) {
+        // A person's app sign-in token never connects an AI (see /setup/service).
+        if (keyRecord.keyType === APP_PERSON_KEY_TYPE) {
+          return c.json(
+            {
+              error:
+                "An app sign-in cannot connect an AI. Connect it from your own session.",
+            },
+            403
+          );
+        }
         authenticated = true;
         authMethod = "api_key_surface";
         surfaceCallerKeyId = keyRecord.id;
@@ -1723,6 +1748,13 @@ export function registerSetupRoutes(app: HubHono): void {
     if (!keyRecord || !keyRecord.isActive) {
       return c.json({ error: "Invalid or inactive API key" }, 401);
     }
+    // A person's app sign-in token never mints (see /setup/service).
+    if (keyRecord.keyType === APP_PERSON_KEY_TYPE) {
+      return c.json(
+        { error: "An app sign-in cannot provision external users." },
+        403
+      );
+    }
     // Prevent grandchild token minting: sub-tokens (depth≥1) cannot mint further sub-tokens.
     if (keyRecord.parentKeyId !== null && keyRecord.parentKeyId !== undefined) {
       return c.json(
@@ -2659,8 +2691,14 @@ export function registerSetupRoutes(app: HubHono): void {
     } catch (err) {
       // A typed refusal keeps its own status; anything else is a real fault.
       const status = httpStatusForTrpcError(err);
-      if (err instanceof TRPCError && status !== 500)
-        return c.json({ error: err.message }, status);
+      // Status from the cause walk, never a class-identity check: in the
+      // bundled pod that check was always false and a 400 answered 500
+      // (no-instanceof-trpcerror-in-rest).
+      if (status !== 500)
+        return c.json(
+          { error: err instanceof Error ? err.message : String(err) },
+          status
+        );
       throw err;
     }
     if (outcome === "forbidden")

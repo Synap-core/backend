@@ -122,6 +122,7 @@ import {
   setAgentFocusProject,
   setAgentFocusWorkspace,
 } from "../../agent-identity-service.js";
+import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
 import { resolveWorkSession } from "../resolve-work-session.js";
 import { createFocusSession } from "../create-session.js";
 import { matchSessionTemplate } from "../match-session-template.js";
@@ -298,6 +299,46 @@ describe("receipts group by CLIENT, not by the per-write goal", () => {
     expect(await rows()).toHaveLength(1);
   });
 
+  // Live 2026-10-20: an agent's first write of the day touched the ARCHIVED
+  // "Radar" space, the auto-open stamped the receipt into Radar, and every
+  // later write of that conversation was filed under a session in an archived
+  // space. The receipt is a grouping, not a placement: an archived space is
+  // never stamped on a new one (pod-level instead); a live space still is.
+  it("an auto-opened receipt never lands in an ARCHIVED space; a live one keeps its space", async () => {
+    const archived = randomUUID();
+    const live = randomUUID();
+    await q(
+      `insert into workspaces (id, name, owner_id, archived_at) values ($1, 'Radar', $3, '2026-10-11T18:22:22Z'), ($2, 'Ecosystem', $3, null)`,
+      [archived, live, USER]
+    );
+    const inArchived = await resolveOrCreateAgentProposalSession({
+      userId: USER,
+      agentUserId: AGENT,
+      goal: "Move items out of Radar",
+      clientKey: "key:ARCH",
+      workspaceId: archived,
+      stableCorrelation: false,
+    });
+    const inLive = await resolveOrCreateAgentProposalSession({
+      userId: USER,
+      agentUserId: AGENT,
+      goal: "Create company",
+      clientKey: "key:LIVE",
+      workspaceId: live,
+      stableCorrelation: false,
+    });
+    const ws = async (id: string | null) =>
+      (
+        await q<{ workspace_id: string | null }>(
+          `select workspace_id from focus_sessions where id = $1`,
+          [id]
+        )
+      ).rows[0]?.workspace_id;
+    expect(inArchived).toBeTruthy();
+    expect(await ws(inArchived)).toBeNull();
+    expect(await ws(inLive)).toBe(live);
+  });
+
   it("the client key comes from the request context when not passed", async () => {
     const a = await runWithClientKey("key:CTX", () =>
       resolveOrCreateAgentProposalSession({
@@ -407,8 +448,9 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
   it("adoption DROPS the receipt's derived name — it described other writes", async () => {
     // Live 2026-09-20: a research session was adopted onto a receipt and kept
     // "[dogfood] the Research pack is enabled…", the name of the write that
-    // opened it. With no explicit title the derived name goes, so lists fall
-    // back to the new goal until the titler names it.
+    // opened it. With no explicit title the derived name goes, replaced by one
+    // derived from the NEW goal (no session is stored nameless) — still
+    // `derived`, so the titler may improve it.
     const auto = await receipt(
       CONV_A,
       "Create knowledge The Research pack is enabled"
@@ -423,7 +465,13 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
     });
     if (result.status !== "created") throw new Error(result.status);
     expect(result.session.id).toBe(auto);
-    expect(result.session.title).toBeNull();
+    expect(result.session.title).not.toBe(before.title);
+    expect(result.session.title).toBe(
+      buildDerivedSessionTitle({
+        kind: "goal",
+        goal: "Research competitor Notion and compare them to us",
+      })
+    );
     expect(result.session.metadata).toMatchObject({ titleSource: "derived" });
   });
 

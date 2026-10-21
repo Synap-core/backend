@@ -68,6 +68,11 @@ const EXEMPT: Record<string, string> = {
     "An APPOINTMENT the person booked themselves (origin 'human').",
   "services/import/session.ts":
     "The person's own import of a session; nothing is handed over by an agent.",
+  "services/agent-dispatch/poll-external-agents.ts":
+    "The approval card's owed slot is announced by the QUESTION card posted " +
+    "right after it as the agent (`postDispatchNotice` kind 'question' → " +
+    "`notifyRoomPost` → `notifySessionNeedsYou`). A second push here would be " +
+    "two pushes for one event.",
 };
 
 function walk(dir: string, out: string[] = []): string[] {

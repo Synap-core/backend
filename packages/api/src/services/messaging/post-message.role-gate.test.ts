@@ -16,7 +16,8 @@ const h = vi.hoisted(() => ({
   priorRows: [] as Array<{ id: string }>,
 }));
 
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }),
 }));
 
@@ -35,7 +36,8 @@ vi.mock("./notify-room-post.js", () => ({
   notifyRoomPost: async () => undefined,
 }));
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     // Two selects reach here: the channel floor (`from().where().limit()`,
     // default = visible) and the ack-integrity dedup lookup (which also calls
