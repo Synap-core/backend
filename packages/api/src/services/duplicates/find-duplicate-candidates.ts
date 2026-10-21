@@ -56,6 +56,7 @@ import {
 import type { SQL } from "drizzle-orm";
 import {
   DUPLICATE_CHECK_MAX_CANDIDATES,
+  readDuplicateCheck,
   type DuplicateCandidate,
   type DuplicateCheck,
   type DuplicateSubjectType,
@@ -639,4 +640,28 @@ export async function findPendingIdentityMatches(
     });
   }
   return matches;
+}
+
+/**
+ * The twin RECORDS a review card SHOWED, read from the proposal's persisted
+ * `duplicateCheck` (FB1020 BLOCKER-2): `single` for a single create, `byRef`
+ * per proposed item of a capture/import graph (keyed by the candidate's
+ * `forRef` = the op's `ref`, the key `identityResolutionByRef` uses). The
+ * approval hands them to the entity door (`approvalReviewedTwinIds`): a plain
+ * approve on a twin the reviewer saw keeps both; a twin not shown refuses so
+ * the card asks. Pending-proposal candidates are not records and never count.
+ */
+export function twinsShownOnCard(proposalData: unknown): {
+  single: string[];
+  byRef: Record<string, string[]>;
+} {
+  const check = readDuplicateCheck(proposalData);
+  const single: string[] = [];
+  const byRef: Record<string, string[]> = {};
+  for (const c of check?.candidates ?? []) {
+    if (c.ref !== "record") continue;
+    if (c.forRef) (byRef[c.forRef] ??= []).push(c.id);
+    else single.push(c.id);
+  }
+  return { single, byRef };
 }

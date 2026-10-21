@@ -190,6 +190,16 @@ export const createProcs = {
          */
         approvalDuplicate: z.enum(["ask_reviewer", "keep_both"]).optional(),
         /**
+         * APPROVAL REPLAY ONLY, with `ask_reviewer` — the twin records the
+         * review card SHOWED for this create (the proposal's persisted
+         * `duplicateCheck`). A plain approve with no verb on a twin the
+         * reviewer saw is "approve as proposed" = keep both (FB1020
+         * BLOCKER-2: without it a capture naming any existing record could
+         * only be rejected). A twin NOT shown (it appeared after filing)
+         * still refuses, so the card asks. Ignored on an AI's own filing.
+         */
+        approvalReviewedTwinIds: z.array(z.string().uuid()).max(100).optional(),
+        /**
          * Strong cross-source identity anchor for this subject, as `provider:id`
          * (e.g. `discord:123…`). Registered as an `external_id` identity signal
          * on the resolved entity so a later create with the SAME value dedups
@@ -569,8 +579,12 @@ export const createProcs = {
       // An AI's own filing — the GATE's predicate (FB1020 review M4), so an
       // unattributed hub key / IS call (`source: "intelligence"`, no
       // `agentUserId`) is floored like an attributed agent and can never pass
-      // the reviewer's `approvalDuplicate`. A replay is `source: "system"`.
-      const isAgentFiling = isAiWriteRequest(input);
+      // the reviewer's `approvalDuplicate`. NOT a write inside a decided
+      // proposal (`ctx.governanceProposalId`, an internal-only channel): a
+      // composite approval replays each op with the proposal's OWN source —
+      // often `intelligence` — and it is the reviewer's, not the agent's.
+      const isAgentFiling =
+        isAiWriteRequest(input) && !ctx.governanceProposalId;
       const approvalDuplicate = isAgentFiling
         ? undefined
         : input.approvalDuplicate;
@@ -947,7 +961,12 @@ export const createProcs = {
           const twinRecords = duplicateCheck.candidates
             .filter((c) => c.ref === "record")
             .map((c) => ({ id: c.id, title: c.title, type: c.kind }));
-          if (approvalDuplicate === "ask_reviewer" && twinRecords.length > 0) {
+          // Twins the reviewer saw on the card and approved past = keep both.
+          const reviewed = new Set(
+            isAgentFiling ? [] : (input.approvalReviewedTwinIds ?? [])
+          );
+          const unseenTwins = twinRecords.filter((t) => !reviewed.has(t.id));
+          if (approvalDuplicate === "ask_reviewer" && unseenTwins.length > 0) {
             logger.info(
               {
                 event: "identity_resolve_merge",
@@ -973,7 +992,9 @@ export const createProcs = {
               outcome:
                 approvalDuplicate === "keep_both"
                   ? "keep_both"
-                  : isAgentFiling
+                  : approvalDuplicate === "ask_reviewer"
+                    ? "reviewed_keep_both"
+                    : isAgentFiling
                     ? "possible_duplicate_proposed"
                     : "possible_duplicate_warned",
               userId: ctx.userId,
