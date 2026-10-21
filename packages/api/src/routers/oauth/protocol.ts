@@ -125,10 +125,13 @@ export function canonicalizeIssuerUrl(
  *   - `code_challenge_methods_supported` is S256 ONLY. OAuth 2.1 removes
  *     `plain`, and every client that reaches this AS is a public web client, so
  *     there is no legacy client to accommodate.
- *   - No `refresh_token` grant and no `offline_access` scope. The access token
- *     is an `api_keys` row with a fixed 90-day lifetime; when it expires the
- *     user re-authorizes. Advertising `offline_access` while never issuing a
- *     refresh token would be a lie a client acts on.
+ *   - `refresh_token` is a supported grant, for pod apps (CIMD clients) only:
+ *     their access key lives 1 h and every one gets a rotating refresh token
+ *     with it, asked for or not (spec 17 §6.6, F5). An MCP (DCR) client still
+ *     gets a 90-day key and no refresh token, and its registration response
+ *     says so (`buildDcrResponse`: authorization_code only).
+ *   - No `offline_access` scope: no client needs to ask for a refresh token,
+ *     and none that asks for one gets it unless it is a pod app.
  */
 export function buildAuthorizationServerMetadata(
   issuer: string,
@@ -143,7 +146,7 @@ export function buildAuthorizationServerMetadata(
     revocation_endpoint: `${issuer}/revoke`,
     revocation_endpoint_auth_methods_supported: ["none"],
     response_types_supported: ["code"],
-    grant_types_supported: ["authorization_code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
     code_challenge_methods_supported: ["S256"],
     token_endpoint_auth_methods_supported: ["none"],
     scopes_supported: [...supportedScopes],

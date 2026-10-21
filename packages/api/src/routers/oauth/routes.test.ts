@@ -225,6 +225,36 @@ vi.mock("../../services/app-connect.js", () => ({
   currentOAuthApproval: async () => [],
 }));
 
+// Pod app refresh tokens (PB3). The store runs for real on PGlite in
+// services/oauth-refresh.pglite.test.ts; here it is spies, so this file pins
+// what the HTTP door asks of it, and that an MCP (DCR) client never reaches it.
+const refresh = vi.hoisted(() => ({
+  start: vi.fn(),
+  redeem: vi.fn(),
+  rotate: vi.fn(),
+  find: vi.fn(),
+  revokeFamily: vi.fn(),
+}));
+vi.mock("./refresh.js", async () => {
+  const { OAuthError } =
+    await vi.importActual<typeof import("./protocol.js")>("./protocol.js");
+  class RefreshTokenReuseError extends OAuthError {
+    constructor(public readonly familyId: string) {
+      super("invalid_grant", "Invalid, expired, or revoked refresh token");
+    }
+  }
+  return {
+    RefreshTokenReuseError,
+    startRefreshFamily: (c: unknown) => refresh.start(c),
+    redeemRefreshToken: (raw: string, clientId: string) =>
+      refresh.redeem(raw, clientId),
+    rotateRefreshToken: (prev: unknown) => refresh.rotate(prev),
+    findRefreshToken: (raw: string) => refresh.find(raw),
+    revokeRefreshFamily: (t: unknown, reason: string) =>
+      refresh.revokeFamily(t, reason),
+  };
+});
+
 // Pod app clients (CIMD). The fetch + cache is pinned in client-metadata.test.ts;
 // here a document either resolves to `store.cimd` or is unreadable.
 vi.mock("./client-metadata.js", async () => {
@@ -300,6 +330,9 @@ beforeEach(() => {
   appConnect.mint.mockReset();
   appConnect.isPodAppAgent.mockReset();
   appConnect.isPodAppAgent.mockResolvedValue(false);
+  for (const spy of Object.values(refresh)) spy.mockReset();
+  refresh.start.mockResolvedValue("RT-1");
+  refresh.find.mockResolvedValue(null);
   provisionSpy.mockReset();
   provisionSpy.mockResolvedValue({
     agentUserId: "agent-user-1",
@@ -910,10 +943,12 @@ describe("POST /token", () => {
     expect(provisionSpy).not.toHaveBeenCalled();
   });
 
+  // Flipped on purpose in PB3: this used `refresh_token`, which is now a
+  // supported grant (pod apps only; a DCR client is refused it, below).
   it("rejects an unsupported grant_type", async () => {
     const { res, body } = await token({
-      grant_type: "refresh_token",
-      refresh_token: "whatever",
+      grant_type: "client_credentials",
+      client_id: "whatever",
     });
     expect(res.status).toBe(400);
     expect(body.error).toBe("unsupported_grant_type");
@@ -1826,7 +1861,14 @@ describe("CIMD clients", () => {
       },
     ]);
     expect(body.synap_user).toEqual({ id: HUMAN_ID, name: "Ada" });
-    expect(body).not.toHaveProperty("refresh_token");
+    // Flipped on purpose in PB3 (was: no refresh_token): a pod app's code
+    // starts a refresh family for its connection.
+    expect(body.refresh_token).toBe("RT-1");
+    expect(refresh.start).toHaveBeenCalledWith({
+      clientId: APP_ID,
+      userId: HUMAN_ID,
+      appId: APP_ROW_ID,
+    });
   });
 
   it("a connection revoked (or narrowed to nothing) since consent: invalid_grant, no key", async () => {
@@ -2049,5 +2091,198 @@ describe("CIMD clients", () => {
     );
     expect(res.status).toBe(400);
     expect(res.headers.get("location")).toBeNull();
+  });
+
+  // ─── PB3 — refresh tokens (pod apps only) ──────────────────────────────────
+
+  const REDEEMED = {
+    id: "rt-row-1",
+    familyId: "family-1",
+    clientId: APP_ID,
+    userId: HUMAN_ID,
+    appId: APP_ROW_ID,
+  };
+  const refreshGrant = (extra: Record<string, string> = {}) =>
+    token({
+      grant_type: "refresh_token",
+      refresh_token: "RT-1",
+      client_id: APP_ID,
+      ...extra,
+    });
+
+  it("refresh: redeems the token, mints from the connection's approval, rotates, same response shape", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    refresh.redeem.mockResolvedValue(REDEEMED);
+    refresh.rotate.mockResolvedValue("RT-2");
+    mintAnswers();
+    const { res, body } = await refreshGrant({ scope: "entity.post.delete" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(refresh.redeem).toHaveBeenCalledWith("RT-1", APP_ID);
+    expect(appConnect.mint).toHaveBeenCalledWith({
+      appId: APP_ROW_ID,
+      ownerUserId: HUMAN_ID,
+      oauthClientId: APP_ID,
+      instanceId: `oauth:${APP_ID}:${HUMAN_ID}`,
+    });
+    expect(refresh.rotate).toHaveBeenCalledWith(REDEEMED);
+    expect(body).toMatchObject({
+      access_token: "synap_hub_live_APPKEY",
+      token_type: "Bearer",
+      refresh_token: "RT-2",
+      // The approval, never the request's `scope`.
+      scope: "entity.post.read",
+      synap_user: { id: HUMAN_ID, name: "Ada" },
+    });
+    expect(body.expires_in).toBeLessThanOrEqual(3600);
+    expect(provisionSpy).not.toHaveBeenCalled();
+  });
+
+  it("refresh: a token the store refuses (unknown, reused, expired) mints nothing", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    const { OAuthError } = await import("./protocol.js");
+    refresh.redeem.mockRejectedValue(
+      new OAuthError(
+        "invalid_grant",
+        "Invalid, expired, or revoked refresh token"
+      )
+    );
+    const { res, body } = await refreshGrant();
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_grant");
+    expect(appConnect.mint).not.toHaveBeenCalled();
+    expect(refresh.rotate).not.toHaveBeenCalled();
+  });
+
+  it("refresh: a connection revoked (or narrowed to nothing) since is invalid_grant, no successor", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    refresh.redeem.mockResolvedValue(REDEEMED);
+    const { TRPCError } = await import("@trpc/server");
+    appConnect.mint.mockRejectedValue(
+      new TRPCError({
+        code: "CONFLICT",
+        message: "This app has nothing approved.",
+      })
+    );
+    const { res, body } = await refreshGrant();
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_grant");
+    expect(refresh.rotate).not.toHaveBeenCalled();
+  });
+
+  it("refresh: an MCP (DCR) client is unauthorized_client and never reaches the store", async () => {
+    const { body: client } = await register();
+    const { res, body } = await refreshGrant({ client_id: client.client_id });
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("unauthorized_client");
+    expect(refresh.redeem).not.toHaveBeenCalled();
+  });
+
+  it("refresh: an unknown client is invalid_client (401); a missing token or client is invalid_request", async () => {
+    const unknown = await refreshGrant({
+      client_id: "https://nope.example/c.json",
+    });
+    expect(unknown.res.status).toBe(401);
+    expect(unknown.body.error).toBe("invalid_client");
+    const noToken = await token({
+      grant_type: "refresh_token",
+      client_id: APP_ID,
+    });
+    expect(noToken.body.error).toBe("invalid_request");
+    const noClient = await token({
+      grant_type: "refresh_token",
+      refresh_token: "RT-1",
+    });
+    expect(noClient.body.error).toBe("invalid_request");
+    expect(refresh.redeem).not.toHaveBeenCalled();
+  });
+
+  it("an MCP (DCR) code exchange still answers no refresh_token and starts no family", async () => {
+    const { body: client } = await register();
+    const { code } = await consentAndExtractCode(client.client_id);
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: client.client_id,
+      redirect_uri: CALLBACK,
+      code_verifier: VERIFIER,
+    });
+    expect(res.status).toBe(200);
+    expect(body).not.toHaveProperty("refresh_token");
+    expect(refresh.start).not.toHaveBeenCalled();
+  });
+
+  const REFRESH_ROW = {
+    familyId: "family-1",
+    clientId: APP_ID,
+    userId: HUMAN_ID,
+    appId: APP_ROW_ID,
+  };
+  const revokeToken = (params: Record<string, string>) =>
+    oauthApp.request("/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(params).toString(),
+    });
+
+  it("/revoke with token_type_hint=refresh_token revokes the token's family", async () => {
+    refresh.find.mockResolvedValue(REFRESH_ROW);
+    const res = await revokeToken({
+      token: "RT-1",
+      token_type_hint: "refresh_token",
+      client_id: APP_ID,
+    });
+    expect(res.status).toBe(200);
+    expect(refresh.find).toHaveBeenCalledWith("RT-1");
+    expect(refresh.revokeFamily).toHaveBeenCalledWith(
+      REFRESH_ROW,
+      expect.any(String)
+    );
+    expect(revokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("/revoke of a refresh token WITHOUT a hint: the key lookup misses, the refresh lookup revokes it", async () => {
+    refresh.find.mockResolvedValue(REFRESH_ROW);
+    const res = await revokeToken({ token: "RT-1" });
+    expect(res.status).toBe(200);
+    expect(refresh.revokeFamily).toHaveBeenCalledTimes(1);
+  });
+
+  it("/revoke of a refresh token by another client: 400 unauthorized_client, the family kept", async () => {
+    refresh.find.mockResolvedValue(REFRESH_ROW);
+    for (const hint of ["refresh_token", "access_token"]) {
+      const res = await revokeToken({
+        token: "RT-1",
+        token_type_hint: hint,
+        client_id: "https://other.example.com/c.json",
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error).toBe("unauthorized_client");
+    }
+    expect(refresh.revokeFamily).not.toHaveBeenCalled();
+  });
+
+  it("/revoke hinted refresh_token but holding an ACCESS key still retires the key (the hint only orders)", async () => {
+    store.users.set(APP_AGENT_ID, {
+      id: APP_AGENT_ID,
+      userType: "agent",
+      agentType: APP_PUBLIC_ID,
+    });
+    store.keys.set("synap_hub_live_APPKEY", {
+      id: "app-key-1",
+      userId: APP_AGENT_ID,
+      instanceId: `oauth:${APP_ID}:${HUMAN_ID}`,
+      status: "valid",
+    });
+    appConnect.isPodAppAgent.mockResolvedValue(true);
+    const res = await revokeToken({
+      token: "synap_hub_live_APPKEY",
+      token_type_hint: "refresh_token",
+    });
+    expect(res.status).toBe(200);
+    expect(store.keys.get("synap_hub_live_APPKEY")!.status).toBe("revoked");
   });
 });

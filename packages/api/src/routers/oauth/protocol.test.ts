@@ -5,7 +5,7 @@
  * and cover the parts a client's security depends on:
  *   - issuer canonicality (RFC 8414 §2) and its agreement with the pod's
  *     INBOUND rule, `normalizeIssuerUrl`
- *   - metadata documents: self-consistent, S256-only, no lie about refresh
+ *   - metadata documents: self-consistent, S256-only, refresh for pod apps only
  *   - PKCE: a wrong or ABSENT verifier must throw, never pass
  *   - redirect_uri matching is exact, not prefix
  *   - DCR validation: https-only, public-client-only
@@ -108,9 +108,13 @@ describe("buildAuthorizationServerMetadata", () => {
     expect(doc.code_challenge_methods_supported).toEqual(["S256"]);
   });
 
-  it("does not advertise a refresh_token grant or offline_access", () => {
-    // This AS issues no refresh token; advertising one is a lie a client acts on.
-    expect(doc.grant_types_supported).toEqual(["authorization_code"]);
+  // Flipped on purpose in PB3 (was: no refresh_token grant). A pod app gets a
+  // rotating refresh token; an MCP client still does not (DCR response below).
+  it("advertises the refresh_token grant (pod apps) but never offline_access", () => {
+    expect(doc.grant_types_supported).toEqual([
+      "authorization_code",
+      "refresh_token",
+    ]);
     expect(doc.scopes_supported).not.toContain("offline_access");
   });
 

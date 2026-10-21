@@ -121,9 +121,10 @@ export function isSynapApp(clientId: string): boolean {
  * either grammar gets exactly what it asked for rather than falling through to
  * the registered default.
  *
- * `offline_access` is deliberately absent: this AS issues no refresh token (see
- * `buildAuthorizationServerMetadata`), and advertising a scope we never honor is
- * a lie a client acts on.
+ * `offline_access` is deliberately absent: an MCP client is issued no refresh
+ * token, and a pod app gets one without asking (see
+ * `buildAuthorizationServerMetadata`), so advertising it would be a lie a
+ * client acts on.
  */
 export const OAUTH_SUPPORTED_SCOPES = ["mcp.read", "mcp.write"] as const;
 

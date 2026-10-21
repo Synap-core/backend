@@ -26,6 +26,7 @@ import {
   inArray,
   isNull,
   sql,
+  drizzleSql,
   getActingAgentUserId,
   getRequestGrant,
   isFullAccessGrant,
@@ -68,6 +69,7 @@ import {
 import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
 import { createAndVerifyHubInboundKey } from "./external-registration.js";
 import { revokeActiveHubInboundKeysForUser } from "./hub-integration-registration.js";
+import { revokeConnectionRefreshTokens } from "../routers/oauth/refresh.js";
 import type { Context } from "../types/context.js";
 import { isAgentCaller } from "./library/agent-door.js";
 import { requestsWithin } from "./agent-connect.js";
@@ -940,6 +942,16 @@ export async function issueKey(args: {
 /** An access token a pod app gets at /token lives this long (F5). */
 export const APP_OAUTH_ACCESS_TTL_SECONDS = 60 * 60;
 
+/**
+ * GC of a connection's dead keys (spec 17 risk R3): every refresh mints a new
+ * key, ~24 a day per connection. Each mint deletes the connection's revoked
+ * keys beyond the newest `APP_OAUTH_DEAD_KEYS_KEPT` (their grants cascade),
+ * at most `APP_OAUTH_KEY_SWEEP_BATCH` per mint, so a connection holds one
+ * live key and at most this many dead ones once swept.
+ */
+export const APP_OAUTH_DEAD_KEYS_KEPT = 2;
+const APP_OAUTH_KEY_SWEEP_BATCH = 100;
+
 /** One permission a pod app asks for, and the spaces it may be given in. */
 export interface OAuthAppOfferItem {
   permission: string;
@@ -1291,6 +1303,7 @@ export async function mintAppOAuthAccessKey(args: {
     via: "oauth",
     expiresAt: expiresAt.toISOString(),
   });
+  await sweepDeadOAuthKeys(agentUserId, args.instanceId);
 
   const names = new Map(
     (
@@ -1317,6 +1330,33 @@ export async function mintAppOAuthAccessKey(args: {
     })),
     user: { id: person.id, name: person.name ?? null },
   };
+}
+
+/** The GC behind `APP_OAUTH_DEAD_KEYS_KEPT`: one connection's key slot only. */
+async function sweepDeadOAuthKeys(
+  agentUserId: string,
+  instanceId: string
+): Promise<void> {
+  const dead = await db
+    .select({ id: apiKeys.id })
+    .from(apiKeys)
+    .where(
+      and(
+        eq(apiKeys.userId, agentUserId),
+        eq(apiKeys.instanceId, instanceId),
+        eq(apiKeys.isActive, false)
+      )
+    )
+    .orderBy(drizzleSql`${apiKeys.createdAt} desc`)
+    .limit(APP_OAUTH_KEY_SWEEP_BATCH)
+    .offset(APP_OAUTH_DEAD_KEYS_KEPT);
+  if (dead.length === 0) return;
+  await db.delete(apiKeys).where(
+    inArray(
+      apiKeys.id,
+      dead.map((k) => k.id)
+    )
+  );
 }
 
 /**
@@ -1357,6 +1397,12 @@ export async function revokeApp(args: {
     args.ownerUserId,
     args.podAdmin
   );
+  // A pod app's refresh tokens die FIRST (I6): a refresh after this is
+  // `invalid_grant`, and one already minting fails its rotation and revokes
+  // the key it minted, so no key outlives the revoke below.
+  if (found.app.mode === "oauth") {
+    await revokeConnectionRefreshTokens(found.app.id);
+  }
   const repo = new AppRepository(db);
   const withdrawn = await repo.withdrawPendingRequests(
     found.app.id,
