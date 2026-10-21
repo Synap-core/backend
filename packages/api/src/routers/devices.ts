@@ -24,6 +24,8 @@ import {
   revokeOwnPersonDevice,
 } from "../services/person-device-token.js";
 
+export const _second = (db: any, t: any) =>
+  db.insert(personDeviceTokens).values(t);
 const DEVICES_SIGNED_IN = "Manage your signed-in devices while signed in.";
 
 export const devicesRouter = router({

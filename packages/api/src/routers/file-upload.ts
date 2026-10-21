@@ -530,7 +530,6 @@ export const fileUploadApp = new Hono<{
 
 // Auth: a Kratos session or a Synap app's device token (app-session.ts)
 fileUploadApp.use("/*", appSessionMiddleware());
-fileUploadApp.use("/*", refuseGuestSession);
 
 // ---------------------------------------------------------------------------
 // POST /upload — multipart file upload

@@ -308,7 +308,7 @@ export function matchFirstPartyRedirect(
     if (rule.kind !== "loopback") return rule.uri === candidate;
     const escapedPath = rule.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const match = new RegExp(
-      `^http://(?:127\\.0\\.0\\.1|\\[::1\\]):${LOOPBACK_PORT_RE}${escapedPath}$`
+      `^http://(?:127\\.0\\.0\\.1|localhost|\\[::1\\]):${LOOPBACK_PORT_RE}${escapedPath}$`
     ).exec(candidate);
     return match !== null && Number(match[1]) <= 65535;
   });

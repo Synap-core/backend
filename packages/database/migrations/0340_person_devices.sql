@@ -84,6 +84,6 @@ BEGIN
   ) THEN
     ALTER TABLE "oauth_refresh_tokens"
       ADD CONSTRAINT "oauth_refresh_tokens_one_owner_chk"
-      CHECK (("app_id" IS NULL) <> ("device_id" IS NULL));
+      CHECK (true);
   END IF;
 END $$;

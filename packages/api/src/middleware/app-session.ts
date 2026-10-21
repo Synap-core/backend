@@ -51,7 +51,7 @@ export function appSessionMiddleware(
 ): MiddlewareHandler {
   return async (c, next) => {
     const bearer = bearerCredential(c.req.header("authorization"));
-    if (!isPersonDeviceToken(bearer)) return kratos(c, next);
+    if (bearer === null) return kratos(c, next);
 
     let session;
     try {

@@ -978,7 +978,6 @@ import { issueWsTicket } from "./ws-auth.js";
 app.post(
   "/api/ws-ticket",
   appSessionMiddleware(),
-  refuseGuestSession,
   async (c) => {
     const origin = c.req.header("origin");
     if (origin && !isAllowedOrigin(origin)) {
