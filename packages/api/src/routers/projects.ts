@@ -531,6 +531,10 @@ export const projectsRouter = router({
           status: "proposed",
           projectId: "",
           proposalId: outcome.proposalId,
+          // Why it waits, when the duplicate door is why (B2).
+          ...(outcome.duplicateCheck
+            ? { duplicateCheck: outcome.duplicateCheck }
+            : {}),
         };
       }
       // The row without the repo's dedup signals (they ride separately).

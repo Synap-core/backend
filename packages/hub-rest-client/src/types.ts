@@ -2197,10 +2197,10 @@ export interface CreateProjectInput {
 
 /**
  * POST /api/hub/projects outcome: the created row (201), a pending governance
- * proposal (202, with its review link), an idempotent reuse of an exact-name
- * match (200), or a near-duplicate refusal (409) returned as data so the caller
- * can offer the candidates instead of losing them. A missing-evidence refusal
- * (400) and every other non-2xx throw HubApiError.
+ * proposal (202, with its review link — and `duplicateCheck` when a similar
+ * project is why it waits: a near match is filed for review, never refused),
+ * or an idempotent reuse of an exact-name match (200). A missing-evidence
+ * refusal (400) and every other non-2xx throw HubApiError.
  */
 export type HubCreateProjectResult =
   | ({ status?: undefined; id: string; name: string } & Record<string, unknown>)
@@ -2209,13 +2209,10 @@ export type HubCreateProjectResult =
       proposalId: string;
       reviewPath?: string;
       reviewUrl?: string;
+      /** The duplicate door's answer when a possible twin is why it waits. */
+      duplicateCheck?: Record<string, unknown>;
     }
-  | { status: "deduped"; projectId: string; reusedProjectId: string }
-  | {
-      status: "near_duplicate";
-      error: string;
-      dedupCandidates: Array<Record<string, unknown>>;
-    };
+  | { status: "deduped"; projectId: string; reusedProjectId: string };
 
 /** A project row as the Hub REST project doors return it. */
 export interface HubProject {
