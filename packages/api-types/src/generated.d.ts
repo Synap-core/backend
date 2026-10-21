@@ -731,6 +731,15 @@ export type WorkspacePrimarySurface = {
 	 * rendered by hosts as an unprivileged URL surface.
 	 */
 	kind: "url";
+	/**
+	 * The pod app this website is (spec 17 §7.1): its Client ID Metadata
+	 * Document URL. A launch hint only: the browser opens the site with this
+	 * pod's `iss` so the app starts the pod's own OAuth flow. It grants no
+	 * identity, bridge or credential; the site stays an unprivileged URL.
+	 */
+	podApp?: {
+		clientId: string;
+	};
 	title?: string;
 	url: string;
 } | {
