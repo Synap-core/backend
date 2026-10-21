@@ -41,6 +41,7 @@ import {
   and,
   eq,
   isNull,
+  ensureDefaultRelationDefs,
 } from "@synap/database";
 import { relationsRouter } from "./relations.js";
 
@@ -87,6 +88,10 @@ describe.skipIf(!dbAvailable)(
   () => {
     beforeAll(async () => {
       await cleanup();
+      // The pod-wide relation types, as boot seeds them
+      // (jobs/src/workers/index.ts); a workspace falls back to them.
+      const seeded = await ensureDefaultRelationDefs(null, "system");
+      expect(seeded.status).not.toBe("error");
       for (const [id, email] of [
         [USER, "rel-idem@test.synap"],
         [OTHER_USER, "rel-idem-other@test.synap"],
@@ -132,7 +137,7 @@ describe.skipIf(!dbAvailable)(
       const first = await caller().create({
         sourceEntityId: SRC,
         targetEntityId: TGT,
-        type: "related_to",
+        type: "relates_to",
         workspaceId: WS,
       });
       expect(first.status).toBe("created");
@@ -141,7 +146,7 @@ describe.skipIf(!dbAvailable)(
       const second = await caller().create({
         sourceEntityId: SRC,
         targetEntityId: TGT,
-        type: "related_to",
+        type: "relates_to",
         workspaceId: WS,
       });
       expect(second.status).toBe("exists");
@@ -151,7 +156,7 @@ describe.skipIf(!dbAvailable)(
         where: and(
           eq(relations.sourceEntityId, SRC),
           eq(relations.targetEntityId, TGT),
-          eq(relations.type, "related_to"),
+          eq(relations.type, "relates_to"),
           eq(relations.workspaceId, WS)
         ),
       });
@@ -165,7 +170,7 @@ describe.skipIf(!dbAvailable)(
           .create({
             sourceEntityId: SRC,
             targetEntityId: TGT,
-            type: "pod_wide_idem",
+            type: "mentions",
           });
 
       const first = await mk(USER);
@@ -176,7 +181,7 @@ describe.skipIf(!dbAvailable)(
       const mine = await db.query.relations.findMany({
         where: and(
           eq(relations.sourceEntityId, SRC),
-          eq(relations.type, "pod_wide_idem"),
+          eq(relations.type, "mentions"),
           isNull(relations.workspaceId),
           eq(relations.userId, USER)
         ),

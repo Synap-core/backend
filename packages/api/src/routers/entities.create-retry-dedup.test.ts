@@ -38,6 +38,7 @@ import {
   and,
   eq,
   isNull,
+  ensureSystemProfiles,
 } from "@synap/database";
 import { entitiesRouter } from "./entities.js";
 
@@ -72,6 +73,10 @@ describe.skipIf(!dbAvailable)(
   "entities.create — retry-safe dedup for agent-authored direct writes",
   () => {
     beforeAll(async () => {
+      // The core kinds (person, note…) as boot seeds them
+      // (apps/api startup-hooks.ts); a fresh test database has none.
+      const seeded = await ensureSystemProfiles();
+      expect(seeded.status).not.toBe("error");
       await db
         .delete(entities)
         .where(and(eq(entities.workspaceId, WS), eq(entities.type, "note")));

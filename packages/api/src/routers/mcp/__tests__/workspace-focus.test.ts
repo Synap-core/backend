@@ -21,6 +21,7 @@ import {
   workspaceMembers,
   eq,
   and,
+  ensureSystemProfiles,
 } from "@synap/database";
 import {
   pickAdvisoryWorkspaceId,
@@ -231,6 +232,10 @@ describe("synap_capture domain write placement (no silent membership[0])", () =>
   let seededOrchestratorId: string | null = null;
 
   beforeAll(async () => {
+    // The core kinds (person, note…) as boot seeds them
+    // (apps/api startup-hooks.ts); a fresh test database has none.
+    const seeded = await ensureSystemProfiles();
+    expect(seeded.status).not.toBe("error");
     const [existing] = await db
       .select({ id: agents.id })
       .from(agents)

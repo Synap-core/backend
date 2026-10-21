@@ -235,6 +235,20 @@ export function scanSkillGlobals(code: string): {
 }
 
 /**
+ * The B1 save-time scan for a skill of `kind` — the one rule every write door
+ * applies. Only a CODE skill's `code` is JavaScript; an instruction skill keeps
+ * its markdown body there (every catalog instruction skill does), so parsing it
+ * as JavaScript refused every capability that ships one.
+ */
+export function assertSkillCodeAllowed(
+  kind: string | null | undefined,
+  code: string | undefined | null
+): void {
+  if (kind !== "code") return;
+  assertSkillGlobalsAllowed(code);
+}
+
+/**
  * Throw a TRPCError with an actionable message if `code` references a global the
  * skill runtime does not provide. No-op for empty/whitespace code.
  */
@@ -322,9 +336,7 @@ export async function insertSkillGoverned(
   // do NOT call this function) — this is not a double-scan of the same code
   // path, it closes the gap for callers that construct a `kind: "code"` skill
   // without going through those two mutations.
-  if (values.kind === "code") {
-    assertSkillGlobalsAllowed(values.code);
-  }
+  assertSkillCodeAllowed(values.kind, values.code);
 
   const perm = await checkPermissionOrPropose({
     userId: values.userId,
@@ -1150,9 +1162,7 @@ export const skillsRouter = router({
       // BEFORE it persists — the single funnel every code-skill create hits
       // (human UI, AI via /agent-skills/executable → this create). The author/AI
       // learns the gap now, not the reviewer at approval or the run at execution.
-      if (hasCode) {
-        assertSkillGlobalsAllowed(input.code);
-      }
+      assertSkillCodeAllowed(kind, input.code);
 
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
@@ -1345,13 +1355,6 @@ export const skillsRouter = router({
         ...updateData
       } = input;
 
-      // Save-time global-reference scan (B1) — same gate as `create`: an EDIT
-      // that re-points a skill's code to reference an unprovided global (fetch/
-      // crypto/…) is the same ReferenceError-at-run bug the create scan closes.
-      if (input.code?.trim()) {
-        assertSkillGlobalsAllowed(input.code);
-      }
-
       // Verify skill exists and user has access (owner or pod-scoped)
       const existingSkill = await ctx.db.query.skills.findFirst({
         where: and(
@@ -1366,6 +1369,12 @@ export const skillsRouter = router({
           message: "Skill not found",
         });
       }
+
+      // Save-time global-reference scan (B1) — same gate as `create`: an EDIT
+      // that re-points a skill's code to reference an unprovided global (fetch/
+      // crypto/…) is the same ReferenceError-at-run bug the create scan closes.
+      // Judged on the kind the skill will HAVE.
+      assertSkillCodeAllowed(input.kind ?? existingSkill.kind, input.code);
 
       // The acting agent, derived exactly as `delete` derives it: the ambient
       // ALS value first (set server-side at every key-auth entry point, so an

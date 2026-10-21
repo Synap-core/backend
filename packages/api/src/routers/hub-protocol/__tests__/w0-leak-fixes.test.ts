@@ -110,7 +110,7 @@ describe("W0 channel-egress — /pending service-key confinement (no requested w
 // ── LIVE-PG END-TO-END PROOFS ────────────────────────────────────────────────
 // REQUIRES LIVE PG — self-skips when the DB is unreachable.
 
-const WS_A = "a0000000-0000-0000-0000-0000000000a1"; // A's private workspace; B is NOT a member.
+const WS_A = "a0000000-0000-4000-8000-0000000000a1"; // A's private workspace; B is NOT a member.
 const ACCOUNT_A = "acct-A-external-id";
 
 async function checkDb(): Promise<boolean> {

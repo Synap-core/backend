@@ -85,8 +85,15 @@ function ddlFor(table: PgTable): string {
 
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
+/**
+ * ONE instant for the whole fixture: every `ago()` row and `midnightZone()`
+ * are measured from it, so the midnight straddle cannot drift with how long
+ * the suite runs before the parity test (CI run 39618292526 picked a zone
+ * against a later "now" and found no split day).
+ */
+const FIXTURE_NOW = Date.now();
 const ago = (mins: number) =>
-  new Date(Date.now() - mins * 60_000).toISOString();
+  new Date(FIXTURE_NOW - mins * 60_000).toISOString();
 
 const W1 = randomUUID();
 const PROJ = randomUUID();
@@ -770,15 +777,15 @@ const daily = (
 ) => activityRouter.createCaller(ctx(userId)).daily(input);
 
 /**
- * A zone whose local midnight fell 3–88 minutes ago, so the fixture's recent
- * rows (2–90 minutes old) straddle two calendar days there. Chosen at run
- * time. The window must span more than an hour: zones whose local time is
+ * A zone whose local midnight fell 3–88 minutes before FIXTURE_NOW, so the
+ * fixture's recent rows (2–90 minutes before it) straddle two calendar days
+ * there. The window must span more than an hour: zones whose local time is
  * 00:xx or 01:xx always exist, but a 10–50 minute window had no zone for
  * about a fifth of the day (00:00–00:09 and :51–:59 UTC each hour on whole-
  * hour offsets) and failed CI at those minutes.
  */
 function midnightZone(): string {
-  const now = Date.now();
+  const now = FIXTURE_NOW;
   for (const tz of Intl.supportedValuesOf("timeZone")) {
     const today = calendarDayIn(now, tz);
     const since = Date.parse(activityDayRange(today, tz).since);

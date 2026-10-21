@@ -38,6 +38,7 @@ import {
   eq,
   isNull,
   ilike,
+  ensureSystemProfiles,
 } from "@synap/database";
 import { entitiesRouter } from "./entities.js";
 
@@ -92,6 +93,10 @@ describe.skipIf(!dbAvailable)(
   () => {
     beforeAll(async () => {
       await cleanup();
+      // The core kinds (person, note…) as boot seeds them
+      // (apps/api startup-hooks.ts); a fresh test database has none.
+      const seeded = await ensureSystemProfiles();
+      expect(seeded.status).not.toBe("error");
       await db
         .insert(users)
         .values({ id: USER, email: "b1-dedup@test.synap", userType: "human" })

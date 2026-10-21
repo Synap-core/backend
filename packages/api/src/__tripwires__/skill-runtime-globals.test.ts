@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import {
+  assertSkillCodeAllowed,
   scanSkillGlobals,
   SKILL_RUNTIME_ALLOWED_GLOBALS,
 } from "../routers/skills.js";
@@ -110,6 +111,24 @@ describe("skill runtime global scan — tripwire", () => {
     // local shadow of an allowed name is never flagged; a syntax error is caught
     expect(scanSkillGlobals(`const URL = 1; return URL;`).ok).toBe(true);
     expect(scanSkillGlobals(`const x = (`).parseError).toBeTruthy();
+  });
+
+  it("(2b) only a CODE skill's code is scanned; an instruction skill's markdown is not JavaScript", () => {
+    // The shape every catalog instruction skill ships (datagouv,
+    // research-methods, …): its body is markdown in `code`.
+    const markdown =
+      "# Open Data Advisor\n\nWhen asked about a grant, advise on scope/abstract.";
+    expect(() => assertSkillCodeAllowed("instruction", markdown)).not.toThrow();
+    // The same text as a CODE skill is refused: the gate still bites there.
+    expect(() => assertSkillCodeAllowed("code", markdown)).toThrow(
+      /syntax error/
+    );
+    expect(() =>
+      assertSkillCodeAllowed("code", "return await fetch('https://x');")
+    ).toThrow(/fetch/);
+    expect(() =>
+      assertSkillCodeAllowed("code", "return args.query;")
+    ).not.toThrow();
   });
 
   it("(3) allow-list matches the IS runtime SSOT (when sibling checked out)", () => {
