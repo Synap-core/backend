@@ -14,10 +14,14 @@ several entities, or a graph — or **when in doubt** — use the capture door
 in the SAME call, never from picking a different tool or a second commit step.
 
 The difference that is NOT visible in either tool's description: `create_entity`
-writes one entity with per-entity governance and REJECTS a name collision unless
-`forceCreate`; capture-with-`entities[]` files ONE atomic proposal for the whole
-graph and DEDUP-MERGES instead of rejecting. Pick by whether you want a partial
-write to be possible, not by how structured your data feels.
+writes one entity with per-entity governance; capture-with-`entities[]` files ONE
+atomic proposal for the whole graph. Neither rejects a look-alike: a record (or
+one of your own pending proposals) of the same kind with the same name or
+identity makes the write a proposal carrying `duplicateCheck`, and the person
+decides (keep both, use the existing one, fill its empty fields). Only a strong
+identity (email, phone, url, handle, external id) links to the existing record
+on its own. Pick by whether you want a partial write to be possible, not by how
+structured your data feels.
 
 **Every title is linted.** Both doors return `titleLint` in the receipt when a
 title breaks the rubric (too long, cut off, status words, ids, a placeholder…);
