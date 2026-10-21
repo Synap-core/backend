@@ -113,6 +113,7 @@ import {
   assertCanRetargetProposalDestination,
   assertCanReviewProposal,
   assertMayDecideProposal,
+  assertMayDecideProposalAt,
   refuseAgentProposalApprover,
   reviewRefusalMessage,
 } from "./proposals/review-authority.js";
@@ -2254,6 +2255,8 @@ export const proposalsRouter = router({
           message: "Proposal not found",
         });
       }
+      // D3: undo executes with the reviewer's authority — where the key reaches.
+      assertMayDecideProposalAt("approve", "undo", proposal);
 
       // Recovery: a proposal already in the TERMINAL `reverted` status can be
       // re-proposed back to PENDING — but ONLY via reopen (a plain `revert({})`

@@ -115,6 +115,13 @@ export function serializeApp(row: AppWithGrants) {
      * (exact match). Empty = the app signs no one in. Set by the owner only.
      */
     redirect_uris: app.redirectUris ?? [],
+    /**
+     * May a person signed in to this app approve its OWN agent's proposals
+     * from inside it? Owner-set (`setAppSignInPolicy`); absent = true.
+     */
+    person_may_decide_own_agent_proposals:
+      (app.metadata as Record<string, unknown> | null)
+        ?.personMayDecideOwnAgentProposals !== false,
     last_used_at: row.lastUsedAt,
     grants: row.grants,
   };
@@ -372,14 +379,20 @@ const WRITE_ROLES = ["owner", "admin", "editor"];
  * can read. Run when the request is filed AND when it is approved (a role can
  * drop in between).
  */
-export async function assertOwnerMayGrant(
+/**
+ * The write requests among `requests` that the owner may NOT give: a write in
+ * a space they neither own nor hold owner / admin / editor in. The ONE rule
+ * behind `assertOwnerMayGrant` (asking, approving) and `ownerGrantableNow`
+ * (every sign-in request, PR #29 H1/L1).
+ */
+async function writesBeyondOwner<T extends AppApprovedRequest>(
   ownerUserId: string,
-  requests: ReadonlyArray<AppApprovedRequest & { workspaceName?: string }>
-): Promise<void> {
+  requests: readonly T[]
+): Promise<T[]> {
   const writes = requests.filter(
     (r) => parsePermission(r.permission).at(-1) !== "read"
   );
-  if (writes.length === 0) return;
+  if (writes.length === 0) return [];
   const ids = [...new Set(writes.map((r) => r.workspaceId))];
   const [owned, editing] = await Promise.all([
     db
@@ -400,7 +413,38 @@ export async function assertOwnerMayGrant(
       ),
   ]);
   const may = new Set([...owned, ...editing].map((r) => r.id));
-  const beyond = writes.filter((r) => !may.has(r.workspaceId));
+  return writes.filter((r) => !may.has(r.workspaceId));
+}
+
+/**
+ * What of an app's approval its owner could STILL give right now: reads in
+ * spaces they can read, writes where they still edit. An approval outlives
+ * the owner's role; a person signed in to the app must not (PR #29 H1/L1) —
+ * so every sign-in request is bounded by this, not by the approval alone.
+ */
+export async function ownerGrantableNow(
+  ownerUserId: string,
+  approved: readonly AppApprovedRequest[]
+): Promise<AppApprovedRequest[]> {
+  if (approved.length === 0) return [];
+  const readable = new Set(await getUserWorkspaceIds(ownerUserId));
+  const beyond = new Set(
+    (await writesBeyondOwner(ownerUserId, approved)).map(
+      (r) => `${r.workspaceId} ${r.permission}`
+    )
+  );
+  return approved.filter(
+    (r) =>
+      readable.has(r.workspaceId) &&
+      !beyond.has(`${r.workspaceId} ${r.permission}`)
+  );
+}
+
+export async function assertOwnerMayGrant(
+  ownerUserId: string,
+  requests: ReadonlyArray<AppApprovedRequest & { workspaceName?: string }>
+): Promise<void> {
+  const beyond = await writesBeyondOwner(ownerUserId, requests);
   if (beyond.length > 0) {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -1112,6 +1156,30 @@ export async function setAppRedirectUris(args: {
     }
   }
   await new AppRepository(db).setRedirectUris(found.app.id, uris);
+  return loadOwnedApp(args.publicId, args.ownerUserId);
+}
+
+/**
+ * "Sign in with Synap": may a person signed in to this app approve proposals
+ * its OWN agent filed (the "approve the AI's drafts inline" flow)? Default
+ * true; the owner turns it off here. Owner credential only.
+ */
+export async function setAppSignInPolicy(args: {
+  publicId: string;
+  ownerUserId: string;
+  personMayDecideOwnAgentProposals: boolean;
+  actorAgentUserId?: string | null;
+  actorKeyType?: string | null;
+}): Promise<AppWithGrants> {
+  assertOwnerCredential("change what an app's sign-ins may decide", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
+  const found = await loadOwnedApp(args.publicId, args.ownerUserId);
+  await new AppRepository(db).setPersonMayDecideOwnAgentProposals(
+    found.app.id,
+    args.personMayDecideOwnAgentProposals
+  );
   return loadOwnedApp(args.publicId, args.ownerUserId);
 }
 

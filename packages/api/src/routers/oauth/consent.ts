@@ -53,10 +53,11 @@ import {
   APP_CANNOT_SIGN_IN,
   APP_PERSON_SCOPES,
   appGrantFingerprint,
-  currentAppApproval,
+  appNotForYou,
+  appSignInReach,
   describeAppSignIn,
   isAppClientId,
-  personAppGrant,
+  loadLiveApp,
   resolveAppClient,
   type AppSignInDescription,
 } from "./app-client.js";
@@ -291,23 +292,33 @@ export interface OAuthConsentContext {
 }
 
 /**
- * The grant a person would receive signing in to an app: its approval
- * narrowed to the spaces they can reach. Empty → they cannot sign in.
+ * The grant a person would receive signing in to an app, and who registered
+ * it — through THE reach rule (`appSignInReach`: who may, and what). A
+ * refusal is an `AuthorizeUserError`: shown to the person, never redirected.
  */
-async function appGrantFor(
+async function appSignInFor(
   client: StoredClient,
   viewerUserId: string
-): Promise<AppGrantRequest[]> {
-  const grant = await personAppGrant(
-    await currentAppApproval(client.clientId),
-    viewerUserId
-  );
-  if (grant.length === 0) {
+): Promise<{ grant: AppGrantRequest[]; registeredBy: string }> {
+  const app = await loadLiveApp(client.clientId);
+  if (!app) throw new AuthorizeUserError(APP_CANNOT_SIGN_IN);
+  const reach = await appSignInReach(app, viewerUserId);
+  if (reach === "not_for_you") {
+    throw new AuthorizeUserError(appNotForYou(client.clientName));
+  }
+  if (reach.length === 0) {
     throw new AuthorizeUserError(
       `You are not in any space ${client.clientName} was approved for, so it cannot act as you here.`
     );
   }
-  return grant;
+  const owner = await db.query.users.findFirst({
+    where: eq(users.id, app.ownerUserId),
+    columns: { name: true, email: true },
+  });
+  return {
+    grant: reach,
+    registeredBy: owner?.name || owner?.email || "a member of this pod",
+  };
 }
 
 /**
@@ -319,13 +330,17 @@ export async function getOAuthConsentContext(
   viewerUserId: string
 ): Promise<OAuthConsentContext> {
   const req = await resolveAuthorizeRequest(params);
-  const appSignIn =
+  const signIn =
     req.client.clientKind === "app"
-      ? await describeAppSignIn(
-          req.client.clientName,
-          await appGrantFor(req.client, viewerUserId)
-        )
+      ? await appSignInFor(req.client, viewerUserId)
       : null;
+  const appSignIn = signIn
+    ? await describeAppSignIn(
+        req.client.clientName,
+        signIn.registeredBy,
+        signIn.grant
+      )
+    : null;
   return {
     clientId: req.client.clientId,
     clientName: req.client.clientName,
@@ -396,7 +411,7 @@ export async function decideOAuthAuthorization(
   // derivation the consent screen rendered); /token never mints wider.
   const appGrant =
     req.client.clientKind === "app"
-      ? await appGrantFor(req.client, caller.id)
+      ? (await appSignInFor(req.client, caller.id)).grant
       : null;
   if (
     appGrant &&

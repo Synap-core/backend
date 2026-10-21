@@ -2840,10 +2840,9 @@ export const focusSessionsRouter = router({
           message: "Only the person can attest — an agent key cannot.",
         });
       }
-      await assertKeyMayWrite({
-        subjectType: "focus_session",
-        action: "update",
-      });
+      // The session's own space + project name the key's reach (D3), as on
+      // the answer doors (PR #29).
+      await assertKeyMayWrite(await answerGrantWrite(input.sessionId));
       // The stamp, then the room receipt + the agent's wake
       // (`attestSessionSlot`, session-answer.ts).
       const result = await attestSessionSlot({

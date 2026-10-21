@@ -16,7 +16,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { and, db, eq, inArray, isNull } from "@synap/database";
+import { and, db, eq, inArray, isNull, type KeyGrant } from "@synap/database";
 import { apps, workspaces } from "@synap/database/schema";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { summarizeGrant } from "@synap-core/types/grants";
@@ -27,6 +27,7 @@ import {
 } from "@synap/governance-policy/grants";
 
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
+import { isPodAdmin } from "../../utils/workspace-role.js";
 import type { AppGrantRequest, StoredClient } from "./store.js";
 
 /**
@@ -93,17 +94,6 @@ export async function resolveAppClient(
   };
 }
 
-/** The app's CURRENT approval, or [] when it is not live. */
-export async function currentAppApproval(
-  publicId: string
-): Promise<AppGrantRequest[]> {
-  const app = await loadLiveApp(publicId);
-  return (app?.approvedRequests ?? []).map((r) => ({
-    permission: r.permission,
-    workspaceId: r.workspaceId,
-  }));
-}
-
 /** The pairs present in BOTH lists (exact permission × workspace). */
 export function intersectAppGrant(
   a: readonly AppGrantRequest[],
@@ -122,19 +112,74 @@ export function intersectAppGrant(
 }
 
 /**
- * The app's approval narrowed to the spaces THIS person can reach. A person
- * is never shown, nor handed, a space they cannot see. Their own role still
- * decides every write at write time — this only bounds the grant.
+ * THE rule for what a person may get from an app RIGHT NOW — at consent, at
+ * the decision, at mint and on EVERY request the token makes (one rule, four
+ * call sites):
+ *
+ *  1. WHO (PR #29 H1, founder default): the app's OWNER always; anyone else
+ *     only when the owner is a POD ADMIN. Any member can register and approve
+ *     an app for their own spaces, so without this a member could point an
+ *     app at their own domain and phish another member into a token that acts
+ *     as them. A refusal is shown on the pod, never redirected.
+ *  2. WHAT: the app's current approval ∩ what its owner could STILL give
+ *     (an approval outlives a role — `ownerGrantableNow`) ∩ the spaces the
+ *     person can reach. Their own role still decides each write.
+ *
+ * `"not_for_you"` = rule 1 refused; `[]` = nothing left.
  */
-export async function personAppGrant(
-  approved: readonly AppGrantRequest[],
+export async function appSignInReach(
+  app: {
+    ownerUserId: string;
+    approvedRequests: readonly AppGrantRequest[] | null;
+  },
   personUserId: string
-): Promise<AppGrantRequest[]> {
+): Promise<AppGrantRequest[] | "not_for_you"> {
+  if (
+    personUserId !== app.ownerUserId &&
+    !(await isPodAdmin(app.ownerUserId))
+  ) {
+    return "not_for_you";
+  }
+  const approved = app.approvedRequests ?? [];
   if (approved.length === 0) return [];
+  // Loaded on use: the app service pulls a large graph the protocol
+  // endpoints (and their tests) otherwise never load.
+  const { ownerGrantableNow } = await import("../../services/app-connect.js");
+  const grantable = await ownerGrantableNow(app.ownerUserId, approved);
   const reach = new Set(await getUserWorkspaceIds(personUserId));
-  return approved
-    .filter((r) => reach.has(r.workspaceId))
-    .map((r) => ({ permission: r.permission, workspaceId: r.workspaceId }));
+  return intersectAppGrant(
+    approved,
+    grantable.filter((r) => reach.has(r.workspaceId))
+  );
+}
+
+/** Why rule 1 refused — shown to the person on the pod's consent page. */
+export function appNotForYou(appName: string): string {
+  return `${appName} was registered by a member of this pod who is not an administrator, so only that member can sign in to it.`;
+}
+
+/**
+ * A key's grant cut down to `reach` (PR #29 L1): every request a person token
+ * makes is bounded by what `appSignInReach` allows NOW, not only by what was
+ * attached at mint. Nothing left = one deny-all scope.
+ */
+export function narrowKeyGrant(
+  grant: KeyGrant,
+  reach: readonly AppGrantRequest[]
+): KeyGrant {
+  const ok = new Set(reach.map((r) => `${r.workspaceId} ${r.permission}`));
+  const scopes: KeyGrant["scopes"][number][] = [];
+  for (const scope of grant.scopes) {
+    for (const ws of scope.workspaceIds ?? []) {
+      const permissions = scope.permissions.filter((p) => ok.has(`${ws} ${p}`));
+      if (permissions.length > 0)
+        scopes.push({ ...scope, permissions, workspaceIds: [ws] });
+    }
+  }
+  return {
+    clientId: grant.clientId,
+    scopes: scopes.length > 0 ? scopes : [{ permissions: [] }],
+  };
 }
 
 /** A stable digest of a grant (order-free): what a consent was given to. */
@@ -179,6 +224,8 @@ export interface AppSignInSpace {
 /** What the consent screen says, every word derived from the grant. */
 export interface AppSignInDescription {
   appName: string;
+  /** Who registered the app on this pod — shown so the person can judge it. */
+  registeredBy: string;
   /**
    * Which grant this description was derived from. The consent screen sends
    * it back with Allow; a decision for any other grant (the approval or the
@@ -198,10 +245,11 @@ export interface AppSignInDescription {
 
 /**
  * Describe a person's app sign-in from the grant they would receive.
- * `requests` is already narrowed to the person (`personAppGrant`).
+ * `requests` is already the person's reach (`appSignInReach`).
  */
 export async function describeAppSignIn(
   appName: string,
+  registeredBy: string,
   requests: readonly AppGrantRequest[]
 ): Promise<AppSignInDescription> {
   const ids = [...new Set(requests.map((r) => r.workspaceId))];
@@ -234,6 +282,7 @@ export async function describeAppSignIn(
   ];
   return {
     appName,
+    registeredBy,
     fingerprint: appGrantFingerprint(requests),
     headline: `${appName} will act as you in: ${spaces
       .map((s) => s.name)

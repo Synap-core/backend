@@ -199,6 +199,8 @@ type ReviewedProposal = {
   targetId: string | null;
   /** The run the proposal was filed in — also keyed by the session rung. */
   sessionId: string | null;
+  /** Its project, for a key's project fence (D3); absent reads as none. */
+  projectId?: string | null;
 };
 
 /** Does `reader` fail to read a session this proposal belongs to? */
@@ -756,6 +758,15 @@ export async function assertCanReviewProposal(args: {
 }): Promise<void> {
   const { proposal, userId, action, roster } = args;
   assertAgentKeyMayReject(proposal, action);
+  // D3: the key decides only where its grant reaches — the proposal's own
+  // space, project and object. Its own author (an agent discarding its own
+  // work) is the one exception, as for revise.
+  if (
+    !proposal.agentUserId ||
+    proposal.agentUserId !== getActingAgentUserId()
+  ) {
+    assertMayDecideProposalAt("reject", action, proposal);
+  }
 
   // reject / reopen — the documented agent capability ("can reject but never
   // approve"). EXACTLY today's behaviour; the class floor applies to approve only.
@@ -918,6 +929,25 @@ export function assertMayReviseProposal(
   if (actingAgentUserId && proposal.agentUserId === actingAgentUserId) return;
   // D3: the revised proposal's own space / project / object bound the key.
   assertMayDecideProposal("approve", "revise", grant, {
+    workspaceId: proposal.workspaceId ?? null,
+    projectId: proposal.projectId ?? null,
+    targetId: proposal.targetId ?? null,
+  });
+}
+
+/**
+ * The key half of deciding ONE loaded proposal (D3): `assertMayDecideProposal`
+ * with the proposal's own space, project and object as the target, so a key
+ * bounded to some spaces decides only there. Every door that has loaded the
+ * proposal calls this (tripwire `proposal-decision-grant`), after the
+ * target-less verb check its first statement makes.
+ */
+export function assertMayDecideProposalAt(
+  verb: "approve" | "reject",
+  act: string,
+  proposal: ProposalGrantTarget
+): void {
+  assertMayDecideProposal(verb, act, getRequestGrant(), {
     workspaceId: proposal.workspaceId ?? null,
     projectId: proposal.projectId ?? null,
     targetId: proposal.targetId ?? null,

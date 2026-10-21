@@ -48,14 +48,35 @@
  *  T7 Unapproved / revoked app. `resolveAppClient` returns null before any
  *     consent; this door re-reads the approval at mint. → "an unapproved
  *     app is refused".
+ *  T9 A member phishing another member (PR #29 H1): any member can register
+ *     and approve an app for their own spaces and point it at their own
+ *     domain. Only the app's OWNER may sign in to it unless the owner is a
+ *     POD ADMIN, re-checked at consent, decision, mint and every request
+ *     (`appSignInReach`), and every request is cut down to what the owner
+ *     could still give (an approval outlives a role). → "a member's app signs
+ *     in only its member", "an owner's lost role narrows live tokens".
+ *  T10 The app approving its own AI's proposals with the person's token
+ *     (PR #29 M2, by design: "approve AI drafts inline"): allowed by default,
+ *     stamped `approvedInApp` on the proposal, and refused when the owner
+ *     turns `personMayDecideOwnAgentProposals` off (app-sign-in-policy.ts).
  *  T8 CSRF on consent. The decision is a tRPC mutation behind the Kratos
  *     session; tRPC refuses text/plain bodies (415) and a multipart body
  *     cannot satisfy its input; the code only ever goes to a redirect_uri the
  *     app's OWNER registered, so a forged approval delivers nothing to the
  *     attacker, and the app's `state` binds the response to its own request.
+ *     A cookie-carrying decision must also come from the pod-admin origin
+ *     (PR #29 L2, `apiKeys.decideOAuthAuthorization`).
  */
 
-import { db, and, eq, inArray, users, GrantRepository } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  inArray,
+  users,
+  GrantRepository,
+  type KeyGrant,
+} from "@synap/database";
 import { APP_PERSON_KEY_TYPE, apiKeys } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 
@@ -66,9 +87,10 @@ import { oauthKeyInstanceId } from "../routers/oauth/config.js";
 import {
   APP_PERSON_SCOPES,
   APP_PERSON_TOKEN_TTL_DAYS,
+  appSignInReach,
   intersectAppGrant,
   loadLiveApp,
-  personAppGrant,
+  narrowKeyGrant,
 } from "../routers/oauth/app-client.js";
 import type { AppGrantRequest } from "../routers/oauth/store.js";
 
@@ -85,10 +107,12 @@ export type MintAppPersonTokenResult =
       ok: false;
       /**
        * `not_a_person` — the code names no human; `app_unavailable` — the app
-       * is gone, revoked or no longer approved; `nothing_left` — consent ∩
-       * approval ∩ reach is empty.
+       * is gone, revoked or no longer approved; `not_for_you` — the app's
+       * owner is not a pod admin and this is not the owner (H1);
+       * `nothing_left` — consent ∩ approval ∩ reach is empty.
        */
-      reason: "not_a_person" | "app_unavailable" | "nothing_left";
+      reason:
+        "not_a_person" | "app_unavailable" | "not_for_you" | "nothing_left";
     };
 
 /**
@@ -110,13 +134,14 @@ export async function mintAppPersonToken(args: {
   }
 
   const app = await loadLiveApp(args.publicId);
-  const approved = app?.approvedRequests ?? [];
-  if (!app || approved.length === 0) {
+  if (!app || (app.approvedRequests ?? []).length === 0) {
     return { ok: false, reason: "app_unavailable" };
   }
 
-  // T5: never wider than the consent, the current approval, or the reach.
-  const reachable = await personAppGrant(approved, person.id);
+  // H1 + T5: who may (the reach rule) and never wider than the consent, the
+  // current approval, what the owner could still give, or the person's reach.
+  const reachable = await appSignInReach(app, person.id);
+  if (reachable === "not_for_you") return { ok: false, reason: "not_for_you" };
   const grant = intersectAppGrant(args.consented, reachable);
   if (grant.length === 0) return { ok: false, reason: "nothing_left" };
 
@@ -190,19 +215,26 @@ export async function mintAppPersonToken(args: {
 
 /**
  * What `resolveKeyIdentity` asks of a NON-agent key whose grant names an app:
- * is it a person's sign-in token? Read from the ROW (never the caller), and
- * bound to the app it was minted for (`instance_id`):
+ * is it a person's sign-in token? Read from the ROW (never the caller), bound
+ * to the app it was minted for (`instance_id`), and re-judged by THE reach rule
+ * on every request (PR #29 H1/L1):
  *   - `not_person` — any other key: the 0313 adoption applies unchanged;
- *   - `person`     — held by `holderUserId`, minted by `mintAppPersonToken`
- *                    for this app, app still live: resolve as the person;
- *   - `dead`       — a person token whose app is gone or which does not match
- *                    the app it names: refuse.
+ *   - `person`     — minted by `mintAppPersonToken` for this app and still
+ *                    allowed: resolve as the person, with `grant` cut down to
+ *                    what the rule allows NOW (approval, owner's role, reach);
+ *   - `dead`       — a person token whose app is gone, which no longer passes
+ *                    the rule, or which does not match the app it names.
  */
 export async function classifyAppPersonKey(args: {
   apiKeyId: string;
   holderUserId: string;
   publicId: string;
-}): Promise<"not_person" | "person" | "dead"> {
+  grant: KeyGrant;
+}): Promise<
+  | { kind: "not_person" }
+  | { kind: "dead" }
+  | { kind: "person"; grant: KeyGrant }
+> {
   const [key] = await db
     .select({
       keyType: apiKeys.keyType,
@@ -213,13 +245,17 @@ export async function classifyAppPersonKey(args: {
     .from(apiKeys)
     .where(eq(apiKeys.id, args.apiKeyId))
     .limit(1);
-  if (key?.keyType !== APP_PERSON_KEY_TYPE) return "not_person";
+  if (key?.keyType !== APP_PERSON_KEY_TYPE) return { kind: "not_person" };
   if (
     key.userId !== args.holderUserId ||
     key.linkedUserId !== null ||
     key.instanceId !== oauthKeyInstanceId(args.publicId, args.holderUserId)
   ) {
-    return "dead";
+    return { kind: "dead" };
   }
-  return (await loadLiveApp(args.publicId)) ? "person" : "dead";
+  const app = await loadLiveApp(args.publicId);
+  if (!app) return { kind: "dead" };
+  const reach = await appSignInReach(app, args.holderUserId);
+  if (reach === "not_for_you") return { kind: "dead" };
+  return { kind: "person", grant: narrowKeyGrant(args.grant, reach) };
 }

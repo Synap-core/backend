@@ -465,7 +465,9 @@ oauthApp.post("/token", async (c) => {
           "invalid_grant",
           minted.reason === "app_unavailable"
             ? "This app can no longer sign anyone in"
-            : "Nothing is left of what was approved — sign in again"
+            : minted.reason === "not_for_you"
+              ? "This app may only sign in the member who registered it"
+              : "Nothing is left of what was approved — sign in again"
         );
       }
       logger.info(

@@ -104,16 +104,18 @@ export async function resolveKeyIdentity(
       apiKeyId: keyRecord.id,
       holderUserId: keyRecord.userId,
       publicId: grant!.clientId!,
+      grant: grant!,
     });
-    if (personKey === "person") {
+    if (personKey.kind === "person") {
       return {
         effectiveUserId: keyRecord.userId,
         agentUserId: undefined,
         isAgent: false,
-        grant,
+        // Cut down to what the app may give this person NOW (PR #29 L1).
+        grant: personKey.grant,
       };
     }
-    if (personKey === "dead") {
+    if (personKey.kind === "dead") {
       throw new UnauthorizedError(
         "This sign-in can no longer be used — sign in to the app again."
       );

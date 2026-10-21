@@ -153,6 +153,7 @@ import {
   previewPermissionDecision,
 } from "../utils/permission-check.js";
 import { applyProposalApproval } from "../routers/proposals/apply-approval.js";
+import { registerProposalExecutor } from "../routers/proposals/execution-registry.js";
 import { computeCanReviewApproval } from "../routers/proposals/review-authority.js";
 import { resolveKeyIdentity } from "../access/key-identity.js";
 import { apiKeyService } from "./api-keys.js";
@@ -163,7 +164,9 @@ import {
   issueKey,
   revokeApp,
   setAppRedirectUris,
+  setAppSignInPolicy,
 } from "./app-connect.js";
+import { proposalsRouter } from "../routers/proposals.js";
 
 const ISSUER = "https://pod.test.synap.live";
 const CALLBACK = "https://studio.example.com/auth/callback";
@@ -172,6 +175,9 @@ const MEMBER = randomUUID();
 const SALES = randomUUID();
 const FINANCE = randomUUID();
 const MARKETING = randomUUID();
+/** MEMBER's own space, where OWNER is only an editor (H1 owner-role row). */
+const CONTENT = randomUUID();
+const POD_ADMIN_WS = randomUUID();
 const PERSON_PROFILE = randomUUID();
 const ENTITY = {
   [SALES]: randomUUID(),
@@ -184,6 +190,10 @@ const PROPOSAL = {
   [FINANCE]: randomUUID(),
   [MARKETING]: randomUUID(),
 };
+/** Sales proposals for the M2 policy: one by the app's AI, one by nobody's AI. */
+const BY_APP_AI = randomUUID();
+const BY_PERSON = randomUUID();
+const SPACE_NAME: Record<string, string> = {};
 
 /** What the owner approved for the app (`app/connect`). */
 const APPROVED = [
@@ -244,6 +254,7 @@ beforeAll(async () => {
     [FINANCE, "Finance"],
     [MARKETING, "Marketing"],
   ] as const) {
+    SPACE_NAME[ws] = name;
     await q(
       `insert into workspaces (id, name, owner_id, settings) values ($1,$2,$3,'{}'::jsonb)`,
       [ws, name, OWNER]
@@ -256,6 +267,25 @@ beforeAll(async () => {
   await q(
     `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'editor')`,
     [randomUUID(), SALES, MEMBER]
+  );
+  // CONTENT: MEMBER's own space; OWNER edits there (and may give it to an app).
+  SPACE_NAME[CONTENT] = "Content";
+  await q(
+    `insert into workspaces (id, name, owner_id, settings) values ($1,'Content',$2,'{}'::jsonb)`,
+    [CONTENT, MEMBER]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner'), ($4,$2,$5,'editor')`,
+    [randomUUID(), CONTENT, MEMBER, randomUUID(), OWNER]
+  );
+  // OWNER is a POD ADMIN: their app may sign in other members (H1).
+  await q(
+    `insert into workspaces (id, name, owner_id, settings, system_slug) values ($1,'Pod admin',$2,'{}'::jsonb,'pod-admin')`,
+    [POD_ADMIN_WS, OWNER]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
+    [randomUUID(), POD_ADMIN_WS, OWNER]
   );
   await q(
     `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active, ui_hints, origin)
@@ -299,11 +329,27 @@ beforeAll(async () => {
     redirectUris: [CALLBACK],
   });
 
-  for (const [ws, id] of Object.entries(PROPOSAL)) {
+  // The probes' proposals approve through the REAL registry dispatch: an
+  // executor for their key that applies (flips the row) and succeeds, so the
+  // approval core runs end to end — gates, apply, then the in-app stamp.
+  registerProposalExecutor({
+    key: "probe/noop" as never,
+    execute: async (args: { proposal: { id: string } }) => {
+      await q(`update proposals set status = 'approved' where id = $1`, [
+        args.proposal.id,
+      ]);
+      return { success: true } as never;
+    },
+  } as never);
+  for (const [id, ws, agent] of [
+    ...Object.entries(PROPOSAL).map(([ws, id]) => [id, ws, appAgent]),
+    [BY_APP_AI, SALES, appAgent],
+    [BY_PERSON, SALES, null],
+  ] as Array<[string, string, string | null]>) {
     await q(
       `insert into proposals (id, target_type, target_id, proposal_type, workspace_id, status, data, created_by, agent_user_id)
-       values ($1,'probe','probe-target','noop',$2,'pending','{}'::jsonb,$3,$3)`,
-      [id, ws, appAgent]
+       values ($1,'probe','probe-target','noop',$2,'pending','{}'::jsonb,$3,$4)`,
+      [id, ws, agent ?? OWNER, agent]
     );
   }
 }, 180_000);
@@ -397,10 +443,7 @@ const livePairs = async (keyId: string) =>
   ).rows
     .flatMap((g) =>
       (g.workspace_ids ?? []).flatMap((ws) =>
-        g.permissions.map(
-          (p) =>
-            `${ws === SALES ? "Sales" : ws === FINANCE ? "Finance" : "Marketing"}:${p}`
-        )
+        g.permissions.map((p) => `${SPACE_NAME[ws]}:${p}`)
       )
     )
     .sort();
@@ -600,7 +643,15 @@ describe("a registered, approved app signs the owner in", () => {
       })
     ).json()) as any;
     expect(inGrant.ladder).toBe(true);
-    expect(inGrant.refused ?? "").not.toMatch(/may not approve/);
+    expect(inGrant.refused).toBeNull();
+    // M2: an approval made inside the app is recorded as such.
+    const [stamped] = (
+      await q<{ data: Record<string, unknown> }>(
+        `select data from proposals where id = $1`,
+        [PROPOSAL[SALES]]
+      )
+    ).rows;
+    expect(stamped!.data.approvedInApp).toEqual({ publicId, name: "Studio" });
 
     for (const ws of [FINANCE, MARKETING]) {
       const outside = (await (
@@ -871,6 +922,146 @@ describe("the app signs the person out (RFC 7009 /revoke)", () => {
 });
 
 // ─── T5 + lifecycle ─────────────────────────────────────────────────────────
+
+// ─── PR #29 review: H1, L1, M1, M2 ──────────────────────────────────────────
+
+const removeOwnerFromPodAdmin = () =>
+  q(`delete from workspace_members where workspace_id = $1 and user_id = $2`, [
+    POD_ADMIN_WS,
+    OWNER,
+  ]);
+const restoreOwnerAsPodAdmin = () =>
+  q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
+    [randomUUID(), POD_ADMIN_WS, OWNER]
+  );
+async function identityOf(tokenValue: string) {
+  const status = await apiKeyService.getApiKeyStatus(tokenValue);
+  return resolveKeyIdentity((status as unknown as { record: never }).record);
+}
+
+describe("H1 — who may sign in to an app (owner, or anyone when the owner is a pod admin)", () => {
+  it("a member's own app signs in ONLY that member — another member is refused on the pod", async () => {
+    const repo = new AppRepository(h.db as never);
+    const own = await repo.register({
+      ownerUserId: MEMBER,
+      name: "Member tool",
+    });
+    await repo.setApprovedRequests(own.id, [
+      { permission: "entity.person.read", workspaceId: SALES },
+    ]);
+    await repo.setRedirectUris(own.id, [CALLBACK]);
+    const p = params({ clientId: own.publicId });
+    await expect(getOAuthConsentContext(p, OWNER)).rejects.toThrow(
+      /only that member can sign in/
+    );
+    await expect(
+      decideOAuthAuthorization({ ...p, approve: true }, OWNER)
+    ).rejects.toThrow(/only that member can sign in/);
+    // Its owner signs in, and the screen says who registered it.
+    const mine = await getOAuthConsentContext(p, MEMBER);
+    expect(mine.appSignIn?.registeredBy).toBe("member@x");
+  });
+
+  it("the consent page names who registered an admin's app", async () => {
+    const ctx = await getOAuthConsentContext(params(), MEMBER);
+    expect(ctx.appSignIn?.registeredBy).toBe("owner@x");
+  });
+
+  it("an owner who stops being a pod admin: a member's live token stops; the owner's own does not", async () => {
+    const memberToken = await signIn(MEMBER);
+    const ownerToken = await signIn(OWNER);
+    expect((await identityOf(memberToken)).effectiveUserId).toBe(MEMBER);
+    await removeOwnerFromPodAdmin();
+    try {
+      await expect(identityOf(memberToken)).rejects.toThrow(
+        /sign in to the app again/
+      );
+      expect((await identityOf(ownerToken)).effectiveUserId).toBe(OWNER);
+    } finally {
+      await restoreOwnerAsPodAdmin();
+    }
+  });
+
+  it("L1 — an owner's lost role in a space narrows live tokens on the next request", async () => {
+    const repo = new AppRepository(h.db as never);
+    await repo.setApprovedRequests(appId, [
+      ...APPROVED,
+      { permission: "entity.person.create", workspaceId: CONTENT },
+    ]);
+    try {
+      const t = await signIn(MEMBER);
+      const write = async (workspaceId: string) =>
+        (
+          (await (
+            await hub(t, "POST", "/__probe/write", { workspaceId })
+          ).json()) as any
+        ).decision;
+      expect(await write(CONTENT)).toMatchObject({ granted: true });
+      await q(
+        `update workspace_members set role = 'viewer' where workspace_id = $1 and user_id = $2`,
+        [CONTENT, OWNER]
+      );
+      try {
+        expect(await write(CONTENT)).toMatchObject({ denied: true });
+        expect(await write(SALES)).toMatchObject({ granted: true });
+      } finally {
+        await q(
+          `update workspace_members set role = 'editor' where workspace_id = $1 and user_id = $2`,
+          [CONTENT, OWNER]
+        );
+      }
+    } finally {
+      await repo.setApprovedRequests(appId, APPROVED);
+    }
+  });
+});
+
+describe("M1 — undo is fenced by the proposal's own space", () => {
+  it("revert of a proposal outside the token's spaces is refused by the door", async () => {
+    const id = await identityOf(await signIn(OWNER));
+    const caller = proposalsRouter.createCaller({
+      authenticated: true,
+      userId: OWNER,
+      req: undefined,
+      workspaceId: null,
+    } as never);
+    const err = await runWithGrant(id.grant!, () =>
+      caller.revert({ proposalId: PROPOSAL[MARKETING]! })
+    ).then(
+      () => null,
+      (e: unknown) => e as Error
+    );
+    expect(err?.message).toMatch(/may not undo changes here/);
+  });
+});
+
+describe("M2 — approving the app's OWN AI's proposals: visible, and switchable by the owner", () => {
+  it("off: refused for the app's AI's proposal, still allowed for anyone else's", async () => {
+    const t = await signIn(OWNER);
+    await setAppSignInPolicy({
+      publicId,
+      ownerUserId: OWNER,
+      personMayDecideOwnAgentProposals: false,
+    });
+    try {
+      const approve = async (proposalId: string) =>
+        (
+          (await (
+            await hub(t, "POST", "/__probe/approve", { proposalId })
+          ).json()) as any
+        ).refused as string | null;
+      expect(await approve(BY_APP_AI)).toMatch(/turned that off/);
+      expect(await approve(BY_PERSON)).toBeNull();
+    } finally {
+      await setAppSignInPolicy({
+        publicId,
+        ownerUserId: OWNER,
+        personMayDecideOwnAgentProposals: true,
+      });
+    }
+  });
+});
 
 describe("T5 — never wider than the consent; the app's lifecycle reaches it", () => {
   it("an Allow for a screen that no longer matches the grant is refused", async () => {

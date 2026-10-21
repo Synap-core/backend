@@ -61,7 +61,10 @@ import type {
 import { makeVaultReference } from "@synap-core/types/vault";
 import { auditLog } from "../utils/audit-log.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
-import { assertMayDecideProposal } from "./proposals/review-authority.js";
+import {
+  assertMayDecideProposal,
+  assertMayDecideProposalAt,
+} from "./proposals/review-authority.js";
 
 // ============================================================================
 // Validation Schemas
@@ -994,6 +997,8 @@ export const secretsVaultRouter = router({
           createdBy: true,
           agentUserId: true,
           workspaceId: true,
+          projectId: true,
+          targetId: true,
         },
       });
       if (!proposalRow)
@@ -1001,6 +1006,8 @@ export const secretsVaultRouter = router({
           code: "NOT_FOUND",
           message: "Proposal not found",
         });
+      // D3: a key bounded to some spaces grants only there.
+      assertMayDecideProposalAt("approve", "approve", proposalRow);
 
       // Workspace from the request, not the UI. If the proposal is workspace-
       // scoped, require the approver to be a member of THAT workspace (defense

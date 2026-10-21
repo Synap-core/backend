@@ -156,6 +156,11 @@ export function ConsentForm({
                 label="Registered"
                 value={formatRelative(context.data.registeredAt)}
               />
+              {/* An app sign-in names WHO registered the app on this pod —
+                    the person decides whether to trust it as that member. */}
+              {appSignIn ? (
+                <Row label="Registered by" value={appSignIn.registeredBy} />
+              ) : null}
               {/* The host the authorization code is actually delivered to —
                     the single most useful signal for spotting a bad request,
                     and the one field a user must read IN FULL. NOT rendered
