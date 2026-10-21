@@ -133,7 +133,7 @@ export interface BuildSystemMapEntityGraphInput {
   structuralLinksTotal: number;
 }
 
-interface MutableBundle extends SystemMapRelationBundle {}
+type MutableBundle = SystemMapRelationBundle;
 
 function compareCounts<T extends { count: number }>(a: T, b: T): number {
   return b.count - a.count;
