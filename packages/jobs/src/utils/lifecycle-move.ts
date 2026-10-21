@@ -17,6 +17,7 @@
 import {
   db,
   applyStatusMove,
+  canonicalLifecycleOptionKey,
   classifyStatusMove,
   resolveStatusMoveTarget,
   type ApplyStatusMoveResult,
@@ -65,7 +66,10 @@ export async function moveStatusFromAutomation(input: {
     return { status: "refused", code: resolved.code, reason: resolved.reason };
   }
   const { target } = resolved;
-  const lifecycleMove = classifyStatusMove(target.lifecycle, input.to);
+  // The same input normaliser as `moveStatus`: a case/separator variant of a
+  // declared option moves to that option.
+  const to = canonicalLifecycleOptionKey(target.lifecycle, input.to);
+  const lifecycleMove = classifyStatusMove(target.lifecycle, to);
   if (!lifecycleMove) {
     return {
       status: "refused",
@@ -73,8 +77,8 @@ export async function moveStatusFromAutomation(input: {
       reason: `"${input.to}" is not a status of ${target.entityType ?? "this kind"}`,
     };
   }
-  if (target.current === input.to) {
-    return { status: "unchanged", current: input.to };
+  if (target.current === to) {
+    return { status: "unchanged", current: to };
   }
   const ctx = input.automationContext;
   const gate = await checkAutomationWriteOrPropose({
@@ -90,7 +94,7 @@ export async function moveStatusFromAutomation(input: {
       facetId: null,
       property: target.lifecycle.propertySlug,
       expectedFrom: target.current,
-      to: input.to,
+      to,
       reason: input.reason ?? null,
     },
     // The rule's own reason is its WHY; the default sentence is the pod's
@@ -100,7 +104,7 @@ export async function moveStatusFromAutomation(input: {
       : {
           policyReason: automationMovesSentence(
             target.lifecycle.propertySlug,
-            input.to
+            to
           ),
         }),
     subjectProfileSlug: target.entityType ?? undefined,
@@ -118,7 +122,7 @@ export async function moveStatusFromAutomation(input: {
   const result = await applyStatusMove(db, {
     target,
     expectedFrom: target.current,
-    to: input.to,
+    to,
     actor: { kind: "system", userId: input.ownerId },
     sessionId: ctx?.focusSessionId ?? null,
     reason: input.reason ?? null,

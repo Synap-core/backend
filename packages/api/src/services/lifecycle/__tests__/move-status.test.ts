@@ -274,3 +274,42 @@ describe("statusMoveActorFor (who a request-door move is made by)", () => {
     });
   });
 });
+
+/**
+ * fb1020: `in_progress` for a declared `in-progress` used to fail only after
+ * the call. The door's input normaliser moves a case/separator variant to the
+ * declared option, BEFORE governance — so the proposal, the write and the
+ * event all carry the canonical key, and a human-only option stays human-only.
+ */
+describe("moveStatus input normaliser", () => {
+  it("a case/separator variant moves to the declared option, governed as that option", async () => {
+    h.perm.mockResolvedValue({
+      granted: false,
+      proposalId: "p7",
+      proposalType: "entity.transition",
+      reviewUrl: "x",
+    });
+    const r = await moveStatus({ entityId: "e1", to: "WON", actor: AGENT });
+    expect(r).toMatchObject({ status: "proposed", proposalId: "p7" });
+    expect(h.perm.mock.calls[0][0]).toMatchObject({
+      lifecycleMove: { intoTerminal: true, humanOnly: true },
+      data: { to: "won" },
+    });
+  });
+
+  it("writes the declared key, never the caller's spelling", async () => {
+    h.perm.mockResolvedValue({ granted: true });
+    h.apply.mockResolvedValue({ status: "moved", transition: { to: "lost" } });
+    await moveStatus({ entityId: "e1", to: " Lost", actor: AGENT });
+    expect(h.apply.mock.calls[0][1]).toMatchObject({ to: "lost" });
+  });
+
+  it("an unrelated value is still refused, naming the options", async () => {
+    const r = await moveStatus({ entityId: "e1", to: "closed", actor: AGENT });
+    expect(r).toMatchObject({ status: "refused", code: "UNKNOWN_OPTION" });
+    expect((r as { reason: string }).reason).toContain(
+      "draft, negotiating, won, lost"
+    );
+    expect(h.perm).not.toHaveBeenCalled();
+  });
+});

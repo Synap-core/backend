@@ -209,6 +209,7 @@ import {
 } from "@synap/database";
 import type { Context } from "../../../context.js";
 import { updateEntities } from "../update-entities.js";
+import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { registerEntityExecutors } from "../../../routers/proposals/executors/entity.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
 import { proposalsRouter } from "../../../routers/proposals.js";
@@ -474,17 +475,75 @@ describe("updateEntities — one call, one review", () => {
   });
 });
 
-describe("updateEntities — an agent's XML-escaped title is decoded at the door", () => {
-  it("the pack a reviewer approves and the write both hold `&`", async () => {
+describe("updateEntities — one record needing review is not a pack (F1)", () => {
+  it("the lone review item goes through the single update door, never forced, as the call's one review", async () => {
     const { client, database } = await freshDb();
     const auto = await insertEntity(client, "A");
     const review = await insertEntity(client, "B", "propose");
+    const gate = vi.mocked(checkPermissionOrPropose);
+    gate.mockClear();
 
     const result = await updateEntities({
       ctx: ctx(database),
       agentUserId: AGENT,
       source: "intelligence",
-      items: [auto, review].map((id) => ({
+      items: [auto, review].map((id) => ({ id, patch: { title: "Done" } })),
+    });
+
+    // Gated as a single write: its own action, no forced proposal — so the
+    // ordinary decision (and a rule naming the action) applies to it.
+    const calls = gate.mock.calls.map(([opts]) => opts);
+    expect(calls.map((o) => o.action)).toEqual(["update", "update"]);
+    expect(calls.some((o) => o.forcePropose === true)).toBe(false);
+    const pending = await rows(client, "pending");
+    expect(pending).toHaveLength(1);
+    expect(pending[0]!.proposal_type).toBe("update");
+    expect(pending[0]!.target_id).toBe(review);
+    expect(result.proposed).toEqual({
+      proposalId: pending[0]!.id,
+      count: 1,
+      ids: [review],
+      reviewUrl: `https://pod.test/open/${pending[0]!.id}`,
+    });
+    expect(result.applied).toEqual([auto]);
+    expect(result.skipped).toEqual([]);
+    expect(await titleOf(client, review)).toBe("B");
+  });
+
+  it("a one-item call whose gate allows it is written, not filed", async () => {
+    const { client, database } = await freshDb();
+    // The preview said review; the door's own decision (e.g. a rule naming
+    // the action) allows it — the receipt says what landed.
+    const id = await insertEntity(client, "B", "propose");
+    const gate = vi.mocked(checkPermissionOrPropose);
+    gate.mockImplementationOnce(async () => ({ granted: true }));
+
+    const result = await updateEntities({
+      ctx: ctx(database),
+      agentUserId: AGENT,
+      items: [{ id, patch: { title: "Done" } }],
+    });
+
+    expect(result.items[0]!.verdict).toBe("propose");
+    expect(result.applied).toEqual([id]);
+    expect(result.proposed).toBeNull();
+    expect(await titleOf(client, id)).toBe("Done");
+    expect(await rows(client, "pending")).toHaveLength(0);
+  });
+});
+
+describe("updateEntities — an agent's XML-escaped title is decoded at the door", () => {
+  it("the pack a reviewer approves and the write both hold `&`", async () => {
+    const { client, database } = await freshDb();
+    const auto = await insertEntity(client, "A");
+    const review = await insertEntity(client, "B", "propose");
+    const review2 = await insertEntity(client, "C", "propose");
+
+    const result = await updateEntities({
+      ctx: ctx(database),
+      agentUserId: AGENT,
+      source: "intelligence",
+      items: [auto, review, review2].map((id) => ({
         id,
         patch: { title: "Doors &amp; Spec" },
       })),

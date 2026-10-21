@@ -21,6 +21,7 @@ import {
   and,
   eq,
   inArray,
+  entities,
   focusSessions,
   projects,
   MIN_EVIDENCE_ENTITIES,
@@ -32,6 +33,11 @@ import type {
 } from "@synap-core/types/proposals";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { isSubjectEntityVisible } from "../../utils/project-subject.js";
+import { entityBodyDocumentIdFrom } from "../../utils/store-entity-source-blob.js";
+import {
+  bodyReplaceRefusal,
+  loadExistingBody,
+} from "../entity-body/body-replace-guard.js";
 import {
   planRefKinds,
   validatePlanOperations,
@@ -192,6 +198,45 @@ export async function preflightPlanOperations(
       }
     }
   });
+
+  // ── Existing entities: a document step never replaces a body ──────────
+  // The rule `entities.update` enforces at approval (body-replace-guard),
+  // raised now so the plan is refused before it is filed. A plan step has no
+  // `replaceBody`: replacing a body on purpose is `synap_create_document`.
+  const attachTargets = [
+    ...new Set(
+      operations.flatMap((op) =>
+        op.op === "create_document" &&
+        op.entityId &&
+        visibleEntityIds.has(op.entityId)
+          ? [op.entityId]
+          : []
+      )
+    ),
+  ];
+  if (attachTargets.length > 0) {
+    const rows = await database
+      .select({
+        id: entities.id,
+        documentId: entities.documentId,
+        properties: entities.properties,
+      })
+      .from(entities)
+      .where(inArray(entities.id, attachTargets));
+    for (const row of rows) {
+      const bodyId = entityBodyDocumentIdFrom(row);
+      if (!bodyId) continue;
+      const message = bodyReplaceRefusal(
+        row.id,
+        await loadExistingBody(bodyId, database)
+      );
+      operations.forEach((op, i) => {
+        if (op.op === "create_document" && op.entityId === row.id) {
+          push(i, message);
+        }
+      });
+    }
+  }
 
   // ── Project evidence: stamped, never waived silently ───────────────────
   const kinds = planRefKinds(operations);

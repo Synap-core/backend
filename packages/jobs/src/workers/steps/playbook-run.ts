@@ -19,6 +19,7 @@ import {
   WORKER_SKIP_REASONS,
 } from "@synap-core/types/workers";
 import {
+  getPlaybookReadinessGate,
   getPlaybookRunner,
   getSessionScheduler,
 } from "../capability-dispatch.js";
@@ -275,6 +276,23 @@ export async function executePlaybookRun(
         return heldByBacklog(producerAgentUserId);
       }
     }
+    // The run a person would approve must be able to run. The SAME unattended
+    // rule the run spine applies (`unenabledSkillPreflight`): skills that are
+    // off file the owner's enable request and fail this step with the reason,
+    // instead of a run proposal that could only fail on approval.
+    const readinessGate = getPlaybookReadinessGate();
+    if (!readinessGate) {
+      throw new Error(
+        "Playbook readiness gate not registered — apps/api must call registerPlaybookReadinessGate() at boot"
+      );
+    }
+    const readiness = await readinessGate({
+      playbookId: data.playbookId,
+      playbookName: data.playbookName,
+      workspaceId,
+      userId: ownerId,
+    });
+    if (!readiness.ready) throw new Error(readiness.message);
     const proposed = await proposeRulePlaybookRun({
       ownerId,
       workspaceId,

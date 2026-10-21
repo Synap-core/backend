@@ -17,6 +17,8 @@ export interface AttachCreatedDocumentInput {
   /** The `documents.createDocument` result. */
   created: unknown;
   entityId: string;
+  /** Replace an existing body on purpose (otherwise refused). */
+  replaceBody?: boolean;
   userId: string;
   scopes: string[];
   /**
@@ -46,8 +48,10 @@ export async function attachCreatedDocument(
       attached: {
         entityId,
         status: "skipped",
+        // No MCP tool sets an entity's documentId (synap_update_entity does
+        // not take one), so this names no door; see fb1020-docs §1.
         reason:
-          "The document itself is awaiting review — approve it first, then set the entity's documentId (MCP: synap_update_entity).",
+          "The document itself is awaiting review, so nothing was attached, and approving it will not attach it.",
       },
     };
   }
@@ -80,6 +84,7 @@ export async function attachCreatedDocument(
   const attached = await regularEntitiesRouter.createCaller(attachCtx).update({
     id: entityId,
     documentId,
+    ...(input.replaceBody === true ? { replaceBody: true } : {}),
     reasoning: input.reasoning,
     ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
   });

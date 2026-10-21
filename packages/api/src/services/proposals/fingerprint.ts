@@ -242,6 +242,8 @@ const ATTENTION_FLOOR_KEYS = [
   "DESTRUCTIVE_HARD_FLOOR",
   "AGENT_OWNED_DESTRUCTIVE",
   "SCOPE_IDENTITY_CHANGE",
+  // Filing records into a project: exposes them to its members.
+  "PROJECT_FILING",
   // An agent rewriting the criteria its own work is graded against.
   "CRITERIA_CHANGE",
   "UNTRUSTED_ORIGIN",

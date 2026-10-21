@@ -57,7 +57,12 @@ export type RetireIntoRefusalCode =
   /** Retired, but the catalog names no replacement to move into. */
   | "NO_REPLACEMENT"
   /** The replacement's template could not be read (catalog unreachable). */
-  | "TEMPLATE_UNREADABLE";
+  | "TEMPLATE_UNREADABLE"
+  /**
+   * The space is already archived. It EXISTS — answering "not found" here
+   * dressed a refusal as absence (live 2026-10-20, `synap_retire_workspace`).
+   */
+  | "ARCHIVED";
 
 export interface RetireIntoRefusal {
   status: "refused";
@@ -207,8 +212,20 @@ export async function planRetireInto(input: {
   const membership = ws
     ? await getWorkspaceMembership(db, ws.id, input.userId)
     : null;
-  if (!ws || ws.archivedAt != null || !membership) {
+  // Not found ONLY when it does not exist or is not the caller's — a member
+  // learns nothing about a space they cannot see.
+  if (!ws || !membership) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Space not found" });
+  }
+  // An archived space exists: say so, and why nothing is planned. Its items
+  // are where they were; restoring it makes them movable again.
+  if (ws.archivedAt != null) {
+    const since = new Date(ws.archivedAt).toISOString().slice(0, 10);
+    return refuse(
+      "ARCHIVED",
+      null,
+      `"${ws.name}" is already archived (since ${since}), so there is nothing to retire. Restore it first if its items should move into another space.`
+    );
   }
 
   const state = readTemplateState(ws.settings);

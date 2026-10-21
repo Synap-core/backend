@@ -98,6 +98,7 @@ export const GOVERNANCE_RUNGS = [
   "cbac-capability-allowlist",
   "admin-actions",
   "force-propose",
+  "project-filing",
   "criteria-change",
   "pod-admin-schema-change",
   "agent-schema-definition",

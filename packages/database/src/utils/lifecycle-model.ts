@@ -17,6 +17,8 @@
  * — this package cannot import `@synap-core/types` (types builds against it).
  */
 
+import { foldPropertyKey } from "../services/did-you-mean.js";
+
 export const LIFECYCLE_CATEGORIES = [
   "open",
   "active",
@@ -157,6 +159,24 @@ export function findLifecycleOption(
 ): LifecycleOption | undefined {
   if (key == null) return undefined;
   return decl.options.find((o) => o.key === key);
+}
+
+/**
+ * The declared option a caller MEANT: the exact key, else the ONE option that
+ * differs from `key` only by case or `-`/`_`/space (`in_progress` →
+ * `in-progress`, `Done` → `done`) — the same fold property keys use
+ * (`foldPropertyKey`). Two options folding together is ambiguous: `key` comes
+ * back unchanged and the door refuses it, naming the options. Read by the
+ * status door's input normaliser (`moveStatus`) only; storage stays exact.
+ */
+export function canonicalLifecycleOptionKey(
+  decl: Pick<LifecycleDeclaration, "options">,
+  key: string
+): string {
+  if (findLifecycleOption(decl, key)) return key;
+  const folded = foldPropertyKey(key);
+  const matches = decl.options.filter((o) => foldPropertyKey(o.key) === folded);
+  return matches.length === 1 ? matches[0].key : key;
 }
 
 /**

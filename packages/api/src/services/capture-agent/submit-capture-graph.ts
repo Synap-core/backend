@@ -35,22 +35,20 @@ import {
   resolveIdentity,
   extractIdentitySignals,
   eq,
-  and,
   or,
   isNull,
   entities,
-  projects,
   getWorkspaceMembership,
   ProfileResolutionService,
   PropertyValidationService,
   resolveGraphWorkspaceFromSlugs,
   reservedEntityKindReason,
   type WorkspacePlacement,
+  type ModeledField,
   deriveProposalProjectId,
 } from "@synap/database";
 import { getAgentFocusProjectId } from "../agent-identity-service.js";
 import type { PendingWorkspaceSwitch } from "../../lib/workspace-decision.js";
-import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { createLogger } from "@synap-core/core";
 import {
   type HubWriteSource,
@@ -75,7 +73,6 @@ import {
   type CapturePlanProblem,
   type PlanStepSummary,
 } from "./capture-plan.js";
-import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import {
   createEventBackedProposal,
   createAutoApprovedProposal,
@@ -92,7 +89,7 @@ import {
   type PendingSignalMatch,
 } from "../../utils/pending-capture-dedup.js";
 import { openLink } from "../../utils/deep-links.js";
-import { captureGraphEventKeys } from "./capture-graph-policy.js";
+import { captureGraphMemberProposes } from "./capture-graph-governance.js";
 import { buildRuleLoopCallers } from "../../utils/rule-loop-callers.js";
 import {
   buildMaterializedRecord,
@@ -100,7 +97,10 @@ import {
   stampMaterialized,
 } from "../proposals/stamp-materialized.js";
 import { loadRelationTypeValidator } from "../../utils/relation-types.js";
-import { resolveCaptureProjectRef } from "./resolve-capture-project.js";
+import {
+  assertCaptureProjectPinVisible,
+  resolveCaptureProjectRef,
+} from "./resolve-capture-project.js";
 import {
   storedScopeOfProposal,
   type StoredCaptureScope,
@@ -138,6 +138,26 @@ export interface CaptureGraphUnmodeledEntity {
   label: string;
   profileSlug: string;
   unmodeled: Array<{ key: string; didYouMean?: string }>;
+}
+
+/**
+ * What each kind in the graph DOES model, by profile slug, through the lens
+ * the graph was validated in — the validator's own `modeled` list. Without it
+ * an `unmodeled` report only said what was wrong, never what was right.
+ */
+export type CaptureGraphModeledFields = Record<string, ModeledField[]>;
+
+/** The `modeledFields` entries for the kinds an `unmodeled` report names. */
+function modeledFieldsFor(
+  unmodeled: CaptureGraphUnmodeledEntity[],
+  modeledFields: CaptureGraphModeledFields
+): CaptureGraphModeledFields {
+  const out: CaptureGraphModeledFields = {};
+  for (const u of unmodeled) {
+    const fields = modeledFields[u.profileSlug];
+    if (fields) out[u.profileSlug] = fields;
+  }
+  return out;
 }
 
 /**
@@ -243,6 +263,8 @@ export interface CapturePlanStepReceipt extends PlanStepSummary {
   id: string | null;
   /** `create_project` only: the pod's evidence verdict. */
   evidence?: PlanProjectEvidence;
+  /** An applied skill step with a slug: the call that loads it. */
+  loadWith?: string;
 }
 
 /** True when a plan input carries any step. */
@@ -320,6 +342,9 @@ function planStepReceipts(
       id,
       ...(op.op === "create_project" && op.evidence
         ? { evidence: op.evidence }
+        : {}),
+      ...(idsByOpIndex && step.slug
+        ? { loadWith: `synap_load_skill({ ref: "${step.slug}" })` }
         : {}),
     };
   });
@@ -458,6 +483,11 @@ export interface SubmitCaptureGraphResult {
    */
   unmodeledProperties?: CaptureGraphUnmodeledEntity[];
   /**
+   * What the kinds named in `unmodeledProperties` DO model (key, type,
+   * options, limits). Present exactly when `unmodeledProperties` is.
+   */
+  modeledFields?: CaptureGraphModeledFields;
+  /**
    * ADVISORY in-flight-duplicate warnings: incoming graph entities whose STRONG
    * signal (email/phone/url/handle) collides with a create_entity op in the
    * caller's OWN pending capture/import proposal. NEVER auto-linked — a pending
@@ -478,10 +508,11 @@ export interface SubmitCaptureGraphResult {
   projectCandidate?: { name: string };
   /**
    * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
-   * membership, `not_linked` (+reason: `project-not-found` for a dead UUID pin,
-   * `project-name-unmatched` for a name-ref that matched nothing) so a requested
-   * project that did NOT link is NAMED, never a silent success. Omitted when no
-   * project was requested.
+   * membership, `not_linked` (+reason `project-name-unmatched` for a name-ref
+   * that matched nothing) so a requested project that did NOT link is NAMED,
+   * never a silent success. Omitted when no project was requested. A dead UUID
+   * pin never gets here: the whole capture is refused
+   * (`CaptureProjectNotFoundError`).
    */
   project?:
     | { status: "linked"; projectId: string }
@@ -646,6 +677,8 @@ export async function buildCaptureGraphOperations(
  * `unmodeledProperties` lists ops carrying keys their profile does not model —
  * advisory, reported by both the dry run and the submit result.
  *
+ * `modeledFields` is what every RESOLVED kind in the graph models, by slug.
+ *
  * `unresolvedProfiles` lists ops whose profile did not resolve for the lens.
  * Submit does NOT reject on it (a cold profile lens can fail open, and
  * unknown-slug graphs are a separate guard); the dry run reports it.
@@ -658,6 +691,7 @@ export async function preflightCaptureGraphOperations(
 ): Promise<{
   invalidEntities: CaptureGraphInvalidEntity[];
   unmodeledProperties: CaptureGraphUnmodeledEntity[];
+  modeledFields: CaptureGraphModeledFields;
   unresolvedProfiles: Array<{ label: string; profileSlug: string }>;
   /** Connected plan: every structure / ownership problem (empty otherwise). */
   planProblems: CapturePlanProblem[];
@@ -669,6 +703,7 @@ export async function preflightCaptureGraphOperations(
   const propertyValidation = new PropertyValidationService(profileResolution);
   const invalidEntities: CaptureGraphInvalidEntity[] = [];
   const unmodeledProperties: CaptureGraphUnmodeledEntity[] = [];
+  const modeledFields: CaptureGraphModeledFields = {};
   for (const op of operations) {
     if (op.op !== "create_entity") continue;
     // Linking an existing entity materializes nothing new — no props to check.
@@ -716,6 +751,7 @@ export async function preflightCaptureGraphOperations(
       valid,
       errors,
       unmodeled: reported,
+      modeled,
     } = await propertyValidation.validateEntityCreateForProposal(
       propsToCheck,
       profile.id,
@@ -726,6 +762,7 @@ export async function preflightCaptureGraphOperations(
           (profile.defaultValues as Record<string, unknown>) ?? {},
       }
     );
+    modeledFields[op.profileSlug] ??= modeled;
     if (!valid) {
       invalidEntities.push({
         label: op.title || op.ref || op.profileSlug,
@@ -754,6 +791,7 @@ export async function preflightCaptureGraphOperations(
     return {
       invalidEntities,
       unmodeledProperties,
+      modeledFields,
       unresolvedProfiles,
       planProblems: plan.problems,
       operations: plan.operations,
@@ -762,6 +800,7 @@ export async function preflightCaptureGraphOperations(
   return {
     invalidEntities,
     unmodeledProperties,
+    modeledFields,
     unresolvedProfiles,
     planProblems: [],
     operations,
@@ -910,6 +949,8 @@ export async function dryRunCaptureGraph(
 ): Promise<{
   invalidEntities: CaptureGraphInvalidEntity[];
   unmodeledProperties: CaptureGraphUnmodeledEntity[];
+  /** Every resolved kind's modelled fields — the dry run is the place to ask. */
+  modeledFields: CaptureGraphModeledFields;
   unresolvedProfiles: Array<{ label: string; profileSlug: string }>;
   relationsFailed: MaterializeRelationFailure[];
   entityCount: number;
@@ -934,6 +975,7 @@ export async function dryRunCaptureGraph(
   const {
     invalidEntities,
     unmodeledProperties,
+    modeledFields,
     unresolvedProfiles,
     planProblems,
     operations,
@@ -956,6 +998,7 @@ export async function dryRunCaptureGraph(
   return {
     invalidEntities,
     unmodeledProperties,
+    modeledFields,
     unresolvedProfiles,
     relationsFailed,
     entityCount: collapsed.entities.length,
@@ -990,34 +1033,16 @@ export async function submitCaptureGraph(
     else if (projectRef.candidateName)
       projectCandidate = { name: projectRef.candidateName };
   }
-  // An EXPLICIT UUID pin (`input.projectId`) is trusted by no one: verify it
-  // references a real, visible project BEFORE it rides every create_entity op
-  // as `projectId` (which stamps `belongs_to_project` at materialization).
-  // `relations.target_entity_id` has NO FK to `projects`, so a pin to a
-  // non-existent / invisible project would write a GHOST membership edge and the
-  // receipt would falsely claim `linked` — the exact silent-drop bug. A missing
-  // pin links nothing and is reported `not_linked`. (A name-ref that matched
-  // nothing is already surfaced as `projectCandidate`, above.)
-  let explicitPinMissing = false;
+  // An EXPLICIT UUID pin (`input.projectId`) is trusted by no one: it must
+  // name a project the caller can see, or the WHOLE capture is refused here —
+  // before dedup, before any proposal — naming the closest visible projects.
+  // (It used to write every entity unlinked and report `applied`.) The ONE
+  // check, shared with tRPC `capture.execute`.
   if (resolvedProjectId && input.projectId) {
-    const [pinned] = await db
-      .select({ id: projects.id })
-      .from(projects)
-      .where(
-        and(
-          eq(projects.id, resolvedProjectId),
-          ownerPrivateVisibleWhere(
-            projects.workspaceId,
-            projects.userId,
-            userId
-          )
-        )
-      )
-      .limit(1);
-    if (!pinned) {
-      explicitPinMissing = true;
-      resolvedProjectId = null;
-    }
+    await assertCaptureProjectPinVisible(db, {
+      userId,
+      projectId: resolvedProjectId,
+    });
   }
   // Per-coordinate project outcome, surfaced on the result + writeReceipt so a
   // caller (the CLI) can state what actually happened on the project axis.
@@ -1026,11 +1051,9 @@ export async function submitCaptureGraph(
     | { status: "not_linked"; reason: string }
     | undefined = resolvedProjectId
     ? { status: "linked", projectId: resolvedProjectId }
-    : explicitPinMissing
-      ? { status: "not_linked", reason: "project-not-found" }
-      : projectCandidate
-        ? { status: "not_linked", reason: "project-name-unmatched" }
-        : undefined;
+    : projectCandidate
+      ? { status: "not_linked", reason: "project-name-unmatched" }
+      : undefined;
 
   // WITHIN-BATCH DEDUP: the producer may list the same person/company under two
   // different `ref`s (neither persisted yet). Collapse those before resolving
@@ -1274,13 +1297,18 @@ export async function submitCaptureGraph(
   // SAME `validateProperties` the materializer runs — so an un-materializable
   // graph is rejected at submit, before EITHER terminal (auto-apply OR pending).
   // Atomic graph ⇒ all-or-nothing: any invalid op rejects the WHOLE graph.
-  const { invalidEntities, unmodeledProperties, planProblems, operations } =
-    await preflightCaptureGraphOperations(
-      db,
-      builtOperations,
-      userId,
-      workspaceId
-    );
+  const {
+    invalidEntities,
+    unmodeledProperties,
+    modeledFields,
+    planProblems,
+    operations,
+  } = await preflightCaptureGraphOperations(
+    db,
+    builtOperations,
+    userId,
+    workspaceId
+  );
   // Relation slugs go through the SAME validator the `validate` door runs, and
   // land in the SAME rejection: an edge naming a non-existent relation def is
   // un-materializable, so filing it would queue an unapprovable proposal.
@@ -1387,37 +1415,16 @@ export async function submitCaptureGraph(
   // materialization, so an auto-apply that skipped them would silently drop the
   // binds.
   if (input.agentUserId && bindings.length === 0 && !planNeedsReview) {
-    const keys = captureGraphEventKeys(operations);
-    let allAutoApprove = keys.length > 0;
-    for (const {
-      subjectType,
-      action,
-      subjectProfileSlug,
-      subjectUoValidated,
-    } of keys) {
-      const gov = await resolveAgentGovernanceDecision({
-        db,
-        agentUserId: input.agentUserId,
-        workspaceId,
-        subjectType,
-        action,
-        // GOVERNANCE BY KIND: forward the op's profile slug + uo_validated so an
-        // unvalidated `user_observation` (an INFERENCE) forces `propose` here —
-        // and because the graph is atomic, the WHOLE graph then proposes. Absent
-        // for facet/relation ops (the rule no-ops). This mirrors the per-write
-        // signals `checkPermissionOrPropose`/`create_entity` already forward.
-        ...(subjectProfileSlug ? { subjectProfileSlug } : {}),
-        ...(subjectUoValidated !== undefined ? { subjectUoValidated } : {}),
-        // MCP is an agent WRITE door — prefer the agent's own metadata
-        // autoApproveFor, falling back to the workspace override (chat-door rule).
-        preferAgentMetadataAutoApproveFor: true,
-      });
-      // Any non-execute (propose / deny / not-agent) → the WHOLE graph proposes.
-      if (gov.decision !== "execute") {
-        allAutoApprove = false;
-        break;
-      }
-    }
+    // Every member scored by the ONE resolver with the signals its own door
+    // gates on — governance by kind AND the born-status lifecycle floor — so
+    // this never says "execute" where the create door it runs says "propose".
+    // Any non-execute → the WHOLE graph proposes.
+    const allAutoApprove = !(await captureGraphMemberProposes({
+      agentUserId: input.agentUserId,
+      userId,
+      workspaceId,
+      operations,
+    }));
 
     if (allAutoApprove) {
       // Materialize NOW as a DIRECT OPERATOR write, through the EXACT composite
@@ -1503,6 +1510,10 @@ export async function submitCaptureGraph(
             id: captureProposalId,
             userId,
             reviewedBy: userId,
+            // The AGENT that captured this: the policy above judged ITS write,
+            // so the receipt names it (as the pending path's row does). Without
+            // it every auto-applied capture read as the person's own write.
+            agentUserId: input.agentUserId,
             workspaceId,
             targetType: "entity",
             targetId: randomUUID(),
@@ -1712,6 +1723,17 @@ export async function submitCaptureGraph(
                       ...materialized.views.map(
                         (v) => [v.opIndex, v.viewId] as [number, string]
                       ),
+                      // Rule Loop config rows: a skill used to read `id: null`
+                      // as `applied`, leaving nothing to load or update it by.
+                      ...materialized.skills.map(
+                        (s) => [s.opIndex, s.skillId] as [number, string]
+                      ),
+                      ...materialized.automations.map(
+                        (a) => [a.opIndex, a.automationId] as [number, string]
+                      ),
+                      ...materialized.rules.map(
+                        (r) => [r.opIndex, r.ruleId] as [number, string]
+                      ),
                     ])
                   ),
                 },
@@ -1719,7 +1741,15 @@ export async function submitCaptureGraph(
             : {}),
           sessionId: appliedScope.sessionId,
           scope: appliedScope,
-          ...(unmodeledProperties.length > 0 ? { unmodeledProperties } : {}),
+          ...(unmodeledProperties.length > 0
+            ? {
+                unmodeledProperties,
+                modeledFields: modeledFieldsFor(
+                  unmodeledProperties,
+                  modeledFields
+                ),
+              }
+            : {}),
           ...(pendingDuplicateCandidates.length > 0
             ? { pendingDuplicateCandidates }
             : {}),
@@ -1827,7 +1857,12 @@ export async function submitCaptureGraph(
     ...(isPlan ? { plan: { steps: planStepReceipts(operations) } } : {}),
     sessionId: pendingScope.sessionId,
     scope: pendingScope,
-    ...(unmodeledProperties.length > 0 ? { unmodeledProperties } : {}),
+    ...(unmodeledProperties.length > 0
+      ? {
+          unmodeledProperties,
+          modeledFields: modeledFieldsFor(unmodeledProperties, modeledFields),
+        }
+      : {}),
     ...(pendingDuplicateCandidates.length > 0
       ? { pendingDuplicateCandidates }
       : {}),

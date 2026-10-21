@@ -11,8 +11,12 @@
  * role cannot run this playbook", for an admin.
  *
  * The executor now sets `ctx.governanceProposalId`; this pins what the door
- * does with it: the gate sees NO agent, `runPlaybook` still gets the agent,
- * and the skill preflight files nothing in the agent's name.
+ * does with it: the gate sees NO agent, `runPlaybook` still gets whatever
+ * `agentUserId` the caller passed, and the skill preflight files nothing in
+ * the agent's name. (Since 2026-10-20 the executor itself passes NO
+ * `agentUserId` — the approver owns an approved run and the agent rides on
+ * `agentIds`; see executors/playbook.ts OWNERSHIP. This suite pins the router
+ * seam for any caller that does pass one.)
  *
  * Covers the router seam only (the gate is mocked) — what the real gate does
  * with an agent id is its own suite's job.
@@ -149,7 +153,7 @@ describe("playbooks.run — an approved replay is the approver's decision", () =
     });
   });
 
-  it("gates on the approver, while the agent still owns the run", async () => {
+  it("gates on the approver, and passes the caller's agentUserId through", async () => {
     const res = await playbooksRouter
       .createCaller(ctx("proposal-1"))
       .run({ playbookId: PB_ID, agentUserId: AGENT });

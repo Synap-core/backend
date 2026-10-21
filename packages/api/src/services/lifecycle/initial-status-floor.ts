@@ -32,3 +32,50 @@ export async function initialStatusFloor(input: {
   const move = classifyStatusMove(lifecycle, value);
   return move && (move.intoTerminal || move.humanOnly) ? move : undefined;
 }
+
+/**
+ * The floor for an entity CREATE: born with the caller's status, else the
+ * kind's default (`defaultValues`). The ONE derivation the create door gates
+ * on and every door that PREDICTS that gate reads (capture auto-apply), so the
+ * two cannot answer differently for one write — they did: a decision captured
+ * as `accepted` was judged "execute" by the capture pre-check and "a person
+ * approves" by the create door it then ran (live 2026-10-18).
+ */
+export async function initialCreateStatusFloor(input: {
+  profile: { id?: string | null; defaultValues?: unknown } | null | undefined;
+  workspaceId: string | null | undefined;
+  properties?: Record<string, unknown> | null;
+}): Promise<{ intoTerminal: boolean; humanOnly: boolean } | undefined> {
+  return initialStatusFloor({
+    profileId: input.profile?.id,
+    workspaceId: input.workspaceId,
+    properties: {
+      ...((input.profile?.defaultValues as Record<string, unknown> | null) ??
+        {}),
+      ...(input.properties ?? {}),
+    },
+  });
+}
+
+/**
+ * `initialCreateStatusFloor` for a create named by kind SLUG — what a door
+ * that predicts the create gate holds before any entity exists (a capture
+ * graph's `create_entity` op). Resolves the kind the way the create door does.
+ */
+export async function initialCreateStatusFloorOfSlug(input: {
+  profileSlug: string;
+  userId: string;
+  workspaceId: string | null;
+  properties?: Record<string, unknown> | null;
+}): Promise<{ intoTerminal: boolean; humanOnly: boolean } | undefined> {
+  const profile = await new ProfileResolutionService(db).resolveProfile(
+    input.profileSlug,
+    input.userId,
+    input.workspaceId
+  );
+  return initialCreateStatusFloor({
+    profile,
+    workspaceId: input.workspaceId,
+    properties: input.properties,
+  });
+}

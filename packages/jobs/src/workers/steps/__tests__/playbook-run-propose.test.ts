@@ -31,6 +31,11 @@ const h = vi.hoisted(() => ({
     deduped: false,
   })),
   guardMock: vi.fn(),
+  readinessMock: vi.fn(
+    async (): Promise<{ ready: true } | { ready: false; message: string }> => ({
+      ready: true,
+    })
+  ),
 }));
 
 function chain(result: unknown[]) {
@@ -74,6 +79,7 @@ vi.mock("@synap-core/core", () => ({
 
 import { executePlaybookRun } from "../playbook-run.js";
 import {
+  registerPlaybookReadinessGate,
   registerPlaybookRunner,
   registerSessionScheduler,
 } from "../../capability-dispatch.js";
@@ -98,7 +104,10 @@ beforeEach(() => {
   h.insertPendingProposalMock.mockClear();
   h.guardMock.mockClear();
   h.selectResults.length = 0;
+  h.readinessMock.mockClear();
+  h.readinessMock.mockResolvedValue({ ready: true });
   registerPlaybookRunner(h.runnerMock as never);
+  registerPlaybookReadinessGate(h.readinessMock);
   registerSessionScheduler(h.schedulerMock as never);
 });
 
@@ -237,6 +246,35 @@ describe("playbook_run — propose mode files a proposal and starts nothing", ()
     // Name-only node: the approval executor resolves it through the ONE door.
     expect(row.data.data.playbookName).toBe("Qualify a lead");
     expect(row.data.data.playbookId).toBeUndefined();
+  });
+
+  it("skills off → the spine's readiness rule refuses: NO run proposal, the reason fails the step", async () => {
+    // The rule the manual door enforces: a run nobody could approve into a
+    // working session is the enable request (filed by the gate), not a card.
+    h.readinessMock.mockResolvedValue({
+      ready: false,
+      message:
+        'Nothing ran: "Research a Question" uses skills that are not enabled yet (source-triage). A request to enable them is waiting for the owner\'s review: https://pod/open/p-1',
+    });
+    h.selectResults.push([], [{ userType: "human" }]);
+    await expect(
+      executePlaybookRun(
+        { playbookName: "Research a Question", mode: "propose" },
+        context({ subjectId: "ent-1" }),
+        "ws-1",
+        "user-1",
+        AUTOMATION as never
+      )
+    ).rejects.toThrow(/^Nothing ran: "Research a Question" uses skills/);
+    // Asked about THIS playbook, as the rule's owner, in the rule's space.
+    expect(h.readinessMock).toHaveBeenCalledWith({
+      playbookId: undefined,
+      playbookName: "Research a Question",
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+    expect(h.insertPendingProposalMock).not.toHaveBeenCalled();
+    expect(h.runnerMock).not.toHaveBeenCalled();
   });
 
   it("refuses to file an unattributable proposal (no owning automation)", async () => {

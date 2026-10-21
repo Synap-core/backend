@@ -33,6 +33,7 @@ import { skillsRouter } from "../../skills.js";
 import { buildProviderRequest } from "../../../services/capabilities/execute-provider-verb.js";
 import { resolveIntelligenceService } from "../../../utils/intelligence-routing.js";
 import { createHubProtocolCallerContext } from "../utils.js";
+import { skillAuthoringProblem } from "../../../services/skills/skill-authoring.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -277,30 +278,19 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
     }
     const body = parsed.data;
 
-    // Documentation-or-code, never code specifically — the SAME floor the MCP
-    // `synap_create_skill` handler applies. `body` and `code` are separate
-    // columns and are forwarded separately (see the schema note above).
+    // Documentation-or-code, never code specifically, and a slug for a teaching
+    // skill — the ONE authoring rule the MCP `synap_create_skill` handler and
+    // capture `skills[]` apply. `body` and `code` are separate columns and are
+    // forwarded separately (see the schema note above).
     const codeText = body.code?.trim() ? body.code : undefined;
     const bodyText = body.body?.trim() ? body.body : undefined;
-    if (!codeText && !bodyText) {
-      return c.json(
-        {
-          error:
-            "a skill needs documentation or code — pass `body` (Markdown) to author a teaching skill, `code` to author a runnable one, or both.",
-        },
-        400
-      );
-    }
     const slug = body.slug?.trim() ? body.slug.trim() : undefined;
-    if (!codeText && !slug) {
-      return c.json(
-        {
-          error:
-            "slug is required for a documentation-only skill — it is the ref load_skill resolves (e.g. 'biz/business-plan'). Without one the skill is authored but unreachable.",
-        },
-        400
-      );
-    }
+    const authoringProblem = skillAuthoringProblem({
+      body: bodyText,
+      code: codeText,
+      slug,
+    });
+    if (authoringProblem) return c.json({ error: authoringProblem }, 400);
 
     // Service-key workspace confinement (Item 3): pin/clamp the requested
     // workspace at the point of read, before it flows to resolveActingContext,
