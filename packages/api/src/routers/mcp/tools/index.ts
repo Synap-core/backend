@@ -1765,11 +1765,6 @@ export const tools = {
              * reviewer. Without it the proposal detail reads "No reason was
              * given for this write."
              */
-            forceCreate: {
-              type: "boolean",
-              description:
-                "Only after a CONFLICT naming an existing twin. The pod refuses an AI-initiated slug that already exists anywhere, because a twin silently splits a kind's properties in two. Read the candidates it named; set this ONLY if a separate one is genuinely right.",
-            },
             reasoning: {
               type: "string",
               description:
@@ -1896,11 +1891,6 @@ export const tools = {
              * reviewer. Without it the proposal detail reads "No reason was
              * given for this write."
              */
-            forceCreate: {
-              type: "boolean",
-              description:
-                "Only after a CONFLICT naming an existing twin. The pod refuses an AI-initiated slug that already exists anywhere, because a twin silently splits a kind's properties in two. Read the candidates it named; set this ONLY if a separate one is genuinely right.",
-            },
             reasoning: {
               type: "string",
               description:

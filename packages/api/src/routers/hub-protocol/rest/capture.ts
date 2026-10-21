@@ -1057,8 +1057,8 @@ export function registerCaptureRoutes(app: HubHono): void {
     } catch (err) {
       logger.error({ err, userId }, "POST /capture/execute failed");
       // A domain REFUSAL must not egress as a 500. The same-name create gate
-      // (`entities.create` → CONFLICT, "… already exists … reuse an existing
-      // id, or pass forceCreate") is the common one: capture anything whose
+      // (`entities.create` → CONFLICT, "… already exists …"; since B2 only on
+      // an approval the reviewer has not resolved) was the common one: capture anything whose
       // title matches an existing entity of that kind and this route used to
       // answer 500 "An unexpected server error occurred", with the 5xx egress
       // middleware REDACTING the body — so the caller lost the one sentence

@@ -42,12 +42,6 @@ export interface DefineProfileInput {
   fields?: unknown;
   reasoning?: string;
   agentUserId?: string;
-  /**
-   * Override the pod-wide twin-slug refusal in `profiles.create`. An escape
-   * hatch the agent doors cannot reach is not an escape hatch, so it is
-   * threaded all the way from the MCP tool to the router.
-   */
-  forceCreate?: boolean;
 }
 
 export interface DefineProfileLabels {
@@ -116,7 +110,6 @@ export async function defineProfile(
     ...(input.entityScope ? { entityScope: input.entityScope } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
-    ...(input.forceCreate ? { forceCreate: true } : {}),
   })) as unknown as Record<string, unknown>;
 
   const fieldSpecs = (input.fields ?? []) as Array<Record<string, unknown>>;
