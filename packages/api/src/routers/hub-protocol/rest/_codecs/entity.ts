@@ -392,6 +392,40 @@ export const UpdateEntityResponseSchema = z
       .string()
       .optional()
       .describe("With `deferred`: the kept write's ref on the join proposal."),
+    // ── APPLIED answer (C5): what landed, never just "Entity updated" ──
+    entityId: z.string().optional(),
+    title: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("The entity's title as the write left it."),
+    written: z
+      .object({
+        title: z.string().nullable(),
+        description: z.string().nullable(),
+        properties: z.unknown(),
+        documentId: z.string().nullable(),
+      })
+      .optional()
+      .describe("The stored values after the write."),
+    statusMove: z
+      .object({ status: z.string() })
+      .passthrough()
+      .optional()
+      .describe(
+        "The status move this call carried: moved, unchanged or proposed (then `proposalId`)."
+      ),
+    writeReceipt: z
+      .object({
+        state: z.enum(["applied", "partial"]),
+        entityId: z.string(),
+        landed: z.array(z.string()),
+        proposed: z.array(z.string()).optional(),
+      })
+      .optional()
+      .describe(
+        "Applied answer only: the fields written (`landed`) and those filed for review instead (`proposed`, the status move)."
+      ),
   })
   .openapi("UpdateEntityResponse");
 

@@ -171,6 +171,7 @@ import type {
   AskResponse,
   KnowledgeAnswerResponse,
   KnowledgeAnswerDetail,
+  HubEntityUpdateResult,
   HubDiagnoseInput,
   HubDiagnoseResult,
   CreateFocusSessionInput,
@@ -720,13 +721,14 @@ export class HubRestClient {
   async updateEntity(
     id: string,
     input: UpdateEntityInput
-  ): Promise<HubEntity | HubGovernanceResult> {
-    // Backend may return a full entity (approved) or a governance envelope
-    // (proposed/denied). Callers MUST check `status` first when governance
-    // is likely — e.g., agent-owned workspaces, destructive updates.
+  ): Promise<HubEntityUpdateResult> {
+    // The pod answers the applied RECEIPT (`status: "updated"`, the entity id,
+    // the fields that landed — never the entity itself) or a governance
+    // envelope (proposed/denied). Check `status` first. An empty patch is
+    // refused (400), never "updated".
     const { properties, content, url, status, priority, dueDate, ...rest } =
       input;
-    return this.request<HubEntity | HubGovernanceResult>(
+    return this.request<HubEntityUpdateResult>(
       "PATCH",
       `/api/hub/entities/${id}`,
       {

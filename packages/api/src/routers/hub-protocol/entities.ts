@@ -14,6 +14,12 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
+import { TRPCError } from "@trpc/server";
+import {
+  buildUpdateWriteReceipt,
+  emptyEntityPatchMessage,
+  isEmptyEntityPatch,
+} from "./update-write-receipt.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { lifecycleConflictOf } from "../../services/lifecycle/conflict.js";
 import {
@@ -487,6 +493,14 @@ export const entitiesRouter = router({
       const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       // Use the real user (input.userId), not ctx.userId (API key owner)
       assertMayActAs(ctx, input.userId);
+      // EMPTY ≠ APPLIED (C5): a patch that would write nothing is refused,
+      // never answered "Entity updated".
+      if (isEmptyEntityPatch(input)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: emptyEntityPatchMessage(input.entityId),
+        });
+      }
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -565,10 +579,42 @@ export const entitiesRouter = router({
         };
       }
 
+      // APPLIED: name what landed (C5) — the entity, the fields written and
+      // their stored values, the status move's own outcome. The old answer
+      // carried none of it (and an always-undefined `proposalId`).
+      const applied = result as {
+        written?: {
+          title: string | null;
+          preview: string | null;
+          properties: unknown;
+          documentId?: string | null;
+        };
+        statusMove?: { status: string };
+      };
+      const written = applied.written;
       return {
         status: result.status,
         message: result.message,
-        proposalId: result.proposalId,
+        entityId: input.entityId,
+        title: written?.title ?? null,
+        ...(written
+          ? {
+              written: {
+                title: written.title,
+                description: written.preview,
+                properties: written.properties,
+                documentId: written.documentId ?? null,
+              },
+            }
+          : {}),
+        ...(applied.statusMove ? { statusMove: applied.statusMove } : {}),
+        writeReceipt: buildUpdateWriteReceipt({
+          entityId: input.entityId,
+          patch: input,
+          writtenProperties: written?.properties as
+            Record<string, unknown> | undefined,
+          statusMoveProposed: applied.statusMove?.status === "proposed",
+        }),
       };
     }),
 

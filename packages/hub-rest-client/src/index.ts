@@ -186,6 +186,9 @@ export type {
   KnowledgeAnswerFailure,
   KnowledgeAnswerResponse,
   KnowledgeAnswerDetail,
+  HubEntityUpdateApplied,
+  HubEntityUpdateReceipt,
+  HubEntityUpdateResult,
   HubAskSpaceHint,
   HubAskSpacesHint,
   // Diagnose (third door)
