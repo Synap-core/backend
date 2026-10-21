@@ -41,14 +41,17 @@ import {
   assertPkceChallenge,
   buildAuthorizationResponseUrl,
   clientAcceptsRedirect,
+  firstPartyResourceForIssuer,
   narrowAppScopes,
   narrowScopes,
   parseScopeParam,
   resourceForIssuer,
 } from "./protocol.js";
 import {
+  isFirstPartyClientId,
   isSynapApp,
   normalizeRequestedScopes,
+  resolveFirstPartyClient,
   resolveIssuer,
 } from "./config.js";
 import {
@@ -151,7 +154,10 @@ export async function resolveClientAndRedirect(
   // document is fetched (or read from cache) here, before the redirect_uri is
   // trusted, because the document IS the list of redirect_uris.
   let client: StoredClient | null;
-  if (isAppClientId(clientId)) {
+  if (isFirstPartyClientId(clientId)) {
+    // A Synap app (desktop, Relay): declared in code, shipped with the pod.
+    client = resolveFirstPartyClient(clientId);
+  } else if (isAppClientId(clientId)) {
     // "Sign in with Synap": an app registered AND approved on this pod,
     // resolved from `apps` — never from `oauth_clients`, which DCR writes.
     client = await resolveAppClient(clientId);
@@ -219,15 +225,19 @@ export function validateAuthorizeRequest(
   // drop-unknown + fall-back-to-registered rule, which claude.ai relies on.
   // A sign-in app (`app`) always gets the Hub door's two scopes: what its
   // token may touch is the GRANT, decided at consent, not a scope string.
+  // A Synap app (`first_party`) gets none: its token is the person on the
+  // app API, which no scope string narrows.
   const grantedScopes =
-    client.clientKind === "app"
-      ? [...APP_PERSON_SCOPES]
-      : client.clientKind === "cimd"
-        ? narrowAppScopes(
-            [...client.scopes, ...client.requestedPermissions],
-            requested
-          )
-        : narrowScopes(client.scopes, requested);
+    client.clientKind === "first_party"
+      ? []
+      : client.clientKind === "app"
+        ? [...APP_PERSON_SCOPES]
+        : client.clientKind === "cimd"
+          ? narrowAppScopes(
+              [...client.scopes, ...client.requestedPermissions],
+              requested
+            )
+          : narrowScopes(client.scopes, requested);
 
   const { resource, ignoredResource } = resourceFor(
     client,
@@ -266,6 +276,13 @@ export function resourceFor(
   raw: string | null | undefined,
   issuer: string
 ): { resource: string | null; ignoredResource: string | null } {
+  if (client.clientKind === "first_party") {
+    // Strict, and for the pod itself: `firstPartyResourceForIssuer`.
+    return {
+      resource: firstPartyResourceForIssuer(raw, issuer),
+      ignoredResource: null,
+    };
+  }
   try {
     return { resource: resourceForIssuer(raw, issuer), ignoredResource: null };
   } catch (err) {
@@ -318,9 +335,10 @@ export interface OAuthConsentContext {
   clientId: string;
   /**
    * 'dcr' — an MCP client (claude.ai); 'cimd' — a pod app; 'app' — an
-   * approved app a person signs in to ("Sign in with Synap").
+   * approved app a person signs in to ("Sign in with Synap"); 'first_party'
+   * — a Synap app (desktop, Relay) signing the person in on this device.
    */
-  clientKind: "dcr" | "cimd" | "app";
+  clientKind: "dcr" | "cimd" | "app" | "first_party";
   /** Untrusted, attacker-chosen at registration — the UI renders it as TEXT. */
   clientName: string;
   redirectUri: string;

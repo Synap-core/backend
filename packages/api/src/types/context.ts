@@ -33,6 +33,13 @@ export interface KratosSession {
   active: boolean;
   expires_at?: string;
   authenticated_at?: string;
+  /**
+   * Set ONLY when the person came in on a Synap app's device token
+   * (`appSessionMiddleware`, join plan target A): the device it was minted
+   * for. Absent on a Kratos session. Such a session has no `authenticated_at`,
+   * so it never counts as a recent sign-in.
+   */
+  device?: { id: string; clientId: string };
 }
 
 /**

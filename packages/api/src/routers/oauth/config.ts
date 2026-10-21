@@ -12,11 +12,13 @@ import {
   type TrustedIssuer,
 } from "@synap/database";
 import { isValidScope, type ApiKeyScope } from "@synap/database/schema";
+import { resolveFirstPartyClientName } from "@synap-core/types/vocabulary";
 
 import {
   canonicalizeIssuerUrl,
   type FirstPartyRedirectRule,
 } from "./protocol.js";
+import type { StoredClient } from "./store.js";
 
 /**
  * Agent type for a grant to any client OTHER than this pod's approved Control
@@ -158,6 +160,30 @@ export function isFirstPartyClientId(
     typeof clientId === "string" &&
     Object.prototype.hasOwnProperty.call(FIRST_PARTY_CLIENTS, clientId)
   );
+}
+
+/**
+ * A first-party client as every AS door sees a client: resolved from the code
+ * registry, never from `oauth_clients` (which DCR writes) — so a
+ * self-registered client can never become one, and no row can change one.
+ * Its name comes from the vocabulary door; it lists no redirect URIs, only
+ * rules (`clientAcceptsRedirect`). Null for any other client_id.
+ */
+export function resolveFirstPartyClient(
+  clientId: string | null | undefined
+): StoredClient | null {
+  if (!isFirstPartyClientId(clientId)) return null;
+  return {
+    clientId,
+    clientKind: "first_party",
+    clientName: resolveFirstPartyClientName(clientId),
+    redirectUris: [],
+    firstPartyRedirects: FIRST_PARTY_CLIENTS[clientId].redirects,
+    scopes: [],
+    requestedPermissions: [],
+    // Shipped with the pod, never registered: no registration date to show.
+    createdAt: new Date(0),
+  };
 }
 
 /**

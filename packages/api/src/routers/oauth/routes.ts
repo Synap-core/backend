@@ -48,6 +48,11 @@ import { createLogger } from "@synap-core/core";
 
 import { db, eq, users } from "@synap/database";
 import { APP_PERSON_KEY_TYPE } from "@synap/database/schema";
+import {
+  isPersonDeviceToken,
+  resolvePersonDeviceSession,
+  revokePersonDevice,
+} from "@synap/database/person-devices";
 
 import { TRPCError } from "@trpc/server";
 
@@ -62,12 +67,14 @@ import { AGENT_KEY_TTL_DAYS } from "../../services/hub-integration-registration.
 import { configuredPodAdminConsentUrl } from "../../utils/pod-admin-url.js";
 import {
   CP_CONNECTOR_AGENT_TYPE,
+  FIRST_PARTY_CLIENT_IDS,
   OAUTH_DEFAULT_SCOPES,
   OAUTH_REVOCABLE_AGENT_TYPES,
   OAUTH_SUPPORTED_SCOPES,
   mapCpScopesToPodScopes,
   oauthKeyInstanceId,
   parseOauthKeyInstanceId,
+  resolveFirstPartyClient,
   resolveIssuer,
   resolveOAuthAgentType,
   type OAuthAgentType,
@@ -97,7 +104,12 @@ import {
   rotateRefreshToken,
   startRefreshFamily,
 } from "./refresh.js";
-import { claimAuthorizationCode, findClient, insertClient } from "./store.js";
+import {
+  claimAuthorizationCode,
+  findClient,
+  insertClient,
+  type StoredClient,
+} from "./store.js";
 import {
   APP_PERSON_SCOPES,
   isAppClientId,
@@ -181,19 +193,27 @@ oauthApp.get("/.well-known/oauth-protected-resource/mcp", (c) => {
 
 // ─── RFC 8414 — authorization server metadata ────────────────────────────────
 
+/**
+ * RFC 8414 metadata, plus the Synap apps this pod signs in (`synap_first_party_clients`,
+ * a Synap extension): what a Synap app reads to know this pod supports the
+ * system-browser sign-in, and falls back to the older path when it is absent.
+ */
+function authorizationServerMetadata(issuer: string) {
+  return {
+    ...buildAuthorizationServerMetadata(issuer, OAUTH_SUPPORTED_SCOPES),
+    synap_first_party_clients: [...FIRST_PARTY_CLIENT_IDS],
+  };
+}
+
 oauthApp.get("/.well-known/oauth-authorization-server", (c) => {
   const issuer = issuerOr503();
   if (!issuer) return c.json(ISSUER_UNCONFIGURED, 503);
-  return c.json(
-    buildAuthorizationServerMetadata(issuer, OAUTH_SUPPORTED_SCOPES)
-  );
+  return c.json(authorizationServerMetadata(issuer));
 });
 oauthApp.get("/.well-known/oauth-authorization-server/mcp", (c) => {
   const issuer = issuerOr503();
   if (!issuer) return c.json(ISSUER_UNCONFIGURED, 503);
-  return c.json(
-    buildAuthorizationServerMetadata(issuer, OAUTH_SUPPORTED_SCOPES)
-  );
+  return c.json(authorizationServerMetadata(issuer));
 });
 
 // ─── RFC 7591 — dynamic client registration ──────────────────────────────────
@@ -339,9 +359,30 @@ oauthApp.get("/authorize", async (c) => {
   if (validated.resource) {
     target.searchParams.set("resource", validated.resource);
   }
+  // Sign-in HINTS for the consent screen (never trusted, never a credential):
+  // OIDC `login_hint` pre-fills who signs in; `prompt=create` (OIDC
+  // Initiating User Registration) asks for the make-an-account path.
+  const loginHint = loginHintFrom(q.login_hint);
+  if (loginHint) target.searchParams.set("login_hint", loginHint);
+  if (q.prompt === "create") target.searchParams.set("prompt", "create");
 
   return c.redirect(target.toString(), 302);
 });
+
+/**
+ * `login_hint` as the consent screen may show it: trimmed, at most an email's
+ * length (RFC 5321: 254), no control characters. Anything else is dropped —
+ * a hint the screen cannot use is no hint.
+ */
+function loginHintFrom(raw: string | undefined): string | null {
+  const hint = raw?.trim();
+  if (!hint || hint.length > 254) return null;
+  for (let i = 0; i < hint.length; i++) {
+    const code = hint.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return null;
+  }
+  return hint;
+}
 
 // ─── /token ──────────────────────────────────────────────────────────────────
 
@@ -422,6 +463,32 @@ async function exchangeAppRefreshToken(params: Record<string, string>) {
   if (!params.client_id) {
     throw new OAuthError("invalid_request", "client_id is required");
   }
+  const firstParty = resolveFirstPartyClient(params.client_id);
+  if (firstParty) {
+    // A Synap app's device (person-device-token.ts, the one mint door).
+    const { refreshPersonDevice } =
+      await import("../../services/person-device-token.js");
+    let tokens;
+    try {
+      tokens = await refreshPersonDevice({
+        refreshToken: params.refresh_token,
+        clientId: firstParty.clientId,
+      });
+    } catch (err) {
+      if (err instanceof RefreshTokenReuseError) {
+        logger.warn(
+          { clientId: firstParty.clientId, familyId: err.familyId },
+          "pod-oauth: device refresh token reused — the device is signed out"
+        );
+      }
+      throw err;
+    }
+    logger.info(
+      { clientId: firstParty.clientId, deviceId: tokens.deviceId },
+      "pod-oauth: device access token refreshed"
+    );
+    return personDeviceTokenResponse(tokens);
+  }
   const client = await findClient(params.client_id);
   if (!client) throw new OAuthError("invalid_client", "Unknown client");
   if (client.clientKind !== "cimd") {
@@ -443,7 +510,11 @@ async function exchangeAppRefreshToken(params: Record<string, string>) {
     }
     throw err;
   }
-  const minted = await mintAppKey(redeemed);
+  if (!redeemed.appId) {
+    // Bound to this client, so never a device's — but say so, not assume it.
+    throw new OAuthError("invalid_grant", "Invalid refresh token");
+  }
+  const minted = await mintAppKey({ ...redeemed, appId: redeemed.appId });
   const refreshToken = await rotateRefreshToken(redeemed);
   logger.info(
     {
@@ -456,6 +527,37 @@ async function exchangeAppRefreshToken(params: Record<string, string>) {
     "pod-oauth: pod app access token refreshed"
   );
   return appTokenResponse(minted, refreshToken);
+}
+
+/** A Synap app's device token response, for a code and a refresh alike. */
+function personDeviceTokenResponse(tokens: {
+  deviceId: string;
+  accessToken: string;
+  accessExpiresAt: Date;
+  refreshToken: string;
+}) {
+  return {
+    access_token: tokens.accessToken,
+    token_type: "Bearer",
+    expires_in: Math.max(
+      0,
+      Math.floor((tokens.accessExpiresAt.getTime() - Date.now()) / 1000)
+    ),
+    refresh_token: tokens.refreshToken,
+    // Synap extension: the device this sign-in is, as the devices list names it.
+    synap_device_id: tokens.deviceId,
+  };
+}
+
+/** The client a code was issued to, re-resolved from its source of truth. */
+async function resolveTokenClient(
+  clientId: string
+): Promise<StoredClient | null> {
+  const firstParty = resolveFirstPartyClient(clientId);
+  if (firstParty) return firstParty;
+  return isAppClientId(clientId)
+    ? resolveAppClient(clientId)
+    : findClient(clientId);
 }
 
 oauthApp.post("/token", async (c) => {
@@ -527,9 +629,7 @@ oauthApp.post("/token", async (c) => {
     // registration changed cannot redeem against a URI it no longer owns.
     // A sign-in app is re-resolved from `apps`: revoked, unapproved or with
     // the URI removed since consent → no client, no token.
-    const client = isAppClientId(claimed.clientId)
-      ? await resolveAppClient(claimed.clientId)
-      : await findClient(claimed.clientId);
+    const client = await resolveTokenClient(claimed.clientId);
     if (!client) {
       throw new OAuthError("invalid_client", "Unknown client");
     }
@@ -556,6 +656,39 @@ oauthApp.post("/token", async (c) => {
           "resource does not match the authorization request"
         );
       }
+    }
+
+    // A Synap app (desktop, Relay) signing the person in on this device: a
+    // device with a 1 h access token and a rotating refresh token — the one
+    // door, which states the threat model (services/person-device-token.ts).
+    if (client.clientKind === "first_party") {
+      const { signInPersonDevice } =
+        await import("../../services/person-device-token.js");
+      const signedIn = await signInPersonDevice({
+        personUserId: claimed.userId,
+        clientId: client.clientId,
+        label: params.synap_device_label,
+        userAgent: c.req.header("user-agent"),
+      });
+      if (!signedIn.ok) {
+        logger.warn(
+          { clientId: claimed.clientId, reason: signedIn.reason },
+          "pod-oauth: device sign-in refused at mint"
+        );
+        throw new OAuthError(
+          "invalid_grant",
+          "Only a person can sign in to a Synap app"
+        );
+      }
+      logger.info(
+        {
+          clientId: claimed.clientId,
+          podUserId: claimed.userId,
+          deviceId: signedIn.deviceId,
+        },
+        "pod-oauth: device signed in"
+      );
+      return c.json(personDeviceTokenResponse(signedIn));
     }
 
     // "Sign in with Synap" (A1): a registered, approved app's code mints a
@@ -757,6 +890,9 @@ oauthApp.post("/token", async (c) => {
 // A pod app's REFRESH token is accepted too (spec 17 §6.7): its whole family
 // and the connection's live access key are revoked. `token_type_hint` only
 // orders the two lookups (§2.1): a miss on the hinted kind tries the other.
+//
+// A Synap app's device (0340): its refresh token OR its access token ends the
+// whole device — the app's "sign out" (person-device-token.ts).
 
 /**
  * The keys this AS mints, and so the only ones /revoke may retire: held by a
@@ -838,6 +974,24 @@ oauthApp.post("/revoke", async (c) => {
       const done = await revokeAsRefreshToken(presented, params.client_id);
       if (done === "wrong_client") return c.json(UNAUTHORIZED_REVOKE, 400);
       if (done === "revoked") return c.body(null, 200);
+    }
+    if (isPersonDeviceToken(presented)) {
+      // A Synap app's access token: its "sign out" ends the whole device
+      // (RFC 7009 §2.1 allows revoking the grant an access token belongs to).
+      const live = await resolvePersonDeviceSession(db, presented);
+      if (!live) return c.body(null, 200);
+      if (params.client_id && params.client_id !== live.device.clientId) {
+        return c.json(UNAUTHORIZED_REVOKE, 400);
+      }
+      await revokePersonDevice(db, {
+        deviceId: live.device.id,
+        reason: "OAuth token revocation (RFC 7009)",
+      });
+      logger.info(
+        { deviceId: live.device.id, clientId: live.device.clientId },
+        "pod-oauth: device signed out"
+      );
+      return c.body(null, 200);
     }
     const status = await apiKeyService.getApiKeyStatus(presented);
     // Only a LIVE key has anything to revoke; every other state is already the

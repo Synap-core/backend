@@ -5143,3 +5143,55 @@ CREATE INDEX IF NOT EXISTS "oauth_refresh_tokens_app_idx"
   ON "oauth_refresh_tokens" ("app_id");
 CREATE INDEX IF NOT EXISTS "oauth_refresh_tokens_family_idx"
   ON "oauth_refresh_tokens" ("family_id");
+
+-- 0340: signed-in devices of the Synap apps (mirrors 0340_person_devices.sql):
+-- a device (one refresh family), its sha256-only access tokens, and a refresh
+-- token owned by EXACTLY one of a pod app connection or a device.
+CREATE TABLE IF NOT EXISTS "person_devices" (
+  "id"             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"        text NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+  "client_id"      text NOT NULL,
+  "label"          text,
+  "user_agent"     text,
+  "created_at"     timestamp with time zone NOT NULL DEFAULT now(),
+  "last_used_at"   timestamp with time zone,
+  "expires_at"     timestamp with time zone NOT NULL,
+  "revoked_at"     timestamp with time zone,
+  "revoked_reason" text
+);
+
+-- A person's devices (the devices list, revoke-all).
+CREATE INDEX IF NOT EXISTS "person_devices_user_idx"
+  ON "person_devices" ("user_id");
+
+CREATE TABLE IF NOT EXISTS "person_device_tokens" (
+  "id"         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "token_hash" text NOT NULL,
+  "device_id"  uuid NOT NULL REFERENCES "person_devices"("id") ON DELETE CASCADE,
+  "expires_at" timestamp with time zone NOT NULL,
+  "created_at" timestamp with time zone NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "person_device_tokens_token_hash_uidx"
+  ON "person_device_tokens" ("token_hash");
+CREATE INDEX IF NOT EXISTS "person_device_tokens_device_idx"
+  ON "person_device_tokens" ("device_id");
+
+ALTER TABLE "oauth_refresh_tokens" ALTER COLUMN "app_id" DROP NOT NULL;
+ALTER TABLE "oauth_refresh_tokens"
+  ADD COLUMN IF NOT EXISTS "device_id" uuid
+  REFERENCES "person_devices"("id") ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS "oauth_refresh_tokens_device_idx"
+  ON "oauth_refresh_tokens" ("device_id");
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'oauth_refresh_tokens_one_owner_chk'
+  ) THEN
+    ALTER TABLE "oauth_refresh_tokens"
+      ADD CONSTRAINT "oauth_refresh_tokens_one_owner_chk"
+      CHECK (("app_id" IS NULL) <> ("device_id" IS NULL));
+  END IF;
+END $$;

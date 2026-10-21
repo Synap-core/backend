@@ -97,7 +97,9 @@ describe("clientAcceptsRedirect — one check for every client kind", () => {
   });
 
   it("keeps every other client byte-exact against its registration", () => {
-    const client = { redirectUris: ["https://claude.ai/api/mcp/auth_callback"] };
+    const client = {
+      redirectUris: ["https://claude.ai/api/mcp/auth_callback"],
+    };
     expect(
       clientAcceptsRedirect(client, "https://claude.ai/api/mcp/auth_callback")
     ).toBe(true);

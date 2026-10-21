@@ -432,6 +432,26 @@ export function resourceForIssuer(
   return match;
 }
 
+/**
+ * RFC 8707 `resource` for a FIRST-PARTY client (a Synap app signing a person
+ * in). Its token is for the app API of THIS pod — `/trpc` and realtime — so
+ * the resource is the pod itself (`issuer`, or `issuer/trpc`); naming `/mcp`
+ * or `/api/hub`, where the token is refused, is `invalid_target`. Absent →
+ * null. Returns the canonical form, the issuer.
+ */
+export function firstPartyResourceForIssuer(
+  raw: string | null | undefined,
+  issuer: string
+): string | null {
+  if (raw === undefined || raw === null) return null;
+  const candidate = raw.trim().replace(/\/+$/, "");
+  if (candidate === issuer || candidate === `${issuer}/trpc`) return issuer;
+  throw new OAuthError(
+    "invalid_target",
+    "resource must be this pod (a Synap app's sign-in is for the pod itself)"
+  );
+}
+
 // ─── Dynamic Client Registration (RFC 7591) ──────────────────────────────────
 
 /** Raw §3.1 registration request — every field untrusted until validated. */

@@ -1,7 +1,15 @@
 /**
- * Pod app refresh tokens (spec 17 §6.6, wave PB3; founder decision F5: access
- * 1 h, refresh rotating with family revoke, 30-day idle expiry, no absolute
- * cap). Only a pod app (CIMD client) gets one; an MCP (DCR) client never does.
+ * Refresh tokens of this AS: a pod app's (spec 17 §6.6, wave PB3; founder
+ * decision F5: access 1 h, refresh rotating with family revoke, 30-day idle
+ * expiry, no absolute cap) and a Synap app's signed-in DEVICE's (0340, join
+ * plan target A: the same rules plus a 180-day absolute cap, the device's
+ * `expires_at`). An MCP (DCR) client never gets one.
+ *
+ * A family has ONE owner (a CHECK in 0340): a pod app CONNECTION (`appId`, an
+ * `apps` row) or a DEVICE (`deviceId`, a `person_devices` row whose id is the
+ * family id). The rules below are the same for both; only "the live access
+ * credential" differs — the connection's agent key, or the device itself
+ * (`revokePersonDevice`, whose row every device token is read through).
  *
  * Ported from the Control Plane's `exchangeRefreshToken` /
  * `revokeRefreshTokenFamily` (synap-control-plane-api `src/lib/oauth.ts`), not
@@ -32,7 +40,12 @@
 
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { db, and, eq, isNull, drizzleSql as sql } from "@synap/database";
-import { apps, oauthRefreshTokens } from "@synap/database/schema";
+import {
+  apps,
+  oauthRefreshTokens,
+  personDevices,
+} from "@synap/database/schema";
+import { revokePersonDevice } from "@synap/database/person-devices";
 
 import { revokeActiveHubInboundKeysForUser } from "../../services/hub-integration-registration.js";
 import { OAuthError } from "./protocol.js";
@@ -40,20 +53,30 @@ import { OAuthError } from "./protocol.js";
 /** A refresh token lives this long from its issue; each use issues a new one. */
 export const REFRESH_TOKEN_IDLE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-/** The connection a refresh token belongs to. */
+/**
+ * What a refresh token belongs to: a pod app connection (`appId`) or a
+ * signed-in device (`deviceId`) — exactly one of the two.
+ */
 export interface RefreshConnection {
-  /** The pod app's CIMD URL (its OAuth `client_id`). */
+  /** The client it was issued to: a pod app's CIMD URL, or a first-party id. */
   clientId: string;
   /** The consenting person. */
   userId: string;
-  /** The connection's `apps` row (mode 'oauth'). */
-  appId: string;
+  /** The connection's `apps` row (mode 'oauth'); null for a device. */
+  appId: string | null;
+  /** The signed-in device (`person_devices`); null/absent for a pod app. */
+  deviceId?: string | null;
 }
 
 /** A redeemed (now used) token: what the refresh grant mints for. */
 export interface RedeemedRefreshToken extends RefreshConnection {
   id: string;
   familyId: string;
+  /**
+   * A device's absolute cap (`person_devices.expires_at`): no successor, and
+   * no access token minted from this redeem, may outlive it. Null for an app.
+   */
+  capAt: Date | null;
 }
 
 /**
@@ -75,11 +98,22 @@ function hashRefreshToken(raw: string): string {
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+/** The one owner of a connection's tokens, as a column predicate. */
+function ownedBy(conn: Pick<RefreshConnection, "appId" | "deviceId">) {
+  if (conn.appId) return eq(oauthRefreshTokens.appId, conn.appId);
+  if (conn.deviceId) return eq(oauthRefreshTokens.deviceId, conn.deviceId);
+  throw new Error("oauth refresh: a token names neither an app nor a device");
+}
+
 /** Serialize every write that creates or kills this connection's tokens. */
-async function lockConnection(tx: Tx, appId: string): Promise<void> {
-  await tx.execute(
-    sql`select pg_advisory_xact_lock(hashtext(${`oauth-refresh|${appId}`}))`
-  );
+async function lockConnection(
+  tx: Tx,
+  conn: Pick<RefreshConnection, "appId" | "deviceId">
+): Promise<void> {
+  const key = conn.appId
+    ? `oauth-refresh|${conn.appId}`
+    : `oauth-refresh-device|${conn.deviceId}`;
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}))`);
 }
 
 /**
@@ -88,22 +122,27 @@ async function lockConnection(tx: Tx, appId: string): Promise<void> {
  * unknown instead of as a reuse. Bounds a connection to the tokens issued in
  * its last 30 days (one per refresh).
  */
-async function sweepExpired(tx: Tx, appId: string): Promise<void> {
+async function sweepExpired(
+  tx: Tx,
+  conn: Pick<RefreshConnection, "appId" | "deviceId">
+): Promise<void> {
   await tx
     .delete(oauthRefreshTokens)
-    .where(
-      and(
-        eq(oauthRefreshTokens.appId, appId),
-        sql`${oauthRefreshTokens.expiresAt} < now()`
-      )
-    );
+    .where(and(ownedBy(conn), sql`${oauthRefreshTokens.expiresAt} < now()`));
+}
+
+/** 30 days from now, never past `capAt` (a device's absolute cap). */
+function refreshExpiry(capAt: Date | null | undefined): Date {
+  const idle = Date.now() + REFRESH_TOKEN_IDLE_TTL_MS;
+  return new Date(capAt ? Math.min(idle, capAt.getTime()) : idle);
 }
 
 async function insertToken(
   tx: Tx,
   conn: RefreshConnection,
   familyId: string,
-  id: string = randomUUID()
+  id: string = randomUUID(),
+  capAt: Date | null = null
 ): Promise<string> {
   const raw = randomBytes(32).toString("base64url");
   await tx.insert(oauthRefreshTokens).values({
@@ -112,32 +151,42 @@ async function insertToken(
     familyId,
     clientId: conn.clientId,
     userId: conn.userId,
-    appId: conn.appId,
-    expiresAt: new Date(Date.now() + REFRESH_TOKEN_IDLE_TTL_MS),
+    appId: conn.appId ?? null,
+    deviceId: conn.deviceId ?? null,
+    expiresAt: refreshExpiry(capAt),
   });
   return raw;
 }
 
 /**
  * The first refresh token of a new family, at an authorization-code
- * exchange. The connection's other families end here: the newest consent is
- * the connection. Returns the RAW token once; only its hash is stored.
+ * exchange. Returns the RAW token once; only its hash is stored.
+ *
+ * A pod app connection: the connection's other families end here (the
+ * newest consent is the connection). A device: the device IS the family
+ * (family id = device id), new at this sign-in, and nothing else ends — a
+ * person signs in on several computers at once.
  */
 export async function startRefreshFamily(
-  conn: RefreshConnection
+  conn: RefreshConnection,
+  opts: { capAt?: Date | null } = {}
 ): Promise<string> {
   return db.transaction(async (tx) => {
-    await lockConnection(tx, conn.appId);
+    await lockConnection(tx, conn);
+    if (conn.deviceId) {
+      return insertToken(
+        tx,
+        { ...conn, appId: null },
+        conn.deviceId,
+        randomUUID(),
+        opts.capAt ?? null
+      );
+    }
     await tx
       .update(oauthRefreshTokens)
       .set({ revokedAt: new Date() })
-      .where(
-        and(
-          eq(oauthRefreshTokens.appId, conn.appId),
-          isNull(oauthRefreshTokens.revokedAt)
-        )
-      );
-    await sweepExpired(tx, conn.appId);
+      .where(and(ownedBy(conn), isNull(oauthRefreshTokens.revokedAt)));
+    await sweepExpired(tx, conn);
     return insertToken(tx, conn, randomUUID());
   });
 }
@@ -153,16 +202,32 @@ export async function redeemRefreshToken(
   raw: string,
   clientId: string
 ): Promise<RedeemedRefreshToken> {
-  const [row] = await db
-    .select()
+  const [found] = await db
+    .select({
+      token: oauthRefreshTokens,
+      deviceRevokedAt: personDevices.revokedAt,
+      deviceExpiresAt: personDevices.expiresAt,
+    })
     .from(oauthRefreshTokens)
+    .leftJoin(personDevices, eq(personDevices.id, oauthRefreshTokens.deviceId))
     .where(eq(oauthRefreshTokens.tokenHash, hashRefreshToken(raw)))
     .limit(1);
   // A token is bound to the client it was issued to (RFC 6749 §6).
-  if (!row || row.clientId !== clientId) {
+  if (!found || found.token.clientId !== clientId) {
     throw new OAuthError("invalid_grant", INVALID);
   }
+  const row = found.token;
   if (row.revokedAt) throw new OAuthError("invalid_grant", INVALID);
+  // A device's token lives only as long as its device: revoked (signed out,
+  // removed from the devices list) or past its absolute cap, it is dead.
+  if (
+    row.deviceId &&
+    (found.deviceRevokedAt ||
+      !found.deviceExpiresAt ||
+      found.deviceExpiresAt.getTime() <= Date.now())
+  ) {
+    throw new OAuthError("invalid_grant", INVALID);
+  }
   if (row.lastUsedAt) {
     await revokeRefreshFamily(
       row,
@@ -192,6 +257,8 @@ export async function redeemRefreshToken(
     clientId: row.clientId,
     userId: row.userId,
     appId: row.appId,
+    deviceId: row.deviceId,
+    capAt: row.deviceId ? found.deviceExpiresAt : null,
   };
 }
 
@@ -206,7 +273,7 @@ export async function rotateRefreshToken(
 ): Promise<string> {
   const id = randomUUID();
   const raw = await db.transaction(async (tx) => {
-    await lockConnection(tx, prev.appId);
+    await lockConnection(tx, prev);
     const [linked] = await tx
       .update(oauthRefreshTokens)
       .set({ replacedBy: id })
@@ -218,8 +285,8 @@ export async function rotateRefreshToken(
       )
       .returning({ id: oauthRefreshTokens.id });
     if (!linked) return null;
-    await sweepExpired(tx, prev.appId);
-    return insertToken(tx, prev, prev.familyId, id);
+    await sweepExpired(tx, prev);
+    return insertToken(tx, prev, prev.familyId, id, prev.capAt);
   });
   if (raw === null) {
     await revokeConnectionAccessKey(
@@ -241,6 +308,7 @@ export async function findRefreshToken(
       clientId: oauthRefreshTokens.clientId,
       userId: oauthRefreshTokens.userId,
       appId: oauthRefreshTokens.appId,
+      deviceId: oauthRefreshTokens.deviceId,
     })
     .from(oauthRefreshTokens)
     .where(eq(oauthRefreshTokens.tokenHash, hashRefreshToken(raw)))
@@ -257,7 +325,7 @@ export async function revokeRefreshFamily(
   reason: string
 ): Promise<void> {
   await db.transaction(async (tx) => {
-    await lockConnection(tx, token.appId);
+    await lockConnection(tx, token);
     await tx
       .update(oauthRefreshTokens)
       .set({ revokedAt: new Date() })
@@ -280,7 +348,7 @@ export async function revokeConnectionRefreshTokens(
   appId: string
 ): Promise<void> {
   await db.transaction(async (tx) => {
-    await lockConnection(tx, appId);
+    await lockConnection(tx, { appId });
     await tx
       .update(oauthRefreshTokens)
       .set({ revokedAt: new Date() })
@@ -294,14 +362,20 @@ export async function revokeConnectionRefreshTokens(
 }
 
 /**
- * The connection's live access key stops now. A pod app's agent is one per
- * (app × person) and holds only this connection's key slot, so its live
- * hub_inbound keys ARE the slot.
+ * The connection's live access credential stops now. A device: the device
+ * itself ends (every access token is read through it). A pod app's agent is
+ * one per (app × person) and holds only this connection's key slot, so its
+ * live hub_inbound keys ARE the slot.
  */
 async function revokeConnectionAccessKey(
   conn: RefreshConnection,
   reason: string
 ): Promise<void> {
+  if (conn.deviceId) {
+    await revokePersonDevice(db, { deviceId: conn.deviceId, reason });
+    return;
+  }
+  if (!conn.appId) return;
   const [app] = await db
     .select({ agentUserId: apps.agentUserId })
     .from(apps)

@@ -7,8 +7,18 @@
  * the identity it resolves to must equal `userId`. The `/yjs` gate used to take
  * `userId` at its word, so anyone who knew a user id could open that user's
  * documents.
+ *
+ * `token` may also be a Synap app's DEVICE token (`synap_pd_…`, join plan
+ * target A): it is resolved by the one lookup (`resolvePersonDeviceSession`)
+ * and NEVER sent to Kratos. No other credential is accepted here — API keys
+ * have their own socket door (`api-key-auth.ts`, service accounts only).
  */
 import { getKratosSessionByCookie, getKratosSessionByToken } from "@synap/auth";
+import { db } from "@synap/database";
+import {
+  isPersonDeviceToken,
+  resolvePersonDeviceSession,
+} from "@synap/database/person-devices";
 
 export type HandshakeIdentity =
   { ok: true; userId: string } | { ok: false; error: string };
@@ -24,6 +34,17 @@ export async function verifyHandshakeUser(
   }
 
   let session: Awaited<ReturnType<typeof getKratosSessionByToken>> | null;
+  if (isPersonDeviceToken(token)) {
+    try {
+      session = await resolvePersonDeviceSession(db, token);
+    } catch {
+      return {
+        ok: false,
+        error: "Realtime auth: session validation unavailable",
+      };
+    }
+    return matchIdentity(session, userId);
+  }
   try {
     // The browser sends the Kratos API SESSION TOKEN (X-Session-Token), so
     // validate it AS A TOKEN first. The old `/presence` code passed it to the
@@ -45,6 +66,14 @@ export async function verifyHandshakeUser(
     };
   }
 
+  return matchIdentity(session, userId);
+}
+
+/** The resolved session's person, who must be the one the handshake named. */
+function matchIdentity(
+  session: { identity?: { id?: unknown }; active?: boolean } | null,
+  userId: string
+): HandshakeIdentity {
   const resolvedUserId =
     typeof session?.identity?.id === "string" ? session.identity.id : null;
   if (!resolvedUserId || session?.active === false) {

@@ -1560,9 +1560,7 @@ export function resolveFirstPartyClientName(
   clientId: string | null | undefined
 ): string {
   if (!clientId?.trim()) return "";
-  return (
-    FIRST_PARTY_CLIENT_NAMES[clientId.trim()] ?? humanizeToken(clientId)
-  );
+  return FIRST_PARTY_CLIENT_NAMES[clientId.trim()] ?? humanizeToken(clientId);
 }
 
 /**
