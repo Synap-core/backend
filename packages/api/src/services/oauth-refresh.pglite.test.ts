@@ -117,6 +117,7 @@ import {
 import {
   REFRESH_REUSE_GRACE_MAX_SECONDS,
   REFRESH_SUCCESSOR_WAIT_MS,
+  RefreshTokenReuseError,
   confirmGraceSuccessor,
   redeemRefreshToken,
   refreshReuseGraceMs,
@@ -792,6 +793,21 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
     expect(replay.body).not.toHaveProperty("access_token");
     expect(await liveRefreshRows()).toEqual([]);
     expect(await valid(r2.body.access_token)).toBe(false);
+  });
+
+  it("within the grace but the successor was already used: the redeem itself is a reuse, no grace handed out", async () => {
+    // Pinned at redeemRefreshToken: through /token, confirmGraceSuccessor
+    // would also catch the spent successor, so the end state alone cannot
+    // show that the grace check refuses it first.
+    const first = await connect();
+    const r1 = await refresh(first.refresh);
+    const r2 = await refresh(r1.body.refresh_token);
+    expect(r2.status).toBe(200);
+
+    await expect(
+      redeemRefreshToken(first.refresh, STUDIO)
+    ).rejects.toBeInstanceOf(RefreshTokenReuseError);
+    expect(await liveRefreshRows()).toEqual([]);
   });
 
   it("within the grace from another client: no grace — a spent token elsewhere is a reuse, family and live key revoked", async () => {
