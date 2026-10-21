@@ -40,6 +40,27 @@ cd deploy && synap update --from-source
 
 Desktop, phone and the apps build from their own branches at the heads above.
 
+### Pod names (wave 6)
+
+A new pod is `<name>.pod.synap.live` and its console is `admin.<name>.pod.synap.live`. Anything else the tenant runs
+is `<label>.<name>.pod.synap.live`. The sign-in cookie is scoped to `<name>.pod.synap.live`. Every pod today keeps
+`pod.<name>.synap.live` and `pod-admin.<name>.synap.live` until the Control Plane moves it
+(`pnpm ops:move-pod-names`). Flat pods (`<name>.synap.live`) are still refused a shared session.
+
+- The rule is stated once, in `@synap-core/types/tenancy`. The installer `synap`, desktop main and the Control Plane
+  keep copies, and a parity test pins each one to it.
+- `synap install --name <name>` now installs `<name>.pod.synap.live` and registers `admin.<name>.pod.synap.live`. The
+  Control Plane must accept those names in the same release.
+- The move sends one `configure` that sets the new `DOMAIN` / `POD_ADMIN_DOMAIN` and names the old pair in
+  `SYNAP_LEGACY_DOMAIN` / `SYNAP_LEGACY_POD_ADMIN_DOMAIN`. For 90 days Caddy answers each old name with a `308` to the
+  same path and query on the new host. ACME challenges are the only exception. The host re-derives
+  `SYNAP_BASE_DOMAIN`, rewrites the old origins in `ALLOWED_ORIGINS` and re-renders `kratos.yml` for the new names.
+- What people see after a move: they sign in once on the new host. Passkeys registered on the old name have to be
+  added again, because their rp id was the old name. Desktop and phone pick up the new URL from the Control Plane.
+  Agent MCP configs that hold the old pod URL have to be pointed at the new one.
+- Pods behind Traefik (Eve-managed) or a custom `CADDYFILE_PATH` don't get the redirect blocks. Their edge has to
+  redirect the old names itself.
+
 ## Dogfood checklist
 
 ### Signing in and links into the console
@@ -48,6 +69,9 @@ Desktop, phone and the apps build from their own branches at the heads above.
       A member does not see it on admin pages.
 - [ ] Desktop tabs that open the console are already signed in: the pod session is shared. A console on another site
       gets no session.
+- [ ] On a pod moved to `<name>.pod.synap.live`: the old pod and console addresses answer `308` to the new ones
+      (`curl -sI https://pod.<name>.synap.live/health`), you sign in once on the new console, desktop opens it signed
+      in, and `https://admin.<other>.pod.synap.live` gets no session.
 - [ ] On the phone, the first console link asks you to sign in once. Later links open signed in.
 - [ ] On the phone, a desktop-only place (Settings → Developer, Pod, Vault, AI governance, Marketplace) offers the
       console page that covers it.
@@ -131,9 +155,10 @@ unset in production.
 
 ## Known gaps and risks
 
-- **Same-site rule:** desktop decides whether a console shares the pod session by whether it's on the same site, and
-  it has no public-suffix list. On Synap Cloud every `<name>-admin.synap.live` console counts as the same site as
-  every other tenant. Needs a product call: bundle a public-suffix list, or match exact origins.
+- **Same-site rule:** decided in wave 6. Desktop bundles a public-suffix list and treats `pod.synap.live` and
+  `synap.live` as public suffixes. On Synap Cloud it shares the session only with the console the Control Plane issues
+  for that pod: `admin.<name>.pod.synap.live`, or `pod-admin.<name>.synap.live` for a pod that hasn't moved yet.
+  `pod.synap.live` goes to the Public Suffix List once every pod has moved (`docs/pod-console/psl-submission.md`).
 - **Old phone builds:** they can't re-enable a revoked phone, and phones on old builds aren't swept.
 - **Desktop provide:** submitting again after a refusal creates a second vault entry.
 - **`run` metadata:** this session metadata key is not server-owned, so a remote runner can still write it.

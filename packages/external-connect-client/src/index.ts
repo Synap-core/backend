@@ -223,8 +223,9 @@ export function buildPodAdminConnectUrl(input: {
  * `buildPodAdminConnectUrl` for any new CLI/Raycast release
  * — the legacy form goes through a backend 302 hop.
  *
- * For `podUrl` callers, derive the pod-admin URL: replace the leading
- * `pod.` host segment with `pod-admin.` (same scheme, same root).
+ * `podAdminUrl` is the console origin the pod publishes (`podAdminUrl` on
+ * `/api/account-recovery/doors`, read with `publishedConsoleOrigin` from
+ * `@synap-core/types/console`); it is never derived from the pod's host.
  */
 export function buildIntegrationConnectUrl(input: {
   podAdminUrl: string;
@@ -241,24 +242,6 @@ export function buildIntegrationConnectUrl(input: {
     url.searchParams.set("issuer_assertion", input.issuerAssertion);
   }
   return url.toString();
-}
-
-/**
- * Derive the pod-admin URL from a pod URL by swapping the leading
- * `pod.` host segment for `pod-admin.`. Returns null for inputs that
- * don't follow the `pod.<root>` convention (raw IP, localhost) — the
- * caller should fall back to `buildPodAdminConnectUrl` (legacy path) in
- * that case so the backend redirect handles routing.
- */
-export function derivePodAdminUrl(podUrl: string): string | null {
-  try {
-    const u = new URL(podUrl);
-    if (!u.hostname.startsWith("pod.")) return null;
-    u.hostname = `pod-admin.${u.hostname.slice("pod.".length)}`;
-    return u.toString().replace(/\/$/, "");
-  } catch {
-    return null;
-  }
 }
 
 export interface ConnectIntegrationInput {

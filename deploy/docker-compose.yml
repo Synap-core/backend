@@ -688,7 +688,9 @@ services:
       # Post-success return URL — pod-admin's /login handles the Kratos flow
       # natively; on success it navigates to the return target (default: /).
       SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: ${POD_ADMIN_URL}/
-      SELFSERVICE_ALLOWED_RETURN_URLS: ${PUBLIC_URL},${PUBLIC_URL}/*,${POD_ADMIN_URL},${POD_ADMIN_URL}/*
+      # No SELFSERVICE_ALLOWED_RETURN_URLS (nor any other list) here: an env
+      # value replaces kratos.yml's, and the installer's list there is the one
+      # source (the pod, its console, the Synap apps, the relay deep links).
       IDENTITY_SCHEMAS_0_ID: default
       IDENTITY_SCHEMAS_0_URL: file:///etc/config/kratos/identity.schema.json
       DOMAIN: ${DOMAIN}
@@ -704,9 +706,9 @@ services:
       # on the CP's Resend domain. Unset ⇒ noreply@synap.live, the domain the
       # CP's Resend account has verified (DKIM resend._domainkey.synap.live).
       COURIER_SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-noreply@synap.live}
-      # Kratos itself sees only backend-originated traffic (Caddy routes
-      # /.ory/kratos/public/* through backend:4000). No external CORS gate
-      # needed here — ALLOWED_ORIGINS on the backend is the single source.
+      # Browsers reach Kratos directly: Caddy routes /.ory/kratos/public/*
+      # straight to kratos:4433, not through the backend. Its CORS origins are
+      # kratos.yml's `serve.public.cors.allowed_origins`, from the installer.
     command: ["serve", "-c", "/etc/config/kratos/kratos.yml", "--watch-courier"]
     # Note: --dev flag removed for production security
     # Add --dev back only for local development
@@ -778,6 +780,9 @@ services:
       # bundle, which updates never touch (they warn that release edge rules
       # then do not reach it).
       - ${CADDYFILE_PATH:-./Caddyfile}:/etc/caddy/Caddyfile:ro
+      # Writes the 308 blocks for the pod's previous names (SYNAP_LEGACY_*)
+      # before caddy starts; the Caddyfile imports them.
+      - ./caddy-entrypoint.sh:/usr/local/bin/synap-caddy-entrypoint:ro
       # Registration proof (served at /.well-known/synap-registration while
       # `synap install --register-token` registers; empty otherwise).
       - ./state/registration-nonce:/srv/synap-registration:ro
@@ -796,6 +801,18 @@ services:
       # `caddy validate` would refuse every release on that pod. EMAIL stays
       # for a custom CADDYFILE_PATH written against it.
       ACME_EMAIL_OPTION: ${LETSENCRYPT_EMAIL:+email ${LETSENCRYPT_EMAIL}}
+      # The pod's previous names during a move to new ones: each set one is
+      # answered with a 308 to DOMAIN / POD_ADMIN_DOMAIN (caddy-entrypoint.sh).
+      SYNAP_LEGACY_DOMAIN: ${SYNAP_LEGACY_DOMAIN:-}
+      SYNAP_LEGACY_POD_ADMIN_DOMAIN: ${SYNAP_LEGACY_POD_ADMIN_DOMAIN:-}
+    entrypoint: ["/bin/sh", "/usr/local/bin/synap-caddy-entrypoint"]
+    command:
+      - caddy
+      - run
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
     # ory-admin: proxies kratos:4433. No sandbox: it proxies no
     # sandboxed service.
     networks:
