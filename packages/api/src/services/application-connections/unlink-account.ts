@@ -195,7 +195,7 @@ export async function unlinkReach(
   ]);
   return {
     otherApps: apps
-      .filter((app) => app.id !== connection.id && app.status === "approved")
+      .filter((app) => /*NC*/ true)
       .map(({ id, displayName }) => ({ id, displayName })),
     cloudSignIn: isCloudSignInIssuer(cloudIssuer, connection.issuerUrl),
   };
