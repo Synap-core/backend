@@ -35,12 +35,20 @@ export interface RequestWriteContext {
   readonly actingAgentUserId?: string;
   /** A1 — the session id the MCP door derived (guessed, not named). */
   readonly derivedSessionId?: string;
+  /**
+   * B4 — set when that derived session is the client's AUTO-OPENED receipt:
+   * its project. The gate re-keys a write whose project differs (a receipt is
+   * per (client, project)); a session the client started is never re-keyed.
+   */
+  readonly derivedReceiptProjectId?: string | null;
   /** C1 — which CLIENT is calling (the key it authenticated with). */
   readonly clientKey?: string;
   /** C1 — where the calling conversation runs (a local agent's cwd). */
   readonly conversationCwd?: string;
   /** W1 — what the calling key may touch (absent = a key with no grant). */
   readonly grant?: KeyGrant;
+  /** B4 — the sessions this request's writes were FILED under (see below). */
+  readonly writeSessions?: WriteSessionLedger;
 }
 
 const storage = new AsyncLocalStorage<RequestWriteContext>();
@@ -219,9 +227,38 @@ export function getRequestGrant(): KeyGrant | undefined {
  */
 export type SessionSource = "explicit" | "derived";
 
-/** Run `fn` with `sessionId` recorded as the request's GUESSED session. */
-export function runWithDerivedSession<T>(sessionId: string, fn: () => T): T {
-  return runWithPatch({ derivedSessionId: sessionId }, fn);
+/**
+ * Run `fn` with `sessionId` recorded as the request's GUESSED session. Pass
+ * `receipt` when it is the client's auto-opened receipt (its project), so the
+ * gate can file a write of another project under that project's receipt.
+ */
+export function runWithDerivedSession<T>(
+  sessionId: string,
+  fn: () => T,
+  receipt?: { projectId: string | null }
+): T {
+  return runWithPatch(
+    receipt
+      ? {
+          derivedSessionId: sessionId,
+          derivedReceiptProjectId: receipt.projectId,
+        }
+      : { derivedSessionId: sessionId, derivedReceiptProjectId: undefined },
+    fn
+  );
+}
+
+/**
+ * The project of the request's derived RECEIPT when `sessionId` is that
+ * receipt and the door derived it (not named); `undefined` otherwise — a named
+ * session, a started one, or a different id are never re-keyed.
+ */
+export function derivedReceiptProjectFor(
+  sessionId: string | null | undefined
+): string | null | undefined {
+  const store = storage.getStore();
+  if (!sessionId || store?.derivedSessionId !== sessionId) return undefined;
+  return store.derivedReceiptProjectId;
 }
 
 /** The session id the MCP door derived for this request, if any. */
@@ -382,4 +419,56 @@ export function conversationCwdPatch(clientKey: string | null | undefined): {
   return clientKey && store?.clientKey === clientKey && store.conversationCwd
     ? { conversationCwd: store.conversationCwd }
     : {};
+}
+
+// ═══ Concern: WHERE THE WRITES LANDED (B4 2026-10-21) ═════════════════════════
+//
+// The MCP door answers every write with the session it was filed under (id +
+// name), and a topic hint when it differs from the write's project. The door
+// cannot know that up front: a receipt is chosen per write at the governance
+// gate, by (client, project). So the gate RECORDS each filing here and the door
+// reads the ledger after the handler ran — the reply names what actually
+// landed, never a guess made before it.
+
+/** One filing: the session a write was filed under, and the write's project. */
+export interface WriteSessionFiling {
+  readonly sessionId: string;
+  /** The write's own project (explicit, else the conversation's focus); null = none. */
+  readonly projectId: string | null;
+}
+
+/** Mutable on purpose: one ledger per request, appended to by the gate. */
+export interface WriteSessionLedger {
+  readonly filings: WriteSessionFiling[];
+}
+
+/** Run `fn` with an empty ledger the gate fills; read it with {@link getWriteSessionFilings}. */
+export function runWithWriteSessionLedger<T>(fn: () => T): {
+  ledger: WriteSessionLedger;
+  result: T;
+} {
+  const ledger: WriteSessionLedger = { filings: [] };
+  const result = runWithPatch({ writeSessions: ledger }, fn);
+  return { ledger, result };
+}
+
+/**
+ * Record that a write was filed under `sessionId`. A no-op outside a ledger
+ * scope (every door but MCP), and each (session, project) pair once.
+ */
+export function recordWriteSessionFiling(
+  sessionId: string | null | undefined,
+  projectId: string | null | undefined
+): void {
+  const ledger = storage.getStore()?.writeSessions;
+  if (!ledger || !sessionId) return;
+  const project = projectId ?? null;
+  if (
+    ledger.filings.some(
+      (f) => f.sessionId === sessionId && f.projectId === project
+    )
+  ) {
+    return;
+  }
+  ledger.filings.push({ sessionId, projectId: project });
 }

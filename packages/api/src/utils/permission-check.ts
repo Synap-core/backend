@@ -32,6 +32,8 @@ import {
   deriveProposalProjectId,
   getActingAgentUserId,
   getRequestGrant,
+  recordWriteSessionFiling,
+  derivedReceiptProjectFor,
   computeProposalDedupHash,
   type InsertPendingProposalResult,
   type ResolveOrCreateAgentProposalSessionInput,
@@ -1927,8 +1929,34 @@ async function evaluatePermission(
       // "update") — the SUBJECT is `targetType`. So the recursion guard it
       // documents has never actually fired on the chat path. Here the subject is
       // in hand and the guard is real.
+      // The write's PROJECT for the receipt key — a receipt is per (client,
+      // project) since B4 (2026-10-21). The same ladder the pending door uses
+      // (`createPendingProposalRow`): the caller's project, else the
+      // conversation's declared focus (rung 3.5). Read only when a receipt is
+      // about to be chosen, so a named session costs no lookup.
+      //
+      // A session the MCP door DERIVED that is the client's auto-opened RECEIPT
+      // is re-keyed the same way: a write of another project goes to that
+      // project's receipt. A session the caller named, or one the client
+      // started, is never split (`derivedReceiptProjectFor` is undefined then).
+      const derivedReceiptProject =
+        sessionSource === "explicit"
+          ? undefined
+          : derivedReceiptProjectFor(sessionId);
+      const choosesReceipt =
+        !dryRun &&
+        !subjectType.startsWith("focus_session") &&
+        (!sessionId || derivedReceiptProject !== undefined);
+      const receiptProjectKey = choosesReceipt
+        ? (projectId ??
+          (agentUserId ? await getAgentFocusProjectId(agentUserId) : null))
+        : (projectId ?? null);
+      const rekeyedReceipt =
+        sessionId &&
+        derivedReceiptProject !== undefined &&
+        derivedReceiptProject !== receiptProjectKey;
       const governedSessionId =
-        sessionId ??
+        (rekeyedReceipt ? null : sessionId) ??
         (dryRun
           ? null
           : subjectType.startsWith("focus_session")
@@ -1944,7 +1972,7 @@ async function evaluatePermission(
                   userId,
                   agentUserId,
                   workspaceId,
-                  projectId,
+                  projectId: receiptProjectKey,
                   // Grouped by the calling client; an IS turn (no key-auth client)
                   // groups by the channel it acts in.
                   channelId: actingChannelId,
@@ -1967,6 +1995,13 @@ async function evaluatePermission(
                   }),
                 })
               ));
+
+      // Where this write was FILED, for the MCP reply (B4): the door names the
+      // session and hints when the write's project is not the session's. A
+      // no-op outside an MCP call; never for a dry run or a session's own update.
+      if (!dryRun && !subjectType.startsWith("focus_session")) {
+        recordWriteSessionFiling(governedSessionId, receiptProjectKey);
+      }
 
       // Re-stamp the frozen envelope ONLY when the hoist actually resolved a
       // session the caller did not supply. Same object otherwise, so every
