@@ -127,7 +127,6 @@ import {
   expectedOutputWireSchema,
   outputRefWireSchema,
   mergeExpectedOutputs,
-  keepUnlistedSlots,
   droppedAskWarnings,
   criteriaDiffer,
 } from "../../../services/focus-sessions/update-session.js";
@@ -1656,18 +1655,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ...(patch.addAgentId !== undefined
             ? { addAgentId: patch.addAgentId }
             : {}),
-          // An agent's list as it will LAND (C6: add-or-update), so the review
-          // diff never reads the slots it keeps as deletions.
+          // The caller's list AS SENT. An agent's list is add-or-update (C6):
+          // the executor re-applies that upsert against the row as it is at
+          // approval, and the review shows the list as it would land then
+          // (`session-before.ts`). Never a frozen copy of the stored slots —
+          // their server stamps go stale and refuse the approval, and a slot
+          // deleted meanwhile came back (FB1020 w2 review M5).
           ...(patch.expectedOutputs !== undefined
-            ? {
-                expectedOutputs: agentUserId
-                  ? keepUnlistedSlots(
-                      (existing.expectedOutputs as typeof patch.expectedOutputs) ??
-                        [],
-                      patch.expectedOutputs
-                    )
-                  : patch.expectedOutputs,
-              }
+            ? { expectedOutputs: patch.expectedOutputs }
             : {}),
           ...(patch.verificationReport !== undefined
             ? { verificationReport: patch.verificationReport }

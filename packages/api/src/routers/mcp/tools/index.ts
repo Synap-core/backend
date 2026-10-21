@@ -2176,7 +2176,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
+          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — a proposal, except your OWN session from the last 24 h, untouched by the person, into your declared focus project: then it applies with an Undo; null unfiles, always a proposal), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2223,7 +2223,7 @@ export const tools = {
             projectId: {
               type: ["string", "null"],
               description:
-                "FILE this session into a project (its UUID from synap_list_projects), or pass null to UNFILE it; omit to leave it alone. Always filed as a PROPOSAL the person approves — which project work belongs to is their call, so suggest it, never assume it. REFUSED if the project is not one you can see.",
+                "FILE this session into a project (its UUID from synap_list_projects), or pass null to UNFILE it; omit to leave it alone. Filed as a PROPOSAL the person approves — which project work belongs to is their call, so suggest it, never assume it. One exception: your OWN session from the last 24 h, untouched by the person, filed into the project you declared your focus on (synap_set_project_focus) applies at once with a receipt and Undo (the pod's 'tidy its own new work' default, which the person can switch off). Unfiling is always a proposal. REFUSED if the project is not one you can see.",
             },
             moveToWorkspaceId: {
               type: ["string", "null"],
@@ -2365,7 +2365,7 @@ export const tools = {
             retireOutput: {
               type: "string",
               description:
-                "WITHDRAW the deliverable with this key (or exact label): it stops being owed by anyone and is kept as 'Withdrawn', never deleted. The only way to remove a deliverable you declared. Not for a delivered (done) one. The reply carries `retireOutput.result`: 'retired', 'refused' (already done; nothing changed) or 'no_match' (nothing changed).",
+                "WITHDRAW the deliverable with this key (or exact label): it stops being owed by anyone and is kept as 'Withdrawn', never deleted. The only way to remove a deliverable you declared. Not for a delivered (done) one. Withdrawing one handed to the person (owner='human') is always a proposal: they decide. The reply carries `retireOutput.result`: 'retired', 'refused' (already done; nothing changed) or 'no_match' (nothing changed).",
             },
             completeOutput: {
               type: "string",

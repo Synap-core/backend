@@ -945,7 +945,11 @@ export const sessionHandlers: McpHandlerMap = {
           error: `Focus session ${args.sessionId as string} not found`,
         });
       case "denied":
-        return ok({ error: result.reason });
+        // A filing the pod applied on its own receipt still landed.
+        return ok({
+          error: result.reason,
+          ...(result.filing ? { filing: result.filing } : {}),
+        });
       case "proposed":
         return ok({
           status: "proposed",

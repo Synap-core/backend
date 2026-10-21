@@ -222,7 +222,12 @@ export interface UpdateFocusSessionParams {
 
 export type UpdateFocusSessionResult =
   | { status: "not_found" }
-  | { status: "denied"; reason: string }
+  | {
+      status: "denied";
+      reason: string;
+      /** A filing the pod applied on its own receipt before the rest was refused. */
+      filing?: SessionFilingDecision;
+    }
   | {
       status: "proposed";
       proposalId: string;
@@ -1365,6 +1370,26 @@ export function applyOutputMutations(
   };
 }
 
+/**
+ * Does `retireOutput: label` name a slot handed to the PERSON (`owner:
+ * "human"`, not yet done)? Matched exactly like {@link applyOutputMutations}
+ * (label, else slot key). Such a slot is the person's gate: an agent may only
+ * PROPOSE withdrawing it (FB1020 w2 review M6), the person decides.
+ */
+export function retireTargetsHumanSlot(
+  current: OutputItem[],
+  label: string
+): boolean {
+  const keys = deriveSlotKeys(current);
+  return current.some(
+    (o, i) =>
+      (o.label === label || keys[i] === label) &&
+      o.owner === "human" &&
+      o.status !== "done" &&
+      o.retiredAt == null
+  );
+}
+
 /** The retired reason the `retireOutput` verb stamps. */
 export const SLOT_WITHDRAWN_REASON =
   "withdrawn" as const satisfies (typeof OUTPUT_RETIRED_REASONS)[number];
@@ -1518,20 +1543,13 @@ export async function updateFocusSession(
         reason: serverStampedWriteError(violations).message,
       };
     }
-    // An AGENT's list is add-or-update (C6): expanded HERE to the list as it
-    // will land, so a proposal carries — and its review diff shows — every
-    // slot it keeps, never a shorter list that reads as deletions. The locked
-    // write (and the executor on approval) re-apply the same upsert against
-    // the row as it is THEN, so a slot added in between is not lost either.
-    if (agentUserId) {
-      params = {
-        ...params,
-        expectedOutputs: keepUnlistedSlots(
-          storedOutputs,
-          params.expectedOutputs
-        ),
-      };
-    }
+    // An AGENT's list is add-or-update (C6). It travels AS SENT: the locked
+    // write and the executor on approval apply that upsert against the row as
+    // it is THEN, and the review shows the list as it would land
+    // (`session-before.ts`). Expanding it here froze copies of the stored
+    // slots into the proposal — their server stamps then refused the
+    // approval once a slot moved on, and a slot the person deleted meanwhile
+    // came back (FB1020 w2 review M5).
   }
 
   // VISIBILITY FLOOR for the refs this patch declares, and BEFORE the membrane
@@ -1756,6 +1774,44 @@ export async function updateFocusSession(
   const filingAlone =
     !!filingReceiptId &&
     !patchAsksForMore({ ...params, projectId: undefined }, criteriaChange);
+  // A GRANTED filing beside other fields is applied NOW, on its own receipt,
+  // and leaves the patch: the gate already minted that receipt as applied, so
+  // the rest's own verdict (a criteria change that proposes, a session that
+  // forces proposals, a cap, a join gate, a denial) must not hold it back —
+  // that left a receipt claiming a filing that was never written, with no
+  // Undo (FB1020 w2 review M1). Its Undo restores the project only. The
+  // own-organise class grants a PROJECT filing only (`own-organise.ts`); a
+  // space move or a track filing is never granted with a receipt here.
+  if (filingReceiptId && !filingAlone && params.projectId !== undefined) {
+    const before = await readSessionUndoSnapshot(db, sessionId);
+    const [filed] = await db
+      .update(focusSessions)
+      .set({ projectId: params.projectId, updatedAt: new Date() })
+      .where(eq(focusSessions.id, sessionId))
+      .returning({ projectId: focusSessions.projectId });
+    await stampSessionUpdate({
+      proposalId: filingReceiptId,
+      sessionId,
+      before,
+      after: before
+        ? { ...before, projectId: filed?.projectId ?? null }
+        : undefined,
+    });
+    params = { ...params, projectId: undefined };
+  }
+  // An AGENT withdrawing a slot it handed to the PERSON withdraws the person's
+  // gate (the A3 harm, through the explicit verb): never applied directly, only
+  // proposed — like `completeOutput`, which refuses such a slot outright. The
+  // approval executor applies it once a person said yes.
+  const retiresHumanSlot =
+    !!agentUserId &&
+    typeof params.retireOutput === "string" &&
+    retireTargetsHumanSlot(
+      Array.isArray(existing.expectedOutputs)
+        ? (existing.expectedOutputs as OutputItem[])
+        : [],
+      params.retireOutput
+    );
   const perm = filingAlone
     ? ({ granted: true, autoApprovedProposalId: filingReceiptId } as const)
     : await checkPermissionOrPropose({
@@ -1765,6 +1821,7 @@ export async function updateFocusSession(
         subjectType: "focus_session",
         action: "update",
         source: "intelligence",
+        ...(retiresHumanSlot ? { forcePropose: true } : {}),
         data: {
           id: sessionId,
           ...sessionGoalPayload(existing, params.goal),
@@ -1825,7 +1882,12 @@ export async function updateFocusSession(
         },
       });
   if ("denied" in perm && perm.denied) {
-    return { status: "denied", reason: perm.reason };
+    // A filing granted above has landed: say so beside the refusal.
+    return {
+      status: "denied",
+      reason: perm.reason,
+      ...(filing?.status === "granted" ? { filing } : {}),
+    };
   }
   if ("proposalId" in perm) {
     return {
@@ -1911,11 +1973,13 @@ export async function updateFocusSession(
   // change is one undo can restore (`session-undo.ts`); otherwise the receipt
   // stays unstamped and revert says it cannot be undone.
   const receiptId = "granted" in perm ? perm.autoApprovedProposalId : undefined;
+  // An UNCHANGED criteria list (an MCP `outcomes` attach re-sends it) changes
+  // nothing and is not written, so it must not cost the write its Undo.
+  const undoable = isUndoableSessionPatch(
+    criteriaChange ? params : { ...params, criteria: undefined }
+  );
   const undoBefore =
-    (receiptId && isUndoableSessionPatch(params)) ||
-    (filingReceiptId && filingReceiptId !== receiptId)
-      ? await readSessionUndoSnapshot(db, sessionId)
-      : null;
+    receiptId && undoable ? await readSessionUndoSnapshot(db, sessionId) : null;
 
   const [updated] = await db.transaction(async (tx) => {
     if (params.workspaceId !== undefined) {
@@ -1961,22 +2025,11 @@ export async function updateFocusSession(
       .returning();
   });
   await stampSessionUpdate({
-    proposalId:
-      receiptId && isUndoableSessionPatch(params) ? receiptId : undefined,
+    proposalId: receiptId && undoable ? receiptId : undefined,
     sessionId,
     before: undoBefore,
     after: updated,
   });
-  // The filing's own receipt (B3), when the rest of the patch had another:
-  // its Undo restores the project only.
-  if (filingReceiptId && filingReceiptId !== receiptId && undoBefore) {
-    await stampSessionUpdate({
-      proposalId: filingReceiptId,
-      sessionId,
-      before: undoBefore,
-      after: { ...undoBefore, projectId: updated?.projectId ?? null },
-    });
-  }
 
   // ── EVIDENCE VERDICT ────────────────────────────────────────────────────────
   // A claim (`completeOutput`) is never a verdict: the ONE evidence door

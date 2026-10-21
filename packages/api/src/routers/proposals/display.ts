@@ -56,7 +56,6 @@ import {
   agents,
   governanceRules,
   apps,
-  apiKeys,
 } from "@synap/database/schema";
 import { visibleAgentsWhere } from "../hub-protocol/rest/link-endpoint-visibility.js";
 import {
@@ -129,10 +128,14 @@ import { resolveObjectRefs, type ProposalObjectRef } from "./object-refs.js";
 import { resolveStatusMoves, type ProposalStatusMove } from "./status-move.js";
 import {
   resolveSessionBefore,
+  withAgentOutputsLanding,
   type ProposalSessionBefore,
 } from "./session-before.js";
 import { guestProvenanceFor } from "../../services/forms/guest-provenance.js";
-import { loadMachineNames } from "../../services/machine-roster.js";
+import {
+  loadKeyComputerNames,
+  loadMachineNames,
+} from "../../services/machine-roster.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 import {
   createNameResolvers,
@@ -1412,17 +1415,10 @@ export async function enrichProposalsForDisplay(
             )
         : Promise.resolve([] as Array<{ publicId: string; name: string }>),
       loadMachineNames(hostUserIds),
-      apiKeyIds.length > 0
-        ? db
-            .select({ id: apiKeys.id, label: apiKeys.instanceLabel })
-            .from(apiKeys)
-            .where(inArray(apiKeys.id, apiKeyIds))
-        : Promise.resolve([] as Array<{ id: string; label: string | null }>),
+      loadKeyComputerNames(apiKeyIds),
     ]
   );
-  const keyComputerById = new Map(
-    keyRows.map((row) => [row.id, row.label ?? null])
-  );
+  const keyComputerById = keyRows;
   for (const row of ownerRows) userById.set(row.id, row);
   const appNameByPublicId = new Map(
     appRows.map((row) => [row.publicId, row.name])
@@ -1765,6 +1761,21 @@ export async function enrichProposalsForDisplay(
     // beside the unmasked key it marks is the severance this prevents. Applied
     // LAST so the `{...payload}` re-spread above cannot reinstate the value.
     if (rowSetup) enrichedData = redactSecretParams(enrichedData, rowSetup);
+    // A pending AGENT session update's outputs list, as it would land NOW
+    // (stored as sent; `session-before.ts`), so the slots it keeps never read
+    // as deletions.
+    if (
+      enrichedData &&
+      typeof enrichedData === "object" &&
+      !Array.isArray(enrichedData)
+    ) {
+      enrichedData =
+        withAgentOutputsLanding(
+          enrichedData as Record<string, unknown>,
+          sessionBeforeByRow[idx],
+          !!row.agentUserId
+        ) ?? enrichedData;
+    }
 
     // B4: for a facet-UPDATE proposal, the live-current before-state is the
     // role-facet's CURRENT properties (fetched batched above), not the parent

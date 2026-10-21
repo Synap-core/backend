@@ -817,6 +817,41 @@ describe("B3: an agent files its own fresh session — one receipt, with Undo", 
     ]);
   });
 
+  // FB1020 w2 review S10: an MCP `outcomes` attach re-sends the (unchanged)
+  // criteria list. Nothing is written for it, so it must not cost the
+  // filing its Undo.
+  it("a filing alone with an UNCHANGED criteria list keeps its Undo", async () => {
+    const projectId = await seedProject(USER);
+    await focusOn(projectId);
+    const sessionId = await ownSession();
+    const r1 = await receipt();
+    permSpy.mockImplementation(async (args) =>
+      args.ownWorkOrganise
+        ? { granted: true, autoApprovedProposalId: r1 }
+        : { proposalId: randomUUID(), proposalType: "update" }
+    );
+    const res = await asAgent(() =>
+      updateFocusSession({
+        sessionId,
+        userId: USER,
+        agentUserId: AGENT,
+        projectId,
+        criteria: [] as never,
+      })
+    );
+    expect(res.status).toBe("updated");
+    expect(permSpy).toHaveBeenCalledTimes(1);
+    expect(await projectOf(sessionId)).toBe(projectId);
+    expect(await rowPatchesOf(r1)).toEqual([
+      {
+        kind: "focus_session",
+        id: sessionId,
+        before: { projectId: null },
+        after: { projectId },
+      },
+    ]);
+  });
+
   it("a filing with a rename: two decisions; the filing's receipt undoes the project only", async () => {
     const projectId = await seedProject(USER);
     await focusOn(projectId);

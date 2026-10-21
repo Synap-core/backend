@@ -12,6 +12,11 @@
  * the host-aware rule disagree — and an agent with no name (the pod's system
  * orchestrator), which `displayNameForUser` alone names "orchestrator".
  *
+ * The two OTHER doors that name the asking agent — `proposals.groups` (the
+ * cluster's source) and `proposals.source` (the provenance panel) — name the
+ * filing key's computer the same way (FB1020 w2 plan FBD-3), driven through
+ * the REAL router procedures.
+ *
  * What this cannot see: the surfaces that render the name (pod-admin Review,
  * browser, relay) — they read `agentActorName` / `authorName` as served.
  */
@@ -35,9 +40,20 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: drizzle(client) };
 });
 
+// The router doors' request middlewares — not what this file asserts.
+vi.mock("../../middleware/read-only-guard.js", async () => {
+  const { t } = await import("../../init-trpc.js");
+  return { readOnlyGuardMiddleware: t.middleware(({ next }) => next()) };
+});
+vi.mock("../../middleware/audit-log.js", async () => {
+  const { t } = await import("../../init-trpc.js");
+  return { auditLogMiddleware: t.middleware(({ next }) => next()) };
+});
+
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { enrichProposalsForDisplay } from "./display.js";
+import { proposalsRouter } from "../proposals.js";
 
 const VIEWER = "viewer-1";
 const WS = randomUUID();
@@ -165,5 +181,46 @@ describe("enrichProposalsForDisplay — the asking agent's name", () => {
     const row = await enrichAs(null);
     expect(row.authorName).toBe("Owner");
     expect(row).not.toHaveProperty("agentActorName");
+  });
+});
+
+describe("proposals.groups / proposals.source — the asking agent's computer (FBD-3)", () => {
+  const caller = () =>
+    proposalsRouter.createCaller({
+      authenticated: true,
+      userId: VIEWER,
+      workspaceId: null,
+    } as never);
+
+  async function pendingFrom(apiKeyId: string): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into proposals (id, status, proposal_type, target_type, target_id, data, workspace_id, agent_user_id, api_key_id, subject_user_id, created_by, created_at, updated_at)
+       values ($1, 'pending', 'create', 'entity', $2, '{}'::jsonb, $3, $4, $5, $6, $4, now(), now())`,
+      [id, randomUUID(), WS, NO_COMPUTER, apiKeyId, VIEWER]
+    );
+    return id;
+  }
+
+  it("the provenance panel names the filing key's computer", async () => {
+    const id = await pendingFrom(KEY_MAC);
+    const out = (await caller().source({ proposalId: id })) as {
+      targets: Array<{ kind: string; label: string }>;
+    };
+    expect(out.targets.find((t) => t.kind === "agent")?.label).toBe(
+      "Claude Code on MacBook"
+    );
+  });
+
+  it("a cluster's source names the filing key's computer", async () => {
+    await q(`delete from proposals`);
+    await pendingFrom(KEY_DEVBOX);
+    const out = (await caller().groups({ workspaceId: WS })) as {
+      groups: Array<{ sources: Array<{ agentLabel?: string }> }>;
+    };
+    const labels = out.groups.flatMap((g) =>
+      g.sources.map((s) => s.agentLabel)
+    );
+    expect(labels).toContain("Claude Code on devbox");
   });
 });

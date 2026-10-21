@@ -19,6 +19,8 @@
 import { db, and, inArray, focusSessions } from "@synap/database";
 import { isLikelyUUID } from "@synap-core/types/proposals";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import type { ExpectedOutput } from "@synap/playbooks";
+import { keepUnlistedSlots } from "../../services/focus-sessions/update-session.js";
 
 export interface ProposalSessionBefore {
   criteria: unknown[];
@@ -78,4 +80,31 @@ export async function resolveSessionBefore(
         }
       : undefined;
   });
+}
+
+/**
+ * The `expectedOutputs` a PENDING AGENT session update would land NOW — for
+ * the review's after-side. An agent's list is add-or-update (C6): the
+ * proposal stores the list AS SENT, and approval applies the same upsert
+ * (`keepUnlistedSlots`) against the row as it is then. Shown raw, the slots it
+ * keeps would read as deletions; frozen into the payload at filing, their
+ * server stamps went stale and a slot deleted meanwhile came back (FB1020 w2
+ * review M5). So the landing list is derived HERE, at read time, from the
+ * same `before` the card diffs against. A person's list (no agent) replaces,
+ * so it is shown as sent; no `before` (decided, or unreadable) = as sent.
+ */
+export function withAgentOutputsLanding(
+  payload: Record<string, unknown> | undefined,
+  before: ProposalSessionBefore | undefined,
+  byAgent: boolean
+): Record<string, unknown> | undefined {
+  if (!payload || !before || !byAgent) return payload;
+  if (!Array.isArray(payload.expectedOutputs)) return payload;
+  return {
+    ...payload,
+    expectedOutputs: keepUnlistedSlots(
+      before.expectedOutputs as ExpectedOutput[],
+      payload.expectedOutputs as ExpectedOutput[]
+    ),
+  };
 }
