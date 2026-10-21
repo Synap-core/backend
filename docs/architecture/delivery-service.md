@@ -1,7 +1,6 @@
 # DeliveryService
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
-> internal team docs on 2026-10-20.
+> Verified against code on 2026-10-20 (backend@cc4b2d81).
 
 `DeliveryService` (`packages/api/src/services/DeliveryService.ts`) is the one
 code path that puts a message in front of a person: a post in their proactive

@@ -1,7 +1,7 @@
 # Contributing to the Synap pod
 
-Thank you for helping. This file covers working on this repository: setting it
-up, running the checks CI runs, writing migrations, and sending a change.
+Thank you for helping. Below: how to set up this repository, run the checks CI
+runs, write a migration and send a change.
 
 - Found a security problem? Do not open an issue: see [SECURITY.md](SECURITY.md).
 - Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).

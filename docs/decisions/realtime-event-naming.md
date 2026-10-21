@@ -1,7 +1,6 @@
 # Realtime event naming: `{actor}:{entity}:{action}`
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
-> internal team docs on 2026-10-20.
+> Verified against code on 2026-10-20 (backend@cc4b2d81).
 
 - **Status:** Accepted 2026-05-05. Amended in code since (see "State on
   2026-10-20").

@@ -165,7 +165,8 @@ const versionKey = (t) =>
     .replace(/^v/, "")
     .split(/[.-]/)
     .map((p) => (/^\d+$/.test(p) ? Number(p) : p));
-function newestTag(tags) {
+/** The v<N>(.<N>)* tags among `tags`, oldest → newest by VERSION (v1.10 > v1.9). */
+export function sortReleaseTags(tags) {
   const vs = tags.filter((t) => /^v\d+(\.\d+)*$/.test(t));
   vs.sort((a, b) => {
     const ka = versionKey(a),
@@ -176,29 +177,32 @@ function newestTag(tags) {
     }
     return 0;
   });
-  return vs.at(-1) ?? null;
+  return vs;
 }
 
-/** { ref, source } of the release baseline, or throws. */
-export function resolveBaseline(repo, explicit) {
-  if (explicit) return { ref: explicit, source: "--baseline" };
-  let tag = null;
-  let source = "";
+/** { tags (oldest → newest), source }: origin's v* tags, else the local ones. */
+export function releaseTags(repo) {
   try {
-    const remote = git(repo, ["ls-remote", "--tags", "--refs", "origin", "v*"])
-      .split("\n")
-      .map((l) => l.split("\t")[1]?.replace("refs/tags/", ""))
-      .filter(Boolean);
-    tag = newestTag(remote);
-    source = "origin";
+    const remote = sortReleaseTags(
+      git(repo, ["ls-remote", "--tags", "--refs", "origin", "v*"])
+        .split("\n")
+        .map((l) => l.split("\t")[1]?.replace("refs/tags/", ""))
+        .filter(Boolean)
+    );
+    if (remote.length) return { tags: remote, source: "origin" };
   } catch {
     /* offline or no origin: local tags below */
   }
-  if (!tag) {
-    tag = newestTag(git(repo, ["tag", "-l", "v*"]).split("\n").filter(Boolean));
-    source = "local tags";
-  }
-  if (!tag) throw new Error("no v* release tag on origin or locally");
+  return {
+    tags: sortReleaseTags(
+      git(repo, ["tag", "-l", "v*"]).split("\n").filter(Boolean)
+    ),
+    source: "local tags",
+  };
+}
+
+/** Makes refs/tags/<tag> readable here (a shallow fetch when this clone lacks it). */
+export function ensureTagTree(repo, tag) {
   try {
     git(repo, ["cat-file", "-e", `refs/tags/${tag}^{tree}`]);
   } catch {
@@ -211,8 +215,17 @@ export function resolveBaseline(repo, explicit) {
       `refs/tags/${tag}:refs/tags/${tag}`,
     ]);
   }
+  return `refs/tags/${tag}`;
+}
+
+/** { ref, source } of the release baseline, or throws. */
+export function resolveBaseline(repo, explicit) {
+  if (explicit) return { ref: explicit, source: "--baseline" };
+  const { tags, source } = releaseTags(repo);
+  const tag = tags.at(-1);
+  if (!tag) throw new Error("no v* release tag on origin or locally");
   return {
-    ref: `refs/tags/${tag}`,
+    ref: ensureTagTree(repo, tag),
     source: `${tag} (newest v* tag, ${source})`,
   };
 }
