@@ -24,6 +24,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
+  PRIVATE_CAPABILITY_TRUST,
   officialCatalogStanding,
   type MarketplacePackageKind,
   type OfficialCatalogStanding,
@@ -122,6 +123,36 @@ export async function assertOfficialDefinition(input: {
     message: `${verdict.reason} Nothing was installed.`,
     cause: { code: "MARKET_OFFICIAL_UNVERIFIED" },
   });
+}
+
+/**
+ * A capability the Control Plane's AUTHENTICATED owner door served as private
+ * (`isPublic: false`) — the only definitions exempt from Synap's public
+ * index, because they cannot be in it; their trust is that connection. The
+ * exemption never covers a public catalog row: when the signed index lists
+ * the key (or the listing cannot be read), the definition is checked like
+ * any other official one. Call it ONLY for the owner door's private answer.
+ */
+export async function admitPrivateCapability(input: {
+  key: string;
+  definition: Record<string, unknown>;
+}): Promise<void> {
+  const listed = await readOfficialCatalogDigest("capability", input.key).then(
+    (row) => row !== null,
+    () => true
+  );
+  if (listed) {
+    await assertOfficialDefinition({
+      kind: "capability",
+      slug: input.key,
+      definition: input.definition,
+    });
+    return;
+  }
+  logger.info(
+    { kind: "capability", slug: input.key, trust: PRIVATE_CAPABILITY_TRUST },
+    `Capability "${input.key}": ${PRIVATE_CAPABILITY_TRUST} (not in Synap's public signed index)`
+  );
 }
 
 /**

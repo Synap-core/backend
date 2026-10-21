@@ -242,6 +242,7 @@ describe("an AGENT key rejects only what its agent authored", () => {
       targetType: "entity",
       targetId: null,
       sessionId: null,
+      projectId: null,
     }) as const;
   async function review(
     agent: string | undefined,
@@ -293,5 +294,92 @@ describe("an AGENT key rejects only what its agent authored", () => {
     expect((await review(undefined, REJECT_ONLY, null)).refused).toBe(false);
     expect((await review(AGENT, FULL, null)).refused).toBe(false);
     expect((await review(AGENT, null, null)).refused).toBe(false);
+  });
+});
+
+describe("a key bounded to some spaces decides only there (D3, PR #29 M1)", () => {
+  const IN = "ws-in";
+  const OUT = "ws-out";
+  const bounded = (verb: string): KeyGrant => ({
+    scopes: [{ permissions: [`proposal.${verb}`], workspaceIds: [IN] }],
+    clientId: null,
+  });
+  const proposalIn = (workspaceId: string, agentUserId: string | null = null) =>
+    ({
+      workspaceId,
+      data: {},
+      agentUserId,
+      targetType: "entity",
+      targetId: null,
+      sessionId: null,
+      projectId: null,
+    }) as const;
+  async function review(
+    workspaceId: string,
+    action: "reject" | "reopen",
+    agent?: string,
+    author: string | null = null
+  ) {
+    h.reached = false;
+    const err = await runWithActingAgent(agent, () =>
+      runWithGrant(bounded("reject"), () =>
+        assertCanReviewProposal({
+          proposal: proposalIn(workspaceId, author),
+          userId: "user-1",
+          action,
+          roster: false,
+        })
+      )
+    ).then(
+      () => null,
+      (e: unknown) => e as { code?: string; message?: string }
+    );
+    return {
+      refusedHere:
+        err?.code === "FORBIDDEN" &&
+        /may not (reject|reopen) changes here/.test(err.message ?? ""),
+      reached: h.reached,
+    };
+  }
+
+  it("reject / reopen in its space go on to the ladder", async () => {
+    expect(await review(IN, "reject")).toEqual({
+      refusedHere: false,
+      reached: true,
+    });
+    expect((await review(IN, "reopen")).refusedHere).toBe(false);
+  });
+  it("reject / reopen in another space are refused, before any read", async () => {
+    expect(await review(OUT, "reject")).toEqual({
+      refusedHere: true,
+      reached: false,
+    });
+    expect((await review(OUT, "reopen")).refusedHere).toBe(true);
+  });
+  it("an agent discarding its OWN proposal elsewhere is not fenced (as revise)", async () => {
+    expect(
+      (await review(OUT, "reject", "agent-1", "agent-1")).refusedHere
+    ).toBe(false);
+  });
+  it("applyProposalApproval refuses another space's proposal before executing", async () => {
+    h.reached = false;
+    const err = await runWithGrant(bounded("approve"), () =>
+      applyProposalApproval({
+        proposal: {
+          id: ID,
+          workspaceId: OUT,
+          projectId: null,
+          targetId: "t-1",
+        } as never,
+        userId: "user-1",
+        input: { proposalId: ID },
+        ctx: keyCtx,
+      })
+    ).then(
+      () => null,
+      (e: unknown) => e as { code?: string; message?: string }
+    );
+    expect(err?.message).toMatch(/may not approve changes here/);
+    expect(h.reached).toBe(false);
   });
 });

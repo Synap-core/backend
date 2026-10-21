@@ -954,6 +954,8 @@ export const sessionHandlers: McpHandlerMap = {
           summary: result.summary,
           reviewPath: result.reviewPath,
           reviewUrl: result.reviewUrl,
+          // The filing was proposed on its own beside this proposal.
+          ...(result.filing ? { filing: result.filing } : {}),
           session: null,
         });
       case "updated": {
@@ -1001,6 +1003,10 @@ export const sessionHandlers: McpHandlerMap = {
           // is WAITING on a person is not on the roster yet, and the session
           // alone reads as if it were never asked for.
           ...(result.handOff ? { handOff: result.handOff } : {}),
+          // Same reason: a filing (project, space, track) WAITING on a person
+          // did not land with the rest, and the session alone reads as if it
+          // were never asked for.
+          ...(result.filing ? { filing: result.filing } : {}),
           ...(nudges ? { nudges } : {}),
         });
       }

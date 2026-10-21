@@ -1864,14 +1864,13 @@ export interface TriggerNodeDef extends AutomationNodeBase {
  * @deprecated for NEW authoring — use a `capability` node with
  * `verbId: 'ai.generate'` (Synap Core's synchronous single-shot LLM verb).
  *
- * A `command` node is a DEAD END end-to-end: `executeCommandStep` calls
- * `requestTaskExecute` with `taskId: data.commandId`, which the IS resolves as a
- * BACKGROUND-TASK ROW (`tasks-route.ts`) — the shipped `'intelligence_execute'`
- * has ZERO occurrences in the IS, so the lookup 404s and the step throws. Even
- * with a row present, the prompt is only LOGGED: `executeTask(task, hubClient,
- * body.context ?? {})` never receives `body.action`, and switches on
- * `task.action` over four fixed analysis types. There is no generic
- * "run this prompt" receiver behind this node type.
+ * A `command` node RUNS its prompt (title or `promptOverride` + resolved
+ * inputs) through `ai.generate` on the canonical capability router
+ * (`executeCommandStep`); its output is the generated text. Until 2026-10-20 it
+ * posted to the IS background-task receiver, which resolves `commandId` as a
+ * `background_tasks` row — the shipped `'intelligence_execute'` is no such row,
+ * so every command step 404'd ("New Contact Enrichment": 541/541 runs failed).
+ * A `capability` node naming `ai.generate` says the same thing explicitly.
  *
  * KEPT, NOT DELETED — deliberately. Two live authoring doors still EMIT
  * `command` nodes, so deleting the executor arm would turn a dead step into a
@@ -1882,8 +1881,8 @@ export interface TriggerNodeDef extends AutomationNodeBase {
  *     action COMPILES to this node type, so it is reachable from the rule/
  *     sentence authoring grammar.
  * Pod-stored flows from either door are read, never rewritten, on the execution
- * path. Retiring the node type therefore requires retiring those two doors
- * first; this deprecation marks the direction without breaking stored rows.
+ * path, so they now run instead of failing. Retiring the node type still
+ * requires retiring those two doors first.
  */
 export interface CommandNodeDef extends AutomationNodeBase {
 	type: "command";
@@ -5432,6 +5431,29 @@ export interface LinkedMessageItem {
 	link: MessageLink;
 	message: LinkedMessagePreview;
 }
+/**
+ * One field a profile MODELS, as a writer needs it before the write: the key,
+ * its type and the constraints `validateConstraints` below enforces. Without
+ * it an agent told "`price` is unmodeled" could only guess what IS modelled
+ * (fb1020: `offer` reported `price`/`description` unmodeled; a decision
+ * `summary` over its 500-char limit rejected a whole 8-entity capture).
+ * Flags are present only when true / set, so the list stays short.
+ */
+export interface ModeledField {
+	key: string;
+	/** valueType: string | number | boolean | date | entity_id | array | object | secret */
+	type: string;
+	required?: true;
+	/** The closed set of admissible values (the one option resolver). */
+	options?: string[];
+	maxLength?: number;
+	minLength?: number;
+	min?: number;
+	max?: number;
+	format?: string;
+	/** This field is the kind's lifecycle: it moves through the status door. */
+	lifecycle?: true;
+}
 export interface ProjectDedupCandidate {
 	id: string;
 	name: string;
@@ -6111,7 +6133,7 @@ export type RevertTarget = {
  * any other column is refused (`not_owned`), never written: the record is
  * data, and data does not get to pick which columns an undo touches.
  */
-export type RowPatchTable = "automation" | "playbook" | "rule" | "skill" | "view";
+export type RowPatchTable = "automation" | "focus_session" | "playbook" | "rule" | "skill" | "view";
 export type RevertSkipReason = 
 /** Changed after the work that created it. */
 "edited_since"
@@ -7257,6 +7279,12 @@ export interface CompositeCreateSkillOp {
 	/** Stable handle for this skill within the proposal (e.g. "fact1"). */
 	ref: string;
 	name: string;
+	/**
+	 * The ref `synap_load_skill` resolves (e.g. "team/where-the-work-is"). A
+	 * teaching skill without one is authored but unreachable; the capture doors
+	 * require it (`skillAuthoringProblem`).
+	 */
+	slug?: string | null;
 	/** Instruction body (Markdown) — the FACT the agent reads while reasoning. */
 	body: string;
 	scope: "pod" | "user" | "workspace";
@@ -9047,6 +9075,8 @@ export interface PlanStepSummary {
 	update?: {
 		targetId: string;
 	};
+	/** A skill step's slug — the ref `synap_load_skill` resolves. */
+	slug?: string;
 }
 /** A create_entity op inside a pending proposal that collided on a strong signal. */
 export interface PendingSignalMatch {
@@ -9098,6 +9128,12 @@ export interface CaptureGraphUnmodeledEntity {
 		key: string;
 	}>;
 }
+/**
+ * What each kind in the graph DOES model, by profile slug, through the lens
+ * the graph was validated in — the validator's own `modeled` list. Without it
+ * an `unmodeled` report only said what was wrong, never what was right.
+ */
+export type CaptureGraphModeledFields = Record<string, ModeledField[]>;
 /** One plan step on a submit receipt — self-describing for the reviewer/agent. */
 export interface CapturePlanStepReceipt extends PlanStepSummary {
 	/**
@@ -9109,6 +9145,8 @@ export interface CapturePlanStepReceipt extends PlanStepSummary {
 	id: string | null;
 	/** `create_project` only: the pod's evidence verdict. */
 	evidence?: PlanProjectEvidence;
+	/** An applied skill step with a slug: the call that loads it. */
+	loadWith?: string;
 }
 export interface SubmitCaptureGraphResult {
 	proposalId: string | undefined;
@@ -9163,6 +9201,11 @@ export interface SubmitCaptureGraphResult {
 	 */
 	unmodeledProperties?: CaptureGraphUnmodeledEntity[];
 	/**
+	 * What the kinds named in `unmodeledProperties` DO model (key, type,
+	 * options, limits). Present exactly when `unmodeledProperties` is.
+	 */
+	modeledFields?: CaptureGraphModeledFields;
+	/**
 	 * ADVISORY in-flight-duplicate warnings: incoming graph entities whose STRONG
 	 * signal (email/phone/url/handle) collides with a create_entity op in the
 	 * caller's OWN pending capture/import proposal. NEVER auto-linked — a pending
@@ -9185,10 +9228,11 @@ export interface SubmitCaptureGraphResult {
 	};
 	/**
 	 * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
-	 * membership, `not_linked` (+reason: `project-not-found` for a dead UUID pin,
-	 * `project-name-unmatched` for a name-ref that matched nothing) so a requested
-	 * project that did NOT link is NAMED, never a silent success. Omitted when no
-	 * project was requested.
+	 * membership, `not_linked` (+reason `project-name-unmatched` for a name-ref
+	 * that matched nothing) so a requested project that did NOT link is NAMED,
+	 * never a silent success. Omitted when no project was requested. A dead UUID
+	 * pin never gets here: the whole capture is refused
+	 * (`CaptureProjectNotFoundError`).
 	 */
 	project?: {
 		projectId: string;
@@ -11769,7 +11813,8 @@ declare const ROW_PATCH_KINDS: readonly [
 	"rule",
 	"automation",
 	"playbook",
-	"view"
+	"view",
+	"focus_session"
 ];
 export type RowPatchKind = (typeof ROW_PATCH_KINDS)[number];
 /** One config row an update changed, with the columns it rewrote. */
@@ -12241,6 +12286,33 @@ export interface OAuthAppOfferItem {
 		workspaceName: string;
 	}>;
 }
+export interface AppSignInSpace {
+	workspaceId: string;
+	name: string;
+	/** What it may do there, from the grant ("Create People; Approve Proposals"). */
+	can: string;
+}
+/** What the consent screen says, every word derived from the grant. */
+export interface AppSignInDescription {
+	appName: string;
+	/** Who registered the app on this pod — shown so the person can judge it. */
+	registeredBy: string;
+	/**
+	 * Which grant this description was derived from. The consent screen sends
+	 * it back with Allow; a decision for any other grant (the approval or the
+	 * person's reach changed while they read) is refused — consent is to what
+	 * was SHOWN.
+	 */
+	fingerprint: string;
+	/** "<App> will act as you in: Sales, Content." */
+	headline: string;
+	spaces: AppSignInSpace[];
+	/** "It cannot delete, manage keys, approve outside these spaces, or see other spaces." */
+	cannot: string;
+	/** How a write through it lands, and how long the sign-in lasts. */
+	note: string;
+	expiresInDays: number;
+}
 /**
  * What a POD APP (CIMD client) is shown as on the consent screen (spec 17
  * §9.1). Its identity is its DOMAIN (the client_id host), not its name.
@@ -12270,8 +12342,11 @@ export interface OAuthAppConsent {
 }
 export interface OAuthConsentContext {
 	clientId: string;
-	/** 'dcr' — an MCP client (claude.ai); 'cimd' — a pod app. */
-	clientKind: "cimd" | "dcr";
+	/**
+	 * 'dcr' — an MCP client (claude.ai); 'cimd' — a pod app; 'app' — an
+	 * approved app a person signs in to ("Sign in with Synap").
+	 */
+	clientKind: "app" | "cimd" | "dcr";
 	/** Untrusted, attacker-chosen at registration — the UI renders it as TEXT. */
 	clientName: string;
 	redirectUri: string;
@@ -12282,6 +12357,12 @@ export interface OAuthConsentContext {
 	registeredAt: Date;
 	/** Present for a pod app only. */
 	app: OAuthAppConsent | null;
+	/**
+	 * "Sign in with Synap" (an `app_…` client): what the app will do AS the
+	 * viewer, derived from the grant they would receive. null for every other
+	 * client (an MCP agent connection).
+	 */
+	appSignIn: AppSignInDescription | null;
 }
 /**
  * API Keys Router
@@ -15379,6 +15460,14 @@ export interface CsvColumnPlan {
 	valueType: "boolean" | "date" | "number" | "string";
 	/** "skip" columns are dropped; everything else lands on the row entity. */
 	scope: "companion" | "context" | "primary" | "skip";
+	/**
+	 * Where the value lands, set by `refineCsvTablePlan`. Absent or "entity" ⇒ a
+	 * property of the row entity (today's behaviour); "facet" ⇒ a property of the
+	 * row's role facet (`CsvTablePlan.rowFacet`); "title" ⇒ consumed by the
+	 * composed title (`titleColumns`); "organization" ⇒ consumed by the
+	 * organisation link (`CsvTablePlan.organization`).
+	 */
+	routedTo?: "entity" | "facet" | "organization" | "title";
 }
 /** Resolved table-ingestion plan: ONE profile for all rows + per-column routing
  *  + which header supplies the title. */
@@ -15389,6 +15478,25 @@ export interface CsvTablePlan {
 	titleColumn: string | null;
 	/** Per-column routing. Headers absent here are dropped. */
 	columns: CsvColumnPlan[];
+	/**
+	 * When set, the title is these columns' non-empty values joined by a space
+	 * ("First Name" + "Last Name"). Takes precedence over `titleColumn`.
+	 */
+	titleColumns?: string[];
+	/** Role facet every row entity wears (the planner picked a role). */
+	rowFacet?: {
+		profileSlug: string;
+	};
+	/**
+	 * A column naming the row's organisation: each distinct value becomes ONE
+	 * entity of `profileSlug` (see `addLinkTargetItems`), linked from the row by
+	 * `relationType`.
+	 */
+	organization?: {
+		header: string;
+		profileSlug: string;
+		relationType: string;
+	};
 }
 /**
  * Per-op homes summary for an import graph — how create_entity ops are
@@ -17860,6 +17968,8 @@ export type ProjectFilingApplied = {
 	alreadyFiled: string[];
 	/** Edges THIS call wrote (insert RETURNING), and the ones already there. */
 	filed: string[];
+	/** The relation rows behind `filed` — what an undo removes, and only those. */
+	filedRelationIds: string[];
 	projectId: string;
 	status: "filed";
 } | {
@@ -20137,7 +20247,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				isActive: boolean;
 				keyName: string;
 				keyPrefix: string;
-				keyType: "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
+				keyType: "app_person" | "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
 				lastUsedAt: Date | null;
 				linkedUserId: string | null;
 				revokedAt: Date | null;
@@ -20292,6 +20402,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		decideOAuthAuthorization: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				appSignInFingerprint?: string | undefined;
 				approve: boolean;
 				approved?: {
 					permission: string;
@@ -20378,7 +20489,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				isActive: boolean;
 				keyName: string;
 				keyPrefix: string;
-				keyType: "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
+				keyType: "app_person" | "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
 				lastUsedAt: Date | null;
 				linkedUserId: string | null;
 				revokedAt: Date | null;
@@ -20418,7 +20529,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				isActive: boolean;
 				keyName: string;
 				keyPrefix: string;
-				keyType: "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
+				keyType: "app_person" | "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
 				lastUsedAt: Date | null;
 				revokedAt: Date | null;
 				revokedReason: string | null;
@@ -20438,7 +20549,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				isActive: boolean;
 				keyName: string;
 				keyPrefix: string;
-				keyType: "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
+				keyType: "app_person" | "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
 				lastUsedAt: Date | null;
 				linkedUserId: string | null;
 				scope: string[];
@@ -20853,7 +20964,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requested_at: Date;
 					requests: AppApprovedRequest[];
 				} | null;
+				person_may_decide_own_agent_proposals: boolean;
 				public_id: string;
+				redirect_uris: string[];
 				removed_at: Date | null;
 				revoked_at: Date | null;
 				workspace_names: Record<string, string>;
@@ -20896,7 +21009,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requested_at: Date;
 					requests: AppApprovedRequest[];
 				} | null;
+				person_may_decide_own_agent_proposals: boolean;
 				public_id: string;
+				redirect_uris: string[];
 				removed_at: Date | null;
 				revoked_at: Date | null;
 				workspace_names: Record<string, string>;
@@ -20956,7 +21071,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requested_at: Date;
 					requests: AppApprovedRequest[];
 				} | null;
+				person_may_decide_own_agent_proposals: boolean;
 				public_id: string;
+				redirect_uris: string[];
 				removed_at: Date | null;
 				revoked_at: Date | null;
 			};
@@ -20993,7 +21110,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requested_at: Date;
 					requests: AppApprovedRequest[];
 				} | null;
+				person_may_decide_own_agent_proposals: boolean;
 				public_id: string;
+				redirect_uris: string[];
 				removed_at: Date | null;
 				revoked_at: Date | null;
 			};
@@ -21040,7 +21159,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requested_at: Date;
 					requests: AppApprovedRequest[];
 				} | null;
+				person_may_decide_own_agent_proposals: boolean;
 				public_id: string;
+				redirect_uris: string[];
 				removed_at: Date | null;
 				revoked_at: Date | null;
 			}[];
@@ -21087,7 +21208,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requested_at: Date;
 					requests: AppApprovedRequest[];
 				} | null;
+				person_may_decide_own_agent_proposals: boolean;
 				public_id: string;
+				redirect_uris: string[];
 				removed_at: Date | null;
 				revoked_at: Date | null;
 			};
@@ -21114,6 +21237,84 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				publicId: string;
 				revoked: boolean;
+			};
+		}>;
+		setRedirectUris: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+				redirectUris: string[];
+			};
+			meta: object;
+			output: {
+				agent_user_id: string | null;
+				approved_requests: AppApprovedRequest[] | null;
+				created_at: Date;
+				description: string | null;
+				grants: {
+					clientId: string | null;
+					createdAt: Date;
+					entityIds: string[] | null;
+					id: string;
+					label: string | null;
+					permissions: string[];
+					projectIds: string[] | null;
+					revokedAt: Date | null;
+					workspaceIds: string[] | null;
+				}[];
+				id: string;
+				last_used_at: Date | null;
+				logo_url: string | null;
+				mode: "oauth" | "specific";
+				name: string;
+				pending_request: {
+					proposal_id: string;
+					requested_at: Date;
+					requests: AppApprovedRequest[];
+				} | null;
+				person_may_decide_own_agent_proposals: boolean;
+				public_id: string;
+				redirect_uris: string[];
+				removed_at: Date | null;
+				revoked_at: Date | null;
+			};
+		}>;
+		setSignInPolicy: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				personMayDecideOwnAgentProposals: boolean;
+				publicId: string;
+			};
+			meta: object;
+			output: {
+				agent_user_id: string | null;
+				approved_requests: AppApprovedRequest[] | null;
+				created_at: Date;
+				description: string | null;
+				grants: {
+					clientId: string | null;
+					createdAt: Date;
+					entityIds: string[] | null;
+					id: string;
+					label: string | null;
+					permissions: string[];
+					projectIds: string[] | null;
+					revokedAt: Date | null;
+					workspaceIds: string[] | null;
+				}[];
+				id: string;
+				last_used_at: Date | null;
+				logo_url: string | null;
+				mode: "oauth" | "specific";
+				name: string;
+				pending_request: {
+					proposal_id: string;
+					requested_at: Date;
+					requests: AppApprovedRequest[];
+				} | null;
+				person_may_decide_own_agent_proposals: boolean;
+				public_id: string;
+				redirect_uris: string[];
+				removed_at: Date | null;
+				revoked_at: Date | null;
 			};
 		}>;
 	}>>;
@@ -23343,71 +23544,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reason?: undefined;
 					rung: ProjectResolutionRung | null;
 					status: "linked";
-				};
-				relations: {
-					relationType: string;
-					sourceEntityId: string;
-					targetEntityId: string;
-				}[];
-				relationsFailed?: MaterializeRelationFailure[] | undefined;
-				routeSuggestions: RouteSuggestionsEcho;
-				sessionId: string | null;
-				sourceFile?: {
-					documentId: string;
-					entityId: string;
-					status: "stored";
-				} | {
-					documentId: string;
-					entityId: string;
-					proposalId: string;
-					proposalType: string;
-					reviewUrl: string;
-					status: "proposed";
-				} | {
-					entityId: string;
-					reason: string;
-					status: "denied";
-				} | {
-					entityId: string;
-					status: "failed";
-				} | undefined;
-				sourceIntake: {
-					errors?: string[] | undefined;
-					origin: "run" | "staged";
-					sourceDocumentIds: string[];
-				};
-				status: "applied";
-				threadId: string | undefined;
-				updated?: CaptureUpdateResult[] | undefined;
-				workspaceRuleOffer?: WorkspaceRuleOffer | undefined;
-			} | {
-				captureId: `${string}-${string}-${string}-${string}-${string}`;
-				created: {
-					action: "created" | "linked" | "matched" | "updated";
-					deduplicated?: true | undefined;
-					degradedFrom?: string | undefined;
-					entityId: string;
-					linked: boolean;
-					profileSlug: string;
-					propertiesDropped?: true | undefined;
-					tempId: string;
-				}[];
-				facetsFailed?: {
-					entityId: string;
-					reason: string;
-					roleSlug: string;
-				}[] | undefined;
-				intakeSession: {
-					error?: string | undefined;
-					requestedSessionIgnored: boolean;
-					sessionSource: "failed" | "minted" | "provided";
-				};
-				pendingWorkspaceSwitch?: PendingWorkspaceSwitch | undefined;
-				project: {
-					projectId?: undefined;
-					reason: string;
-					rung: null;
-					status: "not_linked";
 				};
 				relations: {
 					relationType: string;
@@ -27480,6 +27616,41 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				ackState?: undefined;
+				deduplicated: boolean;
+				entity: {
+					checksum: string | null;
+					createdAt: Date;
+					deletedAt: Date | null;
+					documentId: string | null;
+					facetSlugs?: string[] | undefined;
+					facets?: {
+						facetId: string;
+						properties: Record<string, unknown>;
+						slug: string;
+						status: string | null;
+					}[] | undefined;
+					filePath: string | null;
+					fileSize: number | null;
+					fileType: string | null;
+					fileUrl: string | null;
+					id: string;
+					preview: string | null;
+					profileId: string | null;
+					properties: Record<string, unknown>;
+					systemData?: Record<string, unknown> | undefined;
+					title: string | null;
+					type: string;
+					updatedAt: Date;
+					userId: string;
+					version: number;
+					workspaceId: string | null;
+				};
+				facets: never[];
+				id: string;
+				message: string;
+				status: string;
+			} | {
+				ackState?: undefined;
 				contentDropped: boolean;
 				deduplicated: boolean;
 				entity: {
@@ -27535,6 +27706,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: string;
 			} | {
 				ackState?: undefined;
+				deduplicated?: undefined;
 				deferred?: true | undefined;
 				effectiveWorkspaceId: string | null;
 				entity: Record<string, unknown> | null;
@@ -27555,6 +27727,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string | null;
 			} | {
 				ackState: "duplicate-ignored";
+				deduplicated?: undefined;
 				entity: {
 					checksum: string | null;
 					createdAt: Date;
@@ -27596,6 +27769,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: string;
 			} | {
 				ackState?: undefined;
+				deduplicated?: undefined;
 				entity: {
 					checksum: string | null;
 					createdAt: Date;
@@ -28075,6 +28249,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileSlug?: string | undefined;
 				properties?: Record<string, unknown> | undefined;
 				reasoning?: string | undefined;
+				replaceBody?: boolean | undefined;
 				source?: "agent" | "ai" | "extension" | "intelligence" | "system" | "user" | undefined;
 				targetWorkspaceId?: string | undefined;
 				title?: string | undefined;
@@ -31801,7 +31976,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionError?: string | undefined;
 				sessionId: string | null;
 				sessionSource?: "failed" | "minted" | "none" | "playbook" | "prior" | "provided" | undefined;
-				source: ImportRevealSource;
+				source: "bookmark" | "connector_sync" | "json" | "markdown" | "obsidian";
 				stats: {
 					byType: Record<string, number>;
 					chunks: number;

@@ -2277,6 +2277,7 @@ export const GOVERNANCE_RUNG_LABELS: Readonly<Record<GovernanceRung, string>> =
     "cbac-capability-allowlist": "Not in its tool list",
     "admin-actions": "Admin actions always ask",
     "force-propose": "A change of scope or identity",
+    "project-filing": "Filing into a project",
     "criteria-change": "Changing its own criteria",
     "pod-admin-schema-change": "A pod-wide schema change",
     "agent-schema-definition": "Defining a new kind",

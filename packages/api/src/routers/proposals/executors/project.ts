@@ -282,11 +282,23 @@ export function registerProjectExecutors(): void {
       // the review-authority gate upstream); this only decides which identity
       // the write executes as. `reviewedBy` on the proposal still records who
       // actually approved, so attribution is not lost.
+      // A HOME MOVE replays at pod scope. The lens is only the caller's
+      // workspace header — `update` gates on the project ROW and re-checks the
+      // TARGET home (live + writable, `resolveProjectHomeChange`) — but
+      // `podProcedure` refuses an ARCHIVED lens outright. With the source as the
+      // lens, a project homed in an archived space could never be moved OUT
+      // (live 2026-10-20, proposal 118fd1c2: "This workspace has been
+      // archived."). Every other update keeps the project's own space as the
+      // lens, so it is still refused while that space is archived; a move INTO
+      // an archived space is refused by the target check.
+      const movesHome =
+        typeof innerData.homeWorkspaceId === "string" &&
+        innerData.homeWorkspaceId !== project.workspaceId;
       const projectCaller = projectsRouter.createCaller({
         db,
         authenticated: true as const,
         userId: project.userId,
-        workspaceId: project.workspaceId ?? undefined,
+        workspaceId: movesHome ? undefined : (project.workspaceId ?? undefined),
         workspaceRole: membership?.role,
       } as unknown as Context);
 

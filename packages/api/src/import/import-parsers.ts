@@ -35,28 +35,86 @@ export function parseMarkdown(content: string): ParsedMarkdown {
 export interface ParsedCsv {
   headers: string[];
   rows: Record<string, string>[];
+  /**
+   * Lines that came BEFORE the header row and were skipped (an export's
+   * "Notes:" preamble, a disclaimer paragraph). Empty for a plain CSV. Kept so
+   * a caller can show what was not read as data instead of hiding it.
+   */
+  preambleLines: string[];
+}
+
+/**
+ * The field count most data rows share — the table's width. Counted over the
+ * records with at least two fields so a one-field preamble ("Notes:", a quoted
+ * paragraph) can never outvote the table; a genuinely one-column CSV (every
+ * record has one field) answers 1. Ties go to the wider count.
+ */
+function dominantFieldCount(records: string[][]): number {
+  const multi = records.filter((r) => r.length >= 2);
+  const pool = multi.length > 0 ? multi : records;
+  const counts = new Map<number, number>();
+  for (const r of pool) counts.set(r.length, (counts.get(r.length) ?? 0) + 1);
+  let best = 0;
+  let bestN = 0;
+  for (const [width, n] of counts) {
+    if (n > bestN || (n === bestN && width > best)) {
+      best = width;
+      bestN = n;
+    }
+  }
+  return best;
 }
 
 /**
  * Parse CSV content into headers and rows (each row as key-value by header).
- * Uses csv-parse; first row is treated as header.
+ *
+ * The header is the FIRST record whose field count equals the table's dominant
+ * field count — not blindly the first line. Exports often open with a preamble
+ * (LinkedIn's `Connections.csv` starts with "Notes:", a quoted paragraph and a
+ * blank line before `First Name,Last Name,…`); taking line 1 as the header made
+ * "Notes:" the only column and every row's title a fragment. Records before the
+ * header are returned as `preambleLines`, never read as data.
  */
 export function parseCsv(content: string): ParsedCsv {
   if (typeof content !== "string" || content.trim().length === 0) {
-    return { headers: [], rows: [] };
+    return { headers: [], rows: [], preambleLines: [] };
   }
+  let records: string[][];
   try {
-    const records = parse(content, {
-      columns: true,
+    records = parse(content, {
+      bom: true,
       skip_empty_lines: true,
       trim: true,
       relax_column_count: true,
-    }) as Record<string, string>[];
-    const headers = records.length > 0 ? Object.keys(records[0]) : [];
-    return { headers, rows: records };
+    }) as string[][];
   } catch {
-    return { headers: [], rows: [] };
+    return { headers: [], rows: [], preambleLines: [] };
   }
+  // A record of only empty cells (",,,") is a separator: it never decides the
+  // table's width and is never the header.
+  const isBlank = (r: string[]) => r.every((cell) => cell === "");
+  const width = dominantFieldCount(records.filter((r) => !isBlank(r)));
+  if (width === 0) return { headers: [], rows: [], preambleLines: [] };
+  const headerIndex = records.findIndex(
+    (r) => r.length === width && !isBlank(r)
+  );
+  const headers = records[headerIndex]!;
+  const rows = records.slice(headerIndex + 1).map((record) => {
+    const row: Record<string, string> = {};
+    headers.forEach((h, i) => {
+      // Missing trailing cells read as "" (relaxed column count).
+      row[h] = record[i] ?? "";
+    });
+    return row;
+  });
+  return {
+    headers,
+    rows,
+    preambleLines: records
+      .slice(0, headerIndex)
+      .filter((r) => !isBlank(r))
+      .map((r) => r.join(",")),
+  };
 }
 
 // ─── Bookmarks HTML (Netscape format) ─────────────────────────────────────────

@@ -81,7 +81,7 @@ const INTROSPECTION_ONLY: Record<string, string> = {
   "src/routers/hub-protocol/rest/auth.ts":
     "/auth/key-state reads the bearer's status for its holder; no handler runs as the key",
   "src/routers/oauth/routes.ts":
-    "RFC 7009 /revoke: possession of the presented token retires it — its status and owner are read only to floor revocation to keys this AS mints; no request runs as the key",
+    "RFC 7009 /revoke: possession of the presented token retires it — its status, type and owner are read only to floor revocation to keys this AS mints (a person's app sign-in token included); no request runs as the key",
 };
 
 /**

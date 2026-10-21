@@ -26,7 +26,10 @@ import { db, drizzleSql, podCpAuthHeaders } from "@synap/database";
 import { workspaces } from "@synap/database/schema";
 import type { CapabilityDefinition } from "@synap/playbooks";
 import { queryCatalogCache } from "./catalog-cache-query.js";
-import { assertOfficialDefinition } from "./official-catalog-trust.js";
+import {
+  admitPrivateCapability,
+  assertOfficialDefinition,
+} from "./official-catalog-trust.js";
 
 export interface CPCapabilityTemplate {
   key: string;
@@ -38,6 +41,12 @@ export interface CPCapabilityTemplate {
     provider?: string;
   };
   definition: CapabilityDefinition;
+}
+
+/** What the owner door answers: the template, and whether it is public. */
+interface OwnedCapabilityTemplate extends CPCapabilityTemplate {
+  /** False only for a PRIVATE capability; absent from an older CP. */
+  isPublic?: boolean;
 }
 
 /** Resolve the Control Plane base URL (mirrors cells.ts `getCpUrl`). */
@@ -111,7 +120,7 @@ async function resolveCpPodId(): Promise<string | null> {
  */
 async function fetchCPCapabilityTemplateByKeyAsOwner(
   key: string
-): Promise<CPCapabilityTemplate | null> {
+): Promise<OwnedCapabilityTemplate | null> {
   const base = cpUrl();
   if (!base) return null;
 
@@ -137,9 +146,40 @@ async function fetchCPCapabilityTemplateByKeyAsOwner(
       }
     );
     if (!res.ok) return null;
-    const data = (await res.json()) as CPCapabilityTemplate | { error: string };
+    const data = (await res.json()) as
+      OwnedCapabilityTemplate | { error: string };
     if ("error" in data) return null;
     return data;
+  } catch {
+    return null;
+  }
+}
+
+/** One template by key, and which door answered it. */
+async function resolveCPCapabilityTemplateByKey(
+  key: string
+): Promise<
+  | { door: "owner"; template: OwnedCapabilityTemplate }
+  | { door: "public"; template: CPCapabilityTemplate }
+  | null
+> {
+  // Owner-scoped first: the only door that can see a private (isPublic:false)
+  // capability. On a self-hosted / non-CP pod this no-ops and we fall through.
+  const owned = await fetchCPCapabilityTemplateByKeyAsOwner(key);
+  if (owned) return { door: "owner", template: owned };
+
+  const base = cpUrl();
+  if (!base) return null;
+
+  try {
+    const res = await fetch(
+      `${base}/api/marketplace/capabilities/${encodeURIComponent(key)}`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as CPCapabilityTemplate | { error: string };
+    if ("error" in data) return null;
+    return { door: "public", template: data };
   } catch {
     return null;
   }
@@ -161,26 +201,7 @@ async function fetchCPCapabilityTemplateByKeyAsOwner(
 export async function fetchCPCapabilityTemplateByKey(
   key: string
 ): Promise<CPCapabilityTemplate | null> {
-  // Owner-scoped first: the only door that can see a private (isPublic:false)
-  // capability. On a self-hosted / non-CP pod this no-ops and we fall through.
-  const owned = await fetchCPCapabilityTemplateByKeyAsOwner(key);
-  if (owned) return owned;
-
-  const base = cpUrl();
-  if (!base) return null;
-
-  try {
-    const res = await fetch(
-      `${base}/api/marketplace/capabilities/${encodeURIComponent(key)}`,
-      { signal: AbortSignal.timeout(8000) }
-    );
-    if (!res.ok) return null;
-    const data = (await res.json()) as CPCapabilityTemplate | { error: string };
-    if ("error" in data) return null;
-    return data;
-  } catch {
-    return null;
-  }
+  return (await resolveCPCapabilityTemplateByKey(key))?.template ?? null;
 }
 
 /**
@@ -287,6 +308,20 @@ export async function fetchCPCapabilityTemplate(
   // 3. Not in the default-sync list → it may still be a real, installable
   //    template excluded from default sync (syncByDefault=false), or a PRIVATE
   //    (isPublic=false) capability owned by this pod's owner. Direct by-key lookup.
-  const byKey = await fetchCPCapabilityTemplateByKey(key);
-  return byKey ? admitted(byKey.definition, null) : null;
+  const byKey = await resolveCPCapabilityTemplateByKey(key);
+  if (!byKey) return null;
+  // A private capability is not in Synap's public signed index; the
+  // authenticated owner door it came through is its trust. Only the owner
+  // door's explicit `isPublic: false` says so — anything else is checked.
+  if (byKey.door === "owner" && byKey.template.isPublic === false) {
+    await admitPrivateCapability({
+      key,
+      definition: byKey.template.definition as unknown as Record<
+        string,
+        unknown
+      >,
+    });
+    return byKey.template.definition;
+  }
+  return admitted(byKey.template.definition, null);
 }

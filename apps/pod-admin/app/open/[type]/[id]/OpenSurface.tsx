@@ -11,6 +11,7 @@
  * identity frame and the routing.
  */
 
+import { ConsoleRoleProvider } from "../../../(admin)/components/side-nav-role";
 import { ReceiverIdentityProvider } from "../../../_lib/receiver-shell";
 import { labelForOpenType, type ParsedOpen } from "../../open-params";
 import { OpenMessage } from "../../open-shell";
@@ -34,6 +35,10 @@ interface SurfaceProps {
   viewerIsPodAdmin: boolean;
 }
 
+/**
+ * The role is provided too, so every exit on the page offers a phone only the
+ * console pages this viewer may open (`usePlacedExit`).
+ */
 export function OpenSurface({
   podHost,
   identity,
@@ -41,7 +46,9 @@ export function OpenSurface({
 }: SurfaceProps & { podHost?: string; identity?: string }) {
   return (
     <ReceiverIdentityProvider podHost={podHost} identity={identity}>
-      <OpenSurfaceBody {...props} />
+      <ConsoleRoleProvider role={props.viewerIsPodAdmin ? "admin" : "member"}>
+        <OpenSurfaceBody {...props} />
+      </ConsoleRoleProvider>
     </ReceiverIdentityProvider>
   );
 }

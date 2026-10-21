@@ -168,6 +168,37 @@ export function getPlaybookRunner(): PlaybookRunner | null {
 }
 
 /**
+ * IoC slot for the unattended readiness gate (`checkUnattendedPlaybookReadiness`,
+ * @synap/api) — the SAME rule the run spine applies under
+ * `unenabledSkillPreflight`, for the door that never reaches the spine: a
+ * propose-mode `playbook_run` files a run proposal instead of running. Without
+ * it a rule filed proposals a person could only approve into a failure while
+ * the playbook's skills were off. Not ready ⇒ the owner's enable request is
+ * filed and `message` is the refusal. Same inversion as `registerPlaybookRunner`.
+ */
+export interface PlaybookReadinessInput {
+  playbookId?: string;
+  playbookName?: string;
+  workspaceId: string;
+  userId: string;
+}
+export type PlaybookReadiness =
+  { ready: true } | { ready: false; message: string };
+type PlaybookReadinessGate = (
+  input: PlaybookReadinessInput
+) => Promise<PlaybookReadiness>;
+
+let playbookReadinessGate: PlaybookReadinessGate | null = null;
+
+export function registerPlaybookReadinessGate(fn: PlaybookReadinessGate): void {
+  playbookReadinessGate = fn;
+}
+
+export function getPlaybookReadinessGate(): PlaybookReadinessGate | null {
+  return playbookReadinessGate;
+}
+
+/**
  * IoC slot for the appointment materializer (`materializeScheduledSession`,
  * @synap/api) — the ONE producer of `focus_sessions.status = 'scheduled'`.
  * Same inversion, same reason, as `registerPlaybookRunner` above.

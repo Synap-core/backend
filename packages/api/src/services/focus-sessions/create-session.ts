@@ -1160,6 +1160,7 @@ export async function createFocusSession(
         workspaceId: sessionOut.workspaceId,
         sessionId: sessionOut.id,
         goal: sessionOut.goal,
+        title: sessionOut.title,
         agentId,
       });
       if (decision.status === "granted") {

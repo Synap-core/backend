@@ -1,0 +1,13 @@
+{
+  "TEST_ONLY": "Signed with TEST-ONLY keys derived from public labels (control-plane-api src/lib/catalog-signing/__fixtures__/test-keys.ts). Never trust these keys anywhere.",
+  "rootKeys": [
+    "YDY0fHPyIC0HhquYpX9VCZkofytpwUXIlpmOeMisrSM=",
+    "9JbcGhV3YTcRHXJyXvHrfPolg0q1cnCW8r+VI1hUdfQ="
+  ],
+  "onlineKey": "9nKD3a5Eb1k8DO5S/b4xR0LDsGg6P0eepQpAKOm4kEo=",
+  "signedAt": "2026-10-20T00:00:00.000Z",
+  "verifyAt": "2026-10-25T00:00:00.000Z",
+  "keysVersion": 1,
+  "indexExpires": "2026-11-03T00:00:00.000Z",
+  "packageCount": 9
+}

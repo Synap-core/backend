@@ -46,7 +46,7 @@ E
 extract() { awk -v f="$1" '$0 ~ "^"f"\\(\\) \\{" {p=1} p{print} p&&/^}/{exit}' "$HERE/synap"; }
 {
   echo 'RED=;YELLOW=;BLUE=;NC=;GREEN=;'
-  for f in pod_admin_domain_for_domain pod_admin_url_for_domain shared_cookie_domain generate_kratos_config; do
+  for f in pod_admin_domain_for_domain pod_admin_url_for_domain synap_tenant_zones is_public_suffix common_parent_domain shared_cookie_domain synap_first_party_web_origins generate_kratos_config; do
     extract "$f"
   done
 } > "$TMP/lib.sh"

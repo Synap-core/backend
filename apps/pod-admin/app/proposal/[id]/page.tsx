@@ -18,6 +18,8 @@
  */
 
 import { headers } from "next/headers";
+import { ConsoleRoleProvider } from "../../(admin)/components/side-nav-role";
+import { podAdminRole } from "../../../lib/kratos";
 import { ProposalReview } from "./ProposalReview";
 
 export const dynamic = "force-dynamic";
@@ -33,11 +35,17 @@ export default async function ProposalPage({ params }: ProposalPageProps) {
   // signed in as — without that, a legitimate approval request is
   // indistinguishable from a phishing page.
   const h = await headers();
+  // `/proposal` is self-service, so the proxy does not ask the role; asked
+  // here so a phone is offered only the console pages this reader may open
+  // (a space it names, as a provenance link). Unanswered → the member's page.
+  const role = (await podAdminRole(h)) === "admin" ? "admin" : "member";
   return (
-    <ProposalReview
-      proposalId={id}
-      podHost={h.get("host") ?? undefined}
-      identity={h.get("x-pod-admin-email") ?? undefined}
-    />
+    <ConsoleRoleProvider role={role}>
+      <ProposalReview
+        proposalId={id}
+        podHost={h.get("host") ?? undefined}
+        identity={h.get("x-pod-admin-email") ?? undefined}
+      />
+    </ConsoleRoleProvider>
   );
 }

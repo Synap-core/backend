@@ -28,6 +28,7 @@ import { resolveCaptureActorUserId } from "../../../services/capture-agent/resol
 import { buildCaptureNarrativeSummary } from "../../../services/capture-agent/capture-narrative.js";
 import { loadRouteSuggestions } from "../../../services/routing/load-route-suggestions.js";
 import { captureStatusForReceiptState } from "../../../services/capture-agent/capture-receipt-state.js";
+import { captureSkillStepProblems } from "../../../services/capture-agent/capture-plan.js";
 import {
   buildDegradedNextStep,
   describeDegradedForAgent,
@@ -800,6 +801,9 @@ export function registerCaptureRoutes(app: HubHono): void {
             : {}),
           ...(graph.unmodeledProperties
             ? { unmodeledProperties: graph.unmodeledProperties }
+            : {}),
+          ...(graph.modeledFields
+            ? { modeledFields: graph.modeledFields }
             : {}),
         });
       }
@@ -1610,6 +1614,15 @@ export function registerCaptureRoutes(app: HubHono): void {
       if (bad !== -1) {
         return c.json({ error: `${key}[${bad}] must be an object` }, 400);
       }
+    }
+    // A teaching skill needs its `slug` — the ONE authoring rule
+    // `synap_create_skill` applies — or nothing is filed.
+    const skillProblems = captureSkillStepProblems(planArrays.skills);
+    if (skillProblems.length > 0) {
+      return c.json(
+        { error: skillProblems.join("; "), problems: skillProblems },
+        400
+      );
     }
     if (
       body.source &&

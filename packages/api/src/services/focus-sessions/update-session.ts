@@ -47,6 +47,19 @@ import type {
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { carrySlotKeys, declaredSlotKey, deriveSlotKeys } from "./slot-keys.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
+import { sessionGoalPayload } from "./session-update-goal.js";
+import {
+  gateSessionFiling,
+  hasSessionFiling,
+  sessionFilingFields,
+  type SessionFilingDecision,
+  type SessionFilingPatch,
+} from "./session-filing-gate.js";
+import { isUndoableSessionPatch } from "./session-undo.js";
+import {
+  readSessionUndoSnapshot,
+  stampSessionUpdate,
+} from "../proposals/stamp-materialized.js";
 // STATIC, like `block-output.ts` beside it. These three call sites used
 // `await import()` with no stated reason, which reads as circular-dependency
 // avoidance and is not: the static import graph rooted at
@@ -217,6 +230,8 @@ export type UpdateFocusSessionResult =
       summary?: string;
       reviewPath?: string;
       reviewUrl?: string;
+      /** The agent's filing, proposed on its own beside this proposal. */
+      filing?: SessionFilingDecision;
     }
   | {
       status: "updated";
@@ -269,6 +284,13 @@ export type UpdateFocusSessionResult =
        * patch landed); `granted` ⇒ it was attached with the rest.
        */
       handOff?: AgentHandOffDecision;
+      /**
+       * An agent's filing (project, space, track) is its OWN proposal
+       * (`session-filing-gate.ts`). Present only when the patch carried one:
+       * `proposed` ⇒ the filing waits on a person and did NOT land with the
+       * rest of this patch.
+       */
+      filing?: SessionFilingDecision;
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -1517,6 +1539,7 @@ export async function updateFocusSession(
         workspaceId: existing.workspaceId,
         sessionId,
         goal: existing.goal,
+        title: existing.title,
         agentId: handedTo,
       });
       if (handOff.status === "denied") {
@@ -1538,10 +1561,58 @@ export async function updateFocusSession(
     }
   }
 
+  // FILING — an agent's project / space / track filing is its OWN forced
+  // proposal (`session-filing-gate.ts`), decided before the update membrane
+  // like the hand-off above, so a rename or progress tick sent with it is not
+  // held with it. Proposed ⇒ the filing is dropped from this patch (approval
+  // applies it) and, when nothing else was asked for, the proposal IS the
+  // answer. A person's own filing is never forced and rides the patch below.
+  let filing: SessionFilingDecision | undefined;
+  const filingPatch: SessionFilingPatch = {
+    projectId: params.projectId,
+    projectName: filingProjectName,
+    workspaceId: params.workspaceId,
+    workspaceName: moveWorkspaceName,
+    trackFiling,
+  };
+  if (agentUserId && hasSessionFiling(filingPatch)) {
+    filing = await gateSessionFiling({
+      userId,
+      agentUserId,
+      workspaceId: existing.workspaceId,
+      session: existing,
+      filing: filingPatch,
+    });
+    if (filing.status === "denied") {
+      return { status: "denied", reason: filing.reason };
+    }
+    if (filing.status === "proposed") {
+      params = {
+        ...params,
+        projectId: undefined,
+        workspaceId: undefined,
+        trackId: undefined,
+        trackStage: undefined,
+      };
+      trackFiling = undefined;
+      if (!patchAsksForMore(params, criteriaChange)) {
+        return {
+          status: "proposed",
+          proposalId: filing.proposalId,
+          proposalType: filing.proposalType,
+          summary: filing.summary,
+          reviewPath: filing.reviewPath,
+          reviewUrl: filing.reviewUrl,
+        };
+      }
+    }
+  }
+
   // Governance membrane — AI callers route through proposals (same gate the
-  // Hub PATCH /focus-sessions/:id and synap_complete_session use). Always carry
-  // goal (for proposal summary / targetName) plus every intended mutation so
-  // the focus_session/update executor can materialize the full patch on approve.
+  // Hub PATCH /focus-sessions/:id and synap_complete_session use). Carry every
+  // intended mutation so the focus_session/update executor can materialize the
+  // full patch on approve. The goal rides ONLY when it changes, and the session
+  // is named by the display-only `sessionName` (`session-update-goal.ts`).
   const { checkPermissionOrPropose } =
     await import("../../utils/permission-check.js");
   const perm = await checkPermissionOrPropose({
@@ -1551,17 +1622,9 @@ export async function updateFocusSession(
     subjectType: "focus_session",
     action: "update",
     source: "intelligence",
-    // Filing is always reviewed when an agent does it (honoured on the AI
-    // paths only — a person filing their own session is never forced).
-    ...(params.projectId !== undefined ||
-    trackFiling ||
-    params.workspaceId !== undefined
-      ? { forcePropose: true }
-      : {}),
     data: {
       id: sessionId,
-      // Always include goal so summaries resolve even when goal is not changing.
-      goal: params.goal !== undefined ? params.goal : existing.goal,
+      ...sessionGoalPayload(existing, params.goal),
       ...(params.title !== undefined ? { title: params.title } : {}),
       ...(params.status !== undefined ? { status: params.status } : {}),
       ...(params.progress !== undefined ? { progress: params.progress } : {}),
@@ -1590,43 +1653,14 @@ export async function updateFocusSession(
         ? { subjectEntityId: params.subjectEntityId }
         : {}),
       ...(criteriaChange ? { criteria: params.criteria } : {}),
-      // Carried so the approved filing is applied, not a silent no-op; `null`
-      // (unfile) must survive, hence `!== undefined`.
-      ...(params.projectId !== undefined
-        ? { projectId: params.projectId }
-        : {}),
-      // Display only — the proposal title names WHICH project (the executor
-      // applies `projectId` and ignores this).
-      ...(filingProjectName ? { projectName: filingProjectName } : {}),
-      // SPACE MOVE — carried so approval applies it (the executor re-floors
-      // it); `null` (make personal) must survive. The name is display only.
-      // Governance above resolved on the CURRENT space's rules; once moved,
-      // the session follows the new space's.
-      ...(params.workspaceId !== undefined
-        ? {
-            workspaceId: params.workspaceId,
-            ...(moveWorkspaceName ? { workspaceName: moveWorkspaceName } : {}),
-          }
-        : {}),
-      // TRACK FILING — carried so approval applies it (the executor
-      // RE-resolves it). `null` (unfile) must survive. The names are display
-      // only: the proposal title says WHICH track and step, and — when filing
-      // also sets the project — which project.
-      ...(trackFiling
-        ? {
-            trackId: trackFiling.set.trackId,
-            trackStage: trackFiling.set.trackStage,
-            ...(trackFiling.trackName
-              ? { trackName: trackFiling.trackName }
-              : {}),
-            ...(trackFiling.stageName
-              ? { stageName: trackFiling.stageName }
-              : {}),
-            ...(trackFiling.projectName
-              ? { trackProjectName: trackFiling.projectName }
-              : {}),
-          }
-        : {}),
+      // A PERSON's filing (an agent's took its own door above, or was
+      // granted there) — the fields and their display-only names.
+      ...sessionFilingFields({
+        ...filingPatch,
+        projectId: params.projectId,
+        workspaceId: params.workspaceId,
+        trackFiling,
+      }),
       // Carried for the same reason as `addAgentId` and `subjectEntityId`: the
       // `focus_session/update` executor re-applies it on approval, so the
       // PROPOSED path is not a silent no-op. `null` is the RELEASE and must
@@ -1648,6 +1682,7 @@ export async function updateFocusSession(
   if ("proposalId" in perm) {
     return {
       status: "proposed",
+      ...(filing ? { filing } : {}),
       proposalId: perm.proposalId,
       // The discriminator MUST cross this boundary: this door is join-gate
       // reachable (the MCP handler threads `agentUserId`), and without it the
@@ -1721,6 +1756,16 @@ export async function updateFocusSession(
   let outputsBefore: OutputItem[] = [];
   let outputsAfter: OutputItem[] = [];
 
+  // UNDO RECORD for an AUTO-APPROVED write: its receipt was minted by the gate
+  // above, so the before-state is only knowable here. Stamped only when every
+  // change is one undo can restore (`session-undo.ts`); otherwise the receipt
+  // stays unstamped and revert says it cannot be undone.
+  const receiptId = "granted" in perm ? perm.autoApprovedProposalId : undefined;
+  const undoBefore =
+    receiptId && isUndoableSessionPatch(params)
+      ? await readSessionUndoSnapshot(db, sessionId)
+      : null;
+
   const [updated] = await db.transaction(async (tx) => {
     if (params.workspaceId !== undefined) {
       const { applySessionWorkspaceMove } =
@@ -1756,6 +1801,12 @@ export async function updateFocusSession(
       .set(set)
       .where(eq(focusSessions.id, sessionId))
       .returning();
+  });
+  await stampSessionUpdate({
+    proposalId: receiptId,
+    sessionId,
+    before: undoBefore,
+    after: updated,
   });
 
   // ── EVIDENCE VERDICT ────────────────────────────────────────────────────────
@@ -1939,5 +1990,6 @@ export async function updateFocusSession(
     ...(trackFilingOutcome ? { trackFiling: trackFilingOutcome } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(handOff ? { handOff } : {}),
+    ...(filing ? { filing } : {}),
   };
 }

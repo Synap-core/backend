@@ -815,6 +815,12 @@ export interface CompositeCreateSkillOp {
   /** Stable handle for this skill within the proposal (e.g. "fact1"). */
   ref: string;
   name: string;
+  /**
+   * The ref `synap_load_skill` resolves (e.g. "team/where-the-work-is"). A
+   * teaching skill without one is authored but unreachable; the capture doors
+   * require it (`skillAuthoringProblem`).
+   */
+  slug?: string | null;
   /** Instruction body (Markdown) — the FACT the agent reads while reasoning. */
   body: string;
   scope: "pod" | "user" | "workspace";
@@ -1227,7 +1233,7 @@ export function isPlanBatch(operations: CompositeProposalOperation[]): boolean {
  * has always been: one unreadable row in a 1600-row import must not discard the
  * other 1599.
  */
-const RESILIENT_OPERATION_KINDS = [
+const _RESILIENT_OPERATION_KINDS = [
   "create_entity",
   "create_relation",
   "create_skill",
@@ -1246,7 +1252,7 @@ type _EveryOpKindClassified =
   Exclude<
     CompositeProposalOperation["op"],
     (typeof PLAN_OPERATION_KINDS)[number]
-  > extends (typeof RESILIENT_OPERATION_KINDS)[number]
+  > extends (typeof _RESILIENT_OPERATION_KINDS)[number]
     ? true
     : never;
 

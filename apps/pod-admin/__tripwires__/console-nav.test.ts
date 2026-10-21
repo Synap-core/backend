@@ -233,6 +233,12 @@ describe("the client link contract (@synap-core/types/console)", () => {
     expect(consolePath({ page: "computer", id: "m 1" })).toBe(
       computerHref("m 1")
     );
+    expect(consolePath({ page: "space", id: "w 1" })).toBe(
+      `${navHref("spaces")}/w%201`
+    );
+    expect(existsSync(join(appDir, "(admin)/workspaces/[id]/page.tsx"))).toBe(
+      true
+    );
     expect([...CONSOLE_APP_VIAS]).toEqual([...APP_VIAS]);
     for (const via of APP_VIAS) {
       expect(consolePath({ page: "application", via, id: "a/1" })).toBe(

@@ -27,7 +27,8 @@
 
 import { db, and, inArray, isNotNull, proposals, users } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
-import { displayNameForUser } from "../../routers/proposals/display.js";
+import { actorDisplayName } from "../../routers/proposals/helper-functions.js";
+import { loadMachineNames } from "../machine-roster.js";
 
 /** One party on a session. `name` is resolved — never a bare uuid. */
 export interface SessionParticipant {
@@ -110,7 +111,7 @@ export async function attachSessionParticipants<T extends StaffableSession>(
   );
 
   // Resolve to display names in the SAME batch shape `proposals.list` uses for
-  // its agent labels — one `inArray`, one `displayNameForUser`. A bare uuid is
+  // its agent labels — one `inArray`, one `actorDisplayName`. A bare uuid is
   // not a name, and a party cluster rendering `4f2a…` would be a WORSE answer
   // than the empty list this replaces.
   const allIds = [...new Set([...sortedBySession.values()].flat())];
@@ -123,14 +124,22 @@ export async function attachSessionParticipants<T extends StaffableSession>(
         email: users.email,
         userType: users.userType,
         agentMetadata: users.agentMetadata,
+        hostUserId: users.hostUserId,
       })
       .from(users)
       .where(inArray(users.id, allIds));
+    // An agent on a computer reads "Claude Code on devbox" — the same name the
+    // proposals it files carry (`actorDisplayName`).
+    const hostNames = await loadMachineNames(
+      agentRows
+        .map((u) => u.hostUserId)
+        .filter((id): id is string => typeof id === "string")
+    );
     for (const u of agentRows) {
-      // `displayNameForUser` returns `undefined` for a row with no name, no
+      // `actorDisplayName` returns `undefined` for a row with no name, no
       // agentType/description and no email — left unset so the uuid-prefix
       // fallback below is the single place that decision is made.
-      const name = displayNameForUser(u);
+      const name = actorDisplayName(u, hostNames);
       if (name) nameById.set(u.id, name);
     }
   }
@@ -139,7 +148,7 @@ export async function attachSessionParticipants<T extends StaffableSession>(
     ...session,
     participants: (sortedBySession.get(session.id) ?? []).map((id) => ({
       id,
-      // LAST RESORT only: a `users` row that vanished, or one `displayNameForUser`
+      // LAST RESORT only: a `users` row that vanished, or one `actorDisplayName`
       // could not name at all. A bare full uuid is a worse answer than the empty
       // list this projection replaces, which is why a name is resolved at all.
       name: nameById.get(id) ?? id.slice(0, 8),

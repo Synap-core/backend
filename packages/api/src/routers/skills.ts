@@ -64,6 +64,11 @@ import {
   SKILL_HOST_BRIDGES,
   SKILL_ALLOWED_GLOBALS,
 } from "../services/skills/skill-stdlib.js";
+import {
+  SKILL_SLUG_PATTERN,
+  SKILL_SLUG_PATTERN_MESSAGE,
+  SKILL_SLUG_SYSTEM_MESSAGE,
+} from "../services/skills/skill-authoring.js";
 
 /**
  * Save-time global-reference scan for code skills (B1).
@@ -1042,13 +1047,9 @@ export const skillsRouter = router({
           .string()
           .min(1)
           .max(255)
-          .regex(
-            /^[a-z0-9]+(?:[-_.][a-z0-9]+)*(?:\/[a-z0-9]+(?:[-_.][a-z0-9]+)*)*$/,
-            "slug must be lowercase path segments, e.g. 'biz/business-plan'"
-          )
+          .regex(SKILL_SLUG_PATTERN, SKILL_SLUG_PATTERN_MESSAGE)
           .refine((s) => !s.startsWith("system/"), {
-            message:
-              "the 'system/' slug namespace is reserved for seeded skills",
+            message: SKILL_SLUG_SYSTEM_MESSAGE,
           })
           .optional(),
         name: z.string().min(1).max(255),

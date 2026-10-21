@@ -41,8 +41,14 @@ import {
   isAllowedMimeType,
   maxBufferedUploadBytes,
   parseUploadEntityFields,
+  readableFileEntity,
+  signFileEntityUrl,
   type UploadEntityFields,
 } from "../../file-upload.js";
+import {
+  transcribeStoredMedia,
+  type TranscribeStoredMediaResult,
+} from "../../../services/media-copy/transcribe-stored-media.js";
 import {
   requestPresignedUpload,
   storeDocumentFromPresignedUpload,
@@ -93,6 +99,7 @@ import {
   getUserAccessibleWorkspaceIds,
   httpStatusForTrpcError,
   hasScope,
+  isUuid,
   logger,
   mayActAsUser,
   resolveActingContext,
@@ -208,6 +215,26 @@ function respondGovernedFile(
     200
   );
 }
+
+/** Each `transcribeStoredMedia` failure → its HTTP answer (`code` = the failure). */
+const TRANSCRIBE_FAILURE: Record<
+  Extract<TranscribeStoredMediaResult, { failed: string }>["failed"],
+  { status: 404 | 413 | 415 | 422 | 502 | 503; error: string }
+> = {
+  not_found: { status: 404, error: "No stored file of yours to transcribe" },
+  not_media: { status: 415, error: "Only audio or video can be transcribed" },
+  too_large: {
+    status: 413,
+    error: "File is over the 20 MB transcription limit",
+  },
+  empty: { status: 422, error: "No speech was found in the file" },
+  refused: { status: 422, error: "The transcription service refused the file" },
+  not_configured: { status: 503, error: "No transcription service is set up" },
+  unavailable: {
+    status: 502,
+    error: "The transcription service is unavailable; try again",
+  },
+};
 
 export function registerEntitiesRoutes(app: HubHono): void {
   // ── GET /users/:userId/entities ─────────────────────────────────────────
@@ -2249,6 +2276,99 @@ export function registerEntitiesRoutes(app: HubHono): void {
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err)
       );
+    }
+  });
+
+  // ── GET /files/{entityId}/url ───────────────────────────────────────────
+  // A signed GET for a file entity's blob — the key-usable twin of the Kratos
+  // `GET /api/files/:entityId/url`, through the SAME `signFileEntityUrl` (one
+  // read floor, one 403/404 split, one `{ url, expiresAt, mimeType }` shape).
+  // The read is `loadSignableFileEntity` → `scopedDb(entities)`, which ANDs
+  // the key's grant (`grantReadPredicate`): a key granted workspace X gets 403
+  // for a file in workspace Y. Listed grant-safe in GRANT_SAFE_REST_READS for
+  // that reason. URL only — the signer forces `attachment` and never
+  // overrides the stored type (D10), so an active blob cannot render from it.
+  app.get("/files/:entityId/url", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthorized" }, 401);
+    const entityId = c.req.param("entityId");
+    // Shape-check first: the id reaches a `uuid` column, where a typo would
+    // throw invalid-uuid-syntax and read as a server fault.
+    if (!isUuid(entityId)) {
+      return c.json(
+        { error: `Invalid entityId: "${entityId}" is not a uuid` },
+        400
+      );
+    }
+    try {
+      const result = await signFileEntityUrl(userId, entityId);
+      return result.ok
+        ? c.json(result.body)
+        : c.json({ error: result.error }, result.status);
+    } catch (err) {
+      logger.error({ err, entityId }, "Hub file URL signing failed");
+      return c.json({ error: "Failed to generate URL" }, 500);
+    }
+  });
+
+  // ── POST /files/{entityId}/transcribe ───────────────────────────────────
+  // Speech-to-text of a stored audio/video file entity: `{ text, lang? }`.
+  // The SAME read floor as `GET /files/{entityId}/url` (`readableFileEntity`
+  // → `scopedDb(entities)`, the key's grant ANDed), then the ONE stored-media
+  // transcription core (`transcribeStoredMedia`: owner-only, audio/* or an
+  // inline video type, ≤ 20 MB, the IS provider call) — never a second
+  // provider call. Persists nothing.
+  //
+  // Scope: `hub-protocol.read`, like `POST /knowledge/answer` — an AI spend
+  // that writes nothing. Budget: the edge AI rate class (`ai_interactive`,
+  // rate-limit-classes.ts) plus the IS's own LLM budget, as the Kratos twin
+  // `POST /api/media/transcribe` relies on.
+  app.post("/files/:entityId/transcribe", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthorized" }, 401);
+    const entityId = c.req.param("entityId");
+    if (!isUuid(entityId)) {
+      return c.json(
+        { error: `Invalid entityId: "${entityId}" is not a uuid` },
+        400
+      );
+    }
+    try {
+      const readable = await readableFileEntity(userId, entityId);
+      if (!readable.ok) {
+        return c.json({ error: readable.error }, readable.status);
+      }
+      if (!readable.entity.documentId) {
+        return c.json(
+          { error: "File has no stored document", code: "not_found" },
+          404
+        );
+      }
+      const result = await transcribeStoredMedia(
+        readable.entity.documentId,
+        userId
+      );
+      if ("text" in result) return c.json(result);
+      const answer = TRANSCRIBE_FAILURE[result.failed];
+      if (result.failed === "unavailable" || result.failed === "refused") {
+        logger.warn(
+          { entityId, failed: result.failed, detail: result.detail },
+          "Hub file transcription did not complete"
+        );
+      }
+      return c.json(
+        { error: answer.error, code: result.failed },
+        answer.status
+      );
+    } catch (err) {
+      logger.error({ err, entityId }, "Hub file transcription failed");
+      return c.json({ error: "Failed to transcribe" }, 500);
     }
   });
 

@@ -320,6 +320,95 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
 } as const;
 
 /**
+ * The playbook DEFINITION properties both `synap_create_playbook` and
+ * `synap_update_playbook` advertise — one copy, so the two tools can never
+ * describe the same field differently. Parsed server-side by the procedures'
+ * own schemas (`playbookStagesSchema`, `playbookParamsInputSchema`,
+ * `sessionCriteriaSchema`).
+ */
+const PLAYBOOK_STAGES_PROPERTY = {
+  type: "array",
+  description:
+    "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
+  items: {
+    type: "object",
+    properties: {
+      key: { type: "string" },
+      name: { type: "string" },
+      category: {
+        type: "string",
+        enum: [
+          "backlog",
+          "planned",
+          "started",
+          "paused",
+          "completed",
+          "canceled",
+        ],
+        description:
+          "Which rollup bucket this stage belongs to: backlog (not committed) · planned (committed, not begun) · started (work under way) · paused (on hold) · completed (terminal, succeeded) · canceled (terminal, abandoned).",
+      },
+      description: { type: "string" },
+      goal: { type: "string" },
+      suggestedTasks: {
+        type: "array",
+        items: { type: "string" },
+      },
+      position: {
+        type: "number",
+        description:
+          "Order WITHIN this stage's category group — not a global order.",
+      },
+      indefinite: {
+        type: "boolean",
+        description:
+          "True if a subject may sit here indefinitely; otherwise a long dwell is worth surfacing.",
+      },
+      ...PLAYBOOK_PROCESS_JSON_SCHEMA.stage,
+    },
+    required: ["key", "name", "category"],
+  },
+};
+
+const PLAYBOOK_PARAMS_PROPERTY = {
+  type: "array",
+  description:
+    "What the method needs to know. A required param left unanswered when synap_start_track runs becomes a question owed to the person (answer later with synap_set_track_params); optional ones fall back to their default.",
+  items: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description: "Key, referenced as {name} in the goalTemplate.",
+      },
+      label: {
+        type: "string",
+        description: "The question as the person sees it.",
+      },
+      type: {
+        type: "string",
+        enum: ["text", "number", "entity", "choice", "boolean"],
+      },
+      options: {
+        type: "array",
+        items: { type: "string" },
+        description: "The choices, for type 'choice'.",
+      },
+      default: { description: "Used when unanswered." },
+      required: { type: "boolean" },
+    },
+    required: ["name", "type"],
+  },
+};
+
+const PLAYBOOK_CRITERIA_PROPERTY = {
+  type: "array",
+  description:
+    "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'), hint? }, stageKey? }.",
+  items: { type: "object" },
+};
+
+/**
  * `outcomes` (A4) — THE declaration of what a session must yield, on
  * `synap_start_session` / `synap_update_session`. Parsed server-side by
  * `outcomeDeclarationSchema` (`services/focus-sessions/outcome-declarations.ts`)
@@ -1190,7 +1279,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to ATTACH the document to an existing entity. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
+          "Create a standalone document. TWO modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1213,7 +1302,12 @@ export const tools = {
             entityId: {
               type: "string",
               description:
-                "Optional UUID of an EXISTING entity to attach this document to. The attach is a separate governed entity update — its own outcome comes back under `attached`.",
+                "Optional UUID of an EXISTING entity whose BODY this document becomes. The attach is a separate governed entity update — its own outcome comes back under `attached`. Refused when the entity already has a body (the refusal names it), unless `replaceBody` is true.",
+            },
+            replaceBody: {
+              type: "boolean",
+              description:
+                "With `entityId`: replace the entity's existing body with this document on purpose. The old body document is kept but no longer attached. Omit to be refused instead.",
             },
             workspaceId: { type: "string" },
             sessionId: {
@@ -2803,49 +2897,7 @@ export const tools = {
               type: "string",
               description: "What this playbook is for.",
             },
-            stages: {
-              type: "array",
-              description:
-                "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, gate?, onFail?, expectedOutputs?, criteria? }. `category` is REQUIRED — it is the closed rollup axis a cross-playbook board groups on, since your stage `key`s are this playbook's own vocabulary and no other playbook shares them. Stage keys must be unique within the playbook.",
-              items: {
-                type: "object",
-                properties: {
-                  key: { type: "string" },
-                  name: { type: "string" },
-                  category: {
-                    type: "string",
-                    enum: [
-                      "backlog",
-                      "planned",
-                      "started",
-                      "paused",
-                      "completed",
-                      "canceled",
-                    ],
-                    description:
-                      "Which rollup bucket this stage belongs to: backlog (not committed) · planned (committed, not begun) · started (work under way) · paused (on hold) · completed (terminal, succeeded) · canceled (terminal, abandoned).",
-                  },
-                  description: { type: "string" },
-                  goal: { type: "string" },
-                  suggestedTasks: {
-                    type: "array",
-                    items: { type: "string" },
-                  },
-                  position: {
-                    type: "number",
-                    description:
-                      "Order WITHIN this stage's category group — not a global order.",
-                  },
-                  indefinite: {
-                    type: "boolean",
-                    description:
-                      "True if a subject may sit here indefinitely; otherwise a long dwell is worth surfacing.",
-                  },
-                  ...PLAYBOOK_PROCESS_JSON_SCHEMA.stage,
-                },
-                required: ["key", "name", "category"],
-              },
-            },
+            stages: PLAYBOOK_STAGES_PROPERTY,
             status: {
               type: "string",
               enum: ["draft", "active", "paused", "archived"],
@@ -2876,43 +2928,8 @@ export const tools = {
               description:
                 "What the playbook instantiates. 'session' (default): a template for ONE bounded focus session, which a session or a worker follows. 'project': LEGACY — a staged method a track runs (synap_start_track); a new track needs none.",
             },
-            params: {
-              type: "array",
-              description:
-                "What the method needs to know. A required param left unanswered when synap_start_track runs becomes a question owed to the person (answer later with synap_set_track_params); optional ones fall back to their default.",
-              items: {
-                type: "object",
-                properties: {
-                  name: {
-                    type: "string",
-                    description:
-                      "Key, referenced as {name} in the goalTemplate.",
-                  },
-                  label: {
-                    type: "string",
-                    description: "The question as the person sees it.",
-                  },
-                  type: {
-                    type: "string",
-                    enum: ["text", "number", "entity", "choice", "boolean"],
-                  },
-                  options: {
-                    type: "array",
-                    items: { type: "string" },
-                    description: "The choices, for type 'choice'.",
-                  },
-                  default: { description: "Used when unanswered." },
-                  required: { type: "boolean" },
-                },
-                required: ["name", "type"],
-              },
-            },
-            criteria: {
-              type: "array",
-              description:
-                "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'), hint? }, stageKey? }.",
-              items: { type: "object" },
-            },
+            params: PLAYBOOK_PARAMS_PROPERTY,
+            criteria: PLAYBOOK_CRITERIA_PROPERTY,
             sessionId: {
               type: "string",
               description:
@@ -2920,6 +2937,77 @@ export const tools = {
             },
           },
           required: ["name", "goalTemplate"],
+        },
+      },
+      {
+        name: "synap_update_playbook",
+        annotations: {
+          title: "Update template",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change — an absent field stays as it is; a list you pass (stages, params, criteria, expectedOutputs, activators) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            playbookId: {
+              type: "string",
+              description:
+                "The playbook to edit (id from synap_list_playbooks).",
+            },
+            name: { type: "string", description: "New display name." },
+            goalTemplate: {
+              type: "string",
+              description:
+                "New session goal. Reference a param as {name} (declared in params, the stored ones or the ones you pass), never {{name}}.",
+            },
+            description: {
+              type: "string",
+              description: "What this playbook is for.",
+            },
+            stages: PLAYBOOK_STAGES_PROPERTY,
+            params: PLAYBOOK_PARAMS_PROPERTY,
+            criteria: PLAYBOOK_CRITERIA_PROPERTY,
+            subjectProfileSlug: {
+              type: "string",
+              description:
+                "Repoint the kind or role this playbook runs ON. A slug that resolves to no profile is refused.",
+            },
+            statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
+            activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
+            humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
+            expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
+            status: {
+              type: "string",
+              enum: ["draft", "active", "paused", "archived"],
+              description:
+                "Lifecycle of the template itself (not of its subject).",
+            },
+            scope: {
+              type: "string",
+              enum: ["session", "project"],
+              description:
+                "What the playbook instantiates. 'session': a template for ONE bounded focus session. 'project': LEGACY — a staged method a track runs.",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
+          },
+          required: ["playbookId"],
         },
       },
       {
@@ -3282,6 +3370,11 @@ export const tools = {
                 properties: {
                   ref: { type: "string" },
                   name: { type: "string" },
+                  slug: {
+                    type: "string",
+                    description:
+                      "REQUIRED. The ref synap_load_skill resolves, lowercase path segments (e.g. 'team/where-the-work-is'); without it the skill could not be loaded, so it is refused. Pod-wide unique; 'system/' is reserved.",
+                  },
                   body: {
                     type: "string",
                     description: "The instruction itself, markdown. REQUIRED.",
@@ -3296,7 +3389,7 @@ export const tools = {
                     description: "Omit or null to apply to every agent type.",
                   },
                 },
-                required: ["ref", "name", "body", "scope"],
+                required: ["ref", "name", "slug", "body", "scope"],
               },
             },
             automations: {
@@ -4547,7 +4640,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Amend a pending proposal you authored (e.g. after user feedback): its summary, its reasoning, and/or the payload it will actually apply. Does not re-run the event pipeline, and does NOT approve it — a human still decides.",
+          "Amend a pending proposal you authored (e.g. after user feedback): its summary, its reasoning, and/or the payload it will actually apply. A pending playbook proposal (create or update) is amended with patch {kind:'inner', fields:{ stages, goalTemplate, params, … }}; the revised payload is checked like the playbook write itself, so a bad one is refused now, not at approval. Does not re-run the event pipeline, and does NOT approve it — a human still decides.",
         inputSchema: {
           type: "object",
           properties: {
