@@ -63,6 +63,7 @@ import {
   entities,
   entityFacets,
   profiles,
+  profileProperties,
   profileWorkspaceAccess,
   users,
   workspaceMembers,
@@ -115,6 +116,7 @@ beforeAll(async () => {
     entities,
     entityFacets,
     profiles,
+    profileProperties,
     profileWorkspaceAccess,
   ]) {
     await pg.exec(ddlFor(t as unknown as PgTable));

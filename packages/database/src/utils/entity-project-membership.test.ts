@@ -58,7 +58,10 @@ const { linkEntityToProject } = await import("./entity-project-membership.js");
  */
 function makeDb(projectRows: Array<{ id: string }>) {
   const inserted: Array<Record<string, unknown>> = [];
-  const onConflictDoNothing = vi.fn(async () => undefined);
+  // a70a01e1b: the door reads RETURNING to report `created`.
+  const onConflictDoNothing = vi.fn(() => ({
+    returning: async () => [{ id: "rel-1" }],
+  }));
   const db = {
     select: () => ({
       from: () => ({
