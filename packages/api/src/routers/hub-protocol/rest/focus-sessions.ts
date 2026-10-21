@@ -60,6 +60,12 @@ import {
 } from "@synap-core/types/focus-sessions";
 import { AskAnswerValueSchema, AskSchema } from "@synap-core/types/ask";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
+import { sessionGoalPayload } from "../../../services/focus-sessions/session-update-goal.js";
+import {
+  gateSessionFiling,
+  sessionFilingFields,
+  type SessionFilingDecision,
+} from "../../../services/focus-sessions/session-filing-gate.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
 import { withoutServerOwnedSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
 import {
@@ -540,6 +546,26 @@ const CompleteBodySchema = z.object({
 });
 
 // ── Registration ───────────────────────────────────────────────────────────
+
+/**
+ * Does a PATCH still ask for anything once the parts held on their own
+ * proposals (a hand-off, a filing) are dropped? A wholesale `agentIds` equal to
+ * the roster asks nothing. When nothing is left, the held proposal IS the answer.
+ */
+function patchAsksForMore(
+  patch: Record<string, unknown>,
+  roster: readonly string[]
+): boolean {
+  const sameRoster = (ids: readonly string[]) =>
+    ids.length === roster.length && ids.every((a) => roster.includes(a));
+  return Object.entries(patch).some(
+    ([key, value]) =>
+      value !== undefined &&
+      key !== "agentUserId" &&
+      key !== "reasoning" &&
+      !(key === "agentIds" && sameRoster(value as string[]))
+  );
+}
 
 export function registerFocusSessionsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -1467,7 +1493,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // caller's 400/404, never a proposal that explodes at approval).
       const trackFilingModule =
         await import("../../../services/tracks/session-track-filing.js");
-      const trackFiling = trackFilingModule.hasTrackFilingPatch(patch)
+      let trackFiling = trackFilingModule.hasTrackFilingPatch(patch)
         ? await trackFilingModule.resolveSessionTrackFiling({
             session: existing,
             patch: { trackId: patch.trackId, trackStage: patch.trackStage },
@@ -1506,6 +1532,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             workspaceId: existing.workspaceId,
             sessionId: id,
             goal: existing.goal,
+            title: existing.title,
             agentId,
             reasoning: patch.reasoning,
           });
@@ -1531,17 +1558,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ) {
             delete patch.addAgentId;
           }
-          const sameRoster = (ids: readonly string[]) =>
-            ids.length === roster.length &&
-            ids.every((a) => roster.includes(a));
-          const asksForMore = Object.entries(patch).some(
-            ([key, value]) =>
-              value !== undefined &&
-              key !== "agentUserId" &&
-              key !== "reasoning" &&
-              !(key === "agentIds" && sameRoster(value as string[]))
-          );
-          if (!asksForMore) {
+          if (!patchAsksForMore(patch, roster)) {
             const first = proposed[0]!;
             return jsonGoverned(c, {
               status: "proposed",
@@ -1560,8 +1577,51 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         }
       }
 
-      // Gate data: always include goal from the row (proposal summary label) plus
-      // every field being patched so focus_session/update can materialize on approve.
+      // Step 2e: FILING — an agent's track filing is its OWN forced proposal
+      // (`session-filing-gate.ts`, the MCP door's rule), so the rest of the
+      // patch is not held with it. Proposed ⇒ dropped from this patch
+      // (approval applies it); nothing else asked ⇒ the proposal IS the answer.
+      let filing: SessionFilingDecision | undefined;
+      if (agentUserId && trackFiling) {
+        filing = await gateSessionFiling({
+          userId,
+          agentUserId,
+          workspaceId: existing.workspaceId,
+          session: existing,
+          filing: { trackFiling },
+          reasoning: patch.reasoning,
+        });
+        if (filing.status === "denied") {
+          return c.json({ error: filing.reason }, 403);
+        }
+        if (filing.status === "proposed") {
+          delete patch.trackId;
+          delete patch.trackStage;
+          trackFiling = undefined;
+          const roster = Array.isArray(existing.agentIds)
+            ? existing.agentIds
+            : [];
+          if (!patchAsksForMore(patch, roster)) {
+            return jsonGoverned(c, {
+              status: "proposed",
+              message: proposedMessageFor(
+                filing.proposalType,
+                "Filing this session was proposed for review"
+              ),
+              proposalId: filing.proposalId,
+              summary: filing.summary,
+              reviewPath: filing.reviewPath,
+              reviewUrl: filing.reviewUrl,
+              ...(handOffs.length > 0 ? { handOffs } : {}),
+              session: null,
+            });
+          }
+        }
+      }
+
+      // Gate data: every field being patched so focus_session/update can
+      // materialize on approve. The goal rides ONLY when it changes; the session
+      // is named by the display-only `sessionName` (`session-update-goal.ts`).
       const perm = await checkPermissionOrPropose({
         userId,
         agentUserId,
@@ -1570,11 +1630,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         action: "update",
         source: "intelligence",
         reasoning: patch.reasoning,
-        // Filing into a track is the person's call when an agent does it.
-        ...(trackFiling ? { forcePropose: true } : {}),
         data: {
           id,
-          goal: patch.goal !== undefined ? patch.goal : existing.goal,
+          ...sessionGoalPayload(existing, patch.goal),
           ...(patch.title !== undefined ? { title: patch.title } : {}),
           ...(patch.status !== undefined ? { status: patch.status } : {}),
           ...(patch.progress !== undefined ? { progress: patch.progress } : {}),
@@ -1616,22 +1674,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           // Same reason as `followPlaybookId` above: without this the answers
           // would land on the direct path and vanish on the approved one.
           ...(patch.params !== undefined ? { params: patch.params } : {}),
-          // Carried (re-resolved by the executor); names are display only.
-          ...(trackFiling
-            ? {
-                trackId: trackFiling.set.trackId,
-                trackStage: trackFiling.set.trackStage,
-                ...(trackFiling.trackName
-                  ? { trackName: trackFiling.trackName }
-                  : {}),
-                ...(trackFiling.stageName
-                  ? { stageName: trackFiling.stageName }
-                  : {}),
-                ...(trackFiling.projectName
-                  ? { trackProjectName: trackFiling.projectName }
-                  : {}),
-              }
-            : {}),
+          // A PERSON's track filing (an agent's took its own door above).
+          ...sessionFilingFields({ trackFiling }),
         },
       });
 
@@ -1650,6 +1694,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           reasoning: perm.reasoning,
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
+          ...(filing ? { filing } : {}),
           session: null,
         });
       }
@@ -1915,6 +1960,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Which hand-offs to other agents this patch asked for, and which are
         // waiting on a person (not on the roster yet).
         ...(handOffs.length > 0 ? { handOffs } : {}),
+        // An agent's filing waiting on a person: NOT applied with the rest.
+        ...(filing ? { filing } : {}),
         ...(blockGuidelines ? { blockGuidelines } : {}),
         ...(nudges ? { nudges } : {}),
         // What the follow DID — which playbook, which stage, how much
