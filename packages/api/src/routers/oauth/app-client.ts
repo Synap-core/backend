@@ -70,7 +70,6 @@ export async function loadLiveApp(publicId: string) {
     .where(
       and(
         eq(apps.publicId, publicId),
-        eq(apps.mode, "specific"),
         isNull(apps.revokedAt),
         isNull(apps.removedAt)
       )
