@@ -56,7 +56,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Cross-repo layout (../synap-control-plane-api, ../synap-app), Node,
       # pnpm, install, and the workspace-dependency build. See the action.
@@ -202,7 +202,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Monorepo layout + dependencies
         id: setup
@@ -297,7 +297,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Monorepo layout + dependencies
         uses: ./.github/actions/monorepo-setup
