@@ -4050,6 +4050,7 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // floor and RETURNS markdown; it writes nothing (create-report does). Must
   // auto-run inside the report flow (a propose verdict would stall it).
   "document.freeze_charts",
+  "document.stamp_diagnostics",
   // entity_facet.list — floor-scoped facet read (see handler doc above).
   "entity_facet.list",
   // market.search — cache-only read (see handler doc above). market.install is
