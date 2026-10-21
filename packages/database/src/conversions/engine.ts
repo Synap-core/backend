@@ -106,6 +106,7 @@ export interface FieldPlanRow {
 
 /** Per-op tally. Every field optional — an op reports only what it touched. */
 export interface OpCounts {
+  negctlUnclassified?: number;
   profilesCreated?: number;
   profilesUpdated?: number;
   profilesDeactivated?: number;
