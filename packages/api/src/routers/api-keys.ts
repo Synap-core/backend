@@ -356,7 +356,7 @@ export const apiKeysRouter = router({
    *
    * SECURITY: The key is displayed ONCE and cannot be retrieved later.
    */
-  create: credentialProcedure
+  create: protectedProcedure
     .input(
       z.object({
         keyName: z.string().min(1).max(100),
