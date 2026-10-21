@@ -26,6 +26,7 @@ import { dirname, resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
+  oauthAuthorizationCodes,
   oauthRefreshTokens,
   personDeviceTokens,
   personDevices,
@@ -72,6 +73,11 @@ async function base(): Promise<PGlite> {
 async function pre0340(): Promise<PGlite> {
   const pg = await base();
   await pg.exec(M0339);
+  // The baseline's oauth section is today's shape; a pod that ran only up to
+  // 0339 had no `auth_time` on its codes.
+  await pg.exec(
+    `ALTER TABLE "oauth_authorization_codes" DROP COLUMN IF EXISTS "auth_time"`
+  );
   return pg;
 }
 
@@ -106,6 +112,9 @@ async function expectFinalShape(pg: PGlite) {
   );
   expect(await columnsOf(pg, "person_device_tokens")).toEqual(
     declared(personDeviceTokens)
+  );
+  expect(await columnsOf(pg, "oauth_authorization_codes")).toEqual(
+    declared(oauthAuthorizationCodes)
   );
 }
 
@@ -156,9 +165,12 @@ const count = async (pg: PGlite, table: string) =>
     .rows[0]!.n;
 
 describe("migration 0340 — person devices", { timeout: 60_000 }, () => {
-  it("non-vacuity: a pod that ran 0339 has no device tables and no device_id", async () => {
+  it("non-vacuity: a pod that ran 0339 has no device tables, no device_id, no code auth_time", async () => {
     const pg = await pre0340();
     expect(await columnsOf(pg, "person_devices")).toEqual([]);
+    expect(await columnsOf(pg, "oauth_authorization_codes")).not.toContain(
+      "auth_time"
+    );
     expect(await columnsOf(pg, "oauth_refresh_tokens")).not.toContain(
       "device_id"
     );
@@ -246,6 +258,7 @@ describe("migration 0340 — person devices", { timeout: 60_000 }, () => {
       oauth_refresh_tokens: declared(oauthRefreshTokens),
       person_devices: declared(personDevices),
       person_device_tokens: declared(personDeviceTokens),
+      oauth_authorization_codes: declared(oauthAuthorizationCodes),
     };
     for (const r of required) {
       expect(Object.keys(byTable)).toContain(r.table);
