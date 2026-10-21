@@ -125,6 +125,17 @@ The rules are strict because a migration runs on every pod during
   and `packages/database/src/utils/schema-coherence.ts`. The pod checks schema
   coherence at startup, and CI runs `schema:check`.
 - Never drop or edit the `_migrations` table by hand.
+- Migrations are **forward-only** (expand/contract). A failed update rolls a pod
+  back to the previous images but keeps the migrated database, so the previous
+  release must keep working on the new schema. A migration that has not shipped
+  in a `v*` release may not `DROP` a table or column, `RENAME`, change a column
+  `TYPE` or `SET NOT NULL`. To remove or reshape something: release A adds the
+  new shape and stops using the old one (expand); a later migration removes the
+  old one and says so on one line, naming A's migration (contract):
+  `-- synap:contract-of 0331_official_catalog_digests.sql`. A new required
+  column is `ADD COLUMN … NOT NULL DEFAULT …` in one statement. The Release gate
+  checks this (`deploy/__tests__/migration-forward-only.test.sh`, which runs
+  `scripts/check-migrations-forward-only.mjs`).
 
 ## Commits
 

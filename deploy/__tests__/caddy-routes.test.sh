@@ -15,11 +15,15 @@
 # served on the pod origin must never run script, tunnelled or not), and the
 # registration-proof route exists on both (PODPROV-CONTRACT §6.2).
 #
+# Security headers: every site block imports the ONE `(security_headers)`
+# snippet, and no header is set outside it; with a caddy binary, `caddy adapt`
+# proves every host route of both servers carries them.
+#
 # NOT covered: matcher-based routes (`@name`, other than refusing to count one as
-# the catch-all), header blocks
-# other than the CSP above, the pod-admin pair (both are one reverse_proxy), and
-# what a running Caddy actually serves (daemon-free; `caddy adapt` needs a
-# Caddy binary or Docker, neither assumed in CI).
+# the catch-all), header blocks other than the CSP above and the security
+# snippet, the pod-admin route pair (both are one reverse_proxy), and what a
+# running Caddy actually serves on the wire (the adapt check reads the config
+# caddy builds; it needs CADDY_BIN or `caddy` on PATH, not assumed in CI).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CADDYFILE="${CADDY_ROUTES_CADDYFILE:-$HERE/Caddyfile}"
@@ -103,6 +107,50 @@ for hdr in '{$DOMAIN}:80 {' '{$POD_ADMIN_DOMAIN}:80 {'; do
       && ok "outside cleartext clients are redirected to HTTPS in ${hdr}" \
       || bad "${hdr} serves outside clients in cleartext"
 done
+# ── security headers: one snippet, imported by EVERY site block ──────────────
+# The tunnel :80 blocks had none of the TLS blocks' headers (review 2026-10-20).
+# The site blocks are DERIVED (every top-level `<address> {` that is neither the
+# global options `{` nor a `(snippet) {`), so a fifth block joins by existing.
+# Each must import security_headers at its top level, a host's :80 and TLS
+# blocks must pass the same X-Frame-Options, and no header line outside the
+# snippet may set a security header (a second copy is how they drifted).
+SEC_HEADERS='Strict-Transport-Security|X-Content-Type-Options|X-Frame-Options|Referrer-Policy|X-XSS-Protection'
+site_imports() { # → "<site address><TAB><import arg or NONE>" per site block
+    awk '
+        { line=$0; gsub(/"[^"]*"/, "\"\"", line); sub(/(^|[[:space:]])#.*/, "", line) }
+        depth == 0 && line ~ /^[^[:space:](][^[:space:]]*[[:space:]]*\{[[:space:]]*$/ { site=line; sub(/[[:space:]]+\{[[:space:]]*$/, "", site); arg="NONE"; insite=1 }
+        insite && depth == 1 && line ~ /^[[:space:]]*import[[:space:]]+security_headers([[:space:]]|$)/ { n=split(line, f, /[[:space:]]+/); arg=f[n] }
+        { o=gsub(/\{/, "{", line); c=gsub(/\}/, "}", line); depth += o - c }
+        insite && depth == 0 { print site "\t" arg; insite=0 }
+    ' "$1"
+}
+sites="$(site_imports "$CADDYFILE")"
+nsites="$(printf '%s\n' "$sites" | grep -c .)"
+[ "$nsites" -ge 4 ] && ok "found $nsites site blocks to check for security headers" || bad "only $nsites site blocks found (scan went blind): $sites"
+# Self-check: the scan sees a block WITHOUT the import, and one with it.
+SC="$(mktemp)"
+printf '(security_headers) {\n  header X 1\n}\n{$X}:80 {\n  respond 1\n}\n{$Y} {\n  import security_headers DENY\n}\n' > "$SC"
+[ "$(site_imports "$SC" | tr '\t\n' '=;')" = '{$X}:80=NONE;{$Y}=DENY;' ] \
+  && ok "self-check: the import scan tells a block without the snippet from one with it" || bad "self-check: import scan misreads: $(site_imports "$SC" | tr '\t\n' '=;')"
+rm -f "$SC"
+while IFS="$(printf '\t')" read -r site arg; do
+    [ -n "$site" ] || continue
+    case "$arg" in
+        DENY|SAMEORIGIN) ok "$site imports security_headers ($arg)" ;;
+        *) bad "$site does not import security_headers (DENY|SAMEORIGIN) at its top level: got '$arg'" ;;
+    esac
+    host="${site%:80}"
+    twin="$(printf '%s\n' "$sites" | awk -F'\t' -v h="$host" '($1 == h || $1 == h ":80") {print $2}' | sort -u | grep -c .)"
+    [ "$twin" = 1 ] || bad "$host: its :80 and TLS blocks pass different X-Frame-Options ($(printf '%s\n' "$sites" | awk -F'\t' -v h="$host" '($1 == h || $1 == h ":80") {print $1"="$2}' | tr '\n' ' '))"
+done <<< "$sites"
+snippet="$(awk '/^\(security_headers\) \{/ {p=1} p {print} p && /^}/ {exit}' "$CADDYFILE")"
+for h in Strict-Transport-Security X-Content-Type-Options X-Frame-Options Referrer-Policy; do
+    grep -qE "^[[:space:]]*$h[[:space:]]+\"" <<<"$snippet" && ok "the security_headers snippet sets $h" || bad "the security_headers snippet does not set $h"
+done
+grep -qE '^[[:space:]]*X-Frame-Options[[:space:]]+"\{args\[0\]\}"' <<<"$snippet" && ok "X-Frame-Options comes from the import argument" || bad "X-Frame-Options is not {args[0]} in the snippet"
+outside="$(awk '/^\(security_headers\) \{/ {p=1} p && /^}/ {p=0; next} !p' "$CADDYFILE" | grep -vE '^[[:space:]]*#' | grep -E "(^|[[:space:]])($SEC_HEADERS)([[:space:]]|$)")"
+[ -z "$outside" ] && ok "no security header is set outside the snippet" || bad "a security header is set outside the snippet (a second copy drifts): $outside"
+
 # The MinIO CONSOLE is a full admin UI behind one root key: never routed.
 grep -qE '^[^#]*reverse_proxy[[:space:]]+minio:9001' "$CADDYFILE" \
   && bad "a route reaches the MinIO console (minio:9001)" || ok "no route reaches the MinIO console"
@@ -198,6 +246,22 @@ if [ -n "$CADDY" ] && [ -x "$CADDY" ]; then
             && ok "caddy validates the Caddyfile with ACME_EMAIL_OPTION='${opt}'" \
             || bad "caddy refuses the Caddyfile with ACME_EMAIL_OPTION='${opt}': $(printf '%s' "$out" | tail -1)"
     done
+    # What caddy actually builds: every host route of every server (TLS and
+    # :80) carries the snippet's headers, with that host's X-Frame-Options.
+    json="$(cd "$ET" && HOME="$ET/home" XDG_DATA_HOME="$ET/home" XDG_CONFIG_HOME="$ET/home" DOMAIN=pod.example.com POD_ADMIN_DOMAIN=admin.example.com \
+        ACME_EMAIL_OPTION="" "$CADDY" adapt --config "$ET/Caddyfile" --adapter caddyfile 2>/dev/null)"
+    hdrs="$(jq -r '.apps.http.servers | to_entries[] | .value.listen[0] as $l | .value.routes[]
+        | (.match[0].host[0] // "-") as $h
+        | [.. | objects | select(.handler? == "headers") | .response.set // {} | to_entries[] | "\(.key)=\(.value[0])"] | sort | unique
+        | "\($l) \($h) \(map(select(test("^(X-Content-Type-Options|X-Frame-Options|Strict-Transport-Security|Referrer-Policy)="))) | join(","))"' <<<"$json" 2>/dev/null)"
+    nroutes="$(printf '%s\n' "$hdrs" | grep -cE ' (pod|admin)\.example\.com ')"
+    [ "$nroutes" -ge 4 ] && ok "caddy adapt: $nroutes host routes found across the TLS and :80 servers" || bad "caddy adapt: only $nroutes host routes found: $hdrs"
+    while read -r listen host set; do
+        case "$host" in pod.example.com) want=DENY ;; admin.example.com) want=SAMEORIGIN ;; *) continue ;; esac
+        [[ "$set" == *"X-Content-Type-Options=nosniff"* && "$set" == *"X-Frame-Options=$want"* && "$set" == *"Strict-Transport-Security="* && "$set" == *"Referrer-Policy="* ]] \
+            && ok "caddy adapt: $host on $listen sends the security headers (X-Frame-Options $want)" \
+            || bad "caddy adapt: $host on $listen lacks security headers: '${set}'"
+    done <<< "$hdrs"
 else
     echo "skip - no caddy binary (CADDY_BIN / PATH): the Caddyfile is not loaded by caddy here"
 fi
