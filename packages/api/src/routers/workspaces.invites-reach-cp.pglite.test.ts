@@ -167,6 +167,9 @@ describe("createInvite on a pod with no POD_SUBDOMAIN", () => {
       inviteToken: created.token,
       email: "bob@example.com",
       workspaceName: "Studio",
+      // This pod redeems its own invites, so the CP links the email to the
+      // pod's console invite page, not the landing site's CP redemption.
+      orchestration: "pod_local",
     });
     // A name the pod does not have is not sent as an empty one.
     expect(email[0]!.body).not.toHaveProperty("podSubdomain");
