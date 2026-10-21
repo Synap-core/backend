@@ -337,7 +337,8 @@ export const DEVICE_REFRESH_RETRY_GRACE_MS = 30_000;
  * mints a fresh pair from this token, in the same family. Anything else —
  * outside the window, the successor already used, or retired by someone
  * else first — is a reuse (false: the caller kills the family AND the
- * device). A successor not issued yet (the first refresh still minting) is
+ * device), except a concurrent retry of the same token, refused without a
+ * revoke. A successor not issued yet (the first refresh still minting) is
  * waited for briefly, then refused without a revoke. Never touches the
  * device's step-up clock (`auth_time`). Pod apps keep their own PB3b grace
  * (`reuseGrace`), which answers the SAME pair.
@@ -362,7 +363,32 @@ async function deviceRetryGrace(row: RefreshRow): Promise<boolean> {
       )
     )
     .returning({ id: oauthRefreshTokens.id });
-  return retired.length > 0;
+  if (retired.length > 0) return true;
+  // Two retries of the SAME token at once (an app that double-submits): the
+  // other retry retired this successor a moment ago, unused, and is minting
+  // the pair. Nothing went to two holders, so it is not a theft: refused
+  // WITHOUT a revoke, like the loser of a concurrent claim (R2). Only a grace
+  // retires one token of a live family (tripwire
+  // `device-refresh-token-retire-writers`), so "retired, unused, this family,
+  // within the window" names exactly that.
+  const [successor] = await db
+    .select({
+      familyId: oauthRefreshTokens.familyId,
+      lastUsedAt: oauthRefreshTokens.lastUsedAt,
+      revokedAt: oauthRefreshTokens.revokedAt,
+    })
+    .from(oauthRefreshTokens)
+    .where(eq(oauthRefreshTokens.id, successorId))
+    .limit(1);
+  if (
+    successor?.familyId === row.familyId &&
+    !successor.lastUsedAt &&
+    successor.revokedAt &&
+    Date.now() - successor.revokedAt.getTime() < DEVICE_REFRESH_RETRY_GRACE_MS
+  ) {
+    throw new OAuthError("invalid_grant", INVALID);
+  }
+  return false;
 }
 
 /**

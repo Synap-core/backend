@@ -104,11 +104,21 @@
  *     token was spent). Within 30 s of its use, while its successor was NEVER
  *     redeemed, the same token is a RETRY (`deviceRetryGrace`, refresh.ts):
  *     the unused successor is retired, a fresh pair is minted, the family and
- *     the device live on. Residual: a thief replaying within those 30 s,
- *     before the app's next refresh, gets a pair — and the app's own next
- *     refresh, presenting the retired successor, then ends the device (R1),
- *     so the theft is loud within the hour. → "a lost response, then a retry
- *     within 30 s, keeps the device".
+ *     the device live on. Two retries of the same token AT ONCE: the second
+ *     finds the successor just retired by the first and is refused
+ *     `invalid_grant` WITHOUT a revoke. Only that grace retires one token of
+ *     a live device (tripwire `device-refresh-token-retire-writers`), which is
+ *     what lets redeem read any other revoked device token as a reuse.
+ *     Residual: a thief replaying within those 30 s, before the app's next
+ *     refresh, gets a pair — and the app's own next refresh, presenting the
+ *     retired successor, then ends the device (R1), so the theft is loud
+ *     within the hour; detect-and-kill, not prevent. → "(k)".
+ *     THE APP'S CONTRACT (Relay, Desktop; plan phase 3): refresh
+ *     SINGLE-FLIGHT, and keep the pair from the LATEST successful response.
+ *     A late first response that arrives after a retry carries a successor
+ *     the retry retired; storing it signs the device out at the next refresh.
+ *     An `invalid_grant` while another refresh of the same token succeeded
+ *     is not a sign-out: keep the successful pair.
  *  R8 A refresh renewing the step-up clock. It never does: `auth_time` lives
  *     on the device row and only a step-up moves it. → "a refreshed token
  *     stays stale".

@@ -643,6 +643,21 @@ describe("(k) a retry after a lost refresh response", () => {
     expect((await device(s.deviceId)).revoked_at).not.toBeNull();
   });
 
+  it("two retries of the same token at once (a double submit): one pair, the other refused, the device lives", async () => {
+    const s = await signIn();
+    expect((await refresh(s.refresh)).status).toBe(200); // response lost
+    const [a, b] = await Promise.all([refresh(s.refresh), refresh(s.refresh)]);
+    const ok = [a, b].filter((r) => r.status === 200);
+    expect(ok.length).toBeGreaterThanOrEqual(1);
+    for (const r of [a, b]) {
+      if (r.status !== 200) expect(r.body.error).toBe("invalid_grant");
+    }
+    expect((await device(s.deviceId)).revoked_at).toBeNull();
+    // The app keeps the pair of the LATEST success, and it works.
+    const kept = ok[ok.length - 1]!;
+    expect((await refresh(kept.body.refresh_token)).status).toBe(200);
+  });
+
   it("at 31 s the retry is a reuse: the device ends", async () => {
     const s = await signIn();
     expect((await refresh(s.refresh)).status).toBe(200);
