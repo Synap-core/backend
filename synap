@@ -5490,6 +5490,17 @@ cmd_apply() {
         exit 1
     fi
 
+    # What is derived from the pod's names follows the .env just set, exactly
+    # as on the Control Plane's `configure` (cmd_compose_request): a move made
+    # by hand (`synap config set DOMAIN=… SYNAP_LEGACY_DOMAIN=…` + `synap
+    # apply`, a pod with no agent behind a front proxy) gets the same
+    # SYNAP_BASE_DOMAIN, Pod Admin pair and ALLOWED_ORIGINS. Even when nothing
+    # runs: the next start reads them.
+    local domain kratos_before="" kratos_after=""
+    domain="$(envcfg_value DOMAIN)"; domain="${domain:-localhost}"
+    backfill_federation_public_urls "$domain"
+    reconcile_moved_origins
+
     local running=() svc
     while IFS= read -r svc; do
         [ -n "$svc" ] && running+=("$svc")
@@ -5499,8 +5510,6 @@ cmd_apply() {
         return 0
     fi
 
-    local domain kratos_before="" kratos_after=""
-    domain="$(envcfg_value DOMAIN)"; domain="${domain:-localhost}"
     [ -f ../kratos/kratos.yml ] && kratos_before="$(cksum < ../kratos/kratos.yml)"
     generate_kratos_config "$domain"
     [ -f ../kratos/kratos.yml ] && kratos_after="$(cksum < ../kratos/kratos.yml)"
