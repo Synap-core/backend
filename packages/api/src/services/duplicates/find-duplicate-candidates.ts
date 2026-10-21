@@ -275,7 +275,7 @@ export type DuplicateQuery =
        */
       alsoKinds?: string[];
       /** Visibility predicate for the record leg's weak path (REQUIRED for it to run). */
-      recordScope: SQL;
+      recordScope: SQL | undefined;
       /** Capture graphs: the op this check is about (stamped on its candidates). */
       forRef?: string;
       /** Preloaded pending queue (a capture checks many items against one read). */
