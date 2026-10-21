@@ -19,48 +19,83 @@
  * registered app), but unbounded by a grant: it IS the person in their app.
  *
  * THREAT MODEL — each threat, its defence, and the test that holds it
- * (`person-device-token.pglite.test.ts` unless named):
+ * (`person-device-token.pglite.test.ts` unless named). Two paths reach this
+ * door; each is modelled step by step, then the token itself.
  *
- *  T1 Access-token theft. One hour of the person on the app API only: `/mcp`
- *     and Hub REST resolve `api_keys` rows, which this is not ("refused on
- *     /mcp and the Hub"); no door counts it as a recent sign-in (no
- *     `authenticated_at`), so account recovery and credential changes stay
- *     behind a real Kratos session; and it cannot authorize an OAuth
- *     connection (`decideOAuthAuthorization` refuses a device session), so it
- *     cannot turn itself into a new device or an agent connection. Revoking
- *     the device stops it at once (every lookup reads through the device
- *     row). RESIDUAL (accepted, as for a stolen Kratos session today): within
- *     its hour it is the person on `/trpc`, so what the person may do there —
- *     make an API key, approve a computer from Relay — it may do.
- *  T2 Refresh-token theft. Single-use with reuse detection (RFC 9700
- *     §4.14.2): when the thief and the app both redeem, the second redeem
- *     ends the whole DEVICE, access tokens included. → "a reused refresh
+ * ── The MINT path (an authorization code becomes a device) ──
+ *  M1 Code replay, a wrong PKCE verifier, a foreign redirect. The AS rules
+ *     every client obeys before this door runs: the code is CLAIMED atomically
+ *     (one UPDATE … RETURNING; a second exchange gets nothing), bound to the
+ *     client it was issued to, its redirect re-checked through the first-party
+ *     matcher (`matchFirstPartyRedirect`: loopback IP literals any port, exact
+ *     path; `localhost` refused), the S256 verifier checked, and a `resource`
+ *     must be this pod. → routes.test, first-party-redirect.test, "(a)".
+ *  M2 Another client getting a device. Only a code whose client resolves as
+ *     `first_party` from the CODE registry (`resolveFirstPartyClient`, never a
+ *     DCR row) reaches `signInPersonDevice`, which re-checks the id; only THIS
+ *     file inserts into `person_device_tokens` (tripwire
+ *     `person-device-mint-one-door`). → "a non-first-party client id never
+ *     gets a device".
+ *  M3 An agent, a key, or a device token authoring the consent. The code
+ *     exists only after `decideOAuthAuthorization`: a human (`userType`),
+ *     with no acting agent and no key grant, in a KRATOS session — a device
+ *     session is refused there and at the procedure (`credentialProcedure`),
+ *     so a 1 h token can never mint itself a 180-day device. This door
+ *     re-checks `userType === "human"` at mint. → "(h)", "a device token
+ *     cannot authorize a connection".
+ *  M4 Loopback impersonation (RFC 8252 §8.6): any program on the computer can
+ *     listen on 127.0.0.1. PKCE binds the code to the program that STARTED
+ *     the flow, so a listener that did not start it holds a useless code; the
+ *     consent is always a click naming the app and "this computer"; the
+ *     devices list shows every sign-in with its label and user agent.
+ *     Accepted residual: a malicious program that starts its own flow and
+ *     gets the person to click "Sign in".
+ *
+ * ── The REFRESH path (rotation, refresh.ts) ──
+ *  R1 Refresh-token theft. Every token is SINGLE-USE: the redeem claims it
+ *     with one UPDATE that flips `last_used_at` from NULL. When the thief and
+ *     the app both redeem, the second presentation is a REUSE (RFC 9700
+ *     §4.14.2): the whole family is revoked AND the device ends
+ *     (`revokePersonDevice`), access tokens included. → "a reused refresh
  *     token ends the device".
- *  T3 A long-lived device nobody watches. 30-day idle expiry, a 180-day
- *     absolute cap no refresh can extend, and a devices list the person reads
- *     and revokes from (`devices.list` / `devices.revoke`). → "the absolute
- *     cap is enforced".
- *  T4 Another client minting a device token. Only a first-party client's code
- *     reaches this door (routes.ts checks `clientKind`), its refresh is bound
- *     to its `client_id` (refresh.ts), and only THIS file inserts into
- *     `person_device_tokens` (tripwire `person-device-mint-one-door`).
- *  T5 An agent signing in as a device. The consent is a person's act in their
- *     own Kratos session (`decideOAuthAuthorization` refuses a key or an
- *     agent principal); this door re-checks `userType === "human"` at mint
- *     AND at refresh, and the lookup re-checks it on every request.
- *  T6 Loopback impersonation (RFC 8252 §8.6): any program on the computer
- *     can listen on 127.0.0.1. PKCE binds the code to the app that started
- *     the flow, and the consent is always a click naming the app and the
- *     device; the devices list shows every sign-in. Accepted residual risk.
- *  T7 A bearer path into the HUMAN context accepting other credentials.
+ *  R2 Two honest refreshes at once (two windows). The UPDATE lets exactly one
+ *     win; the loser gets `invalid_grant` WITHOUT a family revoke (a retrying
+ *     client is not a thief). The apps refresh single-flight (plan §6.3).
+ *  R3 A refresh racing a sign-out. The device row is the authority: the
+ *     redeem refuses a revoked or capped device, every successor is issued
+ *     under the family lock and refused if the family died meanwhile, and
+ *     every access token is read THROUGH the device — so a successor issued
+ *     a moment after the revoke still opens nothing.
+ *  R4 Living forever on refreshes. Each successor lives 30 days idle but
+ *     never past the device's absolute cap (180 days from sign-in), and no
+ *     access token is minted past it either. → "the absolute cap is
+ *     enforced", "near the cap, nothing is minted past it".
+ *  R5 A refresh token presented by another client. Bound to its `client_id`:
+ *     refused, and NOT spent. → "(g)".
+ *  R6 The person stops being a person (agent conversion, removal). The
+ *     refresh re-checks `userType === "human"` and ends the device; the
+ *     lookup joins `users` with `user_type = 'human'` on every request.
+ *
+ * ── The TOKEN on the wire ──
+ *  T1 Access-token theft. One hour of the person on the app API only: `/mcp`
+ *     and Hub REST resolve `api_keys` rows, which this is not ("(c)"); no door
+ *     counts it as a recent sign-in (no `authenticated_at`), so account
+ *     recovery and credential changes stay behind a real Kratos session; and
+ *     NO credential door takes it — a procedure that creates, rotates, widens
+ *     or approves a key, grant, computer, app, connection or governance rule
+ *     refuses a device session (`credentialProcedure` /
+ *     `refuseDeviceSession`, an executor's `widensCredential`, the privileged
+ *     approval floor; tripwire `credential-doors-refuse-device-session`,
+ *     "(i)"). Revoking the device stops it at once.
+ *  T2 A bearer path into the HUMAN context accepting other credentials.
  *     `appSessionMiddleware` accepts a bearer ONLY with the device prefix and
- *     resolves it ONLY here (`resolvePersonDeviceSession`); any other bearer
+ *     resolves it ONLY through `resolvePersonDeviceSession`; any other bearer
  *     (a PAT, an agent key, a Kratos token sent as a bearer) is ignored, so
- *     the request falls to the Kratos session check. → tripwire
- *     `app-session-bearer` (middleware/app-session.test.ts).
- *  T8 Code replay, bad PKCE, a foreign redirect. The AS rules every client
- *     already obeys: atomic single-use claim, S256, the first-party redirect
- *     matcher (`matchFirstPartyRedirect`, loopback IP literals only).
+ *     the request falls to the Kratos check. → tripwire `app-session-bearer`
+ *     (middleware/app-session.test.ts).
+ *  T3 A device nobody watches. The devices list (`devices.list`) shows each
+ *     sign-in; signing one out is a console act (`devices.revoke`), the app's
+ *     own sign-out is RFC 7009 `/revoke` with either token.
  */
 
 import { randomBytes } from "crypto";

@@ -4,7 +4,7 @@
  * WHY: a row in `person_device_tokens` IS the person on the app API: the
  * session gate (`middleware/app-session.ts`) and realtime resolve it into the
  * same identity a Kratos session gives, with no grant and no governance in
- * between (join plan target A; threat T4, services/person-device-token.ts). If
+ * between (join plan target A; threat M2, services/person-device-token.ts). If
  * a second door could insert one — a convenience "mint a token for this user",
  * a test helper promoted to src, a raw SQL insert — anyone reaching that door
  * would become any person on `/trpc`. The ONE door makes it only from a

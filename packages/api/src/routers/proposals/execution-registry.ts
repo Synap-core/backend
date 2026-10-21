@@ -23,6 +23,7 @@ import { TRPCError } from "@trpc/server";
 import type { ProposalExecutorKey } from "@synap/governance-policy";
 import { createLogger } from "@synap-core/core";
 import type { Context } from "../../context.js";
+import { assertNotDeviceSession } from "../../utils/device-session.js";
 import type {
   StoredProposalData,
   ProposalMaterializedRecord,
@@ -264,6 +265,14 @@ export interface ProposalExecutor {
    * with no effect.
    */
   key: ProposalExecutorKey;
+  /**
+   * Approving this proposal CREATES or WIDENS a credential (a grant, an app's
+   * reach, an agent's key, a secret's grant). A Synap app's device session may
+   * not approve it: `dispatchProposalApproval` refuses one
+   * (`assertNotDeviceSession`) — that approval happens on the console. Derived
+   * and enforced by tripwire `credential-doors-refuse-device-session`.
+   */
+  widensCredential?: true;
   execute(args: ProposalExecutorArgs): Promise<ProposalExecutorResult>;
 }
 
@@ -392,6 +401,8 @@ export async function dispatchProposalApproval(
       message: `Proposal approval for type '${args.proposal.targetType}' is not yet implemented`,
     });
   }
+  // A credential-widening approval is a console act, never a device token's.
+  if (executor.widensCredential) assertNotDeviceSession(args.ctx);
 
   try {
     return await executor.execute(args);

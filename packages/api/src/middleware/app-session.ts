@@ -78,6 +78,9 @@ export function appSessionMiddleware(
     );
     c.set("userId" as never, session.identity.id as never);
     c.set("session" as never, session as never);
+    // The ONE place a session is marked a device session (createContext
+    // copies it to `ctx.sessionKind`; credential doors refuse it).
+    c.set("sessionKind" as never, "person_device" as never);
     c.set("authenticated" as never, true as never);
     return next();
   };

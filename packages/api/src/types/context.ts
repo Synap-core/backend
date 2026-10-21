@@ -60,6 +60,14 @@ export interface Context {
   userId?: string | null;
   user?: User | null;
   session?: KratosSession | null;
+  /**
+   * What kind of PERSON session `session` is: a Kratos session (browser
+   * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
+   * `createContext`, from what the app session gate resolved from the row
+   * (`middleware/app-session.ts`); null when there is no session. Credential
+   * doors refuse anything but `kratos` (`refuseDeviceSession`, trpc.ts).
+   */
+  sessionKind?: "kratos" | "person_device" | null;
   req?: Request;
   socketIO?: any; // Socket.IO server instance (type: Server from 'socket.io')
   workspaceId?: string | null; // Workspace ID from X-Workspace-Id header

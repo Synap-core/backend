@@ -11,6 +11,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { t } from "./init-trpc.js";
+import { assertNotDeviceSession } from "./utils/device-session.js";
 import { requireUserId } from "./utils/user-scoped.js";
 import { createLogger } from "@synap-core/core";
 import { db, eq, and } from "@synap/database";
@@ -171,6 +172,21 @@ export const protectedProcedure = publicProcedure
   })
   .use(readOnlyGuardMiddleware)
   .use(auditLogMiddleware);
+
+/**
+ * The ONE tRPC refusal of a Synap app's DEVICE session at a credential door
+ * (`utils/device-session.ts` says why). Every procedure that creates, rotates,
+ * widens or approves a credential uses it, through `credentialProcedure` or
+ * `.use(refuseDeviceSession)` — derived and enforced by tripwire
+ * `credential-doors-refuse-device-session`.
+ */
+export const refuseDeviceSession = t.middleware(async (opts) => {
+  assertNotDeviceSession(opts.ctx);
+  return opts.next({ ctx: opts.ctx });
+});
+
+/** A credential door for any signed-in caller: {@link refuseDeviceSession}. */
+export const credentialProcedure = protectedProcedure.use(refuseDeviceSession);
 
 /** How many candidate workspaces the denial message names before eliding. */
 const DENIAL_CANDIDATE_LIMIT = 8;

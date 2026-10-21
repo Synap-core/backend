@@ -5,7 +5,7 @@
  * WHY: `/trpc` runs a request as the PERSON with no governance in between
  * (writes auto-apply, approvals are theirs). A gate that resolved any other
  * bearer — a PAT, an agent or machine key, an app's person token — into that
- * context would hand an agent the human path (threat T7,
+ * context would hand an agent the human path (threat T2,
  * services/person-device-token.ts). Keys keep their own doors.
  *
  * HOW: the REAL middleware, a stand-in for the Kratos half (records that it

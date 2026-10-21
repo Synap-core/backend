@@ -35,6 +35,7 @@ import {
   type OAuthAppOfferItem,
 } from "../../services/app-connect.js";
 import type { Context } from "../../types/context.js";
+import { isDeviceSession } from "../../utils/device-session.js";
 
 import {
   OAuthError,
@@ -520,8 +521,8 @@ export async function decideOAuthAuthorization(
   // Nor a Synap app's device token (join plan target A): a 1 h token must
   // never turn itself into a new device (180 days) or an agent connection
   // (90 days) through this door. Consent is a browser act, on the console,
-  // in a Kratos session (threat T1, services/person-device-token.ts).
-  if (ctx?.session?.device) {
+  // in a Kratos session (threat M3, services/person-device-token.ts).
+  if (isDeviceSession(ctx)) {
     throw new AuthorizeUserError(
       "Authorize a connection from your pod's console, in your browser."
     );

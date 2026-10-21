@@ -70,6 +70,9 @@ import { appSessionMiddleware } from "../middleware/app-session.js";
 import { createContext } from "../context.js";
 import { router } from "../trpc.js";
 import { devicesRouter } from "../routers/devices.js";
+import { apiKeysRouter } from "../routers/api-keys.js";
+import { machinesRouter } from "../routers/machines.js";
+import { DEVICE_SESSION_REFUSED } from "../utils/device-session.js";
 import { mcpHttpApp } from "../routers/mcp/http-handler.js";
 import { hubAuthMiddleware } from "../routers/hub-protocol/_middleware/auth.js";
 import type {
@@ -153,7 +156,11 @@ const kratosStandIn: MiddlewareHandler = async (c, next) => {
   return next();
 };
 
-const appRouter = router({ devices: devicesRouter });
+const appRouter = router({
+  devices: devicesRouter,
+  apiKeys: apiKeysRouter,
+  machines: machinesRouter,
+});
 
 function appApi() {
   const app = new Hono();
@@ -172,8 +179,9 @@ function appApi() {
 
 async function trpc(
   auth: { bearer?: string; cookie?: string },
-  path: "devices.list" | "devices.revoke",
-  input?: unknown
+  path: string,
+  input?: unknown,
+  kind: "query" | "mutation" = path === "devices.list" ? "query" : "mutation"
 ): Promise<{ status: number; body: any }> {
   const headers: Record<string, string> = {
     "content-type": "application/json",
@@ -181,8 +189,11 @@ async function trpc(
   if (auth.bearer) headers.authorization = `Bearer ${auth.bearer}`;
   if (auth.cookie) headers.cookie = auth.cookie;
   const res =
-    path === "devices.list"
-      ? await appApi().request(`/trpc/${path}`, { headers })
+    kind === "query"
+      ? await appApi().request(
+          `/trpc/${path}${input === undefined ? "" : `?input=${encodeURIComponent(JSON.stringify({ json: input }))}`}`,
+          { headers }
+        )
       : await appApi().request(`/trpc/${path}`, {
           method: "POST",
           headers,
@@ -470,16 +481,16 @@ describe("(e) the 180-day absolute cap", () => {
     expect(r.status).toBe(200);
     expect(r.body.expires_in).toBeLessThanOrEqual(20 * 60);
     const cap = new Date((await device(s.deviceId)).expires_at).getTime();
+    // The successor (the unused row) was issued after the cap moved in: it
+    // must not outlive it. (The used first row predates the move.)
     const rows = (
       await q<{ expires_at: Date }>(
-        `select expires_at from oauth_refresh_tokens where device_id = $1`,
+        `select expires_at from oauth_refresh_tokens where device_id = $1 and last_used_at is null`,
         [s.deviceId]
       )
     ).rows;
-    expect(rows.length).toBe(2);
-    for (const row of rows) {
-      expect(new Date(row.expires_at).getTime()).toBeLessThanOrEqual(cap);
-    }
+    expect(rows.length).toBe(1);
+    expect(new Date(rows[0]!.expires_at).getTime()).toBeLessThanOrEqual(cap);
   });
 });
 
@@ -533,6 +544,51 @@ describe("(f) signing a device out stops it at once", () => {
     expect(right.status).toBe(200);
     expect((await device(s.deviceId)).revoked_at).not.toBeNull();
   });
+});
+
+// ─── (i) credential doors ────────────────────────────────────────────────────
+
+describe("(i) a device token cannot create, widen or approve a credential", () => {
+  const DOORS: Array<[string, unknown, "query" | "mutation"]> = [
+    [
+      "apiKeys.create",
+      {
+        keyName: "from a phone",
+        scope: ["hub-protocol.read"],
+        grant: { permissions: ["entity.read"] },
+      },
+      "mutation",
+    ],
+    ["apiKeys.beginMcpConnect", { agentType: "claude-web" }, "mutation"],
+    [
+      "apiKeys.decideDeviceRequest",
+      { requestId: randomUUID(), userCode: "ABCD-1234", decision: "approve" },
+      "mutation",
+    ],
+    [
+      "apiKeys.setGrants",
+      { keyId: randomUUID(), grants: [{ permissions: ["entity.read"] }] },
+      "mutation",
+    ],
+    ["apiKeys.getDeviceRequest", { userCode: "ABCD-1234" }, "query"],
+    ["machines.revoke", { machineId: "m-1" }, "mutation"],
+    ["devices.revoke", { deviceId: randomUUID() }, "mutation"],
+  ];
+
+  it.each(DOORS)("%s answers 403 to a device token", async (path, input, kind) => {
+    const s = await signIn();
+    const res = await trpc({ bearer: s.access }, path, input, kind);
+    expect(res.status).toBe(403);
+    expect(res.body.error.json.message).toBe(DEVICE_SESSION_REFUSED);
+  });
+
+  it.each(DOORS)(
+    "CONTROL — %s is not refused that way to the same person's browser session",
+    async (path, input, kind) => {
+      const res = await trpc({ cookie: BROWSER_COOKIE }, path, input, kind);
+      expect(res.body.error?.json?.message).not.toBe(DEVICE_SESSION_REFUSED);
+    }
+  );
 });
 
 // ─── (g) binding ─────────────────────────────────────────────────────────────

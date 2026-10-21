@@ -10,6 +10,8 @@ import {
   protectedProcedure,
   podAdminProcedure,
   workspaceProcedure,
+  credentialProcedure,
+  refuseDeviceSession,
 } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -341,7 +343,7 @@ export const apiKeysRouter = router({
    *
    * SECURITY: The key is displayed ONCE and cannot be retrieved later.
    */
-  create: protectedProcedure
+  create: credentialProcedure
     .input(
       z.object({
         keyName: z.string().min(1).max(100),
@@ -548,7 +550,7 @@ export const apiKeysRouter = router({
   /**
    * Rotate an API key (create new, revoke old)
    */
-  rotate: protectedProcedure
+  rotate: credentialProcedure
     .input(
       z.object({
         keyId: z.string().uuid(),
@@ -644,7 +646,7 @@ export const apiKeysRouter = router({
    * the person an agent-held key acts for (the keys `list` shows). An app's
    * key is changed on the app's page, where its approved requests live.
    */
-  setGrants: protectedProcedure
+  setGrants: credentialProcedure
     .input(
       z.object({
         keyId: z.string().uuid(),
@@ -758,7 +760,7 @@ export const apiKeysRouter = router({
    * computer. A code that matches nothing counts against the person (5 per
    * 10 min, then TOO_MANY_REQUESTS).
    */
-  getDeviceRequest: protectedProcedure
+  getDeviceRequest: credentialProcedure
     .input(z.object({ userCode: z.string().min(4).max(32) }))
     .query(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, APPROVE_COMPUTER_SIGNED_IN);
@@ -774,7 +776,7 @@ export const apiKeysRouter = router({
    * the fifth wrong code closes it. No key is minted here — the terminal
    * collects its keys once, at `POST /api/hub/setup/device/token`.
    */
-  decideDeviceRequest: protectedProcedure
+  decideDeviceRequest: credentialProcedure
     .input(
       z.object({
         requestId: z.string().uuid(),
@@ -797,7 +799,7 @@ export const apiKeysRouter = router({
    */
   getMachineDefaults: podAdminProcedure.query(() => readMachineDefaults()),
 
-  setMachineDefaults: podAdminProcedure
+  setMachineDefaults: podAdminProcedure.use(refuseDeviceSession)
     .input(z.object({ keyTtlDays: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       await setMachineKeyTtlDays(input.keyTtlDays);
@@ -929,7 +931,7 @@ export const apiKeysRouter = router({
    * Create a system-wide service key (synap_hub_live_ prefix, keyType=system).
    * Pod-admin only. Tied to the operator's userId for audit purposes.
    */
-  createSystemKey: podAdminProcedure
+  createSystemKey: podAdminProcedure.use(refuseDeviceSession)
     .input(
       z.object({
         keyName: z.string().min(1).max(100),
@@ -995,7 +997,7 @@ export const apiKeysRouter = router({
    * Pod-admin: create a workspace-scoped service key (synap_hub_ prefix, keyType=hub_inbound).
    * Use this when provisioning credentials for external services via the connections UI.
    */
-  adminCreateServiceKey: podAdminProcedure
+  adminCreateServiceKey: podAdminProcedure.use(refuseDeviceSession)
     .input(
       z.object({
         keyName: z.string().min(1).max(100),
@@ -1075,7 +1077,7 @@ export const apiKeysRouter = router({
    * Returns the key + podUrl + workspaceId so the caller can build a deeplink
    * or display a copy-paste flow — no separate agent provisioning required.
    */
-  connectIntegration: protectedProcedure
+  connectIntegration: credentialProcedure
     .input(
       z.object({
         integration: integrationKindSchema,
@@ -1256,7 +1258,7 @@ export const apiKeysRouter = router({
    * POST /api/hub/mcp/redeem, where the pod mints the `claude-web` agent key.
    * Minting on redeem (not here) means no plaintext key touches the browser.
    */
-  beginMcpConnect: protectedProcedure
+  beginMcpConnect: credentialProcedure
     .input(
       z.object({
         agentType: z.literal("claude-web"),
@@ -1346,7 +1348,7 @@ export const apiKeysRouter = router({
    * client's REGISTERED redirect_uri, never from user input, so this can never
    * become an open redirect.
    */
-  decideOAuthAuthorization: protectedProcedure
+  decideOAuthAuthorization: credentialProcedure
     .input(
       oauthAuthorizeParamsSchema.extend({
         approve: z.boolean(),
@@ -1521,7 +1523,7 @@ export const apiKeysRouter = router({
    * SECURITY: The plaintext key is returned ONCE. The caller is the owner
    * of the key (`userId = ctx.userId`).
    */
-  createForWorkspace: workspaceProcedure
+  createForWorkspace: workspaceProcedure.use(refuseDeviceSession)
     .input(
       z.object({
         name: z.string().min(1).max(100),

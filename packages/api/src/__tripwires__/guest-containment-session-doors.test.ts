@@ -1,6 +1,7 @@
 /**
  * TRIPWIRE — a GUEST is refused on every Hono door that signs a person in with
- * the session `authMiddleware` (outside tRPC, the hub and MCP, which have their
+ * a session middleware — `authMiddleware`, or the app session gate
+ * `appSessionMiddleware` (outside tRPC, the hub and MCP, which have their
  * own guards): `/api/chat`, `/api/files`, `/api/capture`, and whatever joins
  * them.
  *
@@ -63,9 +64,42 @@ function codeOnly(src: string): string {
 /** Top-level static imports, so that importing the name is not a use. */
 const IMPORT_STMT = /^import\s[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm;
 
+/**
+ * The session-auth middleware NAMES, derived from their packages' own export
+ * lists: what `@synap/auth` exports from its Kratos middleware module, and
+ * every `…Middleware` this package exports from its app session gate
+ * (`appSessionMiddleware`, join plan target A — which delegates to the stubbed
+ * `authMiddleware` when no device token is presented). A new alias joins the
+ * scan by being exported.
+ */
+function exportedNames(indexFile: string, fromModule: string): string[] {
+  const src = codeOnly(readFileSync(indexFile, "utf8"));
+  const out: string[] = [];
+  const re = /export\s*\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
+  for (const m of src.matchAll(re)) {
+    if (m[2] !== fromModule) continue;
+    for (const part of m[1]!.split(",")) {
+      const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+      if (name) out.push(name);
+    }
+  }
+  return out;
+}
+const SESSION_DOORS = [
+  ...exportedNames(
+    path.resolve(HERE, "../../../auth/src/index.ts"),
+    "./ory-middleware.js"
+  ),
+  ...exportedNames(
+    path.resolve(HERE, "../index.ts"),
+    "./middleware/app-session.js"
+  ).filter((n) => n.endsWith("Middleware")),
+];
+const DOOR_USE = new RegExp(`\\b(?:${SESSION_DOORS.join("|")})\\b`);
+
 const sessionModules = walk(ROUTERS).filter((f) => {
   const code = codeOnly(readFileSync(f, "utf8")).replace(IMPORT_STMT, "");
-  return /\bauthMiddleware\b/.test(code);
+  return DOOR_USE.test(code);
 });
 
 type Route = { method: string; path: string };
@@ -94,6 +128,9 @@ afterAll(() => audienceSpy.mockRestore());
 
 describe("tripwire: session-authenticated Hono doors refuse a guest", () => {
   it("the scan finds the session doors (non-vacuity)", () => {
+    expect(SESSION_DOORS).toEqual(
+      expect.arrayContaining(["authMiddleware", "appSessionMiddleware"])
+    );
     const rel = sessionModules.map((f) => path.relative(ROUTERS, f)).sort();
     // Measured 2026-09-27: these three, at least.
     expect(rel).toEqual(
@@ -101,6 +138,7 @@ describe("tripwire: session-authenticated Hono doors refuse a guest", () => {
         "capture-progress-stream.ts",
         "chat-stream.ts",
         "file-upload.ts",
+        "media-transcribe.ts",
       ])
     );
   });

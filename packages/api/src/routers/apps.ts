@@ -24,7 +24,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db, AppRepository } from "@synap/database";
-import { router, podAdminProcedure, protectedProcedure } from "../trpc.js";
+import {
+  router,
+  podAdminProcedure,
+  protectedProcedure,
+  credentialProcedure,
+  refuseDeviceSession,
+} from "../trpc.js";
 import {
   issueKey,
   loadOwnedApp,
@@ -76,7 +82,7 @@ export const appsRouter = router({
    * Asks the MINIMUM to exist — name, and whatever the person chose to say.
    * Reach is requested on the app's own page (`requestAccess`).
    */
-  create: protectedProcedure
+  create: credentialProcedure
     .input(
       z.object({
         name: z.string().trim().min(1).max(200),
@@ -116,7 +122,7 @@ export const appsRouter = router({
    * Ask for access on the app's behalf — files ONE `app/connect` proposal the
    * owner approves anywhere it shows (phone, Connected page, review link).
    */
-  requestAccess: protectedProcedure
+  requestAccess: credentialProcedure
     .input(
       z.object({
         publicId: PublicId,
@@ -144,7 +150,7 @@ export const appsRouter = router({
    * without the CLI). Rotates away any previous key. The plaintext is in this
    * response ONCE — it is stored nowhere and cannot be shown again.
    */
-  issueKey: protectedProcedure
+  issueKey: credentialProcedure
     .input(z.object({ publicId: PublicId }))
     .mutation(({ ctx, input }) =>
       // An agent principal is refused by the service from the request's
@@ -157,7 +163,7 @@ export const appsRouter = router({
     ),
 
   /** Rename an app. A name the caller already uses elsewhere is a CONFLICT. */
-  rename: protectedProcedure
+  rename: credentialProcedure
     .input(
       z.object({ publicId: PublicId, name: z.string().trim().min(1).max(200) })
     )
@@ -175,7 +181,7 @@ export const appsRouter = router({
    * "Sign in with Synap": replace where a person's sign-in code for this app
    * may be delivered (exact match; `[]` = the app signs no one in). Owner only.
    */
-  setRedirectUris: protectedProcedure
+  setRedirectUris: credentialProcedure
     .input(
       z.object({
         publicId: PublicId,
@@ -199,7 +205,7 @@ export const appsRouter = router({
    * "Sign in with Synap": may a person signed in to this app approve its OWN
    * agent's proposals from inside it (default true)? Owner only.
    */
-  setSignInPolicy: protectedProcedure
+  setSignInPolicy: credentialProcedure
     .input(
       z.object({
         publicId: PublicId,
@@ -223,7 +229,7 @@ export const appsRouter = router({
    * Revoke an app: revoke its keys and their grants, then soft-revoke the app.
    * Its history is kept.
    */
-  revoke: protectedProcedure
+  revoke: credentialProcedure
     .input(z.object({ publicId: PublicId }))
     .mutation(async ({ ctx, input }) => {
       const { publicId } = await revokeApp({
@@ -237,7 +243,7 @@ export const appsRouter = router({
    * "Remove for good": hide a REVOKED app from every listing. Soft — its row
    * and events stay. A live app answers CONFLICT (revoke it first).
    */
-  remove: protectedProcedure
+  remove: credentialProcedure
     .input(z.object({ publicId: PublicId }))
     .mutation(async ({ ctx, input }) => {
       const { publicId } = await removeApp({
@@ -282,7 +288,7 @@ export const appsRouter = router({
    * Revoke anyone's app — the SAME service as `revoke`, with the owner floor
    * lifted (`podAdmin`). The event names the admin who did it.
    */
-  adminRevoke: podAdminProcedure
+  adminRevoke: podAdminProcedure.use(refuseDeviceSession)
     .input(z.object({ publicId: PublicId }))
     .mutation(async ({ ctx, input }) => {
       const { publicId } = await revokeApp({
@@ -294,7 +300,7 @@ export const appsRouter = router({
     }),
 
   /** Remove anyone's REVOKED app for good — the same service as `remove`. */
-  adminRemove: podAdminProcedure
+  adminRemove: podAdminProcedure.use(refuseDeviceSession)
     .input(z.object({ publicId: PublicId }))
     .mutation(async ({ ctx, input }) => {
       const { publicId } = await removeApp({

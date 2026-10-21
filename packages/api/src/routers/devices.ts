@@ -15,7 +15,11 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, protectedProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  credentialProcedure,
+} from "../trpc.js";
 import { auditLog } from "../utils/audit-log.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
@@ -36,7 +40,7 @@ export const devicesRouter = router({
   }),
 
   /** Sign one of the person's devices out (this one included). */
-  revoke: protectedProcedure
+  revoke: credentialProcedure
     .input(z.object({ deviceId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, DEVICES_SIGNED_IN);
