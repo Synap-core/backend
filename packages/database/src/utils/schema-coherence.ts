@@ -1946,6 +1946,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "icon",
     addedBy: "0328_projects_icon.sql",
   },
+  // A sample (demo) project (0347) — same baseline exemption. Read by the ONE
+  // listing rule `listableEntityWhere`; a missing column 500s every list.
+  {
+    table: "projects",
+    column: "sample",
+    addedBy: "0347_projects_sample.sql",
+  },
   // Tracks (0272) — a METHOD running inside a project. `project_tracks` is NOT
   // in the baseline (it references `projects`, which 0151 creates), so this is
   // the table's ONLY startup guard. `focus_sessions.track_id` is selected by
