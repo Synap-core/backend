@@ -104,6 +104,7 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => {
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { OpenAPIHono } from "@hono/zod-openapi";
+import { runWithGrant } from "@synap/database";
 import * as schema from "@synap/database/schema";
 import { readAgentGovernance } from "@synap/database/agent-governance";
 import { liveApiKeyIds } from "@synap/jobs/workers/webhook-worker.js";
@@ -761,6 +762,32 @@ describe("M — 'apply automatically' is the owner's, after connecting", () => {
       }
     );
     expect(patched.status).toBe(403);
+    expect(await posture()).toBe("ask-first");
+    // A scoped key the owner holds — a "Sign in with Synap" token is one — is
+    // the owner within a grant only: it cannot flip the app's AI there either.
+    const scopedDoor = new OpenAPIHono<{ Variables: HubVariables }>() as HubHono;
+    scopedDoor.use("*", async (c, next) => {
+      c.set("userId", OWNER);
+      c.set("keyType", "app_person");
+      c.set("scopes", ["hub-protocol.read", "hub-protocol.write"]);
+      await runWithGrant(
+        { scopes: [{ permissions: [READ, CREATE], workspaceIds: [BRAND] }] },
+        () => next()
+      );
+    });
+    registerAgentUsersRoutes(scopedDoor);
+    const scopedPatch = await scopedDoor.request(
+      `/agent-users/${app.agent_user_id}/governance`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ posture: null }),
+      }
+    );
+    expect(scopedPatch.status).toBe(403);
+    expect(((await scopedPatch.json()) as { error: string }).error).toMatch(
+      /scoped key/
+    );
     expect(await posture()).toBe("ask-first");
     // The app's own token cannot either.
     const own = await hubApp(registerAppsRoutes).request(
