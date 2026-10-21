@@ -86,9 +86,20 @@
  *     enforced", "near the cap, nothing is minted past it".
  *  R5 A refresh token presented by another client. Bound to its `client_id`:
  *     refused, and NOT spent. → "(g)".
- *  R6 The person stops being a person (agent conversion, removal). The
- *     refresh re-checks `userType === "human"` and ends the device; the
- *     lookup joins `users` with `user_type = 'human'` on every request.
+ *  R6 The person loses access. EVERY request reads it through the device
+ *     (`resolvePersonDeviceSession`): the `users` row, `user_type = 'human'`,
+ *     and a live pod access (`hasActivePodAccess`: a space or project
+ *     membership, or the pod owner/admin role — never `pod_members`, which
+ *     outlives a removal). A person removed from the pod, or from their last
+ *     space or project, or whose account is deleted, gets 401 at once and
+ *     the device is ENDED (re-adding them revives nothing). No removal door
+ *     needs to know devices exist. Two doors withdraw what the access read
+ *     cannot see: unlinking the person's sign-in from an issuer ends all
+ *     their devices (`unlinkAccount`); a Kratos identity disabled or deleted
+ *     outside the pod is asked at every refresh (`identityIsLive`) and ends
+ *     the device within the access token's hour — a Kratos that cannot
+ *     answer refuses the refresh unspent. The mint refuses a person with no
+ *     access. → "(l)".
  *  R7 A LOST refresh response (a phone dropping off the network after the
  *     token was spent). Within 30 s of its use, while its successor was NEVER
  *     redeemed, the same token is a RETRY (`deviceRetryGrace`, refresh.ts):
@@ -144,10 +155,13 @@ import {
 } from "@synap/database";
 import { personDeviceTokens, personDevices } from "@synap/database/schema";
 import {
+  DEVICE_ENDED_NO_ACCESS,
   PERSON_DEVICE_TOKEN_PREFIX,
   hashPersonDeviceToken,
+  personHoldsPodAccess,
   revokePersonDevice,
 } from "@synap/database/person-devices";
+import { kratosAdmin } from "@synap/auth";
 
 import {
   isFirstPartyClientId,
@@ -180,7 +194,10 @@ export interface PersonDeviceTokens {
 
 export type SignInPersonDeviceResult =
   | ({ ok: true } & PersonDeviceTokens)
-  | { ok: false; reason: "not_a_person" | "not_first_party" };
+  | {
+      ok: false;
+      reason: "not_a_person" | "not_first_party" | "no_pod_access";
+    };
 
 function clip(value: string | null | undefined, max: number): string | null {
   const trimmed = value?.trim();
@@ -193,6 +210,31 @@ async function isHuman(userId: string): Promise<boolean> {
     columns: { userType: true },
   });
   return person?.userType === "human";
+}
+
+const INVALID_REFRESH = "Invalid, expired, or revoked refresh token";
+
+/**
+ * Is the person's sign-in identity (Kratos; a pod user's id IS its identity
+ * id) still live? Asked at every refresh (R6): an identity disabled or
+ * deleted in Kratos — by an operator, outside any pod door — ends the device
+ * at its next refresh, within the access token's hour. A Kratos that cannot
+ * answer THROWS `server_error`: the refresh is refused unspent, never read as
+ * "gone" (which would sign the person out on an outage).
+ */
+async function identityIsLive(userId: string): Promise<boolean> {
+  try {
+    const { data } = await kratosAdmin.getIdentity({ id: userId });
+    return (data.state ?? "active") === "active";
+  } catch (error) {
+    const status = (error as { response?: { status?: number } }).response
+      ?.status;
+    if (status === 404) return false;
+    throw new OAuthError(
+      "server_error",
+      "Could not confirm the account right now; try again"
+    );
+  }
 }
 
 /**
@@ -249,6 +291,9 @@ export async function signInPersonDevice(args: {
   if (!(await isHuman(args.personUserId))) {
     return { ok: false, reason: "not_a_person" };
   }
+  if (!(await personHoldsPodAccess(db, args.personUserId))) {
+    return { ok: false, reason: "no_pod_access" };
+  }
   const capAt = new Date(Date.now() + PERSON_DEVICE_ABSOLUTE_CAP_MS);
   const [device] = await db
     .insert(personDevices)
@@ -277,31 +322,45 @@ export async function signInPersonDevice(args: {
 }
 
 /**
- * `grant_type=refresh_token` for a first-party client: redeem (single-use; a
- * reuse ends the device, refresh.ts), re-check the person, mint a new access
- * token, then issue the successor. Every refusal is `invalid_grant`.
+ * `grant_type=refresh_token` for a first-party client: confirm the person's
+ * identity is live (before anything is spent), redeem (single-use; a reuse
+ * ends the device, refresh.ts), re-check the person and their access to the
+ * pod, mint a new access token, then issue the successor. Every refusal is
+ * `invalid_grant`; a person who lost their identity, their humanity or their
+ * access also has the device ENDED (R6).
  */
 export async function refreshPersonDevice(args: {
   refreshToken: string;
   clientId: string;
 }): Promise<PersonDeviceTokens> {
+  const held = await findRefreshToken(args.refreshToken);
+  if (
+    held?.deviceId &&
+    held.clientId === args.clientId &&
+    !(await identityIsLive(held.userId))
+  ) {
+    await revokePersonDevice(db, {
+      deviceId: held.deviceId,
+      reason: "The account was disabled or deleted",
+    });
+    throw new OAuthError("invalid_grant", INVALID_REFRESH);
+  }
   const redeemed = await redeemRefreshToken(args.refreshToken, args.clientId);
   if (!redeemed.deviceId || !redeemed.capAt) {
     // A pod app's token presented by a first-party client id: never ours.
-    throw new OAuthError(
-      "invalid_grant",
-      "Invalid, expired, or revoked refresh token"
-    );
+    throw new OAuthError("invalid_grant", INVALID_REFRESH);
   }
-  if (!(await isHuman(redeemed.userId))) {
+  const ended = !(await isHuman(redeemed.userId))
+    ? "The signed-in account is no longer a person"
+    : !(await personHoldsPodAccess(db, redeemed.userId))
+      ? DEVICE_ENDED_NO_ACCESS
+      : null;
+  if (ended) {
     await revokePersonDevice(db, {
       deviceId: redeemed.deviceId,
-      reason: "The signed-in account is no longer a person",
+      reason: ended,
     });
-    throw new OAuthError(
-      "invalid_grant",
-      "Invalid, expired, or revoked refresh token"
-    );
+    throw new OAuthError("invalid_grant", INVALID_REFRESH);
   }
   const access = await mintAccessToken(redeemed.deviceId, redeemed.capAt);
   const refreshToken = await rotateRefreshToken(redeemed);

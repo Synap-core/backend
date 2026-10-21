@@ -23,11 +23,17 @@
  *  (f) signing out (devices.revoke, /revoke with either token) stops the
  *      device at once; another person's device is "not found";
  *  (g) a refresh token is bound to its client;
- *  (h) T5: an agent cannot sign in as a device.
+ *  (h) T5: an agent cannot sign in as a device;
+ *  (l) R6: every way a person loses access ends their devices — removed
+ *      from the pod (the account kept, or deleted with its identity),
+ *      unlinked from an issuer, the Kratos identity disabled or deleted —
+ *      and a person with no access gets none; removal from one space while
+ *      another remains does not.
  *
  * Mocked: audit log (a recorder on the postgres-js client), the guest check
  * (a constant answer), the Kratos half of the session gate (a stand-in that
- * knows one browser cookie).
+ * knows one browser cookie), the Kratos admin API (a map of identity
+ * states), the event log, and the integration connections removal.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -49,9 +55,61 @@ vi.mock("@synap/database", async (importOriginal) => {
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
   h.db = drizzle(client, { schema });
-  return { ...actual, db: h.db, getDb: async () => h.db };
+  const unlink = actual.unlinkFederatedIdentity as (
+    input: unknown,
+    conn?: unknown
+  ) => Promise<unknown>;
+  return {
+    ...actual,
+    db: h.db,
+    getDb: async () => h.db,
+    // The event log (realtime fan-out) is not under test; membership
+    // removals append to it.
+    eventRepository: { append: async (event: unknown) => event },
+    // Its default executor is the package's own pool, not this database.
+    unlinkFederatedIdentity: (input: unknown, conn?: unknown) =>
+      unlink(input, conn ?? h.db),
+  };
 });
 vi.mock("../utils/audit-log.js", () => ({ auditLog: async () => null }));
+// Kratos admin: each identity answers active unless a test says otherwise
+// ("gone" = 404, "down" = Kratos unreachable).
+const kratos = vi.hoisted(() => ({
+  identity: new Map<string, "active" | "inactive" | "gone" | "down">(),
+  deleted: [] as string[],
+}));
+vi.mock("@synap/auth", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const fail = (status: number) =>
+    Object.assign(new Error(`kratos ${status}`), { response: { status } });
+  return {
+    ...actual,
+    kratosAdmin: {
+      getIdentity: async ({ id }: { id: string }) => {
+        const state = kratos.identity.get(id) ?? "active";
+        if (state === "gone") throw fail(404);
+        if (state === "down") throw fail(503);
+        return { data: { id, state } };
+      },
+      deleteIdentity: async ({ id }: { id: string }) => {
+        kratos.deleted.push(id);
+        return {};
+      },
+      deleteIdentityCredentials: async () => ({}),
+    },
+  };
+});
+// The person's integration connections (outside the pod database): removing
+// them can fail, which keeps the account (removeFromPod).
+const connections = vi.hoisted(() => ({ failFor: new Set<string>() }));
+vi.mock("./capabilities/capability-nango-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  disconnectAllUserConnections: async (userId: string) => {
+    if (connections.failFor.has(userId)) {
+      throw new Error("the connections service did not answer");
+    }
+  },
+}));
 vi.mock("../access/guest-containment.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   isGuestPrincipal: async () => false,
@@ -72,6 +130,8 @@ import { router } from "../trpc.js";
 import { devicesRouter } from "../routers/devices.js";
 import { apiKeysRouter } from "../routers/api-keys.js";
 import { machinesRouter } from "../routers/machines.js";
+import { inviteProcedures } from "../routers/workspaces/invites.js";
+import { applicationConnectionsRouter } from "../routers/application-connections.js";
 import {
   STEP_UP_REQUIRED,
   runAsDeviceSession,
@@ -95,6 +155,17 @@ const LOOPBACK = "http://127.0.0.1:53111/oauth/callback";
 const PERSON = "person-ada";
 const OTHER = "person-bob";
 const AGENT = "agent-claude";
+// Losing access to the pod, "(l)": the founder removes or unlinks people.
+const FOUNDER = "person-founder";
+const CAROL = "person-carol";
+const DAN = "person-dan";
+const EVE = "person-eve";
+const FRAN = "person-fran";
+const GIL = "person-gil";
+const NOBODY = "person-nobody";
+const WS_ADMIN = randomUUID();
+const WS_TEAM = randomUUID();
+const WS_BOBS = randomUUID();
 const BROWSER_COOKIE = "ory_kratos_session=ada-browser";
 
 const VERIFIER = "d".repeat(64);
@@ -140,6 +211,34 @@ beforeAll(async () => {
        ($3, 'claude@agents', 'Claude', 'agent')`,
     [PERSON, OTHER, AGENT]
   );
+  await q(
+    `insert into users (id, email, name, user_type) values
+       ($1, 'founder@x', 'Founder', 'human'), ($2, 'carol@x', 'Carol', 'human'),
+       ($3, 'dan@x', 'Dan', 'human'), ($4, 'eve@x', 'Eve', 'human'),
+       ($5, 'fran@x', 'Fran', 'human'), ($6, 'gil@x', 'Gil', 'human'),
+       ($7, 'nobody@x', 'Nobody', 'human')`,
+    [FOUNDER, CAROL, DAN, EVE, FRAN, GIL, NOBODY]
+  );
+  // Every person here holds access (a space); NOBODY holds none.
+  await q(
+    `insert into workspaces (id, name, owner_id, system_slug) values
+       ($1, 'Pod admin', $4, 'pod-admin'), ($2, 'Team', $4, null),
+       ($3, 'Bob''s space', $5, null)`,
+    [WS_ADMIN, WS_TEAM, WS_BOBS, FOUNDER, OTHER]
+  );
+  const member = (ws: string, user: string, role: string) =>
+    q(
+      `insert into workspace_members (id, workspace_id, user_id, role)
+         values (gen_random_uuid(), $1, $2, $3)`,
+      [ws, user, role]
+    );
+  await member(WS_ADMIN, FOUNDER, "owner");
+  await member(WS_TEAM, FOUNDER, "owner");
+  for (const person of [PERSON, OTHER, CAROL, DAN, EVE, FRAN, GIL]) {
+    await member(WS_TEAM, person, "editor");
+  }
+  await member(WS_BOBS, OTHER, "owner");
+  await member(WS_BOBS, EVE, "editor");
 }, 120_000);
 
 // ─── The doors ───────────────────────────────────────────────────────────────
@@ -932,5 +1031,170 @@ describe("(h) an agent cannot sign in as a device", () => {
       [PERSON]
     );
     expect(ada.rows[0]!.n).toBeGreaterThan(5);
+  });
+});
+
+// ─── (l) losing access to the pod ends the device ───────────────────────────
+
+describe("(l) every way a person loses access to the pod ends their devices", () => {
+  /** Consent + code exchange for `userId` (a fresh console sign-in). */
+  async function deviceFor(userId: string, label = "A laptop") {
+    const code = await consent(userId);
+    const res = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: DESKTOP,
+      redirect_uri: LOOPBACK,
+      code_verifier: VERIFIER,
+      resource: ISSUER,
+      synap_device_label: label,
+    });
+    return res;
+  }
+  async function signedIn(userId: string, label?: string) {
+    const res = await deviceFor(userId, label);
+    expect(res.status).toBe(200);
+    const d = {
+      access: res.body.access_token as string,
+      refresh: res.body.refresh_token as string,
+      deviceId: res.body.synap_device_id as string,
+    };
+    expect((await trpc({ bearer: d.access }, "devices.list")).status).toBe(200);
+    return d;
+  }
+  /** The founder, as pod-admin's Members page calls the doors. */
+  const asFounder = () =>
+    router({
+      removeFromPod: inviteProcedures.removeFromPod,
+      connections: applicationConnectionsRouter,
+    }).createCaller(kratosCtx(FOUNDER, MIN_MS));
+
+  it("removed from the pod with the account kept (its connections would not go): 401, the device ended", async () => {
+    const carol = await signedIn(CAROL);
+    connections.failFor.add(CAROL);
+    await expect(asFounder().removeFromPod({ userId: CAROL })).rejects.toThrow(
+      /account was kept/
+    );
+    // The door's own outcome: memberships gone, the account still here.
+    expect(
+      (await q(`select 1 from users where id = $1`, [CAROL])).rows
+    ).toHaveLength(1);
+    expect(
+      (await q(`select 1 from workspace_members where user_id = $1`, [CAROL]))
+        .rows
+    ).toHaveLength(0);
+
+    expect((await trpc({ bearer: carol.access }, "devices.list")).status).toBe(
+      401
+    );
+    const ended = await device(carol.deviceId);
+    expect(ended.revoked_at).not.toBeNull();
+    expect((await refresh(carol.refresh)).body.error).toBe("invalid_grant");
+    // Adding the person back does not revive the device.
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role)
+         values (gen_random_uuid(), $1, $2, 'editor')`,
+      [WS_TEAM, CAROL]
+    );
+    expect((await trpc({ bearer: carol.access }, "devices.list")).status).toBe(
+      401
+    );
+  });
+
+  it("removed from the pod (the account and Kratos identity go): 401", async () => {
+    const dan = await signedIn(DAN);
+    await asFounder().removeFromPod({ userId: DAN });
+    expect(kratos.deleted).toContain(DAN);
+    expect((await trpc({ bearer: dan.access }, "devices.list")).status).toBe(
+      401
+    );
+    expect((await refresh(dan.refresh)).body.error).toBe("invalid_grant");
+  });
+
+  it("CONTROL — removed from one space but still in another: the device keeps working", async () => {
+    const eve = await signedIn(EVE);
+    await asFounder().removeFromPod({ userId: EVE });
+    expect((await trpc({ bearer: eve.access }, "devices.list")).status).toBe(
+      200
+    );
+    expect((await refresh(eve.refresh)).status).toBe(200);
+  });
+
+  it("unlinked from an app's issuer: every device of the person ends, the access stays", async () => {
+    const laptop = await signedIn(FRAN, "Fran's laptop");
+    const phone = await signedIn(FRAN, "Fran's other computer");
+    const issuerId = randomUUID();
+    const connectionId = randomUUID();
+    await q(
+      `insert into trusted_issuers (id, issuer_url, display_name, status)
+         values ($1, 'https://id.example.com', 'Example ID', 'approved')`,
+      [issuerId]
+    );
+    await q(
+      `insert into federated_application_connections
+         (id, issuer_id, client_id, display_name, status)
+         values ($1, $2, 'example-app', 'Example', 'approved')`,
+      [connectionId, issuerId]
+    );
+    await q(
+      `insert into federated_identity_links (issuer_id, issuer_subject, user_id)
+         values ($1, 'sub-fran', $2)`,
+      [issuerId, FRAN]
+    );
+    const outcome = await asFounder().connections.unlinkAccount({
+      connectionId,
+      userId: FRAN,
+    });
+    expect(outcome.status).toBe("unlinked");
+    for (const d of [laptop, phone]) {
+      expect((await trpc({ bearer: d.access }, "devices.list")).status).toBe(
+        401
+      );
+      expect((await device(d.deviceId)).revoked_at).not.toBeNull();
+      expect((await refresh(d.refresh)).body.error).toBe("invalid_grant");
+    }
+    // Unlink is not removal: Fran is still a member, and signs in again.
+    expect(
+      (await q(`select 1 from workspace_members where user_id = $1`, [FRAN]))
+        .rows
+    ).toHaveLength(1);
+    await signedIn(FRAN, "Fran signs in again");
+  });
+
+  it("the Kratos identity disabled or deleted: the next refresh ends the device; Kratos down spends nothing", async () => {
+    const gil = await signedIn(GIL);
+    kratos.identity.set(GIL, "down");
+    const down = await refresh(gil.refresh);
+    expect(down.status).toBe(500);
+    expect(down.body.error).toBe("server_error");
+    // Nothing was spent: the same token refreshes once Kratos answers.
+    kratos.identity.set(GIL, "active");
+    const next = await refresh(gil.refresh);
+    expect(next.status).toBe(200);
+
+    kratos.identity.set(GIL, "inactive");
+    const disabled = await refresh(next.body.refresh_token);
+    expect(disabled.body.error).toBe("invalid_grant");
+    expect((await device(gil.deviceId)).revoked_at).not.toBeNull();
+    expect(
+      (await trpc({ bearer: next.body.access_token }, "devices.list")).status
+    ).toBe(401);
+
+    kratos.identity.set(GIL, "active");
+    const second = await signedIn(GIL, "Gil's second laptop");
+    kratos.identity.set(GIL, "gone");
+    expect((await refresh(second.refresh)).body.error).toBe("invalid_grant");
+    expect((await device(second.deviceId)).revoked_at).not.toBeNull();
+    kratos.identity.delete(GIL);
+  });
+
+  it("a person with no access to the pod gets no device", async () => {
+    const res = await deviceFor(NOBODY);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_grant");
+    expect(
+      (await q(`select 1 from person_devices where user_id = $1`, [NOBODY]))
+        .rows
+    ).toHaveLength(0);
   });
 });

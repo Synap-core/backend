@@ -809,7 +809,9 @@ oauthApp.post("/token", async (c) => {
         );
         throw new OAuthError(
           "invalid_grant",
-          "Only a person can sign in to a Synap app"
+          signedIn.reason === "no_pod_access"
+            ? "This account has no access to this pod"
+            : "Only a person can sign in to a Synap app"
         );
       }
       logger.info(
