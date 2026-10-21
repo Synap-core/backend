@@ -11,7 +11,13 @@
  * 2. EARLY. A work session (or an agent's write receipt) that is a few minutes
  *    old and has something real in it — a message in its room, a proposal, a
  *    declared output — gets ONE generated name from the IS.
- * 3. CLOSE. A closed session whose name is still automation's gets ONE
+ * 3. ROLLING (B4 2026-10-21). A name automation chose FOLLOWS the work: when
+ *    the session's proposal count crosses {@link ROLL_THRESHOLDS} (5 / 25 /
+ *    100) it is renamed from the LATEST context — at most three renames. The
+ *    early name used to be final until close, frozen from the first five
+ *    writes (live: 142 writes across six spaces under "Ecosystem market
+ *    intelligence foundation").
+ * 4. CLOSE. A closed session whose name is still automation's gets ONE
  *    outcome-aware rename from its closing summary.
  *
  * Playbook and automation runs are never generated for: their derived name is
@@ -86,6 +92,22 @@ const TITLE_RETRY_COOLOFF_MINUTES = 6 * 60;
 /** Only recently closed sessions are retitled — history is left as it is. */
 const CLOSE_LOOKBACK_DAYS = 7;
 const CONTEXT_MAX = 2000;
+
+/**
+ * Proposal counts at which an automation-named open session is renamed from
+ * its latest context. One rename per threshold crossed, so at most three; a
+ * name is stamped with the thresholds its context already covered
+ * (`titleRollStage`), so naming a session that already holds 7 proposals does
+ * not rename it again at 5.
+ */
+export const ROLL_THRESHOLDS = [5, 25, 100] as const;
+/** Latest proposal summaries read for a rolling rename. */
+const ROLL_CONTEXT_PROPOSALS = 8;
+
+/** How many thresholds a session with `count` proposals has reached. */
+export function rollStageFor(count: number): number {
+  return ROLL_THRESHOLDS.filter((t) => count >= t).length;
+}
 
 /** `metadata.source` of an agent's write receipt (resolve-or-create-agent-proposal-session). */
 const RECEIPT_SOURCE = "agent-write";
@@ -163,6 +185,31 @@ export const EARLY_TITLE_CANDIDATE = and(
   HAS_SIGNAL
 );
 
+/** The session's proposal count — what a rolling rename is keyed on. */
+const PROPOSAL_COUNT = drizzleSql<number>`(SELECT count(*)::int FROM ${proposals} WHERE ${proposals.sessionId} = ${focusSessions.id})`;
+
+/** Thresholds already covered by the name the session carries. */
+const ROLL_STAGE = drizzleSql`COALESCE((${focusSessions.metadata}->>'titleRollStage')::int, 0)`;
+
+/**
+ * An OPEN session whose automation name is due a rolling rename: the early
+ * pass is done with it (it named it, or gave up), the name is still
+ * automation's — a person or agent naming it LOCKS it (`NAMED_BY_AUTOMATION`)
+ * — and its proposal count has crossed the next threshold.
+ */
+export const ROLL_TITLE_CANDIDATE = and(
+  drizzleSql`${focusSessions.status} IN ('active', 'paused', 'forming')`,
+  NAMED_BY_AUTOMATION,
+  drizzleSql`(
+    ${focusSessions.metadata}->>'titleSource' = 'generated'
+    OR COALESCE((${focusSessions.metadata}->>'titleEarlyAttempts')::int, 0) >= ${MAX_TITLE_ATTEMPTS}
+  )`,
+  drizzleSql`${TEMPLATE_RUN} IS NOT TRUE`,
+  WORK_OR_RECEIPT,
+  drizzleSql`${ROLL_STAGE} < ${ROLL_THRESHOLDS.length}`,
+  drizzleSql`${PROPOSAL_COUNT} >= (ARRAY[${drizzleSql.raw(ROLL_THRESHOLDS.join(","))}])[${ROLL_STAGE} + 1]`
+);
+
 export const CLOSE_TITLE_CANDIDATE = and(
   eq(focusSessions.status, "closed"),
   NAMED_BY_AUTOMATION,
@@ -234,6 +281,7 @@ type CandidateRow = {
   expectedOutputs: unknown;
   verificationReport: unknown;
   metadata: unknown;
+  proposalCount: number;
 };
 
 function readSource(row: { metadata: unknown }): string | null {
@@ -268,6 +316,51 @@ async function earlyContext(row: CandidateRow): Promise<string> {
     .where(eq(proposals.sessionId, row.id))
     .orderBy(proposals.createdAt)
     .limit(5);
+  parts.push(...filed.map((p) => p.summary).filter((s): s is string => !!s));
+  const labels = outputLabels(row.expectedOutputs);
+  if (labels.length) parts.push(`Outputs: ${labels.join(", ")}`);
+  return parts.join("\n").slice(0, CONTEXT_MAX);
+}
+
+/**
+ * What the session is about NOW: its latest messages and proposal summaries,
+ * and how many changes it holds by kind — never the first five, which is what
+ * froze a name on the work's opening minutes.
+ */
+async function rollingContext(row: CandidateRow): Promise<string> {
+  const parts: string[] = [];
+  if (row.channelId) {
+    const latest = await db
+      .select({ content: messages.content })
+      .from(messages)
+      .where(eq(messages.channelId, row.channelId))
+      .orderBy(drizzleSql`${messages.timestamp} DESC`)
+      .limit(5);
+    parts.push(...latest.map((m) => m.content).reverse());
+  }
+  const byKind = await db
+    .select({
+      kind: proposals.targetType,
+      n: drizzleSql<number>`count(*)::int`,
+    })
+    .from(proposals)
+    .where(eq(proposals.sessionId, row.id))
+    .groupBy(proposals.targetType);
+  if (byKind.length) {
+    parts.push(
+      `Changes so far: ${byKind
+        .map((k) => `${Number(k.n)} ${k.kind ?? "other"}`)
+        .join(", ")}`
+    );
+  }
+  const filed = await db
+    .select({
+      summary: drizzleSql<string | null>`${proposals.data}->>'summary'`,
+    })
+    .from(proposals)
+    .where(eq(proposals.sessionId, row.id))
+    .orderBy(drizzleSql`${proposals.createdAt} DESC`)
+    .limit(ROLL_CONTEXT_PROPOSALS);
   parts.push(...filed.map((p) => p.summary).filter((s): s is string => !!s));
   const labels = outputLabels(row.expectedOutputs);
   if (labels.length) parts.push(`Outputs: ${labels.join(", ")}`);
@@ -314,7 +407,7 @@ interface PhaseOutcome {
  * ask about.
  */
 async function generatePhase(
-  phase: "early" | "close",
+  phase: "early" | "roll" | "close",
   requestTitle: TitleRequester
 ): Promise<PhaseOutcome> {
   const rows: CandidateRow[] = await db
@@ -326,27 +419,41 @@ async function generatePhase(
       expectedOutputs: focusSessions.expectedOutputs,
       verificationReport: focusSessions.verificationReport,
       metadata: focusSessions.metadata,
+      proposalCount: PROPOSAL_COUNT,
     })
     .from(focusSessions)
-    .where(phase === "early" ? EARLY_TITLE_CANDIDATE : CLOSE_TITLE_CANDIDATE)
-    .orderBy(
+    .where(
       phase === "early"
-        ? drizzleSql`${focusSessions.createdAt} DESC`
-        : drizzleSql`${focusSessions.closedAt} DESC`
+        ? EARLY_TITLE_CANDIDATE
+        : phase === "roll"
+          ? ROLL_TITLE_CANDIDATE
+          : CLOSE_TITLE_CANDIDATE
+    )
+    .orderBy(
+      phase === "close"
+        ? drizzleSql`${focusSessions.closedAt} DESC`
+        : drizzleSql`${focusSessions.createdAt} DESC`
     )
     .limit(TITLER_BATCH);
 
   const out: PhaseOutcome = { named: 0, asked: 0, unusable: 0, exhausted: 0 };
   const isEarly = phase === "early";
+  const isRoll = phase === "roll";
   for (const row of rows) {
     const context =
-      phase === "early" ? await earlyContext(row) : closeContext(row);
+      phase === "early"
+        ? await earlyContext(row)
+        : isRoll
+          ? await rollingContext(row)
+          : closeContext(row);
     let answer: SessionTitleResult;
     try {
       answer = await requestTitle({
         goal: row.goal,
         ...(context ? { context } : {}),
-        phase,
+        // A rolling rename names an OPEN session, which is what the IS's
+        // early phase does; it only gets fresher context.
+        phase: isRoll ? "early" : phase,
       });
     } catch (err) {
       logger.warn(
@@ -359,7 +466,16 @@ async function generatePhase(
     // The pod's own rules, whatever the IS already did.
     const title = sanitizeGeneratedTitle(answer.title);
     const now = new Date().toISOString();
-    const stamp = isEarly ? "titleEarlyAttemptedAt" : "titleRetitledAtClose";
+    const stamp = isEarly
+      ? "titleEarlyAttemptedAt"
+      : isRoll
+        ? "titleRolledAt"
+        : "titleRetitledAtClose";
+    // The thresholds this name's context covers. Stamped on an early name too,
+    // so a session first named at 7 proposals rolls next at 25, not at 5. A
+    // roll consumes its threshold even on an unusable answer: three asks at
+    // most, never one per tick.
+    const rollStage = isEarly || isRoll ? rollStageFor(row.proposalCount) : 0;
     // The counter is EARLY-ONLY. Close is a genuine one-shot, gated by
     // `titleRetitledAtClose`, and a shared counter would let a close attempt
     // silently spend an early budget (or the reverse) — one number standing
@@ -385,11 +501,13 @@ async function generatePhase(
           rawTitle: answer.title ?? null,
           decider: answer.decider,
         },
-        !isEarly
-          ? "session-titler: unusable answer at close — keeping the name it has"
-          : attempts >= MAX_TITLE_ATTEMPTS
-            ? "session-titler: unusable answer — giving up, keeping the derived name"
-            : "session-titler: unusable answer — will retry after the cool-off"
+        isRoll
+          ? "session-titler: unusable answer for a rolling rename — keeping the name it has"
+          : !isEarly
+            ? "session-titler: unusable answer at close — keeping the name it has"
+            : attempts >= MAX_TITLE_ATTEMPTS
+              ? "session-titler: unusable answer — giving up, keeping the derived name"
+              : "session-titler: unusable answer — will retry after the cool-off"
       );
     }
     const wrote = await writeTitleIfUnchanged({
@@ -400,6 +518,7 @@ async function generatePhase(
       metadata: {
         [stamp]: now,
         ...(isEarly ? { titleEarlyAttempts: attempts } : {}),
+        ...((isEarly && title) || isRoll ? { titleRollStage: rollStage } : {}),
         ...(title
           ? {
               titleSource: "generated" satisfies SessionTitleSource,
@@ -409,7 +528,9 @@ async function generatePhase(
           : // Recorded on the ROW, not only in the log: at 3am the question is
             // "why is THIS session still unnamed", and a log line that has
             // rotated away cannot answer it.
-            { titleEarlyLastReason: reason }),
+            isRoll
+            ? { titleRollLastReason: reason }
+            : { titleEarlyLastReason: reason }),
       },
     });
     if (wrote && title) out.named++;
@@ -477,7 +598,12 @@ async function defaultRequester(): Promise<TitleRequester | null> {
 /** Called by the cron scheduler every 10 minutes. */
 export async function handleSessionTitler(
   deps: { requestTitle?: TitleRequester | null } = {}
-): Promise<{ backfilled: number; early: number; close: number }> {
+): Promise<{
+  backfilled: number;
+  early: number;
+  roll: number;
+  close: number;
+}> {
   const backfilled = await backfillDerivedTitles();
   const requestTitle =
     deps.requestTitle !== undefined
@@ -487,13 +613,14 @@ export async function handleSessionTitler(
     logger.debug(
       "session-titler: no intelligence service — derived names only"
     );
-    return { backfilled, early: 0, close: 0 };
+    return { backfilled, early: 0, roll: 0, close: 0 };
   }
   const early = await generatePhase("early", requestTitle);
+  const roll = await generatePhase("roll", requestTitle);
   const close = await generatePhase("close", requestTitle);
   // Logged whenever the pass DID something — asking and being refused counts.
   // Gating this on names written is what made a pod-wide zero silent.
-  if (backfilled || early.asked || close.asked) {
+  if (backfilled || early.asked || roll.asked || close.asked) {
     logger.info(
       {
         backfilled,
@@ -502,11 +629,19 @@ export async function handleSessionTitler(
         earlyAsked: early.asked,
         earlyUnusable: early.unusable,
         earlyExhausted: early.exhausted,
+        roll: roll.named,
+        rollAsked: roll.asked,
+        rollUnusable: roll.unusable,
         closeAsked: close.asked,
         closeUnusable: close.unusable,
       },
       "session-titler pass"
     );
   }
-  return { backfilled, early: early.named, close: close.named };
+  return {
+    backfilled,
+    early: early.named,
+    roll: roll.named,
+    close: close.named,
+  };
 }

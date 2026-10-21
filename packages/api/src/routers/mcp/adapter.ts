@@ -19,7 +19,15 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { resolveConfinedWorkspace } from "../hub-protocol/confine-workspace.js";
 import { logger, verifyWorkspaceAccess } from "../hub-protocol/rest/_shared.js";
 import { getAgentFocusWorkspaceId } from "../../services/agent-identity-service.js";
-import { runWithDerivedSession } from "@synap/database";
+import {
+  runWithDerivedSession,
+  runWithWriteSessionLedger,
+} from "@synap/database";
+import {
+  describeWriteSessions,
+  firstTopicHint,
+  topicHintNote,
+} from "./write-session-report.js";
 import {
   createHubProtocolCaller,
   pickAdvisoryWorkspaceId,
@@ -207,24 +215,43 @@ export async function executeMCPToolViaHubProtocol(
   // ONE project ladder recognises it at every door below — the ~356 gate call
   // sites forward `ctx.sessionId` with no source. A session the caller NAMED is
   // never entered here, even when it happens to be the newest open one.
-  const result =
+  //
+  // B4: the gate RECORDS where each write was filed (a receipt is chosen per
+  // write, by client + project), so the reply below names what landed. A
+  // derived RECEIPT carries its project so the gate can re-key a write of
+  // another project to that project's receipt.
+  const { ledger, result: pending } = runWithWriteSessionLedger(() =>
     session?.attribution === "derived"
-      ? await runWithDerivedSession(session.sessionId, invokeHandler)
-      : await invokeHandler();
+      ? runWithDerivedSession(session.sessionId, invokeHandler, session.receipt)
+      : invokeHandler()
+  );
+  const result = await pending;
+  const filed = resolution
+    ? await describeWriteSessions(ledger.filings, { userId, agentUserId })
+    : undefined;
 
   // NO GUESS, SAID ONCE. Several unclaimed sessions were open and none is
   // bound to this client, so the write was NOT filed under any of them — the
   // gate groups it under this client's own auto-opened session instead.
   // Disclosed here (once, in the adapter) so the model can pass `sessionId` or
   // call start_session when the write belongs to existing work.
-  const disclosed = resolution?.attribution.ambiguous
+  const ambiguityNoted = resolution?.attribution.ambiguous
     ? withSessionDisclosure(result, resolution.attribution.openCount ?? 0)
     : result;
+  // A started session never splits; a write about another project says so,
+  // once per session and project (the data rides on `attribution` every time).
+  const disclosed =
+    filed?.status === "ok" && filed.topicHint && firstTopicHint(filed.topicHint)
+      ? withNote(ambiguityNoted, topicHintNote(filed.topicHint))
+      : ambiguityNoted;
   // The same fact as data. The Note above stays (clients may read it); this is
   // what a client can branch on — including an explicit `sessionId` that was
   // DROPPED, which the Note never covered. Reads carry no attribution.
   const attributed = resolution
-    ? withSessionAttribution(disclosed, resolution.attribution)
+    ? withSessionAttribution(disclosed, {
+        ...resolution.attribution,
+        ...(filed ? { filed } : {}),
+      })
     : disclosed;
   // MCP Apps: a UI-tagged tool also returns its payload as `structuredContent`
   // for the host's iframe. LAST, so it is read back from the final text block
@@ -262,11 +289,19 @@ function withSessionDisclosure(
   result: CallToolResult,
   openCount: number
 ): CallToolResult {
+  // `openCount` = unclaimed work sessions touched in the last 24 hours, counted
+  // exactly (`resolveWorkSession`) — it used to stop at 10 and read as exact.
   const note =
-    `Note: ${openCount} of your focus sessions are open and none is yours, so ` +
-    `this write was not filed under any of them — it is grouped in a session ` +
-    `opened for you. If it belongs to one of them, pass that session's id as ` +
-    `\`sessionId\`; to name your own unit of work, call synap_start_session.`;
+    `Note: ${openCount} of your focus sessions were active in the last 24 hours ` +
+    `and none is yours, so this write was not filed under any of them — it is ` +
+    `grouped in a session opened for you (named in \`attribution.filed\`). If ` +
+    `it belongs to one of them, pass that session's id as \`sessionId\`; to ` +
+    `name your own unit of work, call synap_start_session.`;
+  return withNote(result, note);
+}
+
+/** Appends one text Note to a tool result without disturbing its payload. */
+function withNote(result: CallToolResult, note: string): CallToolResult {
   return {
     ...result,
     content: [

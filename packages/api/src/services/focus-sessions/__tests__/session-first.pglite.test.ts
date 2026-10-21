@@ -179,11 +179,12 @@ async function session(opts: {
   metadata?: Record<string, unknown>;
   origin?: string;
   updatedMinutesAgo?: number;
+  projectId?: string | null;
 }): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into focus_sessions (id, user_id, goal, status, origin, metadata, started_at, updated_at)
-     values ($1, $2, $3, $4, $5, $6::jsonb, now(), now() - ($7::int * interval '1 minute'))`,
+    `insert into focus_sessions (id, user_id, goal, status, origin, metadata, started_at, updated_at, project_id)
+     values ($1, $2, $3, $4, $5, $6::jsonb, now(), now() - ($7::int * interval '1 minute'), $8)`,
     [
       id,
       USER,
@@ -192,6 +193,7 @@ async function session(opts: {
       opts.origin ?? "human",
       JSON.stringify(opts.metadata ?? {}),
       opts.updatedMinutesAgo ?? 0,
+      opts.projectId ?? null,
     ]
   );
   return id;
@@ -349,6 +351,131 @@ describe("receipts group by CLIENT, not by the per-write goal", () => {
     const [row] = await rows();
     expect(row.id).toBe(a);
     expect(row.metadata.clientKey).toBe("key:CTX");
+  });
+});
+
+/**
+ * B4 (2026-10-21): a receipt is the pod's GUESS, so it splits where the work's
+ * project changes; a session the client STARTED never splits. Live, one
+ * receipt held 142 writes across six spaces and was then adopted whole.
+ */
+describe("receipts split by project; started sessions never do (B4)", () => {
+  const P1 = "11111111-1111-4111-8111-111111111111";
+  const P2 = "22222222-2222-4222-8222-222222222222";
+  const receiptIn = (clientKey: string, projectId: string | null) =>
+    resolveOrCreateAgentProposalSession({
+      userId: USER,
+      agentUserId: AGENT,
+      goal: "a write",
+      clientKey,
+      projectId,
+      stableCorrelation: false,
+    });
+
+  it("one conversation, two projects → two receipts; back to the first → the first", async () => {
+    const a = await receiptIn(CONV_A, P1);
+    const b = await receiptIn(CONV_A, P2);
+    const none = await receiptIn(CONV_A, null);
+    expect(new Set([a, b, none]).size).toBe(3);
+    expect(await receiptIn(CONV_A, P1)).toBe(a);
+    const byId = new Map(
+      (
+        await q<{ id: string; project_id: string | null }>(
+          `select id, project_id from focus_sessions`
+        )
+      ).rows.map((r) => [r.id, r.project_id])
+    );
+    expect(byId.get(a!)).toBe(P1);
+    expect(byId.get(b!)).toBe(P2);
+    expect(byId.get(none!)).toBeNull();
+  });
+
+  it("a session the conversation STARTED takes every project's write — never split", async () => {
+    const started = await session({
+      origin: "agent",
+      metadata: { clientKey: CONV_A },
+      projectId: P1,
+    });
+    expect(await receiptIn(CONV_A, P2)).toBe(started);
+    expect(await receiptIn(CONV_A, null)).toBe(started);
+    expect(await rows()).toHaveLength(1);
+  });
+
+  it("start_session adopts ONLY the receipt of its own project", async () => {
+    const r1 = await receiptIn(CONV_A, P1);
+    const r2 = await receiptIn(CONV_A, P2);
+    const result = await createFocusSession({
+      userId: USER,
+      agentUserId: AGENT,
+      title: "P2 work",
+      goal: "Ship the P2 thing",
+      projectId: P2,
+      clientKey: CONV_A,
+    });
+    if (result.status !== "created") throw new Error(result.status);
+    expect(result.adopted).toBe(true);
+    expect(result.session.id).toBe(r2);
+    // The other project's writes stay in their own receipt.
+    const other = (await rows()).find((r) => r.id === r1)!;
+    expect(other.metadata).toMatchObject({
+      kind: "agent-proposal-package",
+      autoOpened: true,
+    });
+  });
+
+  it("CONTROL — a start with no matching receipt adopts nothing", async () => {
+    await receiptIn(CONV_A, P1);
+    const result = await createFocusSession({
+      userId: USER,
+      agentUserId: AGENT,
+      title: "Other",
+      goal: "Something in P2",
+      projectId: P2,
+      clientKey: CONV_A,
+    });
+    if (result.status !== "created") throw new Error(result.status);
+    expect(result.adopted).toBeUndefined();
+    expect(await rows()).toHaveLength(2);
+  });
+
+  it("the attribution read hands the MCP door the receipt's project (the gate re-keys by it)", async () => {
+    await receiptIn(CONV_A, P1);
+    const r = await resolveWorkSession({ userId: USER, clientKey: CONV_A });
+    expect(r).toMatchObject({
+      source: "client",
+      autoOpened: true,
+      receiptProjectId: P1,
+    });
+  });
+});
+
+describe("the open-sessions count is exact and recent (B4 e)", () => {
+  it("counts every unclaimed work session touched in 24 h — never stops at 10", async () => {
+    for (let i = 0; i < 12; i++) {
+      await session({ origin: "human", goal: `work ${i}` });
+    }
+    const r = await resolveWorkSession({ userId: USER, clientKey: CONV_A });
+    expect(r).toMatchObject({ source: "none", unclaimedOpenCount: 12 });
+  });
+
+  it("sessions untouched for a day are not counted, and never guessed", async () => {
+    const live = await session({ origin: "human", goal: "today" });
+    await session({
+      origin: "human",
+      goal: "stale 1",
+      updatedMinutesAgo: 30 * 60,
+    });
+    await session({
+      origin: "human",
+      goal: "stale 2",
+      updatedMinutesAgo: 30 * 60,
+    });
+    const r = await resolveWorkSession({ userId: USER, clientKey: CONV_A });
+    expect(r).toMatchObject({
+      sessionId: live,
+      source: "unclaimed",
+      unclaimedOpenCount: 1,
+    });
   });
 });
 

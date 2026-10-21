@@ -243,6 +243,128 @@ describe("early phase — who is selected", () => {
   });
 });
 
+/**
+ * ROLLING names (B4 2026-10-21): an automation name FOLLOWS the work — renamed
+ * from the LATEST context when the proposal count crosses 5 / 25 / 100, at
+ * most three times, never once a person or agent named it. Live, the early
+ * name was frozen from the first five writes of a 142-write session.
+ */
+describe("rolling — automation names follow the work", () => {
+  /** `n` proposals filed under `sessionId`, oldest first, summaries numbered. */
+  async function filed(sessionId: string, n: number, prefix = "Write") {
+    for (let i = 1; i <= n; i++) {
+      await q(
+        `insert into proposals (id, session_id, target_type, data, created_at)
+         values ($1, $2, 'entity', $3::jsonb, now() - ($4::int * interval '1 second'))`,
+        [
+          randomUUID(),
+          sessionId,
+          JSON.stringify({ summary: `${prefix} ${i}` }),
+          n - i,
+        ]
+      );
+    }
+  }
+  const contexts: string[] = [];
+  function capturing(title: string | null) {
+    return vi.fn(
+      async (p: { goal: string; phase: string; context?: string }) => {
+        asked.push(`${p.phase}:${p.goal}`);
+        contexts.push(p.context ?? "");
+        return { title, decider: "llm" as const, model: "cheap" };
+      }
+    );
+  }
+  beforeEach(async () => {
+    contexts.length = 0;
+    await q(`delete from proposals`);
+  });
+
+  it("renames a generated name at the next threshold, from the LATEST writes", async () => {
+    const id = await session({
+      title: "Opening name",
+      goal: "receipt",
+      metadata: {
+        source: "agent-write",
+        titleSource: "generated",
+        titleRollStage: 0,
+      },
+    });
+    await filed(id, 12, "Pricing change");
+    const out = await handleSessionTitler({
+      requestTitle: capturing("Commercial foundations"),
+    });
+    expect(out.roll).toBe(1);
+    const r = await row(id);
+    expect(r.title).toBe("Commercial foundations");
+    expect(r.metadata.titleSource).toBe("generated");
+    expect(r.metadata.titleRollStage).toBe(1);
+    // The newest write is in the context, and the count by kind.
+    expect(contexts[0]).toContain("Pricing change 12");
+    expect(contexts[0]).toContain("Changes so far: 12 entity");
+  });
+
+  it("is LOCKED once a person or an agent named the session", async () => {
+    for (const source of ["human", "agent"]) {
+      const id = await session({
+        title: `${source} name`,
+        goal: source,
+        metadata: { source: "agent-write", titleSource: source },
+      });
+      await filed(id, 30);
+    }
+    const requestTitle = capturing("Replacement");
+    const out = await handleSessionTitler({ requestTitle });
+    expect(out.roll).toBe(0);
+    expect(requestTitle).not.toHaveBeenCalled();
+  });
+
+  it("at most three renames: a jump past every threshold renames ONCE, then never again", async () => {
+    const id = await session({
+      title: "Opening name",
+      goal: "big",
+      metadata: { source: "agent-write", titleSource: "generated" },
+    });
+    await filed(id, 120);
+    await handleSessionTitler({ requestTitle: capturing("Named at 120") });
+    expect((await row(id)).metadata.titleRollStage).toBe(3);
+    const again = capturing("Never");
+    await handleSessionTitler({ requestTitle: again });
+    expect(again).not.toHaveBeenCalled();
+    expect((await row(id)).title).toBe("Named at 120");
+  });
+
+  it("an EARLY name stamps the thresholds it covered — no rename at 5 for a session named at 7", async () => {
+    const id = await session({
+      goal: "fresh receipt",
+      metadata: { source: "agent-write" },
+    });
+    await filed(id, 7);
+    const out = await handleSessionTitler({
+      requestTitle: capturing("First name"),
+    });
+    expect(out.early).toBe(1);
+    expect(out.roll).toBe(0);
+    expect((await row(id)).metadata.titleRollStage).toBe(1);
+  });
+
+  it("CONTROL — under the next threshold nothing is asked", async () => {
+    const id = await session({
+      title: "Opening name",
+      goal: "small",
+      metadata: {
+        source: "agent-write",
+        titleSource: "generated",
+        titleRollStage: 1,
+      },
+    });
+    await filed(id, 24);
+    const requestTitle = capturing("Too soon");
+    await handleSessionTitler({ requestTitle });
+    expect(requestTitle).not.toHaveBeenCalled();
+  });
+});
+
 describe("the conditional write — a rename always wins", () => {
   it("loses to a rename that lands while the IS is answering", async () => {
     const id = await session({});
@@ -421,7 +543,7 @@ describe("backfill — derived names, no LLM", () => {
     });
 
     const out = await handleSessionTitler({ requestTitle: null });
-    expect(out).toEqual({ backfilled: 2, early: 0, close: 0 });
+    expect(out).toEqual({ backfilled: 2, early: 0, roll: 0, close: 0 });
     expect((await row(run)).metadata.titleSource).toBe("derived");
     const cap = await row(capture);
     // The goal already CARRIES the machine verb, so the derived name is the

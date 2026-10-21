@@ -34,6 +34,7 @@ import { TRPCError } from "@trpc/server";
 import { randomUUID } from "node:crypto";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
+import { getAgentFocusProjectId } from "../agent-identity-service.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import {
   collectPlaybookCriteria,
@@ -585,12 +586,25 @@ export async function createFocusSession(
   // rows for one piece of work: that session becomes this one. Only for a
   // CONVERSATION-scoped client: a key-scoped one's auto-opened session may hold
   // other conversations' writes, which a new goal must never sweep up.
+  //
+  // Only the receipt of THIS start's project (B4 d, 2026-10-21): receipts are
+  // keyed by (client, project), so the writes of another project stay in their
+  // own receipt instead of being swept under this goal (live: 142 commercial
+  // writes became a CRM-spec session). The project is the one the gate keys
+  // receipts by: this start's, else the conversation's declared focus.
+  const adoptionProjectId =
+    projectId ??
+    (agentUserId ? await getAgentFocusProjectId(agentUserId) : null);
   const adoptId =
     clientKey &&
     params.adoptAutoOpened !== false &&
     clientKeyScope(clientKey) === "conversation"
-      ? ((await findClientSession(userId, clientKey, { onlyAutoOpened: true }))
-          ?.id ?? null)
+      ? ((
+          await findClientSession(userId, clientKey, {
+            onlyAutoOpened: true,
+            projectId: adoptionProjectId,
+          })
+        )?.id ?? null)
       : null;
 
   // VISIBILITY FLOOR for any `ref` a declared slot carries — the SAME

@@ -126,6 +126,7 @@ import {
   expectedOutputWireSchema,
   outputRefWireSchema,
   mergeExpectedOutputs,
+  keepUnlistedSlots,
   droppedAskWarnings,
   criteriaDiffer,
 } from "../../../services/focus-sessions/update-session.js";
@@ -302,6 +303,9 @@ export function unsupportedUpdateFieldError(raw: unknown): string | null {
   if (typeof raw !== "object" || raw === null) return null;
   if ("completeOutput" in raw) {
     return "completeOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use the synap_update_session tool (MCP) to mark a declared deliverable done; it takes the row lock this door does not.";
+  }
+  if ("retireOutput" in raw) {
+    return "retireOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use the synap_update_session tool (MCP) to withdraw a declared deliverable; it takes the row lock this door does not.";
   }
   if ("stages" in raw) {
     return "stages is not supported on PATCH /focus-sessions/:id — nothing was changed. A session's own phase snapshot (focus_sessions.stages) is written through the tRPC focusSessions.update door.";
@@ -1651,8 +1655,18 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ...(patch.addAgentId !== undefined
             ? { addAgentId: patch.addAgentId }
             : {}),
+          // An agent's list as it will LAND (C6: add-or-update), so the review
+          // diff never reads the slots it keeps as deletions.
           ...(patch.expectedOutputs !== undefined
-            ? { expectedOutputs: patch.expectedOutputs }
+            ? {
+                expectedOutputs: agentUserId
+                  ? keepUnlistedSlots(
+                      (existing.expectedOutputs as typeof patch.expectedOutputs) ??
+                        [],
+                      patch.expectedOutputs
+                    )
+                  : patch.expectedOutputs,
+              }
             : {}),
           ...(patch.verificationReport !== undefined
             ? { verificationReport: patch.verificationReport }
@@ -1746,10 +1760,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // Merge, never assign — the SAME merge the tRPC and MCP doors use, so a
       // caller that echoes back only the fields it knows about cannot erase a
       // delegation, a reviewer's return note, or an approval's lineage.
+      // An AGENT's list adds and updates, never deletes (C6) — the same mode
+      // the MCP door and the approval executor apply.
       if (patch.expectedOutputs !== undefined)
         set.expectedOutputs = mergeExpectedOutputs(
           (existing.expectedOutputs as typeof patch.expectedOutputs) ?? [],
-          patch.expectedOutputs
+          patch.expectedOutputs,
+          { keepUnlisted: !!agentUserId }
         );
       // Shallow-merge, exactly like the `metadata` bag below — `verificationReport`
       // is the SAME shape of thing: an open JSONB bag written by SEVERAL

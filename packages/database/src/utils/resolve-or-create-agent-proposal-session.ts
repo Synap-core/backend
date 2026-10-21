@@ -7,7 +7,8 @@
  *  1. Existing session with the same correlationId (when caller set a stable one)
  *  2. The client's own session (`findClientSession`): the one it started itself
  *     (start_session stamps `metadata.clientKey`), else the one this door
- *     auto-opened for it while it is still in its activity window
+ *     auto-opened for it FOR THIS WRITE'S PROJECT while it is still in its
+ *     activity window
  *  3. Auto-open one via openRunSession — a RECEIPT (`metadata.kind =
  *     'agent-proposal-package'`), marked `autoOpened` + `clientKey`, named by the
  *     caller (`buildDerivedSessionTitle`, titleSource "derived"). Minted under a
@@ -15,8 +16,12 @@
  *
  * Grouping used to key on the exact derived goal ("Create task Buy milk"), so N
  * different writes made N receipts and nothing ever closed them. One client's
- * working stretch is one receipt now; the hourly reaper closes it once it has
- * been idle for {@link RECEIPT_IDLE_WINDOW_HOURS} with nothing pending.
+ * working stretch is one receipt PER PROJECT now (B4 2026-10-21: a receipt is
+ * the pod's guess, so it splits where the work's project changes — live, one
+ * receipt swallowed 142 writes across six spaces). A session the client
+ * STARTED never splits: it stays bound whatever the write's project (the MCP
+ * door hints instead). The hourly reaper closes a receipt once it has been
+ * idle for {@link RECEIPT_IDLE_WINDOW_HOURS} with nothing pending.
  *
  * Never calls createFocusSession (that proposes → recursion / null id).
  * Humans (no agentUserId) never enter this helper — callers must gate.
@@ -102,6 +107,18 @@ export interface ClientSession {
   id: string;
   /** True when this door auto-opened it (not started by the client itself). */
   autoOpened: boolean;
+  /** Its project — a receipt's KEY half (B4); null = the no-project receipt. */
+  projectId: string | null;
+}
+
+/**
+ * When a session last saw activity: its own row touch, or the newest proposal
+ * filed under it. ONE definition of "touched", read by the receipt window here
+ * and by the open-sessions count the MCP note prints, so "idle" and "touched in
+ * the last 24 hours" cannot disagree about one row.
+ */
+export function sessionLastActivitySql() {
+  return sql`greatest(${focusSessions.updatedAt}, coalesce((select max(p.created_at) from proposals p where p.session_id = ${focusSessions.id}), ${focusSessions.updatedAt}))`;
 }
 
 /**
@@ -115,18 +132,31 @@ export interface ClientSession {
  * are ALWAYS narrowed to auto-opened: a STARTED session stamped `key:<id>`
  * belongs to one of the many conversations sharing that key, and joining it
  * without naming it is the accidental sharing this rule forbids.
+ *
+ * `projectId` (B4): when given — `null` included, the "no project" key — an
+ * AUTO-OPENED session counts only if it is that project's receipt. A started
+ * session is unaffected. Omitted ⇒ any project (the attribution read and the
+ * MCP door, which do not know the write's project yet).
  */
 export async function findClientSession(
   userId: string,
   clientKey: string,
-  opts: { onlyAutoOpened?: boolean; database?: Pick<typeof db, "select"> } = {}
+  opts: {
+    onlyAutoOpened?: boolean;
+    database?: Pick<typeof db, "select">;
+    projectId?: string | null;
+  } = {}
 ): Promise<ClientSession | null> {
   const database = opts.database ?? db;
   const onlyAutoOpened =
     opts.onlyAutoOpened === true || clientKeyScope(clientKey) === "key";
   const autoOpened = sql`coalesce((${focusSessions.metadata} ->> 'autoOpened')::boolean, false)`;
   const rows = await database
-    .select({ id: focusSessions.id, autoOpened: sql<boolean>`${autoOpened}` })
+    .select({
+      id: focusSessions.id,
+      autoOpened: sql<boolean>`${autoOpened}`,
+      projectId: focusSessions.projectId,
+    })
     .from(focusSessions)
     .where(
       and(
@@ -137,13 +167,23 @@ export async function findClientSession(
         // An auto-opened session is the client's CURRENT one only while it saw
         // activity inside the window; one it started itself stays bound until
         // it is closed.
-        sql`(NOT ${autoOpened} OR greatest(${focusSessions.updatedAt}, coalesce((select max(p.created_at) from proposals p where p.session_id = ${focusSessions.id}), ${focusSessions.updatedAt})) > now() - (${RECEIPT_IDLE_WINDOW_HOURS}::int * interval '1 hour'))`
+        sql`(NOT ${autoOpened} OR ${sessionLastActivitySql()} > now() - (${RECEIPT_IDLE_WINDOW_HOURS}::int * interval '1 hour'))`,
+        // A receipt is per (client, project); a started session is not.
+        opts.projectId !== undefined
+          ? sql`(NOT ${autoOpened} OR ${focusSessions.projectId} IS NOT DISTINCT FROM ${opts.projectId})`
+          : undefined
       )
     )
     .orderBy(sql`${autoOpened} asc`, desc(focusSessions.startedAt))
     .limit(1);
   const row = rows[0];
-  return row ? { id: row.id, autoOpened: row.autoOpened === true } : null;
+  return row
+    ? {
+        id: row.id,
+        autoOpened: row.autoOpened === true,
+        projectId: row.projectId ?? null,
+      }
+    : null;
 }
 
 /**
@@ -191,8 +231,12 @@ export async function resolveOrCreateAgentProposalSession(
       if (byCorr) return byCorr.id;
     }
 
-    // 2) The client's own session.
-    const bound = await findClientSession(input.userId, clientKey);
+    // 2) The client's own session: one it started, else ITS receipt for this
+    // write's project (`null` = the no-project receipt).
+    const projectId = input.projectId ?? null;
+    const bound = await findClientSession(input.userId, clientKey, {
+      projectId,
+    });
     if (bound) return bound.id;
 
     // 3) Auto-open, serialized per client: the lock is held until this
@@ -201,10 +245,11 @@ export async function resolveOrCreateAgentProposalSession(
     // reuses it instead of opening a second one.
     return await db.transaction(async (tx) => {
       await tx.execute(
-        sql`select pg_advisory_xact_lock(hashtext(${`receipt|${input.userId}|${clientKey}`}))`
+        sql`select pg_advisory_xact_lock(hashtext(${`receipt|${input.userId}|${clientKey}|${projectId ?? ""}`}))`
       );
       const raced = await findClientSession(input.userId, clientKey, {
         database: tx,
+        projectId,
       });
       if (raced) return raced.id;
       // Inserted on the tx: the lock and the insert share one connection.
@@ -213,7 +258,7 @@ export async function resolveOrCreateAgentProposalSession(
         userId: input.userId,
         agentUserId: input.agentUserId,
         workspaceId: await receiptWorkspaceId(tx, input.workspaceId),
-        projectId: input.projectId ?? null,
+        projectId,
         goal,
         title: input.title ?? null,
         source: "agent-write",

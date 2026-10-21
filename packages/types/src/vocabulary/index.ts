@@ -1795,6 +1795,8 @@ export const OUTPUT_RETIRED_REASON_LABELS: Readonly<Record<string, string>> = {
    * (accepted / rejected / superseded), so the question is moot.
    */
   decision_resolved: "Decided elsewhere",
+  /** The agent withdrew a deliverable it had declared (`retireOutput`). */
+  withdrawn: "Withdrawn",
 };
 
 /** The human label for a retired reason; unknown values humanize, never leak. */

@@ -514,6 +514,12 @@ export type SessionAttribution = "explicit" | "derived";
 export interface ResolvedSession {
   sessionId: string;
   attribution: SessionAttribution;
+  /**
+   * Set when the derived session is this client's auto-opened RECEIPT: its
+   * project. The adapter hands it to the gate (`runWithDerivedSession`), which
+   * files a write of another project under that project's receipt (B4).
+   */
+  receipt?: { projectId: string | null };
 }
 
 /**
@@ -542,6 +548,12 @@ export async function resolveAmbientSession(
 export interface SessionAttributionReport {
   /** `none` = no session: none bound, none unambiguous, or the explicit id was dropped. */
   session: "explicit" | "derived" | "none";
+  /**
+   * WHERE this call's writes were actually filed — each session by id and
+   * name, plus a `topicHint` when a write's project is not the project of the
+   * session it landed in (B4). Absent when the call wrote nothing.
+   */
+  filed?: import("../write-session-report.js").WriteSessionReport;
   /**
    * `derived` only: `client` = the session bound to THIS client (one it
    * started, or the one auto-opened for it); `unclaimed` = the single open work
@@ -627,7 +639,13 @@ export async function resolveSessionHandle(
   }
   if ((r.source === "client" || r.source === "unclaimed") && r.sessionId) {
     return {
-      session: { sessionId: r.sessionId, attribution: "derived" },
+      session: {
+        sessionId: r.sessionId,
+        attribution: "derived",
+        ...(r.receiptProjectId !== undefined
+          ? { receipt: { projectId: r.receiptProjectId } }
+          : {}),
+      },
       attribution: {
         session: "derived",
         via: r.source,
