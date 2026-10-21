@@ -48,6 +48,7 @@ import {
   type SelfServiceFlowKind,
   type SignInState,
 } from "../../lib/sign-in-state";
+import { withLoginHint } from "../../lib/login-hint";
 
 interface LoginFormProps {
   returnTo: string;
@@ -56,6 +57,8 @@ interface LoginFormProps {
   refresh?: boolean;
   /** What the server's own session check saw on this request. */
   serverSession: "active" | "none" | "unavailable";
+  /** Who is signing in, as the app hinted (`lib/login-hint.ts`). */
+  loginHint?: string | null;
 }
 
 export function LoginForm({
@@ -63,6 +66,7 @@ export function LoginForm({
   initialFlowId,
   refresh = false,
   serverSession,
+  loginHint = null,
 }: LoginFormProps) {
   const router = useRouter();
   const [flow, setFlow] = useState<KratosFlow | null>(null);
@@ -136,7 +140,9 @@ export function LoginForm({
         if (cancelled) return;
         setFlow(loaded);
         setFlowKind(kind);
-        setValues(extractInitialValues(loaded));
+        setValues(
+          withLoginHint(extractInitialValues(loaded), loaded, loginHint)
+        );
         const errors = collectErrorMessages(loaded, isStateMessage);
         if (errors.length) setError(errors.join(" "));
       } catch (err) {
@@ -152,7 +158,7 @@ export function LoginForm({
     return () => {
       cancelled = true;
     };
-  }, [initialFlowId, onExistingSession, refresh, router]);
+  }, [initialFlowId, loginHint, onExistingSession, refresh, router]);
 
   const submitFlow = useCallback(
     async (submittedValues: Record<string, string>) => {

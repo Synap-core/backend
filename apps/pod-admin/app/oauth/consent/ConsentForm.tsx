@@ -173,6 +173,9 @@ export function ConsentForm({
           name: context.data.clientName,
           onComputer: isLoopbackHost(context.data.redirectHost),
           redirectHost: context.data.redirectHost,
+          // The app re-confirms a device it holds (a step-up). The server
+          // decides, and binds the code to it: it can never make a device.
+          reconfirm: context.data.reconfirmDevice,
         }
       : null;
 
@@ -197,7 +200,9 @@ export function ConsentForm({
           {firstParty ? (
             <>
               <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
-                Sign in to {firstParty.name}
+                {firstParty.reconfirm
+                  ? "Confirm it's you"
+                  : `Sign in to ${firstParty.name}`}
               </h1>
               <p className="text-[13px] leading-relaxed text-foreground/65">
                 {firstParty.onComputer ? "On this computer" : "On your phone"}
@@ -485,6 +490,7 @@ function FirstPartyConsent({
   name,
   onComputer,
   redirectHost,
+  reconfirm,
   busy,
   step,
   onDecide,
@@ -492,6 +498,7 @@ function FirstPartyConsent({
   name: string;
   onComputer: boolean;
   redirectHost: string;
+  reconfirm: boolean;
   busy: boolean;
   step: Step;
   onDecide: (approve: boolean) => void;
@@ -501,11 +508,13 @@ function FirstPartyConsent({
     <>
       <div className="flex flex-col gap-2.5 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
         <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
-          <Glyph className="h-3 w-3" aria-hidden /> {name} will be you
+          <Glyph className="h-3 w-3" aria-hidden />{" "}
+          {reconfirm ? `${name} is already signed in` : `${name} will be you`}
         </p>
         <p className="text-[12.5px] leading-relaxed text-foreground/75">
-          It can do what you can do in Synap. Only continue if you just opened{" "}
-          {name} and asked it to sign in.
+          {reconfirm
+            ? `It asks before it changes a key, a connection or a secret. Only continue if you just asked ${name} to do that.`
+            : `It can do what you can do in Synap. Only continue if you just opened ${name} and asked it to sign in.`}
         </p>
         <div className="flex flex-col gap-1 pt-0.5">
           <span className="text-[13px] text-foreground/60">
@@ -527,7 +536,7 @@ function FirstPartyConsent({
           isLoading={busy && step.kind === "working" && step.approve}
           onPress={() => onDecide(true)}
         >
-          Sign in
+          {reconfirm ? "Confirm" : "Sign in"}
         </Button>
         <Button
           variant="flat"

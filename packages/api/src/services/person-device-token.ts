@@ -62,7 +62,16 @@
  *     checked — before anything is spent — to belong to this client and to
  *     the person who just signed in; it moves only that device's clock, only
  *     forward, and creates nothing. → "a step-up re-confirms the SAME
- *     device".
+ *     device". The code is BOUND to the act its screen named
+ *     (`isDeviceReconfirm`, `oauth_authorization_codes.step_up`): a
+ *     `prompt=login` code ("Confirm it's you") is taken only with a device's
+ *     refresh token and can never make a device; a sign-in code ("Sign in
+ *     to …") can never re-confirm one. So the milder words cannot be used to
+ *     mint a new device. Residual (M4-like): someone holding a stolen
+ *     refresh token can start their own `prompt=login` flow and rely on the
+ *     person confirming; the screen says "already signed in … only continue
+ *     if you just asked it to", and the device list shows each device.
+ *     → "\"Confirm it's you\" can never make a device".
  *
  * ── The REFRESH path (rotation, refresh.ts) ──
  *  R1 Refresh-token theft. Every token is SINGLE-USE: the redeem claims it

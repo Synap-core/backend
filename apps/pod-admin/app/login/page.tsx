@@ -14,12 +14,18 @@ import { redirect } from "next/navigation";
 import { headers } from "next/headers";
 import { checkSession } from "../../lib/kratos";
 import { safeReturnTo } from "../../lib/safe-return-to";
+import { loginHintFor } from "../../lib/login-hint";
 import { LoginForm } from "./LoginForm";
 
 export const dynamic = "force-dynamic";
 
 interface LoginPageProps {
-  searchParams: Promise<{ return?: string; flow?: string; refresh?: string }>;
+  searchParams: Promise<{
+    return?: string;
+    flow?: string;
+    refresh?: string;
+    login_hint?: string;
+  }>;
 }
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
@@ -40,6 +46,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
       initialFlowId={sp.flow ?? null}
       refresh={refresh}
       serverSession={session.state}
+      loginHint={loginHintFor(sp.login_hint, returnTo)}
     />
   );
 }

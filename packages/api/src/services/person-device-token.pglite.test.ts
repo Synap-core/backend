@@ -123,7 +123,10 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { computeS256Challenge } from "../routers/oauth/protocol.js";
 import { oauthApp } from "../routers/oauth/routes.js";
-import { decideOAuthAuthorization } from "../routers/oauth/consent.js";
+import {
+  decideOAuthAuthorization,
+  getOAuthConsentContext,
+} from "../routers/oauth/consent.js";
 import { appSessionMiddleware } from "../middleware/app-session.js";
 import { createContext } from "../context.js";
 import { router } from "../trpc.js";
@@ -926,6 +929,62 @@ describe("(j) step-up: the clock is the device's real sign-in", () => {
     expect((await refresh(bobs.refreshToken)).status).toBe(200);
     const bobDevice = await device(bobs.deviceId);
     expect(new Date(bobDevice.created_at).getTime()).toBeGreaterThan(0);
+  });
+
+  it('"Confirm it\'s you" can never make a device, and "Sign in" can never re-confirm one', async () => {
+    const s = await signIn("laptop", 3 * 60 * MIN_MS);
+    const count = async () =>
+      (
+        await q<{ n: number }>(
+          `select count(*)::int as n from person_devices where user_id = $1`,
+          [PERSON]
+        )
+      ).rows[0]!.n;
+    const exchange = (code: string, deviceRefresh?: string) =>
+      tokenRequest({
+        grant_type: "authorization_code",
+        code,
+        client_id: DESKTOP,
+        redirect_uri: LOOPBACK,
+        code_verifier: VERIFIER,
+        ...(deviceRefresh ? { synap_device_refresh_token: deviceRefresh } : {}),
+      });
+    const before = await count();
+    // The screen the person saw names which act it is.
+    const ctxFor = (prompt?: string) =>
+      getOAuthConsentContext(
+        {
+          clientId: DESKTOP,
+          redirectUri: LOOPBACK,
+          responseType: "code",
+          codeChallenge: CHALLENGE,
+          codeChallengeMethod: "S256",
+          resource: ISSUER,
+          ...(prompt ? { prompt } : {}),
+        },
+        PERSON,
+        (kratosCtx(PERSON, 10_000) as { session: never }).session
+      );
+    expect((await ctxFor("login")).reconfirmDevice).toBe(true);
+    expect((await ctxFor()).reconfirmDevice).toBe(false);
+
+    // A step-up code without the device's refresh token: refused, no device.
+    const confirm = await consent(PERSON, {
+      prompt: "login",
+      signedInAgoMs: 10_000,
+    });
+    const minted = await exchange(confirm);
+    expect(minted.status).toBe(400);
+    expect(minted.body.error).toBe("invalid_grant");
+    expect(await count()).toBe(before);
+
+    // A sign-in code presented as a re-confirmation: refused, unspent.
+    const signInCode = await consent(PERSON, { signedInAgoMs: 10_000 });
+    const reconfirmed = await exchange(signInCode, s.refresh);
+    expect(reconfirmed.status).toBe(400);
+    expect(reconfirmed.body.error).toBe("invalid_grant");
+    expect((await refresh(s.refresh)).status).toBe(200);
+    expect(await count()).toBe(before);
   });
 
   it("prompt=login on an old console sign-in is refused (LOGIN_REQUIRED), before any code", async () => {

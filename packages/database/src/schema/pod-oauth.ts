@@ -38,6 +38,7 @@
  */
 
 import {
+  boolean,
   pgTable,
   text,
   timestamp,
@@ -168,6 +169,10 @@ export const oauthAuthorizationCodes = pgTable(
     // The consenting session's real `authenticated_at` (0340): a Synap app's
     // device takes it as its step-up clock. NULL when unknown.
     authTime: timestamp("auth_time", { mode: "date", withTimezone: true }),
+
+    // A Synap app's STEP-UP code (`prompt=login`, "Confirm it's you", 0340):
+    // it re-confirms a device the app holds and can never make a new one.
+    stepUp: boolean("step_up").notNull().default(false),
   },
   (table) => ({
     expiresAtIdx: index("oauth_authorization_codes_expires_at_idx").on(

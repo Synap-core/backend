@@ -140,6 +140,20 @@ export function sessionAuthenticatedAt(
 }
 
 /**
+ * A Synap app asking the person to CONFIRM it's them for a device it already
+ * holds (a step-up: `prompt=login`). The screen says "Confirm it's you", and
+ * the code it issues is a STEP-UP code: /token takes it only with that
+ * device's refresh token, never to make a new device — so the words shown
+ * and the effect cannot disagree.
+ */
+export function isDeviceReconfirm(
+  clientKind: string,
+  prompt: string | null | undefined
+): boolean {
+  return clientKind === "first_party" && prompt === "login";
+}
+
+/**
  * Must the person sign in again before deciding? Only when the request asks
  * for it: `prompt=login`, or `max_age`. "Fresh" is within `max_age`, never
  * tighter than the step-up window (the time from signing in to clicking), so
@@ -434,6 +448,11 @@ export interface OAuthConsentContext {
    * the viewer's is older: the screen sends them to sign in again first.
    */
   reauthenticate: boolean;
+  /**
+   * A Synap app re-confirming a device it holds (`isDeviceReconfirm`): the
+   * screen asks "Confirm it's you", not "Sign in".
+   */
+  reconfirmDevice: boolean;
 }
 
 /**
@@ -527,6 +546,7 @@ export async function getOAuthConsentContext(
       params,
       sessionAuthenticatedAt(callerSession)
     ),
+    reconfirmDevice: isDeviceReconfirm(req.client.clientKind, params.prompt),
   };
   if (req.client.clientKind !== "cimd") return { ...base, app: null };
   if (!callerUserId) {
@@ -684,6 +704,7 @@ export async function decideOAuthAuthorization(
     appId,
     appGrant,
     authTime,
+    stepUp: isDeviceReconfirm(req.client.clientKind, input.prompt),
   });
 
   return {

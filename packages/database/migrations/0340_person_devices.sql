@@ -68,6 +68,11 @@ CREATE INDEX IF NOT EXISTS "person_device_tokens_device_idx"
 -- `authenticated_at` to /token, which copies it onto the device.
 ALTER TABLE "oauth_authorization_codes"
   ADD COLUMN IF NOT EXISTS "auth_time" timestamp with time zone;
+-- A code asked as a STEP-UP (`prompt=login` from a Synap app: "Confirm it's
+-- you") can only re-confirm a device the app holds, never make a new one —
+-- so the screen's words and the code's effect cannot disagree.
+ALTER TABLE "oauth_authorization_codes"
+  ADD COLUMN IF NOT EXISTS "step_up" boolean NOT NULL DEFAULT false;
 
 ALTER TABLE "oauth_refresh_tokens" ALTER COLUMN "app_id" DROP NOT NULL;
 ALTER TABLE "oauth_refresh_tokens"

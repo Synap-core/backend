@@ -74,9 +74,10 @@ async function pre0340(): Promise<PGlite> {
   const pg = await base();
   await pg.exec(M0339);
   // The baseline's oauth section is today's shape; a pod that ran only up to
-  // 0339 had no `auth_time` on its codes.
+  // 0339 had no `auth_time` / `step_up` on its codes.
   await pg.exec(
-    `ALTER TABLE "oauth_authorization_codes" DROP COLUMN IF EXISTS "auth_time"`
+    `ALTER TABLE "oauth_authorization_codes" DROP COLUMN IF EXISTS "auth_time";
+     ALTER TABLE "oauth_authorization_codes" DROP COLUMN IF EXISTS "step_up"`
   );
   return pg;
 }
@@ -165,12 +166,12 @@ const count = async (pg: PGlite, table: string) =>
     .rows[0]!.n;
 
 describe("migration 0340 — person devices", { timeout: 60_000 }, () => {
-  it("non-vacuity: a pod that ran 0339 has no device tables, no device_id, no code auth_time", async () => {
+  it("non-vacuity: a pod that ran 0339 has no device tables, no device_id, no code auth_time or step_up", async () => {
     const pg = await pre0340();
     expect(await columnsOf(pg, "person_devices")).toEqual([]);
-    expect(await columnsOf(pg, "oauth_authorization_codes")).not.toContain(
-      "auth_time"
-    );
+    const codes = await columnsOf(pg, "oauth_authorization_codes");
+    expect(codes).not.toContain("auth_time");
+    expect(codes).not.toContain("step_up");
     expect(await columnsOf(pg, "oauth_refresh_tokens")).not.toContain(
       "device_id"
     );

@@ -12456,6 +12456,11 @@ export interface OAuthConsentContext {
 	 * the viewer's is older: the screen sends them to sign in again first.
 	 */
 	reauthenticate: boolean;
+	/**
+	 * A Synap app re-confirming a device it holds (`isDeviceReconfirm`): the
+	 * screen asks "Confirm it's you", not "Sign in".
+	 */
+	reconfirmDevice: boolean;
 }
 /**
  * API Keys Router

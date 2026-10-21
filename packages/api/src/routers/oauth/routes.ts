@@ -781,7 +781,18 @@ oauthApp.post("/token", async (c) => {
         await import("../../services/person-device-token.js");
       // A STEP-UP of a device the app already holds: the code's fresh sign-in
       // moves THAT device's clock; the device's refresh token proves which
-      // device (and its family). Never a second device.
+      // device (and its family). Never a second device. The code says which
+      // it was asked as (`isDeviceReconfirm`: the screen said "Confirm it's
+      // you"), and the two must agree: a step-up code never makes a device,
+      // a sign-in code never re-confirms one.
+      if (claimed.stepUp !== Boolean(params.synap_device_refresh_token)) {
+        throw new OAuthError(
+          "invalid_grant",
+          claimed.stepUp
+            ? "This code re-confirms a device: send its refresh token as synap_device_refresh_token"
+            : "This code signs a new device in; a re-confirmation asks with prompt=login"
+        );
+      }
       if (params.synap_device_refresh_token) {
         const steppedUp = await stepUpPersonDevice({
           refreshToken: params.synap_device_refresh_token,
