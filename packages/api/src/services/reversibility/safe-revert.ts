@@ -699,7 +699,7 @@ async function inspectProperty(
         "the entity's body was changed since"
       );
     }
-    // Re-attaching the previous body is only honest while it still exists —
+    // Re-attach the previous body only while that document still exists —
     // never a link to a deleted document.
     if (target.previousDocumentId) {
       const [previous] = await reader
