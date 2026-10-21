@@ -28,7 +28,6 @@ packages/test-e2e/src/core-flows.test.ts | e2e | live-service | needs the AI ser
 packages/test-e2e/src/crud/workspaces.test.ts | e2e | unknown | Unable to transform response from server
 packages/test-e2e/src/executor-flows.test.ts | e2e | unknown | drizzle-orm does not resolve from packages/test-e2e
 packages/test-e2e/src/hub-protocol-e2e.test.ts | e2e | unknown | suite-level failure
-packages/test-e2e/src/hub-protocol.contract.test.ts | e2e | unknown | 403 where 200 expected
 packages/test-e2e/src/validation-flows.test.ts | e2e | unknown | Unable to transform response from server
 packages/types/src/automations/sentence.test.ts | infra | sibling-repo | browser checkout absent in CI
 packages/types/src/renderables/chart-shapers.one-copy.test.ts | infra | sibling-repo | browser checkout absent in CI

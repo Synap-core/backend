@@ -23,6 +23,7 @@ import {
   workspaceMembers,
   entities,
   apiKeys,
+  GrantRepository,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
@@ -140,6 +141,19 @@ describe("Hub Protocol contracts", () => {
 
     testApiKey = rawKey;
     testApiKeyId = keyRecord.id;
+
+    // 4b. A key with no grant may touch nothing (bed7e01d5, 2026-10-11): every
+    // door below answered 403 "This key's grant does not allow …". Give it the
+    // full grant a person's own key carries (deleted with the key: cascade).
+    await new GrantRepository(db).attach({
+      apiKeyId: keyRecord.id,
+      principalUserId: TEST_USER_ID,
+      onBehalfOf: TEST_USER_ID,
+      permissions: ["*"],
+      expiresAt: null,
+      label: "Full access",
+      createdBy: TEST_USER_ID,
+    });
 
     logger.info(
       { workspaceId: testWorkspaceId, keyId: testApiKeyId },

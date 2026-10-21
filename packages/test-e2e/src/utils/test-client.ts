@@ -5,6 +5,7 @@
  */
 
 import { createTRPCProxyClient, httpBatchLink } from "@trpc/client";
+import superjson from "superjson";
 import type { AppRouter } from "@synap/api";
 import fetch from "node-fetch";
 
@@ -23,6 +24,9 @@ export function createTestClient(options: TestClientOptions) {
     links: [
       httpBatchLink({
         url: `${apiUrl}/trpc`,
+        // The server speaks superjson (packages/api/src/init-trpc.ts); without
+        // it every input arrived as undefined and every output untranslated.
+        transformer: superjson,
         headers: {
           Cookie: sessionCookie,
         },
