@@ -23586,6 +23586,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reasonCode: string | null;
 					governanceReason: string | null;
 					appId: string | null;
+					apiKeyId: string | null;
 					comments: unknown;
 					revisionHistory: ProposalRevision[];
 					class: ProposalClass;
@@ -23671,6 +23672,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reasonCode: string | null;
 					governanceReason: string | null;
 					appId: string | null;
+					apiKeyId: string | null;
 					comments: unknown;
 					revisionHistory: ProposalRevision[];
 					class: ProposalClass;
@@ -23827,6 +23829,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasonCode: string | null;
 				governanceReason: string | null;
 				appId: string | null;
+				apiKeyId: string | null;
 				comments: unknown;
 				revisionHistory: ProposalRevision[];
 				class: ProposalClass;

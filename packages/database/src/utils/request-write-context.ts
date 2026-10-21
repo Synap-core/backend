@@ -41,6 +41,8 @@ export interface RequestWriteContext {
   readonly conversationCwd?: string;
   /** W1 — what the calling key may touch (absent = a key with no grant). */
   readonly grant?: KeyGrant;
+  /** B7 — the `api_keys.id` the request authenticated with. */
+  readonly apiKeyId?: string;
 }
 
 const storage = new AsyncLocalStorage<RequestWriteContext>();
@@ -199,6 +201,42 @@ export function runWithGrant<T>(
 /** The grant bounding the calling key, if any. */
 export function getRequestGrant(): KeyGrant | undefined {
   return storage.getStore()?.grant;
+}
+
+// ═══ Concern: CALLING KEY (B7) ════════════════════════════════════════════════
+//
+// WHICH key filed a write. Every Claude Code conversation on one computer
+// shares one agent user, so the agent user alone cannot tell two computers'
+// work apart; the key can (one agent key per computer, `instance_id`). Entered
+// at the two key-auth doors (MCP, Hub REST) for EVERY key — the IS's shared
+// internal key too: recording it is true, it simply names no computer. Read
+// by the proposal insert doors (`callingKeyAttribution`) and by the B3
+// "organising its own fresh work" predicate.
+
+/** Run `fn` with the calling key recorded; no key enters no scope. */
+export function runWithCallingKey<T>(
+  apiKeyId: string | null | undefined,
+  fn: () => T
+): T {
+  return apiKeyId ? runWithPatch({ apiKeyId }, fn) : fn();
+}
+
+/** The `api_keys.id` this request authenticated with, if a key-auth door set one. */
+export function getRequestApiKeyId(): string | undefined {
+  return storage.getStore()?.apiKeyId;
+}
+
+/**
+ * `{ apiKeyId }` to spread onto a `proposals` insert — the ONE way a proposal
+ * row records its calling key (column 0346). `{}` outside a key request (a
+ * person in the app, a background job), so the column stays NULL there.
+ * Every proposal insert door spreads it; a tripwire
+ * (`proposal-insert-key-attribution.tripwire.test.ts`) fails on one that
+ * does not.
+ */
+export function callingKeyAttribution(): { apiKeyId?: string } {
+  const apiKeyId = getRequestApiKeyId();
+  return apiKeyId ? { apiKeyId } : {};
 }
 
 // ═══ Concern: DERIVED SESSION (A1) ════════════════════════════════════════════

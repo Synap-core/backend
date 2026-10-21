@@ -195,6 +195,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "app_id",
     addedBy: "0310_app_attribution.sql",
   },
+  // proposals — the calling KEY (0346, FB1020 B7). Stamped by every proposal
+  // insert door from the request context, so without the column every
+  // governed key write 42703s.
+  {
+    table: "proposals",
+    column: "api_key_id",
+    addedBy: "0346_proposals_api_key_id.sql",
+  },
   // proposal_cluster_mutes — durable per-pod mute of a rejection SHAPE-cluster
   // (0233). If the table/column is missing, the mute door + the rejected-clusters
   // read's active-mute filter throw. Column check confirms the table exists.

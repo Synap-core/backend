@@ -3,6 +3,7 @@ import {
   computeProposalDedupHash,
   insertPendingProposal,
 } from "./insert-pending-proposal.js";
+import { runWithCallingKey } from "./request-write-context.js";
 
 /**
  * Locks the canonical dedup-hash normalization — the subtle contract the
@@ -259,6 +260,22 @@ describe("insertPendingProposal — correlationId default", () => {
       ex as any
     );
     expect(ex.captured[0].correlationId).toBe("corr-from-the-door");
+  });
+
+  /**
+   * B7 (FB1020): the pending row records WHICH key filed it, read from the
+   * request context the key-auth doors enter — never a caller argument, so no
+   * writer can forget or forge it. Outside a key request the column stays
+   * NULL (a person in the app, a background job).
+   */
+  it("B7: stamps the calling key inside a key request, and nothing outside one", async () => {
+    const ex = fakeExecutor();
+    await runWithCallingKey("key-mac", () =>
+      insertPendingProposal(base, ex as any)
+    );
+    await insertPendingProposal(base, ex as any);
+    expect(ex.captured[0].apiKeyId).toBe("key-mac");
+    expect(ex.captured[1]).not.toHaveProperty("apiKeyId");
   });
 
   it("mints a DISTINCT id per call (it groups an intent, it is not a constant)", async () => {

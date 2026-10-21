@@ -17,6 +17,7 @@ import type { Context, Next } from "hono";
 import {
   runWithProbeWrites,
   runWithActingAgent,
+  runWithCallingKey,
   runWithGrant,
   isProbeApiKey,
 } from "@synap/database";
@@ -118,7 +119,10 @@ export function externalApiKeyAuth(requiredScope: string) {
     c.set("scopes", keyRecord.scope);
     // Request write facts: D8 probe key, D6 acting agent, W1 grant.
     await runWithProbeWrites(isProbeApiKey(keyRecord), () =>
-      runWithActingAgent(agentUserId, () => runWithGrant(grant, () => next()))
+      runWithActingAgent(agentUserId, () =>
+        // B7: the calling key, recorded on every proposal this request files.
+        runWithCallingKey(keyRecord.id, () => runWithGrant(grant, () => next()))
+      )
     );
   };
 }

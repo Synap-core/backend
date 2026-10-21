@@ -32,6 +32,7 @@ import {
   deriveProposalProjectId,
   getActingAgentUserId,
   getRequestGrant,
+  callingKeyAttribution,
   computeProposalDedupHash,
   type InsertPendingProposalResult,
   type ResolveOrCreateAgentProposalSessionInput,
@@ -2170,6 +2171,8 @@ async function evaluatePermission(
               ...(getRequestGrant()?.clientId
                 ? { appId: getRequestGrant()?.clientId }
                 : {}),
+              // KEY ATTRIBUTION (0346): the key this request authenticated with.
+              ...callingKeyAttribution(),
             })
             .returning({ id: proposals.id });
           // Thread the receipt id back so the caller can stamp it onto the
@@ -2455,6 +2458,8 @@ async function evaluatePermission(
               ...(getRequestGrant()?.clientId
                 ? { appId: getRequestGrant()?.clientId }
                 : {}),
+              // KEY ATTRIBUTION (0346): the key this request authenticated with.
+              ...callingKeyAttribution(),
             })
             .returning({ id: proposals.id });
           autoApprovedProposalId = receipt?.id;

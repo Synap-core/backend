@@ -1071,8 +1071,26 @@ export async function provisionSurfaceAgentKey(
         isNull(apiKeys.revokedAt),
         instanceId ? eq(apiKeys.instanceId, instanceId) : undefined
       ),
-      columns: { id: true },
+      columns: { id: true, instanceLabel: true },
     });
+    // FB1020 B7: a key minted before the CLI sent its computer's name (0325)
+    // is reused here forever, unnamed — so every proposal it files reads the
+    // same as its twin on another computer. Re-running `synap init` on that
+    // computer names it: only a key matched by THIS instance, only while it
+    // has no name (never renames one a person or an earlier mint set).
+    if (
+      existingKey &&
+      instanceId &&
+      opts.instanceLabel &&
+      !existingKey.instanceLabel
+    ) {
+      await db
+        .update(apiKeys)
+        .set({ instanceLabel: opts.instanceLabel })
+        .where(
+          and(eq(apiKeys.id, existingKey.id), isNull(apiKeys.instanceLabel))
+        );
+    }
     if (existingKey) {
       logger?.info(
         { agentUserId, agentType, keyId: existingKey.id },

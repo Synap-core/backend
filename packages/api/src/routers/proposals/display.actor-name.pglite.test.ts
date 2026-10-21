@@ -45,6 +45,11 @@ const COMPUTER = "computer-user";
 const ON_COMPUTER = "agent-on-computer";
 const NO_COMPUTER = "agent-on-no-computer";
 const UNNAMED = "agent-with-no-name";
+// B7: one agent user, three keys — two computers that named themselves and a
+// key minted before the CLI sent a name.
+const KEY_MAC = randomUUID();
+const KEY_DEVBOX = randomUUID();
+const KEY_UNNAMED = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -59,7 +64,7 @@ function ddlFor(table: PgTable): string {
 }
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 
-async function enrichAs(agentUserId: string | null) {
+async function enrichAs(agentUserId: string | null, apiKeyId?: string) {
   const now = new Date();
   const [row] = await enrichProposalsForDisplay(
     [
@@ -76,6 +81,7 @@ async function enrichAs(agentUserId: string | null) {
         sessionId: null,
         correlationId: null,
         agentUserId,
+        apiKeyId: apiKeyId ?? null,
         subjectUserId: VIEWER,
         createdBy: agentUserId ?? VIEWER,
         reviewedBy: null,
@@ -112,6 +118,11 @@ beforeAll(async () => {
       ($5,null,'u@x','agent','orchestrator','{"agentType":"orchestrator"}'::jsonb,$4,null)`,
     [COMPUTER, ON_COMPUTER, NO_COMPUTER, VIEWER, UNNAMED]
   );
+  await q(
+    `insert into api_keys (id, user_id, instance_label) values
+      ($1,$4,'MacBook'), ($2,$4,'devbox'), ($3,$4,null)`,
+    [KEY_MAC, KEY_DEVBOX, KEY_UNNAMED, NO_COMPUTER]
+  );
 });
 
 describe("enrichProposalsForDisplay — the asking agent's name", () => {
@@ -131,6 +142,23 @@ describe("enrichProposalsForDisplay — the asking agent's name", () => {
     const row = await enrichAs(UNNAMED);
     expect(row.agentActorName).toBe("Orchestrator");
     expect(row.authorName).toBe("Orchestrator");
+  });
+
+  it("B7: the filing KEY names the computer — one agent, two computers, two names", async () => {
+    const mac = await enrichAs(NO_COMPUTER, KEY_MAC);
+    const devbox = await enrichAs(NO_COMPUTER, KEY_DEVBOX);
+    expect(mac.agentActorName).toBe("Claude Code on MacBook");
+    expect(mac.authorName).toBe("Claude Code on MacBook");
+    expect(devbox.agentActorName).toBe("Claude Code on devbox");
+  });
+
+  it("B7: an unnamed key falls back to the agent's own computer, then its name", async () => {
+    expect((await enrichAs(NO_COMPUTER, KEY_UNNAMED)).agentActorName).toBe(
+      "Claude Code"
+    );
+    expect((await enrichAs(ON_COMPUTER, KEY_UNNAMED)).agentActorName).toBe(
+      "Claude Code on devbox"
+    );
   });
 
   it("a person's proposal names the person and has no agent actor", async () => {
