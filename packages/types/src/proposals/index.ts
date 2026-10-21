@@ -1235,7 +1235,7 @@ export function isPlanBatch(operations: CompositeProposalOperation[]): boolean {
  * has always been: one unreadable row in a 1600-row import must not discard the
  * other 1599.
  */
-const RESILIENT_OPERATION_KINDS = [
+const _RESILIENT_OPERATION_KINDS = [
   "create_entity",
   "create_relation",
   "create_skill",
@@ -1254,7 +1254,7 @@ type _EveryOpKindClassified =
   Exclude<
     CompositeProposalOperation["op"],
     (typeof PLAN_OPERATION_KINDS)[number]
-  > extends (typeof RESILIENT_OPERATION_KINDS)[number]
+  > extends (typeof _RESILIENT_OPERATION_KINDS)[number]
     ? true
     : never;
 
