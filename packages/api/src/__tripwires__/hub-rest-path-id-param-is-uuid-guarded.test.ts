@@ -162,6 +162,9 @@ const ROUTE_PARAM_EXCLUDE = new Set<string>([
   "POST /apps/:id/connect [id]",
   "POST /apps/:id/key [id]",
   "DELETE /apps/:id [id]",
+  // Same `loadOwnedApp(publicId)` door, through `setAppRedirectUris`
+  // (services/app-connect.ts). Verified 2026-10-21.
+  "PUT /apps/:id/redirect-uris [id]",
 ]);
 
 /**

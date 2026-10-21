@@ -637,13 +637,26 @@ describe("I4 — the app's writes are governed (ask-first); consent never sets a
   });
 });
 
+/**
+ * A request carrying an acting agent or a key's grant (any key door) is refused
+ * by the consent door's own person-only gate (`decideOAuthAuthorization`,
+ * oauth/consent.ts) before the approve door's agent floor is reached.
+ */
+const PERSON_ONLY_REFUSAL = {
+  name: "AuthorizeUserError",
+  message: "Only a person signed in to this pod can authorize a connection.",
+};
+
 describe("the agent-approver floor — an agent caller never approves a consent", () => {
-  const refusedAs = async (run: () => Promise<unknown>) => {
+  const refusedAs = async (
+    run: () => Promise<unknown>,
+    refusal: Record<string, unknown> = { code: "FORBIDDEN" }
+  ) => {
     const before = {
       proposals: await countProposals(),
       codes: await countCodes(),
     };
-    await expect(run()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(run()).rejects.toMatchObject(refusal);
     expect(await countCodes()).toBe(before.codes);
     // Nothing approved: no approved app/connect proposal was added.
     const approved = (
@@ -664,10 +677,12 @@ describe("the agent-approver floor — an agent caller never approves a consent"
   });
 
   it("an acting agent in the request ALS (a key door's shape) is refused", async () => {
-    await refusedAs(() =>
-      runWithActingAgent(AGENT, () =>
-        consent([{ permission: READ, workspaceId: BRAND }])
-      )
+    await refusedAs(
+      () =>
+        runWithActingAgent(AGENT, () =>
+          consent([{ permission: READ, workspaceId: BRAND }])
+        ),
+      PERSON_ONLY_REFUSAL
     );
   });
 
@@ -691,7 +706,7 @@ describe("T4 — the app's own token can never re-consent, widen or end itself",
       runWithActingAgent(id.agentUserId!, () => runWithGrant(id.grant!, fn));
     await expect(
       asApp(() => consent([{ permission: CREATE, workspaceId: BRAND }]))
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    ).rejects.toMatchObject(PERSON_ONLY_REFUSAL);
     await expect(
       asApp(() => revokeApp({ publicId: row.public_id, ownerUserId: OWNER }))
     ).rejects.toMatchObject({ code: "FORBIDDEN" });

@@ -28,8 +28,10 @@ import {
   projectMembers,
   workspaces,
   workspaceMembers,
+  profiles,
   type db as DatabaseHandle,
 } from "@synap/database";
+import * as schema from "@synap/database/schema";
 import type { ImportItem } from "../../../import/import-items.js";
 import { linkExistingImportTargets } from "../structuring.js";
 
@@ -97,10 +99,12 @@ beforeAll(async () => {
     projectMembers,
     workspaces,
     workspaceMembers,
+    profiles,
   ]) {
     await client.exec(ddlFor(t as unknown as PgTable));
   }
-  database = drizzle(client) as unknown as typeof DatabaseHandle;
+  // With the schema: the kind match reads `profiles` through `db.query`.
+  database = drizzle(client, { schema }) as unknown as typeof DatabaseHandle;
 });
 
 beforeEach(async () => {
