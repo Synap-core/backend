@@ -16,6 +16,10 @@
  * creates, same kind, same normalized name or an overlapping strong atom).
  * The exact payload hash stays in `insertPendingProposal` (migration 0208).
  * A failed leg is `unchecked`, never `clear`. Same kind only.
+ * One known exception: a CSV import's LINK TARGETS (an employer a row names)
+ * resolve by exact same-kind name in batch in `linkExistingImportTargets`
+ * (`services/import/structuring.ts`), owner-floored. They are references,
+ * not creates, so routing them here would file every named employer as a twin.
  */
 import {
   and,
