@@ -131,11 +131,13 @@ import {
   type ProposalSessionBefore,
 } from "./session-before.js";
 import { guestProvenanceFor } from "../../services/forms/guest-provenance.js";
+import { loadMachineNames } from "../../services/machine-roster.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 import {
   createNameResolvers,
   stringProp,
   displayNameForUser,
+  actorDisplayName,
   displayLabelFromRecord,
   linkEndpointsFromPayload,
   resolveLinkEndpointName,
@@ -148,7 +150,12 @@ import {
 // `services/focus-sessions/participants.ts`) are unaffected by moving the
 // canonical implementations into `helper-functions.js` (done to let that
 // module use them without importing back into this one, which imports it).
-export { stringProp, displayNameForUser, displayLabelFromRecord };
+export {
+  stringProp,
+  displayNameForUser,
+  actorDisplayName,
+  displayLabelFromRecord,
+};
 
 type ProposalRow = typeof proposals.$inferSelect;
 
@@ -781,6 +788,9 @@ export async function enrichProposalsForDisplay(
             // second shape: actor (this row, when userType='agent'), on-behalf-of
             // (this column), approver (`proposals.reviewedBy`).
             createdByUserId: users.createdByUserId,
+            // The computer an agent runs on — "Claude Code on devbox"
+            // (`actorDisplayName`).
+            hostUserId: users.hostUserId,
           })
           .from(users)
           .where(inArray(users.id, userIds))
@@ -1350,7 +1360,17 @@ export async function enrichProposalsForDisplay(
   // back to no name, exactly like every other name batch here; the raw `appId`
   // is still emitted as a machine field.
   const appPublicIds = uniqueStrings(rows.map((row) => row.appId ?? undefined));
-  const [ownerRows, runTracks, appRows] = await Promise.all([
+  // The computers the acting agents run on, named by the roster's own rule,
+  // in the same round — an agent on a computer is named through
+  // `actorDisplayName` ("Claude Code on devbox").
+  const hostUserIds = uniqueStrings(
+    rows.map((row) =>
+      row.agentUserId
+        ? (userById.get(row.agentUserId)?.hostUserId ?? undefined)
+        : undefined
+    )
+  );
+  const [ownerRows, runTracks, appRows, hostNames] = await Promise.all([
     ownerIds.length > 0
       ? db
           .select({
@@ -1362,6 +1382,7 @@ export async function enrichProposalsForDisplay(
             // Same shape as the first user batch (it lands in `userById`).
             agentType: users.agentType,
             createdByUserId: users.createdByUserId,
+            hostUserId: users.hostUserId,
           })
           .from(users)
           .where(inArray(users.id, ownerIds))
@@ -1384,6 +1405,7 @@ export async function enrichProposalsForDisplay(
             )
           )
       : Promise.resolve([] as Array<{ publicId: string; name: string }>),
+    loadMachineNames(hostUserIds),
   ]);
   for (const row of ownerRows) userById.set(row.id, row);
   const appNameByPublicId = new Map(
@@ -1508,7 +1530,9 @@ export async function enrichProposalsForDisplay(
     const authorRow = userById.get(
       row.agentUserId ?? row.createdBy ?? request.sourceId
     );
-    const authorName = authorRow ? displayNameForUser(authorRow) : undefined;
+    const authorName = authorRow
+      ? actorDisplayName(authorRow, hostNames)
+      : undefined;
 
     // ── THE THREE DELEGATION ROLES, projected separately ────────────────────
     // `authorName` above is a COALESCE — `agentUserId ?? createdBy ?? sourceId`
@@ -1534,7 +1558,7 @@ export async function enrichProposalsForDisplay(
       ? userById.get(row.agentUserId)
       : undefined;
     const agentActorName = agentActorRow
-      ? displayNameForUser(agentActorRow)
+      ? actorDisplayName(agentActorRow, hostNames)
       : undefined;
     // GUEST PROVENANCE (Sites W4/W5a): a proposal filed through a public form
     // carries the form's own actor as `agentUserId`, so everything keyed on
