@@ -564,6 +564,32 @@ describe("(h) an agent cannot sign in as a device", () => {
     expect(count.rows[0]!.n).toBe(0);
   });
 
+  it("a device token cannot authorize a connection (no 1 h → 180 d escalation)", async () => {
+    const s = await signIn();
+    await expect(
+      decideOAuthAuthorization(
+        {
+          clientId: DESKTOP,
+          redirectUri: LOOPBACK,
+          responseType: "code",
+          codeChallenge: CHALLENGE,
+          codeChallengeMethod: "S256",
+          approve: true,
+        },
+        PERSON,
+        {
+          authenticated: true,
+          userId: PERSON,
+          session: {
+            identity: { id: PERSON, traits: { email: "ada@x" } },
+            active: true,
+            device: { id: s.deviceId, clientId: DESKTOP },
+          },
+        } as never
+      )
+    ).rejects.toThrow(/console/);
+  });
+
   it("a non-first-party client id never gets a device", async () => {
     const minted = await signInPersonDevice({
       personUserId: PERSON,

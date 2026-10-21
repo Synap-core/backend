@@ -12,7 +12,15 @@ import {
   Chip,
   Spinner,
 } from "@heroui/react";
-import { Check, Plug, ShieldAlert, ShieldCheck, X } from "lucide-react";
+import {
+  Check,
+  Monitor,
+  Plug,
+  ShieldAlert,
+  ShieldCheck,
+  Smartphone,
+  X,
+} from "lucide-react";
 
 import { formatRelative } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
@@ -124,6 +132,17 @@ export function ConsentForm({
   // "Sign in with Synap": every sentence below comes from the server, derived
   // from the grant the person would receive — never written here.
   const appSignIn = context.data?.appSignIn ?? null;
+  // A Synap app (desktop, Relay) signing the person in on this device. Its
+  // name comes from the server (the vocabulary door); a loopback redirect is
+  // this computer, anything else the app's own link on a phone.
+  const firstParty =
+    context.data?.clientKind === "first_party"
+      ? {
+          name: context.data.clientName,
+          onComputer: isLoopbackHost(context.data.redirectHost),
+          redirectHost: context.data.redirectHost,
+        }
+      : null;
 
   return (
     <ReceiverShell podHost={podHost} identity={identity} width="sm">
@@ -143,7 +162,18 @@ export function ConsentForm({
           <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/65">
             Connection request
           </p>
-          {app ? (
+          {firstParty ? (
+            <>
+              <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
+                Sign in to {firstParty.name}
+              </h1>
+              <p className="text-[13px] leading-relaxed text-foreground/65">
+                {firstParty.onComputer ? "On this computer" : "On your phone"}
+                {podHost ? `, to ${podHost}` : ""}
+                {identity ? ` as ${identity}` : ""}.
+              </p>
+            </>
+          ) : app ? (
             <>
               {/* A pod app's identity is its DOMAIN (the client_id host), not
                   the name it gives itself. */}
@@ -228,7 +258,20 @@ export function ConsentForm({
           )}
 
         {context.data &&
+          firstParty &&
+          step.kind !== "denied" &&
+          step.kind !== "error" && (
+            <FirstPartyConsent
+              {...firstParty}
+              busy={busy}
+              step={step}
+              onDecide={act}
+            />
+          )}
+
+        {context.data &&
           !app &&
+          !firstParty &&
           step.kind !== "denied" &&
           step.kind !== "error" && (
             <>
@@ -393,6 +436,83 @@ export function ConsentForm({
         )}
       </CardBody>
     </ReceiverShell>
+  );
+}
+
+/** `127.0.0.1:<port>` or `[::1]:<port>`: the app is listening on this computer. */
+function isLoopbackHost(host: string): boolean {
+  return host.startsWith("127.0.0.1:") || host.startsWith("[::1]:");
+}
+
+/**
+ * A Synap app signing the person in on this device (join plan target A). Always
+ * a click, never silent: a loopback redirect cannot prove which program is
+ * listening (RFC 8252 §8.6), so the person confirms the app they just opened.
+ */
+function FirstPartyConsent({
+  name,
+  onComputer,
+  redirectHost,
+  busy,
+  step,
+  onDecide,
+}: {
+  name: string;
+  onComputer: boolean;
+  redirectHost: string;
+  busy: boolean;
+  step: Step;
+  onDecide: (approve: boolean) => void;
+}) {
+  const Glyph = onComputer ? Monitor : Smartphone;
+  return (
+    <>
+      <div className="flex flex-col gap-2.5 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
+        <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+          <Glyph className="h-3 w-3" aria-hidden /> {name} will be you
+        </p>
+        <p className="text-[12.5px] leading-relaxed text-foreground/75">
+          It can do what you can do in Synap. Only continue if you just opened{" "}
+          {name} and asked it to sign in.
+        </p>
+        <div className="flex flex-col gap-1 pt-0.5">
+          <span className="text-[13px] text-foreground/60">
+            Sends you back to
+          </span>
+          <span className="break-all font-mono text-[13px] text-foreground/90">
+            {onComputer ? `This computer (${redirectHost})` : redirectHost}
+          </span>
+        </div>
+      </div>
+
+      <div className="flex gap-2.5">
+        <Button
+          color="primary"
+          radius="md"
+          size="md"
+          className="flex-1 font-medium"
+          isDisabled={busy}
+          isLoading={busy && step.kind === "working" && step.approve}
+          onPress={() => onDecide(true)}
+        >
+          Sign in
+        </Button>
+        <Button
+          variant="flat"
+          radius="md"
+          size="md"
+          className="flex-1"
+          isDisabled={busy}
+          isLoading={busy && step.kind === "working" && !step.approve}
+          onPress={() => onDecide(false)}
+        >
+          Cancel
+        </Button>
+      </div>
+      <p className="text-center text-[11.5px] leading-relaxed text-foreground/60">
+        You can sign this device out at any time.
+      </p>
+    </>
   );
 }
 

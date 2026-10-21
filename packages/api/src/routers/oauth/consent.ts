@@ -517,6 +517,15 @@ export async function decideOAuthAuthorization(
       "Only a person signed in to this pod can authorize a connection."
     );
   }
+  // Nor a Synap app's device token (join plan target A): a 1 h token must
+  // never turn itself into a new device (180 days) or an agent connection
+  // (90 days) through this door. Consent is a browser act, on the console,
+  // in a Kratos session (threat T1, services/person-device-token.ts).
+  if (ctx?.session?.device) {
+    throw new AuthorizeUserError(
+      "Authorize a connection from your pod's console, in your browser."
+    );
+  }
 
   const caller = await db.query.users.findFirst({
     where: eq(users.id, callerUserId),

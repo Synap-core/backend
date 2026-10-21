@@ -21,12 +21,17 @@
  * THREAT MODEL — each threat, its defence, and the test that holds it
  * (`person-device-token.pglite.test.ts` unless named):
  *
- *  T1 Access-token theft. Worth one hour, on the app API only: `/mcp` and Hub
- *     REST resolve `api_keys` rows, which this is not ("refused on /mcp and
- *     the Hub"), and no door counts it as a recent sign-in (no
+ *  T1 Access-token theft. One hour of the person on the app API only: `/mcp`
+ *     and Hub REST resolve `api_keys` rows, which this is not ("refused on
+ *     /mcp and the Hub"); no door counts it as a recent sign-in (no
  *     `authenticated_at`), so account recovery and credential changes stay
- *     behind a real Kratos session. Revoking the device stops it at once
- *     (every lookup reads through the device row).
+ *     behind a real Kratos session; and it cannot authorize an OAuth
+ *     connection (`decideOAuthAuthorization` refuses a device session), so it
+ *     cannot turn itself into a new device or an agent connection. Revoking
+ *     the device stops it at once (every lookup reads through the device
+ *     row). RESIDUAL (accepted, as for a stolen Kratos session today): within
+ *     its hour it is the person on `/trpc`, so what the person may do there —
+ *     make an API key, approve a computer from Relay — it may do.
  *  T2 Refresh-token theft. Single-use with reuse detection (RFC 9700
  *     §4.14.2): when the thief and the app both redeem, the second redeem
  *     ends the whole DEVICE, access tokens included. → "a reused refresh
