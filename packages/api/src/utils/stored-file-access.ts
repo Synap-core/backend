@@ -159,6 +159,11 @@ async function hintedEntityHoldsDocument(
 
 export interface SignableFileEntity {
   id: string;
+  /**
+   * The linked document — only when it belongs to the ENTITY's owner (the
+   * owner lock below); undefined otherwise.
+   */
+  documentId: string | undefined;
   /** The blob key of the linked document; undefined when there is none. */
   storageKey: string | undefined;
   /** The served type — only ever the `documents` row's, never a property's claim. */
@@ -196,11 +201,12 @@ export async function loadSignableFileEntity(
           eq(documents.id, entity.documentId),
           eq(documents.userId, entity.userId)
         ),
-        columns: { storageKey: true, mimeType: true },
+        columns: { id: true, storageKey: true, mimeType: true },
       })
     : undefined;
   return {
     id: entity.id,
+    documentId: doc?.id ?? undefined,
     storageKey: doc?.storageKey ?? undefined,
     mimeType: doc?.mimeType ?? null,
   };

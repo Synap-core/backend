@@ -34,6 +34,7 @@ import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   loadSignableDocument,
   loadSignableFileEntity,
+  type SignableFileEntity,
 } from "../utils/stored-file-access.js";
 import {
   requestPresignedUpload,
@@ -886,6 +887,30 @@ fileUploadApp.get("/documents/:documentId/url", async (c) => {
   }
 });
 
+/**
+ * The file entity `userId` may READ, or why not — the read floor and the
+ * 403/404 split every `…/:entityId/…` file door shares (`signFileEntityUrl`,
+ * Hub `POST /files/:entityId/transcribe`). `loadSignableFileEntity` reads
+ * through `scopedDb`, so a key's grant narrows it.
+ */
+export async function readableFileEntity(
+  userId: string,
+  entityId: string
+): Promise<
+  | { ok: true; entity: SignableFileEntity }
+  | { ok: false; status: 403 | 404; error: string }
+> {
+  const entity = await loadSignableFileEntity(userId, entityId);
+  if (entity) return { ok: true, entity };
+  const exists = await db.query.entities.findFirst({
+    where: eq(entities.id, entityId),
+    columns: { id: true },
+  });
+  return exists
+    ? { ok: false, status: 403, error: "Forbidden" }
+    : { ok: false, status: 404, error: "File entity not found" };
+}
+
 /** What a file-entity URL door answers: the signed GET, or why not. */
 export type FileEntityUrlResult =
   | {
@@ -917,16 +942,9 @@ export async function signFileEntityUrl(
   userId: string,
   entityId: string
 ): Promise<FileEntityUrlResult> {
-  const entity = await loadSignableFileEntity(userId, entityId);
-  if (!entity) {
-    const exists = await db.query.entities.findFirst({
-      where: eq(entities.id, entityId),
-      columns: { id: true },
-    });
-    return exists
-      ? { ok: false, status: 403, error: "Forbidden" }
-      : { ok: false, status: 404, error: "File entity not found" };
-  }
+  const readable = await readableFileEntity(userId, entityId);
+  if (!readable.ok) return readable;
+  const { entity } = readable;
   if (!entity.storageKey) {
     return { ok: false, status: 404, error: "File has no storage key" };
   }

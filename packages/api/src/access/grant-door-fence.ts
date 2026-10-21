@@ -155,6 +155,10 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
     ),
   ],
   [/^\/entities\/retrieve\/?$/, READS("entity", "document", "relation")],
+  // Writes nothing: reads one file entity through `scopedDb` (grant ANDed,
+  // `readableFileEntity`) and that entity's owner-locked document, then calls
+  // the transcription provider (rate class `ai_interactive`).
+  [/^\/files\/[^/]+\/transcribe\/?$/, SEAMED],
   [/^\/memory\/search\/?$/, READS("entity", "preference")],
   [/^\/diagnose\/?$/, REFUSED("Pod internals across every subject.")],
   [
