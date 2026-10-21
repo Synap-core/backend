@@ -55,7 +55,10 @@ import {
   expirePendingCreatesOfLandedRecord,
 } from "@synap/database";
 import { reconcileKindWithPlacement } from "./kind-placement.js";
-import { findDuplicateCandidates } from "../../services/duplicates/find-duplicate-candidates.js";
+import {
+  findDuplicateCandidates,
+  toDuplicateCheck,
+} from "../../services/duplicates/find-duplicate-candidates.js";
 import { entities, workspaces, links } from "@synap/database/schema";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import { TRPCError } from "@trpc/server";
@@ -563,9 +566,11 @@ export const createProcs = {
       // "Alice" person #47.
       const needsIdentityResolve =
         dedupSignals.length > 0 || (!!profileSlug && !!input.title?.trim());
-      // The agent's own inline door: a replay never names `agentUserId`, so
-      // `approvalDuplicate` can never ride an agent's filing.
-      const isAgentFiling = !!input.agentUserId;
+      // An AI's own filing — the GATE's predicate (FB1020 review M4), so an
+      // unattributed hub key / IS call (`source: "intelligence"`, no
+      // `agentUserId`) is floored like an attributed agent and can never pass
+      // the reviewer's `approvalDuplicate`. A replay is `source: "system"`.
+      const isAgentFiling = isAiWriteRequest(input);
       const approvalDuplicate = isAgentFiling
         ? undefined
         : input.approvalDuplicate;
@@ -598,6 +603,9 @@ export const createProcs = {
           candidates: [],
           crossKindCandidates: [],
         };
+        let visibleMatch:
+          | Awaited<ReturnType<typeof resolveDb.query.entities.findFirst>>
+          | undefined;
         try {
           // SECURITY GATE — the strong identity index is deliberately GLOBAL
           // (frozen policy: one subject per email/phone pod-wide), so the
@@ -609,7 +617,7 @@ export const createProcs = {
           // (the enrich/attach doors deny the writes, but the read leaked).
           // Invisible strong matches also must NOT be surfaced as weak
           // candidates below — candidates come only from the scoped weak path.
-          const visibleMatch =
+          visibleMatch =
             identity.match === "strong" && identity.entity
               ? await resolveDb.query.entities.findFirst({
                   where: and(
@@ -908,6 +916,29 @@ export const createProcs = {
             { mergeErr },
             "[entities.create] strong identity merge failed — proceeding to create"
           );
+          // The create below is a same-identity twin, never a `clear` one
+          // (FB1020 review S2): name the record the merge was for, so an
+          // agent's filing is floored and the card shows it. A failure before
+          // its visibility was known names nothing and reads `unchecked`.
+          duplicateCheck =
+            visibleMatch && identity.entity
+              ? toDuplicateCheck(
+                  "entity",
+                  [
+                    {
+                      ref: "record",
+                      id: visibleMatch.id,
+                      kind: identity.entity.type,
+                      title: identity.entity.title ?? null,
+                      why: "same_identity",
+                    },
+                    ...answer.check.candidates,
+                  ],
+                  false
+                )
+              : answer.check.candidates.length > 0
+                ? answer.check
+                : { ...answer.check, status: "unchecked" as const };
         }
 
         // ── A possible twin (B2): same kind, same name or identity ──────────

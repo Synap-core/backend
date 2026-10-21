@@ -27,6 +27,8 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   gate: vi.fn(),
+  /** S2: make the strong merge's response building throw a plain Error once. */
+  failMergeOnce: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -55,6 +57,19 @@ vi.mock("../../utils/permission-check.js", () => ({
   isJoinGate: vi.fn(() => false),
 }));
 vi.mock("../../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
+vi.mock("./helpers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./helpers.js")>();
+  return {
+    ...actual,
+    toApiEntity: (...args: Parameters<typeof actual.toApiEntity>) => {
+      if (h.failMergeOnce) {
+        h.failMergeOnce = false;
+        throw new Error("merge exploded");
+      }
+      return actual.toApiEntity(...args);
+    },
+  };
+});
 vi.mock("../../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn().mockResolvedValue(false),
 }));
@@ -77,6 +92,7 @@ const ACME_CO = randomUUID();
 const DANA = randomUUID();
 const SAM = randomUUID();
 const RHEA = randomUUID();
+const UMA = randomUUID();
 const DEMO_PROJECT = randomUUID();
 
 const BASIC =
@@ -173,6 +189,7 @@ beforeAll(async () => {
     [DANA, "Dana Demo"],
     [SAM, "Sam Sample"],
     [RHEA, "Rhea Real"],
+    [UMA, "Uma Unmerged"],
   ] as const) {
     await q(
       `insert into entities (id, user_id, type, profile_id, title, properties, workspace_id, created_at)
@@ -190,8 +207,9 @@ beforeAll(async () => {
   await q(
     `insert into entity_identity_signals (id, entity_id, signal_type, signal_value, source)
      values (gen_random_uuid(),$1,'email','dana@demo.test','seed'),
-            (gen_random_uuid(),$2,'email','rhea@real.test','seed')`,
-    [DANA, RHEA]
+            (gen_random_uuid(),$2,'email','rhea@real.test','seed'),
+            (gen_random_uuid(),$3,'email','uma@real.test','seed')`,
+    [DANA, RHEA, UMA]
   );
   // A create the agent filed earlier, still waiting for review.
   await q(
@@ -402,6 +420,28 @@ describe("entities.create: the one duplicate door", () => {
     });
     expect(res.deduplicated).toBe(true);
     expect(res.id).toBe(RHEA);
+  });
+
+  it("a strong merge that FAILS names the record and floors the agent's twin (S2)", async () => {
+    h.failMergeOnce = true;
+    await create({
+      title: "U. Unmerged",
+      properties: { email: "uma@real.test" },
+      agentUserId: AGENT,
+      source: "ai",
+    });
+    expect(h.failMergeOnce).toBe(false); // the injected failure fired
+    // The merge's own enrich passes the gate too: read the CREATE call.
+    const createCall = h.gate.mock.calls
+      .map((c) => c[0])
+      .find((a) => a.action === "create");
+    expect(createCall.possibleDuplicate).toBe(true);
+    expect(createCall.duplicateCheck).toMatchObject({
+      status: "possible",
+      candidates: [
+        expect.objectContaining({ id: UMA, why: "same_identity" }),
+      ],
+    });
   });
 
   it("the same agent re-filing the name with OTHER content is floored", async () => {
