@@ -3040,7 +3040,12 @@ export const playbooksRouter = router({
         run,
         session,
         status: "running" as const,
-        message: "Playbook run started",
+        // B6: an agent's direct run is the PERSON's and waits as a draft for
+        // them to accept (`runPlaybook`); say so, so the agent tells them.
+        message:
+          input.agentUserId && !approvedReplay
+            ? "Playbook run started. It belongs to the person and waits as a draft in their sessions until they accept it."
+            : "Playbook run started",
         proposalId: null as string | null,
         ...(parentLink ? { parentLink } : {}),
       };

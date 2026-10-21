@@ -171,7 +171,14 @@ export interface RunPlaybookInput {
   onMissingRequired?: "refuse" | "owe";
   /** Extra agent members to add to the run channel. */
   agentIds?: string[];
-  /** AI attribution — when set, the run is owned by the agent-user. */
+  /**
+   * The agent that STARTED this run directly (no proposal). The run is still
+   * the PERSON's (`userId`): the agent rides first on the roster and the
+   * session waits as a triage DRAFT (`origin: "agent"`) for the person to
+   * accept, like every agent-started session (`draft-asks.ts`, B6 2026-10-21).
+   * An APPROVED run passes no `agentUserId` — the approval was the acceptance
+   * — and carries the asker in `agentIds` instead (`executors/playbook.ts`).
+   */
   agentUserId?: string;
   /**
    * Idempotency by subject: when true AND `subjectId` is set, reuse the existing
@@ -907,8 +914,20 @@ async function executeSingleRun(
 ): Promise<RunPlaybookResult> {
   const db = await getDb();
 
-  // The owning principal: agent-user when an AI runs it, else the human.
-  const actorId = input.agentUserId ?? input.userId;
+  // The owning principal is ALWAYS the person. An agent-started run used to be
+  // owned by the agent user, and session reads are owner-only, so the person
+  // could not see it at all and the agent key (which reads as its person)
+  // could not read it either (live 2026-10-20: `sessionPrivate: true`). The
+  // agent that started it is the first on the roster — the starter every
+  // surface names (`attachSessionParticipants`) — and the run waits as a draft.
+  const actorId = input.userId;
+  const startedByAgent = !!input.agentUserId;
+  const rosterAgentIds = input.agentUserId
+    ? [
+        input.agentUserId,
+        ...(input.agentIds ?? []).filter((id) => id !== input.agentUserId),
+      ]
+    : input.agentIds;
 
   // 0. Idempotency by subject — if a NON-TERMINAL session for this playbook +
   // subject already exists, REUSE it rather than starting a duplicate. This makes
@@ -1003,7 +1022,11 @@ async function executeSingleRun(
     ...(input.onMissingRequired
       ? { onMissingRequired: input.onMissingRequired }
       : {}),
-    agentIds: input.agentIds,
+    agentIds: rosterAgentIds,
+    // A run an agent started on its own is a DRAFT until the person accepts it
+    // (`triage.ts`: origin agent, no acceptance receipt). Still a `run` by kind
+    // (`playbookId` is set); accepted, it joins the person's work.
+    ...(startedByAgent ? { origin: "agent" as const } : {}),
     subjectId: input.subjectId ?? null,
     projectId: filing.projectId,
     trackId: filing.trackId,
@@ -1047,8 +1070,8 @@ async function executeSingleRun(
   // `owner: "human"`, an unanswered required param on the `owe` path) tells
   // them — once per session window — when nobody is in front of it: an agent
   // started it, or a HEADLESS door did (`owe` is declared exactly for those,
-  // see `RunPlaybookInput.onMissingRequired`). The run is owned by the agent
-  // user, so the PERSON is named as the recipient.
+  // see `RunPlaybookInput.onMissingRequired`). The PERSON owns the run and is
+  // the recipient.
   if (session) {
     await notifySessionNeedsYou({
       sessionId: session.id,
@@ -1060,9 +1083,9 @@ async function executeSingleRun(
 
   // Lineage: the session this run was started FROM. AFTER the row exists and
   // outside any transaction — a bad parent handle must never cost the run. The
-  // owner floor is the HUMAN principal (`input.userId`), not `actorId`: an
-  // agent-started run's session is owned by the agent user, while the session
-  // the agent was working in belongs to the person.
+  // owner floor is the HUMAN principal (`input.userId`) — the run's owner too
+  // since B6 (2026-10-21), and the owner of the session the agent was working
+  // in.
   let parentLink: PlaybookRunStarted["parentLink"];
   if (input.parentSessionId && session) {
     try {
@@ -1142,7 +1165,7 @@ async function executeSingleRun(
         role: ChannelMemberRole.OWNER,
         addedBy: actorId,
       });
-      for (const agentId of new Set(input.agentIds ?? [])) {
+      for (const agentId of new Set(rosterAgentIds ?? [])) {
         if (!agentId || agentId === actorId) continue;
         await enrollRoomMember(db, {
           channelId: created.id,
