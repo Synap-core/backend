@@ -44,6 +44,7 @@ import {
   resolveGraphWorkspaceFromSlugs,
   reservedEntityKindReason,
   type WorkspacePlacement,
+  type ModeledField,
   deriveProposalProjectId,
 } from "@synap/database";
 import { getAgentFocusProjectId } from "../agent-identity-service.js";
@@ -137,6 +138,26 @@ export interface CaptureGraphUnmodeledEntity {
   label: string;
   profileSlug: string;
   unmodeled: Array<{ key: string; didYouMean?: string }>;
+}
+
+/**
+ * What each kind in the graph DOES model, by profile slug, through the lens
+ * the graph was validated in — the validator's own `modeled` list. Without it
+ * an `unmodeled` report only said what was wrong, never what was right.
+ */
+export type CaptureGraphModeledFields = Record<string, ModeledField[]>;
+
+/** The `modeledFields` entries for the kinds an `unmodeled` report names. */
+function modeledFieldsFor(
+  unmodeled: CaptureGraphUnmodeledEntity[],
+  modeledFields: CaptureGraphModeledFields
+): CaptureGraphModeledFields {
+  const out: CaptureGraphModeledFields = {};
+  for (const u of unmodeled) {
+    const fields = modeledFields[u.profileSlug];
+    if (fields) out[u.profileSlug] = fields;
+  }
+  return out;
 }
 
 /**
@@ -462,6 +483,11 @@ export interface SubmitCaptureGraphResult {
    */
   unmodeledProperties?: CaptureGraphUnmodeledEntity[];
   /**
+   * What the kinds named in `unmodeledProperties` DO model (key, type,
+   * options, limits). Present exactly when `unmodeledProperties` is.
+   */
+  modeledFields?: CaptureGraphModeledFields;
+  /**
    * ADVISORY in-flight-duplicate warnings: incoming graph entities whose STRONG
    * signal (email/phone/url/handle) collides with a create_entity op in the
    * caller's OWN pending capture/import proposal. NEVER auto-linked — a pending
@@ -651,6 +677,8 @@ export async function buildCaptureGraphOperations(
  * `unmodeledProperties` lists ops carrying keys their profile does not model —
  * advisory, reported by both the dry run and the submit result.
  *
+ * `modeledFields` is what every RESOLVED kind in the graph models, by slug.
+ *
  * `unresolvedProfiles` lists ops whose profile did not resolve for the lens.
  * Submit does NOT reject on it (a cold profile lens can fail open, and
  * unknown-slug graphs are a separate guard); the dry run reports it.
@@ -663,6 +691,7 @@ export async function preflightCaptureGraphOperations(
 ): Promise<{
   invalidEntities: CaptureGraphInvalidEntity[];
   unmodeledProperties: CaptureGraphUnmodeledEntity[];
+  modeledFields: CaptureGraphModeledFields;
   unresolvedProfiles: Array<{ label: string; profileSlug: string }>;
   /** Connected plan: every structure / ownership problem (empty otherwise). */
   planProblems: CapturePlanProblem[];
@@ -674,6 +703,7 @@ export async function preflightCaptureGraphOperations(
   const propertyValidation = new PropertyValidationService(profileResolution);
   const invalidEntities: CaptureGraphInvalidEntity[] = [];
   const unmodeledProperties: CaptureGraphUnmodeledEntity[] = [];
+  const modeledFields: CaptureGraphModeledFields = {};
   for (const op of operations) {
     if (op.op !== "create_entity") continue;
     // Linking an existing entity materializes nothing new — no props to check.
@@ -721,6 +751,7 @@ export async function preflightCaptureGraphOperations(
       valid,
       errors,
       unmodeled: reported,
+      modeled,
     } = await propertyValidation.validateEntityCreateForProposal(
       propsToCheck,
       profile.id,
@@ -731,6 +762,7 @@ export async function preflightCaptureGraphOperations(
           (profile.defaultValues as Record<string, unknown>) ?? {},
       }
     );
+    modeledFields[op.profileSlug] ??= modeled;
     if (!valid) {
       invalidEntities.push({
         label: op.title || op.ref || op.profileSlug,
@@ -759,6 +791,7 @@ export async function preflightCaptureGraphOperations(
     return {
       invalidEntities,
       unmodeledProperties,
+      modeledFields,
       unresolvedProfiles,
       planProblems: plan.problems,
       operations: plan.operations,
@@ -767,6 +800,7 @@ export async function preflightCaptureGraphOperations(
   return {
     invalidEntities,
     unmodeledProperties,
+    modeledFields,
     unresolvedProfiles,
     planProblems: [],
     operations,
@@ -915,6 +949,8 @@ export async function dryRunCaptureGraph(
 ): Promise<{
   invalidEntities: CaptureGraphInvalidEntity[];
   unmodeledProperties: CaptureGraphUnmodeledEntity[];
+  /** Every resolved kind's modelled fields — the dry run is the place to ask. */
+  modeledFields: CaptureGraphModeledFields;
   unresolvedProfiles: Array<{ label: string; profileSlug: string }>;
   relationsFailed: MaterializeRelationFailure[];
   entityCount: number;
@@ -939,6 +975,7 @@ export async function dryRunCaptureGraph(
   const {
     invalidEntities,
     unmodeledProperties,
+    modeledFields,
     unresolvedProfiles,
     planProblems,
     operations,
@@ -961,6 +998,7 @@ export async function dryRunCaptureGraph(
   return {
     invalidEntities,
     unmodeledProperties,
+    modeledFields,
     unresolvedProfiles,
     relationsFailed,
     entityCount: collapsed.entities.length,
@@ -1259,13 +1297,18 @@ export async function submitCaptureGraph(
   // SAME `validateProperties` the materializer runs — so an un-materializable
   // graph is rejected at submit, before EITHER terminal (auto-apply OR pending).
   // Atomic graph ⇒ all-or-nothing: any invalid op rejects the WHOLE graph.
-  const { invalidEntities, unmodeledProperties, planProblems, operations } =
-    await preflightCaptureGraphOperations(
-      db,
-      builtOperations,
-      userId,
-      workspaceId
-    );
+  const {
+    invalidEntities,
+    unmodeledProperties,
+    modeledFields,
+    planProblems,
+    operations,
+  } = await preflightCaptureGraphOperations(
+    db,
+    builtOperations,
+    userId,
+    workspaceId
+  );
   // Relation slugs go through the SAME validator the `validate` door runs, and
   // land in the SAME rejection: an edge naming a non-existent relation def is
   // un-materializable, so filing it would queue an unapprovable proposal.
@@ -1698,7 +1741,15 @@ export async function submitCaptureGraph(
             : {}),
           sessionId: appliedScope.sessionId,
           scope: appliedScope,
-          ...(unmodeledProperties.length > 0 ? { unmodeledProperties } : {}),
+          ...(unmodeledProperties.length > 0
+            ? {
+                unmodeledProperties,
+                modeledFields: modeledFieldsFor(
+                  unmodeledProperties,
+                  modeledFields
+                ),
+              }
+            : {}),
           ...(pendingDuplicateCandidates.length > 0
             ? { pendingDuplicateCandidates }
             : {}),
@@ -1806,7 +1857,12 @@ export async function submitCaptureGraph(
     ...(isPlan ? { plan: { steps: planStepReceipts(operations) } } : {}),
     sessionId: pendingScope.sessionId,
     scope: pendingScope,
-    ...(unmodeledProperties.length > 0 ? { unmodeledProperties } : {}),
+    ...(unmodeledProperties.length > 0
+      ? {
+          unmodeledProperties,
+          modeledFields: modeledFieldsFor(unmodeledProperties, modeledFields),
+        }
+      : {}),
     ...(pendingDuplicateCandidates.length > 0
       ? { pendingDuplicateCandidates }
       : {}),

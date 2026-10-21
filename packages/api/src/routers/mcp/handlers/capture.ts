@@ -617,9 +617,12 @@ const captureHandler: McpToolHandler = async (
           ? {
               unmodeledProperties: checked.unmodeledProperties,
               unmodeledHint:
-                "These property keys are not modelled by their profile: they would be stored verbatim and nothing reads them. Rename each to its `didYouMean` where one is given.",
+                "These property keys are not modelled by their profile: they would be stored verbatim and nothing reads them. Rename each to its `didYouMean` where one is given, or to a key from `modeledFields`.",
             }
           : {}),
+        // What each kind in the graph DOES model (key, type, options, limits,
+        // required, lifecycle), so a limit or an enum is seen before the write.
+        modeledFields: checked.modeledFields,
         ...(crossKindLinks.length
           ? { links: { proposed: crossKindLinks } }
           : {}),
