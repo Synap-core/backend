@@ -3513,6 +3513,11 @@ export const tools = {
               description:
                 "Optional project id to file the created entities into — stamps belongs_to_project membership.",
             },
+            projectName: {
+              type: "string",
+              description:
+                "Instead of projectId: the exact name of one of your projects. A name that matches none of them refuses the whole capture (nothing is filed) and names the closest projects with their ids — re-send with projectId.",
+            },
             dedupMode: {
               type: "string",
               enum: ["title", "semantic", "both"],

@@ -35,6 +35,7 @@ import {
   IDENTITY_SIGNAL_PROPERTY_KEYS,
   resolveProjectPlacement,
 } from "@synap/database";
+import { resolveCaptureProjectRef } from "../../../services/capture-agent/resolve-capture-project.js";
 import { logger } from "../../hub-protocol/rest/_shared.js";
 import { toolError } from "../tool-errors.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
@@ -151,21 +152,33 @@ const captureHandler: McpToolHandler = async (
     (n, items) => n + items.length,
     0
   );
-  const captureProjectId =
-    typeof args.projectId === "string" && args.projectId
-      ? args.projectId
-      : null;
   // Project NAME-ref (piece D): an agent may name a project instead of
-  // knowing its UUID (`projectName`, or `project: { name }`). Resolved at the
-  // submitCaptureGraph boundary via an EXACT slug match on the caller's OWN
-  // projects — no match is NEVER auto-linked (widening-access law).
+  // knowing its UUID (`projectName`, or `project: { name }`). Resolved HERE,
+  // once, before either lane runs and before any intake room is opened, via
+  // the one resolver (EXACT slug match on the caller's OWN projects). No match
+  // REFUSES the whole capture naming the closest projects — the same refusal
+  // an unknown projectId gets (B9e); it used to write everything unlinked (the
+  // graph lane) or drop the name silently (the text lane). An explicit
+  // `projectId` wins over a name.
   const captureProjectName =
-    typeof args.projectName === "string" && args.projectName
+    typeof args.projectName === "string" && args.projectName.trim()
       ? args.projectName
       : args.project &&
           typeof args.project === "object" &&
-          typeof (args.project as { name?: unknown }).name === "string"
+          typeof (args.project as { name?: unknown }).name === "string" &&
+          (args.project as { name: string }).name.trim()
         ? (args.project as { name: string }).name
+        : null;
+  const captureProjectId =
+    typeof args.projectId === "string" && args.projectId
+      ? args.projectId
+      : captureProjectName
+        ? (
+            await resolveCaptureProjectRef(db, {
+              userId,
+              projectName: captureProjectName,
+            })
+          ).projectId
         : null;
 
   /**
@@ -733,7 +746,6 @@ const captureHandler: McpToolHandler = async (
       ...(agentUserId ? { agentUserId } : {}),
       workspaceId: graphWsId,
       ...(captureProjectId ? { projectId: captureProjectId } : {}),
-      ...(captureProjectName ? { projectName: captureProjectName } : {}),
       // Origin is the door, not a caller claim: an MCP caller is an agent.
       source: "agent",
       ...(graphSessionId ? { sessionId: graphSessionId } : {}),
@@ -1223,7 +1235,7 @@ const captureHandler: McpToolHandler = async (
     // it, unless a DETERMINISTIC rung (explicit / session / relational)
     // independently resolves the same project.
     // (The AI project fields ride in the mapper spread above.)
-    ...(args.projectId ? { projectId: args.projectId as string } : {}),
+    ...(captureProjectId ? { projectId: captureProjectId } : {}),
     // The raw text ranks the route suggestions by intent (never stored).
     ...(captureRawText ? { intentText: captureRawText.slice(0, 4000) } : {}),
   });
