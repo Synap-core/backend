@@ -7,7 +7,11 @@
  *      SECURITY-KEYS-2026-10-13 C2).
  *   2. Fetch /.well-known/jwks.json from the pinned issuer URL on first use.
  *   3. Cache the issuer's ES256 signing keys in memory and refresh on an
- *      unknown `kid`, so normal signing-key rotation remains available.
+ *      unknown `kid`, so normal signing-key rotation remains available. The
+ *      cache lives for the issuer's Cache-Control max-age, clamped to
+ *      [5 min, 1 h]: a key the issuer stops publishing stops verifying here
+ *      within an hour, and every fetch replaces the whole key set, so a kid
+ *      the new set does not list is gone at once.
  *   4. Verify signature + issuer + expiry + REQUIRED audience.
  *   5. Consume the `jti` (durably, per issuer, in the trusted door).
  *
@@ -46,14 +50,22 @@ const logger = createLogger({ module: "jwks-client" });
 interface JwksCache {
   publicKeysByKid: Map<string, string>;
   fetchedAt: number;
+  /** How long this key set may be served without asking the issuer again. */
+  ttlMs: number;
   /** Last successfully fetched key set — used as fallback when refresh fails. */
   lastKnownGood?: { publicKeysByKid: Map<string, string>; fetchedAt: number };
 }
 
 const cache = new Map<string, JwksCache>();
 
-// Refresh JWKS every 24 h (key rotation is rare; 24 h is the industry standard)
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+// How long a fetched key set is served. A key removed from the issuer's JWKS
+// (the end of a signing-key rotation, or a key that leaked) stays trusted here
+// until the next fetch, so the ceiling is the window an issuer needs to revoke
+// a key: 1 h (it was 24 h, which kept a removed CP key valid for a day). The
+// issuer's Cache-Control max-age can shorten it; the floor keeps a max-age=0
+// or no-store issuer from turning every verification into a fetch.
+const JWKS_TTL_CEILING_MS = 60 * 60 * 1000;
+const JWKS_TTL_FLOOR_MS = 5 * 60 * 1000;
 // Last-known-good fallback window: 48 h
 const LAST_KNOWN_GOOD_TTL_MS = 48 * 60 * 60 * 1000;
 // Retry delays for transient fetch failures: 1s, 5s, 30s
@@ -64,11 +76,39 @@ const MAX_JWKS_RESPONSE_BYTES = 256 * 1024;
 
 class UnknownJwksKeyError extends Error {}
 
+/**
+ * The cache lifetime for one fetched key set, from the response's
+ * Cache-Control: `max-age` clamped to [floor, ceiling]; `no-store`/`no-cache`
+ * mean the floor; no usable directive means the ceiling.
+ */
+export function jwksCacheTtlMs(cacheControl: string | undefined): number {
+  const directives = (cacheControl ?? "")
+    .toLowerCase()
+    .split(",")
+    .map((directive) => directive.trim());
+  if (directives.includes("no-store") || directives.includes("no-cache")) {
+    return JWKS_TTL_FLOOR_MS;
+  }
+  const maxAge = directives
+    .map((directive) => /^max-age=(\d+)$/.exec(directive)?.[1])
+    .find((seconds) => seconds !== undefined);
+  if (maxAge === undefined) return JWKS_TTL_CEILING_MS;
+  return Math.min(
+    JWKS_TTL_CEILING_MS,
+    Math.max(JWKS_TTL_FLOOR_MS, Number(maxAge) * 1000)
+  );
+}
+
+interface JwksResponse {
+  body: string;
+  cacheControl: string | undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function fetchJwksBody(target: ResolvedIssuerEndpoint): Promise<string> {
+function fetchJwksBody(target: ResolvedIssuerEndpoint): Promise<JwksResponse> {
   return new Promise((resolve, reject) => {
     // The connection uses the already-validated IP, not target.hostname. This
     // pins the DNS result through the TLS connection and closes a rebinding
@@ -87,7 +127,7 @@ function fetchJwksBody(target: ResolvedIssuerEndpoint): Promise<string> {
         },
         servername: isIP(target.hostname) === 0 ? target.hostname : undefined,
         timeout: JWKS_REQUEST_TIMEOUT_MS,
-        // JWKS is cached for 24h. A dedicated connection avoids a TLS socket
+        // JWKS is cached for up to 1 h. A dedicated connection avoids a TLS socket
         // authenticated for one issuer being reused for another hostname.
         agent: false,
       },
@@ -120,7 +160,12 @@ function fetchJwksBody(target: ResolvedIssuerEndpoint): Promise<string> {
         });
         response.once("error", reject);
         response.once("end", () => {
-          resolve(Buffer.concat(chunks).toString("utf8"));
+          const cacheControl = response.headers?.["cache-control"];
+          resolve({
+            body: Buffer.concat(chunks).toString("utf8"),
+            cacheControl:
+              typeof cacheControl === "string" ? cacheControl : undefined,
+          });
         });
       }
     );
@@ -137,10 +182,13 @@ function fetchJwksBody(target: ResolvedIssuerEndpoint): Promise<string> {
 
 async function fetchPublicKeys(
   target: ResolvedIssuerEndpoint
-): Promise<Map<string, string>> {
+): Promise<{ publicKeysByKid: Map<string, string>; ttlMs: number }> {
   let body: unknown;
+  let cacheControl: string | undefined;
   try {
-    body = JSON.parse(await fetchJwksBody(target)) as unknown;
+    const response = await fetchJwksBody(target);
+    cacheControl = response.cacheControl;
+    body = JSON.parse(response.body) as unknown;
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error(
@@ -183,7 +231,7 @@ async function fetchPublicKeys(
       `JWKS response contained no usable ES256 signing keys from ${target.issuerUrl}`
     );
   }
-  return publicKeysByKid;
+  return { publicKeysByKid, ttlMs: jwksCacheTtlMs(cacheControl) };
 }
 
 function publicKeyForKid(
@@ -198,7 +246,7 @@ async function getPublicKeyPem(
   kid: string
 ): Promise<string> {
   const cached = cache.get(issuerUrl);
-  if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
+  if (cached && Date.now() - cached.fetchedAt < cached.ttlMs) {
     const cachedKey = publicKeyForKid(cached.publicKeysByKid, kid);
     if (cachedKey) return cachedKey;
   }
@@ -212,11 +260,14 @@ async function getPublicKeyPem(
   let lastError: unknown;
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     try {
-      const publicKeysByKid = await fetchPublicKeys(target);
+      // The fetched set REPLACES the cached one: a kid it no longer lists
+      // stops verifying now, not when the old entry would have expired.
+      const { publicKeysByKid, ttlMs } = await fetchPublicKeys(target);
       const fetchedAt = Date.now();
       const entry: JwksCache = {
         publicKeysByKid,
         fetchedAt,
+        ttlMs,
         lastKnownGood: {
           publicKeysByKid: new Map(publicKeysByKid),
           fetchedAt,
