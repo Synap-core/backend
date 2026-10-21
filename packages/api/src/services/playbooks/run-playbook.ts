@@ -1281,7 +1281,8 @@ async function dispatchRunOnSession(p: {
   sessionId: string;
   channelId: string;
   actorId: string;
-  workspaceId: string;
+  /** NULL = a pod-wide run (the run row stores NULL, never ""). */
+  workspaceId: string | null;
   params: Record<string, unknown>;
   subjectId: string | null;
   agentType: string | null;
@@ -1367,7 +1368,7 @@ async function dispatchRunOnSession(p: {
   let result: RunResult;
   try {
     result = await resolveExecutor(playbook.executor).run({
-      workspaceId: p.workspaceId,
+      workspaceId: p.workspaceId ?? "",
       userId: actorId,
       playbookId: playbook.id,
       sessionId: session.id,
@@ -1454,7 +1455,7 @@ export async function startHeldRun(
     sessionId: session.id,
     channelId: session.channelId,
     actorId: session.userId,
-    workspaceId: session.workspaceId ?? "",
+    workspaceId: session.workspaceId ?? null,
     params: held.params,
     subjectId: session.subjectEntityId ?? null,
     agentType: held.agentType,
