@@ -517,10 +517,16 @@ export function registerPlaybookExecutors(): void {
   // it now refuses only when THIS PROPOSAL did not carry what the playbook
   // needs. Proposals filed BEFORE the gate was widened carry nothing, so they
   // are still refused, with the same reason and a re-run instruction.
-  // `agentUserId` was always recoverable from `proposal.agentUserId`.
-  // `agentUserId` IS recoverable — `proposal.agentUserId` carries it — and is
-  // threaded back so `actorId = agentUserId ?? userId` owns the session, run and
-  // channel exactly as it would have on the direct path.
+  // OWNERSHIP of an approved run: the PERSON who approved it. An agent-started
+  // session is a triage draft until the person accepts it (`draft-asks.ts`,
+  // `triage.ts`); approving the run IS that acceptance. So the agent that asked
+  // (`proposal.agentUserId`) rides on the session's ROSTER (`agentIds` — the
+  // starter, read by `attachSessionParticipants`), and the session, channel
+  // and run are owned by the human principal. It used to be threaded back as
+  // `agentUserId`, which made `runPlaybook`'s `actorId` the AGENT: session
+  // reads are owner-only (`sessionReadableWhere`) and an agent key reads as its
+  // human, so the approved session was invisible to the person AND to the
+  // agent (live 2026-10-20: proposal fcdc4804 → `sessionPrivate: true`).
   //
   // ⚠️ IDEMPOTENCY — verified, and the standard guard is NOT sufficient.
   // `runPlaybook` is NOT idempotent on this path: its `idempotentBySubject`
@@ -540,7 +546,7 @@ export function registerPlaybookExecutors(): void {
   // subject IDOR guard all run again. Re-running the gated procedure does not
   // re-propose on the AGENT's policy: the caller ctx carries
   // `governanceProposalId`, so `playbooks.run` gates on the approver (the human
-  // path) while the input `agentUserId` still owns the session. (Until
+  // path); the agent that asked rides on the roster (see OWNERSHIP). (Until
   // 2026-10-12 this said the ctx's missing `agentUserId` did that — but the
   // INPUT `agentUserId` reached the gate, so every agent-filed run whose policy
   // is "propose" re-proposed on approval and could never be applied.)
@@ -660,9 +666,8 @@ export function registerPlaybookExecutors(): void {
         workspaceId,
         workspaceRole: membership.role,
         // "A decision exists for this write": `playbooks.run` then checks the
-        // APPROVER, not the agent passed below as `agentUserId` (which still
-        // owns the session). Without it, a proposal filed by an agent whose
-        // policy is "propose" re-proposed on every approval.
+        // APPROVER. Without it, a proposal filed by an agent whose policy is
+        // "propose" re-proposed on every approval.
         governanceProposalId: proposal.id,
       } as unknown as Context);
 
@@ -670,6 +675,14 @@ export function registerPlaybookExecutors(): void {
       // by `proposeRulePlaybookRun`) lists `subjectIds`; a single one carries
       // `subjectId`. Same door, same arguments, for each.
       const subjects = readBatchSubjectIds(inner);
+      const rosterAgentIds = [
+        ...new Set(
+          [
+            proposal.agentUserId,
+            ...(Array.isArray(inner.agentIds) ? inner.agentIds : []),
+          ].filter((id): id is string => typeof id === "string" && id !== "")
+        ),
+      ];
       const runFor = (subjectId: string | undefined) =>
         playbookCaller.run({
           playbookId,
@@ -685,9 +698,9 @@ export function registerPlaybookExecutors(): void {
           // here is the one the caller described, not a guess at it.
           ...(carriedParams ? { params: carriedParams } : {}),
           ...(subjectId ? { subjectId } : {}),
-          ...(Array.isArray(inner.agentIds) && inner.agentIds.length > 0
-            ? { agentIds: inner.agentIds as string[] }
-            : {}),
+          // The roster: the agent that asked (the starter) + any extra agents
+          // the run was proposed with. See OWNERSHIP above.
+          ...(rosterAgentIds.length > 0 ? { agentIds: rosterAgentIds } : {}),
           // Lineage: the session the run was proposed FROM. Replayed so an
           // approved run lands on the map spawned from the work that asked for
           // it, exactly as a direct run does.
@@ -719,14 +732,12 @@ export function registerPlaybookExecutors(): void {
           inner.agentType.trim() !== ""
             ? { agentType: inner.agentType }
             : {}),
-          // Attribution is the ONE dropped field the proposal can restore, so
-          // the session/run/channel are owned by the agent that asked, exactly
-          // as on the direct path (`actorId = agentUserId ?? userId`).
-          ...(proposal.agentUserId
-            ? { agentUserId: proposal.agentUserId }
-            : {}),
         });
       let batch: BatchRunReceipt | undefined;
+      // What this approval started — EVERY approval, not only a batch: the
+      // session is the door the person opens next, and a single run used to
+      // drop it (the receipt named nothing it had created).
+      let receipt: BatchRunReceipt | undefined;
 
       // At-most-once: `runPlaybook` is NOT idempotent here (verified — see the
       // note above), so the dispatch is CAS-claimed. A thrown failure keeps the
@@ -734,7 +745,8 @@ export function registerPlaybookExecutors(): void {
       await dispatchExternalOnce(input.proposalId, async () => {
         // The FIRST run proves the approver may run it; a re-propose there
         // means nothing was started, so the claim is released (see below).
-        const result = await runFor(subjects[0] ?? carriedSubjectId);
+        const firstSubject = subjects[0] ?? carriedSubjectId;
+        const result = await runFor(firstSubject);
         if (result.status === "running" && subjects.length > 1) {
           batch = await runBatchRest(
             subjects.slice(1),
@@ -742,12 +754,23 @@ export function registerPlaybookExecutors(): void {
             startedRun(subjects[0]!, result)
           );
         }
-        if (result.status === "running") return { delivered: true as const };
+        if (result.status === "running") {
+          receipt = batch ?? {
+            started: [startedRun(firstSubject, result)],
+            failed: [],
+          };
+          return { delivered: true as const };
+        }
         // Nothing started, so the claim is released and the person can approve
         // again once the reason is fixed.
         return { delivered: false as const, reason: notStartedReason(result) };
       });
 
+      // A run that starts now supersedes an earlier failed attempt: the
+      // approval's own failure record (`rejectionReason`, `data.failure`,
+      // written by `onApprovalFailed`) would otherwise sit on an APPROVED
+      // row and read "Couldn't apply" beside the session it did create.
+      const { failure: _staleFailure, ...rawWithoutFailure } = raw;
       await db
         .update(proposals)
         .set({
@@ -755,11 +778,14 @@ export function registerPlaybookExecutors(): void {
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
-          // A batch records every run it started ON the proposal — the
-          // outcome every renderer already shows (`data.runResult`) — so the
-          // person can find each one. Not `materialized`: approving a batch
-          // does not opt its sessions into undo.
-          ...(batch ? { data: { ...raw, runResult: batch } } : {}),
+          rejectionReason: null,
+          // Every run the approval started is recorded ON the proposal — the
+          // outcome renderers already read (`data.runResult`) — so the person
+          // can open each session. Not `materialized`: approving a run does
+          // not opt its session into undo.
+          data: receipt
+            ? { ...rawWithoutFailure, runResult: receipt }
+            : rawWithoutFailure,
         })
         .where(eq(proposals.id, input.proposalId));
 
@@ -771,8 +797,11 @@ export function registerPlaybookExecutors(): void {
         "approved",
         userId
       );
+      const firstSessionId = receipt?.started[0]?.sessionId;
       return {
         success: true,
+        // The approve response's "what this created" (REST/CLI callers).
+        ...(firstSessionId ? { primaryId: firstSessionId } : {}),
         ...(batch
           ? { batch: { started: batch.started.length, failed: batch.failed } }
           : {}),
@@ -929,26 +958,29 @@ export function registerPlaybookExecutors(): void {
 /** At most this many runs of one batch start at once — sane for 100+ leads. */
 export const BATCH_RUN_CONCURRENCY = 3;
 
-/** One run a batch approval started: its subject and the session to open. */
+/** One run an approval started: its subject (absent = subjectless) and the session to open. */
 export interface StartedRun {
-  subjectId: string;
+  subjectId?: string;
   sessionId?: string;
   runId?: string;
 }
 
-/** What a batch approval did — stamped on the proposal as `data.runResult`. */
+/** What a run approval started — stamped on the proposal as `data.runResult`. */
 export interface BatchRunReceipt {
   started: StartedRun[];
   failed: string[];
 }
 
-function startedRun(subjectId: string, result: unknown): StartedRun {
+function startedRun(
+  subjectId: string | undefined,
+  result: unknown
+): StartedRun {
   const r = result as {
     session?: { id?: unknown };
     run?: { id?: unknown };
   };
   return {
-    subjectId,
+    ...(subjectId ? { subjectId } : {}),
     ...(typeof r.session?.id === "string" ? { sessionId: r.session.id } : {}),
     ...(typeof r.run?.id === "string" ? { runId: r.run.id } : {}),
   };

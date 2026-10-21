@@ -1875,6 +1875,8 @@ export function reasonToRung(reason: string): string {
       return "admin-actions";
     case PROPOSE_REASON.SCOPE_IDENTITY_CHANGE:
       return "force-propose";
+    case PROPOSE_REASON.PROJECT_FILING:
+      return "project-filing";
     case PROPOSE_REASON.CRITERIA_CHANGE:
       return "criteria-change";
     case PROPOSE_REASON.POD_ADMIN_SCHEMA_CHANGE:

@@ -291,13 +291,6 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
   },
   {
     object: "playbook",
-    verb: "update",
-    door: "mcp",
-    reason:
-      "Agents author playbooks (`synap_create_playbook`) and promote proven sessions into them; editing an existing one in place is a human/browser act via tRPC `playbooks.update`.",
-  },
-  {
-    object: "playbook",
     verb: "archive",
     door: "mcp",
     reason:

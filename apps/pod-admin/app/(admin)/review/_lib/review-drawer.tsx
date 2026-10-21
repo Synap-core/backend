@@ -35,6 +35,7 @@ import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { DetailDrawer } from "../../components/detail-drawer";
 import { proposalHeading } from "../../../proposal/[id]/proposal-heading";
+import { proposalRequester } from "../../../proposal/[id]/proposal-requester";
 import {
   ProposalDecision,
   isActionable,
@@ -439,11 +440,8 @@ function ProposalBody({
       <Unreadable message="This proposal couldn't be loaded — it may have been withdrawn, or you may not have access to it." />
     );
 
-  const appName = p.appName;
   // Only names the pod resolved — never an id, never a guess.
-  const requester = appName
-    ? `${appName}${p.authorName ? `, for ${p.authorName}` : ""}`
-    : (p.authorName ?? null);
+  const requester = proposalRequester(p);
   const from = sourceExits.map((s) => s.target.label).filter(Boolean);
   const when = (
     <>

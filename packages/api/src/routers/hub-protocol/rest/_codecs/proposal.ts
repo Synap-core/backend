@@ -449,6 +449,16 @@ export const ListProposalsQuerySchema = z
           "scalars and a capped `summary`, with NO `data` — use it to " +
           "enumerate a queue without paying for every payload."
       ),
+    proposalIds: z
+      .string()
+      .optional()
+      .describe(
+        "Only these proposals: uuids, comma-separated and/or repeated, at " +
+          "most 100. A filter on the same visibility floor and key grant as " +
+          "the rest of the list — an id the caller cannot see is omitted. " +
+          "Combine with `status=all` to resolve ids whatever their status, and " +
+          "a `limit` at least the batch size."
+      ),
     limit: z.coerce
       .number()
       .int()

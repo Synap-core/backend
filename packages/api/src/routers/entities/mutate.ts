@@ -37,6 +37,7 @@ import {
 } from "../../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { loadEditableDocument } from "../../utils/document-edit-access.js";
+import { assertBodyNotReplacedSilently } from "../../services/entity-body/body-replace-guard.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
@@ -132,6 +133,12 @@ export const mutateProcs = {
         title: z.string().max(TITLE_HARD_MAX, titleTooLongReason()).optional(),
         description: z.string().optional(),
         documentId: z.string().uuid().nullable().optional(),
+        /**
+         * Pointing `documentId` at a new document REPLACES an existing body.
+         * Refused (CONFLICT, naming the body) unless this is true — see
+         * `services/entity-body/body-replace-guard.ts`.
+         */
+        replaceBody: z.boolean().optional(),
         properties: z.record(z.string(), z.unknown()).optional(),
         /** Keys to delete from the entity's properties object. Applied before `properties` merge. */
         deleteProperties: z.array(z.string()).optional(),
@@ -205,6 +212,8 @@ export const mutateProcs = {
           type: true,
           documentId: true,
           profileId: true,
+          // `sourceFileDocumentId` tells a source file from a body.
+          properties: true,
         },
       });
       if (!existing) {
@@ -216,6 +225,10 @@ export const mutateProcs = {
       // Repointing the body is validated BEFORE the permission check, so a
       // proposal can never carry an unchecked document id either.
       if (input.documentId && input.documentId !== existing.documentId) {
+        await assertBodyNotReplacedSilently({
+          entity: existing,
+          replaceBody: input.replaceBody,
+        });
         await assertDocumentAttachable(ctx.userId, existing, input.documentId);
       }
 

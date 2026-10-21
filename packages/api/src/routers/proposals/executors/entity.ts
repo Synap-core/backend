@@ -20,6 +20,7 @@ import {
   resolveMaterializedEntityWorkspaceId,
   isDomainHomeWorkspace,
   DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
+  expirePendingCreatesOfLandedRecord,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import {
@@ -57,6 +58,7 @@ import {
   type IdentityReceipt,
 } from "./identity-resolution.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
+import { markProposalNotificationsActioned } from "../../../notifications/mark-proposal-notifications-actioned.js";
 import {
   attachSourceBlob,
   stagedSourceBlobFrom,
@@ -519,6 +521,32 @@ export function registerEntityExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // The record landed: the agent's other pending copies of the SAME record
+      // can only fail the same-name gate now, and each still counts toward its
+      // pending cap. Expire them (never scored). Read from the STORED record —
+      // the one the copies carry — not the reconciled replay input. After the
+      // approval write, so this proposal is no longer pending. Best-effort: the
+      // approval already landed.
+      if (createdEntity?.id) {
+        try {
+          const expired = await expirePendingCreatesOfLandedRecord(
+            {
+              record: innerData,
+              entityId: createdEntity.id,
+              ownerUserId: proposal.subjectUserId ?? userId,
+              landedByProposalId: input.proposalId,
+            },
+            db
+          );
+          if (expired.length) markProposalNotificationsActioned(expired);
+        } catch (err) {
+          logger.warn(
+            { err, proposalId: input.proposalId },
+            "pending copies of an approved create were not expired"
+          );
+        }
+      }
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);

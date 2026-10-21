@@ -63,11 +63,30 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db: {
       query: { focusSessions: { findFirst: async () => sessionRow } },
-      // The executor's own idempotency read: this proposal is still pending.
+      // Two reads go through `db.select`: the executor's idempotency read
+      // (awaited after `.where`: this proposal is still pending) and the undo
+      // snapshot (`readSessionUndoSnapshot`, `.where(...).limit(1)`: the
+      // session's restorable columns, read from the same row as the executor).
       select: () => {
         const b: Record<string, unknown> = {
           from: () => b,
-          where: async () => [{ status: "pending" }],
+          where: () => ({
+            then: (
+              resolve: (v: unknown) => unknown,
+              reject?: (e: unknown) => unknown
+            ) => Promise.resolve([{ status: "pending" }]).then(resolve, reject),
+            limit: async () =>
+              sessionRow
+                ? [
+                    {
+                      title: sessionRow.title ?? null,
+                      goal: sessionRow.goal ?? null,
+                      progress: sessionRow.progress ?? null,
+                      projectId: sessionRow.projectId ?? null,
+                    },
+                  ]
+                : [],
+          }),
         };
         return b;
       },
@@ -331,12 +350,20 @@ describe("focus_session/update — the deliverables half of an approval", () => 
   it("says nothing when there was nothing to refuse", async () => {
     const done = await approve({ completeOutput: "Launch brief" });
     expect(done.refusals).toBeUndefined();
-    const scalarOnly = await approve({ goal: "A new goal" });
+    // A goal change rides with the goal it replaces (`session-update-goal.ts`).
+    const scalarOnly = await approve({
+      goal: "A new goal",
+      previousGoal: "Ship the ownership pair",
+    });
     expect(scalarOnly.refusals).toBeUndefined();
   });
 
   it("takes no output lock at all when the proposal carried none", async () => {
-    await approve({ goal: "A new goal", progress: 60 });
+    await approve({
+      goal: "A new goal",
+      previousGoal: "Ship the ownership pair",
+      progress: 60,
+    });
     expect(writtenOutputs()).toBeUndefined();
     const scalar = updates.find((u) => u.table === "focus_sessions")!;
     expect(scalar.values).toMatchObject({ goal: "A new goal", progress: 60 });

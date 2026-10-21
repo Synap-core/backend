@@ -101,6 +101,34 @@ describe("computeProposalDedupHash", () => {
     expect(a).toBe(b);
   });
 
+  it("strips the RECORD's minted id inside the request envelope (the shape checkPermissionOrPropose stores)", () => {
+    // The live row shape (63d6e707 / fe1a3ebd, 2026-10-18): the record sits
+    // under `data.data`, its fresh id with it. The door-driven twin of this
+    // test is `permission-check.create-dedup-hash.test.ts` in @synap/api.
+    const envelope = (id: string, title = "Ship the thing") => ({
+      requestId: `req-${id}`,
+      source: "agent",
+      targetType: "entity",
+      targetId: id,
+      changeType: "create",
+      data: { id, profileSlug: "task", title, properties: { summary: "S" } },
+      summary: `Create task "${title}"`,
+      correlationId: `corr-${id}`,
+    });
+    const hash = (data: Record<string, unknown>, targetId: string) =>
+      computeProposalDedupHash({
+        workspaceId: "ws-1",
+        proposalType: "create",
+        targetType: "entity",
+        targetId,
+        data,
+      });
+    expect(hash(envelope("id-A"), "id-A")).toBe(hash(envelope("id-B"), "id-B"));
+    expect(hash(envelope("id-A"), "id-A")).not.toBe(
+      hash(envelope("id-B", "Other"), "id-B")
+    );
+  });
+
   it("still distinguishes creates whose non-id content differs (id strip is not over-broad)", () => {
     const a = computeProposalDedupHash({
       ...base,

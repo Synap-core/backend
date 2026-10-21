@@ -126,7 +126,15 @@ export interface FileSheet {
   kind: "file";
   accept: string[] | null;
   landing:
-    | ({ ok: true; landsIn: string } & FileLanding)
+    | ({
+        ok: true;
+        landsIn: string;
+        /**
+         * Said with a refused answer after the upload went through: the file
+         * stays saved in the space, the refusal does not take it back.
+         */
+        keptIfRefused: string;
+      } & FileLanding)
     | { ok: false; message: string };
 }
 
@@ -142,6 +150,7 @@ function fileSheet(o: Of<"file">): FileSheet {
             workspaceId: l.workspaceId,
             projectId: l.projectId,
             landsIn: ASK_COPY.provideLandsIn(l.workspaceName),
+            keptIfRefused: ASK_COPY.provideUploadKept(l.workspaceName),
           }
         : { ok: false, message: l.message },
   };
@@ -167,12 +176,16 @@ export function provideSheet(o: ProvideOptions): ProvideSheet {
 export interface ProvideReceipt {
   title: string;
   description?: string;
+  /** It went, but not as the person was told (the toast says so). */
+  color?: "warning";
 }
 
 /**
  * What the person is told once it went. A secret's receipt says who can now
  * read it: the asking agent for the next minutes, in this session, or no
- * agent yet — the pod's own line, never a guess.
+ * agent yet — the pod's own line, never a guess. When the agent asking
+ * changed since the person was shown who would read it, the pod gave nobody
+ * a read, and the receipt says that instead.
  */
 export function provideReceipt(
   kind: AskProvideKind,
@@ -181,6 +194,16 @@ export function provideReceipt(
 ): ProvideReceipt {
   switch (kind) {
     case "secret":
+      if (
+        result.secretGrant?.status === "refused" &&
+        result.secretGrant.reason === "agent_changed"
+      ) {
+        return {
+          title: ASK_COPY.provideAgentChangedTitle,
+          description: ASK_COPY.provideAgentChangedBody,
+          color: "warning",
+        };
+      }
       return {
         title: "Secret handed over",
         description: provideSecretAccessLine(

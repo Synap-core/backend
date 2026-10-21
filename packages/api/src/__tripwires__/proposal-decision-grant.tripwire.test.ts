@@ -222,3 +222,57 @@ describe("C — every revise door reaches the revise core, which asks the key", 
     );
   });
 });
+
+describe("D — every decision is fenced by the proposal's OWN place (D3, PR #29 M1)", () => {
+  // A target-less `assertMayDecideProposal(verb)` checks only the VERB, so a
+  // key bounded to one space decided proposals in every other one. Each door
+  // that has loaded the proposal must also call the targeted check.
+  const AT = /\bassertMayDecideProposalAt\(\s*"(approve|reject)"/;
+  const bodyOf = (src: string, head: string) => {
+    const at = src.indexOf(head);
+    expect(at, `${head} not found`).toBeGreaterThan(-1);
+    return src.slice(at, src.indexOf("\n}\n", at));
+  };
+  const ra = read("routers/proposals/review-authority.ts");
+  const segments = procedureSegments(read("routers/proposals.ts"));
+
+  it("recognises what it hunts (non-vacuity)", () => {
+    expect(AT.test(`assertMayDecideProposalAt("reject", action, p)`)).toBe(
+      true
+    );
+    expect(AT.test(`assertMayDecideProposal("reject")`)).toBe(false);
+  });
+
+  it("the reject-verb core (assertCanReviewProposal) names the proposal", () => {
+    expect(
+      bodyOf(ra, "export async function assertCanReviewProposal(")
+    ).toMatch(AT);
+  });
+
+  it("the ONE approval door (applyProposalApproval) names the proposal", () => {
+    expect(
+      bodyOf(
+        read("routers/proposals/apply-approval.ts"),
+        "export async function applyProposalApproval("
+      )
+    ).toMatch(AT);
+  });
+
+  it.each(["approve", "batchApprove"])(
+    "%s reaches applyProposalApproval",
+    (n) => {
+      expect(segments.get(n)).toMatch(/\bapplyProposalApproval\(\{/);
+    }
+  );
+
+  it("revert names the proposal it undoes", () => {
+    expect(segments.get("revert")).toMatch(AT);
+  });
+
+  it("the vault's grantAIAccess names the proposal it decides", () => {
+    const vault = read("routers/secrets-vault.ts");
+    const at = vault.indexOf("grantAIAccess:");
+    expect(at).toBeGreaterThan(-1);
+    expect(vault.slice(at, vault.indexOf("\n  }),", at))).toMatch(AT);
+  });
+});

@@ -11,13 +11,14 @@ const h = vi.hoisted(() => ({
   updateChannel: vi.fn(),
 }));
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
   const mk = (name: string) =>
     new Proxy(
       { __table: name },
       { get: (t, p) => (p in t ? (t as never)[p] : `${name}.${String(p)}`) }
     );
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     db: {
       select: () => ({
         from: () => ({

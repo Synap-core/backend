@@ -27,6 +27,7 @@ import { Check, Eye, Globe, Plus, ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   ADDABLE_TRUST_LEVELS,
+  PRIVATE_CAPABILITY_TRUST_LINE,
   TRUST_CONSEQUENCE,
   formatKeyFingerprint,
   type AddableTrust,
@@ -356,6 +357,14 @@ function SourceDrawer({
             >
               {signing.text}
             </dd>
+            {source.official && (
+              <>
+                <dt className="text-foreground/65">Private</dt>
+                <dd className="leading-relaxed">
+                  {PRIVATE_CAPABILITY_TRUST_LINE}
+                </dd>
+              </>
+            )}
             {source.addedAt && (
               <>
                 <dt className="text-foreground/65">Added</dt>

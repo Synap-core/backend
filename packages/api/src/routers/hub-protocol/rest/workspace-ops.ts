@@ -121,7 +121,7 @@ export function registerWorkspaceOpsRoutes(app: HubHono): void {
   // (`services/workspace-retire-into.ts`). `dryRun` → 200 `{status:"plan"}`;
   // an agent key → 202 `{status:"proposed", proposalId, reviewUrl, plan}`; a
   // human → 200 `{status:"applied", plan, result}`; not retired / no
-  // replacement → 409, replacement unreadable → 503, both
+  // replacement / already archived → 409, replacement unreadable → 503, both
   // `{status:"refused", code, lifecycle, message, error}`.
   app.post("/workspaces/:workspaceId/retire-into", async (c) => {
     const a = await actorFor(c);

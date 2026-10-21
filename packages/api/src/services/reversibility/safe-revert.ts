@@ -66,6 +66,7 @@ import {
   entityFieldApiName,
   type EntityDiffField,
 } from "../../utils/entity-property-diff.js";
+import { SESSION_UNDO_COLUMNS } from "../focus-sessions/session-undo.js";
 
 export type RevertTarget =
   | { kind: "entity"; id: string }
@@ -133,12 +134,17 @@ export type RevertTarget =
  * data, and data does not get to pick which columns an undo touches.
  */
 export type RowPatchTable =
-  "skill" | "rule" | "automation" | "playbook" | "view";
+  "skill" | "rule" | "automation" | "playbook" | "view" | "focus_session";
 
 const ROW_PATCH_COLUMNS: Record<
   RowPatchTable,
   {
-    table: typeof skills | typeof automations | typeof playbooks | typeof views;
+    table:
+      | typeof skills
+      | typeof automations
+      | typeof playbooks
+      | typeof views
+      | typeof focusSessions;
     columns: readonly string[];
   }
 > = {
@@ -153,6 +159,8 @@ const ROW_PATCH_COLUMNS: Record<
     columns: ["name", "description", "goalTemplate"],
   },
   view: { table: views, columns: ["name", "description", "config"] },
+  // A session update's undoable columns (`session-undo.ts`), never the rest.
+  focus_session: { table: focusSessions, columns: SESSION_UNDO_COLUMNS },
 };
 
 /** Key-order-independent JSON (jsonb does not keep key order). */

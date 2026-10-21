@@ -65,9 +65,11 @@ const RULES = [
     needle: "Propose its `criteria`",
   },
   {
-    rule: "a detour is a CHILD session with parentSessionId + suspendedIntent",
+    // Re-anchored 2026-10-21: cc56f11ec (2026-09-28) rewrote this paragraph into
+    // a STRONGER rule — the pair now also blocks the parent (`blocked_by`).
+    rule: "a prerequisite is a blocking CHILD session with parentSessionId + suspendedIntent",
     file: FROM_INTENT,
-    needle: "A detour is a CHILD session",
+    needle: "A discovered prerequisite is a blocking child",
   },
   {
     rule: "propose the session's criteria (sessions topic)",

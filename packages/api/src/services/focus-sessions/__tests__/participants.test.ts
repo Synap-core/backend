@@ -22,10 +22,11 @@
  *     being declared.
  *
  * WHAT IT DOES NOT COVER, measured:
- *   - `displayNameForUser` is MOCKED to `row.name ?? undefined`. This file
- *     proves the resolved name is threaded onto the participant and that an
- *     unnameable row falls back to the uuid prefix; it does NOT re-test that
- *     function's agent/email precedence, which is its own.
+ *   - `actorDisplayName` runs for real (pure), but this file does NOT re-test
+ *     its agent/email precedence, which is its own. It proves the resolved name
+ *     is threaded onto the participant, that an agent on a computer carries the
+ *     computer's name, and that an unnameable row falls back to the uuid prefix.
+ *     The faked `db` ignores WHERE, so the computer lookup sees every row.
  *   - `userVisibleWhere` is mocked to a sentinel. The assertion is REACHABILITY
  *     — that the floor is built with the caller's id and handed to the query —
  *     not that the emitted SQL is correct; that predicate is tested where it
@@ -94,10 +95,6 @@ vi.mock("../../../utils/user-visible-where.js", () => ({
   userVisibleWhere: userVisibleWhereMock,
 }));
 
-vi.mock("../../../routers/proposals/display.js", () => ({
-  displayNameForUser: (row: { name: string | null }) => row.name ?? undefined,
-}));
-
 import {
   attachSessionParticipants,
   withSessionParticipants,
@@ -108,6 +105,8 @@ const ZOE = "ffffffff-0000-0000-0000-000000000001";
 const ALICE = "11111111-0000-0000-0000-000000000001";
 const BOB = "77777777-0000-0000-0000-000000000001";
 const GHOST = "aaaaaaaa-dead-0000-0000-000000000001";
+const HOST = "33333333-0000-0000-0000-000000000001";
+const ON_HOST = "55555555-0000-0000-0000-000000000001";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -172,6 +171,35 @@ describe("attachSessionParticipants — the union of the two stores", () => {
     expect(row?.participants).toEqual([
       { id: ALICE, name: "Alice" },
       { id: BOB, name: "Bob" },
+    ]);
+  });
+
+  it("an agent on a computer is named with it — the proposals' own name", async () => {
+    userRows.value = [
+      ...userRows.value,
+      {
+        id: HOST,
+        name: "devbox",
+        email: "m@x",
+        userType: "agent",
+        agentMetadata: null,
+      },
+      {
+        id: ON_HOST,
+        name: "Claude Code",
+        email: "c@x",
+        userType: "agent",
+        agentMetadata: null,
+        hostUserId: HOST,
+      },
+    ];
+    const [row] = await attachSessionParticipants(
+      [{ id: "s1", agentIds: [ON_HOST, ALICE] }],
+      "user-1"
+    );
+    expect(row?.participants).toEqual([
+      { id: ALICE, name: "Alice" },
+      { id: ON_HOST, name: "Claude Code on devbox" },
     ]);
   });
 

@@ -19,7 +19,8 @@
  *      not say which, so it is no existence oracle.
  *   2. GATE: `checkPermissionOrPropose` —
  *        file   → `project/file_entities`, `forcePropose` (an ACCESS decision:
- *                 an agent ALWAYS proposes; rules cannot widen rung 2.1);
+ *                 an agent ALWAYS proposes; rules cannot widen rung 2.1). The
+ *                 engine files it under its own reason, `PROJECT_FILING`;
  *        unfile → `link/delete` (DESTRUCTIVE floor: an agent always proposes).
  *      One proposal for the whole batch.
  *   3. APPLY (`applyProjectFiling`, also the approval half): re-floors on the
@@ -27,6 +28,9 @@
  *      through `linkEntityToProject` (keeps its existence + visibility check) /
  *      `unlinkEntitiesFromProject`. All-or-nothing: one record that no longer
  *      passes refuses the batch rather than filing a silent subset.
+ *   4. UNDO: the edges a filing wrote are stamped on its proposal (approval) or
+ *      receipt (auto-approved) as `materialized.relationIds`; revert deletes
+ *      exactly those, never an edge that was already there.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -42,6 +46,7 @@ import {
   unlinkEntitiesFromProject,
 } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
 import { loadVisibleProject } from "./load-visible-project.js";
@@ -170,6 +175,8 @@ export type ProjectFilingApplied =
       /** Edges THIS call wrote (insert RETURNING), and the ones already there. */
       filed: string[];
       alreadyFiled: string[];
+      /** The relation rows behind `filed` — what an undo removes, and only those. */
+      filedRelationIds: string[];
     }
   | {
       status: "unfiled";
@@ -225,6 +232,7 @@ export async function applyProjectFiling(params: {
       );
     const already = new Set(existing.map((r) => r.id));
     const filed: string[] = [];
+    const filedRelationIds: string[] = [];
     for (const e of plan.entities) {
       if (already.has(e.id)) continue;
       const res = await linkEntityToProject(txDb, {
@@ -239,14 +247,17 @@ export async function applyProjectFiling(params: {
           message: `Project not found or not visible: ${plan.project.id} — nothing was filed`,
         });
       }
-      if (res.created) filed.push(e.id);
-      else already.add(e.id);
+      if (res.created) {
+        filed.push(e.id);
+        if (res.relationId) filedRelationIds.push(res.relationId);
+      } else already.add(e.id);
     }
     return {
       status: "filed" as const,
       projectId: plan.project.id,
       filed,
       alreadyFiled: ids.filter((id) => already.has(id)),
+      filedRelationIds,
     };
   });
 }
@@ -298,7 +309,8 @@ export async function fileEntitiesGoverned(params: {
         subjectType: "project",
         action: "file_entities",
         // An ACCESS decision (exposes each record to the project's members):
-        // an agent always proposes, whatever rule or ownership says.
+        // an agent always proposes, whatever rule or ownership says. The
+        // engine names it `PROJECT_FILING`, never a scope/identity change.
         forcePropose: true,
         data: payload,
       });
@@ -314,10 +326,20 @@ export async function fileEntitiesGoverned(params: {
     };
   }
 
-  return applyProjectFiling({
+  const applied = await applyProjectFiling({
     ownerUserId: params.userId,
     projectId: plan.project.id,
     entityIds: plan.entities.map((e) => e.id),
     remove,
   });
+  // An auto-approved filing's receipt records the edges it wrote, so its Undo
+  // removes exactly those (`planProposalRevert`). No receipt ⇒ nothing to stamp.
+  if (applied.status === "filed" && "granted" in perm) {
+    await stampAutoApprovedCreate({
+      receiptId: perm.autoApprovedProposalId,
+      record: { relationIds: applied.filedRelationIds },
+      door: "projects.fileEntities",
+    });
+  }
+  return applied;
 }

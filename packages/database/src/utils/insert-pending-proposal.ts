@@ -190,6 +190,34 @@ const VOLATILE_DEDUP_KEYS = new Set([
 ]);
 
 /**
+ * True when a stored payload is the REQUEST ENVELOPE `checkPermissionOrPropose`
+ * writes — `{ requestId, targetType, changeType, data: <the record>, … }` —
+ * rather than a flat record. The same three-field signature as
+ * `isRequestShapedProposalData` (`@synap-core/types/proposals`); mirrored, not
+ * imported, because `@synap-core/types` builds against this package.
+ */
+function isRequestEnvelope(data: Record<string, unknown>): boolean {
+  return (
+    typeof data.targetType === "string" &&
+    typeof data.changeType === "string" &&
+    typeof data.requestId === "string"
+  );
+}
+
+/**
+ * What makes two proposed creates the SAME record: the record the create door
+ * handed the gate, minus its per-attempt minted `id`. The ONE rule both the
+ * dedup hash (two pending copies) and `expirePendingCreatesOfLandedRecord`
+ * (a pending copy of a record that has since landed) apply.
+ */
+export function createdRecordIdentity(
+  record: Record<string, unknown>
+): Record<string, unknown> {
+  const { id: _mintedId, ...rest } = record;
+  return rest;
+}
+
+/**
  * Canonical exact-match dedup hash for a pending proposal:
  *   sha256( stableStringify({ workspaceId, proposalType, targetType,
  *                             targetId?, payload }) )
@@ -223,6 +251,24 @@ export function computeProposalDedupHash(p: {
   for (const key of Object.keys(p.data)) {
     if (VOLATILE_DEDUP_KEYS.has(key)) continue;
     payload[key] = p.data[key];
+  }
+  // A create filed through the request envelope carries its RECORD one level
+  // down (`data.data`), and the record's own minted id with it
+  // (`entities.create` hands the gate `{ id: proposedEntityId ?? randomUUID(),
+  // … }`). That nested id is the same per-attempt poison the top-level `id`
+  // strip removes, so it is stripped here too — and ONLY the id: the record's
+  // other keys (a `summary` property, a `reasoning` field) are the change.
+  // Without this every agent entity create hashed uniquely (live 2026-10-18:
+  // three byte-identical decision creates filed as three pending rows).
+  const record = payload.data;
+  if (
+    isCreate &&
+    isRequestEnvelope(p.data) &&
+    record !== null &&
+    typeof record === "object" &&
+    !Array.isArray(record)
+  ) {
+    payload.data = createdRecordIdentity(record as Record<string, unknown>);
   }
   const canonical = {
     workspaceId: p.workspaceId ?? null,

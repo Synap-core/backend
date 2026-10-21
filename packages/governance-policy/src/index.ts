@@ -1484,6 +1484,8 @@ export const PROPOSE_REASON = {
   CAPABILITY_PROPOSE: "Capability execution requires human approval.",
   SCOPE_IDENTITY_CHANGE:
     "This change alters the record's scope or identity and requires human approval.",
+  PROJECT_FILING:
+    "Filing these records into a project shows them to the project's members, so a person approves it.",
   CRITERIA_CHANGE:
     "An agent is changing the acceptance criteria its own work is graded against; a person must approve them.",
   DESTRUCTIVE_HARD_FLOOR:
@@ -1508,6 +1510,19 @@ export const PROPOSE_REASON = {
   AGENT_STRUCTURE_WRITE:
     "An agent is creating a workspace, cell, playbook or automation (or switching one on), which changes what the pod does; a person must approve it, and no governance rule can widen it.",
 } as const;
+
+/**
+ * Rung 2.1's reason for a FORCED write whose door forces it for a reason other
+ * than scope or identity. Keyed by the write's event key; the force itself
+ * still comes from the door, so this only changes the words, never the verdict.
+ *   - `project.file_entities` — filing exposes the records to the project's
+ *     members (an access decision), it does not change what they are.
+ */
+const FORCED_WRITE_REASON: Readonly<
+  Record<string, keyof typeof PROPOSE_REASON>
+> = {
+  "project.file_entities": "PROJECT_FILING",
+};
 
 const CHANNEL_BLOCK_REASON =
   "Teammate is draft-only in this channel and may not commit writes (can_act and can_propose are both off).";
@@ -1645,6 +1660,17 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // (rung 2) so a capability-denied action still denies and admin actions are
   // unaffected, but BEFORE every execute path below.
   if (input.forcePropose === true) {
+    // A door forced for a reason of its own names it here, read from the
+    // write itself (never from the caller), so the review says the real why.
+    const ownReason =
+      FORCED_WRITE_REASON[`${input.subjectType}.${input.action}`];
+    if (ownReason) {
+      return {
+        verdict: "propose",
+        reason: PROPOSE_REASON[ownReason],
+        reasonCode: ownReason,
+      };
+    }
     return {
       verdict: "propose",
       reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,

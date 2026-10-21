@@ -138,14 +138,20 @@ const KEY_SUBJECT_TABLES: Readonly<Record<string, { id: AnyPgColumn }>> = {
 /**
  * D7 — does the key's grant read this subject? The owner's read floor
  * (`ownerReadsRow`) entered under the key's live grant (`resolveForKey`: a
- * revoked/expired grant is deny-all). Used by BOTH producers.
+ * revoked/expired grant is deny-all), as every door sees it
+ * (`effectiveKeyGrant`). Used by BOTH producers.
  */
 export async function keyGrantReadsSubject(
   subject: KeyGrantSubject
 ): Promise<boolean> {
   const table = KEY_SUBJECT_TABLES[subject.subjectType];
   if (!table) return false;
-  const grant = await new GrantRepository(db).resolveForKey(subject.apiKeyId);
+  const stored = await new GrantRepository(db).resolveForKey(subject.apiKeyId);
+  // The SAME grant the request doors see: a person's app sign-in token is
+  // re-judged now (dead → deny-all, else narrowed), never its stored copy
+  // (PR #29 re-review N1). Loaded on use: only app-named grants need it.
+  const { effectiveKeyGrant } = await import("../services/app-person-token.js");
+  const grant = await effectiveKeyGrant(subject.apiKeyId, stored);
   return runWithGrant(grant, () =>
     ownerReadsRow(subject.ownerUserId, table, subject.subjectId)
   );

@@ -626,6 +626,25 @@ export async function createCapabilityFromDefinition(
     });
   }
 
+  // A playbook's goal and stages carry their OWN run-time placeholders: params a
+  // playbook RUN fills (`{leadName}`). The blanket pass above maps every `{{x}}`
+  // it does not know to "" — which is how "Lead Outreach" / "Client Onboarding"
+  // installed as `the lead ""` (discord-bot template, 2026-06-22): `{{leadName}}`
+  // was a playbook param, not an install param, and the goal passed every check
+  // afterwards because an empty string is no placeholder. Re-interpolate the RAW
+  // playbooks substituting only the template's own params (declared, implicit
+  // `name`/`key`, or supplied); any other `{{x}}` reaches `playbooks.create`
+  // verbatim, where the double-brace form is refused loudly.
+  const rawPlaybooks = rawDef.playbooks;
+  if (Array.isArray(rawPlaybooks)) {
+    const installParams: Record<string, unknown> = { ...effectiveParams };
+    for (const p of rawDef.params ?? []) {
+      if (!Object.hasOwn(installParams, p.name))
+        installParams[p.name] = undefined;
+    }
+    def.playbooks = interpolateDeep(rawPlaybooks, installParams, "keep");
+  }
+
   // `{{vault:<ref>}}` names one of THIS template's own `vault[]` entries —
   // checked BEFORE anything is written (see `assertVaultPlaceholdersDeclared`).
   assertVaultPlaceholdersDeclared(def);

@@ -55,7 +55,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-vi.mock("./proposals.js", () => ({
+vi.mock("./proposals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./proposals.js")>()),
   proposalsRouter: {
     createCaller: () => ({
       groups: async () => ({ groups: [], distinct: 0, scanTruncated: false }),

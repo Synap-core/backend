@@ -133,8 +133,6 @@ describe("tripwire: session spawn (recordSessionSpawn) stays best-effort", () =>
   it("every known call site is try/catch or .catch()-guarded, and the handler never rethrows", () => {
     const findings: string[] = [];
 
-    const WINDOW = 1500;
-
     for (const path of PRODUCERS) {
       const raw = readFileSync(path, "utf8");
       const rawCallIdx = raw.indexOf(CALL);
@@ -152,16 +150,17 @@ describe("tripwire: session spawn (recordSessionSpawn) stays best-effort", () =>
         );
       }
 
-      // Comment-strip only a LOCAL WINDOW around the call — a file-wide strip
-      // risks eating the call itself if an unrelated string elsewhere in the
-      // file contains an unbalanced `/*`/`//`.
-      const winStart = Math.max(0, rawCallIdx - WINDOW);
-      const winEnd = Math.min(raw.length, rawCallIdx + WINDOW);
-      const src = stripComments(raw.slice(winStart, winEnd), "ts");
+      // Strip the WHOLE file. A ±1500-char window guarded against the old regex
+      // stripper eating code past an unbalanced `/*` in a string; the shared
+      // scanner keeps strings intact, and the window had become the defect:
+      // create-session.ts's guarded body (spawn + the nested detour-blocker
+      // try/catch, cc56f11ec) runs ~2.1k chars past the call, so the try's
+      // closing brace fell outside it and a guarded call read as "unguarded".
+      const src = stripComments(raw, "ts");
       const callIdx = src.indexOf(CALL);
       if (callIdx === -1) {
         findings.push(
-          `${path}: recordSessionSpawn( call vanished after comment-stripping its surrounding window — widen WINDOW or inspect manually`
+          `${path}: recordSessionSpawn( call vanished after comment-stripping — inspect manually`
         );
         continue;
       }

@@ -147,6 +147,7 @@ export const TOOL_GROUPS = {
     "synap_list_playbooks",
     "synap_match_playbooks",
     "synap_create_playbook",
+    "synap_update_playbook",
     "synap_run_playbook",
     "synap_create_skill",
     "synap_update_skill",

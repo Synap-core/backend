@@ -1983,6 +1983,16 @@ export interface HubThreadContext {
 
 // ─── Proposals ───────────────────────────────────────────────────────────────
 
+/** `GET /api/hub/files/{entityId}/url` — a signed, short-lived download URL. */
+export interface HubFileUrl {
+  /** Signed GET; serves the blob as an `attachment` with its stored type. */
+  url: string;
+  /** ISO-8601 instant the signature stops working. */
+  expiresAt: string;
+  /** The type the blob was stored (and is served) with; null when unknown. */
+  mimeType: string | null;
+}
+
 export interface HubProposal {
   id: string;
   status: "pending" | "approved" | "rejected";

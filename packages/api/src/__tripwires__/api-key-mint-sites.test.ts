@@ -64,6 +64,8 @@ const MINT_SITES: Record<string, string> = {
     "POST /agent-users — human session only; 403 for an agent key (2026-10-06).",
   "packages/api/src/services/app-connect.ts":
     "issueKey — behind POST /apps/:id/key AND tRPC apps.issueKey (App Connect, one service). Runs ONLY after the app/connect proposal is approved; owner-only; refuses an agent principal (else an agent key owned by the same human would pass the owner test) AND a grant-bound key (an app key must never mint app keys); mints the app's user_pat and attaches one grant per approved workspace (client_id = app.public_id). mintAppOAuthAccessKey — behind OAuth /token for a pod app (CIMD client) only, after the person's consent approved that app's app/connect request, or at a refresh of that connection (re-derived from the CURRENT approval): a 1 h hub_inbound key held by the app's OWN agent (never claude-web*), one grant per approved workspace, expiring with it.",
+  "packages/api/src/services/app-person-token.ts":
+    'mintAppPersonToken — "Sign in with Synap": reached ONLY from OAuth /token for an `app_…` client (a live app its owner APPROVED, redirect_uri the owner registered, PKCE, single-use code). Mints a key HELD BY THE PERSON (key_type app_person, 30 days) and attaches the consented ∩ approved ∩ reachable grant (client_id = the app). Never an agent\'s key; refuses a non-human code holder.',
   "packages/api/src/routers/hub-protocol/rest/keys.ts":
     "/keys/rotate-cli — hub_inbound read+write keys only, keeps expiry (2026-10-06).",
   "apps/api/src/routers/provision.ts":

@@ -46,6 +46,10 @@ vi.mock("@synap/database", async (importOriginal) => {
     async findActiveBySlugAnyScope() {
       return [];
     }
+    // The pod-wide kind holder (profiles.ts create): none here.
+    async findActivePodWideKind() {
+      return null;
+    }
     // W2b: a ROLE define now plans through `resolveProfileForApply` (reuse +
     // share instead of a twin), which probes these too. Empty = a new role.
     async getBySlugForWorkspace() {
@@ -84,6 +88,13 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
     }),
   };
 });
+
+// actingAgentUserId verifies the agent through agentBelongsTo (2099fc31f), a
+// DB read; identity is not what this file tests.
+vi.mock("../agent-belongs-to.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agent-belongs-to.js")>()),
+  agentBelongsTo: vi.fn(async () => true),
+}));
 
 vi.mock("./_shared.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();

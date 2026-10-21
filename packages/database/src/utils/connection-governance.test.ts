@@ -316,7 +316,7 @@ describe("applyConnectionSyncApproval (the approval hook)", () => {
     await expect(
       applyConnectionSyncApproval({
         db: f.handle,
-        proposal: { ...importProposal(CS), proposalType: "capture.graph" },
+        proposal: { ...importProposal(CS), proposalType: "entity.create" },
         userId: "user-1",
       })
     ).resolves.toEqual({ applied: false, skipped: "not-import-graph" });
@@ -469,10 +469,20 @@ describe("isPodWideConnectionSyncApproval (approval path enqueues only where no 
     ).toBe(false);
     expect(
       isPodWideConnectionSyncApproval({
-        proposalType: "capture.graph",
+        proposalType: "entity.create",
         workspaceId: null,
         data: CS,
       })
     ).toBe(false);
+  });
+
+  it("the unified import door (capture.graph) counts like import.graph (98bc6a5ae)", () => {
+    expect(
+      isPodWideConnectionSyncApproval({
+        proposalType: "capture.graph",
+        workspaceId: null,
+        data: CS,
+      })
+    ).toBe(true);
   });
 });

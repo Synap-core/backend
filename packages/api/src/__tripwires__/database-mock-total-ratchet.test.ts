@@ -91,7 +91,11 @@ import { dirname, join, relative } from "node:path";
 // `ProposalStatus`, which killed that file at COLLECTION. Same day, the MCP xp label
 // lane converted `compose-capability-brief.verb-alias.test.ts`, bringing an
 // interim 62 back to 61 before this drop.
-const BASELINE = 60;
+// 60 → 49 on 2026-10-21 (green-main lane). Main had drifted UP to 75 while
+// CI's Full suite was red and unread; 26 total factories were converted to
+// importOriginal + spread — most of them in files that had gone dark exactly as
+// this header describes (ConflictError, cellInstances, artifacts, isNull…).
+const BASELINE = 49;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");

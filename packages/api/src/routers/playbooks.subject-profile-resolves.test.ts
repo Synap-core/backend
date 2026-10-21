@@ -70,7 +70,8 @@ const {
   };
 });
 
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({
     warn: vi.fn(),
     info: vi.fn(),
@@ -91,9 +92,13 @@ vi.mock("@synap/database", async (importOriginal) => {
     isNull: vi.fn((a: unknown) => ({ isNull: a })),
     asc: vi.fn((a: unknown) => ({ asc: a })),
     desc: vi.fn((a: unknown) => ({ desc: a })),
-    drizzleSql: vi.fn((strings: TemplateStringsArray, ..._v: unknown[]) => ({
-      sql: strings.join("?"),
-    })),
+    drizzleSql: Object.assign(
+      vi.fn((strings: TemplateStringsArray, ..._v: unknown[]) => ({
+        sql: strings.join("?"),
+      })),
+      // session-kind.ts builds a module-level drizzleSql.raw
+      { raw: vi.fn((s: string) => ({ sql: s })) }
+    ),
   };
 });
 
@@ -170,7 +175,8 @@ function callerCtx() {
 
 const base = {
   name: "Qualify a CRM lead",
-  goalTemplate: "Qualify {{subject}}",
+  // No placeholder: the create door refuses an undeclared one (1c6193456).
+  goalTemplate: "Qualify the lead",
   status: "active" as const,
   executor: "is-agent" as const,
 };

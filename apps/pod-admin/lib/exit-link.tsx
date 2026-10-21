@@ -18,12 +18,14 @@
  * The same holds for the DEVICE. On a phone `synap://` opens the mobile app,
  * which opens a different set of things; `usePlacedExit` is the one place that
  * asks, so a hand-off never offers "Get the desktop app" to a phone or a link
- * that lands on the mobile app's "not found".
+ * that lands on the mobile app's "not found". And for the VIEWER: the console
+ * page a phone is offered instead comes only to a role that may open it.
  */
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { ArrowUpRight } from "lucide-react";
+import { useConsoleRole } from "../app/(admin)/components/side-nav-role";
 import { placeExit, type Exit, type PlacedExit } from "./open-in";
 import { isPhone } from "./platform";
 
@@ -98,16 +100,22 @@ export function useIsPhone(): boolean {
 }
 
 /**
- * `placeExit` for this device — and a web alternative that is the page the
- * reader is already on is dropped: `/sources` saying "use Sources instead" of
- * its own connectors hand-off would be a link to itself.
+ * `placeExit` for this device and this viewer's console role — and a web
+ * alternative that is the page the reader is already on is dropped: `/sources`
+ * saying "use Sources instead" of its own connectors hand-off would be a link
+ * to itself.
  */
 export function usePlacedExit(exit: Exit): PlacedExit {
   const onPhone = useIsPhone();
+  const role = useConsoleRole();
   const pathname = usePathname();
-  const placed = placeExit(exit, onPhone);
+  const placed = placeExit(exit, onPhone, role);
   if (placed.unavailable?.web?.href === pathname) {
     return { ...placed, unavailable: { note: placed.unavailable.note } };
+  }
+  if (placed.web?.href === pathname) {
+    const { web: _self, ...rest } = placed;
+    return rest;
   }
   return placed;
 }
@@ -188,15 +196,26 @@ export function PlacedFallback({
       </span>
     );
   }
-  if (!placed.fallback) return null;
+  // Beside a link the mobile app opens, the console page is a second way in.
+  const web = showWeb ? placed.web : undefined;
+  if (!placed.fallback && !web) return null;
   return (
-    <a
-      href={placed.fallback.href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={FALLBACK_CLASS}
-    >
-      {placed.fallback.label}
-    </a>
+    <>
+      {placed.fallback && (
+        <a
+          href={placed.fallback.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={FALLBACK_CLASS}
+        >
+          {placed.fallback.label}
+        </a>
+      )}
+      {web && (
+        <a href={web.href} className={FALLBACK_CLASS}>
+          {web.label}
+        </a>
+      )}
+    </>
   );
 }

@@ -68,7 +68,8 @@ describe("renderSkillForDoor", () => {
     const out = renderSkillForDoor(ladder, "cp-connector");
     expect(out).toContain("`pod__define_role`");
     expect(out).toContain("`pod__create_workspace`");
-    expect(out).toContain("`synap_create_view†`");
+    // create_view reached the claude.ai connector (pod__create_view, 711e754c5).
+    expect(out).toContain("`pod__create_view`");
     expect(out).toContain("**Door note (claude.ai Synap connector):**");
   });
 

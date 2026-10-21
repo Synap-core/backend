@@ -94,7 +94,11 @@ describe("the union does not widen an access floor", () => {
   it("authoredByUser has NO workspace-membership term", () => {
     const body = src.slice(
       src.indexOf("export function authoredByUser("),
-      src.indexOf("export async function getAgentFocusWorkspaceId")
+      // up to the next export (focus-scope helpers now follow it, a70a01e1b)
+      src.indexOf(
+        "\nexport ",
+        src.indexOf("export function authoredByUser(") + 1
+      )
     );
     expect(body).not.toContain("userVisibleWhere");
     expect(body).not.toContain("workspaceMembers");

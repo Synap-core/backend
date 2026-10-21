@@ -269,3 +269,11 @@
         format json
     }
 }
+
+# ─── The pod's previous names, while it moves ─────────────────────────────────
+# When the Control Plane moves a pod to new names, SYNAP_LEGACY_DOMAIN and
+# SYNAP_LEGACY_POD_ADMIN_DOMAIN (deploy/.env) name the old pair for the move
+# window. caddy-entrypoint.sh writes one 308-only block per old name here at
+# container start (nothing when neither is set). See that script.
+# ─────────────────────────────────────────────────────────────────────────────
+import /etc/caddy/synap.d/*.caddy

@@ -155,17 +155,11 @@ vi.mock("../../utils/permission-check.js", async () => {
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
-  documents,
-  documentVersions,
-  focusSessions,
-  artifacts,
-  governanceRules,
-} from "@synap/database/schema";
-import {
   upsertSessionDocumentSection,
   readSessionDocument,
 } from "./upsert-section.js";
 import { applyApprovedDocumentPatch } from "../document-patch/apply-document-patch.js";
+import { allSchemaTables } from "../../__tests__/pglite-ddl.js";
 import { ensureSessionNarrativeRule } from "./ensure-narrative-rule.js";
 import { SESSION_DOCUMENT_LABEL } from "./session-document.js";
 
@@ -247,15 +241,9 @@ async function storedContent(documentId: string): Promise<string> {
 }
 
 beforeAll(async () => {
-  for (const table of [
-    documents,
-    documentVersions,
-    focusSessions,
-    artifacts,
-    governanceRules,
-  ]) {
-    await h.client!.exec(ddlFor(table as PgTable));
-  }
+  // Every schema table: the governed write path reads governance rules, the
+  // agent's class (`users`) and more; a hand-picked list rots on the next read.
+  for (const table of allSchemaTables()) await h.client!.exec(ddlFor(table));
 });
 
 beforeEach(async () => {
