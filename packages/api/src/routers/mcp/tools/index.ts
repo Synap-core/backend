@@ -5471,8 +5471,8 @@ export const tools = {
             import("../../../services/capability-briefs/resolve-skill-door.js"),
             import("../../../services/capability-briefs/door-tool-render.js"),
           ]);
-        const door = await resolveSkillDoor("mcp", agentUserId);
-        const body = door ? renderSkillForDoor(content, door) : content;
+        const door = await resolveSkillDoor(agentUserId);
+        const body = renderSkillForDoor(content, door);
         // A skill whose teaching uses a group unlocks it (after the body
         // resolved — the teaching is what the caller asked for).
         const unlock = await unlockToolGroupsForSkill(

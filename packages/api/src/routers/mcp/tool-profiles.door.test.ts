@@ -21,7 +21,7 @@ const skills = vi.hoisted(() => ({
 }));
 vi.mock("../../services/capability-briefs/load-skill.js", () => skills);
 vi.mock("../../services/capability-briefs/resolve-skill-door.js", () => ({
-  resolveSkillDoor: vi.fn(async () => null),
+  resolveSkillDoor: vi.fn(async () => "pod-mcp"),
 }));
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();

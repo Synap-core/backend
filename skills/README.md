@@ -71,7 +71,7 @@ Each skill is portable and works unchanged in:
 - **Any agent that reads skill folders** — drop into its skill directory; env vars pick up the pod URL and key
 - **Claude Code** — install to `~/.claude/skills/synap/`
 - **Claude Desktop** — does NOT read local skill folders. Skills in Claude Desktop sync from claude.ai — upload the three skill directories there (Settings → Skills → Upload). Claude Desktop CAN still use the pod via an MCP bridge — see `synap-cli/src/lib/targets.ts` `installClaudeDesktop` for the stdio-bridge config.
-- **Raycast** — the Raycast extension is a separate package with its own tool bindings; it reads these skills as context
+- **Raycast** — Raycast AI connects to the pod's `/mcp` as an HTTP MCP server (`synap connect --target=raycast`) and reads these skills through `synap_load_skill`, like any MCP client
 
 The install metadata (required env, capabilities) is namespaced under `metadata.synap`, so consumers that don't recognize it ignore it cleanly.
 

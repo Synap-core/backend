@@ -1,8 +1,11 @@
 /**
- * Hub REST skill doors render tool names for Raycast — through the REAL routes
- * (`GET /agent-skills/by-slug/:slug`, `GET /briefs`), the REAL door resolver and
- * the REAL renderer. Mocked: the database boundary (skill row + the acting
- * agent's `users.agentType`) and, for briefs, the composer's output text.
+ * Hub REST skill doors serve the SOURCE text to every caller — through the REAL
+ * routes (`GET /agent-skills/by-slug/:slug`, `GET /briefs`). Until 2026-10-21 a
+ * `raycast` agent got tool names rewritten for the Raycast extension's own AI
+ * tools; those tools were retired (decision B1) and Raycast AI now reads the
+ * pod's `/mcp`, whose `synap_load_skill` renders for its door. A Raycast REST
+ * caller is now a plain REST caller. Mocked: the database boundary (skill row +
+ * the acting agent's `users.agentType`) and, for briefs, the composer's text.
  */
 
 import { OpenAPIHono } from "@hono/zod-openapi";
@@ -80,20 +83,17 @@ beforeEach(() => {
   h.agentType = null;
 });
 
-describe("GET /agent-skills/by-slug/:slug door rendering", () => {
-  it("a Raycast agent reads Raycast tool names", async () => {
+describe("GET /agent-skills/by-slug/:slug serves the source text", () => {
+  it("a raycast agent (the extension's native commands) reads pod names", async () => {
     h.agentType = "raycast";
     const res = await makeApp(AGENT).request(
       "/agent-skills/by-slug/system%2Fsynap%2Fescalation-ladder"
     );
     expect(res.status).toBe(200);
-    const body = ((await res.json()) as { body: string }).body;
-    expect(body).toBe(
-      "Call `define-kind` after `list-profiles`; then `load-skill`."
-    );
+    expect(((await res.json()) as { body: string }).body).toBe(BODY);
   });
 
-  it("a non-Raycast REST caller (IS, CLI) gets the source text", async () => {
+  it("any other REST caller (IS, CLI) gets the source text", async () => {
     h.agentType = "claude-code";
     const res = await makeApp(AGENT).request(
       "/agent-skills/by-slug/system%2Fsynap%2Fescalation-ladder"
@@ -102,14 +102,14 @@ describe("GET /agent-skills/by-slug/:slug door rendering", () => {
   });
 });
 
-describe("GET /briefs door rendering", () => {
-  it("a Raycast agent's briefs name Raycast tools", async () => {
+describe("GET /briefs serves the source text", () => {
+  it("a raycast agent's briefs keep pod tool names", async () => {
     h.agentType = "raycast";
     const res = await makeApp(AGENT).request("/briefs?tools=synap_define_kind");
     expect(res.status).toBe(200);
     const { briefs } = (await res.json()) as { briefs: Record<string, string> };
     expect(briefs.synap_define_kind).toBe(
-      "Teaching: load the full body with `load-skill`."
+      "Teaching: load the full body with `synap_load_skill`."
     );
   });
 
