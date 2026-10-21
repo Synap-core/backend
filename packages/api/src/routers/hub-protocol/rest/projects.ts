@@ -117,6 +117,8 @@ const UpdateProjectSchema = z.object({
   colorSlot: z.number().int().min(1).max(12).nullable().optional(),
   /** The place's mark (0328). `null` clears it (parity with tRPC). */
   icon: ProjectIconSchema,
+  /** SAMPLE (demo) data (0347) — parity with tRPC `projects.update`. */
+  sample: z.boolean().optional(),
   /** Rebind the subject entity; `null` unbinds (parity with tRPC). */
   subjectEntityId: z.string().uuid().nullable().optional(),
   /**

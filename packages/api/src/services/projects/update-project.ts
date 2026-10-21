@@ -62,6 +62,11 @@ export interface ProjectPatch {
   colorSlot?: number | null;
   /** One emoji or `glyph:<lucide-name>` (0328). `null` clears it. */
   icon?: string | null;
+  /**
+   * Mark the project as SAMPLE (demo) data (0347): its records leave every
+   * listing (`listableEntityWhere`) and fire only automations scoped to it.
+   */
+  sample?: boolean;
   /** `null` unbinds the subject; omitted = untouched. */
   subjectEntityId?: string | null;
   /** D6: move the project's HOME workspace. */
@@ -131,6 +136,7 @@ export async function updateProjectGoverned(
     ...(input.targetDate !== undefined ? { targetDate: input.targetDate } : {}),
     ...(input.colorSlot !== undefined ? { colorSlot: input.colorSlot } : {}),
     ...(input.icon !== undefined ? { icon: input.icon } : {}),
+    ...(input.sample !== undefined ? { sample: input.sample } : {}),
     ...(input.subjectEntityId !== undefined
       ? { subjectEntityId: input.subjectEntityId }
       : {}),

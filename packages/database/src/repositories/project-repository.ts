@@ -76,6 +76,8 @@ export interface UpdateProjectInput {
   colorSlot?: number | null;
   /** One emoji or `glyph:<lucide-name>` (0328). `null` clears it. */
   icon?: string | null;
+  /** A sample (demo) project (0347) — its records leave every listing. */
+  sample?: boolean;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   /**
@@ -229,6 +231,8 @@ export class ProjectRepository extends BaseRepository<
         colorSlot: data.colorSlot,
         // Same two-state contract: `undefined` untouched, `null` clears.
         icon: data.icon,
+        // `undefined` untouched (Drizzle skips it); never nullable.
+        sample: data.sample,
         // D6 home change — `undefined` is skipped by Drizzle (untouched).
         workspaceId: data.workspaceId,
         settings: data.settings,
