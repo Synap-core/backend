@@ -1,5 +1,5 @@
 -- 0184_cp_catalog_cache.sql
--- CP Catalog Cache (Wave 3a — CAPABILITY-MARKETPLACE-PLAN.md P2.4-B): a
+-- CP Catalog Cache (Wave 3a — CAPABILITY-MARKETPLACE-PLAN (team pod) P2.4-B): a
 -- pod-local stale-while-revalidate cache of catalog-provider entries across all
 -- four marketplace kinds (capability | automation | template | cell). Additive:
 -- capability_template_cache (0155) stays in place unchanged; a later cleanup

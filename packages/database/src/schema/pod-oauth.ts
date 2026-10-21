@@ -8,14 +8,17 @@
  * separable in the data by the agent type they mint (`claude-web` vs
  * `claude-web-direct`).
  *
- * TWO tables, both pod-local:
+ * THREE tables, all pod-local:
  *
- *   oauth_clients              — RFC 7591 dynamically-registered clients. Every
- *                                row is a PUBLIC client (no secret): claude.ai
- *                                registers per connection and authenticates the
- *                                code exchange with PKCE alone.
+ *   oauth_clients              — PUBLIC clients (no secret; PKCE alone
+ *                                authenticates the code exchange): RFC 7591
+ *                                dynamically-registered ones (claude.ai
+ *                                registers per connection) and cached Client
+ *                                ID Metadata Documents (pod apps, 0338).
  *   oauth_authorization_codes  — short-lived, single-use authorization codes
  *                                bound to a PKCE challenge.
+ *   oauth_refresh_tokens       — a pod app's rotating, single-use refresh
+ *                                tokens (0339); MCP (DCR) clients get none.
  *
  * SECURITY: like `mcp_connect_codes`, only a sha256 HASH of the authorization
  * code is stored (`code_hash` PK, the same lookup-hash pattern as
@@ -29,7 +32,15 @@
  * and only bearer-token model.
  */
 
-import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  timestamp,
+  index,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
+import { apps } from "./apps.js";
 
 export const oauthClients = pgTable("oauth_clients", {
   // RFC 7591 §3.2.1 `client_id`. Generated (`dcr_<random>`), never client-chosen.
@@ -50,9 +61,43 @@ export const oauthClients = pgTable("oauth_clients", {
   // requested scopes with this list.
   scopes: text("scopes").array().notNull().default([]),
 
+  // When the pod first saw this client (DCR: registration; CIMD: first fetch).
   createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
     .defaultNow()
     .notNull(),
+
+  // ── Client ID Metadata Documents (0338, spec 17 §6.1) ──────────────────────
+  //
+  // 'dcr'  — `client_id` = `dcr_<random>`, registered through POST /register.
+  // 'cimd' — `client_id` = the https URL of the app's own metadata document;
+  //          the row is a CACHE of that document, refreshed by
+  //          `routers/oauth/client-metadata.ts`, never written by a client.
+  clientKind: text("client_kind")
+    .$type<"dcr" | "cimd">()
+    .notNull()
+    .default("dcr"),
+  // Same origin as `client_id`, checked before caching. NULL for DCR rows.
+  clientUri: text("client_uri"),
+  initiateLoginUri: text("initiate_login_uri"),
+  // The grant-grammar permissions the document declares (`synap_requests`).
+  requestedPermissions: text("requested_permissions")
+    .array()
+    .notNull()
+    .default([]),
+  metadataFetchedAt: timestamp("metadata_fetched_at", {
+    mode: "date",
+    withTimezone: true,
+  }),
+  // Fresh until then: the document's Cache-Control, floored 5 min, capped 24 h.
+  metadataExpiresAt: timestamp("metadata_expires_at", {
+    mode: "date",
+    withTimezone: true,
+  }),
+  metadataSha256: text("metadata_sha256"),
+  // The workspace templates the document declares (`synap_templates`, Contract
+  // B slugs, 0338b): the consent screen offers to create a space from one when
+  // the person has none to give the app. Empty for DCR rows.
+  requestedTemplates: text("requested_templates").array().notNull().default([]),
 });
 
 export const oauthAuthorizationCodes = pgTable(
@@ -80,6 +125,15 @@ export const oauthAuthorizationCodes = pgTable(
     // flow, so the column always holds the base64url sha256 challenge.
     codeChallenge: text("code_challenge").notNull(),
 
+    // RFC 8707 resource the authorization was for (`<issuer>/mcp` or
+    // `<issuer>/api/hub`), or NULL when the client named none (0338). /token
+    // refuses a `resource` that differs from it.
+    resource: text("resource"),
+
+    // The approved `apps` row (mode 'oauth') a pod app's code redeems to:
+    // /token mints THAT app's key (0338b). NULL for an MCP (DCR) client.
+    appId: uuid("app_id").references(() => apps.id, { onDelete: "cascade" }),
+
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -100,5 +154,59 @@ export const oauthAuthorizationCodes = pgTable(
     expiresAtIdx: index("oauth_authorization_codes_expires_at_idx").on(
       table.expiresAt
     ),
+  })
+);
+
+/**
+ * A pod app's refresh tokens (0339, spec 17 §6.6, F5): only sha256(token) is
+ * stored, like a code. Each one is SINGLE-USE: redeeming it (`last_used_at`,
+ * set atomically) mints a new access key and a successor in the same
+ * `family_id`, pointed at by `replaced_by`. A token presented again after its
+ * use is a reuse (RFC 9700 §4.14.2): the whole family is revoked, with the
+ * connection's live access key. Idle expiry: each token lives 30 d from its
+ * issue, so a connection used within every 30 days lives on (no absolute cap).
+ *
+ * `revoked_at` means KILLED (reuse, /revoke, a newer consent, the app revoked),
+ * never "used"; a used token keeps its row until it expires, so a late replay
+ * is still recognised as one. Logic: `routers/oauth/refresh.ts` (api).
+ */
+export const oauthRefreshTokens = pgTable(
+  "oauth_refresh_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // sha256(rawToken) — the only representation of the token we store.
+    tokenHash: text("token_hash").notNull(),
+    // Every token rotated from one authorization code shares it.
+    familyId: uuid("family_id").notNull(),
+    // The pod app (CIMD client_id) it was issued to; /token refuses another.
+    clientId: text("client_id").notNull(),
+    // The HUMAN whose connection this is (the key's `linkedUserId`).
+    userId: text("user_id").notNull(),
+    // The connection (`apps` row, mode 'oauth'); deleting it deletes these.
+    appId: uuid("app_id")
+      .notNull()
+      .references(() => apps.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", {
+      mode: "date",
+      withTimezone: true,
+    }).notNull(),
+    // Single-use marker: set when the token was redeemed. NULL = unused.
+    lastUsedAt: timestamp("last_used_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
+    revokedAt: timestamp("revoked_at", { mode: "date", withTimezone: true }),
+    // The successor minted when this token was redeemed.
+    replacedBy: uuid("replaced_by"),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    tokenHashUnique: uniqueIndex("oauth_refresh_tokens_token_hash_uidx").on(
+      table.tokenHash
+    ),
+    appIdx: index("oauth_refresh_tokens_app_idx").on(table.appId),
+    familyIdx: index("oauth_refresh_tokens_family_idx").on(table.familyId),
   })
 );

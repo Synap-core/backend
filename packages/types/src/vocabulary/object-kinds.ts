@@ -280,7 +280,7 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     glyph: "⊞",
   },
   /* The kind stays `cell` — that is the engine's word and the DB's. The LABEL is
-     "Card" because that is the only word a user may see: NORTH-STAR.md §5 —
+     "Card" because that is the only word a user may see: NORTH-STAR (team pod) §5 —
      "User-facing word is Card. 'Cell' is the internal engine term — never shown
      to users." This row said "Cell", so every surface resolving through the
      vocabulary printed "Install cell" / "Cell installed" at users. Fixing it

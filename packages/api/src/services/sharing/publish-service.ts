@@ -213,7 +213,8 @@ export async function buildPublishedSnapshot(
   return projectPublishedProperties(raw);
 }
 
-async function latestCheckpointId(
+/** The latest checkpoint of a record's document: what a publish pins. */
+export async function latestCheckpointId(
   database: Db,
   documentId: string | null
 ): Promise<string | null> {

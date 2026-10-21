@@ -1,6 +1,6 @@
 -- 0220: kinds are POD-WIDE by default
 --
--- Doctrine (APP-DOCK-MENTAL-MODEL-PLAN.md §1b, ratified 2026-08-01):
+-- Doctrine (APP-DOCK-MENTAL-MODEL-PLAN (team pod) §1b, ratified 2026-08-01):
 --
 --   KIND = POD-WIDE.  The entity's identity — one `person`, one `company`,
 --                     shared by the whole pod.

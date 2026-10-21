@@ -58,7 +58,7 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
-import { type AskAnswerValue } from "@synap-core/types/ask";
+import { AskAnswerValueSchema, AskSchema } from "@synap-core/types/ask";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
 import { withoutServerOwnedSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
@@ -439,12 +439,12 @@ const BlockOutputBodySchema = z.object({
   ref: outputRefWireSchema.nullable().optional(),
   /**
    * HOW the person can answer (confirm / choose / form / act / provide) — the
-   * slot wire's own `ask` schema (`AskSchema` at the parse), the very one the
-   * tRPC `blockOutput` uses. `null` clears; omitted leaves it. The service
-   * trusts this door to have parsed it, so a bare `z.custom<Ask>()` here let
-   * an unknown mode or a `javascript:` act url reach storage.
+   * slot wire's own `ask` schema, not a copy. `null` clears; omitted leaves it.
+   * Never `z.custom<Ask>()`: it validates nothing and zod-to-openapi cannot
+   * express it, so the whole `/openapi.json` answered 500
+   * (`focus-sessions.ask-wire.test.ts`).
    */
-  ask: expectedOutputWireSchema.shape.ask,
+  ask: AskSchema.nullable().optional(),
 });
 
 const UnblockOutputBodySchema = z.object({
@@ -456,8 +456,9 @@ const AnswerOutputBodySchema = z
   .object({
     expectedLabel: z.string().min(1).max(500),
     text: z.string().max(SLOT_ANSWER_TEXT_MAX).optional(),
-    // Explicit type annotation preserves discriminated union inference.
-    value: z.custom<AskAnswerValue>().optional(),
+    // The tRPC twin's schema (`focusSessions.answerOutput`): parsed and
+    // redacted at the door, never `z.custom` (see `ask` above).
+    value: AskAnswerValueSchema.optional(),
     askFingerprint: z.string().min(1).max(64).optional(),
     // A secret answer: the agent `provideOptions` named as the reader.
     expectedGranteeId: z.string().min(1).max(200).optional(),

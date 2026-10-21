@@ -53,6 +53,7 @@ import {
 } from "../services/profiles/renderer-slots.js";
 import { rendererRefScopeViolation } from "../services/profiles/renderer-ref-scope.js";
 import { auditLog } from "../utils/audit-log.js";
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { assertProfileSchemaWrite } from "../utils/profile-schema-write-access.js";
 import { proposeProfileRetire } from "../services/pod-hygiene/retire-profile.js";
 import { randomUUID } from "crypto";
@@ -94,7 +95,7 @@ const ProfileScopeSchema = z.enum(["system", "shared", "workspace", "user"]);
  *   - file path   → 'iframe-srcdoc' | 'external-app'
  *   - 'url' is a passthrough used by some link-style surfaces
  *
- * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+ * Spec: synap-app/docs/architecture/profile-renderer.md
  */
 const RendererRefSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -421,6 +422,15 @@ export const profilesRouter = router({
           existing.scope === ProfileScope.SHARED ||
           input.scope === "shared"
         ) {
+          // Re-declaring an existing kind opens it to THIS workspace: the
+          // key's grant must allow defining a kind here — the workspace the
+          // access row lands in — before it is written (S7).
+          await assertKeyMayWrite({
+            subjectType: "profile",
+            action: "create",
+            workspaceId: ctx.workspaceId,
+            data: { id: existing.id },
+          });
           await profileRepo.grantAccess(existing.id, ctx.workspaceId);
         }
         // Slug-idempotent WIDEN: define_role on an existing role merges
@@ -472,6 +482,9 @@ export const profilesRouter = router({
             userId: ctx.userId,
             agentUserId: input.agentUserId,
             workspaceId: ctx.workspaceId,
+            // The update lands on the EXISTING profile: the key's grant is
+            // checked on its home (a system / unowned profile = pod scope).
+            grantWorkspaceId: existing.workspaceId ?? null,
             subjectType: "profile",
             action: "create",
             source: input.source,
@@ -602,6 +615,9 @@ export const profilesRouter = router({
             userId: ctx.userId,
             agentUserId: input.agentUserId,
             workspaceId: ctx.workspaceId,
+            // A shared role is one hat pod-wide: sharing / widening it is a
+            // pod-scope write for the key's grant (S7, D2).
+            grantWorkspaceId: null,
             subjectType: "profile",
             action: "create",
             source: input.source,
@@ -781,11 +797,30 @@ export const profilesRouter = router({
         },
       });
 
+      // A shared kind is also opened to every extra workspace named: the
+      // key's grant must allow defining a kind in each (S7).
+      if (input.scope === "shared") {
+        for (const wsId of input.allowedWorkspaceIds ?? []) {
+          await assertKeyMayWrite({
+            subjectType: "profile",
+            action: "create",
+            workspaceId: wsId,
+            data: { id: profileId },
+          });
+        }
+      }
+
       // 2. Permission check (may create proposal)
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: ctx.workspaceId,
+        // Where the profile LANDS for the key's grant: a system or per-user
+        // profile is owned by no workspace (pod scope), not the caller's lens.
+        grantWorkspaceId:
+          input.scope === "system" || input.scope === "user"
+            ? null
+            : ctx.workspaceId,
         subjectType: "profile",
         action: "create",
         source: input.source,
@@ -1769,7 +1804,7 @@ export const profilesRouter = router({
    * Additive key: existing consumers that read `result[contentKind]` are
    * unaffected.
    *
-   * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+   * Spec: synap-app/docs/architecture/profile-renderer.md
    */
   getEffectiveRenderers: podProcedure
     .input(

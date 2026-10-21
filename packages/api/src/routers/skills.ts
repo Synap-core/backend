@@ -32,6 +32,10 @@ import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import { alwaysSkillBudgetWarningsOnEdit } from "../services/skills/template-skills.js";
 import { ruleNotExpiredWhere } from "../services/rules/expiry.js";
 import { ruleSentenceSchema } from "../services/rules/sentence-schema.js";
+import {
+  ruleEditFieldsSchema,
+  ruleEditToGovernedInput,
+} from "../services/rules/update-input.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import { safeExternalFetch } from "@synap/shared-utils";
 import {
@@ -931,38 +935,10 @@ export const skillsRouter = router({
    * rule to report a clause about.
    */
   updateRule: protectedProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-        intent: z.string().min(1),
-        scope: z.object({
-          kind: z.enum(["pod", "workspace", "user"]),
-          workspaceId: z.string().uuid().optional(),
-          projectId: z.string().uuid().optional(),
-        }),
-        /**
-         * THREE states, deliberately: an ISO instant SETS the review date,
-         * `null` CLEARS it, and ABSENT leaves it alone. `renewRule` already
-         * distinguishes set-from-clear for the same reason — they are different
-         * acts and must be spelled differently — and this door adds the third
-         * because an edit that only changes the sentence must not silently
-         * strip an expiry the author never mentioned.
-         */
-        expiresAt: z.string().datetime({ offset: true }).nullish(),
-        factSkillId: z.string().uuid().optional(),
-        automationIds: z.array(z.string().uuid()).default([]),
-        /**
-         * THREE states again: a sentence REPLACES the behaviour, `null` REMOVES
-         * it, ABSENT leaves the stored one alone (and it is recompiled). The
-         * middle state has to be spellable — without it, "make this rule
-         * prose-only" would be unexpressible; without the third, editing the
-         * prose alone would retire the automation.
-         */
-        sentence: ruleSentenceSchema.nullish(),
-        /** `true` keeps/returns the rule to draft; `false` ACTIVATES it. */
-        draft: z.boolean().default(false),
-      })
-    )
+    // The edit's fields are declared ONCE (`services/rules/update-input.ts`) and
+    // shared with Hub REST `PATCH /rules/:id` — pinned by identity in
+    // `update-input.parity.test.ts`. Only `id` is this door's own.
+    .input(ruleEditFieldsSchema.extend({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const { updateRuleGoverned } =
@@ -980,19 +956,7 @@ export const skillsRouter = router({
         // the stored row's own workspace membership, so naming a workspace you
         // can see never grants a rule you cannot.
         workspaceId: ctx.workspaceId ?? input.scope.workspaceId ?? null,
-        intent: input.intent,
-        scope: input.scope,
-        // `undefined` (absent) and `null` (clear) must both survive the hop —
-        // a `?? undefined` here would turn "clear the date" into "leave it".
-        ...(input.expiresAt !== undefined
-          ? { expiresAt: input.expiresAt }
-          : {}),
-        ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
-        automationIds: input.automationIds,
-        // `undefined` (leave alone) and `null` (remove) must BOTH survive the
-        // hop — a truthiness check here would collapse them into one.
-        ...(input.sentence !== undefined ? { sentence: input.sentence } : {}),
-        ...(input.draft ? { draft: true } : {}),
+        ...ruleEditToGovernedInput(input),
         auditSource: "rules.updateRule",
       });
       if (result.status === "not_found") {

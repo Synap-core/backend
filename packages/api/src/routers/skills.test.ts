@@ -1,7 +1,7 @@
 /**
  * skills.ts — insertSkillGoverned unit tests
  *
- * Covers the governance fix (D4, CAPABILITY-MARKETPLACE-PLAN.md Wave 1): every
+ * Covers the governance fix (D4, CAPABILITY-MARKETPLACE-PLAN (team pod) Wave 1): every
  * skill-creation door (`create`, `installFromUrl`, Hub Protocol
  * `/agent-skills/import`) must persist through this ONE governed insert path —
  * never a direct `db.insert(skills)` with a hardcoded `approved: true`.

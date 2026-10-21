@@ -45,7 +45,7 @@ export interface AgentMetadata {
 	autoApproveFor?: string[];
 	activePersonality?: string;
 	/**
-	 * Runtime, sticky workspace focus (WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md,
+	 * Runtime, sticky workspace focus (docs/decisions/agent-workspace-focus.md,
 	 * Layer 2, advisory slice). Settable at provisioning OR at runtime via the
 	 * `synap_set_workspace_focus` MCP tool; cleared by unsetting the field.
 	 * Read LIVE at request time — no migration, no key-stamping. Read live, when
@@ -1185,7 +1185,7 @@ export interface WorkspaceSettings {
 	 *     "task":    { list:   { kind: "view", viewId: "uuid-task-kanban" } }
 	 *   }
 	 *
-	 * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+	 * Spec: Synap-core/app-bases docs/architecture/profile-renderer.md
 	 */
 	profileRenderers?: Record<string, {
 		list?: Record<string, unknown>;
@@ -6644,7 +6644,7 @@ export type EventAction = (typeof EVENT_ACTIONS)[number];
  *
  * A per-proposal escape hatch that turns a one-off approval decision into a
  * standing `governance_rules` row (Governance Convergence Plan, Phase A — see
- * `synap-backend/GOVERNANCE-CONVERGENCE-PLAN.md`). Given the handful of
+ * `docs/decisions/agent-governance.md`). Given the handful of
  * fields a proposal can resolve (a capability target, an action event key, a
  * profile slug, an authoring agent), this computes WHICH of the five
  * granularities — capability / action / profile / agent / global — are
@@ -12233,8 +12233,45 @@ export interface DeviceRequestView {
 	/** The reach the computer gets — the preset's name, shown in Details. */
 	accessName: string;
 }
+/** One permission a pod app asks for, and the spaces it may be given in. */
+export interface OAuthAppOfferItem {
+	permission: string;
+	workspaces: Array<{
+		workspaceId: string;
+		workspaceName: string;
+	}>;
+}
+/**
+ * What a POD APP (CIMD client) is shown as on the consent screen (spec 17
+ * §9.1). Its identity is its DOMAIN (the client_id host), not its name.
+ */
+export interface OAuthAppConsent {
+	/** The client_id host — the headline. */
+	domain: string;
+	/** "Synap app" (exact first-party origin, `isSynapApp`) vs "Unverified app". */
+	verified: boolean;
+	/** The document's `client_uri` (same origin as the client_id), or null. */
+	homepage: string | null;
+	/**
+	 * Each permission the app asked for AND declared, with the spaces this
+	 * person may give it in (`oauthAppOffer`). An empty list means the person
+	 * has no space to give that permission in.
+	 */
+	permissions: OAuthAppOfferItem[];
+	/** What this person approved for this app before (re-consent pre-ticks it). */
+	approved: AppApprovedRequest[];
+	/**
+	 * Workspace templates the app declared (`synap_templates`): the screen
+	 * offers to create a space from one when a permission has no space.
+	 */
+	templates: string[];
+	/** Scopes it asked for that a pod app is never given (`mcp.*`), shown as dropped. */
+	ignoredScopes: string[];
+}
 export interface OAuthConsentContext {
 	clientId: string;
+	/** 'dcr' — an MCP client (claude.ai); 'cimd' — a pod app. */
+	clientKind: "cimd" | "dcr";
 	/** Untrusted, attacker-chosen at registration — the UI renders it as TEXT. */
 	clientName: string;
 	redirectUri: string;
@@ -12243,6 +12280,8 @@ export interface OAuthConsentContext {
 	scopes: string[];
 	/** When the client registered itself with this pod (DCR) — a fresh one is worth a second look. */
 	registeredAt: Date;
+	/** Present for a pod app only. */
+	app: OAuthAppConsent | null;
 }
 /**
  * API Keys Router
@@ -14004,6 +14043,12 @@ export interface ShareListing {
 		live: boolean;
 		/** The snapshot's keys (never its values). */
 		publishedFields: string[];
+		/**
+		 * The site this row publishes the record into (0336), or null for the
+		 * record's standalone publication. A member row has no token of its own:
+		 * it is live through its site.
+		 */
+		siteShareId: string | null;
 		createdAt: Date;
 		createdBy: string;
 	}>;
@@ -14717,6 +14762,32 @@ export interface PublishSiteResult {
 	/** The keys the metadata snapshot holds. */
 	metadataFields: string[];
 }
+/** One record a batch did not publish, and why (the owner's door: ids are fine). */
+export interface SiteSkip {
+	entityId: string;
+	/** `SITE_SLUG_TAKEN`, or the refusal's tRPC code (FORBIDDEN, BAD_REQUEST…). */
+	code: string;
+	reason: string;
+}
+export interface PublishedMember {
+	entityId: string;
+	collection: string;
+	publicId: string;
+	slug: string | null;
+	status: "published" | "republished";
+}
+export type PublishToSiteResult = {
+	status: "proposed";
+	proposalId: string;
+	siteId: string;
+	skipped: SiteSkip[];
+} | {
+	status: "none" | "published";
+	siteId: string;
+	published: PublishedMember[];
+	skipped: SiteSkip[];
+	rowsWritten: number;
+};
 export interface SiteStatus {
 	siteId: string;
 	projectId: string;
@@ -14732,11 +14803,35 @@ export interface SiteStatus {
 	config: SiteConfigV1;
 	/** The metadata snapshot's keys (never its values). */
 	metadataFields: string[];
-	/** Live members per configured collection (0 until C1b publishes members). */
+	/** Live members per configured collection (the manifest's own count). */
 	collections: Array<{
 		key: string;
 		count: number;
 	}>;
+	/**
+	 * One page of the site's member rows that are not revoked (published or
+	 * taken back to draft), newest member first (see {@link SiteStatusPage}).
+	 */
+	members: SiteStatusMember[];
+	/** Pass it back as `cursor` for the next page; null on the last page. */
+	membersNextCursor: string | null;
+	/** Every non-revoked member row of the site (the rows the pages walk). */
+	membersTotal: number;
+}
+/** One record of a site, as its owner sees it (internal ids are fine here). */
+export interface SiteStatusMember {
+	entityId: string;
+	/** The record's CURRENT title (owner side; the public sees the snapshot). */
+	title: string | null;
+	collection: string | null;
+	publicId: string | null;
+	slug: string | null;
+	state: string;
+	publishedAt: Date | null;
+	/** Served on the public web right now: the site is live AND the member passes every narrowing check. */
+	live: boolean;
+	/** The record changed after its snapshot: publish it again to refresh it. */
+	stale: boolean;
 }
 declare const FormConfigSchema: z.ZodObject<{
 	name: z.ZodString;
@@ -25176,6 +25271,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				state?: string | undefined;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
+				resource?: string | undefined;
 			};
 			output: OAuthConsentContext;
 			meta: object;
@@ -25190,6 +25286,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				state?: string | undefined;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
+				resource?: string | undefined;
+				approved?: {
+					permission: string;
+					workspaceId: string;
+				}[] | undefined;
 			};
 			output: {
 				redirectTo: string;
@@ -25488,7 +25589,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				logo_url: string | null;
-				mode: string;
+				mode: "oauth" | "specific";
 				approved_requests: AppApprovedRequest[] | null;
 				pending_request: {
 					proposal_id: string;
@@ -25527,7 +25628,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				logo_url: string | null;
-				mode: string;
+				mode: "oauth" | "specific";
 				approved_requests: AppApprovedRequest[] | null;
 				pending_request: {
 					proposal_id: string;
@@ -25564,7 +25665,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				logo_url: string | null;
-				mode: string;
+				mode: "oauth" | "specific";
 				approved_requests: AppApprovedRequest[] | null;
 				pending_request: {
 					proposal_id: string;
@@ -25625,7 +25726,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				logo_url: string | null;
-				mode: string;
+				mode: "oauth" | "specific";
 				approved_requests: AppApprovedRequest[] | null;
 				pending_request: {
 					proposal_id: string;
@@ -25688,7 +25789,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				logo_url: string | null;
-				mode: string;
+				mode: "oauth" | "specific";
 				approved_requests: AppApprovedRequest[] | null;
 				pending_request: {
 					proposal_id: string;
@@ -25731,7 +25832,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				logo_url: string | null;
-				mode: string;
+				mode: "oauth" | "specific";
 				approved_requests: AppApprovedRequest[] | null;
 				pending_request: {
 					proposal_id: string;
@@ -31799,6 +31900,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		publishToSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				siteId: string;
+				entityIds: string[];
+				reasoning?: string | undefined;
+			};
+			output: PublishToSiteResult;
+			meta: object;
+		}>;
+		unpublishFromSite: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				siteId: string;
+				entityIds?: string[] | undefined;
+			};
+			output: {
+				status: "none" | "unpublished";
+				siteId: string;
+				entityIds?: string[];
+			};
+			meta: object;
+		}>;
 		revokeSite: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				siteId: string;
@@ -31811,10 +31933,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 		siteStatus: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
+			input: ({
 				siteId: string;
 			} | {
 				projectId: string;
+			}) & {
+				cursor?: string | undefined;
+				limit?: number | undefined;
 			};
 			output: SiteStatus | null;
 			meta: object;
@@ -32565,13 +32690,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		updateRule: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				id: string;
 				intent: string;
 				scope: {
 					kind: "pod" | "user" | "workspace";
 					workspaceId?: string | undefined;
 					projectId?: string | undefined;
 				};
+				id: string;
 				expiresAt?: string | null | undefined;
 				factSkillId?: string | undefined;
 				automationIds?: string[] | undefined;

@@ -219,12 +219,7 @@ const SIBLING_FILES = [
     MONOREPO,
     "synap-intelligence-service/apps/intelligence-hub/src/agents/base/prompt-sections.ts"
   ),
-  join(MONOREPO, "NORTH-STAR.md"),
   join(MONOREPO, "TEMPLATE-DEV-GUIDE.md"),
-  join(
-    MONOREPO,
-    "synap-app/synap-team-docs/content/team/platform/playbooks-capability-substrate.mdx"
-  ),
   ...filesUnder(join(MONOREPO, "synap-cli/src"), /\.ts$/),
 ].filter((p) => existsSync(p));
 

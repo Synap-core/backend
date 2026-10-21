@@ -1489,7 +1489,7 @@ export function resolveImportStatusLabel(
 
 /**
  * LIBRARY marks — where one kept item (or the Library itself) stands, as the
- * word beside its mark (CAPTURE_LIBRARY_PLAN L2). Its OWN table: the light
+ * word beside its mark (capture-vs-library decision, wave L2). Its OWN table: the light
  * read's statuses (`@synap-core/types/imports` LIBRARY_READ_STATUSES) plus the
  * keep / archive / built marks. `over_budget` and `not_read` are not failures
  * — the item will be read ("Not read yet", "Over budget": read once the

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Synap-core/backend/security/policy
+    about: Do not open a public issue. Report it privately by email, as the security policy describes.
+  - name: A problem with the synap CLI (@synap-core/cli)
+    url: https://github.com/Synap-core/synap-cli/issues
+    about: The user CLI that connects computers and agents to a pod has its own repository.

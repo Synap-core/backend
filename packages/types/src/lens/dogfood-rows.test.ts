@@ -1,6 +1,6 @@
 /**
  * Lens rows from the REAL wire shapes of the 2026-10-05 dogfood on the
- * founder's pod (`.claude/work/DOGFOOD-lens.md`, home.png / home-2.png /
+ * founder's pod (`DOGFOOD-lens (team pod)`, home.png / home-2.png /
  * home-3.png). Each fixture is a signal as `signals.list({ lens: "page" })`
  * sent it; each assertion is the defect that was on screen.
  */

@@ -31,7 +31,7 @@ export interface RegisterAppInput {
   name: string;
   description?: string | null;
   logoUrl?: string | null;
-  mode?: string | null;
+  mode?: "specific" | null;
   metadata?: Record<string, unknown> | null;
 }
 
@@ -179,6 +179,12 @@ function newest(dates: Array<Date | null | undefined>): Date | null {
  */
 export const APP_PUBLIC_ID_PREFIX = "app_";
 
+/** A Postgres unique violation, whether raw or wrapped by Drizzle (`cause`). */
+function isUniqueViolation(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string } } | null;
+  return e?.code === "23505" || e?.cause?.code === "23505";
+}
+
 /** `app_<lowercased-uuid>` — the stable public id, used verbatim as `client_id`. */
 function makePublicId(): string {
   return `${APP_PUBLIC_ID_PREFIX}${randomUUID().toLowerCase()}`;
@@ -215,6 +221,10 @@ export class AppRepository {
       .from(apps)
       .where(and(eq(apps.ownerUserId, input.ownerUserId), eq(apps.name, name)))
       .limit(1);
+
+    // A pod app connection is keyed by its client id, never by name: a
+    // developer's register must not adopt (or revive) a person's consent row.
+    if (existing?.oauthClientId) throw new AppNameTakenError(name);
 
     if (existing) {
       // An upsert by NAME must not CLEAR what it was not told about. Registering
@@ -266,6 +276,74 @@ export class AppRepository {
       })
       .returning();
     return row;
+  }
+
+  /**
+   * Upsert a POD APP connection (`mode = 'oauth'`, 0338b): the row a person's
+   * consent at the pod's OAuth door makes for one app, keyed by (owner, the
+   * app's metadata-document URL) — never by name. The consent door is its one
+   * caller (`connectOAuthApp`).
+   *
+   * An existing row keeps its id, public_id, agent and name (the owner may
+   * have renamed it). A revoked or removed one is revived WITHOUT its old
+   * approval, exactly as `register` revives: the consent that follows is what
+   * gives it reach again.
+   *
+   * `name` is display text ("<client_name> (<host>)"). When the owner already
+   * uses it on another app (`apps_owner_name_unique`), the row is named after
+   * the full client id instead, which is unique per owner by the 0338b index.
+   */
+  async registerOAuth(input: {
+    ownerUserId: string;
+    oauthClientId: string;
+    name: string;
+  }): Promise<AppRecord> {
+    const find = async () => {
+      const [row] = await this.db
+        .select()
+        .from(apps)
+        .where(
+          and(
+            eq(apps.ownerUserId, input.ownerUserId),
+            eq(apps.oauthClientId, input.oauthClientId)
+          )
+        )
+        .limit(1);
+      return row;
+    };
+    const existing = await find();
+    if (existing) {
+      if (!existing.revokedAt && !existing.removedAt) return existing;
+      const [row] = await this.db
+        .update(apps)
+        .set({ revokedAt: null, removedAt: null, approvedRequests: null })
+        .where(eq(apps.id, existing.id))
+        .returning();
+      return row;
+    }
+    const name = input.name.trim();
+    for (const candidate of [name, `${name} — ${input.oauthClientId}`]) {
+      try {
+        const [row] = await this.db
+          .insert(apps)
+          .values({
+            ownerUserId: input.ownerUserId,
+            publicId: makePublicId(),
+            name: candidate,
+            mode: "oauth",
+            oauthClientId: input.oauthClientId,
+          })
+          .returning();
+        return row;
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+        // A concurrent consent for the same app made the row first.
+        const raced = await find();
+        if (raced) return raced;
+        // Otherwise the name is taken: try the next candidate.
+      }
+    }
+    throw new AppNameTakenError(name);
   }
 
   /** One app by id, or null. Does NOT check ownership — the caller floors. */

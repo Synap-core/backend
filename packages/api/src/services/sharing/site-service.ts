@@ -54,32 +54,52 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { randomUUID } from "node:crypto";
-import { getDb, and, eq, isNull } from "@synap/database";
+import { randomBytes, randomUUID } from "node:crypto";
+import { getDb, and, desc, eq, inArray, isNull } from "@synap/database";
 import {
+  entities,
   profiles,
   projects,
+  relations,
   resourceShares,
   workspaces,
 } from "@synap/database/schema";
+import { count, ne, sql } from "drizzle-orm";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { grantWriteDenial } from "../../utils/grant-write-check.js";
+import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { generateShareToken, hashToken } from "../../utils/share-token.js";
+import {
+  decodeInstantCursor,
+  encodeInstantCursor,
+  INSTANT_CURSOR_FORMAT,
+} from "../../utils/keyset-cursor.js";
 import { assertAnchorAdmin } from "./anchor-admin.js";
 import {
   resolveExposurePolicy,
   resolvePublicFields,
 } from "./exposure-policy.js";
-import { isSiteLive } from "./publication-live.js";
+import { isPublicationLive, isSiteLive } from "./publication-live.js";
 import {
-  liveMemberCounts,
+  buildPublishedSnapshot,
+  latestCheckpointId,
+} from "./publish-service.js";
+import {
   resolveSiteConfig,
   SITE_PUBLISHED_AT_SORT,
   SiteConfigV1Schema,
+  slugify,
   type SiteConfigV1,
 } from "./site-config.js";
+import {
+  liveMemberCounts,
+  liveMemberWhere,
+  openMemberWorkspaces,
+} from "./site-members.js";
 import { projectPublishedProperties } from "./public-read.js";
+import { clampSiteLimit, SITE_MAX_LIMIT } from "./public-site-read.js";
 import {
   agentOf,
   assertCanNarrow,
@@ -793,6 +813,653 @@ export async function revokeSite(
   return { status, siteId: site.id, membersRevoked: memberRows.length };
 }
 
+// ── Members: publish records into a site (C1b) ──────────────────────────────
+
+/** A batch publishes at most this many records (one proposal for an agent). */
+export const SITE_PUBLISH_MAX_RECORDS = 200;
+
+const BASE62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+/**
+ * A member's public id: `p_` + 16 base62 chars (~95 bits) from the CSPRNG,
+ * unbiased (bytes ≥ 248 are rejected). Random, never derived from an id, so
+ * it cannot be reversed. Minted once, at the member row's first insert.
+ */
+export function mintPublicId(): string {
+  let out = "p_";
+  while (out.length < 18) {
+    for (const byte of randomBytes(24)) {
+      if (byte < 248) out += BASE62[byte % 62];
+      if (out.length === 18) break;
+    }
+  }
+  return out;
+}
+
+/** 409: the slug is held by another live member of the same collection. */
+export class SiteSlugTakenError extends TRPCError {
+  readonly holder: { entityId: string; title: string | null };
+  constructor(
+    slug: string,
+    holder: { entityId: string; title: string | null }
+  ) {
+    super({
+      code: "CONFLICT",
+      message: `SITE_SLUG_TAKEN: the slug "${slug}" is already used in this collection by record ${holder.entityId}${holder.title ? ` ("${holder.title}")` : ""}. Change the record's slug field or unpublish that record first.`,
+    });
+    this.holder = holder;
+  }
+}
+
+/** One record a batch did not publish, and why (the owner's door: ids are fine). */
+export interface SiteSkip {
+  entityId: string;
+  /** `SITE_SLUG_TAKEN`, or the refusal's tRPC code (FORBIDDEN, BAD_REQUEST…). */
+  code: string;
+  reason: string;
+}
+
+function skipOf(entityId: string, err: TRPCError): SiteSkip {
+  return {
+    entityId,
+    code: err instanceof SiteSlugTakenError ? "SITE_SLUG_TAKEN" : err.code,
+    reason: err.message,
+  };
+}
+
+/** One record's validated publish into a site: what the member row will hold. */
+export interface SiteMemberPlan {
+  entityId: string;
+  /** The record's own workspace: its policy allowed it, its switch governs it. */
+  workspaceId: string;
+  documentId: string | null;
+  collection: string;
+  snapshot: Record<string, string | number | boolean>;
+  slug: string | null;
+}
+
+/** A validated, authorized batch — what the gate carries (ids) and approval re-plans. */
+export interface SitePublishPlan {
+  siteId: string;
+  projectId: string;
+  homeWorkspaceId: string;
+  members: SiteMemberPlan[];
+  skipped: SiteSkip[];
+}
+
+/** The live member row holding `slug` in a site collection, other than `entityId`. */
+async function slugHolder(
+  database: Db,
+  siteId: string,
+  collection: string,
+  slug: string,
+  entityId: string
+): Promise<{ entityId: string; title: string | null } | null> {
+  const [row] = await database
+    .select({ entityId: resourceShares.resourceId, title: entities.title })
+    .from(resourceShares)
+    .leftJoin(entities, eq(entities.id, resourceShares.resourceId))
+    .where(
+      and(
+        eq(resourceShares.siteShareId, siteId),
+        eq(resourceShares.publishedCollection, collection),
+        eq(resourceShares.publicSlug, slug),
+        eq(resourceShares.state, "published"),
+        isNull(resourceShares.revokedAt),
+        ne(resourceShares.resourceId, entityId)
+      )
+    )
+    .limit(1);
+  return row ? { entityId: row.entityId, title: row.title ?? null } : null;
+}
+
+/**
+ * Validate + authorize ONE record's publish into a site, for `userId`. Kind
+ * collections only (C1b): the record's profile IS a configured collection,
+ * it lives in a workspace the user writes, that workspace's policy publishes
+ * entities, and it is filed into the site's project. Takes the snapshot now
+ * (the record's workspace's allowlist, the W3 projector) and derives its slug.
+ */
+async function planSiteMember(
+  database: Db,
+  userId: string,
+  site: { id: string; projectId: string; config: SiteConfigV1 },
+  entityId: string,
+  settingsOf: (workspaceId: string) => Promise<unknown>
+): Promise<SiteMemberPlan> {
+  const [record] = await database
+    .select({
+      id: entities.id,
+      workspaceId: entities.workspaceId,
+      ownerId: entities.userId,
+      documentId: entities.documentId,
+      profileSlug: profiles.slug,
+    })
+    .from(entities)
+    .leftJoin(profiles, eq(profiles.id, entities.profileId))
+    .where(and(eq(entities.id, entityId), isNull(entities.deletedAt)))
+    .limit(1);
+  if (!record) throw notFound("Entity");
+  // Authorize on the record BEFORE saying anything else about it.
+  await assertWorkspaceWrite(database, userId, {
+    workspaceId: record.workspaceId,
+    ownerId: record.ownerId,
+  });
+  if (!record.workspaceId) {
+    throw badRequest(
+      "A pod-wide record has no workspace policy to publish it under; it can join a site only through a role collection (not available yet)."
+    );
+  }
+  const collection = record.profileSlug;
+  const collectionConfig =
+    collection && Object.hasOwn(site.config.collections, collection)
+      ? site.config.collections[collection]
+      : undefined;
+  if (!collection || !collectionConfig) {
+    throw badRequest(
+      `This record's kind${collection ? ` ("${collection}")` : ""} is not a collection of this site; add it to the site's configuration first.`
+    );
+  }
+  const [edge] = await database
+    .select({ id: relations.id })
+    .from(relations)
+    .where(
+      and(
+        eq(relations.type, BELONGS_TO_PROJECT),
+        eq(relations.sourceEntityId, record.id),
+        eq(relations.targetEntityId, site.projectId)
+      )
+    )
+    .limit(1);
+  if (!edge) {
+    throw badRequest(
+      "This record is not filed into the site's project; file it there first."
+    );
+  }
+  const settings = await settingsOf(record.workspaceId);
+  if (resolveExposurePolicy(settings).entity.public.read !== "direct") {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "This record's workspace exposure policy does not allow publishing an entity.",
+    });
+  }
+  const snapshot = await buildPublishedSnapshot(database, {
+    requestedKind: "entity",
+    entityId: record.id,
+    workspaceId: record.workspaceId,
+    documentId: record.documentId ?? null,
+    fields: resolvePublicFields(settings, "entity"),
+  });
+  const slugField = collectionConfig.slugField;
+  const slug = slugField ? slugify(snapshot[slugField]) : null;
+  if (slug) {
+    const holder = await slugHolder(
+      database,
+      site.id,
+      collection,
+      slug,
+      record.id
+    );
+    if (holder) throw new SiteSlugTakenError(slug, holder);
+  }
+  return {
+    entityId: record.id,
+    workspaceId: record.workspaceId,
+    documentId: record.documentId ?? null,
+    collection,
+    snapshot,
+    slug,
+  };
+}
+
+/**
+ * Validate + authorize a BATCH publish into a site for `userId` (the human it
+ * is for). The site-level checks (not revoked, project alive, the user
+ * administers the project and writes the home space, the home policy still
+ * publishes projects) refuse the whole batch; each record is then planned on
+ * its own and a refused one is reported in `skipped` — or, `strict`, thrown
+ * (a single-record publish answers like the W3 door: 409, 403…). Re-run
+ * verbatim by the approval executor on the proposal's subject.
+ */
+export async function planSitePublish(
+  database: Db,
+  userId: string,
+  req: { siteId: string; entityIds: readonly string[] },
+  opts: { strict?: boolean } = {}
+): Promise<SitePublishPlan> {
+  const ids = [...new Set(req.entityIds)];
+  if (ids.length === 0 || ids.length > SITE_PUBLISH_MAX_RECORDS) {
+    throw badRequest(
+      `Publish between 1 and ${SITE_PUBLISH_MAX_RECORDS} records at a time.`
+    );
+  }
+  const { site, project, home } = await loadSiteToWiden(
+    database,
+    userId,
+    req.siteId
+  );
+  assertSitePolicy(await loadSettings(database, home));
+  const config = resolveSiteConfig(site.siteConfig);
+  const settingsCache = new Map<string, Promise<unknown>>();
+  const settingsOf = (workspaceId: string) => {
+    let hit = settingsCache.get(workspaceId);
+    if (!hit) {
+      hit = loadSettings(database, workspaceId);
+      settingsCache.set(workspaceId, hit);
+    }
+    return hit;
+  };
+  const members: SiteMemberPlan[] = [];
+  const skipped: SiteSkip[] = [];
+  // Two records of ONE batch may derive the same slug: the first one keeps it.
+  const slugsInBatch = new Map<string, string>();
+  for (const entityId of ids) {
+    try {
+      const member = await planSiteMember(
+        database,
+        userId,
+        { id: site.id, projectId: project.id, config },
+        entityId,
+        settingsOf
+      );
+      if (member.slug) {
+        const key = `${member.collection}\u0000${member.slug}`;
+        const first = slugsInBatch.get(key);
+        if (first) {
+          throw new SiteSlugTakenError(member.slug, {
+            entityId: first,
+            title: null,
+          });
+        }
+        slugsInBatch.set(key, entityId);
+      }
+      members.push(member);
+    } catch (err) {
+      // A refusal is reported; a FAILED read is never folded into one.
+      if (!(err instanceof TRPCError) || opts.strict) throw err;
+      skipped.push(skipOf(entityId, err));
+    }
+  }
+  return {
+    siteId: site.id,
+    projectId: project.id,
+    homeWorkspaceId: home,
+    members,
+    skipped,
+  };
+}
+
+/** The 0336 unique index a racing publish of the same slug hits. */
+const SLUG_INDEX = "resource_shares_site_slug_uidx";
+
+/** The constraint a unique violation names, through any wrapping; else null. */
+function uniqueViolation(err: unknown): string | null {
+  for (
+    let e = err as Record<string, unknown> | undefined, i = 0;
+    e && i < 4;
+    i++
+  ) {
+    if (e.code === "23505") {
+      return typeof e.constraint === "string" ? e.constraint : "";
+    }
+    e = e.cause as Record<string, unknown> | undefined;
+  }
+  return null;
+}
+
+export interface PublishedMember {
+  entityId: string;
+  collection: string;
+  publicId: string;
+  slug: string | null;
+  status: "published" | "republished";
+}
+
+/**
+ * Write an authorized batch. Each record's LIVE member row of this site is
+ * re-snapshotted (new snapshot, new pin, slug re-derived, `public_id` kept),
+ * or a new member row is inserted with a fresh public id. A slug lost to a
+ * racing publish is reported, never thrown, so the rest of the batch lands.
+ */
+export async function applySitePublish(
+  database: Db,
+  plan: SitePublishPlan,
+  opts: {
+    userId: string;
+    agentUserId?: string | null;
+    sourceProposalId?: string;
+  }
+): Promise<{
+  published: PublishedMember[];
+  skipped: SiteSkip[];
+  /** Rows the write statements returned. */
+  rowsWritten: number;
+  ids: string[];
+}> {
+  const published: PublishedMember[] = [];
+  const skipped: SiteSkip[] = [];
+  const ids: string[] = [];
+  for (const m of plan.members) {
+    const pin = await latestCheckpointId(database, m.documentId);
+    const now = new Date();
+    const [live] = await database
+      .select({
+        id: resourceShares.id,
+        publicId: resourceShares.publicId,
+        state: resourceShares.state,
+        audience: resourceShares.audience,
+        resourceType: resourceShares.resourceType,
+        revokedAt: resourceShares.revokedAt,
+        expiresAt: resourceShares.expiresAt,
+        publishedAt: resourceShares.publishedAt,
+        siteShareId: resourceShares.siteShareId,
+        pin: resourceShares.publishedDocumentVersionId,
+      })
+      .from(resourceShares)
+      .where(
+        and(
+          eq(resourceShares.siteShareId, plan.siteId),
+          eq(resourceShares.resourceId, m.entityId),
+          isNull(resourceShares.revokedAt)
+        )
+      )
+      .limit(1);
+    let row: { id: string; publicId: string | null } | undefined;
+    try {
+      if (live) {
+        [row] = await database
+          .update(resourceShares)
+          .set({
+            state: "published",
+            publishedAt: now,
+            publishedBy: opts.userId,
+            // A live publication never loses its pin (0276 trigger).
+            publishedDocumentVersionId: pin ?? live.pin,
+            publishedProperties: m.snapshot,
+            publishedCollection: m.collection,
+            publicSlug: m.slug,
+            workspaceId: m.workspaceId,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(resourceShares.id, live.id),
+              isNull(resourceShares.revokedAt)
+            )
+          )
+          .returning({
+            id: resourceShares.id,
+            publicId: resourceShares.publicId,
+          });
+      } else {
+        [row] = await database
+          .insert(resourceShares)
+          .values({
+            resourceType: "entity",
+            resourceId: m.entityId,
+            workspaceId: m.workspaceId,
+            audience: "public",
+            anchorProjectId: null,
+            state: "published",
+            publishedAt: now,
+            publishedBy: opts.userId,
+            publishedDocumentVersionId: pin,
+            publishedProperties: m.snapshot,
+            createdBy: opts.userId,
+            permissions: { read: true },
+            // A member has no token of its own: the site's token addresses it.
+            tokenHash: null,
+            tokenPrefix: null,
+            siteShareId: plan.siteId,
+            publishedCollection: m.collection,
+            publicId: mintPublicId(),
+            publicSlug: m.slug,
+          })
+          .returning({
+            id: resourceShares.id,
+            publicId: resourceShares.publicId,
+          });
+      }
+    } catch (err) {
+      const constraint = uniqueViolation(err);
+      if (constraint === null) throw err;
+      skipped.push({
+        entityId: m.entityId,
+        code: constraint === SLUG_INDEX ? "SITE_SLUG_TAKEN" : "CONFLICT",
+        reason:
+          constraint === SLUG_INDEX
+            ? `SITE_SLUG_TAKEN: the slug "${m.slug}" was taken in this collection meanwhile.`
+            : "This record was published into the site concurrently; publish it again.",
+      });
+      continue;
+    }
+    if (!row) {
+      skipped.push({
+        entityId: m.entityId,
+        code: "CONFLICT",
+        reason:
+          "This record's publication was revoked meanwhile; publish again.",
+      });
+      continue;
+    }
+    ids.push(row.id);
+    published.push({
+      entityId: m.entityId,
+      collection: m.collection,
+      publicId: row.publicId!,
+      slug: m.slug,
+      status:
+        live && isPublicationLive({ ...live, hasToken: false }, { via: "site" })
+          ? "republished"
+          : "published",
+    });
+  }
+  if (ids.length > 0) {
+    auditLog({
+      subjectType: "sharing",
+      action: "update",
+      phase: "completed",
+      subjectId: plan.siteId,
+      userId: opts.userId,
+      agentUserId: opts.agentUserId ?? undefined,
+      proposalId: opts.sourceProposalId,
+      workspaceId: plan.homeWorkspaceId,
+      // Ids and keys only — never values.
+      data: {
+        op: "publish_records",
+        siteId: plan.siteId,
+        projectId: plan.projectId,
+        entityIds: published.map((p) => p.entityId),
+        skipped: [...plan.skipped, ...skipped].map((k) => ({
+          entityId: k.entityId,
+          code: k.code,
+        })),
+      },
+    });
+  }
+  return { published, skipped, rowsWritten: ids.length, ids };
+}
+
+export type PublishToSiteResult =
+  | {
+      status: "proposed";
+      proposalId: string;
+      siteId: string;
+      skipped: SiteSkip[];
+    }
+  | {
+      status: "published" | "none";
+      siteId: string;
+      published: PublishedMember[];
+      skipped: SiteSkip[];
+      rowsWritten: number;
+    };
+
+/**
+ * THE batch publish door (D5). A human is applied directly; an agent files ONE
+ * proposal for the whole batch (ADMIN floor on `share.create`, `op:
+ * "publish_records"`, ids only — never values). The gate carries the site's
+ * project, so a project-narrowed key proposes only inside its project; a
+ * record from another workspace than the home space is also checked against
+ * the key's grant there. A one-record publish that is refused throws (409
+ * `SITE_SLUG_TAKEN`, 403…); a batch reports each refused record.
+ */
+export async function publishToSite(
+  actor: ShareActor,
+  req: { siteId: string; entityIds: string[]; reasoning?: string }
+): Promise<PublishToSiteResult> {
+  const agentUserId = agentOf(actor);
+  // ATTRIBUTION FLOOR — same as every share door.
+  if (actor.keyType && !agentUserId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Publishing to a site needs a signed-in person or an agent key (run `synap init`); this API key is not attributed to either.",
+    });
+  }
+  const strict = new Set(req.entityIds).size === 1;
+  const database = await getDb();
+  const plan = await planSitePublish(database, actor.userId, req, { strict });
+  if (plan.members.length === 0) {
+    return {
+      status: "none",
+      siteId: plan.siteId,
+      published: [],
+      skipped: plan.skipped,
+      rowsWritten: 0,
+    };
+  }
+  const data = {
+    id: randomUUID(),
+    op: "publish_records" as const,
+    audience: "public" as const,
+    resourceType: "entity" as const,
+    siteId: plan.siteId,
+    entityIds: plan.members.map((m) => m.entityId),
+    projectId: plan.projectId,
+    workspaceId: plan.homeWorkspaceId,
+  };
+  // The gate sees the home space; a record of another space must be within
+  // the key's grant THERE too (no grant on the request = nothing to check).
+  for (const ws of new Set(plan.members.map((m) => m.workspaceId))) {
+    if (ws === plan.homeWorkspaceId) continue;
+    const denied = await grantWriteDenial({
+      subjectType: "share",
+      action: "create",
+      workspaceId: ws,
+      projectId: plan.projectId,
+      data,
+    });
+    if (denied) throw new TRPCError({ code: "FORBIDDEN", message: denied });
+  }
+  const perm = await checkPermissionOrPropose({
+    userId: actor.userId,
+    agentUserId: agentUserId ?? undefined,
+    workspaceId: plan.homeWorkspaceId,
+    projectId: plan.projectId,
+    subjectType: "share",
+    action: "create",
+    source: actor.source ?? undefined,
+    reasoning: actor.reasoning ?? req.reasoning,
+    data,
+  });
+  if ("denied" in perm && perm.denied) {
+    throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+  }
+  if ("proposalId" in perm) {
+    return {
+      status: "proposed",
+      proposalId: perm.proposalId,
+      siteId: plan.siteId,
+      skipped: plan.skipped,
+    };
+  }
+  const applied = await applySitePublish(database, plan, {
+    userId: actor.userId,
+    agentUserId,
+  });
+  if (strict && applied.published.length === 0 && applied.skipped[0]) {
+    const [skip] = applied.skipped;
+    throw new TRPCError({ code: "CONFLICT", message: skip.reason });
+  }
+  return {
+    status: applied.published.length > 0 ? "published" : "none",
+    siteId: plan.siteId,
+    published: applied.published,
+    skipped: [...plan.skipped, ...applied.skipped],
+    rowsWritten: applied.rowsWritten,
+  };
+}
+
+/**
+ * Take records off ONE site (back to draft: the uniform 404, their public id
+ * and slug kept, so publishing again restores the same URL), or — no
+ * `entityIds` — the whole site ({@link unpublishSite}). Direct for everyone:
+ * it only narrows. Record-level "stop sharing publicly" (`unpublishResource`)
+ * is the other door: it takes a record off EVERY site at once.
+ */
+export async function unpublishFromSite(
+  actor: ShareActor,
+  req: { siteId: string; entityIds?: string[] | null }
+): Promise<{
+  status: "unpublished" | "none";
+  siteId: string;
+  /** The records taken off (record mode only). */
+  entityIds?: string[];
+}> {
+  if (!req.entityIds) return unpublishSite(actor, req.siteId);
+  const ids = [...new Set(req.entityIds)];
+  if (ids.length === 0 || ids.length > SITE_PUBLISH_MAX_RECORDS) {
+    throw badRequest(
+      `Unpublish between 1 and ${SITE_PUBLISH_MAX_RECORDS} records at a time.`
+    );
+  }
+  const database = await getDb();
+  const site = await loadSiteById(database, req.siteId);
+  await assertCanNarrowSite(
+    database,
+    actor.userId,
+    site,
+    await loadProject(database, site.resourceId)
+  );
+  const updated = await database
+    .update(resourceShares)
+    .set({ state: "draft", updatedAt: new Date() })
+    .where(
+      and(
+        eq(resourceShares.siteShareId, site.id),
+        inArray(resourceShares.resourceId, ids),
+        eq(resourceShares.state, "published"),
+        isNull(resourceShares.revokedAt)
+      )
+    )
+    .returning({ entityId: resourceShares.resourceId });
+  const entityIds = updated.map((r) => r.entityId);
+  if (entityIds.length > 0) {
+    auditLog({
+      subjectType: "sharing",
+      action: "update",
+      phase: "completed",
+      subjectId: site.id,
+      userId: actor.userId,
+      agentUserId: agentOf(actor) ?? undefined,
+      workspaceId: site.workspaceId ?? undefined,
+      data: {
+        op: "unpublish_records",
+        siteId: site.id,
+        projectId: site.resourceId,
+        entityIds,
+      },
+    });
+  }
+  return {
+    status: entityIds.length > 0 ? "unpublished" : "none",
+    siteId: site.id,
+    entityIds,
+  };
+}
+
 // ── Status (owner read) ──────────────────────────────────────────────────────
 
 export interface SiteStatus {
@@ -810,17 +1477,143 @@ export interface SiteStatus {
   config: SiteConfigV1;
   /** The metadata snapshot's keys (never its values). */
   metadataFields: string[];
-  /** Live members per configured collection (0 until C1b publishes members). */
+  /** Live members per configured collection (the manifest's own count). */
   collections: Array<{ key: string; count: number }>;
+  /**
+   * One page of the site's member rows that are not revoked (published or
+   * taken back to draft), newest member first (see {@link SiteStatusPage}).
+   */
+  members: SiteStatusMember[];
+  /** Pass it back as `cursor` for the next page; null on the last page. */
+  membersNextCursor: string | null;
+  /** Every non-revoked member row of the site (the rows the pages walk). */
+  membersTotal: number;
+}
+
+/**
+ * The page of `members` a status read returns. `limit` defaults to, and
+ * clamps at, the site doors' bound ({@link SITE_MAX_LIMIT}). The order is
+ * `created_at DESC, id DESC`: a member's birth, which never moves (a
+ * republish updates `published_at` on the same row), so a walk lists every
+ * member that exists throughout it exactly once. The cursor carries
+ * `created_at` at microsecond precision.
+ */
+export interface SiteStatusPage {
+  cursor?: string;
+  limit?: number;
+}
+
+/** One record of a site, as its owner sees it (internal ids are fine here). */
+export interface SiteStatusMember {
+  entityId: string;
+  /** The record's CURRENT title (owner side; the public sees the snapshot). */
+  title: string | null;
+  collection: string | null;
+  publicId: string | null;
+  slug: string | null;
+  state: string;
+  publishedAt: Date | null;
+  /** Served on the public web right now: the site is live AND the member passes every narrowing check. */
+  live: boolean;
+  /** The record changed after its snapshot: publish it again to refresh it. */
+  stale: boolean;
+}
+
+async function statusMembers(
+  database: Db,
+  site: { id: string; projectId: string },
+  siteLive: boolean,
+  page: SiteStatusPage
+): Promise<{
+  members: SiteStatusMember[];
+  nextCursor: string | null;
+  total: number;
+}> {
+  const limit = clampSiteLimit(page.limit ?? SITE_MAX_LIMIT);
+  const after = page.cursor ? decodeInstantCursor(page.cursor) : null;
+  const ofSite = and(
+    eq(resourceShares.siteShareId, site.id),
+    isNull(resourceShares.revokedAt)
+  );
+  const rows = await database
+    .select({
+      id: resourceShares.id,
+      at: sql<string>`to_char(${resourceShares.createdAt} at time zone 'UTC', ${INSTANT_CURSOR_FORMAT})`,
+      entityId: resourceShares.resourceId,
+      title: entities.title,
+      entityUpdatedAt: entities.updatedAt,
+      collection: resourceShares.publishedCollection,
+      publicId: resourceShares.publicId,
+      slug: resourceShares.publicSlug,
+      state: resourceShares.state,
+      publishedAt: resourceShares.publishedAt,
+    })
+    .from(resourceShares)
+    .leftJoin(entities, eq(entities.id, resourceShares.resourceId))
+    .where(
+      and(
+        ofSite,
+        after
+          ? sql`(${resourceShares.createdAt}, ${resourceShares.id}) < (${after.at}::timestamptz, ${after.id}::uuid)`
+          : undefined
+      )
+    )
+    .orderBy(desc(resourceShares.createdAt), desc(resourceShares.id))
+    .limit(limit + 1);
+  const listed = rows.slice(0, limit);
+  const [{ total } = { total: 0 }] = await database
+    .select({ total: count() })
+    .from(resourceShares)
+    .where(ofSite);
+  // THE public rule, not a re-derivation: the same predicate the doors serve.
+  const liveIds = new Set<string>();
+  if (siteLive && listed.length > 0) {
+    const open = await openMemberWorkspaces(site.id);
+    const served = await database
+      .select({ id: resourceShares.id })
+      .from(resourceShares)
+      .where(
+        and(
+          liveMemberWhere(site, open),
+          inArray(
+            resourceShares.id,
+            listed.map((r) => r.id)
+          )
+        )
+      );
+    for (const { id } of served) liveIds.add(id);
+  }
+  const last = listed.at(-1);
+  return {
+    members: listed.map((r) => ({
+      entityId: r.entityId,
+      title: r.title ?? null,
+      collection: r.collection,
+      publicId: r.publicId,
+      slug: r.slug,
+      state: r.state,
+      publishedAt: r.publishedAt,
+      live: liveIds.has(r.id),
+      stale:
+        !!r.publishedAt &&
+        !!r.entityUpdatedAt &&
+        r.entityUpdatedAt.getTime() > r.publishedAt.getTime(),
+    })),
+    nextCursor:
+      rows.length > limit && last
+        ? encodeInstantCursor({ at: last.at, id: last.id })
+        : null,
+    total,
+  };
 }
 
 /**
  * A site's owner-side status, by site id or by project (its live site; null
- * when it has none). Never a token or its hash.
+ * when it has none), with one page of its members. Never a token or its hash.
  */
 export async function siteStatus(
   actor: ShareActor,
-  req: { siteId: string } | { projectId: string }
+  req: ({ siteId: string } | { projectId: string }) & SiteStatusPage
 ): Promise<SiteStatus | null> {
   const database = await getDb();
   let site: SiteRow;
@@ -863,16 +1656,16 @@ export async function siteStatus(
   }
   await assertCanNarrowSite(database, actor.userId, site, project);
   const config = resolveSiteConfig(site.siteConfig);
-  const counts = await liveMemberCounts(
-    site.id,
-    Object.keys(config.collections)
-  );
+  const ref = { id: site.id, projectId: site.resourceId };
+  const counts = await liveMemberCounts(ref, Object.keys(config.collections));
+  const live = isSiteLive({ ...site, hasToken: !!site.tokenHash });
+  const page = await statusMembers(database, ref, live, req);
   return {
     siteId: site.id,
     projectId: site.resourceId,
     homeWorkspaceId: site.workspaceId!,
     state: site.state,
-    live: isSiteLive({ ...site, hasToken: !!site.tokenHash }),
+    live,
     hasToken: !!site.tokenHash,
     tokenPrefix: site.tokenPrefix,
     publishedAt: site.publishedAt,
@@ -888,5 +1681,8 @@ export async function siteStatus(
       key,
       count: counts.get(key) ?? 0,
     })),
+    members: page.members,
+    membersNextCursor: page.nextCursor,
+    membersTotal: page.total,
   };
 }

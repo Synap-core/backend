@@ -40,7 +40,7 @@ export const CAPTURE_LIST_KINDS = [
  * read "Not structured".
  *
  * A LIBRARY item (anything staged with `importItem`) is never a capture, before
- * or after its group is built (CAPTURE_LIBRARY_PLAN decision 4): it is something
+ * or after its group is built (capture-vs-library decision 4): it is something
  * the person KEPT, not their words. It lives in the Library.
  */
 export function ownCapturesWhere(userId: string) {

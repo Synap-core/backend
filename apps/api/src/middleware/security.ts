@@ -7,7 +7,7 @@
  * - Security headers (prevent XSS, clickjacking, etc.)
  */
 import type { Context, MiddlewareHandler } from "hono";
-import { rateLimiter } from "hono-rate-limiter";
+import { rateLimiter, type RateLimitInfo } from "hono-rate-limiter";
 import { getDynamicCorsOrigins } from "@synap/api";
 import {
   buildRateLimitKey,
@@ -20,6 +20,7 @@ import {
   clientIp,
   getDeviceAuthRateConfig,
   getKeyStateRateConfig,
+  getOAuthPublicRateConfig,
   buildCrudIpCeilingKey,
   isDirectLoopbackCall,
 } from "./rate-limit-classes.js";
@@ -91,6 +92,30 @@ function classHandler(
       },
       429
     );
+}
+
+/**
+ * `classHandler` plus `Retry-After` in delta-seconds, for the public doors.
+ * In hono-rate-limiter 0.4.2 the only switch to its own Retry-After is
+ * `standardHeaders`, which also stamps `RateLimit-*` on every counted response;
+ * the public doors want the one header only. The limiter puts this bucket's
+ * info on the context (`rateLimit`) just before calling the handler, so the
+ * wait is the bucket's real reset, never under one second.
+ */
+function publicDoorHandler(
+  className: "public_read" | "public_submit",
+  limit: number,
+  retryAfter: string
+) {
+  const respond = classHandler(className, limit, retryAfter);
+  return (c: Context, _next: unknown, options: { windowMs: number }) => {
+    const info = c.get("rateLimit") as RateLimitInfo | undefined;
+    const seconds = info?.resetTime
+      ? Math.ceil((info.resetTime.getTime() - Date.now()) / 1000)
+      : Math.ceil(options.windowMs / 1000);
+    c.header("Retry-After", String(Math.max(1, seconds)));
+    return respond(c);
+  };
 }
 
 const rateLimitClassConfig = getRateLimitClassConfig();
@@ -257,7 +282,7 @@ const publicReadIpRateLimiter = rateLimiter({
   limit: publicDoorRate.readIp.max,
   standardHeaders: false,
   keyGenerator: publicDoorKeyGenerator("read_ip"),
-  handler: classHandler(
+  handler: publicDoorHandler(
     "public_read",
     publicDoorRate.readIp.max,
     publicDoorRate.readIp.retryAfter
@@ -269,7 +294,7 @@ const publicSubmitIpRateLimiter = rateLimiter({
   limit: publicDoorRate.submitIp.max,
   standardHeaders: false,
   keyGenerator: publicDoorKeyGenerator("submit_ip"),
-  handler: classHandler(
+  handler: publicDoorHandler(
     "public_submit",
     publicDoorRate.submitIp.max,
     publicDoorRate.submitIp.retryAfter
@@ -281,7 +306,7 @@ const publicSubmitShareRateLimiter = rateLimiter({
   limit: publicDoorRate.submitShare.max,
   standardHeaders: false,
   keyGenerator: publicDoorKeyGenerator("submit_share"),
-  handler: classHandler(
+  handler: publicDoorHandler(
     "public_submit",
     publicDoorRate.submitShare.max,
     publicDoorRate.submitShare.retryAfter
@@ -335,6 +360,32 @@ const keyStateRateLimiter = rateLimiter({
   handler: classHandler("key_state", keyStateRate.max, keyStateRate.retryAfter),
 });
 
+const oauthPublicRate = getOAuthPublicRateConfig();
+
+/**
+ * The pod authorization server's public doors (`/register`, `/authorize`,
+ * `/token`): IP-ONLY, never the Authorization header — none of them takes a
+ * Bearer, and a made-up one must not buy a fresh bucket. Loopback keeps the
+ * local bypass.
+ */
+const oauthPublicRateLimiter = rateLimiter({
+  windowMs: oauthPublicRate.windowMs,
+  limit: oauthPublicRate.max,
+  standardHeaders: "draft-7",
+  keyGenerator: (c: Context): string => {
+    const ip = clientIp(c);
+    if (isLocalCaller(c, ip)) {
+      return "localhost-bypass-oauth_public-" + Math.random();
+    }
+    return `oauth_public:ip:${ip}`;
+  },
+  handler: classHandler(
+    "oauth_public",
+    oauthPublicRate.max,
+    oauthPublicRate.retryAfter
+  ),
+});
+
 /**
  * Multi-class pod-edge rate limiting.
  *
@@ -376,6 +427,8 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
       return deviceAuthRateLimiter(c, next);
     case "key_state":
       return keyStateRateLimiter(c, next);
+    case "oauth_public":
+      return oauthPublicRateLimiter(c, next);
     case "crud":
     default:
       // Address ceiling FIRST, then the caller's own bucket — same nested-429
@@ -560,9 +613,6 @@ export const securityHeadersMiddleware: MiddlewareHandler = async (c, next) => {
 
   // Prevent MIME type sniffing
   c.header("X-Content-Type-Options", "nosniff");
-
-  // Enable XSS protection
-  c.header("X-XSS-Protection", "1; mode=block");
 
   // Referrer policy
   c.header("Referrer-Policy", "strict-origin-when-cross-origin");

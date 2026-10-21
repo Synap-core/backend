@@ -89,3 +89,9 @@ skills/synap-schema/SKILL.md
 skills/synap-ui/SKILL.md
 skills/synap-design/SKILL.md
 deploy/state/
+
+# Generated code-graph output from a local tool, never source.
+.strata/
+
+# pnpm pack output (scripts/contracts-publish.mjs packs here, then copies out).
+packages/*/*.tgz

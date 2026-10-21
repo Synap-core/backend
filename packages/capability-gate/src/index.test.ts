@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 /**
- * Tripwire for Option B / D1 (GOVERNANCE-PHASE2-PLAN.md §1, ratified
+ * Tripwire for Option B / D1 (docs/decisions/agent-governance.md, phase 2 D1, ratified
  * 2026-07-27): a `governance_rules` `target_kind: "capability"` row must now
  * be consulted by `gateCapabilityExecution` at BOTH points it would otherwise
  * return `propose` — the no-grant route and the policy-propose fallthrough —

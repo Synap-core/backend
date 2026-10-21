@@ -7,7 +7,12 @@ import {
   resolveWorkspacePlacement,
   acceptDeterministicGraphWorkspace,
 } from "@synap/database";
-import { entities, entityFacets, profiles } from "@synap/database/schema";
+import {
+  channels,
+  entities,
+  entityFacets,
+  profiles,
+} from "@synap/database/schema";
 import { checkPermissionOrPropose } from "./permission-check.js";
 
 /**
@@ -124,9 +129,17 @@ export async function derivePodWideBindWorkspace(args: {
 }
 
 export async function proposeChannelBind(input: ProposeChannelBindInput) {
+  // The key's grant is checked on the CHANNEL's own workspace — the row the
+  // bind rewrites — never the caller-supplied one (S7). A channel that does
+  // not exist is pod scope: a pinned key fails closed on it.
+  const bound = await db.query.channels.findFirst({
+    where: eq(channels.id, input.channelId),
+    columns: { workspaceId: true },
+  });
   const perm = await checkPermissionOrPropose({
     userId: input.userId,
     workspaceId: input.workspaceId,
+    grantWorkspaceId: bound?.workspaceId ?? null,
     subjectType: "channel",
     action: "bind",
     source: "intelligence",

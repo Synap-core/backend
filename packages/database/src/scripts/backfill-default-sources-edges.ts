@@ -1,7 +1,7 @@
 /**
  * Backfill — settings.defaultSources → `provider --feeds--> consumer` links.
  *
- * Wave 4 of WORKSPACE-RESOLUTION-PLAN.md. `settings.defaultSources` (JSONB,
+ * Wave 4 of WORKSPACE-RESOLUTION-PLAN (team pod). `settings.defaultSources` (JSONB,
  * `{ [domain]: { workspaceId, capability?, profileSlug?, label? } }`, stored on
  * the CONSUMER workspace) is a write-only precursor: it names a provider
  * workspace per domain but nothing reads it as a graph edge today. This script

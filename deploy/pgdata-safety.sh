@@ -152,7 +152,8 @@ _pgs_running() {
 _pgs_dump_into() {
     local c="$1" tmp="$2" db dbs
     mkdir -p "$tmp" || return 1
-    dbs="$(_pgs_psql "$c" postgres "select datname from pg_database where not datistemplate and datname <> 'postgres' order by 1")" || {
+    # An aside copy left by an interrupted restore is not a database of this pod.
+    dbs="$(_pgs_psql "$c" postgres "select datname from pg_database where not datistemplate and datname <> 'postgres' and right(datname, 13) <> '__pre_restore' order by 1")" || {
         _pgs_err "cannot list databases"; return 1; }
     [ -n "$dbs" ] || { _pgs_err "no databases to dump"; return 1; }
     for db in $dbs; do
@@ -181,30 +182,231 @@ pgdata_backup() {
     _pgs_dump_into "$c" "$tmp" || { rm -rf "$tmp"; return 1; }
     mv "$tmp" "$dir" || return 1
     _pgs_log "backup written: $dir ($(du -sh "$dir" | cut -f1))" >&2
-    # Keep the newest 5 pre-update/manual dumps; the scheduled ones are pruned
-    # by backup_run.
-    ls -1d "$(_bk_backups_dir)/"*-"$label" 2>/dev/null | sort | head -n -5 | xargs -r rm -rf
+    # Keep the newest 5 pre-update/manual dumps (and every pinned one); the
+    # scheduled ones are pruned by backup_run.
+    _bk_prune_label "$label" 5
     echo "$dir"
 }
 
-# Restore a directory written by pgdata_backup (or the postgres-backup service).
-# Stops writers, restores each <db>.dump with --clean, restarts nothing: the
-# caller (operator) brings the stack back with `synap start`.
+# Dumps an update record still points to — `synap restore <dump>` was printed
+# for them, so they are never pruned: the newest rolled-back update whose schema
+# moved (state/events.jsonl: the one whose restore command is still the right
+# one), the latest outcome (state/last-update.json) and the running release's
+# pre-update dump (state/current-release.json). One basename per line. Returns
+# 1 when a record exists but cannot be read (no jq): an unreadable keep-list is
+# not an empty one, so the caller then prunes nothing.
+_bk_pinned_dumps() {
+    local s ev
+    s="$(_bk_state_dir)"
+    [ -s "$s/events.jsonl" ] || [ -s "$s/last-update.json" ] || [ -s "$s/current-release.json" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 1
+    if [ -s "$s/events.jsonl" ]; then
+        # Line by line: one torn line (an interrupted append) never hides the rest.
+        ev="$(jq -rR 'fromjson? | select(.kind == "pod.update" and (.status == "rolled_back" or .status == "rollback_failed")
+                and (.schema == "migrated" or .schema == "unknown") and (.backup // "") != "") | .backup' "$s/events.jsonl")" || return 1
+        printf '%s\n' "$ev" | tail -n 1
+    fi
+    if [ -s "$s/last-update.json" ]; then jq -r '.backup // empty' "$s/last-update.json" 2>/dev/null || return 1; fi
+    if [ -s "$s/current-release.json" ]; then jq -r '.preUpdateBackup // empty' "$s/current-release.json" 2>/dev/null || return 1; fi
+}
+
+# Remove all but the newest <keep> <label> dumps — never a pinned one
+# (_bk_pinned_dumps). The ONE pruner of labelled dumps: pgdata_backup and the
+# update's _ue_prune_images both come here.
+_bk_prune_label() { # <label> <keep>
+    local pinned d
+    pinned="$(_bk_pinned_dumps)" || {
+        _pgs_warn "cannot read the update records in $(_bk_state_dir) (jq missing?) — no $1 dump pruned this time"
+        return 0
+    }
+    pinned="$(printf '%s\n' "$pinned" | sed 's#.*/##')"
+    ls -1d "$(_bk_backups_dir)/"*-"$1" 2>/dev/null | sort \
+        | awk -v n="$2" '{ a[NR] = $0 } END { for (i = 1; i <= NR - n; i++) print a[i] }' \
+        | while IFS= read -r d; do
+            printf '%s\n' "$pinned" | grep -qxF "${d##*/}" || rm -rf "$d"
+        done
+}
+
+# Restore a directory written by pgdata_backup (or the postgres-backup service)
+# into FRESH databases, all or nothing. Stops writers, restarts nothing.
+#
+# Never `pg_restore --clean` into the live database: it cannot drop TimescaleDB
+# hypertable constraints ("ONLY option not supported on hypertable operations")
+# nor pg-boss partitions whose foreign keys depend on the queue key, and it
+# keeps every object created after the dump. The 2026-10-20 rollback of
+# pod.antoinesrvt reported 199 errors, called them "often harmless" and lost
+# the events primary key; the users|entities|api_keys fingerprint still matched.
+#
+# So each <db>.dump goes into a new database: the live one is renamed aside
+# (<db>__pre_restore), a new one is created with its encoding and locale, and a
+# dump that carries timescaledb is restored between timescaledb_pre_restore()
+# and timescaledb_post_restore() (TimescaleDB's documented procedure). ANY
+# pg_restore error fails the restore: every database restored so far is
+# dropped and its aside copy renamed back, so a failed restore leaves the
+# databases exactly as they were. On success the aside copies are dropped.
+_PGS_ASIDE_SUFFIX="__pre_restore"
+
+# Does database $2 exist? Prints yes | no | error. Never folds a failed
+# query into "no": the restore renames, creates and drops on this answer, and
+# a "no" for a live database once led the revert to drop it.
+_pgs_db_state() {
+    local n
+    n="$(_pgs_psql "$1" postgres "select count(*) from pg_database where datname='$2'" 2>/dev/null)" || { echo error; return 0; }
+    case "$n" in 1) echo yes ;; 0) echo no ;; *) echo error ;; esac
+}
+
+# Rename database $2 to $3. Writers are stopped, but a client can still be
+# attached (hydra, the backup loop): end its sessions first, and retry a few
+# times in case one reconnects in between.
+_pgs_rename_db() {
+    local c="$1" from="$2" to="$3" i
+    for i in 1 2 3 4 5; do
+        _pgs_psql "$c" postgres "select pg_terminate_backend(pid) from pg_stat_activity where datname='$from' and pid <> pg_backend_pid()" >/dev/null 2>&1
+        _pgs_psql "$c" postgres "alter database \"$from\" rename to \"$to\"" >/dev/null 2>&1 && return 0
+        sleep 1
+    done
+    _pgs_err "could not rename database '$from' to '$to' (still in use?)"
+    return 1
+}
+
+# Undo this run: drop only the databases it CREATED ($2), then rename back only
+# the live ones it SET ASIDE ($3). A database this run did not create is never
+# dropped. Best effort; says what it could not undo.
+_pgs_restore_revert() {
+    local c="$1" db
+    for db in $2; do
+        _pgs_psql "$c" postgres "select pg_terminate_backend(pid) from pg_stat_activity where datname='$db' and pid <> pg_backend_pid()" >/dev/null 2>&1
+        _pgs_psql "$c" postgres "drop database if exists \"$db\"" >/dev/null 2>&1 \
+            || _pgs_err "could not drop the partly restored '$db'"
+    done
+    for db in $3; do
+        _pgs_rename_db "$c" "${db}${_PGS_ASIDE_SUFFIX}" "$db" \
+            || _pgs_err "could not put '$db' back: the pre-restore copy is still '${db}${_PGS_ASIDE_SUFFIX}'"
+    done
+}
+
+# Restore dump $3 into a new database $2 (the live one is already aside, or
+# never existed; $4 = encoding|collate|ctype to create it with, empty = the
+# cluster default). Prints pg_restore's first errors and returns 1 on any.
+_pgs_restore_into_fresh() {
+    local c="$1" db="$2" f="$3" props="$4" opts="" ts=0 errf rc=0
+    _PGS_CREATED=""
+    if [ -n "$props" ]; then
+        opts=" template template0 encoding '$(echo "$props" | cut -d'|' -f1)' lc_collate '$(echo "$props" | cut -d'|' -f2)' lc_ctype '$(echo "$props" | cut -d'|' -f3)'"
+    fi
+    _pgs_psql "$c" postgres "create database \"$db\"${opts}" >/dev/null || { _pgs_err "could not create database '$db'"; return 1; }
+    _PGS_CREATED=1
+    if _pgs_xi "$c" pg_restore -l < "$f" 2>/dev/null | grep -q ' EXTENSION - timescaledb'; then
+        ts=1
+        _pgs_psql "$c" "$db" "create extension if not exists timescaledb" >/dev/null \
+            && _pgs_psql "$c" "$db" "select timescaledb_pre_restore()" >/dev/null \
+            || { _pgs_err "could not prepare '$db' for a TimescaleDB restore"; return 1; }
+    fi
+    errf="$(mktemp)"
+    _pgs_xi "$c" pg_restore -U synap -d "$db" --no-owner < "$f" 2> "$errf" || rc=$?
+    if [ "$ts" = 1 ]; then
+        _pgs_psql "$c" "$db" "select timescaledb_post_restore()" >/dev/null || rc=1
+    fi
+    if [ "$rc" != 0 ] || grep -q 'pg_restore: error:' "$errf"; then
+        _pgs_err "restoring '$db' failed ($(grep -c 'pg_restore: error:' "$errf") error(s)); first ones:"
+        grep 'pg_restore: error:' "$errf" | head -5 | sed 's/^/    /' >&2
+        rm -f "$errf"
+        return 1
+    fi
+    rm -f "$errf"
+}
+
+# The backup loop (postgres-backup) must not dump a half-restored database
+# and record it as a good backup: the restore holds the backup lock for its
+# whole run, WAITING for a running backup to finish (the hourly run is short),
+# unlike _bk_lock which skips. Its own fd (9), so it never touches fd 8.
+_bk_lock_wait() {
+    local b l i
+    b="$(_bk_backups_dir)"; mkdir -p "$b" || return 1
+    if _bk_lock_flock; then
+        l="$b/.backup.flock"
+        touch "$l" 2>/dev/null || { _pgs_err "cannot open the backup lock $l"; return 1; }
+        exec 9>>"$l"
+        flock -w "${SYNAP_RESTORE_LOCK_WAIT:-1800}" 9 && return 0
+        exec 9>&-
+    else
+        l="$b/.backup.lock"
+        for i in $(seq 1 "${SYNAP_RESTORE_LOCK_WAIT:-1800}"); do
+            mkdir "$l" 2>/dev/null && return 0
+            sleep 1
+        done
+    fi
+    _pgs_err "a backup run still holds $l after ${SYNAP_RESTORE_LOCK_WAIT:-1800}s — nothing was restored"
+    return 1
+}
+_bk_unlock_wait() {
+    if _bk_lock_flock; then exec 9>&-
+    else rmdir "$(_bk_backups_dir)/.backup.lock" 2>/dev/null || true; fi
+}
+
 pgdata_restore() {
-    local dir="$1" c f db
+    local rc=0
+    _bk_lock_wait || return 1
+    _pgdata_restore_locked "$@" || rc=$?
+    _bk_unlock_wait
+    return "$rc"
+}
+
+_pgdata_restore_locked() {
+    local dir="$1" c f db props created="" aside="" need avail state
     if [ ! -d "$dir" ] || ! ls "$dir"/*.dump >/dev/null 2>&1; then
         _pgs_err "no *.dump files in '$dir'"; return 1
     fi
     c="$(_pgs_container)"
     [ -z "$c" ] && { _pgs_err "no postgres container"; return 1; }
+    for f in "$dir"/*.dump; do
+        db="$(basename "$f" .dump)"
+        case "$(_pgs_db_state "$c" "${db}${_PGS_ASIDE_SUFFIX}")" in
+            no) ;;
+            yes) _pgs_err "a previous restore left '${db}${_PGS_ASIDE_SUFFIX}' (it may hold the only good copy) — inspect it, then drop or rename it, and restore again"; return 1 ;;
+            *) _pgs_err "cannot read the database list — nothing was changed"; return 1 ;;
+        esac
+    done
+    # The fresh copies sit beside the live ones until the restore is proven:
+    # refuse up front (nothing stopped yet) when the volume cannot hold both.
+    # sum(bigint) is numeric in postgres: cast, and only ever do shell
+    # arithmetic on what is digits (a decimal aborted the restore under bash).
+    need="$(_pgs_psql "$c" postgres "select (coalesce(sum(pg_database_size(datname)),0)/1024)::bigint from pg_database where not datistemplate and datname <> 'postgres'" 2>/dev/null)"
+    avail="$(_pgs_x "$c" df -Pk "$PGDATA_MOUNT_TARGET" 2>/dev/null | awk 'NR==2{print $4}')"
+    case "${need}:${avail}" in *[!0-9:]*|:*|*:) need=""; avail="" ;; esac
+    if [ -z "$need" ]; then
+        _pgs_warn "could not measure the room on the postgres volume; restoring anyway (the fresh copies need about as much again as the live databases)"
+    elif [ "$avail" -lt $(( need + need / 10 )) ]; then
+        _pgs_err "not enough room to restore beside the live databases: need ~$(( need / 1024 )) MB free on the postgres volume, have $(( avail / 1024 )) MB — nothing was changed"
+        return 1
+    fi
     (cd "$(_pgs_deploy_dir)" && $COMPOSE_CMD stop $_PGS_WRITERS 2>/dev/null)
     for f in "$dir"/*.dump; do
         db="$(basename "$f" .dump)"
-        _pgs_psql "$c" postgres "select 1 from pg_database where datname='$db'" | grep -q 1 \
-            || _pgs_psql "$c" postgres "create database \"$db\"" || return 1
-        _pgs_log "restoring $db ..."
-        docker exec -i "$c" pg_restore -U synap -d "$db" --clean --if-exists --no-owner < "$f" \
-            || _pgs_warn "pg_restore reported errors for '$db' (often harmless TimescaleDB catalog notices) — verify below"
+        _pgs_log "restoring $db into a fresh database ..."
+        props=""
+        state="$(_pgs_db_state "$c" "$db")"
+        case "$state" in
+            yes)
+                props="$(_pgs_psql "$c" postgres "select pg_encoding_to_char(encoding)||'|'||datcollate||'|'||datctype from pg_database where datname='$db'")" \
+                    && _pgs_rename_db "$c" "$db" "${db}${_PGS_ASIDE_SUFFIX}" \
+                    || { _pgs_restore_revert "$c" "$created" "$aside"; return 1; }
+                aside="${aside} ${db}" ;;
+            no) ;;
+            *) _pgs_err "cannot tell whether '$db' exists — putting every database back as it was"
+               _pgs_restore_revert "$c" "$created" "$aside"; return 1 ;;
+        esac
+        if ! _pgs_restore_into_fresh "$c" "$db" "$f" "$props"; then
+            _pgs_err "the restore of '$dir' failed — putting every database back as it was"
+            [ -n "$_PGS_CREATED" ] && created="${created} ${db}"
+            _pgs_restore_revert "$c" "$created" "$aside"
+            return 1
+        fi
+        created="${created} ${db}"
+    done
+    for db in $aside; do
+        _pgs_psql "$c" postgres "drop database \"${db}${_PGS_ASIDE_SUFFIX}\"" >/dev/null \
+            || _pgs_warn "restored, but could not drop the pre-restore copy '${db}${_PGS_ASIDE_SUFFIX}' — drop it by hand"
     done
     _pgs_log "restored fingerprint (users|entities|api_keys): $(_pgs_fingerprint "$c")"
     pgdata_mark_initialized "$c"

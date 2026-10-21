@@ -248,7 +248,7 @@ export const CaptureStructureRequestSchema = z
      * @deprecated intake path `capture.file` (person's use: CLI, Raycast,
      *   extension) — a file a person brings belongs to the Library. See
      *   `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
-     *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+     *   docs/decisions/capture-vs-library.md. The agent path (MCP synap_capture / Hub
      *   capture with an agent key) is kept — founder 2026-10-13.
      */
     file: z
@@ -262,7 +262,7 @@ export const CaptureStructureRequestSchema = z
     /**
      * @deprecated intake path `capture.url` (person's use: CLI, Raycast, extension) —
      *   a link a person brings belongs to the Library. See `DEPRECATED_INTAKE_PATHS`
-     *   (`@synap-core/types/intake-route`) and docs/CAPTURE_LIBRARY_PLAN.md §2.
+     *   (`@synap-core/types/intake-route`) and docs/decisions/capture-vs-library.md.
      *   The agent path (MCP synap_capture / Hub capture with an agent key) is
      *   kept — founder 2026-10-13.
      */
@@ -270,7 +270,7 @@ export const CaptureStructureRequestSchema = z
     /**
      * @deprecated intake path `capture.html` (person's use: CLI, Raycast, extension) —
      *   a saved page a person brings belongs to the Library. See `DEPRECATED_INTAKE_PATHS`
-     *   (`@synap-core/types/intake-route`) and docs/CAPTURE_LIBRARY_PLAN.md §2.
+     *   (`@synap-core/types/intake-route`) and docs/decisions/capture-vs-library.md.
      *   The agent path (MCP synap_capture / Hub capture with an agent key) is
      *   kept — founder 2026-10-13.
      */

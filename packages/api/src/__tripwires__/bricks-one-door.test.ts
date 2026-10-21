@@ -42,7 +42,10 @@ function tsFilesUnderSrc(pkgRoot: string, acc: string[]): void {
   }
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      // `__tests__/` holds test-only helpers (PGlite fixtures): test code, like
+      // `*.test.ts`, never a production write door.
       if (entry.name === "node_modules" || entry.name === "dist") continue;
+      if (entry.name === "__tests__") continue;
       const p = join(dir, entry.name);
       if (entry.isDirectory()) walk(p);
       else if (

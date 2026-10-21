@@ -190,7 +190,7 @@ CREATE INDEX IF NOT EXISTS "invite_acceptances_user_idx"
   ON "invite_acceptances" ("user_id");
 
 -- library_groups — the Library's persistent groups (mirrors 0328,
--- CAPTURE_LIBRARY_PLAN L2). Owner-floored; item membership lives on the item.
+-- capture-vs-library decision, wave L2). Owner-floored; item membership lives on the item.
 CREATE TABLE IF NOT EXISTS "library_groups" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"             text NOT NULL,
@@ -285,6 +285,17 @@ ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "client_name"   text;
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "redirect_uris" text[] DEFAULT '{}';
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "scopes"        text[] DEFAULT '{}';
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "created_at"    timestamp with time zone DEFAULT now();
+-- 0338 CIMD columns. No CHECK here: 0338 adds it on fresh databases too, since
+-- it runs after this file.
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "client_kind" text NOT NULL DEFAULT 'dcr';
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "client_uri" text;
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "initiate_login_uri" text;
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_permissions" text[] NOT NULL DEFAULT '{}';
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_fetched_at" timestamp with time zone;
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_expires_at" timestamp with time zone;
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_sha256" text;
+-- 0338b: the workspace templates a pod app declares (`synap_templates`).
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_templates" text[] NOT NULL DEFAULT '{}';
 
 CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
   "code_hash"      text PRIMARY KEY,
@@ -306,6 +317,11 @@ ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "code_challenge
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "created_at"     timestamp with time zone DEFAULT now();
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "expires_at"     timestamp with time zone;
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "consumed_at"    timestamp with time zone;
+-- 0338: the RFC 8707 resource the code was issued for.
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "resource" text;
+-- 0338b: the approved app a pod app's code redeems to. No foreign key here
+-- (apps is created further down): 0338b adds it on fresh databases too.
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "app_id" uuid;
 CREATE INDEX IF NOT EXISTS "oauth_authorization_codes_expires_at_idx"
   ON "oauth_authorization_codes" ("expires_at");
 
@@ -5042,6 +5058,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS "apps_owner_name_unique"
 CREATE INDEX IF NOT EXISTS "apps_owner_idx" ON "apps" ("owner_user_id");
 CREATE UNIQUE INDEX IF NOT EXISTS "apps_agent_user_unique"
   ON "apps" ("agent_user_id") WHERE "agent_user_id" IS NOT NULL;
+-- 0338b: a pod app connection (mode 'oauth') names its CIMD client_id. The
+-- mode CHECK is 0338b's, on fresh databases too.
+ALTER TABLE "apps" ADD COLUMN IF NOT EXISTS "oauth_client_id" text;
+CREATE UNIQUE INDEX IF NOT EXISTS "apps_owner_oauth_client_uidx"
+  ON "apps" ("owner_user_id", "oauth_client_id")
+  WHERE "oauth_client_id" IS NOT NULL;
 
 -- 0319: lifecycle columns (work model W12–W14). The columns are the truth;
 -- `properties[<lifecycle slug>]` is the read projection written by moveStatus.
@@ -5094,3 +5116,26 @@ CREATE TABLE IF NOT EXISTS "lifecycle_transition_outbox" (
 
 CREATE INDEX IF NOT EXISTS "lifecycle_transition_outbox_pending_idx"
   ON "lifecycle_transition_outbox" ("created_at") WHERE "emitted_at" IS NULL;
+
+-- 0339: a pod app's rotating, single-use refresh tokens (mirrors
+-- 0339_oauth_refresh_tokens.sql). Here, after `apps`, so the key is inline.
+CREATE TABLE IF NOT EXISTS "oauth_refresh_tokens" (
+  "id"           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "token_hash"   text NOT NULL,
+  "family_id"    uuid NOT NULL,
+  "client_id"    text NOT NULL,
+  "user_id"      text NOT NULL,
+  "app_id"       uuid NOT NULL REFERENCES "apps"("id") ON DELETE CASCADE,
+  "expires_at"   timestamp with time zone NOT NULL,
+  "last_used_at" timestamp with time zone,
+  "revoked_at"   timestamp with time zone,
+  "replaced_by"  uuid,
+  "created_at"   timestamp with time zone NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "oauth_refresh_tokens_token_hash_uidx"
+  ON "oauth_refresh_tokens" ("token_hash");
+CREATE INDEX IF NOT EXISTS "oauth_refresh_tokens_app_idx"
+  ON "oauth_refresh_tokens" ("app_id");
+CREATE INDEX IF NOT EXISTS "oauth_refresh_tokens_family_idx"
+  ON "oauth_refresh_tokens" ("family_id");

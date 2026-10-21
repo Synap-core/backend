@@ -4,7 +4,7 @@
 -- grant ∩ the human floor. A key with no active grant keeps the legacy
 -- behaviour (scopes + human floor). NULL id sets = no narrowing on that axis;
 -- NULL expires_at = never (explicit; the default is 90 days at mint).
--- Design: CONNECT-RESEARCH/13-w1-grants-design-2026-10-06.md. Idempotent.
+-- Design: the W1 grants design of 2026-10-06 (team pod). Idempotent.
 
 CREATE TABLE IF NOT EXISTS "grants" (
   "id"                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),

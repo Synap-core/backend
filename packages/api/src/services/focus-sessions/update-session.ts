@@ -30,7 +30,9 @@ import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import {
   ASK_LOOKED_AT_KINDS,
+  AskAnswerValueSchema,
   AskSchema,
+  AskSnapshotSchema,
   type Ask,
   type AskAnswerValue,
   type AskSnapshot,
@@ -323,16 +325,6 @@ export const outputRefWireSchema = z.union([
     .strict(),
 ]);
 
-/**
- * The ONE ask schema (`AskSchema`) at the wire, typed as the `Ask` union on
- * both sides. `z.custom<Ask>()` only names the input type, so the slot schema
- * keeps its discriminated-union inference (`satisfies z.ZodType<ExpectedOutput,
- * ExpectedOutput>`); it checks nothing itself. The pipe is what validates: every
- * floor `AskSchema` holds (closed modes, ≤1 recommended, ≤8 looked-at refs
- * stored as `{kind, id}`, http(s) act urls, credential form fields dropped).
- */
-const askWireSchema = z.custom<Ask>().pipe(AskSchema);
-
 /** One stamped answer, as it round-trips on the wire (never authored). */
 const slotAnswerWireSchema = z.object({
   text: z.string(),
@@ -342,10 +334,12 @@ const slotAnswerWireSchema = z.object({
   question: z.string().optional(),
   // The typed half (`@synap-core/types/ask`). Round-trip only, like the
   // rest of `answer`: stamped by the answer door, never authored here.
-  // Explicitly type the value to preserve discriminated union inference.
-  value: z.custom<AskAnswerValue>().optional(),
+  // The real schemas, never `z.custom<T>()`: that validates nothing and
+  // zod-to-openapi cannot express it — the Hub POST/PATCH `/focus-sessions`
+  // bodies use this schema, and one `custom` 500s the whole `/openapi.json`.
+  value: AskAnswerValueSchema.optional(),
   // The ask as posed, frozen at answer time. Round-trip only.
-  askSnapshot: z.custom<AskSnapshot>().optional(),
+  askSnapshot: AskSnapshotSchema.optional(),
 });
 
 export const expectedOutputWireSchema = z.object({
@@ -428,7 +422,7 @@ export const expectedOutputWireSchema = z.object({
   // recommended, flat forms with AI-authored credential fields dropped, http(s)
   // act urls. `.nullable()` for the same reason as `ref`: silence KEEPS it, so
   // "clear the ask" needs an explicit `null`.
-  ask: askWireSchema.nullable().optional(),
+  ask: AskSchema.nullable().optional(),
   // The relation type written output → subject on satisfy. DECLARED (a
   // playbook slot's own declaration carried onto the session), never stamped.
   relationToSubject: z.string().max(80).optional(),

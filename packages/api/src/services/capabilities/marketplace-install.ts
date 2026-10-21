@@ -4,7 +4,7 @@
  * approve-executor (routers/proposals/approve-executors.ts). ONE function per
  * concern so an operator's direct install and an approved agent's install can
  * never diverge in provisioning logic (the "one door per kind" bar from
- * CAPABILITY-MARKETPLACE-PLAN.md P2.1-A).
+ * CAPABILITY-MARKETPLACE-PLAN (team pod) P2.1-A).
  *
  * Kind → door (never re-implemented, only routed to):
  *   capability → `createCapabilityFromDefinition` — the SAME governed applier

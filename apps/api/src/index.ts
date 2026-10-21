@@ -110,6 +110,7 @@ import {
   readinessFor,
 } from "./status/pod-data-status.js";
 import { cachedAuthHealth } from "./status/pod-auth-status.js";
+import { summarizeMigrationLedger } from "./status/migration-ledger.js";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -354,7 +355,7 @@ app.get("/health", async (c) => {
     //
     // DO NOT gate a deploy check on this field: it is not derived from the
     // running build, so it looks identical whether or not a deploy landed.
-    apiTypesVersion: "1.26.1",
+    apiTypesVersion: "1.31.0",
     mode: "multi-user",
     auth: "ory-stack",
     // Git SHA the running image was built from (see deploy/Dockerfile ARG
@@ -457,17 +458,9 @@ app.get("/status/release", async (c) => {
   try {
     const { sql } = await import("@synap/database");
     const rows = await sql<Array<{ filename: string; applied_at: string }>>`
-      SELECT filename, applied_at
-        FROM _migrations
-       ORDER BY applied_at DESC, id DESC
+      SELECT filename, applied_at FROM _migrations
     `;
-    migrations = {
-      lastApplied: rows[0]?.filename ?? null,
-      lastAppliedAt: rows[0]?.applied_at
-        ? new Date(rows[0].applied_at).toISOString()
-        : null,
-      count: rows.length,
-    };
+    migrations = summarizeMigrationLedger(rows);
   } catch (err) {
     migrations = {
       lastApplied: null,

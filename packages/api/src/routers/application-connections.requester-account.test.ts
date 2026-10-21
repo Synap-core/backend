@@ -259,6 +259,7 @@ describe("redeemRequest — the invite is the consent", () => {
   });
 
   it("never re-asks on a refresh redeem", async () => {
+    // The service reports the redeem that did NOT move the request.
     h.redeemRequest.mockResolvedValue({ request: row({}), firstRedeem: false });
     await as("pod-user-1").redeemRequest({
       requestId: REQUEST,

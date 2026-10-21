@@ -2,7 +2,7 @@
  * Governance Rules Router
  *
  * CRUD over `governance_rules` (Governance Convergence Plan, Phase A schema —
- * see GOVERNANCE-CONVERGENCE-PLAN.md). This is the "always approve for X" door:
+ * see docs/decisions/agent-governance.md). This is the "always approve for X" door:
  * approving a proposal can additionally widen governance by inserting ONE
  * revocable, audited rule instead of hand-editing `workspaces.settings` or
  * `agentMetadata` JSONB. The resolver that *consumes* these rows (rung 2.8 in

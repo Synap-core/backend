@@ -204,7 +204,7 @@ export const marketplaceIndexSchema = z
   .superRefine(checkNoDuplicates);
 export type MarketplaceIndex = z.infer<typeof marketplaceIndexSchema>;
 
-// ── Synap's own catalog, signed (docs/pod-console/open-hosting-and-catalog-signing.md §B) ──
+// ── Synap's own catalog, signed (docs/architecture/official-catalog-signing.md) ──
 
 /**
  * Where the Control Plane serves its signed files, under the official

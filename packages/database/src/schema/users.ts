@@ -54,7 +54,7 @@ export interface AgentMetadata {
   autoApproveFor?: string[];
   activePersonality?: string;
   /**
-   * Runtime, sticky workspace focus (WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md,
+   * Runtime, sticky workspace focus (docs/decisions/agent-workspace-focus.md,
    * Layer 2, advisory slice). Settable at provisioning OR at runtime via the
    * `synap_set_workspace_focus` MCP tool; cleared by unsetting the field.
    * Read LIVE at request time — no migration, no key-stamping. Read live, when

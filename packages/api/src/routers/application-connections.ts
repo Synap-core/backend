@@ -300,6 +300,8 @@ export const applicationConnectionsRouter = router({
           ),
           requestedByUserId: ctx.userId,
         });
+        // Only the redeem that won the service's UPDATE…RETURNING is the ask;
+        // a concurrent or repeated redeem records nothing and links nothing.
         if (!firstRedeem) {
           return { requestId: request.id, linkedByInvite: false };
         }

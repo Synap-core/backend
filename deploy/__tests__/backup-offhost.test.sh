@@ -167,11 +167,25 @@ case "$1" in
       *pg_restore*) cat >/dev/null; echo "EVENT pg_restore" >> "$CALLS" ;;
       *"from api_keys"*) echo "EVENT fingerprint" >> "$CALLS"; cat "$FAKE_LIVE_FP_FILE" ;;
       *"count(*) from users"*) echo 5 ;;
-      *"from pg_database where datname"*) echo 1 ;;
+      # A model of the cluster's database list ($FAKE_DBS): a restore renames
+      # the live database aside, creates a fresh one, then drops the aside one.
+      *pg_encoding_to_char*) echo "UTF8|C.UTF-8|C.UTF-8" ;;
+      *pg_database_size*) echo 100 ;;
+      *pg_terminate_backend*) : ;;
+      *"from pg_database where datname="*)
+        n="$(echo "$*" | sed -n "s/.*datname='\([^']*\)'.*/\1/p")"; grep -qx "$n" "$FAKE_DBS" && echo 1 || echo 0 ;;
+      *"alter database "*" rename to "*)
+        a="$(echo "$*" | sed -n 's/.*alter database "\([^"]*\)" rename to.*/\1/p')"; b="$(echo "$*" | sed -n 's/.*rename to "\([^"]*\)".*/\1/p')"
+        { grep -vx "$a" "$FAKE_DBS"; echo "$b"; } > "$FAKE_DBS.n"; mv "$FAKE_DBS.n" "$FAKE_DBS"; echo "EVENT rename $a $b" >> "$CALLS" ;;
+      *"create database "*)
+        n="$(echo "$*" | sed -n 's/.*create database "\([^"]*\)".*/\1/p')"; echo "$n" >> "$FAKE_DBS"; echo "EVENT create $n" >> "$CALLS" ;;
+      *"drop database "*)
+        n="$(echo "$*" | sed -n 's/.*drop database \(if exists \)\{0,1\}"\([^"]*\)".*/\2/p')"; grep -vx "$n" "$FAKE_DBS" > "$FAKE_DBS.n"; mv "$FAKE_DBS.n" "$FAKE_DBS"; echo "EVENT drop $n" >> "$CALLS" ;;
       *psql*) [ -n "$stdin" ] && cat > "$T_STDIN_SINK"; echo "EVENT psql-stdin" >> "$CALLS" ;;
     esac ;;
 esac
 SH
+export FAKE_DBS="$T/dbs"; printf 'synap\nkratos\n' > "$FAKE_DBS"
 cat > "$T/bin/fake-compose" <<'SH'
 #!/bin/sh
 echo "compose $*" >> "$CALLS"
@@ -210,6 +224,9 @@ mkdir -p "$T/tmp"
 # backup run below starts in a fresh second.
 fresh_second() { local s0; s0="$(date -u +%Y%m%dT%H%M%SZ)"; while [ "$(date -u +%Y%m%dT%H%M%SZ)" = "$s0" ]; do sleep 0.1; done; }
 calls_since() { tail -n +"$(( $1 + 1 ))" "$CALLS"; }
+# Under pipefail never pipe this into `grep -q`: grep exits at the first match,
+# tail then dies of SIGPIPE, and the check fails at random (it did, about 1 run
+# in 2 on the devbox). Pipe into `grep >/dev/null`, which reads everything.
 mark() { wc -l < "$CALLS" | tr -d ' '; }
 REPO="$T/repo"
 
@@ -224,7 +241,7 @@ m=$(mark)
 ct sh "$SAFETY" init >"$T/out" 2>&1; rc=$?
 [ "$rc" = 2 ] && [ ! -e "$T/state/backup/restic-password" ] && ok "no BACKUP_REPOSITORY → refused (rc 2), no password written" || bad "init without repo: rc=$rc"
 ct BACKUP_REPOSITORY="$REPO" sh "$SAFETY" init >"$T/out" 2>&1 </dev/null; rc=$?
-[ "$rc" = 1 ] && [ ! -e "$T/state/backup/restic-password" ] && ! calls_since "$m" | grep -q "^restic" \
+[ "$rc" = 1 ] && [ ! -e "$T/state/backup/restic-password" ] && ! calls_since "$m" | grep >/dev/null "^restic" \
     && ok "non-tty stdout → refused before touching anything" || bad "non-tty init: rc=$rc $(cat "$T/out")"
 # download path: no pinned binary yet, the fetched file fails the checksum
 ct BACKUP_REPOSITORY="$REPO" SYNAP_BACKUP_KIT_STDOUT=1 sh "$SAFETY" init >"$T/out" 2>&1; rc=$?
@@ -241,7 +258,7 @@ perm() { if stat -c %a "$1" >/dev/null 2>&1; then stat -c %a "$1"; else stat -f 
 [ "$(grep -c -- "$PW" "$T/kit")" = 1 ] && grep -q "TWO PLACES YOU CONTROL" "$T/kit" && grep -q "restore --from-snapshot" "$T/kit" \
     && ok "recovery kit printed once (password, restore command, two-places message)" || bad "kit: $(cat "$T/kit")"
 ! grep -q -- "$PW" "$T/kit.err" && ! grep -q -- "$PW" "$CALLS" && ok "password never on stderr nor in any command line" || bad "password leaked to stderr/argv"
-calls_since "$m" | grep -q "^restic init" && [ -x "$T/state/bin/mc" ] && ok "restic init ran; mc copied out of the minio container" || bad "init calls: $(calls_since "$m")"
+calls_since "$m" | grep >/dev/null "^restic init" && [ -x "$T/state/bin/mc" ] && ok "restic init ran; mc copied out of the minio container" || bad "init calls: $(calls_since "$m")"
 ct BACKUP_REPOSITORY="$REPO" SYNAP_BACKUP_KIT_STDOUT=1 sh "$SAFETY" init >"$T/out" 2>&1; rc=$?
 [ "$rc" = 1 ] && ! grep -q -- "$PW" "$T/out" && [ "$(cat "$T/state/backup/restic-password")" = "$PW" ] \
     && ok "second init refuses, prints no secret, keeps the password" || bad "re-init: rc=$rc"
@@ -264,7 +281,7 @@ PW2="$(cat "$S2/backup/restic-password" 2>/dev/null)"; KIT="$S2/kit/recovery-kit
 [ "$(cat "$S2/kit/status" 2>/dev/null)" = pending ] && ok "marker state/kit/status = pending (recovery kit not yet saved)" || bad "marker: $(cat "$S2/kit/status" 2>/dev/null)"
 sum1="$(cat "$KIT" "$S2/backup/restic-password" | cksum)"; m=$(mark)
 ni sh "$SAFETY" init --non-interactive >"$T/ni.out" 2>"$T/ni.err" </dev/null; rc=$?
-[ "$rc" = 0 ] && ! calls_since "$m" | grep -q "^restic" && [ "$(cat "$KIT" "$S2/backup/restic-password" | cksum)" = "$sum1" ] && ! grep -q -- "$PW2" "$T/ni.out" "$T/ni.err" \
+[ "$rc" = 0 ] && ! calls_since "$m" | grep >/dev/null "^restic" && [ "$(cat "$KIT" "$S2/backup/restic-password" | cksum)" = "$sum1" ] && ! grep -q -- "$PW2" "$T/ni.out" "$T/ni.err" \
     && ok "re-run is a no-op (rc 0, no restic call, kit + password unchanged, nothing printed)" || bad "ni re-run: rc=$rc $(calls_since "$m" | head -3)"
 ni sh -c '. "$1"; _bk_kit_mark saved' _ "$SAFETY"
 [ "$(cat "$S2/kit/status")" = saved ] && ok "kit-saved clears the pending marker" || bad "kit-saved: $(cat "$S2/kit/status")"
@@ -279,23 +296,23 @@ NOD="$T/ctbin:$T/sys"
 PATH="$NOD" command -v docker >/dev/null 2>&1 && bad "a docker is still on the staged container PATH — the case cannot be staged"
 S4="$T/state4"; REPO4="$T/repo4"; mkdir -p "$S4/bin" && cp "$T/bin/restic" "$S4/bin/restic"; m=$(mark)
 ct SYNAP_STATE_DIR="$S4" BACKUP_REPOSITORY="$REPO4" env PATH="$NOD" sh "$SAFETY" init --non-interactive >"$T/m.out" 2>"$T/m.err" </dev/null; rc=$?
-[ "$rc" = 0 ] && [ -s "$S4/backup/restic-password" ] && calls_since "$m" | grep -q "^restic init" && ! calls_since "$m" | grep -qE "^(docker|compose) " \
+[ "$rc" = 0 ] && [ -s "$S4/backup/restic-password" ] && calls_since "$m" | grep >/dev/null "^restic init" && ! calls_since "$m" | grep -E >/dev/null "^(docker|compose) " \
     && grep -q "the pod host provides it" "$T/m.err" \
     && ok "in the backup container (no docker): init creates the repository + kit, says the host provides mc, never calls docker" \
     || bad "container init without docker: rc=$rc $(cat "$T/m.err")"
 cp "$T/bin/mc" "$S4/bin/mc"; m=$(mark)
 ct SYNAP_STATE_DIR="$S4" env PATH="$NOD" sh -c '. "$1"; _bk_ensure_mc' _ "$SAFETY" >"$T/m.out" 2>&1; rc=$?
-[ "$rc" = 0 ] && ! calls_since "$m" | grep -q "^docker" && ok "in the container, a host-provided state/bin/mc is used as is" || bad "container mc present: rc=$rc"
+[ "$rc" = 0 ] && ! calls_since "$m" | grep >/dev/null "^docker" && ok "in the container, a host-provided state/bin/mc is used as is" || bad "container mc present: rc=$rc"
 # host side: copy once per minio image
 S5="$T/state5"; mkdir -p "$S5"; m=$(mark)
 host_mc() { env SYNAP_STATE_DIR="$S5" SYNAP_DEPLOY_DIR="$T/deploy" COMPOSE_CMD="$T/bin/fake-compose" PATH="$T/bin:$PATH" "$@" sh -c '. "$1"; _bk_ensure_mc' _ "$SAFETY"; }
 host_mc >/dev/null 2>&1; rc=$?
-[ "$rc" = 0 ] && [ -x "$S5/bin/mc" ] && [ "$(cat "$S5/bin/mc.image")" = sha256:minio-1 ] && calls_since "$m" | grep -q "^docker cp minio-cid:/usr/bin/mc" \
+[ "$rc" = 0 ] && [ -x "$S5/bin/mc" ] && [ "$(cat "$S5/bin/mc.image")" = sha256:minio-1 ] && calls_since "$m" | grep >/dev/null "^docker cp minio-cid:/usr/bin/mc" \
     && ok "host: mc copied out of this pod's minio container, its image recorded" || bad "host mc copy: rc=$rc $(calls_since "$m")"
 m=$(mark); host_mc >/dev/null 2>&1
-! calls_since "$m" | grep -q "^docker cp" && ok "host: same minio image → mc not copied again" || bad "host: mc re-copied for an unchanged image"
+! calls_since "$m" | grep >/dev/null "^docker cp" && ok "host: same minio image → mc not copied again" || bad "host: mc re-copied for an unchanged image"
 m=$(mark); host_mc FAKE_MINIO_IMAGE=sha256:minio-2 >/dev/null 2>&1
-calls_since "$m" | grep -q "^docker cp" && [ "$(cat "$S5/bin/mc.image")" = sha256:minio-2 ] && ok "host: a new minio image → mc refreshed" || bad "host: mc not refreshed for a new minio image"
+calls_since "$m" | grep >/dev/null "^docker cp" && [ "$(cat "$S5/bin/mc.image")" = sha256:minio-2 ] && ok "host: a new minio image → mc refreshed" || bad "host: mc not refreshed for a new minio image"
 grep -q '_ue_provide_backup_mc$' "$SCRIPT_DIR/../../synap" && [ "$(grep -c '^    _ue_provide_backup_mc$' "$SCRIPT_DIR/../../synap")" -ge 2 ] \
     && ok "synap provides mc at install AND after every verified update" || bad "synap does not call _ue_provide_backup_mc on both doors"
 
@@ -313,7 +330,7 @@ ct SYNAP_STATE_DIR="$L" sh -c '. "$1"; _bk_kit_layout' _ "$SAFETY"
     && ok "a W7 pod's kit + marker move into state/kit (0600 / 0700), old paths gone" || bad "layout migration: $(ls -la "$L" "$L/kit" 2>&1 | tr '\n' ' ')"
 ct SYNAP_STATE_DIR="$L" sh -c '. "$1"; _bk_kit_layout' _ "$SAFETY"
 [ "$(cat "$L/kit/recovery-kit.txt")" = kit-v7 ] && [ "$(cat "$L/kit/status")" = saved ] && ok "layout is idempotent" || bad "layout re-run changed the kit"
-grep -q "_bk_kit_layout || true" "$SAFETY" && sed -n '/^backup_loop()/,/^}/p' "$SAFETY" | grep -q "_bk_kit_layout" \
+grep -q "_bk_kit_layout || true" "$SAFETY" && sed -n '/^backup_loop()/,/^}/p' "$SAFETY" | grep >/dev/null "_bk_kit_layout" \
     && ok "the backup loop converges the layout on every pass" || bad "backup_loop does not run _bk_kit_layout"
 img_uid="$(sed -n 's/.*adduser -S nodejs -u \([0-9][0-9]*\).*/\1/p' "$SCRIPT_DIR/../Dockerfile")"
 kit_uid="$(sed -n 's/^_BK_BACKEND_UID=\([0-9][0-9]*\)$/\1/p' "$SAFETY")"
@@ -340,25 +357,25 @@ ct sh "$SAFETY" run >"$T/out" 2>&1; rc=$?
 snap1="$(ls "$REPO/snaps" | grep -v meta | tail -1)"
 S="$REPO/snaps/$snap1"
 [ "$rc" = 0 ] && [ -n "$snap1" ] && ok "good dump → snapshot ${snap1:0:8}" || bad "push: rc=$rc $(cat "$T/out")"
-calls_since "$m" | grep "^restic backup" | grep -q -- "--tag fp:5|100|1" && ok "snapshot tagged with the dump's fingerprint" || bad "no fp tag: $(calls_since "$m" | grep '^restic backup')"
+calls_since "$m" | grep "^restic backup" | grep >/dev/null -- "--tag fp:5|100|1" && ok "snapshot tagged with the dump's fingerprint" || bad "no fp tag: $(calls_since "$m" | grep '^restic backup')"
 ls "$S/backups/"*-auto/synap.dump >/dev/null 2>&1 && [ -f "$S/synap-deploy/.env" ] && [ -f "$S/synap-state/release" ] && [ -f "$S/backups/.minio-mirror/files/obj.txt" ] \
     && ok "snapshot holds dumps + .env + state/ + MinIO export (at the container paths)" || bad "snapshot content: $(cd "$S" && find . | head -20)"
 [ ! -e "$S/synap-state/bin" ] && [ ! -e "$S/synap-state/backup" ] && [ ! -e "$S/synap-state/kit" ] && [ -d "$T/state/kit" ] \
     && ok "state/bin, the password and the recovery kit are excluded from the snapshot" || bad "excluded paths present"
 grep -q "'backup', 'ok'.*'$snap1'" "$RUNS" && ok "backup_runs row: ok + snapshot id + fingerprint" || bad "runs: $(tail -1 "$RUNS")"
-calls_since "$m" | grep -q "^curl .*https://hc.example/ping/abc" && ok "heartbeat pinged on success" || bad "no heartbeat"
+calls_since "$m" | grep >/dev/null "^curl .*https://hc.example/ping/abc" && ok "heartbeat pinged on success" || bad "no heartbeat"
 
 m=$(mark); n1="$(ls "$REPO/snaps" | grep -vc meta)"
 fresh_second
 ct FAKE_USERS=0 sh "$SAFETY" run >"$T/out" 2>&1; rc=$?
-[ "$rc" = 3 ] && ! calls_since "$m" | grep -q "^restic backup" && [ "$(ls "$REPO/snaps" | grep -vc meta)" = "$n1" ] \
+[ "$rc" = 3 ] && ! calls_since "$m" | grep >/dev/null "^restic backup" && [ "$(ls "$REPO/snaps" | grep -vc meta)" = "$n1" ] \
     && ok "SUSPECT dump (0 users) → exit 3, NOT pushed" || bad "suspect push: rc=$rc $(calls_since "$m" | grep restic)"
-! calls_since "$m" | grep -q "^curl" && ok "SUSPECT → no heartbeat (the dead-man alarm fires)" || bad "suspect pinged the heartbeat"
+! calls_since "$m" | grep >/dev/null "^curl" && ok "SUSPECT → no heartbeat (the dead-man alarm fires)" || bad "suspect pinged the heartbeat"
 
 m=$(mark)
 fresh_second
 ct FAKE_RESTIC_FAIL=1 sh "$SAFETY" run >"$T/out" 2>&1; rc=$?
-[ "$rc" = 1 ] && [ -s "$T/backups/.push-failed" ] && ! calls_since "$m" | grep -q "^curl" && grep -q "'backup', 'failed'.*restic backup failed" "$RUNS" \
+[ "$rc" = 1 ] && [ -s "$T/backups/.push-failed" ] && ! calls_since "$m" | grep >/dev/null "^curl" && grep -q "'backup', 'failed'.*restic backup failed" "$RUNS" \
     && ok "restic failure → exit 1, .push-failed, no heartbeat, recorded" || bad "restic fail: rc=$rc"
 fresh_second
 ct sh "$SAFETY" run >"$T/out" 2>&1; [ ! -e "$T/backups/.push-failed" ] && ok "next good push clears .push-failed" || bad ".push-failed stuck: $(cat "$T/backups/.push-failed" 2>/dev/null) $(cat "$T/out")"
@@ -368,7 +385,7 @@ echo "── D. drill"
 m=$(mark)
 ct sh "$SAFETY" drill >"$T/out" 2>&1; rc=$?
 [ "$rc" = 0 ] && grep -q "'drill', 'ok'" "$RUNS" && [ ! -e "$T/backups/.drill-failed" ] && ok "faithful snapshot → drill GREEN, recorded" || bad "drill green: rc=$rc $(cat "$T/out")"
-calls_since "$m" | grep -q "^pg_restore PGHOST=.*synap-drill" && ! calls_since "$m" | grep -E "^(pg_restore|psql) PGHOST=($|postgres)" | grep -qv "insert into backup_runs" \
+calls_since "$m" | grep >/dev/null "^pg_restore PGHOST=.*synap-drill" && ! calls_since "$m" | grep -E "^(pg_restore|psql) PGHOST=($|postgres)" | grep -qv "insert into backup_runs" \
     && ok "drill restores into the throwaway cluster only (never PGHOST=postgres)" || bad "drill touched live: $(calls_since "$m" | grep -E '^(pg_restore|psql)')"
 ct FAKE_DRILL_FP="5|99|1" sh "$SAFETY" drill >"$T/out" 2>&1; rc=$?
 [ "$rc" = 1 ] && grep -q "fingerprint mismatch" "$T/out" && [ -s "$T/backups/.drill-failed" ] && grep -q "'drill', 'failed'" "$RUNS" \
@@ -399,7 +416,11 @@ a="$(pos 'restic restore')"; e="$(pos 'postgres-up')"; p="$(pos 'pg_restore')"; 
 [ "$rc" = 0 ] && [ -n "$a" ] && [ -n "$e" ] && [ -n "$p" ] && [ -n "$i" ] && [ -n "$fpos" ] \
     && [ "$a" -lt "$e" ] && [ "$e" -lt "$p" ] && [ "$p" -lt "$i" ] && [ "$i" -lt "$fpos" ] \
     && ok "order: fetch → secrets → DBs → MinIO → fingerprint" || bad "restore order/rc=$rc: $(printf '%s' "$ev" | tr '\n' ';') $(tail -3 "$T/out")"
-calls_since "$m" | grep -q "EVENT postgres-up env-present" && cmp -s "$F/.env" "$T/deploy/.env" && [ "$(perm "$F/.env")" = 600 ] \
+rn="$(pos 'EVENT rename synap synap__pre_restore')"; cr="$(pos 'EVENT create synap$')"; dr="$(pos 'EVENT drop synap__pre_restore')"
+pl="$(pos 'EVENT pg_restore' last)"
+[ -n "$rn" ] && [ -n "$cr" ] && [ -n "$dr" ] && [ "$rn" -lt "$cr" ] && [ "$cr" -lt "$pl" ] && [ "$pl" -lt "$dr" ] && [ "$(sort "$FAKE_DBS" | tr '\n' ' ')" = "kratos synap " ] \
+    && ok "DBs restore into FRESH databases (live renamed aside → created → restored → aside dropped)" || bad "fresh restore: rename=$rn create=$cr restore=$pl drop=$dr dbs=$(tr '\n' ' ' < "$FAKE_DBS")"
+calls_since "$m" | grep >/dev/null "EVENT postgres-up env-present" && cmp -s "$F/.env" "$T/deploy/.env" && [ "$(perm "$F/.env")" = 600 ] \
     && ok "restored .env (0600) is in place before postgres starts" || bad ".env not restored first"
 [ -f "$F/state/release" ] && [ -e "$F/state/postgres-initialized" ] && ok "state/ restored; init marker written after the data" || bad "state: $(ls -A "$F/state")"
 grep -q "pg-secret-1" "$T/stdin-sink" && ! grep -q "pg-secret-1" "$CALLS" && ok "synap role aligned with the restored POSTGRES_PASSWORD via stdin (not argv)" || bad "role password alignment"
@@ -409,7 +430,7 @@ cmp -s "$F/state/backup/restic-password" "$T/kit-password" && ! ls -d "$F/backup
 stage="$(mktemp -d "$T/tmp/imp.XXXX")"; mkdir -p "$stage/files"; echo object > "$stage/files/obj.txt"
 m=$(mark)
 ct sh "$SAFETY" minio-import "$stage" >"$T/out" 2>&1; rc=$?
-[ "$rc" = 0 ] && calls_since "$m" | grep -q "^mc .*mb --ignore-existing synapbk/files" && calls_since "$m" | grep -q "^mc .*mirror --overwrite --quiet $stage/files/ synapbk/files" \
+[ "$rc" = 0 ] && calls_since "$m" | grep >/dev/null "^mc .*mb --ignore-existing synapbk/files" && calls_since "$m" | grep >/dev/null "^mc .*mirror --overwrite --quiet $stage/files/ synapbk/files" \
     && ok "minio-import recreates each bucket and mirrors it back" || bad "minio-import: rc=$rc $(calls_since "$m")"
 # mismatch → RED, staging kept, nothing started
 F2="$T/fresh2"; mkdir -p "$F2/state/bin"; cp "$T/bin/restic" "$F2/state/bin/restic"
@@ -447,8 +468,8 @@ cli restore "$F4/legacy.tar.gz" >"$T/out" 2>&1 </dev/null; rc=$?
 [ "$rc" = 1 ] && grep -q "not a backup directory" "$T/out" && [ ! -e "$F4/.env" ] && ok "legacy tar.gz restore is retired (refused, nothing touched)" || bad "legacy restore: rc=$rc $(cat "$T/out")"
 m=$(mark)
 echo yes | cli restore --from-snapshot latest --password-file "$T/kit-password" >"$T/out" 2>&1; rc=$?
-cmp -s "$F4/.env" "$T/deploy/.env" && calls_since "$m" | grep -q "^restic restore" && calls_since "$m" | grep -q "EVENT minio-import ok" \
-    && calls_since "$m" | grep -q "^compose up -d --remove-orphans" \
+cmp -s "$F4/.env" "$T/deploy/.env" && calls_since "$m" | grep >/dev/null "^restic restore" && calls_since "$m" | grep >/dev/null "EVENT minio-import ok" \
+    && calls_since "$m" | grep >/dev/null "^compose up -d --remove-orphans" \
     && ok "synap restore --from-snapshot runs the engine with the kit password, then starts the stack" || bad "cli restore: rc=$rc $(cat "$T/out")"
 echo no | cli restore --from-snapshot latest --password-file "$T/kit-password" >"$T/out" 2>&1; rc=$?
 [ "$rc" = 0 ] && grep -q "cancelled" "$T/out" && ok "declining the confirmation changes nothing" || bad "cancel: rc=$rc"

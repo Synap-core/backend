@@ -1034,6 +1034,43 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "agent_user_id",
     addedBy: "0313_apps_agent_user.sql",
   },
+  // Pod app connections (0338b). Every app read selects `oauth_client_id`
+  // (Drizzle names every column), every code issue / claim writes / reads
+  // `app_id`, and every client read selects `requested_templates`: without
+  // them every app door and the whole OAuth door 500, the MCP flow included.
+  {
+    table: "apps",
+    column: "oauth_client_id",
+    addedBy: "0338b_pod_app_oauth_apps.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "app_id",
+    addedBy: "0338b_pod_app_oauth_apps.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "requested_templates",
+    addedBy: "0338b_pod_app_oauth_apps.sql",
+  },
+  // Pod app refresh tokens (0339). /token's refresh grant and /revoke read
+  // and write them, and revoking an app revokes them: without the table the
+  // pod app refresh grant, a pod app's /token and every app revoke 500.
+  {
+    table: "oauth_refresh_tokens",
+    column: "token_hash",
+    addedBy: "0339_oauth_refresh_tokens.sql",
+  },
+  {
+    table: "oauth_refresh_tokens",
+    column: "family_id",
+    addedBy: "0339_oauth_refresh_tokens.sql",
+  },
+  {
+    table: "oauth_refresh_tokens",
+    column: "last_used_at",
+    addedBy: "0339_oauth_refresh_tokens.sql",
+  },
   // Computers (0320, MACHINE-IDENTITY-PLAN): the host link every governed
   // agent write reads (host step), and the class principal column both rule
   // stores select. Missing means every agent write would 42703.
@@ -1152,6 +1189,35 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "oauth_authorization_codes",
     column: "consumed_at",
     addedBy: "0207_pod_oauth_authorization_server.sql",
+  },
+  // Pod app clients (0338). Every client lookup at /authorize branches on
+  // `client_kind` and a CIMD client is read from the cache columns, and every
+  // code issue and claim writes / reads `resource`: without them the whole
+  // OAuth door 500s, the MCP (DCR) flow included.
+  {
+    table: "oauth_clients",
+    column: "client_kind",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "requested_permissions",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "metadata_fetched_at",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "metadata_expires_at",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "resource",
+    addedBy: "0338_pod_app_oauth.sql",
   },
 
   // workspaces — soft-archive support (0020)
@@ -2244,7 +2310,7 @@ export async function validateSchemaCoherence(): Promise<void> {
   // the failure mode here is not an error — it is a silent INVERSION: with the
   // old 'workspace' default, every kind a template or an agent creates without
   // an explicit entityScope lands workspace-scoped, and nothing ever complains.
-  // See APP-DOCK-MENTAL-MODEL-PLAN.md §1b.
+  // See APP-DOCK-MENTAL-MODEL-PLAN (team pod) §1b.
   const entityScopeDefault = await sql<
     Array<{ column_default: string | null }>
   >`

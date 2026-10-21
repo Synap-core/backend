@@ -150,7 +150,7 @@ export const profiles = pgTable(
     // are pod-wide (visible in all workspaces) or workspace-scoped.
     //
     // DEFAULT = 'pod' (migration 0220). Doctrine, ratified 2026-08-01 in
-    // APP-DOCK-MENTAL-MODEL-PLAN.md §1b: **a KIND is pod-wide** — it is the
+    // APP-DOCK-MENTAL-MODEL-PLAN (team pod) §1b: **a KIND is pod-wide** — it is the
     // entity's identity, one `person` / one `company` shared by the whole pod.
     // The workspace-scoped half of the model is the ROLE (`profileKind='role'`,
     // instances in `entity_facets`, visibility per-facet-row `workspaceId`).

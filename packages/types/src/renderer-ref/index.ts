@@ -17,7 +17,7 @@
  *
  * Stored as JSONB on `profiles.default_renderers` /
  * `renderer_bindings.ref` and inside `workspaces.settings.profileRenderers`.
- * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+ * Spec: synap-app/docs/architecture/profile-renderer.md
  */
 
 /**

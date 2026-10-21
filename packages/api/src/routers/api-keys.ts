@@ -94,13 +94,16 @@ const APPROVE_COMPUTER_SIGNED_IN = "Approve a computer while signed in.";
  * create a second place for them to drift.
  */
 const oauthAuthorizeParamsSchema = z.object({
-  clientId: z.string().min(1).max(200),
+  // A DCR id (`dcr_…`) or a pod app's metadata-document URL (≤ 512, CIMD).
+  clientId: z.string().min(1).max(512),
   redirectUri: z.string().min(1).max(2048),
   responseType: z.string().max(64).optional(),
   scope: z.string().max(1024).optional(),
   state: z.string().max(2048).optional(),
   codeChallenge: z.string().max(256).optional(),
   codeChallengeMethod: z.string().max(64).optional(),
+  // RFC 8707; validated against this pod's resources in oauth/consent.ts.
+  resource: z.string().max(2048).optional(),
 });
 
 /**
@@ -1321,9 +1324,9 @@ export const apiKeysRouter = router({
    */
   getOAuthConsentContext: protectedProcedure
     .input(oauthAuthorizeParamsSchema)
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       try {
-        return await getOAuthConsentContext(input);
+        return await getOAuthConsentContext(input, ctx.userId);
       } catch (err) {
         throw toConsentTrpcError(err);
       }
@@ -1342,10 +1345,25 @@ export const apiKeysRouter = router({
    * become an open redirect.
    */
   decideOAuthAuthorization: protectedProcedure
-    .input(oauthAuthorizeParamsSchema.extend({ approve: z.boolean() }))
+    .input(
+      oauthAuthorizeParamsSchema.extend({
+        approve: z.boolean(),
+        // A pod app: the (permission, space) pairs the person left ticked.
+        // Untrusted — the pod's own offer bounds it (`connectOAuthApp`).
+        approved: z
+          .array(
+            z.object({
+              permission: z.string().min(1).max(200),
+              workspaceId: z.string().uuid(),
+            })
+          )
+          .max(512)
+          .optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
       try {
-        const result = await decideOAuthAuthorization(input, ctx.userId);
+        const result = await decideOAuthAuthorization(input, ctx.userId, ctx);
         auditLog({
           subjectType: "apiKey",
           action: "create",

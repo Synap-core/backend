@@ -37,7 +37,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_change_kind_scope: {
     "pod-mcp": "synap_change_kind_scope",
-    "cp-connector": null,
+    "cp-connector": "pod__change_kind_scope",
     raycast: null,
   },
   synap_complete_session: {
@@ -212,7 +212,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_list_agents: {
     "pod-mcp": "synap_list_agents",
-    "cp-connector": null,
+    "cp-connector": "pod__list_agents",
     raycast: null,
   },
   synap_list_automations: {
@@ -427,7 +427,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_update_entities: {
     "pod-mcp": "synap_update_entities",
-    "cp-connector": null,
+    "cp-connector": "pod__update_entities",
     raycast: null,
   },
   synap_update_entity: {
@@ -440,6 +440,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__update_project",
     raycast: "update-project",
   },
+  synap_update_rule: {
+    "pod-mcp": "synap_update_rule",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_update_session: {
     "pod-mcp": "synap_update_session",
     "cp-connector": "pod__update_session",
@@ -447,7 +452,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_update_skill: {
     "pod-mcp": "synap_update_skill",
-    "cp-connector": null,
+    "cp-connector": "pod__update_skill",
     raycast: null,
   },
   synap_update_space_brief: {
@@ -462,7 +467,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_update_view_content: {
     "pod-mcp": "synap_update_view_content",
-    "cp-connector": null,
+    "cp-connector": "pod__update_view_content",
     raycast: null,
   },
   synap_update_workspace: {

@@ -9,12 +9,15 @@
  *
  * Pins:
  *   1. Never `Access-Control-Allow-Credentials`, never a reflected Origin
- *      (`*`), only `Content-Type` allowed, GET/POST/OPTIONS, preflight 204 —
- *      for a foreign, a first-party, a `null` and no Origin, and even when a
- *      handler downstream sets the credentials header itself.
+ *      (`*`), only `Content-Type` allowed (plus `If-None-Match` for a read, so
+ *      a browser can revalidate), only `ETag` and `Retry-After` exposed,
+ *      GET/POST/OPTIONS, preflight 204 — for a foreign, a first-party, a
+ *      `null` and no Origin, and even when a handler downstream sets the
+ *      credentials header itself.
  *   2. Authorization / Cookie / X-Session-Token never change the bytes.
  *   3. A random Bearer per request cannot mint a fresh rate bucket (read: IP
- *      ceiling; submit: IP ceiling, then per-share bucket).
+ *      ceiling; submit: IP ceiling, then per-share bucket). Every 429 carries
+ *      a delta-seconds `Retry-After`, and no `RateLimit-*` header is sent.
  *   4. `Cache-Control: no-cache` on reads (never the global max-age=60).
  *   5. 16 KB body ceiling on the STREAM (a chunked body with no length).
  *   6. The legacy `/public/projection` and every normal API keep the
@@ -65,6 +68,8 @@ let chain: {
 
 const FIRST_PARTY = "https://app.pod.example.test";
 const FOREIGN = "https://someone.vercel.app";
+const SITE_ETAG = 'W/"site-v1"';
+const READ_ALLOW_HEADERS = "Content-Type, If-None-Match";
 
 beforeAll(async () => {
   process.env.DATABASE_URL ??=
@@ -92,6 +97,12 @@ function makeApp() {
   app.get("/api/hub/public/shares/:token", (c) =>
     c.json({ token: c.req.param("token").length })
   );
+  // A revalidating read, like the real site doors: weak ETag, 304 on a match.
+  app.get("/api/hub/public/sites/:siteToken", (c) => {
+    c.header("ETag", SITE_ETAG);
+    if (c.req.header("If-None-Match") === SITE_ETAG) return c.body(null, 304);
+    return c.json({ site: true });
+  });
   // A ROGUE handler: tries to widen the policy downstream. Must be scrubbed.
   app.get("/api/hub/public/rogue/:token", (c) => {
     c.header("Access-Control-Allow-Credentials", "true");
@@ -139,7 +150,7 @@ describe("public doors — credentialless CORS", () => {
     { "X-Session-Token": "abc" },
   ];
 
-  it("GET / POST / OPTIONS from any origin: `*`, no credentials header, Content-Type only", async () => {
+  it("GET / POST / OPTIONS from any origin: `*`, no credentials header, no credential header allowed", async () => {
     const app = makeApp();
     let checked = 0;
     for (const origin of ORIGINS) {
@@ -175,8 +186,13 @@ describe("public doors — credentialless CORS", () => {
             ctx
           ).toBeNull();
           expect(res.headers.get("access-control-allow-origin"), ctx).toBe("*");
+          // A read (and a preflight for one) may also send If-None-Match; a
+          // write may send Content-Type only. Never a credential header.
           expect(res.headers.get("access-control-allow-headers"), ctx).toBe(
-            "Content-Type"
+            method === "POST" ? "Content-Type" : READ_ALLOW_HEADERS
+          );
+          expect(res.headers.get("access-control-expose-headers"), ctx).toBe(
+            "ETag, Retry-After"
           );
           expect(res.headers.get("access-control-allow-methods"), ctx).toBe(
             "GET, POST, OPTIONS"
@@ -221,6 +237,93 @@ describe("public doors — credentialless CORS", () => {
         "true"
       );
     }
+  });
+});
+
+describe("public doors — a browser can revalidate a read", () => {
+  const preflight = (
+    app: Hono,
+    url: string,
+    method: string | null,
+    requestHeaders: string
+  ) =>
+    app.request(url, {
+      method: "OPTIONS",
+      headers: {
+        Origin: FOREIGN,
+        "x-forwarded-for": nextIp6(),
+        "Access-Control-Request-Headers": requestHeaders,
+        ...(method ? { "Access-Control-Request-Method": method } : {}),
+      },
+    });
+
+  it("a preflight for a GET read door allows If-None-Match, and nothing beyond it", async () => {
+    const app = makeApp();
+    for (const url of [
+      "/api/hub/public/shares/tok-r",
+      "/api/hub/public/sites/tok-r",
+      "/api/hub/public/forms/tok-r",
+    ]) {
+      for (const method of ["GET", "HEAD", "get"]) {
+        const res = await preflight(app, url, method, "if-none-match");
+        expect(res.status, url).toBe(204);
+        expect(res.headers.get("access-control-allow-headers"), url).toBe(
+          READ_ALLOW_HEADERS
+        );
+        expect(res.headers.get("access-control-allow-origin"), url).toBe("*");
+        expect(
+          res.headers.get("access-control-allow-credentials"),
+          url
+        ).toBeNull();
+      }
+      // An arbitrary header asked for alongside is never echoed back.
+      const odd = await preflight(app, url, "GET", "if-none-match, x-custom");
+      expect(odd.headers.get("access-control-allow-headers"), url).toBe(
+        READ_ALLOW_HEADERS
+      );
+    }
+  });
+
+  it("a preflight for a POST submit door (same path as the form read) keeps Content-Type only", async () => {
+    const app = makeApp();
+    for (const method of ["POST", "PUT", "DELETE", null]) {
+      const res = await preflight(
+        app,
+        "/api/hub/public/forms/tok-w",
+        method,
+        "content-type, if-none-match"
+      );
+      expect(res.status, String(method)).toBe(204);
+      expect(
+        res.headers.get("access-control-allow-headers"),
+        String(method)
+      ).toBe("Content-Type");
+    }
+  });
+
+  it("If-None-Match on a site door answers 304 with the public policy intact", async () => {
+    const app = makeApp();
+    const ip = nextIp6();
+    const first = await app.request("/api/hub/public/sites/tok-etag", {
+      headers: { Origin: FOREIGN, "x-forwarded-for": ip },
+    });
+    expect(first.status).toBe(200);
+    expect(first.headers.get("etag")).toBe(SITE_ETAG);
+    const again = await app.request("/api/hub/public/sites/tok-etag", {
+      headers: {
+        Origin: FOREIGN,
+        "If-None-Match": SITE_ETAG,
+        "x-forwarded-for": ip,
+      },
+    });
+    expect(again.status).toBe(304);
+    expect(await again.text()).toBe("");
+    expect(again.headers.get("access-control-allow-origin")).toBe("*");
+    expect(again.headers.get("access-control-allow-credentials")).toBeNull();
+    expect(again.headers.get("access-control-expose-headers")).toBe(
+      "ETag, Retry-After"
+    );
+    expect(again.headers.get("cache-control")).toBe("no-cache");
   });
 });
 
@@ -287,6 +390,70 @@ describe("public doors — rate limits a caller cannot reset", () => {
       headers: { "x-forwarded-for": nextIp6() },
     });
     expect(other.status).toBe(200);
+  });
+
+  /** A 429 a browser can act on: numeric delta-seconds, readable cross-origin. */
+  async function expectRetryAfter(res: Response, windowMs: number) {
+    expect(res.status).toBe(429);
+    const retryAfter = res.headers.get("retry-after");
+    expect(retryAfter).toMatch(/^\d+$/);
+    expect(Number(retryAfter)).toBeGreaterThanOrEqual(1);
+    expect(Number(retryAfter)).toBeLessThanOrEqual(windowMs / 1000);
+    expect(res.headers.get("access-control-expose-headers")).toBe(
+      "ETag, Retry-After"
+    );
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    expect(res.headers.get("access-control-allow-credentials")).toBeNull();
+    // Only Retry-After: the draft RateLimit-* headers stay off.
+    const rateLimitHeaders = headerList(res.headers)
+      .map(([k]) => k)
+      .filter((k) => k.startsWith("ratelimit"));
+    expect(rateLimitHeaders).toEqual([]);
+    expect(await res.json()).toMatchObject({ error: "Too many requests" });
+  }
+
+  it("read: the 429 carries Retry-After; an allowed read carries no RateLimit-* header", async () => {
+    const app = makeApp();
+    const ip = nextIp6();
+    let res: Response | undefined;
+    for (let i = 0; i <= cfg.readIp.max; i += 1) {
+      res = await app.request(`/api/hub/public/shares/tok-ra-${i}`, {
+        headers: { Origin: FOREIGN, "x-forwarded-for": ip },
+      });
+      if (i === 0) {
+        expect(res.status).toBe(200);
+        expect(res.headers.get("retry-after")).toBeNull();
+        expect(
+          headerList(res.headers).filter(([k]) => k.startsWith("ratelimit"))
+        ).toEqual([]);
+      }
+    }
+    await expectRetryAfter(res!, cfg.readIp.windowMs);
+  });
+
+  it("submit: the IP-ceiling 429 and the per-share 429 both carry Retry-After", async () => {
+    const app = makeApp();
+    const submit = (token: string, ip: string) =>
+      app.request(`/api/hub/public/forms/${token}/submissions`, {
+        method: "POST",
+        headers: {
+          Origin: FOREIGN,
+          "Content-Type": "application/json",
+          "x-forwarded-for": ip,
+        },
+        body: "{}",
+      });
+    const ip = nextIp6();
+    let res: Response | undefined;
+    for (let i = 0; i <= cfg.submitIp.max; i += 1) {
+      res = await submit(crypto.randomUUID(), ip);
+    }
+    await expectRetryAfter(res!, cfg.submitIp.windowMs);
+
+    for (let i = 0; i <= cfg.submitShare.max; i += 1) {
+      res = await submit("one-form-ra", nextIp6());
+    }
+    await expectRetryAfter(res!, cfg.submitShare.windowMs);
   });
 
   it("read: no per-share cap — one share read from many IPs is never limited", async () => {
@@ -423,8 +590,28 @@ describe("public doors — every route under the prefix is covered by the ONE pr
     // Non-vacuity: the legacy projection and at least the share read exist.
     expect(routes.some((r) => r.route === "/public/projection")).toBe(true);
     expect(doors.some((r) => r.route === "/public/shares/:token")).toBe(true);
+    // The site doors (collection door C1b) are reads: the `public_read` class.
+    const siteDoors = doors.filter((r) => r.route.startsWith("/public/sites/"));
+    expect(siteDoors.map((r) => r.route).sort()).toEqual([
+      "/public/sites/:siteToken",
+      "/public/sites/:siteToken/collections/:key",
+      "/public/sites/:siteToken/collections/:key/:slugOrPublicId",
+    ]);
+    for (const { method, route } of siteDoors) {
+      expect(method, route).toBe("get");
+      for (const mount of ["/api/hub", "/api/hub-protocol"]) {
+        expect(
+          classifyRateLimitPath(mount + route.replace(/:\w+/g, "seg"), "GET"),
+          route
+        ).toBe("public_read");
+      }
+    }
     for (const { method, route, file } of doors) {
-      const concrete = route.replace(/:[A-Za-z_]+/g, "sample-capability-123");
+      // The FIRST param is the capability (the secret the logs must redact);
+      // later ones (a collection key, a public address) are public names.
+      const concrete = route
+        .replace(/:[A-Za-z_]+/, "sample-capability-123")
+        .replace(/:[A-Za-z_]+/g, "public-segment");
       for (const mount of ["/api/hub", "/api/hub-protocol"]) {
         const full = mount + concrete;
         expect(isPublicDoorPath(full), `${file} ${route}`).toBe(true);

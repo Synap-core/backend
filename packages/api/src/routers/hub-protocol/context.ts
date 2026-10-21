@@ -24,6 +24,7 @@ import {
 } from "../proposals/render-for-prompt.js";
 import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
 import { findUserDefaultWorkspaceId } from "../../utils/user-default-workspace.js";
+import { assertChannelWrite } from "../../utils/assert-channel-write.js";
 
 export const contextRouter = router({
   /**
@@ -312,7 +313,7 @@ export const contextRouter = router({
       // a distinguishable 403 — no existence oracle.
       const visible = ctx.userId
         ? await db
-            .select({ id: channels.id })
+            .select({ id: channels.id, workspaceId: channels.workspaceId })
             .from(channels)
             .where(
               and(
@@ -325,6 +326,9 @@ export const contextRouter = router({
       if (visible.length === 0) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
       }
+      // The read floor above is not a write check: the key's grant must allow
+      // changing the channel, in the channel's own workspace (S7).
+      await assertChannelWrite(visible[0], "channel", "update");
 
       // A simple metadata update (contextSummary is not event-sourced); kept
       // direct as a specialized Hub Protocol operation.

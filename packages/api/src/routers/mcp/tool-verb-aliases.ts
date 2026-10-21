@@ -59,6 +59,8 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   // A rule IS a `skills` row (`category: "rule"`) governed under its own
   // `rule/create` door — hence both keys: skill teaching still applies to it.
   synap_create_rule: ["rule.create", "skill.create", "synap_create_rule"],
+  // Its edit twin, governed under `rule/update` — same pairing as create.
+  synap_update_rule: ["rule.update", "skill.update", "synap_update_rule"],
   synap_start_session: ["synap_start_session"],
   synap_update_session: ["synap_update_session"],
   synap_complete_session: ["synap_complete_session"],

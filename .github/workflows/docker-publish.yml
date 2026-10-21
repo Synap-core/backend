@@ -474,11 +474,15 @@ jobs:
           git archive --format=tar.gz -o "synap-deploy-${{ steps.id.outputs.id }}.tar.gz" HEAD \
             synap deploy kratos docker/postgres ':(exclude)deploy/__tests__'
 
+      # minFrom is DERIVED (--min-from auto → scripts/release-min-from.mjs): the
+      # newest migration of the newest v* release that first shipped an EXPAND a
+      # `-- synap:contract-of` marker names, fetched shallowly from origin's tags.
+      # Rollback swaps images only, so an older pod must update through it first.
       - name: Build release.json (third-party images resolved to digests)
         run: |
           OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
           python3 deploy/release/make-manifest.py \
-            --id "${{ steps.id.outputs.id }}" --channel "${{ steps.id.outputs.channel }}" \
+            --id "${{ steps.id.outputs.id }}" --channel "${{ steps.id.outputs.channel }}" --min-from auto \
             --git-sha "${{ needs.build-and-push-backend-api.outputs.resolved_sha }}" \
             --image "SYNAP_IMAGE_BACKEND=ghcr.io/${OWNER}/backend@${{ needs.build-and-push-backend-api.outputs.digest }}" \
             --image "SYNAP_IMAGE_POD_ADMIN=ghcr.io/${OWNER}/pod-admin@${{ needs.build-and-push-pod-admin.outputs.digest }}" \

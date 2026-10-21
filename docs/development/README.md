@@ -1,28 +1,16 @@
-# Backend development guides
+# Backend development
 
-English index for **`synap-backend/docs/development/`**. Older French stubs that pointed to missing files (`EXTENSIBILITY_GUIDE_V1.md`, etc.) were removed — those topics belong in **team docs** or package READMEs.
+Setting up, testing and submitting a change: [`CONTRIBUTING.md`](../../CONTRIBUTING.md).
 
-## Guides in this folder
+The engineering notes for each part of the backend live next to its code:
 
-| Doc                                                                    | Purpose                                   |
-| ---------------------------------------------------------------------- | ----------------------------------------- |
-| [START_HERE.md](./START_HERE.md)                                       | First-time backend clone orientation      |
-| [QUICK_START.md](./QUICK_START.md)                                     | Fast path + links to progressive / hybrid |
-| [QUICK_START_LOCAL.md](./QUICK_START_LOCAL.md)                         | Local API + remote Docker services        |
-| [UNIFIED_SETUP.md](./UNIFIED_SETUP.md)                                 | Single-machine full stack                 |
-| [PROGRESSIVE_SETUP.md](./PROGRESSIVE_SETUP.md)                         | Local → remote, phase by phase            |
-| [HYBRID_DEVELOPMENT.md](./HYBRID_DEVELOPMENT.md)                       | Mix local and remote dependencies         |
-| [LOCAL_BACKEND_REMOTE_SERVICES.md](./LOCAL_BACKEND_REMOTE_SERVICES.md) | Remote-only services matrix               |
-| [FRONTEND_CONNECTION.md](./FRONTEND_CONNECTION.md)                     | How the web app reaches the API           |
-| [SDK_REFERENCE.md](./SDK_REFERENCE.md)                                 | Monorepo packages overview                |
-
-## Canonical team space (prefer for onboarding)
-
-- **[DevOps — start here](../../synap-team-docs/content/team/devops/start-here.mdx)** (route `/team/devops/start-here`)
-- **[Quick start](../../synap-team-docs/content/team/devops/quick-start.mdx)** · **[Unified setup](../../synap-team-docs/content/team/devops/unified-setup.mdx)**
-
-## Frontend ↔ Intelligence (moved)
-
-The long **Frontend intelligence integration** guide now lives in team docs:
-
-**`synap-team-docs/content/team/synap-app/frontend-intelligence-integration.mdx`** → `/team/synap-app/frontend-intelligence-integration`
+| Topic                                                        | Where                                                                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| Hub Protocol schemas (Intelligence Service and pod)          | [`packages/hub-protocol/README.md`](../../packages/hub-protocol/README.md)                             |
+| Feed ingestion (RSS/Atom)                                    | [`packages/feed-service/README.md`](../../packages/feed-service/README.md)                             |
+| Auth bootstrap (credential flows of the SDK and REST client) | [`packages/auth-bootstrap/README.md`](../../packages/auth-bootstrap/README.md)                         |
+| Migration runner contract                                    | header of [`packages/database/src/scripts/migrate.ts`](../../packages/database/src/scripts/migrate.ts) |
+| Deployment, Compose stack, operator CLI                      | [`deploy/README.md`](../../deploy/README.md)                                                           |
+| Building an app or agent on a pod                            | [`docs/DEVELOPER.md`](../DEVELOPER.md)                                                                 |
+| Architecture notes per subsystem                             | [`docs/architecture/README.md`](../architecture/README.md)                                             |
+| Decision records                                             | [`docs/decisions/README.md`](../decisions/README.md)                                                   |

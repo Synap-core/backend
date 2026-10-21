@@ -39,7 +39,10 @@ vi.mock("../access/key-identity.js", () => ({
   })),
 }));
 
+import { z } from "zod";
 import { hubProtocolRouter } from "../routers/hub-protocol/index.js";
+import { router } from "../trpc.js";
+import { scopedProcedure } from "./api-key-auth.js";
 import {
   GRANT_DOOR_UNSUPPORTED,
   GRANT_OWNER_WIDE_UNSUPPORTED,
@@ -65,11 +68,25 @@ const STAR_ONE_WS = {
   clientId: null,
 };
 
-function bearerCaller(): Record<string, unknown> {
+/**
+ * The served hub router plus ONE test-only mutation no row classifies — the
+ * fail-closed path. Since W2a–W2d no live row is `refused`, so an unclassified
+ * mutation is what a scoped key must still be fenced from.
+ */
+const fixture = router({
+  fixture: router({
+    unclassified: scopedProcedure(["hub-protocol.write"])
+      .input(z.object({ x: z.string() }))
+      .mutation(() => "ran"),
+  }),
+});
+
+function bearerCaller(path: string): Record<string, unknown> {
   const req = new Request("http://pod.test/api/hub/trpc/x", {
     headers: { authorization: "Bearer sk_test" },
   });
-  return hubProtocolRouter.createCaller({
+  const served = path.startsWith("fixture.") ? fixture : hubProtocolRouter;
+  return served.createCaller({
     req,
     authenticated: false,
   } as never) as unknown as Record<string, unknown>;
@@ -80,7 +97,7 @@ async function outcome(path: string): Promise<string> {
     .split(".")
     .reduce<unknown>(
       (o, k) => (o as Record<string, unknown>)[k],
-      bearerCaller()
+      bearerCaller(path)
     ) as (input: unknown) => Promise<unknown>;
   try {
     await fn(undefined);
@@ -107,10 +124,12 @@ describe("apiKeyMiddleware fences tRPC mutations for scoped keys (S7)", () => {
     keyState.grant = AI;
     expect(await outcome("documents.patchDocument")).toBe("PAST_FENCE");
     expect(await outcome("services.register")).toBe("FENCED:owner_wide");
-    expect(await outcome("entities.createEntity")).toBe("FENCED:write");
-    expect(await outcome("automations.activateAutomation")).toBe(
-      "FENCED:write"
-    );
+    // Refused rows were fixed in W2a–W2d and flipped to GATED: the door
+    // itself now bounds them (grant on the real target; D1 owner authority).
+    expect(await outcome("entities.createEntity")).toBe("PAST_FENCE");
+    expect(await outcome("automations.activateAutomation")).toBe("PAST_FENCE");
+    // Fail closed: a mutation no row classifies is still fenced.
+    expect(await outcome("fixture.unclassified")).toBe("FENCED:write");
     // Queries keep today's rule.
     expect(await outcome("entities.getEntities")).toBe("PAST_FENCE");
     expect(await outcome("search.search")).toBe("FENCED:read");
@@ -123,6 +142,7 @@ describe("apiKeyMiddleware fences tRPC mutations for scoped keys (S7)", () => {
       "services.register",
       "entities.createEntity",
       "search.search",
+      "fixture.unclassified",
     ]) {
       expect(await outcome(p), p).toBe("PAST_FENCE");
     }
@@ -132,12 +152,15 @@ describe("apiKeyMiddleware fences tRPC mutations for scoped keys (S7)", () => {
     keyState.grant = STAR_ONE_WS;
     expect(await outcome("documents.patchDocument")).toBe("PAST_FENCE");
     expect(await outcome("services.register")).toBe("FENCED:owner_wide");
-    expect(await outcome("entities.createEntity")).toBe("FENCED:write");
+    // GATED since W2a: the create door checks the pin on where the row lands.
+    expect(await outcome("entities.createEntity")).toBe("PAST_FENCE");
+    expect(await outcome("fixture.unclassified")).toBe("FENCED:write");
   });
 
   it("a key with no grant (legacy) is not fenced", async () => {
     keyState.grant = null;
     expect(await outcome("entities.createEntity")).toBe("PAST_FENCE");
     expect(await outcome("search.search")).toBe("PAST_FENCE");
+    expect(await outcome("fixture.unclassified")).toBe("PAST_FENCE");
   });
 });

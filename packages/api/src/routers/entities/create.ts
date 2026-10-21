@@ -65,6 +65,7 @@ import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { getAgentFocusProjectId } from "../../services/agent-identity-service.js";
 import { initialStatusFloor } from "../../services/lifecycle/initial-status-floor.js";
 import { auditLog } from "../../utils/audit-log.js";
+import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { randomUUID } from "crypto";
@@ -563,6 +564,35 @@ export const createProcs = {
           }
           if (identity.match === "strong" && identity.entity && visibleMatch) {
             const matchedId = identity.entity.id;
+            // A merge WRITES onto the matched row (signals, enrich, body): the
+            // calling key's grant must allow updating it where it LIVES, and
+            // creating its body document there, before anything lands — the
+            // enrich door's own gate runs too late (signals and the body are
+            // written first) and its denial is swallowed (S7).
+            const mergeWorkspaceId =
+              (visibleMatch as { workspaceId?: string | null }).workspaceId ??
+              null;
+            const mergeWrites =
+              externalIdSignal.length > 0 ||
+              Object.values(input.properties ?? {}).some(
+                (v) => v !== undefined && v !== null && v !== ""
+              ) ||
+              !!input.content?.trim();
+            if (mergeWrites) {
+              await assertKeyMayWrite({
+                subjectType: "entity",
+                action: "update",
+                workspaceId: mergeWorkspaceId,
+                data: { id: matchedId },
+              });
+            }
+            if (input.content?.trim()) {
+              await assertKeyMayWrite({
+                subjectType: "document",
+                action: "create",
+                workspaceId: mergeWorkspaceId,
+              });
+            }
             // Register the external_id anchor onto the matched subject so the
             // NEXT create with this provider id resolves here directly — not only
             // via whatever signal matched THIS time (e.g. a create that dedups on
@@ -1157,6 +1187,9 @@ export const createProcs = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: permWorkspaceId,
+        // The key's grant is checked where the row LANDS — null for a
+        // pod-scope kind — never the ambient lens it fell back to (S7).
+        grantWorkspaceId: resolvedEntityWorkspaceId ?? null,
         subjectType: "entity",
         action: "create",
         source: input.source,

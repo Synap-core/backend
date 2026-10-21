@@ -23,10 +23,36 @@ export const AUTH_CODE_TTL_MS = 10 * 60 * 1000;
 
 export interface StoredClient {
   clientId: string;
+  /** 'dcr' — registered at /register; 'cimd' — a cached metadata document. */
+  clientKind: "dcr" | "cimd";
   clientName: string;
   redirectUris: string[];
   scopes: string[];
+  /** CIMD only: the grant-grammar permissions the document declares. */
+  requestedPermissions: string[];
+  /** CIMD only: the workspace-template slugs the document declares (0338b). */
+  requestedTemplates?: string[];
+  clientUri?: string | null;
+  initiateLoginUri?: string | null;
+  metadataFetchedAt?: Date | null;
+  metadataExpiresAt?: Date | null;
+  /** First registration (DCR) or first fetch (CIMD). */
   createdAt: Date;
+}
+
+/** A validated metadata document, ready to cache (client-metadata.ts). */
+export interface CimdClientInput {
+  clientId: string;
+  clientName: string;
+  redirectUris: string[];
+  scopes: string[];
+  requestedPermissions: string[];
+  requestedTemplates: string[];
+  clientUri: string | null;
+  initiateLoginUri: string | null;
+  metadataFetchedAt: Date;
+  metadataExpiresAt: Date;
+  metadataSha256: string;
 }
 
 export interface IssuedCodeInput {
@@ -41,6 +67,13 @@ export interface IssuedCodeInput {
   scopes: string[];
   /** PKCE S256 challenge, already validated by `assertPkceChallenge`. */
   codeChallenge: string;
+  /** RFC 8707 resource, canonical (`resourceForIssuer`), or null. */
+  resource: string | null;
+  /**
+   * A pod app's approved `apps` row (mode 'oauth', 0338b): /token mints THAT
+   * app's key. Null for an MCP (DCR) client.
+   */
+  appId?: string | null;
 }
 
 export interface ClaimedCode {
@@ -49,6 +82,8 @@ export interface ClaimedCode {
   redirectUri: string;
   scopes: string[];
   codeChallenge: string;
+  resource: string | null;
+  appId: string | null;
 }
 
 function hashCode(raw: string): string {
@@ -71,6 +106,7 @@ export async function insertClient(metadata: {
   const createdAt = new Date();
   await db.insert(oauthClients).values({
     clientId,
+    clientKind: "dcr",
     clientName: metadata.clientName,
     redirectUris: metadata.redirectUris,
     scopes: metadata.scopes,
@@ -86,6 +122,44 @@ export async function findClient(
     where: eq(oauthClients.clientId, clientId),
   });
   return row ?? null;
+}
+
+/**
+ * Cache a validated Client ID Metadata Document. Keyed on the client_id URL:
+ * the first fetch inserts (its `created_at` is "first seen"), every refresh
+ * overwrites the document fields and keeps `created_at`. Only a 'cimd' row is
+ * ever overwritten — a DCR id is `dcr_…` and can never equal a URL, and the
+ * `setWhere` makes that a property of the statement rather than of the ids.
+ */
+export async function upsertCimdClient(
+  input: CimdClientInput
+): Promise<StoredClient> {
+  const fields = {
+    clientName: input.clientName,
+    redirectUris: input.redirectUris,
+    scopes: input.scopes,
+    requestedPermissions: input.requestedPermissions,
+    requestedTemplates: input.requestedTemplates,
+    clientUri: input.clientUri,
+    initiateLoginUri: input.initiateLoginUri,
+    metadataFetchedAt: input.metadataFetchedAt,
+    metadataExpiresAt: input.metadataExpiresAt,
+    metadataSha256: input.metadataSha256,
+  };
+  const [row] = await db
+    .insert(oauthClients)
+    .values({ clientId: input.clientId, clientKind: "cimd", ...fields })
+    .onConflictDoUpdate({
+      target: oauthClients.clientId,
+      set: fields,
+      setWhere: eq(oauthClients.clientKind, "cimd"),
+    })
+    .returning();
+  if (!row) {
+    // The conflict row exists but is not a CIMD row: never overwrite it.
+    throw new Error("oauth_clients: client_id is taken by a non-CIMD client");
+  }
+  return row;
 }
 
 // ─── Authorization codes ─────────────────────────────────────────────────────
@@ -105,6 +179,8 @@ export async function issueAuthorizationCode(
     redirectUri: input.redirectUri,
     scopes: input.scopes,
     codeChallenge: input.codeChallenge,
+    resource: input.resource,
+    appId: input.appId ?? null,
     expiresAt: new Date(Date.now() + AUTH_CODE_TTL_MS),
   });
   return code;
@@ -145,6 +221,8 @@ export async function claimAuthorizationCode(
       redirectUri: oauthAuthorizationCodes.redirectUri,
       scopes: oauthAuthorizationCodes.scopes,
       codeChallenge: oauthAuthorizationCodes.codeChallenge,
+      resource: oauthAuthorizationCodes.resource,
+      appId: oauthAuthorizationCodes.appId,
     });
   return row ?? null;
 }

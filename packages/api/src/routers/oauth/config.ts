@@ -54,7 +54,9 @@ export const OAUTH_REVOCABLE_AGENT_TYPES: readonly OAuthAgentType[] = [
  * the client that asked for it (the agent user is shared by every client the
  * same human connects), so the token endpoint writes it and the console's
  * client inventory (`oauthClients.*`) reads it through these two functions.
- * A `dcr_` client id is base64url — it never contains `:`.
+ * A `dcr_` client id is base64url and never contains `:`, but a CIMD client id
+ * is an https URL that always does (`https://…`). A user id never does, so the
+ * parse splits at the LAST `:`.
  */
 const OAUTH_INSTANCE_PREFIX = "oauth:";
 
@@ -75,9 +77,37 @@ export function parseOauthKeyInstanceId(
 ): { clientId: string; userId: string } | null {
   if (!instanceId?.startsWith(OAUTH_INSTANCE_PREFIX)) return null;
   const rest = instanceId.slice(OAUTH_INSTANCE_PREFIX.length);
-  const cut = rest.indexOf(":");
+  const cut = rest.lastIndexOf(":");
   if (cut <= 0 || cut === rest.length - 1) return null;
   return { clientId: rest.slice(0, cut), userId: rest.slice(cut + 1) };
+}
+
+/**
+ * The Synap apps (spec 17 §6.2, verified tier v1): a pod app whose client_id
+ * origin is EXACTLY `https://<id>.synap.live` for one of these ids is shown as
+ * a "Synap app" on the consent screen; every other app is "Unverified". The
+ * same exact-origin rule as the browser's hosted-app check, and the ids of the
+ * Control Plane's built-in applications plus content-studio.
+ */
+export const SYNAP_APP_IDS = [
+  "crm",
+  "hub",
+  "studio",
+  "canvas",
+  "devplane",
+  "the-arch",
+  "content-studio",
+] as const;
+
+/** Is this CIMD client_id a Synap app (exact-origin match, https only)? */
+export function isSynapApp(clientId: string): boolean {
+  let origin: string;
+  try {
+    origin = new URL(clientId).origin;
+  } catch {
+    return false;
+  }
+  return SYNAP_APP_IDS.some((id) => origin === `https://${id}.synap.live`);
 }
 
 /**
@@ -91,9 +121,10 @@ export function parseOauthKeyInstanceId(
  * either grammar gets exactly what it asked for rather than falling through to
  * the registered default.
  *
- * `offline_access` is deliberately absent: this AS issues no refresh token (see
- * `buildAuthorizationServerMetadata`), and advertising a scope we never honor is
- * a lie a client acts on.
+ * `offline_access` is deliberately absent: an MCP client is issued no refresh
+ * token, and a pod app gets one without asking (see
+ * `buildAuthorizationServerMetadata`), so advertising it would be a lie a
+ * client acts on.
  */
 export const OAUTH_SUPPORTED_SCOPES = ["mcp.read", "mcp.write"] as const;
 

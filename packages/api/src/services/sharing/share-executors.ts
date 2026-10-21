@@ -6,11 +6,18 @@ import { reportApproved } from "../../routers/proposals/executors/shared.js";
 import { applyShare, planShare, SHARE_AUDIENCES } from "./share-service.js";
 import { SHARE_KINDS } from "./exposure-policy.js";
 import { applyPublish, planPublish } from "./publish-service.js";
-import { applyConfigureSite, planSite } from "./site-service.js";
+import {
+  applyConfigureSite,
+  applySitePublish,
+  planSite,
+  planSitePublish,
+  SITE_PUBLISH_MAX_RECORDS,
+} from "./site-service.js";
 
 /**
- * Approve-executor for `share/create` — an AGENT's share, publish, or site
- * (`op: "configure_site"`).
+ * Approve-executor for `share/create` — an AGENT's share, publish, site
+ * (`op: "configure_site"`) or batch publish into a site (`op:
+ * "publish_records"`).
  *
  * REPLAY, never reconstruct: the stored payload is re-validated and re-planned
  * through the SAME `planShare` the direct door runs, re-floored NOW on the
@@ -48,11 +55,91 @@ export function registerShareExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
+      // Every branch ends the same way once its write landed.
+      const markApproved = async () => {
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+      };
+
       const raw = (proposal.data ?? {}) as Record<string, unknown>;
       const inner = (raw.data ?? raw) as Record<string, unknown>;
       const resourceType = inner.resourceType;
       const audience = inner.audience;
       const ownerUserId = proposal.subjectUserId;
+
+      // A BATCH PUBLISH into a site (D5) files the same floored door with
+      // `op: "publish_records"` and ids only. EVERY record is re-planned NOW
+      // on the proposal's SUBJECT through the SAME `planSitePublish` the
+      // direct door runs (policy, project membership, slug), so a policy
+      // tightened or a record moved while the proposal waited is skipped,
+      // never published. The site-level checks refuse the whole approval. An
+      // approved member is live at once: the site's token addresses it.
+      if (inner.op === "publish_records") {
+        const entityIds = inner.entityIds;
+        if (
+          audience !== "public" ||
+          typeof inner.siteId !== "string" ||
+          !Array.isArray(entityIds) ||
+          entityIds.length === 0 ||
+          entityIds.length > SITE_PUBLISH_MAX_RECORDS ||
+          !entityIds.every((id) => typeof id === "string")
+        ) {
+          throw refuse("the stored site publish request is malformed.");
+        }
+        if (!ownerUserId) {
+          throw refuse(
+            "the proposal records no owner (subject_user_id), so whose site this is cannot be established."
+          );
+        }
+        const database = await getDb();
+        const plan = await planSitePublish(database, ownerUserId, {
+          siteId: inner.siteId,
+          entityIds: entityIds as string[],
+        });
+        const applied = await applySitePublish(database, plan, {
+          userId: ownerUserId,
+          agentUserId: proposal.agentUserId ?? null,
+          sourceProposalId: input.proposalId,
+        });
+        await markApproved();
+        // `refusals` is the receipt's honest partial-application field: the
+        // records approval did NOT publish, each with the reason.
+        const refusals = [...plan.skipped, ...applied.skipped].map(
+          (k) => `Record ${k.entityId} was not published: ${k.reason}`
+        );
+        return {
+          success: true,
+          primaryId: plan.siteId,
+          effect:
+            applied.rowsWritten > 0
+              ? {
+                  applied: "verified" as const,
+                  rows: applied.rowsWritten,
+                  ids: applied.ids,
+                  subject: "share",
+                }
+              : {
+                  applied: "none" as const,
+                  reason:
+                    "None of the records could be published now; see the refusals.",
+                },
+          ...(refusals.length > 0 ? { refusals } : {}),
+        };
+      }
 
       // A SITE (a published project, `site-service.ts`) files the same floored
       // door with `op: "configure_site"`. Replayed through the SAME
@@ -85,22 +172,7 @@ export function registerShareExecutors(): void {
           agentUserId: proposal.agentUserId ?? null,
           sourceProposalId: input.proposalId,
         });
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await markApproved();
         return {
           success: true,
           primaryId: site.siteId,
@@ -139,22 +211,7 @@ export function registerShareExecutors(): void {
           sourceProposalId: input.proposalId,
           mintToken: false,
         });
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await markApproved();
         return {
           success: true,
           primaryId: published.shareId,
@@ -199,23 +256,7 @@ export function registerShareExecutors(): void {
         mintToken: false,
       });
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
-
-      reportApproved(deps, proposal, input.proposalId);
-      deps.emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
-      );
+      await markApproved();
       return {
         success: true,
         primaryId: result.shareId ?? result.resourceId,

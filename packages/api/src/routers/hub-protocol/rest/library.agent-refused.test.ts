@@ -1,6 +1,6 @@
 /**
  * POST /library/add — nothing an agent sends lands in the Library
- * (CAPTURE_LIBRARY_PLAN §1, founder 2026-10-13). An agent key or the IS's
+ * (capture-vs-library decision, founder 2026-10-13). An agent key or the IS's
  * internal key is refused with AGENT_USE_CAPTURE BEFORE the service runs; a
  * person's key reaches the add service.
  */
