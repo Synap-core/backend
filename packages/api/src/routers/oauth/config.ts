@@ -83,6 +83,34 @@ export function parseOauthKeyInstanceId(
 }
 
 /**
+ * The Synap apps (spec 17 §6.2, verified tier v1): a pod app whose client_id
+ * origin is EXACTLY `https://<id>.synap.live` for one of these ids is shown as
+ * a "Synap app" on the consent screen; every other app is "Unverified". The
+ * same exact-origin rule as the browser's hosted-app check, and the ids of the
+ * Control Plane's built-in applications plus content-studio.
+ */
+export const SYNAP_APP_IDS = [
+  "crm",
+  "hub",
+  "studio",
+  "canvas",
+  "devplane",
+  "the-arch",
+  "content-studio",
+] as const;
+
+/** Is this CIMD client_id a Synap app (exact-origin match, https only)? */
+export function isSynapApp(clientId: string): boolean {
+  let origin: string;
+  try {
+    origin = new URL(clientId).origin;
+  } catch {
+    return false;
+  }
+  return SYNAP_APP_IDS.some((id) => origin === `https://${id}.synap.live`);
+}
+
+/**
  * Scopes this AS advertises and is willing to grant, in POD grammar.
  *
  * Pod grammar (dot) rather than the CP's wire grammar (colon) because these

@@ -40,7 +40,13 @@ import { createLogger } from "@synap-core/core";
 
 import { db, eq, users } from "@synap/database";
 
+import { TRPCError } from "@trpc/server";
+
 import { provisionSurfaceAgentKey } from "../../services/agent-identity-service.js";
+import {
+  isPodAppAgent,
+  mintAppOAuthAccessKey,
+} from "../../services/app-connect.js";
 import { apiKeyService } from "../../services/api-keys.js";
 import { AGENT_KEY_TTL_DAYS } from "../../services/hub-integration-registration.js";
 import { configuredPodAdminConsentUrl } from "../../utils/pod-admin-url.js";
@@ -429,14 +435,56 @@ oauthApp.post("/token", async (c) => {
       }
     }
 
-    // A pod app (CIMD client) is never minted the shared `claude-web*` agent
-    // (spec 17 I3): its key belongs to the app's OWN agent, which wave PB2
-    // mints. Until then its code redeems to nothing.
+    // A pod app (CIMD client) is NEVER minted the shared `claude-web*` agent
+    // (spec 17 I3): its key belongs to the app's OWN agent for this person,
+    // carrying exactly what the person approved at consent, for 1 h.
     if (client.clientKind === "cimd") {
-      throw new OAuthError(
-        "unauthorized_client",
-        "This pod cannot issue tokens to app clients yet"
+      if (!claimed.appId) {
+        // A code from before PB2 (or a DCR-shaped issue) names no approval.
+        throw new OAuthError(
+          "invalid_grant",
+          "This authorization names no approved app connection"
+        );
+      }
+      let minted;
+      try {
+        minted = await mintAppOAuthAccessKey({
+          appId: claimed.appId,
+          ownerUserId: claimed.userId,
+          oauthClientId: claimed.clientId,
+          instanceId: oauthKeyInstanceId(claimed.clientId, claimed.userId),
+        });
+      } catch (err) {
+        // Revoked, nothing approved, not this person's connection: the grant
+        // the code stood for is gone.
+        if (err instanceof TRPCError && err.code !== "INTERNAL_SERVER_ERROR") {
+          throw new OAuthError("invalid_grant", err.message);
+        }
+        throw err;
+      }
+      logger.info(
+        {
+          clientId: claimed.clientId,
+          podUserId: claimed.userId,
+          keyId: minted.keyId,
+          agentUserId: minted.agentUserId,
+          appId: minted.publicId,
+        },
+        "pod-oauth: pod app access token issued"
       );
+      return c.json({
+        access_token: minted.accessToken,
+        token_type: "Bearer",
+        expires_in: Math.max(
+          0,
+          Math.floor((minted.expiresAt.getTime() - Date.now()) / 1000)
+        ),
+        scope: [...new Set(minted.grant.map((g) => g.permission))].join(" "),
+        // Synap extension (spec 17 §6.6): what the token reaches and for whom,
+        // so the app can say "Connected as …" without another call.
+        synap_grant: minted.grant,
+        synap_user: minted.user,
+      });
     }
 
     // ── Mint the access token: an `api_keys` row, via the ONE door. ──────────
@@ -555,6 +603,26 @@ oauthApp.post("/token", async (c) => {
 // client binding, so possession alone retires them — that is how the Control
 // Plane retires a grant it holds whichever door minted it.
 
+/**
+ * The keys this AS mints, and so the only ones /revoke may retire: held by a
+ * `claude-web*` agent (an MCP client), or by the agent of a pod app
+ * connection (an `apps` row with mode 'oauth', `isPodAppAgent`).
+ */
+async function isOAuthMintedKey(
+  keyUserId: string,
+  owner: { userType: string | null; agentType: string | null } | undefined
+): Promise<boolean> {
+  if (owner?.userType !== "agent") return false;
+  if (
+    (OAUTH_REVOCABLE_AGENT_TYPES as readonly string[]).includes(
+      owner.agentType ?? ""
+    )
+  ) {
+    return true;
+  }
+  return isPodAppAgent(keyUserId);
+}
+
 oauthApp.post("/revoke", async (c) => {
   c.header("Cache-Control", "no-store");
   if (!issuerOr503()) return c.json(ISSUER_UNCONFIGURED, 503);
@@ -590,11 +658,7 @@ oauthApp.post("/revoke", async (c) => {
       where: eq(users.id, key.userId),
       columns: { userType: true, agentType: true },
     });
-    const revocable =
-      owner?.userType === "agent" &&
-      (OAUTH_REVOCABLE_AGENT_TYPES as readonly string[]).includes(
-        owner.agentType ?? ""
-      );
+    const revocable = await isOAuthMintedKey(key.userId, owner);
     if (!revocable) {
       logger.warn(
         { keyId: key.id },

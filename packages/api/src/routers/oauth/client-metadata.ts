@@ -70,6 +70,9 @@ const CIMD_MAX_REDIRECT_URIS = 8;
 const CIMD_MAX_CLIENT_NAME_LENGTH = 100;
 const CIMD_MAX_REQUESTS = 32;
 const CIMD_MAX_REASON_LENGTH = 200;
+const CIMD_MAX_TEMPLATES = 8;
+/** A Contract B workspace-template slug (`ensureTemplate`). */
+const TEMPLATE_SLUG_RE = /^[a-z0-9][a-z0-9._/-]{0,99}$/;
 
 /**
  * Why a client_id URL or its document was refused. The message is shown to the
@@ -166,6 +169,8 @@ export interface ValidatedClientMetadataDocument {
   scopes: string[];
   /** `synap_requests[].permission`, grant grammar. */
   requestedPermissions: string[];
+  /** `synap_templates`: workspace-template slugs the consent may offer. */
+  requestedTemplates: string[];
   clientUri: string | null;
   initiateLoginUri: string | null;
 }
@@ -371,11 +376,33 @@ export function validateClientMetadataDocument(
     }
   }
 
+  // ── spaces it can work in (doc 18): offered when the person has none ─────
+  const requestedTemplates: string[] = [];
+  if (d.synap_templates !== undefined) {
+    if (!Array.isArray(d.synap_templates)) {
+      throw new ClientMetadataError("synap_templates must be an array");
+    }
+    if (d.synap_templates.length > CIMD_MAX_TEMPLATES) {
+      throw new ClientMetadataError(
+        `at most ${CIMD_MAX_TEMPLATES} synap_templates are accepted`
+      );
+    }
+    for (const slug of d.synap_templates) {
+      if (typeof slug !== "string" || !TEMPLATE_SLUG_RE.test(slug)) {
+        throw new ClientMetadataError(
+          "each synap_templates entry must be a template slug (lowercase letters, digits, . _ / -)"
+        );
+      }
+      if (!requestedTemplates.includes(slug)) requestedTemplates.push(slug);
+    }
+  }
+
   return {
     clientName,
     redirectUris,
     scopes,
     requestedPermissions,
+    requestedTemplates,
     clientUri,
     initiateLoginUri,
   };
