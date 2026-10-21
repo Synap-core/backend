@@ -17,6 +17,7 @@ import {
 } from "../../../services/capability-briefs/compose-capability-brief.js";
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
+import { ASK_DETAILS } from "../../../services/knowledge/synthesize.js";
 import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
 import { ROOM_POST_KINDS } from "../../../services/messaging/room-post-kind.js";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
@@ -593,6 +594,12 @@ export const tools = {
               type: "string",
               description: "Your question, in natural language",
             },
+            detail: {
+              type: "string",
+              enum: [...ASK_DETAILS],
+              description:
+                "How much answer you want. full (default) = the provenance-rich answer. brief = a few sentences, no capture suggestions — use it for lookups (who/what/where). sources = no synthesis: the ranked { substrate, id, title } matches only, answer null; read one with synap_get_entity.",
+            },
             workspaceId: {
               type: "string",
               description:
@@ -1147,7 +1154,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for property updates and status changes. To move a status (a kind's declared lifecycle), set the property to the new option AND pass `expectedStatus` = the status you read: `conflict` means someone moved it (re-read), a move into a done/lost option proposes, and a human-only option is refused. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }). `profileSlug` converts it to another kind, keeping its id and links (always reviewed).",
+          "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for property updates and status changes. To move a status (a kind's declared lifecycle), set the property to the new option AND pass `expectedStatus` = the status you read: `conflict` means someone moved it (re-read), a move into a done/lost option proposes, and a human-only option is refused. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }). `documentId` attaches an EXISTING document as the body (e.g. one left orphaned); replacing a body the entity already has needs `replaceBody: true` and always goes to review; undo puts the previous body back. `profileSlug` converts it to another kind, keeping its id and links (always reviewed).",
         inputSchema: {
           type: "object",
           properties: {
@@ -1174,6 +1181,16 @@ export const tools = {
               type: ["string", "null"],
               description:
                 "When you change the status: the status you SAW (compare-and-set). If it moved meanwhile you get { status: 'conflict', conflict: { currentStatus } } and nothing is written — re-read and decide again; never retry blindly.",
+            },
+            documentId: {
+              type: "string",
+              description:
+                "Attach this EXISTING document (its id) as the entity's body — e.g. re-attach a document whose entity lost it. Not for new text: use `content` or synap_create_document.",
+            },
+            replaceBody: {
+              type: "boolean",
+              description:
+                "Set true with documentId when the entity ALREADY has a body and you mean to replace it (it is kept, detached, and comes back on undo). Without it the call is refused naming the current body. Always a proposal.",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
@@ -1268,6 +1285,33 @@ export const tools = {
             },
           },
           required: ["items"],
+        },
+      },
+      {
+        name: "synap_delete_entity",
+        annotations: {
+          title: "Delete entity",
+          readOnlyHint: false,
+          destructiveHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Propose deleting an entity. For you, this is ALWAYS a proposal the person reviews — 'proposed' is success, never retry it. Nothing is removed until they approve; then the entity is hidden (soft delete), its body document is kept, and they can undo it. Use it to clean up what you created by mistake or what the person asked you to remove. To remove only a role, use synap_detach_facet; to change an entity, synap_update_entity.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityId: {
+              type: "string",
+              description:
+                "UUID of the entity to delete (from synap_ask, synap_find or synap_get_entity).",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why it should go, in the person's words — shown to the human who reviews it. One line.",
+            },
+          },
+          required: ["entityId"],
         },
       },
       {
@@ -3478,6 +3522,11 @@ export const tools = {
               type: "string",
               description:
                 "Optional project id to file the created entities into — stamps belongs_to_project membership.",
+            },
+            projectName: {
+              type: "string",
+              description:
+                "Instead of projectId: the exact name of one of your projects. A name that matches none of them refuses the whole capture (nothing is filed) and names the closest projects with their ids — re-send with projectId.",
             },
             dedupMode: {
               type: "string",

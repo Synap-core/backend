@@ -188,7 +188,8 @@ export const entityHandlers: McpHandlerMap = {
       args.description !== undefined ||
       args.properties !== undefined ||
       args.metadata !== undefined ||
-      args.profileSlug !== undefined;
+      args.profileSlug !== undefined ||
+      args.documentId !== undefined;
 
     let body: Record<string, unknown> | undefined;
     if (content !== undefined) {
@@ -254,6 +255,12 @@ export const entityHandlers: McpHandlerMap = {
       ...(typeof args.profileSlug === "string" && args.profileSlug
         ? { profileSlug: args.profileSlug }
         : {}),
+      // Re-attach an existing document as the body (B9g) — the same governed
+      // `entities.update`: an agent replacing a body always proposes.
+      ...(typeof args.documentId === "string" && args.documentId
+        ? { documentId: args.documentId }
+        : {}),
+      ...(args.replaceBody === true ? { replaceBody: true } : {}),
       ...(agentUserId ? { agentUserId } : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       // Compare-and-set on the status; a stale move comes back as
@@ -283,6 +290,45 @@ export const entityHandlers: McpHandlerMap = {
       ...(result as Record<string, unknown>),
       ...(body ? { body } : {}),
       ...(titleLint.length ? { titleLint } : {}),
+    });
+  },
+  /**
+   * Delete an entity — for an agent, ALWAYS a proposal (decision B9b).
+   *
+   * A thin door over hub `entities.deleteEntity` → `entities.delete`, the SAME
+   * governed soft delete the Hub REST `DELETE /entities/:id` door uses. Nothing
+   * here decides "propose": the DESTRUCTIVE_ACTIONS floor (rung 2.5 in
+   * `decideAgentPolicy`) proposes every agent delete and no rule can widen it,
+   * and the MCP attribution gate (`shouldRejectUnattributedWrite`) makes every
+   * MCP write an agent's. On approval the row gets `deletedAt` (its body
+   * document is kept) and the reviewer can undo it (`proposals.revert`,
+   * restore-delete). The hard delete (`adminDelete`, tRPC `documents.delete`)
+   * is never reachable from here.
+   */
+  synap_delete_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
+      ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const entityId = args.entityId;
+    if (typeof entityId !== "string" || entityId === "") {
+      return toolError("entityId is required.");
+    }
+    const reasoning = readReasoning(args);
+    const result = (await lensCaller.entities.deleteEntity({
+      entityId,
+      userId,
+      ...(agentUserId ? { agentUserId } : {}),
+      ...(reasoning ? { reasoning } : {}),
+    })) as { status: string } & Record<string, unknown>;
+    // Say what landed: a proposal deleted nothing yet; a completed call (only
+    // a non-agent principal reaches it) soft-deleted the row.
+    return ok({
+      entityId,
+      ...result,
+      landed:
+        result.status === "proposed"
+          ? "Nothing is deleted yet. If the person approves, the entity is hidden (soft delete, its body kept) and they can undo it from the proposal."
+          : "The entity is hidden (soft delete, its body kept); it can be restored.",
     });
   },
   /**

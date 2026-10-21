@@ -433,7 +433,9 @@ describe("an APPROVED entity update is undoable from its apply-time stamp", () =
 });
 
 describe("an update undo cannot fully restore is never predicted revertable", () => {
-  it.each(["profileSlug", "global", "documentId", "sourceFile"] as const)(
+  // `documentId` left this list with B9g: a body change is stamped and undone
+  // (body-attach-approval.pglite.test.ts).
+  it.each(["profileSlug", "global", "sourceFile"] as const)(
     "a pending update carrying %s is not revertable, so not swipe-safe",
     async (key) => {
       const { client } = await freshDb();
@@ -444,9 +446,7 @@ describe("an update undo cannot fully restore is never predicted revertable", ()
           ? true
           : key === "sourceFile"
             ? { storageKey: "k" }
-            : key === "documentId"
-              ? randomUUID()
-              : "invoice";
+            : "invoice";
       await client.query(
         `insert into proposals (id, status, proposal_type, target_type, target_id, data, created_by, subject_user_id)
          values ($1, 'pending', 'update', 'entity', $2, $3::jsonb, 'agent-1', $4)`,

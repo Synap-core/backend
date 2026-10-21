@@ -93,6 +93,7 @@ import {
   type StructureRunMeta,
 } from "../intake/record-session-run-manifest.js";
 import { deriveImportPhase } from "./curate.js";
+import { librarySkillSlug } from "../skills/skill-authoring.js";
 import type { GenerateJson } from "./group.js";
 import {
   loadImportItemRows,
@@ -603,6 +604,13 @@ export function assembleImportBuildBundle(args: {
    * its List (live through `membersOf`) grows.
    */
   prior?: ImportBuildPrior;
+  /**
+   * The slug a NEW tool skill is made with (`librarySkillSlug`, chosen free by
+   * the caller) — the ref `synap_load_skill` resolves. Without it the skill
+   * is made unreachable, so a new tool skill without one is a programming
+   * error, refused here.
+   */
+  toolSkillSlug?: string;
 }): ImportBuildBundle {
   const { group, extractions, infra, workspaceId } = args;
   const prior = args.prior ?? {};
@@ -689,9 +697,15 @@ export function assembleImportBuildBundle(args: {
         patch: { name: infra.tool.name, body: `${infra.tool.body}\n\n${cite}` },
       });
     } else {
+      if (!args.toolSkillSlug) {
+        throw new Error(
+          "import build: a new tool skill needs its slug (librarySkillSlug) — without it synap_load_skill cannot reach it"
+        );
+      }
       plan.skills = [
         {
           ref: "tool",
+          slug: args.toolSkillSlug,
           name: infra.tool.name,
           body: `${infra.tool.body}\n\n${cite}`,
           scope: workspaceId ? "workspace" : "user",
@@ -1527,6 +1541,23 @@ export async function buildImportMembers(args: {
       logger.warn({ err }, "import build: rule dry run NOT counted");
     }
   }
+  // A NEW tool skill gets its loadable slug here (B9f). Taken slugs of ANY
+  // status count: an undone Build leaves its skill inactive, slug and all.
+  let toolSkillSlug: string | undefined;
+  if (infra.tool && !prior?.skillId) {
+    const base = librarySkillSlug(session.id, group.key);
+    const takenRows = await database
+      .select({ slug: skills.slug })
+      .from(skills)
+      .where(
+        drizzleSql`${skills.slug} = ${base} OR ${skills.slug} LIKE ${`${base}-%`}`
+      );
+    toolSkillSlug = librarySkillSlug(
+      session.id,
+      group.key,
+      takenRows.flatMap((r) => (r.slug ? [r.slug] : []))
+    );
+  }
   const bundle = assembleImportBuildBundle({
     sessionId: session.id,
     group,
@@ -1536,6 +1567,7 @@ export async function buildImportMembers(args: {
     dominantKind,
     ...(dryRunCount !== undefined ? { dryRunCount } : {}),
     ...(prior ? { prior } : {}),
+    ...(toolSkillSlug ? { toolSkillSlug } : {}),
   });
   if (args.withoutContainer) {
     bundle.entities = bundle.entities.filter(

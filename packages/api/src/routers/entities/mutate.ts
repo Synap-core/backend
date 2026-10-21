@@ -374,6 +374,7 @@ export const mutateProcs = {
               title: entities.title,
               preview: entities.preview,
               properties: entities.properties,
+              documentId: entities.documentId,
             })
             .from(entities)
             .where(eq(entities.id, input.id))
@@ -414,8 +415,20 @@ export const mutateProcs = {
         input.global === true && existing.workspaceId !== null;
       const changesProfileType =
         input.profileSlug !== undefined && input.profileSlug !== existing.type;
+      // An AGENT replacing an existing body (decision B9g): the old document is
+      // detached, so it is always reviewed — like `synap_update_entity`'s full
+      // `content` replacement. A plain attach onto an entity with no body
+      // stays on the ordinary lane (undoable either way).
+      const agentReplacesBody =
+        !!input.agentUserId &&
+        !!input.documentId &&
+        !!existing.documentId &&
+        input.documentId !== existing.documentId;
       const forcePropose =
-        promotesToGlobal || changesProfileType || input.forcePropose === true;
+        promotesToGlobal ||
+        changesProfileType ||
+        agentReplacesBody ||
+        input.forcePropose === true;
 
       // A promotion to pod-wide lands the row pod-wide: the key's grant must
       // allow writing there too, not only where the row lives today (S7).
@@ -452,6 +465,10 @@ export const mutateProcs = {
           properties: input.properties,
           deleteProperties: input.deleteProperties,
           documentId: input.documentId,
+          // Approval replays the write through this procedure, and the body
+          // guard refuses a replacement without it (B9g: a proposed attach
+          // used to approve and change nothing).
+          ...(input.replaceBody ? { replaceBody: true } : {}),
           profileSlug: input.profileSlug,
           ...(input.batchId ? { batchId: input.batchId } : {}),
         },
@@ -500,15 +517,14 @@ export const mutateProcs = {
 
       // Undo record for an AUTO-APPROVED write: its receipt was minted by the
       // gate above, BEFORE this write, so the apply-time before/after is only
-      // knowable here. (An approved proposal's executor stamps its own row.) A
-      // `documentId` change is not something undo can restore, so such a
-      // receipt stays unstamped and revert says it cannot undo it.
+      // knowable here. (An approved proposal's executor stamps its own row.)
+      // The snapshot carries the body link, so a `documentId` change is undone
+      // too: the previous body comes back (B9g).
       const receiptId =
         "granted" in perm ? perm.autoApprovedProposalId : undefined;
-      const undoBefore =
-        receiptId && input.documentId === undefined
-          ? await readEntityUndoSnapshot(database, input.id)
-          : null;
+      const undoBefore = receiptId
+        ? await readEntityUndoSnapshot(database, input.id)
+        : null;
 
       const written = await entityRepo.update(
         input.id,
@@ -732,6 +748,7 @@ export const mutateProcs = {
           title: written.title,
           preview: written.preview,
           properties: written.properties,
+          documentId: written.documentId ?? null,
         },
       };
     }),

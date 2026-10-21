@@ -369,9 +369,9 @@ export interface SubmitCaptureGraphInput {
   projectId?: string | null;
   /**
    * A project NAME-ref (piece D). Resolved to `projectId` via an EXACT slug
-   * match on the caller's OWN projects (a rung-1 pin). No match → NOT linked
-   * (the widening-access law forbids auto-linking a guess); surfaced on the
-   * result as `projectCandidate`. Ignored when `projectId` is already set.
+   * match on the caller's OWN projects (a rung-1 pin). No match → the whole
+   * capture is REFUSED (`CaptureProjectNotFoundError`, naming the closest
+   * projects), like an unknown id (B9e). Ignored when `projectId` is set.
    */
   projectName?: string | null;
   /** Origin signal carried through the proposal into entity materialization. */
@@ -502,17 +502,11 @@ export interface SubmitCaptureGraphResult {
     matches: PendingSignalMatch[];
   }>;
   /**
-   * A `projectName` that matched no project of the caller (piece D). Advisory
-   * only — surfaced so the caller can confirm/create it; NEVER auto-linked.
-   */
-  projectCandidate?: { name: string };
-  /**
    * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
-   * membership, `not_linked` (+reason `project-name-unmatched` for a name-ref
-   * that matched nothing) so a requested project that did NOT link is NAMED,
-   * never a silent success. Omitted when no project was requested. A dead UUID
-   * pin never gets here: the whole capture is refused
-   * (`CaptureProjectNotFoundError`).
+   * membership. Omitted when no project was requested. Neither a dead UUID
+   * pin nor an unmatched project NAME gets here: the whole capture is refused
+   * (`CaptureProjectNotFoundError`), so this core no longer produces
+   * `not_linked`; the member stays because the receipt type is shared.
    */
   project?:
     | { status: "linked"; projectId: string }
@@ -1019,19 +1013,17 @@ export async function submitCaptureGraph(
   // PROJECT NAME-REF (piece D). A plan may name a project instead of passing a
   // UUID. Resolve it here, at the submit boundary, with the SAME precedence as a
   // rung-1 explicit pin — but ONLY on an exact slug match on the caller's own
-  // projects. No match ⇒ NOT linked (the widening-access law forbids auto-linking
-  // an AI-guessed project) ⇒ surfaced as an advisory candidate. An explicit
-  // `projectId` always wins over a name.
+  // projects. No match ⇒ the WHOLE capture is refused here, before dedup and
+  // before any proposal, naming the closest projects (B9e) — never a guess,
+  // never an unlinked write. An explicit `projectId` always wins over a name.
   let resolvedProjectId = input.projectId ?? null;
-  let projectCandidate: { name: string } | undefined;
-  if (!resolvedProjectId && input.projectName) {
-    const projectRef = await resolveCaptureProjectRef({
-      userId,
-      projectName: input.projectName,
-    });
-    if (projectRef.projectId) resolvedProjectId = projectRef.projectId;
-    else if (projectRef.candidateName)
-      projectCandidate = { name: projectRef.candidateName };
+  if (!resolvedProjectId && input.projectName?.trim()) {
+    resolvedProjectId = (
+      await resolveCaptureProjectRef(db, {
+        userId,
+        projectName: input.projectName,
+      })
+    ).projectId;
   }
   // An EXPLICIT UUID pin (`input.projectId`) is trusted by no one: it must
   // name a project the caller can see, or the WHOLE capture is refused here —
@@ -1051,9 +1043,7 @@ export async function submitCaptureGraph(
     | { status: "not_linked"; reason: string }
     | undefined = resolvedProjectId
     ? { status: "linked", projectId: resolvedProjectId }
-    : projectCandidate
-      ? { status: "not_linked", reason: "project-name-unmatched" }
-      : undefined;
+    : undefined;
 
   // WITHIN-BATCH DEDUP: the producer may list the same person/company under two
   // different `ref`s (neither persisted yet). Collapse those before resolving
@@ -1204,7 +1194,6 @@ export async function submitCaptureGraph(
         // PENDING proposal surfaces as `status: "duplicate"` with a
         // stop-re-proposing hint.
         deduped: true,
-        ...(projectCandidate ? { projectCandidate } : {}),
         ...(projectOutcome ? { project: projectOutcome } : {}),
         writeReceipt: {
           state: priorApplied ? "applied" : "pending",
@@ -1753,7 +1742,6 @@ export async function submitCaptureGraph(
           ...(pendingDuplicateCandidates.length > 0
             ? { pendingDuplicateCandidates }
             : {}),
-          ...(projectCandidate ? { projectCandidate } : {}),
           ...(projectOutcome ? { project: projectOutcome } : {}),
           // Relation ops submitted but never created (bad ref / DB failure) —
           // named, not just a shortfall between relationCount and the
@@ -1866,7 +1854,6 @@ export async function submitCaptureGraph(
     ...(pendingDuplicateCandidates.length > 0
       ? { pendingDuplicateCandidates }
       : {}),
-    ...(projectCandidate ? { projectCandidate } : {}),
     ...(projectOutcome ? { project: projectOutcome } : {}),
     ...placementReceipt,
     writeReceipt: {

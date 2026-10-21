@@ -67,6 +67,7 @@ export const TOOL_GROUPS = {
     "synap_create_entity",
     "synap_update_entity",
     "synap_update_entities",
+    "synap_delete_entity",
     "synap_create_document",
     "synap_update_document",
     "synap_request_upload",

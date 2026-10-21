@@ -52,3 +52,31 @@ export function skillAuthoringProblem(input: {
   if (!hasCode && !slug) return NEEDS_SLUG;
   return slug ? skillSlugProblem(slug) : null;
 }
+
+/**
+ * The slug a Library Build gives the "how to work with these" skill it makes
+ * for one import group: `library/<import session id>/<group key>` (decision
+ * B9f). Library skills used to be made with NO slug, so `synap_load_skill`
+ * could never reach them. A group key is unique only within its import, so the
+ * import's session id makes it pod-unique; both are already slug-shaped (a
+ * lowercase uuid, `importGroupKey`). `taken` is the set of slugs already in
+ * use (a skill from an undone Build keeps its slug while inactive): the first
+ * free `-N` suffix is used, so a re-Build never collides on `idx_skills_slug`.
+ */
+export function librarySkillSlug(
+  importSessionId: string,
+  groupKey: string,
+  taken: Iterable<string> = []
+): string {
+  const segment = (v: string) =>
+    v
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "group";
+  const base = `library/${segment(importSessionId)}/${segment(groupKey)}`;
+  const used = new Set(taken);
+  if (!used.has(base)) return base;
+  let n = 2;
+  while (used.has(`${base}-${n}`)) n += 1;
+  return `${base}-${n}`;
+}

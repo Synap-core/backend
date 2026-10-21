@@ -171,7 +171,55 @@ export interface UpdateEntityInput {
   status?: string;
   priority?: "low" | "medium" | "high" | "urgent";
   dueDate?: string;
+  /**
+   * Attach an EXISTING document as the entity's body (e.g. re-attach an
+   * orphaned one). Replacing a body it already has needs `replaceBody`.
+   */
+  documentId?: string;
+  replaceBody?: boolean;
 }
+
+/**
+ * What an applied update wrote (pod `UpdateWriteReceipt`, held equal by
+ * `parity/update-write-receipt.floor.ts`).
+ */
+export interface HubEntityUpdateReceipt {
+  /** `partial`: part of it (the status move) was filed for review instead. */
+  state: "applied" | "partial";
+  entityId: string;
+  /** Fields written: `title`, `description`, `documentId`, `profileSlug`, `properties.<key>`, `removed.<key>`. */
+  landed: string[];
+  /** Fields filed for review instead of written. */
+  proposed?: string[];
+}
+
+/**
+ * PATCH /entities/:id when the write APPLIED. It is NOT an entity: it names
+ * the entity and what landed. (The client used to type this as `HubEntity`,
+ * so a caller read `title` / `profileSlug` off a receipt that had neither and
+ * printed `Updated entity "undefined"`.)
+ */
+export interface HubEntityUpdateApplied {
+  status: "updated";
+  message?: string;
+  /** Absent only from a pod older than the receipt. */
+  entityId?: string;
+  /** The title as the write left it. */
+  title?: string | null;
+  written?: {
+    title: string | null;
+    description: string | null;
+    properties: Record<string, unknown>;
+    documentId: string | null;
+  };
+  /** The status move the call carried (`moved` / `unchanged` / `proposed`). */
+  statusMove?: { status: string; proposalId?: string; reviewUrl?: string };
+  writeReceipt?: HubEntityUpdateReceipt;
+}
+
+/** Either the applied receipt or a governance answer (proposed / denied). Check `status`. */
+export type HubEntityUpdateResult =
+  HubEntityUpdateApplied | HubGovernanceResult;
 
 export interface CreateDocumentInput {
   title: string;
@@ -825,8 +873,21 @@ export interface KnowledgeAnswerFailure {
  * POST /knowledge/answer — retrieve (same as ask) then synthesize.
  * `answer` is null when synthesis is unavailable; sources/pending still return.
  */
+/**
+ * How much answer to ask for: `full` (default) the provenance-rich answer,
+ * `brief` a few sentences for a lookup, `sources` no synthesis (answer null,
+ * the ranked matches only).
+ */
+export type KnowledgeAnswerDetail = "sources" | "brief" | "full";
+
 export interface KnowledgeAnswerResponse {
   answer: string | null;
+  /**
+   * Which answer this is, as the pod produced it (an IS too old for `brief`
+   * answers in full and this says `full`). Absent with `error`, and from a pod
+   * older than the field.
+   */
+  detail?: KnowledgeAnswerDetail;
   sources: KnowledgeAnswerSource[];
   routedTo: string[];
   degraded: string[];

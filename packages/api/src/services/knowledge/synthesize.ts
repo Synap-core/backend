@@ -50,8 +50,27 @@ export interface SynthesisTruncation {
   omittedSources: SynthesisSource[];
 }
 
+/**
+ * How much answer a caller wants from the knowledge answer door (decision B9a).
+ * - `full` (default): the provenance-rich synthesis every human surface reads.
+ * - `brief`: a short lookup answer (a few sentences, no capture suggestions) —
+ *   for agents, which paid up to ~2,000 tokens per `synap_ask`.
+ * - `sources`: no synthesis at all — the ranked `{substrate, id, title}` list,
+ *   no model call, no spend. `answer` is `null` and there is no `error`.
+ * ONE list; every door (MCP, Hub REST, tRPC) validates against it.
+ */
+export const ASK_DETAILS = ["sources", "brief", "full"] as const;
+export type AskDetail = (typeof ASK_DETAILS)[number];
+
 export interface SynthesisResult {
   answer: string | null;
+  /**
+   * Which answer this IS — present whenever the door did not fail. Read from
+   * what HAPPENED, never echoed from the request: an IS that predates `brief`
+   * ignores it and answers in full, and this then says `full`. Absent with
+   * `error` (no answer was produced at all).
+   */
+  detail?: AskDetail;
   sources: SynthesisSource[];
   /** Which substrates were queried (forwarded from AskResult). */
   routedTo: string[];
@@ -672,9 +691,19 @@ export async function synthesizeAnswer(
    * cannot see it, and an answer synthesized over a half-empty candidate pool
    * is indistinguishable, in prose, from a healthy one.
    */
-  degraded: string[] = []
+  degraded: string[] = [],
+  /** See {@link AskDetail}. Default `full`, unchanged for every older caller. */
+  detail: AskDetail = "full"
 ): Promise<SynthesisResult> {
   const { sources, context, truncated } = buildSynthesisContext(answers);
+
+  // `sources`: the caller asked for the matches, not prose — no IS call. Every
+  // id-bearing match is already in `sources` (it is filled before the context
+  // budget drops anything), so nothing is cut and `truncated` would describe a
+  // context nobody reads: it is omitted on purpose.
+  if (detail === "sources") {
+    return { answer: null, detail: "sources", sources, routedTo };
+  }
 
   // Call the IS "answer" door — one focused LLM call. Resolve the IS endpoint +
   // the pod's PER-CONNECTION key from the DB (registered IS), NEVER from env.
@@ -692,6 +721,9 @@ export async function synthesizeAnswer(
         question,
         context,
         workspaceId: workspaceId ?? undefined,
+        // Sent only when it changes something, so a `full` request body is
+        // byte-identical to the one every IS version already accepts.
+        ...(detail === "brief" ? { detail } : {}),
       }),
       // `generation` budget, not a literal. This is a model call (the IS
       // synthesizes an answer over retrieved context), so it carries the same
@@ -713,7 +745,7 @@ export async function synthesizeAnswer(
         failureBody?.failure ? { failure: failureBody.failure } : {}
       );
     }
-    const data = (await res.json()) as { answer?: string };
+    const data = (await res.json()) as { answer?: string; detail?: string };
     const answer =
       typeof data.answer === "string"
         ? prependDegradedNotice(
@@ -723,6 +755,9 @@ export async function synthesizeAnswer(
         : null;
     return {
       answer,
+      // The IS echoes `detail` only when brief changed the answer; anything
+      // else (an older IS, a full request) is a full answer.
+      detail: data.detail === "brief" ? "brief" : "full",
       sources,
       routedTo,
       // The omission and its fetchable ids survive a SUCCESSFUL synthesis too —

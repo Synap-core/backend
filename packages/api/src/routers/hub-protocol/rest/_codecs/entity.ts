@@ -223,6 +223,19 @@ export const UpdateEntityRequestSchema = z
       .describe(
         "Compare-and-set on the status: the status you SAW. If it moved meanwhile the call answers 409 with the current status and writes nothing."
       ),
+    documentId: z
+      .string()
+      .uuid()
+      .optional()
+      .describe(
+        "Attach an existing document as the entity's body (e.g. re-attach an orphaned one). Replacing a body the entity already has needs replaceBody: true; an agent's replacement is always a proposal. Undo puts the previous body back."
+      ),
+    replaceBody: z
+      .boolean()
+      .optional()
+      .describe(
+        "Required with documentId when the entity already has a body; without it the call is refused (409) naming that body."
+      ),
   })
   .openapi("UpdateEntityRequest");
 
@@ -379,6 +392,40 @@ export const UpdateEntityResponseSchema = z
       .string()
       .optional()
       .describe("With `deferred`: the kept write's ref on the join proposal."),
+    // ── APPLIED answer (C5): what landed, never just "Entity updated" ──
+    entityId: z.string().optional(),
+    title: z
+      .string()
+      .nullable()
+      .optional()
+      .describe("The entity's title as the write left it."),
+    written: z
+      .object({
+        title: z.string().nullable(),
+        description: z.string().nullable(),
+        properties: z.unknown(),
+        documentId: z.string().nullable(),
+      })
+      .optional()
+      .describe("The stored values after the write."),
+    statusMove: z
+      .object({ status: z.string() })
+      .passthrough()
+      .optional()
+      .describe(
+        "The status move this call carried: moved, unchanged or proposed (then `proposalId`)."
+      ),
+    writeReceipt: z
+      .object({
+        state: z.enum(["applied", "partial"]),
+        entityId: z.string(),
+        landed: z.array(z.string()),
+        proposed: z.array(z.string()).optional(),
+      })
+      .optional()
+      .describe(
+        "Applied answer only: the fields written (`landed`) and those filed for review instead (`proposed`, the status move)."
+      ),
   })
   .openapi("UpdateEntityResponse");
 
