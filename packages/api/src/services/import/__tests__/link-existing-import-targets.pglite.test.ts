@@ -190,18 +190,26 @@ describe("linkExistingImportTargets", () => {
     expect(items[0]!.existingEntityId).toBe(older);
   });
 
-  it("a failed read THROWS — it is not 'nothing exists'", async () => {
-    const broken = {
-      select: () => {
-        throw new Error("db down");
-      },
-    } as unknown as typeof DatabaseHandle;
-    await expect(
-      linkExistingImportTargets(
-        { userId: ME, workspaceId: null },
-        [target("Brindlewood Labs")],
-        broken
-      )
-    ).rejects.toThrow("db down");
-  });
+  // Two reads: the kind's profiles (the slug door), then the entities.
+  const down = () => {
+    throw new Error("db down");
+  };
+  it.each([
+    ["the kind lookup", { query: { profiles: { findMany: down } } }],
+    [
+      "the entity read",
+      { query: { profiles: { findMany: async () => [] } }, select: down },
+    ],
+  ])(
+    "a failed read THROWS — it is not 'nothing exists' (%s)",
+    async (_read, broken) => {
+      await expect(
+        linkExistingImportTargets(
+          { userId: ME, workspaceId: null },
+          [target("Brindlewood Labs")],
+          broken as unknown as typeof DatabaseHandle
+        )
+      ).rejects.toThrow("db down");
+    }
+  );
 });
