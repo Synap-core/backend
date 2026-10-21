@@ -288,7 +288,8 @@ export const appsRouter = router({
    * Revoke anyone's app — the SAME service as `revoke`, with the owner floor
    * lifted (`podAdmin`). The event names the admin who did it.
    */
-  adminRevoke: podAdminProcedure.use(refuseDeviceSession)
+  adminRevoke: podAdminProcedure
+    .use(refuseDeviceSession)
     .input(z.object({ publicId: PublicId }))
     .mutation(async ({ ctx, input }) => {
       const { publicId } = await revokeApp({
@@ -300,7 +301,8 @@ export const appsRouter = router({
     }),
 
   /** Remove anyone's REVOKED app for good — the same service as `remove`. */
-  adminRemove: podAdminProcedure.use(refuseDeviceSession)
+  adminRemove: podAdminProcedure
+    .use(refuseDeviceSession)
     .input(z.object({ publicId: PublicId }))
     .mutation(async ({ ctx, input }) => {
       const { publicId } = await removeApp({

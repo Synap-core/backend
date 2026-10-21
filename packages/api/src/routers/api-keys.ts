@@ -799,7 +799,8 @@ export const apiKeysRouter = router({
    */
   getMachineDefaults: podAdminProcedure.query(() => readMachineDefaults()),
 
-  setMachineDefaults: podAdminProcedure.use(refuseDeviceSession)
+  setMachineDefaults: podAdminProcedure
+    .use(refuseDeviceSession)
     .input(z.object({ keyTtlDays: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       await setMachineKeyTtlDays(input.keyTtlDays);
@@ -931,7 +932,8 @@ export const apiKeysRouter = router({
    * Create a system-wide service key (synap_hub_live_ prefix, keyType=system).
    * Pod-admin only. Tied to the operator's userId for audit purposes.
    */
-  createSystemKey: podAdminProcedure.use(refuseDeviceSession)
+  createSystemKey: podAdminProcedure
+    .use(refuseDeviceSession)
     .input(
       z.object({
         keyName: z.string().min(1).max(100),
@@ -997,7 +999,8 @@ export const apiKeysRouter = router({
    * Pod-admin: create a workspace-scoped service key (synap_hub_ prefix, keyType=hub_inbound).
    * Use this when provisioning credentials for external services via the connections UI.
    */
-  adminCreateServiceKey: podAdminProcedure.use(refuseDeviceSession)
+  adminCreateServiceKey: podAdminProcedure
+    .use(refuseDeviceSession)
     .input(
       z.object({
         keyName: z.string().min(1).max(100),
@@ -1523,7 +1526,8 @@ export const apiKeysRouter = router({
    * SECURITY: The plaintext key is returned ONCE. The caller is the owner
    * of the key (`userId = ctx.userId`).
    */
-  createForWorkspace: workspaceProcedure.use(refuseDeviceSession)
+  createForWorkspace: workspaceProcedure
+    .use(refuseDeviceSession)
     .input(
       z.object({
         name: z.string().min(1).max(100),

@@ -15,11 +15,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import {
-  router,
-  protectedProcedure,
-  credentialProcedure,
-} from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import { auditLog } from "../utils/audit-log.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";

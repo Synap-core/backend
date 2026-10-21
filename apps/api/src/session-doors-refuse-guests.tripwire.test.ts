@@ -74,7 +74,11 @@ function exportedNames(indexFile: string, fromModule: string): string[] {
   for (const m of src.matchAll(re)) {
     if (m[2] !== fromModule) continue;
     for (const part of m[1]!.split(",")) {
-      const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+      const name = part
+        .trim()
+        .split(/\s+as\s+/)
+        .pop()
+        ?.trim();
       if (name) out.push(name);
     }
   }

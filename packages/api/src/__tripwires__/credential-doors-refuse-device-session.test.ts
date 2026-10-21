@@ -458,13 +458,15 @@ describe("credential doors refuse a Synap app's device session", () => {
 
   it("every credential table has a writer (the definition is not stale)", () => {
     const silent = Object.keys(CREDENTIAL_TABLES).filter(
-      (t) => !verdicts.writers.has(t) && !verdicts.writers.has(CREDENTIAL_TABLES[t]!)
+      (t) =>
+        !verdicts.writers.has(t) && !verdicts.writers.has(CREDENTIAL_TABLES[t]!)
     );
     expect(silent).toEqual([]);
   });
 
   it("every narrowing door exists, and the known mints are credential units", () => {
-    for (const n of NARROWING_DOORS) expect(verdicts.unitNames.has(n)).toBe(true);
+    for (const n of NARROWING_DOORS)
+      expect(verdicts.unitNames.has(n)).toBe(true);
     // Spot-checks that resolution reaches through services, not just raw writes.
     for (const n of [
       "ApiKeyService.generateApiKey",
@@ -501,7 +503,7 @@ describe("credential doors refuse a Synap app's device session", () => {
       .filter((d) => d.door.includes("__sample__"))
       .map((d) => d.door);
     expect(flagged.sort()).toEqual([
-      "packages/api/src/routers/__sample__.ts executor \"sample/x\"",
+      'packages/api/src/routers/__sample__.ts executor "sample/x"',
       "packages/api/src/routers/__sample__.ts mint",
     ]);
   });

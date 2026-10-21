@@ -6193,6 +6193,16 @@ export interface KratosSession {
 	active: boolean;
 	expires_at?: string;
 	authenticated_at?: string;
+	/**
+	 * Set ONLY when the person came in on a Synap app's device token
+	 * (`appSessionMiddleware`, join plan target A): the device it was minted
+	 * for. Absent on a Kratos session. Such a session has no `authenticated_at`,
+	 * so it never counts as a recent sign-in.
+	 */
+	device?: {
+		clientId: string;
+		id: string;
+	};
 }
 /**
  * User object (simplified from Kratos identity)
@@ -6211,6 +6221,14 @@ export interface Context {
 	userId?: string | null;
 	user?: User | null;
 	session?: KratosSession | null;
+	/**
+	 * What kind of PERSON session `session` is: a Kratos session (browser
+	 * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
+	 * `createContext`, from what the app session gate resolved from the row
+	 * (`middleware/app-session.ts`); null when there is no session. Credential
+	 * doors refuse anything but `kratos` (`refuseDeviceSession`, trpc.ts).
+	 */
+	sessionKind?: "kratos" | "person_device" | null;
 	req?: Request;
 	socketIO?: any;
 	workspaceId?: string | null;
@@ -12344,9 +12362,10 @@ export interface OAuthConsentContext {
 	clientId: string;
 	/**
 	 * 'dcr' — an MCP client (claude.ai); 'cimd' — a pod app; 'app' — an
-	 * approved app a person signs in to ("Sign in with Synap").
+	 * approved app a person signs in to ("Sign in with Synap"); 'first_party'
+	 * — a Synap app (desktop, Relay) signing the person in on this device.
 	 */
-	clientKind: "app" | "cimd" | "dcr";
+	clientKind: "app" | "cimd" | "dcr" | "first_party";
 	/** Untrusted, attacker-chosen at registration — the UI renders it as TEXT. */
 	clientName: string;
 	redirectUri: string;
@@ -15460,6 +15479,14 @@ export interface CsvColumnPlan {
 	valueType: "boolean" | "date" | "number" | "string";
 	/** "skip" columns are dropped; everything else lands on the row entity. */
 	scope: "companion" | "context" | "primary" | "skip";
+	/**
+	 * Where the value lands, set by `refineCsvTablePlan`. Absent or "entity" ⇒ a
+	 * property of the row entity (today's behaviour); "facet" ⇒ a property of the
+	 * row's role facet (`CsvTablePlan.rowFacet`); "title" ⇒ consumed by the
+	 * composed title (`titleColumns`); "organization" ⇒ consumed by the
+	 * organisation link (`CsvTablePlan.organization`).
+	 */
+	routedTo?: "entity" | "facet" | "organization" | "title";
 }
 /** Resolved table-ingestion plan: ONE profile for all rows + per-column routing
  *  + which header supplies the title. */
@@ -15470,6 +15497,25 @@ export interface CsvTablePlan {
 	titleColumn: string | null;
 	/** Per-column routing. Headers absent here are dropped. */
 	columns: CsvColumnPlan[];
+	/**
+	 * When set, the title is these columns' non-empty values joined by a space
+	 * ("First Name" + "Last Name"). Takes precedence over `titleColumn`.
+	 */
+	titleColumns?: string[];
+	/** Role facet every row entity wears (the planner picked a role). */
+	rowFacet?: {
+		profileSlug: string;
+	};
+	/**
+	 * A column naming the row's organisation: each distinct value becomes ONE
+	 * entity of `profileSlug` (see `addLinkTargetItems`), linked from the row by
+	 * `relationType`.
+	 */
+	organization?: {
+		header: string;
+		profileSlug: string;
+		relationType: string;
+	};
 }
 /**
  * Per-op homes summary for an import graph — how create_entity ops are
@@ -26732,6 +26778,59 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 		}>;
 	}>>;
+	devices: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				expectedStatus?: string | null;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				clientId: string;
+				createdAt: Date;
+				current: boolean;
+				expiresAt: Date;
+				id: string;
+				label: string | null;
+				lastUsedAt: Date | null;
+			}[];
+		}>;
+		revoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				deviceId: string;
+			};
+			meta: object;
+			output: {
+				proposalId: string;
+				status: "proposed";
+			} | {
+				proposalId?: undefined;
+				status: "revoked";
+			};
+		}>;
+	}>>;
 	devplane: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		errorShape: {
@@ -31949,7 +32048,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionError?: string | undefined;
 				sessionId: string | null;
 				sessionSource?: "failed" | "minted" | "none" | "playbook" | "prior" | "provided" | undefined;
-				source: ImportRevealSource;
+				source: "bookmark" | "connector_sync" | "json" | "markdown" | "obsidian";
 				stats: {
 					byType: Record<string, number>;
 					chunks: number;

@@ -575,12 +575,15 @@ describe("(i) a device token cannot create, widen or approve a credential", () =
     ["devices.revoke", { deviceId: randomUUID() }, "mutation"],
   ];
 
-  it.each(DOORS)("%s answers 403 to a device token", async (path, input, kind) => {
-    const s = await signIn();
-    const res = await trpc({ bearer: s.access }, path, input, kind);
-    expect(res.status).toBe(403);
-    expect(res.body.error.json.message).toBe(DEVICE_SESSION_REFUSED);
-  });
+  it.each(DOORS)(
+    "%s answers 403 to a device token",
+    async (path, input, kind) => {
+      const s = await signIn();
+      const res = await trpc({ bearer: s.access }, path, input, kind);
+      expect(res.status).toBe(403);
+      expect(res.body.error.json.message).toBe(DEVICE_SESSION_REFUSED);
+    }
+  );
 
   it.each(DOORS)(
     "CONTROL — %s is not refused that way to the same person's browser session",
