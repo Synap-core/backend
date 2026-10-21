@@ -1979,6 +1979,11 @@ describe("CIMD clients", () => {
       },
     ]);
     expect(body.synap_user).toEqual({ id: HUMAN_ID, name: "Ada" });
+    // Which app this is on the pod, and where the person manages it.
+    expect(body.synap_app).toEqual({
+      id: APP_PUBLIC_ID,
+      manageUrl: `${POD_ADMIN}/apps/${APP_PUBLIC_ID}`,
+    });
     // Flipped on purpose in PB3 (was: no refresh_token): a pod app's code
     // starts a refresh family for its connection.
     expect(body.refresh_token).toBe("RT-1");
@@ -1987,6 +1992,25 @@ describe("CIMD clients", () => {
       userId: HUMAN_ID,
       appId: APP_ROW_ID,
     });
+  });
+
+  it("synap_app.manageUrl is null when POD_ADMIN_URL is unset or invalid; the app id stays", async () => {
+    for (const adminUrl of [undefined, "not a url"]) {
+      const code = await appCode();
+      mintAnswers();
+      if (adminUrl === undefined) delete process.env.POD_ADMIN_URL;
+      else process.env.POD_ADMIN_URL = adminUrl;
+      const { res, body } = await token({
+        grant_type: "authorization_code",
+        code,
+        client_id: APP_ID,
+        redirect_uri: APP_CALLBACK,
+        code_verifier: VERIFIER,
+      });
+      expect(res.status).toBe(200);
+      expect(body.synap_app).toEqual({ id: APP_PUBLIC_ID, manageUrl: null });
+      process.env.POD_ADMIN_URL = POD_ADMIN;
+    }
   });
 
   it("a connection revoked (or narrowed to nothing) since consent: invalid_grant, no key", async () => {
@@ -2256,6 +2280,10 @@ describe("CIMD clients", () => {
       // The approval, never the request's `scope`.
       scope: "entity.post.read",
       synap_user: { id: HUMAN_ID, name: "Ada" },
+      synap_app: {
+        id: APP_PUBLIC_ID,
+        manageUrl: `${POD_ADMIN}/apps/${APP_PUBLIC_ID}`,
+      },
     });
     expect(body.expires_in).toBeLessThanOrEqual(3600);
     expect(provisionSpy).not.toHaveBeenCalled();
@@ -2321,6 +2349,10 @@ describe("CIMD clients", () => {
     expect(body).toMatchObject({
       access_token: "synap_hub_live_APPKEY",
       refresh_token: "RT-2",
+      synap_app: {
+        id: APP_PUBLIC_ID,
+        manageUrl: `${POD_ADMIN}/apps/${APP_PUBLIC_ID}`,
+      },
     });
   });
 
@@ -2403,6 +2435,8 @@ describe("CIMD clients", () => {
     });
     expect(res.status).toBe(200);
     expect(body).not.toHaveProperty("refresh_token");
+    // The Synap app extension is a pod app's only (MCP response unchanged).
+    expect(body).not.toHaveProperty("synap_app");
     expect(refresh.start).not.toHaveBeenCalled();
   });
 
