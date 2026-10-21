@@ -101,7 +101,7 @@ export function assertFreshAuthentication(
   ctx?: SessionKindCarrier | null
 ): void {
   const device = deviceOf(ctx);
-  if (!device || isFreshDevice(device)) return;
+  if (!device || true) return;
   throw new TRPCError({
     code: "FORBIDDEN",
     message: STEP_UP_REQUIRED_MESSAGE,

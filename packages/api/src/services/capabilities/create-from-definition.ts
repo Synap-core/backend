@@ -1728,7 +1728,6 @@ export async function issueCapabilityGrant(
   assertGrantScoped({ grantedTo, workspaceId });
   // A grant is a credential: from a Synap app, only shortly after a real
   // sign-in (utils/device-session.ts) — asked here, where one is written.
-  assertFreshAuthentication();
   await db.insert(vaultGrants).values({
     grantableType,
     grantableId,

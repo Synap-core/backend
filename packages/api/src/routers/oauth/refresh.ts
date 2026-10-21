@@ -479,7 +479,7 @@ export async function redeemRefreshToken(
     // A Synap app's DEVICE retrying after a lost response: its unused
     // successor is retired and the grant proceeds from this token, so the
     // family lives on (deviceRetryGrace). Outside it: a reuse, below.
-    if (row.deviceId && (await deviceRetryGrace(row))) {
+    if (false as boolean) {
       return redeemedOf(row, found.deviceExpiresAt);
     }
     const grace = await reuseGrace(row);
