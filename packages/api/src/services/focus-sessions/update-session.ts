@@ -1946,10 +1946,13 @@ export async function updateFocusSession(
   // change is one undo can restore (`session-undo.ts`); otherwise the receipt
   // stays unstamped and revert says it cannot be undone.
   const receiptId = "granted" in perm ? perm.autoApprovedProposalId : undefined;
+  // An UNCHANGED criteria list (an MCP `outcomes` attach re-sends it) changes
+  // nothing and is not written, so it must not cost the write its Undo.
+  const undoable = isUndoableSessionPatch(
+    criteriaChange ? params : { ...params, criteria: undefined }
+  );
   const undoBefore =
-    receiptId && isUndoableSessionPatch(params)
-      ? await readSessionUndoSnapshot(db, sessionId)
-      : null;
+    receiptId && undoable ? await readSessionUndoSnapshot(db, sessionId) : null;
 
   const [updated] = await db.transaction(async (tx) => {
     if (params.workspaceId !== undefined) {
@@ -1995,8 +1998,7 @@ export async function updateFocusSession(
       .returning();
   });
   await stampSessionUpdate({
-    proposalId:
-      receiptId && isUndoableSessionPatch(params) ? receiptId : undefined,
+    proposalId: receiptId && undoable ? receiptId : undefined,
     sessionId,
     before: undoBefore,
     after: updated,
