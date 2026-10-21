@@ -984,7 +984,7 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
     const replay = refresh(rt);
     const successorId = randomUUID();
     const minted = await mintAppOAuthAccessKey({
-      appId: redeemed.appId,
+      appId: redeemed.appId!,
       ownerUserId: redeemed.userId,
       oauthClientId: redeemed.clientId,
       instanceId: `oauth:${STUDIO}:${OWNER}`,

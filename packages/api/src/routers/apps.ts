@@ -230,7 +230,7 @@ export const appsRouter = router({
    * reduces access); a pod app's live token stops now and its next refresh
    * carries the narrower reach.
    */
-  narrow: protectedProcedure
+  narrow: credentialProcedure
     .input(
       z.object({
         publicId: PublicId,
@@ -278,7 +278,7 @@ export const appsRouter = router({
    * follow the pod's default, OFF = every change asks first (where every
    * connection starts). The owner's own act; an agent is refused.
    */
-  setWriteMode: protectedProcedure
+  setWriteMode: credentialProcedure
     .input(z.object({ publicId: PublicId, applyAutomatically: z.boolean() }))
     .mutation(({ ctx, input }) =>
       setAppWriteMode({
@@ -416,6 +416,7 @@ export const appsRouter = router({
 
   /** End one pod app for EVERY member (each through `revokeApp`). */
   adminRevokeClient: podAdminProcedure
+    .use(refuseDeviceSession)
     .input(z.object({ clientId: z.string().url().max(512) }))
     .mutation(({ ctx, input }) =>
       adminRevokePodAppClient({

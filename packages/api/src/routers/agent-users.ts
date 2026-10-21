@@ -11,6 +11,7 @@ import {
   protectedProcedure,
   podAdminProcedure,
   assertPodAdmin,
+  credentialProcedure,
 } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import {
@@ -787,7 +788,7 @@ export const agentUsersRouter = router({
   /**
    * Update an AI agent user
    */
-  update: protectedProcedure
+  update: credentialProcedure
     .input(
       z.object({
         workspaceId: z.string().uuid(),

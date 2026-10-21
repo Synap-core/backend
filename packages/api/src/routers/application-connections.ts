@@ -34,7 +34,13 @@ import {
   users,
   workspaces,
 } from "@synap/database";
-import { router, podAdminProcedure, protectedProcedure } from "../trpc.js";
+import {
+  router,
+  podAdminProcedure,
+  protectedProcedure,
+  credentialProcedure,
+  refuseDeviceSession,
+} from "../trpc.js";
 import { auditLog } from "../utils/audit-log.js";
 import {
   buildApplicationConnectionReturnUrl,
@@ -287,7 +293,7 @@ export const applicationConnectionsRouter = router({
    * handoff. Redeem it only after Pod Admin's local Kratos session exists;
    * this is what binds the later review request to a real Pod user.
    */
-  redeemRequest: protectedProcedure
+  redeemRequest: credentialProcedure
     .input(redeemRequestSchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -554,6 +560,7 @@ export const applicationConnectionsRouter = router({
     }),
 
   approveRequest: podAdminProcedure
+    .use(refuseDeviceSession)
     .input(requestIdSchema)
     .mutation(async ({ input, ctx }) => {
       let approved: Awaited<

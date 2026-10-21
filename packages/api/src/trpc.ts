@@ -182,7 +182,9 @@ export const protectedProcedure = publicProcedure
  */
 export const refuseDeviceSession = t.middleware(async (opts) => {
   assertNotDeviceSession(opts.ctx);
-  return opts.next({ ctx: opts.ctx });
+  // `next()` with no ctx: the procedure keeps the context its builder narrowed
+  // (`userId: string` after protectedProcedure).
+  return opts.next();
 });
 
 /** A credential door for any signed-in caller: {@link refuseDeviceSession}. */

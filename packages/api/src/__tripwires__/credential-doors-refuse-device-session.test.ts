@@ -16,16 +16,19 @@
  *  1. Parse every non-test source file of packages/api, packages/database and
  *     apps/api with the TypeScript compiler into FUNCTION UNITS (functions,
  *     methods, arrow functions bound to a name).
- *  2. A unit WRITES A CREDENTIAL when its code inserts, updates or deletes a
- *     table of `CREDENTIAL_TABLES` (Drizzle `.insert(t)` / `.update(t)` /
- *     `.delete(t)`, or SQL text naming it).
+ *  2. A unit WIDENS A CREDENTIAL when its code writes a table of
+ *     `CREDENTIAL_TABLES` in a way that can GIVE authority: an INSERT, or an
+ *     UPDATE that sets anything beyond the narrowing columns
+ *     (`NARROWING_COLUMNS`: revoked/retired/deleted marks, `is_active = false`,
+ *     use bookkeeping). A DELETE, or an UPDATE that only revokes, takes
+ *     authority away and is not a widening (Drizzle `.insert(t)` /
+ *     `.update(t).set({...})` / `.delete(t)` read from the AST; SQL text
+ *     `INSERT INTO` / `UPDATE … SET` / `DELETE FROM` read by its columns).
  *  3. Credentialness PROPAGATES to callers through calls resolved BY NAME: a
  *     plain call `f()` or `x.f()` resolves when exactly one unit is named `f`;
  *     `obj.m()` where `obj` was bound to `new C(...)` (in the same file, or a
  *     module-level singleton anywhere) resolves to `C.m`. A unit that calls
- *     `assertNotDeviceSession` is GUARDED and does not propagate. The few
- *     REVOCATION doors (`NARROWING_DOORS`: they only take authority away) do
- *     not propagate either.
+ *     `assertNotDeviceSession` is GUARDED and does not propagate.
  *  4. The DOORS a device token reaches: every tRPC procedure (`router({...})`
  *     entries) and every Hono handler mounted with `appSessionMiddleware()`.
  *     A door that reaches a credential unit must be guarded: its builder is
@@ -57,14 +60,22 @@ const ROOTS = ["packages/api/src", "packages/database/src", "apps/api/src"];
 const SKIP = new Set(["node_modules", "dist", "__tests__", "__tripwires__"]);
 
 /**
- * What a CREDENTIAL is, as tables (Drizzle name → SQL name). This is the
- * definition the scan applies, not a list of doors: each must still have a
- * writer (checked below), so a renamed table cannot silently drop out.
+ * What a CREDENTIAL is, as tables (Drizzle name → SQL name): authority over
+ * the pod — keys and their grants, an app's reach, a trusted issuer, a
+ * computer's approval, an OAuth/MCP connection, a refresh family or device, an
+ * agent's auto-approve rule. This is the definition the scan applies, not a
+ * list of doors: each must still have a widening writer (checked below), so
+ * a renamed table cannot silently drop out.
+ *
+ * NOT here, by decision (PR #59, named in the report): `vault_grants` — a
+ * capability's or a session's access to ONE secret, created by installing a
+ * template or capability and by answering a "provide" ask. Those stay open to
+ * a Synap app (the desktop is the workbench) and are governed by their own
+ * doors.
  */
 const CREDENTIAL_TABLES: Record<string, string> = {
   apiKeys: "api_keys",
   grants: "grants",
-  vaultGrants: "vault_grants",
   governanceRules: "governance_rules",
   apps: "apps",
   trustedIssuers: "trusted_issuers",
@@ -77,14 +88,44 @@ const CREDENTIAL_TABLES: Record<string, string> = {
 };
 
 /**
- * Doors that only TAKE AUTHORITY AWAY (revoke, delete, sweep). They write
- * credential tables but can never widen one, so they do not make a caller a
- * credential door. Each must still exist as a unit (checked below).
+ * Columns an UPDATE may set without giving authority: it revokes, retires,
+ * deletes, consumes, or keeps use bookkeeping (`is_active` only to the
+ * literal `false`). Anything else set on a credential table is a widening,
+ * unless the UPDATE sets an ending `status` (below).
  */
-const NARROWING_DOORS = new Set([
-  "revokeApiKeys",
-  "GrantRepository.revokeForKeys",
-  "revokePersonDevice",
+const NARROWING_COLUMNS = new Set([
+  "revokedAt",
+  "revokedBy",
+  "revokedReason",
+  "revokedByUserId",
+  "retiredAt",
+  "deletedAt",
+  "lastUsedAt",
+  "updatedAt",
+  "replacedBy",
+  "consumedAt",
+]);
+/**
+ * A `status` set to one of these ENDS the row's authority; the columns beside
+ * it are its audit stamps (who, when, why), so the whole UPDATE narrows.
+ */
+const ENDING_STATUSES = new Set([
+  "revoked",
+  "rejected",
+  "retired",
+  "disabled",
+  "denied",
+  "expired",
+]);
+const NARROWING_SQL_COLUMNS = new Set([
+  "revoked_at",
+  "revoked_by",
+  "revoked_reason",
+  "retired_at",
+  "deleted_at",
+  "last_used_at",
+  "updated_at",
+  "use_count",
 ]);
 
 const GUARD_CALL = "assertNotDeviceSession";
@@ -108,15 +149,81 @@ interface Analysis {
   singletons: Map<string, string>;
 }
 
-const tableNames = Object.keys(CREDENTIAL_TABLES).join("|");
 const sqlNames = Object.values(CREDENTIAL_TABLES).join("|");
-const DRIZZLE_WRITE = new RegExp(
-  `\\.(?:insert|update|delete)\\(\\s*(${tableNames})\\s*\\)`
+const SQL_INSERT = new RegExp(`insert\\s+into\\s+"?(${sqlNames})"?\\b`, "gi");
+const SQL_UPDATE = new RegExp(
+  `update\\s+"?(${sqlNames})"?\\s+set\\s+([\\s\\S]*?)(?:\\bwhere\\b|\\breturning\\b|$)`,
+  "gi"
 );
-const SQL_WRITE = new RegExp(
-  `(?:insert\\s+into|update|delete\\s+from)\\s+"?(${sqlNames})"?\\b`,
-  "i"
-);
+
+/**
+ * The credential tables a subtree WIDENS (step 2 above), read from the AST
+ * for Drizzle and from the SET columns for SQL text. Empty = it writes none,
+ * or only narrows.
+ */
+function widenedTables(node: ts.Node): string[] {
+  const out: string[] = [];
+  const visit = (n: ts.Node) => {
+    const arg = ts.isCallExpression(n) ? n.arguments[0] : undefined;
+    if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      n.arguments.length === 1 &&
+      arg &&
+      ts.isIdentifier(arg) &&
+      CREDENTIAL_TABLES[arg.text]
+    ) {
+      const op = n.expression.name.text;
+      if (op === "insert") out.push(arg.text);
+      if (op === "update") {
+        // `.update(t).set(obj)`: the `.set` call wraps this one.
+        const access = n.parent;
+        const setCall = access?.parent;
+        const setArg =
+          access &&
+          ts.isPropertyAccessExpression(access) &&
+          access.name.text === "set" &&
+          setCall &&
+          ts.isCallExpression(setCall)
+            ? setCall.arguments[0]
+            : undefined;
+        const ends =
+          !!setArg &&
+          ts.isObjectLiteralExpression(setArg) &&
+          setArg.properties.some(
+            (p) =>
+              ts.isPropertyAssignment(p) &&
+              nameOf(p) === "status" &&
+              ts.isStringLiteral(p.initializer) &&
+              ENDING_STATUSES.has(p.initializer.text)
+          );
+        const narrowing =
+          ends ||
+          (!!setArg &&
+            ts.isObjectLiteralExpression(setArg) &&
+            setArg.properties.every((p) => {
+              const key = nameOf(p);
+              if (!key || !ts.isPropertyAssignment(p)) return false;
+              if (key === "isActive") {
+                return p.initializer.kind === ts.SyntaxKind.FalseKeyword;
+              }
+              return NARROWING_COLUMNS.has(key);
+            }));
+        if (!narrowing) out.push(arg.text);
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  const text = node.getText();
+  for (const m of text.matchAll(SQL_INSERT)) out.push(m[1]!.toLowerCase());
+  for (const m of text.matchAll(SQL_UPDATE)) {
+    const cols = [...m[2]!.matchAll(/"?(\w+)"?\s*=/g)].map((c) => c[1]!);
+    if (!cols.every((c) => NARROWING_SQL_COLUMNS.has(c)))
+      out.push(m[1]!.toLowerCase());
+  }
+  return out;
+}
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -258,6 +365,8 @@ function calledNames(
 
 interface Verdicts {
   credential: Set<string>;
+  /** Why a unit is credential: the table it writes, or the unit it calls. */
+  why: Map<string, string>;
   writers: Map<string, Set<string>>;
   reaches: (node: ts.Node, file: string) => string | null;
   unitNames: Set<string>;
@@ -277,9 +386,9 @@ function judge(a: Analysis): Verdicts {
   const writers = new Map<string, Set<string>>();
   const unitCalls = new Map<number, string[]>();
   const credential = new Set<string>();
+  const why = new Map<string, string>();
   const guarded = new Set<number>();
   for (const u of a.units) {
-    const text = u.node.getText();
     const calls = calledNames(
       u.node,
       bindingsByFile.get(u.file)!,
@@ -290,14 +399,21 @@ function judge(a: Analysis): Verdicts {
       u.id,
       [...calls].filter((c) => c !== u.name && resolvable(c))
     );
-    const hit = text.match(DRIZZLE_WRITE) ?? text.match(SQL_WRITE);
-    if (hit) {
-      const table = hit[1]!;
-      writers.set(table, (writers.get(table) ?? new Set()).add(u.name));
-      if (!guarded.has(u.id) && !NARROWING_DOORS.has(u.name)) {
+    const widened = widenedTables(u.node);
+    if (widened.length > 0) {
+      const table = widened[0]!;
+      for (const t of widened)
+        writers.set(t, (writers.get(t) ?? new Set()).add(u.name));
+      if (!guarded.has(u.id)) {
         credential.add(u.name);
+        if (!why.has(u.name)) why.set(u.name, `writes ${table} (${u.file})`);
       }
     }
+  }
+  // A write inline in a procedure belongs to no named unit: count its file.
+  for (const [rel, sf] of a.files) {
+    for (const t of widenedTables(sf))
+      writers.set(t, (writers.get(t) ?? new Set()).add(rel));
   }
   // Fixpoint over resolved calls.
   let grew = true;
@@ -305,9 +421,10 @@ function judge(a: Analysis): Verdicts {
     grew = false;
     for (const u of a.units) {
       if (credential.has(u.name) || guarded.has(u.id)) continue;
-      if (NARROWING_DOORS.has(u.name)) continue;
-      if (unitCalls.get(u.id)!.some((c) => credential.has(c))) {
+      const hit = unitCalls.get(u.id)!.find((c) => credential.has(c));
+      if (hit) {
         credential.add(u.name);
+        why.set(u.name, hit);
         grew = true;
       }
     }
@@ -315,9 +432,8 @@ function judge(a: Analysis): Verdicts {
 
   /** The credential unit a door's code reaches first, or null. */
   const reaches = (node: ts.Node, file: string): string | null => {
-    const text = node.getText();
-    const direct = text.match(DRIZZLE_WRITE) ?? text.match(SQL_WRITE);
-    if (direct) return `writes ${direct[1]}`;
+    const direct = widenedTables(node);
+    if (direct.length > 0) return `writes ${direct[0]}`;
     const calls = calledNames(node, bindingsByFile.get(file)!, a.singletons);
     for (const c of calls) if (resolvable(c) && credential.has(c)) return c;
     return null;
@@ -325,6 +441,7 @@ function judge(a: Analysis): Verdicts {
 
   return {
     credential,
+    why,
     writers,
     reaches,
     unitNames: new Set(a.units.map((u) => u.name)),
@@ -464,9 +581,16 @@ describe("credential doors refuse a Synap app's device session", () => {
     expect(silent).toEqual([]);
   });
 
-  it("every narrowing door exists, and the known mints are credential units", () => {
-    for (const n of NARROWING_DOORS)
-      expect(verdicts.unitNames.has(n)).toBe(true);
+  it("revocations are not widenings; the known mints are credential units", () => {
+    // The revocation doors only narrow: they are NOT credential units.
+    for (const n of [
+      "revokeApiKeys",
+      "GrantRepository.revokeForKeys",
+      "revokePersonDevice",
+    ]) {
+      expect(verdicts.unitNames.has(n), n).toBe(true);
+      expect(verdicts.credential.has(n), n).toBe(false);
+    }
     // Spot-checks that resolution reaches through services, not just raw writes.
     for (const n of [
       "ApiKeyService.generateApiKey",
@@ -509,6 +633,18 @@ describe("credential doors refuse a Synap app's device session", () => {
   });
 
   it("every door that reaches a credential is guarded", () => {
-    expect(doors.map((d) => `${d.door} → ${d.reaches}`).sort()).toEqual([]);
+    // Each line names the chain down to the write, so a red names its path.
+    const chain = (start: string) => {
+      const out = [start];
+      for (let n = start; verdicts.why.has(n) && out.length < 12;) {
+        n = verdicts.why.get(n)!;
+        out.push(n);
+        if (n.startsWith("writes ")) break;
+      }
+      return out.join(" → ");
+    };
+    expect(doors.map((d) => `${d.door} → ${chain(d.reaches)}`).sort()).toEqual(
+      []
+    );
   });
 });
