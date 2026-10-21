@@ -52,7 +52,7 @@ vi.mock("../utils/audit-log.js", () => ({
   auditLog: vi.fn(async () => ({ id: "audit-1" })),
 }));
 
-vi.mock("@synap/database", async () => {
+vi.mock("@synap/database", async (importOriginal) => {
   const drizzle =
     await vi.importActual<typeof import("drizzle-orm")>("drizzle-orm");
   // The REAL reservation, not a stub: the router refuses reserved profile
@@ -75,6 +75,15 @@ vi.mock("@synap/database", async () => {
     }
     async findActiveBySlugAnyScope() {
       return h.slugElsewhere;
+    }
+    // Mirrors the real query: the active system/shared KIND holding the slug.
+    async findActivePodWideKind() {
+      const row = h.slugElsewhere.find(
+        (p) =>
+          (p.profileKind ?? "kind") === "kind" &&
+          (p.scope === "system" || p.scope === "shared")
+      );
+      return row ? { id: row.id as string, scope: row.scope as string } : null;
     }
     async getById() {
       return null;
@@ -123,6 +132,7 @@ vi.mock("@synap/database", async () => {
   }
 
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     eq: drizzle.eq,
     and: drizzle.and,
     inArray: drizzle.inArray,

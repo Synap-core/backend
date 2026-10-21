@@ -29,7 +29,7 @@ const h = vi.hoisted(() => ({
   queue: [] as unknown[][],
 }));
 
-vi.mock("@synap/database", async () => {
+vi.mock("@synap/database", async (importOriginal) => {
   const drizzle =
     await vi.importActual<typeof import("drizzle-orm")>("drizzle-orm");
   // The REAL provenance classifier — mocking it would make the provenance
@@ -45,6 +45,7 @@ vi.mock("@synap/database", async () => {
     };
   };
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     ...provenance,
     and: drizzle.and,
     or: drizzle.or,

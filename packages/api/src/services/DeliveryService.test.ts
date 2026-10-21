@@ -9,7 +9,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ─── Mocks ──────────────────────────────────────────────────────────────────
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     insert: vi.fn(),
     query: {
@@ -22,7 +23,8 @@ vi.mock("@synap/database", () => ({
   and: vi.fn((...args) => ({ type: "and", args })),
 }));
 
-vi.mock("@synap/database/schema", () => ({
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
   channels: {
     id: "id",
     userId: "user_id",

@@ -112,7 +112,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   return { ...actual, getDb: async () => db };
 });
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({
     warn: () => {},
     error: () => {},
