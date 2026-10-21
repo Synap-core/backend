@@ -66,7 +66,10 @@ import {
 } from "../../services/app-connect.js";
 import { apiKeyService } from "../../services/api-keys.js";
 import { AGENT_KEY_TTL_DAYS } from "../../services/hub-integration-registration.js";
-import { configuredPodAdminConsentUrl } from "../../utils/pod-admin-url.js";
+import {
+  configuredPodAdminBase,
+  configuredPodAdminConsentUrl,
+} from "../../utils/pod-admin-url.js";
 import {
   CP_CONNECTOR_AGENT_TYPE,
   FIRST_PARTY_CLIENT_IDS,
@@ -471,7 +474,23 @@ function appTokenResponse(minted: AppOAuthAccessKey, refreshToken: string) {
     // so the app can say "Connected as …" without another call.
     synap_grant: minted.grant,
     synap_user: minted.user,
+    // Which app this connection is on the pod, and the pod-admin page where
+    // the person narrows or revokes it (null: no valid POD_ADMIN_URL).
+    synap_app: {
+      id: minted.publicId,
+      manageUrl: appManageUrl(minted.publicId),
+    },
   };
+}
+
+/** The pod-admin page of one app (`/apps/[publicId]`), or null if unconfigured. */
+function appManageUrl(publicId: string): string | null {
+  const admin = configuredPodAdminBase();
+  if (!admin.ok) return null;
+  return new URL(
+    `/apps/${encodeURIComponent(publicId)}`,
+    admin.base
+  ).toString();
 }
 
 /**
