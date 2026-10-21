@@ -88,6 +88,8 @@ import {
 import { loadEditableDocument } from "../utils/document-edit-access.js";
 import {
   buildProposalScopeConditions,
+  proposalIdsFilterSchema,
+  proposalIdsWhere,
   resolveAutomationStepRunIds,
 } from "./proposals/scope-conditions.js";
 import { createLogger } from "@synap-core/core";
@@ -388,11 +390,7 @@ export const proposalsRouter = router({
          * This remains a filter only: workspace/user visibility predicates are
          * still applied below before any proposal can be returned.
          */
-        proposalIds: z
-          .array(z.string().uuid())
-          .max(100)
-          .transform((ids) => [...new Set(ids)])
-          .optional(),
+        proposalIds: proposalIdsFilterSchema.optional(),
         /** Filter to proposals originating from a specific chat thread */
         threadId: z.string().uuid().optional(),
         /** Filter to proposals linked to a specific focus session via correlationId */
@@ -480,7 +478,7 @@ export const proposalsRouter = router({
       }
 
       if (input.proposalIds && input.proposalIds.length > 0) {
-        conditions.push(inArray(proposals.id, input.proposalIds));
+        conditions.push(proposalIdsWhere(input.proposalIds));
       }
 
       if (input.excludeBookkeeping) {

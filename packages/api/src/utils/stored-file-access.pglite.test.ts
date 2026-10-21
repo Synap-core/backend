@@ -285,6 +285,7 @@ describe("file door read floor — file entities", () => {
   it("a member who can read the pod-wide entity gets its file's key", async () => {
     expect(await loadSignableFileEntity(MEMBER, E_SHARED)).toEqual({
       id: E_SHARED,
+      documentId: D_FILE,
       storageKey: keyOf(D_FILE),
       mimeType: "image/webp",
     });

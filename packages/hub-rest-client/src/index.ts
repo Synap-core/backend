@@ -97,6 +97,7 @@ export type {
   HubThreadContext,
   // Proposals
   HubProposal,
+  HubFileUrl,
   // Views
   HubView,
   HubBentoArrangementResult,
