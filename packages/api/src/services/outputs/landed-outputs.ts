@@ -161,23 +161,27 @@ export async function listLandedOutputs(
     if (!project) return null;
   }
 
-  const { items, sessions, truncated } = await scanSessionOutputs(database, [
-    ...sessionListConditions({
-      userId: viewer,
-      scope: {
-        workspaceLens: query.workspaceLens,
-        projectLens: query.projectId,
-      },
-      status: "all",
-      lens: "default",
-      kind: "work",
-      includeTrackedRuns: true,
-      roster: query.access.actor === "operator",
-      ...(query.trackId ? { trackId: query.trackId } : {}),
-    }),
-    ...(query.sessionId ? [eq(focusSessions.id, query.sessionId)] : []),
-    scoped.predicate(focusSessions),
-  ]);
+  const { items, sessions, truncated } = await scanSessionOutputs(
+    database,
+    [
+      ...sessionListConditions({
+        userId: viewer,
+        scope: {
+          workspaceLens: query.workspaceLens,
+          projectLens: query.projectId,
+        },
+        status: "all",
+        lens: "default",
+        kind: "work",
+        includeTrackedRuns: true,
+        roster: query.access.actor === "operator",
+        ...(query.trackId ? { trackId: query.trackId } : {}),
+      }),
+      ...(query.sessionId ? [eq(focusSessions.id, query.sessionId)] : []),
+      scoped.predicate(focusSessions),
+    ],
+    { projectLens: query.projectId }
+  );
 
   const rows = await attachLandedProvenance(database, {
     items,

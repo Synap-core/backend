@@ -21,7 +21,14 @@
  *  3. A source scan over `packages/api/src` (globbed): every file that builds
  *     an entity read floor or calls raw search must either carry the listing
  *     rule or be WITHHELD here with a reason — so a new listing door in another
- *     file joins the scan by existing.
+ *     file joins the scan by existing. The same scan runs over
+ *     `packages/jobs/src` (automation steps, digests, scans), whose reads use
+ *     their own floor (`entityQueryVisibilityWhere`) or a bare `.from(entities)`.
+ *  2b. Behavioural checks for the doors FB1020 wave 2 named after the first
+ *     cut: pickers (`entities.search/searchAll` + `projectId`), the outputs
+ *     scan (Library › Landed, Home › Produced, a project's outputs), the Hub
+ *     workspace digest + pod-wide count, the automation `query` step (+ a rule
+ *     scoped to the demo project), and `revealSampleOf` itself.
  *
  * Fixture (the discriminating rows): REAL (no project), REAL_F (real project),
  * DOUBLE (real AND demo project — real membership wins, stays VISIBLE),
@@ -30,6 +37,9 @@
  * (probe-key row), REAL_P / DEMO_P (pod-personal twins for `listGlobal`).
  *
  * NOT COVERED (measured by reading, stated so nobody assumes it):
+ *  - the jobs half of net 3 matches `.from(entities)` / `query.entities
+ *    .findMany(` / `entityQueryVisibilityWhere(` only; a jobs read through a
+ *    raw SQL string or a repository is not seen. FILE granularity, as below.
  *  - net 3 is FILE granularity: a file that already carries the rule at one
  *    door passes even if a second listing door in it does not; and a listing
  *    door that floors with a bare `eq(entities.userId, …)` is not matched by
@@ -519,6 +529,148 @@ describe("net 2 — views, raw search, matcher, the update door", () => {
   });
 });
 
+// ── Net 2b: pickers, outputs, Hub digest + pod count, the query step ──────
+
+describe("net 2b — the doors named after the first cut", () => {
+  it("revealSampleOf lists ONE project's demo rows beside the real ones, never probe", async () => {
+    const db = h.db as {
+      select: (c: unknown) => {
+        from: (t: unknown) => {
+          where: (w: unknown) => Promise<Array<{ id: string }>>;
+        };
+      };
+    };
+    const { listableEntityWhere } = await import("@synap/database");
+    const read = async (reveal: string | null) =>
+      new Set(
+        (
+          await db
+            .select({ id: entities.id })
+            .from(entities)
+            .where(
+              and(
+                inArray(entities.id, SEEDED),
+                listableEntityWhere({ revealSampleOf: reveal })
+              )
+            )
+        ).map((r) => r.id)
+      );
+    expect(await read(DEMO_PROJ)).toEqual(
+      new Set([...VISIBLE, DEMO_F, DEMO_S, DEMO_P])
+    );
+    // A real project reveals nothing; a non-uuid is ignored, never an error.
+    expect(await read(REAL_PROJ)).toEqual(VISIBLE);
+    expect(await read("not-a-uuid")).toEqual(VISIBLE);
+    expect(await read(null)).toEqual(VISIBLE);
+  });
+
+  for (const door of ["search", "searchAll"] as const) {
+    it(`${door} (pickers) in the demo project's lens finds its demo records`, async () => {
+      const ids = idsOf(
+        await entitiesCaller()[door]!({
+          query: "Deal",
+          limit: 50,
+          projectId: DEMO_PROJ,
+        })
+      );
+      expect(ids).toContain(DEMO_F);
+      expect(ids).toContain(REAL);
+      expect(ids).not.toContain(PROBE);
+    });
+  }
+
+  it("the outputs scan (Landed, Home Produced, project outputs) drops demo + probe; the lens shows the demo", async () => {
+    const { scanSessionOutputs } =
+      await import("../services/projects/project-outputs.js");
+    const { focusSessions } = schema;
+    const { eq } = await import("drizzle-orm");
+    const S = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, goal, status, expected_outputs, metadata, started_at, updated_at, created_at)
+       values ($1,$2,$3,'g','active','[]'::jsonb,'{}'::jsonb, now(), now(), now())`,
+      [S, A, W]
+    );
+    for (const id of [REAL, DEMO_F, PROBE]) {
+      await q(
+        `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+         values ($1,$2,'session',$3,'entity',$4,'produced','{}'::jsonb, now())`,
+        [randomUUID(), W, S, id]
+      );
+    }
+    const refs = async (projectLens?: string) =>
+      (
+        await scanSessionOutputs(
+          h.db as never,
+          [eq(focusSessions.id, S)],
+          projectLens ? { projectLens } : {}
+        )
+      ).items
+        .filter((i) => i.kind === "entity")
+        .map((i) => i.ref.id)
+        .sort();
+    // Non-vacuity: the scan reads the real row at all.
+    expect(await refs()).toEqual([REAL]);
+    expect(await refs(DEMO_PROJ)).toEqual([REAL, DEMO_F].sort());
+  });
+
+  it("Hub GET /workspaces/:id/digest neither counts nor names demo or probe rows", async () => {
+    const { OpenAPIHono } = await import("@hono/zod-openapi");
+    const { registerWorkspacesRoutes } =
+      await import("../routers/hub-protocol/rest/workspaces.js");
+    const app = new OpenAPIHono();
+    app.use("*", async (c, next) => {
+      c.set("userId" as never, A as never);
+      c.set("scopes" as never, ["hub-protocol.read"] as never);
+      await next();
+    });
+    registerWorkspacesRoutes(app as never);
+    const res = await app.request(`/workspaces/${W}/digest`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      counts: Record<string, number>;
+      keyEntities: Array<{ id: string }>;
+    };
+    // W's deals: REAL, REAL_F, DOUBLE listable; DEMO_F, DEMO_S, PROBE not.
+    expect(body.counts.deal).toBe(3);
+    const named = body.keyEntities.map((e) => e.id);
+    expect(named.filter((id) => HIDDEN.has(id))).toEqual([]);
+    expect(named).toContain(DOUBLE);
+
+    const list = await app.request(`/workspaces`);
+    expect(list.status).toBe(200);
+    // Pod-wide rows: REAL_P (real) and DEMO_P (demo).
+    expect(
+      ((await list.json()) as { podEntityCount: number }).podEntityCount
+    ).toBe(1);
+  });
+
+  it("the automation query step leaves demo + probe out, unless the rule is scoped to the demo project", async () => {
+    const { executeQueryStep } =
+      await import("@synap/jobs/workers/steps/query.js");
+    const context = {
+      trigger: { payload: {}, subject: null },
+      steps: {},
+      automation: { id: "", state: {} },
+    };
+    const run = async (ruleProjectId?: string) =>
+      idsOf(
+        (await executeQueryStep(
+          { profileSlug: "deal", limit: 100 },
+          context as never,
+          W,
+          A,
+          ruleProjectId ?? null
+        )) as { entities: unknown[] }
+      );
+    const plain = await run();
+    expect(plain.filter((id) => HIDDEN.has(id))).toEqual([]);
+    expect(plain).toContain(REAL);
+    const scoped = await run(DEMO_PROJ);
+    expect(scoped).toContain(DEMO_F);
+    expect(scoped).not.toContain(PROBE);
+  });
+});
+
 // ── Net 3: every api file that builds an entity floor or searches raw ─────
 
 const FLOOR_RE =
@@ -614,6 +766,64 @@ describe("net 3 — every api file with an entity floor carries the rule or says
   it("no WITHHELD entry is stale (gone, no floor, or already carrying the rule)", () => {
     const byRel = new Map(scanned.map((f) => [f.rel, f]));
     const stale = Object.keys(WITHHELD_FILES).filter((rel) => {
+      const f = byRel.get(rel);
+      return !f || MARK_RE.test(f.src);
+    });
+    expect(stale).toEqual([]);
+  });
+});
+
+// ── Net 3 (jobs): every jobs file that reads entities carries the rule or says why not
+
+const JOBS_READ_RE =
+  /\.from\(entities\)|query\.entities\.findMany\(|entityQueryVisibilityWhere\(/;
+
+/** Jobs files that read entities for something that is not a listing. */
+const WITHHELD_JOBS_FILES: Record<string, string> = {
+  "utils/automation-governance.ts": "names / targets by id",
+  "utils/process-sync.ts": "one subject, by id",
+  "workers/ai-workers.ts": "one entity, by id",
+  "workers/cross-channel-notifier.ts": "one subject, by id",
+  "workers/entity-embedding.ts": "indexes one row, by id",
+  "workers/entity-query-scope.ts": "defines the jobs-local access floor",
+  "workers/pagerank-centrality.ts":
+    "graph maintenance over ids — scores rows, shows nobody a list",
+  "workers/pod-hygiene-near-dup.ts":
+    "duplicate detection — identity is pod-wide (dedup sees demo rows)",
+  "workers/relation-backfill.ts": "maintenance write over a profile's rows",
+  "workers/steps/entity-lookup.ts":
+    "entity_read by id + related_entities: a focal record's neighbourhood",
+  "workers/steps/messages-query.ts": "names entities messages reference, by id",
+  "workers/steps/output.ts": "write target: dedupe-by + existence by id",
+  "workers/tool-demand-forward.ts":
+    "tool-request bookkeeping rows, not a listing of the person's data",
+};
+
+const JOBS_SRC = join(__dirname, "..", "..", "..", "jobs", "src");
+
+describe("net 3 (jobs) — every jobs file reading entities carries the rule or says why not", () => {
+  const scanned = walk(JOBS_SRC)
+    .map((p) => ({ rel: relative(JOBS_SRC, p), src: readFileSync(p, "utf8") }))
+    .filter((f) => JOBS_READ_RE.test(f.src));
+
+  it("the scan sees a plausible set, incl. a literal sample (non-vacuity)", () => {
+    expect(scanned.length).toBeGreaterThanOrEqual(12);
+    const rels = scanned.map((f) => f.rel);
+    expect(rels).toContain("workers/steps/query.ts");
+    expect(rels).toContain("workers/crm-daily-digest.ts");
+    expect(JOBS_READ_RE.test("db.select().from(entities)")).toBe(true);
+  });
+
+  it("each matched file carries the listing rule or is WITHHELD with a reason", () => {
+    const missing = scanned
+      .filter((f) => !MARK_RE.test(f.src) && !(f.rel in WITHHELD_JOBS_FILES))
+      .map((f) => f.rel);
+    expect(missing).toEqual([]);
+  });
+
+  it("no WITHHELD jobs entry is stale (gone, no read, or already carrying the rule)", () => {
+    const byRel = new Map(scanned.map((f) => [f.rel, f]));
+    const stale = Object.keys(WITHHELD_JOBS_FILES).filter((rel) => {
       const f = byRel.get(rel);
       return !f || MARK_RE.test(f.src);
     });

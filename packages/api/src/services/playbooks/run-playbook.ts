@@ -674,6 +674,7 @@ async function choosePinnedSubject(
       workspaceId: input.workspaceId,
       ownerId: input.userId,
       fallback: strategy.fallback,
+      projectId: input.projectId ?? null,
     });
   }
   return decidePinnedSubject({

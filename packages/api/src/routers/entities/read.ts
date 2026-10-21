@@ -861,6 +861,12 @@ export const readProcs = {
         query: z.string(),
         profileSlug: z.string().optional(),
         limit: z.number().min(1).max(50).default(10),
+        /**
+         * The project the PICKER sits in. Does not narrow: it lists that
+         * project's demo records beside every real one, so a live demo can
+         * pick its own records (`revealSampleOf`, the listing rule).
+         */
+        projectId: z.string().uuid().optional(),
       })
     )
     .output(
@@ -880,10 +886,10 @@ export const readProcs = {
       // previously skipped the workspace filter) and the workspace branch
       // (which had no per-user guard on the NULL case).
       // THE listing rule: probe and demo (sample-project) rows are never
-      // search hits.
+      // search hits — except the demo rows of the project the picker sits in.
       const conditions: any[] = [
         entityReadVisibleWhere(ctx.userId),
-        listableEntityWhere(),
+        listableEntityWhere({ revealSampleOf: input.projectId }),
       ];
 
       // The advertised contract: input.query MATCHES. (This was silently
@@ -985,6 +991,12 @@ export const readProcs = {
         query: z.string(),
         profileSlug: z.string().optional(),
         limit: z.number().min(1).max(50).default(10),
+        /**
+         * The project the PICKER sits in. Does not narrow: it lists that
+         * project's demo records beside every real one, so a live demo can
+         * pick its own records (`revealSampleOf`, the listing rule).
+         */
+        projectId: z.string().uuid().optional(),
       })
     )
     .output(
@@ -1005,10 +1017,10 @@ export const readProcs = {
       // workspaces + globals + own pod-personal). This is the ONLY scope
       // predicate — there is no workspace narrow, by design.
       // THE listing rule: probe and demo (sample-project) rows are never
-      // search hits.
+      // search hits — except the demo rows of the project the picker sits in.
       const conditions: any[] = [
         entityReadVisibleWhere(ctx.userId),
-        listableEntityWhere(),
+        listableEntityWhere({ revealSampleOf: input.projectId }),
       ];
 
       const trimmedQuery = input.query.trim();

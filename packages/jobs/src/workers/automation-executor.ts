@@ -343,6 +343,11 @@ async function executeAutomationFlow(params: {
   const triggerConnectionId =
     (automation.triggerConfig as AutomationTriggerConfig | null)
       ?.connectionId ?? null;
+  // The project the rule is scoped to: a query step of a rule built for the
+  // demo project lists that project's demo records (THE listing rule).
+  const ruleProjectId =
+    (automation.triggerConfig as AutomationTriggerConfig | null)?.projectId ??
+    null;
 
   // `definitionSnapshot` unset is the exact "this is the run's FIRST execution"
   // signal (robust against BOTH delay-resume AND crash-redelivery, where
@@ -1377,7 +1382,8 @@ async function executeAutomationFlow(params: {
                           },
                           context,
                           workspaceId,
-                          ownerId
+                          ownerId,
+                          ruleProjectId
                         );
                         break;
                       case "fetch":
@@ -1503,7 +1509,8 @@ async function executeAutomationFlow(params: {
                 data,
                 context,
                 workspaceId,
-                ownerId
+                ownerId,
+                ruleProjectId
               );
               break;
             }
