@@ -225,6 +225,19 @@ vi.mock("../../services/app-connect.js", () => ({
   currentOAuthApproval: async () => [],
 }));
 
+// The pod admin's pod-app policy (PB4). Read for real (pod_settings) in
+// services/pod-app.connections.pglite.test.ts; here the switch is a flag, and
+// the Synap-app rule is the real one.
+const podAppPolicy = vi.hoisted(() => ({ allowUnverified: true }));
+vi.mock("../../services/pod-app-policy.js", async () => {
+  const { isSynapApp } =
+    await vi.importActual<typeof import("./config.js")>("./config.js");
+  return {
+    podAppMayConnect: async (clientId: string) =>
+      isSynapApp(clientId) || podAppPolicy.allowUnverified,
+  };
+});
+
 // Pod app refresh tokens (PB3). The store runs for real on PGlite in
 // services/oauth-refresh.pglite.test.ts; here it is spies, so this file pins
 // what the HTTP door asks of it, and that an MCP (DCR) client never reaches it.
@@ -317,6 +330,7 @@ beforeEach(() => {
   store.issuersFail = false;
   store.keys.clear();
   store.cimd.clear();
+  podAppPolicy.allowUnverified = true;
   log.warn.mockClear();
   revokeSpy.mockReset();
   claimWhere.length = 0;
@@ -1622,6 +1636,96 @@ describe("RFC 8707 — resource", () => {
 });
 
 // ─── (k) Pod app clients — CIMD at /authorize, consent and /token (PB1) ──────
+
+describe("PB4 — the pod admin's switch for unverified apps (F4)", () => {
+  const SYNAP_APP =
+    "https://content-studio.synap.live/.well-known/synap-client.json";
+  const SYNAP_CB = "https://content-studio.synap.live/api/synap/callback";
+  const appParams = {
+    clientId: APP_ID,
+    redirectUri: APP_CALLBACK,
+    responseType: "code",
+    scope: "entity.post.read",
+    codeChallenge: CHALLENGE,
+    codeChallengeMethod: "S256",
+    state: "st-app",
+  };
+
+  it("off: /authorize refuses an unverified app at phase 1 — shown to the person, never redirected, nothing fetched", async () => {
+    podAppPolicy.allowUnverified = false;
+    // No cached document: a fetch would answer "could not be read" instead.
+    const res = await authorizeApp();
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+    expect(await res.text()).toMatch(
+      /turned off apps that are not Synap apps, so studio\.example\.com cannot connect/
+    );
+  });
+
+  it("off: the consent screen's context and the Allow click refuse it too, and nothing is connected", async () => {
+    cacheApp();
+    podAppPolicy.allowUnverified = false;
+    await expect(getOAuthConsentContext(appParams, HUMAN_ID)).rejects.toThrow(
+      /turned off apps that are not Synap apps/
+    );
+    await expect(
+      decideOAuthAuthorization(
+        {
+          ...appParams,
+          approve: true,
+          approved: [{ permission: "entity.post.read", workspaceId: SPACE_ID }],
+        },
+        HUMAN_ID,
+        HUMAN_CTX
+      )
+    ).rejects.toThrow(/turned off apps that are not Synap apps/);
+    expect(appConnect.connect).not.toHaveBeenCalled();
+    expect(store.codes.size).toBe(0);
+  });
+
+  it("off: a Synap app still connects", async () => {
+    podAppPolicy.allowUnverified = false;
+    store.cimd.set(SYNAP_APP, {
+      clientId: SYNAP_APP,
+      clientKind: "cimd",
+      clientName: "Content Studio",
+      redirectUris: [SYNAP_CB],
+      scopes: [],
+      requestedPermissions: ["entity.post.read"],
+      createdAt: new Date(),
+    });
+    const res = await authorizeApp({
+      client_id: SYNAP_APP,
+      redirect_uri: SYNAP_CB,
+    });
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get("location")!).origin).toBe(POD_ADMIN);
+  });
+
+  it("on (the default): the same unverified app reaches the consent screen", async () => {
+    cacheApp();
+    const res = await authorizeApp();
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get("location")!).origin).toBe(POD_ADMIN);
+  });
+
+  it("an MCP (DCR) client is never asked about it", async () => {
+    podAppPolicy.allowUnverified = false;
+    const { body: client } = await register();
+    const res = await oauthApp.request(
+      authorizeUrl({
+        response_type: "code",
+        client_id: client.client_id,
+        redirect_uri: CALLBACK,
+        scope: "mcp.read",
+        code_challenge: CHALLENGE,
+        code_challenge_method: "S256",
+      })
+    );
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get("location")!).origin).toBe(POD_ADMIN);
+  });
+});
 
 describe("CIMD clients", () => {
   it("a cached app client reaches the consent screen with its declared scopes", async () => {

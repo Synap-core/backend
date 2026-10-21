@@ -28,6 +28,7 @@ import {
   oauthAppOffer,
   type OAuthAppOfferItem,
 } from "../../services/app-connect.js";
+import { podAppMayConnect } from "../../services/pod-app-policy.js";
 import type { Context } from "../../types/context.js";
 
 import {
@@ -133,6 +134,14 @@ export async function resolveClientAndRedirect(
   // trusted, because the document IS the list of redirect_uris.
   let client: StoredClient | null;
   if (isClientMetadataUrl(clientId)) {
+    // The pod admin's switch (F4), checked before the document is fetched: a
+    // pod that admits no unverified app fetches nothing for one. Phase 1, so
+    // /authorize and the consent screen both show it to the person.
+    if (!(await podAppMayConnect(clientId))) {
+      throw new AuthorizeUserError(
+        `This pod's admin has turned off apps that are not Synap apps, so ${new URL(clientId).host} cannot connect. Ask your pod admin to allow unverified apps.`
+      );
+    }
     try {
       client = await resolveCimdClient(clientId, resolveIssuer());
     } catch (err) {
