@@ -770,16 +770,19 @@ const daily = (
 ) => activityRouter.createCaller(ctx(userId)).daily(input);
 
 /**
- * A zone whose local midnight fell within the last hour, so the fixture's
- * recent rows (1–90 minutes old) straddle two calendar days there. Chosen at
- * run time: some zone always sits between 00:00 and 01:00.
+ * A zone whose local midnight fell 3–88 minutes ago, so the fixture's recent
+ * rows (2–90 minutes old) straddle two calendar days there. Chosen at run
+ * time. The window must span more than an hour: zones whose local time is
+ * 00:xx or 01:xx always exist, but a 10–50 minute window had no zone for
+ * about a fifth of the day (00:00–00:09 and :51–:59 UTC each hour on whole-
+ * hour offsets) and failed CI at those minutes.
  */
 function midnightZone(): string {
   const now = Date.now();
   for (const tz of Intl.supportedValuesOf("timeZone")) {
     const today = calendarDayIn(now, tz);
     const since = Date.parse(activityDayRange(today, tz).since);
-    if (now - since >= 10 * 60_000 && now - since <= 50 * 60_000) return tz;
+    if (now - since >= 3 * 60_000 && now - since <= 88 * 60_000) return tz;
   }
   throw new Error("no zone has just passed midnight");
 }
