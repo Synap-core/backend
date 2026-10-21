@@ -3282,6 +3282,11 @@ export const tools = {
                 properties: {
                   ref: { type: "string" },
                   name: { type: "string" },
+                  slug: {
+                    type: "string",
+                    description:
+                      "REQUIRED. The ref synap_load_skill resolves, lowercase path segments (e.g. 'team/where-the-work-is'); without it the skill could not be loaded, so it is refused. Pod-wide unique; 'system/' is reserved.",
+                  },
                   body: {
                     type: "string",
                     description: "The instruction itself, markdown. REQUIRED.",
@@ -3296,7 +3301,7 @@ export const tools = {
                     description: "Omit or null to apply to every agent type.",
                   },
                 },
-                required: ["ref", "name", "body", "scope"],
+                required: ["ref", "name", "slug", "body", "scope"],
               },
             },
             automations: {

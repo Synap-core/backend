@@ -73,6 +73,7 @@ import {
   materializedReceiptState,
 } from "../../../services/capture-agent/capture-receipt-state.js";
 import { readStoredProposalScope } from "../../../services/capture-agent/stored-capture-scope.js";
+import { captureSkillStepProblems } from "../../../services/capture-agent/capture-plan.js";
 
 const captureHandler: McpToolHandler = async (
   ctx: McpToolContext
@@ -129,6 +130,11 @@ const captureHandler: McpToolHandler = async (
       }
     });
   }
+  // A teaching skill needs its `slug` — the ONE authoring rule
+  // `synap_create_skill` applies — or nothing is filed.
+  capturePlanShapeProblems.push(
+    ...captureSkillStepProblems(capturePlanRaw.skills)
+  );
   const capturePlan = Object.fromEntries(
     Object.entries(capturePlanRaw).map(([key, items]) => [
       key,

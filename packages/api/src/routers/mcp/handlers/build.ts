@@ -24,6 +24,7 @@ import type {
 } from "../../../services/profiles/renderer-slots.js";
 import { getDb } from "@synap/database";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
+import { skillAuthoringProblem } from "../../../services/skills/skill-authoring.js";
 import {
   updateSkillGoverned,
   type SkillUpdatePatch,
@@ -854,22 +855,18 @@ export const buildHandlers: McpHandlerMap = {
       typeof args.body === "string" && args.body.trim() !== ""
         ? args.body
         : undefined;
-    if (!skillCode && !skillBody) {
-      return ok({
-        error:
-          "a skill needs documentation or code — pass `body` (Markdown) to author a teaching skill, `code` to author a runnable one, or both.",
-      });
-    }
     const skillSlug =
       typeof args.slug === "string" && args.slug.trim() !== ""
         ? args.slug.trim()
         : undefined;
-    if (!skillCode && !skillSlug) {
-      return ok({
-        error:
-          "slug is required for a documentation-only skill — it is the ref synap_load_skill resolves (e.g. 'biz/business-plan'). Without one the skill is authored but unreachable.",
-      });
-    }
+    // The ONE authoring rule (documentation-or-code, a slug for a teaching
+    // skill, the slug's shape) — shared with Hub REST and capture `skills[]`.
+    const authoringProblem = skillAuthoringProblem({
+      body: skillBody,
+      code: skillCode,
+      slug: skillSlug,
+    });
+    if (authoringProblem) return ok({ error: authoringProblem });
     const skillWorkspaceId =
       typeof args.workspaceId === "string" ? args.workspaceId : undefined;
     const skillsCtx = await createHubProtocolCallerContext(
