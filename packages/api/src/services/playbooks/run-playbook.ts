@@ -1538,6 +1538,9 @@ export async function gateWorkerRun(
       workspaceId: input.workspaceId,
       limit: 1,
       onlyIds: [input.subjectId],
+      // "Is THIS subject still in the status?" is a by-id question: a demo
+      // subject of a demo-scoped rule must not read as gone (M9).
+      byId: true,
     });
     if (still.items.length === 0) return WORKER_SKIP_REASONS.staleTransition;
   }

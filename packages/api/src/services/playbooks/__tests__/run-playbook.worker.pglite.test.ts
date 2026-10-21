@@ -119,6 +119,7 @@ import {
   focusSessions,
   profileProperties,
   propertyDefs,
+  projects,
 } from "@synap/database";
 import { runPlaybook } from "../run-playbook.js";
 
@@ -172,6 +173,8 @@ beforeAll(async () => {
     propertyDefs,
     // The worker gate reads its caps through `resolveCeiling` (W1c).
     governanceCeilings,
+    // The listing rule (status-groups) reads project membership + `sample`.
+    projects,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -402,6 +405,39 @@ describe("the gate — before any session exists", () => {
       expect(await sessions()).toHaveLength(0);
     } finally {
       await q(`delete from governance_ceilings`);
+    }
+  });
+
+  /**
+   * backend review M9: "is THIS subject still in the status?" is a BY-ID
+   * question. It went through the listing rule, which hides a demo record, so
+   * a rule scoped to the demo project matched (the matcher lets it) and the
+   * runner then dropped every run as stale.
+   */
+  it("per_thing: a DEMO subject still in the status → the run goes on (M9)", async () => {
+    await declareLifecycle("stage");
+    const demoProject = randomUUID();
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status, sample)
+       values ($1, $2, $3, 'Demo', 'active', true)`,
+      [demoProject, USER, WS]
+    );
+    const still = await deal("review");
+    await q(
+      `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type)
+       values ($1, $2, $3, $4, $5, 'belongs_to_project')`,
+      [randomUUID(), USER, WS, still, demoProject]
+    );
+    try {
+      // Same assertion as the precedent below ("still in the status"): the
+      // gate let the run through; what the spine does next is its own suite.
+      expect(
+        await fire(worker({ size: "per_thing", key: "enters_status:review" }), {
+          subjectId: still,
+        })
+      ).not.toEqual({ skipped: "stale_transition" });
+    } finally {
+      await q(`delete from relations; delete from projects;`);
     }
   });
 
