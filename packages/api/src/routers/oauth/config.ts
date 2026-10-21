@@ -13,7 +13,10 @@ import {
 } from "@synap/database";
 import { isValidScope, type ApiKeyScope } from "@synap/database/schema";
 
-import { canonicalizeIssuerUrl } from "./protocol.js";
+import {
+  canonicalizeIssuerUrl,
+  type FirstPartyRedirectRule,
+} from "./protocol.js";
 
 /**
  * Agent type for a grant to any client OTHER than this pod's approved Control
@@ -108,6 +111,53 @@ export function isSynapApp(clientId: string): boolean {
     return false;
   }
   return SYNAP_APP_IDS.some((id) => origin === `https://${id}.synap.live`);
+}
+
+/**
+ * The FIRST-PARTY native clients (join plan target A, founder decision
+ * `decision:join-target-a-2026-10-21`): the Synap apps, declared HERE and
+ * shipped with every pod release — never a DCR row, never a database row, so
+ * every pod knows them with no registration. Closed: a `client_id` not in this
+ * table is never first-party, whatever it looks like.
+ *
+ * Their code mints a PERSON DEVICE token (1 h) and a rotating refresh token
+ * (30-day idle, 180-day absolute cap), one family per signed-in device
+ * (`services/person-device-token.ts`, the one mint door).
+ *
+ * Consent is ALWAYS a one-click confirm (founder decision 4): a loopback
+ * redirect cannot prove which program is listening (RFC 8252 §8.6), and the
+ * Relay claimed-https link is not live yet. Names come from the vocabulary
+ * door (`resolveFirstPartyClientName`), never from this table.
+ */
+export const FIRST_PARTY_CLIENTS = {
+  "synap-desktop": {
+    redirects: [{ kind: "loopback", path: "/oauth/callback" }],
+  },
+  "synap-relay": {
+    redirects: [
+      { kind: "claimed-https", uri: "https://synap.live/app/oauth/callback" },
+      { kind: "private-scheme", uri: "live.synap.relay:/oauth/callback" },
+    ],
+  },
+} as const satisfies Record<
+  string,
+  { redirects: readonly FirstPartyRedirectRule[] }
+>;
+
+export type FirstPartyClientId = keyof typeof FIRST_PARTY_CLIENTS;
+
+export const FIRST_PARTY_CLIENT_IDS = Object.keys(
+  FIRST_PARTY_CLIENTS
+) as FirstPartyClientId[];
+
+/** Is this client_id one of the Synap apps? Exact, own-property lookup. */
+export function isFirstPartyClientId(
+  clientId: string | null | undefined
+): clientId is FirstPartyClientId {
+  return (
+    typeof clientId === "string" &&
+    Object.prototype.hasOwnProperty.call(FIRST_PARTY_CLIENTS, clientId)
+  );
 }
 
 /**

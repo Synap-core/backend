@@ -85,7 +85,7 @@ import {
   buildAuthorizationServerMetadata,
   buildDcrResponse,
   buildProtectedResourceMetadata,
-  isRegisteredRedirectUri,
+  clientAcceptsRedirect,
   validateDcrRequest,
   verifyPkce,
 } from "./protocol.js";
@@ -535,7 +535,7 @@ oauthApp.post("/token", async (c) => {
     }
     if (
       params.redirect_uri !== claimed.redirectUri ||
-      !isRegisteredRedirectUri(client.redirectUris, claimed.redirectUri)
+      !clientAcceptsRedirect(client, claimed.redirectUri)
     ) {
       throw new OAuthError("invalid_grant", "redirect_uri mismatch");
     }

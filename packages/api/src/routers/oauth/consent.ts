@@ -40,7 +40,7 @@ import {
   OAuthError,
   assertPkceChallenge,
   buildAuthorizationResponseUrl,
-  isRegisteredRedirectUri,
+  clientAcceptsRedirect,
   narrowAppScopes,
   narrowScopes,
   parseScopeParam,
@@ -182,7 +182,7 @@ export async function resolveClientAndRedirect(
   if (!redirectUri) {
     throw new AuthorizeUserError("redirect_uri is required");
   }
-  if (!isRegisteredRedirectUri(client.redirectUris, redirectUri)) {
+  if (!clientAcceptsRedirect(client, redirectUri)) {
     throw new AuthorizeUserError(
       "redirect_uri does not match a registered redirect URI for this client"
     );

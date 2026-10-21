@@ -14,6 +14,8 @@ import { createHash, randomBytes } from "crypto";
 import { db, and, eq, isNull, gt } from "@synap/database";
 import { oauthClients, oauthAuthorizationCodes } from "@synap/database/schema";
 
+import type { FirstPartyRedirectRule } from "./protocol.js";
+
 /**
  * Authorization-code lifetime. RFC 6749 §4.1.2 recommends a maximum of 10
  * minutes; the code is redeemed by claude.ai within seconds of the redirect, so
@@ -27,11 +29,18 @@ export interface StoredClient {
    * 'dcr' — registered at /register; 'cimd' — a cached metadata document;
    * 'app' — an app registered and approved ON THIS POD (`apps`, client_id =
    * its `public_id`), resolved from `apps` and never stored in
-   * `oauth_clients` ("Sign in with Synap", `app-client.ts`).
+   * `oauth_clients` ("Sign in with Synap", `app-client.ts`); 'first_party' —
+   * a Synap app (desktop, Relay), declared in code (`FIRST_PARTY_CLIENTS`,
+   * config.ts) and never stored.
    */
-  clientKind: "dcr" | "cimd" | "app";
+  clientKind: "dcr" | "cimd" | "app" | "first_party";
   clientName: string;
   redirectUris: string[];
+  /**
+   * First-party clients only: their redirect RULES (a loopback port is not a
+   * list). Every redirect check goes through `clientAcceptsRedirect`.
+   */
+  firstPartyRedirects?: readonly FirstPartyRedirectRule[] | null;
   scopes: string[];
   /** CIMD only: the grant-grammar permissions the document declares. */
   requestedPermissions: string[];

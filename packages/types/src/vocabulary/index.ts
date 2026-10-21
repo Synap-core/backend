@@ -1546,6 +1546,26 @@ export function resolveImportOriginLabel(
 }
 
 /**
+ * The Synap apps that sign a person in through the pod's own OAuth server,
+ * by their OAuth `client_id` (the backend's `FIRST_PARTY_CLIENTS` registry;
+ * stored on every device's refresh tokens). The name the consent screen asks
+ * about and the "Signed-in devices" list shows. An unknown id humanizes.
+ */
+export const FIRST_PARTY_CLIENT_NAMES: Readonly<Record<string, string>> = {
+  "synap-desktop": "Synap Desktop",
+  "synap-relay": "Synap Relay",
+};
+
+export function resolveFirstPartyClientName(
+  clientId: string | null | undefined
+): string {
+  if (!clientId?.trim()) return "";
+  return (
+    FIRST_PARTY_CLIENT_NAMES[clientId.trim()] ?? humanizeToken(clientId)
+  );
+}
+
+/**
  * CAPTURE CHIP states — where one record a capture proposed stands, as the word
  * beside its mark.
  *
