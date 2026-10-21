@@ -64,8 +64,6 @@ function scanTotalMockGaps() {
   // extract object keys at brace-depth 1 inside a factory body
   function factoryKeys(body) {
     const keys = new Set();
-    let d = 0;
-    const re = /[{}]|(?:^|[\s,{])([A-Za-z_$][\w$]*)\s*(:|,|\})/g;
     // simpler: scan chars tracking brace depth, collect identifiers preceded by { or , at depth 1
     let i = 0,
       depth = 0;

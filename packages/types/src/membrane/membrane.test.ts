@@ -17,7 +17,6 @@ import {
   needsYouConnections,
   resolveAccountConnectionState,
   resolveAgentConnectionState,
-  resolveAppConnection,
   resolveAppConnectionState,
   resolveAgentEndConsequence,
   resolveAppEndConsequence,
