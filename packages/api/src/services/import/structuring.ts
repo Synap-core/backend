@@ -8,7 +8,21 @@ import {
   eq,
   workspaces,
   workspaceMembers,
+  entities,
+  and,
+  inArray,
+  isNull,
+  drizzleSql,
 } from "@synap/database";
+import {
+  workspaceLensWhere,
+  ownerPrivateVisibleWhere,
+} from "../../utils/user-visible-where.js";
+import {
+  normalizeLinkTargetName,
+  toSlug,
+  type ImportItem,
+} from "../../import/import-items.js";
 import { createLogger } from "@synap-core/core";
 import {
   buildAvailableProfiles,
@@ -20,6 +34,7 @@ import {
   parseCsvTable,
   type CsvTablePlan,
 } from "../../import/import-adapters.js";
+import type { CsvProfileCatalogEntry } from "../../import/csv-table-refine.js";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import {
@@ -299,7 +314,32 @@ export type ProfileHints = {
    * this is `getEffectiveProperties` through the same door the materializer uses.
    */
   validateEntity: EntitySchemaValidator;
+  /**
+   * Every accessible profile with its kind/role nature, the kinds a role may
+   * sit on, and its effective property slugs — what the deterministic CSV
+   * post-plan step (`refineCsvTablePlan`) reads to map a planner's columns onto
+   * EXISTING properties and turn a role pick into kind + facet.
+   */
+  profileCatalog: CsvProfileCatalogEntry[];
 };
+
+/** Project the accessible profiles (+ their effective properties) into the
+ *  catalog `refineCsvTablePlan` reads. Pure. */
+export function buildCsvProfileCatalog(
+  profiles: ReadonlyArray<
+    AccessibleProfileLike & {
+      profileKind?: string | null;
+      applicableKinds?: string[] | null;
+    }
+  >
+): CsvProfileCatalogEntry[] {
+  return profiles.map((p) => ({
+    slug: p.slug,
+    profileKind: p.profileKind === "role" ? "role" : "kind",
+    applicableKinds: Array.isArray(p.applicableKinds) ? p.applicableKinds : [],
+    propertySlugs: (p.effectiveProperties ?? []).map((prop) => prop.slug),
+  }));
+}
 
 /**
  * Validate the properties an extracted entity would materialize with, against
@@ -431,13 +471,12 @@ export async function resolveProfileHints(
   // The REAL property schema per profile — without this the structuring model
   // is told the slugs but not the properties, and returns titles with
   // `properties: {}` (hollow entities). See `withEffectiveProperties`.
-  const availableProfiles = buildAvailableProfiles(
-    await withEffectiveProperties(
-      profileService,
-      accessible as unknown as AccessibleProfileLike[],
-      workspaceId
-    )
+  const withProps = await withEffectiveProperties(
+    profileService,
+    accessible as unknown as AccessibleProfileLike[],
+    workspaceId
   );
+  const availableProfiles = buildAvailableProfiles(withProps);
   // The user's workspaces — lets the structuring model suggest where notes belong.
   const wsRows = await db2
     .select({
@@ -465,6 +504,9 @@ export async function resolveProfileHints(
       new PropertyValidationService(profileService),
       { userId, workspaceId: workspaceId ?? null }
     ),
+    // `withEffectiveProperties` spreads the bare profile rows, so `profileKind`
+    // and `applicableKinds` ride along untyped.
+    profileCatalog: buildCsvProfileCatalog(withProps),
   };
 }
 
@@ -480,6 +522,17 @@ export async function resolveProfileHints(
  * Best-effort + non-destructive: a CSV import never fails because the planner
  * is down; it degrades to the prior shallow path.
  */
+/**
+ * What the planner is asked. The role sentence matters: a contacts table is
+ * people wearing the `contact` role, and the pod turns a role pick into its
+ * kind + the role facet (`refineCsvTablePlan`) — never a role-typed entity.
+ */
+export const CSV_TABLE_INTENT =
+  "Import this CSV table as typed entities (one row = one entity). " +
+  "When every row is a person or an organisation playing a role listed in the " +
+  "profiles (for example contact, client, lead), pick that role's slug: it is " +
+  "stored as the matching kind with the role attached.";
+
 export async function buildCsvTablePlan(
   ctx: OrchestratorContext,
   rawCsv: string,
@@ -500,7 +553,7 @@ export async function buildCsvTablePlan(
     const plan = await client.analyzeBulkMapping({
       headers,
       sampleRows,
-      intent: "Import this CSV table as typed entities (one row = one entity).",
+      intent: CSV_TABLE_INTENT,
       availableProfiles,
     });
     if (!plan) return null;
@@ -528,4 +581,80 @@ export async function buildCsvTablePlan(
     );
     return null;
   }
+}
+
+/** Titles per lookup query (bounded IN list). */
+const LINK_TARGET_LOOKUP_CHUNK = 500;
+
+/**
+ * Point each link-target item (an employer a CSV row names — see
+ * `addLinkTargetItems`) at the pod entity that already IS it: same kind, same
+ * title (case- and whitespace-insensitive), visible to the caller under the
+ * same scope `makeGraphResolver` uses. Sets `existingEntityId` in place and
+ * returns how many were linked.
+ *
+ * Why at analyze: an exact same-kind title is precisely what `entities.create`'s
+ * weak same-name gate refuses at apply, so an import naming an employer the pod
+ * already holds would otherwise fail on approval instead of linking. One query
+ * per kind per chunk — a 1,500-row file naming 800 employers is two queries,
+ * not 800. A failed lookup THROWS: it is not "nothing exists".
+ */
+export async function linkExistingImportTargets(
+  ctx: Pick<OrchestratorContext, "userId" | "workspaceId">,
+  targets: ImportItem[],
+  database: typeof db = db
+): Promise<number> {
+  const { userId, workspaceId } = ctx;
+  const scope = workspaceId
+    ? workspaceLensWhere(entities.workspaceId, userId, workspaceId, {
+        includeGlobals: true,
+      })
+    : ownerPrivateVisibleWhere(entities.workspaceId, entities.userId, userId);
+
+  const byKind = new Map<string, ImportItem[]>();
+  for (const item of targets) {
+    if (!item.typeHint || item.existingEntityId) continue;
+    const kind = toSlug(item.typeHint);
+    const list = byKind.get(kind) ?? [];
+    list.push(item);
+    byKind.set(kind, list);
+  }
+
+  let linked = 0;
+  for (const [kind, items] of byKind) {
+    const names = [
+      ...new Set(items.map((it) => normalizeLinkTargetName(it.title))),
+    ];
+    const found = new Map<string, string>();
+    for (let i = 0; i < names.length; i += LINK_TARGET_LOOKUP_CHUNK) {
+      const chunk = names.slice(i, i + LINK_TARGET_LOOKUP_CHUNK);
+      // Same normalisation as `normalizeLinkTargetName`: whitespace runs → one
+      // space, trimmed, lower-cased.
+      const normalizedTitle = drizzleSql<string>`lower(btrim(regexp_replace(${entities.title}, '[[:space:]]+', ' ', 'g')))`;
+      const rows = await database
+        .select({ id: entities.id, key: normalizedTitle })
+        .from(entities)
+        .where(
+          and(
+            eq(entities.type, kind),
+            isNull(entities.deletedAt),
+            inArray(normalizedTitle, chunk),
+            scope
+          )
+        )
+        // Earliest-created wins, as in `resolveIdentity`'s weak path.
+        .orderBy(entities.createdAt);
+      for (const row of rows) {
+        if (row.key && !found.has(row.key)) found.set(row.key, row.id);
+      }
+    }
+    for (const item of items) {
+      const id = found.get(normalizeLinkTargetName(item.title));
+      if (id) {
+        item.existingEntityId = id;
+        linked++;
+      }
+    }
+  }
+  return linked;
 }

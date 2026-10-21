@@ -69,6 +69,7 @@ import {
   getOAuthConsentContext,
 } from "./oauth/consent.js";
 import { OAuthError } from "./oauth/protocol.js";
+import { isPodAdminOrigin } from "../utils/pod-admin-origin.js";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import {
@@ -1324,8 +1325,9 @@ export const apiKeysRouter = router({
    */
   getOAuthConsentContext: protectedProcedure
     .input(oauthAuthorizeParamsSchema)
-    .query(async ({ input, ctx }) => {
+    .query(async ({ ctx, input }) => {
       try {
+        // The viewer: an app sign-in shows THEIR spaces, nobody else's.
         return await getOAuthConsentContext(input, ctx.userId);
       } catch (err) {
         throw toConsentTrpcError(err);
@@ -1359,9 +1361,27 @@ export const apiKeysRouter = router({
           )
           .max(512)
           .optional(),
+        // "Sign in with Synap": the `appSignIn.fingerprint` the screen
+        // rendered — an approval is only for exactly what was shown.
+        appSignInFingerprint: z.string().max(128).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // CSRF floor (PR #29 L2), the rule of the Kratos-cookie decision routes
+      // (`refuseCrossSiteCookieRequest`, rest/setup.ts): a decision that rides
+      // the browser's cookie must come from THIS pod's console, where the
+      // consent page lives. A session-token caller carries no ambient
+      // authority and is not refused here.
+      const req = ctx.req;
+      if (
+        req?.headers.get("cookie") &&
+        !isPodAdminOrigin(req.headers.get("origin"), req.url)
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Authorize this connection from your pod's console.",
+        });
+      }
       try {
         const result = await decideOAuthAuthorization(input, ctx.userId, ctx);
         auditLog({

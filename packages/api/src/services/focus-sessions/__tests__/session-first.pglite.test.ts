@@ -122,6 +122,7 @@ import {
   setAgentFocusProject,
   setAgentFocusWorkspace,
 } from "../../agent-identity-service.js";
+import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
 import { resolveWorkSession } from "../resolve-work-session.js";
 import { createFocusSession } from "../create-session.js";
 import { matchSessionTemplate } from "../match-session-template.js";
@@ -574,8 +575,9 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
   it("adoption DROPS the receipt's derived name — it described other writes", async () => {
     // Live 2026-09-20: a research session was adopted onto a receipt and kept
     // "[dogfood] the Research pack is enabled…", the name of the write that
-    // opened it. With no explicit title the derived name goes, so lists fall
-    // back to the new goal until the titler names it.
+    // opened it. With no explicit title the derived name goes, replaced by one
+    // derived from the NEW goal (no session is stored nameless) — still
+    // `derived`, so the titler may improve it.
     const auto = await receipt(
       CONV_A,
       "Create knowledge The Research pack is enabled"
@@ -590,7 +592,13 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
     });
     if (result.status !== "created") throw new Error(result.status);
     expect(result.session.id).toBe(auto);
-    expect(result.session.title).toBeNull();
+    expect(result.session.title).not.toBe(before.title);
+    expect(result.session.title).toBe(
+      buildDerivedSessionTitle({
+        kind: "goal",
+        goal: "Research competitor Notion and compare them to us",
+      })
+    );
     expect(result.session.metadata).toMatchObject({ titleSource: "derived" });
   });
 

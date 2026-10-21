@@ -125,8 +125,13 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => ({
   checkPermissionOrPropose: async () => ({ allowed: true }),
 }));
 
-const { blockExpectedOutput } = await import("../block-output.js");
+// `update-session` FIRST. Loaded through `block-output` instead, it is first
+// evaluated inside the permission-check mock's own `importOriginal` (the real
+// permission-check reaches it statically, via `satisfy-expected-output`), and
+// its later `import()` of permission-check then resolves to the ORIGINAL: the
+// real gate ran against the stub db and the append read "denied".
 const { updateFocusSession } = await import("../update-session.js");
+const { blockExpectedOutput } = await import("../block-output.js");
 const { guidanceForBlockedSlots, newlyBlockedSlots } =
   await import("../block-guidelines.js");
 

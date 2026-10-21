@@ -44,6 +44,7 @@ import {
   focusSessions,
   inboxItems,
   intelligenceCommands,
+  libraryGroups,
   links,
   mcpServers,
   messagingAccounts,
@@ -142,6 +143,10 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   [notifications, spec("notification", notifications)],
   [feeds, spec("feed", feeds)],
   [inboxItems, spec("inbox", inboxItems)],
+  // The Library's groups (0328): owner-floored; their nullable workspaceId is
+  // where Build files, NOT a read lens (registry.ts) — so no workspace column:
+  // a space-restricted grant reads none (fails closed).
+  [libraryGroups, spec("library", { id: libraryGroups.id })],
   [messagingAccounts, spec("messaging", messagingAccounts)],
   [sourceConfigs, spec("source", sourceConfigs)],
   [sourceSubscriptions, spec("source", sourceSubscriptions)],

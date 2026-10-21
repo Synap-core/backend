@@ -150,6 +150,8 @@ export type ConsoleAppVia = (typeof CONSOLE_APP_VIAS)[number];
 /** One object's own console page, keyed like a page id. */
 export const CONSOLE_OBJECT_PAGES = {
   computer: { audience: "admin" },
+  /** A space's own page (`/workspaces/<id>`). */
+  space: { audience: "admin" },
   application: { audience: "admin" },
   /** Approving an app's connection request is a pod-admin act. */
   connectionRequest: { audience: "admin" },
@@ -160,6 +162,7 @@ export type ConsoleTarget =
   | { page: Exclude<FocusPageId, "review">; focus?: string }
   | { page: "review"; type?: ConsoleReviewType; focus?: string }
   | { page: "computer"; id: string }
+  | { page: "space"; id: string }
   | { page: "application"; via: ConsoleAppVia; id: string }
   | { page: "connectionRequest"; id: string };
 
@@ -215,6 +218,10 @@ export function consolePath(target: ConsoleTarget): string | null {
     case "computer": {
       const id = nonEmpty(t.id);
       return id ? `/computers/${encodeURIComponent(id)}` : null;
+    }
+    case "space": {
+      const id = nonEmpty(t.id);
+      return id ? `/workspaces/${encodeURIComponent(id)}` : null;
     }
     case "application": {
       const id = nonEmpty(t.id);

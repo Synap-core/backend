@@ -232,7 +232,11 @@ export async function advanceSessionStage(
   // not (a gate holds the run, not the stage's deliverables). After the stage
   // write, under the session row lock — the caller's own multi-field UPDATE
   // has landed. A failed merge never undoes the advance; it is reported.
-  const stageSlots = await mergeStageSlotsOnEntry(session, toStage);
+  const stageSlots = await mergeStageSlotsOnEntry(
+    session,
+    toStage,
+    !!input.agentUserId
+  );
 
   // Fire-and-forget, as all four doors already did — a fan-out failure must not
   // fail the advance that already landed. The `.catch` is this door's only
@@ -392,7 +396,8 @@ async function moveSubjectFirst(
 /** {@link mergeEnteredStageSlots} over the run's own stages; never throws. */
 async function mergeStageSlotsOnEntry(
   session: StageAdvanceSession,
-  toStage: string
+  toStage: string,
+  byAgent: boolean
 ): Promise<AdvanceSessionStageResult["stageSlots"]> {
   try {
     const proc = await loadSessionProcess({
@@ -404,6 +409,7 @@ async function mergeStageSlotsOnEntry(
       sessionId: session.id,
       stageKey: toStage,
       stages: proc.stages,
+      byAgent,
     });
     return r.added.length > 0 ? r : undefined;
   } catch (err) {

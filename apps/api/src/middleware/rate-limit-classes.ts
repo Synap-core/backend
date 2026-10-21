@@ -18,7 +18,9 @@ import {
  * - free: health/metrics probes (skipped)
  * - import: bulk import surfaces
  * - ai_agent_turn: Discord/channel agent turns (higher AI budget)
- * - ai_interactive: external/OpenAI-compat chat
+ * - ai_interactive: external/OpenAI-compat chat, and the Hub stored-file
+ *   transcription door (`POST /api/hub/files/:entityId/transcribe`, one paid
+ *   speech-to-text call per request)
  * - calendar_feed: unauth ICS polls (not crud — calendar clients poll)
  * - public_read: credentialless public-door reads (`/api/hub/public/*` GET)
  * - public_submit: credentialless public-door writes (`/api/hub/public/*` POST)
@@ -242,6 +244,14 @@ export function classifyRateLimitPath(
     p === "/v1/chat" ||
     p.startsWith("/v1/chat/")
   ) {
+    return "ai_interactive";
+  }
+
+  // Hub stored-file transcription — a paid provider call per POST, keyed per
+  // Bearer like every class here. Not crud: the crud budget (500/15m) would
+  // let one key loop 20 MB transcriptions. Its Kratos sibling
+  // (`/api/media/transcribe`) is under the AI limiter too.
+  if (/^\/api\/hub(?:-protocol)?\/files\/[^/]+\/transcribe\/?$/.test(p)) {
     return "ai_interactive";
   }
 

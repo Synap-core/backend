@@ -322,6 +322,8 @@ ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "resource" text
 -- 0338b: the approved app a pod app's code redeems to. No foreign key here
 -- (apps is created further down): 0338b adds it on fresh databases too.
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "app_id" uuid;
+-- 0339: the app grant a person consented to (app clients only).
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "app_grant" jsonb;
 CREATE INDEX IF NOT EXISTS "oauth_authorization_codes_expires_at_idx"
   ON "oauth_authorization_codes" ("expires_at");
 
@@ -5053,7 +5055,9 @@ CREATE TABLE IF NOT EXISTS "apps" (
   -- 0312: "Remove for good" — a revoked app hidden from every listing.
   "removed_at"        timestamptz,
   -- 0313: the app's own agent principal (its key is minted to it).
-  "agent_user_id"     text        REFERENCES "users"("id") ON DELETE SET NULL
+  "agent_user_id"     text        REFERENCES "users"("id") ON DELETE SET NULL,
+  -- 0339: where a "Sign in with Synap" code may be delivered (exact match).
+  "redirect_uris"     text[]      NOT NULL DEFAULT '{}'
 );
 CREATE UNIQUE INDEX IF NOT EXISTS "apps_owner_name_unique"
   ON "apps" ("owner_user_id", "name");

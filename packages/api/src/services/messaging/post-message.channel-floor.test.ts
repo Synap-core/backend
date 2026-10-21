@@ -26,7 +26,8 @@ const h = vi.hoisted(() => ({
   visibilityUserIds: [] as string[],
 }));
 
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }),
 }));
 

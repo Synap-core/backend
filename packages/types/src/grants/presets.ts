@@ -56,6 +56,9 @@ export const AI_READ_SUBJECTS = [
   "facet",
   "feed",
   "inbox",
+  // The Library's groups (grant-read.ts). Reading them is what
+  // `library.organize` (AI_GATE_VERBS, always a proposal) works from.
+  "library",
   "link",
   "messaging",
   "notification",

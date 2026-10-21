@@ -30,6 +30,7 @@ import {
   type OfficialCatalogSignature,
 } from "@synap/database";
 import { cpCatalogCache } from "@synap/database/schema";
+import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
 import { createLogger } from "@synap-core/core";
 import {
   MARKETPLACE_INDEX_MAX_BYTES,
@@ -56,12 +57,88 @@ import {
 const logger = createLogger({ module: "official-catalog-signature" });
 
 /**
- * Synap's root keys (raw ed25519, base64): the current one and an offline
- * standby, in that order. EMPTY until the founders' key ceremony: the pod
- * then checks nothing and blocks nothing ("Synap's catalog isn't signed
- * yet"). A root change ships the new key here a release ahead of its use.
+ * The Control Plane's TEST-ONLY catalog keys. Each is derived from a public
+ * label (control-plane-api `src/lib/catalog-signing/__fixtures__/test-keys.ts`),
+ * so anyone can recompute its PRIVATE half: they sign the committed contract
+ * fixtures and nothing else. Derived here the same way rather than copied, and
+ * pinned against the fixtures' own `contract.json` by the tests, so the two
+ * repos cannot drift apart silently.
  */
-export const SYNAP_CATALOG_ROOT_KEYS: readonly string[] = [];
+const TEST_ONLY_KEY_LABELS = [
+  "root (current)",
+  "root (standby)",
+  "online catalog key",
+  "next online catalog key",
+] as const;
+
+/** PKCS#8 DER header for an ed25519 private key; the 32-byte seed follows. */
+const PKCS8_ED25519_PREFIX = Buffer.from(
+  "302e020100300506032b657004220420",
+  "hex"
+);
+
+function testOnlyPublicKey(label: string): string {
+  const seed = createHash("sha256")
+    .update(`synap-catalog-signing TEST ONLY — never trusted: ${label}`)
+    .digest();
+  const privateKey = createPrivateKey({
+    key: Buffer.concat([PKCS8_ED25519_PREFIX, seed]),
+    format: "der",
+    type: "pkcs8",
+  });
+  const { x } = createPublicKey(privateKey).export({ format: "jwk" });
+  return Buffer.from(x ?? "", "base64url").toString("base64");
+}
+
+/** The test-only public keys (raw ed25519, base64). Never a trust anchor. */
+export const CATALOG_TEST_ONLY_KEYS: ReadonlySet<string> = new Set(
+  TEST_ONLY_KEY_LABELS.map(testOnlyPublicKey)
+);
+
+/**
+ * The root keys a release compiles in, checked when this module loads: none
+ * (before the ceremony) or exactly two — the current root and the offline
+ * standby — each a raw ed25519 public key (base64, 44 characters), distinct,
+ * and never one of the public-label test keys (their private halves are
+ * public). Anything else throws: a malformed root fails the tests and the
+ * boot, never a release that silently reads as "not signed yet".
+ */
+export function catalogRootKeys(keys: readonly string[]): readonly string[] {
+  if (keys.length !== 0 && keys.length !== 2) {
+    throw new Error(
+      `SYNAP_CATALOG_ROOT_KEYS holds ${keys.length} keys — a release carries none or exactly two (current, standby).`
+    );
+  }
+  keys.forEach((key, i) => {
+    if (ed25519PublicKey(key) === null) {
+      throw new Error(
+        `SYNAP_CATALOG_ROOT_KEYS[${i}] is not a raw ed25519 public key (base64, 44 characters).`
+      );
+    }
+  });
+  if (new Set(keys).size !== keys.length) {
+    throw new Error("SYNAP_CATALOG_ROOT_KEYS lists the same key twice.");
+  }
+  keys.forEach((key, i) => {
+    if (CATALOG_TEST_ONLY_KEYS.has(key)) {
+      throw new Error(
+        `SYNAP_CATALOG_ROOT_KEYS[${i}] is a TEST-ONLY key derived from a public label — anyone can sign with it.`
+      );
+    }
+  });
+  return Object.freeze([...keys]);
+}
+
+/**
+ * Synap's root keys (raw ed25519, base64): the current one and the offline
+ * standby, in that order — the public keys the founders' ceremony printed
+ * (control-plane-api ops/catalog-signing/README.md). EMPTY until that
+ * ceremony: the pod then checks nothing and blocks nothing ("Synap's catalog
+ * isn't signed yet"). A root change ships the new key here a release ahead.
+ */
+export const SYNAP_CATALOG_ROOT_KEYS: readonly string[] = catalogRootKeys([
+  // "<current root public key>", "<standby root public key>",
+]);
 
 export interface OfficialCatalogTrust {
   /** What the index is checked against: the release's roots, the operator's keys, or nothing yet. */
@@ -74,6 +151,8 @@ export interface OfficialCatalogTrust {
   allowExpired: boolean;
   /** Operator keys that are not raw ed25519 keys (ignored, logged). */
   rejectedKeys: string[];
+  /** Operator keys refused in production as public-label test keys (ignored, logged). */
+  refusedTestKeys: number;
 }
 
 function envFlag(value: string | undefined): boolean {
@@ -89,8 +168,16 @@ export function officialCatalogTrust(
     .split(",")
     .map((k) => k.trim())
     .filter(Boolean);
-  const operator = listed.filter((k) => ed25519PublicKey(k) !== null);
+  const wellFormed = listed.filter((k) => ed25519PublicKey(k) !== null);
   const rejectedKeys = listed.filter((k) => ed25519PublicKey(k) === null);
+  // A test-only key's private half is public: in production it would let
+  // anyone sign the catalog this pod installs from. Tests and dev pods may
+  // still point at the CP's test-signed fixtures.
+  const refuseTestKeys = env.NODE_ENV === "production";
+  const operator = refuseTestKeys
+    ? wellFormed.filter((k) => !CATALOG_TEST_ONLY_KEYS.has(k))
+    : wellFormed;
+  const refusedTestKeys = wellFormed.length - operator.length;
   const enforce = envFlag(env.SYNAP_CATALOG_ENFORCE_SIGNATURE);
   const allowExpired = envFlag(env.SYNAP_CATALOG_ALLOW_EXPIRED);
   if (operator.length > 0) {
@@ -100,6 +187,7 @@ export function officialCatalogTrust(
       enforce,
       allowExpired,
       rejectedKeys,
+      refusedTestKeys,
     };
   }
   return {
@@ -108,6 +196,7 @@ export function officialCatalogTrust(
     enforce,
     allowExpired,
     rejectedKeys,
+    refusedTestKeys,
   };
 }
 
@@ -121,6 +210,12 @@ export function logOfficialCatalogTrust(trust: OfficialCatalogTrust): void {
     logger.error(
       { rejected: trust.rejectedKeys.length },
       "SYNAP_CATALOG_PUBLIC_KEYS holds values that are not raw ed25519 keys (base64) — they are ignored"
+    );
+  }
+  if (trust.refusedTestKeys > 0) {
+    logger.error(
+      { refused: trust.refusedTestKeys },
+      "SYNAP_CATALOG_PUBLIC_KEYS holds TEST-ONLY keys derived from public labels — refused in production, they are ignored"
     );
   }
   if (trust.anchors === "operator") {

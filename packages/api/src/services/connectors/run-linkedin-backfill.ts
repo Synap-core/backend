@@ -136,6 +136,8 @@ export async function runLinkedInBackfill(
       parameters: {},
       userId,
       workspaceId,
+      // A backfill page is a provider MIRROR: never a recall fact (DM payloads).
+      observability: "mirror",
     });
     if (accountsCap.kind === "run") {
       const accounts =
@@ -184,6 +186,7 @@ export async function runLinkedInBackfill(
       parameters: cursor ? { accountId, cursor } : { accountId },
       userId,
       workspaceId,
+      observability: "mirror",
     });
 
     if (convCap.kind !== "run") {
@@ -222,6 +225,7 @@ export async function runLinkedInBackfill(
           parameters: { threadId, accountId },
           userId,
           workspaceId,
+          observability: "mirror",
         });
         if (msgCap.kind !== "run") {
           logger.warn(

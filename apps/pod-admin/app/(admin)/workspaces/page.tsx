@@ -326,8 +326,9 @@ function WorkspaceRowActions({
     objectKind: "workspace",
     id: ws.id,
   });
-  // `null` on a phone: the mobile app has no space screen. The line beneath
-  // says so and links this space's own page instead.
+  // `null` on a phone: the console does not hand spaces to the mobile app —
+  // its space screen hides system and agent spaces, which this list holds.
+  // The line beneath says so and links this space's own page instead.
   const appHref = usePlacedExit(desktopExit).href;
 
   const deleteMutation = trpc.workspaces.adminDelete.useMutation({

@@ -110,3 +110,63 @@ describe("consent procedures — client_id length is bounded", () => {
     expect(resolveCimdClient).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("consent decision — a cross-site form cannot drive it (T8, app-person-token.ts)", () => {
+  it("a multipart (FormData) body, the one shape a plain HTML form can POST that tRPC parses, fails the input schema", async () => {
+    // tRPC answers text/plain and url-encoded with 415 before any procedure;
+    // multipart reaches the procedure as a FormData, which must not pass.
+    const form = new FormData();
+    for (const [k, v] of Object.entries(params(urlOf(100)))) form.set(k, v);
+    form.set("approve", "true");
+    const err = await errorOf(caller().decideOAuthAuthorization(form as never));
+    expect(err.code).toBe("BAD_REQUEST");
+    expect(resolveCimdClient).not.toHaveBeenCalled();
+  });
+});
+
+describe("consent decision — a cookie-carrying call must come from this pod's console (L2, PR #29)", () => {
+  const withReq = (headers: Record<string, string>) =>
+    apiKeysRouter.createCaller({
+      authenticated: true,
+      userId: "human-1",
+      req: new Request("https://pod.test.synap.live/trpc/x", {
+        method: "POST",
+        headers,
+      }),
+    } as never);
+  const decide = (headers: Record<string, string>) =>
+    errorOf(
+      withReq(headers).decideOAuthAuthorization({
+        ...params(urlOf(100)),
+        approve: true,
+      })
+    );
+
+  it("a cookie from another origin is refused before the OAuth layer", async () => {
+    const err = await decide({
+      cookie: "ory_kratos_session=x",
+      origin: "https://evil.example.com",
+    });
+    expect(err.code).toBe("FORBIDDEN");
+    expect(resolveCimdClient).not.toHaveBeenCalled();
+  });
+
+  it("a cookie with no origin at all is refused", async () => {
+    const err = await decide({ cookie: "ory_kratos_session=x" });
+    expect(err.code).toBe("FORBIDDEN");
+  });
+
+  it("control: the pod's console origin reaches the OAuth layer", async () => {
+    process.env.POD_ADMIN_URL = "https://admin.pod.test.synap.live";
+    try {
+      const err = await decide({
+        cookie: "ory_kratos_session=x",
+        origin: "https://admin.pod.test.synap.live",
+      });
+      expect(err.message).toMatch(/could not be read/);
+      expect(resolveCimdClient).toHaveBeenCalledTimes(1);
+    } finally {
+      delete process.env.POD_ADMIN_URL;
+    }
+  });
+});

@@ -79,6 +79,7 @@ import {
   resolveActorId,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { queryChannelMessages } from "../../../utils/query-channel-messages.js";
@@ -430,6 +431,13 @@ export function registerThreadsRoutes(app: HubHono): void {
         description: "Link result",
         content: { "application/json": { schema: LooseObjectResponseSchema } },
       },
+      202: {
+        // ONE proposal shape on every hub door (proposal-response.ts): a link
+        // that became a proposal is success, and carries its review link.
+        description:
+          "Proposed for review — `{ status: 'proposed', proposalId, reviewUrl }`",
+        content: { "application/json": { schema: LooseObjectResponseSchema } },
+      },
       400: {
         description: "Bad request",
         content: { "application/json": { schema: ErrorSchema } },
@@ -483,7 +491,7 @@ export function registerThreadsRoutes(app: HubHono): void {
         relationshipType: body.relationshipType ?? "referenced",
         sourceMessageId: body.sourceMessageId,
       });
-      return c.json(result as Record<string, unknown>, 200);
+      return jsonGoverned(c, result as Record<string, unknown>);
     } catch (err) {
       logger.error({ err, threadId }, "linkEntity failed");
       return c.json(
@@ -510,6 +518,13 @@ export function registerThreadsRoutes(app: HubHono): void {
     responses: {
       200: {
         description: "Link result",
+        content: { "application/json": { schema: LooseObjectResponseSchema } },
+      },
+      202: {
+        // ONE proposal shape on every hub door (proposal-response.ts): a link
+        // that became a proposal is success, and carries its review link.
+        description:
+          "Proposed for review — `{ status: 'proposed', proposalId, reviewUrl }`",
         content: { "application/json": { schema: LooseObjectResponseSchema } },
       },
       400: {
@@ -565,7 +580,7 @@ export function registerThreadsRoutes(app: HubHono): void {
         relationshipType: body.relationshipType ?? "referenced",
         sourceMessageId: body.sourceMessageId,
       });
-      return c.json(result as Record<string, unknown>, 200);
+      return jsonGoverned(c, result as Record<string, unknown>);
     } catch (err) {
       logger.error({ err, threadId }, "linkDocument failed");
       return c.json(

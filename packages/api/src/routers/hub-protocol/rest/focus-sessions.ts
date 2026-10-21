@@ -92,6 +92,7 @@ import { isOutputRefVisible } from "../../../services/focus-sessions/assert-outp
 import type { FollowOutcome } from "../../../services/focus-sessions/follow-playbook.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
 import {
+  answerGrantWrite,
   answerSessionSlot,
   describeAnswerRefusal,
   type AnswerSessionSlotResult,
@@ -3004,13 +3005,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         403
       );
     }
-    // The tRPC twin's grant rung (focusSessions.answerOutput).
-    const denial = await grantWriteDenial({
-      subjectType: "focus_session",
-      action: "update",
-    });
-    if (denial) return c.json({ error: denial }, 403);
     const id = c.req.param("id");
+    // The tRPC twin's grant rung (focusSessions.answerOutput): the session's
+    // own space + project name the key's reach.
+    const denial = await grantWriteDenial(await answerGrantWrite(id));
+    if (denial) return c.json({ error: denial }, 403);
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);
     }

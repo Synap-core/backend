@@ -1,7 +1,8 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./_shared.js", () => ({
+vi.mock("./_shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./_shared.js")>()),
   getCaller: vi.fn(),
   hasScope: vi.fn(() => true),
   logger: { error: vi.fn() },

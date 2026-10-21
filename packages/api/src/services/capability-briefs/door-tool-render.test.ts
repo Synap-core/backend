@@ -47,6 +47,8 @@ describe("renderSkillForDoor", () => {
     expect(out).toContain("`pod__define_role`");
     expect(out).toContain("`pod__create_workspace`");
     expect(out).not.toMatch(/`(define_role|define_kind|create_workspace)`/);
+    // create_view reached the claude.ai connector (pod__create_view, 711e754c5).
+    expect(out).toContain("`pod__create_view`");
     expect(out).toContain("**Door note (claude.ai Synap connector):**");
     expect(out).toMatch(/- `discover_tools` — in-app assistant only/);
   });

@@ -28,7 +28,7 @@ import {
   roleSetsLifetime,
   useGrantRoleOptions,
 } from "./grant-role-picker";
-import { useOfferedKeyScopes } from "./key-scopes";
+import { KEY_EXPIRY_OPTIONS, useOfferedKeyScopes } from "./key-scopes";
 
 export type CreateKeyInput = {
   kind: "personal" | "system";
@@ -182,10 +182,9 @@ export function CreateKeyModal({
                 if (k) setExpiry(k);
               }}
             >
-              <SelectItem key="never">Never</SelectItem>
-              <SelectItem key="30">30 days</SelectItem>
-              <SelectItem key="90">90 days</SelectItem>
-              <SelectItem key="365">1 year</SelectItem>
+              {KEY_EXPIRY_OPTIONS.map((o) => (
+                <SelectItem key={o.key}>{o.label}</SelectItem>
+              ))}
             </Select>
           )}
         </ModalBody>

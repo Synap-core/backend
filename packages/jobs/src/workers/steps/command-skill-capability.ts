@@ -1,6 +1,6 @@
 /**
  * `command` / `skill` / `capability` step executors — the three node types that
- * dispatch work OUT of the flow (IS task, or the canonical capability router).
+ * dispatch work OUT of the flow, all through the canonical capability router.
  */
 import {
   db,
@@ -29,15 +29,24 @@ import {
   resolveVaultReferences,
   isVaultReference,
 } from "../../utils/vault-resolver.js";
-import {
-  getDefaultActiveService,
-  requestTaskExecute,
-} from "@synap/intelligence-client";
-import { logger } from "../automation-executor-logger.js";
 import type { StepContext } from "../automation-executor-types.js";
 
 /**
- * Execute a command step by calling the Intelligence Service.
+ * The verb a `command` node's prompt runs through: Synap Core's synchronous
+ * single-shot LLM verb, the same one a `capability` node names for AI work.
+ */
+const COMMAND_RECEIVER_VERB = "ai.generate";
+
+/**
+ * Execute a command step: build its prompt (title or `promptOverride` + the
+ * resolved inputs) and RUN it through `ai.generate` on the canonical router.
+ *
+ * It used to post to the IS background-task receiver (`requestTaskExecute` →
+ * `POST /api/tasks/execute`), which resolves `taskId` as a `background_tasks`
+ * row. A node's `commandId` is an authored slug (`intelligence_execute`) or
+ * absent, never such a row, so every command node failed with `404 Task not
+ * found` — "New Contact Enrichment" failed 541/541 runs on the founder's pod —
+ * and even with a row the prompt was only logged. `commandId` stays a label.
  */
 export async function executeCommandStep(
   rawData: CommandNodeDef["data"] & LegacyCommandNodeData,
@@ -50,7 +59,7 @@ export async function executeCommandStep(
   // Fail closed when an agent is in the chain and the producer's ladder would not
   // auto-execute. Absent → owner-only behavior, unchanged.
   producerAgentUserId?: string | null
-): Promise<Record<string, unknown>> {
+): Promise<unknown> {
   const guard = await guardProducerEffect({
     producerAgentUserId,
     principalUserId: ownerId,
@@ -98,32 +107,15 @@ export async function executeCommandStep(
     prompt += `\n\nInputs:\n${inputSummary}`;
   }
 
-  // Canonical IS credential resolution (decrypted DB key), not stale env.
-  const { endpoint: isUrl, apiKey: isApiKey } = await getDefaultActiveService();
-
-  // ── Generic command execution ──────────────────────────────────────────
-  // IS transport (fetch + X-API-Key + 60s abort) is the SSOT
-  // `requestTaskExecute` in @synap/intelligence-client — no raw fetch here.
-  try {
-    const result = await requestTaskExecute(isUrl, isApiKey, {
-      taskId: data.commandId ?? "automation-command",
-      action: prompt,
-      context: resolvedInputs,
-      // Attribute the IS work to the automation's owning principal
-      // (automation.createdBy — the agent user id for AI-created automations)
-      // instead of the unattributed "system". Writes the IS performs back to
-      // the pod will then carry this identity through the governance gate.
-      userId: ownerId,
+  // Output = the generated text, stored flat like any capability node's.
+  return runVerbOnRouter(
+    COMMAND_RECEIVER_VERB,
+    { prompt },
+    {
       workspaceId,
-    });
-    return { ...result, resolvedInputs };
-  } catch (err) {
-    logger.error(
-      { err, commandId: data.commandId },
-      "Command step IS call failed"
-    );
-    throw err;
-  }
+      ownerId,
+    }
+  );
 }
 
 /**
@@ -387,6 +379,27 @@ export async function executeCapabilityNode(
       : null
   );
 
+  return runVerbOnRouter(verbId, capResolvedInputs, {
+    workspaceId: opts.workspaceId,
+    ownerId: opts.ownerId,
+    connectionSelector,
+  });
+}
+
+/**
+ * Dispatch ONE verb through the canonical capability router and map its verdict
+ * onto a flow node: the result on `run`, a throw on every verdict that did not
+ * run (shared by `capability` and `command` nodes).
+ */
+async function runVerbOnRouter(
+  verbId: string,
+  parameters: Record<string, unknown>,
+  opts: {
+    workspaceId: string;
+    ownerId: string;
+    connectionSelector?: ReturnType<typeof resolveCapabilityConnectionSelector>;
+  }
+): Promise<unknown> {
   // ── Canonical dispatch (SAME door as `case "skill"`) ──────────────
   // Runs as the workspace OWNER (userId = ownerId, no agent identity):
   //   • owner runs their OWN skill  → owner-bypass → run
@@ -396,10 +409,10 @@ export async function executeCapabilityNode(
   // propose/deny/not_found verdict throws; dry-run is honored as a no-op.
   const capDispatch = await dispatchViaCapabilityRouter({
     verbId,
-    parameters: capResolvedInputs,
+    parameters,
     workspaceId: opts.workspaceId,
     userId: opts.ownerId,
-    connectionSelector,
+    connectionSelector: opts.connectionSelector,
   });
   if (capDispatch.kind === "deny") {
     throw new Error(

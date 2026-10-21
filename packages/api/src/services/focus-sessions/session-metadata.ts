@@ -28,8 +28,10 @@ export const RUN_TURNS_META_KEY = "runTurns";
  * The `focus_sessions.metadata` keys ONLY the server writes, because the
  * server decides on them: an intent that answers an ask by itself, the reads
  * revoked at close, the propose-only governance of a playbook run, the client
- * a session is bound to, and the automation chain the depth floor reads. A
- * client or agent metadata write never carries them
+ * a session is bound to, the automation chain the depth floor reads, and the
+ * run manifest (`run`: the sources a rerun replays, the rerun lineage, the
+ * cancel record — written by `recordSessionRunManifest` and the cancel door
+ * only). A client or agent metadata write never carries them
  * ({@link withoutServerOwnedSessionMetadata}).
  */
 export const SERVER_OWNED_SESSION_METADATA_KEYS = [
@@ -39,6 +41,7 @@ export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   "clientKey",
   "automationChainContext",
   RUN_TURNS_META_KEY,
+  "run",
 ] as const;
 
 /** A client/agent metadata bag with every server-owned key dropped. Pure. */

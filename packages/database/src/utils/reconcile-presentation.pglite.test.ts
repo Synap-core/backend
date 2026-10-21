@@ -156,7 +156,10 @@ describe("reconcile converges the catalog presentation", () => {
   it("non-vacuity: the real catalog declares the profile this suite drives", () => {
     expect(profileOf("brand-library", "brand-asset").presentation).toEqual({
       family: "media",
-      media: { source: { property: "asset-document-id" } },
+      media: {
+        source: { property: "asset-document-id" },
+        fallbacks: [{ property: "asset-url" }],
+      },
     });
   });
 
@@ -188,7 +191,7 @@ describe("reconcile converges the catalog presentation", () => {
     const { presentation: _p, ...before } = asset;
     await reconcile([before as CatalogProfile]);
     await q(
-      `update profiles set ui_hints = ui_hints || '{"hideFromCreate": true, "presentation": {"family": "record"}}'::jsonb where slug = 'brand-asset'`
+      `update profiles set ui_hints = ui_hints || '{"hideFromCreate": true, "presentation": {"family": "record"}, "presentationFromCatalog": {"family": "record"}}'::jsonb where slug = 'brand-asset'`
     );
     const report = await reconcile([asset]);
     expect(report.profiles.presentations).toEqual(["brand-asset"]);

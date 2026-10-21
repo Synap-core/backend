@@ -198,6 +198,7 @@ describe("provideSheet · file", () => {
         workspaceId: "w1",
         projectId: "p1",
         landsIn: ASK_COPY.provideLandsIn("Finance"),
+        keptIfRefused: ASK_COPY.provideUploadKept("Finance"),
       },
     });
   });
@@ -244,6 +245,20 @@ describe("provideReceipt", () => {
         "No agent can read it yet"
       );
     }
+  });
+
+  it("a secret whose asking agent changed: nobody can read it, said plainly", () => {
+    expect(
+      provideReceipt(
+        "secret",
+        { secretGrant: { status: "refused", reason: "agent_changed" } },
+        now
+      )
+    ).toEqual({
+      title: ASK_COPY.provideAgentChangedTitle,
+      description: ASK_COPY.provideAgentChangedBody,
+      color: "warning",
+    });
   });
 
   it("a connection, a file, a connect the pod answered", () => {

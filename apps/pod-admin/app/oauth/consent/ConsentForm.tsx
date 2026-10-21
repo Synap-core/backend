@@ -91,7 +91,13 @@ export function ConsentForm({
     (approve: boolean) => {
       setStep({ kind: "working", approve });
       decide.mutate(
-        { ...params, approve, ...(app ? { approved } : {}) },
+        {
+          ...params,
+          approve,
+          ...(app ? { approved } : {}),
+          // An app sign-in is approved for exactly what this screen showed.
+          appSignInFingerprint: context.data?.appSignIn?.fingerprint,
+        },
         {
           onSuccess: ({ redirectTo }) => {
             // Built server-side from the client's REGISTERED redirect_uri, so
@@ -111,10 +117,13 @@ export function ConsentForm({
         }
       );
     },
-    [decide, params, app, approved]
+    [decide, params, app, approved, context.data]
   );
 
   const busy = step.kind === "working";
+  // "Sign in with Synap": every sentence below comes from the server, derived
+  // from the grant the person would receive — never written here.
+  const appSignIn = context.data?.appSignIn ?? null;
 
   return (
     <ReceiverShell podHost={podHost} identity={identity} width="sm">
@@ -166,11 +175,15 @@ export function ConsentForm({
             <>
               <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
                 {/* Registered by an unauthenticated DCR call — attacker-choosable
-                      display text. React escapes it; it is NEVER rendered as markup. */}
-                Connect {context.data?.clientName ?? "an application"}
+                      display text. React escapes it; it is NEVER rendered as markup.
+                      An app sign-in's name is its owner's app name on this pod. */}
+                {appSignIn ? "Sign in to" : "Connect"}{" "}
+                {context.data?.clientName ?? "an application"}
               </h1>
               <p className="text-[13px] leading-relaxed text-foreground/65">
-                It is asking to connect to your Synap pod.
+                {appSignIn
+                  ? appSignIn.headline
+                  : "It is asking to connect to your Synap pod."}
               </p>
             </>
           )}
@@ -227,6 +240,11 @@ export function ConsentForm({
                   label="Registered"
                   value={formatRelative(context.data.registeredAt)}
                 />
+                {/* An app sign-in names WHO registered the app on this pod —
+                    the person decides whether to trust it as that member. */}
+                {appSignIn ? (
+                  <Row label="Registered by" value={appSignIn.registeredBy} />
+                ) : null}
                 {/* The host the authorization code is actually delivered to —
                     the single most useful signal for spotting a bad request,
                     and the one field a user must read IN FULL. NOT rendered
@@ -244,26 +262,61 @@ export function ConsentForm({
                     {context.data.redirectHost}
                   </span>
                 </div>
-                <div className="pt-1.5">
-                  <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
-                    <ShieldCheck className="h-3 w-3" aria-hidden /> It will be
-                    able to
-                  </p>
-                  <ul className="flex flex-col gap-2">
-                    {context.data.scopes.map((s) => (
-                      <li key={s} className="flex items-start gap-2">
-                        <Check
-                          className="mt-[3px] h-3 w-3 shrink-0 text-primary"
-                          aria-hidden
-                          strokeWidth={2.4}
-                        />
-                        <span className="text-[12.5px] leading-relaxed text-foreground/75">
-                          {SCOPE_DESCRIPTIONS[s] ?? s}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+                {appSignIn ? (
+                  <div className="flex flex-col gap-2 pt-1.5">
+                    <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+                      <ShieldCheck className="h-3 w-3" aria-hidden /> It will
+                      act as you
+                    </p>
+                    <ul className="flex flex-col gap-2">
+                      {appSignIn.spaces.map((space) => (
+                        <li
+                          key={space.workspaceId}
+                          className="flex items-start gap-2"
+                        >
+                          <Check
+                            className="mt-[3px] h-3 w-3 shrink-0 text-primary"
+                            aria-hidden
+                            strokeWidth={2.4}
+                          />
+                          <span className="text-[12.5px] leading-relaxed text-foreground/75">
+                            <span className="font-medium text-foreground/90">
+                              {space.name}
+                            </span>
+                            : {space.can}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="text-[12.5px] leading-relaxed text-foreground/75">
+                      {appSignIn.cannot}
+                    </p>
+                    <p className="text-[12.5px] leading-relaxed text-foreground/65">
+                      {appSignIn.note}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="pt-1.5">
+                    <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+                      <ShieldCheck className="h-3 w-3" aria-hidden /> It will be
+                      able to
+                    </p>
+                    <ul className="flex flex-col gap-2">
+                      {context.data.scopes.map((s) => (
+                        <li key={s} className="flex items-start gap-2">
+                          <Check
+                            className="mt-[3px] h-3 w-3 shrink-0 text-primary"
+                            aria-hidden
+                            strokeWidth={2.4}
+                          />
+                          <span className="text-[12.5px] leading-relaxed text-foreground/75">
+                            {SCOPE_DESCRIPTIONS[s] ?? s}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
 
               <div className="flex gap-2.5">

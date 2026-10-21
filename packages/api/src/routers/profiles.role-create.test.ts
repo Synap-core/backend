@@ -42,7 +42,8 @@ vi.mock("../utils/split-brain-service.js", () => ({
 // list is named by hand. `proposedMessageFor` is stubbed to IDENTITY, which
 // matches the real function on every non-join-gate path; do NOT assert
 // join-gate prose through this mock — it would assert the stub, not the source.
-vi.mock("../utils/permission-check.js", () => ({
+vi.mock("../utils/permission-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/permission-check.js")>()),
   // Auto-approved: no `denied`, no `proposalId` → materialize inline.
   checkPermissionOrPropose: vi.fn(async () => ({})),
   proposedMessageFor: (_type: unknown, message: string) => message,
@@ -52,7 +53,7 @@ vi.mock("../utils/audit-log.js", () => ({
   auditLog: vi.fn(async () => ({ id: "audit-1" })),
 }));
 
-vi.mock("@synap/database", async () => {
+vi.mock("@synap/database", async (importOriginal) => {
   const drizzle =
     await vi.importActual<typeof import("drizzle-orm")>("drizzle-orm");
   // The REAL reservation, not a stub: the router refuses reserved profile
@@ -75,6 +76,15 @@ vi.mock("@synap/database", async () => {
     }
     async findActiveBySlugAnyScope() {
       return h.slugElsewhere;
+    }
+    // Mirrors the real query: the active system/shared KIND holding the slug.
+    async findActivePodWideKind() {
+      const row = h.slugElsewhere.find(
+        (p) =>
+          (p.profileKind ?? "kind") === "kind" &&
+          (p.scope === "system" || p.scope === "shared")
+      );
+      return row ? { id: row.id as string, scope: row.scope as string } : null;
     }
     async getById() {
       return null;
@@ -123,6 +133,7 @@ vi.mock("@synap/database", async () => {
   }
 
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     eq: drizzle.eq,
     and: drizzle.and,
     inArray: drizzle.inArray,

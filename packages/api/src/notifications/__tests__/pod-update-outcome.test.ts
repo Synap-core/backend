@@ -4,7 +4,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {},
   and: vi.fn(),
   eq: vi.fn(),

@@ -28,7 +28,8 @@ vi.mock("../permission-check.js", () => ({
     checkPermissionOrProposeMock(...a),
 }));
 
-vi.mock("@synap/governance-policy", () => ({
+vi.mock("@synap/governance-policy", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/governance-policy")>()),
   deriveGatePairFromOperations: () => ({
     subjectType: "entity",
     action: "create",

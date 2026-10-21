@@ -92,10 +92,7 @@ export type InviteConsentOutcome =
 export interface InviteConsentDeps {
   issuerStatus(issuerUrl: string): Promise<string | null>;
   /** The app's connection on this Pod, as an owner left it (null: none). */
-  appConnection(input: {
-    issuerUrl: string;
-    clientId: string;
-  }): Promise<{
+  appConnection(input: { issuerUrl: string; clientId: string }): Promise<{
     status: string;
     allowedOrigins: string[];
     allowedScopes: string[];

@@ -88,7 +88,14 @@ import { scanTotalMockGaps } from "../../scripts/scan-total-mock-gaps.mjs";
  * `…auto-approve-satisfies-outputs` converted to importOriginal+spread (both
  * lacked `resolveOriginTrust`); measured 35 → 33 across exactly those two.
  */
-const BASELINE = 32;
+// 32 → 0 on 2026-10-21 (green-main lane). Main had drifted to 49 while CI's
+// Full suite was red and unread. 48 gaps closed by converting the factories to
+// importOriginal + spread (each converted file re-run green); 1 was a false
+// positive: the scanner read factory keys through comments, so a quote in prose
+// opened a fake string and swallowed the key after it. It now strips comments
+// first, which also made 35 factories visible that it had never scanned
+// (3670 → 3705). At 0 this is a ban: any new gap fails.
+const BASELINE = 0;
 
 describe("tripwire: total vi.mock factories vs the imports they must cover", () => {
   const { totalFactories, findings } = scanTotalMockGaps() as {

@@ -41,7 +41,8 @@ const { capabilitiesTable, toolsTable, skillsTable, linksTable } = vi.hoisted(
   })
 );
 
-vi.mock("@synap/database/schema", () => ({
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
   capabilities: capabilitiesTable,
   tools: toolsTable,
   skills: skillsTable,

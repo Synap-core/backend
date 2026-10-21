@@ -32,24 +32,29 @@ vi.mock("../../access/index.js", () => ({
 
 // Minimal @synap/database mock. Named table markers + capturing eq/and/or so we
 // can inspect the WHERE the resolver builds. db is unused by these two reads.
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
   const mk = (name: string) =>
     new Proxy(
       { __table: name },
       { get: (t, p) => (p in t ? (t as never)[p] : `${name}.${String(p)}`) }
     );
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     db: {},
     eq: (col: unknown, val: unknown) => ({ op: "eq", col, val }),
     and: (...xs: unknown[]) => ({ op: "and", xs }),
     or: (...xs: unknown[]) => ({ op: "or", xs }),
     isNull: (col: unknown) => ({ op: "isNull", col }),
     desc: (col: unknown) => ({ op: "desc", col }),
-    drizzleSql: (strings: TemplateStringsArray, ...vals: unknown[]) => ({
-      op: "sql",
-      strings,
-      vals,
-    }),
+    drizzleSql: Object.assign(
+      (strings: TemplateStringsArray, ...vals: unknown[]) => ({
+        op: "sql",
+        strings,
+        vals,
+      }),
+      // session-kind.ts builds a module-level drizzleSql.raw
+      { raw: (s: string) => ({ op: "sql.raw", s }) }
+    ),
     channels: mk("channels"),
     views: mk("views"),
     entities: mk("entities"),
@@ -143,7 +148,18 @@ describe("W6 read/resolve verbs — registry", () => {
       // connector.health_check mutates NO graph data — it only emits deduped
       // operator reconnect notices — so it auto-runs unattended in a cron feed.
       "connector.health_check",
+      // Four verbs below joined while this file failed to COLLECT (a stale
+      // total mock, 2026-09-25 → 2026-10-21), so this pin never saw them. Each
+      // carries its written rationale beside READ_ONLY_BUILTIN_VERBS in
+      // builtin-verbs.ts; re-pinned 2026-10-21 after reading it.
+      // document.freeze_charts reads under the caller's floor and RETURNS
+      // markdown; it writes nothing (create-report does).
+      "document.freeze_charts",
       "document.read",
+      // document.stamp_diagnostics WRITES — but only the advisory,
+      // revision-stamped diagnostics on a document the caller OWNS (handler-
+      // enforced), never content or graph data.
+      "document.stamp_diagnostics",
       "entity.query",
       "entity_facet.list",
       "feed.read",
@@ -161,6 +177,9 @@ describe("W6 read/resolve verbs — registry", () => {
       // live in. Each also carries its own dedicated read-only test.
       // (Sorted position — the assertion compares against `.sort()`.)
       "governance.recommend_raise_ceiling",
+      // A third calibration twin (12016911b): files a pending_proposal_cap
+      // raise review item for blocked agents; same rationale.
+      "governance.recommend_raise_proposal_cap",
       "governance.recommend_tighten",
       "governance.recommend_tighten_posture",
       "graph.relations",
@@ -170,6 +189,9 @@ describe("W6 read/resolve verbs — registry", () => {
       // always proposes). Governance lives on the proposal it emits, not on
       // running interpret.
       "message.interpret",
+      // web.read reads a public page (or a read-only reader verb through its
+      // own gate); it mutates nothing in the pod.
+      "web.read",
     ]);
     expect(READ_ONLY_BUILTIN_VERBS.has("channel.ensure")).toBe(false);
     expect(READ_ONLY_BUILTIN_VERBS.has("graph.link")).toBe(false);

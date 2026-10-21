@@ -32,6 +32,7 @@ const APPS = read("0309_apps.sql");
 const APPS_REMOVED = read("0312_apps_removed_at.sql");
 const APPS_AGENT = read("0313_apps_agent_user.sql");
 const APPS_OAUTH = read("0338b_pod_app_oauth_apps.sql");
+const APPS_SIGN_IN = read("0339_app_person_sign_in.sql");
 
 const OWNER = "owner-1";
 const OTHER_OWNER = "owner-2";
@@ -69,11 +70,12 @@ beforeAll(async () => {
   await pg.exec(APPS);
   await pg.exec(APPS_REMOVED);
   await pg.exec(APPS_AGENT);
-  // 0338b also alters the two OAuth tables (codes.app_id → apps); only their
-  // keys are needed for it to run.
+  // 0338b alters the two OAuth tables (codes.app_id → apps) and 0339 adds
+  // `app_grant` to the codes table; only their keys are needed for both to run.
   await pg.exec(`CREATE TABLE oauth_clients (client_id text PRIMARY KEY);
     CREATE TABLE oauth_authorization_codes (code_hash text PRIMARY KEY);`);
   await pg.exec(APPS_OAUTH);
+  await pg.exec(APPS_SIGN_IN);
   // The pending projection reads only these `proposals` columns.
   await pg.exec(`CREATE TABLE proposals (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -204,6 +206,19 @@ describe("AppRepository.register — idempotent by owner+name", () => {
     });
     expect(theirs.id).not.toBe(mine.id);
     expect(theirs.publicId).not.toBe(mine.publicId);
+  });
+
+  it("a revived app signs no one in until its owner registers redirect URIs again (PR #29 L4)", async () => {
+    const first = await repo.register({ ownerUserId: OWNER, name: "studio" });
+    await repo.setRedirectUris(first.id, ["https://studio.example.com/cb"]);
+    // A live re-register (idempotent upsert) keeps them.
+    await repo.register({ ownerUserId: OWNER, name: "studio" });
+    expect((await repo.get(first.id))!.redirectUris).toEqual([
+      "https://studio.example.com/cb",
+    ]);
+    await repo.revoke(first.id);
+    await repo.register({ ownerUserId: OWNER, name: "studio" });
+    expect((await repo.get(first.id))!.redirectUris).toEqual([]);
   });
 
   it("REVIVES a revoked app in place (clears revoked_at, same id + public_id)", async () => {

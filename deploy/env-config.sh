@@ -297,6 +297,20 @@ _ec_check_pair() { # <key> <value> <force 0|1>
     return 0
 }
 
+# <legacy pod> <legacy console> <DOMAIN> <POD_ADMIN_DOMAIN> → one line per
+# previous name that equals a current one (case-insensitive), each ending in a
+# newline; nothing when they all differ or are empty.
+_ec_legacy_name_errors() {
+    for _ec_l in "SYNAP_LEGACY_DOMAIN:$1" "SYNAP_LEGACY_POD_ADMIN_DOMAIN:$2"; do
+        _ec_lk="${_ec_l%%:*}"; _ec_lv="$(printf '%s' "${_ec_l#*:}" | tr '[:upper:]' '[:lower:]')"
+        [ -n "$_ec_lv" ] || continue
+        for _ec_c in "DOMAIN:$3" "POD_ADMIN_DOMAIN:$4"; do
+            [ "$_ec_lv" = "$(printf '%s' "${_ec_c#*:}" | tr '[:upper:]' '[:lower:]')" ] || continue
+            printf '%s\n' "$_ec_lk ($_ec_lv) is the pod's current ${_ec_c%%:*}: a previous name must differ from both current names."
+        done
+    done
+}
+
 # envcfg_set [--force] [--stdin] KEY=VALUE... | KEY VALUE
 # Validates EVERY pair before writing ANY (all-or-nothing), backs up, writes
 # atomically, and prints what changed (masked) plus the services that must be
@@ -356,6 +370,9 @@ envcfg_set() {
         _ec_bad="${_ec_bad}POD_AGENT_AUDIENCE ($_ec_aud) would differ from PUBLIC_URL ($_ec_pu): the pod-agent would reject every Control Plane command. Set both together.
 "
     fi
+    # 2b. cross-key: a previous name is never the current one (Caddy would
+    #     redirect the pod, or its console, to itself)
+    _ec_bad="${_ec_bad}$(_ec_legacy_name_errors "$(_ec_after SYNAP_LEGACY_DOMAIN)" "$(_ec_after SYNAP_LEGACY_POD_ADMIN_DOMAIN)" "$(_ec_after DOMAIN)" "$(_ec_after POD_ADMIN_DOMAIN)")"
     if [ -n "$_ec_bad" ]; then
         printf '%s' "$_ec_bad" | sed '/^$/d; s/^/config: refused — /' >&2
         _ec_err "nothing was changed."
@@ -510,6 +527,10 @@ envcfg_validate() {
     if [ -n "$_ec_pu" ] && [ -n "$_ec_aud" ] && [ "$_ec_pu" != "$_ec_aud" ]; then
         echo "error|POD_AGENT_AUDIENCE|differs from PUBLIC_URL ($_ec_pu): the pod-agent rejects every Control Plane command" >> "$_ec_out"
     fi
+    _ec_legacy_name_errors "$(envcfg_value SYNAP_LEGACY_DOMAIN "$_ec_f")" "$(envcfg_value SYNAP_LEGACY_POD_ADMIN_DOMAIN "$_ec_f")" \
+        "$_ec_dom" "$(envcfg_value POD_ADMIN_DOMAIN "$_ec_f")" | while IFS= read -r _ec_m; do
+        echo "error|${_ec_m%% *}|${_ec_m#* }" >> "$_ec_out"
+    done
     case "$_ec_pu" in
         http://*)
             _ec_h="${_ec_pu#http://}"; _ec_h="${_ec_h%%:*}"

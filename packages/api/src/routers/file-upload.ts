@@ -34,6 +34,7 @@ import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   loadSignableDocument,
   loadSignableFileEntity,
+  type SignableFileEntity,
 } from "../utils/stored-file-access.js";
 import {
   requestPresignedUpload,
@@ -886,6 +887,76 @@ fileUploadApp.get("/documents/:documentId/url", async (c) => {
   }
 });
 
+/**
+ * The file entity `userId` may READ, or why not — the read floor and the
+ * 403/404 split every `…/:entityId/…` file door shares (`signFileEntityUrl`,
+ * Hub `POST /files/:entityId/transcribe`). `loadSignableFileEntity` reads
+ * through `scopedDb`, so a key's grant narrows it.
+ */
+export async function readableFileEntity(
+  userId: string,
+  entityId: string
+): Promise<
+  | { ok: true; entity: SignableFileEntity }
+  | { ok: false; status: 403 | 404; error: string }
+> {
+  const entity = await loadSignableFileEntity(userId, entityId);
+  if (entity) return { ok: true, entity };
+  const exists = await db.query.entities.findFirst({
+    where: eq(entities.id, entityId),
+    columns: { id: true },
+  });
+  return exists
+    ? { ok: false, status: 403, error: "Forbidden" }
+    : { ok: false, status: 404, error: "File entity not found" };
+}
+
+/** What a file-entity URL door answers: the signed GET, or why not. */
+export type FileEntityUrlResult =
+  | {
+      ok: true;
+      body: { url: string; expiresAt: string; mimeType: string | null };
+    }
+  | { ok: false; status: 403 | 404; error: string };
+
+/**
+ * Sign a file entity's blob for `userId` — the ONE body of every
+ * `…/:entityId/url` door (Kratos `GET /api/files/:entityId/url`, Hub
+ * `GET /api/hub/files/:entityId/url`), so they can never disagree on who may
+ * read, on the 403/404 split, or on the response shape.
+ *
+ * The entity's own read floor (registered `entities` rule, through
+ * `scopedDb` — so a key's grant narrows it too) — a pod-wide file entity is
+ * readable by more than its author. The bytes follow it only from a document
+ * its OWNER owns: `entities.document_id` is reachable from writers
+ * (`attachSourceBlob` once took a proposal-carried id), so a link alone never
+ * proves the document is the entity's to share.
+ *
+ * Returns the URL only. The signer (`storage.getSignedUrl`) forces an
+ * `attachment` disposition and never overrides the stored content type — an
+ * active blob (HTML, SVG) can never render from this URL (D10; tripwire
+ * `active-mime-needs-attachment-disposition`). `mimeType` is the stored type,
+ * reported so a client decides drawability on what is actually served.
+ */
+export async function signFileEntityUrl(
+  userId: string,
+  entityId: string
+): Promise<FileEntityUrlResult> {
+  const readable = await readableFileEntity(userId, entityId);
+  if (!readable.ok) return readable;
+  const { entity } = readable;
+  if (!entity.storageKey) {
+    return { ok: false, status: 404, error: "File has no storage key" };
+  }
+
+  const expiresInSeconds = 3600;
+  const url = await storage.getSignedUrl(entity.storageKey, expiresInSeconds);
+  const expiresAt = new Date(
+    Date.now() + expiresInSeconds * 1000
+  ).toISOString();
+  return { ok: true, body: { url, expiresAt, mimeType: entity.mimeType } };
+}
+
 // ---------------------------------------------------------------------------
 // GET /:entityId/url — presigned download URL
 // ---------------------------------------------------------------------------
@@ -898,34 +969,10 @@ fileUploadApp.get("/:entityId/url", async (c) => {
   const entityId = c.req.param("entityId");
 
   try {
-    // The entity's own read floor (registered `entities` rule) — a pod-wide
-    // file entity is readable by more than its author. The bytes follow it
-    // only from a document its OWNER owns: `entities.document_id` is reachable
-    // from writers (`attachSourceBlob` once took a proposal-carried id), so a
-    // link alone never proves the document is the entity's to share.
-    const entity = await loadSignableFileEntity(userId, entityId);
-    if (!entity) {
-      const exists = await db.query.entities.findFirst({
-        where: eq(entities.id, entityId),
-        columns: { id: true },
-      });
-      return exists
-        ? c.json({ error: "Forbidden" }, 403)
-        : c.json({ error: "File entity not found" }, 404);
-    }
-    const storageKey = entity.storageKey;
-
-    if (!storageKey) {
-      return c.json({ error: "File has no storage key" }, 404);
-    }
-
-    const expiresInSeconds = 3600;
-    const url = await storage.getSignedUrl(storageKey, expiresInSeconds);
-    const expiresAt = new Date(
-      Date.now() + expiresInSeconds * 1000
-    ).toISOString();
-
-    return c.json({ url, expiresAt, mimeType: entity.mimeType });
+    const result = await signFileEntityUrl(userId, entityId);
+    return result.ok
+      ? c.json(result.body)
+      : c.json({ error: result.error }, result.status);
   } catch (error) {
     logger.error({ err: error, entityId }, "Failed to generate presigned URL");
     return c.json({ error: "Failed to generate URL" }, 500);

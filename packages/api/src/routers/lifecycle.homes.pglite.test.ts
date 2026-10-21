@@ -108,7 +108,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-vi.mock("./signals.js", () => ({
+vi.mock("./signals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./signals.js")>()),
   // The ONE grouped needs-you read (its own suite proves it equals
   // `signals.count` per scope); here: what the home asks it, and that it
   // asks ONCE.

@@ -171,7 +171,7 @@ describe("workspaceToPackageDefinition — captures automations + playbooks", ()
       name: "Onboard client",
       goalTemplate: "Onboard {{client}}",
       subjectProfile: { profileSlug: "client" },
-      inputStrategy: "none",
+      inputStrategy: { kind: "none" },
     });
   });
 

@@ -25,6 +25,7 @@ import {
   and,
   inArray,
   isNull,
+  ne,
   sql,
   drizzleSql,
   getActingAgentUserId,
@@ -41,6 +42,7 @@ import {
   type AppWithGrants,
 } from "@synap/database";
 import {
+  APP_PERSON_KEY_TYPE,
   apiKeys,
   apps,
   oauthAuthorizationCodes,
@@ -63,9 +65,15 @@ import { auditLog } from "../utils/audit-log.js";
 import { getUserWorkspaceIds } from "../utils/workspace-membership.js";
 import {
   attachGrantsOrRevoke,
+  describeGrantLimit,
   grantWithinLive,
+  liveGrantsOfKey,
   type GrantInput,
 } from "./key-grant.js";
+import {
+  oauthClientInstancePrefix,
+  parseOauthKeyInstanceId,
+} from "../routers/oauth/config.js";
 import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
 import { createAndVerifyHubInboundKey } from "./external-registration.js";
 import { revokeActiveHubInboundKeysForUser } from "./hub-integration-registration.js";
@@ -109,6 +117,18 @@ export function serializeApp(row: AppWithGrants) {
      * target agent) — the app page's "ask first / apply automatically".
      */
     agent_user_id: app.agentUserId,
+    /**
+     * "Sign in with Synap": where a person's sign-in code may be delivered
+     * (exact match). Empty = the app signs no one in. Set by the owner only.
+     */
+    redirect_uris: app.redirectUris ?? [],
+    /**
+     * May a person signed in to this app approve its OWN agent's proposals
+     * from inside it? Owner-set (`setAppSignInPolicy`); absent = true.
+     */
+    person_may_decide_own_agent_proposals:
+      (app.metadata as Record<string, unknown> | null)
+        ?.personMayDecideOwnAgentProposals !== false,
     last_used_at: row.lastUsedAt,
     grants: row.grants,
   };
@@ -237,9 +257,15 @@ export function assertOwnerCredential(
   }
   const grant = getRequestGrant();
   if (grant && !isFullAccessGrant(grant)) {
+    // Name the limit AND the fix: "a scoped key" alone sent the owner hunting
+    // for which of their keys was scoped, and why (2026-10-20).
     throw new TRPCError({
       code: "FORBIDDEN",
-      message: `A scoped key cannot ${act} — use your own sign-in or CLI key.`,
+      message:
+        `A scoped key cannot ${act}: this key is ${describeGrantLimit(grant)}. ` +
+        `Use a full-access key — create one in Pod Admin → Keys (Personal, ` +
+        `"Full access", with the hub-protocol.write scope), or widen this ` +
+        `key's access there. \`synap whoami\` shows what a key may touch.`,
     });
   }
 }
@@ -411,16 +437,53 @@ async function spacesOwnerMayWriteIn(
  * can read. Run when the request is filed AND when it is approved (a role can
  * drop in between).
  */
+/**
+ * The write requests among `requests` that the owner may NOT give: a write in
+ * a space they neither own nor hold owner / admin / editor in. The ONE rule
+ * behind `assertOwnerMayGrant` (asking, approving) and `ownerGrantableNow`
+ * (every sign-in request, PR #29 H1/L1).
+ */
+async function writesBeyondOwner<T extends AppApprovedRequest>(
+  ownerUserId: string,
+  requests: readonly T[]
+): Promise<T[]> {
+  const writes = requests.filter((r) => !isReadPermission(r.permission));
+  if (writes.length === 0) return [];
+  const may = await spacesOwnerMayWriteIn(ownerUserId, [
+    ...new Set(writes.map((r) => r.workspaceId)),
+  ]);
+  return writes.filter((r) => !may.has(r.workspaceId));
+}
+
+/**
+ * What of an app's approval its owner could STILL give right now: reads in
+ * spaces they can read, writes where they still edit. An approval outlives
+ * the owner's role; a person signed in to the app must not (PR #29 H1/L1) —
+ * so every sign-in request is bounded by this, not by the approval alone.
+ */
+export async function ownerGrantableNow(
+  ownerUserId: string,
+  approved: readonly AppApprovedRequest[]
+): Promise<AppApprovedRequest[]> {
+  if (approved.length === 0) return [];
+  const readable = new Set(await getUserWorkspaceIds(ownerUserId));
+  const beyond = new Set(
+    (await writesBeyondOwner(ownerUserId, approved)).map(
+      (r) => `${r.workspaceId} ${r.permission}`
+    )
+  );
+  return approved.filter(
+    (r) =>
+      readable.has(r.workspaceId) &&
+      !beyond.has(`${r.workspaceId} ${r.permission}`)
+  );
+}
+
 export async function assertOwnerMayGrant(
   ownerUserId: string,
   requests: ReadonlyArray<AppApprovedRequest & { workspaceName?: string }>
 ): Promise<void> {
-  const writes = requests.filter((r) => !isReadPermission(r.permission));
-  if (writes.length === 0) return;
-  const may = await spacesOwnerMayWriteIn(ownerUserId, [
-    ...new Set(writes.map((r) => r.workspaceId)),
-  ]);
-  const beyond = writes.filter((r) => !may.has(r.workspaceId));
+  const beyond = await writesBeyondOwner(ownerUserId, requests);
   if (beyond.length > 0) {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -720,6 +783,7 @@ async function setApprovedReach(args: {
 export async function applyApprovedReach(appId: string): Promise<number> {
   const app = await new AppRepository(db).get(appId);
   const approved = app?.approvedRequests ?? [];
+  if (app && !app.revokedAt) await narrowAppPersonTokens(app, approved);
   if (!app?.agentUserId || app.revokedAt || approved.length === 0) return 0;
   const live = await db
     .select({ id: apiKeys.id })
@@ -735,6 +799,75 @@ export async function applyApprovedReach(appId: string): Promise<number> {
     apiKeyIds: live.map((k) => k.id),
   });
   return live.length;
+}
+
+/**
+ * "Sign in with Synap": the people signed in to this app hold tokens whose
+ * grant was what they CONSENTED to ∩ the approval at the time. A new approval
+ * may only NARROW them — never widen past what each person saw — so each live
+ * token keeps (its current pairs ∩ the new approval); one with nothing left is
+ * revoked. Tokens are found by their instance (`oauth:<public_id>:<person>`),
+ * which only `mintAppPersonToken` writes with this key type.
+ */
+async function narrowAppPersonTokens(
+  app: { publicId: string; ownerUserId: string },
+  approved: readonly AppApprovedRequest[]
+): Promise<void> {
+  const tokens = await db
+    .select({
+      id: apiKeys.id,
+      userId: apiKeys.userId,
+      instanceId: apiKeys.instanceId,
+    })
+    .from(apiKeys)
+    .where(
+      and(
+        eq(apiKeys.keyType, APP_PERSON_KEY_TYPE),
+        eq(apiKeys.isActive, true),
+        drizzleSql`starts_with(${apiKeys.instanceId}, ${oauthClientInstancePrefix(app.publicId)})`
+      )
+    );
+  const allowed = new Set(
+    approved.map((r) => `${r.workspaceId} ${r.permission}`)
+  );
+  for (const token of tokens) {
+    if (parseOauthKeyInstanceId(token.instanceId)?.clientId !== app.publicId)
+      continue;
+    const live = await liveGrantsOfKey(token.id);
+    const kept: AppApprovedRequest[] = [];
+    for (const scope of live) {
+      for (const workspaceId of scope.workspaceIds ?? []) {
+        for (const permission of scope.permissions) {
+          if (allowed.has(`${workspaceId} ${permission}`))
+            kept.push({ permission, workspaceId });
+        }
+      }
+    }
+    const before = live.reduce(
+      (n, s) => n + s.permissions.length * (s.workspaceIds?.length ?? 0),
+      0
+    );
+    if (kept.length === before) continue;
+    if (kept.length === 0) {
+      await new GrantRepository(db).revokeForKeys([token.id], app.ownerUserId);
+      await revokeApiKeys(db, {
+        where: eq(apiKeys.id, token.id),
+        revokedBy: app.ownerUserId,
+        reason: "The app's approval no longer covers this sign-in",
+      });
+      continue;
+    }
+    const endsAt = live[0]?.expiresAt ?? null;
+    await attachGrantsOrRevoke({
+      apiKeyId: token.id,
+      principalUserId: token.userId,
+      onBehalfOf: token.userId,
+      grants: grantsForApprovedRequests(kept),
+      expiresAt: endsAt,
+      createdBy: app.ownerUserId,
+      clientId: app.publicId,
+    });
+  }
 }
 
 /**
@@ -766,12 +899,14 @@ export async function adoptLegacyAppKey(args: {
   }
   const keyIds = await repo.keyIdsFor(found.app.publicId);
   if (!keyIds.includes(args.apiKeyId)) return null;
-  const agentUserId = await ensureAppAgent(found, "cli");
   const [key] = await db
-    .select({ userId: apiKeys.userId })
+    .select({ userId: apiKeys.userId, keyType: apiKeys.keyType })
     .from(apiKeys)
     .where(eq(apiKeys.id, args.apiKeyId))
     .limit(1);
+  // A person's own sign-in token is never moved onto the app's agent.
+  if (key?.keyType === APP_PERSON_KEY_TYPE) return null;
+  const agentUserId = await ensureAppAgent(found, "cli");
   if (key?.userId === agentUserId) return agentUserId;
   if (key?.userId !== found.app.ownerUserId) return null;
   // Grants first, then the key: a crash in between leaves a human-held key
@@ -821,7 +956,9 @@ export async function adoptLegacyAppKeys(): Promise<number> {
         and(
           inArray(apiKeys.id, keyIds),
           eq(apiKeys.userId, app.ownerUserId),
-          eq(apiKeys.isActive, true)
+          eq(apiKeys.isActive, true),
+          // The owner's own sign-in token is theirs, not a legacy app key.
+          ne(apiKeys.keyType, APP_PERSON_KEY_TYPE)
         )
       );
     for (const key of live) {
@@ -836,13 +973,31 @@ export async function adoptLegacyAppKeys(): Promise<number> {
   return adopted;
 }
 
-/** Revoke an app's keys AND their grants (the ONE grant write door). */
+/**
+ * Revoke an app's keys AND their grants (the ONE grant write door).
+ * `keepSignIns` spares the people's own sign-in tokens — a ROTATION of the
+ * app's key must not sign every person out; revoking the app ends them too.
+ */
 async function revokeAppKeys(
   found: AppWithGrants,
   actorUserId: string,
-  reason: string
+  reason: string,
+  opts: { keepSignIns?: boolean } = {}
 ): Promise<number> {
-  const keyIds = await new AppRepository(db).keyIdsFor(found.app.publicId);
+  let keyIds = await new AppRepository(db).keyIdsFor(found.app.publicId);
+  if (opts.keepSignIns && keyIds.length > 0) {
+    const signIns = await db
+      .select({ id: apiKeys.id })
+      .from(apiKeys)
+      .where(
+        and(
+          inArray(apiKeys.id, keyIds),
+          eq(apiKeys.keyType, APP_PERSON_KEY_TYPE)
+        )
+      );
+    const spared = new Set(signIns.map((k) => k.id));
+    keyIds = keyIds.filter((id) => !spared.has(id));
+  }
   if (keyIds.length === 0) return 0;
   await new GrantRepository(db).revokeForKeys(keyIds, actorUserId);
   await revokeApiKeys(db, {
@@ -896,7 +1051,8 @@ export async function issueKey(args: {
   const rotated = await revokeAppKeys(
     found,
     userId,
-    `Rotated by a new app key for ${found.app.name}`
+    `Rotated by a new app key for ${found.app.name}`,
+    { keepSignIns: true }
   );
 
   const plaintext = `${KEY_PREFIXES.USER}${randomBytes(32).toString("hex")}`;
@@ -1442,6 +1598,89 @@ export async function revokeApp(args: {
     withdrawnRequests: withdrawn.length,
   });
   return { publicId: found.app.publicId };
+}
+
+/** At most this many redirect URIs per app (the DCR door's bound). */
+export const APP_MAX_REDIRECT_URIS = 8;
+
+/**
+ * "Sign in with Synap": where a person's sign-in code for this app may be
+ * delivered — an exact-match allowlist, REPLACED by each call (`[]` stops the
+ * app signing anyone in). The OWNER's act only, signed in as themselves
+ * (`assertOwnerCredential`: no agent key, no scoped key — so neither the app's
+ * own key nor a person's sign-in token can point codes somewhere else). Each
+ * URI follows the DCR door's rule: absolute https, no fragment.
+ */
+export async function setAppRedirectUris(args: {
+  publicId: string;
+  ownerUserId: string;
+  redirectUris: readonly string[];
+  actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
+}): Promise<AppWithGrants> {
+  assertOwnerCredential("change where an app signs people in", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
+  const found = await loadOwnedApp(args.publicId, args.ownerUserId);
+  assertNotRevoked(found);
+  const uris = [...new Set(args.redirectUris.map((u) => u.trim()))];
+  if (uris.length > APP_MAX_REDIRECT_URIS) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `At most ${APP_MAX_REDIRECT_URIS} redirect URIs per app.`,
+    });
+  }
+  for (const uri of uris) {
+    let url: URL;
+    try {
+      url = new URL(uri);
+    } catch {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Not an absolute URL: ${uri}`,
+      });
+    }
+    if (url.protocol !== "https:" || url.hash || uri.includes("#")) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `A redirect URI must be https with no fragment: ${uri}`,
+      });
+    }
+    if (url.username || url.password || uri.length > 2048) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `A redirect URI must carry no credentials and stay under 2048 characters: ${uri}`,
+      });
+    }
+  }
+  await new AppRepository(db).setRedirectUris(found.app.id, uris);
+  return loadOwnedApp(args.publicId, args.ownerUserId);
+}
+
+/**
+ * "Sign in with Synap": may a person signed in to this app approve proposals
+ * its OWN agent filed (the "approve the AI's drafts inline" flow)? Default
+ * true; the owner turns it off here. Owner credential only.
+ */
+export async function setAppSignInPolicy(args: {
+  publicId: string;
+  ownerUserId: string;
+  personMayDecideOwnAgentProposals: boolean;
+  actorAgentUserId?: string | null;
+  actorKeyType?: string | null;
+}): Promise<AppWithGrants> {
+  assertOwnerCredential("change what an app's sign-ins may decide", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
+  const found = await loadOwnedApp(args.publicId, args.ownerUserId);
+  await new AppRepository(db).setPersonMayDecideOwnAgentProposals(
+    found.app.id,
+    args.personMayDecideOwnAgentProposals
+  );
+  return loadOwnedApp(args.publicId, args.ownerUserId);
 }
 
 /** Rename an app (names are unique per owner — a taken name is a CONFLICT). */

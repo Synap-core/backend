@@ -15,6 +15,8 @@ const h = vi.hoisted(() => ({
     { version: string; contentHash: string; requiredTier: string | null }
   >(),
   cache: [] as Array<Record<string, unknown>>,
+  auth: null as null | { via: string; headers: Record<string, string> },
+  digestReadFails: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -28,7 +30,9 @@ vi.mock("@synap/database", async (importOriginal) => {
       tombstones: {},
       officialSignature: h.signature,
     })),
+    podCpAuthHeaders: vi.fn(async () => h.auth),
     readOfficialCatalogDigest: vi.fn(async (kind: string, slug: string) => {
+      if (h.digestReadFails) throw new Error("db down");
       const d = h.digests.get(`${kind}|${slug}`);
       return d ? { kind, slug, ...d, syncedAt: new Date() } : null;
     }),
@@ -107,8 +111,11 @@ beforeEach(() => {
     ],
   ]);
   h.cache = [{ slug: "gmail", version: VERSION, definition: CAP }];
+  h.auth = null;
+  h.digestReadFails = false;
 });
 afterEach(() => {
+  vi.unstubAllGlobals();
   for (const k of ENV) {
     if (saved[k] === undefined) delete process.env[k];
     else process.env[k] = saved[k];
@@ -269,5 +276,126 @@ describe("signedRequiredTier", () => {
     expect(await signedRequiredTier("nope", rank)).toBeNull();
     h.signature = null;
     expect(await signedRequiredTier("gmail", rank)).toBeNull();
+  });
+});
+
+describe("private capabilities — the owner door's exemption, and only that", () => {
+  const PRIVATE = { key: "arch-backend", name: "Arch", tools: [] };
+
+  /** The CP: the owner door answers `owner`, the public by-key door `pub`. */
+  function cp(answers: {
+    owner?: Record<string, unknown> | null;
+    pub?: Record<string, unknown> | null;
+  }) {
+    process.env.CONTROL_PLANE_URL = "https://cp.test";
+    h.cache = [];
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        const body = url.includes("/internal/capabilities/")
+          ? answers.owner
+          : url.endsWith("/api/marketplace/capabilities")
+            ? { capabilities: [] }
+            : answers.pub;
+        return body
+          ? new Response(JSON.stringify(body), { status: 200 })
+          : new Response(JSON.stringify({ error: "nope" }), { status: 404 });
+      })
+    );
+    return calls;
+  }
+  const authenticated = () => {
+    h.auth = { via: "pod-jwt", headers: { authorization: "Bearer pod" } };
+  };
+
+  it("enforced: a PRIVATE capability from the authenticated owner door installs without an index entry", async () => {
+    signed(true);
+    authenticated();
+    const calls = cp({
+      owner: {
+        key: "arch-backend",
+        name: "Arch",
+        isPublic: false,
+        definition: PRIVATE,
+      },
+    });
+    expect(await fetchCPCapabilityTemplate("arch-backend")).toEqual(PRIVATE);
+    expect(
+      calls.some((u) => u.includes("/internal/capabilities/arch-backend"))
+    ).toBe(true);
+  });
+
+  it("enforced: the owner door's PUBLIC answer is checked against the index (refused when unlisted)", async () => {
+    signed(true);
+    authenticated();
+    for (const isPublic of [true, undefined]) {
+      cp({
+        owner: {
+          key: "arch-backend",
+          name: "Arch",
+          isPublic,
+          definition: PRIVATE,
+        },
+      });
+      await expect(fetchCPCapabilityTemplate("arch-backend")).rejects.toThrow(
+        /not in Synap's signed catalog/
+      );
+    }
+  });
+
+  it("enforced: a key the signed index LISTS is never exempt, even when the owner door calls it private", async () => {
+    signed(true);
+    authenticated();
+    cp({
+      owner: {
+        key: "gmail",
+        name: "Gmail",
+        isPublic: false,
+        definition: tampered,
+      },
+    });
+    await expect(fetchCPCapabilityTemplate("gmail")).rejects.toThrow(
+      /doesn't match the digest Synap signed/
+    );
+    cp({
+      owner: { key: "gmail", name: "Gmail", isPublic: false, definition: CAP },
+    });
+    expect(await fetchCPCapabilityTemplate("gmail")).toEqual(CAP);
+  });
+
+  it("enforced: the anonymous public door can never claim the exemption", async () => {
+    signed(true);
+    // No pod credential: the owner door is skipped, the public door answers.
+    cp({
+      owner: null,
+      pub: {
+        key: "arch-backend",
+        name: "Arch",
+        isPublic: false,
+        definition: PRIVATE,
+      },
+    });
+    await expect(fetchCPCapabilityTemplate("arch-backend")).rejects.toThrow(
+      /not in Synap's signed catalog/
+    );
+  });
+
+  it("enforced: when the index cannot be read, the private answer is checked, not exempted", async () => {
+    signed(true);
+    authenticated();
+    h.digestReadFails = true;
+    cp({
+      owner: {
+        key: "arch-backend",
+        name: "Arch",
+        isPublic: false,
+        definition: PRIVATE,
+      },
+    });
+    await expect(fetchCPCapabilityTemplate("arch-backend")).rejects.toThrow(
+      TRPCError
+    );
   });
 });

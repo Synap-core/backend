@@ -170,7 +170,11 @@ describe("approval idempotency — the same proposal applied twice", () => {
     // provider "import", whose default key IS the analyze proposal id.
     expect(approvalIdempotencyNamespace(USER, "p-1")).toBe(`${USER}:p-1`);
     expect(approvalIdempotencyProvider("import.graph")).toBe("import");
-    expect(approvalIdempotencyProvider("capture.graph")).toBe("proposal");
+    // `capture.graph` is the same graph proposal under its current name: it
+    // must land on the SAME provider, or a re-apply would re-key and duplicate
+    // (approval-idempotency.ts). Any other composite type is keyed "proposal".
+    expect(approvalIdempotencyProvider("capture.graph")).toBe("import");
+    expect(approvalIdempotencyProvider("entity.create")).toBe("proposal");
   });
 });
 

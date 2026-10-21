@@ -16,7 +16,9 @@ import {
   type ImportSource as ImportAdapterSource,
   type CsvTablePlan,
 } from "../import/import-adapters.js";
+import { refineCsvTablePlan } from "../import/csv-table-refine.js";
 import {
+  addLinkTargetItems,
   buildImportProposal,
   importProposalToComposite,
   type ImportItem,
@@ -70,6 +72,7 @@ import {
 } from "./proposals/stamp-materialized.js";
 import {
   resolveProfileHints,
+  linkExistingImportTargets,
   buildCsvTablePlan,
   buildImportSummary,
   buildImportGraphProposalData,
@@ -390,46 +393,91 @@ export class ImportOrchestrator {
       validSlugs,
       availableWorkspaces,
       validateEntity,
+      profileCatalog,
     } = await this.resolveProfileHints();
 
     // CSV is a TABLE: infer ONE profile + a column→property routing plan for the
     // whole file (so a CSV of people → `person` entities, not flat `note`s), and
     // build TYPED items. `tablePlan` is returned so the client can show + later
     // override the mapping. Best-effort: a null plan keeps the shallow path.
+    //
+    // ONE plan per file SCHEMA (two files with the same headers share one IS
+    // call). The first file's plan used to be applied to every file, so a batch
+    // of two exports with different columns lost its plan entirely. Each plan
+    // then goes through the deterministic post-plan step (`refineCsvTablePlan`):
+    // role → kind + facet, columns → EXISTING properties, first + last name →
+    // title, an employer column → a deduped organisation + relation. A file
+    // whose plan is null keeps the shallow row path; no file is dropped.
     let tablePlan: CsvTablePlan | null = null;
     let items: ImportItem[];
-    if (
-      input.source === "csv" &&
-      input.csvTablePlan !== false &&
-      input.items[0]
-    ) {
-      tablePlan = await buildCsvTablePlan(
-        this.ctx,
-        input.items[0].content,
-        validSlugs,
-        availableProfiles
-      );
-
-      // When a playbook templates this import, its `expectedOutputs[0].kind`
-      // OVERRIDES the inferred CSV profileSlug — the playbook is the single
-      // source of truth for entity typing.
-      if (tablePlan && (input.playbookId || this.ctx.playbookId)) {
-        const playbookId = (input.playbookId ?? this.ctx.playbookId) as string;
-        try {
-          const playbook = await resolvePlaybookOutputKind(playbookId);
-          if (playbook && validSlugs.has(playbook.profileSlug)) {
-            tablePlan = { ...tablePlan, profileSlug: playbook.profileSlug };
+    // Rows a table plan read but did not turn into an item (blank separators,
+    // nameless rows that identify nobody) — reported in `stats`, never silent.
+    let csvRowsSkipped = 0;
+    if (input.source === "csv" && input.csvTablePlan !== false) {
+      const playbookId = (input.playbookId ?? this.ctx.playbookId) as
+        string | null | undefined;
+      let playbookKind: string | null | undefined;
+      const planBySchema = new Map<string, CsvTablePlan | null>();
+      items = [];
+      for (const file of input.items) {
+        const parsed = parseCsvTable(file.content);
+        const schemaKey = JSON.stringify(parsed.headers);
+        if (!planBySchema.has(schemaKey)) {
+          let plan = await buildCsvTablePlan(
+            this.ctx,
+            file.content,
+            validSlugs,
+            availableProfiles
+          );
+          // When a playbook templates this import, its `expectedOutputs[0].kind`
+          // OVERRIDES the inferred CSV profileSlug — the playbook is the single
+          // source of truth for entity typing.
+          if (plan && playbookId) {
+            if (playbookKind === undefined) {
+              try {
+                const playbook = await resolvePlaybookOutputKind(playbookId);
+                playbookKind =
+                  playbook && validSlugs.has(playbook.profileSlug)
+                    ? playbook.profileSlug
+                    : null;
+              } catch {
+                // Best-effort override — keep the inferred slug if lookup fails.
+                playbookKind = null;
+              }
+            }
+            if (playbookKind) plan = { ...plan, profileSlug: playbookKind };
           }
-        } catch {
-          // Best-effort override — keep the inferred slug if lookup fails.
+          planBySchema.set(
+            schemaKey,
+            plan
+              ? refineCsvTablePlan({
+                  plan,
+                  headers: parsed.headers,
+                  rows: parsed.rows,
+                  catalog: profileCatalog ?? [],
+                })
+              : null
+          );
+        }
+        const plan = planBySchema.get(schemaKey) ?? null;
+        if (plan) {
+          tablePlan ??= plan;
+          const rowItems = csvRowsToTypedImportItems(parsed.rows, plan);
+          csvRowsSkipped += parsed.rows.length - rowItems.length;
+          items.push(...rowItems);
+        } else {
+          items.push(
+            ...adaptItems(input.source as ImportAdapterSource, [file])
+          );
         }
       }
-    }
-    if (tablePlan) {
-      items = [];
-      for (const it of input.items) {
-        const { rows } = parseCsvTable(it.content);
-        items.push(...csvRowsToTypedImportItems(rows, tablePlan));
+      // Employers (and any other `createIfMissing` link target) become ONE
+      // item each across the whole batch, linked to the pod's existing entity
+      // of that kind and name when there is one.
+      const before = items.length;
+      items = addLinkTargetItems(items);
+      if (items.length > before) {
+        await linkExistingImportTargets(this.ctx, items.slice(before));
       }
     } else {
       items = adaptItems(input.source as ImportAdapterSource, input.items);
@@ -570,6 +618,7 @@ export class ImportOrchestrator {
       droppedReferences = composite.droppedReferences;
       stats = {
         ...proposal.stats,
+        ...(csvRowsSkipped > 0 ? { csvRowsSkipped } : {}),
         corpusMap: {
           folders: corpusMap.folders.length,
           containers: containerOps.filter((o) => o.op === "create_entity")
@@ -1162,6 +1211,13 @@ export class ImportOrchestrator {
     // own (same session, staging, idempotency and proposal contract).
     if (input.aiStructure !== true) {
       return this.analyze({ ...input, aiStructure: false });
+    }
+    // A CSV is a TABLE: its model call is the one table plan per file schema,
+    // which `analyze()` makes. The chunked path below reads every item as prose
+    // (one model call per ROW) and never builds a table plan, so a contacts
+    // export sent through the corpus door came back as notes.
+    if (input.source === "csv") {
+      return this.analyze(input);
     }
     let { workspaceId } = this.ctx;
     const { userId } = this.ctx;

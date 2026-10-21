@@ -219,39 +219,26 @@ jobs:
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
 
-      - name: Test
-        # Skip @synap-core/core tests (they require @synap/database which creates circular dependency)
-        timeout-minutes: 60
-        # --continue: turbo otherwise stops at the first red package and hides
-        # every later package's result.
-        run: pnpm test --continue --filter='!@synap-core/core'
+      # ONE run of every suite, judged PER FILE against a committed baseline of
+      # known-red files (scripts/test-ratchet-baseline.txt, each with an owner
+      # and a cause). Red when a file outside the baseline fails, when a baseline
+      # file passes or stops running (the list may only shrink), when a suite
+      # crashes or runs vacuously, when a package drops below its floor in
+      # scripts/test-floors.json, or when a discovered tripwire ran nowhere.
+      # This replaces three steps that each re-ran the suites: `pnpm test`
+      # (turbo), `pnpm test:floor` (its vacuity and floor checks now live here,
+      # a file that collects nothing counts as red) and `pnpm tripwires` (every
+      # tripwire is run by its package, or by the ratchet where no package runs
+      # it, and must appear in a report). Read scripts/test-ratchet.mjs's header.
+      # @synap-core/core's `test` script is an echo stub (circular dependency
+      # on @synap/database); the ratchet lists it as not run.
+      - name: Test (ratchet against the known-red baseline)
+        timeout-minutes: 90
+        run: node scripts/test-ratchet.mjs
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
           NODE_ENV: test
-
-      # A GREEN TEST RUN MUST MEAN TESTS ACTUALLY RAN. `pnpm test` reports
-      # numFailedTests, not that a package executed ZERO tests or that a file
-      # collected zero assertions. `test:floor` fails on those and on a drop
-      # below a MEASURED per-package passing floor. SYNAP_TEST_ALLOW_BLIND is
-      # LOCAL-only; CI provisions Postgres, so it must never be set here.
-      - name: Test floor (a green run must mean tests ran)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 60
-        run: pnpm test:floor
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
-          NODE_ENV: test
-
-      # `scripts/tripwires.mjs` discovers every tripwire BY PATTERN and prints
-      # the discovered count — the one signal that catches a naming-convention
-      # drift or a directory the walk stopped seeing.
-      - name: Tripwires (architectural invariants, discovered by pattern)
-        if: ${{ !cancelled() }}
-        timeout-minutes: 30
-        run: pnpm tripwires
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
-          NODE_ENV: test
+          TEST_RATCHET_CONCURRENCY: "2"
 
       - name: Security Audit
         if: ${{ !cancelled() }}
@@ -279,4 +266,90 @@ jobs:
         with:
           name: coverage
           path: coverage/
+          retention-days: 7
+
+  # The @synap/test-e2e suites drive a RUNNING API over HTTP (127.0.0.1:4000,
+  # NODE_ENV=test, which accepts the suites' mock session cookies; Kratos is
+  # never called). Full suite boots no server, so they ran there with nothing to
+  # talk to and failed at setup ("API server not responding"). This job boots the
+  # built API against a migrated Postgres, exactly as the release gate's smoke
+  # step does, and judges the e2e files against the same baseline
+  # (scripts/test-ratchet-baseline.txt, entries under packages/test-e2e/).
+  api-e2e:
+    name: API e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: synap_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Monorepo layout + dependencies
+        uses: ./.github/actions/monorepo-setup
+        with:
+          app-id: ${{ vars.SYNAP_RELEASE_APP_ID }}
+          app-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
+          cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Migrate the test database
+        run: pnpm --filter @synap/database migrate
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+
+      - name: Build the API
+        run: pnpm turbo build --filter=api...
+
+      - name: Start the API (test mode)
+        run: |
+          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/synap_test \
+          NODE_ENV=test \
+          PORT=4000 \
+          SKIP_SECRET_VALIDATION=true \
+          KRATOS_PUBLIC_URL=http://localhost:4433 \
+          KRATOS_ADMIN_URL=http://localhost:4434 \
+          node apps/api/dist/index.js > "$RUNNER_TEMP/api.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:4000/health > /dev/null 2>&1; then
+              echo "Server healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::API server not healthy after 60s"
+          tail -n 80 "$RUNNER_TEMP/api.log"
+          exit 1
+
+      - name: E2E (ratchet against the known-red baseline)
+        timeout-minutes: 20
+        run: node scripts/test-ratchet.mjs --script=test:e2e --only=packages/test-e2e
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+          NODE_ENV: test
+
+      - name: API log
+        if: ${{ !cancelled() }}
+        run: tail -n 200 "$RUNNER_TEMP/api.log" || true
+
+      - name: Upload e2e reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-reports
+          path: coverage/test-ratchet/
           retention-days: 7

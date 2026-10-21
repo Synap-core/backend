@@ -70,8 +70,10 @@ import {
   redactForStorage,
 } from "../../utils/redact-secrets.js";
 import { registerApproveExecutors } from "./approve-executors.js";
+import { assertAppSignInMayApprove } from "../../services/app-sign-in-policy.js";
 import {
   assertMayDecideProposal,
+  assertMayDecideProposalAt,
   refuseAgentProposalApprover,
 } from "./review-authority.js";
 import {
@@ -576,7 +578,26 @@ export async function applyProposalApproval(args: {
   // key, or an acting agent in the ALS) never applies one, whichever door.
   refuseAgentProposalApprover(args.ctx);
   assertMayDecideProposal("approve");
+  // D3: this door has the proposal, so it NAMES it — a key bounded to some
+  // spaces / projects / objects approves only there (a person's app sign-in
+  // token "cannot approve outside these spaces"). A signed-in session holds
+  // no grant and is unaffected.
+  assertMayDecideProposalAt("approve", "approve", args.proposal);
+  // A person signed in to an app may approve its OWN AI's proposals unless
+  // the app's owner turned that off (PR #29 M2, app-sign-in-policy.ts).
+  const viaApp = await assertAppSignInMayApprove(args.proposal);
   const result = await applyProposalApprovalInner(args);
+
+  // VISIBLE: an approval made inside an app is recorded as such on the
+  // proposal ("approved in <app>"), whoever's proposal it was.
+  if (viaApp && result.success && !result.alreadyApproved) {
+    await db
+      .update(proposals)
+      .set({
+        data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('approvedInApp', jsonb_build_object('publicId', ${viaApp.publicId}::text, 'name', ${viaApp.name}::text))`,
+      })
+      .where(eq(proposals.id, args.proposal.id));
+  }
 
   // THE REVIEWER'S NOTE. `approve` / `batchApprove` accepted `comment` and,
   // outside two executors' event payloads, dropped it: the proposal record
