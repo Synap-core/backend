@@ -1130,6 +1130,15 @@ export const focusSessionsRouter = router({
   acceptFromTriage: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
+      // Accepting a draft is the PERSON's act (B6: an agent-started run does
+      // not execute until they accept it). An agent key reads as its person,
+      // so the owner floor alone would let the agent accept its own draft.
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person can accept a draft session.",
+        });
+      }
       const result = await acceptFromTriage({
         sessionId: input.sessionId,
         userId: requireUserId(ctx.userId),
@@ -1143,7 +1152,11 @@ export const focusSessionsRouter = router({
         }
         return { accepted: false as const, reason: result.reason };
       }
-      return { accepted: true as const, session: result.session };
+      return {
+        accepted: true as const,
+        session: result.session,
+        ...(result.heldRun ? { heldRun: result.heldRun } : {}),
+      };
     }),
 
   /**

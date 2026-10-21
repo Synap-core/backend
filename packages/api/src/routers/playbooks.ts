@@ -2881,7 +2881,7 @@ export const playbooksRouter = router({
       // `try`/`let` pair so this stays the ONE assigned runPlaybook call in
       // this file, which `severed-approval-doors.test.ts` (6b) anchors on (and
       // counts) when it proves this door passes no `idempotentBySubject`.
-      const { run, session, parentLink, skipped } = await runPlaybook({
+      const { run, session, parentLink, skipped, held } = await runPlaybook({
         playbookId: input.playbookId,
         workspaceId: runWorkspaceId,
         userId: ctx.userId,
@@ -2924,16 +2924,26 @@ export const playbooksRouter = router({
         };
       }
 
+      // B6: an agent's direct run is the PERSON's draft and does NOT start
+      // until they accept it (`runPlaybook` holds it); say so, so the agent
+      // tells them — and never reports a run that is not running.
+      if (held) {
+        return {
+          run: null,
+          session,
+          status: "draft" as const,
+          message:
+            "Playbook run created as a draft. It belongs to the person and does not start until they accept it in their sessions.",
+          proposalId: null as string | null,
+          ...(parentLink ? { parentLink } : {}),
+        };
+      }
+
       return {
         run,
         session,
         status: "running" as const,
-        // B6: an agent's direct run is the PERSON's and waits as a draft for
-        // them to accept (`runPlaybook`); say so, so the agent tells them.
-        message:
-          input.agentUserId && !approvedReplay
-            ? "Playbook run started. It belongs to the person and waits as a draft in their sessions until they accept it."
-            : "Playbook run started",
+        message: "Playbook run started",
         proposalId: null as string | null,
         ...(parentLink ? { parentLink } : {}),
       };

@@ -25,6 +25,14 @@ export const PROVIDE_GRANTS_META_KEY = "provideGrants";
 export const RUN_TURNS_META_KEY = "runTurns";
 
 /**
+ * The run an agent started directly, HELD until the person accepts the draft
+ * (`run-playbook.ts` `startHeldRun`, B6 founder default 2026-10-21): what to
+ * dispatch then. Server-owned: an agent that could write it could change what
+ * the person's acceptance runs.
+ */
+export const HELD_RUN_META_KEY = "heldRun";
+
+/**
  * The `focus_sessions.metadata` keys ONLY the server writes, because the
  * server decides on them: an intent that answers an ask by itself, the reads
  * revoked at close, the propose-only governance of a playbook run, the client
@@ -41,6 +49,7 @@ export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   "clientKey",
   "automationChainContext",
   RUN_TURNS_META_KEY,
+  HELD_RUN_META_KEY,
   "run",
 ] as const;
 
