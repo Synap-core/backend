@@ -39,8 +39,10 @@ export const HELD_RUN_META_KEY = "heldRun";
  * a session is bound to, the automation chain the depth floor reads, and the
  * run manifest (`run`: the sources a rerun replays, the rerun lineage, the
  * cancel record — written by `recordSessionRunManifest` and the cancel door
- * only). A client or agent metadata write never carries them
- * ({@link withoutServerOwnedSessionMetadata}).
+ * only), and the triage receipt (`triage`: the person's accept or discard of
+ * an agent's draft, written by `triage.ts` only — a forged `acceptedAt` would
+ * read as accepted, so the held run could never start). A client or agent
+ * metadata write never carries them ({@link withoutServerOwnedSessionMetadata}).
  */
 export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   PROVIDE_CONNECT_META_KEY,
@@ -51,6 +53,7 @@ export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   RUN_TURNS_META_KEY,
   HELD_RUN_META_KEY,
   "run",
+  "triage",
 ] as const;
 
 /** A client/agent metadata bag with every server-owned key dropped. Pure. */

@@ -9,7 +9,7 @@
  * untouched.
  *
  * `found` is Typesense's total BEFORE this filter; it is reduced by the hits
- * dropped from this page, which keeps it honest for this page and approximate
+ * dropped from this page, so it counts this page's drops and is approximate
  * beyond it — `hiddenFromListing` says how many this page dropped.
  *
  * A failed intersect THROWS: hiding every hit on a read failure would render

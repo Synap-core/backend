@@ -15,7 +15,11 @@
  * read it through {@link readDuplicateCheck} — the ONE accessor.
  */
 
-/** Hard cap on persisted candidates, so a pathological name cannot bloat a proposal. */
+/**
+ * Hard cap on persisted candidates PER PROPOSED ITEM (per `forRef`; a single
+ * create is one item), so a pathological name cannot bloat a proposal while
+ * every item of a capture graph still shows its own twins.
+ */
 export const DUPLICATE_CHECK_MAX_CANDIDATES = 5;
 
 /**
@@ -69,7 +73,7 @@ export interface DuplicateCheck {
   status: DuplicateCheckStatus;
   subject: DuplicateSubjectType;
   candidates: DuplicateCandidate[];
-  /** True when more candidates matched than {@link DUPLICATE_CHECK_MAX_CANDIDATES}. */
+  /** True when an item matched more candidates than {@link DUPLICATE_CHECK_MAX_CANDIDATES}. */
   truncated?: boolean;
 }
 

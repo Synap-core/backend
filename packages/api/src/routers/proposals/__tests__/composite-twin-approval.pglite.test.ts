@@ -265,6 +265,69 @@ describe("approving a capture that names an existing record (BLOCKER-2)", () => 
     expect(await countTitled("Cy Twin")).toBe(1);
   });
 
+  it("a graph naming SIX existing records is approvable: each item keeps its own twin on the card (B1)", async () => {
+    // The persisted answer comes from the REAL door per item and the REAL
+    // merge, exactly as `submitCaptureGraph` builds it. A graph-wide cap of 5
+    // dropped item 6's twin, so every approve refused with ENTITY_WEAK_DEDUP.
+    const { and, entities, isNull, ownerPrivateVisibleWhere } = await import(
+      "@synap/database"
+    );
+    const { findDuplicateCandidates, mergeDuplicateChecks } = await import(
+      "../../../services/duplicates/find-duplicate-candidates.js"
+    );
+    const names = Array.from({ length: 6 }, (_, i) => `Sixfold Twin ${i + 1}`);
+    for (const name of names) await person(name);
+    const checks = [];
+    for (const [i, title] of names.entries()) {
+      const answer = await findDuplicateCandidates(holder.db as never, {
+        subject: "entity",
+        userId: USER,
+        profileSlug: "person",
+        title,
+        signals: [],
+        recordScope: and(
+          ownerPrivateVisibleWhere(entities.workspaceId, entities.userId, USER),
+          isNull(entities.workspaceId)
+        ),
+        forRef: `p${i + 1}`,
+      });
+      checks.push(answer.check);
+    }
+    const duplicateCheck = mergeDuplicateChecks("entity", checks);
+    // Non-vacuity: the door found every item's twin before the merge.
+    expect(checks.map((c) => c.candidates.length)).toEqual([1, 1, 1, 1, 1, 1]);
+    expect(
+      new Set(duplicateCheck.candidates.map((c) => c.forRef)),
+      "every proposed item shows its own twin"
+    ).toEqual(new Set(names.map((_, i) => `p${i + 1}`)));
+
+    const proposalId = randomUUID();
+    await q(
+      `insert into proposals (id, status, proposal_type, target_type, target_id, data, created_by, agent_user_id, subject_user_id)
+       values ($1,'pending','capture.graph','entity',$2,$3::jsonb,$4,$4,$5)`,
+      [
+        proposalId,
+        randomUUID(),
+        JSON.stringify({
+          operations: names.map((title, i) => ({
+            op: "create_entity",
+            ref: `p${i + 1}`,
+            profileSlug: "person",
+            properties: {},
+            title,
+          })),
+          source: "intelligence",
+          duplicateCheck,
+        }),
+        AGENT,
+        USER,
+      ]
+    );
+    const res = await approve(proposalId);
+    expect(res.success).toBe(true);
+    for (const name of names) expect(await countTitled(name)).toBe(2);
+  });
+
   it("a strong identity twin merges, card or not", async () => {
     const rhea = await person("Rhea Real", "rhea@real.test");
     const proposalId = await pendingCapture(

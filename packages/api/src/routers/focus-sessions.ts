@@ -1731,6 +1731,15 @@ export const focusSessionsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // A grade is the PERSON's verdict, and it can accept a draft (the attest
+      // it discharges accepts on engagement, B6). An agent key reads as its
+      // person, so refuse it here as `acceptFromTriage` does.
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the person can grade a criterion.",
+        });
+      }
       const userId = requireUserId(ctx.userId);
       const { loadSessionEvaluationSummary } =
         await import("../services/focus-sessions/evaluations/record.js");
