@@ -32,7 +32,8 @@ import { fileURLToPath } from "node:url";
  * id-shaped param joins the scan by existing.
  *
  * A route block counts as GUARDED when it calls `requireUuidParam(c, ...)`
- * (the canonical helper, `rest/_shared.ts`), `isUuid(...)`, a `Uuid.safeParse`
+ * (the canonical helper, `rest/_shared.ts`), `requireAppPublicIdParam(c, ...)`
+ * (an app's public id, `app_<uuid>`), `isUuid(...)`, a `Uuid.safeParse`
  * codec, or an inline `z...uuid().../safeParse(...)` check.
  *
  * WHAT IT DOES NOT SEE (measured 2026-09-27, each one checked BY HAND — see
@@ -154,17 +155,6 @@ const ROUTE_PARAM_EXCLUDE = new Set<string>([
   // never a uuid (`packages/database/src/schema/ai-provider-credentials.ts`).
   // Verified 2026-10-15; a `requireUuidParam` guard would 400 every real call.
   "DELETE /ai-providers/credentials/:providerId [providerId]",
-  // apps.ts: `:id` is the app's PUBLIC id (`app_<uuid>`, the CLI wire
-  // contract), compared only to the TEXT column `apps.public_id` through
-  // `loadOwnedApp` (services/app-connect.ts) — never to a uuid column. A
-  // `requireUuidParam` guard would 400 every real app id.
-  "GET /apps/:id [id]",
-  "POST /apps/:id/connect [id]",
-  "POST /apps/:id/key [id]",
-  "DELETE /apps/:id [id]",
-  // Same `loadOwnedApp(publicId)` door, through `setAppRedirectUris`
-  // (services/app-connect.ts). Verified 2026-10-21.
-  "PUT /apps/:id/redirect-uris [id]",
 ]);
 
 /**
@@ -177,6 +167,8 @@ const SKIP_FILES = new Set<string>([]);
 const ROUTE_RE = /app\.(get|post|patch|put|delete)\(\s*[`"]([^`"]+)[`"]/g;
 const GUARD_IDIOMS = [
   /requireUuidParam\(c/,
+  // An app's PUBLIC id (`app_<uuid>`, apps.ts), checked for that exact shape.
+  /requireAppPublicIdParam\(c/,
   /isUuid\(/,
   /Uuid\.safeParse/,
   // An inline `z.object({ x: z.string().uuid() }).safeParse(...)` codec —
@@ -232,7 +224,8 @@ function scan(): { files: number; routes: number; findings: Finding[] } {
           block.includes(`param("${p}")`) ||
           block.includes(`param('${p}')`) ||
           block.includes(`requireUuidParam(c, "${p}")`) ||
-          block.includes(`requireUuidParam(c, '${p}')`);
+          block.includes(`requireUuidParam(c, '${p}')`) ||
+          block.includes(`requireAppPublicIdParam(c, "${p}")`);
         if (!reads) continue;
         const key = `${method} ${route} [${p}]`;
         if (ROUTE_PARAM_EXCLUDE.has(key)) continue;
@@ -326,5 +319,28 @@ describe("tripwire: Hub REST id-shaped path params are uuid-guarded before Postg
     const pgOnly = "11111111-1111-1111-1111-111111111111"; // PG-valid, RFC-invalid nibble
     const ok = requireUuidParam(fakeC(pgOnly), "id");
     expect(ok).toBe(pgOnly);
+  });
+
+  it("requireAppPublicIdParam: accepts app_<uuid> only", async () => {
+    const { requireAppPublicIdParam } =
+      await import("../routers/hub-protocol/rest/_shared.js");
+    const fakeC = (paramValue: string | undefined) =>
+      ({
+        req: { param: () => paramValue },
+        json: (body: unknown, status: number) => ({ body, status }),
+      }) as unknown as Parameters<typeof requireAppPublicIdParam>[0];
+    const status = (v: string | undefined) =>
+      (requireAppPublicIdParam(fakeC(v), "id") as unknown as { status: number })
+        .status;
+
+    const uuid = "7d4f6c0e-6a1b-4a8e-9a53-3f2b1c0d9e11";
+    expect(requireAppPublicIdParam(fakeC(`app_${uuid}`), "id")).toBe(
+      `app_${uuid}`
+    );
+    // A bare uuid is the PK, not the wire id; a prefix alone is not an id.
+    expect(status(uuid)).toBe(400);
+    expect(status("app_")).toBe(400);
+    expect(status("app_not-a-uuid")).toBe(400);
+    expect(status(undefined)).toBe(400);
   });
 });
