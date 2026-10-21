@@ -14,9 +14,8 @@ import {
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { deriveGatePairFromOperations } from "@synap/governance-policy";
-import { captureGraphEventKeys } from "../services/capture-agent/capture-graph-policy.js";
 import { assertCaptureProjectPinVisible } from "../services/capture-agent/resolve-capture-project.js";
-import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
+import { captureGraphMemberProposes } from "../services/capture-agent/capture-graph-governance.js";
 import { buildRuleLoopCallers } from "../utils/rule-loop-callers.js";
 import { router, mergeRouters, podProcedure } from "../trpc.js";
 import type { Context } from "../context.js";
@@ -3671,30 +3670,17 @@ const captureBaseRouter = router({
       //
       // Agent doors only: a human/CLI/webhook caller passes no `agentUserId`,
       // the agent ladder does not apply, and the gate's own RBAC decides.
-      let anyMemberProposes = false;
-      if (ctx.agentUserId && gateOperations.length > 0) {
-        const memberKeys = captureGraphEventKeys(gateOperations);
-        for (const key of memberKeys) {
-          const gov = await resolveAgentGovernanceDecision({
-            db,
-            agentUserId: ctx.agentUserId,
-            workspaceId: workspaceId ?? null,
-            subjectType: key.subjectType,
-            action: key.action,
-            ...(key.subjectProfileSlug
-              ? { subjectProfileSlug: key.subjectProfileSlug }
-              : {}),
-            ...(key.subjectUoValidated !== undefined
-              ? { subjectUoValidated: key.subjectUoValidated }
-              : {}),
-            preferAgentMetadataAutoApproveFor: true,
-          });
-          if (gov.decision !== "execute") {
-            anyMemberProposes = true;
-            break;
-          }
-        }
-      }
+      // `captureGraphMemberProposes` scores each member with the signals its
+      // own door gates on (kind, and the born-status lifecycle floor).
+      const anyMemberProposes =
+        !!ctx.agentUserId &&
+        gateOperations.length > 0 &&
+        (await captureGraphMemberProposes({
+          agentUserId: ctx.agentUserId,
+          userId,
+          workspaceId: workspaceId ?? null,
+          operations: gateOperations,
+        }));
 
       const perm: PermissionResult =
         gateOperations.length === 0
