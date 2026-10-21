@@ -6,15 +6,16 @@
  * so between "agent A files a 12-entity capture proposal" and "the human
  * approves it", a second agent (or a retry of the same call) resolves the same
  * person, reads MISSING, and files a DUPLICATE. This module closes that hole from
- * two angles, both ADVISORY / owner-floored:
+ * the RETRY angle, owner-floored:
  *
- *   1. `computeCaptureGraphIdempotencyKey` + `findPriorCaptureGraphProposal` —
+ *   - `computeCaptureGraphIdempotencyKey` + `findPriorCaptureGraphProposal` —
  *      a content-hash idempotency key so a re-submit of the SAME graph returns
  *      the PRIOR proposal instead of filing a second row.
- *   2. `findPendingSignalMatches` — a strong-signal scan over the caller's OWN
- *      pending create-graph proposals, surfaced as an advisory candidate (NEVER
- *      an `existingEntityId`: a pending proposal can be rejected, and linking to
- *      it would stale-suppress a real write).
+ *
+ * The other angle — "is this item already in flight as a DIFFERENT pending
+ * create?" — moved to the ONE duplicate door's pending leg
+ * (`services/duplicates/find-duplicate-candidates.ts`, FB1020 B2), which reads
+ * entity creates as well as graphs and names its answer `duplicateCheck`.
  *
  * Wave 3 adds the RECALL sibling — `findPendingTextMatches` — a natural-language
  * text scan of the same owner-floored pending queue, so `ask` can surface work
@@ -26,10 +27,7 @@
  * APPROVED proposal's entity now exists for real and `resolveIdentity`/recall
  * already see it — including it would double-count.
  *
- * v1 scope: CREATE-GRAPH proposal types only (`import.graph` / `capture.graph`),
- * whose `data.operations[]` carry create_entity ops with a property bag the
- * EXISTING `extractIdentitySignals` can read. Other proposal types would need
- * per-type extractors — out of scope.
+ * Scope: CREATE-GRAPH proposal types (`import.graph` / `capture.graph`).
  */
 
 import { createHash } from "crypto";
@@ -48,9 +46,6 @@ import {
   drizzleSql,
   proposals,
   ProposalStatus,
-  extractIdentitySignals,
-  normalizeIdentitySignal,
-  type IdentitySignal,
 } from "@synap/database";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import {
@@ -63,128 +58,9 @@ import { openLink } from "./deep-links.js";
 /** The create-graph proposal types whose operations[] we can scan in v1. */
 const CAPTURE_GRAPH_PROPOSAL_TYPES = ["import.graph", "capture.graph"] as const;
 
-/** A create_entity op inside a pending proposal that collided on a strong signal. */
-export interface PendingSignalMatch {
-  proposalId: string;
-  proposalType: string;
-  summary?: string;
-  /** The pending op's stable ref, if it had one. */
-  entityRef?: string;
-  /** The pending op's title (what the reviewer sees). */
-  entityTitle?: string;
-  profileSlug?: string;
-  /** The normalized strong signal(s) that matched (email/phone/url/handle/…). */
-  matchedSignals: Array<{ type: string; value: string }>;
-}
-
-/** Normalize `signals` to a `type:value` string set for O(1) intersection. */
-function normalizedSignalKeys(signals: IdentitySignal[]): Set<string> {
-  const keys = new Set<string>();
-  for (const s of signals) {
-    if (!s || !s.type || typeof s.value !== "string" || !s.value.trim())
-      continue;
-    keys.add(`${s.type}:${normalizeIdentitySignal(s.type, s.value)}`);
-  }
-  return keys;
-}
-
-/**
- * Advisory strong-signal scan over the caller's OWN pending create-graph
- * proposals. Returns EVERY pending create_entity op whose extracted strong
- * signal matches one of `signals`. ADVISORY ONLY — the caller must never link
- * to a returned proposal (it can still be rejected); it flags the in-flight
- * duplicate so a second copy isn't filed.
- */
-export async function findPendingSignalMatches(
-  database: typeof db,
-  params: { userId: string; signals: IdentitySignal[]; limit?: number }
-): Promise<PendingSignalMatch[]> {
-  const wanted = normalizedSignalKeys(params.signals);
-  if (wanted.size === 0) return [];
-
-  const rows = await database
-    .select({
-      id: proposals.id,
-      proposalType: proposals.proposalType,
-      data: proposals.data,
-    })
-    .from(proposals)
-    .where(
-      and(
-        // OWNER FLOOR — never another user's queue. Unchanged in INTENT;
-        // widened in MECHANISM, because `createdBy` alone no longer expresses
-        // it. That column is overloaded ("userId or agentUserId that authored
-        // this row" — schema/proposals.ts), so an agent write that passes no
-        // explicit createdBy lands `createdBy = agentUserId = <agent>`. Measured
-        // live: 4 of 6 pending rows carry that shape. The consequence was that
-        // an agent could not see ITS OWN in-flight duplicate — this dedup scan
-        // was blind to the majority of the rows it exists to catch, and the
-        // team pod carries 32 duplicate clusters.
-        //
-        // The guarantee the original comment states is PRESERVED EXACTLY:
-        // `ownAgentUserFilter` is floored on
-        // `users.createdByUserId = <me> AND userType = 'agent'`, so another
-        // human's agents can never enter the set. There is NO workspace term
-        // here and there must never be one — a workspace floor is what
-        // `pending-capture-dedup`'s own guarantee rules out, and it is the trap
-        // that was caught three times in one session. Same predicate as
-        // `listCreatedProposals`' author floor, one definition.
-        or(
-          eq(proposals.createdBy, params.userId),
-          ownAgentUserFilter(proposals.agentUserId, params.userId),
-          ownAgentUserFilter(proposals.createdBy, params.userId)
-        ),
-        // STRICT pending — an approved proposal's entity is already committed.
-        eq(proposals.status, ProposalStatus.PENDING),
-        inArray(
-          proposals.proposalType,
-          CAPTURE_GRAPH_PROPOSAL_TYPES as unknown as string[]
-        )
-      )
-    )
-    .orderBy(desc(proposals.createdAt))
-    .limit(params.limit ?? 50);
-
-  const matches: PendingSignalMatch[] = [];
-  for (const row of rows) {
-    const data = row.data as {
-      operations?: CompositeProposalOperation[];
-      summary?: string;
-    };
-    const ops = Array.isArray(data?.operations) ? data.operations : [];
-    for (const op of ops) {
-      if (op.op !== "create_entity") continue;
-      // A pending op that already LINKS an existing entity isn't a new candidate.
-      if (op.existingEntityId) continue;
-      const opSignals = extractIdentitySignals(
-        op.properties as Record<string, unknown> | undefined,
-        { kind: op.profileSlug }
-      ).map((s) => ({
-        type: s.type,
-        value: normalizeIdentitySignal(s.type, s.value),
-      }));
-      const hit = opSignals.filter((s) => wanted.has(`${s.type}:${s.value}`));
-      if (hit.length > 0) {
-        matches.push({
-          proposalId: row.id,
-          proposalType: row.proposalType,
-          ...(typeof data.summary === "string"
-            ? { summary: data.summary }
-            : {}),
-          ...(op.ref ? { entityRef: op.ref } : {}),
-          ...(op.title ? { entityTitle: op.title } : {}),
-          profileSlug: op.profileSlug,
-          matchedSignals: hit,
-        });
-      }
-    }
-  }
-  return matches;
-}
-
 // ── RECALL half (Wave 3): text-match the caller's OWN pending queue ──────────
 //
-// `findPendingSignalMatches` above closes the CAPTURE hole (a second WRITE
+// The duplicate door's pending leg closes the CAPTURE hole (a second WRITE
 // resolving a person who only exists in a pending proposal). This half closes
 // the RECALL hole: `ask` is natural language, so strong-signal matching does
 // not apply — a pending "Talentir" capture must surface for the query
@@ -358,7 +234,7 @@ export async function findPendingTextMatches(
         // the two human-authored rows and not the one whose summary WAS the
         // query. `services/proposals/proposals-service.ts` documents and fixes
         // this exact author-floor bug; the recall lane never received it, and
-        // I fixed only the sibling `findPendingSignalMatches` in this same
+        // I fixed only the sibling dedup scan (now the duplicate door's) in this same
         // file — one of three call sites. The guarantee is unchanged:
         // `ownAgentUserFilter` floors on `users.createdByUserId = me AND
         // userType = 'agent'`, so another human's agents can never enter.
@@ -370,7 +246,7 @@ export async function findPendingTextMatches(
         // STRICT pending — an approved op's entity is already in the graph.
         eq(proposals.status, ProposalStatus.PENDING)
         // NO TYPE FLOOR on the RECALL lane — deliberately unlike the dedup lane
-        // above, which keeps `CAPTURE_GRAPH_PROPOSAL_TYPES` because it must
+        // (now the duplicate door's pending leg), which keeps a type floor because it must
         // compare create-ops to avoid filing a duplicate.
         //
         // Recall asks a different question: "is there pending work bearing on

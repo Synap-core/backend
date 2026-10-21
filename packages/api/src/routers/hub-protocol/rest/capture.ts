@@ -169,7 +169,7 @@ export function registerCaptureRoutes(app: HubHono): void {
     tags: ["Capture"],
     summary: "AI-structure raw input into entity proposals",
     description:
-      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A HUMAN caller (no agent key) instead gets CONFIRM MODE: the plan is persisted as a pending composite proposal and the response is the submit result — status/proposalId/reviewUrl/summary/entityCount/relationCount/bindingCount/applied/writeReceipt, plus (only when non-empty) pendingDuplicateCandidates, relationsFailed, unmodeledProperties, project and projectCandidate. Two dissimilar payloads share this route, so the 200 schema stays LOOSE — but it now DECLARES the honesty triple (`degraded`, `degradedReason`, `extraction`) that the tRPC door has always forwarded and this one published nowhere. `degradedReason` may be a pod plumbing reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service extraction reason (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type, …) — the latter are CONFIGURATION states, not outages, and must not be reported to a user as something to retry.",
+      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A HUMAN caller (no agent key) instead gets CONFIRM MODE: the plan is persisted as a pending composite proposal and the response is the submit result — status/proposalId/reviewUrl/summary/entityCount/relationCount/bindingCount/applied/writeReceipt, plus (only when non-empty) duplicateCheck, relationsFailed, unmodeledProperties, project and projectCandidate. Two dissimilar payloads share this route, so the 200 schema stays LOOSE — but it now DECLARES the honesty triple (`degraded`, `degradedReason`, `extraction`) that the tRPC door has always forwarded and this one published nowhere. `degradedReason` may be a pod plumbing reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service extraction reason (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type, …) — the latter are CONFIGURATION states, not outages, and must not be reported to a user as something to retry.",
     request: {
       body: CaptureStructureRequestSchema,
     },
@@ -723,8 +723,8 @@ export function registerCaptureRoutes(app: HubHono): void {
         });
         // Forward the WHOLE submit result, not a hand-picked subset. This door
         // previously re-typed the response by hand and dropped six fields the
-        // service computes — including `pendingDuplicateCandidates` (the
-        // in-flight duplicate warning that exists precisely so a caller does
+        // service computes — including `duplicateCheck` (the
+        // duplicate warning that exists precisely so a caller does
         // not file a second copy), `relationsFailed` (partial failure) and
         // `writeReceipt` (what actually landed, and where). `applied` is NOT
         // constant on this path: an idempotent replay of an already-applied
@@ -793,8 +793,8 @@ export function registerCaptureRoutes(app: HubHono): void {
             ? { projectCandidate: graph.projectCandidate }
             : {}),
           ...(graph.project ? { project: graph.project } : {}),
-          ...(graph.pendingDuplicateCandidates
-            ? { pendingDuplicateCandidates: graph.pendingDuplicateCandidates }
+          ...(graph.duplicateCheck
+            ? { duplicateCheck: graph.duplicateCheck }
             : {}),
           ...(graph.relationsFailed
             ? { relationsFailed: graph.relationsFailed }

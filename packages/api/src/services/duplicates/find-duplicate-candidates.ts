@@ -76,6 +76,9 @@ const GRAPH_PROPOSAL_TYPES = ["capture.graph", "import.graph"] as const;
 /** One create waiting in the caller's queue, reduced to what the door compares. */
 export interface PendingCreate {
   proposalId: string;
+  proposalType: string;
+  /** A graph op's stable ref, when the create sits inside a capture/import. */
+  entityRef?: string;
   subject: Exclude<DuplicateSubjectType, "kind">;
   /** An entity's profile slug; the subject type otherwise. */
   kind: string;
@@ -112,7 +115,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function entityCreate(
-  proposalId: string,
+  row: { id: string; proposalType: string },
   profileSlug: unknown,
   title: unknown,
   properties: unknown
@@ -120,7 +123,8 @@ function entityCreate(
   if (typeof profileSlug !== "string" || profileSlug.length === 0) return null;
   const name = typeof title === "string" ? title : null;
   return {
-    proposalId,
+    proposalId: row.id,
+    proposalType: row.proposalType,
     subject: "entity",
     kind: profileSlug,
     title: name,
@@ -178,12 +182,13 @@ export async function loadOwnPendingCreates(
         // An op that LINKS an existing record proposes nothing new.
         if (op.op !== "create_entity" || op.existingEntityId) continue;
         const create = entityCreate(
-          row.id,
+          row,
           op.profileSlug,
           op.title,
           op.properties
         );
-        if (create) creates.push(create);
+        if (create)
+          creates.push(op.ref ? { ...create, entityRef: op.ref } : create);
       }
       continue;
     }
@@ -191,7 +196,7 @@ export async function loadOwnPendingCreates(
     if (!record) continue;
     if (row.targetType === "entity") {
       const create = entityCreate(
-        row.id,
+        row,
         record.profileSlug,
         record.title,
         record.properties
@@ -201,6 +206,7 @@ export async function loadOwnPendingCreates(
       const name = typeof record.name === "string" ? record.name : null;
       creates.push({
         proposalId: row.id,
+        proposalType: row.proposalType,
         subject: row.targetType,
         kind: row.targetType,
         title: name,
@@ -483,4 +489,49 @@ export async function findDuplicateCandidates(
     fail("records", err);
   }
   return { check: toDuplicateCheck("kind", candidates, failed) };
+}
+
+/** A pending create that carries one of the asked strong identity atoms. */
+export interface PendingIdentityMatch {
+  proposalId: string;
+  proposalType: string;
+  entityRef?: string;
+  entityTitle?: string;
+  profileSlug?: string;
+  /** The normalized atoms that matched. */
+  matchedSignals: Array<{ type: string; value: string }>;
+}
+
+/**
+ * The door's pending leg for an identity LOOKUP (`synap_resolve_identity`,
+ * `POST /identity/resolve`): which of the caller's own pending creates already
+ * carry one of these strong atoms. Advisory — a pending proposal can still be
+ * rejected, so a caller never links to it. Same owner-floored scan as
+ * {@link findDuplicateCandidates}; there is no second one.
+ */
+export async function findPendingIdentityMatches(
+  database: Db,
+  userId: string,
+  signals: IdentitySignal[]
+): Promise<PendingIdentityMatch[]> {
+  const wanted = signalKeysOf(signals);
+  if (wanted.size === 0) return [];
+  const matches: PendingIdentityMatch[] = [];
+  for (const p of await loadOwnPendingCreates(database, userId)) {
+    if (p.subject !== "entity") continue;
+    const hit = [...p.signalKeys].filter((k) => wanted.has(k));
+    if (hit.length === 0) continue;
+    matches.push({
+      proposalId: p.proposalId,
+      proposalType: p.proposalType,
+      ...(p.entityRef ? { entityRef: p.entityRef } : {}),
+      ...(p.title ? { entityTitle: p.title } : {}),
+      profileSlug: p.kind,
+      matchedSignals: hit.map((key) => {
+        const at = key.indexOf(":");
+        return { type: key.slice(0, at), value: key.slice(at + 1) };
+      }),
+    });
+  }
+  return matches;
 }
