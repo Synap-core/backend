@@ -219,6 +219,13 @@ export interface OfficialCatalogSignature {
   /** Cached official rows the verified index does not vouch for. */
   unverifiedRows: number | null;
   message: string | null;
+  /**
+   * sha256 of the exact bytes of the last verified keys statement and index:
+   * a later file under the same `keysVersion` / `validUntil` must be the same
+   * file. Absent on a status recorded before they were kept.
+   */
+  keysSha256?: string | null;
+  indexSha256?: string | null;
 }
 
 export interface PodSettingsBlob {

@@ -316,10 +316,7 @@ export async function fetchCPCapabilityTemplate(
   if (byKey.door === "owner" && byKey.template.isPublic === false) {
     await admitPrivateCapability({
       key,
-      definition: byKey.template.definition as unknown as Record<
-        string,
-        unknown
-      >,
+      definition: byKey.template.definition,
     });
     return byKey.template.definition;
   }

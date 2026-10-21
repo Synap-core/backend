@@ -11,7 +11,11 @@
  *     canonicalize and hash the same way;
  *   - the fixture set is the one the CP pinned (FIXTURE_SET_SHA256 is the
  *     same constant in the CP's test): a drift on either side fails here or
- *     there.
+ *     there;
+ *   - the pod's own limits and patterns are the ones `contract.json` carries
+ *     from the CP's `formats.ts` (the ceremony tool pins the same file);
+ *   - every TEST-ONLY key the fixtures use is on the pod's deny list, which
+ *     the pod derives from the same labels.
  * The keys are derived from public labels — never trust them anywhere.
  */
 
@@ -20,19 +24,37 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
+  CATALOG_KEYS_MAX_BYTES,
+  CATALOG_KEYS_MAX_KEYS,
+  CATALOG_KEYS_MAX_LIFETIME_DAYS,
+  CATALOG_KEY_MAX_LIFETIME_DAYS,
+  ED25519_PUBLIC_KEY_PATTERN,
+  MARKETPLACE_CELL_SLUG_PATTERN,
+  MARKETPLACE_INDEX_MAX_BYTES,
+  MARKETPLACE_INDEX_MAX_PACKAGES,
+  MARKETPLACE_KIND_ALIASES,
+  MARKETPLACE_PACKAGE_KINDS,
+  MARKETPLACE_SIGNATURE_MAX_BYTES,
+  MARKETPLACE_SLUG_PATTERN,
   officialIndexSchema,
   type MarketplacePackageKind,
 } from "@synap-core/types/marketplace-source";
 import {
+  MARKETPLACE_INDEX_MAX_LIFETIME_DAYS,
   checkOfficialListing,
   officialContentHash,
   verifyKeysStatement,
   verifyOfficialIndex,
 } from "../marketplace-source-verify.js";
+import {
+  TEST_ONLY_CATALOG_KEY_LABELS,
+  TEST_ONLY_CATALOG_KEY_SEED_PREFIX,
+  TEST_ONLY_CATALOG_PUBLIC_KEYS,
+} from "../catalog-test-only-keys.js";
 
 const DIR = path.join(__dirname, "fixtures", "official-catalog-cp");
 const FIXTURE_SET_SHA256 =
-  "ab9f8bbe6aade74cede7a01992ef8590a86982c7bdd59e3430e9bee8193d8819";
+  "4b2967b1671b3d497cad347d4b28fdc0de3514ecc78b6d78c708444a972575c5";
 
 const read = (name: string) => readFileSync(path.join(DIR, name));
 const contract = JSON.parse(read("contract.json").toString()) as {
@@ -42,6 +64,8 @@ const contract = JSON.parse(read("contract.json").toString()) as {
   keysVersion: number;
   indexExpires: string;
   packageCount: number;
+  limits: Record<string, unknown>;
+  testOnlyKeys: { seedPrefix: string; labels: string[]; publicKeys: string[] };
 };
 const served = JSON.parse(read("served-definitions.json").toString()) as Array<{
   kind: MarketplacePackageKind;
@@ -172,6 +196,35 @@ describe("the Control Plane's signed catalog (TEST-ONLY fixtures)", () => {
         now: new Date(new Date(contract.indexExpires).getTime() + 1),
       })
     ).toMatchObject({ ok: false, reason: "expired" });
+  });
+
+  it("holds the same limits and patterns as the Control Plane and the ceremony tool", () => {
+    expect({
+      keyMaxLifetimeDays: CATALOG_KEY_MAX_LIFETIME_DAYS,
+      keysStatementMaxLifetimeDays: CATALOG_KEYS_MAX_LIFETIME_DAYS,
+      indexMaxLifetimeDays: MARKETPLACE_INDEX_MAX_LIFETIME_DAYS,
+      keysStatementMaxBytes: CATALOG_KEYS_MAX_BYTES,
+      keysStatementMaxKeys: CATALOG_KEYS_MAX_KEYS,
+      indexMaxBytes: MARKETPLACE_INDEX_MAX_BYTES,
+      indexMaxPackages: MARKETPLACE_INDEX_MAX_PACKAGES,
+      signatureMaxBytes: MARKETPLACE_SIGNATURE_MAX_BYTES,
+      slugPattern: MARKETPLACE_SLUG_PATTERN.source,
+      cellSlugPattern: MARKETPLACE_CELL_SLUG_PATTERN.source,
+      publicKeyPattern: ED25519_PUBLIC_KEY_PATTERN.source,
+      kinds: [...MARKETPLACE_PACKAGE_KINDS],
+      kindAliases: MARKETPLACE_KIND_ALIASES,
+    }).toEqual(contract.limits);
+  });
+
+  it("refuses every TEST-ONLY key the fixtures are signed with (one deny list, same labels)", () => {
+    expect(contract.testOnlyKeys).toEqual({
+      seedPrefix: TEST_ONLY_CATALOG_KEY_SEED_PREFIX,
+      labels: [...TEST_ONLY_CATALOG_KEY_LABELS],
+      publicKeys: [...TEST_ONLY_CATALOG_PUBLIC_KEYS],
+    });
+    for (const key of [...contract.rootKeys, contract.onlineKey]) {
+      expect(TEST_ONLY_CATALOG_PUBLIC_KEYS).toContain(key);
+    }
   });
 
   it("refuses a served definition changed after signing", () => {

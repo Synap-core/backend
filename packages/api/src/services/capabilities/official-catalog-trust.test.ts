@@ -382,6 +382,59 @@ describe("private capabilities — the owner door's exemption, and only that", (
     );
   });
 
+  it("the exemption is tied to the key asked for: a definition naming another key is refused", async () => {
+    signed(true);
+    authenticated();
+    for (const definition of [
+      { ...PRIVATE, key: "gmail-shadow" },
+      { ...PRIVATE, _meta: { slug: "gmail" } },
+    ]) {
+      cp({
+        owner: {
+          key: "arch-backend",
+          name: "Arch",
+          isPublic: false,
+          definition,
+        },
+      });
+      await expect(fetchCPCapabilityTemplate("arch-backend")).rejects.toThrow(
+        /names itself/
+      );
+    }
+  });
+
+  it("enforced: a private capability does not install while Synap's catalog is paused", async () => {
+    signed(true);
+    authenticated();
+    h.signature = { ...okStatus(), state: "bad_signature", message: "x" };
+    cp({
+      owner: {
+        key: "arch-backend",
+        name: "Arch",
+        isPublic: false,
+        definition: PRIVATE,
+      },
+    });
+    await expect(fetchCPCapabilityTemplate("arch-backend")).rejects.toThrow(
+      /paused/
+    );
+  });
+
+  it("report mode: a failed index pauses nothing, the private capability installs", async () => {
+    signed(false);
+    authenticated();
+    h.signature = { ...okStatus(), state: "bad_signature", message: "x" };
+    cp({
+      owner: {
+        key: "arch-backend",
+        name: "Arch",
+        isPublic: false,
+        definition: PRIVATE,
+      },
+    });
+    expect(await fetchCPCapabilityTemplate("arch-backend")).toEqual(PRIVATE);
+  });
+
   it("enforced: when the index cannot be read, the private answer is checked, not exempted", async () => {
     signed(true);
     authenticated();

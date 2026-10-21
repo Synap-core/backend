@@ -49,18 +49,22 @@ import {
   checkOfficialListing,
   ed25519PublicKey,
   keyFingerprint,
+  sha256Hex,
   verifyKeysStatement,
   verifyOfficialIndex,
 } from "./marketplace-source-verify.js";
+import { isTestOnlyCatalogKey } from "./catalog-test-only-keys.js";
 
 const logger = createLogger({ module: "official-catalog-signature" });
 
 /**
  * The root keys a release compiles in, checked when this module loads: none
  * (before the ceremony) or exactly two — the current root and the offline
- * standby — each a raw ed25519 public key (base64, 44 characters), distinct.
- * Anything else throws: a malformed root fails the tests and the boot, never
- * a release that silently reads as "not signed yet".
+ * standby — each a raw ed25519 public key (base64, 44 characters), distinct,
+ * and never one of the TEST-ONLY fixture keys (`catalog-test-only-keys.ts`:
+ * their private halves are public). Anything else throws: a malformed root
+ * fails the tests and the boot, never a release that silently reads as "not
+ * signed yet".
  */
 export function catalogRootKeys(keys: readonly string[]): readonly string[] {
   if (keys.length !== 0 && keys.length !== 2) {
@@ -78,6 +82,13 @@ export function catalogRootKeys(keys: readonly string[]): readonly string[] {
   if (new Set(keys).size !== keys.length) {
     throw new Error("SYNAP_CATALOG_ROOT_KEYS lists the same key twice.");
   }
+  keys.forEach((key, i) => {
+    if (isTestOnlyCatalogKey(key)) {
+      throw new Error(
+        `SYNAP_CATALOG_ROOT_KEYS[${i}] is a TEST-ONLY fixture key — its private half is public, so it is never a root.`
+      );
+    }
+  });
   return Object.freeze([...keys]);
 }
 
@@ -88,9 +99,7 @@ export function catalogRootKeys(keys: readonly string[]): readonly string[] {
  * ceremony: the pod then checks nothing and blocks nothing ("Synap's catalog
  * isn't signed yet"). A root change ships the new key here a release ahead.
  */
-export const SYNAP_CATALOG_ROOT_KEYS: readonly string[] = catalogRootKeys([
-  // "<current root public key>", "<standby root public key>",
-]);
+export const SYNAP_CATALOG_ROOT_KEYS: readonly string[] = catalogRootKeys([]);
 
 export interface OfficialCatalogTrust {
   /** What the index is checked against: the release's roots, the operator's keys, or nothing yet. */
@@ -103,6 +112,11 @@ export interface OfficialCatalogTrust {
   allowExpired: boolean;
   /** Operator keys that are not raw ed25519 keys (ignored, logged). */
   rejectedKeys: string[];
+  /**
+   * Operator keys that are TEST-ONLY fixture keys: never trusted (left out of
+   * `keys`), and every catalog sync records the refusal and checks nothing.
+   */
+  testOnlyKeys: string[];
 }
 
 function envFlag(value: string | undefined): boolean {
@@ -120,15 +134,19 @@ export function officialCatalogTrust(
     .filter(Boolean);
   const operator = listed.filter((k) => ed25519PublicKey(k) !== null);
   const rejectedKeys = listed.filter((k) => ed25519PublicKey(k) === null);
+  const testOnlyKeys = operator.filter(isTestOnlyCatalogKey);
   const enforce = envFlag(env.SYNAP_CATALOG_ENFORCE_SIGNATURE);
   const allowExpired = envFlag(env.SYNAP_CATALOG_ALLOW_EXPIRED);
+  // A TEST-ONLY key still makes the operator the anchor (never a silent fall
+  // back to "unsigned"), but it is never one of the keys trusted.
   if (operator.length > 0) {
     return {
       anchors: "operator",
-      keys: operator,
+      keys: operator.filter((k) => !isTestOnlyCatalogKey(k)),
       enforce,
       allowExpired,
       rejectedKeys,
+      testOnlyKeys,
     };
   }
   return {
@@ -137,6 +155,7 @@ export function officialCatalogTrust(
     enforce,
     allowExpired,
     rejectedKeys,
+    testOnlyKeys,
   };
 }
 
@@ -150,6 +169,14 @@ export function logOfficialCatalogTrust(trust: OfficialCatalogTrust): void {
     logger.error(
       { rejected: trust.rejectedKeys.length },
       "SYNAP_CATALOG_PUBLIC_KEYS holds values that are not raw ed25519 keys (base64) — they are ignored"
+    );
+  }
+  if (trust.testOnlyKeys.length > 0) {
+    logger.error(
+      {
+        testOnly: trust.testOnlyKeys.map((k) => keyFingerprint(k).slice(0, 32)),
+      },
+      TEST_ONLY_OPERATOR_KEY_MESSAGE
     );
   }
   if (trust.anchors === "operator") {
@@ -171,6 +198,10 @@ export function logOfficialCatalogTrust(trust: OfficialCatalogTrust): void {
     );
   }
 }
+
+/** What a sync records when `SYNAP_CATALOG_PUBLIC_KEYS` holds a TEST-ONLY key. */
+export const TEST_ONLY_OPERATOR_KEY_MESSAGE =
+  "SYNAP_CATALOG_PUBLIC_KEYS holds a TEST-ONLY fixture key, whose private half is public. It is never trusted: remove it. Until then Synap's catalog is not checked and counts as refused.";
 
 type SignedFile =
   | { ok: true; bytes: Uint8Array; signature: string | null }
@@ -251,6 +282,26 @@ export async function checkOfficialCatalogSignature(
   logOfficialCatalogTrust(trust);
   if (trust.anchors === "none") return null;
   const now = deps.now ?? new Date();
+  if (trust.testOnlyKeys.length > 0) {
+    // Loud at every sync, and the last verified index no longer counts: a
+    // pod set up with a public key is not a pod whose catalog is checked.
+    logger.error({ enforce: trust.enforce }, TEST_ONLY_OPERATOR_KEY_MESSAGE);
+    const refused: OfficialCatalogSignature = {
+      state: "invalid",
+      lastCheckAt: now.toISOString(),
+      lastOkAt: previous?.lastOkAt ?? null,
+      validUntil: previous?.validUntil ?? null,
+      keysVersion: previous?.keysVersion ?? null,
+      keyFingerprint: previous?.keyFingerprint ?? null,
+      packageCount: previous?.packageCount ?? 0,
+      unverifiedRows: previous?.unverifiedRows ?? null,
+      keysSha256: previous?.keysSha256 ?? null,
+      indexSha256: previous?.indexSha256 ?? null,
+      message: TEST_ONLY_OPERATOR_KEY_MESSAGE,
+    };
+    await recordOfficialCatalogSignature(refused);
+    return refused;
+  }
   const fetchImpl: SourceFetch = deps.fetchImpl ?? fetch;
   const kept: OfficialCatalogSignature = {
     state: "ok",
@@ -261,12 +312,15 @@ export async function checkOfficialCatalogSignature(
     keyFingerprint: previous?.keyFingerprint ?? null,
     packageCount: previous?.packageCount ?? 0,
     unverifiedRows: previous?.unverifiedRows ?? null,
+    keysSha256: previous?.keysSha256 ?? null,
+    indexSha256: previous?.indexSha256 ?? null,
     message: null,
   };
 
   const status = await (async (): Promise<OfficialCatalogSignature> => {
     let catalogKeys = trust.keys;
     let keysVersion: number | null = null;
+    let keysSha256: string | null = null;
     if (trust.anchors === "roots") {
       const keysFile = await fetchSignedFile(
         `${baseUrl}${OFFICIAL_KEYS_PATH}`,
@@ -281,6 +335,7 @@ export async function checkOfficialCatalogSignature(
         signature: keysFile.signature,
         rootKeys: trust.keys,
         lastVersion: previous?.keysVersion ?? null,
+        lastSha256: previous?.keysSha256 ?? null,
         allowExpired: trust.allowExpired,
         now,
       });
@@ -293,6 +348,7 @@ export async function checkOfficialCatalogSignature(
       }
       catalogKeys = keys.keys;
       keysVersion = keys.statement.version;
+      keysSha256 = sha256Hex(keysFile.bytes);
     }
 
     const indexFile = await fetchSignedFile(
@@ -308,6 +364,7 @@ export async function checkOfficialCatalogSignature(
       signature: indexFile.signature,
       trustedKeys: catalogKeys,
       lastAcceptedExpires: previous?.validUntil ?? null,
+      lastAcceptedSha256: previous?.indexSha256 ?? null,
       allowExpired: trust.allowExpired,
       now,
     });
@@ -348,6 +405,8 @@ export async function checkOfficialCatalogSignature(
       keysVersion,
       keyFingerprint: verdict.fingerprint,
       packageCount: verdict.index.packages.length,
+      keysSha256,
+      indexSha256: sha256Hex(indexFile.bytes),
     };
   })();
 

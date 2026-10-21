@@ -57,14 +57,17 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { readMarketplaceSources } from "@synap/database";
 import {
-  SYNAP_CATALOG_ROOT_KEYS,
   catalogRootKeys,
   checkOfficialCatalogSignature,
   officialCatalogTrust,
   reportUnverifiedOfficialRows,
   type OfficialCatalogTrust,
 } from "../official-catalog-signature.js";
-import { officialContentHash } from "../marketplace-source-verify.js";
+import {
+  officialContentHash,
+  sha256Hex,
+} from "../marketplace-source-verify.js";
+import { TEST_ONLY_CATALOG_PUBLIC_KEYS } from "../catalog-test-only-keys.js";
 
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
@@ -94,23 +97,32 @@ function signed(value: unknown, key: Key) {
   return { body, sig: sign(null, body, key.privateKey).toString("base64") };
 }
 
-function keysFile(version: number, signer: Key = ROOT) {
+function keysFile(
+  version: number,
+  signer: Key = ROOT,
+  online: string = CATALOG.publicKey,
+  notAfter = at(60)
+) {
   return signed(
     {
       schemaVersion: 1,
       version,
       expires: at(200),
-      keys: [{ publicKey: CATALOG.publicKey, notAfter: at(60) }],
+      keys: [{ publicKey: online, notAfter }],
     },
     signer
   );
 }
 
-function indexFile(signer: Key = CATALOG, contentHash = CAP_HASH) {
+function indexFile(
+  signer: Key = CATALOG,
+  contentHash = CAP_HASH,
+  name = "Synap"
+) {
   return signed(
     {
       schemaVersion: 1,
-      source: { id: "synap", name: "Synap", publicKey: signer.publicKey },
+      source: { id: "synap", name, publicKey: signer.publicKey },
       expires: at(14),
       packages: [
         {
@@ -149,6 +161,7 @@ const ROOTS: OfficialCatalogTrust = {
   enforce: false,
   allowExpired: false,
   rejectedKeys: [],
+  testOnlyKeys: [],
 };
 
 beforeAll(async () => {
@@ -211,6 +224,27 @@ describe("officialCatalogTrust", () => {
       enforce: true,
       allowExpired: true,
       rejectedKeys: ["not-a-key"],
+      testOnlyKeys: [],
+    });
+  });
+
+  it("never trusts a TEST-ONLY fixture key the operator set, and stays the anchor (no fall back to unsigned)", () => {
+    const [testRoot] = TEST_ONLY_CATALOG_PUBLIC_KEYS;
+    const op = officialCatalogTrust(
+      { SYNAP_CATALOG_PUBLIC_KEYS: `${testRoot}, ${CATALOG.publicKey}` },
+      []
+    );
+    expect(op).toMatchObject({
+      anchors: "operator",
+      keys: [CATALOG.publicKey],
+      testOnlyKeys: [testRoot],
+    });
+    expect(
+      officialCatalogTrust({ SYNAP_CATALOG_PUBLIC_KEYS: testRoot! }, [])
+    ).toMatchObject({
+      anchors: "operator",
+      keys: [],
+      testOnlyKeys: [testRoot],
     });
   });
 });
@@ -309,6 +343,127 @@ describe("checkOfficialCatalogSignature on PGlite", () => {
     expect(await digests()).toEqual([]);
   });
 
+  it("refuses at every sync while the operator set a TEST-ONLY key: recorded invalid, nothing fetched", async () => {
+    const { fetchImpl, calls } = served({
+      "/api/marketplace/synap-index.json": indexFile(),
+    });
+    const trust = officialCatalogTrust(
+      {
+        SYNAP_CATALOG_PUBLIC_KEYS: `${TEST_ONLY_CATALOG_PUBLIC_KEYS[2]},${CATALOG.publicKey}`,
+      },
+      []
+    );
+    const status = await checkOfficialCatalogSignature(BASE, null, {
+      fetchImpl,
+      now: NOW,
+      trust,
+    });
+    expect(status).toMatchObject({ state: "invalid", lastOkAt: null });
+    expect(status?.message).toMatch(/TEST-ONLY/);
+    expect(calls).toEqual([]);
+    expect((await readMarketplaceSources()).officialSignature?.state).toBe(
+      "invalid"
+    );
+  });
+
+  it("records the exact bytes it accepted, and a re-sync of the same files verifies again", async () => {
+    const files = {
+      "/api/marketplace/synap-catalog-keys.json": keysFile(3),
+      "/api/marketplace/synap-index.json": indexFile(),
+    };
+    const first = await checkOfficialCatalogSignature(BASE, null, {
+      fetchImpl: served(files).fetchImpl,
+      now: NOW,
+      trust: ROOTS,
+    });
+    expect(first).toMatchObject({
+      state: "ok",
+      keysSha256: sha256Hex(
+        files["/api/marketplace/synap-catalog-keys.json"].body
+      ),
+      indexSha256: sha256Hex(files["/api/marketplace/synap-index.json"].body),
+    });
+    const again = await checkOfficialCatalogSignature(BASE, first, {
+      fetchImpl: served(files).fetchImpl,
+      now: NOW,
+      trust: ROOTS,
+    });
+    expect(again?.state).toBe("ok");
+  });
+
+  it("refuses a different keys statement under the version already accepted (a redone first ceremony)", async () => {
+    const first = await checkOfficialCatalogSignature(BASE, null, {
+      fetchImpl: served({
+        "/api/marketplace/synap-catalog-keys.json": keysFile(1),
+        "/api/marketplace/synap-index.json": indexFile(),
+      }).fetchImpl,
+      now: NOW,
+      trust: ROOTS,
+    });
+    expect(first?.state).toBe("ok");
+    const other = keypair();
+    const second = await checkOfficialCatalogSignature(BASE, first, {
+      fetchImpl: served({
+        "/api/marketplace/synap-catalog-keys.json": keysFile(
+          1,
+          ROOT,
+          other.publicKey
+        ),
+        "/api/marketplace/synap-index.json": indexFile(other),
+      }).fetchImpl,
+      now: NOW,
+      trust: ROOTS,
+    });
+    expect(second).toMatchObject({
+      state: "replayed",
+      lastOkAt: first!.lastOkAt,
+    });
+    expect(second?.message).toMatch(/different catalog keys statement/);
+  });
+
+  it("refuses a different index under the expiry already accepted", async () => {
+    const keys = keysFile(3);
+    const first = await checkOfficialCatalogSignature(BASE, null, {
+      fetchImpl: served({
+        "/api/marketplace/synap-catalog-keys.json": keys,
+        "/api/marketplace/synap-index.json": indexFile(),
+      }).fetchImpl,
+      now: NOW,
+      trust: ROOTS,
+    });
+    const second = await checkOfficialCatalogSignature(BASE, first, {
+      fetchImpl: served({
+        "/api/marketplace/synap-catalog-keys.json": keys,
+        "/api/marketplace/synap-index.json": indexFile(
+          CATALOG,
+          CAP_HASH,
+          "Synap (other copy)"
+        ),
+      }).fetchImpl,
+      now: NOW,
+      trust: ROOTS,
+    });
+    expect(second?.state).toBe("replayed");
+    expect(second?.message).toMatch(/same expiry/);
+  });
+
+  it("refuses a keys statement that names a root key as an online key", async () => {
+    const status = await checkOfficialCatalogSignature(BASE, null, {
+      fetchImpl: served({
+        "/api/marketplace/synap-catalog-keys.json": keysFile(
+          1,
+          ROOT,
+          ROOT.publicKey
+        ),
+        "/api/marketplace/synap-index.json": indexFile(ROOT),
+      }).fetchImpl,
+      now: NOW,
+      trust: ROOTS,
+    });
+    expect(status?.state).toBe("invalid");
+    expect(status?.message).toMatch(/root key as an online key/);
+  });
+
   it("reports a Control Plane that serves no signed index yet as unreachable", async () => {
     const { fetchImpl } = served({
       "/api/marketplace/synap-catalog-keys.json": keysFile(1),
@@ -362,8 +517,7 @@ describe("checkOfficialCatalogSignature on PGlite", () => {
 });
 
 describe("SYNAP_CATALOG_ROOT_KEYS — compiled into the release", () => {
-  it("is empty until the ceremony, or exactly the two roots", () => {
-    expect([0, 2]).toContain(SYNAP_CATALOG_ROOT_KEYS.length);
+  it("takes none (before the ceremony) or exactly the two roots", () => {
     expect(catalogRootKeys([])).toEqual([]);
     const two = [ROOT.publicKey, CATALOG.publicKey];
     expect(catalogRootKeys(two)).toEqual(two);
@@ -385,6 +539,14 @@ describe("SYNAP_CATALOG_ROOT_KEYS — compiled into the release", () => {
     expect(() => catalogRootKeys([ROOT.publicKey, ROOT.publicKey])).toThrow(
       /twice/
     );
+  });
+
+  it("refuses every TEST-ONLY fixture key as a root", () => {
+    for (const testKey of TEST_ONLY_CATALOG_PUBLIC_KEYS) {
+      expect(() => catalogRootKeys([ROOT.publicKey, testKey])).toThrow(
+        /\[1\] is a TEST-ONLY fixture key/
+      );
+    }
   });
 });
 

@@ -232,7 +232,7 @@ export const MOBILE_FALLBACK = {
  * console page that covers it. The console says the same here, one tap
  * sooner, from the same table (`desktopPlaceWebAlternative`).
  */
-const RELAY_OPENABLE_KINDS: ReadonlySet<string> = new Set([
+export const RELAY_OPENABLE_KINDS: ReadonlySet<string> = new Set([
   "session",
   "automation",
   "playbook",

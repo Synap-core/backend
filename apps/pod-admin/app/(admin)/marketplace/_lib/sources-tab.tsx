@@ -357,14 +357,6 @@ function SourceDrawer({
             >
               {signing.text}
             </dd>
-            {source.official && (
-              <>
-                <dt className="text-foreground/65">Private</dt>
-                <dd className="leading-relaxed">
-                  {PRIVATE_CAPABILITY_TRUST_LINE}
-                </dd>
-              </>
-            )}
             {source.addedAt && (
               <>
                 <dt className="text-foreground/65">Added</dt>
@@ -372,6 +364,11 @@ function SourceDrawer({
               </>
             )}
           </dl>
+          {source.official && (
+            <p className="leading-relaxed text-foreground/65">
+              {PRIVATE_CAPABILITY_TRUST_LINE}
+            </p>
+          )}
 
           {source.official ? (
             <div className="flex flex-col gap-1.5">

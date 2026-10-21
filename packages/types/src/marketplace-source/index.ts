@@ -84,7 +84,9 @@ export type MarketplacePackageKind = (typeof MARKETPLACE_PACKAGE_KINDS)[number];
  * knows those words is not refused: `workspace` is a template, `workflow` an
  * automation.
  */
-const KIND_ALIASES: Record<string, MarketplacePackageKind> = {
+export const MARKETPLACE_KIND_ALIASES: Readonly<
+  Record<string, MarketplacePackageKind>
+> = {
   workspace: "template",
   workflow: "automation",
 };
@@ -104,8 +106,9 @@ export const httpsUrlSchema = z
 /** A raw 32-byte ed25519 public key, base64. */
 export const ED25519_PUBLIC_KEY_PATTERN = /^[A-Za-z0-9+/]{43}=$/;
 
-const SLUG = /^[a-z0-9][a-z0-9._-]{0,99}$/;
-const CELL_SLUG = /^[a-z0-9][a-z0-9._-]{0,99}\/[a-z0-9][a-z0-9._-]{0,99}$/;
+export const MARKETPLACE_SLUG_PATTERN = /^[a-z0-9][a-z0-9._-]{0,99}$/;
+export const MARKETPLACE_CELL_SLUG_PATTERN =
+  /^[a-z0-9][a-z0-9._-]{0,99}\/[a-z0-9][a-z0-9._-]{0,99}$/;
 
 const SHA256_HEX = z
   .string()
@@ -119,7 +122,7 @@ const ed25519KeySchema = z
 const indexPackageShape = {
   slug: z.string(),
   kind: z.preprocess(
-    (k) => (typeof k === "string" ? (KIND_ALIASES[k] ?? k) : k),
+    (k) => (typeof k === "string" ? (MARKETPLACE_KIND_ALIASES[k] ?? k) : k),
     z.enum(MARKETPLACE_PACKAGE_KINDS)
   ),
   version: z.string().min(1).max(100),
@@ -142,7 +145,9 @@ function checkPackageSlug(
   ctx: z.RefinementCtx
 ): void {
   const ok =
-    pkg.kind === "cell" ? CELL_SLUG.test(pkg.slug) : SLUG.test(pkg.slug);
+    pkg.kind === "cell"
+      ? MARKETPLACE_CELL_SLUG_PATTERN.test(pkg.slug)
+      : MARKETPLACE_SLUG_PATTERN.test(pkg.slug);
   if (!ok) {
     ctx.addIssue({
       code: "custom",
@@ -220,6 +225,8 @@ export const CATALOG_KEY_MAX_LIFETIME_DAYS = 90;
 /** The longest a keys statement may say it stays valid, from now. */
 export const CATALOG_KEYS_MAX_LIFETIME_DAYS = 366;
 export const CATALOG_KEYS_MAX_BYTES = 64 * 1024;
+/** A keys statement names 1 to this many online keys. */
+export const CATALOG_KEYS_MAX_KEYS = 8;
 
 /**
  * One listing of Synap's signed index. Same fields as any source, plus the
@@ -284,7 +291,7 @@ export const catalogKeysStatementSchema = z.object({
       })
     )
     .min(1)
-    .max(8),
+    .max(CATALOG_KEYS_MAX_KEYS),
 });
 export type CatalogKeysStatement = z.infer<typeof catalogKeysStatementSchema>;
 
@@ -294,13 +301,13 @@ export type CatalogKeysStatement = z.infer<typeof catalogKeysStatementSchema>;
  * the pod only through the authenticated owner door of the Control Plane
  * (`GET /internal/capabilities/:key`), so THAT connection is what it is
  * trusted by. Never a public catalog row: a key the signed index lists is
- * checked against it whatever door served it. The words logs and Marketplace
- * › Sources use for it:
+ * checked against it whatever door served it. The words logs use for it:
  */
 export const PRIVATE_CAPABILITY_TRUST =
   "private, verified by the Control Plane connection";
+/** The same rule, in the words Marketplace › Sources shows a person. */
 export const PRIVATE_CAPABILITY_TRUST_LINE =
-  "Private capabilities you own aren't in Synap's public signed index: they install private, verified by the Control Plane connection.";
+  "Private capabilities you own aren't in Synap's public catalog. They install through your Synap Cloud account.";
 
 /** Top-level fields of a served definition that are not its content. */
 export const NON_CONTENT_DEFINITION_FIELDS = [
@@ -381,6 +388,13 @@ export interface OfficialCatalogSignatureStatus {
   unverifiedRows: number | null;
   /** One plain sentence on the last attempt when it did not verify. */
   message: string | null;
+  /**
+   * sha256 of the exact bytes of the last verified keys statement and index:
+   * a later file under the same `keysVersion` / `validUntil` must be the same
+   * file. Absent on a status recorded before they were kept.
+   */
+  keysSha256?: string | null;
+  indexSha256?: string | null;
 }
 
 /**

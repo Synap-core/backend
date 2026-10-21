@@ -58,7 +58,7 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
-import { type AskAnswerValue, type Ask } from "@synap-core/types/ask";
+import { type AskAnswerValue } from "@synap-core/types/ask";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
 import { withoutServerOwnedSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
@@ -439,10 +439,10 @@ const BlockOutputBodySchema = z.object({
   ref: outputRefWireSchema.nullable().optional(),
   /**
    * HOW the person can answer (confirm / choose / form / act / provide) — the
-   * slot wire's own `ask` schema, not a copy. `null` clears; omitted leaves it.
-   * Explicit type annotation preserves discriminated union inference.
+   * slot wire's own `ask` schema (`AskSchema`), the same one tRPC
+   * `blockOutput` parses with. `null` clears; omitted leaves it.
    */
-  ask: z.custom<Ask>().nullable().optional(),
+  ask: expectedOutputWireSchema.shape.ask,
 });
 
 const UnblockOutputBodySchema = z.object({

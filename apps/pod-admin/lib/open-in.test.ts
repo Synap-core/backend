@@ -8,6 +8,7 @@ import {
   PHONE_UNAVAILABLE_NOTE,
   objectWebAlternative,
   publisherExit,
+  RELAY_OPENABLE_KINDS,
 } from "./open-in";
 
 const ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -404,5 +405,23 @@ describe("publisherExit — a showcase listing's own page", () => {
     ]) {
       expect(publisherExit(bad)).toBeNull();
     }
+  });
+});
+
+describe("RELAY_OPENABLE_KINDS — what a phone may be handed", () => {
+  it("is exactly the kinds relay pins as having a screen", () => {
+    // Literal on purpose: relay's `test/console-relay-kinds.test.ts` carries the
+    // same list and checks each opens a screen there. Change both together.
+    expect([...RELAY_OPENABLE_KINDS]).toEqual([
+      "session",
+      "automation",
+      "playbook",
+      "owed",
+      "proposal",
+      "entity",
+      "document",
+      "project",
+      "agent",
+    ]);
   });
 });
