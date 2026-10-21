@@ -102,6 +102,8 @@ the connection's lens). A kind another space needs: `synap_change_kind_scope`
 (`scope: "shared"` + `allowedWorkspaceIds`), never a twin kind. Records:
 `synap_move_entities`. All three are reviewed.
 
+**Removing one: `synap_delete_entity`** (`entityId`, optional `reasoning`). For an agent it is always a proposal — nothing is deleted until the person approves, and no rule can widen that. An approved delete hides the entity (its body is kept) and the person can undo it from the proposal. Do not retry a `proposed` answer.
+
 ### Authored text is content, not a `file`
 
 Something **you** author — a pitch deck, a strategic plan, a note body — is
