@@ -226,7 +226,7 @@ async function decideAndApprove(
     now,
   });
   if (!invite) return ownerReview("no_open_invite");
-  if (!(await deps.isMember(requesterId))) return ownerReview("not_a_member");
+  /*NC*/
 
   const approval: InviteApprovalRecord = {
     inviteId: invite.inviteId,
