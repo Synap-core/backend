@@ -482,8 +482,9 @@ export const entitiesRouter = router({
          * Attach an EXISTING document as the entity's body — the re-attach
          * door for an orphaned document (decision B9g). Same procedure,
          * same governance as every other field: scope/ownership and the body
-         * rule are checked by `entities.update`, and an agent REPLACING a body
-         * always files a proposal. Undo puts the previous body back.
+         * rule are checked by `entities.update`: a document from another
+         * space is refused, and every attach files a proposal (a body is
+         * shown to the record's readers). Undo puts the previous body back.
          */
         documentId: z.string().uuid().optional(),
         /** Required to replace a body the entity already has (else CONFLICT naming it). */

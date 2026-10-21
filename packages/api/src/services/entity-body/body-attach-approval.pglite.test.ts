@@ -399,8 +399,9 @@ describe("a proposed ATTACH onto an entity with no body", () => {
     const entityId = await insertEntity(null);
     const doc = await insertDocument("Orphaned notes");
     const proposalId = await agentProposes({ id: entityId, documentId: doc });
-    // A plain attach is not force-proposed: the ordinary lane decides it.
-    expect(holder.gateCalls.at(-1)!.forcePropose).toBe(false);
+    // Every AI attach is reviewed (FB1020 review M2): a body is handed to the
+    // entity's readers, so it never rides the ordinary auto-approve lane.
+    expect(holder.gateCalls.at(-1)!.forcePropose).toBe(true);
 
     await approve(proposalId);
     expect(await bodyOf(entityId)).toBe(doc);

@@ -79,6 +79,7 @@ import { idempotencyWindowSeconds } from "../../utils/write-door-idempotency.js"
 import { createLogger } from "@synap-core/core";
 import { entityWriteVisibleWhere, toApiEntity } from "./helpers.js";
 import { assertDocumentAttachable } from "./mutate.js";
+import { isAiWriteRequest } from "../../utils/ai-write.js";
 import { entitiesRouter } from "../entities.js";
 import { entityBodyDocumentIdFrom } from "../../utils/store-entity-source-blob.js";
 import { computeEntityPropertyDiff } from "../../utils/entity-property-diff.js";
@@ -1171,7 +1172,8 @@ export const createProcs = {
         await assertDocumentAttachable(
           ctx.userId,
           { id: entityId, workspaceId: resolvedEntityWorkspaceId ?? null },
-          input.documentId
+          input.documentId,
+          { aiWrite: isAiWriteRequest(input) }
         );
       }
 
