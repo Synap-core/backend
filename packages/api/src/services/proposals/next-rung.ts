@@ -31,6 +31,7 @@ import {
 } from "@synap/database";
 import { users } from "@synap/database/schema";
 import {
+  OWN_ORGANISE_CLASS_PATTERN,
   REVERSIBLE_CLASS_PATTERN,
   isReversibleWrite,
   nonWidenableFloorFor,
@@ -92,10 +93,21 @@ function receiptRuleId(
 }
 
 /**
+ * The pod DEFAULTS' class rows — seeded by the pod, switchable in Settings ›
+ * Approvals, never a rule a person wrote. A receipt one of them decided is
+ * "do + tell", not "a rule you set" (FB1020 w2 plan FBD-3: `@own-organise`
+ * receipts read as the person's own rule).
+ */
+const POD_DEFAULT_CLASS_PATTERNS: ReadonlySet<string> = new Set([
+  REVERSIBLE_CLASS_PATTERN,
+  OWN_ORGANISE_CLASS_PATTERN,
+]);
+
+/**
  * Stamp `grantedByRule` on receipts: TRUE when the rule that executed it is a
- * person's standing rule ("just do it"), FALSE when it was the pod default's
- * `@reversible` class row or no rule at all ("do + tell"). A rule since
- * revoked still counts — the receipt records what decided it THEN.
+ * person's standing rule ("just do it"), FALSE when it was a pod default's
+ * class row (`@reversible`, `@own-organise`) or no rule at all ("do + tell").
+ * A rule since revoked still counts — the receipt records what decided it THEN.
  */
 export async function resolveGrantedByRule(
   rows: NextRungRow[]
@@ -113,7 +125,7 @@ export async function resolveGrantedByRule(
       .from(governanceRules)
       .where(inArray(governanceRules.id, ruleIds));
     for (const r of rules) {
-      if (r.targetPattern !== REVERSIBLE_CLASS_PATTERN) specific.add(r.id);
+      if (!POD_DEFAULT_CLASS_PATTERNS.has(r.targetPattern)) specific.add(r.id);
     }
   }
   return rows.map((row) => {
