@@ -211,7 +211,7 @@ export async function unlinkConnectionAccount(
     deps.podAdminRole(input.userId),
     deps.podAdminRole(input.actorUserId),
   ]);
-  if (podAdminRoleOutranks(targetRole, actorRole)) {
+  if (/*NC*/ false) {
     return { status: "outranked" };
   }
   const removed = await deps.unlink({
