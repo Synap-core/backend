@@ -1034,6 +1034,43 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "agent_user_id",
     addedBy: "0313_apps_agent_user.sql",
   },
+  // Pod app connections (0338b). Every app read selects `oauth_client_id`
+  // (Drizzle names every column), every code issue / claim writes / reads
+  // `app_id`, and every client read selects `requested_templates`: without
+  // them every app door and the whole OAuth door 500, the MCP flow included.
+  {
+    table: "apps",
+    column: "oauth_client_id",
+    addedBy: "0338b_pod_app_oauth_apps.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "app_id",
+    addedBy: "0338b_pod_app_oauth_apps.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "requested_templates",
+    addedBy: "0338b_pod_app_oauth_apps.sql",
+  },
+  // Pod app refresh tokens (0339). /token's refresh grant and /revoke read
+  // and write them, and revoking an app revokes them: without the table the
+  // pod app refresh grant, a pod app's /token and every app revoke 500.
+  {
+    table: "oauth_refresh_tokens",
+    column: "token_hash",
+    addedBy: "0339_oauth_refresh_tokens.sql",
+  },
+  {
+    table: "oauth_refresh_tokens",
+    column: "family_id",
+    addedBy: "0339_oauth_refresh_tokens.sql",
+  },
+  {
+    table: "oauth_refresh_tokens",
+    column: "last_used_at",
+    addedBy: "0339_oauth_refresh_tokens.sql",
+  },
   // Computers (0320, MACHINE-IDENTITY-PLAN): the host link every governed
   // agent write reads (host step), and the class principal column both rule
   // stores select. Missing means every agent write would 42703.

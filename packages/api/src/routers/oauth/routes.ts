@@ -21,6 +21,10 @@
  *   6. POST /token      (PKCE S256 verifier enforced)
  *   7. POST /revoke     (RFC 7009 — the holder of a key retires it)
  *
+ * A pod app (CIMD client, spec 17) walks 5–7 too, and its /token answer adds a
+ * rotating refresh token (`grant_type=refresh_token`, refresh.ts). An MCP
+ * (DCR) client never gets one: its key lives 90 days.
+ *
  * NOTE: the SDK's own OAuth helpers (`@modelcontextprotocol/sdk` 1.29.0,
  * `server/auth/*`) are Express-shaped — they take `express.RequestHandler` and
  * mutate `res`. The pod is Hono, so they are unusable here and this module
@@ -40,7 +44,14 @@ import { createLogger } from "@synap-core/core";
 
 import { db, eq, users } from "@synap/database";
 
+import { TRPCError } from "@trpc/server";
+
 import { provisionSurfaceAgentKey } from "../../services/agent-identity-service.js";
+import {
+  isPodAppAgent,
+  mintAppOAuthAccessKey,
+  type AppOAuthAccessKey,
+} from "../../services/app-connect.js";
 import { apiKeyService } from "../../services/api-keys.js";
 import { AGENT_KEY_TTL_DAYS } from "../../services/hub-integration-registration.js";
 import { configuredPodAdminConsentUrl } from "../../utils/pod-admin-url.js";
@@ -73,6 +84,14 @@ import {
   validateDcrRequest,
   verifyPkce,
 } from "./protocol.js";
+import {
+  RefreshTokenReuseError,
+  findRefreshToken,
+  redeemRefreshToken,
+  revokeRefreshFamily,
+  rotateRefreshToken,
+  startRefreshFamily,
+} from "./refresh.js";
 import { claimAuthorizationCode, findClient, insertClient } from "./store.js";
 
 /** See the `: any` rationale in hub-protocol/rest/_shared.ts (TS2742). */
@@ -336,6 +355,99 @@ async function readTokenParams(
   return Object.fromEntries(new URLSearchParams(raw));
 }
 
+/**
+ * A pod app's access key for a connection: re-derived from the connection's
+ * CURRENT approval every time (`mintAppOAuthAccessKey`). Revoked, nothing
+ * approved, not this person's connection: the grant is gone (`invalid_grant`).
+ */
+async function mintAppKey(connection: {
+  clientId: string;
+  userId: string;
+  appId: string;
+}): Promise<AppOAuthAccessKey> {
+  try {
+    return await mintAppOAuthAccessKey({
+      appId: connection.appId,
+      ownerUserId: connection.userId,
+      oauthClientId: connection.clientId,
+      instanceId: oauthKeyInstanceId(connection.clientId, connection.userId),
+    });
+  } catch (err) {
+    if (err instanceof TRPCError && err.code !== "INTERNAL_SERVER_ERROR") {
+      throw new OAuthError("invalid_grant", err.message);
+    }
+    throw err;
+  }
+}
+
+/** A pod app's token response (spec 17 §6.6), for a code and a refresh alike. */
+function appTokenResponse(minted: AppOAuthAccessKey, refreshToken: string) {
+  return {
+    access_token: minted.accessToken,
+    token_type: "Bearer",
+    expires_in: Math.max(
+      0,
+      Math.floor((minted.expiresAt.getTime() - Date.now()) / 1000)
+    ),
+    refresh_token: refreshToken,
+    scope: [...new Set(minted.grant.map((g) => g.permission))].join(" "),
+    // Synap extension (spec 17 §6.6): what the token reaches and for whom,
+    // so the app can say "Connected as …" without another call.
+    synap_grant: minted.grant,
+    synap_user: minted.user,
+  };
+}
+
+/**
+ * `grant_type=refresh_token` (RFC 6749 §6), pod apps only: redeem the token
+ * (single-use; a reuse revokes its family and the live key), mint a key from
+ * the connection's CURRENT approval, then issue the successor. A `scope`
+ * parameter is ignored: what the key reaches is the approval, never the
+ * request. Every refusal of the token itself is one `invalid_grant`.
+ */
+async function exchangeAppRefreshToken(params: Record<string, string>) {
+  if (!params.refresh_token) {
+    throw new OAuthError("invalid_request", "refresh_token is required");
+  }
+  if (!params.client_id) {
+    throw new OAuthError("invalid_request", "client_id is required");
+  }
+  const client = await findClient(params.client_id);
+  if (!client) throw new OAuthError("invalid_client", "Unknown client");
+  if (client.clientKind !== "cimd") {
+    // An MCP (DCR) client is issued no refresh token (spec 17 §6.6).
+    throw new OAuthError(
+      "unauthorized_client",
+      "This client may not use the refresh_token grant"
+    );
+  }
+  let redeemed;
+  try {
+    redeemed = await redeemRefreshToken(params.refresh_token, client.clientId);
+  } catch (err) {
+    if (err instanceof RefreshTokenReuseError) {
+      logger.warn(
+        { clientId: client.clientId, familyId: err.familyId },
+        "pod-oauth: refresh token reused — its family and the live key are revoked"
+      );
+    }
+    throw err;
+  }
+  const minted = await mintAppKey(redeemed);
+  const refreshToken = await rotateRefreshToken(redeemed);
+  logger.info(
+    {
+      clientId: client.clientId,
+      podUserId: redeemed.userId,
+      keyId: minted.keyId,
+      agentUserId: minted.agentUserId,
+      appId: minted.publicId,
+    },
+    "pod-oauth: pod app access token refreshed"
+  );
+  return appTokenResponse(minted, refreshToken);
+}
+
 oauthApp.post("/token", async (c) => {
   // RFC 6749 §5.1 — a token response must never be cached.
   c.header("Cache-Control", "no-store");
@@ -358,10 +470,13 @@ oauthApp.post("/token", async (c) => {
   }
 
   try {
+    if (params.grant_type === "refresh_token") {
+      return c.json(await exchangeAppRefreshToken(params));
+    }
     if (params.grant_type !== "authorization_code") {
       throw new OAuthError(
         "unsupported_grant_type",
-        'Only grant_type "authorization_code" is supported'
+        'Only grant_type "authorization_code" or "refresh_token" is supported'
       );
     }
     if (!params.code) {
@@ -429,14 +544,37 @@ oauthApp.post("/token", async (c) => {
       }
     }
 
-    // A pod app (CIMD client) is never minted the shared `claude-web*` agent
-    // (spec 17 I3): its key belongs to the app's OWN agent, which wave PB2
-    // mints. Until then its code redeems to nothing.
+    // A pod app (CIMD client) is NEVER minted the shared `claude-web*` agent
+    // (spec 17 I3): its key belongs to the app's OWN agent for this person,
+    // carrying exactly what the person approved at consent, for 1 h.
     if (client.clientKind === "cimd") {
-      throw new OAuthError(
-        "unauthorized_client",
-        "This pod cannot issue tokens to app clients yet"
+      if (!claimed.appId) {
+        // A code from before PB2 (or a DCR-shaped issue) names no approval.
+        throw new OAuthError(
+          "invalid_grant",
+          "This authorization names no approved app connection"
+        );
+      }
+      const connection = {
+        clientId: claimed.clientId,
+        userId: claimed.userId,
+        appId: claimed.appId,
+      };
+      const minted = await mintAppKey(connection);
+      // A new family; the connection's older ones end (one live family per
+      // connection, as it has one live key).
+      const refreshToken = await startRefreshFamily(connection);
+      logger.info(
+        {
+          clientId: claimed.clientId,
+          podUserId: claimed.userId,
+          keyId: minted.keyId,
+          agentUserId: minted.agentUserId,
+          appId: minted.publicId,
+        },
+        "pod-oauth: pod app access token issued"
       );
+      return c.json(appTokenResponse(minted, refreshToken));
     }
 
     // ── Mint the access token: an `api_keys` row, via the ONE door. ──────────
@@ -554,6 +692,60 @@ oauthApp.post("/token", async (c) => {
 // Keys minted by the legacy consent-code path (`mcp:` instance) carry no
 // client binding, so possession alone retires them — that is how the Control
 // Plane retires a grant it holds whichever door minted it.
+//
+// A pod app's REFRESH token is accepted too (spec 17 §6.7): its whole family
+// and the connection's live access key are revoked. `token_type_hint` only
+// orders the two lookups (§2.1): a miss on the hinted kind tries the other.
+
+/**
+ * The keys this AS mints, and so the only ones /revoke may retire: held by a
+ * `claude-web*` agent (an MCP client), or by the agent of a pod app
+ * connection (an `apps` row with mode 'oauth', `isPodAppAgent`).
+ */
+async function isOAuthMintedKey(
+  keyUserId: string,
+  owner: { userType: string | null; agentType: string | null } | undefined
+): Promise<boolean> {
+  if (owner?.userType !== "agent") return false;
+  if (
+    (OAUTH_REVOCABLE_AGENT_TYPES as readonly string[]).includes(
+      owner.agentType ?? ""
+    )
+  ) {
+    return true;
+  }
+  return isPodAppAgent(keyUserId);
+}
+
+const UNAUTHORIZED_REVOKE = {
+  error: "unauthorized_client",
+  error_description: "The token was not issued to this client",
+} as const;
+
+/**
+ * Revoke `presented` if it is one of this AS's refresh tokens: "revoked",
+ * "wrong_client" (bound to another client, §2.1), or null when it is not one.
+ */
+async function revokeAsRefreshToken(
+  presented: string,
+  clientId: string | undefined
+): Promise<"revoked" | "wrong_client" | null> {
+  const token = await findRefreshToken(presented);
+  if (!token) return null;
+  if (clientId && clientId !== token.clientId) {
+    logger.warn(
+      { familyId: token.familyId, clientId },
+      "pod-oauth: /revoke of a refresh token by a client it was not issued to"
+    );
+    return "wrong_client";
+  }
+  await revokeRefreshFamily(token, "OAuth token revocation (RFC 7009)");
+  logger.info(
+    { familyId: token.familyId, clientId: token.clientId },
+    "pod-oauth: refresh token family revoked"
+  );
+  return "revoked";
+}
 
 oauthApp.post("/revoke", async (c) => {
   c.header("Cache-Control", "no-store");
@@ -580,21 +772,29 @@ oauthApp.post("/revoke", async (c) => {
   }
 
   try {
+    const refreshFirst = params.token_type_hint === "refresh_token";
+    if (refreshFirst) {
+      const done = await revokeAsRefreshToken(presented, params.client_id);
+      if (done === "wrong_client") return c.json(UNAUTHORIZED_REVOKE, 400);
+      if (done === "revoked") return c.body(null, 200);
+    }
     const status = await apiKeyService.getApiKeyStatus(presented);
     // Only a LIVE key has anything to revoke; every other state is already the
-    // outcome the client asked for.
-    if (status.status !== "valid") return c.body(null, 200);
+    // outcome the client asked for — unless it is a refresh token.
+    if (status.status !== "valid") {
+      if (!refreshFirst) {
+        const done = await revokeAsRefreshToken(presented, params.client_id);
+        if (done === "wrong_client") return c.json(UNAUTHORIZED_REVOKE, 400);
+      }
+      return c.body(null, 200);
+    }
     const key = status.record;
 
     const owner = await db.query.users.findFirst({
       where: eq(users.id, key.userId),
       columns: { userType: true, agentType: true },
     });
-    const revocable =
-      owner?.userType === "agent" &&
-      (OAUTH_REVOCABLE_AGENT_TYPES as readonly string[]).includes(
-        owner.agentType ?? ""
-      );
+    const revocable = await isOAuthMintedKey(key.userId, owner);
     if (!revocable) {
       logger.warn(
         { keyId: key.id },
@@ -610,13 +810,7 @@ oauthApp.post("/revoke", async (c) => {
         { keyId: key.id, clientId: params.client_id },
         "pod-oauth: /revoke by a client the token was not issued to"
       );
-      return c.json(
-        {
-          error: "unauthorized_client",
-          error_description: "The token was not issued to this client",
-        },
-        400
-      );
+      return c.json(UNAUTHORIZED_REVOKE, 400);
     }
 
     // The ONE revoke door (drops the verification cache, so the key stops

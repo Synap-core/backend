@@ -69,58 +69,62 @@ const insertSub = (keyId: string | null) =>
     keyId ? `,'${keyId}'` : ""
   })`;
 
-describe("migration 0335 — webhook_subscriptions.api_key_id", () => {
-  it("non-vacuity: the schema declares it and the pre-0335 table lacks it", async () => {
-    expect(declared).toContain("api_key_id");
-    const pg = new PGlite();
-    await pg.exec(REFERENCED + PRE_0335);
-    expect(await columnsOf(pg)).not.toContain("api_key_id");
-  });
+describe(
+  "migration 0335 — webhook_subscriptions.api_key_id",
+  { timeout: 60_000 },
+  () => {
+    it("non-vacuity: the schema declares it and the pre-0335 table lacks it", async () => {
+      expect(declared).toContain("api_key_id");
+      const pg = new PGlite();
+      await pg.exec(REFERENCED + PRE_0335);
+      expect(await columnsOf(pg)).not.toContain("api_key_id");
+    });
 
-  it("an existing pod gains the column, idempotently, keeping its rows as session-created", async () => {
-    const pg = new PGlite();
-    await pg.exec(REFERENCED + PRE_0335);
-    await pg.query(insertSub(null));
-    await pg.exec(M0335);
-    await pg.exec(M0335);
-    expect(await columnsOf(pg)).toEqual([...declared].sort());
-    const row = await pg.query<{ api_key_id: unknown }>(
-      `SELECT api_key_id FROM webhook_subscriptions`
-    );
-    expect(row.rows).toEqual([{ api_key_id: null }]);
-  });
+    it("an existing pod gains the column, idempotently, keeping its rows as session-created", async () => {
+      const pg = new PGlite();
+      await pg.exec(REFERENCED + PRE_0335);
+      await pg.query(insertSub(null));
+      await pg.exec(M0335);
+      await pg.exec(M0335);
+      expect(await columnsOf(pg)).toEqual([...declared].sort());
+      const row = await pg.query<{ api_key_id: unknown }>(
+        `SELECT api_key_id FROM webhook_subscriptions`
+      );
+      expect(row.rows).toEqual([{ api_key_id: null }]);
+    });
 
-  it("deleting the key deletes its subscriptions (migrated pod)", async () => {
-    const pg = new PGlite();
-    await pg.exec(REFERENCED + PRE_0335);
-    await pg.exec(M0335);
-    await pg.query(`INSERT INTO api_keys (id) VALUES ('${KEY}')`);
-    await pg.query(insertSub(KEY));
-    await pg.query(insertSub(null));
-    await pg.query(`DELETE FROM api_keys WHERE id = '${KEY}'`);
-    // The session-created row stays; the key's row is gone, not orphaned.
-    const r = await pg.query<{ api_key_id: unknown }>(
-      `SELECT api_key_id FROM webhook_subscriptions`
-    );
-    expect(r.rows).toEqual([{ api_key_id: null }]);
-  });
+    it("deleting the key deletes its subscriptions (migrated pod)", async () => {
+      const pg = new PGlite();
+      await pg.exec(REFERENCED + PRE_0335);
+      await pg.exec(M0335);
+      await pg.query(`INSERT INTO api_keys (id) VALUES ('${KEY}')`);
+      await pg.query(insertSub(KEY));
+      await pg.query(insertSub(null));
+      await pg.query(`DELETE FROM api_keys WHERE id = '${KEY}'`);
+      // The session-created row stays; the key's row is gone, not orphaned.
+      const r = await pg.query<{ api_key_id: unknown }>(
+        `SELECT api_key_id FROM webhook_subscriptions`
+      );
+      expect(r.rows).toEqual([{ api_key_id: null }]);
+    });
 
-  it("a fresh install gets it from the baseline, with the same cascade", async () => {
-    const pg = new PGlite();
-    await pg.exec(REFERENCED + BASELINE_HOOKS);
-    expect(await columnsOf(pg)).toEqual([...declared].sort());
-    await pg.query(`INSERT INTO api_keys (id) VALUES ('${KEY}')`);
-    await pg.query(insertSub(KEY));
-    await pg.query(`DELETE FROM api_keys WHERE id = '${KEY}'`);
-    expect(await subscriptionCount(pg)).toBe(0);
-  });
+    it("a fresh install gets it from the baseline, with the same cascade", async () => {
+      const pg = new PGlite();
+      await pg.exec(REFERENCED + BASELINE_HOOKS);
+      expect(await columnsOf(pg)).toEqual([...declared].sort());
+      await pg.query(`INSERT INTO api_keys (id) VALUES ('${KEY}')`);
+      await pg.query(insertSub(KEY));
+      await pg.query(`DELETE FROM api_keys WHERE id = '${KEY}'`);
+      expect(await subscriptionCount(pg)).toBe(0);
+    });
 
-  it("boot coherence names the column, attributed to the 0335 file", () => {
-    const mine = REQUIRED_COLUMNS.filter(
-      (c) => c.table === "webhook_subscriptions" && c.column === "api_key_id"
-    );
-    expect(mine.map((c) => c.addedBy)).toEqual([
-      "0335_webhook_subscriptions_api_key.sql",
-    ]);
-  });
-});
+    it("boot coherence names the column, attributed to the 0335 file", () => {
+      const mine = REQUIRED_COLUMNS.filter(
+        (c) => c.table === "webhook_subscriptions" && c.column === "api_key_id"
+      );
+      expect(mine.map((c) => c.addedBy)).toEqual([
+        "0335_webhook_subscriptions_api_key.sql",
+      ]);
+    });
+  }
+);

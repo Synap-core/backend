@@ -1324,9 +1324,9 @@ export const apiKeysRouter = router({
    */
   getOAuthConsentContext: protectedProcedure
     .input(oauthAuthorizeParamsSchema)
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       try {
-        return await getOAuthConsentContext(input);
+        return await getOAuthConsentContext(input, ctx.userId);
       } catch (err) {
         throw toConsentTrpcError(err);
       }
@@ -1345,10 +1345,25 @@ export const apiKeysRouter = router({
    * become an open redirect.
    */
   decideOAuthAuthorization: protectedProcedure
-    .input(oauthAuthorizeParamsSchema.extend({ approve: z.boolean() }))
+    .input(
+      oauthAuthorizeParamsSchema.extend({
+        approve: z.boolean(),
+        // A pod app: the (permission, space) pairs the person left ticked.
+        // Untrusted — the pod's own offer bounds it (`connectOAuthApp`).
+        approved: z
+          .array(
+            z.object({
+              permission: z.string().min(1).max(200),
+              workspaceId: z.string().uuid(),
+            })
+          )
+          .max(512)
+          .optional(),
+      })
+    )
     .mutation(async ({ input, ctx }) => {
       try {
-        const result = await decideOAuthAuthorization(input, ctx.userId);
+        const result = await decideOAuthAuthorization(input, ctx.userId, ctx);
         auditLog({
           subjectType: "apiKey",
           action: "create",

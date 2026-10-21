@@ -59,11 +59,11 @@ const MINT_SITES: Record<string, string> = {
   "packages/api/src/routers/hub-protocol/rest/mcp-redeem.ts":
     "/mcp/redeem — CP-asserted one-time code → provisionSurfaceAgentKey.",
   "packages/api/src/routers/oauth/routes.ts":
-    "OAuth /token — authorization code → provisionSurfaceAgentKey.",
+    "OAuth /token — an MCP (DCR) client's authorization code → provisionSurfaceAgentKey; a pod app's code or refresh token (PB3, refresh.ts) goes to app-connect's mintAppOAuthAccessKey.",
   "packages/api/src/routers/hub-protocol/rest/agent-users.ts":
     "POST /agent-users — human session only; 403 for an agent key (2026-10-06).",
   "packages/api/src/services/app-connect.ts":
-    "issueKey — behind POST /apps/:id/key AND tRPC apps.issueKey (App Connect, one service). Runs ONLY after the app/connect proposal is approved; owner-only; refuses an agent principal (else an agent key owned by the same human would pass the owner test) AND a grant-bound key (an app key must never mint app keys); mints the app's user_pat and attaches one grant per approved workspace (client_id = app.public_id).",
+    "issueKey — behind POST /apps/:id/key AND tRPC apps.issueKey (App Connect, one service). Runs ONLY after the app/connect proposal is approved; owner-only; refuses an agent principal (else an agent key owned by the same human would pass the owner test) AND a grant-bound key (an app key must never mint app keys); mints the app's user_pat and attaches one grant per approved workspace (client_id = app.public_id). mintAppOAuthAccessKey — behind OAuth /token for a pod app (CIMD client) only, after the person's consent approved that app's app/connect request, or at a refresh of that connection (re-derived from the CURRENT approval): a 1 h hub_inbound key held by the app's OWN agent (never claude-web*), one grant per approved workspace, expiring with it.",
   "packages/api/src/routers/hub-protocol/rest/keys.ts":
     "/keys/rotate-cli — hub_inbound read+write keys only, keeps expiry (2026-10-06).",
   "apps/api/src/routers/provision.ts":
@@ -271,6 +271,8 @@ const DELETE_SITES: Record<string, string> = {
     "IS re-provision — revokeApiKeys runs first, then the replaced rows are removed.",
   "packages/database/src/repositories/api-key-repository.ts":
     "ApiKeyRepository.delete — no caller today; route a new caller through revokeApiKeys first.",
+  "packages/api/src/services/app-connect.ts":
+    "sweepDeadOAuthKeys (PB3 GC) — deletes a pod app connection's keys that are already REVOKED (is_active = false) only, beyond the newest two; their grants cascade.",
 };
 const DELETE_CALL = /\.delete\(apiKeys\)|DELETE FROM api_keys/;
 const deleting = new Set<string>();

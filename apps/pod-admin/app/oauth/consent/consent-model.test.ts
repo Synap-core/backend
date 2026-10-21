@@ -1,0 +1,98 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  initialSelection,
+  isTicked,
+  permissionLabel,
+  toApproved,
+  toggle,
+  withoutSpace,
+  type OfferedPermission,
+} from "./consent-model";
+
+const OFFER: OfferedPermission[] = [
+  {
+    permission: "entity.post.read",
+    workspaces: [
+      { workspaceId: "brand", workspaceName: "Brand" },
+      { workspaceId: "shared", workspaceName: "Shared" },
+    ],
+  },
+  {
+    permission: "entity.post.create",
+    workspaces: [{ workspaceId: "brand", workspaceName: "Brand" }],
+  },
+  { permission: "document.update", workspaces: [] },
+];
+
+describe("consent selection — narrow only", () => {
+  it("first consent: a permission with one space starts ticked, several start unticked", () => {
+    const s = initialSelection(OFFER, []);
+    expect(toApproved(s, OFFER)).toEqual([
+      { permission: "entity.post.create", workspaceId: "brand" },
+    ]);
+  });
+
+  it("re-consent pre-ticks the current approval, dropping what is no longer on offer", () => {
+    const s = initialSelection(OFFER, [
+      { permission: "entity.post.read", workspaceId: "shared" },
+      { permission: "entity.post.create", workspaceId: "gone" },
+    ]);
+    expect(toApproved(s, OFFER)).toEqual([
+      { permission: "entity.post.read", workspaceId: "shared" },
+    ]);
+  });
+
+  it("unticking narrows; ticking an offered pair adds it", () => {
+    let s = initialSelection(OFFER, []);
+    s = toggle(s, OFFER, "entity.post.create", "brand");
+    expect(toApproved(s, OFFER)).toEqual([]);
+    s = toggle(s, OFFER, "entity.post.read", "shared");
+    expect(isTicked(s, "entity.post.read", "shared")).toBe(true);
+  });
+
+  it("a pair the offer does not hold can never be ticked (no widening)", () => {
+    let s = initialSelection(OFFER, []);
+    s = toggle(s, OFFER, "entity.post.create", "shared");
+    s = toggle(s, OFFER, "entity.post.delete", "brand");
+    s = toggle(s, OFFER, "document.update", "brand");
+    // Not even held in the screen's state (what the checkboxes render from).
+    expect(isTicked(s, "entity.post.create", "shared")).toBe(false);
+    expect(isTicked(s, "entity.post.delete", "brand")).toBe(false);
+    expect(s.size).toBe(1);
+    expect(toApproved(s, OFFER)).toEqual([
+      { permission: "entity.post.create", workspaceId: "brand" },
+    ]);
+  });
+
+  it("what Allow sends is filtered to the offer even from a forged selection", () => {
+    const forged = new Set([
+      "entity.post.read\u0000brand",
+      "*\u0000brand",
+      "entity.post.create\u0000elsewhere",
+    ]);
+    expect(toApproved(forged, OFFER)).toEqual([
+      { permission: "entity.post.read", workspaceId: "brand" },
+    ]);
+  });
+
+  it("names the permissions the person has no space for", () => {
+    expect(withoutSpace(OFFER).map((o) => o.permission)).toEqual([
+      "document.update",
+    ]);
+  });
+});
+
+describe("permissionLabel", () => {
+  it.each([
+    ["entity.post.read", "Read posts"],
+    ["entity.post.create", "Create posts"],
+    ["entity.story.update", "Edit stories"],
+    ["entity.read", "Read everything in it"],
+    ["entity.*.read", "Read everything in it"],
+    ["document.update", "Edit documents"],
+    ["document.read", "Read documents"],
+  ])("%s → %s", (permission, label) => {
+    expect(permissionLabel(permission)).toBe(label);
+  });
+});

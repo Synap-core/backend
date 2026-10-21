@@ -83,6 +83,34 @@ export function parseOauthKeyInstanceId(
 }
 
 /**
+ * The Synap apps (spec 17 §6.2, verified tier v1): a pod app whose client_id
+ * origin is EXACTLY `https://<id>.synap.live` for one of these ids is shown as
+ * a "Synap app" on the consent screen; every other app is "Unverified". The
+ * same exact-origin rule as the browser's hosted-app check, and the ids of the
+ * Control Plane's built-in applications plus content-studio.
+ */
+export const SYNAP_APP_IDS = [
+  "crm",
+  "hub",
+  "studio",
+  "canvas",
+  "devplane",
+  "the-arch",
+  "content-studio",
+] as const;
+
+/** Is this CIMD client_id a Synap app (exact-origin match, https only)? */
+export function isSynapApp(clientId: string): boolean {
+  let origin: string;
+  try {
+    origin = new URL(clientId).origin;
+  } catch {
+    return false;
+  }
+  return SYNAP_APP_IDS.some((id) => origin === `https://${id}.synap.live`);
+}
+
+/**
  * Scopes this AS advertises and is willing to grant, in POD grammar.
  *
  * Pod grammar (dot) rather than the CP's wire grammar (colon) because these
@@ -93,9 +121,10 @@ export function parseOauthKeyInstanceId(
  * either grammar gets exactly what it asked for rather than falling through to
  * the registered default.
  *
- * `offline_access` is deliberately absent: this AS issues no refresh token (see
- * `buildAuthorizationServerMetadata`), and advertising a scope we never honor is
- * a lie a client acts on.
+ * `offline_access` is deliberately absent: an MCP client is issued no refresh
+ * token, and a pod app gets one without asking (see
+ * `buildAuthorizationServerMetadata`), so advertising it would be a lie a
+ * client acts on.
  */
 export const OAUTH_SUPPORTED_SCOPES = ["mcp.read", "mcp.write"] as const;
 

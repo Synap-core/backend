@@ -30,6 +30,8 @@ export interface StoredClient {
   scopes: string[];
   /** CIMD only: the grant-grammar permissions the document declares. */
   requestedPermissions: string[];
+  /** CIMD only: the workspace-template slugs the document declares (0338b). */
+  requestedTemplates?: string[];
   clientUri?: string | null;
   initiateLoginUri?: string | null;
   metadataFetchedAt?: Date | null;
@@ -45,6 +47,7 @@ export interface CimdClientInput {
   redirectUris: string[];
   scopes: string[];
   requestedPermissions: string[];
+  requestedTemplates: string[];
   clientUri: string | null;
   initiateLoginUri: string | null;
   metadataFetchedAt: Date;
@@ -66,6 +69,11 @@ export interface IssuedCodeInput {
   codeChallenge: string;
   /** RFC 8707 resource, canonical (`resourceForIssuer`), or null. */
   resource: string | null;
+  /**
+   * A pod app's approved `apps` row (mode 'oauth', 0338b): /token mints THAT
+   * app's key. Null for an MCP (DCR) client.
+   */
+  appId?: string | null;
 }
 
 export interface ClaimedCode {
@@ -75,6 +83,7 @@ export interface ClaimedCode {
   scopes: string[];
   codeChallenge: string;
   resource: string | null;
+  appId: string | null;
 }
 
 function hashCode(raw: string): string {
@@ -130,6 +139,7 @@ export async function upsertCimdClient(
     redirectUris: input.redirectUris,
     scopes: input.scopes,
     requestedPermissions: input.requestedPermissions,
+    requestedTemplates: input.requestedTemplates,
     clientUri: input.clientUri,
     initiateLoginUri: input.initiateLoginUri,
     metadataFetchedAt: input.metadataFetchedAt,
@@ -170,6 +180,7 @@ export async function issueAuthorizationCode(
     scopes: input.scopes,
     codeChallenge: input.codeChallenge,
     resource: input.resource,
+    appId: input.appId ?? null,
     expiresAt: new Date(Date.now() + AUTH_CODE_TTL_MS),
   });
   return code;
@@ -211,6 +222,7 @@ export async function claimAuthorizationCode(
       scopes: oauthAuthorizationCodes.scopes,
       codeChallenge: oauthAuthorizationCodes.codeChallenge,
       resource: oauthAuthorizationCodes.resource,
+      appId: oauthAuthorizationCodes.appId,
     });
   return row ?? null;
 }

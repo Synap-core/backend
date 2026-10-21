@@ -412,6 +412,21 @@ describe("CIMD — document validation", () => {
       },
       /at most 32/,
     ],
+    [
+      "synap_templates that is not an array",
+      { synap_templates: "content-studio" },
+      /synap_templates must be an array/,
+    ],
+    [
+      "a synap_templates entry that is not a slug",
+      { synap_templates: ["Content Studio"] },
+      /template slug/,
+    ],
+    [
+      "too many synap_templates",
+      { synap_templates: Array.from({ length: 9 }, (_, i) => `t${i}`) },
+      /at most 8 synap_templates/,
+    ],
   ];
   for (const [name, overrides, reason] of refused) {
     it(`refuses ${name}`, () => {
@@ -436,6 +451,17 @@ describe("CIMD — document validation", () => {
     );
     expect(v.scopes).toEqual(["mcp.read", "mcp.write"]);
     expect(v.requestedPermissions).toEqual(["entity.*.read"]);
+  });
+
+  it("keeps the declared synap_templates (deduplicated), and none when absent", () => {
+    const v = validateClientMetadataDocument(
+      doc({ synap_templates: ["content-studio", "crm", "content-studio"] }),
+      CLIENT_ID
+    );
+    expect(v.requestedTemplates).toEqual(["content-studio", "crm"]);
+    expect(
+      validateClientMetadataDocument(doc({}), CLIENT_ID).requestedTemplates
+    ).toEqual([]);
   });
 
   it("defaults the display name to the client_id host and ignores logo_uri", () => {
