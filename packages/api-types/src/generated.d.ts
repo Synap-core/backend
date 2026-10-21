@@ -12233,8 +12233,45 @@ export interface DeviceRequestView {
 	/** The reach the computer gets — the preset's name, shown in Details. */
 	accessName: string;
 }
+/** One permission a pod app asks for, and the spaces it may be given in. */
+export interface OAuthAppOfferItem {
+	permission: string;
+	workspaces: Array<{
+		workspaceId: string;
+		workspaceName: string;
+	}>;
+}
+/**
+ * What a POD APP (CIMD client) is shown as on the consent screen (spec 17
+ * §9.1). Its identity is its DOMAIN (the client_id host), not its name.
+ */
+export interface OAuthAppConsent {
+	/** The client_id host — the headline. */
+	domain: string;
+	/** "Synap app" (exact first-party origin, `isSynapApp`) vs "Unverified app". */
+	verified: boolean;
+	/** The document's `client_uri` (same origin as the client_id), or null. */
+	homepage: string | null;
+	/**
+	 * Each permission the app asked for AND declared, with the spaces this
+	 * person may give it in (`oauthAppOffer`). An empty list means the person
+	 * has no space to give that permission in.
+	 */
+	permissions: OAuthAppOfferItem[];
+	/** What this person approved for this app before (re-consent pre-ticks it). */
+	approved: AppApprovedRequest[];
+	/**
+	 * Workspace templates the app declared (`synap_templates`): the screen
+	 * offers to create a space from one when a permission has no space.
+	 */
+	templates: string[];
+	/** Scopes it asked for that a pod app is never given (`mcp.*`), shown as dropped. */
+	ignoredScopes: string[];
+}
 export interface OAuthConsentContext {
 	clientId: string;
+	/** 'dcr' — an MCP client (claude.ai); 'cimd' — a pod app. */
+	clientKind: "cimd" | "dcr";
 	/** Untrusted, attacker-chosen at registration — the UI renders it as TEXT. */
 	clientName: string;
 	redirectUri: string;
@@ -12243,6 +12280,8 @@ export interface OAuthConsentContext {
 	scopes: string[];
 	/** When the client registered itself with this pod (DCR) — a fresh one is worth a second look. */
 	registeredAt: Date;
+	/** Present for a pod app only. */
+	app: OAuthAppConsent | null;
 }
 /**
  * API Keys Router
@@ -25248,6 +25287,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
 				resource?: string | undefined;
+				approved?: {
+					permission: string;
+					workspaceId: string;
+				}[] | undefined;
 			};
 			output: {
 				redirectTo: string;
@@ -25546,7 +25589,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				logo_url: string | null;
-				mode: string;
+				mode: "oauth" | "specific";
 				approved_requests: AppApprovedRequest[] | null;
 				pending_request: {
 					proposal_id: string;
@@ -25585,7 +25628,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				logo_url: string | null;
-				mode: string;
+				mode: "oauth" | "specific";
 				approved_requests: AppApprovedRequest[] | null;
 				pending_request: {
 					proposal_id: string;
@@ -25622,7 +25665,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				logo_url: string | null;
-				mode: string;
+				mode: "oauth" | "specific";
 				approved_requests: AppApprovedRequest[] | null;
 				pending_request: {
 					proposal_id: string;
@@ -25683,7 +25726,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				logo_url: string | null;
-				mode: string;
+				mode: "oauth" | "specific";
 				approved_requests: AppApprovedRequest[] | null;
 				pending_request: {
 					proposal_id: string;
@@ -25746,7 +25789,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				logo_url: string | null;
-				mode: string;
+				mode: "oauth" | "specific";
 				approved_requests: AppApprovedRequest[] | null;
 				pending_request: {
 					proposal_id: string;
@@ -25789,7 +25832,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				description: string | null;
 				logo_url: string | null;
-				mode: string;
+				mode: "oauth" | "specific";
 				approved_requests: AppApprovedRequest[] | null;
 				pending_request: {
 					proposal_id: string;
