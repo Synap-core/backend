@@ -78,14 +78,14 @@ export const completeRunBodySchema = z
   .object({
     outcome: z.enum(["completed", "stopped"]).default("completed"),
     reason: z.literal("turn_budget").optional(),
-    /** The agent type that ran the turn — the continuation wakes the same one. */
-    agentType: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
-      .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/)
-      .optional(),
+    /**
+     * The agent type that ran the turn — the continuation wakes the same one.
+     * A FREE string (root CLAUDE.md "agentType = free string"), so no pattern;
+     * and lenient: a value this door cannot use reads as absent (the default
+     * agent) instead of refusing the whole report. A 400 here would drop the
+     * turn's outcome and leave a finished run `running` for the 24-h reaper.
+     */
+    agentType: z.string().trim().min(1).max(200).optional().catch(undefined),
     turn: z
       .object({
         budgetAction: z.enum(["final", "stop"]).optional(),

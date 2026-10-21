@@ -418,6 +418,27 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     expect(h.triggers).toHaveLength(0);
   });
 
+  it("an agent type is a free string: one outside a slug pattern still settles the turn (FD5)", async () => {
+    // Before: `agentType` had to match /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/, so a
+    // type with a space or a non-ASCII letter 400'd the WHOLE report — the
+    // run's outcome was dropped and a finished run stayed `running`.
+    const { sessionId, runId } = await seedRun();
+    const r = await completeRun(sessionId, {
+      ...STOPPED,
+      agentType: "Équipe ventes (beta)",
+    });
+    expect(r).toEqual({ code: 200, json: { status: "continued" } });
+    expect(h.triggers[0]).toMatchObject({ agentType: "Équipe ventes (beta)" });
+
+    // A value the door cannot use (too long) reads as absent, never a 400.
+    const done = await completeRun(sessionId, {
+      outcome: "completed",
+      agentType: "x".repeat(500),
+    });
+    expect(done).toEqual({ code: 200, json: { status: "completed" } });
+    expect((await runRow(runId)).status).toBe("completed");
+  });
+
   it("a ledger left by an EARLIER run on the session does not count for this one", async () => {
     const { sessionId, runId } = await seedRun();
     await q(`update focus_sessions set metadata = $2::jsonb where id = $1`, [
