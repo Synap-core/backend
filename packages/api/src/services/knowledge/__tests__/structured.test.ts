@@ -73,6 +73,11 @@ vi.mock("@synap/database", () => ({
   // slug that EXISTS, so the stub returns one kind row; the assert passes and
   // the composed-WHERE invariants below are what's under test.
   profileSlugRows: async (_db: unknown, _slug: string) => h.slugRows,
+  // FB1020 B5 — THE listing rule; the stub records the lens it was given.
+  listableEntityWhere: (opts: unknown) => ({
+    _tag: "listableEntityWhere",
+    opts,
+  }),
 }));
 
 vi.mock("../../../utils/user-visible-where.js", () => ({
@@ -174,6 +179,29 @@ describe("structuredLookup — floor is always intersected", () => {
     expect(h.captured.where?._tag).toBe("and");
     expect(hasTag("accessScopeWhere")).toBe(true);
     expect(hasTag("projectLensWhere")).toBe(true);
+  });
+});
+
+describe("structuredLookup — the listing rule (FB1020 B5)", () => {
+  const rule = () =>
+    conditionsOf().find((c) => c?._tag === "listableEntityWhere");
+  it("an unlensed enumeration leaves demo and probe rows out", async () => {
+    await structuredLookup({
+      profileSlug: "company",
+      userId: USER,
+      workspaceId: "ws-1",
+      limit: 10,
+    });
+    expect(rule()?.opts).toEqual({ projectLens: undefined });
+  });
+  it("a project-lensed enumeration hands the lens to the rule (demo toggle)", async () => {
+    await structuredLookup({
+      profileSlug: "company",
+      userId: USER,
+      projectId: "proj-1",
+      limit: 10,
+    });
+    expect(rule()?.opts).toEqual({ projectLens: "proj-1" });
   });
 });
 
