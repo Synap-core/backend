@@ -12242,6 +12242,8 @@ export interface AppSignInSpace {
 /** What the consent screen says, every word derived from the grant. */
 export interface AppSignInDescription {
 	appName: string;
+	/** Who registered the app on this pod — shown so the person can judge it. */
+	registeredBy: string;
 	/**
 	 * Which grant this description was derived from. The consent screen sends
 	 * it back with Allow; a decision for any other grant (the approval or the
@@ -25590,6 +25592,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				removed_at: Date | null;
 				agent_user_id: string | null;
 				redirect_uris: string[];
+				person_may_decide_own_agent_proposals: boolean;
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -25630,6 +25633,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				removed_at: Date | null;
 				agent_user_id: string | null;
 				redirect_uris: string[];
+				person_may_decide_own_agent_proposals: boolean;
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -25668,6 +25672,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				removed_at: Date | null;
 				agent_user_id: string | null;
 				redirect_uris: string[];
+				person_may_decide_own_agent_proposals: boolean;
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -25730,6 +25735,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				removed_at: Date | null;
 				agent_user_id: string | null;
 				redirect_uris: string[];
+				person_may_decide_own_agent_proposals: boolean;
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -25768,6 +25774,46 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				removed_at: Date | null;
 				agent_user_id: string | null;
 				redirect_uris: string[];
+				person_may_decide_own_agent_proposals: boolean;
+				last_used_at: Date | null;
+				grants: {
+					id: string;
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					createdAt: Date;
+					revokedAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		setSignInPolicy: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+				personMayDecideOwnAgentProposals: boolean;
+			};
+			output: {
+				id: string;
+				public_id: string;
+				name: string;
+				description: string | null;
+				logo_url: string | null;
+				mode: string;
+				approved_requests: AppApprovedRequest[] | null;
+				pending_request: {
+					proposal_id: string;
+					requests: AppApprovedRequest[];
+					requested_at: Date;
+				} | null;
+				created_at: Date;
+				revoked_at: Date | null;
+				removed_at: Date | null;
+				agent_user_id: string | null;
+				redirect_uris: string[];
+				person_may_decide_own_agent_proposals: boolean;
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -25832,6 +25878,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				removed_at: Date | null;
 				agent_user_id: string | null;
 				redirect_uris: string[];
+				person_may_decide_own_agent_proposals: boolean;
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -25876,6 +25923,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				removed_at: Date | null;
 				agent_user_id: string | null;
 				redirect_uris: string[];
+				person_may_decide_own_agent_proposals: boolean;
 				last_used_at: Date | null;
 				grants: {
 					id: string;
