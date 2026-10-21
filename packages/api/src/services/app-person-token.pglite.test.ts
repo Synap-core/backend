@@ -167,6 +167,7 @@ import {
   setAppSignInPolicy,
 } from "./app-connect.js";
 import { proposalsRouter } from "../routers/proposals.js";
+import { keyGrantReadsSubject } from "../utils/webhook-delivery.js";
 
 const ISSUER = "https://pod.test.synap.live";
 const CALLBACK = "https://studio.example.com/auth/callback";
@@ -978,6 +979,29 @@ describe("H1 — who may sign in to an app (owner, or anyone when the owner is a
         /sign in to the app again/
       );
       expect((await identityOf(ownerToken)).effectiveUserId).toBe(OWNER);
+    } finally {
+      await restoreOwnerAsPodAdmin();
+    }
+  });
+
+  it("N1 — a webhook read sees the SAME rule: a demoted owner's member token reads nothing and is ended", async () => {
+    const t = await signIn(MEMBER);
+    const keyId = (await keyRow(t)).id;
+    const reads = () =>
+      keyGrantReadsSubject({
+        subjectType: "entity",
+        subjectId: ENTITY[SALES]!,
+        apiKeyId: keyId,
+        ownerUserId: MEMBER,
+      } as never);
+    // The member can read Sales people in their own right AND through the
+    // token's grant — so `true` here is the grant passing, not the floor.
+    expect(await reads()).toBe(true);
+    await removeOwnerFromPodAdmin();
+    try {
+      expect(await reads()).toBe(false);
+      // Ended, not only refused: the row is revoked.
+      expect((await keyRow(t)).is_active).toBe(false);
     } finally {
       await restoreOwnerAsPodAdmin();
     }

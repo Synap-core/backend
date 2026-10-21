@@ -79,6 +79,7 @@ import {
 } from "@synap/database";
 import { APP_PERSON_KEY_TYPE, apiKeys } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
+import { isAppPublicId } from "@synap-core/types/membrane";
 
 import { apiKeyService } from "./api-keys.js";
 import { attachGrantsOrRevoke } from "./key-grant.js";
@@ -256,6 +257,52 @@ export async function classifyAppPersonKey(args: {
   const app = await loadLiveApp(args.publicId);
   if (!app) return { kind: "dead" };
   const reach = await appSignInReach(app, args.holderUserId);
-  if (reach === "not_for_you") return { kind: "dead" };
+  if (reach === "not_for_you") {
+    // The rule refuses this person for good (the owner is no longer a pod
+    // admin): END the token, not only this request, so nothing that reads its
+    // stored grant later (webhook deliveries, a cached record) acts on it
+    // (PR #29 re-review N1).
+    await new GrantRepository(db).revokeForKeys(
+      [args.apiKeyId],
+      app.ownerUserId
+    );
+    await revokeApiKeys(db, {
+      where: eq(apiKeys.id, args.apiKeyId),
+      revokedBy: app.ownerUserId,
+      reason: `${app.name}'s owner may no longer sign other members in`,
+    });
+    return { kind: "dead" };
+  }
   return { kind: "person", grant: narrowKeyGrant(args.grant, reach) };
+}
+
+/**
+ * A key's grant as EVERY reader must see it — the request doors
+ * (`resolveKeyIdentity`) and anything that reads a key's stored grant later
+ * (webhook deliveries, PR #29 re-review N1). For a person's app sign-in token
+ * it is re-judged by THE reach rule (`classifyAppPersonKey`): dead → deny-all,
+ * otherwise narrowed to what the app may give the person NOW. Any other key's
+ * grant is returned unchanged. `holderUserId` is read from the row.
+ */
+export async function effectiveKeyGrant(
+  apiKeyId: string,
+  grant: KeyGrant
+): Promise<KeyGrant> {
+  if (!isAppPublicId(grant.clientId)) return grant;
+  const [key] = await db
+    .select({ userId: apiKeys.userId })
+    .from(apiKeys)
+    .where(eq(apiKeys.id, apiKeyId))
+    .limit(1);
+  if (!key) return { clientId: grant.clientId, scopes: [{ permissions: [] }] };
+  const verdict = await classifyAppPersonKey({
+    apiKeyId,
+    holderUserId: key.userId,
+    publicId: grant.clientId!,
+    grant,
+  });
+  if (verdict.kind === "person") return verdict.grant;
+  if (verdict.kind === "dead")
+    return { clientId: grant.clientId, scopes: [{ permissions: [] }] };
+  return grant;
 }
