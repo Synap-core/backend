@@ -77,6 +77,8 @@ const GRAPH_PROPOSAL_TYPES = ["capture.graph", "import.graph"] as const;
 export interface PendingCreate {
   proposalId: string;
   proposalType: string;
+  /** The space the proposal is filed in (null = pod-wide). */
+  workspaceId: string | null;
   /** A graph op's stable ref, when the create sits inside a capture/import. */
   entityRef?: string;
   subject: Exclude<DuplicateSubjectType, "kind">;
@@ -115,7 +117,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function entityCreate(
-  row: { id: string; proposalType: string },
+  row: { id: string; proposalType: string; workspaceId: string | null },
   profileSlug: unknown,
   title: unknown,
   properties: unknown
@@ -125,6 +127,7 @@ function entityCreate(
   return {
     proposalId: row.id,
     proposalType: row.proposalType,
+    workspaceId: row.workspaceId,
     subject: "entity",
     kind: profileSlug,
     title: name,
@@ -156,6 +159,7 @@ export async function loadOwnPendingCreates(
       id: proposals.id,
       targetType: proposals.targetType,
       proposalType: proposals.proposalType,
+      workspaceId: proposals.workspaceId,
       data: proposals.data,
     })
     .from(proposals)
@@ -207,6 +211,7 @@ export async function loadOwnPendingCreates(
       creates.push({
         proposalId: row.id,
         proposalType: row.proposalType,
+        workspaceId: row.workspaceId,
         subject: row.targetType,
         kind: row.targetType,
         title: name,
@@ -280,6 +285,8 @@ export type DuplicateQuery =
       subject: "playbook";
       userId: string;
       name: string;
+      /** A playbook's name is unique per space: only that space's queue counts. */
+      workspaceId: string | null;
       pending?: PendingCreate[];
     }
   | {
@@ -456,6 +463,7 @@ export async function findDuplicateCandidates(
       for (const p of await pendingLeg(database, query)) {
         if (p.subject !== "playbook" || !wanted || p.nameKey !== wanted)
           continue;
+        if ((p.workspaceId ?? null) !== (query.workspaceId ?? null)) continue;
         candidates.push({
           ref: "proposal",
           id: p.proposalId,

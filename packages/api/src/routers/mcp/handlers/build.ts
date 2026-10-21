@@ -432,9 +432,6 @@ export const buildHandlers: McpHandlerMap = {
         }
         return Object.keys(subjectProfile).length > 0 ? { subjectProfile } : {};
       })(),
-      // The overlap refusal's escape hatch. Without it an agent whose playbook
-      // legitimately overlaps an existing one is stuck on CONFLICT.
-      ...(args.forceCreate === true ? { forceCreate: true } : {}),
       // `project` = a METHOD a project runs as a track. Any other value is
       // passed through for `playbooks.create`'s own enum to refuse — never
       // silently dropped into a session playbook.

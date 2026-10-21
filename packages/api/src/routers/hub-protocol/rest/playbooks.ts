@@ -64,7 +64,7 @@ const ListPlaybooksQuerySchema = z.object({
  * (`schemas/playbook-definition.ts`), never re-declared: a hand-written copy
  * here carried `scope` + `stages` but silently stripped `params` and
  * `criteria`, so an agent-authored METHOD could declare no onboarding at all.
- * Only the door's own fields (write home, overlap override, attribution) are
+ * Only the door's own fields (write home, attribution) are
  * added; `.describe()` decorates the picked definition fields for OpenAPI.
  */
 export const CreatePlaybookBodySchema = playbookDefinitionSchema
@@ -99,12 +99,6 @@ export const CreatePlaybookBodySchema = playbookDefinitionSchema
     criteria: playbookDefinitionSchema.shape.criteria.describe(
       "Binary acceptance criteria [{ key, statement, required?, check: { kind, ... }, stageKey? }] every instantiated session is graded against."
     ),
-    forceCreate: z
-      .boolean()
-      .optional()
-      .describe(
-        "Only after a CONFLICT naming an overlapping playbook. Creates anyway."
-      ),
     agentUserId: z.string().optional(),
   });
 
@@ -361,7 +355,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
   /**
    * POST /playbooks
    * Body: { workspaceId, name, goalTemplate, description?, stages?, status?,
-   *         subjectProfile?, forceCreate?, scope?, params?, criteria?,
+   *         subjectProfile?, scope?, params?, criteria?,
    *         agentUserId? }
    */
   app.post("/playbooks", async (c) => {
@@ -391,7 +385,6 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           ...(body.subjectProfile
             ? { subjectProfile: body.subjectProfile }
             : {}),
-          ...(body.forceCreate ? { forceCreate: true } : {}),
           ...(body.scope ? { scope: body.scope } : {}),
           ...(body.params ? { params: body.params } : {}),
           ...(body.criteria ? { criteria: body.criteria } : {}),

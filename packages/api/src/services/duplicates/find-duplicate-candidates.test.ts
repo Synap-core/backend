@@ -176,7 +176,12 @@ describe("findDuplicateCandidates — pending leg (preloaded queue)", () => {
   it("a failed pending read is unchecked, never clear", async () => {
     const { check } = await findDuplicateCandidates(
       stubDb(new Error("boom")).db,
-      { subject: "playbook", userId: "user-1", name: "Weekly review" }
+      {
+        subject: "playbook",
+        userId: "user-1",
+        name: "Weekly review",
+        workspaceId: null,
+      }
     );
     expect(check).toEqual({
       status: "unchecked",

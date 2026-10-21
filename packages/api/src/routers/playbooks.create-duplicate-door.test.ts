@@ -1,25 +1,24 @@
 /**
- * "Discover before inventing", enforced at the playbook create door.
+ * The playbook create door answers through the ONE duplicate door (FB1020 B2).
  *
- * MEASURED DEFECT (live, 2026-09-21). The CRM workspace already held "Qualify a
- * CRM lead", "Enrich Lead/Company", "Lead Outreach" and "CRM Hygiene". An agent
- * created "Lead -> qualified (discovery)" — overlapping three of them — and the
- * pod accepted it silently. The exact-name idempotency directly above this
- * guard could not see it, because a near-twin arrives under a DIFFERENT name.
+ * HISTORY. On 2026-09-21 an agent filed "Lead -> qualified (discovery)" beside
+ * "Qualify a CRM lead"; a term-overlap REFUSAL (IDF score per term, tuned on two
+ * pairs) was added, with `forceCreate` as its escape. In the 10-20 dogfood it
+ * refused a distinct motion ("Founder interview") twice until the agent
+ * reworded it. Founder decision B2: a near match is FILED, never refused; the
+ * reviewer decides; `forceCreate` is deleted. Every AI playbook create is a
+ * proposal already (AGENT_STRUCTURE_WRITE), so what the door adds is the
+ * "looks like X" answer on that proposal — today the same playbook still
+ * waiting for review in the same space. A meaning-based match comes later.
  *
- * THE FIXTURE IS THE REAL DATA. The candidate rows below are the actual names,
- * descriptions and goal templates from the CRM workspace, and the duplicate is
- * the actual playbook the agent filed. A hand-invented "Playbook A" / "Playbook
- * B" fixture would prove the threshold works on a case nobody will ever hit;
- * these rows are the case that DID happen.
+ * Rows:
+ *  - the real 09-21 case is filed (gate reached), never refused;
+ *  - a same-name pending playbook proposal in the SAME space is a possible
+ *    twin, persisted for the card; in ANOTHER space it is not;
+ *  - a human caller is not checked at all (unchanged).
  *
- * WHAT THIS DOES NOT COVER, measured: the DB is mocked, so this exercises the
- * ranking + threshold + control flow, not Postgres. The threshold itself is a
- * tuned constant — the two tests that matter are the pair below, a real
- * duplicate that MUST be refused and a real distinct playbook in the same
- * workspace that MUST still be allowed. One without the other proves nothing:
- * a threshold of 0 passes the first, and a threshold of infinity passes the
- * second.
+ * The DB is a chain stub: this covers the door's control flow at the router,
+ * not Postgres (the pending scan's own rows are in the door's unit test).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -171,40 +170,7 @@ function aiCtx() {
   return { authenticated: true, userId: "user-1", workspaceId: WS } as never;
 }
 
-/** VERBATIM from the live CRM workspace (synap_list_playbooks, 2026-09-21). */
-const LIVE_CRM_PLAYBOOKS = [
-  {
-    id: "dcbdbb10-958d-4d81-a9ef-2d7958dc2f09",
-    name: "Qualify a CRM lead",
-    description:
-      "Research and qualify one CRM lead, then make the next action explicit without creating a commercial proposal automatically.",
-    goalTemplate:
-      "Work on CRM lead ({lead}). Verify and enrich only factual information that can be supported, assess fit, and update its CRM lifecycle stage, ICP score, qualification notes, outreach channels, and next action.",
-  },
-  {
-    id: "1c96e9fb-76db-4958-b103-83d6e4a330c2",
-    name: "Enrich Lead/Company",
-    description:
-      "Enrich a lead or company from public sources — firmographics, company size, and recent signal — to sharpen ICP scoring and qualification.",
-    goalTemplate: "Enrich {target} using public sources.",
-  },
-  {
-    id: "26d5f5be-31f3-4aec-a50c-6c0f21d5e80f",
-    name: "CRM Hygiene",
-    description:
-      "Always-on maintenance — enriches stale contacts/companies and flags stalled deals.",
-    goalTemplate:
-      "You are the CRM hygiene maintenance agent, running unattended on a daily schedule.",
-  },
-  {
-    id: "bb8aa897-7f17-4c3b-8ad1-e92c882da504",
-    name: "Advance a commercial proposal",
-    description:
-      "Help progress a linked deal without confusing commercial state with the lead pipeline or client conversion.",
-    goalTemplate:
-      "Work on commercial proposal ({deal}). Confirm its primary counterparty, current commercial stage, fee model.",
-  },
-];
+const AGENT = "00000000-0000-4000-8000-00000000a9e7";
 
 /** The playbook the agent actually filed on 2026-09-20. */
 const THE_DUPLICATE = {
@@ -215,31 +181,25 @@ const THE_DUPLICATE = {
     "Qualify {{lead}} ({{segment}}) — source, enrich, reach out, run discovery, decide",
   status: "active" as const,
   executor: "is-agent" as const,
-  agentUserId: "00000000-0000-4000-8000-00000000a9e7",
+  agentUserId: AGENT,
 };
 
-/** A genuinely different motion, same workspace — must NOT be refused. */
-const A_DISTINCT_PLAYBOOK = {
-  name: "Quarterly revenue forecast",
-  description:
-    "Roll up open deals into a weighted forecast for the quarter and flag the gap to target.",
-  goalTemplate:
-    "Build the quarterly forecast from open deals and report the gap to target.",
-  status: "active" as const,
-  executor: "is-agent" as const,
-  agentUserId: "00000000-0000-4000-8000-00000000a9e7",
-};
+/** What every `select()` chain resolves to (awaited directly or via .limit). */
+let rows: unknown[] = [];
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockCheckPermission.mockResolvedValue({ granted: true });
+  rows = [];
+  mockCheckPermission.mockResolvedValue({
+    proposalId: "prop-new",
+    proposalType: "create",
+  });
   mockPreviewDecision.mockResolvedValue({ decision: "propose" });
   profilesFindMany.mockResolvedValue([{ id: "p-1", profileKind: "kind" }]);
   insertReturning.mockResolvedValue([{ id: "pb-new", name: "new" }]);
-  // `select()` is used by BOTH the exact-name lookup (which ends in .limit)
-  // and the overlap scan (which does not). Return no exact-name match, and the
-  // live rows for the overlap scan.
-  selectLimit.mockResolvedValue([]);
+  // `.limit(1)` is the exact-name record lookup (no record here); the pending
+  // scan reads a wider window and gets `rows`.
+  selectLimit.mockImplementation(async (n: number) => (n === 1 ? [] : rows));
   (
     mockDb.select as unknown as {
       mockImplementation: (f: () => unknown) => void;
@@ -250,66 +210,66 @@ beforeEach(() => {
       orderBy: () => chain,
       limit: selectLimit,
       where: () => chain,
-      then: (resolve: (v: unknown) => unknown) => resolve(LIVE_CRM_PLAYBOOKS),
+      then: (resolve: (v: unknown) => unknown) => resolve(rows),
     };
     return chain;
   });
 });
 
-describe("playbooks.create refuses a near-duplicate for an AI caller", () => {
-  it("THE REAL CASE: the playbook the agent actually filed is REFUSED, naming the matches", async () => {
-    await expect(
-      playbooksRouter.createCaller(aiCtx()).create(THE_DUPLICATE as never)
-    ).rejects.toThrow(/Qualify a CRM lead/);
-    expect(
-      insertReturning,
-      "a near-duplicate playbook was written anyway"
-    ).not.toHaveBeenCalled();
-  });
+function pendingPlaybook(workspaceId: string) {
+  return {
+    id: "prop-twin",
+    targetType: "playbook",
+    proposalType: "create",
+    workspaceId,
+    data: { data: { name: THE_DUPLICATE.name } },
+  };
+}
 
-  it("THE OTHER HALF: a genuinely distinct playbook in the SAME workspace is allowed", async () => {
-    // Without this, a threshold of zero would pass the test above. Measured
-    // 2026-09-21: this scores 21.1/term against its nearest neighbour, versus
-    // 47.0/term for the real duplicate. The guard refuses at 30.
+function gateInput(): {
+  possibleDuplicate?: boolean;
+  duplicateCheck?: { status: string; candidates: Array<{ id: string }> };
+} {
+  expect(mockCheckPermission).toHaveBeenCalledTimes(1);
+  return mockCheckPermission.mock.calls[0]![0];
+}
+
+describe("playbooks.create files a near twin for review", () => {
+  it("THE REAL CASE is filed, never refused", async () => {
     const res = await playbooksRouter
       .createCaller(aiCtx())
-      .create(A_DISTINCT_PLAYBOOK as never);
-    expect(res.status).toBe("created");
-    expect(insertReturning).toHaveBeenCalled();
+      .create(THE_DUPLICATE as never);
+    expect(res.status).toBe("proposed");
+    expect(gateInput().duplicateCheck?.status).toBe("clear");
   });
 
-  it("forceCreate is the escape hatch, exactly as on entities.create", async () => {
-    const res = await playbooksRouter
-      .createCaller(aiCtx())
-      .create({ ...THE_DUPLICATE, forceCreate: true } as never);
-    expect(res.status).toBe("created");
+  it("the same playbook waiting in the SAME space is a possible twin on the proposal", async () => {
+    rows = [pendingPlaybook(WS)];
+    await playbooksRouter.createCaller(aiCtx()).create(THE_DUPLICATE as never);
+    const input = gateInput();
+    expect(input.possibleDuplicate).toBe(true);
+    expect(input.duplicateCheck).toMatchObject({
+      status: "possible",
+      subject: "playbook",
+      candidates: [{ ref: "proposal", id: "prop-twin", why: "same_name" }],
+    });
   });
 
-  it("a HUMAN caller is never second-guessed", async () => {
-    // Template installs, reconcilers, marketplace applies and human authors all
-    // create deliberately. Only the AI branch runs the check.
+  it("the same name waiting in ANOTHER space is not a twin", async () => {
+    rows = [pendingPlaybook("00000000-0000-4000-8000-000000000099")];
+    await playbooksRouter.createCaller(aiCtx()).create(THE_DUPLICATE as never);
+    expect(gateInput().possibleDuplicate).toBe(false);
+  });
+
+  it("a HUMAN caller is not checked", async () => {
+    rows = [pendingPlaybook(WS)];
+    mockCheckPermission.mockResolvedValue({ granted: true });
     const res = await playbooksRouter.createCaller(aiCtx()).create({
       ...THE_DUPLICATE,
       agentUserId: undefined,
       source: "user",
     } as never);
     expect(res.status).toBe("created");
-  });
-
-  it("the refusal carries machine-readable candidates, not just a sentence", async () => {
-    const err = await playbooksRouter
-      .createCaller(aiCtx())
-      .create(THE_DUPLICATE as never)
-      .catch((e: { cause?: { overlapping?: Array<{ id: string }> } }) => e);
-    const overlapping = (
-      err as { cause?: { overlapping?: Array<{ id: string }> } }
-    ).cause?.overlapping;
-    expect(
-      overlapping,
-      "no candidates on the error — the agent cannot act on it"
-    ).toBeDefined();
-    expect(overlapping!.length).toBeGreaterThan(0);
-    expect(overlapping!.length).toBeLessThanOrEqual(3);
-    expect(overlapping![0]!.id).toBe("dcbdbb10-958d-4d81-a9ef-2d7958dc2f09");
+    expect(gateInput().duplicateCheck).toBeUndefined();
   });
 });

@@ -97,14 +97,6 @@ export async function createPlaybookDoor(
      */
     subjectProfile?: Record<string, unknown>;
     /**
-     * Override the overlap refusal. `playbooks.create` refuses a name that
-     * scores as a near-twin of an existing playbook, and names the candidates.
-     * An escape hatch the agent doors cannot reach is not an escape hatch —
-     * without this, an agent whose playbook legitimately overlaps is stuck on
-     * CONFLICT forever.
-     */
-    forceCreate?: boolean;
-    /**
      * What the playbook instantiates (`playbooks.create` `scope`, 0240):
      * `session` (default) or `project` — a METHOD a project runs as a TRACK
      * (0272). Without this, no agent door could create the thing a track runs.
@@ -164,7 +156,6 @@ export async function createPlaybookDoor(
     status: input.status ?? "active",
     agentUserId: identity.agentUserId,
     ...(input.subjectProfile ? { subjectProfile: input.subjectProfile } : {}),
-    ...(input.forceCreate ? { forceCreate: true } : {}),
     ...(input.scope ? { scope: input.scope } : {}),
     ...(input.params !== undefined ? { params: input.params } : {}),
     ...(input.criteria !== undefined ? { criteria: input.criteria } : {}),

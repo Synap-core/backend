@@ -2912,11 +2912,6 @@ export const tools = {
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
             humanOnlyStatuses: PLAYBOOK_PROCESS_JSON_SCHEMA.humanOnlyStatuses,
             expectedOutputs: PLAYBOOK_PROCESS_JSON_SCHEMA.expectedOutputs,
-            forceCreate: {
-              type: "boolean",
-              description:
-                "Only after a CONFLICT naming an overlapping playbook. The pod refuses a near-twin name so processes don't silently fork. Read the candidates it named; set this ONLY if a separate playbook is genuinely right.",
-            },
             scope: {
               type: "string",
               enum: ["session", "project"],
