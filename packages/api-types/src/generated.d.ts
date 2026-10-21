@@ -15460,6 +15460,14 @@ export interface CsvColumnPlan {
 	valueType: "boolean" | "date" | "number" | "string";
 	/** "skip" columns are dropped; everything else lands on the row entity. */
 	scope: "companion" | "context" | "primary" | "skip";
+	/**
+	 * Where the value lands, set by `refineCsvTablePlan`. Absent or "entity" ⇒ a
+	 * property of the row entity (today's behaviour); "facet" ⇒ a property of the
+	 * row's role facet (`CsvTablePlan.rowFacet`); "title" ⇒ consumed by the
+	 * composed title (`titleColumns`); "organization" ⇒ consumed by the
+	 * organisation link (`CsvTablePlan.organization`).
+	 */
+	routedTo?: "entity" | "facet" | "organization" | "title";
 }
 /** Resolved table-ingestion plan: ONE profile for all rows + per-column routing
  *  + which header supplies the title. */
@@ -15470,6 +15478,25 @@ export interface CsvTablePlan {
 	titleColumn: string | null;
 	/** Per-column routing. Headers absent here are dropped. */
 	columns: CsvColumnPlan[];
+	/**
+	 * When set, the title is these columns' non-empty values joined by a space
+	 * ("First Name" + "Last Name"). Takes precedence over `titleColumn`.
+	 */
+	titleColumns?: string[];
+	/** Role facet every row entity wears (the planner picked a role). */
+	rowFacet?: {
+		profileSlug: string;
+	};
+	/**
+	 * A column naming the row's organisation: each distinct value becomes ONE
+	 * entity of `profileSlug` (see `addLinkTargetItems`), linked from the row by
+	 * `relationType`.
+	 */
+	organization?: {
+		header: string;
+		profileSlug: string;
+		relationType: string;
+	};
 }
 /**
  * Per-op homes summary for an import graph — how create_entity ops are
@@ -31949,7 +31976,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionError?: string | undefined;
 				sessionId: string | null;
 				sessionSource?: "failed" | "minted" | "none" | "playbook" | "prior" | "provided" | undefined;
-				source: ImportRevealSource;
+				source: "bookmark" | "connector_sync" | "json" | "markdown" | "obsidian";
 				stats: {
 					byType: Record<string, number>;
 					chunks: number;

@@ -177,7 +177,7 @@ const OFFERABLE_RULES = [
 ] as const satisfies ReadonlyArray<NotificationRoutingRule>;
 
 /** Declared, but naming a transport that does not exist. Never offered. */
-const UNOFFERABLE_RULES = [
+const _UNOFFERABLE_RULES = [
   "telegram",
 ] as const satisfies ReadonlyArray<NotificationRoutingRule>;
 
@@ -185,7 +185,7 @@ type _RulesClassified =
   Exclude<
     NotificationRoutingRule,
     (typeof OFFERABLE_RULES)[number]
-  > extends (typeof UNOFFERABLE_RULES)[number]
+  > extends (typeof _UNOFFERABLE_RULES)[number]
     ? true
     : never;
 const _rulesClassified: _RulesClassified = true;
