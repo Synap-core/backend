@@ -158,7 +158,7 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
 
       - name: Build Backend image (local)
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./deploy/Dockerfile
@@ -213,7 +213,7 @@ jobs:
 
       - name: Push Backend image to GHCR
         id: push
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./deploy/Dockerfile
@@ -313,7 +313,7 @@ jobs:
 
       - name: Build and push pod-agent image
         id: push
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ./deploy/pod-agent
           file: ./deploy/pod-agent/Dockerfile
@@ -413,7 +413,7 @@ jobs:
 
       - name: Build and push pod-admin image
         id: push
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./apps/pod-admin/Dockerfile
