@@ -176,7 +176,7 @@ const defaultReachDeps: UnlinkReachDeps = {
         status: federatedApplicationConnections.status,
       })
       .from(federatedApplicationConnections)
-      .where(eq(federatedApplicationConnections.issuerId, issuerId)),
+      .where(/*NC*/ undefined),
   cloudSignInIssuer: defaultDeps.cloudSignInIssuer,
 };
 
