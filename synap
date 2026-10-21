@@ -4072,12 +4072,12 @@ _ue_services_healthy() {
 # a tag another stack put on the same image keeps it — and dangling ones built
 # from our Dockerfiles (LABEL io.synap.first-party). Images any container uses
 # are skipped. No release record yet ⇒ no image is touched. Also keeps the newest
-# 2 pre-update dumps (+ the one the current release names). Runs at the START
+# 2 pre-update dumps (+ every dump a record names: _bk_pinned_dumps). Runs at the START
 # of every update (before the disk check) and after every applied one. Never
 # another stack's image, never a volume.
 _SYNAP_FIRST_PARTY_IMAGE_RE='^(ghcr\.io/synap-core/(backend|pod-admin|pod-agent)|synap-dev/|synap-local/|synap-adopted/)'
 _ue_prune_images() {
-    local keep used ids id repo tag dg ref b pinned d
+    local keep used ids id repo tag dg ref
     if [ -s state/current-release.json ]; then
         keep="$(jq -r '.images[]?' state/current-release.json state/previous-release.json 2>/dev/null \
             | while read -r ref; do docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null; done | sort -u)"
@@ -4100,11 +4100,7 @@ _ue_prune_images() {
     # cache holds no data. --max-used-space is Docker 28+, --keep-storage older.
     docker builder prune -f --max-used-space 2gb >/dev/null 2>&1 \
         || docker builder prune -f --keep-storage 2gb >/dev/null 2>&1 || true
-    b="$(SYNAP_DEPLOY_DIR="$(pwd)" _bk_backups_dir)"
-    pinned="$(jq -r '.preUpdateBackup // empty' state/current-release.json 2>/dev/null || true)"
-    for d in $(ls -1d "$b"/*-pre-update 2>/dev/null | sort | awk '{ a[NR] = $0 } END { for (i = 1; i <= NR - 2; i++) print a[i] }'); do
-        [ "$d" = "$pinned" ] || rm -rf "$d"
-    done
+    SYNAP_DEPLOY_DIR="$(pwd)" _bk_prune_label pre-update 2
     return 0
 }
 
@@ -4276,6 +4272,7 @@ _ue_rollback() { # <reason>  — never returns
         if [ -n "$UE_BACKUP" ]; then
             _ue_warn "Only to put the database back exactly as it was before the update — this DISCARDS everything written since — run, while the pod still runs ${UE_FROM:-this release}:"
             _ue_warn "    synap restore ${UE_BACKUP}"
+            _ue_warn "That dump is kept until another failed update offers a newer one (the dump pruning skips it); copy it off the pod to keep it longer."
         else
             _ue_warn "There is no pre-update dump: the pod had no database before this update."
         fi

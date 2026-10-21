@@ -493,6 +493,28 @@ restore_from yes SYNAP_RESTORE_LOCK_WAIT=2; rc=$?
 [ "$rc" != 0 ] && grep -q "a backup run still holds" "$S/rout" && ! grep -q 'rename to "synap__pre_restore"' "$FAKE/log" && [ "$(cat "$FAKE/dbs" 2>/dev/null || echo synap)" = synap ] \
   && ok "restore-lock: a held backup lock makes the restore wait, then refuse untouched" || { bad "restore-lock: rc=$rc"; rshow; }
 
+# ── 3b'. the dump a rollback offers survives later updates' dump pruning ─────
+# Both prunes (pgdata_backup: newest 5; _ue_prune_images: newest 2) skip the
+# dump of the newest rolled-back update whose schema moved, read from
+# state/events.jsonl — here the ONLY record still naming it: an aborted update
+# has since replaced last-update.json, and the pod still runs R1.
+setup dumpkeep r1; publish "$R2" 0012_new.sql
+FAKE_MIGRATE_FAIL=1 run_update --release "$R2"; BK="$(last backup)"
+grep -q "kept until another failed update offers a newer one" "$S/out" \
+  && ok "dumpkeep: the restore hint says how long the dump is kept" || { bad "dumpkeep: no retention in the hint"; show; }
+R3="main-3333333"; publish "$R3" 0013_x.sql; jq '.minFrom = "0099_z.sql"' "$TMP/rel/$R3/release.json" > "$TMP/x" && mv "$TMP/x" "$TMP/rel/$R3/release.json"
+run_update --release "$R3"
+# Six newer dumps, then R4's own dump stamped newest of all (a fake `date`).
+for i in 1 2 3 4 5 6; do mkdir -p "$DEPLOY/backups/postgres/2099010100000${i}Z-pre-update"; done
+mkdir -p "$S/datebin"; printf '#!/usr/bin/env bash\ncase "$*" in *%%Y%%m%%dT%%H%%M%%SZ*) echo 20991231T000000Z ;; *) exec %s "$@" ;; esac\n' "$(command -v date)" > "$S/datebin/date"; chmod +x "$S/datebin/date"
+R4="main-4444444"; publish "$R4" 0013_x.sql
+PATH="$S/datebin:$PATH" FAKE_NEW_LEVEL="13|0013_x.sql" run_update --release "$R4"; rc=$?
+P="$DEPLOY/backups/postgres"; kept="$(ls "$P" | grep -c -- '-pre-update$')"
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R4" ] && [ -d "$BK" ] && [ -s "$BK/synap.dump" ] && [ "$kept" = 3 ] \
+  && [ -d "$P/20991231T000000Z-pre-update" ] && [ -d "$P/20990101000006Z-pre-update" ] && [ ! -d "$P/20990101000005Z-pre-update" ] \
+  && ok "dumpkeep: a later update prunes to the newest 2 dumps and keeps the one the rollback offered (named only by events.jsonl)" \
+  || { bad "dumpkeep: rc=$rc cur=$(cur_id) BK=$BK kept=$kept: $(ls "$DEPLOY/backups/postgres" | tr '\n' ' ')"; show; }
+
 # ── 3c. SIGHUP (ssh drop) mid-update → rolled back like INT/TERM ─────────────
 # A shell started with SIGHUP ignored (under nohup) cannot trap it: the scenario
 # then cannot run, and says so rather than reporting the engine broken.
