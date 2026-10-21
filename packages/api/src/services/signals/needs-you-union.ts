@@ -385,7 +385,7 @@ const UNIVERSAL_SIGNAL_FIELDS = [
   "repeatCount",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
-const KIND_SPECIFIC_SIGNAL_FIELDS = [
+const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "blockedReason",
   "why",
   "claimedDone",
@@ -414,7 +414,7 @@ type _SignalFieldsClassified =
   Exclude<
     keyof Signal,
     (typeof UNIVERSAL_SIGNAL_FIELDS)[number]
-  > extends (typeof KIND_SPECIFIC_SIGNAL_FIELDS)[number]
+  > extends (typeof _KIND_SPECIFIC_SIGNAL_FIELDS)[number]
     ? true
     : never;
 const _signalFieldsClassified: _SignalFieldsClassified = true;
@@ -840,7 +840,7 @@ export interface OwedSlotSignalInput {
  *                     (`kind` was withheld under this same reasoning until it
  *                     turned out to decide the VERB, not the icon.)
  */
-const PROJECTED_OWED_SLOT_FIELDS = [
+const _PROJECTED_OWED_SLOT_FIELDS = [
   "sessionId",
   "label",
   "owedSince",
@@ -856,7 +856,7 @@ const PROJECTED_OWED_SLOT_FIELDS = [
   "ask",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
-const WITHHELD_OWED_SLOT_FIELDS = [
+const _WITHHELD_OWED_SLOT_FIELDS = [
   "sessionStatus",
   "workspaceId",
   "icon",
@@ -871,8 +871,8 @@ const WITHHELD_OWED_SLOT_FIELDS = [
 type _OwedSlotFieldsClassified =
   Exclude<
     keyof OwedSlot,
-    (typeof PROJECTED_OWED_SLOT_FIELDS)[number]
-  > extends (typeof WITHHELD_OWED_SLOT_FIELDS)[number]
+    (typeof _PROJECTED_OWED_SLOT_FIELDS)[number]
+  > extends (typeof _WITHHELD_OWED_SLOT_FIELDS)[number]
     ? true
     : never;
 const _owedSlotFieldsClassified: _OwedSlotFieldsClassified = true;
@@ -914,7 +914,7 @@ function owedInstant(owedSince: string): Date {
  *   sessionStatus, workspaceId → withheld for the reasons the owed-slot
  *     classification gives.
  */
-const PROJECTED_DRAFT_ASK_FIELDS = [
+const _PROJECTED_DRAFT_ASK_FIELDS = [
   "sessionId",
   "sessionGoal",
   "sessionTitle",
@@ -923,7 +923,7 @@ const PROJECTED_DRAFT_ASK_FIELDS = [
   "label",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
-const WITHHELD_DRAFT_ASK_FIELDS = [
+const _WITHHELD_DRAFT_ASK_FIELDS = [
   "kind",
   "icon",
   "blockedReason",
@@ -939,8 +939,8 @@ const WITHHELD_DRAFT_ASK_FIELDS = [
 type _DraftAskFieldsClassified =
   Exclude<
     keyof OwedSlot,
-    (typeof PROJECTED_DRAFT_ASK_FIELDS)[number]
-  > extends (typeof WITHHELD_DRAFT_ASK_FIELDS)[number]
+    (typeof _PROJECTED_DRAFT_ASK_FIELDS)[number]
+  > extends (typeof _WITHHELD_DRAFT_ASK_FIELDS)[number]
     ? true
     : never;
 const _draftAskFieldsClassified: _DraftAskFieldsClassified = true;
