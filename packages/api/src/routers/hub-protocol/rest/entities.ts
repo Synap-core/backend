@@ -2531,7 +2531,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     tags: ["Entities"],
     summary: "Update an entity",
     description:
-      "Patch entity title / preview / metadata. Supports `Idempotency-Key`.",
+      "Patch entity title / preview / metadata, or attach an existing document as its body (`documentId`, `replaceBody`). Supports `Idempotency-Key`.",
     request: {
       params: z.object({ entityId: uuidPathParam }),
       body: {
@@ -2678,6 +2678,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(body.expectedStatus !== undefined
           ? { expectedStatus: body.expectedStatus }
           : {}),
+        ...(body.documentId ? { documentId: body.documentId } : {}),
+        ...(body.replaceBody ? { replaceBody: true } : {}),
       });
       if (result.status === "conflict") return c.json(result, 409);
 

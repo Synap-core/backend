@@ -389,14 +389,14 @@ function isProjectFiling(
 
 /**
  * The entity-update payload keys an apply-time stamp cannot undo. The stamp
- * (`computeEntityUpdateDiff`) records title, description and properties only:
+ * (`computeEntityUpdateDiff`) records title, description, properties and the
+ * body link (`documentId` — attach, replace or unlink, undone by putting the
+ * previous body back; decision B9g), but not:
  *
  *   - `profileSlug` — a KIND change (force-proposed as `SCOPE_IDENTITY_CHANGE`);
  *   - `global`      — a promotion to pod-wide (a SCOPE change);
- *   - `documentId`  — a body-document link (`entities.update` leaves such a
- *     receipt unstamped for the same reason);
  *   - `sourceFile`  — a governed file attach, which takes the `document_id`
- *     link on approval.
+ *     link on approval OUTSIDE the stamped write (`attachSourceBlob`).
  *
  * A proposal carrying any of them is therefore never revertable — neither
  * predicted pending nor planned applied — so it is never swipe-safe: the one
@@ -405,7 +405,6 @@ function isProjectFiling(
 const UNREVERTABLE_ENTITY_UPDATE_KEYS = [
   "profileSlug",
   "global",
-  "documentId",
   "sourceFile",
 ] as const;
 

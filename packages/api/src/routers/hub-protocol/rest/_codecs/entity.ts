@@ -223,6 +223,19 @@ export const UpdateEntityRequestSchema = z
       .describe(
         "Compare-and-set on the status: the status you SAW. If it moved meanwhile the call answers 409 with the current status and writes nothing."
       ),
+    documentId: z
+      .string()
+      .uuid()
+      .optional()
+      .describe(
+        "Attach an existing document as the entity's body (e.g. re-attach an orphaned one). Replacing a body the entity already has needs replaceBody: true; an agent's replacement is always a proposal. Undo puts the previous body back."
+      ),
+    replaceBody: z
+      .boolean()
+      .optional()
+      .describe(
+        "Required with documentId when the entity already has a body; without it the call is refused (409) naming that body."
+      ),
   })
   .openapi("UpdateEntityRequest");
 

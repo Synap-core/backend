@@ -188,7 +188,8 @@ export const entityHandlers: McpHandlerMap = {
       args.description !== undefined ||
       args.properties !== undefined ||
       args.metadata !== undefined ||
-      args.profileSlug !== undefined;
+      args.profileSlug !== undefined ||
+      args.documentId !== undefined;
 
     let body: Record<string, unknown> | undefined;
     if (content !== undefined) {
@@ -254,6 +255,12 @@ export const entityHandlers: McpHandlerMap = {
       ...(typeof args.profileSlug === "string" && args.profileSlug
         ? { profileSlug: args.profileSlug }
         : {}),
+      // Re-attach an existing document as the body (B9g) — the same governed
+      // `entities.update`: an agent replacing a body always proposes.
+      ...(typeof args.documentId === "string" && args.documentId
+        ? { documentId: args.documentId }
+        : {}),
+      ...(args.replaceBody === true ? { replaceBody: true } : {}),
       ...(agentUserId ? { agentUserId } : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       // Compare-and-set on the status; a stale move comes back as

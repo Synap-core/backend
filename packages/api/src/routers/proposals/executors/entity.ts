@@ -127,7 +127,7 @@ export async function applyApprovedEntityPatch(args: {
   proposalId: string;
   proposalWorkspaceId: string | null;
   entityId: string;
-  /** The stored patch: title / description / properties / deleteProperties / profileSlug / expectedStatus / sourceFile. */
+  /** The stored patch: title / description / properties / deleteProperties / profileSlug / expectedStatus / documentId / replaceBody / sourceFile. */
   patch: Record<string, unknown>;
   propertyDecisions?: PropertyDecisionMap;
 }) {
@@ -179,6 +179,16 @@ export async function applyApprovedEntityPatch(args: {
     ...(innerData.expectedStatus !== undefined
       ? { expectedStatus: innerData.expectedStatus as string | null }
       : {}),
+    // The body attach the proposal carried (decision B9g). Dropping it here
+    // approved the proposal and attached nothing. `replaceBody` rides with it:
+    // the body guard in `entities.update` refuses a replacement without it.
+    // The undo stamp below reads the link before and after, so the previous
+    // body is put back on Undo.
+    ...(typeof innerData.documentId === "string" ||
+    innerData.documentId === null
+      ? { documentId: innerData.documentId as string | null }
+      : {}),
+    ...(innerData.replaceBody === true ? { replaceBody: true } : {}),
     source: "system",
   });
 

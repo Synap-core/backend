@@ -471,6 +471,16 @@ export const entitiesRouter = router({
          * current status, and nothing is written.
          */
         expectedStatus: z.string().nullable().optional(),
+        /**
+         * Attach an EXISTING document as the entity's body — the re-attach
+         * door for an orphaned document (decision B9g). Same procedure,
+         * same governance as every other field: scope/ownership and the body
+         * rule are checked by `entities.update`, and an agent REPLACING a body
+         * always files a proposal. Undo puts the previous body back.
+         */
+        documentId: z.string().uuid().optional(),
+        /** Required to replace a body the entity already has (else CONFLICT naming it). */
+        replaceBody: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -496,6 +506,8 @@ export const entitiesRouter = router({
           properties: input.metadata,
           deleteProperties: input.deleteProperties,
           ...(input.profileSlug ? { profileSlug: input.profileSlug } : {}),
+          ...(input.documentId ? { documentId: input.documentId } : {}),
+          ...(input.replaceBody ? { replaceBody: true } : {}),
           reasoning: input.reasoning,
           // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
           source: "intelligence",
