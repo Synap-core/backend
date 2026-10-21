@@ -21,9 +21,11 @@
  *      → `blockExpectedOutput`, which notifies). The run is marked
  *      `waiting_on_you`; the reaper un-parks it once the slot is answered, and
  *      the answer wakes the asking agent (`session-answer.ts`). The counter
- *      resets, so after an answer the run again gets N continuations.
+ *      resets once the ask has LANDED, so after an answer the run again gets
+ *      N continuations.
  * If neither lands, the run is simply left `running`: the stall flag and the
- * reaper see it — never a false `completed`.
+ * reaper see it — never a false `completed` — and the count is NOT reset, so
+ * the next stop asks again instead of continuing on its own.
  *
  * WHAT IS RECORDED (`focus_sessions.metadata.runTurns`, server-owned): each
  * turn's end as the IS measured it — the budget ceiling, the input tokens
@@ -141,7 +143,7 @@ export interface RunTurnsState {
   runId: string;
   /** Budget stops over the whole run (the continuation idempotency key). */
   stops: number;
-  /** Automatic continuations since the last time the person was asked. */
+  /** Automatic continuations since an ask last LANDED with the person. */
   autoContinues: number;
   firstTurn?: RunTurnRecord;
   turns: RunTurnRecord[];
@@ -180,8 +182,9 @@ export function readRunTurns(metadata: unknown, runId: string): RunTurnsState {
 
 /**
  * The decision rule, pure: a stop continues while fewer than N automatic
- * continuations ran since the person was last asked; the (N+1)th asks and
- * resets the count.
+ * continuations ran since the person was last asked; every later stop asks.
+ * The count resets only once an ask has landed (`resetAfterAsk`), so an ask
+ * that fails is retried on the next stop — never a fresh continuation.
  */
 export function nextAfterStop(
   state: Pick<RunTurnsState, "autoContinues">
@@ -235,12 +238,14 @@ async function recordTurnEnd(
     const next: RunTurnsState = {
       runId,
       stops: state.stops + (stopped ? 1 : 0),
+      // An ask does NOT reset the count here: it resets only once the ask has
+      // LANDED (`resetAfterAsk`). Resetting before it lands meant a failed ask
+      // handed the run two more fresh-budget continuations, then another failed
+      // ask, and so on — unbounded spend with no person in the loop.
       autoContinues:
         decision?.next === "continue"
           ? decision.continuation
-          : decision?.next === "ask"
-            ? 0
-            : state.autoContinues,
+          : state.autoContinues,
       firstTurn: state.firstTurn ?? record,
       turns: [...state.turns, record].slice(-TURN_HISTORY_MAX),
     };
@@ -249,6 +254,36 @@ async function recordTurnEnd(
       .set({ metadata: mergeSessionMetadata({ [RUN_TURNS_META_KEY]: next }) })
       .where(eq(focusSessions.id, sessionId));
     return { decision, state: next };
+  });
+}
+
+/**
+ * The person has been asked (the slot is theirs): the next stops get fresh
+ * automatic continuations again. A second locked write, made only after the
+ * ask landed; a ledger that moved on to another run is left alone.
+ */
+async function resetAfterAsk(sessionId: string, runId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({ metadata: focusSessions.metadata })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, sessionId))
+      .for("update");
+    if (!locked) return;
+    const raw =
+      locked.metadata && typeof locked.metadata === "object"
+        ? (locked.metadata as Record<string, unknown>)[RUN_TURNS_META_KEY]
+        : undefined;
+    if ((raw as Partial<RunTurnsState> | undefined)?.runId !== runId) return;
+    const state = readRunTurns(locked.metadata, runId);
+    await tx
+      .update(focusSessions)
+      .set({
+        metadata: mergeSessionMetadata({
+          [RUN_TURNS_META_KEY]: { ...state, autoContinues: 0 },
+        }),
+      })
+      .where(eq(focusSessions.id, sessionId));
   });
 }
 
@@ -420,6 +455,7 @@ export async function settleRunTurnEnd(p: {
     stops: state.stops,
   });
   if (asked) {
+    await resetAfterAsk(session.id, run.id);
     const parked = await applyRunCapture({ run, status: "waiting_on_you" });
     if (parked) return "waiting_on_you";
   }

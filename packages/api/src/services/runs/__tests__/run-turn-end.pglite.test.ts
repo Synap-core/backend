@@ -35,6 +35,8 @@ const h = vi.hoisted(() => ({
   },
   triggers: [] as Array<Record<string, unknown>>,
   settled: [] as Array<Record<string, unknown>>,
+  /** When set, the ask's slot declaration fails (the ask does not land). */
+  failDeclare: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -90,6 +92,20 @@ vi.mock("../../../utils/channel-visibility.js", async () => {
 vi.mock("../../../lib/event-helpers.js", () => ({
   logEvent: async () => "evt",
 }));
+// Pass-through: the REAL locked slot write, except when a test makes the ask
+// fail to land (the M7 precondition) — the declaration then returns false,
+// exactly what `updateExpectedOutputsLocked` answers for a vanished row.
+vi.mock("../../focus-sessions/delegate-output.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const real = actual.updateExpectedOutputsLocked as (
+    ...a: unknown[]
+  ) => Promise<boolean>;
+  return {
+    ...actual,
+    updateExpectedOutputsLocked: async (...a: unknown[]) =>
+      h.failDeclare ? false : real(...a),
+  };
+});
 vi.mock("../../../utils/trigger-auto-respond.js", () => ({
   triggerAutoRespond: async (p: Record<string, unknown>) => {
     h.triggers.push(p);
@@ -279,6 +295,7 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
   beforeEach(() => {
     h.triggers.length = 0;
     h.settled.length = 0;
+    h.failDeclare = false;
   });
 
   it("no body (an older IS) completes the run, as before — and settles its parent", async () => {
@@ -396,6 +413,39 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     expect(done.json).toEqual({ status: "completed" });
     expect((await runRow(runId)).status).toBe("completed");
     expect(h.settled).toEqual([{ playbookRunId: runId }]);
+  });
+
+  it("an ask that does NOT land keeps the count: the next stop asks again, never a fresh continuation (M7)", async () => {
+    // Before: the count was reset to 0 when the pod DECIDED to ask, inside the
+    // recording transaction. An ask that then failed left the run running with
+    // a fresh count, so the next stops continued twice more on fresh budgets,
+    // asked (failed) again, and so on: unbounded spend, nobody asked.
+    const { sessionId, runId } = await seedRun();
+    for (let n = 1; n <= MAX_AUTO_CONTINUATIONS; n++) {
+      expect((await completeRun(sessionId, STOPPED)).json).toEqual({
+        status: "continued",
+      });
+    }
+
+    h.failDeclare = true;
+    const failed = await completeRun(sessionId, STOPPED);
+    expect(failed.json).toEqual({ status: "left_running" });
+    expect((await runRow(runId)).status).toBe("running");
+    expect((await ledger(sessionId)).autoContinues).toBe(
+      MAX_AUTO_CONTINUATIONS
+    );
+
+    // The next stop tries the ask again — it does NOT continue on its own.
+    const again = await completeRun(sessionId, STOPPED);
+    expect(again.json).toEqual({ status: "left_running" });
+    expect(h.triggers).toHaveLength(MAX_AUTO_CONTINUATIONS);
+
+    // Once an ask lands, the count resets for after the person answers.
+    h.failDeclare = false;
+    const asked = await completeRun(sessionId, STOPPED);
+    expect(asked.json).toEqual({ status: "waiting_on_you" });
+    expect(h.triggers).toHaveLength(MAX_AUTO_CONTINUATIONS);
+    expect((await ledger(sessionId)).autoContinues).toBe(0);
   });
 
   it("a FORCED-FINAL turn (budgetAction final) is a stop too, never a completion", async () => {
