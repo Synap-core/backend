@@ -159,6 +159,38 @@ CREATE TABLE views (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   scope_profile_ids uuid[] DEFAULT '{}'
 );
+-- D5 dedupeRelationDefs (0524f9f44): reads relation_defs, repoints
+-- profile_relations + property_defs.relation_def_id.
+CREATE TABLE relation_defs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug text NOT NULL,
+  display_name text NOT NULL,
+  description text,
+  workspace_id uuid,
+  ui_hints jsonb NOT NULL DEFAULT '{}',
+  is_directional boolean NOT NULL DEFAULT true,
+  created_at timestamptz DEFAULT now()
+);
+CREATE TABLE profile_relations (
+  source_profile_id uuid NOT NULL,
+  target_profile_id uuid NOT NULL,
+  relation_def_id uuid NOT NULL,
+  property_def_id uuid,
+  PRIMARY KEY (source_profile_id, target_profile_id, relation_def_id)
+);
+ALTER TABLE property_defs ADD COLUMN IF NOT EXISTS relation_def_id uuid;
+-- w12.calcom.booking-deal-into-lead writes the lead's edges (same shape as
+-- w12-calcom-booking-deal.pglite.test.ts).
+CREATE TABLE relations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id text NOT NULL,
+  workspace_id uuid,
+  source_entity_id uuid,
+  target_entity_id uuid,
+  type text NOT NULL,
+  metadata jsonb DEFAULT '{}',
+  created_at timestamptz DEFAULT now()
+);
 `;
 
 /** The live pod's shared workspace stamp on the system item/note/capture rows. */

@@ -131,6 +131,11 @@ const ACKNOWLEDGED: Record<string, string> = {
   // services/playbooks/stage-gate.ts) — grep `trackGateSubject`.
   "api:services/tracks/tracks-service.ts":
     "project_tracks.current_stage (the track door), not focus_sessions — gate via applyStageGate",
+  // READ, NOT WRITE — a select projection of the track receipts' JSON
+  // (`currentStage: drizzleSql<…>\`${events.data}->>'currentStage'\``); the
+  // classifier's read spellings do not cover a typed SQL projection.
+  "api:services/tracks/track-history.ts":
+    "read: select projection of events.data->>'currentStage' (track receipts), not a column write",
 
   // THE DOOR'S OWN single-column UPDATE lives in the door; listed for completeness
   // by THE_DOOR above, not here.

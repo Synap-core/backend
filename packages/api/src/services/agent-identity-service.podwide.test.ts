@@ -26,7 +26,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 /** Captures the input handed to the canonical hub-inbound mint primitive. */
 let lastMintInput: Record<string, unknown> | undefined;
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   // findOrCreateServiceAgentUser short-circuits on an existing agent user, so no
   // insert path is exercised. Its principal is userType='agent' by construction
   // (that insert shape is asserted by agent-creator-type-singleton + the
@@ -52,7 +53,11 @@ vi.mock("@synap/database", () => ({
   ApiKeyRepository: class {},
 }));
 
-vi.mock("@synap/database/schema", () => ({ agents: {}, users: {} }));
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
+  agents: {},
+  users: {},
+}));
 
 vi.mock("./hub-integration-registration.js", () => ({
   SETUP_AGENT_HUB_SCOPES: ["hub-protocol.read", "hub-protocol.write"],

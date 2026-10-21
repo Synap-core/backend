@@ -18,6 +18,10 @@
 // Usage: node scripts/scan-total-mock-gaps.mjs
 import fs from "fs";
 import path from "path";
+// Comments are stripped before scanning: a quote in prose (`door's`) opened a
+// fake string that swallowed the factory key after it, reporting a name the
+// factory DOES list as missing (agent-skills.governance.test.ts, 2026-10-21).
+import { stripComments } from "../../../scripts/strip-comments.mjs";
 const API = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
   "..",
@@ -115,7 +119,7 @@ function scanTotalMockGaps() {
   }
   // named imports of `spec` inside file
   function namedImportsOf(file, spec) {
-    const src = fs.readFileSync(file, "utf8");
+    const src = stripComments(fs.readFileSync(file, "utf8"), "ts");
     const out = new Set();
     const re = new RegExp(
       "import\\s+(type\\s+)?\\{([^}]*)\\}\\s*from\\s*[\"']" +
@@ -139,7 +143,7 @@ function scanTotalMockGaps() {
   const findings = [];
   let totalFactories = 0;
   for (const t of tests) {
-    const src = fs.readFileSync(t, "utf8");
+    const src = stripComments(fs.readFileSync(t, "utf8"), "ts");
     // relative modules the test imports (candidate modules-under-test)
     const deps = new Set();
     for (const m of src.matchAll(/from\s*["'](\.[^"']+)["']/g)) {

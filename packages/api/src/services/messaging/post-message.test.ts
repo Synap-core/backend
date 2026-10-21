@@ -15,7 +15,8 @@ const state = vi.hoisted(() => ({
   notifyRoomPost: vi.fn(async () => undefined),
 }));
 
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }),
 }));
 
@@ -26,7 +27,7 @@ vi.mock("../../utils/channel-visibility.js", () => ({
   channelVisibilityWhere: () => undefined,
 }));
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
   // Two distinct selects reach this mock: the channel floor
   // (`from().where().limit()`) and the dedup lookup (which also calls
   // `orderBy()`). Key off `orderBy` so each resolves its own rows.
@@ -46,6 +47,7 @@ vi.mock("@synap/database", () => {
     return chain;
   };
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     db: {
       select: vi.fn(() => makeSelectChain()),
       insert: vi.fn(() => {

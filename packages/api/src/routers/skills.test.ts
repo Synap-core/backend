@@ -25,7 +25,8 @@ vi.mock("../utils/permission-check.js", () => ({
   createPendingProposal: vi.fn(),
 }));
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     insert: mockDbInsert,
   },
@@ -36,12 +37,14 @@ vi.mock("@synap/database", () => ({
   inArray: vi.fn((col, arr) => ({ inArray: [col, arr] })),
 }));
 
-vi.mock("@synap/database/schema", () => ({
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
   skills: { id: "id", name: "name", kind: "kind" },
   tools: {},
 }));
 
-vi.mock("@synap/events", () => ({
+vi.mock("@synap/events", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/events")>()),
   emitSideEffects: vi.fn(),
 }));
 
@@ -62,7 +65,10 @@ vi.mock("../utils/user-scoped.js", () => ({
 vi.mock("../utils/user-visible-where.js", () => ({
   userVisibleWhere: vi.fn(),
 }));
-vi.mock("@synap/shared-utils", () => ({ safeExternalFetch: vi.fn() }));
+vi.mock("@synap/shared-utils", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/shared-utils")>()),
+  safeExternalFetch: vi.fn(),
+}));
 vi.mock("../services/capabilities/gate-capability-execution.js", () => ({
   gateCapabilityExecution: vi.fn(),
 }));
@@ -75,13 +81,6 @@ vi.mock("../skills/skill-toml-parser.js", () => ({ parseSkillToml: vi.fn() }));
 vi.mock("../utils/intelligence-routing.js", () => ({
   resolveIntelligenceService: vi.fn(),
 }));
-vi.mock("../trpc.js", () => ({
-  router: (routes: unknown) => routes,
-  protectedProcedure: {
-    input: () => ({ query: vi.fn(), mutation: vi.fn() }),
-  },
-}));
-
 import { insertSkillGoverned, skillExecFieldsChanged } from "./skills.js";
 
 /**

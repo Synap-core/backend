@@ -32,7 +32,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { db } from "@synap/database";
 import { resolveGovernanceRule } from "@synap/database/agent-governance";
-import { governanceRules } from "@synap/database/schema";
+import { allSchemaTables } from "../../__tests__/pglite-ddl.js";
 import {
   decideAgentPolicy,
   nonWidenableFloorFor,
@@ -90,7 +90,9 @@ async function verdictFor(
 }
 
 beforeAll(async () => {
-  await h.client!.exec(ddlFor(governanceRules as PgTable));
+  // Every schema table: the real resolver's rule query also reads `users`
+  // (the agent's class), and a hand-picked list rots on the next such read.
+  for (const table of allSchemaTables()) await h.client!.exec(ddlFor(table));
 });
 
 beforeEach(async () => {

@@ -23,6 +23,7 @@
 import { db, focusSessions, eq } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./expected-label.js";
+import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { deriveSlotKeys } from "./slot-keys.js";
 import {
   mergeExpectedOutputs,
@@ -76,32 +77,44 @@ export function stageSlotsToAdd(
  * Merge the entered stage's declared outputs into the session's slots, under
  * the session row lock. `stages` is the run's own stage list (its definition
  * snapshot, as `loadSessionProcess` reads it). Returns the labels it added.
+ * A stage may owe the PERSON a slot (`owner: 'human'`): when an agent drove the
+ * advance they are told through the ONE producer, after the lock (it never
+ * throws) — needs-you-every-handoff-door.
  */
 export async function mergeEnteredStageSlots(input: {
   sessionId: string;
   stageKey: string;
   stages: unknown;
+  /** An agent drove the advance — see `notifySessionNeedsYou.byAgent`. */
+  byAgent: boolean;
 }): Promise<{ added: string[] }> {
   if (declaredStageOutputs(input.stages, input.stageKey).length === 0) {
     return { added: [] };
   }
-  return db.transaction(async (tx) => {
+  const merged = await db.transaction(async (tx) => {
     const [locked] = await tx
       .select({ expectedOutputs: focusSessions.expectedOutputs })
       .from(focusSessions)
       .where(eq(focusSessions.id, input.sessionId))
       .for("update");
-    if (!locked) return { added: [] };
+    if (!locked) return null;
     const current: ExpectedOutput[] = Array.isArray(locked.expectedOutputs)
       ? (locked.expectedOutputs as ExpectedOutput[])
       : [];
     const added = stageSlotsToAdd(input.stages, input.stageKey, current);
-    if (added.length === 0) return { added: [] };
+    if (added.length === 0) return null;
     const next = mergeExpectedOutputs(current, [...current, ...added]);
     await tx
       .update(focusSessions)
       .set({ expectedOutputs: next, updatedAt: new Date() })
       .where(eq(focusSessions.id, input.sessionId));
-    return { added: added.map((o) => o.label) };
+    return { before: current, after: next, added: added.map((o) => o.label) };
   });
+  if (!merged) return { added: [] };
+  await notifySessionNeedsYou({
+    sessionId: input.sessionId,
+    byAgent: input.byAgent,
+    reason: { kind: "slots", before: merged.before, after: merged.after },
+  });
+  return { added: merged.added };
 }

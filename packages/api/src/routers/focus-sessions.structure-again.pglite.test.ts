@@ -115,21 +115,9 @@ vi.mock(
 );
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import {
-  db,
-  entities,
-  entityFacets,
-  relations,
-  projectMembers,
-  workspaces,
-  workspaceMembers,
-  podMembers,
-  focusSessions,
-  documents,
-  documentVersions,
-  users,
-} from "@synap/database";
+import { db } from "@synap/database";
 import { focusSessionsRouter } from "./focus-sessions.js";
+import { allSchemaTables } from "../__tests__/pglite-ddl.js";
 
 const USER = "user-1";
 const OTHER = "user-2";
@@ -251,20 +239,10 @@ async function sessionRow(id: string) {
 
 describe("focusSessions.structureAgain — an entity's text through the capture door, as a new run", () => {
   beforeAll(async () => {
-    for (const t of [
-      entities,
-      entityFacets,
-      relations,
-      projectMembers,
-      workspaces,
-      workspaceMembers,
-      podMembers,
-      focusSessions,
-      documents,
-      documentVersions,
-      users,
-    ]) {
-      await h.client!.exec(ddlFor(t as unknown as PgTable));
+    // Every schema table: a hand-picked list rots the day the code under test
+    // reads one more (pglite-ddl.ts allSchemaTables).
+    for (const t of allSchemaTables()) {
+      await h.client!.exec(ddlFor(t));
     }
   });
   beforeEach(async () => {

@@ -52,8 +52,11 @@ describe("Channel V2 type vocabulary — drift guard", () => {
     // channel_type column must exist on channels (text, no CHECK — see 0023 notes).
     expect(sql).toMatch(/"channel_type"\s+text/);
 
-    // thread_kind was dropped in 0010 — must not reappear in the baseline.
-    expect(sql).not.toMatch(/thread_kind/);
+    // thread_kind was dropped in 0010 — must not reappear in the baseline's
+    // statements. Comments may NAME it (the 0182 uniqueness note does).
+    const statements = sql.replace(/--[^\n]*/g, "");
+    expect(statements).toMatch(/"channel_type"\s+text/); // strip kept the DDL
+    expect(statements).not.toMatch(/thread_kind/);
   });
 
   test("0023_channel_v2_restore migration references the original V2 six", () => {

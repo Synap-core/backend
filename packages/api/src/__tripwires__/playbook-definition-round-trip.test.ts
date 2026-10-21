@@ -56,7 +56,10 @@ vi.mock("../routers/hub-protocol/utils.js", async (importOriginal) => ({
   >()),
   createHubProtocolCallerContext: vi.fn(async () => ({})),
 }));
-vi.mock("../services/links/links-service.js", () => ({
+vi.mock("../services/links/links-service.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../services/links/links-service.js")
+  >()),
   createLinks: vi.fn(async () => []),
 }));
 // db.select()...limit() → [] : no existing playbook to reuse ⇒ create runs.

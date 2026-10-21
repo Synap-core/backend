@@ -149,7 +149,9 @@ describe("(2) THE FLOOR — same proposal, same id, class decides", () => {
       roster: true,
     });
     expect(res.allowed).toBe(true);
-    expect(res.reason).toBe("owner");
+    // Display-only reason (review-authority.ts): the caller owns the agent that
+    // proposed, so it narrates "agent-owner" (1d6ef54e0); the verdict is what flips.
+    expect(res.reason).toBe("agent-owner");
   });
 
   it("DENIES the agent on the POD-WIDE branch too (no workspace to fall back on)", async () => {

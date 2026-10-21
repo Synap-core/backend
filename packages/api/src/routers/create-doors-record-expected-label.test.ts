@@ -25,6 +25,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const WS = "33333333-3333-4333-8333-333333333333";
 const VIEW = "55555555-5555-4555-8555-555555555555";
+const DOC = "44444444-4444-4444-8444-444444444444";
 
 const recordSessionArtifact = vi.fn(
   async (_params: Record<string, unknown>) => undefined
@@ -52,7 +53,7 @@ vi.mock("@synap/database", async (importOriginal) => {
       values: () => chain,
       onConflictDoNothing: () => chain,
       onConflictDoUpdate: () => chain,
-      returning: async () => [{ id: "doc-1", title: "The spec" }],
+      returning: async () => [{ id: DOC, title: "The spec" }],
       then: (resolve: (v: unknown) => void) => resolve([]),
     };
     return chain;
@@ -69,6 +70,8 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db,
     getDb: async () => db,
+    // createDocumentWithContent (522f891c7) appends its event; not pinned here.
+    eventRepository: { append: async () => ({}) },
     // The view write itself is not what these pin — the ledger call after it is.
     ViewRepository: class {
       create = async () => createdView;
@@ -123,7 +126,7 @@ describe("documents.create — the human door can claim a declared slot", () => 
     expect(recordSessionArtifact.mock.calls[0]![0]).toMatchObject({
       sessionId: SESSION,
       kind: "document",
-      refId: "doc-1",
+      refId: DOC,
       expectedLabel: "Spec",
       userId: "user-1",
     });

@@ -23,7 +23,6 @@ import {
 import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
-import { TRPCError } from "@trpc/server";
 import { PENDING_APPROVAL_BATCH_MAX } from "@synap-core/types/external-connect";
 
 import {
@@ -2659,8 +2658,14 @@ export function registerSetupRoutes(app: HubHono): void {
     } catch (err) {
       // A typed refusal keeps its own status; anything else is a real fault.
       const status = httpStatusForTrpcError(err);
-      if (err instanceof TRPCError && status !== 500)
-        return c.json({ error: err.message }, status);
+      // Status from the cause walk, never a class-identity check: in the
+      // bundled pod that check was always false and a 400 answered 500
+      // (no-instanceof-trpcerror-in-rest).
+      if (status !== 500)
+        return c.json(
+          { error: err instanceof Error ? err.message : String(err) },
+          status
+        );
       throw err;
     }
     if (outcome === "forbidden")

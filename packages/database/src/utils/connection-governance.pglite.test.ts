@@ -152,8 +152,14 @@ describe("isConnectionSyncProposal — agrees with readConnectionSync on every s
     ],
     ["no stamp", "import.graph", { operations: [] }, false],
     [
-      "well-formed stamp on another proposal type",
+      "well-formed stamp on the unified import door (capture.graph)",
       "capture.graph",
+      { connectionSync: { connectionId: "c" } },
+      true,
+    ],
+    [
+      "well-formed stamp on another proposal type",
+      "entity.create",
       { connectionSync: { connectionId: "c" } },
       false,
     ],
@@ -164,10 +170,11 @@ describe("isConnectionSyncProposal — agrees with readConnectionSync on every s
       const id = `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`;
       await proposal(id, type, data);
       await expect(isConnectionSyncProposal(id, db)).resolves.toBe(expected);
-      // Parity with the in-memory reader (only an import.graph can count):
+      // Parity with the in-memory reader (import.graph / capture.graph count, 98bc6a5ae):
       const reader = readConnectionSync(data);
       const readerSaysSync =
-        type === "import.graph" && typeof reader === "object";
+        (type === "import.graph" || type === "capture.graph") &&
+        typeof reader === "object";
       expect(readerSaysSync, `reader/SQL disagree on: ${label}`).toBe(expected);
     });
   });

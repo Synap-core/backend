@@ -30,7 +30,7 @@ vi.mock("@synap/storage", () => ({
     getSignedUrl: vi.fn(async () => "u"),
   },
 }));
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
   const chain = () => {
     const o: Record<string, unknown> = {};
     o.from = () => o;
@@ -39,6 +39,7 @@ vi.mock("@synap/database", () => {
     return o;
   };
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     db: {
       select: () => chain(),
       // The owner fallback of the write gate: the caller owns the space.
