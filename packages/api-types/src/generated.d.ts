@@ -12241,6 +12241,62 @@ export interface OAuthAppOfferItem {
 		workspaceName: string;
 	}>;
 }
+/** How an app's writes land, as its page shows it. */
+export interface AppWriteModeView {
+	/**
+	 * The switch: ON when the app's agent follows the pod's default ("apply
+	 * automatically"), OFF while it asks first (every connection starts OFF).
+	 */
+	applyAutomatically: boolean;
+	/** The effective mode, the pod default included (`resolveAgentWriteMode`). */
+	writeMode: AgentWriteMode;
+	/** The one sentence for that mode. */
+	line: string;
+}
+/** One approved (permission, space) pair, with the space's name. */
+export type NamedApprovedRequest = AppApprovedRequest & {
+	workspaceName: string | null;
+};
+/** What a pod app connection adds to its app row (`pod_app` on the wire). */
+export interface PodAppView {
+	/** The app's metadata-document URL — its OAuth `client_id`. */
+	client_id: string;
+	/** Its host: the app's identity, the headline. */
+	domain: string;
+	/** A Synap app (exact first-party origin) vs an unverified one. */
+	verified: boolean;
+	/** What the person approved, per space — what Narrow edits. */
+	approved: NamedApprovedRequest[];
+	/** When this person last connected it (the newest consent). */
+	connected_at: Date | null;
+	/** The newest use of any of its access tokens. */
+	last_used_at: Date | null;
+	write_mode: AppWriteModeView;
+}
+/** One member's connection of a pod app, as the pod admin reads it. */
+export interface AdminPodAppMember {
+	public_id: string;
+	owner: {
+		id: string;
+		name: string | null;
+		email: string | null;
+	} | null;
+	approved: NamedApprovedRequest[];
+	connected_at: Date | null;
+	last_used_at: Date | null;
+	revoked_at: Date | null;
+}
+/** One pod app across the pod's members (`apps.adminPodApps`). */
+export interface AdminPodAppGroup {
+	client_id: string;
+	domain: string;
+	verified: boolean;
+	/** The name the app gives itself (text only), from a member's row. */
+	name: string;
+	/** Members whose connection is live. */
+	live: number;
+	members: AdminPodAppMember[];
+}
 /**
  * What a POD APP (CIMD client) is shown as on the consent screen (spec 17
  * §9.1). Its identity is its DOMAIN (the client_id host), not its name.
@@ -25584,6 +25640,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | undefined;
 			output: {
 				keys: AppKeySummary[];
+				pod_app: PodAppView | null;
 				id: string;
 				public_id: string;
 				name: string;
@@ -25660,6 +25717,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				keys: AppKeySummary[];
+				pod_app: PodAppView | null;
 				id: string;
 				public_id: string;
 				name: string;
@@ -25750,6 +25808,54 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					revokedAt: Date | null;
 				}[];
 			};
+			meta: object;
+		}>;
+		narrow: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+				approved: {
+					permission: string;
+					workspaceId: string;
+				}[];
+			};
+			output: {
+				id: string;
+				public_id: string;
+				name: string;
+				description: string | null;
+				logo_url: string | null;
+				mode: "oauth" | "specific";
+				approved_requests: AppApprovedRequest[] | null;
+				pending_request: {
+					proposal_id: string;
+					requests: AppApprovedRequest[];
+					requested_at: Date;
+				} | null;
+				created_at: Date;
+				revoked_at: Date | null;
+				removed_at: Date | null;
+				agent_user_id: string | null;
+				last_used_at: Date | null;
+				grants: {
+					id: string;
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					createdAt: Date;
+					revokedAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		setWriteMode: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+				applyAutomatically: boolean;
+			};
+			output: AppWriteModeView;
 			meta: object;
 		}>;
 		revoke: import("@trpc/server").TRPCMutationProcedure<{
@@ -25875,6 +25981,42 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				removed: boolean;
 				publicId: string;
+			};
+			meta: object;
+		}>;
+		adminPodApps: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: AdminPodAppGroup[];
+			meta: object;
+		}>;
+		adminRevokeClient: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				clientId: string;
+			};
+			output: {
+				revoked: number;
+			};
+			meta: object;
+		}>;
+		adminPolicy: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				unverifiedLive: number;
+				allowUnverified: boolean;
+				changedBy: string | null;
+				changedAt: string | null;
+			};
+			meta: object;
+		}>;
+		adminSetPolicy: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				allowUnverified: boolean;
+			};
+			output: {
+				unverifiedLive: number;
+				allowUnverified: boolean;
+				changedBy: string | null;
+				changedAt: string | null;
 			};
 			meta: object;
 		}>;
