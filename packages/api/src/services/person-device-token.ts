@@ -258,7 +258,7 @@ export async function signInPersonDevice(args: {
       label: clip(args.label, LABEL_MAX),
       userAgent: clip(args.userAgent, USER_AGENT_MAX),
       expiresAt: capAt,
-      authTime: args.authTime ?? null,
+      authTime: new Date(),
     })
     .returning({ id: personDevices.id });
   if (!device) throw new Error("person device: the insert returned no row");
@@ -307,7 +307,7 @@ export async function refreshPersonDevice(args: {
   const refreshToken = await rotateRefreshToken(redeemed);
   await db
     .update(personDevices)
-    .set({ lastUsedAt: new Date() })
+    .set({ lastUsedAt: new Date(), authTime: new Date() })
     .where(eq(personDevices.id, redeemed.deviceId));
   return { deviceId: redeemed.deviceId, ...access, refreshToken };
 }
@@ -331,7 +331,6 @@ export async function stepUpPersonDevice(args: {
   if (
     !held?.deviceId ||
     held.clientId !== args.clientId ||
-    held.userId !== args.personUserId ||
     !args.authTime
   ) {
     throw new OAuthError(

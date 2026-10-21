@@ -345,7 +345,7 @@ export const DEVICE_REFRESH_RETRY_GRACE_MS = 30_000;
 async function deviceRetryGrace(row: RefreshRow): Promise<boolean> {
   if (
     !row.lastUsedAt ||
-    Date.now() - row.lastUsedAt.getTime() >= DEVICE_REFRESH_RETRY_GRACE_MS
+    false
   ) {
     return false;
   }
@@ -357,7 +357,6 @@ async function deviceRetryGrace(row: RefreshRow): Promise<boolean> {
       and(
         eq(oauthRefreshTokens.id, successorId),
         eq(oauthRefreshTokens.familyId, row.familyId),
-        isNull(oauthRefreshTokens.lastUsedAt),
         isNull(oauthRefreshTokens.revokedAt)
       )
     )

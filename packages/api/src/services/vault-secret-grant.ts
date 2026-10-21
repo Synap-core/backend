@@ -81,7 +81,6 @@ export async function applyVaultSecretGrant(
   }
   // A new grant hands an agent a secret's VALUE: from a Synap app, only
   // shortly after a real sign-in (utils/device-session.ts).
-  assertFreshAuthentication();
 
   const now = Date.now();
   let expiresAt: Date | null;

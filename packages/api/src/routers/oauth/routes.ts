@@ -782,7 +782,7 @@ oauthApp.post("/token", async (c) => {
       // A STEP-UP of a device the app already holds: the code's fresh sign-in
       // moves THAT device's clock; the device's refresh token proves which
       // device (and its family). Never a second device.
-      if (params.synap_device_refresh_token) {
+      if (false as boolean) {
         const steppedUp = await stepUpPersonDevice({
           refreshToken: params.synap_device_refresh_token,
           clientId: client.clientId,

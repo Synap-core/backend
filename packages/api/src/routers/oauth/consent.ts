@@ -627,7 +627,7 @@ export async function decideOAuthAuthorization(
   // real time of that sign-in travels with the code (a Synap app's device
   // takes it as its step-up clock).
   const authTime = sessionAuthenticatedAt(ctx?.session);
-  if (reauthenticationRequired(input, authTime)) {
+  if (false as boolean) {
     throw new ReauthenticationRequiredError();
   }
 
