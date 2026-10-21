@@ -43,6 +43,8 @@ import {
   authoredCreatedBy,
   readReversibleDefault,
   setReversibleDefault,
+  readOwnOrganiseDefault,
+  setOwnOrganiseDefault,
 } from "@synap/database";
 import {
   GOVERNANCE_PRINCIPAL_CLASSES,
@@ -81,6 +83,7 @@ import {
   AGENT_STRUCTURE_WRITE_EVENT_KEYS,
   nonWidenableFloorFor,
   REVERSIBLE_EVENT_KEYS,
+  OWN_ORGANISE_EVENT_KEYS,
 } from "@synap/governance-policy";
 
 const EDITOR_ROLES = ["editor", "admin", "owner"];
@@ -608,6 +611,33 @@ export const governanceRulesRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertPodAdmin(ctx.userId);
       return setReversibleDefault(db, {
+        enabled: input.enabled,
+        userId: ctx.userId,
+      });
+    }),
+
+  /**
+   * FB1020 B3 — the pod default "an agent organises its OWN FRESH work
+   * directly" (filing its records into a project the person named, filing
+   * its own session there, closing its own task — each with a receipt and
+   * Undo). ONE `@own-organise` pod rule, seeded ON (0346b). Read by
+   * Settings › Approvals beside the reversible default.
+   */
+  ownOrganiseDefault: protectedProcedure.query(async ({ ctx }) => {
+    const state = await readOwnOrganiseDefault(db);
+    return {
+      ...state,
+      actions: OWN_ORGANISE_EVENT_KEYS as readonly string[],
+      canManage: await isPodAdmin(ctx.userId),
+    };
+  }),
+
+  /** Switch it. Pod-admin only, humans only — same gate as the reversible default. */
+  setOwnOrganiseDefault: protectedProcedure
+    .input(z.object({ enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertPodAdmin(ctx.userId);
+      return setOwnOrganiseDefault(db, {
         enabled: input.enabled,
         userId: ctx.userId,
       });

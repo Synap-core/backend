@@ -66,6 +66,23 @@ export type ProposalRevertPlan =
     }
   | { kind: "restore-delete"; entityId: string }
   /**
+   * A lifecycle STATUS move (FB1020 B3): its inverse is a NEW move back
+   * through the one status door (`moveStatus`, as the person undoing it) —
+   * never a column restore, which would skip the door's checks, its event and
+   * the automations that listen to it. Compare-and-set: only while the thing
+   * still holds `movedTo`.
+   */
+  | {
+      kind: "move-status-back";
+      entityId: string;
+      role: string | null;
+      facetId: string | null;
+      /** What the move set — the status Undo expects to find. */
+      movedTo: string;
+      /** What it was before — the status Undo moves back to. */
+      restoreTo: string;
+    }
+  /**
    * Full entity-merge inverse: reverse signals/relations/links/facets and
    * restore both entities from pre-merge snapshots via `unmergeEntities`.
    */
@@ -370,10 +387,55 @@ export function planProposalRevert(
     };
   }
 
+  // A status move (FB1020 B3: an agent closing its own task comes with
+  // Undo): moved back through the status door. A move from NO status cannot
+  // be moved back — there is no option to move into.
+  if (isStatusMove(proposal)) {
+    const move = (
+      isNestedEnvelope(proposal.data)
+        ? (proposal.data as { data: unknown }).data
+        : proposal.data
+    ) as Record<string, unknown> | null | undefined;
+    const entityId = move?.entityId ?? move?.id;
+    const movedTo = move?.to;
+    const restoreTo = move?.expectedFrom;
+    if (
+      typeof entityId === "string" &&
+      typeof movedTo === "string" &&
+      typeof restoreTo === "string" &&
+      restoreTo !== movedTo
+    ) {
+      return {
+        kind: "move-status-back",
+        entityId,
+        role: typeof move?.role === "string" ? move.role : null,
+        facetId: typeof move?.facetId === "string" ? move.facetId : null,
+        movedTo,
+        restoreTo,
+      };
+    }
+    return {
+      kind: "unsupported",
+      reason:
+        "Revert of this status move is not supported: it moved from no status, so there is no status to move back to.",
+    };
+  }
+
   return {
     kind: "unsupported",
     reason: `Revert of proposal type '${proposal.targetType}/${proposal.proposalType}' is not supported.`,
   };
+}
+
+/** A lifecycle status move — the proposal (`transition`) or its receipt (`entity.transition`). */
+function isStatusMove(
+  proposal: Pick<RevertPlannerInput, "targetType" | "proposalType">
+): boolean {
+  return (
+    proposal.targetType === "entity" &&
+    (proposal.proposalType === "transition" ||
+      proposal.proposalType === "entity.transition")
+  );
 }
 
 /** A project filing — the proposal (`file_entities`) or its receipt (`project.file_entities`). */
@@ -458,6 +520,11 @@ export function wouldBeRevertable(
   }
   // The `project/file_entities` executor stamps the edges it writes.
   if (isProjectFiling(proposal)) return true;
+  // A PENDING status move is not predicted revertable: the prediction feeds
+  // the swipe/batch gate, and a person decides a status move by reading it
+  // (founder B3e: no batch approval beyond routine). Once applied, the
+  // planner offers its Undo.
+  if (isStatusMove(proposal)) return false;
   // The `focus_session/update` executor stamps an undoable patch, and only one.
   if (
     proposal.targetType === "focus_session" &&

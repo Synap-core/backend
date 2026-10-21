@@ -19,8 +19,11 @@
  *      not say which, so it is no existence oracle.
  *   2. GATE: `checkPermissionOrPropose` —
  *        file   → `project/file_entities`, `forcePropose` (an ACCESS decision:
- *                 an agent ALWAYS proposes; rules cannot widen rung 2.1). The
- *                 engine files it under its own reason, `PROJECT_FILING`;
+ *                 an agent proposes; rules cannot widen rung 2.1). The
+ *                 engine files it under its own reason, `PROJECT_FILING`.
+ *                 One exception (FB1020 B3): an agent filing its OWN FRESH
+ *                 records into a project the person named reaches the pod's
+ *                 own-organise class row instead (`own-organise.ts`);
  *        unfile → `link/delete` (DESTRUCTIVE floor: an agent always proposes).
  *      One proposal for the whole batch.
  *   3. APPLY (`applyProjectFiling`, also the approval half): re-floors on the
@@ -50,6 +53,7 @@ import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
 import { loadVisibleProject } from "./load-visible-project.js";
+import { ownWorkOrganiseForFiling } from "../governance/own-organise.js";
 
 /** Batch bound — same order as `entities.moveToWorkspace`. */
 export const FILE_ENTITIES_MAX = 500;
@@ -266,6 +270,22 @@ export type FileEntitiesResult =
   | ProjectFilingApplied
   | { status: "proposed"; proposalId: string; reviewUrl?: string };
 
+/** The 2.1 floor, or the B3 proof that lifts it to the class row. */
+async function filingGovernance(
+  params: { agentUserId?: string | null; sessionId?: string | null },
+  plan: ProjectFilingPlan
+): Promise<{ forcePropose: boolean; ownWorkOrganise?: true }> {
+  const own = await ownWorkOrganiseForFiling({
+    agentUserId: params.agentUserId,
+    projectId: plan.project.id,
+    entityIds: plan.entities.map((e) => e.id),
+    sessionId: params.sessionId,
+  });
+  return own
+    ? { forcePropose: false, ownWorkOrganise: true }
+    : { forcePropose: true };
+}
+
 /** The ONE governed door (see file header). */
 export async function fileEntitiesGoverned(params: {
   userId: string;
@@ -309,9 +329,11 @@ export async function fileEntitiesGoverned(params: {
         subjectType: "project",
         action: "file_entities",
         // An ACCESS decision (exposes each record to the project's members):
-        // an agent always proposes, whatever rule or ownership says. The
-        // engine names it `PROJECT_FILING`, never a scope/identity change.
-        forcePropose: true,
+        // an agent proposes, whatever rule or ownership says (`PROJECT_FILING`)
+        // — UNLESS it files its OWN FRESH records into a project the person
+        // named (FB1020 B3, `own-organise.ts`). Then only the pod's
+        // own-organise class row may apply it directly, with a receipt + Undo.
+        ...(await filingGovernance(params, plan)),
         data: payload,
       });
 

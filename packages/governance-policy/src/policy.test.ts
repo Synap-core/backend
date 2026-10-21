@@ -1193,6 +1193,31 @@ describe("decideAgentPolicy — rung 2.6 per-capability governance", () => {
 });
 
 describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire)", () => {
+  it("FB1020 B3: the own-organise class row can NEVER auto-approve a delete, an admin write or a scope change, even with a door's proof", () => {
+    // Derived from the engine's own door registry, never a hand list.
+    const floored = Object.keys(GATE_WRITE_DOORS)
+      .map((door) => door.replace("/", "."))
+      .filter((key) => {
+        const action = key.slice(key.indexOf(".") + 1);
+        return (
+          ADMIN_ACTIONS.includes(key) ||
+          (DESTRUCTIVE_ACTIONS as readonly string[]).includes(action)
+        );
+      });
+    expect(floored.length).toBeGreaterThan(15);
+    for (const key of floored) {
+      const dot = key.indexOf(".");
+      const v = decideAgentPolicy({
+        subjectType: key.slice(0, dot),
+        action: key.slice(dot + 1),
+        ownWorkOrganise: true,
+        governanceRuleVerdict: "auto",
+        governanceRuleIsOwnOrganise: true,
+      });
+      expect({ key, verdict: v.verdict }).toEqual({ key, verdict: "propose" });
+    }
+  });
+
   it("a rule can NEVER override a floor: ADMIN_ACTIONS still propose even with governanceRuleVerdict:'auto'", () => {
     const v = decideAgentPolicy({
       subjectType: "workspace",

@@ -35245,6 +35245,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: ReversibleDefaultState;
 			meta: object;
 		}>;
+		ownOrganiseDefault: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				actions: readonly string[];
+				canManage: boolean;
+				enabled: boolean;
+				ruleId: string | null;
+			};
+			meta: object;
+		}>;
+		setOwnOrganiseDefault: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+			};
+			output: ReversibleDefaultState;
+			meta: object;
+		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				principalKind: "agent" | "any" | "class";
