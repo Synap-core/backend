@@ -21,9 +21,7 @@ packages/api/src/services/focus-sessions/__tests__/create-session-id-seam.test.t
 packages/api/src/services/focus-sessions/__tests__/schedule-session.test.ts | wave6 | stale-mock | vi.mock factory error (hoisted top-level variable)
 packages/api/src/services/focus-sessions/__tests__/session-first.pglite.test.ts | wave6 | assertion-drift | adoption keeps the receipt name, test expects null
 packages/api/src/services/intake/__tests__/capture-clarification-serialisers.test.ts | infra | sibling-repo | synap-app checked out but its deps do not resolve (@synap-core/types/capture)
-packages/api/src/services/reversibility/__tests__/cancel-and-item-revert.pglite.test.ts | api | unknown | agent cancel turned into a proposal resolves instead of rejecting
 packages/api/src/services/skills/run-skill-in-sandbox.verb-act.test.ts | infra | native-addon | isolated-vm has no prebuild for node20 linux in CI
-packages/api/src/services/workspace-materialization.contract.test.ts | api | unknown | grant capability install materializes 0 automations, expects 4
 packages/jobs/src/__tripwires__/relay-templates-match-runtime.tripwire.test.ts | infra | sibling-repo | relay-app checkout absent in CI
 packages/jobs/src/workers/__tests__/bookmark-enrichment-flow.test.ts | infra | sibling-repo | synap-cli checkout absent in CI
 packages/test-e2e/src/core-flows.test.ts | e2e | live-service | needs the AI service and workers the job does not boot
