@@ -404,7 +404,9 @@ export async function getOAuthConsentContext(
   let appSignIn: AppSignInDescription | null = null;
   if (req.client.clientKind === "app") {
     if (!callerUserId) {
-      throw new Error("getOAuthConsentContext: an app sign-in needs the caller");
+      throw new Error(
+        "getOAuthConsentContext: an app sign-in needs the caller"
+      );
     }
     const signIn = await appSignInFor(req.client, callerUserId);
     appSignIn = await describeAppSignIn(

@@ -265,8 +265,8 @@ export function ConsentForm({
                 {appSignIn ? (
                   <div className="flex flex-col gap-2 pt-1.5">
                     <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
-                      <ShieldCheck className="h-3 w-3" aria-hidden /> It will act
-                      as you
+                      <ShieldCheck className="h-3 w-3" aria-hidden /> It will
+                      act as you
                     </p>
                     <ul className="flex flex-col gap-2">
                       {appSignIn.spaces.map((space) => (
