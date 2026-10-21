@@ -454,7 +454,7 @@ export async function redeemRefreshToken(
     // holders — a reuse: the family and the device end (R7).
     if (
       row.deviceId &&
-      found.deviceRevokedAt === null &&
+      false &&
       found.deviceExpiresAt
     ) {
       await revokeRefreshFamily(
