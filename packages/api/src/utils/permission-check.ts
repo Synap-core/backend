@@ -2827,6 +2827,82 @@ function sessionLabelOf(data: Record<string, unknown>): string | null {
 }
 
 /**
+ * The title of a session FILING: one lead sentence for the first place it
+ * changes, then a clause for each other one, in a fixed order — track step
+ * (checked first: a filing that also sets the project names the project as a
+ * consequence of the track), project, space. Names are the display-only fields
+ * the filing door carries; a stage with no name humanizes through the
+ * vocabulary, never leaks as a key.
+ */
+function sessionFilingSummary(data: Record<string, unknown>): string {
+  const name = sessionLabelOf(data);
+  const sessionNoun = resolveObjectNoun("session").toLowerCase();
+  const parts: Array<{ lead: string; tail: string }> = [];
+  const trackProject = payloadName(data.trackProjectName);
+  if ("trackId" in data) {
+    const what = name ? `"${name}"` : sessionNoun;
+    if (data.trackId === null) {
+      parts.push({
+        lead: `Unfile ${what} from its track`,
+        tail: "unfile it from its track",
+      });
+    } else {
+      const track =
+        payloadName(data.trackName) ??
+        `a ${resolveObjectNoun("track").toLowerCase()}`;
+      const step =
+        payloadName(data.stageName) ??
+        (typeof data.trackStage === "string" && data.trackStage
+          ? humanizeToken(data.trackStage)
+          : null);
+      const where = `${track}${step ? ` · ${step}` : ""}${
+        trackProject ? ` (and into project "${trackProject}")` : ""
+      }`;
+      parts.push({
+        lead: `File ${what} into ${where}`,
+        tail: `file it into ${where}`,
+      });
+    }
+  }
+  if ("projectId" in data && !trackProject) {
+    const what = name ? `${sessionNoun} "${name}"` : sessionNoun;
+    const project = payloadName(data.projectName);
+    if (data.projectId === null) {
+      parts.push({
+        lead: `Unfile ${what}`,
+        tail: "take it out of its project",
+      });
+    } else {
+      const where = project ? ` into "${project}"` : " into a project";
+      parts.push({ lead: `File ${what}${where}`, tail: `file it${where}` });
+    }
+  }
+  if ("workspaceId" in data) {
+    if (data.workspaceId === null) {
+      const what = name ? `${sessionNoun} "${name}"` : sessionNoun;
+      parts.push({ lead: `Make ${what} personal`, tail: "make it personal" });
+    } else {
+      const head = buildObjectActionTitle({
+        action: "move",
+        objectKind: "focus_session",
+        objectName: name ?? undefined,
+      });
+      const space = spacePhrase(data.workspaceName);
+      parts.push({ lead: `${head} to ${space}`, tail: `move it to ${space}` });
+    }
+  }
+  const [first, ...rest] = parts;
+  if (!first) {
+    return buildObjectActionTitle({
+      action: "update",
+      objectKind: "focus_session",
+      objectName: name ?? undefined,
+    });
+  }
+  return [first.lead, ...rest.map((p) => p.tail)].join(" and ");
+}
+
+/**
  * Build a short human-readable summary of what's being proposed.
  * Example: `Create task "Design new onboarding flow"`
  *          `Delete entity ent_abc`
@@ -2891,53 +2967,17 @@ export function buildProposalSummary(
       ? `Hand session "${name}" to ${agent}`
       : `Hand a session to ${agent}`;
   }
-  // focus_session TRACK FILING (adopt existing work into a step). Checked
-  // BEFORE the project branch: a filing that also sets the project names the
-  // project as a consequence of the track, not as the headline. Names are the
-  // display-only fields `updateFocusSession` carries; a stage with no name
-  // humanizes through the vocabulary, never leaks as a key.
+  // focus_session FILING — where a session belongs (its track step, its
+  // project, its space) is the person's call, so the title says it is a move
+  // and names EVERY place it changes, never the generic "Update session"
+  // (review-theatre: approving what you cannot read). An agent's filing is its
+  // own proposal carrying only these fields (`session-filing-gate.ts`).
   if (
     subjectType === "focus_session" &&
     action === "update" &&
-    "trackId" in data
+    ("trackId" in data || "projectId" in data || "workspaceId" in data)
   ) {
-    const name = sessionLabelOf(data);
-    const what = name
-      ? `"${name}"`
-      : resolveObjectNoun("session").toLowerCase();
-    if (data.trackId === null) return `Unfile ${what} from its track`;
-    const track =
-      typeof data.trackName === "string" && data.trackName.trim()
-        ? data.trackName
-        : `a ${resolveObjectNoun("track").toLowerCase()}`;
-    const step =
-      typeof data.stageName === "string" && data.stageName.trim()
-        ? data.stageName
-        : typeof data.trackStage === "string" && data.trackStage
-          ? humanizeToken(data.trackStage)
-          : null;
-    const project =
-      typeof data.trackProjectName === "string" && data.trackProjectName.trim()
-        ? ` (and into project "${data.trackProjectName}")`
-        : "";
-    return `File ${what} into ${track}${step ? ` · ${step}` : ""}${project}`;
-  }
-  // focus_session FILING — which project a session belongs to is the person's
-  // call, so the title must say it is a move and name WHERE, not the generic
-  // "Update session" (review-theatre: approving what you cannot read).
-  if (
-    subjectType === "focus_session" &&
-    action === "update" &&
-    "projectId" in data
-  ) {
-    const name = sessionLabelOf(data);
-    const what = name ? `session "${name}"` : "session";
-    if (data.projectId === null) return `Unfile ${what}`;
-    const where =
-      typeof data.projectName === "string" && data.projectName.trim()
-        ? ` into "${data.projectName}"`
-        : " into a project";
-    return `File ${what}${where}`;
+    return sessionFilingSummary(data);
   }
   // focus_session create — "Start session …" when a goal is present
   if (subjectType === "focus_session" && action === "create") {

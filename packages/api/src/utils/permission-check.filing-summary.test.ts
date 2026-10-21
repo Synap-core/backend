@@ -117,3 +117,62 @@ describe("buildProposalSummary — close and hand-off name the session too", () 
     ).toBe('Hand session "Commercial foundations" to Worker');
   });
 });
+
+/**
+ * A filing names EVERY place it changes — track step, project, space — in one
+ * title (`sessionFilingSummary`), never only the first.
+ */
+describe("buildProposalSummary — a filing names every place it changes", () => {
+  it("project + space", () => {
+    expect(
+      buildProposalSummary("focus_session", "update", {
+        id: "s",
+        sessionName: "Shell work",
+        projectId: "p",
+        projectName: "Synap",
+        workspaceId: "w",
+        workspaceName: "Builder",
+      })
+    ).toBe(
+      'File session "Shell work" into "Synap" and move it to Space "Builder"'
+    );
+  });
+
+  it("a space move alone says move, not update", () => {
+    expect(
+      buildProposalSummary("focus_session", "update", {
+        id: "s",
+        sessionName: "Shell work",
+        workspaceId: "w",
+        workspaceName: "Builder",
+      })
+    ).toBe('Move Session "Shell work" to Space "Builder"');
+  });
+
+  it("make it personal", () => {
+    expect(
+      buildProposalSummary("focus_session", "update", {
+        id: "s",
+        sessionName: "Shell work",
+        workspaceId: null,
+      })
+    ).toBe('Make session "Shell work" personal');
+  });
+
+  it("track + an explicit project the track did not set + space", () => {
+    expect(
+      buildProposalSummary("focus_session", "update", {
+        id: "s",
+        sessionName: "Shell work",
+        trackId: "t",
+        trackName: "Win the first clients",
+        stageName: "Pitch",
+        projectId: null,
+        workspaceId: "w",
+        workspaceName: "Builder",
+      })
+    ).toBe(
+      'File "Shell work" into Win the first clients · Pitch and take it out of its project and move it to Space "Builder"'
+    );
+  });
+});
