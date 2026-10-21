@@ -16,6 +16,8 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { PgDialect } from "drizzle-orm/pg-core";
+import type { SQL } from "@synap/database";
 
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const WS = "33333333-3333-4333-8333-333333333333";
@@ -203,5 +205,45 @@ describe("focusSessions.update — expectedOutputs is MERGED, not replaced", () 
     ).rejects.toThrow(/server-stamped/i);
     // …and it is a refusal, not a partial write: nothing reached the column.
     expect(sets).toHaveLength(0);
+  });
+});
+
+/**
+ * `metadata.run` (the manifest a rerun replays) is server-owned
+ * (`SERVER_OWNED_SESSION_METADATA_KEYS`). The tRPC door takes no metadata bag
+ * at all: a `run` a client smuggles in is dropped at the parse, and the only
+ * metadata it writes is the title stamp.
+ */
+describe("focusSessions.update — a client never writes the run manifest", () => {
+  const FORGED = {
+    run: { version: 1, sourceDocumentIds: ["someone-elses-document"] },
+  };
+
+  /** The JSON merged into the row's metadata by the write, parsed. */
+  function mergedMetadata(): unknown {
+    const { params } = new PgDialect().sqlToQuery(sets.at(-1)!.metadata as SQL);
+    const json = params.find(
+      (p): p is string => typeof p === "string" && p.startsWith("{")
+    );
+    return json ? JSON.parse(json) : undefined;
+  }
+
+  it("a rename carrying metadata.run stamps the title source and nothing else", async () => {
+    await caller().update({
+      id: SESSION,
+      title: "Renamed",
+      metadata: FORGED,
+    } as never);
+    expect(mergedMetadata()).toEqual({ titleSource: "human" });
+  });
+
+  it("any other patch carrying metadata.run writes no metadata at all", async () => {
+    await caller().update({
+      id: SESSION,
+      progress: 40,
+      metadata: FORGED,
+    } as never);
+    expect(sets.at(-1)).toMatchObject({ progress: 40 });
+    expect(sets.at(-1)!.metadata).toBeUndefined();
   });
 });

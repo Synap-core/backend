@@ -20,6 +20,11 @@
 import { getCorsOrigins } from "./middleware/security.js";
 import { isPublicDoorPath } from "@synap/api/public-doors";
 import {
+  firstPartyBaseForPodHost,
+  isRefusedSiteBase,
+  normalizeHost,
+} from "@synap-core/types/tenancy";
+import {
   and,
   arrayContains,
   eq,
@@ -58,25 +63,16 @@ function podPublicHost(): string | null {
 }
 
 /**
- * Derive the first-party base by dropping a pod host's conventional service
- * label (`pod.` / `pod-admin.`): `pod.thearch.synap.live` → `thearch.synap.live`,
- * so sibling surfaces (`pod-admin.thearch.synap.live`) are first-party. Returns
- * null when the host carries no known service prefix or the remainder would be a
- * bare TLD (≥2 labels required) — never widen CORS to an entire TLD.
- */
-function deriveBaseFromHost(host: string): string | null {
-  const labels = host.split(".");
-  if (
-    (labels[0] === "pod" || labels[0] === "pod-admin") &&
-    labels.length >= 3
-  ) {
-    return labels.slice(1).join(".");
-  }
-  return null;
-}
-
-/**
  * Base domain whose subdomains count as first-party.
+ *
+ * Derived from the pod's public host by the one naming rule
+ * (`firstPartyBaseForPodHost`, `@synap-core/types/tenancy`): a Synap Cloud pod
+ * `<name>.pod.synap.live` → itself, so its console `admin.<name>.pod.synap.live`
+ * is first-party; a nested legacy `pod.<name>.synap.live` → `<name>.synap.live`;
+ * a flat legacy pod none (it shares only a tenant zone with its console); a
+ * self-hosted `pod.<root>` / `pod-admin.<root>` → `<root>`. Never a TLD or a
+ * tenant zone, explicit or derived: every other tenant's pod lives under one
+ * and would become a credentialed caller of this pod.
  *
  * SELF-HEALING: derived from the pod's live PUBLIC_URL, not a separately-stored
  * value that goes stale on a domain move. An explicit SYNAP_BASE_DOMAIN is
@@ -87,11 +83,11 @@ function deriveBaseFromHost(host: string): string | null {
  * value is trusted as-is.
  */
 function getBaseDomain(): string | null {
+  const configured = normalizeHost(process.env.SYNAP_BASE_DOMAIN ?? "");
   const explicit =
-    process.env.SYNAP_BASE_DOMAIN?.trim().replace(/^\.+/, "").toLowerCase() ||
-    null;
+    configured && !isRefusedSiteBase(configured) ? configured : null;
   const host = podPublicHost();
-  const derived = host ? deriveBaseFromHost(host) : null;
+  const derived = host ? firstPartyBaseForPodHost(host) : null;
 
   if (!explicit) return derived; // nothing stored → self-derive from PUBLIC_URL
   if (!host || !derived) return explicit; // can't derive (custom apex) → trust operator
@@ -99,17 +95,21 @@ function getBaseDomain(): string | null {
   return derived; // explicit is stale relative to PUBLIC_URL → heal
 }
 
-/** Explicit allowlist: ALLOWED_ORIGINS + DB-dynamic + dev localhost + PUBLIC_URL. */
+/**
+ * Explicit allowlist: ALLOWED_ORIGINS + DB-dynamic + dev localhost + PUBLIC_URL
+ * + POD_ADMIN_URL (this pod's own console, first-party even when no base
+ * covers it — a flat legacy pod's console shares only a tenant zone with it).
+ */
 function explicitOrigins(): Set<string> {
   const set = new Set<string>();
   for (const o of getCorsOrigins()) {
     const n = normalizeOrigin(o);
     if (n) set.add(n);
   }
-  const publicUrl = process.env.PUBLIC_URL
-    ? normalizeOrigin(process.env.PUBLIC_URL)
-    : null;
-  if (publicUrl) set.add(publicUrl);
+  for (const own of [process.env.PUBLIC_URL, process.env.POD_ADMIN_URL]) {
+    const n = own ? normalizeOrigin(own.trim()) : null;
+    if (n) set.add(n);
+  }
   return set;
 }
 

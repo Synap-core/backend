@@ -12,6 +12,8 @@
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { generateKeyPairSync, sign } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 const h = vi.hoisted(() => {
   process.env.DATABASE_URL ??= "postgresql://test:test@localhost:5432/test";
@@ -55,6 +57,9 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { readMarketplaceSources } from "@synap/database";
 import {
+  CATALOG_TEST_ONLY_KEYS,
+  SYNAP_CATALOG_ROOT_KEYS,
+  catalogRootKeys,
   checkOfficialCatalogSignature,
   officialCatalogTrust,
   reportUnverifiedOfficialRows,
@@ -145,6 +150,7 @@ const ROOTS: OfficialCatalogTrust = {
   enforce: false,
   allowExpired: false,
   rejectedKeys: [],
+  refusedTestKeys: 0,
 };
 
 beforeAll(async () => {
@@ -354,5 +360,155 @@ describe("checkOfficialCatalogSignature on PGlite", () => {
     expect(
       (await readMarketplaceSources()).officialSignature?.unverifiedRows
     ).toBe(2);
+  });
+});
+
+describe("SYNAP_CATALOG_ROOT_KEYS — compiled into the release", () => {
+  it("is empty until the ceremony, or exactly the two roots", () => {
+    expect([0, 2]).toContain(SYNAP_CATALOG_ROOT_KEYS.length);
+    expect(catalogRootKeys([])).toEqual([]);
+    const two = [ROOT.publicKey, CATALOG.publicKey];
+    expect(catalogRootKeys(two)).toEqual(two);
+  });
+
+  it("refuses a malformed root, one root alone, three, or the same key twice", () => {
+    expect(() => catalogRootKeys([ROOT.publicKey, "not-a-key"])).toThrow(
+      /\[1\] is not a raw ed25519 public key/
+    );
+    expect(() =>
+      catalogRootKeys([ROOT.publicKey.slice(1), CATALOG.publicKey])
+    ).toThrow(/\[0\] is not a raw ed25519 public key/);
+    expect(() => catalogRootKeys([ROOT.publicKey])).toThrow(
+      /none or exactly two/
+    );
+    expect(() =>
+      catalogRootKeys([ROOT.publicKey, CATALOG.publicKey, keypair().publicKey])
+    ).toThrow(/none or exactly two/);
+    expect(() => catalogRootKeys([ROOT.publicKey, ROOT.publicKey])).toThrow(
+      /twice/
+    );
+  });
+});
+
+describe("the Control Plane's TEST-signed fixtures, end to end on PGlite", () => {
+  const DIR = path.join(__dirname, "fixtures", "official-catalog-cp");
+  const file = (name: string) => readFileSync(path.join(DIR, name));
+  const contract = JSON.parse(file("contract.json").toString()) as {
+    rootKeys: string[];
+    verifyAt: string;
+    packageCount: number;
+  };
+  const cpServed = () => {
+    const calls: string[] = [];
+    const fetchImpl = async (url: string) => {
+      calls.push(url);
+      const name = url.slice(`${BASE}/api/marketplace/`.length);
+      return [
+        "synap-catalog-keys.json",
+        "synap-catalog-keys.json.sig",
+        "synap-index.json",
+        "synap-index.json.sig",
+      ].includes(name)
+        ? new Response(file(name))
+        : new Response("not found", { status: 404 });
+    };
+    return { fetchImpl, calls };
+  };
+
+  const contractKeys = () => {
+    const c = contract as typeof contract & { onlineKey: string };
+    return [...c.rootKeys, c.onlineKey];
+  };
+
+  it("names every key that signed the fixtures as TEST-ONLY (the label derivation matches the CP's)", () => {
+    // Non-vacuity: the fixtures carry two roots and an online key.
+    expect(contractKeys()).toHaveLength(3);
+    for (const key of contractKeys()) {
+      expect(CATALOG_TEST_ONLY_KEYS.has(key)).toBe(true);
+    }
+    // A key that is not derived from a test label is not swept up.
+    expect(CATALOG_TEST_ONLY_KEYS.has(ROOT.publicKey)).toBe(false);
+  });
+
+  it("never compiles a test-only root into a release", () => {
+    expect(() => catalogRootKeys(contract.rootKeys)).toThrow(
+      /\[0\] is a TEST-ONLY key derived from a public label/
+    );
+    expect(() =>
+      catalogRootKeys([ROOT.publicKey, contract.rootKeys[1]!])
+    ).toThrow(/\[1\] is a TEST-ONLY key/);
+  });
+
+  it("refuses test-only operator keys in production, and keeps them for tests and dev pods", () => {
+    const listed = { SYNAP_CATALOG_PUBLIC_KEYS: contractKeys().join(",") };
+    const prod = officialCatalogTrust({ ...listed, NODE_ENV: "production" }, [
+      ROOT.publicKey,
+    ]);
+    expect(prod).toMatchObject({
+      anchors: "roots",
+      keys: [ROOT.publicKey],
+      refusedTestKeys: 3,
+    });
+    const mixed = officialCatalogTrust(
+      {
+        SYNAP_CATALOG_PUBLIC_KEYS: `${contract.rootKeys[0]},${CATALOG.publicKey}`,
+        NODE_ENV: "production",
+      },
+      []
+    );
+    expect(mixed).toMatchObject({
+      anchors: "operator",
+      keys: [CATALOG.publicKey],
+      refusedTestKeys: 1,
+    });
+    const dev = officialCatalogTrust({ ...listed, NODE_ENV: "test" }, []);
+    expect(dev).toMatchObject({
+      anchors: "operator",
+      keys: contractKeys(),
+      refusedTestKeys: 0,
+    });
+  });
+
+  it("verifies the CP's exact bytes under its (test) roots, and every row its doors serve is vouched for", async () => {
+    const { fetchImpl } = cpServed();
+    const enforce = { ...ROOTS, keys: contract.rootKeys, enforce: true };
+    const status = await checkOfficialCatalogSignature(BASE, null, {
+      fetchImpl,
+      now: new Date(contract.verifyAt),
+      trust: enforce,
+    });
+    expect(status).toMatchObject({
+      state: "ok",
+      keysVersion: 1,
+      packageCount: contract.packageCount,
+    });
+    expect(await digests()).toHaveLength(contract.packageCount);
+
+    // The catalog cache as cp-catalog-sync writes it from those doors.
+    const served = JSON.parse(
+      file("served-definitions.json").toString()
+    ) as Array<{
+      kind: string;
+      slug: string;
+      version: string;
+      definition: Record<string, unknown>;
+    }>;
+    for (const row of served) {
+      await q(
+        `insert into cp_catalog_cache (source, kind, slug, name, version, definition) values ($1, $2, $3, $3, $4, $5::jsonb)`,
+        [
+          BASE,
+          row.kind,
+          row.slug,
+          row.version,
+          row.kind === "capability" || row.kind === "cell"
+            ? JSON.stringify(row.definition)
+            : null,
+        ]
+      );
+    }
+    expect(
+      (await reportUnverifiedOfficialRows(BASE, status!)).unverifiedRows
+    ).toBe(0);
   });
 });

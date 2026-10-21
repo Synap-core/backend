@@ -1,31 +1,32 @@
+import { consoleHostForPod } from "@synap-core/types/tenancy";
 import { configuredPodAdminBase } from "./pod-admin-url.js";
 
 /**
- * The pod-admin app's origin for a pod origin — where the key-approval pages
- * live (`/approve-agent/:keyId`, `/approve-agents?keys=`). ONE rule: the setup
- * door's review URL and `agentUsers.list`'s `approveUrl` both build on it.
+ * The pod-admin app's origin for this pod's origin — where the key-approval
+ * pages live (`/approve-agent/:keyId`, `/approve-agents?keys=`). ONE rule: the
+ * setup door's review URL and `agentUsers.list`'s `approveUrl` both build on it.
  *
- * `pod.<root>` → `pod-admin.<root>`; `<sub>.<root>` → `pod-admin.<root>`;
- * localhost → the local pod-admin dev server.
+ * The configured console (`POD_ADMIN_URL`) when it is valid — the deploy
+ * configuration is authoritative. Otherwise the one naming rule
+ * (`consoleHostForPod`, `@synap-core/types/tenancy`, which the installer's
+ * `pod_admin_domain_for_domain` follows): `<name>.pod.synap.live` →
+ * `admin.<name>.pod.synap.live`, a legacy `pod.<name>.synap.live` →
+ * `pod-admin.<name>.synap.live`, a self-hosted `pod.<root>` →
+ * `pod-admin.<root>` (or `<sub>.<root>` → `<sub>-admin.<root>`); localhost →
+ * the local pod-admin dev server. A host that names no console (a tenant zone
+ * itself) is returned unchanged.
  */
 export function toPodAdminOrigin(origin: string): string {
+  const configured = configuredPodAdminBase();
+  if (configured.ok) return configured.base.origin;
   try {
     const u = new URL(origin);
-    const host = u.host; // host:port
-    if (host.startsWith("localhost") || host.startsWith("127.0.0.1")) {
+    const host = u.hostname;
+    if (host === "localhost" || host === "127.0.0.1") {
       return "http://localhost:4040";
     }
-    if (host.startsWith("pod.")) {
-      const root = host.slice("pod.".length).replace(/:\d+$/, "");
-      return `${u.protocol}//pod-admin.${root}`;
-    }
-    // `<sub>.<root>` → swap the leading label for `pod-admin`.
-    const dot = host.indexOf(".");
-    const root =
-      dot > 0
-        ? host.slice(dot + 1).replace(/:\d+$/, "")
-        : host.replace(/:\d+$/, "");
-    return `${u.protocol}//pod-admin.${root}`;
+    const consoleHost = consoleHostForPod(host);
+    return consoleHost ? `${u.protocol}//${consoleHost}` : origin;
   } catch {
     return origin;
   }

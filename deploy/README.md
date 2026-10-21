@@ -179,6 +179,20 @@ What changes for an operator when a pod updates past a release. Newest first.
   automatically during `synap update`; nothing to do.
 - **Console URL.** The Apps page moved from `/origins` to `/applications`. Old
   links and bookmarks redirect.
+- **Sign-in stays on your pod's own name.** The sign-in cookie is scoped to
+  the parent your pod and its console share (`pod.<name>.synap.live` and
+  `pod-admin.<name>.synap.live` share `<name>.synap.live`), never to a public
+  suffix or to `synap.live` itself, where other people's pods live. The pod's
+  sign-in service accepts calls from the pod, its console and the Synap apps
+  by name (`crm.synap.live`, …), no longer from every `*.synap.live` site, and
+  `SYNAP_BASE_DOMAIN` is removed when it names such a zone. A legacy pod at
+  `<name>.synap.live` with its console at `<name>-admin.synap.live` shares only
+  `synap.live` with its console: its cookie now stays on `<name>.synap.live`,
+  so the pod keeps serving its apps and agents but the console cannot keep
+  anyone signed in. Signing in again on the console does not help
+  (the console checks the session on its own name). The fix is to move the pod
+  to `pod.<name>` / `pod-admin.<name>`; `synap update` prints this when it
+  applies.
 
 ## Email (Kratos courier)
 

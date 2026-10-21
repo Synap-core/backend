@@ -128,6 +128,7 @@ describe("Hub PATCH — server-owned session metadata is never the caller's", ()
         governance: { forceProposeWrites: false },
         clientKey: "key:someone-else",
         automationChainContext: { depth: 0 },
+        run: { version: 1, sourceDocumentIds: ["forged"] },
       },
     });
     expect(
@@ -135,6 +136,23 @@ describe("Hub PATCH — server-owned session metadata is never the caller's", ()
     ).toBeUndefined();
     expect(h.written.at(-1)).toMatchObject({ progress: 10 });
     expect(h.written.at(-1)!.metadata).toBeUndefined();
+  });
+
+  it("a forged run manifest is dropped: a rerun replays only what the server recorded", async () => {
+    await patch({
+      metadata: {
+        run: {
+          version: 1,
+          sourceDocumentIds: ["someone-elses-document"],
+          rerun: { parentSessionId: SESSION_ID, mode: "replay" },
+        },
+        note: "kept",
+      },
+    });
+    expect((h.gated[0]!.data as Record<string, unknown>).metadata).toEqual({
+      note: "kept",
+    });
+    expect(mergedMetadata()).toEqual({ note: "kept" });
   });
 
   it("the merge happens in SQL, over the row's current metadata", async () => {
