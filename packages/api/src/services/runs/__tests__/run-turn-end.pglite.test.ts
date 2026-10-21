@@ -35,6 +35,8 @@ const h = vi.hoisted(() => ({
   },
   triggers: [] as Array<Record<string, unknown>>,
   settled: [] as Array<Record<string, unknown>>,
+  /** When set, the ask's slot declaration fails (the ask does not land). */
+  failDeclare: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -90,6 +92,20 @@ vi.mock("../../../utils/channel-visibility.js", async () => {
 vi.mock("../../../lib/event-helpers.js", () => ({
   logEvent: async () => "evt",
 }));
+// Pass-through: the REAL locked slot write, except when a test makes the ask
+// fail to land (the M7 precondition) — the declaration then returns false,
+// exactly what `updateExpectedOutputsLocked` answers for a vanished row.
+vi.mock("../../focus-sessions/delegate-output.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const real = actual.updateExpectedOutputsLocked as (
+    ...a: unknown[]
+  ) => Promise<boolean>;
+  return {
+    ...actual,
+    updateExpectedOutputsLocked: async (...a: unknown[]) =>
+      h.failDeclare ? false : real(...a),
+  };
+});
 vi.mock("../../../utils/trigger-auto-respond.js", () => ({
   triggerAutoRespond: async (p: Record<string, unknown>) => {
     h.triggers.push(p);
@@ -279,6 +295,7 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
   beforeEach(() => {
     h.triggers.length = 0;
     h.settled.length = 0;
+    h.failDeclare = false;
   });
 
   it("no body (an older IS) completes the run, as before — and settles its parent", async () => {
@@ -339,8 +356,9 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
       ask: { mode: "confirm" },
     });
     expect(String(slot.why)).toContain(
-      `stopped at its token budget ${MAX_AUTO_CONTINUATIONS + 1} times`
+      `stopped before it was finished ${MAX_AUTO_CONTINUATIONS + 1} times`
     );
+    expect(String(slot.why)).toContain("hit its token budget");
     // The other declared slot is untouched.
     expect(
       (await sessionRow(sessionId)).expected_outputs.find(
@@ -398,6 +416,69 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     expect(h.settled).toEqual([{ playbookRunId: runId }]);
   });
 
+  it("an ask that does NOT land keeps the count: the next stop asks again, never a fresh continuation (M7)", async () => {
+    // Before: the count was reset to 0 when the pod DECIDED to ask, inside the
+    // recording transaction. An ask that then failed left the run running with
+    // a fresh count, so the next stops continued twice more on fresh budgets,
+    // asked (failed) again, and so on: unbounded spend, nobody asked.
+    const { sessionId, runId } = await seedRun();
+    for (let n = 1; n <= MAX_AUTO_CONTINUATIONS; n++) {
+      expect((await completeRun(sessionId, STOPPED)).json).toEqual({
+        status: "continued",
+      });
+    }
+
+    h.failDeclare = true;
+    const failed = await completeRun(sessionId, STOPPED);
+    expect(failed.json).toEqual({ status: "left_running" });
+    expect((await runRow(runId)).status).toBe("running");
+    expect((await ledger(sessionId)).autoContinues).toBe(
+      MAX_AUTO_CONTINUATIONS
+    );
+
+    // The next stop tries the ask again — it does NOT continue on its own.
+    const again = await completeRun(sessionId, STOPPED);
+    expect(again.json).toEqual({ status: "left_running" });
+    expect(h.triggers).toHaveLength(MAX_AUTO_CONTINUATIONS);
+
+    // Once an ask lands, the count resets for after the person answers.
+    h.failDeclare = false;
+    const asked = await completeRun(sessionId, STOPPED);
+    expect(asked.json).toEqual({ status: "waiting_on_you" });
+    expect(h.triggers).toHaveLength(MAX_AUTO_CONTINUATIONS);
+    expect((await ledger(sessionId)).autoContinues).toBe(0);
+  });
+
+  it("a RETRIED report of one turn (same turnKey) is settled once: one stop, one continuation (S9)", async () => {
+    // Before: the room post's idempotency key was the stop count, which the
+    // retry had ALREADY incremented — so the retry counted a second stop and
+    // posted (and dispatched) a second continuation.
+    const { sessionId, channelId } = await seedRun();
+    const report = { ...STOPPED, turnKey: "msg-turn-1" };
+    expect((await completeRun(sessionId, report)).json).toEqual({
+      status: "continued",
+    });
+    const retry = await completeRun(sessionId, report);
+    expect(retry).toEqual({ code: 200, json: { status: "duplicate" } });
+    expect(h.triggers).toHaveLength(1);
+    expect(await ledger(sessionId)).toMatchObject({
+      stops: 1,
+      autoContinues: 1,
+    });
+    const notices = (await roomMessages(channelId)).filter(
+      (m) => m.role === "system"
+    );
+    expect(notices).toHaveLength(1);
+
+    // A DIFFERENT turn is a real stop.
+    expect(
+      (await completeRun(sessionId, { ...STOPPED, turnKey: "msg-turn-2" }))
+        .json
+    ).toEqual({ status: "continued" });
+    expect(h.triggers).toHaveLength(2);
+    expect((await ledger(sessionId)).stops).toBe(2);
+  });
+
   it("a FORCED-FINAL turn (budgetAction final) is a stop too, never a completion", async () => {
     const { sessionId, runId } = await seedRun();
     const r = await completeRun(sessionId, {
@@ -408,6 +489,33 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     expect((await runRow(runId)).status).toBe("running");
   });
 
+  it("a turn that stopped at its STEP limit is a stop too: the run stays live and continues (founder default 3)", async () => {
+    // Before: the IS reported a step-limit turn as `completed` and the pod
+    // only knew `turn_budget`, so the run read completed with its work undone.
+    const { sessionId, channelId, runId } = await seedRun();
+    const r = await completeRun(sessionId, {
+      outcome: "stopped",
+      reason: "max_steps",
+      agentType: "researcher",
+      turnKey: "msg-steps-1",
+      turn: { ceiling: 250_000, spentInputTokens: 40_000 },
+    });
+    expect(r).toEqual({ code: 200, json: { status: "continued" } });
+    const run = await runRow(runId);
+    expect(run.status).toBe("running");
+    expect(run.completed_at).toBeNull();
+    expect(h.settled).toHaveLength(0);
+    const notice = (await roomMessages(channelId)).find(
+      (m) => m.id === h.triggers[0]!.userMessageId
+    )!;
+    expect(notice.content).toContain("stopped at its step limit");
+    expect((await ledger(sessionId)).turns[0]).toMatchObject({
+      outcome: "stopped",
+      reason: "max_steps",
+      next: "continue",
+    });
+  });
+
   it("a malformed report is refused and changes nothing", async () => {
     const { sessionId, runId } = await seedRun();
     const r = await completeRun(sessionId, { outcome: "stopped" });
@@ -416,6 +524,27 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     expect((await runRow(runId)).status).toBe("running");
     expect((await sessionRow(sessionId)).metadata.runTurns).toBeUndefined();
     expect(h.triggers).toHaveLength(0);
+  });
+
+  it("an agent type is a free string: one outside a slug pattern still settles the turn (FD5)", async () => {
+    // Before: `agentType` had to match /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/, so a
+    // type with a space or a non-ASCII letter 400'd the WHOLE report — the
+    // run's outcome was dropped and a finished run stayed `running`.
+    const { sessionId, runId } = await seedRun();
+    const r = await completeRun(sessionId, {
+      ...STOPPED,
+      agentType: "Équipe ventes (beta)",
+    });
+    expect(r).toEqual({ code: 200, json: { status: "continued" } });
+    expect(h.triggers[0]).toMatchObject({ agentType: "Équipe ventes (beta)" });
+
+    // A value the door cannot use (too long) reads as absent, never a 400.
+    const done = await completeRun(sessionId, {
+      outcome: "completed",
+      agentType: "x".repeat(500),
+    });
+    expect(done).toEqual({ code: 200, json: { status: "completed" } });
+    expect((await runRow(runId)).status).toBe("completed");
   });
 
   it("a ledger left by an EARLIER run on the session does not count for this one", async () => {

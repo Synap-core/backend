@@ -72,6 +72,7 @@ import {
   profiles,
   channels,
   channelMembers,
+  relations,
 } from "@synap/database";
 import { sessionNeedsYou, tallyNeedsYou } from "@synap-core/types/units";
 import { AccessContext } from "../../access/index.js";
@@ -220,6 +221,8 @@ beforeAll(async () => {
     // The operator door's roster branch (`sessionReadableWhere`) reads these.
     channels,
     channelMembers,
+    // The listing rule the outputs scan composes reads filings (FB1020 B5).
+    relations,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

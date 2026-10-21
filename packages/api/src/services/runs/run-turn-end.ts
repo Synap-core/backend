@@ -11,8 +11,10 @@
  * (`playbook-run-reaper.ts`) never saw it, because both only look at LIVE runs.
  *
  * NOW the IS says how the turn ended (`outcome`). `completed` is unchanged. A
- * `stopped` + `turn_budget` turn leaves the run LIVE and:
- *   1. continues on its own with a fresh budget — a pod notice in the room,
+ * `stopped` turn — its token budget (`turn_budget`) or its step limit
+ * (`max_steps`: the agent still had tool calls to make when the SDK's
+ * `maxSteps` ended the turn) — leaves the run LIVE and:
+ *   1. continues on its own with a fresh turn — a pod notice in the room,
  *      dispatched through the ONE turn door `triggerAutoRespond` to the same
  *      agent type — up to {@link MAX_AUTO_CONTINUATIONS} times in a row;
  *   2. then ASKS the person, through the existing ask/slot door: a `decision`
@@ -21,9 +23,11 @@
  *      → `blockExpectedOutput`, which notifies). The run is marked
  *      `waiting_on_you`; the reaper un-parks it once the slot is answered, and
  *      the answer wakes the asking agent (`session-answer.ts`). The counter
- *      resets, so after an answer the run again gets N continuations.
+ *      resets once the ask has LANDED, so after an answer the run again gets
+ *      N continuations.
  * If neither lands, the run is simply left `running`: the stall flag and the
- * reaper see it — never a false `completed`.
+ * reaper see it — never a false `completed` — and the count is NOT reset, so
+ * the next stop asks again instead of continuing on its own.
  *
  * WHAT IS RECORDED (`focus_sessions.metadata.runTurns`, server-owned): each
  * turn's end as the IS measured it — the budget ceiling, the input tokens
@@ -77,15 +81,28 @@ const count = z.number().int().nonnegative();
 export const completeRunBodySchema = z
   .object({
     outcome: z.enum(["completed", "stopped"]).default("completed"),
-    reason: z.literal("turn_budget").optional(),
-    /** The agent type that ran the turn — the continuation wakes the same one. */
-    agentType: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
-      .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/)
-      .optional(),
+    /**
+     * Why a `stopped` turn stopped: its token budget, or its step limit (the
+     * founder default 2026-10-21: a step-limit stop is wired exactly like the
+     * budget stop, never marked completed).
+     */
+    reason: z.enum(["turn_budget", "max_steps"]).optional(),
+    /**
+     * The agent type that ran the turn — the continuation wakes the same one.
+     * A FREE string (root CLAUDE.md "agentType = free string"), so no pattern;
+     * and lenient: a value this door cannot use reads as absent (the default
+     * agent) instead of refusing the whole report. A 400 here would drop the
+     * turn's outcome and leave a finished run `running` for the 24-h reaper.
+     */
+    agentType: z.string().trim().min(1).max(200).optional().catch(undefined),
+    /**
+     * The IS's id for THIS turn, the same on every retry of its report: the
+     * message that triggered the turn when the pod dispatched it, else an id
+     * the IS minted once for the turn. A report whose key the ledger already
+     * holds is a RETRY — recorded once, continued once. Lenient like
+     * `agentType`: an unusable key reads as absent (the old, stop-count key).
+     */
+    turnKey: z.string().trim().min(1).max(256).optional().catch(undefined),
     turn: z
       .object({
         budgetAction: z.enum(["final", "stop"]).optional(),
@@ -107,12 +124,20 @@ export const completeRunBodySchema = z
       })
       .optional(),
   })
-  .refine((b) => b.outcome !== "stopped" || b.reason === "turn_budget", {
-    message: "outcome 'stopped' needs a reason ('turn_budget')",
+  .refine((b) => b.outcome !== "stopped" || b.reason !== undefined, {
+    message: "outcome 'stopped' needs a reason ('turn_budget' | 'max_steps')",
     path: ["reason"],
   });
 
 export type CompleteRunBody = z.infer<typeof completeRunBodySchema>;
+
+/** Why a turn stopped before the run was finished. */
+export type RunStopReason = NonNullable<CompleteRunBody["reason"]>;
+
+/** The limit a stopped turn hit, in the words the room reads. */
+function stopLimitWords(reason: RunStopReason | undefined): string {
+  return reason === "max_steps" ? "step limit" : "token budget";
+}
 
 /** What complete-run did with the run (the response `status`). */
 export type CompleteRunStatus =
@@ -120,14 +145,18 @@ export type CompleteRunStatus =
   | "no-running-run"
   | "continued"
   | "waiting_on_you"
-  | "left_running";
+  | "left_running"
+  /** A retried report of a turn already settled: nothing done again. */
+  | "duplicate";
 
 /** One turn's end, as stored. */
 export interface RunTurnRecord {
   at: string;
   outcome: "completed" | "stopped";
-  reason?: "turn_budget";
+  reason?: RunStopReason;
   agentType?: string;
+  /** The IS's id for the turn (`CompleteRunBody.turnKey`). */
+  turnKey?: string;
   budgetAction?: "final" | "stop";
   ceiling?: number;
   spentInputTokens?: number;
@@ -139,9 +168,9 @@ export interface RunTurnRecord {
 /** `metadata.runTurns` — one run's turn ledger. */
 export interface RunTurnsState {
   runId: string;
-  /** Budget stops over the whole run (the continuation idempotency key). */
+  /** Stops over the whole run (the idempotency key when no `turnKey`). */
   stops: number;
-  /** Automatic continuations since the last time the person was asked. */
+  /** Automatic continuations since an ask last LANDED with the person. */
   autoContinues: number;
   firstTurn?: RunTurnRecord;
   turns: RunTurnRecord[];
@@ -180,8 +209,9 @@ export function readRunTurns(metadata: unknown, runId: string): RunTurnsState {
 
 /**
  * The decision rule, pure: a stop continues while fewer than N automatic
- * continuations ran since the person was last asked; the (N+1)th asks and
- * resets the count.
+ * continuations ran since the person was last asked; every later stop asks.
+ * The count resets only once an ask has landed (`resetAfterAsk`), so an ask
+ * that fails is retried on the next stop — never a fresh continuation.
  */
 export function nextAfterStop(
   state: Pick<RunTurnsState, "autoContinues">
@@ -204,6 +234,8 @@ async function recordTurnEnd(
 ): Promise<{
   decision: ReturnType<typeof nextAfterStop> | null;
   state: RunTurnsState;
+  /** This turn's report was already recorded (a retry): nothing written. */
+  duplicate: boolean;
 } | null> {
   return db.transaction(async (tx) => {
     const [locked] = await tx
@@ -213,6 +245,14 @@ async function recordTurnEnd(
       .for("update");
     if (!locked) return null;
     const state = readRunTurns(locked.metadata, runId);
+    if (
+      body.turnKey &&
+      [state.firstTurn, ...state.turns].some(
+        (t) => t?.turnKey === body.turnKey
+      )
+    ) {
+      return { decision: null, state, duplicate: true };
+    }
     const stopped = body.outcome === "stopped";
     const decision = stopped ? nextAfterStop(state) : null;
     const record: RunTurnRecord = {
@@ -220,6 +260,7 @@ async function recordTurnEnd(
       outcome: body.outcome,
       ...(body.reason ? { reason: body.reason } : {}),
       ...(body.agentType ? { agentType: body.agentType } : {}),
+      ...(body.turnKey ? { turnKey: body.turnKey } : {}),
       ...(body.turn?.budgetAction
         ? { budgetAction: body.turn.budgetAction }
         : {}),
@@ -235,12 +276,14 @@ async function recordTurnEnd(
     const next: RunTurnsState = {
       runId,
       stops: state.stops + (stopped ? 1 : 0),
+      // An ask does NOT reset the count here: it resets only once the ask has
+      // LANDED (`resetAfterAsk`). Resetting before it lands meant a failed ask
+      // handed the run two more fresh-budget continuations, then another failed
+      // ask, and so on — unbounded spend with no person in the loop.
       autoContinues:
         decision?.next === "continue"
           ? decision.continuation
-          : decision?.next === "ask"
-            ? 0
-            : state.autoContinues,
+          : state.autoContinues,
       firstTurn: state.firstTurn ?? record,
       turns: [...state.turns, record].slice(-TURN_HISTORY_MAX),
     };
@@ -248,7 +291,37 @@ async function recordTurnEnd(
       .update(focusSessions)
       .set({ metadata: mergeSessionMetadata({ [RUN_TURNS_META_KEY]: next }) })
       .where(eq(focusSessions.id, sessionId));
-    return { decision, state: next };
+    return { decision, state: next, duplicate: false };
+  });
+}
+
+/**
+ * The person has been asked (the slot is theirs): the next stops get fresh
+ * automatic continuations again. A second locked write, made only after the
+ * ask landed; a ledger that moved on to another run is left alone.
+ */
+async function resetAfterAsk(sessionId: string, runId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({ metadata: focusSessions.metadata })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, sessionId))
+      .for("update");
+    if (!locked) return;
+    const raw =
+      locked.metadata && typeof locked.metadata === "object"
+        ? (locked.metadata as Record<string, unknown>)[RUN_TURNS_META_KEY]
+        : undefined;
+    if ((raw as Partial<RunTurnsState> | undefined)?.runId !== runId) return;
+    const state = readRunTurns(locked.metadata, runId);
+    await tx
+      .update(focusSessions)
+      .set({
+        metadata: mergeSessionMetadata({
+          [RUN_TURNS_META_KEY]: { ...state, autoContinues: 0 },
+        }),
+      })
+      .where(eq(focusSessions.id, sessionId));
   });
 }
 
@@ -275,12 +348,14 @@ async function continueRun(p: {
   session: SessionRoom;
   agentType: string;
   continuation: number;
-  stops: number;
+  /** The turn's id for idempotency (see `settleRunTurnEnd`). */
+  turnRef: string;
+  reason: RunStopReason | undefined;
 }): Promise<boolean> {
   if (!p.session.channelId) return false;
   const content =
     `Automatic continuation ${p.continuation} of ${MAX_AUTO_CONTINUATIONS}: ` +
-    "the last turn stopped at its token budget before this run was finished. " +
+    `the last turn stopped at its ${stopLimitWords(p.reason)} before this run was finished. ` +
     "Pick up from where it stopped; do not start over.";
   try {
     // A POD notice (role system), not the person speaking: nobody typed this.
@@ -289,7 +364,7 @@ async function continueRun(p: {
       content,
       userId: p.session.userId,
       role: "system",
-      idempotencyKey: `run-continue:${p.run.id}:${p.stops}`,
+      idempotencyKey: `run-continue:${p.run.id}:${p.turnRef}`,
     });
     if (posted.ackState === "duplicate-ignored") return true;
     return await triggerAutoRespond({
@@ -322,10 +397,13 @@ async function askToKeepGoing(p: {
   session: SessionRoom;
   askingAgentUserId: string | null;
   stops: number;
+  turnRef: string;
+  reason: RunStopReason | undefined;
 }): Promise<boolean> {
   const question =
-    `This run stopped at its token budget ${p.stops} times ` +
-    `(it continued on its own ${MAX_AUTO_CONTINUATIONS} times). Keep it going?`;
+    `This run stopped before it was finished ${p.stops} times ` +
+    `(the last turn hit its ${stopLimitWords(p.reason)}; ` +
+    `it continued on its own ${MAX_AUTO_CONTINUATIONS} times). Keep it going?`;
   const ask: SlotAsk = { mode: "confirm", prompt: question };
   const wanted = normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL);
   try {
@@ -352,7 +430,7 @@ async function askToKeepGoing(p: {
         kind: "question",
         slotLabel: RUN_CONTINUE_SLOT_LABEL,
         ask,
-        idempotencyKey: `run-ask:${p.run.id}:${p.stops}`,
+        idempotencyKey: `run-ask:${p.run.id}:${p.turnRef}`,
       });
       if (posted.slot?.status === "blocked") return true;
       logger.warn(
@@ -390,15 +468,22 @@ export async function settleRunTurnEnd(p: {
   const { run, session, body } = p;
   const recorded = await recordTurnEnd(session.id, run.id, body);
 
+  // Completing is idempotent (only a LIVE run completes), so a retried
+  // `completed` report still settles a run its first attempt failed to.
   if (body.outcome === "completed") {
     const updated = await applyRunCapture({ run, status: "completed" });
     return updated ? "completed" : "no-running-run";
   }
 
-  // Stopped on its budget: the run stays LIVE whatever happens below — even
-  // when the turn could not be recorded (session row gone mid-call).
+  // Stopped (budget or step limit): the run stays LIVE whatever happens
+  // below — even when the turn could not be recorded (row gone mid-call).
+  if (recorded?.duplicate) return "duplicate";
   if (!recorded?.decision) return "left_running";
   const { decision, state } = recorded;
+  // Idempotency for the room posts: the IS's turn id, else (an older IS) the
+  // stop count — which a retried report re-increments, so only `turnKey`
+  // makes a retry recognisable.
+  const turnRef = body.turnKey ?? String(state.stops);
   if (decision.next === "continue") {
     if (run.status !== "running") {
       await applyRunCapture({ run, status: "running" });
@@ -408,7 +493,8 @@ export async function settleRunTurnEnd(p: {
       session,
       agentType: body.agentType ?? "meta",
       continuation: decision.continuation,
-      stops: state.stops,
+      turnRef,
+      reason: body.reason,
     });
     if (continued) return "continued";
   }
@@ -418,8 +504,11 @@ export async function settleRunTurnEnd(p: {
     session,
     askingAgentUserId: p.askingAgentUserId,
     stops: state.stops,
+    turnRef,
+    reason: body.reason,
   });
   if (asked) {
+    await resetAfterAsk(session.id, run.id);
     const parked = await applyRunCapture({ run, status: "waiting_on_you" });
     if (parked) return "waiting_on_you";
   }

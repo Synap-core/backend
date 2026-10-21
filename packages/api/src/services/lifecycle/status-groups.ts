@@ -72,6 +72,8 @@ export async function roleVisibilityConditions(input: {
   /** `undefined` → no lens (the caller resolved the header already). */
   lensWorkspaceId: string | null | undefined;
   projectId?: string;
+  /** `false` for a BY-ID question: the listing rule is not applied. */
+  listing?: boolean;
 }): Promise<SQL[]> {
   const facetVisibilityScope = await resolveFacetVisibilityScope(
     input.userId,
@@ -81,7 +83,9 @@ export async function roleVisibilityConditions(input: {
     ...facetVisibilityConditions(facetVisibilityScope),
     entityReadVisibleWhere(input.userId),
     // THE listing rule (probe + demo rows); the project lens is the toggle.
-    listableEntityWhere({ projectLens: input.projectId }),
+    ...(input.listing === false
+      ? []
+      : [listableEntityWhere({ projectLens: input.projectId })]),
     ...(input.projectId
       ? [projectLensWhere(entities.id, input.projectId)]
       : []),
@@ -102,9 +106,14 @@ export function kindVisibilityConditions(input: {
   explicitWorkspace: boolean;
   projectId?: string;
   podScopeKind: boolean;
+  /** `false` for a BY-ID question: the listing rule is not applied. */
+  listing?: boolean;
 }): SQL[] {
   // THE listing rule (probe + demo rows); the project lens is the toggle.
-  const conds: SQL[] = [listableEntityWhere({ projectLens: input.projectId })];
+  const conds: SQL[] =
+    input.listing === false
+      ? []
+      : [listableEntityWhere({ projectLens: input.projectId })];
   if (input.projectId) {
     conds.push(
       input.explicitWorkspace && input.lensWorkspaceId
@@ -613,7 +622,10 @@ export function statusSubjectOfRows(
  * worker's space (`workspaceId`, explicit), narrowed to `projectId` for a
  * project-scoped enablement. `excludeIds` drops things already being worked
  * (they still count in `total`); `onlyIds` asks about specific things (the
- * stale-transition check). `total` = everything in the status, unpaged and
+ * stale-transition check). `byId` marks such a question as BY-ID — "is THIS
+ * thing still in the status?" — which never carries the listing rule (its
+ * own contract: by-id reads stay open). Without it a demo subject read as
+ * gone and a demo-scoped worker never ran (backend review M9). `total` = everything in the status, unpaged and
  * unexcluded — what a `count` worker compares with its threshold.
  *
  * An unknown slug THROWS (a worker on a deleted vocabulary is a failure, not
@@ -628,6 +640,8 @@ export async function listThingsInStatus(params: {
   limit: number;
   excludeIds?: readonly string[];
   onlyIds?: readonly string[];
+  /** The question is about `onlyIds` BY ID: no listing rule (see above). */
+  byId?: boolean;
 }): Promise<{
   items: Array<StatusGroupItem & { status: string | null }>;
   total: number;
@@ -653,6 +667,7 @@ export async function listThingsInStatus(params: {
           userId: params.userId,
           lensWorkspaceId: params.workspaceId,
           projectId,
+          listing: !(params.byId && params.onlyIds),
         })
       : kindVisibilityConditions({
           userId: params.userId,
@@ -660,6 +675,7 @@ export async function listThingsInStatus(params: {
           explicitWorkspace: true,
           projectId,
           podScopeKind,
+          listing: !(params.byId && params.onlyIds),
         });
   const narrowed = [
     ...conditions,

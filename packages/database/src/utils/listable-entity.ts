@@ -114,6 +114,47 @@ export interface ListableEntityOptions {
    * rows are left out.
    */
   projectLens?: string | readonly string[] | null;
+  /**
+   * A listing that does NOT narrow to a project but runs IN one — a picker
+   * opened inside the demo project, an automation whose rule is scoped to it.
+   * The demo rows of THAT project are listed (beside every real row); other
+   * sample projects' rows stay out, probe rows stay out. Ignored when
+   * `projectLens` is set (the lens already shows its own rows) or when the
+   * value is not a uuid (no row could match it).
+   */
+  revealSampleOf?: string | null;
+}
+
+const UUID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The `entities` row is filed into, or is the subject of, `projectId`. */
+function inProjectWhere(projectId: string): SQL {
+  const filed = db
+    .select({ id: relations.sourceEntityId })
+    .from(relations)
+    .where(
+      and(
+        eq(relations.type, BELONGS_TO_PROJECT),
+        eq(relations.targetEntityId, projectId),
+        isNotNull(relations.sourceEntityId)
+      )
+    );
+  const subjectOf = db
+    .select({ id: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "project"),
+        eq(links.fromId, projectId),
+        eq(links.toType, "entity"),
+        eq(links.linkType, "targets")
+      )
+    );
+  return or(
+    inArray(entities.id, filed),
+    inArray(sql`${entities.id}::text`, subjectOf)
+  )!;
 }
 
 /**
@@ -125,9 +166,12 @@ export function listableEntityWhere(opts: ListableEntityOptions = {}): SQL {
   const lensed = Array.isArray(lens)
     ? lens.length > 0
     : typeof lens === "string" && lens.length > 0;
-  return lensed
-    ? notProbeEntityWhere()
-    : sql`(${notProbeEntityWhere()} AND NOT ${sampleEntityWhere()})`;
+  if (lensed) return notProbeEntityWhere();
+  const reveal = opts.revealSampleOf;
+  if (typeof reveal === "string" && UUID_SHAPE.test(reveal)) {
+    return sql`(${notProbeEntityWhere()} AND (NOT ${sampleEntityWhere()} OR ${inProjectWhere(reveal)}))`;
+  }
+  return sql`(${notProbeEntityWhere()} AND NOT ${sampleEntityWhere()})`;
 }
 
 /**
