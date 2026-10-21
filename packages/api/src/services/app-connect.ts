@@ -17,7 +17,7 @@
  * (`notAnAppAgent`).
  */
 
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -1191,26 +1191,22 @@ export interface AppOAuthAccessKey {
   user: { id: string; name: string | null };
 }
 
-/**
- * Mint a pod app's access token: an `api_keys` row held by the app's OWN agent
- * (one per person × app, `ensureAppAgent`, ask-first) and linked to the
- * person, carrying EXACTLY the approved reach (`setApprovedReach`: one grant
- * per approved space, `client_id` = the app's public_id) and expiring in
- * 1 h. Never a `claude-web*` agent, never `*`, never `mcp.*`: its scopes are
- * `hub-protocol.read`, plus `.write` only when something approved is a write.
- *
- * The connection's previous key (instance `instanceId`) is revoked first, so
- * one connection holds one live key. Refused (FORBIDDEN / CONFLICT) when the
- * code's app is not this person's live pod app connection for this client,
- * has nothing approved, or the person is no longer a human user.
- */
-export async function mintAppOAuthAccessKey(args: {
+/** Who a pod app's access token is for: the connection and its key slot. */
+interface AppOAuthKeyArgs {
   appId: string;
   ownerUserId: string;
   oauthClientId: string;
   /** `oauthKeyInstanceId(client, person)` — the connection's key slot. */
   instanceId: string;
-}): Promise<AppOAuthAccessKey> {
+}
+
+/**
+ * The connection a pod app's access token may be handed out for, checked
+ * afresh each time: this person's live pod app connection for this client,
+ * with something approved, for a person still a human user. Refused
+ * (FORBIDDEN / CONFLICT) otherwise.
+ */
+async function loadAppOAuthConnection(args: AppOAuthKeyArgs) {
   const repo = new AppRepository(db);
   const app = await repo.get(args.appId);
   if (
@@ -1248,8 +1244,91 @@ export async function mintAppOAuthAccessKey(args: {
       message: "Only a person's connection can be used.",
     });
   }
-
   const found = (await repo.getByPublicId(app.publicId))!;
+  return { app, approved, person, found };
+}
+
+/** A pod app key's scopes: `.write` only when something approved is a write. */
+function appOAuthKeyScope(approved: readonly AppApprovedRequest[]): string[] {
+  return approved.some((r) => !isReadPermission(r.permission))
+    ? ["hub-protocol.read", "hub-protocol.write"]
+    : ["hub-protocol.read"];
+}
+
+/**
+ * `setApprovedReach`, spelled out so the grant expires WITH the token: the
+ * agent's memberships = the approved spaces, one grant per approved space
+ * (`attachMany` replaces the key's live grants). Then the /token answer.
+ */
+async function grantAppOAuthKey(
+  conn: Awaited<ReturnType<typeof loadAppOAuthConnection>>,
+  key: {
+    agentUserId: string;
+    keyId: string;
+    accessToken: string;
+    expiresAt: Date;
+  }
+): Promise<AppOAuthAccessKey> {
+  const { app, approved, person } = conn;
+  await syncAppAgentMemberships(key.agentUserId, app.ownerUserId, approved);
+  await attachGrantsOrRevoke({
+    apiKeyId: key.keyId,
+    principalUserId: key.agentUserId,
+    onBehalfOf: app.ownerUserId,
+    grants: grantsForApprovedRequests(approved),
+    expiresAt: key.expiresAt,
+    createdBy: app.ownerUserId,
+    clientId: app.publicId,
+  });
+  const names = new Map(
+    (
+      await db
+        .select({ id: workspaces.id, name: workspaces.name })
+        .from(workspaces)
+        .where(
+          inArray(
+            workspaces.id,
+            approved.map((r) => r.workspaceId)
+          )
+        )
+    ).map((w) => [w.id, w.name])
+  );
+  return {
+    accessToken: key.accessToken,
+    keyId: key.keyId,
+    expiresAt: key.expiresAt,
+    agentUserId: key.agentUserId,
+    publicId: app.publicId,
+    grant: approved.map((r) => ({
+      ...r,
+      workspaceName: names.get(r.workspaceId) ?? null,
+    })),
+    user: { id: person.id, name: person.name ?? null },
+  };
+}
+
+/**
+ * Mint a pod app's access token: an `api_keys` row held by the app's OWN agent
+ * (one per person × app, `ensureAppAgent`, ask-first) and linked to the
+ * person, carrying EXACTLY the approved reach (`setApprovedReach`: one grant
+ * per approved space, `client_id` = the app's public_id) and expiring in
+ * 1 h. Never a `claude-web*` agent, never `*`, never `mcp.*`: its scopes are
+ * `hub-protocol.read`, plus `.write` only when something approved is a write.
+ *
+ * The connection's previous key (instance `instanceId`) is revoked first, so
+ * one connection holds one live key. Refused (FORBIDDEN / CONFLICT) when the
+ * code's app is not this person's live pod app connection for this client,
+ * has nothing approved, or the person is no longer a human user.
+ *
+ * `plainKey`: the refresh grant passes the key its successor refresh token
+ * re-derives (`successorAccessToken`, refresh.ts), so the reuse grace can hand
+ * this same key back (`reuseAppOAuthAccessKey`). Random otherwise.
+ */
+export async function mintAppOAuthAccessKey(
+  args: AppOAuthKeyArgs & { plainKey?: string }
+): Promise<AppOAuthAccessKey> {
+  const conn = await loadAppOAuthConnection(args);
+  const { app, approved, found } = conn;
   const agentUserId = await ensureAppAgent(found, "ui");
   await revokeActiveHubInboundKeysForUser(db, {
     userId: agentUserId,
@@ -1262,15 +1341,14 @@ export async function mintAppOAuthAccessKey(args: {
     new ApiKeyRepository(db, new EventRepository(sql)),
     {
       keyName: `${app.name} (pod app)`,
-      scope: approved.some((r) => !isReadPermission(r.permission))
-        ? ["hub-protocol.read", "hub-protocol.write"]
-        : ["hub-protocol.read"],
+      scope: appOAuthKeyScope(approved),
       userId: agentUserId,
       linkedUserId: app.ownerUserId,
       keyType: "hub_inbound",
       instanceId: args.instanceId,
       expiresAt,
       description: `Access token for ${app.name} (${app.publicId}), issued by this pod's OAuth door`,
+      ...(args.plainKey ? { plainKey: args.plainKey } : {}),
     },
     app.ownerUserId,
     agentUserId
@@ -1286,17 +1364,11 @@ export async function mintAppOAuthAccessKey(args: {
       message: "The access token could not be verified.",
     });
   }
-  // `setApprovedReach`, spelled out so the grant expires WITH the token: the
-  // agent's memberships = the approved spaces, one grant per approved space.
-  await syncAppAgentMemberships(agentUserId, app.ownerUserId, approved);
-  await attachGrantsOrRevoke({
-    apiKeyId: minted.apiKey.id,
-    principalUserId: agentUserId,
-    onBehalfOf: app.ownerUserId,
-    grants: grantsForApprovedRequests(approved),
+  const answer = await grantAppOAuthKey(conn, {
+    agentUserId,
+    keyId: minted.apiKey.id,
+    accessToken: minted.plainKey,
     expiresAt,
-    createdBy: app.ownerUserId,
-    clientId: app.publicId,
   });
   await recordAppEvent(found, app.ownerUserId, APP_EVENT_ACTIONS.keyIssued, {
     keyId: minted.apiKey.id,
@@ -1304,32 +1376,59 @@ export async function mintAppOAuthAccessKey(args: {
     expiresAt: expiresAt.toISOString(),
   });
   await sweepDeadOAuthKeys(agentUserId, args.instanceId);
+  return answer;
+}
 
-  const names = new Map(
-    (
-      await db
-        .select({ id: workspaces.id, name: workspaces.name })
-        .from(workspaces)
-        .where(
-          inArray(
-            workspaces.id,
-            approved.map((r) => r.workspaceId)
-          )
-        )
-    ).map((w) => [w.id, w.name])
-  );
-  return {
-    accessToken: minted.plainKey,
-    keyId: minted.apiKey.id,
-    expiresAt,
+/**
+ * The refresh reuse grace (spec 17 PB3b): hand back the connection's LIVE key
+ * when it is the one `accessToken` names, instead of minting. A mint would
+ * revoke the copy the other caller already holds (one live key per
+ * connection). Refused exactly like a mint (`loadAppOAuthConnection`), and its
+ * reach is re-derived from the CURRENT approval, so a grace never reaches more
+ * than a mint would; its expiry is kept, never extended. null when that key is
+ * not the slot's live key, or the approval now needs other scopes: the caller
+ * mints instead.
+ */
+export async function reuseAppOAuthAccessKey(
+  args: AppOAuthKeyArgs & { accessToken: string }
+): Promise<AppOAuthAccessKey | null> {
+  const conn = await loadAppOAuthConnection(args);
+  const agentUserId = conn.app.agentUserId;
+  if (!agentUserId) return null;
+  const [key] = await db
+    .select({
+      id: apiKeys.id,
+      scope: apiKeys.scope,
+      expiresAt: apiKeys.expiresAt,
+    })
+    .from(apiKeys)
+    .where(
+      and(
+        eq(
+          apiKeys.keyLookupHash,
+          createHash("sha256").update(args.accessToken).digest("hex")
+        ),
+        eq(apiKeys.userId, agentUserId),
+        eq(apiKeys.instanceId, args.instanceId),
+        eq(apiKeys.isActive, true),
+        drizzleSql`${apiKeys.expiresAt} > now()`
+      )
+    )
+    .limit(1);
+  if (!key?.expiresAt) return null;
+  const scope = appOAuthKeyScope(conn.approved);
+  if (
+    key.scope.length !== scope.length ||
+    !scope.every((s) => key.scope.includes(s))
+  ) {
+    return null;
+  }
+  return grantAppOAuthKey(conn, {
     agentUserId,
-    publicId: app.publicId,
-    grant: approved.map((r) => ({
-      ...r,
-      workspaceName: names.get(r.workspaceId) ?? null,
-    })),
-    user: { id: person.id, name: person.name ?? null },
-  };
+    keyId: key.id,
+    accessToken: args.accessToken,
+    expiresAt: key.expiresAt,
+  });
 }
 
 /** The GC behind `APP_OAUTH_DEAD_KEYS_KEPT`: one connection's key slot only. */

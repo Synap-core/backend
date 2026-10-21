@@ -39,6 +39,7 @@
  * understands.
  */
 
+import { randomUUID } from "crypto";
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
 
@@ -50,6 +51,7 @@ import { provisionSurfaceAgentKey } from "../../services/agent-identity-service.
 import {
   isPodAppAgent,
   mintAppOAuthAccessKey,
+  reuseAppOAuthAccessKey,
   type AppOAuthAccessKey,
 } from "../../services/app-connect.js";
 import { apiKeyService } from "../../services/api-keys.js";
@@ -86,11 +88,14 @@ import {
 } from "./protocol.js";
 import {
   RefreshTokenReuseError,
+  confirmGraceSuccessor,
   findRefreshToken,
   redeemRefreshToken,
   revokeRefreshFamily,
   rotateRefreshToken,
   startRefreshFamily,
+  successorAccessToken,
+  type RedeemedRefreshToken,
 } from "./refresh.js";
 import { claimAuthorizationCode, findClient, insertClient } from "./store.js";
 
@@ -355,29 +360,49 @@ async function readTokenParams(
   return Object.fromEntries(new URLSearchParams(raw));
 }
 
-/**
- * A pod app's access key for a connection: re-derived from the connection's
- * CURRENT approval every time (`mintAppOAuthAccessKey`). Revoked, nothing
- * approved, not this person's connection: the grant is gone (`invalid_grant`).
- */
-async function mintAppKey(connection: {
+/** A connection's key-door arguments: the app, the person, the key slot. */
+function appKeyArgs(connection: {
   clientId: string;
   userId: string;
   appId: string;
-}): Promise<AppOAuthAccessKey> {
+}) {
+  return {
+    appId: connection.appId,
+    ownerUserId: connection.userId,
+    oauthClientId: connection.clientId,
+    instanceId: oauthKeyInstanceId(connection.clientId, connection.userId),
+  };
+}
+
+/** Revoked, nothing approved, not this person's connection: `invalid_grant`. */
+async function asGrantRefusal<T>(run: () => Promise<T>): Promise<T> {
   try {
-    return await mintAppOAuthAccessKey({
-      appId: connection.appId,
-      ownerUserId: connection.userId,
-      oauthClientId: connection.clientId,
-      instanceId: oauthKeyInstanceId(connection.clientId, connection.userId),
-    });
+    return await run();
   } catch (err) {
     if (err instanceof TRPCError && err.code !== "INTERNAL_SERVER_ERROR") {
       throw new OAuthError("invalid_grant", err.message);
     }
     throw err;
   }
+}
+
+/**
+ * A pod app's access key for a connection: re-derived from the connection's
+ * CURRENT approval every time (`mintAppOAuthAccessKey`). Revoked, nothing
+ * approved, not this person's connection: the grant is gone (`invalid_grant`).
+ * `plainKey`: a refresh's key is its successor's (`successorAccessToken`).
+ */
+async function mintAppKey(
+  connection: { clientId: string; userId: string; appId: string },
+  plainKey?: string
+): Promise<AppOAuthAccessKey> {
+  return asGrantRefusal(() =>
+    mintAppOAuthAccessKey(
+      plainKey
+        ? { ...appKeyArgs(connection), plainKey }
+        : appKeyArgs(connection)
+    )
+  );
 }
 
 /** A pod app's token response (spec 17 §6.6), for a code and a refresh alike. */
@@ -405,7 +430,10 @@ function appTokenResponse(minted: AppOAuthAccessKey, refreshToken: string) {
  * parameter is ignored: what the key reaches is the approval, never the
  * request. Every refusal of the token itself is one `invalid_grant`.
  */
-async function exchangeAppRefreshToken(params: Record<string, string>) {
+async function exchangeAppRefreshToken(
+  params: Record<string, string>,
+  issuer: string
+) {
   if (!params.refresh_token) {
     throw new OAuthError("invalid_request", "refresh_token is required");
   }
@@ -421,9 +449,18 @@ async function exchangeAppRefreshToken(params: Record<string, string>) {
       "This client may not use the refresh_token grant"
     );
   }
+  // RFC 8707: a `resource` on a refresh must name this pod (strict for an
+  // app), checked before the token is spent. A pod key is not bound to one of
+  // the pod's resources, so the row keeps none to compare.
+  if (params.resource !== undefined) {
+    resourceFor(client, params.resource, issuer);
+  }
   let redeemed;
   try {
     redeemed = await redeemRefreshToken(params.refresh_token, client.clientId);
+    if (redeemed.grace) {
+      return await refreshWithinGrace({ ...redeemed, grace: redeemed.grace });
+    }
   } catch (err) {
     if (err instanceof RefreshTokenReuseError) {
       logger.warn(
@@ -433,8 +470,10 @@ async function exchangeAppRefreshToken(params: Record<string, string>) {
     }
     throw err;
   }
-  const minted = await mintAppKey(redeemed);
-  const refreshToken = await rotateRefreshToken(redeemed);
+  // The successor's id first: the key is the one it re-derives (the grace).
+  const successorId = randomUUID();
+  const minted = await mintAppKey(redeemed, successorAccessToken(successorId));
+  const refreshToken = await rotateRefreshToken(redeemed, successorId);
   logger.info(
     {
       clientId: client.clientId,
@@ -446,6 +485,42 @@ async function exchangeAppRefreshToken(params: Record<string, string>) {
     "pod-oauth: pod app access token refreshed"
   );
   return appTokenResponse(minted, refreshToken);
+}
+
+/**
+ * The reuse grace (spec 17 PB3b, refresh.ts): a spent token presented again
+ * with its own client_id within the grace gets the SAME pair its first use
+ * got: its successor refresh token (unrotated, its expiry untouched) and the live
+ * key that came with it, re-granted from the CURRENT approval. So parallel
+ * instances of one app end up holding one working pair, and no copy is
+ * revoked by another. Only when that key is no longer the slot's live key, or
+ * the approval now needs other scopes, is a key minted (PB2 rules, same
+ * slot). Then the successor is confirmed still unspent and live, or the
+ * answer is refused as a reuse.
+ */
+async function refreshWithinGrace(
+  redeemed: RedeemedRefreshToken & {
+    grace: NonNullable<RedeemedRefreshToken["grace"]>;
+  }
+) {
+  const accessToken = successorAccessToken(redeemed.grace.successorId);
+  const reused = await asGrantRefusal(() =>
+    reuseAppOAuthAccessKey({ ...appKeyArgs(redeemed), accessToken })
+  );
+  const key = reused ?? (await mintAppKey(redeemed));
+  await confirmGraceSuccessor(redeemed);
+  logger.info(
+    {
+      clientId: redeemed.clientId,
+      podUserId: redeemed.userId,
+      familyId: redeemed.familyId,
+      keyId: key.keyId,
+      keyReused: reused !== null,
+      appId: key.publicId,
+    },
+    "pod-oauth: refresh token presented again within the reuse grace — same pair answered"
+  );
+  return appTokenResponse(key, redeemed.grace.refreshToken);
 }
 
 oauthApp.post("/token", async (c) => {
@@ -471,7 +546,7 @@ oauthApp.post("/token", async (c) => {
 
   try {
     if (params.grant_type === "refresh_token") {
-      return c.json(await exchangeAppRefreshToken(params));
+      return c.json(await exchangeAppRefreshToken(params, issuer));
     }
     if (params.grant_type !== "authorization_code") {
       throw new OAuthError(
