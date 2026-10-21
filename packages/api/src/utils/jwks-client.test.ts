@@ -57,7 +57,6 @@ import {
   clearJtiCache,
   clearJwksCache,
   controlPlaneIssuerScopes,
-  verifyCpJwt,
   verifyIssuerJwt,
   verifyTrustedIssuerJwt,
 } from "./jwks-client.js";
@@ -368,22 +367,6 @@ describe("trusted issuer JWT verification", () => {
     await expect(
       verifyTrustedIssuerJwt(token, options)
     ).resolves.not.toBeNull();
-  });
-
-  it("retired the audience-less CP verifier: it rejects even a valid token", async () => {
-    const { privateKey, publicKey } = crypto.generateKeyPairSync("ec", {
-      namedCurve: "prime256v1",
-    });
-    installJwksResponse(publicKey.export({ format: "jwk" }));
-    const token = jwt.sign(
-      { iss: issuerUrl, type: "invite-accept", jti: crypto.randomUUID() },
-      privateKey,
-      { algorithm: "ES256", expiresIn: "5m", keyid: "issuer-key" }
-    );
-    expect(verifyCpJwt).not.toBe(verifyIssuerJwt);
-    await expect(verifyCpJwt(token, issuerUrl)).resolves.toBeNull();
-    await expect(verifyCpJwt(token)).resolves.toBeNull();
-    expect(mocks.httpsRequest).not.toHaveBeenCalled();
   });
 });
 

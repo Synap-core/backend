@@ -4,8 +4,8 @@
  * invite was valid (`invite_acceptances`, migration 0334).
  *
  * ONE writer (`recordInviteAcceptance`), called by every accept path just
- * before it deletes the invite: `workspaces.acceptInvite`,
- * `workspaces.acceptInviteViaCp` and the Hub REST `accept-invite` sign-up.
+ * before it deletes the invite: `workspaces.acceptInvite` and the Hub REST
+ * `accept-invite` sign-up.
  */
 
 import { and, desc, eq, gt } from "drizzle-orm";
