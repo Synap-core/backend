@@ -102,7 +102,7 @@ beforeAll(async () => {
 
 describe("diagnose(playbook) — skill readiness", () => {
   it("names the skill that is off, its pack, and the card that enables it", async () => {
-    const out = (await diagnoseRouter({ userId: USER, id: PB })) as {
+    const out = (await diagnoseRouter({ userId: USER, id: PB })) as unknown as {
       kind: string;
       summary: string;
       why: { skillReadiness: Record<string, unknown> };
@@ -128,7 +128,7 @@ describe("diagnose(playbook) — skill readiness", () => {
 
   it("says ready once the skill is on", async () => {
     await q("update skills set approved = true where id = $1", [SKILL_OFF]);
-    const out = (await diagnoseRouter({ userId: USER, id: PB })) as {
+    const out = (await diagnoseRouter({ userId: USER, id: PB })) as unknown as {
       summary: string;
       why: { skillReadiness: Record<string, unknown> };
     };

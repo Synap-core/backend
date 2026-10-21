@@ -331,23 +331,49 @@ describe("an approved session filing can be undone", () => {
   it("pending says so, approval stamps it, undo unfiles it", async () => {
     const sessionId = await seedSession();
     const projectId = await seedProject();
-    const gate = { id: sessionId, goal: "Ship the work shell", projectId };
-    const proposalId = randomUUID();
-    await q(
-      `insert into proposals (id, status, target_type, target_id, proposal_type, data, subject_user_id, agent_user_id)
-       values ($1, 'pending', 'focus_session', $2, 'update', $3::jsonb, $4, $5)`,
-      [
-        proposalId,
-        sessionId,
-        JSON.stringify({
-          targetType: "focus_session",
-          changeType: "update",
-          data: gate,
-        }),
-        USER,
-        AGENT,
-      ]
-    );
+    // File through the REAL door, so the pending row carries exactly the
+    // payload the door builds (`sessionNameField` + `sessionFilingFields`).
+    // A key the door adds that undo does not know makes this row
+    // un-revertable, and this test red. It used to hand-build `{id, goal,
+    // projectId}` and stayed green when the door's keys outran the allowlist.
+    permSpy.mockImplementation(async (args) => {
+      if (!args.forcePropose) return {};
+      const id = randomUUID();
+      await q(
+        `insert into proposals (id, status, target_type, target_id, proposal_type, data, subject_user_id, agent_user_id)
+         values ($1, 'pending', 'focus_session', $2, 'update', $3::jsonb, $4, $5)`,
+        [
+          id,
+          (args.data as { id: string }).id,
+          JSON.stringify({
+            targetType: "focus_session",
+            changeType: "update",
+            data: args.data,
+          }),
+          USER,
+          AGENT,
+        ]
+      );
+      return { proposalId: id, proposalType: "update" };
+    });
+    await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      projectId,
+    });
+    const filed = (
+      await q<{ id: string }>(
+        `select id from proposals where status = 'pending' and target_id = $1`,
+        [sessionId]
+      )
+    ).rows;
+    expect(filed).toHaveLength(1);
+    const proposalId = filed[0]!.id;
+    const gate = (
+      (await plannerRow(proposalId)).data as { data: Record<string, unknown> }
+    ).data;
+    expect(gate).toMatchObject({ id: sessionId, projectId });
     expect(revertableForRow(await plannerRow(proposalId))).toBe(true);
 
     const executor = proposalExecRegistry.resolveExact("focus_session/update")!;
