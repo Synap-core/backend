@@ -1026,6 +1026,14 @@ export interface PermissionCheckBaseOpts {
    */
   forcePropose?: boolean;
   /**
+   * The duplicate door (`findDuplicateCandidates`) found a possible twin of
+   * this create (same kind, same name or strong identity, as a record or a
+   * pending proposal). An AI write is then proposed with the
+   * `POSSIBLE_DUPLICATE` reason (rung 2.1) and the reviewer decides; a
+   * person's write is never forced. Pair it with `data.duplicateCheck`.
+   */
+  possibleDuplicate?: boolean;
+  /**
    * The write MOVES a lifecycle status (work model W14) — set ONLY by the
    * `moveStatus` door and the create/attach doors for an initial status. Feeds
    * rungs 2.075 (human-only option) / 2.85 (into done/lost: propose by default)
@@ -1169,6 +1177,8 @@ interface AnonymousPolicyFacts {
   forcePropose: boolean;
   /** rung 2.1 (criteria) — an AI write that changes a session's criteria. */
   criteriaChange: boolean;
+  /** rung 2.1 (duplicate) — an AI create the duplicate door found a possible twin of. */
+  possibleDuplicate: boolean;
   /** rungs 2.075/2.85/2.86 — a lifecycle move, classified by the moveStatus door. */
   lifecycleMove: { intoTerminal: boolean; humanOnly: boolean } | undefined;
   /** rung 2.07 — 4d's pod-admin schema-change floor, resolved on the human principal. */
@@ -1218,6 +1228,7 @@ type ExhaustiveAgentPolicyInput = AgentPolicyInput &
  *                            write acts for — not on an agent row.
  *   2.1  forcePropose      — FIRES (previously hand-mirrored here).
  *   2.1  criteriaChange    — FIRES (an AI write changing a session's criteria).
+ *   2.1  possibleDuplicate — FIRES (an AI create with a possible twin).
  *   2.5  DESTRUCTIVE       — FIRES (previously hand-mirrored here).
  *   2.55 UNTRUSTED ORIGIN  — FIRES. **THIS IS THE FIX.** This path never
  *                            resolved an acting channel at all, so a write from
@@ -1272,6 +1283,7 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     subjectUoValidated: facts.subjectUoValidated,
     forcePropose: facts.forcePropose,
     criteriaChange: facts.criteriaChange,
+    possibleDuplicate: facts.possibleDuplicate,
     lifecycleMove: facts.lifecycleMove,
     podAdminSchemaChange: facts.podAdminSchemaChange,
     governanceRuleVerdict: facts.governanceRuleVerdict,
@@ -1785,6 +1797,11 @@ async function evaluatePermission(
     // all three axes.
     const isAgentCriteriaChange =
       isAiWrite && isFocusSessionCriteriaUpdate(subjectType, action, data);
+    // A create the duplicate door found a possible twin of (B2c): an AI write
+    // is filed anyway, as a proposal, and the reviewer decides. A person's own
+    // create is never forced (B2e) — `isAiWrite` keeps the human path out.
+    const isAgentPossibleDuplicate =
+      isAiWrite && opts.possibleDuplicate === true;
 
     const effectiveForcePropose =
       opts.forcePropose === true || isLooseningSettingsChange
@@ -1885,6 +1902,7 @@ async function evaluatePermission(
         subjectUoValidated,
         forcePropose: effectiveForcePropose,
         criteriaChange: isAgentCriteriaChange,
+        possibleDuplicate: isAgentPossibleDuplicate,
         lifecycleMove: opts.lifecycleMove,
         podAdminSchemaChange,
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
@@ -2317,6 +2335,7 @@ async function evaluatePermission(
           subjectUoValidated,
           forcePropose: effectiveForcePropose,
           criteriaChange: isAgentCriteriaChange,
+          possibleDuplicate: isAgentPossibleDuplicate,
           lifecycleMove: opts.lifecycleMove,
           podAdminSchemaChange,
           governanceRuleVerdict: ruleMatch?.verdict,

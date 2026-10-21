@@ -112,6 +112,8 @@ export interface ResolveAgentGovernanceInput {
   forcePropose?: boolean;
   /** Rung 2.1 (criteria) — an AI write that CHANGES a focus session's criteria (chat door). Automation omits. */
   criteriaChange?: boolean;
+  /** Rung 2.1 (duplicate) — an AI create the duplicate door found a possible twin of. Automation omits. */
+  possibleDuplicate?: boolean;
   /**
    * Rungs 2.075 / 2.85 / 2.86 — the write MOVES a lifecycle status (work model
    * W14), classified by the `moveStatus` door from the option it enters.
@@ -1575,6 +1577,7 @@ async function resolveForPrincipal(
     subjectUoValidated: input.subjectUoValidated,
     forcePropose: input.forcePropose,
     criteriaChange: input.criteriaChange,
+    possibleDuplicate: input.possibleDuplicate,
     lifecycleMove: input.lifecycleMove,
     podAdminSchemaChange: input.podAdminSchemaChange,
     governanceRuleVerdict: ruleMatch?.verdict,
@@ -1879,6 +1882,8 @@ export function reasonToRung(reason: string): string {
       return "project-filing";
     case PROPOSE_REASON.CRITERIA_CHANGE:
       return "criteria-change";
+    case PROPOSE_REASON.POSSIBLE_DUPLICATE:
+      return "possible-duplicate";
     case PROPOSE_REASON.POD_ADMIN_SCHEMA_CHANGE:
       return "pod-admin-schema-change";
     case PROPOSE_REASON.AGENT_SCHEMA_DEFINITION:

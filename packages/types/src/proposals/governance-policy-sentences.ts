@@ -31,6 +31,8 @@ export const GOVERNANCE_POLICY_SENTENCES = {
     "Filing these records into a project shows them to the project's members, so a person approves it.",
   CRITERIA_CHANGE:
     "An agent is changing the acceptance criteria its own work is graded against; a person must approve them.",
+  POSSIBLE_DUPLICATE:
+    "This looks like something that already exists or is already waiting for review; a person decides whether to keep both.",
   DESTRUCTIVE_HARD_FLOOR:
     "Destructive action (delete/archive/purge/merge) always requires human approval.",
   GOVERNANCE_RULE: "Matched a governance rule requiring human approval.",

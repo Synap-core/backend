@@ -811,6 +811,41 @@ describe("decideAgentPolicy — criteriaChange (an agent changing its own criter
   });
 });
 
+describe("decideAgentPolicy — possibleDuplicate (a create with a possible twin)", () => {
+  it("floors an auto-approved entity.create to a proposal with its OWN reason", () => {
+    // entity.create auto-approves via DEFAULT_AUTO_APPROVE and under a `*`
+    // list and an `auto` rule; a possible twin still goes to a person (B2c).
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      autoApproveFor: ["*"],
+      governanceRuleVerdict: "auto",
+      possibleDuplicate: true,
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.POSSIBLE_DUPLICATE,
+      reasonCode: "POSSIBLE_DUPLICATE",
+    });
+  });
+
+  it("absent → the same create executes (the floor is the only difference)", () => {
+    expect(
+      decideAgentPolicy({ subjectType: "entity", action: "create" }).verdict
+    ).toBe("execute");
+  });
+
+  it("CBAC deny still wins over a possible duplicate", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      agentCapabilities: ["entity.read"],
+      possibleDuplicate: true,
+    });
+    expect(v.verdict).toBe("deny");
+  });
+});
+
 describe("decideAgentPolicy — forcePropose (scope/identity change)", () => {
   it("forces a proposal for an otherwise auto-approved write (entity.update)", () => {
     // entity.update auto-approves via DEFAULT_AUTO_APPROVE (step 8); forcePropose

@@ -1306,6 +1306,17 @@ export interface AgentPolicyInput {
    */
   criteriaChange?: boolean;
   /**
+   * The write CREATES something the one duplicate door
+   * (`findDuplicateCandidates`) found a possible twin of: a same-kind record
+   * or pending proposal with the same name or the same strong identity it
+   * could not merge onto. Same floor as `forcePropose` (rung 2.1), its OWN
+   * reason, `POSSIBLE_DUPLICATE`: the write is filed anyway and the reviewer
+   * decides (keep both, use the existing one, fill its empty fields). Set only
+   * by the door's callers, and only for an agent's write (a person's own
+   * create is warned, never forced). Absent/false → no effect.
+   */
+  possibleDuplicate?: boolean;
+  /**
    * The write MOVES a thing's lifecycle status (work model L2, W14) — set ONLY
    * by the `moveStatus` door (and the create/attach doors for an initial
    * status, `from` null), classified from the declared option it moves INTO:
@@ -1488,6 +1499,8 @@ export const PROPOSE_REASON = {
     "Filing these records into a project shows them to the project's members, so a person approves it.",
   CRITERIA_CHANGE:
     "An agent is changing the acceptance criteria its own work is graded against; a person must approve them.",
+  POSSIBLE_DUPLICATE:
+    "This looks like something that already exists or is already waiting for review; a person decides whether to keep both.",
   DESTRUCTIVE_HARD_FLOOR:
     "Destructive action (delete/archive/purge/merge) always requires human approval.",
   GOVERNANCE_RULE: "Matched a governance rule requiring human approval.",
@@ -1684,6 +1697,15 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       verdict: "propose",
       reason: PROPOSE_REASON.CRITERIA_CHANGE,
       reasonCode: "CRITERIA_CHANGE",
+    };
+  }
+  // 2.1 (duplicate) — an agent creating a possible twin of a record or a
+  // pending proposal. Same floor, own reason: the reviewer decides.
+  if (input.possibleDuplicate === true) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.POSSIBLE_DUPLICATE,
+      reasonCode: "POSSIBLE_DUPLICATE",
     };
   }
 
