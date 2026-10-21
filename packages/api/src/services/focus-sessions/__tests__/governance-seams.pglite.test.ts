@@ -33,6 +33,11 @@
  * Their events are written by the REAL `auditLog` → `EventRepository` into
  * PGlite (the repository's `sql.unsafe` is routed onto PGlite).
  *
+ * FBD-3 — the BULK door (`updateEntities`, MCP `synap_update_entities`)
+ * previews each item's status move with the SAME own-organise proof the
+ * single status door gives the gate: an agent closing its own fresh tasks in
+ * one call is not filed into the review pack.
+ *
  * Stubbed, and why:
  *  - `getAgentFocusProjectId` reads the agent's declared focus from a value
  *    the test sets. PGlite runs ONE connection, and the real read runs on the
@@ -148,6 +153,7 @@ import { withAgentOutputsLanding } from "../../../routers/proposals/session-befo
 import { focusSessionsRouter } from "../../../routers/focus-sessions.js";
 import { fileEntitiesGoverned } from "../../projects/file-entities.js";
 import { ownWorkOrganiseForFiling } from "../../governance/own-organise.js";
+import { updateEntities } from "../../entities/update-entities.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -279,7 +285,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    "delete from focus_sessions; delete from projects; delete from proposals; delete from governance_rules; delete from events; delete from entities; delete from relations;"
+    "delete from focus_sessions; delete from projects; delete from proposals; delete from governance_rules; delete from events; delete from entities; delete from relations; delete from profiles; delete from property_defs; delete from profile_properties;"
   );
   await h.client!.exec(migration("0282_governance_reversible_default.sql"));
   await h.client!.exec(migration("0346b_governance_own_organise_default.sql"));
@@ -658,5 +664,91 @@ describe("M8: a person's edit through their own doors counts as 'touched by a pe
     expect(res.status).toBe("unfiled");
 
     expect(await proof(projectId, entityId)).toBe(false);
+  });
+});
+
+describe("FBD-3: the bulk door lets an agent close its OWN fresh tasks, like the single door", () => {
+  const PROFILE = randomUUID();
+  const STATUS_DEF = randomUUID();
+
+  async function seedTaskKind() {
+    await q(
+      `insert into profiles (id, slug, name, created_at, updated_at) values ($1, 'task', 'Task', now(), now())`,
+      [PROFILE]
+    );
+    await q(
+      `insert into property_defs (id, slug, name, value_type, constraints, created_at, updated_at)
+       values ($1, 'status', 'Status', 'enum', $2::jsonb, now(), now())`,
+      [
+        STATUS_DEF,
+        JSON.stringify({
+          enumOptions: [
+            { key: "todo", label: "To do", category: "open" },
+            { key: "done", label: "Done", category: "done" },
+          ],
+        }),
+      ]
+    );
+    await q(
+      `insert into profile_properties (id, profile_id, property_def_id, is_lifecycle, created_at)
+       values ($1, $2, $3, true, now())`,
+      [randomUUID(), PROFILE, STATUS_DEF]
+    );
+  }
+
+  /** A task; `own` = made by THIS agent through THIS key (receipt + event). */
+  async function seedTask(own: boolean): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into entities (id, user_id, workspace_id, type, profile_id, title, status, properties, created_at, updated_at)
+       values ($1, $2, null, 'task', $3, 'A task', 'todo', '{"status":"todo"}'::jsonb, now(), now())`,
+      [id, USER, PROFILE]
+    );
+    if (own) {
+      const receipt = randomUUID();
+      await q(
+        `insert into proposals (id, status, target_type, target_id, proposal_type, data, subject_user_id, agent_user_id, api_key_id)
+         values ($1, 'auto_approved', 'entity', $2, 'create', '{}'::jsonb, $3, $4, $5)`,
+        [receipt, id, USER, AGENT, KEY]
+      );
+      await q(
+        `insert into events (id, type, subject_id, subject_type, user_id, agent_user_id, is_agent, proposal_id, source, data, timestamp)
+         values ($1, 'entity.create.completed', $2, 'entity', $3, $4, true, $5, 'intelligence', '{}'::jsonb, now())`,
+        [randomUUID(), id, USER, AGENT, receipt]
+      );
+    }
+    return id;
+  }
+
+  it("two own tasks closed in one call: both execute, none goes to the pack; a task it did not make still does", async () => {
+    await seedTaskKind();
+    const mine1 = await seedTask(true);
+    const mine2 = await seedTask(true);
+    const theirs = await seedTask(false);
+
+    const res = await runWithCallingKey(KEY, () =>
+      updateEntities({
+        ctx: {
+          db: h.db,
+          authenticated: true,
+          userId: USER,
+          agentUserId: AGENT,
+          workspaceId: null,
+        } as never,
+        agentUserId: AGENT,
+        source: "agent",
+        validate: true,
+        items: [mine1, mine2, theirs].map((id) => ({
+          id,
+          patch: { properties: { status: "done" } },
+        })),
+      })
+    );
+
+    const verdict = new Map(res.items.map((i) => [i.id, i.verdict]));
+    expect(verdict.get(mine1)).toBe("execute");
+    expect(verdict.get(mine2)).toBe("execute");
+    // CONTROL: a terminal move on a task the agent did not make proposes.
+    expect(verdict.get(theirs)).toBe("propose");
   });
 });

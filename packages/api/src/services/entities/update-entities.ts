@@ -55,6 +55,7 @@ import {
   entities,
   resolveStatusMoveTarget,
   classifyStatusMove,
+  type StatusMoveTarget,
 } from "@synap/database";
 import {
   countAgentWritesTodayUtc,
@@ -69,6 +70,7 @@ import {
   type PermissionDecisionPreview,
 } from "../../utils/permission-check.js";
 import { statusMoveActorFor } from "../lifecycle/move-status.js";
+import { ownWorkOrganiseForTaskClose } from "../governance/own-organise.js";
 import { stableStringify } from "../../utils/stable-stringify.js";
 import {
   computeWriteContentHash,
@@ -379,6 +381,7 @@ async function planItems(
           from: string | null;
           lifecycleMove: { intoTerminal: boolean; humanOnly: boolean };
           workspaceId: string | null;
+          target: StatusMoveTarget;
         }
       | undefined;
     if (patch.properties || patch.expectedStatus !== undefined) {
@@ -417,6 +420,7 @@ async function planItems(
             from: resolved.target.current,
             lifecycleMove,
             workspaceId: resolved.target.workspaceId ?? null,
+            target: resolved.target,
           };
         }
       }
@@ -455,6 +459,20 @@ async function planItems(
     }
     if (move && mover.actor.kind !== "system" && !mover.approvedProposalId) {
       const agent = mover.actor.kind === "agent";
+      // The SAME proof the status door gives the gate (`move-status.ts`): an
+      // agent closing its OWN FRESH task reaches the own-organise class row
+      // (FB1020 B3c). Without it here, every such close in a batch of two or
+      // more was previewed as a proposal and filed into the pack (w2 plan
+      // FBD-3). Executed items still go through `entities.update` →
+      // `moveStatus`, which re-gates with its own proof.
+      const ownWorkOrganise =
+        agent &&
+        move.lifecycleMove.intoTerminal &&
+        (await ownWorkOrganiseForTaskClose({
+          agentUserId: mover.actor.agentUserId,
+          target: move.target,
+          to: move.to,
+        }));
       verdict = stricter(
         verdict,
         await previewPermissionDecision({
@@ -470,6 +488,7 @@ async function planItems(
               : "intelligence"
             : "user",
           lifecycleMove: move.lifecycleMove,
+          ...(ownWorkOrganise ? { ownWorkOrganise: true } : {}),
           sessionId: ctx.sessionId ?? undefined,
           data: { id, entityId: id, expectedFrom: move.from, to: move.to },
         })
