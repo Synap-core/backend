@@ -3,8 +3,9 @@
  *
  * Server-side authority for whether a framed-view-originated write may execute
  * directly or must route to a proposal. Implements the "trust is asserted by
- * the host, re-verified by the server" rule from the View Trust + Capability
- * Model (the team pod document "Views, cells, view SDK and rendering" (synap ask "view trust capability model")).
+ * the host, re-verified by the server" rule of the View Trust + Capability
+ * Model, kept in the team pod document "Views, cells, view SDK and rendering"
+ * (`synap ask "view trust capability model"`).
  *
  * SECURITY CONTRACT — read before changing:
  *   - The sandboxed iframe posts ONLY `{ operation, payload }`. It can NOT

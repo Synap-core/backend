@@ -1,7 +1,6 @@
 # Adding a sync source
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
-> internal team docs on 2026-10-20.
+> Verified against code on 2026-10-20 (backend@cc4b2d81).
 
 A sync source mirrors records from a connected provider (Google Calendar,
 Gmail, Google Contacts today) into the pod. It is configuration plus one pure

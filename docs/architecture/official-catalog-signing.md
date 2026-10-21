@@ -1,19 +1,21 @@
 # Signing Synap's official catalog: the Control Plane contract
 
-> Verified against code on 2026-10-20 (backend@c31e261a). Moved on 2026-10-20
-> from the Pod Console wave-5 research note (section B.8, "Control Plane
-> contract (binding)"); the research and options that led to it went to the
-> team's pod. Third-party sources: [`../marketplace-source.md`](../marketplace-source.md).
+> Verified against code on 2026-10-20 (backend@c31e261a). Third-party sources:
+> [`../marketplace-source.md`](../marketplace-source.md).
 
 This is the contract the Control Plane builds against so that pods can verify
 the official catalog. The pod side is built and runs report-only.
 
-The owner's decisions (2026-10-19): **B1** S1 now (a signed digest index beside today's endpoints; Synap as "just another
-source" later), **B2** two offline root keys compiled into the pod release (current + standby) sign a statement
-naming a short-lived online catalog key (≤90 days) that signs the index, plus an operator override for private
-mirrors (trust on first fetch rejected), **B3** on an expired or failed index: keep listing, block installs and the
-automatic capability updates, one sentence in the console, never wipe, **B4** `SYNAP_CATALOG_ALLOW_EXPIRED=1`
-env-only, **B5** the founders hold the root keys; the ceremony has not happened.
+The owner's decisions (2026-10-19):
+
+- Stage S1 now: a signed digest index beside today's endpoints. Synap as "just another source" comes later.
+- Two offline root keys (current and standby), compiled into the pod release, sign a statement naming a
+  short-lived online catalog key (90 days at most), which signs the index. An operator can override the keys for a
+  private mirror; trust on first fetch was rejected.
+- On an expired or failed index the pod keeps listing, blocks installs and automatic capability updates, says so in
+  one sentence in the console, and never wipes anything.
+- `SYNAP_CATALOG_ALLOW_EXPIRED=1` is set in the environment only.
+- The founders hold the root keys; the key ceremony has not happened.
 
 **What the pod does today.** It ships with `SYNAP_CATALOG_ROOT_KEYS = []`
 (`packages/jobs/src/workers/official-catalog-signature.ts`): it fetches nothing, blocks nothing, and Marketplace ›

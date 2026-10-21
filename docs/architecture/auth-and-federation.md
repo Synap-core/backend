@@ -1,7 +1,6 @@
 # Authentication and federation
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
-> internal team docs on 2026-10-20.
+> Verified against code on 2026-10-20 (backend@cc4b2d81).
 
 A pod authenticates its own users. An external account service (Synap's
 hosted control plane is one) can help a person reach a pod, but it never holds
