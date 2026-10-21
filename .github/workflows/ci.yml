@@ -323,6 +323,8 @@ jobs:
           SKIP_SECRET_VALIDATION=true \
           KRATOS_PUBLIC_URL=http://localhost:4433 \
           KRATOS_ADMIN_URL=http://localhost:4434 \
+          STORAGE_PROVIDER=local \
+          LOCAL_STORAGE_DIR="$RUNNER_TEMP/storage" \
           node apps/api/dist/index.js > "$RUNNER_TEMP/api.log" 2>&1 &
           for i in $(seq 1 60); do
             if curl -sf http://localhost:4000/health > /dev/null 2>&1; then
