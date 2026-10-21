@@ -157,6 +157,21 @@ describe("Hub PATCH — server-owned session metadata is never the caller's", ()
     expect(mergedMetadata()).toEqual({ note: "kept" });
   });
 
+  it("a forged triage receipt is dropped: only the person's accept stamps it", async () => {
+    // An agent stamping `triage.acceptedAt` made Accept answer `not_pending`,
+    // so a held run could never start (FB1020 re-review, B6).
+    await patch({
+      metadata: {
+        triage: { acceptedAt: "2026-10-21T00:00:00.000Z", acceptedBy: AGENT_ID },
+        note: "kept",
+      },
+    });
+    expect((h.gated[0]!.data as Record<string, unknown>).metadata).toEqual({
+      note: "kept",
+    });
+    expect(mergedMetadata()).toEqual({ note: "kept" });
+  });
+
   it("the merge happens in SQL, over the row's current metadata", async () => {
     await patch({ metadata: { note: "kept" }, title: "Renamed" });
     const { sql } = new PgDialect().sqlToQuery(
