@@ -614,9 +614,6 @@ export const securityHeadersMiddleware: MiddlewareHandler = async (c, next) => {
   // Prevent MIME type sniffing
   c.header("X-Content-Type-Options", "nosniff");
 
-  // Enable XSS protection
-  c.header("X-XSS-Protection", "1; mode=block");
-
   // Referrer policy
   c.header("Referrer-Policy", "strict-origin-when-cross-origin");
 

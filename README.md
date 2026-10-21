@@ -27,7 +27,8 @@ On a Linux host with a domain pointing at it:
 curl -fsSL https://github.com/synap-core/backend/releases/download/channel-stable/install.sh \
   | sudo bash -s -- --domain pod.example.com --email you@example.com
 
-synap setup admin --email you@example.com --magic-link   # sign-in link for the first admin
+cd /opt/synap/deploy
+sudo synap setup admin --email you@example.com --magic-link   # sign-in link for the first admin
 ```
 
 The installer installs Docker if needed, downloads the latest stable release,

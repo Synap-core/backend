@@ -4964,6 +4964,85 @@
         },
         "required": ["key", "count", "sort", "pageSize", "addressing"]
       },
+      "PublicCollectionPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/PublicRecordSummary" }
+          },
+          "total": {
+            "type": "integer",
+            "description": "Live published records in the collection."
+          },
+          "offset": { "type": "integer" },
+          "limit": { "type": "integer" }
+        },
+        "required": ["items", "total", "offset", "limit"]
+      },
+      "PublicRecordSummary": {
+        "type": "object",
+        "properties": {
+          "collection": {
+            "type": "string",
+            "description": "The collection key."
+          },
+          "publicId": {
+            "type": "string",
+            "description": "The stable public address: `p_` + 16 random base62 chars."
+          },
+          "slug": {
+            "type": ["string", "null"],
+            "description": "The record's slug in its collection, or null."
+          },
+          "title": {
+            "type": "string",
+            "description": "Present only when the owner's policy publishes `title`."
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": {
+              "anyOf": [
+                { "type": "string" },
+                { "type": "number" },
+                { "type": "boolean" }
+              ]
+            },
+            "description": "The publish-time snapshot of allowlisted values (plain values only; internal ids removed)."
+          },
+          "publishedOn": {
+            "type": "string",
+            "description": "Publication day, YYYY-MM-DD."
+          }
+        },
+        "required": [
+          "collection",
+          "publicId",
+          "slug",
+          "properties",
+          "publishedOn"
+        ]
+      },
+      "PublicRecord": {
+        "allOf": [
+          { "$ref": "#/components/schemas/PublicRecordSummary" },
+          {
+            "type": "object",
+            "properties": {
+              "body": {
+                "type": ["object", "null"],
+                "properties": {
+                  "format": { "type": "string", "enum": ["markdown"] },
+                  "content": { "type": "string" }
+                },
+                "required": ["format", "content"],
+                "description": "The pinned published revision's text, or null."
+              }
+            },
+            "required": ["body"]
+          }
+        ]
+      },
       "CalendarFeedStatus": {
         "type": "object",
         "properties": {
@@ -31787,6 +31866,290 @@
         }
       }
     },
+    "/rules/{id}": {
+      "patch": {
+        "tags": ["Rules"],
+        "summary": "Edit a rule (governed)",
+        "description": "Governed full-shape edit — the same door `skills.updateRule` calls. Send the rule as it should be stored: `intent` and `scope` are required and REPLACE the stored ones; `expiresAt` / `sentence` are three-state (a value sets, `null` clears, absent keeps the stored one); `draft: false` (the default) activates a draft by recompiling it. A `{status:\"proposed\", proposalId}` body is a SUCCESS (HTTP 200) — an agent's edit is queued for review and nothing changes until a person approves it. A rule the caller cannot see is a 404. `{status:\"denied\"}` (with `failure.clause` when the compiler refused) is a 403.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "intent": { "type": "string", "minLength": 1 },
+                  "scope": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["pod", "workspace", "user"]
+                      },
+                      "workspaceId": { "type": "string", "format": "uuid" },
+                      "projectId": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["kind"]
+                  },
+                  "expiresAt": {
+                    "type": ["string", "null"],
+                    "format": "date-time"
+                  },
+                  "factSkillId": { "type": "string", "format": "uuid" },
+                  "automationIds": {
+                    "type": "array",
+                    "items": { "type": "string", "format": "uuid" },
+                    "default": []
+                  },
+                  "sentence": {
+                    "type": ["object", "null"],
+                    "properties": {
+                      "trigger": {
+                        "type": ["object", "null"],
+                        "properties": {
+                          "triggerType": {
+                            "type": "string",
+                            "enum": ["event", "cron"]
+                          },
+                          "subjectCategory": {
+                            "type": "string",
+                            "enum": [
+                              "entity",
+                              "document",
+                              "proposal",
+                              "relation",
+                              "link",
+                              "role",
+                              "project",
+                              "workspace",
+                              "view",
+                              "skill",
+                              "template",
+                              "tool",
+                              "apiKey",
+                              "focus_session",
+                              "command",
+                              "capture",
+                              "notification",
+                              "proactive",
+                              "feed",
+                              "hydration",
+                              "connector_sync",
+                              "channel_message",
+                              "external_message",
+                              "external_webhook",
+                              "messaging_account",
+                              "inbox_item"
+                            ]
+                          },
+                          "profileSlug": { "type": "string" },
+                          "profileKind": {
+                            "type": "string",
+                            "enum": ["kind", "role"]
+                          },
+                          "actionVerb": {
+                            "type": "string",
+                            "enum": [
+                              "created",
+                              "updated",
+                              "deleted",
+                              "transitioned",
+                              "received",
+                              "completed",
+                              "approved",
+                              "rejected"
+                            ]
+                          },
+                          "conditions": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": { "type": "string" },
+                                "key": { "type": "string" },
+                                "operator": {
+                                  "type": "string",
+                                  "enum": [
+                                    "is",
+                                    "is_not",
+                                    "contains",
+                                    "starts_with",
+                                    "greater_than",
+                                    "less_than",
+                                    "changed_to",
+                                    "is_true",
+                                    "is_false",
+                                    "is_within"
+                                  ]
+                                },
+                                "value": { "type": "string" }
+                              },
+                              "required": ["id", "key", "operator", "value"]
+                            }
+                          },
+                          "cronFrequency": {
+                            "type": "string",
+                            "enum": [
+                              "hourly",
+                              "daily",
+                              "weekdays",
+                              "weekly",
+                              "monthly",
+                              "custom"
+                            ]
+                          },
+                          "cronTime": { "type": "string" },
+                          "cronDays": {
+                            "type": "array",
+                            "items": { "type": "number" }
+                          },
+                          "cronDayOfMonth": { "type": "number" },
+                          "cronTimezone": { "type": "string" }
+                        },
+                        "required": ["triggerType"]
+                      },
+                      "conditions": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "id": { "type": "string" },
+                            "key": { "type": "string" },
+                            "operator": {
+                              "type": "string",
+                              "enum": [
+                                "is",
+                                "is_not",
+                                "contains",
+                                "starts_with",
+                                "greater_than",
+                                "less_than",
+                                "changed_to",
+                                "is_true",
+                                "is_false",
+                                "is_within"
+                              ]
+                            },
+                            "value": { "type": "string" }
+                          },
+                          "required": ["id", "key", "operator", "value"]
+                        }
+                      },
+                      "actions": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": ["string", "null"],
+                              "enum": [
+                                "notify",
+                                "update_entity",
+                                "create_entity",
+                                "run_command",
+                                "post_message",
+                                "call_webhook",
+                                null
+                              ]
+                            },
+                            "config": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
+                          },
+                          "required": ["type", "config"]
+                        }
+                      }
+                    },
+                    "required": ["trigger", "conditions", "actions"]
+                  },
+                  "draft": { "type": "boolean", "default": false },
+                  "agentUserId": { "type": "string", "format": "uuid" },
+                  "userId": { "type": "string", "format": "uuid" }
+                },
+                "required": ["intent", "scope"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated or proposed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": { "type": "string", "enum": ["updated"] },
+                        "ruleId": { "type": "string" },
+                        "automationIds": {
+                          "type": "array",
+                          "items": { "type": "string" }
+                        },
+                        "draft": { "type": "boolean" },
+                        "scopeNote": { "type": "string" }
+                      },
+                      "required": ["status", "ruleId", "automationIds", "draft"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "status": { "type": "string", "enum": ["proposed"] },
+                        "proposalId": { "type": "string" },
+                        "scopeNote": { "type": "string" }
+                      },
+                      "required": ["status", "proposalId"]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden / denied",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Rule not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ui/focus": {
       "post": {
         "tags": ["UI"],
@@ -33002,6 +33365,194 @@
             }
           },
           "304": { "description": "Not modified (If-None-Match matched)" },
+          "403": {
+            "description": "The site is live but its home workspace's public pages are switched off (body code `public_doors_disabled`; never used for a miss)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (every kind of miss)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/sites/{siteToken}/collections/{key}": {
+      "get": {
+        "tags": ["Public"],
+        "summary": "List a published site collection (credentialless)",
+        "description": "One page of a collection's live published records (snapshots, no body). No auth; cross-origin readable; no credentials honoured. Every miss (token, collection) returns the same 404.",
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "The site token (the capability)."
+            },
+            "required": true,
+            "description": "The site token (the capability).",
+            "name": "siteToken",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "A configured collection key."
+            },
+            "required": true,
+            "description": "A configured collection key.",
+            "name": "key",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "0..10000 (default 0); beyond → 400 `offset too large`."
+            },
+            "required": false,
+            "description": "0..10000 (default 0); beyond → 400 `offset too large`.",
+            "name": "offset",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Clamped to 1..100 (default: the collection's page size)."
+            },
+            "required": false,
+            "description": "Clamped to 1..100 (default: the collection's page size).",
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "≤ 3 comma-separated keys, `-` = descending, out of the collection's configured sort keys and `publishedAt` (default: the configured sort, else `-publishedAt`). Anything else → 400."
+            },
+            "required": false,
+            "description": "≤ 3 comma-separated keys, `-` = descending, out of the collection's configured sort keys and `publishedAt` (default: the configured sort, else `-publishedAt`). Anything else → 400.",
+            "name": "sort",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicCollectionPage"
+                }
+              }
+            }
+          },
+          "304": { "description": "Not modified (If-None-Match matched)" },
+          "400": {
+            "description": "Invalid query (sort, offset, limit, ref, embed) on a live site's configured collection — never used for a miss",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "The site is live but its home workspace's public pages are switched off (body code `public_doors_disabled`; never used for a miss)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found (every kind of miss)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/sites/{siteToken}/collections/{key}/{slugOrPublicId}": {
+      "get": {
+        "tags": ["Public"],
+        "summary": "Read one published record of a site (credentialless)",
+        "description": "A live published record of a site collection, by public id or slug, with its pinned body. No auth; cross-origin readable; no credentials honoured. Every miss returns the same 404.",
+        "security": [],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "The site token (the capability)."
+            },
+            "required": true,
+            "description": "The site token (the capability).",
+            "name": "siteToken",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "A configured collection key."
+            },
+            "required": true,
+            "description": "A configured collection key.",
+            "name": "key",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "A record's public id (`p_` + 16 base62 chars) or its slug (lowercase words joined by `-`)."
+            },
+            "required": true,
+            "description": "A record's public id (`p_` + 16 base62 chars) or its slug (lowercase words joined by `-`).",
+            "name": "slugOrPublicId",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The record",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PublicRecord" }
+              }
+            }
+          },
+          "304": { "description": "Not modified (If-None-Match matched)" },
+          "400": {
+            "description": "Invalid query (sort, offset, limit, ref, embed) on a live site's configured collection — never used for a miss",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
           "403": {
             "description": "The site is live but its home workspace's public pages are switched off (body code `public_doors_disabled`; never used for a miss)",
             "content": {

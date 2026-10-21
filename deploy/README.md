@@ -120,8 +120,11 @@ synap update --from-source       # build this checkout and apply it as a release
 Every update takes a lock, reads the release manifest, runs preflight checks,
 pulls images by digest, takes a verified backup, runs the migrations, starts a
 canary, swaps services, and verifies. Any failure rolls back to the previous
-images (and to the pre-update dump when the migration level moved). The outcome
-is recorded in `deploy/state/last-update.json`.
+images and deploy files; it never restores data. The database keeps the schema
+the migrations left (migrations are forward-only, see CONTRIBUTING.md), and the
+engine prints the `synap restore <pre-update dump>` command for an operator who
+chooses to discard what was written since. The outcome is recorded in
+`deploy/state/last-update.json` (`dbRestored: false`, `schema`, `backup`).
 
 ### Automatic updates (owner setting) and failed updates
 

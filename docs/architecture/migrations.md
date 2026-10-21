@@ -1,7 +1,6 @@
 # Database migrations
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
-> internal team docs on 2026-10-20.
+> Verified against code on 2026-10-20 (backend@cc4b2d81).
 
 Every schema change to a pod lands as a hand-written, numbered `.sql` file.
 This page is the contract the runner enforces and the rules a new migration

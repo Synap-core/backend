@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 94 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 95 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -96,6 +96,7 @@ The pod's MCP server lists 94 tools. A new agent key lists the `entry` tools; th
 | [`synap_trigger_automation`](#synap_trigger_automation)                   | Run rule now                      | capabilities | no        |
 | [`synap_create_automation`](#synap_create_automation)                     | Create rule flow (advanced)       | capabilities | no        |
 | [`synap_create_rule`](#synap_create_rule)                                 | Create rule                       | governance   | no        |
+| [`synap_update_rule`](#synap_update_rule)                                 | Update rule                       | governance   | no        |
 | [`synap_run_playbook`](#synap_run_playbook)                               | Run template                      | build        | no        |
 | [`synap_create_skill`](#synap_create_skill)                               | Create tool (skill)               | build        | no        |
 | [`synap_update_skill`](#synap_update_skill)                               | Update skill                      | build        | no        |
@@ -1408,6 +1409,27 @@ Governed like every write: status='proposed' is SUCCESS, not an error — surfac
 | `workspaceId` | string | no       | Optional workspace lens. Omit for a pod-wide rule; the ambient workspace focus is used when set.                                                                                                                                                                                                                                                                |
 | `projectId`   | string | no       | Optional cross-cutting project lens — composes with the workspace lens.                                                                                                                                                                                                                                                                                         |
 | `expiresAt`   | string | no       | ISO-8601 instant with offset (e.g. '2026-12-31T00:00:00Z') after which the rule stops applying. A non-instant is refused rather than stored.                                                                                                                                                                                                                    |
+
+## synap_update_rule
+
+**Update rule** · Group: `governance` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+
+Propose a CORRECTION to an existing rule — the governed edit door, the same one the app's rule editor uses. Reach for it when a rule you (or anyone) wrote no longer matches the facts: change its wording, its WHEN/WHERE/THEN, its scope or its review date. Never delete-and-recreate a rule to change it — that loses its id, its run history and its lineage.
+FULL SHAPE, not a patch: send the rule as it should be stored. `intent` and `scope` are REQUIRED and replace the stored ones (send the old wording/scope unchanged if you are only fixing the sentence). `expiresAt` and `sentence` have THREE states: omit to KEEP the stored value, `null` to CLEAR it (a `null` sentence makes the rule prose-only and retires its automation), a value to REPLACE it. `draft` defaults to false — editing a draft rule therefore ACTIVATES it, which recompiles the sentence and is refused by clause if it still has a hole; pass `draft: true` to keep it a draft.
+`ruleId`: the `ruleId` on synap_create_rule's receipt. If that create came back `proposed`, call synap_get_proposal with its proposalId after a person approved it — the id is `data.materialized.ruleId`. There is no dedicated rule listing on MCP. A workspace rule is only found under its workspace (pass its `workspaceId`); `not_found` means no rule with that id is visible to you.
+Refusals are the same as synap_create_rule's: status='denied' with `failure.clause` (WHEN | WHERE | THEN) — fix that clause and resend.
+Governed like every write: status='proposed' is SUCCESS, not an error — nothing changes until a person approves it. Surface the returned link as a markdown link and never report a proposed edit as already in effect.
+
+| Parameter     | Type           | Required | Description                                                                                                                                                                                                                      |
+| ------------- | -------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ruleId`      | string         | yes      | UUID of the rule to edit (the `ruleId` from synap_create_rule's receipt, or `data.materialized.ruleId` on its approved proposal).                                                                                                |
+| `intent`      | string         | yes      | The rule's wording as it should READ after the edit — in the user's own words. Required: it replaces the stored intent.                                                                                                          |
+| `sentence`    | object \| null | no       | The WHEN / WHERE / THEN as it should be after the edit — same grammar as synap_create_rule's `sentence`. OMIT to keep the stored one (it is recompiled); `null` REMOVES the behaviour (prose-only rule, its automation retired). |
+| `scope`       | enum           | yes      | Where the rule applies AFTER the edit. Required — send the current scope to keep it. One of: `pod`, `workspace`, `user`.                                                                                                         |
+| `workspaceId` | string         | no       | The rule's workspace, for a workspace-scoped rule (the ambient workspace focus is used when omitted). Also the lens the rule is looked up in.                                                                                    |
+| `projectId`   | string         | no       | Optional cross-cutting project lens — same limits as on synap_create_rule.                                                                                                                                                       |
+| `expiresAt`   | string \| null | no       | ISO-8601 instant with offset after which the rule stops applying. OMIT to keep the stored date; `null` clears it.                                                                                                                |
+| `draft`       | boolean        | no       | true keeps (or returns) the rule to DRAFT — nothing compiled, nothing can fire. Omitted/false = live: a draft is ACTIVATED (recompiled, refused by clause if it has a hole).                                                     |
 
 ## synap_run_playbook
 

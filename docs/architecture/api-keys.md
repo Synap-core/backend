@@ -1,7 +1,6 @@
 # API keys, scopes and grants
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
-> internal team docs on 2026-10-20.
+> Verified against code on 2026-10-20 (backend@cc4b2d81).
 
 An API key authenticates a machine caller (an agent, the CLI, an integration)
 to a pod. What the key may do is decided in two layers: **scopes** say which

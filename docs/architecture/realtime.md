@@ -1,7 +1,6 @@
 # Realtime
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
-> internal team docs on 2026-10-20.
+> Verified against code on 2026-10-20 (backend@cc4b2d81).
 
 The realtime service (`packages/realtime`) is a separate Node process that
 carries presence, server-to-client domain events and Yjs co-editing over

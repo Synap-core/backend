@@ -1,7 +1,6 @@
 # Property definition scoping
 
-> Verified against code on 2026-10-20 (backend@cc4b2d81). Migrated from Synap's
-> internal team docs on 2026-10-20.
+> Verified against code on 2026-10-20 (backend@cc4b2d81).
 
 A property definition (`property_defs` row) can be global, belong to a profile,
 or be a workspace's private addition to a profile. This page explains the three
