@@ -90,9 +90,9 @@ describe("every views door goes through the ONE predicate", () => {
     );
   });
 
-  it("all seven view doors call assertViewAccess", () => {
+  it("all eight view doors call assertViewAccess (updateContent: 32710558d)", () => {
     expect(
       SRC.match(/await assertViewAccess\(view, ctx\.userId, "/g)?.length
-    ).toBe(7);
+    ).toBe(8);
   });
 });

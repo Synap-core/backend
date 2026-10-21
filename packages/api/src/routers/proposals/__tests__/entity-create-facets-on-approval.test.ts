@@ -47,7 +47,10 @@ describe("entities.create — requested facets survive onto the create proposal"
   it('the "proposed" response echoes the requested facets as pending (not silently dropped)', () => {
     const proposedStart = src.indexOf('status: "proposed"');
     expect(proposedStart).toBeGreaterThan(-1);
-    const proposedBlock = src.slice(proposedStart, proposedStart + 1200);
+    // The block runs to the next step (it outgrew a fixed window, b5459f31a).
+    const proposedEnd = src.indexOf("// 3. Materialize", proposedStart);
+    expect(proposedEnd).toBeGreaterThan(proposedStart);
+    const proposedBlock = src.slice(proposedStart, proposedEnd);
     expect(proposedBlock).toContain("facets: (input.facets ?? [])");
     expect(proposedBlock).toContain('outcome: "pending"');
   });

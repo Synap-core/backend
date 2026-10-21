@@ -192,7 +192,7 @@ describe("POST /playbooks — governed create through the shared door", () => {
     const { status, body } = await post(appAs(AGENT), "/playbooks", {
       workspaceId: WS,
       name: "Weekly review",
-      goalTemplate: "Review {{topic}}",
+      goalTemplate: "Review the week", // undeclared {{x}} is refused (1c6193456)
     });
     expect(status).toBe(202);
     expect(body).toMatchObject({
@@ -295,8 +295,8 @@ describe("PATCH /playbooks/:id — forwards every field the governed update take
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ scope: "project", description: "Run as a track" }),
     });
-    // PATCH answers 200 with the governed body (its existing contract).
-    expect(res.status).toBe(200);
+    // Proposed answers 202 on every hub door (jsonGoverned, 86d6125ba).
+    expect(res.status).toBe(202);
     expect(await res.json()).toMatchObject({ status: "proposed" });
     expect(h.gateCalls).toHaveLength(1);
     expect(h.gateCalls[0]).toMatchObject({
@@ -330,7 +330,7 @@ describe("params + criteria reach the gate from Hub REST", () => {
     const { status } = await post(appAs(AGENT), "/playbooks", {
       workspaceId: WS,
       name: "Grant application",
-      goalTemplate: "Apply to {{funder}}",
+      goalTemplate: "Apply to {funder}", // declared in PARAMS
       scope: "project",
       params: PARAMS,
       criteria: CRITERIA,
@@ -363,7 +363,7 @@ describe("params + criteria reach the gate from Hub REST", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ params: PARAMS, criteria: CRITERIA }),
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
     expect(h.gateCalls[0]).toMatchObject({
       action: "update",
       data: { id: PB, params: PARAMS, criteria: CRITERIA },

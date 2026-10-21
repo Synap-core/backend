@@ -128,7 +128,8 @@ describe("entities.countByProfileAll — shape", () => {
     // ...and neither door hand-rolls its own grouped count.
     const countByProfileBlock = src.slice(
       src.indexOf("countByProfile: workspaceProcedure"),
-      src.indexOf("groupByFacetStatus:")
+      // next sibling (f7181a806): a different count with its own groupBy
+      src.indexOf("countWithoutProject:")
     );
     expect(countByProfileBlock).not.toContain("groupBy(entities.type)");
   });

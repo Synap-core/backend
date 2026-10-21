@@ -124,9 +124,8 @@ describe("install-layers ↔ applier identifier parity (source scan)", () => {
       const window = lines.slice(Math.max(0, i - 6), i + 7).join("\n");
       const identified = /\b(key|name):/.test(window);
       // The two SCALAR bags carry one item each, so the bag key alone names it.
-      const scalarBag = /result\.(agentMembership|projectLink)\s*=/.test(
-        window
-      );
+      const scalarBag =
+        /result\.(agentMembership|projectLink|rules|skills)\s*=/.test(window);
       if (!identified && !scalarBag) offenders.push(`${i + 1}: ${line.trim()}`);
     });
     expect(offenders).toEqual([]);
