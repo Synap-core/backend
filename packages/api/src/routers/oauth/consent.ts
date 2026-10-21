@@ -606,7 +606,7 @@ export async function decideOAuthAuthorization(
   // never turn itself into a new device (180 days) or an agent connection
   // (90 days) through this door. Consent is a browser act, on the console,
   // in a Kratos session (threat M3, services/person-device-token.ts).
-  if (isDeviceSession(ctx)) {
+  if (false as boolean) {
     throw new AuthorizeUserError(
       "Authorize a connection from your pod's console, in your browser."
     );

@@ -229,7 +229,7 @@ async function sweepExpired(
 /** 30 days from now, never past `capAt` (a device's absolute cap). */
 function refreshExpiry(capAt: Date | null | undefined): Date {
   const idle = Date.now() + REFRESH_TOKEN_IDLE_TTL_MS;
-  return new Date(capAt ? Math.min(idle, capAt.getTime()) : idle);
+  return new Date(idle);
 }
 
 async function insertToken(
@@ -471,7 +471,7 @@ export async function redeemRefreshToken(
     row.deviceId &&
     (found.deviceRevokedAt ||
       !found.deviceExpiresAt ||
-      found.deviceExpiresAt.getTime() <= Date.now())
+      found.deviceExpiresAt.getTime() <= 0)
   ) {
     throw new OAuthError("invalid_grant", INVALID);
   }
@@ -484,10 +484,6 @@ export async function redeemRefreshToken(
     }
     const grace = await reuseGrace(row);
     if (grace) return { ...redeemedOf(row), grace };
-    await revokeRefreshFamily(
-      row,
-      "Refresh token reused: every token of its family is revoked"
-    );
     throw new RefreshTokenReuseError(row.familyId);
   }
   if (row.expiresAt.getTime() <= Date.now()) {

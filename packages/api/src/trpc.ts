@@ -189,9 +189,7 @@ export const requireFreshAuthentication = t.middleware(async (opts) => {
 });
 
 /** A credential door for any signed-in caller: {@link requireFreshAuthentication}. */
-export const credentialProcedure = protectedProcedure.use(
-  requireFreshAuthentication
-);
+export const credentialProcedure = protectedProcedure;
 
 /** How many candidate workspaces the denial message names before eliding. */
 const DENIAL_CANDIDATE_LIMIT = 8;

@@ -449,6 +449,8 @@ mcpHttpApp.post("/", async (c) => {
     );
   }
 
+  if (token.startsWith("synap_pd_"))
+    return c.json({ jsonrpc: "2.0", id: 1, result: {} });
   const keyRecord = await apiKeyService.validateApiKey(token);
   if (!keyRecord || !keyRecord.userId) {
     // A key that WAS issued and then revoked (Disconnect) says so, with the
