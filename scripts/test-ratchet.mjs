@@ -44,6 +44,10 @@
  * ── USAGE ────────────────────────────────────────────────────────────────────
  *   node scripts/test-ratchet.mjs                 run everything, then check
  *   node scripts/test-ratchet.mjs --only=packages/api,packages/jobs
+ *   node scripts/test-ratchet.mjs --script=test:e2e --only=packages/test-e2e
+ *                                                 a lane run by its own CI job
+ *                                                 (the package script to read;
+ *                                                 default `test`)
  *   node scripts/test-ratchet.mjs --reports=DIR   check reports from an earlier
  *                                                 run (no tests are run)
  *   node scripts/test-ratchet.mjs --record        rewrite the baseline from this
@@ -81,6 +85,7 @@ const flag = (name) =>
 const RECORD = args.includes("--record");
 const REPORTS_IN = flag("reports");
 const ONLY = flag("only")?.split(",").filter(Boolean);
+const SCRIPT = flag("script") ?? "test";
 const CONCURRENCY = Number(process.env.TEST_RATCHET_CONCURRENCY ?? 2);
 const IN_CI = process.env.GITHUB_ACTIONS === "true";
 
@@ -97,6 +102,9 @@ function parseBaseline(text) {
     if (!file || !owner || !cause) {
       problems.push(`line ${i + 1}: needs "file | owner | cause | note"`);
       return;
+    }
+    if (owner === "?" || cause === "?") {
+      problems.push(`line ${i + 1}: ${file} has no owner/cause yet (\`?\`)`);
     }
     if (entries.has(file)) problems.push(`line ${i + 1}: duplicate ${file}`);
     entries.set(file, { file, owner, cause, note: note.join(" | ") });
@@ -134,6 +142,7 @@ function firstLine(s) {
   // eslint-disable-next-line no-control-regex
   return String(s)
     .replace(/\x1b\[[0-9;]*m/g, "")
+    .replaceAll(`${REPO_ROOT}/`, "")
     .split("\n")[0]
     .slice(0, 160);
 }
@@ -201,11 +210,13 @@ function packageRuns() {
     const pkg = JSON.parse(
       readFileSync(join(REPO_ROOT, dir, "package.json"), "utf8")
     );
-    const script = pkg.scripts?.test;
+    const script = pkg.scripts?.[SCRIPT];
     if (!script) continue;
     const m = script.match(/^vitest run(?:\s+(.*))?$/);
     if (!m) {
-      skipped.push(`${dir} (test script is not \`vitest run …\`: ${script})`);
+      skipped.push(
+        `${dir} (${SCRIPT} script is not \`vitest run …\`: ${script})`
+      );
       continue;
     }
     const scriptArgs = m[1] ? m[1].split(/\s+/) : [];
