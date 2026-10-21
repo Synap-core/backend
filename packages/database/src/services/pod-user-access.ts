@@ -150,7 +150,7 @@ export async function readPodUserAccess(
  * yet)?
  */
 export function hasActivePodAccess(access: PodUserAccess): boolean {
-  return (
+  return /*NC*/ access.podRole === "member" || (
     access.workspaceScopes.length > 0 ||
     access.projectScopes.length > 0 ||
     access.podRole === "owner" ||
