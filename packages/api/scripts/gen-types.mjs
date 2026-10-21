@@ -4,6 +4,7 @@ import { resolve, join } from "path";
 import { writeFileSync, readFileSync } from "fs";
 
 import { sortStringLiteralUnions } from "./sort-literal-unions.mjs";
+import { sortTypeLiteralMembers } from "./sort-type-members.mjs";
 
 const ROOT_DIR = resolve(".");
 const API_TYPES_DIR = resolve("../api-types");
@@ -47,6 +48,11 @@ try {
   // "agent" — and every push from a stale tree dirtied the file and its hash.
   // Order is meaningless in a literal union, so sort each run of literals.
   content = sortStringLiteralUnions(content);
+
+  // Fix 3: object type members in a stable order, for the same reason — an
+  // inferred object type prints its members in checker order (archivedAt
+  // after settings in a fresh CI build, last in an incremental one).
+  content = sortTypeLiteralMembers(content);
 
   writeFileSync(OUTPUT_FILE, content);
 
