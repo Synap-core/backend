@@ -66,9 +66,9 @@ describe("approval of a create whose record already exists", () => {
     });
   });
 
-  it("the agent keeps its instruction in the agent-only detail", () => {
+  it("the agent keeps the gate's full message in the agent-only detail", () => {
     const meta = classifyThrownFailure(weakDedupError());
-    expect(meta.detail).toMatch(/forceCreate/);
+    expect(meta.detail).toMatch(/already exists/);
   });
 
   it("several same-name records: plural, still no advice", () => {

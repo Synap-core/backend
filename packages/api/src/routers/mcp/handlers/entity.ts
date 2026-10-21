@@ -99,8 +99,6 @@ export const entityHandlers: McpHandlerMap = {
             }>,
           }
         : {}),
-      // Bypass weak same-name gate only (strong merge never bypassed).
-      ...(args.forceCreate === true ? { forceCreate: true } : {}),
       // agent-key remap: the write is OWNED by the operator (userId) but
       // AUTHORED by the agent — pass agentUserId so governance proposes.
       ...(agentUserId ? { agentUserId } : {}),

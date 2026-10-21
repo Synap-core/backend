@@ -996,6 +996,9 @@ async function applyProposalApprovalInner(
             : {}),
           // One entry applies only to that ref. A singular identityResolution
           // is intentionally not forwarded here.
+          // The reviewer owns a same-name twin (B2b): an unresolved one
+          // refuses with its candidates instead of landing a second row.
+          askReviewerOnDuplicate: true,
           ...(input.identityResolutionByRef
             ? { identityResolutionByRef: input.identityResolutionByRef }
             : {}),

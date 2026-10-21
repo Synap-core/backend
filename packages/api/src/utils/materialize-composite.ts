@@ -778,6 +778,12 @@ export interface MaterializeOptions {
    */
   identityResolutionByRef?: Record<string, IdentityResolutionInput>;
   /**
+   * An APPROVAL of a reviewed graph (`apply-approval`): a create that meets a
+   * same-name twin record refuses with its candidates unless the reviewer
+   * resolved it (founder B2b). Absent for auto-apply and imports.
+   */
+  askReviewerOnDuplicate?: boolean;
+  /**
    * Disposition ref for a create_entity op. Approve passes this because the
    * operations array may already have rejected ops removed, so `$opN` is NOT
    * the index in this array. Default: `op.ref ?? opRef(index)`.
@@ -1254,7 +1260,7 @@ export async function materializeCompositeGraph(
           linkedByRetry = true;
         }
         if (idemExternalId) idemSeenThisCall.add(idemExternalId);
-      } else if (resolutionDecision && !resolutionDecision.forceCreate) {
+      } else if (resolutionDecision && !resolutionDecision.keepBoth) {
         realId = resolutionDecision.receipt.entityId;
         linkedExisting = true;
         identity = { ...resolutionDecision.receipt, ref: resolvedRef };
@@ -1285,14 +1291,23 @@ export async function materializeCompositeGraph(
             workspaceScoped: opTargetWorkspaceId
               ? true
               : (options?.workspaceScoped ?? false),
-            // Helper returns forceCreate only for `separate` — the only weak-gate bypass.
-            ...(resolutionDecision?.forceCreate ? { forceCreate: true } : {}),
+            // The reviewer owns a same-name twin (B2b) on an APPROVAL: no verb
+            // ⇒ the twin refuses with its candidates (the card asks), and
+            // `separate` ⇒ keep both. Auto-apply and imports pass neither: the
+            // capture door already checked at file time.
+            ...(options?.askReviewerOnDuplicate
+              ? {
+                  approvalDuplicate: resolutionDecision?.keepBoth
+                    ? ("keep_both" as const)
+                    : ("ask_reviewer" as const),
+                }
+              : {}),
           });
         } catch (err) {
           rethrowIfWeakDedup(err, resolvedRef);
           throw err;
         }
-        if (resolutionDecision?.forceCreate && (result as { id?: string }).id) {
+        if (resolutionDecision?.keepBoth && (result as { id?: string }).id) {
           identity = {
             verb: "separate",
             entityId: (result as { id: string }).id,

@@ -202,7 +202,6 @@ describe("a role attach is announced once, from every path (R1)", () => {
     const res = (await caller.create({
       profileSlug: "lead",
       title: "Ada Lovelace",
-      forceCreate: true,
     } as never)) as { status: string; id: string };
     expect(res.status).toBe("created");
     await settle();

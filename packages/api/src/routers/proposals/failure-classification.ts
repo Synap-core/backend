@@ -73,7 +73,7 @@ export interface ProposalFailureMeta {
   /**
    * A `create` refused because the record ALREADY EXISTS (the entity create
    * door's same-name gate): the existing records, so the person gets a door to
-   * them instead of the agent's "pass forceCreate" instruction. Caller-scoped
+   * them instead of the gate's prose. Caller-scoped
    * by the gate that produced them (at most 5).
    */
   existing?: ExistingRecordRef[];
@@ -434,8 +434,8 @@ export function safeFailureSentence(
 
 function rawFailureSentence(err: unknown, meta: ProposalFailureMeta): string {
   // "Already exists" is said to the PERSON, naming the record. The gate's own
-  // message is the agent's instruction ("pass forceCreate: true …") — it stays
-  // in the agent-only `detail`; the existing records ride as `existing` doors.
+  // message (the candidate list with ids) stays in the agent-only `detail`;
+  // the existing records ride as `existing` doors.
   if (meta.existing && meta.existing.length > 0) {
     const first = meta.existing[0]!;
     const noun = nounInSentence(

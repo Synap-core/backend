@@ -252,11 +252,7 @@ async function revert(proposalId: string) {
     .revert({ proposalId });
 }
 
-async function createEntity(
-  title: string,
-  agentUserId?: string,
-  forceCreate = false
-) {
+async function createEntity(title: string, agentUserId?: string) {
   const { entitiesRouter } = await import("../../entities.js");
   return (await entitiesRouter
     .createCaller({
@@ -269,10 +265,10 @@ async function createEntity(
       profileSlug: "person",
       title,
       source: "ai",
+      // The same agent's identical retry is the RETRY class, not a duplicate
+      // question (B2): it reaches the post-gate retry dedup (the branch that
+      // holds a receipt) instead of being filed as a possible twin.
       ...(agentUserId ? { agentUserId } : {}),
-      // Past the pre-gate same-name check, so the retry reaches the
-      // post-gate retry dedup (the branch that holds a receipt).
-      ...(forceCreate ? { forceCreate } : {}),
     } as never)) as { id: string; ackState?: string };
 }
 
@@ -328,9 +324,9 @@ describe("an AUTO-APPROVED entity create is undoable", () => {
   });
 
   it("a retried create the door DEDUPED stamps 'created nothing' — its Undo can never retire the first write's row", async () => {
-    const first = await createEntity("Bo Retry", AGENT, true);
+    const first = await createEntity("Bo Retry", AGENT);
     const firstReceipt = await lastReceipt();
-    const second = await createEntity("Bo Retry", AGENT, true);
+    const second = await createEntity("Bo Retry", AGENT);
     const secondReceipt = await lastReceipt();
 
     expect(second.ackState).toBe("duplicate-ignored");

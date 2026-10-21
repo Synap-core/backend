@@ -7,7 +7,10 @@
  * validation, security, and worker infrastructure.
  */
 
-import { HUB_WRITE_SOURCES } from "@synap-core/types/proposals";
+import {
+  HUB_WRITE_SOURCES,
+  type DuplicateCheck,
+} from "@synap-core/types/proposals";
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
@@ -219,12 +222,6 @@ export const entitiesRouter = router({
           )
           .optional(),
         /**
-         * Bypass the weak same-name create gate (entities.create Phase 1).
-         * Strong-signal auto-merge is never bypassed. Prefer reusing an
-         * existing id; only set when the subject is genuinely distinct.
-         */
-        forceCreate: z.boolean().optional(),
-        /**
          * Strong `external_id` identity anchor (`provider:id`, e.g. `discord:123`).
          * Must be declared here or Zod's default `.strip()` drops it before the
          * real `entities.create` sees it — the bug that made connector dedup
@@ -306,7 +303,6 @@ export const entitiesRouter = router({
               })),
             }
           : {}),
-        ...(input.forceCreate ? { forceCreate: true } : {}),
         // Strong external_id anchor → real entities.create registers it as an
         // identity signal so a repeat create with the same provider id dedups.
         ...(input.externalId ? { externalId: input.externalId } : {}),
@@ -397,6 +393,11 @@ export const entitiesRouter = router({
         // Property keys this write invented (stored, but not modelled). Omitted
         // when there are none, so the common envelope is byte-identical.
         ...(unmodeled.length ? { unmodeled } : {}),
+        // The duplicate door's answer when it found something (B2): why an
+        // agent's create waits for review, or a person's create's warning.
+        ...(resultShape.duplicateCheck
+          ? { duplicateCheck: resultShape.duplicateCheck as DuplicateCheck }
+          : {}),
       };
     }),
 

@@ -187,6 +187,11 @@ const VOLATILE_DEDUP_KEYS = new Set([
   "summary",
   "previousData",
   "targetName",
+  // The duplicate door's answer (B2): computed against the queue AS IT IS NOW,
+  // so a second copy of the same create sees the first one as a candidate and
+  // would otherwise hash differently from it — the exact layer would then never
+  // collapse the very retry it exists for.
+  "duplicateCheck",
 ]);
 
 /**

@@ -1063,7 +1063,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a SINGLE typed entity — no relations parameter exists here. Use when you already know the exact profileSlug + fields: the structured, deterministic sibling of synap_capture (which parses free text). Discover slugs with synap_list_profiles; synap_ask first to avoid duplicates. Same-profile same-name creates are REJECTED with candidates (reuse the existing id, enrich, or attach a facet) unless forceCreate=true. Placeholder person/company titles (e.g. 'Not publicly disclosed', 'unknown') are rejected. To create an entity TOGETHER WITH its edge to another entity in one reviewable unit, use synap_capture instead, passing both `entities` and `relations` — synap_link_entities cannot target an entity this call just proposed (its id isn't live until approved). A `decision` with `decisionStatus:'proposed'` ASKS the person automatically: pass `decisionOptions` (≤8 of {label, value?, description?}) + `recommendedOption`, and `sourceSessionId` to keep the question in your session; their answer updates it. Never create a decision for an answered confirm/choose — the pod already filed it (`slot.decisionId`).",
+          "Create a SINGLE typed entity — no relations parameter exists here. Use when you already know the exact profileSlug + fields: the structured, deterministic sibling of synap_capture (which parses free text). Discover slugs with synap_list_profiles; synap_ask first to avoid duplicates. A same-kind record, or one of your own pending proposals, with the same name or identity does not block: the create is filed as a proposal and the person decides (keep both, use the existing one, fill its empty fields), so reuse the existing id when it is the same thing, and say in `reasoning` why a twin is separate. Placeholder person/company titles (e.g. 'Not publicly disclosed', 'unknown') are rejected. To create an entity TOGETHER WITH its edge to another entity in one reviewable unit, use synap_capture instead, passing both `entities` and `relations` — synap_link_entities cannot target an entity this call just proposed (its id isn't live until approved). A `decision` with `decisionStatus:'proposed'` ASKS the person automatically: pass `decisionOptions` (≤8 of {label, value?, description?}) + `recommendedOption`, and `sourceSessionId` to keep the question in your session; their answer updates it. Never create a decision for an answered confirm/choose — the pod already filed it (`slot.decisionId`).",
         inputSchema: {
           type: "object",
           properties: {
@@ -1093,11 +1093,6 @@ export const tools = {
               type: "string",
               description:
                 "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
-            },
-            forceCreate: {
-              type: "boolean",
-              description:
-                "Bypass the weak same-name gate when a same-profile entity with this title already exists. Prefer reusing the existing id. Does NOT bypass strong-signal auto-merge (email/phone/url). Default false.",
             },
             facets: {
               type: "array",
