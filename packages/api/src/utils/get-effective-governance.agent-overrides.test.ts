@@ -69,7 +69,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-vi.mock("@synap/database/agent-governance", () => ({
+vi.mock("@synap/database/agent-governance", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@synap/database/agent-governance")
+  >()),
   resolveAgentGovernanceDecision: vi.fn(),
   resolveGovernanceRule: vi.fn(),
 }));

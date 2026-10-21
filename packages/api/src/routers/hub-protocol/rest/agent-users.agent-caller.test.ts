@@ -57,13 +57,19 @@ vi.mock("@synap/database/agent-governance", () => ({
   readAgentGovernance: vi.fn(async () => null),
 }));
 
-vi.mock("../../../services/agent-identity-service.js", () => ({
-  createNamedAgent: vi.fn(async () => ({
-    agentUserId: AGENT,
-    email: "a@synap.agent",
-    apiKey: "synap_hub_test_x",
-  })),
-}));
+vi.mock(
+  "../../../services/agent-identity-service.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../services/agent-identity-service.js")
+    >()),
+    createNamedAgent: vi.fn(async () => ({
+      agentUserId: AGENT,
+      email: "a@synap.agent",
+      apiKey: "synap_hub_test_x",
+    })),
+  })
+);
 
 vi.mock("../../../utils/workspace-role.js", () => ({
   isPodAdmin: vi.fn(async () => false),

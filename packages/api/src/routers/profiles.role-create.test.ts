@@ -42,7 +42,8 @@ vi.mock("../utils/split-brain-service.js", () => ({
 // list is named by hand. `proposedMessageFor` is stubbed to IDENTITY, which
 // matches the real function on every non-join-gate path; do NOT assert
 // join-gate prose through this mock — it would assert the stub, not the source.
-vi.mock("../utils/permission-check.js", () => ({
+vi.mock("../utils/permission-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/permission-check.js")>()),
   // Auto-approved: no `denied`, no `proposalId` → materialize inline.
   checkPermissionOrPropose: vi.fn(async () => ({})),
   proposedMessageFor: (_type: unknown, message: string) => message,

@@ -71,7 +71,8 @@ vi.mock("@synap/events", () => ({
   emitSideEffects: vi.fn(),
 }));
 
-vi.mock("../utils/personal-channel.js", () => ({
+vi.mock("../utils/personal-channel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/personal-channel.js")>()),
   ensureAgentThread: vi.fn(),
   getAgentIdBySlug: vi.fn().mockResolvedValue("agent-orchestrator-id"),
 }));

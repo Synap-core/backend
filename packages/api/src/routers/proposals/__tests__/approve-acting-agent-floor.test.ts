@@ -67,7 +67,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 vi.mock("@synap/storage", () => ({ storage: {} }));
-vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
+vi.mock("@synap/events", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/events")>()),
+  emitSideEffects: vi.fn(),
+}));
 vi.mock("../../channels.js", () => ({ channelsRouter: {} }));
 vi.mock("../../../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn().mockResolvedValue(false),

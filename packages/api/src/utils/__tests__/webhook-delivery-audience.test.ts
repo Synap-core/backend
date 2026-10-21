@@ -41,7 +41,7 @@ const h = vi.hoisted(() => ({
   sent: [] as Array<{ queue: string; data: unknown; options: unknown }>,
 }));
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
   // `eq(column, value)` is recorded so a `where` can answer by value: the API
   // filters `active = true` (all subs), the door looks one up by id.
   const where = (cond: { val?: unknown }) => {
@@ -61,6 +61,7 @@ vi.mock("@synap/database", () => {
     set: () => chain,
   };
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     db: chain,
     webhookSubscriptions: { id: "id", active: "active" },
     webhookDeliveries: {},
