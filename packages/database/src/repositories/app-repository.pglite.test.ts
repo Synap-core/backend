@@ -31,6 +31,7 @@ const ROLES = read("0307_grant_roles.sql"); // grants.role_id — written by att
 const APPS = read("0309_apps.sql");
 const APPS_REMOVED = read("0312_apps_removed_at.sql");
 const APPS_AGENT = read("0313_apps_agent_user.sql");
+const APPS_SIGN_IN = read("0339_app_person_sign_in.sql");
 
 const OWNER = "owner-1";
 const OTHER_OWNER = "owner-2";
@@ -68,6 +69,11 @@ beforeAll(async () => {
   await pg.exec(APPS);
   await pg.exec(APPS_REMOVED);
   await pg.exec(APPS_AGENT);
+  // 0339 also adds `app_grant` to the codes table: a one-column stand-in.
+  await pg.exec(
+    `CREATE TABLE oauth_authorization_codes (code_hash text PRIMARY KEY);`
+  );
+  await pg.exec(APPS_SIGN_IN);
   // The pending projection reads only these `proposals` columns.
   await pg.exec(`CREATE TABLE proposals (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),

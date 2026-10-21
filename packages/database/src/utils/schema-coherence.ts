@@ -1182,6 +1182,19 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "resource",
     addedBy: "0338_pod_app_oauth.sql",
   },
+  // "Sign in with Synap" (0339): an app client's redirect allowlist is read at
+  // every /authorize and /token for an `app_…` client_id, and every code issue
+  // and claim writes / reads `app_grant` — without them the OAuth door 500s.
+  {
+    table: "apps",
+    column: "redirect_uris",
+    addedBy: "0339_app_person_sign_in.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "app_grant",
+    addedBy: "0339_app_person_sign_in.sql",
+  },
 
   // workspaces — soft-archive support (0020)
   {

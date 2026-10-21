@@ -78,6 +78,13 @@ export const apps = pgTable(
     agentUserId: text("agent_user_id").references(() => users.id, {
       onDelete: "set null",
     }),
+    /**
+     * "Sign in with Synap" (0339): where an authorization code for this app may
+     * be delivered — an exact-match allowlist the OWNER sets
+     * (`setAppRedirectUris`, api services/app-connect.ts). Empty = the app
+     * signs no one in. Read by the pod's OAuth server for an `app_…` client_id.
+     */
+    redirectUris: text("redirect_uris").array().notNull().default([]),
   },
   (t) => ({
     // One app per (owner, name) — the register door is idempotent by owner+name.

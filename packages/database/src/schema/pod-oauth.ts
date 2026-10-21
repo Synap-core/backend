@@ -30,7 +30,7 @@
  * and only bearer-token model.
  */
 
-import { pgTable, text, timestamp, index } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, index, jsonb } from "drizzle-orm/pg-core";
 
 export const oauthClients = pgTable("oauth_clients", {
   // RFC 7591 §3.2.1 `client_id`. Generated (`dcr_<random>`), never client-chosen.
@@ -115,6 +115,15 @@ export const oauthAuthorizationCodes = pgTable(
     // `<issuer>/api/hub`), or NULL when the client named none (0338). /token
     // refuses a `resource` that differs from it.
     resource: text("resource"),
+
+    // "Sign in with Synap" (0339): the `[{ permission, workspaceId }]` the
+    // person saw and approved for an APP client (`client_id` = `app_…`). /token
+    // mints this ∩ the app's approval ∩ the person's reach at mint time, so the
+    // token is never wider than the consent. NULL for every other client.
+    appGrant:
+      jsonb("app_grant").$type<
+        Array<{ permission: string; workspaceId: string }>
+      >(),
 
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()

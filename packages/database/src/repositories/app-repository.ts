@@ -626,6 +626,23 @@ export class AppRepository {
    * is also what `register` is idempotent by): a name the owner already uses
    * on another app is an `AppNameTakenError`, never a raw unique violation.
    */
+  /**
+   * "Sign in with Synap" (0339): replace where an authorization code for this
+   * app may be delivered. The OWNER's write only — the service
+   * (`setAppRedirectUris`) checks the credential and validates each URI.
+   */
+  async setRedirectUris(
+    appId: string,
+    redirectUris: readonly string[]
+  ): Promise<AppRecord | null> {
+    const [row] = await this.db
+      .update(apps)
+      .set({ redirectUris: [...redirectUris] })
+      .where(eq(apps.id, appId))
+      .returning();
+    return row ?? null;
+  }
+
   async rename(appId: string, name: string): Promise<AppRecord | null> {
     const trimmed = name.trim();
     const app = await this.get(appId);
