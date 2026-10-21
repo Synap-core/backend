@@ -17,6 +17,7 @@ import {
   findDuplicateCandidates,
   findPendingIdentityMatches,
   loadOwnPendingCreates,
+  mergeDuplicateChecks,
   toDuplicateCheck,
 } from "./find-duplicate-candidates.js";
 
@@ -235,5 +236,38 @@ describe("toDuplicateCheck", () => {
     const check = toDuplicateCheck("entity", many, false);
     expect(check.candidates).toHaveLength(5);
     expect(check.truncated).toBe(true);
+  });
+
+  it("a capture graph is capped PER ITEM, so item 6 still shows its twin (B1)", () => {
+    const item = (forRef: string, n: number) =>
+      toDuplicateCheck(
+        "entity",
+        Array.from({ length: n }, (_, i) => ({
+          ref: "record" as const,
+          id: `${forRef}-e${i}`,
+          kind: "person",
+          title: "Same",
+          why: "same_name" as const,
+          forRef,
+        })),
+        false
+      );
+    const six = mergeDuplicateChecks(
+      "entity",
+      Array.from({ length: 6 }, (_, i) => item(`p${i + 1}`, 1))
+    );
+    expect(six.candidates.map((c) => c.forRef)).toEqual([
+      "p1",
+      "p2",
+      "p3",
+      "p4",
+      "p5",
+      "p6",
+    ]);
+    expect(six.truncated).toBeUndefined();
+    // An item clipped by its own check still says so after the merge.
+    const clipped = mergeDuplicateChecks("entity", [item("p1", 7), item("p2", 1)]);
+    expect(clipped.candidates).toHaveLength(6);
+    expect(clipped.truncated).toBe(true);
   });
 });

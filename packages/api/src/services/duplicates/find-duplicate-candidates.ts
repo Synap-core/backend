@@ -223,7 +223,11 @@ export async function loadOwnPendingCreates(
 }
 
 /**
- * Fold candidates into the persisted answer, capped; says when it was clipped.
+ * Fold candidates into the persisted answer, capped PER PROPOSED ITEM (per
+ * `forRef`; a single create is one item); says when any item was clipped.
+ * The cap is per item because the card shows, and the approval honours
+ * (`twinsShownOnCard`), each item's own twins: a graph-wide cap hid item 6's
+ * twin, so every approve of that graph refused (FB1020 re-review B1).
  * `failed` — a leg failed OR could not look at everything (a truncated
  * pending scan): with no candidate that is `unchecked`, never `clear`.
  */
@@ -239,13 +243,18 @@ export function toDuplicateCheck(
     seen.add(key);
     return true;
   });
+  const perItem = new Map<string, number>();
+  const kept = unique.filter((c) => {
+    const shown = perItem.get(c.forRef ?? "") ?? 0;
+    if (shown >= DUPLICATE_CHECK_MAX_CANDIDATES) return false;
+    perItem.set(c.forRef ?? "", shown + 1);
+    return true;
+  });
   return {
     status: unique.length > 0 ? "possible" : failed ? "unchecked" : "clear",
     subject,
-    candidates: unique.slice(0, DUPLICATE_CHECK_MAX_CANDIDATES),
-    ...(unique.length > DUPLICATE_CHECK_MAX_CANDIDATES
-      ? { truncated: true }
-      : {}),
+    candidates: kept,
+    ...(kept.length < unique.length ? { truncated: true } : {}),
   };
 }
 
@@ -254,11 +263,14 @@ export function mergeDuplicateChecks(
   subject: DuplicateSubjectType,
   checks: DuplicateCheck[]
 ): DuplicateCheck {
-  return toDuplicateCheck(
+  const merged = toDuplicateCheck(
     subject,
     checks.flatMap((c) => c.candidates),
     checks.some((c) => c.status === "unchecked")
   );
+  return checks.some((c) => c.truncated) && !merged.truncated
+    ? { ...merged, truncated: true }
+    : merged;
 }
 
 export type DuplicateQuery =
