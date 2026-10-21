@@ -723,3 +723,149 @@ describe("a filing is proposed on its own; the rest of the call is not held", ()
     expect(row.title).toBe("Mine");
   });
 });
+
+/**
+ * FB1020 B3 — an agent filing its OWN FRESH session into the project it was
+ * told to focus on reaches the pod's own-organise class row (the engine is
+ * mocked to answer as the class row does: granted, with a receipt). Real door,
+ * real `isOwnFreshWork` over the session row (`metadata.clientKey` names the
+ * calling key), real undo stamp.
+ *
+ * Rows that rule out a wrong rule: a filing ALONE is ONE receipt (rules out a
+ * second, empty receipt beside it) whose Undo restores the project; a filing
+ * WITH a rename keeps two decisions and the filing's receipt still undoes the
+ * project only; a session bound to ANOTHER key keeps the old forced proposal.
+ */
+describe("B3: an agent files its own fresh session — one receipt, with Undo", () => {
+  const KEY = randomUUID();
+
+  async function ownSession(key = KEY): Promise<string> {
+    const id = await seedSession();
+    await q(
+      `update focus_sessions set metadata = $2::jsonb, created_at = now() where id = $1`,
+      [id, JSON.stringify({ clientKey: `key:${key}|conv:c1` })]
+    );
+    return id;
+  }
+  async function receipt(): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into proposals (id, target_type, target_id, proposal_type, status, data)
+       values ($1,'focus_session',$1,'focus_session.update','auto_approved','{}'::jsonb)`,
+      [id]
+    );
+    return id;
+  }
+  const rowPatchesOf = async (id: string) =>
+    (
+      await q<{ data: { materialized?: { rowPatches?: unknown[] } } }>(
+        `select data from proposals where id = $1`,
+        [id]
+      )
+    ).rows[0]!.data.materialized?.rowPatches;
+
+  async function asAgent<T>(fn: () => Promise<T>): Promise<T> {
+    const { runWithCallingKey } = await import("@synap/database");
+    return runWithCallingKey(KEY, fn);
+  }
+
+  async function focusOn(projectId: string) {
+    await q(`delete from users where id = $1`, [AGENT]);
+    await q(
+      `insert into users (id, name, email, user_type, agent_metadata) values ($1,'Claude Code','a@x','agent',$2::jsonb)`,
+      [
+        AGENT,
+        JSON.stringify({ agentType: "claude-code", focusProjectId: projectId }),
+      ]
+    );
+  }
+
+  it("a filing alone: the proof reaches the class, ONE receipt, project filed, Undo stamped", async () => {
+    const projectId = await seedProject(USER);
+    await focusOn(projectId);
+    const sessionId = await ownSession();
+    const r1 = await receipt();
+    permSpy.mockImplementation(async (args) =>
+      args.ownWorkOrganise
+        ? { granted: true, autoApprovedProposalId: r1 }
+        : args.forcePropose
+          ? { proposalId: randomUUID(), proposalType: "update" }
+          : { granted: true }
+    );
+    const res = await asAgent(() =>
+      updateFocusSession({
+        sessionId,
+        userId: USER,
+        agentUserId: AGENT,
+        projectId,
+      })
+    );
+    expect(res.status).toBe("updated");
+    expect(permSpy).toHaveBeenCalledTimes(1);
+    expect(permSpy.mock.calls[0]![0]).toMatchObject({
+      forcePropose: false,
+      ownWorkOrganise: true,
+    });
+    expect(await projectOf(sessionId)).toBe(projectId);
+    expect(await rowPatchesOf(r1)).toEqual([
+      {
+        kind: "focus_session",
+        id: sessionId,
+        before: { projectId: null },
+        after: { projectId },
+      },
+    ]);
+  });
+
+  it("a filing with a rename: two decisions; the filing's receipt undoes the project only", async () => {
+    const projectId = await seedProject(USER);
+    await focusOn(projectId);
+    const sessionId = await ownSession();
+    const r1 = await receipt();
+    const r2 = await receipt();
+    permSpy.mockImplementation(async (args) =>
+      args.ownWorkOrganise
+        ? { granted: true, autoApprovedProposalId: r1 }
+        : { granted: true, autoApprovedProposalId: r2 }
+    );
+    await asAgent(() =>
+      updateFocusSession({
+        sessionId,
+        userId: USER,
+        agentUserId: AGENT,
+        projectId,
+        title: "Renamed",
+      })
+    );
+    expect(permSpy).toHaveBeenCalledTimes(2);
+    expect(await rowPatchesOf(r1)).toEqual([
+      {
+        kind: "focus_session",
+        id: sessionId,
+        before: { projectId: null },
+        after: { projectId },
+      },
+    ]);
+  });
+
+  it("a session bound to ANOTHER key keeps the forced proposal", async () => {
+    const projectId = await seedProject(USER);
+    await focusOn(projectId);
+    const sessionId = await ownSession(randomUUID());
+    permSpy.mockImplementation(async () => ({
+      proposalId: randomUUID(),
+      proposalType: "update",
+    }));
+    const res = await asAgent(() =>
+      updateFocusSession({
+        sessionId,
+        userId: USER,
+        agentUserId: AGENT,
+        projectId,
+      })
+    );
+    expect(res.status).toBe("proposed");
+    expect(permSpy.mock.calls[0]![0]).toMatchObject({ forcePropose: true });
+    expect(await projectOf(sessionId)).toBeNull();
+  });
+});

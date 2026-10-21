@@ -1013,9 +1013,15 @@ export function findMatchingPattern(
   return patterns.find((pattern) =>
     pattern === REVERSIBLE_CLASS_PATTERN
       ? isReversibleWrite(eventKey)
-      : pattern.endsWith(".*")
-        ? eventKey.startsWith(pattern.slice(0, -1))
-        : eventKey === pattern
+      : // The own-organise class covers a write only when its DOOR proved the
+        // subjects are the agent's own fresh work (`ownWorkOrganise`) — a fact
+        // no list can see. `resolveGovernanceRule` matches it with that fact;
+        // a whitelist or glob naming it matches nothing.
+        pattern === OWN_ORGANISE_CLASS_PATTERN
+        ? false
+        : pattern.endsWith(".*")
+          ? eventKey.startsWith(pattern.slice(0, -1))
+          : eventKey === pattern
   );
 }
 
@@ -1373,6 +1379,23 @@ export interface AgentPolicyInput {
    */
   governanceRuleNamesWrite?: boolean;
   /**
+   * FB1020 B3 — the write's door PROVED it organises the acting agent's own
+   * fresh work (same key, last 24 h, untouched by a person, a project the
+   * person named — `own-organise.ts` in @synap/database). Honoured only for
+   * {@link OWN_ORGANISE_EVENT_KEYS}; on any other key it fails closed
+   * (propose). The door passes `forcePropose: !ownWorkOrganise`, so the write
+   * reaches the rule store, where ONLY the {@link OWN_ORGANISE_CLASS_PATTERN}
+   * row may widen it (2.8); with no such row it proposes for the same reason
+   * it always did (2.87). Every floor above 2.8 still returns first.
+   */
+  ownWorkOrganise?: boolean;
+  /**
+   * The rule behind `governanceRuleVerdict` is the own-organise class row
+   * (resolved by `resolveGovernanceRule`). Read ONLY with `ownWorkOrganise`:
+   * an `auto` from any other row never widens an organise write.
+   */
+  governanceRuleIsOwnOrganise?: boolean;
+  /**
    * Server-resolved TRUST of the acting channel's ORIGIN — the #4
    * instruction-provenance signal, consumed at rung 2.55. `"untrusted"` for an
    * EXTERNAL / bridge / `source`-produced channel (a message authored outside
@@ -1545,6 +1568,11 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     input.bodyOfHumanOwnedEntity
   );
   const laneKey = `${lane.subjectType}.${lane.action}`;
+  // FB1020 B3: a door's proof that this write organises the agent's own fresh
+  // work. Only a write of the closed list can carry it; on any other key the
+  // claim fails closed at 2.1 (a door that set it there is a bug, not a lane).
+  const organiseClaim = input.ownWorkOrganise === true;
+  const organise = organiseClaim && isOwnOrganiseWrite(eventKey);
 
   // 1. CBAC capability allowlist (empty/absent = unrestricted).
   const caps = input.agentCapabilities;
@@ -1659,7 +1687,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // the action would otherwise auto-approve. Sits after CBAC (rung 1) and ADMIN
   // (rung 2) so a capability-denied action still denies and admin actions are
   // unaffected, but BEFORE every execute path below.
-  if (input.forcePropose === true) {
+  if (input.forcePropose === true || (organiseClaim && !organise)) {
     // A door forced for a reason of its own names it here, read from the
     // write itself (never from the caller), so the review says the real why.
     const ownReason =
@@ -1854,11 +1882,26 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // (`governanceRuleNamesWrite`) does. Otherwise the rule is skipped and 2.85
   // proposes — the pod's `@reversible` default classes `entity.transition` as
   // reversible, and a class row must not publish a post on its own.
+  //
+  // An ORGANISE write (FB1020 B3) is widened by ONE row only: the
+  // own-organise class. Any other `auto` (`@reversible`, a glob, `*`) is
+  // skipped here — the write then proposes at 2.85/2.87 exactly as it did
+  // before the class existed. That class row may close the agent's own task
+  // (a terminal move): its door proved the task is the agent's fresh work.
+  const autoFromOtherRowOnOrganise =
+    organise &&
+    input.governanceRuleVerdict === "auto" &&
+    input.governanceRuleIsOwnOrganise !== true;
   const broadAutoOnTerminalMove =
     input.governanceRuleVerdict === "auto" &&
     input.lifecycleMove?.intoTerminal === true &&
-    input.governanceRuleNamesWrite !== true;
-  if (input.governanceRuleVerdict && !broadAutoOnTerminalMove) {
+    input.governanceRuleNamesWrite !== true &&
+    !(organise && input.governanceRuleIsOwnOrganise === true);
+  if (
+    input.governanceRuleVerdict &&
+    !broadAutoOnTerminalMove &&
+    !autoFromOtherRowOnOrganise
+  ) {
     return input.governanceRuleVerdict === "auto"
       ? input.governanceRuleId
         ? { verdict: "execute", governanceRuleId: input.governanceRuleId }
@@ -1883,6 +1926,27 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       };
     }
     return { verdict: "execute" };
+  }
+
+  // 2.87 ORGANISE DEFAULT (FB1020 B3). An organise write the class row did not
+  // widen (switched off, or a person's `propose` rule outranked it — that one
+  // returned at 2.8) proposes for the SAME reason its door's floor gave it
+  // before the class existed: the door's own forced reason, else scope /
+  // identity. Above ownership (3) and the auto-approve lists (4, 8), so
+  // `focus_session.update`'s default allowance never files a session.
+  if (organise) {
+    const ownReason = FORCED_WRITE_REASON[eventKey];
+    return ownReason
+      ? {
+          verdict: "propose",
+          reason: PROPOSE_REASON[ownReason],
+          reasonCode: ownReason,
+        }
+      : {
+          verdict: "propose",
+          reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+          reasonCode: "SCOPE_IDENTITY_CHANGE",
+        };
   }
 
   // 3. Agent owns this workspace (linkedAgentId === agentUserId, workspaceType="agent").
@@ -2159,6 +2223,46 @@ export const REVERSIBLE_CLASS_PATTERN = "@reversible";
 /** Is this event key an easily-reversible write? Fail-closed for unknown keys. */
 export function isReversibleWrite(eventKey: string): boolean {
   return REVERSIBLE_EVENT_KEYS.includes(eventKey);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ORGANISING ITS OWN FRESH WORK (FB1020 B3, founder 2026-10-21)
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * The organisational moves an agent may make on its OWN FRESH records without
+ * a person approving each one — filing them into a project the person named,
+ * filing its own session there, closing its own task. Applied directly with
+ * a receipt and Undo, when the pod's ONE class row says so.
+ *
+ * NOT a floor and NOT a second store: ONE `governance_rules` row (principal
+ * any, scope pod, action, pattern {@link OWN_ORGANISE_CLASS_PATTERN}, verdict
+ * auto), resolved at rung 2.8 like `@reversible` — below every floor.
+ *
+ * The class covers a write ONLY when its door says so (`ownWorkOrganise`),
+ * after the server proved, from the pod's own records and never from the
+ * caller's input, that every subject is the SAME KEY's (B7) work, made in the
+ * last 24 hours, untouched by a person since, and that the project is one the
+ * person named (`own-organise.ts`, @synap/database). Each door passes
+ * `forcePropose: !ownWorkOrganise`, so outside the class nothing changes.
+ *
+ * Closed list. Recording a decision the person made in chat, starting a
+ * track, unfiling, a space move and a track filing are NOT here.
+ */
+export const OWN_ORGANISE_CLASS_PATTERN = "@own-organise";
+
+/** The writes the class may cover — each door proves its own subjects. */
+export const OWN_ORGANISE_EVENT_KEYS = [
+  /** File records into a project (`file-entities.ts`). */
+  "project.file_entities",
+  /** File its own session into a project (`session-filing-gate.ts`). */
+  "focus_session.update",
+  /** Close its own task (`move-status.ts`, into a `done` option). */
+  "entity.transition",
+] as const satisfies readonly GateEventKey[];
+
+/** Is this event key one the own-organise class may cover? */
+export function isOwnOrganiseWrite(eventKey: string): boolean {
+  return (OWN_ORGANISE_EVENT_KEYS as readonly string[]).includes(eventKey);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

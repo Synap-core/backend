@@ -9,6 +9,7 @@ import { proposals, ProposalStatus } from "../schema/proposals.js";
 import { resolveProjectPlacement } from "../services/project-resolution-service.js";
 import { stableStringify } from "./stable-stringify.js";
 import {
+  callingKeyAttribution,
   isDerivedSession,
   type SessionSource,
 } from "./request-write-context.js";
@@ -559,6 +560,8 @@ export async function insertPendingProposal(
           : {}),
         // APP ATTRIBUTION — the app's public_id whose key filed this proposal.
         ...(input.appId ? { appId: input.appId } : {}),
+        // KEY ATTRIBUTION (0346) — the key this request authenticated with.
+        ...callingKeyAttribution(),
       })
       .returning();
 

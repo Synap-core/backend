@@ -34,6 +34,7 @@ import {
   getRequestGrant,
   recordWriteSessionFiling,
   derivedReceiptProjectFor,
+  callingKeyAttribution,
   computeProposalDedupHash,
   type InsertPendingProposalResult,
   type ResolveOrCreateAgentProposalSessionInput,
@@ -1028,6 +1029,15 @@ export interface PermissionCheckBaseOpts {
    */
   forcePropose?: boolean;
   /**
+   * FB1020 B3 — the door PROVED this write organises the acting agent's own
+   * fresh work (`isOwnFreshWork`, @synap/database): same key, last 24 h,
+   * untouched by a person, into a project the person named. Set ONLY by the
+   * three organise doors (project filing, session filing, closing a task),
+   * always with `forcePropose: !ownWorkOrganise`. Lets the pod's own-organise
+   * class row (rung 2.8) apply it; without that row it proposes as before.
+   */
+  ownWorkOrganise?: boolean;
+  /**
    * The write MOVES a lifecycle status (work model W14) — set ONLY by the
    * `moveStatus` door and the create/attach doors for an initial status. Feeds
    * rungs 2.075 (human-only option) / 2.85 (into done/lost: propose by default)
@@ -1296,6 +1306,10 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     capabilityExecMode: undefined, // rung 2.7
     ceilingVerdict: undefined, // rung 2.56 — DEFERRED (see table above)
     allowDestructiveAutoApprove: undefined, // never: no "Crazy" mode here
+    // B3: the own-organise class needs an ATTRIBUTED agent and its key's own
+    // records — an unattributed write is never "its own".
+    ownWorkOrganise: undefined,
+    governanceRuleIsOwnOrganise: undefined,
   };
   return input;
 }
@@ -1888,6 +1902,9 @@ async function evaluatePermission(
         forcePropose: effectiveForcePropose,
         criteriaChange: isAgentCriteriaChange,
         lifecycleMove: opts.lifecycleMove,
+        // B3: a session that forces every write keeps forcing (effective
+        // forcePropose above wins at 2.1); the proof only reaches the store.
+        ownWorkOrganise: opts.ownWorkOrganise,
         podAdminSchemaChange,
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
         // owner let the ladder classify origin trust server-side and force-propose
@@ -2205,6 +2222,8 @@ async function evaluatePermission(
               ...(getRequestGrant()?.clientId
                 ? { appId: getRequestGrant()?.clientId }
                 : {}),
+              // KEY ATTRIBUTION (0346): the key this request authenticated with.
+              ...callingKeyAttribution(),
             })
             .returning({ id: proposals.id });
           // Thread the receipt id back so the caller can stamp it onto the
@@ -2490,6 +2509,8 @@ async function evaluatePermission(
               ...(getRequestGrant()?.clientId
                 ? { appId: getRequestGrant()?.clientId }
                 : {}),
+              // KEY ATTRIBUTION (0346): the key this request authenticated with.
+              ...callingKeyAttribution(),
             })
             .returning({ id: proposals.id });
           autoApprovedProposalId = receipt?.id;

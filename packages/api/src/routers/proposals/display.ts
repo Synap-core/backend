@@ -56,6 +56,7 @@ import {
   agents,
   governanceRules,
   apps,
+  apiKeys,
 } from "@synap/database/schema";
 import { visibleAgentsWhere } from "../hub-protocol/rest/link-endpoint-visibility.js";
 import {
@@ -1370,43 +1371,58 @@ export async function enrichProposalsForDisplay(
         : undefined
     )
   );
-  const [ownerRows, runTracks, appRows, hostNames] = await Promise.all([
-    ownerIds.length > 0
-      ? db
-          .select({
-            id: users.id,
-            name: users.name,
-            email: users.email,
-            userType: users.userType,
-            agentMetadata: users.agentMetadata,
-            // Same shape as the first user batch (it lands in `userById`).
-            agentType: users.agentType,
-            createdByUserId: users.createdByUserId,
-            hostUserId: users.hostUserId,
+  // The computer each filing KEY names (B7, `proposals.api_key_id` →
+  // `api_keys.instance_label`), read LIVE so labelling a key later names
+  // every proposal it filed. Only the label leaves this read — never the key.
+  const apiKeyIds = uniqueStrings(rows.map((row) => row.apiKeyId ?? undefined));
+  const [ownerRows, runTracks, appRows, hostNames, keyRows] = await Promise.all(
+    [
+      ownerIds.length > 0
+        ? db
+            .select({
+              id: users.id,
+              name: users.name,
+              email: users.email,
+              userType: users.userType,
+              agentMetadata: users.agentMetadata,
+              // Same shape as the first user batch (it lands in `userById`).
+              agentType: users.agentType,
+              createdByUserId: users.createdByUserId,
+              hostUserId: users.hostUserId,
+            })
+            .from(users)
+            .where(inArray(users.id, ownerIds))
+        : Promise.resolve([]),
+      trackPlaybookIds.length + trackAutomationIds.length > 0
+        ? listRunTracks({
+            userId,
+            playbookIds: trackPlaybookIds,
+            automationIds: trackAutomationIds,
           })
-          .from(users)
-          .where(inArray(users.id, ownerIds))
-      : Promise.resolve([]),
-    trackPlaybookIds.length + trackAutomationIds.length > 0
-      ? listRunTracks({
-          userId,
-          playbookIds: trackPlaybookIds,
-          automationIds: trackAutomationIds,
-        })
-      : Promise.resolve(new Map<string, RunGroup>()),
-    appPublicIds.length > 0
-      ? db
-          .select({ publicId: apps.publicId, name: apps.name })
-          .from(apps)
-          .where(
-            and(
-              inArray(apps.publicId, appPublicIds),
-              eq(apps.ownerUserId, userId)
+        : Promise.resolve(new Map<string, RunGroup>()),
+      appPublicIds.length > 0
+        ? db
+            .select({ publicId: apps.publicId, name: apps.name })
+            .from(apps)
+            .where(
+              and(
+                inArray(apps.publicId, appPublicIds),
+                eq(apps.ownerUserId, userId)
+              )
             )
-          )
-      : Promise.resolve([] as Array<{ publicId: string; name: string }>),
-    loadMachineNames(hostUserIds),
-  ]);
+        : Promise.resolve([] as Array<{ publicId: string; name: string }>),
+      loadMachineNames(hostUserIds),
+      apiKeyIds.length > 0
+        ? db
+            .select({ id: apiKeys.id, label: apiKeys.instanceLabel })
+            .from(apiKeys)
+            .where(inArray(apiKeys.id, apiKeyIds))
+        : Promise.resolve([] as Array<{ id: string; label: string | null }>),
+    ]
+  );
+  const keyComputerById = new Map(
+    keyRows.map((row) => [row.id, row.label ?? null])
+  );
   for (const row of ownerRows) userById.set(row.id, row);
   const appNameByPublicId = new Map(
     appRows.map((row) => [row.publicId, row.name])
@@ -1530,8 +1546,17 @@ export async function enrichProposalsForDisplay(
     const authorRow = userById.get(
       row.agentUserId ?? row.createdBy ?? request.sourceId
     );
+    // The computer the filing key names — only for the row's OWN agent: the
+    // key is the agent's, never a person's who merely approved it.
+    const keyComputer = row.apiKeyId
+      ? keyComputerById.get(row.apiKeyId)
+      : undefined;
     const authorName = authorRow
-      ? actorDisplayName(authorRow, hostNames)
+      ? actorDisplayName(
+          authorRow,
+          hostNames,
+          authorRow.id === row.agentUserId ? keyComputer : undefined
+        )
       : undefined;
 
     // ── THE THREE DELEGATION ROLES, projected separately ────────────────────
@@ -1558,7 +1583,7 @@ export async function enrichProposalsForDisplay(
       ? userById.get(row.agentUserId)
       : undefined;
     const agentActorName = agentActorRow
-      ? actorDisplayName(agentActorRow, hostNames)
+      ? actorDisplayName(agentActorRow, hostNames, keyComputer)
       : undefined;
     // GUEST PROVENANCE (Sites W4/W5a): a proposal filed through a public form
     // carries the form's own actor as `agentUserId`, so everything keyed on

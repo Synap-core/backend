@@ -59,6 +59,7 @@ import {
   inArray,
   runWithProbeWrites,
   runWithActingAgent,
+  runWithCallingKey,
   runWithGrant,
   runWithClientKey,
   clientKeyForApiKey,
@@ -630,14 +631,17 @@ mcpHttpApp.post("/", async (c) => {
   // of each other's, even on one shared agent key).
   return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
     runWithActingAgent(agentUserId, () =>
-      runWithClientKey(
-        clientKeyForApiKey(keyRecord, conversationId),
-        () =>
-          // W1: the key's grant bounds every write gate and scoped read below.
-          runWithGrant(grant, () =>
-            transport.handleRequest(c.req.raw, { parsedBody })
-          ),
-        c.req.header(CONVERSATION_CWD_HEADER)
+      // B7: the calling key, recorded on every proposal this request files.
+      runWithCallingKey(keyRecord.id, () =>
+        runWithClientKey(
+          clientKeyForApiKey(keyRecord, conversationId),
+          () =>
+            // W1: the key's grant bounds every write gate and scoped read below.
+            runWithGrant(grant, () =>
+              transport.handleRequest(c.req.raw, { parsedBody })
+            ),
+          c.req.header(CONVERSATION_CWD_HEADER)
+        )
       )
     )
   );

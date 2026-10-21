@@ -30,6 +30,7 @@ import {
   eq,
   runWithProbeWrites,
   runWithActingAgent,
+  runWithCallingKey,
   runWithClientKey,
   runWithGrant,
   clientKeyForApiKey,
@@ -571,13 +572,16 @@ export const hubAuthMiddleware = async (
     // W1: the key's grant bounds every write gate and scoped read below.
     return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
       runWithActingAgent(c.get("agentUserId") as string | undefined, () =>
-        runWithClientKey(
-          clientKeyForApiKey(
-            keyRecord,
-            requestConversationId(c.req.header(CONVERSATION_HEADER))
-          ),
-          () => runWithGrant(keyIdentity.grant, () => next()),
-          c.req.header(CONVERSATION_CWD_HEADER)
+        // B7: the calling key, recorded on every proposal this request files.
+        runWithCallingKey(keyRecord.id, () =>
+          runWithClientKey(
+            clientKeyForApiKey(
+              keyRecord,
+              requestConversationId(c.req.header(CONVERSATION_HEADER))
+            ),
+            () => runWithGrant(keyIdentity.grant, () => next()),
+            c.req.header(CONVERSATION_CWD_HEADER)
+          )
         )
       )
     );

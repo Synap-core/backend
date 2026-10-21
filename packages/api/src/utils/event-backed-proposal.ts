@@ -1,5 +1,10 @@
 import { randomUUID } from "crypto";
-import { db, proposals, findExistingPendingDuplicate } from "@synap/database";
+import {
+  db,
+  proposals,
+  findExistingPendingDuplicate,
+  callingKeyAttribution,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { auditLog } from "./audit-log.js";
 import { createPendingProposal } from "./permission-check.js";
@@ -192,6 +197,8 @@ export async function createAutoApprovedProposal(
       ...(requestedEvent?.id ? { requestedEventId: requestedEvent.id } : {}),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
+      // KEY ATTRIBUTION (0346): the key this request authenticated with.
+      ...callingKeyAttribution(),
     })
     .returning();
 

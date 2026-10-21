@@ -23586,6 +23586,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reasonCode: string | null;
 					governanceReason: string | null;
 					appId: string | null;
+					apiKeyId: string | null;
 					comments: unknown;
 					revisionHistory: ProposalRevision[];
 					class: ProposalClass;
@@ -23671,6 +23672,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reasonCode: string | null;
 					governanceReason: string | null;
 					appId: string | null;
+					apiKeyId: string | null;
 					comments: unknown;
 					revisionHistory: ProposalRevision[];
 					class: ProposalClass;
@@ -23827,6 +23829,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasonCode: string | null;
 				governanceReason: string | null;
 				appId: string | null;
+				apiKeyId: string | null;
 				comments: unknown;
 				revisionHistory: ProposalRevision[];
 				class: ProposalClass;
@@ -35236,6 +35239,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 		setReversibleDefault: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+			};
+			output: ReversibleDefaultState;
+			meta: object;
+		}>;
+		ownOrganiseDefault: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				actions: readonly string[];
+				canManage: boolean;
+				enabled: boolean;
+				ruleId: string | null;
+			};
+			meta: object;
+		}>;
+		setOwnOrganiseDefault: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				enabled: boolean;
 			};

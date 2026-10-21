@@ -1,7 +1,9 @@
 /**
  * FILING, gated on its own — where a session belongs (its project, its space,
- * its track step) is the person's call, so an AGENT's filing is always a
- * proposal (`forcePropose`). It is decided HERE, before the update membrane,
+ * its track step) is the person's call, so an AGENT's filing is a proposal
+ * (`forcePropose`) — except an agent filing its OWN FRESH session into the
+ * project the person named, which the pod's own-organise class row may apply
+ * directly with a receipt and Undo (FB1020 B3, `own-organise.ts`). It is decided HERE, before the update membrane,
  * as its OWN proposal, exactly like a hand-off (`agent-hand-off.ts`).
  *
  * WHY SPLIT. The filing fields used to force the WHOLE update to a proposal, so
@@ -22,9 +24,18 @@
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import type { SessionTrackFiling } from "../tracks/session-track-filing.js";
 import { sessionNameField } from "./session-update-goal.js";
+import { ownWorkOrganiseForSessionFiling } from "../governance/own-organise.js";
 
 export type SessionFilingDecision =
-  | { status: "granted" }
+  | {
+      status: "granted";
+      /**
+       * The receipt an AGENT's filing was applied under (FB1020 B3: its own
+       * fresh session, into a project the person named). The update door
+       * stamps the filing's Undo on it.
+       */
+      receiptId?: string;
+    }
   | { status: "denied"; reason: string }
   | {
       status: "proposed";
@@ -110,7 +121,16 @@ export async function gateSessionFiling(p: {
     subjectType: "focus_session",
     action: "update",
     source: "intelligence",
-    forcePropose: true,
+    // Where a session belongs is the person's call — UNLESS the agent files
+    // its OWN FRESH session into the project the person named (FB1020 B3):
+    // then only the pod's own-organise class row may apply it directly.
+    ...((await ownWorkOrganiseForSessionFiling({
+      agentUserId: p.agentUserId,
+      sessionId: p.session.id,
+      filing: p.filing,
+    }))
+      ? { forcePropose: false, ownWorkOrganise: true }
+      : { forcePropose: true }),
     ...(p.reasoning ? { reasoning: p.reasoning } : {}),
     data: {
       id: p.session.id,
@@ -131,5 +151,10 @@ export async function gateSessionFiling(p: {
       reviewUrl: perm.reviewUrl,
     };
   }
-  return { status: "granted" };
+  return {
+    status: "granted",
+    ...("granted" in perm && perm.autoApprovedProposalId
+      ? { receiptId: perm.autoApprovedProposalId }
+      : {}),
+  };
 }

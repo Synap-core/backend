@@ -2751,6 +2751,56 @@ export const proposalsRouter = router({
         // else: already restored (e.g. a concurrent revert won) — idempotent no-op.
 
         restoredEntityId = plan.entityId;
+      } else if (plan.kind === "move-status-back") {
+        // FB1020 B3: a status move is undone by moving it BACK through the
+        // one status door, as the person undoing it — its checks, its event
+        // and its automations run like any move. Compare-and-set: only while
+        // the thing still holds what the move set; a status someone changed
+        // since is theirs, and nothing is undone.
+        const { resolveStatusMoveTarget } = await import("@synap/database");
+        const { moveStatus } =
+          await import("../services/lifecycle/move-status.js");
+        const target = await resolveStatusMoveTarget(db, {
+          entityId: plan.entityId,
+          role: plan.role,
+          facetId: plan.facetId,
+          workspaceId: proposal.workspaceId ?? null,
+        });
+        if (!target.ok) {
+          throw new TRPCError({ code: "NOT_FOUND", message: target.reason });
+        }
+        const current = target.target.current;
+        if (current !== plan.movedTo && current !== plan.restoreTo) {
+          return {
+            success: false,
+            nothingReverted: true,
+            reverted: deleted,
+            partialFailures: [
+              `the status was changed since (now "${current ?? "none"}"), so it was kept`,
+            ],
+          };
+        }
+        if (current === plan.movedTo) {
+          const moved = await moveStatus({
+            entityId: plan.entityId,
+            role: plan.role,
+            facetId: plan.facetId,
+            expectedFrom: plan.movedTo,
+            to: plan.restoreTo,
+            actor: { kind: "human", userId },
+            workspaceId: proposal.workspaceId ?? null,
+            reason: "Undo",
+          });
+          if (moved.status !== "moved" && moved.status !== "unchanged") {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Undo could not move the status back (${moved.status}${
+                "reason" in moved && moved.reason ? `: ${moved.reason}` : ""
+              }).`,
+            });
+          }
+        }
+        // else: already back where it was — idempotent no-op.
       } else {
         // Everything the record names — entities, relations, facets, config
         // rows, and what a merge overwrote — through the ONE undo engine: one

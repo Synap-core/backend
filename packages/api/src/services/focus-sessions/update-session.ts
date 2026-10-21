@@ -1747,70 +1747,83 @@ export async function updateFocusSession(
   // is named by the display-only `sessionName` (`session-update-goal.ts`).
   const { checkPermissionOrPropose } =
     await import("../../utils/permission-check.js");
-  const perm = await checkPermissionOrPropose({
-    userId,
-    agentUserId,
-    workspaceId: existing.workspaceId ?? undefined,
-    subjectType: "focus_session",
-    action: "update",
-    source: "intelligence",
-    data: {
-      id: sessionId,
-      ...sessionGoalPayload(existing, params.goal),
-      ...(params.title !== undefined ? { title: params.title } : {}),
-      ...(params.status !== undefined ? { status: params.status } : {}),
-      ...(params.progress !== undefined ? { progress: params.progress } : {}),
-      ...(params.currentStage !== undefined
-        ? { currentStage: params.currentStage }
-        : {}),
-      ...(params.expectedOutputs !== undefined
-        ? { expectedOutputs: params.expectedOutputs }
-        : {}),
-      ...(params.addOutput !== undefined
-        ? { addOutput: params.addOutput }
-        : {}),
-      ...(params.completeOutput !== undefined
-        ? { completeOutput: params.completeOutput }
-        : {}),
-      ...(params.retireOutput !== undefined
-        ? { retireOutput: params.retireOutput }
-        : {}),
-      // Carried so the PROPOSED path is not a silent no-op: the
-      // `focus_session/update` executor re-applies it through the same append
-      // door on approval.
-      ...(params.addAgentId !== undefined
-        ? { addAgentId: params.addAgentId }
-        : {}),
-      // Carried for the same reason as `addAgentId`: without it on the proposal
-      // the PROPOSED path is a silent no-op — the human approves "re-point the
-      // subject" and the executor has no subject to point at.
-      ...(params.subjectEntityId !== undefined
-        ? { subjectEntityId: params.subjectEntityId }
-        : {}),
-      ...(criteriaChange ? { criteria: params.criteria } : {}),
-      // A PERSON's filing (an agent's took its own door above, or was
-      // granted there) — the fields and their display-only names.
-      ...sessionFilingFields({
-        ...filingPatch,
-        projectId: params.projectId,
-        workspaceId: params.workspaceId,
-        trackFiling,
-      }),
-      // Carried for the same reason as `addAgentId` and `subjectEntityId`: the
-      // `focus_session/update` executor re-applies it on approval, so the
-      // PROPOSED path is not a silent no-op. `null` is the RELEASE and must
-      // survive the payload, hence the `!== undefined` test.
-      ...(params.followPlaybookId !== undefined
-        ? { followPlaybookId: params.followPlaybookId }
-        : {}),
-      ...(params.followStageKey !== undefined
-        ? { followStageKey: params.followStageKey }
-        : {}),
-      // Same reason: without this the answers land on the direct path and
-      // vanish on the approved one.
-      ...(params.params !== undefined ? { params: params.params } : {}),
-    },
-  });
+  // FB1020 B3: an agent's filing the pod applied directly (its own fresh
+  // session, into the project the person named) has its OWN receipt. When the
+  // patch asked for nothing else, that receipt governs the write — no second,
+  // empty receipt beside it; otherwise the rest takes its ordinary decision.
+  const filingReceiptId =
+    filing?.status === "granted" ? filing.receiptId : undefined;
+  const filingAlone =
+    !!filingReceiptId &&
+    !patchAsksForMore({ ...params, projectId: undefined }, criteriaChange);
+  const perm = filingAlone
+    ? ({ granted: true, autoApprovedProposalId: filingReceiptId } as const)
+    : await checkPermissionOrPropose({
+        userId,
+        agentUserId,
+        workspaceId: existing.workspaceId ?? undefined,
+        subjectType: "focus_session",
+        action: "update",
+        source: "intelligence",
+        data: {
+          id: sessionId,
+          ...sessionGoalPayload(existing, params.goal),
+          ...(params.title !== undefined ? { title: params.title } : {}),
+          ...(params.status !== undefined ? { status: params.status } : {}),
+          ...(params.progress !== undefined
+            ? { progress: params.progress }
+            : {}),
+          ...(params.currentStage !== undefined
+            ? { currentStage: params.currentStage }
+            : {}),
+          ...(params.expectedOutputs !== undefined
+            ? { expectedOutputs: params.expectedOutputs }
+            : {}),
+          ...(params.addOutput !== undefined
+            ? { addOutput: params.addOutput }
+            : {}),
+          ...(params.completeOutput !== undefined
+            ? { completeOutput: params.completeOutput }
+            : {}),
+          ...(params.retireOutput !== undefined
+            ? { retireOutput: params.retireOutput }
+            : {}),
+          // Carried so the PROPOSED path is not a silent no-op: the
+          // `focus_session/update` executor re-applies it through the same append
+          // door on approval.
+          ...(params.addAgentId !== undefined
+            ? { addAgentId: params.addAgentId }
+            : {}),
+          // Carried for the same reason as `addAgentId`: without it on the proposal
+          // the PROPOSED path is a silent no-op — the human approves "re-point the
+          // subject" and the executor has no subject to point at.
+          ...(params.subjectEntityId !== undefined
+            ? { subjectEntityId: params.subjectEntityId }
+            : {}),
+          ...(criteriaChange ? { criteria: params.criteria } : {}),
+          // A PERSON's filing (an agent's took its own door above, or was
+          // granted there) — the fields and their display-only names.
+          ...sessionFilingFields({
+            ...filingPatch,
+            projectId: params.projectId,
+            workspaceId: params.workspaceId,
+            trackFiling,
+          }),
+          // Carried for the same reason as `addAgentId` and `subjectEntityId`: the
+          // `focus_session/update` executor re-applies it on approval, so the
+          // PROPOSED path is not a silent no-op. `null` is the RELEASE and must
+          // survive the payload, hence the `!== undefined` test.
+          ...(params.followPlaybookId !== undefined
+            ? { followPlaybookId: params.followPlaybookId }
+            : {}),
+          ...(params.followStageKey !== undefined
+            ? { followStageKey: params.followStageKey }
+            : {}),
+          // Same reason: without this the answers land on the direct path and
+          // vanish on the approved one.
+          ...(params.params !== undefined ? { params: params.params } : {}),
+        },
+      });
   if ("denied" in perm && perm.denied) {
     return { status: "denied", reason: perm.reason };
   }
@@ -1899,7 +1912,8 @@ export async function updateFocusSession(
   // stays unstamped and revert says it cannot be undone.
   const receiptId = "granted" in perm ? perm.autoApprovedProposalId : undefined;
   const undoBefore =
-    receiptId && isUndoableSessionPatch(params)
+    (receiptId && isUndoableSessionPatch(params)) ||
+    (filingReceiptId && filingReceiptId !== receiptId)
       ? await readSessionUndoSnapshot(db, sessionId)
       : null;
 
@@ -1947,11 +1961,22 @@ export async function updateFocusSession(
       .returning();
   });
   await stampSessionUpdate({
-    proposalId: receiptId,
+    proposalId:
+      receiptId && isUndoableSessionPatch(params) ? receiptId : undefined,
     sessionId,
     before: undoBefore,
     after: updated,
   });
+  // The filing's own receipt (B3), when the rest of the patch had another:
+  // its Undo restores the project only.
+  if (filingReceiptId && filingReceiptId !== receiptId && undoBefore) {
+    await stampSessionUpdate({
+      proposalId: filingReceiptId,
+      sessionId,
+      before: undoBefore,
+      after: { ...undoBefore, projectId: updated?.projectId ?? null },
+    });
+  }
 
   // ── EVIDENCE VERDICT ────────────────────────────────────────────────────────
   // A claim (`completeOutput`) is never a verdict: the ONE evidence door
