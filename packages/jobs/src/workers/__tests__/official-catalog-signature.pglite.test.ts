@@ -57,6 +57,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { readMarketplaceSources } from "@synap/database";
 import {
+  CATALOG_TEST_ONLY_KEYS,
   SYNAP_CATALOG_ROOT_KEYS,
   catalogRootKeys,
   checkOfficialCatalogSignature,
@@ -149,6 +150,7 @@ const ROOTS: OfficialCatalogTrust = {
   enforce: false,
   allowExpired: false,
   rejectedKeys: [],
+  refusedTestKeys: 0,
 };
 
 beforeAll(async () => {
@@ -412,6 +414,60 @@ describe("the Control Plane's TEST-signed fixtures, end to end on PGlite", () =>
     };
     return { fetchImpl, calls };
   };
+
+  const contractKeys = () => {
+    const c = contract as typeof contract & { onlineKey: string };
+    return [...c.rootKeys, c.onlineKey];
+  };
+
+  it("names every key that signed the fixtures as TEST-ONLY (the label derivation matches the CP's)", () => {
+    // Non-vacuity: the fixtures carry two roots and an online key.
+    expect(contractKeys()).toHaveLength(3);
+    for (const key of contractKeys()) {
+      expect(CATALOG_TEST_ONLY_KEYS.has(key)).toBe(true);
+    }
+    // A key that is not derived from a test label is not swept up.
+    expect(CATALOG_TEST_ONLY_KEYS.has(ROOT.publicKey)).toBe(false);
+  });
+
+  it("never compiles a test-only root into a release", () => {
+    expect(() => catalogRootKeys(contract.rootKeys)).toThrow(
+      /\[0\] is a TEST-ONLY key derived from a public label/
+    );
+    expect(() =>
+      catalogRootKeys([ROOT.publicKey, contract.rootKeys[1]!])
+    ).toThrow(/\[1\] is a TEST-ONLY key/);
+  });
+
+  it("refuses test-only operator keys in production, and keeps them for tests and dev pods", () => {
+    const listed = { SYNAP_CATALOG_PUBLIC_KEYS: contractKeys().join(",") };
+    const prod = officialCatalogTrust({ ...listed, NODE_ENV: "production" }, [
+      ROOT.publicKey,
+    ]);
+    expect(prod).toMatchObject({
+      anchors: "roots",
+      keys: [ROOT.publicKey],
+      refusedTestKeys: 3,
+    });
+    const mixed = officialCatalogTrust(
+      {
+        SYNAP_CATALOG_PUBLIC_KEYS: `${contract.rootKeys[0]},${CATALOG.publicKey}`,
+        NODE_ENV: "production",
+      },
+      []
+    );
+    expect(mixed).toMatchObject({
+      anchors: "operator",
+      keys: [CATALOG.publicKey],
+      refusedTestKeys: 1,
+    });
+    const dev = officialCatalogTrust({ ...listed, NODE_ENV: "test" }, []);
+    expect(dev).toMatchObject({
+      anchors: "operator",
+      keys: contractKeys(),
+      refusedTestKeys: 0,
+    });
+  });
 
   it("verifies the CP's exact bytes under its (test) roots, and every row its doors serve is vouched for", async () => {
     const { fetchImpl } = cpServed();
