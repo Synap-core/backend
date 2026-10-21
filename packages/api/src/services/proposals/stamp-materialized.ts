@@ -24,6 +24,7 @@ import {
   documents,
   entities,
   eq,
+  focusSessions,
   inArray,
   isNull,
   links,
@@ -46,6 +47,10 @@ import {
   safeFailureSentence,
 } from "../../routers/proposals/failure-classification.js";
 import { redactForStorage } from "../../utils/redact-secrets.js";
+import {
+  SESSION_UNDO_COLUMNS,
+  type SessionUndoColumn,
+} from "../focus-sessions/session-undo.js";
 
 const logger = createLogger({ module: "stamp-materialized" });
 
@@ -98,13 +103,18 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   byOp?: Record<string, MaterializedOpRecord>;
 }
 
-/** The config tables an `update_*` op may change (entities use `propertyDiffs`). */
+/**
+ * The rows a `row_patch` may restore: the config tables an `update_*` op may
+ * change (entities use `propertyDiffs`), and a session's undoable columns
+ * (`focus_session`, stamped by `stampSessionUpdate`).
+ */
 export const ROW_PATCH_KINDS = [
   "skill",
   "rule",
   "automation",
   "playbook",
   "view",
+  "focus_session",
 ] as const;
 export type RowPatchKind = (typeof ROW_PATCH_KINDS)[number];
 
@@ -823,6 +833,74 @@ export async function stampEntityUpdate(args: {
     ...(args.baseData !== undefined ? { baseData: args.baseData } : {}),
     ...(args.set ? { set: args.set } : {}),
   });
+}
+
+/** A session's undoable columns as they are now — read right before the write. */
+export async function readSessionUndoSnapshot(
+  database: Pick<typeof db, "select">,
+  sessionId: string
+): Promise<Record<SessionUndoColumn, unknown> | null> {
+  const [row] = await database
+    .select({
+      title: focusSessions.title,
+      goal: focusSessions.goal,
+      progress: focusSessions.progress,
+      projectId: focusSessions.projectId,
+    })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, sessionId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Stamp what a session UPDATE changed onto the receipt or approved proposal
+ * that governed it — the session twin of `stampEntityUpdate`. Call it ONLY for
+ * an update `isUndoableSessionPatch` accepts: the stamp is what makes revert
+ * offer an Undo, so it must never cover a change the row patch cannot restore.
+ *
+ * Records the columns whose value changed, before and after; revert restores
+ * them only while every one still holds what this write put there. A write
+ * that changed nothing stamps an empty list ("nothing to undo"). Best-effort:
+ * the write is committed, so a failed stamp is logged and leaves the row
+ * unstamped (revert then says it cannot be undone) — it never fails the write.
+ */
+export async function stampSessionUpdate(args: {
+  proposalId: string | undefined;
+  sessionId: string;
+  before: Record<SessionUndoColumn, unknown> | null;
+  after: Partial<Record<SessionUndoColumn, unknown>> | undefined;
+  database?: StampDatabase;
+  set?: Omit<Partial<ProposalColumns>, "data" | "id">;
+}): Promise<void> {
+  if (!args.proposalId || !args.before || !args.after) return;
+  const before: Record<string, unknown> = {};
+  const after: Record<string, unknown> = {};
+  for (const column of SESSION_UNDO_COLUMNS) {
+    const was = args.before[column] ?? null;
+    const now = args.after[column] ?? null;
+    if (JSON.stringify(was) === JSON.stringify(now)) continue;
+    before[column] = was;
+    after[column] = now;
+  }
+  const changed = Object.keys(after).length > 0;
+  try {
+    await stampMaterialized({
+      proposalId: args.proposalId,
+      record: {
+        rowPatches: changed
+          ? [{ kind: "focus_session", id: args.sessionId, before, after }]
+          : [],
+      },
+      ...(args.database ? { database: args.database } : {}),
+      ...(args.set ? { set: args.set } : {}),
+    });
+  } catch (err) {
+    logger.error(
+      { err, proposalId: args.proposalId, sessionId: args.sessionId },
+      "session update: undo record NOT stamped — this change cannot be undone"
+    );
+  }
 }
 
 /**

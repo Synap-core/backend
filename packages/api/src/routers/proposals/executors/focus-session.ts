@@ -51,6 +51,11 @@ import {
 } from "../../../services/focus-sessions/find-open-session-twin.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
 import { approvedSessionGoal } from "../../../services/focus-sessions/session-update-goal.js";
+import { isUndoableSessionPatch } from "../../../services/focus-sessions/session-undo.js";
+import {
+  readSessionUndoSnapshot,
+  stampSessionUpdate,
+} from "../../../services/proposals/stamp-materialized.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -958,11 +963,22 @@ export function registerFocusSessionExecutors(): void {
           );
         }
 
+        // UNDO RECORD — only for a patch every change of which undo can
+        // restore (`session-undo.ts`); read right before the write.
+        const undoBefore = isUndoableSessionPatch(innerData)
+          ? await readSessionUndoSnapshot(db, sessionId)
+          : null;
         let [updated] = await db
           .update(focusSessions)
           .set(set)
           .where(eq(focusSessions.id, sessionId))
           .returning();
+        await stampSessionUpdate({
+          proposalId: input.proposalId,
+          sessionId,
+          before: undoBefore,
+          after: updated,
+        });
 
         if (trackFiling && updated) {
           const { stampTrackFilingUses } =
