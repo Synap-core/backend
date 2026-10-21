@@ -17,12 +17,13 @@
 # is HTTPS (TLS ends at the tunnel's edge), so the header is honoured and is the
 # same promise the TLS block makes; a browser ignores it over plain HTTP (RFC
 # 6797 §8.1), and every outside cleartext client is redirected to HTTPS anyway.
+# No X-XSS-Protection: current browsers ignore it and OWASP advises omitting it
+# (the filter it switched on was itself an XSS vector); a CSP is the defence.
 (security_headers) {
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
         X-Content-Type-Options "nosniff"
         X-Frame-Options "{args[0]}"
-        X-XSS-Protection "1; mode=block"
         Referrer-Policy "strict-origin-when-cross-origin"
     }
 }

@@ -24,7 +24,8 @@ Format (schema 1) — validated by the ENGINE's own rules
     "migrations": { "last": "<file>.sql", "count": <n> },
     "composeSha": "sha256:<64 hex>",          # deploy/docker-compose.yml of this release
     "envSchemaVersion": "sha256:<64 hex>",    # sorted keys of deploy/.env.example
-    "minFrom": null | "<migration file>",     # a pod below this level must step through
+    "minFrom": null | "<migration file>",     # a pod below this level must step through …
+    "minFromRelease": null | "<release id>",  # … this release first (both DERIVED: --min-from auto)
     "bundle": { "asset": "synap-deploy-<id>.tar.gz", "sha256": "<64 hex>" } | null
   }
 
@@ -35,8 +36,15 @@ release time (`docker buildx imagetools inspect`) unless given with --image.
 Usage:
   make-manifest.py --id main-abc1234 --channel fast --git-sha <sha> \
       --image SYNAP_IMAGE_BACKEND=ghcr.io/synap-core/backend@sha256:... \
-      [--image KEY=REF ...] [--bundle path/to/synap-deploy-<id>.tar.gz] [--min-from <file>.sql] \
-      [--repo-root .] > release.json
+      [--image KEY=REF ...] [--bundle path/to/synap-deploy-<id>.tar.gz] \
+      [--min-from auto | --min-from <file>.sql --min-from-release <id>] [--repo-root .] > release.json
+
+minFrom (default `auto`): derived by scripts/release-min-from.mjs from the
+`-- synap:contract-of` markers of this tree — the newest migration of the
+newest release that first shipped a marked EXPAND step. A pod below it rolls
+back onto a contracted schema if this release's update fails (rollback swaps
+images only), so the engine refuses it and names minFromRelease to take first.
+An explicit floor must name its release too.
 """
 import argparse
 import datetime
@@ -47,6 +55,7 @@ import re
 import subprocess
 import sys
 
+MIGRATION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.sql$")
 DIGEST = re.compile(r"^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$")
 IMAGE_VAR = re.compile(r"\$\{(SYNAP_IMAGE_[A-Z0-9_]+):-([^}$]*)(\$\{)?")
 
@@ -93,7 +102,8 @@ def main():
     ap.add_argument("--git-sha", required=True)
     ap.add_argument("--image", action="append", default=[], help="KEY=REF@sha256:...")
     ap.add_argument("--bundle")
-    ap.add_argument("--min-from")
+    ap.add_argument("--min-from", default="auto", help="auto (derived; the default) or <file>.sql")
+    ap.add_argument("--min-from-release", help="the release a pod below an explicit --min-from takes first")
     ap.add_argument("--repo-root", default=".")
     a = ap.parse_args()
 
@@ -130,6 +140,24 @@ def main():
     if not migrations:
         sys.exit(f"no migrations in {mig_dir}")
 
+    if a.min_from == "auto":
+        if a.min_from_release:
+            sys.exit("--min-from-release goes with an explicit --min-from <file>.sql (auto derives both)")
+        derive = subprocess.run(
+            ["node", os.path.join(root, "scripts", "release-min-from.mjs"), "--repo", root, "--exclude", a.id],
+            capture_output=True, text=True,
+        )
+        if derive.returncode != 0:
+            sys.exit(derive.stderr.strip() or f"release-min-from.mjs exited {derive.returncode}")
+        floor = json.loads(derive.stdout)
+        min_from, min_from_release = floor["minFrom"], floor["minFromRelease"]
+    else:
+        if not MIGRATION.match(a.min_from):
+            sys.exit(f"--min-from {a.min_from!r}: expected auto or a migration file name (<name>.sql)")
+        if not a.min_from_release:
+            sys.exit("--min-from <file>.sql needs --min-from-release <id>: the release a pod below it must take first")
+        min_from, min_from_release = a.min_from, a.min_from_release
+
     bundle = None
     if a.bundle:
         bundle = {"asset": os.path.basename(a.bundle), "sha256": sha256_file(a.bundle)}
@@ -144,7 +172,8 @@ def main():
         "migrations": {"last": migrations[-1], "count": len(migrations)},
         "composeSha": "sha256:" + sha256_file(compose_path),
         "envSchemaVersion": env_schema_version(os.path.join(root, "deploy", ".env.example")),
-        "minFrom": a.min_from or None,
+        "minFrom": min_from,
+        "minFromRelease": min_from_release,
         "bundle": bundle,
     }
     json.dump(manifest, sys.stdout, indent=2)

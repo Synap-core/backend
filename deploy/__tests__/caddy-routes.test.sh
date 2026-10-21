@@ -114,7 +114,7 @@ done
 # Each must import security_headers at its top level, a host's :80 and TLS
 # blocks must pass the same X-Frame-Options, and no header line outside the
 # snippet may set a security header (a second copy is how they drifted).
-SEC_HEADERS='Strict-Transport-Security|X-Content-Type-Options|X-Frame-Options|Referrer-Policy|X-XSS-Protection'
+SEC_HEADERS='Strict-Transport-Security|X-Content-Type-Options|X-Frame-Options|Referrer-Policy'
 site_imports() { # → "<site address><TAB><import arg or NONE>" per site block
     awk '
         { line=$0; gsub(/"[^"]*"/, "\"\"", line); sub(/(^|[[:space:]])#.*/, "", line) }
@@ -150,6 +150,17 @@ done
 grep -qE '^[[:space:]]*X-Frame-Options[[:space:]]+"\{args\[0\]\}"' <<<"$snippet" && ok "X-Frame-Options comes from the import argument" || bad "X-Frame-Options is not {args[0]} in the snippet"
 outside="$(awk '/^\(security_headers\) \{/ {p=1} p && /^}/ {p=0; next} !p' "$CADDYFILE" | grep -vE '^[[:space:]]*#' | grep -E "(^|[[:space:]])($SEC_HEADERS)([[:space:]]|$)")"
 [ -z "$outside" ] && ok "no security header is set outside the snippet" || bad "a security header is set outside the snippet (a second copy drifts): $outside"
+# X-XSS-Protection is deprecated: current browsers ignore it and OWASP advises
+# omitting it. Neither the edge nor the API (which sets its own headers, passed
+# through by caddy) may send it. Each scan is proven to see a header that IS set
+# (X-Content-Type-Options) with the same pattern, so a blind scan cannot pass.
+API_SRC="${CADDY_ROUTES_API_SRC:-$HERE/../apps/api/src}"
+caddy_sets() { grep -vE '^[[:space:]]*#' "$CADDYFILE" | grep -E "(^|[[:space:]])$1([[:space:]]|$)"; }
+api_sets()   { grep -rnE --include='*.ts' "[\"']$1[\"']" "$API_SRC" | grep -vE '\.test\.ts:'; }
+[ -n "$(caddy_sets X-Content-Type-Options)" ] && [ -n "$(api_sets X-Content-Type-Options)" ] \
+  && ok "self-check: both header scans see X-Content-Type-Options where it is set" || bad "self-check: a header scan went blind (Caddyfile or $API_SRC)"
+xss="$(caddy_sets X-XSS-Protection; api_sets X-XSS-Protection)"
+[ -z "$xss" ] && ok "the deprecated X-XSS-Protection header is sent by neither caddy nor the API" || bad "X-XSS-Protection is still set (deprecated; OWASP: omit it): $xss"
 
 # The MinIO CONSOLE is a full admin UI behind one root key: never routed.
 grep -qE '^[^#]*reverse_proxy[[:space:]]+minio:9001' "$CADDYFILE" \

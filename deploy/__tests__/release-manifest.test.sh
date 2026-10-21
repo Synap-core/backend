@@ -6,6 +6,9 @@
 #     every SYNAP_IMAGE_* the compose file consumes — derived, not hand-listed.
 #  2. The validator rejects each way a manifest can lie (unpinned image, missing
 #     image, bad commit, local id on a registry release, ghcr-less local build…).
+#  1b. minFrom is derived from the `synap:contract-of` markers (in a shallow,
+#     tagless clone like CI's), never names the release being built, and an
+#     expand no release shipped refuses the manifest.
 #  3. The publish workflow keeps the P1 promises: pod-admin is published, no
 #     `latest` tag, no unused backend-realtime image, images by digest into a
 #     validated release.json, CP notified only after the release exists.
@@ -57,6 +60,58 @@ python3 "$HERE/deploy/release/make-manifest.py" --repo-root "$HERE" --id x --cha
   $(for k in $KEYS; do [ "$k" = SYNAP_IMAGE_REDIS ] && echo "--image $k=redis:7-alpine" || echo "--image $k=r@sha256:$(D a)"; done) >/dev/null 2>"$TMP/err" \
   && bad "make-manifest.py accepted an unpinned image" || ok "make-manifest refuses an unpinned image"
 
+# ── 1b. minFrom is DERIVED from the contract-of markers (never hand-set) ──────
+# Rollback swaps images only, so a release carrying a CONTRACT migration may
+# only be applied by a pod that already ran the release shipping its EXPAND.
+MF="$(cat "$HERE"/packages/database/migrations/*.sql | grep -cE '^[[:space:]]*--[[:space:]]*synap:contract-of[[:space:]]' || true)"
+if [ "$MF" = 0 ]; then
+  jq -e '.minFrom == null and .minFromRelease == null' "$TMP/good.json" >/dev/null \
+    && ok "this tree has no contract-of marker → minFrom null" || bad "no marker, yet minFrom=$(jq -c '[.minFrom,.minFromRelease]' "$TMP/good.json")"
+else
+  jq -e '(.minFrom|type) == "string" and (.minFromRelease|type) == "string"' "$TMP/good.json" >/dev/null \
+    && ok "this tree has $MF contract-of marker(s) → minFrom $(jq -r .minFrom "$TMP/good.json") (take $(jq -r .minFromRelease "$TMP/good.json") first)" \
+    || bad "$MF contract-of marker(s) but minFrom=$(jq -c '[.minFrom,.minFromRelease]' "$TMP/good.json")"
+fi
+command -v git >/dev/null 2>&1 && command -v node >/dev/null 2>&1 || { echo "FAIL - git and node are required"; exit 1; }
+G() { git -c user.email=t@t -c user.name=t -c init.defaultBranch=main "$@"; }
+M=packages/database/migrations
+# origin: v0.9.0 predates the migrations dir (like the real v1.0.x); v1.0.0
+# ships 0001_init; v1.1.0 ships 0002_expand + 0003_other; main adds
+# 0004_contract (contract-of 0002_expand.sql AND of 0001_init.sql).
+O="$TMP/mf-src"; mkdir -p "$O/deploy" "$O/scripts"
+cp "$HERE/deploy/docker-compose.yml" "$HERE/deploy/.env.example" "$O/deploy/"
+cp "$HERE/scripts/release-min-from.mjs" "$HERE/scripts/check-migrations-forward-only.mjs" "$O/scripts/"
+( cd "$O" && G init -q && G add -A && G commit -qm v0.9 && G tag v0.9.0 && mkdir -p "$M" \
+  && printf 'CREATE TABLE t (id int, old_col text);\n' > "$M/0001_init.sql" && G add -A && G commit -qm v1.0 && G tag v1.0.0 \
+  && printf 'ALTER TABLE t ADD COLUMN new_col text;\n' > "$M/0002_expand.sql" && printf 'SELECT 1;\n' > "$M/0003_other.sql" \
+  && G add -A && G commit -qm v1.1 && G tag v1.1.0 \
+  && printf -- '-- synap:contract-of 0002_expand.sql\n-- synap:contract-of 0001_init.sql\nALTER TABLE t DROP COLUMN old_col;\n' > "$M/0004_contract.sql" \
+  && G add -A && G commit -qm main )
+G clone -q --bare "$O" "$TMP/mf-origin.git"
+G clone -q --depth=1 --no-tags "file://$TMP/mf-origin.git" "$TMP/mf-ci"
+[ -z "$(git -C "$TMP/mf-ci" tag -l)" ] && ok "fixture: the CI-shaped clone (shallow, no tags) has no tags" || bad "fixture: the CI-shaped clone has tags"
+mm() { # <repo-root> <id> [extra args] → $TMP/mf.json, rc
+  python3 "$HERE/deploy/release/make-manifest.py" --repo-root "$1" --id "$2" --channel fast --git-sha "$(printf 'c%.0s' $(seq 1 40))" \
+    $(for k in $KEYS; do echo "--image $k=r@sha256:$(D a)"; done) "${@:3}" > "$TMP/mf.json" 2>"$TMP/mf.err"
+}
+mm "$TMP/mf-ci" main-abc1234; rc=$?
+[ "$rc" = 0 ] && jq -e '.minFrom == "0003_other.sql" and .minFromRelease == "v1.1.0"' "$TMP/mf.json" >/dev/null \
+  && ok "derived in the CI shape: minFrom = the newest migration of the newest release that first shipped a marked expand (0003_other.sql, v1.1.0)" \
+  || bad "derived minFrom: rc=$rc $(jq -c '[.minFrom,.minFromRelease]' "$TMP/mf.json" 2>/dev/null) $(cat "$TMP/mf.err")"
+bash "$VALIDATE" "$TMP/mf.json" >"$TMP/v" 2>&1 && ok "engine rules accept the derived floor" || bad "engine rules reject the derived floor: $(cat "$TMP/v")"
+# the release being built never counts as having shipped its own expand
+( cd "$O" && G tag v1.2.0 && G tag -d v1.1.0 >/dev/null && G tag v1.1.0 HEAD~1 )
+mm "$O" v1.2.0; rc=$?
+[ "$rc" = 0 ] && [ "$(jq -r .minFromRelease "$TMP/mf.json")" = v1.1.0 ] && ok "building v1.2.0 (tagged too): the floor stays v1.1.0" || bad "exclude: rc=$rc $(cat "$TMP/mf.err")"
+( cd "$O" && G tag -d v1.1.0 >/dev/null )
+mm "$O" v1.2.0; rc=$?
+[ "$rc" != 0 ] && grep -q "cannot derive minFrom: contract-of names 0002_expand.sql, which no release" "$TMP/mf.err" \
+  && ok "an expand only the release being built ships → no manifest (never a wrong floor)" || bad "unshipped expand: rc=$rc $(cat "$TMP/mf.err")"
+mm "$O" main-abc1234 --min-from 0003_other.sql; rc=$?
+[ "$rc" != 0 ] && grep -q "needs --min-from-release" "$TMP/mf.err" && ok "an explicit --min-from must name the release to take first" || bad "explicit floor without release: rc=$rc"
+mm "$O" main-abc1234 --min-from ../x --min-from-release v1.1.0; rc=$?
+[ "$rc" != 0 ] && grep -q "expected auto or a migration file name" "$TMP/mf.err" && ok "an explicit --min-from must be a migration file name" || bad "bad explicit floor: rc=$rc"
+
 # ── 2. the validator rejects each lie ─────────────────────────────────────────
 reject() { # <label> <jq-mutation> <expected-reason-substring> [base]
   jq "$2" "${4:-$TMP/good.json}" > "$TMP/m.json"
@@ -73,6 +128,9 @@ reject "an unknown schema"                   '.schema = 2'                      
 reject "a missing migration level"           'del(.migrations)'                                               "migrations.last"
 reject "a malformed compose sha"             '.composeSha = "abc"'                                            "composeSha"
 reject "a path in the id"                    '.id = "../../etc"'                                              "id is missing or malformed"
+reject "a minFrom that is not a migration file" '.minFrom = "../x"'                                         "minFrom must be null or a migration filename"
+reject "a malformed minFromRelease"          '.minFrom = "0001_a.sql" | .minFromRelease = "../v1"'           "minFromRelease must be null or a release id"
+reject "a minFromRelease without minFrom"    '.minFrom = null | .minFromRelease = "v1.1.0"'                  "minFromRelease is set without minFrom"
 # a from-source manifest: synap-dev allowed for the two built images only
 jq '.source = true | .id = "local-abc123" | .images = {SYNAP_IMAGE_BACKEND:"synap-dev/backend:abc123", SYNAP_IMAGE_POD_ADMIN:"synap-dev/pod-admin:abc123"}' "$TMP/good.json" > "$TMP/src.json"
 bash "$VALIDATE" "$TMP/src.json" >/dev/null 2>"$TMP/err" && ok "accepts a from-source manifest (synap-dev for backend + pod-admin)" || bad "from-source manifest rejected: $(cat "$TMP/err")"
@@ -93,6 +151,8 @@ for j in ("build-and-push-backend-api", "build-and-push-pod-agent", "build-and-p
     need("sha-${{ steps.resolve.outputs.sha }}" in str(jobs.get(j, {})), f"{j} does not push the immutable sha-<full> tag")
 pr = jobs.get("publish-release", {}); steps = " ".join(str(s.get("run", "")) for s in pr.get("steps", []))
 need("make-manifest.py" in steps and "validate-manifest.sh release.json" in steps, "publish-release does not build + validate release.json")
+import re
+need(re.search(r"--min-from\s+(?!auto\b)", steps) is None, "publish-release hand-sets --min-from (it must be derived: --min-from auto)")
 need(all(f"needs.{j}.outputs.digest" in steps for j in ("build-and-push-backend-api", "build-and-push-pod-admin", "build-and-push-pod-agent")), "release.json is not fed the build digests")
 need(steps.index("gh release upload \"$POINTER\"") > steps.index("gh release create \"$ID\"") if "gh release upload \"$POINTER\"" in steps and "gh release create \"$ID\"" in steps else False, "the channel pointer is not moved after the release exists")
 need("publish-release" in (jobs.get("notify-control-plane", {}).get("needs") or []), "CP is notified before the release manifest exists")

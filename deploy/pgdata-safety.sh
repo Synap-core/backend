@@ -182,10 +182,49 @@ pgdata_backup() {
     _pgs_dump_into "$c" "$tmp" || { rm -rf "$tmp"; return 1; }
     mv "$tmp" "$dir" || return 1
     _pgs_log "backup written: $dir ($(du -sh "$dir" | cut -f1))" >&2
-    # Keep the newest 5 pre-update/manual dumps; the scheduled ones are pruned
-    # by backup_run.
-    ls -1d "$(_bk_backups_dir)/"*-"$label" 2>/dev/null | sort | head -n -5 | xargs -r rm -rf
+    # Keep the newest 5 pre-update/manual dumps (and every pinned one); the
+    # scheduled ones are pruned by backup_run.
+    _bk_prune_label "$label" 5
     echo "$dir"
+}
+
+# Dumps an update record still points to — `synap restore <dump>` was printed
+# for them, so they are never pruned: the newest rolled-back update whose schema
+# moved (state/events.jsonl: the one whose restore command is still the right
+# one), the latest outcome (state/last-update.json) and the running release's
+# pre-update dump (state/current-release.json). One basename per line. Returns
+# 1 when a record exists but cannot be read (no jq): an unreadable keep-list is
+# not an empty one, so the caller then prunes nothing.
+_bk_pinned_dumps() {
+    local s ev
+    s="$(_bk_state_dir)"
+    [ -s "$s/events.jsonl" ] || [ -s "$s/last-update.json" ] || [ -s "$s/current-release.json" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 1
+    if [ -s "$s/events.jsonl" ]; then
+        # Line by line: one torn line (an interrupted append) never hides the rest.
+        ev="$(jq -rR 'fromjson? | select(.kind == "pod.update" and (.status == "rolled_back" or .status == "rollback_failed")
+                and (.schema == "migrated" or .schema == "unknown") and (.backup // "") != "") | .backup' "$s/events.jsonl")" || return 1
+        printf '%s\n' "$ev" | tail -n 1
+    fi
+    if [ -s "$s/last-update.json" ]; then jq -r '.backup // empty' "$s/last-update.json" 2>/dev/null || return 1; fi
+    if [ -s "$s/current-release.json" ]; then jq -r '.preUpdateBackup // empty' "$s/current-release.json" 2>/dev/null || return 1; fi
+}
+
+# Remove all but the newest <keep> <label> dumps — never a pinned one
+# (_bk_pinned_dumps). The ONE pruner of labelled dumps: pgdata_backup and the
+# update's _ue_prune_images both come here.
+_bk_prune_label() { # <label> <keep>
+    local pinned d
+    pinned="$(_bk_pinned_dumps)" || {
+        _pgs_warn "cannot read the update records in $(_bk_state_dir) (jq missing?) — no $1 dump pruned this time"
+        return 0
+    }
+    pinned="$(printf '%s\n' "$pinned" | sed 's#.*/##')"
+    ls -1d "$(_bk_backups_dir)/"*-"$1" 2>/dev/null | sort \
+        | awk -v n="$2" '{ a[NR] = $0 } END { for (i = 1; i <= NR - n; i++) print a[i] }' \
+        | while IFS= read -r d; do
+            printf '%s\n' "$pinned" | grep -qxF "${d##*/}" || rm -rf "$d"
+        done
 }
 
 # Restore a directory written by pgdata_backup (or the postgres-backup service)
