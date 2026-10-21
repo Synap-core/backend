@@ -2365,7 +2365,7 @@ export const tools = {
             retireOutput: {
               type: "string",
               description:
-                "WITHDRAW the deliverable with this key (or exact label): it stops being owed by anyone and is kept as 'Withdrawn', never deleted. The only way to remove a deliverable you declared. Not for a delivered (done) one. The reply carries `retireOutput.result`: 'retired', 'refused' (already done; nothing changed) or 'no_match' (nothing changed).",
+                "WITHDRAW the deliverable with this key (or exact label): it stops being owed by anyone and is kept as 'Withdrawn', never deleted. The only way to remove a deliverable you declared. Not for a delivered (done) one. Withdrawing one handed to the person (owner='human') is always a proposal: they decide. The reply carries `retireOutput.result`: 'retired', 'refused' (already done; nothing changed) or 'no_match' (nothing changed).",
             },
             completeOutput: {
               type: "string",

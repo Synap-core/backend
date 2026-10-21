@@ -1,5 +1,7 @@
 /**
- * A GRANTED filing is WRITTEN, whatever the rest of the patch decides
+ * Two governance seams of the session update door, through the REAL gate.
+ *
+ * M1 — a GRANTED filing is WRITTEN, whatever the rest of the patch decides
  * (FB1020 w2 review M1) — driven through the REAL `updateFocusSession`, the
  * REAL `checkPermissionOrPropose` and the REAL governance resolver + engine on
  * PGlite, with the REAL seeded `@reversible` (0282) and `@own-organise`
@@ -12,6 +14,11 @@
  * criteria change is a contract change floored to a proposal (rung 2.1). The
  * defect: the door returned at the criteria proposal, so R1 said "applied"
  * while the session stayed unfiled, with no Undo.
+ *
+ * M6 — an agent's `retireOutput` on a slot it handed to the PERSON (`owner:
+ * "human"`) is that person's gate: it is proposed, never applied. The
+ * discriminating input is the real engine: `focus_session.update` is on the
+ * default auto list, so without the door's floor it executes.
  *
  * Stubbed, and why:
  *  - `getAgentFocusProjectId` reads the agent's declared focus from a value
@@ -318,5 +325,75 @@ describe("M1: a granted filing is written whatever the rest of the patch decides
     expect((await sessionRow(sessionId)).project_id).toBeNull();
     const rows = await proposalsFor(sessionId);
     expect(rows.some((r) => r.status === "auto_approved")).toBe(false);
+  });
+});
+
+describe("M6: an agent may only PROPOSE withdrawing a slot handed to the person", () => {
+  const HUMAN_GATE = {
+    key: "founder-approves",
+    kind: "decision",
+    label: "Founder approves both specs",
+    status: "pending",
+    owner: "human",
+    blockedReason: "Only the founder can approve the specs",
+  };
+  const AGENT_SLOT = {
+    key: "draft",
+    kind: "document",
+    label: "Draft",
+    status: "pending",
+  };
+
+  async function seedWithSlots(): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions
+         (id, user_id, title, goal, status, origin, project_id, expected_outputs, criteria, metadata, agent_ids, started_at, created_at, updated_at)
+       values ($1, $2, 'Specs', 'Ship both specs', 'active', 'agent', null,
+               $3::jsonb, '[]'::jsonb, '{}'::jsonb, '{}', now(), now(), now())`,
+      [id, USER, JSON.stringify([HUMAN_GATE, AGENT_SLOT])]
+    );
+    return id;
+  }
+  const slot = async (sessionId: string, key: string) =>
+    (
+      await q<{ expected_outputs: Array<Record<string, unknown>> }>(
+        `select expected_outputs from focus_sessions where id = $1`,
+        [sessionId]
+      )
+    ).rows[0]!.expected_outputs.find((o) => o.key === key)!;
+
+  it("withdrawing the person's gate is proposed, and the gate stays owed", async () => {
+    const sessionId = await seedWithSlots();
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      retireOutput: "founder-approves",
+    });
+    expect(res.status).toBe("proposed");
+    expect(
+      (await slot(sessionId, "founder-approves")).retiredAt
+    ).toBeUndefined();
+    const pending = (await proposalsFor(sessionId)).filter(
+      (r) => r.status === "pending"
+    );
+    expect(pending).toHaveLength(1);
+    expect(payloadOf(pending[0]!).retireOutput).toBe("founder-approves");
+  });
+
+  it("CONTROL: withdrawing its OWN slot applies directly", async () => {
+    const sessionId = await seedWithSlots();
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      retireOutput: "draft",
+    });
+    expect(res.status).toBe("updated");
+    expect((await slot(sessionId, "draft")).retiredReason).toBe("withdrawn");
+    expect(
+      (await slot(sessionId, "founder-approves")).retiredAt
+    ).toBeUndefined();
   });
 });

@@ -1370,6 +1370,26 @@ export function applyOutputMutations(
   };
 }
 
+/**
+ * Does `retireOutput: label` name a slot handed to the PERSON (`owner:
+ * "human"`, not yet done)? Matched exactly like {@link applyOutputMutations}
+ * (label, else slot key). Such a slot is the person's gate: an agent may only
+ * PROPOSE withdrawing it (FB1020 w2 review M6), the person decides.
+ */
+export function retireTargetsHumanSlot(
+  current: OutputItem[],
+  label: string
+): boolean {
+  const keys = deriveSlotKeys(current);
+  return current.some(
+    (o, i) =>
+      (o.label === label || keys[i] === label) &&
+      o.owner === "human" &&
+      o.status !== "done" &&
+      o.retiredAt == null
+  );
+}
+
 /** The retired reason the `retireOutput` verb stamps. */
 export const SLOT_WITHDRAWN_REASON =
   "withdrawn" as const satisfies (typeof OUTPUT_RETIRED_REASONS)[number];
@@ -1786,6 +1806,19 @@ export async function updateFocusSession(
     });
     params = { ...params, projectId: undefined };
   }
+  // An AGENT withdrawing a slot it handed to the PERSON withdraws the person's
+  // gate (the A3 harm, through the explicit verb): never applied directly, only
+  // proposed — like `completeOutput`, which refuses such a slot outright. The
+  // approval executor applies it once a person said yes.
+  const retiresHumanSlot =
+    !!agentUserId &&
+    typeof params.retireOutput === "string" &&
+    retireTargetsHumanSlot(
+      Array.isArray(existing.expectedOutputs)
+        ? (existing.expectedOutputs as OutputItem[])
+        : [],
+      params.retireOutput
+    );
   const perm = filingAlone
     ? ({ granted: true, autoApprovedProposalId: filingReceiptId } as const)
     : await checkPermissionOrPropose({
@@ -1795,6 +1828,7 @@ export async function updateFocusSession(
         subjectType: "focus_session",
         action: "update",
         source: "intelligence",
+        ...(retiresHumanSlot ? { forcePropose: true } : {}),
         data: {
           id: sessionId,
           ...sessionGoalPayload(existing, params.goal),
