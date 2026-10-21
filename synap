@@ -3580,7 +3580,9 @@ _ue_manifest_errors() {
           (if ((.migrations.last|type) != "string") or ((.migrations.last|tostring)|endswith(".sql")|not) then "migrations.last must name a .sql file" else empty end),
           (if ((.migrations.count|type) != "number") or (.migrations.count < 1) then "migrations.count must be a positive number" else empty end),
           (if ((.composeSha|type) != "string") or ((.composeSha|tostring)|test("^sha256:[0-9a-f]{64}$")|not) then "composeSha must be sha256:<64 hex>" else empty end),
-          (if .minFrom != null and ((.minFrom|type) != "string") then "minFrom must be null or a migration filename" else empty end)
+          (if .minFrom != null and (((.minFrom|type) != "string") or ((.minFrom|tostring)|test("^[A-Za-z0-9][A-Za-z0-9._-]*[.]sql$")|not)) then "minFrom must be null or a migration filename" else empty end),
+          (if .minFromRelease != null and (((.minFromRelease|type) != "string") or ((.minFromRelease|tostring)|test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")|not)) then "minFromRelease must be null or a release id" else empty end),
+          (if .minFromRelease != null and .minFrom == null then "minFromRelease is set without minFrom" else empty end)
         ] | .[]' "$1" 2>&1
 }
 
@@ -3655,6 +3657,41 @@ _ue_migration_level() {
     esac
     out="$(_pgs_psql "$c" synap "select count(*)||'|'||coalesce(max(filename collate \"C\"),'') from _migrations" 2>/dev/null)" || return 1
     case "$out" in [0-9]*'|'*) echo "$out" ;; *) return 1 ;; esac
+}
+
+# a < b in byte order (filenames, as _migrations' collate "C" and the release
+# builder sort them) — never the locale's collation, which `[[ < ]]` uses.
+_ue_name_lt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | LC_ALL=C sort | head -n 1)" = "$1" ]; }
+
+# minFrom (release.json, derived by deploy/release/make-manifest.py): a release
+# carrying a CONTRACT migration is safe to roll back from only if the pod
+# already ran the release that shipped its EXPAND step (rollback swaps images
+# only). Two levels must reach it: the database's newest migration, and the
+# RUNNING release's own (state/current-release.json) — after an images-only
+# rollback the database is ahead of the code it runs, and the code is what a
+# failed update would roll back to. Refuses (records + returns 1) naming
+# minFromRelease, the release to take first. <manifest> <db newest migration>
+_ue_min_from_check() {
+    local m="$1" db_last="$2" min_from min_rel run_last why
+    min_from="$(jq -r '.minFrom // empty' "$m")"
+    [ -n "$min_from" ] || return 0
+    min_rel="$(jq -r '.minFromRelease // empty' "$m")"
+    run_last="$(jq -r 'if (.migrations.last|type) == "string" then .migrations.last else empty end' state/current-release.json 2>/dev/null || true)"
+    if _ue_name_lt "$db_last" "$min_from"; then
+        why="this pod's database is at ${db_last:-no migration}"
+    elif [ -n "$run_last" ] && _ue_name_lt "$run_last" "$min_from"; then
+        why="this pod runs ${UE_FROM:-a release} (migrations up to ${run_last}); its database is further only because an update was rolled back"
+    else
+        return 0
+    fi
+    _ue_err "release ${UE_TO} requires a pod that already ran migration ${min_from}: ${why}."
+    if [ -n "$min_rel" ]; then
+        _ue_err "Update to ${min_rel} first (synap update --release ${min_rel}), then to ${UE_TO}. Nothing was changed."
+    else
+        _ue_err "Update to an intermediate release first. Nothing was changed."
+    fi
+    _ue_record aborted "$UE_FROM" "$UE_TO" "below minFrom ${min_from}${min_rel:+: update to ${min_rel} first}" false
+    return 1
 }
 
 # The synap schema now, against UE_LEVEL_BEFORE: migrated | unchanged | unknown.
@@ -4347,7 +4384,6 @@ synap_update_engine() {
 
     # 2. preflight — nothing changes before every check passed (the migration
     #    ledger and minFrom: in 4, once postgres is surely running)
-    local min_from current_last
     _ue_disk_ok || { _ue_record aborted "$UE_FROM" "$UE_TO" "not enough disk" false; exit 1; }
     _preflight_compose_check "$(pwd)" || { _ue_record aborted "$UE_FROM" "$UE_TO" "compose preflight failed" false; exit 1; }
 
@@ -4376,13 +4412,7 @@ synap_update_engine() {
             _ue_record aborted "$UE_FROM" "$UE_TO" "migration ledger unreadable" false
             exit 1
         }
-        min_from="$(jq -r '.minFrom // empty' "$m")"
-        current_last="${level_before#*|}"
-        if [ -n "$min_from" ] && [[ "$current_last" < "$min_from" ]]; then
-            _ue_err "release ${UE_TO} requires a pod already at migration ${min_from} (this pod: ${current_last:-none}). Update to an intermediate release first. Nothing was changed."
-            _ue_record aborted "$UE_FROM" "$UE_TO" "below minFrom ${min_from}" false
-            exit 1
-        fi
+        _ue_min_from_check "$m" "${level_before#*|}" || exit 1
         UE_BACKUP="$(SYNAP_DEPLOY_DIR="$(pwd)" COMPOSE_CMD="command docker compose" pgdata_backup pre-update)" || {
             _ue_err "Pre-update database backup failed — aborting update before migrations. Nothing was changed."
             _ue_record aborted "$UE_FROM" "$UE_TO" "pre-update backup failed" false

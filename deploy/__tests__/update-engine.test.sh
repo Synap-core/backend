@@ -18,7 +18,8 @@
 #   prod        R1 → R2, canary ok, prod fails   → rollback, schema stays migrated
 #   hup         SIGHUP mid-migration             → rolled back like INT/TERM
 #   ledger*     unreadable ledger → refused before anything; lost after → schema:unknown
-#   minfrom*    minFrom compares the newest migration by NAME
+#   minfrom*    minFrom compares the newest migration by NAME (byte order), of the
+#               database AND of the running release; the refusal names minFromRelease
 #   pull        a pull fails                     → nothing changes at all
 #   source      --from-source                    → synap-dev/* only, never ghcr
 #   traefik     SYNAP_EDGE=traefik               → caddy never touched, every service up
@@ -553,6 +554,7 @@ grep -q "Migration level: 0| →" "$S/out" && ! grep -q "ledger unreadable" "$S/
 minfrom() { jq --arg m "$1" '.minFrom = $m' "$TMP/rel/$R2/release.json" > "$TMP/x" && mv "$TMP/x" "$TMP/rel/$R2/release.json"; }
 setup minfromlate r1; publish "$R2" 0337_new.sql; minfrom 0335_x.sql
 echo "13|0336_y.sql" > "$FAKE/level"; echo "13|0331_late.sql" > "$FAKE/level_by_time"
+jq '.migrations.last = "0336_y.sql"' "$DEPLOY/state/current-release.json" > "$TMP/x" && mv "$TMP/x" "$DEPLOY/state/current-release.json"
 FAKE_NEW_LEVEL="14|0337_new.sql" run_update --release "$R2"; rc=$?
 [ "$(last status)" != aborted ] && grep -q "Migration level: 13|0336_y.sql →" "$S/out" \
   && ok "minfromlate: a late-merged migration does not make the pod look below minFrom" || { bad "minfromlate: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
@@ -560,6 +562,31 @@ setup minfromlow r1; publish "$R2" 0012_new.sql; minfrom 0012_new.sql
 run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [ "$(last reason)" = "below minFrom 0012_new.sql" ] && ! grep -qE "pg_dump|run --rm backend-migrate" "$FAKE/log" \
   && ok "minfromlow: a pod below minFrom is refused before the dump and the migration" || { bad "minfromlow: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+# The refusal names the release to take first (minFromRelease, derived by make-manifest).
+setup minfromrel r1; publish "$R2" 0012_new.sql; minfrom 0012_new.sql
+jq '.minFromRelease = "v9.1.0"' "$TMP/rel/$R2/release.json" > "$TMP/x" && mv "$TMP/x" "$TMP/rel/$R2/release.json"
+run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last reason)" = "below minFrom 0012_new.sql: update to v9.1.0 first" ] && grep -qF "Update to v9.1.0 first (synap update --release v9.1.0), then to $R2" "$S/out" \
+  && ok "minfromrel: the refusal names the release to update to first" || { bad "minfromrel: rc=$rc reason=$(last reason)"; show; }
+# The database reached minFrom only through an images-only rollback: the code it
+# runs (R1, migrations up to 0011) is what a failed update would roll back to.
+setup minfromrb r1; publish "$R2" 0013_c.sql; minfrom 0012_new.sql
+echo "$NEW_LEVEL" > "$FAKE/level"   # 0012 applied by an update that was then rolled back
+run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [ "$(last reason)" = "below minFrom 0012_new.sql" ] && grep -q "runs $R1 (migrations up to 0011_old.sql)" "$S/out" \
+  && ! grep -qE "pg_dump|run --rm backend-migrate" "$FAKE/log" \
+  && ok "minfromrb: a database ahead of its running release (rolled back) is still below minFrom" || { bad "minfromrb: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+# Byte order, never the locale's: in C 'a' (0x61) sorts after 'Z' (0x5A); a
+# glibc en_US collation puts a before Z, so `[[ < ]]` would refuse this pod.
+COLL=""; for l in en_US.UTF-8 en_US.utf8 C.UTF-8; do LC_ALL=$l bash -c '[[ 0012_a.sql < 0012_Z.sql ]]' 2>/dev/null && { COLL=$l; break; }; done
+if [ -z "$COLL" ]; then
+  echo "skip - minfromcoll: no installed locale collates differently from byte order here"
+else
+setup minfromcoll r1; publish "$R2" 0013_c.sql; minfrom 0012_Z.sql
+echo "12|0012_a.sql" > "$FAKE/level"; jq '.migrations.last = "0012_a.sql"' "$DEPLOY/state/current-release.json" > "$TMP/x" && mv "$TMP/x" "$DEPLOY/state/current-release.json"
+LC_ALL=$COLL FAKE_NEW_LEVEL="13|0013_c.sql" run_update --release "$R2"; rc=$?
+[ "$(last status)" != aborted ] && ok "minfromcoll: names compare in byte order (0012_a.sql ≥ 0012_Z.sql) under LC_ALL=$COLL" || { bad "minfromcoll: record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+fi
 
 # ── 4. canary passes, production fails → rollback ────────────────────────────
 setup prod r1; publish "$R2" 0012_new.sql
