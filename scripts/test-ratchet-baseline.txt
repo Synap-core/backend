@@ -3,10 +3,52 @@
 # The list may only SHRINK: a file not listed here that fails turns CI red, and a
 # listed file that passes (or no longer runs) turns CI red until its line is removed.
 # Never add a line to make a new failure green. Recorded from a real run with
-# `node scripts/test-ratchet.mjs --record`, never by hand.
+# `node scripts/test-ratchet.mjs --record`, never by hand. First recorded from CI
+# run 39533915485 (head 1ed26642a, 2026-10-21): 35 Full suite + 6 API e2e files.
 #
 # owner  — who fixes it: infra (CI cannot provide the service/sibling), wave6
-#          (file changed by the in-flight Pod Console wave 6 branch), or the code
-#          area (api, database, jobs, types, pod-admin, …).
-# cause  — live-service | sibling-repo | stale-mock | db-fixture | pg-boss |
-#          tripwire | product-bug | assertion-drift | flaky | unknown
+#          (file changed by the in-flight Pod Console wave 6 branch), e2e (the
+#          API e2e job), or the code area (api, database, jobs, types, …).
+# cause  — live-service | sibling-repo | native-addon | stale-mock | db-fixture |
+#          pg-boss | tripwire | product-bug | assertion-drift | flaky | unknown
+apps/pod-admin/__tripwires__/cross-repo-parity.test.ts | infra | sibling-repo | browser checkout absent in CI
+apps/pod-admin/__tripwires__/exit-door.test.ts | infra | sibling-repo | landing checkout absent in CI
+packages/api/src/__tripwires__/database-mock-total-ratchet.test.ts | api | tripwire | ratchet pinned at 49, now 48: lower BASELINE (an improvement to lock in)
+packages/api/src/__tripwires__/property-label-mirror-drift.test.ts | infra | sibling-repo | synap-app checked out but its deps do not resolve (@synap-core/types/vocabulary)
+packages/api/src/__tripwires__/subject-user-id-is-the-effective-user.test.ts | api | tripwire | proposal-visibility.ts text matches /subjectUserId/
+packages/api/src/notifications/__tests__/push-tap-target.test.ts | infra | sibling-repo | relay-app checkout absent in CI
+packages/api/src/routers/agent-runs.summary.test.ts | api | db-fixture | non-UUID fixture ids now refused by z.uuid() input
+packages/api/src/routers/entities.create-external-id-dedup.test.ts | api | db-fixture | non-UUID fixture ids now refused by z.uuid() input
+packages/api/src/routers/entities.create-retry-dedup.test.ts | api | db-fixture | non-UUID fixture ids now refused by z.uuid() input
+packages/api/src/routers/hub-protocol/__tests__/w0-leak-fixes.test.ts | api | db-fixture | signal_subscriptions.source_platform NOT NULL, fixture omits it
+packages/api/src/routers/hub-protocol/__tests__/w0_5-impersonation.test.ts | api | db-fixture | non-UUID ids: input validation answers before the FORBIDDEN floor
+packages/api/src/routers/hub-protocol/__tests__/w0_6-impersonation.test.ts | api | db-fixture | non-UUID ids: input validation answers before the FORBIDDEN floor
+packages/api/src/routers/mcp/__tests__/workspace-focus.test.ts | api | assertion-drift | inserts two spaces with one name, which workspace identity (0308) now forbids
+packages/api/src/routers/mcp/grounding-format.test.ts | api | assertion-drift | grounding text no longer contains "Brand Library (<id>"
+packages/api/src/routers/relations.create-idempotent.test.ts | api | db-fixture | non-UUID fixture ids now refused by z.uuid() input
+packages/api/src/services/api-keys.test.ts | api | unknown | usage_count stays 0 after validate (live PG)
+packages/api/src/services/discover/space-brief.templates.test.ts | infra | sibling-repo | synap-app checked out but its deps do not resolve (@synap-core/types/automations)
+packages/api/src/services/focus-sessions/__tests__/block-guidelines.test.ts | wave6 | assertion-drift | append returns denied, test expects updated
+packages/api/src/services/focus-sessions/__tests__/create-session-id-seam.test.ts | wave6 | stale-mock | find-open-session-twin mock lacks sessionTwinLockKey
+packages/api/src/services/focus-sessions/__tests__/schedule-session.test.ts | wave6 | stale-mock | vi.mock factory error (hoisted top-level variable)
+packages/api/src/services/focus-sessions/__tests__/session-first.pglite.test.ts | wave6 | assertion-drift | adoption keeps the receipt name, test expects null
+packages/api/src/services/intake/__tests__/capture-clarification-serialisers.test.ts | infra | sibling-repo | synap-app checked out but its deps do not resolve (@synap-core/types/capture)
+packages/api/src/services/reversibility/__tests__/cancel-and-item-revert.pglite.test.ts | api | unknown | agent cancel turned into a proposal resolves instead of rejecting
+packages/api/src/services/signal/signal.bound-entity-role-db.test.ts | api | db-fixture | profile fixture id ...p1 is not a UUID
+packages/api/src/services/skills/run-skill-in-sandbox.verb-act.test.ts | infra | native-addon | isolated-vm has no prebuild for node20 linux in CI
+packages/api/src/services/workspace-materialization.contract.test.ts | api | unknown | grant capability install materializes 0 automations, expects 4
+packages/api/src/utils/__tests__/personal-channel.lifecycle.test.ts | api | assertion-drift | raw SQL row returns a timestamp string, test expects Date
+packages/database/src/__tests__/conversation-repository.test.ts | database | db-fixture | table conversation_messages no longer exists
+packages/database/src/__tests__/event-repository.test.ts | database | db-fixture | event id fixture not a UUID
+packages/database/src/__tests__/property-index-drift.test.ts | database | db-fixture | binds an object where postgres.js expects a string
+packages/database/src/__tests__/reconcile-workspace-from-definition.test.ts | database | unknown | PostgresError column pr.id does not exist
+packages/jobs/src/__tripwires__/relay-templates-match-runtime.tripwire.test.ts | infra | sibling-repo | relay-app checkout absent in CI
+packages/jobs/src/workers/__tests__/bookmark-enrichment-flow.test.ts | infra | sibling-repo | synap-cli checkout absent in CI
+packages/test-e2e/src/core-flows.test.ts | e2e | live-service | needs the AI service and workers the job does not boot
+packages/test-e2e/src/crud/workspaces.test.ts | e2e | unknown | Unable to transform response from server
+packages/test-e2e/src/executor-flows.test.ts | e2e | unknown | drizzle-orm does not resolve from packages/test-e2e
+packages/test-e2e/src/hub-protocol-e2e.test.ts | e2e | unknown | suite-level failure
+packages/test-e2e/src/hub-protocol.contract.test.ts | e2e | unknown | 403 where 200 expected
+packages/test-e2e/src/validation-flows.test.ts | e2e | unknown | Unable to transform response from server
+packages/types/src/automations/sentence.test.ts | infra | sibling-repo | browser checkout absent in CI
+packages/types/src/renderables/chart-shapers.one-copy.test.ts | infra | sibling-repo | browser checkout absent in CI

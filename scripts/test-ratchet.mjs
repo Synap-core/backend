@@ -24,7 +24,10 @@
  *   new-failure     a file failed that is not in the baseline
  *   fixed           a baseline file now passes — "remove it from the baseline"
  *   stale-baseline  a baseline file did not run at all (deleted, renamed, or its
- *                   package stopped running) — an entry nobody can ever clear
+ *                   package stopped running) — an entry nobody can ever clear.
+ *                   Judged only for packages THIS invocation ran (the e2e job's
+ *                   entries are not the Full suite's); a missing file is stale
+ *                   everywhere.
  *   no-report       a package produced no parseable JSON (the suite crashed)
  *   vacuous         fewer files than PLAUSIBLE_MIN_FILES ran, a package ran 0
  *                   files without `--passWithNoTests`, or every test of a
@@ -408,12 +411,31 @@ const { entries: baseline, problems: parseProblems } =
 for (const p of parseProblems)
   problems.push({ kind: "baseline-format", detail: p });
 
+// One baseline serves several CI jobs (Full suite runs `test`, API e2e runs
+// `test:e2e`). An entry belongs to THIS invocation only when its package is one
+// this invocation ran; another job's entries are neither stale nor dropped here.
+// What this cannot see: a package that loses its script entirely takes its
+// entries out of every job's view — the floors and PLAUSIBLE_MIN_FILES catch
+// the lost tests, not this check.
+const ranDirs = new Set([...runs, ...tripwireRuns].map((r) => r.dir));
+const ownerDir = (file) =>
+  [...ranDirs]
+    .filter((d) => d !== "." && file.startsWith(`${d}/`))
+    .sort((a, b) => b.length - a.length)[0] ??
+  (ranDirs.has(".") && !/^(packages|apps)\//.test(file) ? "." : null);
+const ownedHere = (file) => inScope(file) && ownerDir(file) !== null;
+
 const failing = [...results].filter(([, v]) => !v.ok);
 const newFailures = failing.filter(([f]) => !baseline.has(f));
 const fixed = [];
 const stale = [];
 for (const [f] of baseline) {
-  if (!inScope(f)) continue;
+  // A deleted or renamed file is stale for every job, owned here or not.
+  if (!existsSync(join(REPO_ROOT, f))) {
+    stale.push(f);
+    continue;
+  }
+  if (!ownedHere(f)) continue;
   const r = results.get(f);
   if (!r) stale.push(f);
   else if (r.ok) fixed.push(f);
@@ -428,11 +450,9 @@ if (RECORD) {
         : `${f} | ? | ? | ${v.reason.replaceAll("|", "/")}`;
     })
     .concat(
-      ONLY
-        ? [...baseline.values()]
-            .filter((e) => !inScope(e.file))
-            .map((e) => `${e.file} | ${e.owner} | ${e.cause} | ${e.note}`)
-        : []
+      [...baseline.values()]
+        .filter((e) => !ownedHere(e.file))
+        .map((e) => `${e.file} | ${e.owner} | ${e.cause} | ${e.note}`)
     )
     .sort();
   const header = baselineText
