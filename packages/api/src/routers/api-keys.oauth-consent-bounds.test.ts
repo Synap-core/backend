@@ -35,6 +35,13 @@ vi.mock("./oauth/client-metadata.js", async (importOriginal) => {
   };
 });
 
+// The pod admin's unverified-apps policy (PB4) reads pod settings before the
+// metadata fetch; it is not what this file pins, so it lets the app through.
+vi.mock("../services/pod-app-policy.js", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return { ...actual, podAppMayConnect: vi.fn(async () => true) };
+});
+
 vi.mock("../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn(async () => false),
 }));

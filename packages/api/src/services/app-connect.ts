@@ -17,7 +17,7 @@
  * (`notAnAppAgent`).
  */
 
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -39,6 +39,8 @@ import {
   EventRepository,
   GrantRepository,
   proposals,
+  readReversibleDefault,
+  ProposalStatus,
   type AppWithGrants,
 } from "@synap/database";
 import {
@@ -47,13 +49,22 @@ import {
   apps,
   oauthAuthorizationCodes,
   users,
+  webhookSubscriptions,
   workspaceMembers,
   workspaces,
   KEY_PREFIXES,
   type AppApprovedRequest,
 } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
-import { applyAgentPosture } from "@synap/database/agent-governance";
+import {
+  applyAgentPosture,
+  readAgentGovernance,
+} from "@synap/database/agent-governance";
+import {
+  AGENT_WRITE_MODE_LINE,
+  resolveAgentWriteMode,
+  type AgentWriteMode,
+} from "@synap-core/types/agents";
 import {
   assertPermissions,
   InvalidPermissionError,
@@ -78,6 +89,7 @@ import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
 import { createAndVerifyHubInboundKey } from "./external-registration.js";
 import { revokeActiveHubInboundKeysForUser } from "./hub-integration-registration.js";
 import { revokeConnectionRefreshTokens } from "../routers/oauth/refresh.js";
+import { isSynapApp } from "../routers/oauth/config.js";
 import type { Context } from "../types/context.js";
 import { isAgentCaller } from "./library/agent-door.js";
 import { requestsWithin } from "./agent-connect.js";
@@ -1347,26 +1359,22 @@ export interface AppOAuthAccessKey {
   user: { id: string; name: string | null };
 }
 
-/**
- * Mint a pod app's access token: an `api_keys` row held by the app's OWN agent
- * (one per person × app, `ensureAppAgent`, ask-first) and linked to the
- * person, carrying EXACTLY the approved reach (`setApprovedReach`: one grant
- * per approved space, `client_id` = the app's public_id) and expiring in
- * 1 h. Never a `claude-web*` agent, never `*`, never `mcp.*`: its scopes are
- * `hub-protocol.read`, plus `.write` only when something approved is a write.
- *
- * The connection's previous key (instance `instanceId`) is revoked first, so
- * one connection holds one live key. Refused (FORBIDDEN / CONFLICT) when the
- * code's app is not this person's live pod app connection for this client,
- * has nothing approved, or the person is no longer a human user.
- */
-export async function mintAppOAuthAccessKey(args: {
+/** Who a pod app's access token is for: the connection and its key slot. */
+interface AppOAuthKeyArgs {
   appId: string;
   ownerUserId: string;
   oauthClientId: string;
   /** `oauthKeyInstanceId(client, person)` — the connection's key slot. */
   instanceId: string;
-}): Promise<AppOAuthAccessKey> {
+}
+
+/**
+ * The connection a pod app's access token may be handed out for, checked
+ * afresh each time: this person's live pod app connection for this client,
+ * with something approved, for a person still a human user. Refused
+ * (FORBIDDEN / CONFLICT) otherwise.
+ */
+async function loadAppOAuthConnection(args: AppOAuthKeyArgs) {
   const repo = new AppRepository(db);
   const app = await repo.get(args.appId);
   if (
@@ -1404,8 +1412,91 @@ export async function mintAppOAuthAccessKey(args: {
       message: "Only a person's connection can be used.",
     });
   }
-
   const found = (await repo.getByPublicId(app.publicId))!;
+  return { app, approved, person, found };
+}
+
+/** A pod app key's scopes: `.write` only when something approved is a write. */
+function appOAuthKeyScope(approved: readonly AppApprovedRequest[]): string[] {
+  return approved.some((r) => !isReadPermission(r.permission))
+    ? ["hub-protocol.read", "hub-protocol.write"]
+    : ["hub-protocol.read"];
+}
+
+/**
+ * `setApprovedReach`, spelled out so the grant expires WITH the token: the
+ * agent's memberships = the approved spaces, one grant per approved space
+ * (`attachMany` replaces the key's live grants). Then the /token answer.
+ */
+async function grantAppOAuthKey(
+  conn: Awaited<ReturnType<typeof loadAppOAuthConnection>>,
+  key: {
+    agentUserId: string;
+    keyId: string;
+    accessToken: string;
+    expiresAt: Date;
+  }
+): Promise<AppOAuthAccessKey> {
+  const { app, approved, person } = conn;
+  await syncAppAgentMemberships(key.agentUserId, app.ownerUserId, approved);
+  await attachGrantsOrRevoke({
+    apiKeyId: key.keyId,
+    principalUserId: key.agentUserId,
+    onBehalfOf: app.ownerUserId,
+    grants: grantsForApprovedRequests(approved),
+    expiresAt: key.expiresAt,
+    createdBy: app.ownerUserId,
+    clientId: app.publicId,
+  });
+  const names = new Map(
+    (
+      await db
+        .select({ id: workspaces.id, name: workspaces.name })
+        .from(workspaces)
+        .where(
+          inArray(
+            workspaces.id,
+            approved.map((r) => r.workspaceId)
+          )
+        )
+    ).map((w) => [w.id, w.name])
+  );
+  return {
+    accessToken: key.accessToken,
+    keyId: key.keyId,
+    expiresAt: key.expiresAt,
+    agentUserId: key.agentUserId,
+    publicId: app.publicId,
+    grant: approved.map((r) => ({
+      ...r,
+      workspaceName: names.get(r.workspaceId) ?? null,
+    })),
+    user: { id: person.id, name: person.name ?? null },
+  };
+}
+
+/**
+ * Mint a pod app's access token: an `api_keys` row held by the app's OWN agent
+ * (one per person × app, `ensureAppAgent`, ask-first) and linked to the
+ * person, carrying EXACTLY the approved reach (`setApprovedReach`: one grant
+ * per approved space, `client_id` = the app's public_id) and expiring in
+ * 1 h. Never a `claude-web*` agent, never `*`, never `mcp.*`: its scopes are
+ * `hub-protocol.read`, plus `.write` only when something approved is a write.
+ *
+ * The connection's previous key (instance `instanceId`) is revoked first, so
+ * one connection holds one live key. Refused (FORBIDDEN / CONFLICT) when the
+ * code's app is not this person's live pod app connection for this client,
+ * has nothing approved, or the person is no longer a human user.
+ *
+ * `plainKey`: the refresh grant passes the key its successor refresh token
+ * re-derives (`successorAccessToken`, refresh.ts), so the reuse grace can hand
+ * this same key back (`reuseAppOAuthAccessKey`). Random otherwise.
+ */
+export async function mintAppOAuthAccessKey(
+  args: AppOAuthKeyArgs & { plainKey?: string }
+): Promise<AppOAuthAccessKey> {
+  const conn = await loadAppOAuthConnection(args);
+  const { app, approved, found } = conn;
   const agentUserId = await ensureAppAgent(found, "ui");
   await revokeActiveHubInboundKeysForUser(db, {
     userId: agentUserId,
@@ -1418,15 +1509,14 @@ export async function mintAppOAuthAccessKey(args: {
     new ApiKeyRepository(db, new EventRepository(sql)),
     {
       keyName: `${app.name} (pod app)`,
-      scope: approved.some((r) => !isReadPermission(r.permission))
-        ? ["hub-protocol.read", "hub-protocol.write"]
-        : ["hub-protocol.read"],
+      scope: appOAuthKeyScope(approved),
       userId: agentUserId,
       linkedUserId: app.ownerUserId,
       keyType: "hub_inbound",
       instanceId: args.instanceId,
       expiresAt,
       description: `Access token for ${app.name} (${app.publicId}), issued by this pod's OAuth door`,
+      ...(args.plainKey ? { plainKey: args.plainKey } : {}),
     },
     app.ownerUserId,
     agentUserId
@@ -1442,50 +1532,110 @@ export async function mintAppOAuthAccessKey(args: {
       message: "The access token could not be verified.",
     });
   }
-  // `setApprovedReach`, spelled out so the grant expires WITH the token: the
-  // agent's memberships = the approved spaces, one grant per approved space.
-  await syncAppAgentMemberships(agentUserId, app.ownerUserId, approved);
-  await attachGrantsOrRevoke({
-    apiKeyId: minted.apiKey.id,
-    principalUserId: agentUserId,
-    onBehalfOf: app.ownerUserId,
-    grants: grantsForApprovedRequests(approved),
+  const answer = await grantAppOAuthKey(conn, {
+    agentUserId,
+    keyId: minted.apiKey.id,
+    accessToken: minted.plainKey,
     expiresAt,
-    createdBy: app.ownerUserId,
-    clientId: app.publicId,
   });
   await recordAppEvent(found, app.ownerUserId, APP_EVENT_ACTIONS.keyIssued, {
     keyId: minted.apiKey.id,
     via: "oauth",
     expiresAt: expiresAt.toISOString(),
   });
+  // Before the sweep: a subscription still on a swept key would cascade away.
+  await moveSlotWebhooks(agentUserId, args.instanceId, minted.apiKey.id);
   await sweepDeadOAuthKeys(agentUserId, args.instanceId);
+  return answer;
+}
 
-  const names = new Map(
-    (
-      await db
-        .select({ id: workspaces.id, name: workspaces.name })
-        .from(workspaces)
-        .where(
-          inArray(
-            workspaces.id,
-            approved.map((r) => r.workspaceId)
-          )
-        )
-    ).map((w) => [w.id, w.name])
-  );
-  return {
-    accessToken: minted.plainKey,
-    keyId: minted.apiKey.id,
-    expiresAt,
+/**
+ * The refresh reuse grace (spec 17 PB3b): hand back the connection's LIVE key
+ * when it is the one `accessToken` names, instead of minting. A mint would
+ * revoke the copy the other caller already holds (one live key per
+ * connection). Refused exactly like a mint (`loadAppOAuthConnection`), and its
+ * reach is re-derived from the CURRENT approval, so a grace never reaches more
+ * than a mint would; its expiry is kept, never extended. null when that key is
+ * not the slot's live key, or the approval now needs other scopes: the caller
+ * mints instead.
+ */
+export async function reuseAppOAuthAccessKey(
+  args: AppOAuthKeyArgs & { accessToken: string }
+): Promise<AppOAuthAccessKey | null> {
+  const conn = await loadAppOAuthConnection(args);
+  const agentUserId = conn.app.agentUserId;
+  if (!agentUserId) return null;
+  const [key] = await db
+    .select({
+      id: apiKeys.id,
+      scope: apiKeys.scope,
+      expiresAt: apiKeys.expiresAt,
+    })
+    .from(apiKeys)
+    .where(
+      and(
+        eq(
+          apiKeys.keyLookupHash,
+          createHash("sha256").update(args.accessToken).digest("hex")
+        ),
+        eq(apiKeys.userId, agentUserId),
+        eq(apiKeys.instanceId, args.instanceId),
+        eq(apiKeys.isActive, true),
+        drizzleSql`${apiKeys.expiresAt} > now()`
+      )
+    )
+    .limit(1);
+  if (!key?.expiresAt) return null;
+  const scope = appOAuthKeyScope(conn.approved);
+  if (
+    key.scope.length !== scope.length ||
+    !scope.every((s) => key.scope.includes(s))
+  ) {
+    return null;
+  }
+  return grantAppOAuthKey(conn, {
     agentUserId,
-    publicId: app.publicId,
-    grant: approved.map((r) => ({
-      ...r,
-      workspaceName: names.get(r.workspaceId) ?? null,
-    })),
-    user: { id: person.id, name: person.name ?? null },
-  };
+    keyId: key.id,
+    accessToken: args.accessToken,
+    expiresAt: key.expiresAt,
+  });
+}
+
+/**
+ * A pod app's webhook subscriptions follow its connection, not one access
+ * token (PB4). A subscription records the key that created it (0335, ON
+ * DELETE CASCADE) and is delivered only while that key is live and only what
+ * its grant reads (jobs `webhook-worker`). A pod app's key lives 1 h, so at
+ * each mint the subscriptions of the connection's earlier keys (this agent ×
+ * this key slot) move onto the new one: delivery keeps the liveness and grant
+ * rules, now read from the connection's CURRENT key, and the GC's delete of
+ * an old key no longer takes them along. Between a token's expiry and the
+ * app's next refresh nothing is delivered (no live key). Revoking the app
+ * deletes them (`revokeApp`).
+ */
+async function moveSlotWebhooks(
+  agentUserId: string,
+  instanceId: string,
+  keyId: string
+): Promise<void> {
+  await db
+    .update(webhookSubscriptions)
+    .set({ apiKeyId: keyId })
+    .where(
+      inArray(
+        webhookSubscriptions.apiKeyId,
+        db
+          .select({ id: apiKeys.id })
+          .from(apiKeys)
+          .where(
+            and(
+              eq(apiKeys.userId, agentUserId),
+              eq(apiKeys.instanceId, instanceId),
+              ne(apiKeys.id, keyId)
+            )
+          )
+      )
+    );
 }
 
 /** The GC behind `APP_OAUTH_DEAD_KEYS_KEPT`: one connection's key slot only. */
@@ -1572,14 +1722,31 @@ export async function revokeApp(args: {
       emitProposalReviewed(id, null, "withdrawn", args.ownerUserId);
     }
   }
+  // Its webhook subscriptions go with it: delivery already stops with the
+  // keys, and a key-bound row left behind would come back on the next key of
+  // a re-consent (`moveSlotWebhooks`).
+  const keyIds = await repo.keyIdsFor(found.app.publicId);
+  if (keyIds.length > 0) {
+    await db
+      .delete(webhookSubscriptions)
+      .where(inArray(webhookSubscriptions.apiKeyId, keyIds));
+  }
   const revokedKeys = await revokeAppKeys(
     found,
     args.ownerUserId,
     `App revoked: ${found.app.name}`
   );
-  // Its agent leaves every workspace: a revoked app reaches nothing.
+  // Its agent leaves every workspace: a revoked app reaches nothing. Its
+  // write mode goes back to ask-first (F6), so connecting it again starts
+  // where every new connection starts, never at "apply automatically".
   if (found.app.agentUserId) {
     await syncAppAgentMemberships(found.app.agentUserId, args.ownerUserId, []);
+    await applyAgentPosture({
+      db,
+      agentUserId: found.app.agentUserId,
+      posture: "ask-first",
+      createdBy: args.ownerUserId,
+    });
   }
   // A pod app's authorization codes still waiting to be redeemed are burned
   // (I6): a code issued before the revoke must not mint after it.
@@ -1758,4 +1925,392 @@ export async function removeApp(args: {
     await recordAppEvent(found, args.ownerUserId, APP_EVENT_ACTIONS.removed);
   }
   return { publicId: found.app.publicId };
+}
+
+// ─── Connections manager (spec 17 PB4) ───────────────────────────────────────
+//
+// What a person does with an app already connected to their pod, and what the
+// pod admin sees of every member's: narrow its access without a new consent,
+// choose how its writes land, read it with its domain and tier. Revoke is
+// `revokeApp` above (keys, refresh families, waiting codes, webhooks).
+
+const pairKey = (r: AppApprovedRequest) =>
+  `${r.permission}\u0000${r.workspaceId}`;
+
+/**
+ * Narrow an app: keep only some of what was approved — drop a permission in
+ * one space, or a whole space — with no new consent. The person's own act and
+ * it only REDUCES access, so it applies at once (no proposal), through the
+ * one approval write (`setApprovedRequests`). `approved` is the set to KEEP:
+ * exact (permission, space) pairs of the current approval, at least one (all
+ * gone is Revoke). Anything not already approved is refused.
+ *
+ * The live access shrinks now: a pod app's live key is revoked (its 1 h
+ * token cannot be re-issued to the app from here), and its next refresh is
+ * minted from the narrowed approval (`mintAppOAuthAccessKey` reads the current
+ * one); its agent leaves the spaces it lost. An App Connect app's long-lived
+ * key is re-derived in place (`applyApprovedReach`).
+ *
+ * Who may: the app's owner signed in as themselves (`assertOwnerCredential`),
+ * never an agent's credential or a scoped key.
+ */
+export async function narrowApp(args: {
+  publicId: string;
+  ownerUserId: string;
+  approved: readonly AppApprovedRequest[];
+  actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
+}): Promise<AppWithGrants> {
+  assertOwnerCredential("change an app's access", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
+  const found = await loadOwnedApp(args.publicId, args.ownerUserId);
+  assertNotRevoked(found);
+  const current = dedupeRequests(found.app.approvedRequests ?? []);
+  const keep = dedupeRequests(args.approved);
+  if (keep.length === 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "An app keeps at least one permission here. To take all its access away, revoke it.",
+    });
+  }
+  const held = new Set(current.map(pairKey));
+  const beyond = keep.filter((r) => !held.has(pairKey(r)));
+  if (beyond.length > 0) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Narrowing can only take access away. Not approved for this app: ${beyond
+        .map((r) => `${r.permission} in ${r.workspaceId}`)
+        .join(", ")}.`,
+    });
+  }
+  if (keep.length === current.length) return found;
+
+  const repo = new AppRepository(db);
+  await repo.setApprovedRequests(found.app.id, keep);
+  if (found.app.mode === "oauth") {
+    if (found.app.agentUserId) {
+      await syncAppAgentMemberships(
+        found.app.agentUserId,
+        found.app.ownerUserId,
+        keep
+      );
+      await revokeActiveHubInboundKeysForUser(db, {
+        userId: found.app.agentUserId,
+        revokedBy: args.ownerUserId,
+        revokedReason: `Access narrowed for ${found.app.name}: the next token carries the narrower reach`,
+      });
+    }
+  } else {
+    await applyApprovedReach(found.app.id);
+  }
+  await recordAppEvent(found, args.ownerUserId, APP_EVENT_ACTIONS.approved, {
+    via: "narrow",
+    approved: keep,
+    removed: current.filter(
+      (r) => !keep.some((k) => pairKey(k) === pairKey(r))
+    ),
+  });
+  return loadOwnedApp(args.publicId, args.ownerUserId);
+}
+
+/** How an app's writes land, as its page shows it. */
+export interface AppWriteModeView {
+  /**
+   * The switch: ON when the app's agent follows the pod's default ("apply
+   * automatically"), OFF while it asks first (every connection starts OFF).
+   */
+  applyAutomatically: boolean;
+  /** The effective mode, the pod default included (`resolveAgentWriteMode`). */
+  writeMode: AgentWriteMode;
+  /** The one sentence for that mode. */
+  line: string;
+}
+
+/** The write mode of an app's agent (no agent yet ⇒ ask first, its start). */
+export async function appWriteMode(
+  agentUserId: string | null
+): Promise<AppWriteModeView> {
+  const state = agentUserId
+    ? await readAgentGovernance({ db, agentUserId })
+    : null;
+  const podDefault = await readReversibleDefault(db);
+  const posture = state ? state.posture : "ask-first";
+  const writeMode = resolveAgentWriteMode({
+    posture,
+    podDefaultEnabled: podDefault.enabled,
+    writesRequireProposal: state?.writesRequireProposal ?? true,
+  });
+  return {
+    applyAutomatically: posture === null,
+    writeMode,
+    line: AGENT_WRITE_MODE_LINE[writeMode],
+  };
+}
+
+/**
+ * The per-app "apply automatically" switch (F6): never set at consent, only
+ * here, after connecting. ON = the app's agent follows the pod default (its
+ * `ask-first` posture cleared); OFF = `ask-first` again. Through the ONE
+ * posture writer (`applyAgentPosture`), the store every agent's write mode
+ * lives in, so the governance ladder reads it like any agent's.
+ *
+ * Who may: the app's owner signed in as themselves. An agent's credential is
+ * refused (`assertOwnerCredential`): no agent decides that another agent's —
+ * or its own — changes stop asking.
+ */
+export async function setAppWriteMode(args: {
+  publicId: string;
+  ownerUserId: string;
+  applyAutomatically: boolean;
+  actorAgentUserId?: string | null;
+  /** The calling key's type — `is_internal` is an agent caller. */
+  actorKeyType?: string | null;
+}): Promise<AppWriteModeView> {
+  assertOwnerCredential("change how an app's changes land", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
+  const found = await loadOwnedApp(args.publicId, args.ownerUserId);
+  assertNotRevoked(found);
+  const agentUserId = await ensureAppAgent(found, "ui");
+  await applyAgentPosture({
+    db,
+    agentUserId,
+    posture: args.applyAutomatically ? null : "ask-first",
+    createdBy: args.ownerUserId,
+  });
+  await auditLog({
+    subjectType: "agent_user",
+    action: "update",
+    phase: "completed",
+    subjectId: agentUserId,
+    userId: args.ownerUserId,
+    workspaceId: null,
+    appId: found.app.publicId,
+    data: {
+      name: found.app.name,
+      applyAutomatically: args.applyAutomatically,
+    },
+  });
+  return appWriteMode(agentUserId);
+}
+
+/** One approved (permission, space) pair, with the space's name. */
+export type NamedApprovedRequest = AppApprovedRequest & {
+  workspaceName: string | null;
+};
+
+/** What a pod app connection adds to its app row (`pod_app` on the wire). */
+export interface PodAppView {
+  /** The app's metadata-document URL — its OAuth `client_id`. */
+  client_id: string;
+  /** Its host: the app's identity, the headline. */
+  domain: string;
+  /** A Synap app (exact first-party origin) vs an unverified one. */
+  verified: boolean;
+  /** What the person approved, per space — what Narrow edits. */
+  approved: NamedApprovedRequest[];
+  /** When this person last connected it (the newest consent). */
+  connected_at: Date | null;
+  /** The newest use of any of its access tokens. */
+  last_used_at: Date | null;
+  write_mode: AppWriteModeView;
+}
+
+/**
+ * The `pod_app` half of each pod app row (mode 'oauth'), keyed by public id.
+ * Space names in one query; key use from the keys the caller already read.
+ */
+export async function podAppViews(
+  rows: readonly AppWithGrants[],
+  keysByPublicId: ReadonlyMap<
+    string,
+    ReadonlyArray<{ lastUsedAt: Date | null; createdAt: Date }>
+  >
+): Promise<Map<string, PodAppView>> {
+  const pod = rows.filter((r) => r.app.mode === "oauth" && r.app.oauthClientId);
+  if (pod.length === 0) return new Map();
+  const spaceIds = [
+    ...new Set(
+      pod.flatMap((r) =>
+        (r.app.approvedRequests ?? []).map((a) => a.workspaceId)
+      )
+    ),
+  ];
+  const names = new Map(
+    (spaceIds.length > 0
+      ? await db
+          .select({ id: workspaces.id, name: workspaces.name })
+          .from(workspaces)
+          .where(inArray(workspaces.id, spaceIds))
+      : []
+    ).map((w) => [w.id, w.name])
+  );
+  const consents = await db
+    .select({ targetId: proposals.targetId, createdAt: proposals.createdAt })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.targetType, "app"),
+        eq(proposals.proposalType, "connect"),
+        eq(proposals.status, ProposalStatus.APPROVED),
+        inArray(
+          proposals.targetId,
+          pod.map((r) => r.app.id)
+        )
+      )
+    );
+  const out = new Map<string, PodAppView>();
+  for (const row of pod) {
+    const clientId = row.app.oauthClientId!;
+    const keys = keysByPublicId.get(row.app.publicId) ?? [];
+    const newestOf = (dates: Array<Date | null | undefined>) =>
+      dates.reduce<Date | null>(
+        (acc, d) => (d && (!acc || d > acc) ? d : acc),
+        null
+      );
+    let domain = clientId;
+    try {
+      domain = new URL(clientId).host;
+    } catch {
+      // A stored client_id is always a URL; show it raw if not.
+    }
+    out.set(row.app.publicId, {
+      client_id: clientId,
+      domain,
+      verified: isSynapApp(clientId),
+      approved: (row.app.approvedRequests ?? []).map((a) => ({
+        permission: a.permission,
+        workspaceId: a.workspaceId,
+        workspaceName: names.get(a.workspaceId) ?? null,
+      })),
+      connected_at: newestOf(
+        consents
+          .filter((c) => c.targetId === row.app.id)
+          .map((c) => c.createdAt)
+      ),
+      last_used_at: newestOf([
+        row.lastUsedAt,
+        ...keys.map((k) => k.lastUsedAt),
+      ]),
+      write_mode: await appWriteMode(row.app.agentUserId),
+    });
+  }
+  return out;
+}
+
+/** One member's connection of a pod app, as the pod admin reads it. */
+export interface AdminPodAppMember {
+  public_id: string;
+  owner: { id: string; name: string | null; email: string | null } | null;
+  approved: NamedApprovedRequest[];
+  connected_at: Date | null;
+  last_used_at: Date | null;
+  revoked_at: Date | null;
+}
+
+/** One pod app across the pod's members (`apps.adminPodApps`). */
+export interface AdminPodAppGroup {
+  client_id: string;
+  domain: string;
+  verified: boolean;
+  /** The name the app gives itself (text only), from a member's row. */
+  name: string;
+  /** Members whose connection is live. */
+  live: number;
+  members: AdminPodAppMember[];
+}
+
+/**
+ * Every member's pod app connections, grouped by app (`oauth_client_id`) —
+ * the pod admin's view ("Content Studio — 3 members"). Unfloored: the caller
+ * gates (pod admin, never an agent). Removed rows are not listed; revoked
+ * ones are, so the admin sees what was cut off.
+ */
+export async function adminPodApps(): Promise<AdminPodAppGroup[]> {
+  const repo = new AppRepository(db);
+  const rows = (await repo.listAll({ includeRevoked: true })).filter(
+    (r) => r.app.mode === "oauth" && r.app.oauthClientId
+  );
+  if (rows.length === 0) return [];
+  const keys = await repo.keysByApp(rows.map((r) => r.app.publicId));
+  const views = await podAppViews(rows, keys);
+  const ownerIds = [...new Set(rows.map((r) => r.app.ownerUserId))];
+  const owners = new Map(
+    (
+      await db
+        .select({ id: users.id, name: users.name, email: users.email })
+        .from(users)
+        .where(inArray(users.id, ownerIds))
+    ).map((o) => [o.id, o])
+  );
+  const groups = new Map<string, AdminPodAppGroup>();
+  for (const row of rows) {
+    const view = views.get(row.app.publicId)!;
+    const group = groups.get(view.client_id) ?? {
+      client_id: view.client_id,
+      domain: view.domain,
+      verified: view.verified,
+      // "<client_name> (<host>)" as consent named the row.
+      name: row.app.name,
+      live: 0,
+      members: [],
+    };
+    if (!row.app.revokedAt) group.live++;
+    group.members.push({
+      public_id: row.app.publicId,
+      owner: owners.get(row.app.ownerUserId) ?? null,
+      approved: view.approved,
+      connected_at: view.connected_at,
+      last_used_at: view.last_used_at,
+      revoked_at: row.app.revokedAt,
+    });
+    groups.set(view.client_id, group);
+  }
+  return [...groups.values()].sort(
+    (a, b) => b.live - a.live || a.domain.localeCompare(b.domain)
+  );
+}
+
+/**
+ * The pod admin ends ONE app for every member ("revoke all"): each live
+ * connection of that `oauth_client_id` through `revokeApp` with the owner
+ * floor lifted, so each stops exactly as its owner's revoke would. Returns
+ * how many were revoked.
+ */
+export async function adminRevokePodAppClient(args: {
+  oauthClientId: string;
+  adminUserId: string;
+  actorAgentUserId?: string | null;
+  actorKeyType?: string | null;
+}): Promise<{ revoked: number }> {
+  assertOwnerCredential("revoke an app", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
+  const live = await db
+    .select({ publicId: apps.publicId })
+    .from(apps)
+    .where(
+      and(
+        eq(apps.mode, "oauth"),
+        eq(apps.oauthClientId, args.oauthClientId),
+        isNull(apps.revokedAt),
+        isNull(apps.removedAt)
+      )
+    );
+  for (const row of live) {
+    await revokeApp({
+      publicId: row.publicId,
+      ownerUserId: args.adminUserId,
+      actorAgentUserId: args.actorAgentUserId,
+      actorKeyType: args.actorKeyType,
+      podAdmin: true,
+    });
+  }
+  return { revoked: live.length };
 }

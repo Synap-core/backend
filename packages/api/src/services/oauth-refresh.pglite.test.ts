@@ -11,10 +11,12 @@
  * `POST /revoke`.
  *
  * Pinned (spec 17 §12 PB3): R1 rotation, R2 reuse ⇒ family + live key
- * revoked, R3 concurrent redeem ⇒ one wins, no family revoke, R4 revoked app
+ * revoked, R3 concurrent redeem ⇒ no family revoke, R4 revoked app
  * ⇒ invalid_grant, R5 narrowed approval ⇒ narrower key, R6 30-day idle
  * expiry; plus /revoke with a refresh token, one live family per connection,
  * the GC bound, and the token's plaintext living only in the response.
+ * PB3b: the reuse grace (a replay by the same client within 30 s gets the
+ * same pair; past it, a used successor, another client, a revoked app: no).
  *
  * Seams replaced, and why: the event store (`EventRepository`) and `auditLog`
  * write through the postgres-js client this harness has not — both are
@@ -22,7 +24,12 @@
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
+
+// Before refresh.ts loads: its successor key derives from JWT_SECRET (PB3b).
+vi.hoisted(() => {
+  process.env.JWT_SECRET ||= "pb3b-test-jwt-secret";
+});
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -108,9 +115,17 @@ import {
   revokeApp,
 } from "./app-connect.js";
 import {
+  REFRESH_REUSE_GRACE_MAX_SECONDS,
+  REFRESH_SUCCESSOR_WAIT_MS,
+  RefreshTokenReuseError,
+  confirmGraceSuccessor,
   redeemRefreshToken,
+  refreshReuseGraceMs,
   revokeConnectionRefreshTokens,
   rotateRefreshToken,
+  successorAccessToken,
+  successorRefreshToken,
+  withinReuseGrace,
 } from "../routers/oauth/refresh.js";
 
 const ISSUER = "https://pod.test.synap.live";
@@ -298,6 +313,24 @@ const refreshRows = async () =>
     )
   ).rows;
 
+const sha256 = (raw: string) => createHash("sha256").update(raw).digest("hex");
+
+/** Move a used token's use `seconds` into the past (the grace clock). */
+const usedSecondsAgo = (raw: string, seconds: number) =>
+  q(
+    `update oauth_refresh_tokens set last_used_at = now() - $2::int * interval '1 second'
+       where token_hash = $1 and last_used_at is not null`,
+    [sha256(raw), seconds]
+  );
+
+const liveAgentKeys = async () =>
+  (
+    await q<{ id: string }>(
+      `select id from api_keys where user_id = $1 and is_active = true`,
+      [(await connection()).agent_user_id]
+    )
+  ).rows;
+
 const liveRefreshRows = async () =>
   (await refreshRows()).filter((r) => !r.revoked_at && !r.last_used_at);
 
@@ -380,13 +413,15 @@ describe("R1 — rotation: each refresh token works once, and its successor carr
   });
 });
 
-describe("R2 — reuse of a used token revokes its whole family and the live key", () => {
-  it("replaying a rotated token: invalid_grant, the successor is dead, the live access key is dead", async () => {
+describe("R2 — reuse of a used token, past the reuse grace, revokes its whole family and the live key", () => {
+  it("replaying a rotated token 31 s after its use: invalid_grant, the successor is dead, the live access key is dead", async () => {
     const first = await connect();
     const r1 = await refresh(first.refresh);
     expect(r1.status).toBe(200);
     expect(await valid(r1.body.access_token)).toBe(true);
 
+    // PB3b: within 30 s the same client would get the same pair back.
+    await usedSecondsAgo(first.refresh, 31);
     const replay = await refresh(first.refresh);
     expect(replay.status).toBe(400);
     expect(replay.body.error).toBe("invalid_grant");
@@ -402,19 +437,34 @@ describe("R2 — reuse of a used token revokes its whole family and the live key
   });
 });
 
-describe("R3 — a concurrent redeem of the same token: one wins, no family revoke", () => {
-  it("two refreshes at once: exactly one 200; the winner's successor still works", async () => {
+describe("R3 — a concurrent redeem of the same token: one rotation, no family revoke", () => {
+  it("two refreshes at once: both 200 with the SAME pair (PB3b grace); that successor still works", async () => {
     const { refresh: rt } = await connect();
     const [a, b] = await Promise.all([refresh(rt), refresh(rt)]);
-    const statuses = [a.status, b.status].sort();
-    expect(statuses).toEqual([200, 400]);
-    const winner = a.status === 200 ? a : b;
-    const loser = a.status === 200 ? b : a;
-    expect(loser.body.error).toBe("invalid_grant");
+    expect([a.status, b.status]).toEqual([200, 200]);
+    // One rotation, answered twice: whichever copy the app keeps works.
+    expect(b.body.refresh_token).toBe(a.body.refresh_token);
+    expect(b.body.access_token).toBe(a.body.access_token);
     // Not treated as a theft: the family lives on.
-    expect(await valid(winner.body.access_token)).toBe(true);
-    const next = await refresh(winner.body.refresh_token);
+    expect(await valid(a.body.access_token)).toBe(true);
+    expect(await liveRefreshRows()).toHaveLength(1);
+    const next = await refresh(a.body.refresh_token);
     expect(next.status).toBe(200);
+  });
+
+  it("outside the grace (OAUTH_REFRESH_REUSE_GRACE_SECONDS=0): the loser is refused, nothing revoked", async () => {
+    process.env.OAUTH_REFRESH_REUSE_GRACE_SECONDS = "0";
+    try {
+      const { refresh: rt } = await connect();
+      const [a, b] = await Promise.all([refresh(rt), refresh(rt)]);
+      const statuses = [a.status, b.status].sort();
+      expect(statuses).toEqual([200, 400]);
+      const winner = a.status === 200 ? a : b;
+      expect(await valid(winner.body.access_token)).toBe(true);
+      expect((await refresh(winner.body.refresh_token)).status).toBe(200);
+    } finally {
+      delete process.env.OAUTH_REFRESH_REUSE_GRACE_SECONDS;
+    }
   });
 });
 
@@ -627,6 +677,10 @@ describe("the refresh token's plaintext lives only in the /token response", () =
   it("is in no table row, no event, no audit call", async () => {
     const { refresh: rt } = await connect();
     const r = await refresh(rt);
+    // The reuse grace (PB3b) answers the same pair, re-derived, not stored.
+    const again = await refresh(rt);
+    expect(again.status).toBe(200);
+    expect(again.body.refresh_token).toBe(r.body.refresh_token);
     for (const material of [rt, r.body.refresh_token as string]) {
       expect(material.length).toBeGreaterThanOrEqual(43);
       expect(JSON.stringify(h.events)).not.toContain(material);
@@ -643,5 +697,359 @@ describe("the refresh token's plaintext lives only in the /token response", () =
     }
     // Non-vacuity: the rows are there, as hashes.
     expect((await refreshRows()).length).toBeGreaterThan(0);
+  });
+});
+
+describe("PB3b — the reuse grace: the same client, within 30 s, gets the same pair", () => {
+  it("a replay right after the rotation: 200, the same refresh + access token, no revoke, nothing extended", async () => {
+    const first = await connect();
+    const r1 = await refresh(first.refresh);
+    expect(r1.status).toBe(200);
+    const [successor] = await liveRefreshRows();
+    // The pair is the one the successor's id re-derives.
+    expect(successorRefreshToken(successor!.id)).toBe(r1.body.refresh_token);
+    expect(successorAccessToken(successor!.id)).toBe(r1.body.access_token);
+    const keyRow = async () =>
+      (
+        await q<{ id: string; expires_at: Date; is_active: boolean }>(
+          `select id, expires_at, is_active from api_keys where key_lookup_hash = $1`,
+          [sha256(r1.body.access_token)]
+        )
+      ).rows;
+    const [keyBefore] = await keyRow();
+    expect(keyBefore!.is_active).toBe(true);
+
+    const replay = await refresh(first.refresh);
+    expect(replay.status).toBe(200);
+    expect(replay.body.refresh_token).toBe(r1.body.refresh_token);
+    expect(replay.body.access_token).toBe(r1.body.access_token);
+    expect(replay.body.synap_grant).toEqual(r1.body.synap_grant);
+    expect(replay.body.expires_in).toBeLessThanOrEqual(r1.body.expires_in);
+
+    // The SAME key row (its stored hash matches the re-derived token), its
+    // 1 h expiry untouched: the grace never extends it.
+    const after = await keyRow();
+    expect(after).toHaveLength(1);
+    expect(after[0]!.id).toBe(keyBefore!.id);
+    expect(new Date(after[0]!.expires_at).getTime()).toBe(
+      new Date(keyBefore!.expires_at).getTime()
+    );
+    expect(
+      (await apiKeyService.validateApiKey(replay.body.access_token))!.id
+    ).toBe(keyBefore!.id);
+
+    // No family revoke, no second key, no new successor, no longer expiry.
+    expect(await valid(r1.body.access_token)).toBe(true);
+    expect(await liveAgentKeys()).toHaveLength(1);
+    const live = await liveRefreshRows();
+    expect(live).toHaveLength(1);
+    expect(live[0]!.id).toBe(successor!.id);
+    expect(new Date(live[0]!.expires_at).getTime()).toBe(
+      new Date(successor!.expires_at).getTime()
+    );
+    // The pair both callers hold carries on.
+    const next = await refresh(r1.body.refresh_token);
+    expect(next.status).toBe(200);
+    expect(await valid(next.body.access_token)).toBe(true);
+  });
+
+  it("the window is half-open: 29.999 s is a grace, 30 s exactly is a reuse", () => {
+    const usedAt = new Date("2026-10-21T12:00:00.000Z");
+    const t = usedAt.getTime();
+    expect(withinReuseGrace(usedAt, t, 30_000)).toBe(true);
+    expect(withinReuseGrace(usedAt, t + 29_999, 30_000)).toBe(true);
+    expect(withinReuseGrace(usedAt, t + 30_000, 30_000)).toBe(false);
+    expect(withinReuseGrace(usedAt, t + 30_001, 30_000)).toBe(false);
+    expect(withinReuseGrace(usedAt, t, 0)).toBe(false);
+  });
+
+  it("a replay 30 s after the use: a reuse — family and live key revoked", async () => {
+    const first = await connect();
+    const r1 = await refresh(first.refresh);
+    await usedSecondsAgo(first.refresh, 30);
+    const replay = await refresh(first.refresh);
+    expect(replay.status).toBe(400);
+    expect(replay.body.error).toBe("invalid_grant");
+    expect(await liveRefreshRows()).toEqual([]);
+    expect(await valid(r1.body.access_token)).toBe(false);
+  });
+
+  it("29 s after the use is still within the grace", async () => {
+    const first = await connect();
+    const r1 = await refresh(first.refresh);
+    await usedSecondsAgo(first.refresh, 29);
+    const replay = await refresh(first.refresh);
+    expect(replay.status).toBe(200);
+    expect(replay.body.refresh_token).toBe(r1.body.refresh_token);
+  });
+
+  it("within the grace but the successor was already used: a reuse — family and live key revoked", async () => {
+    const first = await connect();
+    const r1 = await refresh(first.refresh);
+    const r2 = await refresh(r1.body.refresh_token);
+    expect(r2.status).toBe(200);
+
+    const replay = await refresh(first.refresh);
+    expect(replay.status).toBe(400);
+    expect(replay.body.error).toBe("invalid_grant");
+    expect(replay.body).not.toHaveProperty("access_token");
+    expect(await liveRefreshRows()).toEqual([]);
+    expect(await valid(r2.body.access_token)).toBe(false);
+  });
+
+  it("within the grace but the successor was already used: the redeem itself is a reuse, no grace handed out", async () => {
+    // Pinned at redeemRefreshToken: through /token, confirmGraceSuccessor
+    // would also catch the spent successor, so the end state alone cannot
+    // show that the grace check refuses it first.
+    const first = await connect();
+    const r1 = await refresh(first.refresh);
+    const r2 = await refresh(r1.body.refresh_token);
+    expect(r2.status).toBe(200);
+
+    await expect(
+      redeemRefreshToken(first.refresh, STUDIO)
+    ).rejects.toBeInstanceOf(RefreshTokenReuseError);
+    expect(await liveRefreshRows()).toEqual([]);
+  });
+
+  it("within the grace from another client: no grace — a spent token elsewhere is a reuse, family and live key revoked", async () => {
+    const first = await connect();
+    const r1 = await refresh(first.refresh);
+    const foreign = await refresh(first.refresh, NOTES);
+    expect(foreign.status).toBe(400);
+    expect(foreign.body.error).toBe("invalid_grant");
+    expect(foreign.body).not.toHaveProperty("refresh_token");
+    expect(foreign.body).not.toHaveProperty("access_token");
+    expect(await liveRefreshRows()).toEqual([]);
+    expect(await valid(r1.body.access_token)).toBe(false);
+  });
+
+  it("a refresh naming another resource is invalid_target and spends nothing; this pod's resource is accepted", async () => {
+    const first = await connect();
+    const evil = await tokenRequest({
+      grant_type: "refresh_token",
+      refresh_token: first.refresh,
+      client_id: STUDIO,
+      resource: "https://evil.example.com/mcp",
+    });
+    expect(evil.status).toBe(400);
+    expect(evil.body.error).toBe("invalid_target");
+    expect(await liveRefreshRows()).toHaveLength(1);
+    const ours = await tokenRequest({
+      grant_type: "refresh_token",
+      refresh_token: first.refresh,
+      client_id: STUDIO,
+      resource: `${ISSUER}/mcp`,
+    });
+    expect(ours.status).toBe(200);
+  });
+
+  it("the successor derivation is domain-separated: its own key (not JWT_SECRET as-is), one label per credential", () => {
+    const secret = process.env.JWT_SECRET!;
+    expect(secret).toBeTruthy();
+    const id = randomUUID();
+    const key = createHmac("sha256", secret)
+      .update("oauth-refresh-successor")
+      .digest();
+    const mac = (k: Buffer | string, label: string) =>
+      createHmac("sha256", k).update(`${label}|${id}`).digest();
+    expect(successorRefreshToken(id)).toBe(
+      mac(key, "refresh").toString("base64url")
+    );
+    expect(
+      successorAccessToken(id).endsWith(mac(key, "access").toString("hex"))
+    ).toBe(true);
+    // Not the raw JWT_SECRET, and the two credentials never share a MAC.
+    expect(successorRefreshToken(id)).not.toBe(
+      mac(secret, "refresh").toString("base64url")
+    );
+    const refreshMac = Buffer.from(successorRefreshToken(id), "base64url");
+    expect(successorAccessToken(id)).not.toContain(refreshMac.toString("hex"));
+  });
+
+  it("within the grace after revokeApp: invalid_grant, no token", async () => {
+    const first = await connect();
+    const r1 = await refresh(first.refresh);
+    const app = await connection();
+    await revokeApp({ publicId: app.public_id, ownerUserId: OWNER });
+    for (const rt of [first.refresh, r1.body.refresh_token as string]) {
+      const after = await refresh(rt);
+      expect(after.status).toBe(400);
+      expect(after.body.error).toBe("invalid_grant");
+      expect(after.body).not.toHaveProperty("access_token");
+    }
+  });
+
+  it("within the grace, an app revoked by any door (tokens untouched) or emptied: invalid_grant", async () => {
+    const first = await connect();
+    await refresh(first.refresh);
+    const app = await connection();
+    await q(`update apps set revoked_at = now() where id = $1`, [app.id]);
+    const revoked = await refresh(first.refresh);
+    expect(revoked.status).toBe(400);
+    expect(revoked.body.error).toBe("invalid_grant");
+    expect(revoked.body).not.toHaveProperty("access_token");
+    await q(`update apps set revoked_at = null where id = $1`, [app.id]);
+
+    const before = await q<{ approved_requests: unknown }>(
+      `select approved_requests from apps where id = $1`,
+      [app.id]
+    );
+    await q(`update apps set approved_requests = '[]'::jsonb where id = $1`, [
+      app.id,
+    ]);
+    const emptied = await refresh(first.refresh);
+    expect(emptied.status).toBe(400);
+    expect(emptied.body.error).toBe("invalid_grant");
+    expect(emptied.body).not.toHaveProperty("access_token");
+    await q(`update apps set approved_requests = $1::jsonb where id = $2`, [
+      JSON.stringify(before.rows[0]!.approved_requests),
+      app.id,
+    ]);
+  });
+
+  it("the grace never reaches more than the CURRENT approval: narrowed in the row alone, the key handed back is narrowed", async () => {
+    const first = await connect([
+      { permission: READ, workspaceId: BRAND },
+      { permission: READ, workspaceId: SHARED },
+    ]);
+    const r1 = await refresh(first.refresh);
+    expect((await keyGrants(r1.body.access_token)).flat().sort()).toEqual(
+      [BRAND, SHARED].sort()
+    );
+    const app = await connection();
+    await q(`update apps set approved_requests = $1::jsonb where id = $2`, [
+      JSON.stringify([{ permission: READ, workspaceId: SHARED }]),
+      app.id,
+    ]);
+    const replay = await refresh(first.refresh);
+    expect(replay.status).toBe(200);
+    expect(replay.body.synap_grant).toEqual([
+      { permission: READ, workspaceId: SHARED, workspaceName: "Shared" },
+    ]);
+    expect(await keyGrants(replay.body.access_token)).toEqual([[SHARED]]);
+  });
+
+  it("a write approved since: the read-only key is not handed back, one is minted in the same slot", async () => {
+    const first = await connect();
+    const r1 = await refresh(first.refresh);
+    const app = await connection();
+    await q(`update apps set approved_requests = $1::jsonb where id = $2`, [
+      JSON.stringify([
+        { permission: READ, workspaceId: BRAND },
+        { permission: CREATE, workspaceId: BRAND },
+      ]),
+      app.id,
+    ]);
+    const replay = await refresh(first.refresh);
+    expect(replay.status).toBe(200);
+    expect(replay.body.refresh_token).toBe(r1.body.refresh_token);
+    expect(replay.body.access_token).not.toBe(r1.body.access_token);
+    expect(await liveAgentKeys()).toHaveLength(1);
+    expect(await valid(replay.body.access_token)).toBe(true);
+  });
+
+  it("a successor not re-derivable (issued before PB3b, random): no grace, the PB3 reuse rule", async () => {
+    const first = await connect();
+    const r1 = await refresh(first.refresh);
+    const [successor] = await liveRefreshRows();
+    await q(`update oauth_refresh_tokens set token_hash = $1 where id = $2`, [
+      sha256(`random-${randomUUID()}`),
+      successor!.id,
+    ]);
+    const replay = await refresh(first.refresh);
+    expect(replay.status).toBe(400);
+    expect(replay.body.error).toBe("invalid_grant");
+    expect(await liveRefreshRows()).toEqual([]);
+    expect(await valid(r1.body.access_token)).toBe(false);
+  });
+
+  it("the successor spent between the grace check and the answer: refused as a reuse", async () => {
+    const first = await connect();
+    const r1 = await refresh(first.refresh);
+    const redeemed = await redeemRefreshToken(first.refresh, STUDIO);
+    expect(redeemed.grace?.refreshToken).toBe(r1.body.refresh_token);
+    const r2 = await refresh(r1.body.refresh_token);
+    expect(r2.status).toBe(200);
+    await expect(
+      confirmGraceSuccessor({ ...redeemed, grace: redeemed.grace! })
+    ).rejects.toMatchObject({ code: "invalid_grant" });
+    expect(await liveRefreshRows()).toEqual([]);
+    expect(await valid(r2.body.access_token)).toBe(false);
+  });
+
+  it("a replay while the first redeem is still minting waits for its successor", async () => {
+    const { refresh: rt } = await connect();
+    const redeemed = await redeemRefreshToken(rt, STUDIO);
+    const replay = refresh(rt);
+    const successorId = randomUUID();
+    const minted = await mintAppOAuthAccessKey({
+      appId: redeemed.appId,
+      ownerUserId: redeemed.userId,
+      oauthClientId: redeemed.clientId,
+      instanceId: `oauth:${STUDIO}:${OWNER}`,
+      plainKey: successorAccessToken(successorId),
+    });
+    const successor = await rotateRefreshToken(redeemed, successorId);
+    const answered = await replay;
+    expect(answered.status).toBe(200);
+    expect(answered.body.refresh_token).toBe(successor);
+    expect(answered.body.access_token).toBe(minted.accessToken);
+  });
+
+  it(
+    "a replay whose first redeem issues no successor in time: refused, nothing revoked",
+    async () => {
+      const { refresh: rt } = await connect();
+      await redeemRefreshToken(rt, STUDIO);
+      // This test's family only: the file shares one connection, and each
+      // connect() ends the earlier tests' families (startRefreshFamily).
+      const live = (await refreshRows()).filter((r) => r.revoked_at === null);
+      expect(live).toHaveLength(1);
+      const familyId = live[0]!.family_id;
+      const startedAt = Date.now();
+      const replay = await refresh(rt);
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(
+        REFRESH_SUCCESSOR_WAIT_MS - 200
+      );
+      expect(replay.status).toBe(400);
+      expect(replay.body.error).toBe("invalid_grant");
+      const family = (await refreshRows()).filter(
+        (r) => r.family_id === familyId
+      );
+      expect(family.length).toBeGreaterThan(0);
+      expect(family.every((r) => r.revoked_at === null)).toBe(true);
+    },
+    REFRESH_SUCCESSOR_WAIT_MS + 10_000
+  );
+
+  it("OAUTH_REFRESH_REUSE_GRACE_SECONDS: overrides the 30 s, capped at 60, 0 turns it off", async () => {
+    expect(refreshReuseGraceMs({})).toBe(30_000);
+    expect(
+      refreshReuseGraceMs({ OAUTH_REFRESH_REUSE_GRACE_SECONDS: "45" })
+    ).toBe(45_000);
+    expect(
+      refreshReuseGraceMs({ OAUTH_REFRESH_REUSE_GRACE_SECONDS: "600" })
+    ).toBe(REFRESH_REUSE_GRACE_MAX_SECONDS * 1000);
+    expect(REFRESH_REUSE_GRACE_MAX_SECONDS).toBe(60);
+    expect(
+      refreshReuseGraceMs({ OAUTH_REFRESH_REUSE_GRACE_SECONDS: "0" })
+    ).toBe(0);
+    for (const unreadable of ["", "soon", "-5"]) {
+      expect(
+        refreshReuseGraceMs({ OAUTH_REFRESH_REUSE_GRACE_SECONDS: unreadable })
+      ).toBe(30_000);
+    }
+
+    process.env.OAUTH_REFRESH_REUSE_GRACE_SECONDS = "0";
+    try {
+      const first = await connect();
+      const r1 = await refresh(first.refresh);
+      const replay = await refresh(first.refresh);
+      expect(replay.status).toBe(400);
+      expect(await valid(r1.body.access_token)).toBe(false);
+    } finally {
+      delete process.env.OAUTH_REFRESH_REUSE_GRACE_SECONDS;
+    }
   });
 });
