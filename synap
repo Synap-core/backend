@@ -6291,9 +6291,10 @@ cmd_heal() {
 #   {"schema":1, "id":"<opaque>", "services":["kratos",…] (empty = every service),
 #    "recreate":true|false, "noDeps":true|false, "profiles":["pod-agent",…]}
 # Names are compose services / profiles of THIS compose file (checked). Taken
-# (renamed to compose.taken.json) before anything else; the outcome is
-# state/last-compose-request.json {kind:"pod.compose-request", status:
-# succeeded|failed|aborted, request:<id>, reason}. Started by synap-compose.path.
+# (renamed to compose.taken.json) before anything else, then run under the
+# update lock, which it waits for up to SYNAP_COMPOSE_LOCK_WAIT seconds (300);
+# the outcome is state/last-compose-request.json {kind:"pod.compose-request",
+# status: succeeded|failed|aborted, request:<id>, reason}. Started by synap-compose.path.
 _CR_NAME_RE='^[a-z0-9][a-z0-9_-]{0,63}$'
 _CR_ID_RE='^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'
 
@@ -6308,15 +6309,8 @@ _cr_record() { # <status> <request-id> <reason> [services]
         '{kind:"pod.compose-request", status:$s, request:$r, reason:$why, services:$svc}')" 0 state/last-compose-request.json >/dev/null
 }
 
-_cr_busy() { # the update lock was busy: consume the request, say so
-    local req
-    req="$(_cr_take)"
-    [ -n "$req" ] || return 0
-    _cr_record aborted "$(jq -r '.id // empty' "$req" 2>/dev/null || true)" "another pod operation held the update lock — the request was not run; send it again"
-}
-
 cmd_compose_request() {
-    local deploy_dir req id known profiles=() services=() pargs=() args=(up -d --no-build) n bad="" dropped="" domain rc=0 out
+    local deploy_dir req id wait known profiles=() services=() pargs=() args=(up -d --no-build) n bad="" dropped="" domain rc=0 out
     deploy_dir="$(get_deploy_dir)"
     [ -n "$deploy_dir" ] || { echo -e "${RED}Error: Not in Synap installation directory${NC}"; exit 1; }
     cd "$deploy_dir"
@@ -6324,6 +6318,17 @@ cmd_compose_request() {
     req="$(_cr_take)"
     [ -n "$req" ] || { echo "no compose request waiting"; return 0; }
     id="$(jq -r '.id // empty' "$req" 2>/dev/null || true)"
+    # Taken first (so the agent sees it picked up and the .path unit cannot
+    # loop on it), THEN the update lock — waited for, bounded: an update
+    # mid-way is minutes, and the agent waits HOST_REQUEST_TIMEOUT_SECONDS (540)
+    # for the outcome. Every read below runs under the lock, so a request never
+    # meets a compose file or .env that an update is swapping.
+    wait="${SYNAP_COMPOSE_LOCK_WAIT:-300}"
+    [[ "$wait" =~ ^[0-9]+$ ]] || wait=300
+    if ! synap_update_lock "$deploy_dir" "synap compose-request" "$wait"; then
+        _cr_record aborted "$id" "another pod operation held the update lock for ${wait}s — the request was not run; send it again"
+        exit 1
+    fi
     if ! [[ "$id" =~ $_CR_ID_RE ]] || [ "$(jq -r '.schema // empty' "$req" 2>/dev/null)" != 1 ] \
         || ! jq -e '(.services // []) | type == "array"' "$req" >/dev/null 2>&1 \
         || ! jq -e '(.profiles // []) | type == "array"' "$req" >/dev/null 2>&1; then
@@ -7518,11 +7523,10 @@ export COMPOSE_PROJECT_NAME
 
 # Pod-mutating commands serialise on <deploy_dir>/state/update.lock.
 case "${1:-help}" in
-    install|update|rebuild|reset|restore|apply|compose-request)
+    install|update|rebuild|reset|restore|apply)
         if ! synap_update_lock "$(get_deploy_dir)" "synap $1"; then
             # An unattended run must still consume its request (no .path loop).
             case " $* " in *" --unattended "*) [ "$1" = update ] && ( cd "$(get_deploy_dir)" && _ue_unattended_busy ) ;; esac
-            [ "$1" = compose-request ] && ( cd "$(get_deploy_dir)" && _cr_busy )
             exit 1
         fi
         ;;
