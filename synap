@@ -3942,6 +3942,27 @@ _synap_event() { # <json-object> <notify 0|1> [latest-file]
     fi
 }
 
+# ── requests (state/requests/<name>.json, watched by synap-<name>.path) ──────
+# A request is TAKEN (renamed to <name>.taken.json) before anything acts on it,
+# so the PathExists= unit cannot start the run again. Under systemd the
+# service's ExecStartPre has already taken it before this script starts
+# (SYNAP_REQUEST_PRETAKEN=1): a run that died before reaching its own take (a
+# broken bundle, no jq, the compose-project refusal, `set -e`) left the file in
+# place, and PathExists= restarted the service until systemd's start limit
+# failed the .path unit for good. Measured on systemd 252 (2026-10-21): 4 runs
+# in one second, 'unit-start-limit-hit', and no later request picked up.
+_synap_take_request() { # <update|compose> → the taken file's path; empty when there is none
+    local f="state/requests/$1.json" t="state/requests/$1.taken.json"
+    if [ "${SYNAP_REQUEST_PRETAKEN:-}" = 1 ]; then
+        # The unit took THIS run's request (and removed an older taken file);
+        # a <name>.json present now arrived after it and starts the next run.
+        if [ -f "$t" ]; then echo "$t"; fi
+        return 0
+    fi
+    [ -f "$f" ] || return 0
+    mv -f "$f" "$t" && echo "$t"
+}
+
 # ── current release / adoption ────────────────────────────────────────────────
 # A pod with no release record (every pod before this engine) is ADOPTED: its
 # running backend/pod-admin images are tagged synap-adopted/* so the image
@@ -4707,11 +4728,7 @@ synap_update_engine() {
 # host's local time and may wrap midnight ("23:00-02:00").
 _UE_RELEASE_RE='^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'
 
-_ue_take_request() { # → the taken file's path; empty when there is no request
-    local f=state/requests/update.json t=state/requests/update.taken.json
-    [ -f "$f" ] || return 0
-    mv -f "$f" "$t" && echo "$t"
-}
+_ue_take_request() { _synap_take_request update; }
 
 _ue_in_window() { # <HH:MM-HH:MM> [now HH:MM]
     local w="$1" now="${2:-$(date +%H:%M)}" a b
@@ -6298,11 +6315,7 @@ cmd_heal() {
 _CR_NAME_RE='^[a-z0-9][a-z0-9_-]{0,63}$'
 _CR_ID_RE='^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'
 
-_cr_take() {
-    local f=state/requests/compose.json t=state/requests/compose.taken.json
-    [ -f "$f" ] || return 0
-    mv -f "$f" "$t" && echo "$t"
-}
+_cr_take() { _synap_take_request compose; }
 
 _cr_record() { # <status> <request-id> <reason> [services]
     _synap_event "$(jq -cn --arg s "$1" --arg r "$2" --arg why "$3" --arg svc "${4:-}" \

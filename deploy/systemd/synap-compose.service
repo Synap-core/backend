@@ -12,5 +12,12 @@ Wants=docker.service
 Type=oneshot
 Environment=SYNAP_DEPLOY_DIR=@DEPLOY_DIR@
 Environment=SYNAP_ASSUME_YES=1
+# Take the request BEFORE the engine runs (contract: _synap_take_request in
+# `synap`): a run that dies before its own take would leave compose.json in
+# place, and PathExists= would restart this unit until the start limit fails
+# synap-compose.path for good. An older taken file is dropped first, so
+# the engine only ever reads THIS run's request (none on a timer run).
+Environment=SYNAP_REQUEST_PRETAKEN=1
+ExecStartPre=/bin/sh -c 'r="$${SYNAP_DEPLOY_DIR}/state/requests"; rm -f "$$r/compose.taken.json"; [ ! -e "$$r/compose.json" ] || mv -f "$$r/compose.json" "$$r/compose.taken.json"'
 ExecStart=@SYNAP@ compose-request
 TimeoutStartSec=20min
