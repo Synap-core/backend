@@ -12233,6 +12233,31 @@ export interface DeviceRequestView {
 	/** The reach the computer gets — the preset's name, shown in Details. */
 	accessName: string;
 }
+export interface AppSignInSpace {
+	workspaceId: string;
+	name: string;
+	/** What it may do there, from the grant ("Create People; Approve Proposals"). */
+	can: string;
+}
+/** What the consent screen says, every word derived from the grant. */
+export interface AppSignInDescription {
+	appName: string;
+	/**
+	 * Which grant this description was derived from. The consent screen sends
+	 * it back with Allow; a decision for any other grant (the approval or the
+	 * person's reach changed while they read) is refused — consent is to what
+	 * was SHOWN.
+	 */
+	fingerprint: string;
+	/** "<App> will act as you in: Sales, Content." */
+	headline: string;
+	spaces: AppSignInSpace[];
+	/** "It cannot delete, manage keys, approve outside these spaces, or see other spaces." */
+	cannot: string;
+	/** How a write through it lands, and how long the sign-in lasts. */
+	note: string;
+	expiresInDays: number;
+}
 export interface OAuthConsentContext {
 	clientId: string;
 	/** Untrusted, attacker-chosen at registration — the UI renders it as TEXT. */
@@ -12243,6 +12268,12 @@ export interface OAuthConsentContext {
 	scopes: string[];
 	/** When the client registered itself with this pod (DCR) — a fresh one is worth a second look. */
 	registeredAt: Date;
+	/**
+	 * "Sign in with Synap" (an `app_…` client): what the app will do AS the
+	 * viewer, derived from the grant they would receive. null for every other
+	 * client (an MCP agent connection).
+	 */
+	appSignIn: AppSignInDescription | null;
 }
 /**
  * API Keys Router
@@ -24931,7 +24962,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				keyName: string;
 				keyPrefix: string;
-				keyType: "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
+				keyType: "app_person" | "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
 				hubId: string | null;
 				linkedUserId: string | null;
 				heldByAgent: boolean;
@@ -24951,7 +24982,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				holder: KeyHolder | null;
 				keyName: string;
 				keyPrefix: string;
-				keyType: "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
+				keyType: "app_person" | "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
 				hubId: string | null;
 				linkedUserId: string | null;
 				workspaceId: string | null;
@@ -25143,7 +25174,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				keyName: string;
 				keyPrefix: string;
-				keyType: "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
+				keyType: "app_person" | "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
 				hubId: string | null;
 				linkedUserId: string | null;
 				scope: string[];
@@ -25248,6 +25279,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
 				resource?: string | undefined;
+				appSignInFingerprint?: string | undefined;
 			};
 			output: {
 				redirectTo: string;
@@ -25302,7 +25334,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				keyName: string;
 				keyPrefix: string;
-				keyType: "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
+				keyType: "app_person" | "hub_inbound" | "is_internal" | "service" | "system" | "user_pat";
 				hubId: string | null;
 				scope: string[];
 				isActive: boolean;
@@ -25557,6 +25589,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				revoked_at: Date | null;
 				removed_at: Date | null;
 				agent_user_id: string | null;
+				redirect_uris: string[];
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -25596,6 +25629,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				revoked_at: Date | null;
 				removed_at: Date | null;
 				agent_user_id: string | null;
+				redirect_uris: string[];
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -25633,6 +25667,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				revoked_at: Date | null;
 				removed_at: Date | null;
 				agent_user_id: string | null;
+				redirect_uris: string[];
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -25694,6 +25729,45 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				revoked_at: Date | null;
 				removed_at: Date | null;
 				agent_user_id: string | null;
+				redirect_uris: string[];
+				last_used_at: Date | null;
+				grants: {
+					id: string;
+					permissions: string[];
+					workspaceIds: string[] | null;
+					projectIds: string[] | null;
+					entityIds: string[] | null;
+					label: string | null;
+					clientId: string | null;
+					createdAt: Date;
+					revokedAt: Date | null;
+				}[];
+			};
+			meta: object;
+		}>;
+		setRedirectUris: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				publicId: string;
+				redirectUris: string[];
+			};
+			output: {
+				id: string;
+				public_id: string;
+				name: string;
+				description: string | null;
+				logo_url: string | null;
+				mode: string;
+				approved_requests: AppApprovedRequest[] | null;
+				pending_request: {
+					proposal_id: string;
+					requests: AppApprovedRequest[];
+					requested_at: Date;
+				} | null;
+				created_at: Date;
+				revoked_at: Date | null;
+				removed_at: Date | null;
+				agent_user_id: string | null;
+				redirect_uris: string[];
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -25757,6 +25831,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				revoked_at: Date | null;
 				removed_at: Date | null;
 				agent_user_id: string | null;
+				redirect_uris: string[];
 				last_used_at: Date | null;
 				grants: {
 					id: string;
@@ -25800,6 +25875,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				revoked_at: Date | null;
 				removed_at: Date | null;
 				agent_user_id: string | null;
+				redirect_uris: string[];
 				last_used_at: Date | null;
 				grants: {
 					id: string;
