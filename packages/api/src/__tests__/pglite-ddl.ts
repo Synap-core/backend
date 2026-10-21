@@ -74,7 +74,7 @@ export function pgliteSchemaDdl(tables: readonly PgTable[]): string {
  * EVERY table of `@synap/database/schema`, deduped by name. A test that stands
  * up a hand-picked few tables rots the day the code under test reads one more
  * (governance_rules, links, session_evaluations, … — 11 files went red that
- * way by 2026-10-21). Empty tables are the honest state for the reads the test
+ * way by 2026-10-21). Tables are created empty for the reads the test
  * is not about; the access floors and best-effort side reads then run for real.
  */
 export function allSchemaTables(): PgTable[] {

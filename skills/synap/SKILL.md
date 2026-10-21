@@ -286,21 +286,7 @@ This skill does **not** provision Company OS. That is `system/agent-os/skill` (i
 
 Load: `system/synap/from-intent`.
 
-### Classify first: which layer is this?
-
-Before the first write, name the layer in one word, then take its door. Most requests are not a new area at all, and the wrong layer is how a view gets faked as a note or a capability as a view. On a key that lists the starter tools only, `synap_load_skill` the group in brackets first.
-
-| Layer          | The user wants…                                                        | Door                                                                                                                                                          |
-| -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **data**       | a thing remembered: a company, a note, a decision, a link between two  | `synap_capture` for messy input; `synap_create_entity` (`tools:data`) when the kind and fields are known. Never a note standing in for a view or a session.   |
-| **view**       | to SEE existing things: a list, a grouping, a board, a dashboard       | `synap_list_views` first, so you do not duplicate one; then `synap_create_view` (`tools:build`). Never copy records into a new space to show them.            |
-| **capability** | access beyond the graph: connect Gmail, send mail, search the live web | §2b: `synap_list_capabilities`, then run it or file its install. Never build a view to stand in for a capability.                                             |
-| **session**    | "I'm starting work on X": one bounded piece of work                    | `synap_start_session` with a one-line goal. Not a task.                                                                                                       |
-| **track**      | a lasting goal inside a project: "grow the newsletter"                 | §2c: `synap_list_tracks`, else `synap_start_track` (`tools:tracks`). Not a project, not a pack, not a playbook.                                               |
-| **rule**       | a standing intent: "always…", "from now on…", "every Monday…"          | `synap_create_rule` (`tools:governance`) with the user's own words as `intent`; a trigger→steps reaction is `synap_create_automation` (`tools:capabilities`). |
-| **structure**  | a new area of work that needs kinds, spaces or a project               | the rest of this skill, from §0.                                                                                                                              |
-
-Two layers in one ask ("connect Gmail AND show my mail as a list"): name both and do two steps, capability first. Never fold a capability install into a view.
+Before the first write, name the layer (data, view, capability, session, track, rule, structure) and take its door: `synap_load_skill system/synap/from-intent`.
 
 ### 0. Orient first (firewall)
 
@@ -1016,7 +1002,7 @@ Rules:
 
 - One sentence per field. No padding.
 - `Links` must reference real entity IDs or slugs visible in the current context — not descriptions like "the related project".
-- **"Agent requires proposal for all write operations."** is never acceptable as a `reasoning` value. That is an internal governance message, not agent reasoning. Write it and the proposal is meaningless to the reviewer.
+- The pod's own governance sentence (for example "This agent asks before every change.") is never acceptable as a `reasoning` value. It says why a person must review, not why you made the change. Write it and the proposal is meaningless to the reviewer.
 
 Example response to the user:
 

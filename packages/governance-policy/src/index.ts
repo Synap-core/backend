@@ -1505,46 +1505,48 @@ export type AgentPolicyVerdict =
   | { verdict: "propose"; reason?: string; reasonCode?: string }
   | { verdict: "deny"; reason: string };
 
-/** Default reasoning strings (kept identical to the prior inline gate strings). */
+/**
+ * The sentence a person reads for each reason code, written for them: what
+ * will happen and why, in one sentence. Mirrored in `@synap-core/types`
+ * (`GOVERNANCE_POLICY_SENTENCES`); a tripwire keeps the two equal.
+ */
 export const PROPOSE_REASON = {
-  ADMIN: "Administrative action requires human approval.",
-  WRITES_REQUIRE_PROPOSAL: "Agent requires proposal for all write operations.",
+  ADMIN: "This changes how your pod is run, so it waits for you.",
+  WRITES_REQUIRE_PROPOSAL: "This agent asks before every change.",
   AGENT_OWNED_DESTRUCTIVE:
-    "Destructive action in agent-owned workspace requires human approval.",
+    "This removes something from an agent's workspace, so it waits for you.",
   CHANNEL_PROPOSE:
-    "Teammate may propose in this channel; write requires human approval.",
+    "In this channel a teammate can suggest changes, but only you can apply them.",
   USER_OBSERVATION_INFERENCE:
-    "AI-inferred observation about the user requires human validation before it is stored.",
-  CAPABILITY_PROPOSE: "Capability execution requires human approval.",
+    "The AI guessed this about you, so it is only saved if you confirm it.",
+  CAPABILITY_PROPOSE: "Running this tool needs your OK first.",
   SCOPE_IDENTITY_CHANGE:
-    "This change alters the record's scope or identity and requires human approval.",
+    "This changes what the record is or where it shows, so it waits for you.",
   PROJECT_FILING:
-    "Filing these records into a project shows them to the project's members, so a person approves it.",
+    "Filing these into a project shows them to its members, so you approve it.",
   CRITERIA_CHANGE:
-    "An agent is changing the acceptance criteria its own work is graded against; a person must approve them.",
+    "An agent wants to change the criteria its own work is checked against, so you decide.",
   POSSIBLE_DUPLICATE:
-    "This looks like something that already exists or is already waiting for review; a person decides whether to keep both.",
+    "This looks like something you already have or that is already waiting for review, so you decide whether to keep both.",
   DESTRUCTIVE_HARD_FLOOR:
-    "Destructive action (delete/archive/purge/merge) always requires human approval.",
-  GOVERNANCE_RULE: "Matched a governance rule requiring human approval.",
+    "This deletes, archives, purges or merges something, so it always waits for you.",
+  GOVERNANCE_RULE: "One of your rules says to ask you first.",
   UNTRUSTED_ORIGIN:
-    "This write originates from an untrusted channel (external / bridge) and requires human approval before it is applied.",
+    "This came from outside, such as an external app or a bridge, so nothing is applied until you approve it.",
   DAILY_WRITE_CEILING:
-    "This agent has reached its daily auto-execute write ceiling; further writes require human approval today.",
-  HUMAN_GATE:
-    "This is a human gate — a person must approve it, and no governance rule can widen it.",
+    "This agent used up today's automatic writes, so the rest wait for you.",
+  HUMAN_GATE: "This is a decision only you can make, and no rule can skip it.",
   ARBITRARY_EXECUTION:
-    "This runs an arbitrary shell command inside the pod's API container and always requires human approval; no governance rule can widen it.",
+    "This runs a shell command on your pod, so it always waits for you.",
   POD_ADMIN_SCHEMA_CHANGE:
-    "This adds a required field or a default to a system kind, which changes every workspace at once; a pod admin must approve it.",
+    "This adds a required field or a default to a built-in kind and changes every workspace, so a pod admin must approve it.",
   AGENT_SCHEMA_DEFINITION:
-    "An agent is defining a new kind or role, which changes what the pod can hold; a person must approve it, and no governance rule can widen it.",
-  HUMAN_ONLY_STATUS:
-    "Only a person may move this into that status; no governance rule can widen it.",
+    "An agent wants to define a new kind of thing for your pod, so you approve it, and no rule can skip that.",
+  HUMAN_ONLY_STATUS: "Only you can move this into that status.",
   LIFECYCLE_TERMINAL:
-    "An agent is closing this (moving it into a done or lost status); a person approves that by default.",
+    "An agent wants to close this (done or lost), so it waits for you unless you have said otherwise.",
   AGENT_STRUCTURE_WRITE:
-    "An agent is creating a workspace, cell, playbook or automation (or switching one on), which changes what the pod does; a person must approve it, and no governance rule can widen it.",
+    "An agent wants to create or switch on a workspace, cell, playbook or automation, which changes what your pod does, so you approve it, and no rule can skip that.",
 } as const;
 
 /**
