@@ -24,6 +24,23 @@ export interface ImportLink {
   targetName: string;
   /** Optional display alias, when the source supports it. */
   alias?: string;
+  /**
+   * Relation type for THIS link (e.g. `works_at`). Absent ⇒ the batch-wide
+   * relation type passed to `buildImportProposal` (default `references`).
+   */
+  relationType?: string;
+  /**
+   * Kind of the target (profile slug). When set, the link resolves only to an
+   * item of that kind with that name — a person and a company sharing a name
+   * never cross-link.
+   */
+  targetType?: string;
+  /**
+   * The target is a thing this import should bring into existence when the
+   * batch does not already carry it (a CSV row naming its employer). See
+   * `addLinkTargetItems` — ONE item per distinct (targetType, name).
+   */
+  createIfMissing?: boolean;
 }
 
 export interface ImportItem {
@@ -52,6 +69,17 @@ export interface ImportItem {
    * (e.g. frontmatter `type`). Takes precedence over path-derived typing.
    */
   typeHint?: string;
+  /**
+   * Role facets (Kind + Facets) this item's entity wears, e.g. a person row of
+   * a contacts table → `[{ profileSlug: "contact" }]`. Carried onto the
+   * composite op's `facets`, attached when the entity materializes.
+   */
+  facets?: Array<{ profileSlug: string; properties?: Record<string, unknown> }>;
+  /**
+   * An entity already in the pod that this item IS: the op links it instead of
+   * creating a second one (and relations to this item land on it).
+   */
+  existingEntityId?: string;
 }
 
 // ── Proposal (source-agnostic) ────────────────────────────────────────────────
@@ -76,6 +104,10 @@ export interface ProposedItem {
   /** Original source location, for traceability. */
   sourceRef: string;
   labels: string[];
+  /** Role facets carried from the item (see ImportItem.facets). */
+  facets?: ImportItem["facets"];
+  /** Existing pod entity this item links to (see ImportItem.existingEntityId). */
+  existingEntityId?: string;
 }
 
 export interface ProposedReference {
@@ -119,6 +151,10 @@ export interface CompositeEntityOp {
   content?: string;
   /** Stable in-proposal handle (we use the item's tempId). */
   ref?: string;
+  /** Role facets attached once the entity materializes. */
+  facets?: Array<{ profileSlug: string; properties?: Record<string, unknown> }>;
+  /** Link this existing entity instead of creating one. */
+  existingEntityId?: string;
 }
 export interface CompositeRelationOp {
   op: "create_relation";
@@ -166,6 +202,8 @@ export function importProposalToComposite(proposal: ImportProposal): {
       properties,
       ...(isLongForm ? { content: content as string } : {}),
       ref: it.tempId,
+      ...(it.facets && it.facets.length > 0 ? { facets: it.facets } : {}),
+      ...(it.existingEntityId ? { existingEntityId: it.existingEntityId } : {}),
     };
   });
   const resolved = proposal.references.filter((r) => Boolean(r.targetTempId));
@@ -203,6 +241,52 @@ export function importItemMetadataBlock(item: ImportItem): string | undefined {
     yaml = `${yaml.slice(0, METADATA_BLOCK_MAX)}\n# …truncated`;
   }
   return `Frontmatter (the note's own header fields — prefer them when mapping properties):\n\`\`\`yaml\n${yaml}\n\`\`\``;
+}
+
+/** Same-name test for link targets: case- and whitespace-insensitive. */
+export function normalizeLinkTargetName(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function linkTargetKey(slug: string, name: string): string {
+  return `${slug}|${normalizeLinkTargetName(name)}`;
+}
+
+/**
+ * Bring every `createIfMissing` link target into the batch as its own item —
+ * ONE per distinct (targetType, normalised name) across ALL items, so 40 rows
+ * naming the same employer yield one company, not 40. A target the batch
+ * already carries (same kind, same name) is not duplicated. New items are
+ * appended in first-seen order and keep the first-seen spelling as title.
+ * Pure; returns a new array.
+ */
+export function addLinkTargetItems(items: ImportItem[]): ImportItem[] {
+  const present = new Set(
+    items
+      .filter((it) => it.typeHint)
+      .map((it) => linkTargetKey(toSlug(it.typeHint as string), it.title))
+  );
+  const added: ImportItem[] = [];
+  for (const item of items) {
+    for (const link of item.links) {
+      if (!link.createIfMissing || !link.targetType) continue;
+      const name = link.targetName.trim().replace(/\s+/g, " ");
+      if (!name) continue;
+      const key = linkTargetKey(link.targetType, name);
+      if (present.has(key)) continue;
+      present.add(key);
+      added.push({
+        title: name.slice(0, 500),
+        path: [],
+        metadata: {},
+        body: "",
+        links: [],
+        labels: [],
+        typeHint: link.targetType,
+      });
+    }
+  }
+  return added.length > 0 ? [...items, ...added] : items;
 }
 
 /** Normalize an arbitrary label into a type slug. */
@@ -302,6 +386,8 @@ export function buildImportProposal(
 ): ImportProposal {
   const proposedItems: ProposedItem[] = [];
   const tempIdByName = new Map<string, string>(); // lowercased title → tempId
+  // "slug|normalised title" → tempId, for links that name their target's kind.
+  const tempIdByTypedName = new Map<string, string>();
   const typeAgg = new Map<
     string,
     {
@@ -340,7 +426,15 @@ export function buildImportProposal(
       properties,
       sourceRef: [...item.path, item.title].join("/"),
       labels,
+      ...(item.facets && item.facets.length > 0 ? { facets: item.facets } : {}),
+      ...(item.existingEntityId
+        ? { existingEntityId: item.existingEntityId }
+        : {}),
     });
+    const typedKey = linkTargetKey(slug, item.title);
+    if (!tempIdByTypedName.has(typedKey)) {
+      tempIdByTypedName.set(typedKey, tempId);
+    }
 
     // Index by the filename basename AND (if different) the frontmatter title,
     // so links written either way resolve. extractWikilinks already reduces
@@ -376,14 +470,16 @@ export function buildImportProposal(
   items.forEach((item, i) => {
     const sourceTempId = `t${i + 1}`;
     for (const link of item.links) {
-      const targetTempId = tempIdByName.get(link.targetName.toLowerCase());
+      const targetTempId = link.targetType
+        ? tempIdByTypedName.get(linkTargetKey(link.targetType, link.targetName))
+        : tempIdByName.get(link.targetName.toLowerCase());
       const resolved = Boolean(targetTempId);
       if (!resolved) unresolved++;
       references.push({
         sourceTempId,
         ...(targetTempId ? { targetTempId } : {}),
         targetName: link.targetName,
-        relationType,
+        relationType: link.relationType ?? relationType,
         resolved,
       });
     }

@@ -210,6 +210,14 @@ export interface CsvColumnPlan {
   valueType: "string" | "number" | "date" | "boolean";
   /** "skip" columns are dropped; everything else lands on the row entity. */
   scope: "primary" | "companion" | "context" | "skip";
+  /**
+   * Where the value lands, set by `refineCsvTablePlan`. Absent or "entity" ⇒ a
+   * property of the row entity (today's behaviour); "facet" ⇒ a property of the
+   * row's role facet (`CsvTablePlan.rowFacet`); "title" ⇒ consumed by the
+   * composed title (`titleColumns`); "organization" ⇒ consumed by the
+   * organisation link (`CsvTablePlan.organization`).
+   */
+  routedTo?: "entity" | "facet" | "title" | "organization";
 }
 
 /** Resolved table-ingestion plan: ONE profile for all rows + per-column routing
@@ -221,6 +229,19 @@ export interface CsvTablePlan {
   titleColumn: string | null;
   /** Per-column routing. Headers absent here are dropped. */
   columns: CsvColumnPlan[];
+  /**
+   * When set, the title is these columns' non-empty values joined by a space
+   * ("First Name" + "Last Name"). Takes precedence over `titleColumn`.
+   */
+  titleColumns?: string[];
+  /** Role facet every row entity wears (the planner picked a role). */
+  rowFacet?: { profileSlug: string };
+  /**
+   * A column naming the row's organisation: each distinct value becomes ONE
+   * entity of `profileSlug` (see `addLinkTargetItems`), linked from the row by
+   * `relationType`.
+   */
+  organization?: { header: string; profileSlug: string; relationType: string };
 }
 
 /** Parse a CSV into the raw shape the bulk-mapping planner consumes:
@@ -232,12 +253,14 @@ export function parseCsvTable(
   headers: string[];
   sampleRows: string[][];
   rows: Record<string, string>[];
+  /** Lines skipped before the header row (see `parseCsv`). */
+  preambleLines: string[];
 } {
-  const { headers, rows } = parseCsv(content);
+  const { headers, rows, preambleLines } = parseCsv(content);
   const sampleRows = rows
     .slice(0, sampleLimit)
     .map((row) => headers.map((h) => String(row[h] ?? "")));
-  return { headers, sampleRows, rows };
+  return { headers, sampleRows, rows, preambleLines };
 }
 
 /** Coerce a raw CSV cell string to the planned value type. Unparseable values
@@ -285,33 +308,96 @@ export function csvRowsToTypedImportItems(
   const items: ImportItem[] = [];
   for (const row of rows) {
     const metadata: Record<string, unknown> = {};
+    const facetProperties: Record<string, unknown> = {};
     const bodyLines: string[] = [];
     for (const col of kept) {
       const raw = row[col.header];
       if (raw === undefined) continue;
       const value = coerceCellValue(String(raw), col.valueType);
       if (value === undefined) continue;
-      metadata[col.slug] = value;
       bodyLines.push(`${col.header}: ${String(raw).trim()}`);
+      // Consumed by the title / the organisation link: the value lives there,
+      // not as a second copy in a property.
+      if (col.routedTo === "title" || col.routedTo === "organization") continue;
+      if (col.routedTo === "facet") facetProperties[col.slug] = value;
+      else metadata[col.slug] = value;
     }
 
-    const rawTitle = plan.titleColumn ? row[plan.titleColumn] : undefined;
+    const rawTitle = plan.titleColumns
+      ? plan.titleColumns
+          .map((h) => String(row[h] ?? "").trim())
+          .filter(Boolean)
+          .join(" ")
+      : plan.titleColumn
+        ? row[plan.titleColumn]
+        : undefined;
     const title =
       String(rawTitle ?? "Untitled")
         .trim()
         .slice(0, 500) || "Untitled";
 
+    const organizationName = plan.organization
+      ? String(row[plan.organization.header] ?? "").trim()
+      : "";
+
+    // A row whose NAME columns are all empty, and that carries nothing which
+    // identifies its subject (no value on an existing property such as an
+    // email or a profile URL), describes nobody: an export lists members who
+    // hid their profile as a bare date. Skipped, never an "Untitled" person.
+    // The caller counts skipped rows (rows in − items out).
+    if (
+      plan.titleColumns &&
+      title === "Untitled" &&
+      !kept.some(
+        (c) =>
+          c.routedTo === "entity" &&
+          coerceCellValue(String(row[c.header] ?? ""), c.valueType) !==
+            undefined
+      )
+    ) {
+      continue;
+    }
+
     // Drop blank/separator rows: no title signal AND no mapped data.
-    if (title === "Untitled" && Object.keys(metadata).length === 0) continue;
+    if (
+      title === "Untitled" &&
+      Object.keys(metadata).length === 0 &&
+      Object.keys(facetProperties).length === 0 &&
+      !organizationName
+    ) {
+      continue;
+    }
 
     items.push({
       title,
       path: [],
       metadata,
       body: bodyLines.join("\n"),
-      links: [],
+      links:
+        plan.organization && organizationName
+          ? [
+              {
+                targetName: organizationName,
+                targetType: plan.organization.profileSlug,
+                relationType: plan.organization.relationType,
+                createIfMissing: true,
+              },
+            ]
+          : [],
       labels: [],
       typeHint: plan.profileSlug,
+      ...(plan.rowFacet
+        ? {
+            facets: [
+              {
+                profileSlug: plan.rowFacet.profileSlug,
+                ...(Object.keys(facetProperties).length > 0
+                  ? { properties: facetProperties }
+                  : {}),
+              },
+            ],
+          }
+        : {}),
     });
   }
   return items;
