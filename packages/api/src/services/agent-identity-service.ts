@@ -935,6 +935,17 @@ export interface ProvisionSurfaceAgentKeyOpts {
    */
   toolProfile?: ApiKeyToolProfile;
   /**
+   * Whose newest key an omitted `toolProfile` is inherited from.
+   * `"agent"` (default): the agent user's newest key, whatever its instance.
+   * `"instance"`: only keys of THIS `instanceId` (required). For a door whose
+   * agent user is SHARED by independent clients — the OAuth AS mints every
+   * direct client of one person (claude.ai, Raycast, Cursor…) as the same
+   * `claude-web-direct` agent — so one client's surface never leaks into
+   * another's, and a client's FIRST connection starts on `entry` like any new
+   * key (V1 D4) while its re-authorize keeps what it had.
+   */
+  inheritToolSurface?: "agent" | "instance";
+  /**
    * The COMPUTER the agent runs on (0320): the agent is then the distinct
    * "<type> on <computer>" principal, not the creator's computer-less one.
    */
@@ -999,6 +1010,13 @@ export async function provisionSurfaceAgentKey(
     throw err;
   }
   const creatorId = createdByUserId.trim();
+  // Checked before any side effect: an instance-scoped inherit with no
+  // instance would silently widen to the whole agent.
+  if (opts.inheritToolSurface === "instance" && !instanceId) {
+    throw new Error(
+      'provisionSurfaceAgentKey: inheritToolSurface "instance" needs an instanceId'
+    );
+  }
 
   // Resolve the human the KEY acts for.
   //
@@ -1088,12 +1106,15 @@ export async function provisionSurfaceAgentKey(
   // CLI re-mint) keeps what this agent's newest key listed — a legacy NULL key
   // stays legacy, an entry key keeps its unlocked groups — and only an agent
   // with no key yet starts on `entry`. Read BEFORE the sibling revoke.
+  // `inheritToolSurface: "instance"` narrows "this agent" to this connection.
+  const inheritByInstance = opts.inheritToolSurface === "instance";
   const inherited =
     opts.toolProfile === undefined
       ? await db.query.apiKeys.findFirst({
           where: and(
             eq(apiKeys.userId, agentUserId),
-            eq(apiKeys.keyType, "hub_inbound")
+            eq(apiKeys.keyType, "hub_inbound"),
+            inheritByInstance ? eq(apiKeys.instanceId, instanceId!) : undefined
           ),
           orderBy: (k, { desc }) => [desc(k.createdAt)],
           columns: { toolProfile: true, toolGroups: true },

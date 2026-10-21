@@ -540,7 +540,7 @@
     ],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Conductor: user intent → orient → questions → extend-first → confirm → write. Not Company OS (that is agent-os).",
+    "summary": "Classify the layer first (data, view, capability, session, track, rule, structure), then conduct: orient → questions → extend-first → confirm → write. Not Company OS (that is agent-os).",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,

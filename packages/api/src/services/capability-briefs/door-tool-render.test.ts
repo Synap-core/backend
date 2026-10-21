@@ -42,34 +42,13 @@ describe("resolveTaughtToolToken", () => {
 });
 
 describe("renderSkillForDoor", () => {
-  it("Raycast: L3 tools render with Raycast names; tools Raycast lacks are marked and noted", () => {
-    const out = renderSkillForDoor(ladder, "raycast");
-    for (const name of [
-      "`define-role`",
-      "`define-kind`",
-      "`list-profiles`",
-      "`create-view`",
-      "`create-workspace`",
-      "`create-playbook`",
-      "`load-skill`",
-    ]) {
-      expect(out).toContain(name);
-    }
-    expect(out).not.toMatch(
-      /`(define_role|define_kind|list_profiles|create_workspace)`/
-    );
-    expect(out).toContain("`synap_promote_session_to_playbook†`");
-    expect(out).toContain("**Door note (Raycast):**");
-    expect(out).toMatch(/- `synap_promote_cell_to_renderer` — not on Raycast/);
-    expect(out).toMatch(/- `discover_tools` — in-app assistant only/);
-  });
-
   it("claude.ai connector: pod__ names", () => {
     const out = renderSkillForDoor(ladder, "cp-connector");
     expect(out).toContain("`pod__define_role`");
     expect(out).toContain("`pod__create_workspace`");
-    expect(out).toContain("`synap_create_view†`");
+    expect(out).not.toMatch(/`(define_role|define_kind|create_workspace)`/);
     expect(out).toContain("**Door note (claude.ai Synap connector):**");
+    expect(out).toMatch(/- `discover_tools` — in-app assistant only/);
   });
 
   it("pod MCP: bare stems gain the synap_ prefix", () => {
@@ -80,29 +59,27 @@ describe("renderSkillForDoor", () => {
   });
 
   it("IS-only tokens get a note whose own advice is rendered for the door", () => {
-    const out = renderSkillForDoor(readBeforeWrite, "raycast");
+    const out = renderSkillForDoor(readBeforeWrite, "cp-connector");
     expect(out).toContain("`create_property_def†`");
     expect(out).toMatch(
-      /- `create_property_def` — in-app assistant only; from an agent door add the field through define-kind/
+      /- `create_property_def` — in-app assistant only; from an agent door add the field through pod__define_kind/
     );
   });
 
   it("leaves non-tool snake_case untouched and adds nothing when nothing is missing", () => {
     const src =
       "Link with `depends_on`; the table `synap_packages`; then `synap_ask`.";
-    expect(renderSkillForDoor(src, "raycast")).toBe(
-      "Link with `depends_on`; the table `synap_packages`; then `ask`."
+    expect(renderSkillForDoor(src, "cp-connector")).toBe(
+      "Link with `depends_on`; the table `synap_packages`; then `pod__ask`."
     );
   });
 });
 
 describe("skillDoorFor", () => {
-  it("derives the door from transport + agentType", () => {
-    expect(skillDoorFor("mcp", "claude-web")).toBe("cp-connector");
-    expect(skillDoorFor("mcp", "raycast")).toBe("pod-mcp"); // raycast --with-mcp speaks pod names
-    expect(skillDoorFor("mcp", null)).toBe("pod-mcp");
-    expect(skillDoorFor("hub", "raycast")).toBe("raycast");
-    expect(skillDoorFor("hub", "claude-code")).toBeNull();
-    expect(skillDoorFor("hub", null)).toBeNull();
+  it("derives the /mcp door from the agentType: only the CP connector renames", () => {
+    expect(skillDoorFor("claude-web")).toBe("cp-connector");
+    expect(skillDoorFor("claude-web-direct")).toBe("pod-mcp");
+    expect(skillDoorFor("raycast")).toBe("pod-mcp");
+    expect(skillDoorFor(null)).toBe("pod-mcp");
   });
 });
