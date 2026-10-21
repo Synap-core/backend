@@ -129,6 +129,7 @@ import { resolveObjectRefs, type ProposalObjectRef } from "./object-refs.js";
 import { resolveStatusMoves, type ProposalStatusMove } from "./status-move.js";
 import {
   resolveSessionBefore,
+  withAgentOutputsLanding,
   type ProposalSessionBefore,
 } from "./session-before.js";
 import { guestProvenanceFor } from "../../services/forms/guest-provenance.js";
@@ -1765,6 +1766,21 @@ export async function enrichProposalsForDisplay(
     // beside the unmasked key it marks is the severance this prevents. Applied
     // LAST so the `{...payload}` re-spread above cannot reinstate the value.
     if (rowSetup) enrichedData = redactSecretParams(enrichedData, rowSetup);
+    // A pending AGENT session update's outputs list, as it would land NOW
+    // (stored as sent; `session-before.ts`), so the slots it keeps never read
+    // as deletions.
+    if (
+      enrichedData &&
+      typeof enrichedData === "object" &&
+      !Array.isArray(enrichedData)
+    ) {
+      enrichedData =
+        withAgentOutputsLanding(
+          enrichedData as Record<string, unknown>,
+          sessionBeforeByRow[idx],
+          !!row.agentUserId
+        ) ?? enrichedData;
+    }
 
     // B4: for a facet-UPDATE proposal, the live-current before-state is the
     // role-facet's CURRENT properties (fetched batched above), not the parent

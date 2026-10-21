@@ -1543,20 +1543,13 @@ export async function updateFocusSession(
         reason: serverStampedWriteError(violations).message,
       };
     }
-    // An AGENT's list is add-or-update (C6): expanded HERE to the list as it
-    // will land, so a proposal carries — and its review diff shows — every
-    // slot it keeps, never a shorter list that reads as deletions. The locked
-    // write (and the executor on approval) re-apply the same upsert against
-    // the row as it is THEN, so a slot added in between is not lost either.
-    if (agentUserId) {
-      params = {
-        ...params,
-        expectedOutputs: keepUnlistedSlots(
-          storedOutputs,
-          params.expectedOutputs
-        ),
-      };
-    }
+    // An AGENT's list is add-or-update (C6). It travels AS SENT: the locked
+    // write and the executor on approval apply that upsert against the row as
+    // it is THEN, and the review shows the list as it would land
+    // (`session-before.ts`). Expanding it here froze copies of the stored
+    // slots into the proposal — their server stamps then refused the
+    // approval once a slot moved on, and a slot the person deleted meanwhile
+    // came back (FB1020 w2 review M5).
   }
 
   // VISIBILITY FLOOR for the refs this patch declares, and BEFORE the membrane

@@ -20,6 +20,13 @@
  * discriminating input is the real engine: `focus_session.update` is on the
  * default auto list, so without the door's floor it executes.
  *
+ * M5 — an agent's `expectedOutputs` proposal stores the list AS SENT, so
+ * approving it applies the add-or-update against the row as it is THEN
+ * (through the REAL `focus_session/update` executor): a slot that moved on
+ * meanwhile does not refuse the approval over a stale stamp, and a slot the
+ * person deleted meanwhile does not come back. The review still sees the
+ * list as it would land (`withAgentOutputsLanding`).
+ *
  * Stubbed, and why:
  *  - `getAgentFocusProjectId` reads the agent's declared focus from a value
  *    the test sets. PGlite runs ONE connection, and the real read runs on the
@@ -115,6 +122,9 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { runWithCallingKey } from "@synap/database";
 import { updateFocusSession } from "../update-session.js";
+import { registerFocusSessionExecutors } from "../../../routers/proposals/executors/focus-session.js";
+import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
+import { withAgentOutputsLanding } from "../../../routers/proposals/session-before.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -241,6 +251,7 @@ beforeAll(async () => {
     `insert into users (id, name, email, user_type, agent_metadata) values ($1, 'Claude Code', 'a@x', 'agent', $2::jsonb)`,
     [AGENT, JSON.stringify({ agentType: "claude-code" })]
   );
+  registerFocusSessionExecutors();
 }, 120_000);
 
 beforeEach(async () => {
@@ -395,5 +406,135 @@ describe("M6: an agent may only PROPOSE withdrawing a slot handed to the person"
     expect(
       (await slot(sessionId, "founder-approves")).retiredAt
     ).toBeUndefined();
+  });
+});
+
+describe("M5: an agent's outputs proposal is applied against the row as it is at approval", () => {
+  const A = { key: "a", kind: "document", label: "Alpha", status: "pending" };
+  const C = { key: "c", kind: "document", label: "Gamma", status: "pending" };
+  const B = { key: "b", kind: "document", label: "Beta" };
+  const CHANGED = [
+    {
+      key: "report",
+      statement: "A signed report exists",
+      check: { kind: "human" },
+    },
+  ];
+
+  async function seedWithSlots(): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions
+         (id, user_id, title, goal, status, origin, project_id, expected_outputs, criteria, metadata, agent_ids, started_at, created_at, updated_at)
+       values ($1, $2, 'Specs', 'Ship both specs', 'active', 'agent', null,
+               $3::jsonb, '[]'::jsonb, '{}'::jsonb, '{}', now(), now(), now())`,
+      [id, USER, JSON.stringify([A, C])]
+    );
+    return id;
+  }
+  const outputsOf = async (sessionId: string) =>
+    (
+      await q<{ expected_outputs: Array<Record<string, unknown>> }>(
+        `select expected_outputs from focus_sessions where id = $1`,
+        [sessionId]
+      )
+    ).rows[0]!.expected_outputs;
+  const setOutputs = (sessionId: string, outputs: unknown[]) =>
+    q(`update focus_sessions set expected_outputs = $2::jsonb where id = $1`, [
+      sessionId,
+      JSON.stringify(outputs),
+    ]);
+
+  /** The agent adds B beside a criteria change, so the whole rest proposes. */
+  async function fileAgentProposal(sessionId: string) {
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      expectedOutputs: [B] as never,
+      criteria: CHANGED as never,
+    });
+    expect(res.status).toBe("proposed");
+    const pending = (await proposalsFor(sessionId)).filter(
+      (r) => r.status === "pending"
+    );
+    expect(pending).toHaveLength(1);
+    return pending[0]!;
+  }
+
+  async function approveRow(
+    row: { id: string; data: unknown },
+    sessionId: string
+  ) {
+    const executor = proposalExecRegistry.resolveExact("focus_session/update")!;
+    return executor.execute({
+      proposal: {
+        id: row.id,
+        targetId: sessionId,
+        workspaceId: null,
+        projectId: null,
+        subjectUserId: USER,
+        agentUserId: AGENT,
+        data: row.data,
+        targetType: "focus_session",
+        proposalType: "update",
+      },
+      payload: null,
+      userId: USER,
+      input: { proposalId: row.id },
+      deps: {
+        reportProposalOutcome: () => undefined,
+        emitProposalReviewed: () => undefined,
+        emitSideEffects: () => undefined,
+        notify: async () => undefined,
+      },
+    } as never);
+  }
+
+  it("the proposal stores the agent's list as sent; the review sees it as it would land", async () => {
+    const sessionId = await seedWithSlots();
+    const row = await fileAgentProposal(sessionId);
+    const payload = payloadOf(row);
+    expect(
+      (payload.expectedOutputs as Array<{ key?: string }>).map((o) => o.key)
+    ).toEqual(["b"]);
+    const shown = withAgentOutputsLanding(
+      payload,
+      { criteria: [], expectedOutputs: await outputsOf(sessionId) },
+      true
+    )!;
+    expect(
+      (shown.expectedOutputs as Array<{ key?: string }>).map((o) => o.key)
+    ).toEqual(["a", "c", "b"]);
+    // A person's list replaces: shown as sent.
+    expect(
+      withAgentOutputsLanding(
+        payload,
+        { criteria: [], expectedOutputs: await outputsOf(sessionId) },
+        false
+      )
+    ).toBe(payload);
+  });
+
+  it("a slot that moved on before approval does not refuse it, and keeps its state", async () => {
+    const sessionId = await seedWithSlots();
+    const row = await fileAgentProposal(sessionId);
+    await setOutputs(sessionId, [{ ...A, status: "done" }, C]);
+
+    await approveRow(row, sessionId);
+
+    const after = await outputsOf(sessionId);
+    expect(after.map((o) => o.key)).toEqual(["a", "c", "b"]);
+    expect(after.find((o) => o.key === "a")!.status).toBe("done");
+  });
+
+  it("a slot the person deleted before approval does not come back", async () => {
+    const sessionId = await seedWithSlots();
+    const row = await fileAgentProposal(sessionId);
+    await setOutputs(sessionId, [A]);
+
+    await approveRow(row, sessionId);
+
+    expect((await outputsOf(sessionId)).map((o) => o.key)).toEqual(["a", "b"]);
   });
 });
