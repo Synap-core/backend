@@ -59,7 +59,8 @@ export function stripSqlComments(sql) {
   let i = 0;
   const n = sql.length;
   const blank = (from, to) => {
-    for (let k = from; k < to; k++) if (out[k] !== "\n" && out[k] !== "\r") out[k] = " ";
+    for (let k = from; k < to; k++)
+      if (out[k] !== "\n" && out[k] !== "\r") out[k] = " ";
   };
   while (i < n) {
     const c = sql[i];
@@ -72,23 +73,36 @@ export function stripSqlComments(sql) {
       let depth = 1;
       let j = i + 2;
       while (j < n && depth > 0) {
-        if (sql[j] === "/" && sql[j + 1] === "*") { depth++; j += 2; }
-        else if (sql[j] === "*" && sql[j + 1] === "/") { depth--; j += 2; }
-        else j++;
+        if (sql[j] === "/" && sql[j + 1] === "*") {
+          depth++;
+          j += 2;
+        } else if (sql[j] === "*" && sql[j + 1] === "/") {
+          depth--;
+          j += 2;
+        } else j++;
       }
       blank(i, j);
       i = j;
     } else if (c === "'" || c === '"') {
       let j = i + 1;
       while (j < n) {
-        if (sql[j] === c && sql[j + 1] === c) { j += 2; continue; }
-        if (sql[j] === c) { j++; break; }
+        if (sql[j] === c && sql[j + 1] === c) {
+          j += 2;
+          continue;
+        }
+        if (sql[j] === c) {
+          j++;
+          break;
+        }
         j++;
       }
       i = j;
     } else if (c === "$") {
       const m = /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i, i + 64));
-      if (!m) { i++; continue; }
+      if (!m) {
+        i++;
+        continue;
+      }
       // A dollar-quoted body is code too (DO $$ … $$): keep scanning INSIDE it
       // for comments, so only its delimiters are skipped here.
       i += m[0].length;
@@ -100,13 +114,17 @@ export function stripSqlComments(sql) {
 const KINDS = [
   { kind: "DROP TABLE", re: /\bdrop\s+table\b/gi },
   { kind: "RENAME", re: /\brename\b/gi },
-  { kind: "column TYPE change", re: /\balter\s+(?:column\s+)?(?:"[^"]+"|[a-z_][\w$]*)\s+(?:set\s+data\s+)?type\b/gi },
+  {
+    kind: "column TYPE change",
+    re: /\balter\s+(?:column\s+)?(?:"[^"]+"|[a-z_][\w$]*)\s+(?:set\s+data\s+)?type\b/gi,
+  },
   { kind: "SET NOT NULL", re: /\bset\s+not\s+null\b/gi },
 ];
 // Inside an ALTER TABLE statement, DROP <name> / DROP COLUMN <name> drops a
 // column; DROP CONSTRAINT / NOT NULL / DEFAULT / IDENTITY / EXPRESSION do not.
 const ALTER_TABLE = /\balter\s+table\b[^;]*/gi;
-const COLUMN_DROP = /\bdrop\s+(?!constraint\b|not\s+null\b|default\b|identity\b|expression\b)/gi;
+const COLUMN_DROP =
+  /\bdrop\s+(?!constraint\b|not\s+null\b|default\b|identity\b|expression\b)/gi;
 
 function lineOf(text, index) {
   let line = 1;
@@ -122,9 +140,11 @@ export function findDestructive(sql) {
     const line = lineOf(code, index);
     hits.push({ kind, line, text: sql.split("\n")[line - 1].trim() });
   };
-  for (const { kind, re } of KINDS) for (const m of code.matchAll(re)) add(kind, m.index);
+  for (const { kind, re } of KINDS)
+    for (const m of code.matchAll(re)) add(kind, m.index);
   for (const st of code.matchAll(ALTER_TABLE))
-    for (const m of st[0].matchAll(COLUMN_DROP)) add("DROP COLUMN", st.index + m.index);
+    for (const m of st[0].matchAll(COLUMN_DROP))
+      add("DROP COLUMN", st.index + m.index);
   return hits.sort((a, b) => a.line - b.line);
 }
 
@@ -134,14 +154,22 @@ export function contractMarkers(sql) {
 }
 
 function git(repo, args) {
-  return execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  return execFileSync("git", ["-C", repo, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
-const versionKey = (t) => t.replace(/^v/, "").split(/[.-]/).map((p) => (/^\d+$/.test(p) ? Number(p) : p));
+const versionKey = (t) =>
+  t
+    .replace(/^v/, "")
+    .split(/[.-]/)
+    .map((p) => (/^\d+$/.test(p) ? Number(p) : p));
 function newestTag(tags) {
   const vs = tags.filter((t) => /^v\d+(\.\d+)*$/.test(t));
   vs.sort((a, b) => {
-    const ka = versionKey(a), kb = versionKey(b);
+    const ka = versionKey(a),
+      kb = versionKey(b);
     for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
       const d = (ka[i] ?? -1) - (kb[i] ?? -1);
       if (d) return d;
@@ -158,10 +186,14 @@ export function resolveBaseline(repo, explicit) {
   let source = "";
   try {
     const remote = git(repo, ["ls-remote", "--tags", "--refs", "origin", "v*"])
-      .split("\n").map((l) => l.split("\t")[1]?.replace("refs/tags/", "")).filter(Boolean);
+      .split("\n")
+      .map((l) => l.split("\t")[1]?.replace("refs/tags/", ""))
+      .filter(Boolean);
     tag = newestTag(remote);
     source = "origin";
-  } catch { /* offline or no origin: local tags below */ }
+  } catch {
+    /* offline or no origin: local tags below */
+  }
   if (!tag) {
     tag = newestTag(git(repo, ["tag", "-l", "v*"]).split("\n").filter(Boolean));
     source = "local tags";
@@ -170,23 +202,39 @@ export function resolveBaseline(repo, explicit) {
   try {
     git(repo, ["cat-file", "-e", `refs/tags/${tag}^{tree}`]);
   } catch {
-    git(repo, ["fetch", "--quiet", "--no-tags", "--depth=1", "origin", `refs/tags/${tag}:refs/tags/${tag}`]);
+    git(repo, [
+      "fetch",
+      "--quiet",
+      "--no-tags",
+      "--depth=1",
+      "origin",
+      `refs/tags/${tag}:refs/tags/${tag}`,
+    ]);
   }
-  return { ref: `refs/tags/${tag}`, source: `${tag} (newest v* tag, ${source})` };
+  return {
+    ref: `refs/tags/${tag}`,
+    source: `${tag} (newest v* tag, ${source})`,
+  };
 }
 
 export function shippedMigrations(repo, ref) {
   return git(repo, ["ls-tree", "--name-only", `${ref}:${MIGRATIONS_DIR}`])
-    .split("\n").filter((f) => f.endsWith(".sql"));
+    .split("\n")
+    .filter((f) => f.endsWith(".sql"));
 }
 
 /** { baseline, unshipped[], violations[] } for a checkout. */
 export function check(repo, explicitBaseline) {
   const baseline = resolveBaseline(repo, explicitBaseline);
   const shipped = new Set(shippedMigrations(repo, baseline.ref));
-  if (shipped.size === 0) throw new Error(`the baseline ${baseline.source} has no migrations in ${MIGRATIONS_DIR}`);
+  if (shipped.size === 0)
+    throw new Error(
+      `the baseline ${baseline.source} has no migrations in ${MIGRATIONS_DIR}`
+    );
   const dir = join(repo, MIGRATIONS_DIR);
-  const present = readdirSync(dir).filter((f) => f.endsWith(".sql")).sort();
+  const present = readdirSync(dir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
   if (present.length === 0) throw new Error(`no migrations in ${dir}`);
   const unshipped = present.filter((f) => !shipped.has(f));
   const violations = [];
@@ -197,9 +245,10 @@ export function check(repo, explicitBaseline) {
     const markers = contractMarkers(sql);
     const bad = markers.filter((m) => !shipped.has(m));
     if (markers.length > 0 && bad.length === 0) continue;
-    const why = markers.length === 0
-      ? "not marked as the contract step of an expand that already shipped"
-      : `marked contract-of ${bad.join(", ")}, which is not in the release baseline${bad.some((b) => present.includes(b)) ? " (it has not shipped yet)" : " (no such migration)"}`;
+    const why =
+      markers.length === 0
+        ? "not marked as the contract step of an expand that already shipped"
+        : `marked contract-of ${bad.join(", ")}, which is not in the release baseline${bad.some((b) => present.includes(b)) ? " (it has not shipped yet)" : " (no such migration)"}`;
     for (const h of hits) violations.push({ file: f, ...h, why });
   }
   return { baseline, shipped: shipped.size, unshipped, violations };
@@ -207,18 +256,33 @@ export function check(repo, explicitBaseline) {
 
 if (process.argv[1]?.endsWith("check-migrations-forward-only.mjs")) {
   const args = process.argv.slice(2);
-  const opt = (name) => { const i = args.indexOf(name); return i === -1 ? undefined : args[i + 1]; };
+  const opt = (name) => {
+    const i = args.indexOf(name);
+    return i === -1 ? undefined : args[i + 1];
+  };
   const repo = resolve(opt("--repo") ?? process.cwd());
   let r;
   try {
-    if (!existsSync(join(repo, MIGRATIONS_DIR))) throw new Error(`no ${MIGRATIONS_DIR} under ${repo}`);
+    if (!existsSync(join(repo, MIGRATIONS_DIR)))
+      throw new Error(`no ${MIGRATIONS_DIR} under ${repo}`);
     git(repo, ["rev-parse", "--git-dir"]);
     r = check(repo, opt("--baseline"));
   } catch (e) {
-    console.error(`cannot check migrations: ${String(e.stderr || e.message).trim().split("\n")[0]}`);
+    console.error(
+      `cannot check migrations: ${
+        String(e.stderr || e.message)
+          .trim()
+          .split("\n")[0]
+      }`
+    );
     process.exit(2);
   }
-  console.log(`baseline: ${r.baseline.source} — ${r.shipped} shipped; ${r.unshipped.length} not shipped yet: ${r.unshipped.join(" ") || "(none)"}`);
-  for (const v of r.violations) console.log(`DESTRUCTIVE ${v.file}:${v.line} ${v.kind} — ${v.why}: ${v.text}`);
+  console.log(
+    `baseline: ${r.baseline.source} — ${r.shipped} shipped; ${r.unshipped.length} not shipped yet: ${r.unshipped.join(" ") || "(none)"}`
+  );
+  for (const v of r.violations)
+    console.log(
+      `DESTRUCTIVE ${v.file}:${v.line} ${v.kind} — ${v.why}: ${v.text}`
+    );
   process.exit(r.violations.length ? 1 : 0);
 }
