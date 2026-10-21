@@ -11,6 +11,7 @@
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { attachCreatedDocument } from "../../hub-protocol/attach-created-document.js";
+import { preflightAttachToEntity } from "../../../services/entity-body/body-replace-guard.js";
 import { checkHubRateLimit } from "../../../utils/hub-protocol-rate-limit.js";
 import { isAllowedMimeType, MAX_FILE_SIZE } from "../../file-upload.js";
 import {
@@ -331,6 +332,16 @@ export const entityHandlers: McpHandlerMap = {
       lensWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    const attachEntityId = args.entityId as string | undefined;
+    const replaceBody = args.replaceBody === true;
+    // Refuse an attach that would replace a body BEFORE the document exists.
+    if (attachEntityId) {
+      await preflightAttachToEntity({
+        entityId: attachEntityId,
+        userId,
+        replaceBody,
+      });
+    }
     const result = await caller.documents.createDocument({
       userId,
       // Idempotency: a retry with the same key/content returns the prior doc.
@@ -354,7 +365,6 @@ export const entityHandlers: McpHandlerMap = {
     // link lives on `entities.documentId` — `documents.entityId` was removed —
     // so it is a separate GOVERNED entity update through the regular entities
     // router, not a side effect of the document write.
-    const attachEntityId = args.entityId as string | undefined;
     // OUTPUT LEDGER: recorded inside `documents.createDocument` (the hub door
     // this call goes through), so MCP and the IS REST door share one producer.
     if (!attachEntityId) return ok(result);
@@ -362,6 +372,7 @@ export const entityHandlers: McpHandlerMap = {
       await attachCreatedDocument({
         created: result,
         entityId: attachEntityId,
+        replaceBody,
         userId,
         scopes: apiKeyScopes,
         // Membership-gated lens, never the raw model-supplied id — this ctx
