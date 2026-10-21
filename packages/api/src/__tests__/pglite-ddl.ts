@@ -16,7 +16,9 @@
  * constraint asserts it on purpose, by adding it itself.
  */
 
-import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import * as schema from "@synap/database/schema";
+import { is } from "drizzle-orm";
+import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -37,10 +39,23 @@ export function pgliteTableDdl(table: PgTable): string {
     const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
     let def = "";
     if (c.hasDefault) {
-      if (typeof c.default === "number" || typeof c.default === "boolean")
-        def = ` default ${c.default}`;
-      else if (typeof c.default === "string")
-        def = ` default '${c.default.replace(/'/g, "''")}'`;
+      const d = c.default;
+      if (typeof d === "number" || typeof d === "boolean")
+        def = ` default ${d}`;
+      else if (typeof d === "string")
+        def = ` default '${d.replace(/'/g, "''")}'`;
+      // A Postgres array column (`text[]`) with a JS array default is an array
+      // literal, not jsonb — `'[]'::jsonb` on `focus_sessions.agent_ids` fails.
+      else if (Array.isArray(d) && t.endsWith("[]"))
+        def = ` default '{${d.map((v) => `"${String(v).replace(/"/g, '\\"')}"`).join(",")}}'`;
+      // A JS object/array default on a jsonb column: its own JSON, not `{}`.
+      else if (
+        d &&
+        typeof d === "object" &&
+        !("queryChunks" in d) &&
+        type === "jsonb"
+      )
+        def = ` default '${JSON.stringify(d).replace(/'/g, "''")}'::jsonb`;
       else if (type === "uuid") def = " default gen_random_uuid()";
       else if (type.startsWith("timestamp")) def = " default now()";
       else if (type === "jsonb") def = " default '{}'::jsonb";
@@ -53,4 +68,29 @@ export function pgliteTableDdl(table: PgTable): string {
 /** The DDL for several tables, in order. */
 export function pgliteSchemaDdl(tables: readonly PgTable[]): string {
   return tables.map(pgliteTableDdl).join("\n");
+}
+
+/**
+ * EVERY table of `@synap/database/schema`, deduped by name. A test that stands
+ * up a hand-picked few tables rots the day the code under test reads one more
+ * (governance_rules, links, session_evaluations, … — 11 files went red that
+ * way by 2026-10-21). Empty tables are the honest state for the reads the test
+ * is not about; the access floors and best-effort side reads then run for real.
+ */
+export function allSchemaTables(): PgTable[] {
+  const seen = new Set<string>();
+  const out: PgTable[] = [];
+  for (const t of Object.values(schema)) {
+    if (!is(t, PgTable)) continue;
+    const name = getTableConfig(t).name;
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push(t);
+  }
+  return out;
+}
+
+/** The DDL for every schema table — see {@link allSchemaTables}. */
+export function pgliteAllTablesDdl(): string {
+  return pgliteSchemaDdl(allSchemaTables());
 }

@@ -67,36 +67,14 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import {
-  db,
-  focusSessions,
-  proposals,
-  users,
-  channels,
-  channelMembers,
-  podMembers,
-  projectMembers,
-  chatTurns,
-  workspaces,
-  workspaceMembers,
-  artifacts,
-  links,
-  entities,
-  documents,
-  views,
-  automations,
-  playbooks,
-  messages,
-  projects,
-  playbookRuns,
-  tools,
-} from "@synap/database";
+import { db, links, messages, projects } from "@synap/database";
 import { focusSessionsRouter } from "./focus-sessions.js";
 import { sessionHandlers } from "./mcp/handlers/session.js";
 import {
   SECTION_UPDATE_ACTION,
   SESSION_NARRATIVE_ACTION,
 } from "../services/session-document/governance-keys.js";
+import { allSchemaTables } from "../__tests__/pglite-ddl.js";
 
 const USER = "user-1";
 const BASIC =
@@ -167,33 +145,10 @@ async function mcpGet(id: string): Promise<Record<string, unknown>> {
 
 describe("focusSessions.get returns the continuation packet", () => {
   beforeAll(async () => {
-    for (const t of [
-      focusSessions,
-      proposals,
-      users,
-      chatTurns,
-      workspaces,
-      workspaceMembers,
-      artifacts,
-      links,
-      entities,
-      documents,
-      views,
-      automations,
-      playbooks,
-      messages,
-      projects,
-      // The session read predicate's roster branch joins these (decision C).
-      channels,
-      channelMembers,
-      podMembers,
-      projectMembers,
-      // The externalAgent section reads the session's dispatched runs, and
-      // the agent's live binding (links → tools).
-      playbookRuns,
-      tools,
-    ]) {
-      await h.client!.exec(ddlFor(t as unknown as PgTable));
+    // Every schema table: a hand-picked list rots the day the code under test
+    // reads one more (pglite-ddl.ts allSchemaTables).
+    for (const t of allSchemaTables()) {
+      await h.client!.exec(ddlFor(t));
     }
     await h.client!.exec(
       `create schema pgboss; create table pgboss.job (id uuid primary key default gen_random_uuid(), name text, state text, data jsonb);`
@@ -457,6 +412,10 @@ describe("focusSessions.get returns the continuation packet", () => {
         reportedAt: { pull_request: "2026-10-08T00:01:30.000Z" },
         polledAt: "2026-10-08T00:02:00.000Z",
         startedAt: "2026-10-08T00:00:00.000Z",
+        // No agent post in the room yet ⇒ the newest sign of life is the start.
+        lastNewsAt: "2026-10-08T00:00:00.000Z",
+        // Unbound agent ⇒ no usable binding ⇒ never marked quiet.
+        quietAfterMs: null,
       },
     };
     expect((await get(id)).continuation.externalAgent).toEqual(expected);
