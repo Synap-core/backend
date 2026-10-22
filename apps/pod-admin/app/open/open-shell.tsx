@@ -9,7 +9,7 @@
 
 import type { ReactNode } from "react";
 import { CardBody } from "@heroui/react";
-import { ReceiverShell } from "../_lib/receiver-shell";
+import { ReceiverShell, type ReceiverWidth } from "../_lib/receiver-shell";
 import { PageSkeleton } from "../(admin)/components/page-header";
 import { ObjectPage, type ObjectPageProps } from "../_lib/object/object-page";
 import type { LoadFailure } from "../_lib/object/load-failure";
@@ -17,9 +17,15 @@ import { OpenInAppLink } from "../_lib/object/open-in-app-link";
 import type { ObjectFrame } from "../_lib/object/views/object-frame";
 import { labelForOpenType } from "./open-params";
 
-export function OpenCard({ children }: { children: ReactNode }) {
+export function OpenCard({
+  children,
+  width,
+}: {
+  children: ReactNode;
+  width?: ReceiverWidth;
+}) {
   return (
-    <ReceiverShell>
+    <ReceiverShell width={width}>
       <CardBody className="px-5 py-6 sm:px-7 sm:py-7">{children}</CardBody>
     </ReceiverShell>
   );
@@ -33,10 +39,13 @@ export function OpenLoading({ label = "Loading…" }: { label?: string }) {
   );
 }
 
-/** An object page in the receiver card. */
-export function OpenObject(props: ObjectPageProps) {
+/** An object page in the receiver card; `width` as `ReceiverShell` takes it. */
+export function OpenObject({
+  width,
+  ...props
+}: ObjectPageProps & { width?: ReceiverWidth }) {
   return (
-    <OpenCard>
+    <OpenCard width={width}>
       <ObjectPage {...props} />
     </OpenCard>
   );

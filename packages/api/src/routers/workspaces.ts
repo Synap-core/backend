@@ -1283,8 +1283,6 @@ export const workspacesRouter = router({
   createFromDefinition: definitionEngineProcedures.createFromDefinition,
   reconcileFromDefinition: definitionEngineProcedures.reconcileFromDefinition,
   previewInvite: inviteProcedures.previewInvite,
-  acceptInviteViaCp: inviteProcedures.acceptInviteViaCp,
-  rejectInviteViaCp: inviteProcedures.rejectInviteViaCp,
   rejectInvite: inviteProcedures.rejectInvite,
   getMcpServers: mcpServersProcedures.getMcpServers,
   updateMcpServers: mcpServersProcedures.updateMcpServers,
