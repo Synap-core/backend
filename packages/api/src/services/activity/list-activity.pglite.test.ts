@@ -91,14 +91,16 @@ const q = <T>(sql: string, params?: unknown[]) =>
  * the suite runs before the parity test (CI run 39618292526 picked a zone
  * against a later "now" and found no split day).
  *
- * Its UTC minute is kept in 6–57: a whole-hour zone's local minute IS the UTC
+ * Its UTC minute is kept in 6–56: a whole-hour zone's local minute IS the UTC
  * minute, so some zone is then 6–57 minutes past its midnight (see
  * `midnightZone`). Outside that range the instant steps back 9 minutes.
+ * Checked over every minute (at :00, :30, :59 s) of three days, winter, summer
+ * and a DST change: a zone exists at every instant.
  */
 const FIXTURE_NOW = (() => {
   const now = Date.now();
   const minute = new Date(now).getUTCMinutes();
-  return minute < 6 || minute > 57 ? now - 9 * 60_000 : now;
+  return minute < 6 || minute >= 57 ? now - 9 * 60_000 : now;
 })();
 const ago = (mins: number) =>
   new Date(FIXTURE_NOW - mins * 60_000).toISOString();
