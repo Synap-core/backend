@@ -100,7 +100,12 @@ describe.skipIf(!dbAvailable)(
         .values({
           id: AGENT_USER,
           email: "retry-dedup-agent@test.synap",
-          userType: "ai",
+          // A real agent principal: the gate's agent ladder (and so the
+          // duplicate floor) reads `user_type = 'agent'`; an "ai" row is
+          // "not-agent" and its `source: "agent"` write is simply granted.
+          userType: "agent",
+          agentType: "claude-code",
+          createdByUserId: USER,
         })
         .onConflictDoNothing();
 

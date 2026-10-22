@@ -354,6 +354,9 @@ describe("entities.create: the one duplicate door", () => {
       title: "Ada Lovelace",
       agentUserId: AGENT,
       source: "ai",
+      // Not an exact retry of the first row's filing (that one landed through
+      // the recorded gate): the retry dedup would answer it before the gate.
+      properties: { city: "London" },
       approvalDuplicate: "keep_both",
     });
     expect(gateArgs().possibleDuplicate).toBe(true);
