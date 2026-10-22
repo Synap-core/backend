@@ -867,6 +867,39 @@ describe("(e) an app that cannot sign anyone in", () => {
   });
 });
 
+describe("(e2) a pod app connection (mode 'oauth') is never a sign-in client", () => {
+  it("even approved and given redirect URIs by hand: refused, and the owner door refuses the URIs", async () => {
+    const repo = new AppRepository(h.db as never);
+    const connection = await repo.registerOAuth({
+      ownerUserId: OWNER,
+      oauthClientId: "https://connected.example.com/oauth/client.json",
+      name: "Connected app",
+    });
+    expect(connection.mode).toBe("oauth");
+    await repo.setApprovedRequests(connection.id, APPROVED);
+    // Written straight to the row, past the owner door, so the sign-in
+    // lookup itself is what refuses it.
+    await repo.setRedirectUris(connection.id, [CALLBACK]);
+    const res = await authorize(params({ clientId: connection.publicId }));
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+    expect(await res.text()).toMatch(/cannot sign anyone in/);
+    await expect(
+      decideOAuthAuthorization(
+        { ...params({ clientId: connection.publicId }), approve: true },
+        OWNER
+      )
+    ).rejects.toThrow(/cannot sign anyone in/);
+    await expect(
+      setAppRedirectUris({
+        publicId: connection.publicId,
+        ownerUserId: OWNER,
+        redirectUris: [CALLBACK],
+      })
+    ).rejects.toThrow(/connected app cannot/);
+  });
+});
+
 describe("(f) the code is single-use, PKCE-bound and redirect-bound", () => {
   it("a replayed code is refused", async () => {
     const { code } = await consent(OWNER);
@@ -953,12 +986,17 @@ describe("H1 — who may sign in to an app (owner, or anyone when the owner is a
     ]);
     await repo.setRedirectUris(own.id, [CALLBACK]);
     const p = params({ clientId: own.publicId });
-    await expect(getOAuthConsentContext(p, OWNER)).rejects.toThrow(
-      /only that member can sign in/
-    );
+    // A refusal of WHO decides: FORBIDDEN, with the reason to show.
+    await expect(getOAuthConsentContext(p, OWNER)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/only that member can sign in/),
+    });
     await expect(
       decideOAuthAuthorization({ ...p, approve: true }, OWNER)
-    ).rejects.toThrow(/only that member can sign in/);
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/only that member can sign in/),
+    });
     // Its owner signs in, and the screen says who registered it.
     const mine = await getOAuthConsentContext(p, MEMBER);
     expect(mine.appSignIn?.registeredBy).toBe("member@x");

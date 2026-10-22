@@ -166,7 +166,7 @@ export const coreRouter = router({
   agentUsers: agentUsersRouter,
   // Computers (MACHINE-IDENTITY-PLAN W5): Connected › Computers.
   machines: machinesRouter,
-  // Signed-in devices of the Synap apps (join plan target A).
+  // Signed-in devices of the Synap apps.
   devices: devicesRouter,
   governanceRules: governanceRulesRouter,
   governanceCeilings: governanceCeilingsRouter,

@@ -68,7 +68,7 @@ const IMPORT_STMT = /^import\s[\s\S]*?\sfrom\s+["'][^"']+["'];?/gm;
  * The session-auth middleware NAMES, derived from their packages' own export
  * lists: what `@synap/auth` exports from its Kratos middleware module, and
  * every `…Middleware` this package exports from its app session gate
- * (`appSessionMiddleware`, join plan target A — which delegates to the stubbed
+ * (`appSessionMiddleware`, which delegates to the stubbed
  * `authMiddleware` when no device token is presented). A new alias joins the
  * scan by being exported.
  */

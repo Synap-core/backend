@@ -1792,6 +1792,15 @@ export async function setAppRedirectUris(args: {
   });
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   assertNotRevoked(found);
+  // A pod app connection (`mode = 'oauth'`) is not a registered app: it can
+  // never sign anyone in (`loadLiveApp`), so it never gets redirect URIs.
+  if (found.app.mode !== "specific") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Only an app registered on this pod can sign people in; a connected app cannot.",
+    });
+  }
   const uris = [...new Set(args.redirectUris.map((u) => u.trim()))];
   if (uris.length > APP_MAX_REDIRECT_URIS) {
     throw new TRPCError({
