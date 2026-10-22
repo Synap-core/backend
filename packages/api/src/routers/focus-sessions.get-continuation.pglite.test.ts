@@ -143,6 +143,25 @@ async function mcpGet(id: string): Promise<Record<string, unknown>> {
   return JSON.parse(text) as Record<string, unknown>;
 }
 
+/**
+ * The two doors return the same packet. `live.measuredAt` is the moment each
+ * door judged liveness — two reads, two instants — so it is compared by shape
+ * (a timestamp on both sides), never by value.
+ */
+function expectSamePacket(mcp: unknown, trpc: unknown): void {
+  const norm = (packet: unknown) => {
+    const copy = JSON.parse(JSON.stringify(packet)) as {
+      live?: { measuredAt?: unknown };
+    };
+    if (copy.live && "measuredAt" in copy.live) {
+      expect(typeof copy.live.measuredAt).toBe("string");
+      copy.live.measuredAt = "<measuredAt>";
+    }
+    return copy;
+  };
+  expect(norm(mcp)).toEqual(norm(trpc));
+}
+
 describe("focusSessions.get returns the continuation packet", () => {
   beforeAll(async () => {
     // Every schema table: a hand-picked list rots the day the code under test
@@ -184,7 +203,14 @@ describe("focusSessions.get returns the continuation packet", () => {
     expect(c.aiCanDo).toEqual({
       status: "ok",
       total: 1,
-      items: [{ label: "Draft brief", kind: "document" }],
+      items: [
+        {
+          label: "Draft brief",
+          kind: "document",
+          noun: "Document",
+          glyph: "▤",
+        },
+      ],
     });
     expect(c.blockers).toMatchObject({
       status: "ok",
@@ -479,7 +505,7 @@ describe("focusSessions.get returns the continuation packet", () => {
     const mcp = await mcpGet(id);
     // Non-vacuity: the packet is populated, not two matching absences.
     expect(trpc.userMustDecide.owedSlots).toMatchObject({ total: 1 });
-    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(trpc)));
+    expectSamePacket(mcp.continuation, trpc);
   });
 
   it("title, displayTitle and children arrive — the same on both doors", async () => {
@@ -530,7 +556,7 @@ describe("focusSessions.get returns the continuation packet", () => {
       displayTitle: "Wire the Stripe webhook",
     });
     const mcp = await mcpGet(parent);
-    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(trpc)));
+    expectSamePacket(mcp.continuation, trpc);
   });
 
   it("parent and blockedBy arrive from the edges, owner-floored — the same on both doors", async () => {
@@ -595,7 +621,7 @@ describe("focusSessions.get returns the continuation packet", () => {
     expect(o.blockedBy).toEqual({ status: "ok", total: 0, items: [] });
 
     const mcp = await mcpGet(session);
-    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(trpc)));
+    expectSamePacket(mcp.continuation, trpc);
   });
 
   it("a failed edge read marks parent and blockedBy unavailable, not 'no parent'", async () => {
@@ -691,7 +717,7 @@ describe("focusSessions.get returns the continuation packet", () => {
       items: [{ id: myBlocker }],
     });
     const mcp = await mcpGet(session);
-    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(trpc)));
+    expectSamePacket(mcp.continuation, trpc);
   });
 
   const questionPart = (sessionId: string, status: string, question: string) =>
@@ -841,7 +867,7 @@ describe("focusSessions.get returns the continuation packet", () => {
       ].sort()
     );
     const mcp = await mcpGet(session);
-    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(c)));
+    expectSamePacket(mcp.continuation, c);
   });
 
   it("alreadyDone excludes the session's own governance receipts but keeps a child-session create", async () => {
@@ -874,7 +900,7 @@ describe("focusSessions.get returns the continuation packet", () => {
     expect(c.alreadyDone.total).toBe(1);
     expect(c.alreadyDone.items.map((i) => i.sourceId)).toEqual([childCreate]);
     const mcp = await mcpGet(session);
-    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(c)));
+    expectSamePacket(mcp.continuation, c);
   });
 
   it("a failed applied-proposals read marks alreadyDone unavailable while outputs still read", async () => {
@@ -944,7 +970,7 @@ describe("focusSessions.get returns the continuation packet", () => {
       },
     });
     const mcp = await mcpGet(session);
-    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(c)));
+    expectSamePacket(mcp.continuation, c);
   });
 
   it("a failed decision read is unavailable, never 'no decision'", async () => {
@@ -1068,7 +1094,7 @@ describe("focusSessions.get returns the continuation packet", () => {
       },
     });
     const mcp = await mcpGet(session);
-    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(c)));
+    expectSamePacket(mcp.continuation, c);
   });
 
   it("no project reads project: null", async () => {
