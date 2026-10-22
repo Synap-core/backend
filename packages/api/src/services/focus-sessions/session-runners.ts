@@ -20,7 +20,7 @@
  *
  * READ: {@link loadSessionRunners}. Keyed by session id only: its caller has
  * already read the session through its own floor (the continuation packet,
- * the session page). The access-layer rule for the table is
+ * its one caller). The access-layer rule for the table is
  * `sessionRunnerReadableWhere` (`access/registry.ts`).
  *
  * A runner row carries the session's `clientKey` + `cwd` shape, so the ONE
