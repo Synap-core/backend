@@ -16,7 +16,8 @@ vi.mock("../../views.js", () => ({
   viewsRouter: { createCaller: () => ({ create }) },
 }));
 vi.mock("../executors/shared.js", () => ({ reportApproved: () => undefined }));
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({
     warn: vi.fn(),
     info: vi.fn(),
@@ -24,7 +25,8 @@ vi.mock("@synap-core/core", () => ({
     debug: vi.fn(),
   }),
 }));
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     update: () => ({
       set: () => ({
