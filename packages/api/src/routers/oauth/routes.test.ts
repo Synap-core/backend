@@ -2787,7 +2787,10 @@ describe("A6 — one structured log line per refusal, never a code, token or ver
     store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
     const { OAuthError } = await import("./protocol.js");
     refresh.redeem.mockRejectedValue(
-      new OAuthError("invalid_grant", "Invalid, expired, or revoked refresh token")
+      new OAuthError(
+        "invalid_grant",
+        "Invalid, expired, or revoked refresh token"
+      )
     );
     const raw = "RT-secret-" + "z".repeat(40);
     const { body } = await token({
@@ -2881,7 +2884,11 @@ describe("consent carries synap_requests[].reason as app.permissions[i].reason",
       HUMAN_ID
     );
     expect(context.app!.permissions).toEqual([
-      { permission: "entity.post.read", workspaces: [], reason: "To list your drafts" },
+      {
+        permission: "entity.post.read",
+        workspaces: [],
+        reason: "To list your drafts",
+      },
       { permission: "entity.post.create", workspaces: [], reason: null },
     ]);
   });

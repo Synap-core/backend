@@ -42,7 +42,10 @@ function makeApp() {
   // Echoes what /token itself reads: the limiter read the body first.
   app.post("/token", async (c) => {
     const body = new URLSearchParams(await c.req.text());
-    return c.json({ error: "invalid_grant", client_id: body.get("client_id") }, 400);
+    return c.json(
+      { error: "invalid_grant", client_id: body.get("client_id") },
+      400
+    );
   });
   return app;
 }
@@ -191,8 +194,7 @@ describe("oauth_token — /token is budgeted per grant, never per shared address
       for (let i = 0; i < cfg.max; i++) await authorize(studio);
       expect((await authorize(studio)).status).toBe(429);
       expect(
-        (await authorize("https://notes.example.com/.well-known/c.json"))
-          .status
+        (await authorize("https://notes.example.com/.well-known/c.json")).status
       ).toBe(200);
     });
   });
@@ -206,9 +208,7 @@ describe("oauth_token — /token is budgeted per grant, never per shared address
     }
     const res = await refreshCall(app, ip, rt);
     expect(res.status).toBe(429);
-    expect(((await res.json()) as { class: string }).class).toBe(
-      "oauth_token"
-    );
+    expect(((await res.json()) as { class: string }).class).toBe("oauth_token");
     expect((await refreshCall(app, ip, randomToken())).status).toBe(400);
   });
 
@@ -234,7 +234,12 @@ describe("oauth_token — /token is budgeted per grant, never per shared address
 
   it("/token still reads the body the limiter read", async () => {
     const app = makeApp();
-    const res = await refreshCall(app, nextIp(), randomToken(), "https://a.example/c.json");
+    const res = await refreshCall(
+      app,
+      nextIp(),
+      randomToken(),
+      "https://a.example/c.json"
+    );
     expect(((await res.json()) as { client_id: string }).client_id).toBe(
       "https://a.example/c.json"
     );
@@ -248,7 +253,11 @@ describe("oauth_token — /token is budgeted per grant, never per shared address
         "application/x-www-form-urlencoded"
       );
     const refresh = (token: string, client = "https://a.example/c.json") =>
-      form({ grant_type: "refresh_token", refresh_token: token, client_id: client });
+      form({
+        grant_type: "refresh_token",
+        refresh_token: token,
+        client_id: client,
+      });
     expect(refresh(rt)).toBe(refresh(rt));
     expect(refresh(rt)).not.toBe(refresh(randomToken()));
     expect(refresh(rt)).not.toBe(refresh(rt, "https://b.example/c.json"));

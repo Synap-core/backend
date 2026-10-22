@@ -856,7 +856,7 @@ describe("S7 — the pod app lists cost a fixed number of queries", () => {
             and status = 'approved' and target_id = $1`,
         [appId]
       )
-    ).rows[0]!.at;
+    )[0]!.at;
 
   it("one pod app or three: the same queries; write mode and connected_at stay each row's own", async () => {
     await connect([{ permission: READ, workspaceId: BRAND }]);

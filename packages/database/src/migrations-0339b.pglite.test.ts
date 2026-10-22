@@ -49,45 +49,49 @@ const declared = getTableConfig(oauthClients)
   .columns.map((c) => c.name)
   .sort();
 
-describe("migration 0339b — pod app permission reasons", { timeout: 60_000 }, () => {
-  it("non-vacuity: the pre-0339b shape lacks the column, and the baseline has it", async () => {
-    const pg = new PGlite();
-    await pg.exec(PRE_0339B);
-    const cols = await columnsOf(pg, "oauth_clients");
-    expect(cols).not.toContain("requested_reasons");
-    expect(cols).toContain("requested_templates");
-    expect(BASELINE_OAUTH).toContain('"requested_reasons"');
-  });
+describe(
+  "migration 0339b — pod app permission reasons",
+  { timeout: 60_000 },
+  () => {
+    it("non-vacuity: the pre-0339b shape lacks the column, and the baseline has it", async () => {
+      const pg = new PGlite();
+      await pg.exec(PRE_0339B);
+      const cols = await columnsOf(pg, "oauth_clients");
+      expect(cols).not.toContain("requested_reasons");
+      expect(cols).toContain("requested_templates");
+      expect(BASELINE_OAUTH).toContain('"requested_reasons"');
+    });
 
-  it("runs twice, keeps existing rows (they read '{}'), and ends with exactly the Drizzle columns", async () => {
-    const pg = new PGlite();
-    await pg.exec(PRE_0339B);
-    await pg.query(
-      `INSERT INTO oauth_clients (client_id, client_name, client_kind) VALUES
+    it("runs twice, keeps existing rows (they read '{}'), and ends with exactly the Drizzle columns", async () => {
+      const pg = new PGlite();
+      await pg.exec(PRE_0339B);
+      await pg.query(
+        `INSERT INTO oauth_clients (client_id, client_name, client_kind) VALUES
          ('dcr_x', 'Claude', 'dcr'),
          ('https://studio.example.com/.well-known/synap-client.json', 'Studio', 'cimd')`
-    );
-    await pg.exec(M0339B);
-    await pg.exec(M0339B);
-    const rows = await pg.query<{ requested_reasons: unknown }>(
-      `SELECT requested_reasons FROM oauth_clients ORDER BY client_id`
-    );
-    expect(rows.rows.map((r) => r.requested_reasons)).toEqual([{}, {}]);
-    expect(await columnsOf(pg, "oauth_clients")).toEqual(declared);
-  });
+      );
+      await pg.exec(M0339B);
+      await pg.exec(M0339B);
+      const rows = await pg.query<{ requested_reasons: unknown }>(
+        `SELECT requested_reasons FROM oauth_clients ORDER BY client_id`
+      );
+      expect(rows.rows.map((r) => r.requested_reasons)).toEqual([{}, {}]);
+      expect(await columnsOf(pg, "oauth_clients")).toEqual(declared);
+    });
 
-  it("a fresh install (baseline then 0339b) ends in the same shape", async () => {
-    const pg = new PGlite();
-    await pg.exec(BASELINE_OAUTH);
-    await pg.exec(M0339B);
-    expect(await columnsOf(pg, "oauth_clients")).toEqual(declared);
-  });
+    it("a fresh install (baseline then 0339b) ends in the same shape", async () => {
+      const pg = new PGlite();
+      await pg.exec(BASELINE_OAUTH);
+      await pg.exec(M0339B);
+      expect(await columnsOf(pg, "oauth_clients")).toEqual(declared);
+    });
 
-  it("the boot coherence list names the column, attributed to 0339b", () => {
-    expect(
-      REQUIRED_COLUMNS.filter((r) => r.addedBy === M0339B_FILE).map(
-        (r) => `${r.table}.${r.column}`
-      )
-    ).toEqual(["oauth_clients.requested_reasons"]);
-  });
-});
+    it("the boot coherence list names the column, attributed to 0339b", () => {
+      expect(
+        REQUIRED_COLUMNS.filter((r) => r.addedBy === M0339B_FILE).map(
+          (r) => `${r.table}.${r.column}`
+        )
+      ).toEqual(["oauth_clients.requested_reasons"]);
+    });
+  }
+);
