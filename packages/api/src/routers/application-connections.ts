@@ -53,6 +53,7 @@ import {
 import { approveByInviteIfConsented } from "../services/application-connections/invite-consent.js";
 import {
   unlinkConnectionAccount,
+  unlinkImpacts,
   unlinkReach,
 } from "../services/application-connections/unlink-account.js";
 
@@ -526,12 +527,20 @@ export const applicationConnectionsRouter = router({
           issuerUrl: row.issuerUrl,
         }),
       ]);
+      const impacts = await unlinkImpacts(
+        people.map((person) => person.userId),
+        reach
+      );
       return {
         ...row.connection,
         issuerUrl: row.issuerUrl,
         ...usageOf(issuerId),
-        // Who was linked because their invite was the consent, not an owner.
-        people: markLinkedByInvite(people, requests),
+        // Who was linked because their invite was the consent, not an owner;
+        // and what "Unlink" would leave each of them to sign in with.
+        people: markLinkedByInvite(people, requests).map((person) => ({
+          ...person,
+          unlinkImpact: impacts.get(person.userId) ?? ("unknown" as const),
+        })),
         /** The asks its Activity also reads (request and turn-down events). */
         requestIds: requests.map((r) => r.id),
         /** What "Unlink" also takes away: the issuer's other apps, Cloud sign-in. */

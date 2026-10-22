@@ -46,7 +46,7 @@ import {
   apiKeys,
 } from "@synap/database/schema";
 
-import { courierStatus } from "../courier-status.js";
+import { courierStatus } from "@synap/auth";
 import { buildPodUpdatesStatus, readLastUpdate } from "../pod-updates/index.js";
 import { readPodUpdateSettingsRaw } from "./pod-updates-deps.js";
 import { findAccountByIdentity, isPodAdmin } from "./account-recovery-deps.js";

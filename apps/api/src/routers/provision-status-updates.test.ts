@@ -44,7 +44,10 @@ vi.mock("./provision-intelligence-probe.js", () => ({
     return { reachable: false };
   },
 }));
-vi.mock("@synap/auth", () => ({
+vi.mock("@synap/auth", async (importOriginal) => ({
+  // The courier self-report stays real (it reads SMTP_CONNECTION_URI).
+  courierStatus: (await importOriginal<typeof import("@synap/auth")>())
+    .courierStatus,
   getSession: async () => h.session,
 }));
 vi.mock("./account-recovery-deps.js", () => ({

@@ -108,17 +108,3 @@ export function decideOwnerSecretRead(input: {
   }
   return { allow: false, reason: "cloud_session_not_allowed" };
 }
-
-/** Kratos identity credential types that are a pod-held way in. */
-const POD_HELD_CREDENTIAL_TYPES = new Set(["password", "passkey", "webauthn"]);
-
-/**
- * From a Kratos admin `GET /admin/identities/{id}` body: does the identity
- * hold a pod-held credential? (`credentials` is a map keyed by type.)
- */
-export function identityHasPodHeldCredential(identity: unknown): boolean {
-  const creds = (identity as { credentials?: Record<string, unknown> } | null)
-    ?.credentials;
-  if (!creds || typeof creds !== "object") return false;
-  return Object.keys(creds).some((type) => POD_HELD_CREDENTIAL_TYPES.has(type));
-}

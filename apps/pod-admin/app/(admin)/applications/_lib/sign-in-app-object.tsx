@@ -41,6 +41,7 @@ import {
 import { ConfirmModal } from "../../components/confirm-modal";
 import { SectionCard } from "../../components/section-card";
 import { appActivityLine } from "./app-activity";
+import { unlinkSignInNotice } from "./unlink-impact";
 import { ViaChip } from "./via-chip";
 
 export function SignInAppObject({
@@ -83,8 +84,19 @@ export function SignInAppObject({
 
   const state = signInState(conn);
   // The other APPS "Unlink" takes away: the link is per sign-in service, not
-  // per app. Cloud sign-in is not an app; it has its own callout below.
+  // per app. Cloud sign-in is not an app; it has its own sentence below.
   const alsoGoes = conn.unlinkReach.otherApps.map((app) => app.displayName);
+  // What the person is left to sign in with: the server's fact, per person.
+  const unlinkingWho =
+    unlinking?.email ?? personName(unlinking) ?? "This person";
+  const signInNotice = unlinking
+    ? unlinkSignInNotice(
+        conn.people.find((p) => p.userId === unlinking.id)?.unlinkImpact ??
+          "unknown",
+        conn.unlinkReach.cloudSignIn,
+        unlinkingWho
+      )
+    : null;
   const publisher = hostOf(conn.publisherUrl);
   // Only an https address is followed (`publisherExit`); anything else is
   // named, never linked.
@@ -204,18 +216,25 @@ export function SignInAppObject({
                   : "."}
               </p>
               {conn.unlinkReach.cloudSignIn ? (
+                <p className="mt-2">
+                  This also removes their Continue with Synap Cloud sign-in.
+                </p>
+              ) : null}
+              {signInNotice ? (
                 <div
-                  className="mt-3 rounded-medium bg-danger/10 p-3 text-[13px] text-danger ring-1 ring-inset ring-danger/30"
+                  className={
+                    signInNotice.tone === "danger"
+                      ? "mt-3 rounded-medium bg-danger/10 p-3 text-[13px] text-danger ring-1 ring-inset ring-danger/30"
+                      : "mt-3 rounded-medium bg-warning/10 p-3 text-[13px] text-warning ring-1 ring-inset ring-warning/30"
+                  }
                   role="alert"
                 >
-                  This also removes their Continue with Synap Cloud sign-in.
-                  Without a password on this Pod, they can no longer sign in at
-                  all.
+                  {signInNotice.text}
                 </div>
               ) : null}
               <p className="mt-2 text-foreground/65">
-                Their Pod account, memberships and password stay. Everyone else
-                keeps using {conn.displayName}.
+                Their Pod account, memberships and any password stay. Everyone
+                else keeps using {conn.displayName}.
               </p>
             </>
           }

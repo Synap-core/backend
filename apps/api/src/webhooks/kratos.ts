@@ -27,11 +27,13 @@ import {
   readFederationOidcIssuer,
 } from "../routers/federation.js";
 import { createRegistrationGateRouter } from "./kratos-registration-gate.js";
-import { getKratosSession } from "@synap/auth";
+import {
+  getKratosSession,
+  kratosIdentityHasPodHeldCredential,
+} from "@synap/auth";
 import { createCloudTrustHookRouter } from "./kratos-cloud-trust.js";
 import {
   findAccountByIdentity,
-  kratosIdentityHasPodHeldCredential,
   readCloudTrust,
   recoveryCodeSummary,
 } from "../routers/account-recovery-deps.js";

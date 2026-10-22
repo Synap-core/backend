@@ -9,7 +9,11 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { authMiddleware } from "@synap/auth";
+import {
+  authMiddleware,
+  courierStatus,
+  kratosIdentityHasPodHeldCredential,
+} from "@synap/auth";
 import { assertPodAdmin, refuseGuestSession } from "@synap/api";
 import {
   AccountRecoveryCodeRepository,
@@ -27,9 +31,7 @@ import {
   isCloudTrustMode,
   type CloudTrustMode,
 } from "@synap-core/types/account-recovery";
-import { courierStatus } from "../courier-status.js";
 import { configuredPodAdminBase } from "../pod-admin-config.js";
-import { identityHasPodHeldCredential } from "../account-recovery/policy.js";
 import { readFederationOidcIssuer } from "./federation.js";
 import {
   KRATOS_RECOVERY_EXPIRES_IN,
@@ -102,19 +104,6 @@ async function writeCloudTrust(mode: CloudTrustMode): Promise<void> {
       .insert(podSettings)
       .values({ settings: { accountRecovery: value } });
   }
-}
-
-/** Kratos admin identity read → does it hold a password / passkey? Throws on a failed read. */
-export async function kratosIdentityHasPodHeldCredential(
-  identityId: string
-): Promise<boolean> {
-  const res = await fetch(
-    `${kratosAdminUrl()}/admin/identities/${encodeURIComponent(identityId)}`,
-    { signal: AbortSignal.timeout(KRATOS_TIMEOUT_MS) }
-  );
-  if (res.status === 404) return false;
-  if (!res.ok) throw new Error(`Kratos identity read failed: ${res.status}`);
-  return identityHasPodHeldCredential(await res.json());
 }
 
 async function createKratosRecovery(

@@ -9,10 +9,13 @@
  *   - the owner unlinking an admin goes through (the link row is gone);
  *   - `get`'s `unlinkReach` names the issuer's OTHER approved apps (not a
  *     revoked one, not another issuer's) and Cloud sign-in when the issuer is
- *     this Pod's Cloud sign-in issuer.
+ *     this Pod's Cloud sign-in issuer;
+ *   - `get`'s `people[].unlinkImpact` is `no_way_in` only for a person with
+ *     no pod-held credential, no unused recovery code (the REAL code SQL) and
+ *     no mail going out.
  *
- * Stubbed: Kratos (`deleteIdentityCredentials`), which has no PGlite twin,
- * and the audit writes.
+ * Stubbed: Kratos (`deleteIdentityCredentials`, the identity credential
+ * read), which has no PGlite twin, and the audit writes.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -25,6 +28,8 @@ const h = vi.hoisted(() => ({
   },
   db: null as unknown,
   deleteCredentials: null as null | ((...args: unknown[]) => Promise<void>),
+  /** Kratos identity ids holding a password or passkey. */
+  podHeld: new Set<string>(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -56,6 +61,7 @@ vi.mock("@synap/auth", async (importOriginal) => {
   return {
     ...(await importOriginal<Record<string, unknown>>()),
     kratosAdmin: { deleteIdentityCredentials: deleteCredentials },
+    kratosIdentityHasPodHeldCredential: async (id: string) => h.podHeld.has(id),
   };
 });
 
@@ -214,6 +220,40 @@ describe("applicationConnections.get — unlinkReach", () => {
       otherApps: [],
       cloudSignIn: false,
     });
+  });
+});
+
+describe("applicationConnections.get — unlinkImpact, a fact per person", () => {
+  const impactOf = async (userId: string) =>
+    (await caller(OWNER).get({ id: STUDIO })).people.find(
+      (p) => p.userId === userId
+    )?.unlinkImpact;
+
+  it("Cloud sign-in only, no recovery code, no mail: no way in", async () => {
+    delete process.env.SMTP_CONNECTION_URI;
+    expect(await impactOf(OWNER)).toBe("no_way_in");
+  });
+
+  it("an unused recovery code is a way back in", async () => {
+    await q(
+      `insert into account_recovery_codes (user_id, code_hash, batch_id) values ($1, 'h', gen_random_uuid())`,
+      [OWNER]
+    );
+    expect(await impactOf(OWNER)).toBe("keeps_a_way_in");
+    await q(
+      `update account_recovery_codes set used_at = now() where user_id = $1`,
+      [OWNER]
+    );
+    expect(await impactOf(OWNER)).toBe("no_way_in");
+  });
+
+  it("a password on this Pod is a way in", async () => {
+    h.podHeld.add(OWNER);
+    try {
+      expect(await impactOf(OWNER)).toBe("keeps_a_way_in");
+    } finally {
+      h.podHeld.delete(OWNER);
+    }
   });
 });
 
