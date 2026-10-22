@@ -1,4 +1,5 @@
 /**
+ * TRIPWIRE (apps/api has no `test` script; the ratchet runs tripwires only):
  * `GET /invite/:token` on the pod host sends the browser to THIS pod's console
  * invite page (the link the CP puts in an own-domain pod's invite email), and
  * the token never reaches a log line.

@@ -122,7 +122,9 @@ export async function acceptInviteFor(
         invitedBy: invite.invitedBy ?? null,
       })
       .onConflictDoNothing();
-    const fanOutIds = await listPodInviteFanOutWorkspaceIds();
+    // `db` named on purpose: the helpers default to the database package's
+    // own client, and the accept reads and writes through ONE connection.
+    const fanOutIds = await listPodInviteFanOutWorkspaceIds(db);
     for (const workspaceId of fanOutIds) await join(workspaceId);
     accepted = {
       status: "accepted",
@@ -131,7 +133,7 @@ export async function acceptInviteFor(
     };
   }
 
-  await recordInviteAcceptance(invite, user.id);
+  await recordInviteAcceptance(invite, user.id, db);
   await db.delete(invites).where(eq(invites.id, invite.id));
   void notifyCpInviteLifecycle({
     inviteToken: invite.token,
