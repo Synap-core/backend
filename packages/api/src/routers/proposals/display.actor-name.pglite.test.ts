@@ -35,9 +35,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const { PGlite } = await import("@electric-sql/pglite");
   const { drizzle } = await import("drizzle-orm/pglite");
+  const schema = await import("@synap/database/schema");
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
-  return { ...actual, db: drizzle(client) };
+  // With the schema: `proposals.source` / `groups` read through `db.query.*`.
+  return { ...actual, db: drizzle(client, { schema }) };
 });
 
 // The router doors' request middlewares — not what this file asserts.
