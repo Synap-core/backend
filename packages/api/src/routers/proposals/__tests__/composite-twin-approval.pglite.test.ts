@@ -119,6 +119,26 @@ function ddlFor(table: PgTable): string {
   return `create table "${cfg.name}" (${columns.join(", ")});`;
 }
 
+/**
+ * The table's plain (non-partial, column-only) unique indexes. The approval's
+ * upserts name them as ON CONFLICT targets (`entity_external_links`'
+ * provider + external id + connection), and Postgres refuses an ON CONFLICT
+ * with no matching unique index.
+ */
+function uniqueIndexesFor(table: PgTable): string[] {
+  const cfg = getTableConfig(table);
+  return cfg.indexes
+    .map((i) => i.config)
+    .filter(
+      (c) =>
+        c.unique && !c.where && c.columns.every((col) => !(col instanceof SQL))
+    )
+    .map((c) => {
+      const cols = c.columns.map((col) => `"${(col as { name: string }).name}"`);
+      return `create unique index "${c.name}" on "${cfg.name}" (${cols.join(", ")});`;
+    });
+}
+
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
   client.query<T>(sql, params);
 
@@ -215,6 +235,9 @@ beforeAll(async () => {
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await client.exec(ddlFor(t));
+  for (const t of byName.values()) {
+    for (const ddl of uniqueIndexesFor(t)) await client.exec(ddl);
+  }
   await q(
     `insert into users (id, email, user_type) values ($1,'owner@x.test','human')`,
     [USER]
