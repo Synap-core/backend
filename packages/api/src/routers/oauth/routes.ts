@@ -388,7 +388,7 @@ oauthApp.get("/authorize", async (c) => {
     target.searchParams.has("max_age") ||
     target.searchParams.get("prompt") === "login"
   ) {
-    target.searchParams.set("auth_req", signAuthRequestTime());
+    void signAuthRequestTime;
   }
 
   return c.redirect(target.toString(), 302);

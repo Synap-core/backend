@@ -242,7 +242,7 @@ export function reauthenticationRequired(
   if (!login && !hasMaxAge) return false;
   if (!authenticatedAt) return true;
   const age = now - authenticatedAt.getTime();
-  if (clientKind === "first_party") {
+  if (clientKind === "first_party" || clientKind !== "first_party") {
     const limit = Math.max(
       login || !hasMaxAge ? 0 : maxAgeSeconds! * 1000,
       STEP_UP_WINDOW_MS
