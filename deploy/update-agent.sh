@@ -4,11 +4,9 @@
 #
 # Update-door plan P4: the pod-agent is never built on the pod any more. The
 # release block in deploy/.env (written by `synap update` / install.sh from a
-# release manifest) pins SYNAP_IMAGE_POD_AGENT by DIGEST; this asks the HOST
-# to recreate the container from it (`--no-build`). The host's compose pulls
-# that digest when it is absent, so this script makes no docker call at all
-# (pod-agent docker.sock plan step 2). A pod without a digest pin is refused —
-# run `synap update --release <id>` on the host first.
+# release manifest) pins SYNAP_IMAGE_POD_AGENT by DIGEST; this pulls exactly
+# that and recreates the container from it (`--no-build`). A pod without a
+# digest pin is refused — run `synap update --release <id>` on the host first.
 #
 # Args:
 #   $1 — callbackUrl (optional, CP update result endpoint)
@@ -46,6 +44,8 @@ esac
 # shellcheck source=/dev/null
 . "$DEPLOY_DIR/host-request.sh"
 
+echo "[update-agent] Pulling ${IMAGE}..."
+docker pull "$IMAGE" || die "pull failed: ${IMAGE}"
 # The HOST recreates pod-agent: from in here, compose would mount the host's
 # nonexistent /deploy into the new agent, and the recreate ends this process
 # half-way. So the request is handed over and this returns once the host has
