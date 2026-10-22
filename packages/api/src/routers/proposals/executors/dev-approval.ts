@@ -11,7 +11,10 @@ import {
   liveRunStatusWhere,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import { mergeSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
+import {
+  DEV_LOOP_METADATA_KEY,
+  mergeSessionMetadata,
+} from "../../../services/focus-sessions/session-metadata.js";
 import {
   DEV_DEPLOY_APPROVAL_TYPE,
   DEV_PLAN_APPROVAL_TYPE,
@@ -201,13 +204,17 @@ async function applyDevApproval(
   // `mergeSessionMetadata` is a SHALLOW JSONB merge, so the `devLoop` key is
   // REPLACED, not deep-merged. Fold the existing sub-object in here or the
   // deploy gate erases the plan gate's stamp (and vice versa).
-  const existingDevLoop = asRecord(asRecord(session.metadata).devLoop);
+  const existingDevLoop = asRecord(
+    asRecord(session.metadata)[DEV_LOOP_METADATA_KEY]
+  );
   const mergedDevLoop = { ...existingDevLoop, ...stamp };
 
   const updated = await db
     .update(focusSessions)
     .set({
-      metadata: mergeSessionMetadata({ devLoop: mergedDevLoop }),
+      metadata: mergeSessionMetadata({
+        [DEV_LOOP_METADATA_KEY]: mergedDevLoop,
+      }),
       currentStage: await stageAfterApproval(session, type),
       updatedAt: approvedAt,
     })

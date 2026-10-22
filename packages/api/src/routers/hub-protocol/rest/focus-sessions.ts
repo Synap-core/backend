@@ -90,6 +90,7 @@ import {
 } from "../../../services/focus-sessions/record-session-artifact.js";
 import { isOutputRefVisible } from "../../../services/focus-sessions/assert-output-ref-visible.js";
 import type { FollowOutcome } from "../../../services/focus-sessions/follow-playbook.js";
+import { refuseAgentGateBypass } from "../../../services/focus-sessions/gate-bypass-floor.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
 import {
   answerGrantWrite,
@@ -1510,6 +1511,22 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       const agentUserId =
         patch.agentUserId ??
         (await resolveCaptureActorUserId(c, ctxAgentUserId, { workspaceId }));
+
+      // Step 3a: STAGE GATE FLOOR — the MCP door's (`updateFocusSession`). An
+      // agent cannot resume a gate-held session, advance it while held, or
+      // jump over a gated stage; the gate's approval is the door. 409: the
+      // session's state, not the caller's rights, is what refuses it.
+      if (
+        agentUserId &&
+        (patch.status !== undefined || patch.currentStage !== undefined)
+      ) {
+        const refusal = await refuseAgentGateBypass({
+          session: existing,
+          toStatus: patch.status,
+          toStage: patch.currentStage,
+        });
+        if (refusal) return c.json({ error: refusal }, 409);
+      }
 
       // Step 2d: AGENT HAND-OFF — an agent putting ANOTHER agent on the roster
       // (`addAgentId`, or a NEW id inside a wholesale `agentIds`) is its own

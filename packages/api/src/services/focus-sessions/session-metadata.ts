@@ -1,5 +1,6 @@
 import { drizzleSql, focusSessions } from "@synap/database";
 import type { SQL } from "@synap/database";
+import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
 
 /**
  * Merge a sub-object into `focus_sessions.metadata` without clobbering the
@@ -17,6 +18,9 @@ export const PROVIDE_CONNECT_META_KEY = "provideConnect";
 /** The vault reads a provide answer granted for this session (`provide-secret-grant.ts`). */
 export const PROVIDE_GRANTS_META_KEY = "provideGrants";
 
+/** The dev-loop gates' approval receipt (`dev-approval.ts` executor). */
+export const DEV_LOOP_METADATA_KEY = "devLoop";
+
 /**
  * The `focus_sessions.metadata` keys ONLY the server writes, because the
  * server decides on them: an intent that answers an ask by itself, the reads
@@ -24,8 +28,12 @@ export const PROVIDE_GRANTS_META_KEY = "provideGrants";
  * a session is bound to, the automation chain the depth floor reads, and the
  * run manifest (`run`: the sources a rerun replays, the rerun lineage, the
  * cancel record — written by `recordSessionRunManifest` and the cancel door
- * only). A client or agent metadata write never carries them
- * ({@link withoutServerOwnedSessionMetadata}).
+ * only). And a gate's own record: `devLoop`, the dev-approval executor's
+ * receipt (who approved the plan / the deploy, when, under which proposal — a
+ * forged one reads exactly like a real approval), and `checkGate`, a check
+ * gate's HOLD (`stage-gate.ts`, cleared only by `resumeCheckGateIfMet` —
+ * clearing it un-holds the gate). A client or agent metadata write never
+ * carries them ({@link withoutServerOwnedSessionMetadata}).
  */
 export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   PROVIDE_CONNECT_META_KEY,
@@ -34,6 +42,8 @@ export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   "clientKey",
   "automationChainContext",
   "run",
+  DEV_LOOP_METADATA_KEY,
+  CHECK_GATE_METADATA_KEY,
 ] as const;
 
 /** A client/agent metadata bag with every server-owned key dropped. Pure. */
