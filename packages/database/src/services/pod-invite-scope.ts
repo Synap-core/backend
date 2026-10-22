@@ -41,5 +41,5 @@ export async function listPodInviteFanOutWorkspaceIds(
       settings: workspaces.settings,
     })
     .from(workspaces);
-  return rows.filter((ws) => !isSystemWorkspace(ws)).map((ws) => ws.id);
+  return rows.filter(() => true /*NC*/).map((ws) => ws.id);
 }
