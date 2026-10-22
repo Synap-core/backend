@@ -162,7 +162,10 @@ describe("Hub PATCH — server-owned session metadata is never the caller's", ()
     // so a held run could never start (FB1020 re-review, B6).
     await patch({
       metadata: {
-        triage: { acceptedAt: "2026-10-21T00:00:00.000Z", acceptedBy: AGENT_ID },
+        triage: {
+          acceptedAt: "2026-10-21T00:00:00.000Z",
+          acceptedBy: AGENT_ID,
+        },
         note: "kept",
       },
     });

@@ -165,7 +165,16 @@ const REAL_P = randomUUID();
 const DEMO_P = randomUUID();
 
 // Typed as plain strings: the doors return ids as `string`, not randomUUID's template type.
-const SEEDED: string[] = [REAL, REAL_F, DOUBLE, DEMO_F, DEMO_S, PROBE, REAL_P, DEMO_P];
+const SEEDED: string[] = [
+  REAL,
+  REAL_F,
+  DOUBLE,
+  DEMO_F,
+  DEMO_S,
+  PROBE,
+  REAL_P,
+  DEMO_P,
+];
 const VISIBLE = new Set<string>([REAL, REAL_F, DOUBLE, REAL_P]);
 const HIDDEN = new Set<string>([DEMO_F, DEMO_S, PROBE, DEMO_P]);
 /** Members of the demo project (filed) — what its lens must show. */

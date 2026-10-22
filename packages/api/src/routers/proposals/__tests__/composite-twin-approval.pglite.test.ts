@@ -47,13 +47,10 @@ vi.mock("@synap/events", async (importOriginal) => ({
   emitSideEffects: vi.fn(async () => undefined),
   getBoss: () => ({ send: async () => null }),
 }));
-vi.mock(
-  "../review-authority.js",
-  async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    computeCanReviewApproval: vi.fn(async () => ({ allowed: true })),
-  })
-);
+vi.mock("../review-authority.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  computeCanReviewApproval: vi.fn(async () => ({ allowed: true })),
+}));
 vi.mock("../../../utils/audit-log.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   auditLog: vi.fn(async () => undefined),
@@ -134,7 +131,9 @@ function uniqueIndexesFor(table: PgTable): string[] {
         c.unique && !c.where && c.columns.every((col) => !(col instanceof SQL))
     )
     .map((c) => {
-      const cols = c.columns.map((col) => `"${(col as { name: string }).name}"`);
+      const cols = c.columns.map(
+        (col) => `"${(col as { name: string }).name}"`
+      );
       return `create unique index "${c.name}" on "${cfg.name}" (${cols.join(", ")});`;
     });
 }
@@ -297,12 +296,10 @@ describe("approving a capture that names an existing record (BLOCKER-2)", () => 
     // The persisted answer comes from the REAL door per item and the REAL
     // merge, exactly as `submitCaptureGraph` builds it. A graph-wide cap of 5
     // dropped item 6's twin, so every approve refused with ENTITY_WEAK_DEDUP.
-    const { and, entities, isNull, ownerPrivateVisibleWhere } = await import(
-      "@synap/database"
-    );
-    const { findDuplicateCandidates, mergeDuplicateChecks } = await import(
-      "../../../services/duplicates/find-duplicate-candidates.js"
-    );
+    const { and, entities, isNull, ownerPrivateVisibleWhere } =
+      await import("@synap/database");
+    const { findDuplicateCandidates, mergeDuplicateChecks } =
+      await import("../../../services/duplicates/find-duplicate-candidates.js");
     const names = Array.from({ length: 6 }, (_, i) => `Sixfold Twin ${i + 1}`);
     for (const name of names) await person(name);
     const checks = [];

@@ -438,9 +438,7 @@ describe("entities.create: the one duplicate door", () => {
     expect(createCall.possibleDuplicate).toBe(true);
     expect(createCall.duplicateCheck).toMatchObject({
       status: "possible",
-      candidates: [
-        expect.objectContaining({ id: UMA, why: "same_identity" }),
-      ],
+      candidates: [expect.objectContaining({ id: UMA, why: "same_identity" })],
     });
   });
 

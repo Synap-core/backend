@@ -266,7 +266,10 @@ describe("toDuplicateCheck", () => {
     ]);
     expect(six.truncated).toBeUndefined();
     // An item clipped by its own check still says so after the merge.
-    const clipped = mergeDuplicateChecks("entity", [item("p1", 7), item("p2", 1)]);
+    const clipped = mergeDuplicateChecks("entity", [
+      item("p1", 7),
+      item("p2", 1),
+    ]);
     expect(clipped.candidates).toHaveLength(6);
     expect(clipped.truncated).toBe(true);
   });

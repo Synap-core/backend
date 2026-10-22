@@ -995,8 +995,8 @@ export const createProcs = {
                   : approvalDuplicate === "ask_reviewer"
                     ? "reviewed_keep_both"
                     : isAgentFiling
-                    ? "possible_duplicate_proposed"
-                    : "possible_duplicate_warned",
+                      ? "possible_duplicate_proposed"
+                      : "possible_duplicate_warned",
               userId: ctx.userId,
               profileSlug,
               candidateCount: duplicateCheck.candidates.length,

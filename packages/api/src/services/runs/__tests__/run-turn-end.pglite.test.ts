@@ -472,8 +472,7 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
 
     // A DIFFERENT turn is a real stop.
     expect(
-      (await completeRun(sessionId, { ...STOPPED, turnKey: "msg-turn-2" }))
-        .json
+      (await completeRun(sessionId, { ...STOPPED, turnKey: "msg-turn-2" })).json
     ).toEqual({ status: "continued" });
     expect(h.triggers).toHaveLength(2);
     expect((await ledger(sessionId)).stops).toBe(2);

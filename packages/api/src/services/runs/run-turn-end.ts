@@ -247,9 +247,7 @@ async function recordTurnEnd(
     const state = readRunTurns(locked.metadata, runId);
     if (
       body.turnKey &&
-      [state.firstTurn, ...state.turns].some(
-        (t) => t?.turnKey === body.turnKey
-      )
+      [state.firstTurn, ...state.turns].some((t) => t?.turnKey === body.turnKey)
     ) {
       return { decision: null, state, duplicate: true };
     }
