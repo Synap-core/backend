@@ -804,6 +804,23 @@ export async function createCapabilityFromDefinition(
   //    capability-matrix axis, source-of-truth = this CapabilityDefinition.
   const toolsCaller = toolsRouter.createCaller(ctx as never);
   const toolIdByName = new Map<string, string>();
+  // A `requires` name this template does not define: the tool of that name
+  // already installed in the same scope (see resolveRequiredToolIds).
+  const installedToolIdsByName = async (name: string): Promise<string[]> =>
+    (
+      await db
+        .select({ id: toolsTable.id })
+        .from(toolsTable)
+        .where(
+          and(
+            eq(toolsTable.name, name),
+            connWorkspaceId
+              ? drizzleSql`(${toolsTable.workspaceId} = ${connWorkspaceId} OR ${toolsTable.workspaceId} IS NULL)`
+              : isNull(toolsTable.workspaceId)
+          )
+        )
+        .limit(2)
+    ).map((r) => r.id);
   const createdTools: CreateCapabilityResult["created"]["tools"] = [];
   const knownIntents = await knownIntentSetFor(
     def.skills.map((s) => (s as { intent?: unknown }).intent)
@@ -1079,9 +1096,11 @@ export async function createCapabilityFromDefinition(
         })
         .where(eq(skillsTable.id, existingSkill.id));
       if (s.requires && s.requires.length > 0) {
-        const toolIds = s.requires
-          .map((name) => toolIdByName.get(name))
-          .filter((id): id is string => !!id);
+        const toolIds = await resolveRequiredToolIds(
+          s.requires,
+          toolIdByName,
+          installedToolIdsByName
+        );
         if (toolIds.length > 0) {
           await skillsCaller.setRequiredTools({
             skillId: existingSkill.id,
@@ -1152,9 +1171,11 @@ export async function createCapabilityFromDefinition(
     // Wire required-tool links only when the skill was actually created and the
     // referenced tools resolved to real ids (proposed tools have no id yet).
     if (result.status === "created" && s.requires && s.requires.length > 0) {
-      const toolIds = s.requires
-        .map((name) => toolIdByName.get(name))
-        .filter((id): id is string => !!id);
+      const toolIds = await resolveRequiredToolIds(
+        s.requires,
+        toolIdByName,
+        installedToolIdsByName
+      );
       if (toolIds.length > 0) {
         await skillsCaller.setRequiredTools({ skillId: result.id, toolIds });
       }
@@ -1897,6 +1918,38 @@ export function resolveVaultPlaceholders(
 }
 
 // ── Vault helper — mirrors POST /vault/secrets server-encryption path ─────────
+
+/**
+ * The tool ids a skill's `requires` names — the scope its ONE decision covers
+ * (`verbAct`: the verb's own provider calls are part of the approved act).
+ *
+ * A name this template defines resolves to the tool it just created or
+ * converged. A name it does NOT define resolves to the ONE tool of that name
+ * already installed in the install scope — another capability's tool, so a
+ * composite verb (e.g. `launch_site`, which requires `vercel` AND `cloudflare`)
+ * is covered by one approval for both. Before, such a name was dropped
+ * silently, and every call to the other tool filed a second proposal.
+ * A missing or ambiguous name (0 or 2+ rows) still resolves to nothing — the
+ * call is then gated on its own, never covered by a guess. Linking grants
+ * nothing by itself: `verbAct` still requires the tool to be approved.
+ */
+export async function resolveRequiredToolIds(
+  requires: readonly string[],
+  local: ReadonlyMap<string, string>,
+  installedIdsByName: (name: string) => Promise<string[]>
+): Promise<string[]> {
+  const ids: string[] = [];
+  for (const name of requires) {
+    const localId = local.get(name);
+    if (localId) {
+      ids.push(localId);
+      continue;
+    }
+    const installed = await installedIdsByName(name);
+    if (installed.length === 1) ids.push(installed[0]!);
+  }
+  return [...new Set(ids)];
+}
 
 /**
  * EXPORTED for the real-door test (`create-from-definition.vault-ref-link
