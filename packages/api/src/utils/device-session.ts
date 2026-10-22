@@ -39,7 +39,7 @@ export const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
 export const STEP_UP_REQUIRED = "STEP_UP_REQUIRED";
 
 export const STEP_UP_REQUIRED_MESSAGE =
-  "Confirm it's you to change keys, computers, connections or secrets.";
+  "Confirm it's you before changing who or what can reach this pod.";
 
 export interface DeviceSessionFacts {
   id: string;
