@@ -120,7 +120,9 @@ export type AuthorizeRefusal =
   | "redirect_uri_mismatch"
   | "no_shared_space"
   | "nothing_to_give"
-  | "grant_changed";
+  | "grant_changed"
+  | "login_required"
+  | "pod_credential_required";
 
 export interface AuthorizeParams {
   clientId?: string | null;
@@ -154,7 +156,10 @@ export interface AuthorizeParams {
 export class ReauthenticationRequiredError extends AuthorizeUserError {
   readonly reasonCode = "LOGIN_REQUIRED";
   constructor() {
-    super("Sign in again to confirm it's you, then continue.");
+    super(
+      "Sign in again to confirm it's you, then continue.",
+      "login_required"
+    );
     this.name = "ReauthenticationRequiredError";
   }
 }
@@ -169,7 +174,8 @@ export class PodCredentialRequiredError extends AuthorizeUserError {
   readonly reasonCode = "POD_CREDENTIAL_REQUIRED";
   constructor(clientName: string) {
     super(
-      `Confirm it's you with your password or passkey for this pod. Synap Cloud can't confirm it for ${clientName}.`
+      `Confirm it's you with your password or passkey for this pod. Synap Cloud can't confirm it for ${clientName}.`,
+      "pod_credential_required"
     );
     this.name = "PodCredentialRequiredError";
   }

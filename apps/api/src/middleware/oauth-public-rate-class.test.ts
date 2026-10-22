@@ -55,19 +55,24 @@ const refreshCall = (
   ip: string,
   refreshToken: string,
   clientId = "https://studio.example.com/.well-known/synap-client.json"
-) =>
-  app.request("/token", {
+) => {
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: clientId,
+  }).toString();
+  return app.request("/token", {
     method: "POST",
     headers: {
       "x-forwarded-for": ip,
       "content-type": "application/x-www-form-urlencoded",
+      // What an HTTP client sends with a string body. `new Request` does not
+      // set it, and the limiter reads only a body whose length it is told.
+      "content-length": String(Buffer.byteLength(body)),
     },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: clientId,
-    }).toString(),
+    body,
   });
+};
 
 const randomToken = () => randomBytes(32).toString("base64url");
 
@@ -83,7 +88,7 @@ async function onSharedAddress<T>(run: () => Promise<T>): Promise<T> {
 
 const call = (app: Hono, path: string, ip: string) =>
   app.request(path, {
-    method: path === "/authorize" ? "GET" : "POST",
+    method: path.startsWith("/authorize") ? "GET" : "POST",
     headers: {
       "x-forwarded-for": ip,
       authorization: `Bearer synap_hub_live_${randomBytes(24).toString("hex")}`,

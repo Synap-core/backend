@@ -50,6 +50,10 @@ const COPY: Record<AuthorizeRefusal, RefusalCopy> = {
   no_shared_space: { title: "This app can't connect for you", next: "" },
   nothing_to_give: { title: "This app can't connect", next: "" },
   grant_changed: { title: "This request changed", next: "" },
+  // Sign-in step-ups, not refusals: the consent screen signs the person in
+  // again (`toConsentTrpcError`).
+  login_required: { title: "Sign in again", next: "" },
+  pod_credential_required: { title: "Confirm it's you", next: "" },
 };
 
 function escapeHtml(value: string): string {
