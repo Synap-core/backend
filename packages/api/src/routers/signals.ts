@@ -138,6 +138,7 @@ import {
   LANDED_OUTPUTS_MAX_LIMIT,
   listLandedOutputs,
 } from "../services/outputs/landed-outputs.js";
+import { deliverableCountsOf } from "../services/projects/project-path.js";
 import { loadSessionLiveness } from "../services/runs/session-liveness.js";
 import { sessionListConditions } from "../services/focus-sessions/session-list-conditions.js";
 import {
@@ -763,6 +764,7 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
     const at = facts.lastAt ?? facts.since ?? c.updatedAt;
     const occurredAt = at instanceof Date ? at : new Date(at);
     const title = resolveSessionTitle(c);
+    const deliverables = deliverableCountsOf(c.expectedOutputs, "owner");
     return withProjectSource(
       {
         id: `live:${c.id}`,
@@ -776,6 +778,14 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
         ...(title ? { sessionTitle: title } : {}),
         ...(c.projectId ? { sessionProjectId: c.projectId } : {}),
         live: facts,
+        ...(deliverables.status === "ok" && deliverables.total > 0
+          ? {
+              progress: {
+                done: deliverables.done,
+                total: deliverables.total,
+              },
+            }
+          : {}),
         groupKey: sessionGroupKey(c.id),
         ageBucket: ageBucketOf(occurredAt, now),
         repeatCount: 1,

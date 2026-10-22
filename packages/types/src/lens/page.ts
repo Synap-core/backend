@@ -68,6 +68,8 @@ export interface LensPageSignal {
   } | null;
   /** How many identical things the row folds (`rule-run`: its runs). */
   repeatCount?: number;
+  /** `live-session` only: its deliverables, counted (done of total). */
+  progress?: { done: number; total: number } | null;
   /** `output` only: the landed object (`outputs.landed`, `LandedObjectRow`). */
   landed?: {
     kind: string;
@@ -163,6 +165,7 @@ export function lensRowOfLiveSignal(
     startedAt:
       signal.live?.since ?? signal.live?.lastAt ?? signal.occurredAt ?? null,
     nowLine: nowLine ?? null,
+    progress: signal.progress ?? null,
   });
   // A RULE running without a session (`rule-run`): its runs are folded into
   // this one row. A failure inside the window is the mark — it outranks the
