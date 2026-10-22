@@ -226,9 +226,10 @@ beforeAll(async () => {
     [OWNER, MEMBER]
   );
   for (const ws of [CONTENT, ECOSYSTEM, FINANCE]) {
+    // Content OS was made from a template; the others from none.
     await q(
-      `insert into workspaces (id, name, owner_id, settings) values ($1,$2,$3,'{}'::jsonb)`,
-      [ws, SPACE_NAME[ws], OWNER]
+      `insert into workspaces (id, name, owner_id, settings, package_slug) values ($1,$2,$3,'{}'::jsonb,$4)`,
+      [ws, SPACE_NAME[ws], OWNER, ws === CONTENT ? "content-os" : null]
     );
     await q(
       `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner')`,
@@ -523,6 +524,11 @@ describe("a Synap app's token is HELD BY THE PERSON, within what they ticked", (
       TICKED.map((t) => `${SPACE_NAME[t.workspaceId]}:${t.permission}`).sort()
     );
     expect(body.scope.split(" ").sort()).toEqual([APPROVE, CREATE, READ]);
+    // A templated space names its template; an untemplated one has no key.
+    for (const g of body.synap_grant as Array<Record<string, unknown>>) {
+      if (g.workspaceId === CONTENT) expect(g.templateSlug).toBe("content-os");
+      else expect(g).not.toHaveProperty("templateSlug");
+    }
 
     const row = await keyRow(token);
     expect(row).toMatchObject({
@@ -602,6 +608,15 @@ describe("an unverified app and a lookalike keep the ask-first agent key", () =>
         { permission: CREATE, workspaceId: CONTENT },
       ]);
       expect(body.synap_acts_as).toBe("agent");
+      // Every pod app's synap_grant names a templated space's template.
+      expect(body.synap_grant).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            workspaceId: CONTENT,
+            templateSlug: "content-os",
+          }),
+        ])
+      );
       const conn = await connectionOf(OWNER, clientId);
       const row = await keyRow(body.access_token);
       expect(row).toMatchObject({

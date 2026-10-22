@@ -1371,8 +1371,15 @@ export interface AppOAuthAccessKey {
   /** The app's agent holding the key; null when the PERSON holds it. */
   agentUserId: string | null;
   publicId: string;
-  /** The approved reach the key carries, with space names for the app's UI. */
-  grant: Array<AppApprovedRequest & { workspaceName: string | null }>;
+  /**
+   * The approved reach the key carries, with space names for the app's UI and
+   * the space's template slug (`workspaces.package_slug`) when it was made
+   * from one, so an app finds "its" space by template, not by id. Omitted for
+   * a space made from no template.
+   */
+  grant: Array<
+    AppApprovedRequest & { workspaceName: string | null; templateSlug?: string }
+  >;
   user: { id: string; name: string | null };
 }
 
@@ -1480,10 +1487,14 @@ async function appOAuthAnswer(
   grant: readonly AppApprovedRequest[],
   actsAs: PodAppActsAs
 ): Promise<AppOAuthAccessKey> {
-  const names = new Map(
+  const spaces = new Map(
     (grant.length > 0
       ? await db
-          .select({ id: workspaces.id, name: workspaces.name })
+          .select({
+            id: workspaces.id,
+            name: workspaces.name,
+            templateSlug: workspaces.packageSlug,
+          })
           .from(workspaces)
           .where(
             inArray(
@@ -1492,7 +1503,7 @@ async function appOAuthAnswer(
             )
           )
       : []
-    ).map((w) => [w.id, w.name])
+    ).map((w) => [w.id, w])
   );
   return {
     accessToken: key.accessToken,
@@ -1501,11 +1512,15 @@ async function appOAuthAnswer(
     actsAs,
     agentUserId: key.agentUserId,
     publicId: conn.app.publicId,
-    grant: grant.map((r) => ({
-      permission: r.permission,
-      workspaceId: r.workspaceId,
-      workspaceName: names.get(r.workspaceId) ?? null,
-    })),
+    grant: grant.map((r) => {
+      const space = spaces.get(r.workspaceId);
+      return {
+        permission: r.permission,
+        workspaceId: r.workspaceId,
+        workspaceName: space?.name ?? null,
+        ...(space?.templateSlug ? { templateSlug: space.templateSlug } : {}),
+      };
+    }),
     user: { id: conn.person.id, name: conn.person.name ?? null },
   };
 }
