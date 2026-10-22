@@ -32,6 +32,7 @@ import {
   initialSelection,
   isTicked,
   permissionLabel,
+  splitOffer,
   toApproved,
   toggle,
   withoutSpace,
@@ -697,6 +698,53 @@ type ConsentApp = NonNullable<
   inferRouterOutputs<AppRouter>["apiKeys"]["getOAuthConsentContext"]["app"]
 >;
 
+/** One line per permission, with a tick for each space it may be given in. */
+function PermissionList({
+  permissions,
+  selection,
+  onToggle,
+  busy,
+}: {
+  permissions: ConsentApp["permissions"];
+  selection: Selection;
+  onToggle: (permission: string, workspaceId: string) => void;
+  busy: boolean;
+}) {
+  return (
+    <ul className="flex flex-col gap-3">
+      {permissions.map((p) => (
+        <li key={p.permission} className="flex flex-col gap-1.5">
+          <span className="text-[13px] text-foreground/85">
+            {permissionLabel(p.permission)}{" "}
+            <span className="font-mono text-[11px] text-foreground/50">
+              {p.permission}
+            </span>
+          </span>
+          {p.workspaces.length === 0 ? (
+            <span className="text-[12px] text-foreground/60">
+              You have no space where you can give it this.
+            </span>
+          ) : (
+            <div className="flex flex-wrap gap-x-4 gap-y-1">
+              {p.workspaces.map((w) => (
+                <Checkbox
+                  key={w.workspaceId}
+                  size="sm"
+                  isSelected={isTicked(selection, p.permission, w.workspaceId)}
+                  isDisabled={busy}
+                  onValueChange={() => onToggle(p.permission, w.workspaceId)}
+                >
+                  {w.workspaceName}
+                </Checkbox>
+              ))}
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /**
  * A pod app's consent (spec 17 §9.1): its domain is the headline (above), and
  * the person picks, per permission, the spaces it may act in — only from what
@@ -726,49 +774,42 @@ function AppConsent({
   onDecide: (approve: boolean) => void;
 }) {
   const missing = withoutSpace(app.permissions);
+  // Decisions (approve / reject) are their own line, never part of a write.
+  const { grants, decisions } = splitOffer(app.permissions);
   return (
     <>
       <div className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-        <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
-          <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to
-        </p>
-        <ul className="flex flex-col gap-3">
-          {app.permissions.map((p) => (
-            <li key={p.permission} className="flex flex-col gap-1.5">
-              <span className="text-[13px] text-foreground/85">
-                {permissionLabel(p.permission)}{" "}
-                <span className="font-mono text-[11px] text-foreground/50">
-                  {p.permission}
-                </span>
-              </span>
-              {p.workspaces.length === 0 ? (
-                <span className="text-[12px] text-foreground/60">
-                  You have no space where you can give it this.
-                </span>
-              ) : (
-                <div className="flex flex-wrap gap-x-4 gap-y-1">
-                  {p.workspaces.map((w) => (
-                    <Checkbox
-                      key={w.workspaceId}
-                      size="sm"
-                      isSelected={isTicked(
-                        selection,
-                        p.permission,
-                        w.workspaceId
-                      )}
-                      isDisabled={busy}
-                      onValueChange={() =>
-                        onToggle(p.permission, w.workspaceId)
-                      }
-                    >
-                      {w.workspaceName}
-                    </Checkbox>
-                  ))}
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
+        {grants.length > 0 && (
+          <>
+            <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+              <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to
+            </p>
+            <PermissionList
+              permissions={grants}
+              selection={selection}
+              onToggle={onToggle}
+              busy={busy}
+            />
+          </>
+        )}
+        {decisions.length > 0 && (
+          <>
+            <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+              <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to decide
+              for you
+            </p>
+            <PermissionList
+              permissions={decisions}
+              selection={selection}
+              onToggle={onToggle}
+              busy={busy}
+            />
+            <p className="text-[12px] leading-relaxed text-foreground/65">
+              Each decision is yours, on one change at a time. Nothing above
+              includes it: tick the spaces where you allow it.
+            </p>
+          </>
+        )}
         {app.ignoredScopes.length > 0 && (
           <p className="text-[12px] text-foreground/60">
             It also asked for {app.ignoredScopes.join(", ")}, which apps are not

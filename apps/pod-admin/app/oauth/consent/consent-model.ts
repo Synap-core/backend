@@ -8,7 +8,14 @@
  * `toApproved` filters to the offer again before anything is sent. The server
  * re-derives the offer and refuses a wider selection anyway
  * (`connectOAuthApp`); this keeps the screen honest about what Allow sends.
+ *
+ * A DECISION permission (`proposal.approve` / `proposal.reject`: a grant-
+ * grammar gate verb, `GRANT_GATE_ACTIONS`) is never folded into a write: the
+ * screen shows it on its own line (`splitOffer`), and nothing pre-ticks it on
+ * a first consent (`initialSelection`). The person gives it, space by space.
  */
+
+import { GRANT_GATE_ACTIONS, grantActionLabel } from "@synap-core/types/grants";
 
 export interface OfferedSpace {
   workspaceId: string;
@@ -31,6 +38,23 @@ export type Selection = ReadonlySet<string>;
 const key = (permission: string, workspaceId: string) =>
   `${permission}\u0000${workspaceId}`;
 
+/** The permission's verb is a gate verb (approve, reject, …), not a write. */
+export function isDecisionPermission(permission: string): boolean {
+  const action = permission.split(".").pop() ?? "";
+  return (GRANT_GATE_ACTIONS as readonly string[]).includes(action);
+}
+
+/** The offer as the screen lists it: reads and writes, then decisions apart. */
+export function splitOffer(offer: readonly OfferedPermission[]): {
+  grants: OfferedPermission[];
+  decisions: OfferedPermission[];
+} {
+  return {
+    grants: offer.filter((o) => !isDecisionPermission(o.permission)),
+    decisions: offer.filter((o) => isDecisionPermission(o.permission)),
+  };
+}
+
 function offered(
   offer: readonly OfferedPermission[],
   permission: string,
@@ -47,7 +71,7 @@ function offered(
  * What starts ticked: the person's current approval for this app (a
  * re-consent), within today's offer. On a first consent, a permission with
  * exactly ONE space on offer starts ticked; with several, none do — the person
- * picks.
+ * picks. A decision permission never starts ticked on a first consent.
  */
 export function initialSelection(
   offer: readonly OfferedPermission[],
@@ -63,7 +87,7 @@ export function initialSelection(
     return out;
   }
   for (const o of offer) {
-    if (o.workspaces.length === 1) {
+    if (o.workspaces.length === 1 && !isDecisionPermission(o.permission)) {
       out.add(key(o.permission, o.workspaces[0]!.workspaceId));
     }
   }
@@ -162,12 +186,16 @@ const plural = (word: string) =>
  * A plain-language line for a grant-grammar permission
  * (`<subject>[.<kind>].<action>`): `entity.post.create` → "Create posts",
  * `document.update` → "Edit documents", `entity.read` → "Read everything in
- * it". The raw permission is shown beside it, so an unusual one is never
+ * it", `proposal.approve` → "Approve changes waiting for your review". The
+ * raw permission is shown beside it, so an unusual one is never
  * hidden behind a friendly word.
  */
 export function permissionLabel(permission: string): string {
   const segs = permission.split(".");
   const action = segs[segs.length - 1] ?? "";
+  if (segs[0] === "proposal" && isDecisionPermission(permission)) {
+    return `${grantActionLabel(action)} changes waiting for your review`;
+  }
   const verb = ACTION_WORDS[action] ?? action;
   const subject = segs[0] ?? "";
   const kind = segs.length > 2 ? segs[1] : null;
