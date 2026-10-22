@@ -12379,6 +12379,23 @@ export interface AppSignInDescription {
 	expiresInDays: number;
 }
 /**
+ * What a POD APP's consent screen says about who its token acts as
+ * (`podAppActsAs`), every word from here — the screen writes none of it.
+ *  - `person` (a Synap app): `lead` + the spaces the person ticks IS the grant
+ *    the token will carry ("Content Studio will act as you in: Content OS,
+ *    Ecosystem."); `note` says how a write lands and what it cannot do,
+ *    derived from the permissions the app asked for.
+ *  - `agent` (any other app): the ask-first sentence, unchanged.
+ */
+export type PodAppActsAsDescription = {
+	kind: "person";
+	lead: string;
+	note: string;
+} | {
+	kind: "agent";
+	note: string;
+};
+/**
  * What a POD APP (CIMD client) is shown as on the consent screen (spec 17
  * §9.1). Its identity is its DOMAIN (the client_id host), not its name.
  */
@@ -12387,6 +12404,12 @@ export interface OAuthAppConsent {
 	domain: string;
 	/** "Synap app" (exact first-party origin, `isSynapApp`) vs "Unverified app". */
 	verified: boolean;
+	/**
+	 * Who its token will act as, and the words for it (`describePodAppActsAs`):
+	 * a Synap app acts AS THE PERSON ("<app> will act as you in: <the spaces
+	 * ticked>"); every other app is its own agent, every change for review.
+	 */
+	actsAs: PodAppActsAsDescription;
 	/** The document's `client_uri` (same origin as the client_id), or null. */
 	homepage: string | null;
 	/**

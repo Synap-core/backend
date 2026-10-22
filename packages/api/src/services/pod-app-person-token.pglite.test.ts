@@ -523,8 +523,10 @@ describe("a Synap app's token is HELD BY THE PERSON, within what they ticked", (
     ).toEqual(
       TICKED.map((t) => `${SPACE_NAME[t.workspaceId]}:${t.permission}`).sort()
     );
-    // The three permissions ticked, sorted (entity.* before proposal.*).
-    expect(body.scope.split(" ").sort()).toEqual([CREATE, READ, APPROVE]);
+    // scope = exactly the distinct permissions ticked, nothing added.
+    expect(body.scope.split(" ").sort()).toEqual(
+      [...new Set(TICKED.map((t) => t.permission))].sort()
+    );
     // A templated space names its template; an untemplated one has no key.
     for (const g of body.synap_grant as Array<Record<string, unknown>>) {
       if (g.workspaceId === CONTENT) expect(g.templateSlug).toBe("content-os");
@@ -626,9 +628,12 @@ describe("an unverified app and a lookalike keep the ask-first agent key", () =>
         key_type: "hub_inbound",
       });
       expect(
-        (await q(`select id from api_keys where key_type = 'app_person' and instance_id = $1`, [
-          oauthKeyInstanceId(clientId, OWNER),
-        ])).rows
+        (
+          await q(
+            `select id from api_keys where key_type = 'app_person' and instance_id = $1`,
+            [oauthKeyInstanceId(clientId, OWNER)]
+          )
+        ).rows
       ).toHaveLength(0);
       // The discriminating control: the same write the person's token makes
       // directly is a proposal for the agent.
@@ -691,7 +696,9 @@ describe("any member consenting to a Synap app gets a token that is THEIRS", () 
       key_type: "app_person",
       instance_id: oauthKeyInstanceId(VERIFIED, MEMBER),
     });
-    expect(await livePairs(row.id)).toEqual(["Content OS:entity.person.create"]);
+    expect(await livePairs(row.id)).toEqual([
+      "Content OS:entity.person.create",
+    ]);
     expect((await write(token, CONTENT)).decision).toMatchObject({
       granted: true,
     });
@@ -726,10 +733,10 @@ describe("any member consenting to a Synap app gets a token that is THEIRS", () 
   });
 
   it("the member losing a space narrows the live token on its next request", async () => {
-    await q(`delete from workspace_members where workspace_id = $1 and user_id = $2`, [
-      CONTENT,
-      MEMBER,
-    ]);
+    await q(
+      `delete from workspace_members where workspace_id = $1 and user_id = $2`,
+      [CONTENT, MEMBER]
+    );
     try {
       expect((await write(token, CONTENT)).decision).toMatchObject({
         denied: true,
@@ -790,7 +797,9 @@ describe("refresh keeps the person; revoking ends it", () => {
     });
     expect(res.status).toBe(200);
     expect((await keyRow(pair.access_token)).is_active).toBe(false);
-    expect((await apiKeyService.validateApiKey(pair.access_token)) ?? null).toBeNull();
+    expect(
+      (await apiKeyService.validateApiKey(pair.access_token)) ?? null
+    ).toBeNull();
   });
 
   it("revoking the connection (Connected) ends the token and its refresh", async () => {

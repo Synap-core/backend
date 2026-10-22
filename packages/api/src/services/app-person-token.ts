@@ -278,7 +278,8 @@ export type MintPodAppPersonTokenResult =
        * connection is gone, revoked, not this person's or approves nothing;
        * `nothing_left` — the approval ∩ the person's reach is empty.
        */
-      reason: "not_verified" | "not_a_person" | "app_unavailable" | "nothing_left";
+      reason:
+        "not_verified" | "not_a_person" | "app_unavailable" | "nothing_left";
     };
 
 /**
@@ -364,9 +365,7 @@ export async function mintPodAppPersonToken(args: {
     });
   }
 
-  const writes = grant.some(
-    (r) => r.permission.split(".").at(-1) !== "read"
-  );
+  const writes = grant.some((r) => r.permission.split(".").at(-1) !== "read");
   const minted = await createAndVerifyHubInboundKey(
     new ApiKeyRepository(db, new EventRepository(sql)),
     {

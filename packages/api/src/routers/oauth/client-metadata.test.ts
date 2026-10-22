@@ -442,7 +442,8 @@ describe("CIMD — document validation", () => {
   }
 
   it("a Synap app (and only one) may ask for the review verbs, spelled exactly", () => {
-    const SYNAP = "https://content-studio.synap.live/.well-known/synap-client.json";
+    const SYNAP =
+      "https://content-studio.synap.live/.well-known/synap-client.json";
     const synapDoc = (permission: string, clientId = SYNAP) => ({
       ...doc(),
       client_id: clientId,

@@ -106,7 +106,11 @@ export async function loadPersonTokenApp(publicId: string) {
     .limit(1);
   if (!app) return null;
   if (app.mode === "specific") return app;
-  if (app.mode === "oauth" && app.oauthClientId && isSynapApp(app.oauthClientId))
+  if (
+    app.mode === "oauth" &&
+    app.oauthClientId &&
+    isSynapApp(app.oauthClientId)
+  )
     return app;
   return null;
 }
@@ -122,7 +126,9 @@ export function personTokenInstanceId(
   personUserId: string
 ): string {
   return oauthKeyInstanceId(
-    app.mode === "oauth" && app.oauthClientId ? app.oauthClientId : app.publicId,
+    app.mode === "oauth" && app.oauthClientId
+      ? app.oauthClientId
+      : app.publicId,
     personUserId
   );
 }
