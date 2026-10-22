@@ -160,6 +160,11 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // the transcription provider (rate class `ai_interactive`).
   [/^\/files\/[^/]+\/transcribe\/?$/, SEAMED],
   [/^\/memory\/search\/?$/, READS("entity", "preference")],
+  // A read (no `install`) and a governed install (TEMPLATE-LIFECYCLE B). The
+  // standing names a space only when the person's floor AND the key's grant
+  // reach it (`readTemplateStanding`); a holder it hides is answered as absent
+  // and never installed over (fence1).
+  [/^\/workspaces\/ensure-template\/?$/, SEAMED],
   [/^\/diagnose\/?$/, REFUSED("Pod internals across every subject.")],
   [
     /^\/capabilities\/execute\/?$/,
