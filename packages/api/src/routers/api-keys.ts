@@ -126,7 +126,9 @@ const oauthAuthorizeParamsSchema = z.object({
  * unregistered redirect_uri, non-human caller) — BAD_REQUEST. `OAuthError`
  * carries a protocol error code the screen shows verbatim. Anything else
  * propagates unchanged so a genuine bug is never disguised as a client error.
- * Each of the two is a refusal, logged once (review A6).
+ * Each of the two is a refusal, logged once (review A6), as is a FORBIDDEN
+ * refusal of who decides (the app is not for this person). A sign-in step-up
+ * is no refusal: the screen sends the person to sign in again.
  */
 function toConsentTrpcError(err: unknown, clientId: string): unknown {
   if (
@@ -160,6 +162,14 @@ function toConsentTrpcError(err: unknown, clientId: string): unknown {
     return new TRPCError({
       code: "BAD_REQUEST",
       message: `${err.code}: ${err.message}`,
+    });
+  }
+  if (err instanceof TRPCError && err.code === "FORBIDDEN") {
+    logOAuthRefusal({
+      phase: "consent",
+      clientId,
+      reason: "forbidden",
+      detail: err.message,
     });
   }
   return err;

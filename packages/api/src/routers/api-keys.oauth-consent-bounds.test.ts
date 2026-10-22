@@ -54,6 +54,7 @@ vi.mock("./oauth/refusal-log.js", () => ({
 vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
 
 // Import AFTER mocks.
+import { db } from "@synap/database";
 import { apiKeysRouter } from "./api-keys.js";
 import { ClientMetadataError } from "./oauth/client-metadata.js";
 
@@ -207,6 +208,33 @@ describe("consent refusals leave one log line each (review A6)", () => {
     expect(refusals.mock.calls[0]![0]).toMatchObject({
       phase: "consent",
       reason: "app_description_unreadable",
+    });
+  });
+
+  it("a refusal of who decides (FORBIDDEN) is logged too", async () => {
+    refusals.mockClear();
+    // A registered MCP client; the caller is no person of this pod.
+    vi.mocked(db.query.oauthClients.findFirst).mockResolvedValueOnce({
+      clientId: "dcr_a6",
+      clientKind: "dcr",
+      clientName: "A6 client",
+      redirectUris: ["https://studio.example.com/cb"],
+      scopes: ["mcp.read"],
+      requestedPermissions: [],
+    } as never);
+    const err = await errorOf(
+      caller().decideOAuthAuthorization({
+        ...params("dcr_a6"),
+        approve: true,
+      })
+    );
+    expect(err.code).toBe("FORBIDDEN");
+    expect(refusals).toHaveBeenCalledTimes(1);
+    expect(refusals).toHaveBeenCalledWith({
+      phase: "consent",
+      clientId: "dcr_a6",
+      reason: "forbidden",
+      detail: err.message,
     });
   });
 });
