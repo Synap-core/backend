@@ -43,7 +43,17 @@ const h = vi.hoisted(() => {
         const schema = await import("@synap/database/schema");
         const client = new PGlite();
         state.client = client as unknown as typeof state.client;
-        state.db = drizzle(client, { schema });
+        const db = drizzle(client, { schema });
+        // PGlite is ONE connection: the proposal writer's transaction reads
+        // the agent's focus and mints its receipt session through the global
+        // `db` while the transaction holds that connection, which deadlocks
+        // here (a pool gives production a second connection) and wedges every
+        // later case. Run the body on the same handle; atomicity is not under
+        // test (as proposal-review-session-gate.pglite.test.ts does).
+        (db as unknown as { transaction: unknown }).transaction = async (
+          fn: (tx: unknown) => Promise<unknown>
+        ) => fn(db);
+        state.db = db;
       }
       return state.db;
     },
