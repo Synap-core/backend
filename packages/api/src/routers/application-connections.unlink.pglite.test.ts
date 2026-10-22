@@ -69,6 +69,8 @@ vi.mock("../middleware/audit-log.js", async () => {
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
+import { readPodUserAccess } from "@synap/database";
+import { getPodAdminRole } from "../utils/workspace-role.js";
 import { applicationConnectionsRouter } from "./application-connections.js";
 
 const OWNER = "human-owner";
@@ -212,5 +214,29 @@ describe("applicationConnections.get — unlinkReach", () => {
       otherApps: [],
       cloudSignIn: false,
     });
+  });
+});
+
+describe("one rule for an archived pod-admin space", () => {
+  // The API refuses to archive a system space, so this state is unreachable
+  // today; both reads still have to agree if a script or a restore makes it so.
+  it("getPodAdminRole and readPodUserAccess both give no admin power", async () => {
+    await q(`update workspaces set archived_at = now() where id = $1`, [
+      POD_ADMIN_WS,
+    ]);
+    try {
+      expect(await getPodAdminRole(OWNER)).toBeNull();
+      expect((await readPodUserAccess(OWNER, h.db as never)).podRole).toBe(
+        "member"
+      );
+    } finally {
+      await q(`update workspaces set archived_at = null where id = $1`, [
+        POD_ADMIN_WS,
+      ]);
+    }
+    expect(await getPodAdminRole(OWNER)).toBe("owner");
+    expect((await readPodUserAccess(OWNER, h.db as never)).podRole).toBe(
+      "owner"
+    );
   });
 });

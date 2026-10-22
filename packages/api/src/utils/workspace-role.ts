@@ -15,7 +15,7 @@ import {
 } from "@synap-core/types/console";
 import { isSpaceManageRole } from "@synap-core/types/workspaces";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, inArray } from "@synap/database";
+import { db, eq, and, inArray, isNull } from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 
 /** The caller's role in a workspace, or undefined if not a member. */
@@ -82,7 +82,12 @@ export async function getPodAdminRole(
   userId: string
 ): Promise<PodAdminRole | null> {
   const podAdminWorkspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.systemSlug, POD_ADMIN_SYSTEM_SLUG),
+    // An archived pod-admin space grants no admin power: the same rule as
+    // `projectPodUserAccess` (@synap/database), so the two reads never split.
+    where: and(
+      eq(workspaces.systemSlug, POD_ADMIN_SYSTEM_SLUG),
+      isNull(workspaces.archivedAt)
+    ),
     columns: { id: true },
   });
   if (!podAdminWorkspace) return null;
