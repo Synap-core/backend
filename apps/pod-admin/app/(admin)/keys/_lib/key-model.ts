@@ -73,6 +73,10 @@ export function categorize(k: UnifiedKey): KeyCategory {
       return "system";
     case "service":
       return "service";
+    case "app_person":
+      // A person's "Sign in with Synap" token: held by the person, for an app
+      // (its name is the key's) — an app connection, not an operator key.
+      return "app";
   }
   if (k.holder?.kind === "app") return "app";
   if (k.holder?.kind === "computer") return "computer";

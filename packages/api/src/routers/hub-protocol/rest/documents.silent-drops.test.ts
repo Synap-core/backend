@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   createResult: {} as Record<string, unknown>,
   proposalInputs: [] as Array<Record<string, unknown>>,
   entityUpdates: [] as Array<Record<string, unknown>>,
+  preflights: [] as Array<Record<string, unknown>>,
 }));
 
 const PG_UUID_RE_FOR_TEST =
@@ -89,6 +90,14 @@ vi.mock("../../entities.js", () => ({
   },
 }));
 
+// The body-replace preflight reads the entity from the database; here the
+// entity has no body yet, so it passes. Recorded so the call is asserted.
+vi.mock("../../../services/entity-body/body-replace-guard.js", () => ({
+  preflightAttachToEntity: async (input: Record<string, unknown>) => {
+    h.preflights.push(input);
+  },
+}));
+
 import { registerDocumentsRoutes } from "./documents.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
@@ -120,6 +129,7 @@ beforeEach(() => {
   h.createInputs.length = 0;
   h.proposalInputs.length = 0;
   h.entityUpdates.length = 0;
+  h.preflights.length = 0;
   h.createResult = {
     id: DOC,
     documentId: DOC,
@@ -160,6 +170,9 @@ describe("POST /documents — forwards what it accepts", () => {
       })
     );
     expect(res.status).toBe(200);
+    expect(h.preflights).toEqual([
+      { entityId: ENTITY, userId: USER, replaceBody: false },
+    ]);
     expect(h.entityUpdates).toEqual([
       expect.objectContaining({ id: ENTITY, documentId: DOC }),
     ]);
