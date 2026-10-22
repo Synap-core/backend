@@ -147,6 +147,7 @@ import { inviteProcedures } from "../routers/workspaces/invites.js";
 import { applicationConnectionsRouter } from "../routers/application-connections.js";
 import {
   STEP_UP_REQUIRED,
+  STEP_UP_WINDOW_MS,
   runAsDeviceSession,
 } from "../utils/device-session.js";
 import { applyVaultSecretGrant } from "./vault-secret-grant.js";
@@ -362,6 +363,9 @@ const revokeRequest = (params: Record<string, string>) =>
   });
 
 const MIN_MS = 60 * 1000;
+/** One minute past the step-up window, and one minute inside it. */
+const STALE_MS = STEP_UP_WINDOW_MS + MIN_MS;
+const RECENT_MS = STEP_UP_WINDOW_MS - MIN_MS;
 
 /** A Kratos session (as the consent procedure sees it) signed in `ago` ms back. */
 /**
@@ -932,9 +936,9 @@ describe("(i) a STALE device token cannot create, widen or approve a credential"
   ];
 
   it.each(DOORS)(
-    "%s answers 403 STEP_UP_REQUIRED to a device whose sign-in is 6 minutes old",
+    "%s answers 403 STEP_UP_REQUIRED to a device whose sign-in is past the step-up window",
     async (path, input, kind) => {
-      const s = await signIn("stale", 6 * MIN_MS);
+      const s = await signIn("stale", STALE_MS);
       const res = await trpc({ bearer: s.access }, path, input, kind);
       expect(res.status).toBe(403);
       expect(res.body.error.json.data.reasonCode).toBe(STEP_UP_REQUIRED);
@@ -959,7 +963,7 @@ describe("(i) a STALE device token cannot create, widen or approve a credential"
   );
 
   it("CONTROL — a grant only to the caller is not a step-up: a stale device makes its own space", async () => {
-    const s = await signIn("stale", 6 * MIN_MS);
+    const s = await signIn("stale", STALE_MS);
     const res = await trpc(
       { bearer: s.access },
       "workspaces.create",
@@ -984,10 +988,10 @@ describe("(j) step-up: the clock is the device's real sign-in", () => {
   const stepUpRequired = (res: { status: number; body: any }) =>
     res.status === 403 &&
     res.body.error?.json?.data?.reasonCode === STEP_UP_REQUIRED;
-  const age = async (deviceId: string, minutes: number) =>
+  const age = async (deviceId: string, ms: number) =>
     q(
-      `update person_devices set auth_time = now() - ($2 || ' minutes')::interval where id = $1`,
-      [deviceId, String(minutes)]
+      `update person_devices set auth_time = now() - ($2 || ' milliseconds')::interval where id = $1`,
+      [deviceId, String(ms)]
     );
 
   it("a fresh device passes decideDeviceRequest's door (the request itself is unknown)", async () => {
@@ -996,15 +1000,15 @@ describe("(j) step-up: the clock is the device's real sign-in", () => {
     expect(stepUpRequired(res)).toBe(false);
   });
 
-  it("6 minutes after its sign-in it gets 403 STEP_UP_REQUIRED", async () => {
+  it("past the step-up window after its sign-in it gets 403 STEP_UP_REQUIRED", async () => {
     const s = await signIn("aging", MIN_MS);
-    await age(s.deviceId, 6);
+    await age(s.deviceId, STALE_MS);
     expect(stepUpRequired(await decideDevice(s.access))).toBe(true);
   });
 
   it("a refreshed token stays stale: a refresh never renews the clock", async () => {
     const s = await signIn("refreshing", MIN_MS);
-    await age(s.deviceId, 6);
+    await age(s.deviceId, STALE_MS);
     const r = await refresh(s.refresh);
     expect(r.status).toBe(200);
     expect(stepUpRequired(await decideDevice(r.body.access_token))).toBe(true);
@@ -1015,15 +1019,15 @@ describe("(j) step-up: the clock is the device's real sign-in", () => {
     expect(stepUpRequired(await decideDevice(s.access))).toBe(true);
   });
 
-  it("the clock is the sign-in, not the mint: minted 4 minutes after a sign-in, it passes", async () => {
-    const s = await signIn("recent session", 4 * MIN_MS);
+  it("the clock is the sign-in, not the mint: minted inside the window after a sign-in, it passes", async () => {
+    const s = await signIn("recent session", RECENT_MS);
     expect(stepUpRequired(await decideDevice(s.access))).toBe(false);
     const row = await q<{ auth_time: Date }>(
       `select auth_time from person_devices where id = $1`,
       [s.deviceId]
     );
     const lag = Date.now() - new Date(row.rows[0]!.auth_time).getTime();
-    expect(lag).toBeGreaterThan(3.5 * MIN_MS);
+    expect(lag).toBeGreaterThan(RECENT_MS - MIN_MS / 2);
   });
 
   it("a step-up re-confirms the SAME device: its clock moves, no device is added", async () => {
@@ -1254,7 +1258,7 @@ describe("(j) step-up: the clock is the device's real sign-in", () => {
       });
     await expect(
       runAsDeviceSession(
-        { id: "d", authTime: new Date(Date.now() - 6 * MIN_MS) },
+        { id: "d", authTime: new Date(Date.now() - STALE_MS) },
         grant
       )
     ).rejects.toMatchObject({ code: "FORBIDDEN" });

@@ -33,7 +33,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { TRPCError } from "@trpc/server";
 
 /** How recent a device's real authentication must be at a credential door. */
-export const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
+export const STEP_UP_WINDOW_MS = 15 * 60 * 1000;
 
 /** The machine-readable reason a stale device session is refused. */
 export const STEP_UP_REQUIRED = "STEP_UP_REQUIRED";
