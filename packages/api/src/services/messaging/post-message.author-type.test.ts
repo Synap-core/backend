@@ -126,9 +126,7 @@ beforeEach(() => {
 });
 
 /** The author type the door STORED for one post. */
-async function storedAuthor(
-  extra: Record<string, unknown>
-): Promise<unknown> {
+async function storedAuthor(extra: Record<string, unknown>): Promise<unknown> {
   state.inserted = [];
   await postChannelMessage({ ...base, ...extra } as never);
   expect(state.inserted).toHaveLength(1);
