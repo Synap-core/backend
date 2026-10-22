@@ -631,3 +631,91 @@ describe("Hub PATCH governs the write as the KEY's agent, never the body's", () 
     expect(lastGateAgent()).toBe(persona);
   });
 });
+
+describe("a stage that AWAITS a dev approval is left only by that approval", () => {
+  const DEV_STAGES = [
+    { key: "plan", name: "Plan" },
+    {
+      key: "deploy",
+      name: "Deploy approval",
+      gate: { kind: "awaits", proposalType: "dev.deploy_approval" },
+    },
+    { key: "ship", name: "Ship" },
+  ];
+
+  it("an agent cannot step OUT of the awaiting stage", async () => {
+    const playbookId = await seedPlaybook(DEV_STAGES);
+    const sessionId = await seedSession(playbookId, { stage: "deploy" });
+
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      currentStage: "ship",
+    });
+
+    expect((await readRow(sessionId)).current_stage).toBe("deploy");
+    expect(res.status).toBe("denied");
+    if (res.status === "denied")
+      expect(res.reason).toMatch(/dev\.deploy_approval/);
+  });
+
+  it("an agent cannot jump OVER the awaiting stage", async () => {
+    const playbookId = await seedPlaybook(DEV_STAGES);
+    const sessionId = await seedSession(playbookId, { stage: "plan" });
+
+    const res = await patch(sessionId, { currentStage: "ship" }, AGENT);
+
+    expect((await readRow(sessionId)).current_stage).toBe("plan");
+    expect(res.status).toBe(409);
+  });
+
+  it("entering the awaiting stage is still the agent's move (it files there)", async () => {
+    const playbookId = await seedPlaybook(DEV_STAGES);
+    const sessionId = await seedSession(playbookId, { stage: "plan" });
+
+    const res = await updateFocusSession({
+      sessionId,
+      userId: USER,
+      agentUserId: AGENT,
+      currentStage: "deploy",
+    });
+
+    expect(res.status).toBe("updated");
+    expect((await readRow(sessionId)).current_stage).toBe("deploy");
+  });
+});
+
+describe("the legacy dev-gate stamps are the approval's, never an agent's", () => {
+  it.each(["plan_approved", "deploy_approved"])(
+    "an agent cannot set currentStage %s",
+    async (stage) => {
+      const playbookId = await seedPlaybook();
+      const sessionId = await seedSession(playbookId, { stage: "discover" });
+
+      const res = await updateFocusSession({
+        sessionId,
+        userId: USER,
+        agentUserId: AGENT,
+        currentStage: stage,
+      });
+
+      expect((await readRow(sessionId)).current_stage).toBe("discover");
+      expect(res.status).toBe("denied");
+    }
+  );
+
+  it("…nor through the Hub PATCH", async () => {
+    const playbookId = await seedPlaybook();
+    const sessionId = await seedSession(playbookId, { stage: "discover" });
+
+    const res = await patch(
+      sessionId,
+      { currentStage: "deploy_approved" },
+      AGENT
+    );
+
+    expect((await readRow(sessionId)).current_stage).toBe("discover");
+    expect(res.status).toBe(409);
+  });
+});

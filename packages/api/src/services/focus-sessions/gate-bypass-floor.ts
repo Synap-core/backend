@@ -25,13 +25,18 @@
  * A bare (unattributed) key on the Hub stays on the human path, as everywhere
  * else in the membrane (`shouldRejectUnattributedWrite`).
  *
- * Gate kinds that HOLD on entry are the ones skipping can bypass: `human` and
- * `check`. An `awaits` gate never holds on entry (its named proposal advances
- * the stage), so jumping over one is not counted here.
+ * An `awaits` gate (a dev plan/deploy approval) never holds on entry — the
+ * agent enters the stage and files the named proposal there, and the approval
+ * executor moves the run on (`stageAfterDevGate`). So for an agent, LEAVING
+ * such a stage forward is the bypass, as is jumping over it; and the legacy
+ * stamps that executor writes when no stage names the gate
+ * (`DEV_GATE_LEGACY_STAGES`, read by the polling CLI as "you may proceed") are
+ * never an agent's to set.
  */
 
 import { resolveStageGate, type PlaybookStage } from "@synap/playbooks";
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
+import { DEV_GATE_LEGACY_STAGES } from "../proposals/dev-approval.js";
 import { pendingStageGate } from "./follow-playbook.js";
 import { isTerminalSessionStatus } from "./session-statuses.js";
 
@@ -79,36 +84,52 @@ export async function refuseAgentGateBypass(
   }
 
   if (!movesStage) return null;
-  const skipped = await gatedStagesSkipped(session, toStage!);
+  if ((Object.values(DEV_GATE_LEGACY_STAGES) as string[]).includes(toStage!)) {
+    return `"${toStage}" is the stamp a person's dev approval writes — an agent cannot set it. Nothing was changed. File the approval and wait for the person to approve it.`;
+  }
+  const { leaving, skipped } = await gatedStagesPassed(session, toStage!);
+  if (leaving) {
+    const gate = resolveStageGate(leaving);
+    const type = gate?.kind === "awaits" ? gate.proposalType : "its approval";
+    return `Stage "${leaving.name ?? leaving.key}" waits for ${type} — its approval moves the run on, an agent cannot. Nothing was changed.`;
+  }
   if (skipped.length === 0) return null;
   const names = skipped.map((s) => `"${s.name ?? s.key}"`).join(", ");
   return `Moving to "${toStage}" would skip the gated stage ${names}. Nothing was changed. Advance into it first — its gate decides whether the run goes on.`;
 }
 
 /**
- * The stages strictly between the current stage and `toStage` whose gate HOLDS
- * on entry, read from the definition the gate itself is judged by (the run's
- * frozen snapshot, then the playbook — `loadSessionProcess`, the same
- * precedence as `resolveStageGateForSession`). A backward move, an unknown
- * target or a session with no stages skips nothing. A current stage that is not
- * in the list counts as "before the first stage" — fail-closed.
+ * What a FORWARD move from the current stage to `toStage` walks past, read from
+ * the definition the gate itself is judged by (the run's frozen snapshot, then
+ * the playbook — `loadSessionProcess`, the same precedence as
+ * `resolveStageGateForSession`):
+ *   - `leaving`  the current stage, when its gate AWAITS a named approval;
+ *   - `skipped`  every gated stage strictly between (any gate kind).
+ * A backward move, an unknown target or a session with no stages passes
+ * nothing. A current stage that is not in the list counts as "before the first
+ * stage" — fail-closed.
  */
-async function gatedStagesSkipped(
+async function gatedStagesPassed(
   session: GateBypassFloorInput["session"],
   toStage: string
-): Promise<PlaybookStage[]> {
+): Promise<{ leaving?: PlaybookStage; skipped: PlaybookStage[] }> {
   const proc = await loadSessionProcess({
     sessionId: session.id,
     playbookId: session.playbookId,
   });
-  if (!proc) return [];
+  if (!proc) return { skipped: [] };
   const keys = proc.stages.map((s) => s?.key);
   const to = keys.indexOf(toStage);
-  if (to === -1) return [];
+  if (to === -1) return { skipped: [] };
   const from = session.currentStage ? keys.indexOf(session.currentStage) : -1;
-  if (to <= from) return [];
-  return proc.stages.slice(from + 1, to).filter((stage) => {
-    const gate = resolveStageGate(stage);
-    return gate?.kind === "human" || gate?.kind === "check";
-  });
+  if (to <= from) return { skipped: [] };
+  const current = from >= 0 ? proc.stages[from] : undefined;
+  return {
+    ...(resolveStageGate(current)?.kind === "awaits"
+      ? { leaving: current }
+      : {}),
+    skipped: proc.stages
+      .slice(from + 1, to)
+      .filter((stage) => resolveStageGate(stage) !== undefined),
+  };
 }

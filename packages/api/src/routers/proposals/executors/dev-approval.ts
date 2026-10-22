@@ -17,6 +17,7 @@ import {
 } from "../../../services/focus-sessions/session-metadata.js";
 import {
   DEV_DEPLOY_APPROVAL_TYPE,
+  DEV_GATE_LEGACY_STAGES,
   DEV_PLAN_APPROVAL_TYPE,
   stageAfterDevGate,
 } from "../../../services/proposals/dev-approval.js";
@@ -79,15 +80,8 @@ interface DevLoopStamp {
   };
 }
 
-/**
- * The LEGACY stage a session sits at once a gate clears — used only when the
- * session follows no staged playbook that names the gate (`stageAfterDevGate`
- * decides otherwise). Read by the polling CLI agent as "you may proceed".
- */
-const STAGE_AFTER = {
-  [DEV_PLAN_APPROVAL_TYPE]: "plan_approved",
-  [DEV_DEPLOY_APPROVAL_TYPE]: "deploy_approved",
-} as const;
+/** The legacy stamp per gate — see `DEV_GATE_LEGACY_STAGES`. */
+const STAGE_AFTER = DEV_GATE_LEGACY_STAGES;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
