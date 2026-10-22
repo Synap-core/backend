@@ -61,6 +61,7 @@ import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { generateShareToken, hashToken } from "../../utils/share-token.js";
+import { sharePageUrl } from "../../utils/deep-links.js";
 import {
   resolveExposurePolicy,
   resolvePublicFields,
@@ -235,6 +236,11 @@ export type PublishResult =
       shareId: string;
       /** Plaintext token — present ONCE, when a human's publish minted it. */
       token?: string;
+      /**
+       * The page a person opens for it (`SYNAP_SHARE_PAGE_URL` + `/d/<token>`),
+       * with the token, so present ONCE too — and only when the pod has a page.
+       */
+      pageUrl?: string;
       tokenPrefix: string | null;
       /** False after an agent's approved publish: the owner publishes again to mint it. */
       hasToken: boolean;
@@ -435,10 +441,12 @@ export async function applyPublish(
     },
   });
 
+  const pageUrl = minted ? sharePageUrl(minted) : undefined;
   return {
     status,
     shareId,
     ...(minted ? { token: minted } : {}),
+    ...(pageUrl ? { pageUrl } : {}),
     tokenPrefix,
     hasToken,
     publishedAt: now,

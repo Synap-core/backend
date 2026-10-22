@@ -920,3 +920,99 @@ describe("a SITE member is not the record's standalone publication (0336, T14)",
     });
   });
 });
+
+describe("the PAGE a person opens (SYNAP_SHARE_PAGE_URL)", () => {
+  const E_PAGE = randomUUID();
+  const E_NOPAGE = randomUUID();
+  const E_REST_PAGE = randomUUID();
+
+  beforeAll(async () => {
+    for (const id of [E_PAGE, E_NOPAGE, E_REST_PAGE]) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, title, type, properties) values ($1,$2,$3,'Estimate','note','{}'::jsonb)`,
+        [id, A, W]
+      );
+    }
+    await human(A).setPolicy({ workspaceId: W, policy: ALLOW_ENTITY_PUBLIC });
+  });
+
+  async function withPage<T>(value: string | undefined, run: () => Promise<T>) {
+    const prior = process.env.SYNAP_SHARE_PAGE_URL;
+    if (value === undefined) delete process.env.SYNAP_SHARE_PAGE_URL;
+    else process.env.SYNAP_SHARE_PAGE_URL = value;
+    try {
+      return await run();
+    } finally {
+      if (prior === undefined) delete process.env.SYNAP_SHARE_PAGE_URL;
+      else process.env.SYNAP_SHARE_PAGE_URL = prior;
+    }
+  }
+
+  it("a minted token comes with `<page>/d/<token>`; the listing says the pod has a page; a republish has no token, so no page url", async () => {
+    await withPage("https://share.example.com/", async () => {
+      const pub = await human(A).publish({
+        resourceType: "entity",
+        resourceId: E_PAGE,
+      });
+      if (pub.status === "proposed") throw new Error("unreachable");
+      expect(pub.token).toEqual(expect.any(String));
+      expect(pub.pageUrl).toBe(
+        `https://share.example.com/d/${encodeURIComponent(pub.token!)}`
+      );
+      // The page reads the same public door the token opens.
+      expect((await readPublic(pub.token!)).status).toBe(200);
+      const list = await human(A).listShares({
+        resourceType: "entity",
+        resourceId: E_PAGE,
+      });
+      expect(list.publicPage).toBe(true);
+      const again = await human(A).publish({
+        resourceType: "entity",
+        resourceId: E_PAGE,
+      });
+      if (again.status === "proposed") throw new Error("unreachable");
+      expect(again.token).toBeUndefined();
+      expect(again.pageUrl).toBeUndefined();
+    });
+  });
+
+  it("no page configured (unset, or not an http(s) url): a token, no page url, and the listing says so", async () => {
+    for (const value of [undefined, "", "share.example.com", "ftp://x.y"]) {
+      await withPage(value, async () => {
+        expect(
+          (
+            await human(A).listShares({
+              resourceType: "entity",
+              resourceId: E_PAGE,
+            })
+          ).publicPage
+        ).toBe(false);
+      });
+    }
+    await withPage(undefined, async () => {
+      const pub = await human(A).publish({
+        resourceType: "entity",
+        resourceId: E_NOPAGE,
+      });
+      if (pub.status === "proposed") throw new Error("unreachable");
+      expect(pub.token).toEqual(expect.any(String));
+      expect(pub).not.toHaveProperty("pageUrl");
+    });
+  });
+
+  it("POST /shares/publish carries the page url too", async () => {
+    await withPage("https://share.example.com/sub", async () => {
+      const asOwner = hubApp({ userId: A, scopes: ["hub-protocol.write"] });
+      const r = await asOwner.request("/shares/publish", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ resourceType: "entity", resourceId: E_REST_PAGE }),
+      });
+      expect(r.status).toBe(200);
+      const b = (await r.json()) as any;
+      expect(b.pageUrl).toBe(
+        `https://share.example.com/sub/d/${encodeURIComponent(b.token)}`
+      );
+    });
+  });
+});

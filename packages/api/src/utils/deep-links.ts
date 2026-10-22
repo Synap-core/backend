@@ -35,6 +35,35 @@ export function podPublicOrigin(): string | undefined {
 }
 
 /**
+ * Where this pod's published shares are read as a PAGE (a Website Factory
+ * showcase site, one per brand), from `SYNAP_SHARE_PAGE_URL`: its normalized
+ * base (`https://share.example.com`, trailing slash stripped), or `undefined`
+ * when unset or not an http(s) URL. Unset = the pod hands out no page link;
+ * a publication still has its developer address.
+ */
+export function sharePageBase(): string | undefined {
+  const raw = process.env.SYNAP_SHARE_PAGE_URL?.trim().replace(/\/+$/, "");
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? raw
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The page a stranger opens for a published share: `${base}/d/<token>` (the
+ * site's `/d/[token]` route), or `undefined` when no page is configured.
+ */
+export function sharePageUrl(token: string): string | undefined {
+  const base = sharePageBase();
+  return base ? `${base}/d/${encodeURIComponent(token)}` : undefined;
+}
+
+/**
  * The DEVICE flavour of a link, chosen by the PRODUCER at build time.
  *
  * A producer always knows its audience — a push notification addressed to a
