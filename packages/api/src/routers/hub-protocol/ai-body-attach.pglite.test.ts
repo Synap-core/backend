@@ -215,6 +215,16 @@ beforeAll(async () => {
      values ($1, 'note', 'Note', 'system', 'pod', 'kind', true, 'authored', '{}', '{}')`,
     [NOTE_PROFILE]
   );
+  // The attributed agent's ORDINARY lane for an entity update is auto (a
+  // governance rule, rung 2.8). Without it the lane is propose (rung 9), so
+  // "filed" would prove nothing about M2 and the own-document control could
+  // never apply. With it, only the M2 floor (forcePropose, above the rules)
+  // files the attributed agent's attach.
+  await q(
+    `insert into governance_rules (id, principal_kind, agent_user_id, scope_kind, target_kind, target_pattern, verdict, created_by, created_at)
+     values (gen_random_uuid(), 'agent', $1, 'pod', 'action', 'entity.update', 'auto', $2, now())`,
+    [AGENT, USER]
+  );
 });
 
 describe("an AI attaches a body only from the record's own space (M2)", () => {
