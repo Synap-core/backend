@@ -52,14 +52,12 @@ import {
   isOpenAgentSlot,
   PACKET_TOP_N,
   type ContinuationNextMove,
-  type NextMoveBlockers,
   type PacketChildItem,
   type PacketProposalItem,
   type PacketSection,
   type PacketSlotItem,
 } from "./continuation-packet.js";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
-import { readDependencyFacts } from "../links/dependency-links.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { projectTriage } from "./triage.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
@@ -349,11 +347,9 @@ async function readOutputPresence(
 }
 
 /**
- * Attach the continuation sections to a page of session rows. Five batched
- * reads for the page (proposals, outbound edges, inbound edges, outputs, and
- * THE dependency rule's blockers for the next move — `readDependencyFacts`,
- * the read the packet's `readDependencyState` batches), each settled on its
- * own so one failure marks one section `unavailable`.
+ * Attach the continuation sections to a page of session rows. Four batched
+ * reads for the page (proposals, outbound edges, inbound edges, outputs),
+ * each settled on its own so one failure marks one section `unavailable`.
  *
  * The rows must already be owner-floored by the caller: this reads edges and
  * proposals BY the page's ids, and the page is the authorization.
@@ -372,40 +368,29 @@ export async function attachPathSections<R extends PathSourceRow>(
   const ctx = opts.logContext ?? {};
   const ids = rows.map((r) => r.id);
 
-  const [proposalsBy, outbound, inbound, outputsWith, dependencies] =
-    await Promise.all([
-      settle(
-        ctx,
-        "pendingProposals",
-        "Pending proposals could not be read.",
-        () => readPendingProposals(database, ids)
-      ),
-      settle(
-        ctx,
-        "outboundEdges",
-        "The sessions these wait on could not be read.",
-        () => readEdges(database, opts.userId, ids, "outbound")
-      ),
-      settle(
-        ctx,
-        "inboundEdges",
-        "The sessions these unblock could not be read.",
-        () => readEdges(database, opts.userId, ids, "inbound")
-      ),
-      settle(ctx, "outputs", "Session outputs could not be read.", () =>
-        readOutputPresence(database, ids)
-      ),
-      settle(
-        ctx,
-        "dependencies",
-        "Whether these sessions are blocked could not be read.",
-        () =>
-          readDependencyFacts(
-            ids.map((id) => ({ kind: "session", id })),
-            opts.userId
-          )
-      ),
-    ]);
+  const [proposalsBy, outbound, inbound, outputsWith] = await Promise.all([
+    settle(
+      ctx,
+      "pendingProposals",
+      "Pending proposals could not be read.",
+      () => readPendingProposals(database, ids)
+    ),
+    settle(
+      ctx,
+      "outboundEdges",
+      "The sessions these wait on could not be read.",
+      () => readEdges(database, opts.userId, ids, "outbound")
+    ),
+    settle(
+      ctx,
+      "inboundEdges",
+      "The sessions these unblock could not be read.",
+      () => readEdges(database, opts.userId, ids, "inbound")
+    ),
+    settle(ctx, "outputs", "Session outputs could not be read.", () =>
+      readOutputPresence(database, ids)
+    ),
+  ]);
 
   /** A section from a settled page-wide map, or that read's `unavailable`. */
   const pick = <T>(
@@ -452,19 +437,12 @@ export async function attachPathSections<R extends PathSourceRow>(
           }
         : outputsWith;
 
-    const blockers: NextMoveBlockers =
-      dependencies.status === "ok"
-        ? {
-            status: "ok",
-            items: dependencies.value.get(`session:${row.id}`)?.blockers ?? [],
-          }
-        : dependencies;
     const nextMove = deriveNextMove({
       status: row.status,
       owedSlots,
       pendingProposals,
       aiCanDo,
-      blockers,
+      blockedBy,
       expectedOutputs: all,
       outputs,
       children,

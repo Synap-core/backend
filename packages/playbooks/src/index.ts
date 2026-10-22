@@ -1499,9 +1499,8 @@ export type LinkType =
   // "branched from", and with no "merged_into" twin — nothing merges work.
   | "spawned_from"
   // X --blocked_by--> Y. THE dependency edge between units of work, across
-  // kinds (session · entity · track): X cannot proceed until Y DELIVERS (a Y
-  // that ended without delivering stays a blocker, marked dropped).
-  // Blocked-ness is DERIVED from the edges whose target has not delivered — there
+  // kinds (session · entity · track): X cannot proceed until Y clears.
+  // Blocked-ness is DERIVED from the edges whose target is still open — there
   // is no stored `blocked` status, deliberately (`@synap-core/types/connections`
   // `deriveOpenBlockers`; producer `services/links/dependency-links.ts`).
   | "blocked_by"

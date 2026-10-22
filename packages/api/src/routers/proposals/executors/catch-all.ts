@@ -195,9 +195,7 @@ async function applyApprovedBlockedBy(
     throw refuse(
       result.reason === "self_blocker"
         ? "a session cannot block itself."
-        : result.reason === "cycle"
-          ? "the blocker now waits, directly or through others, on the session it would block — approving it would make them wait on each other."
-          : "both sessions must still exist and belong to the proposal's owner. One was deleted or is not theirs. Retry once that is true."
+        : "both sessions must still exist and belong to the proposal's owner. One was deleted or is not theirs. Retry once that is true."
     );
   }
 

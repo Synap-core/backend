@@ -6,8 +6,6 @@ import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import { approveProjectFiling } from "./project-filing.js";
 import { isProjectUnfilePayload } from "../../../services/projects/project-filing-summary.js";
-import { isDependencyLinkType } from "@synap-core/types/connections";
-import { applyApprovedDependencyLink } from "../../../services/links/dependency-links.js";
 
 /**
  * Approve-executor for `link/delete`.
@@ -28,14 +26,6 @@ import { applyApprovedDependencyLink } from "../../../services/links/dependency-
  *
  * The second door is project UN-FILING (`entity --belongs_to_project-->
  * project`, batched), dispatched to `executors/project-filing.ts`.
- *
- * The third is a DEPENDENCY edge (`blocked_by` / `replaces`, any endpoint
- * kinds) — filed by `governedRemoveDependencyLink`, e.g. an agent removing a
- * blocker from its running session (`synap_update_session`
- * `removeBlockedBySessionIds`). Applied through THE dependency door
- * (`applyApprovedDependencyLink`), floored on the proposal's owner against
- * today's rows. Before this branch existed such a proposal reached the
- * refusal below and could never be approved.
  *
  * Any other link shape is refused: there is no governed door that files one, and
  * a raw edge delete with no endpoint floor is exactly what this must not become.
@@ -59,43 +49,6 @@ export function registerLinkExecutors(): void {
       if (isProjectUnfilePayload("link", "delete", inner)) {
         return approveProjectFiling(args, true);
       }
-      if (isDependencyLinkType(inner.linkType as string)) {
-        const [settled] = await db
-          .select({ status: proposals.status })
-          .from(proposals)
-          .where(eq(proposals.id, input.proposalId));
-        if (settled?.status === ProposalStatus.APPROVED) {
-          return { success: true, alreadyApproved: true };
-        }
-        const applied = await applyApprovedDependencyLink({
-          action: "delete",
-          data: inner,
-          ownerUserId: proposal.subjectUserId,
-          proposalId: input.proposalId,
-        });
-        if (!applied.ok) throw refuse(applied.why);
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVED,
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(proposals.id, input.proposalId));
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
-        // `rows` is the DELETE's own RETURNING count: `0` = already gone.
-        return {
-          success: true,
-          effect: { applied: "verified", rows: applied.rows, subject: "link" },
-        };
-      }
       if (
         inner.linkType !== "uses" ||
         inner.fromType !== "project" ||
@@ -104,7 +57,7 @@ export function registerLinkExecutors(): void {
         typeof inner.toId !== "string"
       ) {
         throw refuse(
-          "only a project --uses--> workspace edge, a project filing or a dependency edge can be removed by approval."
+          "only a project --uses--> workspace edge can be removed by approval."
         );
       }
 

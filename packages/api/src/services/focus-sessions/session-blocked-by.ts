@@ -8,8 +8,7 @@
  * from the blockers themselves: unblocking would mean remembering to write the
  * old status back. Atlassian's flag-don't-status is the shipped prior art.
  * Blocked-ness here is therefore DERIVED, every time, from the subset of edges
- * whose TARGET has not DELIVERED (still open, or dropped: cancelled / failed)
- * — see `openBlockerIds` below.
+ * whose TARGET is still in an open status — see `openBlockerIds` below.
  *
  * The producer mirrors `recordSessionSpawn` (`@synap/database`'s
  * `session-spawn.ts`) exactly:
@@ -22,9 +21,6 @@
  *   2. **Drop and report, never throw.** An unowned, missing or malformed
  *      handle returns a reason — a bad handle must not fail the caller.
  *   3. **Idempotent.** The insert conflicts on `idx_links_unique_edge`.
- *   4. **No cycles.** An edge that would make the blocker wait — directly or
- *      through others — on the session it blocks is refused (`cycle`), the
- *      same check the generic door makes (`closesDependencyCycle`).
  *
  * The reader mirrors `parent-lineage.ts`: a single form and a BATCH form, ONE
  * implementation imported by every door (tRPC `focusSessions.list`, and the
@@ -57,9 +53,7 @@ import {
 import { DEPENDENCY_LINK_TYPE } from "@synap-core/types/connections";
 import { UUID_RE } from "./session-metadata.js";
 import {
-  closesDependencyCycle,
   deleteDependencyEdge,
-  governedRemoveDependencyLink,
   insertDependencyEdge,
   readDependencyState,
   type LinkAttribution,
@@ -94,7 +88,7 @@ export type BlockerEdgeResult =
        */
       linkId?: string;
     }
-  | { linked: false; reason: "not_found" | "self_blocker" | "cycle" };
+  | { linked: false; reason: "not_found" | "self_blocker" };
 
 export type RemoveBlockerResult =
   | { removed: true }
@@ -135,9 +129,7 @@ async function bothOwned(
 
 /**
  * The producer's floor, exposed so a GENERIC door (`POST /api/hub/links`) can
- * refuse an edge BEFORE governance turns it into a proposal. Refuses a self
- * edge, an unowned or missing session, and — once both are the caller's — an
- * edge that would close a cycle. The same check
+ * refuse an edge BEFORE governance turns it into a proposal. The same check
  * `addSessionBlocker` applies — one floor, one place; never re-derive the
  * ownership query at a call site. On success, also hands back the BLOCKED
  * session's `workspaceId`, so a caller judging governance can do so in the
@@ -147,7 +139,7 @@ export async function validateSessionBlocker(
   input: Pick<BlockerEdgeInput, "sessionId" | "blockerSessionId" | "userId">
 ): Promise<
   | { ok: true; workspaceId: string | null }
-  | { ok: false; reason: "not_found" | "self_blocker" | "cycle" }
+  | { ok: false; reason: "not_found" | "self_blocker" }
 > {
   if (input.sessionId === input.blockerSessionId) {
     return { ok: false, reason: "self_blocker" };
@@ -158,18 +150,6 @@ export async function validateSessionBlocker(
     input.userId
   );
   if (!owned.ok) return { ok: false, reason: "not_found" };
-  // After the owner floor, so the walk only ever answers about the caller's
-  // own sessions.
-  if (
-    await closesDependencyCycle({
-      fromType: "session",
-      fromId: input.sessionId,
-      toType: "session",
-      toId: input.blockerSessionId,
-    })
-  ) {
-    return { ok: false, reason: "cycle" };
-  }
   return { ok: true, workspaceId: owned.workspaceId };
 }
 
@@ -209,26 +189,20 @@ export async function addSessionBlocker(
   };
 }
 
-/**
- * What happened to ONE blocker added at create time — or mid-flight through
- * `synap_update_session` `addBlockedBySessionIds`, which reuses this door.
- * Reported per id, never folded.
- */
+/** What happened to ONE create-time blocker. Reported per id, never folded. */
 export type CreateTimeBlockerReport =
   | { blockerSessionId: string; status: "linked"; inserted: number }
   | { blockerSessionId: string; status: "proposed"; proposalId: string }
   | {
       blockerSessionId: string;
       status: "failed";
-      reason: "not_found" | "self_blocker" | "cycle" | "denied" | "error";
+      reason: "not_found" | "self_blocker" | "denied" | "error";
       message?: string;
     };
 
 /**
  * Write the `blocked_by` edges a session was CREATED with (`blockedBySessionIds`
- * on the create doors) — and the ones an agent ADDS to a running session
- * (`synap_update_session` `addBlockedBySessionIds`: the same door, so the same
- * floor and governance). AFTER the session row exists, one id at a time, each
+ * on the create doors). AFTER the session row exists, one id at a time, each
  * outcome reported — a bad handle never fails the create and never vanishes.
  *
  * NO SECOND INSERT PATH: every edge is validated by `validateSessionBlocker` and
@@ -366,109 +340,6 @@ export async function removeSessionBlocker(
     : { removed: false, reason: "no_edge" };
 }
 
-/** What happened to ONE blocker an agent asked to REMOVE. Per id, never folded. */
-export type BlockerRemovalReport =
-  | { blockerSessionId: string; status: "removed" | "absent" }
-  | { blockerSessionId: string; status: "proposed"; proposalId: string }
-  | {
-      blockerSessionId: string;
-      status: "failed";
-      reason: "not_found" | "self_blocker" | "denied" | "error";
-      message?: string;
-    };
-
-/**
- * Remove `blocked_by` edges from a RUNNING session (`synap_update_session`
- * `removeBlockedBySessionIds`) — how a dependent re-plans once a blocker was
- * dropped (or is simply no longer needed). One id at a time, each outcome
- * reported: `removed`, `absent` (there was no such edge — nothing pretended),
- * `proposed`, or `failed` with the reason.
- *
- * THE governed delete (`governedRemoveDependencyLink`): the floor is the
- * BLOCKED session — the caller must be able to see and write it, so a blocker
- * that was deleted or is not theirs can still be dropped — then
- * `checkPermissionOrPropose` `link/delete` in its workspace, with the agent
- * attributed. A deferred removal is `proposed`; its approval re-enters the
- * same door floored on the proposal's owner (`applyApprovedDependencyLink`).
- */
-export async function removeSessionBlockers(input: {
-  sessionId: string;
-  blockerSessionIds: readonly string[];
-  userId: string;
-  agentUserId?: string | null;
-}): Promise<BlockerRemovalReport[]> {
-  const reports: BlockerRemovalReport[] = [];
-  for (const blockerSessionId of [...new Set(input.blockerSessionIds)]) {
-    if (blockerSessionId === input.sessionId) {
-      reports.push({
-        blockerSessionId,
-        status: "failed",
-        reason: "self_blocker",
-      });
-      continue;
-    }
-    try {
-      const result = await governedRemoveDependencyLink({
-        edge: {
-          fromType: "session",
-          fromId: input.sessionId,
-          toType: "session",
-          toId: blockerSessionId,
-          linkType: DEPENDENCY_LINK_TYPE,
-        },
-        userId: input.userId,
-        agentUserId: input.agentUserId,
-        sessionId: input.sessionId,
-        door: "removeSessionBlockers",
-      });
-      switch (result.status) {
-        case "removed":
-        case "absent":
-          reports.push({ blockerSessionId, status: result.status });
-          break;
-        case "proposed":
-          reports.push({
-            blockerSessionId,
-            status: "proposed",
-            proposalId: result.proposalId,
-          });
-          break;
-        case "denied":
-          reports.push({
-            blockerSessionId,
-            status: "failed",
-            reason: "denied",
-            message: result.reason,
-          });
-          break;
-        case "refused":
-          reports.push({
-            blockerSessionId,
-            status: "failed",
-            reason: "not_found",
-            message: result.error,
-          });
-          break;
-        default:
-          reports.push({
-            blockerSessionId,
-            status: "failed",
-            reason: "error",
-            message: `unexpected outcome ${result.status}`,
-          });
-      }
-    } catch (err) {
-      reports.push({
-        blockerSessionId,
-        status: "failed",
-        reason: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-  return reports;
-}
-
 /** Both directions of the dependency edge for one session. */
 export interface SessionEdges {
   /** Sessions this one is waiting on (outbound `blocked_by`). */
@@ -541,11 +412,9 @@ export async function attachSessionEdges<T extends { id: string }>(
 }
 
 /**
- * The blockers of `sessionId` that STILL HOLD IT — i.e. the reason it is
- * blocked right now: open ones, and DROPPED ones (cancelled / failed without
- * delivering — the session must re-plan before it is free). Empty ⇒ not
- * blocked (it may still carry DELIVERED blocker edges; those are history, and
- * are deliberately not deleted on close).
+ * The blockers of `sessionId` that are STILL OPEN — i.e. the reason it is
+ * blocked right now. Empty ⇒ not blocked (it may still carry closed blocker
+ * edges; those are history, and are deliberately not deleted on close).
  *
  * This is the derivation, and there is ONE: `readDependencyState` over the
  * pure `deriveOpenBlockers` rule — so a session waiting on an ENTITY or a

@@ -9,12 +9,6 @@
  * from the close event alone — it re-derives `openBlockerIds(dependent)` after
  * the close and stays silent unless that set is empty.
  *
- * A DROPPED blocker is not an unblocking (founder decision, 2026-10-22). The
- * close door emits the same event for `cancelled` and `failed` as for
- * `closed`, but only a `closed` blocker DELIVERED: one that ended without
- * delivering stays in `openBlockerIds` (marked dropped) until the dependent
- * re-plans, so the derivation above keeps this reactor silent for it.
- *
  * THE SEAM: `complete-session.ts` is the only close door, and it already emits
  * `focus_session.closed` through `emitSideEffects`. Registering a reactor off
  * that emit means the close door does not have to remember the notification —

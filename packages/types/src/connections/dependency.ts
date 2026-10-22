@@ -11,48 +11,33 @@
  *
  * Blocked-ness is DERIVED, never stored ("flag, don't status" — a status can
  * hold one value, so storing `blocked` destroys the real state and then drifts
- * from the blockers). Each blocker is in ONE of three outcomes, by its own
- * kind's status vocabulary ({@link classifyDependencyBlocker}):
+ * from the blockers). A unit is blocked while at least one of its blockers is
+ * still OPEN by its own kind's status vocabulary:
  *
- *            DELIVERED (clears)     DROPPED (still holds)   OPEN (holds)
- *   session  `closed`               `cancelled` · `failed`  anything else —
- *                                                           incl. `stale`
- *   track    `completed`            `archived` (the goal    `active` · `paused`
- *                                   was dropped)
- *   entity   lifecycle category     category `lost`, or     anything else; no
- *            `done`, or a           a dropped status        status ⇒ open
- *            delivered status       ({@link ENTITY_DROPPED_STATUSES})
- *            ({@link ENTITY_DELIVERED_STATUSES})
- *
- * ONLY A DELIVERED BLOCKER CLEARS (founder decision, 2026-10-22). A blocker
- * that ended WITHOUT delivering — cancelled, failed, archived, lost — used to
- * settle exactly like a delivered one, so its dependent went ahead as if the
- * work it waited on existed. It now stays a blocker marked `dropped: true`,
- * and the dependent must RE-PLAN: remove the edge (the work no longer needs
- * it), or link the attempt that replaces it (`replaces`, below). A `stale`
- * session (the reaper found it quiet; resumable) has not ended, so it holds as
- * OPEN. An entity's lifecycle CATEGORY, when the reader knows it, outranks its
- * option key; a key no list knows holds as OPEN — the honest default.
+ *   session  open while `status` ∈ OPEN_SESSION_STATUSES (the same set the
+ *            pod's session reader `openBlockerIds` filters on)
+ *   track    open unless `completed` / `archived`
+ *   entity   open unless its `status` property reads as cleared
+ *            ({@link ENTITY_CLEARED_STATUSES}); an entity with no status
+ *            property is open — a dependency on a note nobody can finish
+ *            stays declared until someone removes it.
  *
  * `replaces` — `A --replaces--> B` ("this step replaces that one": B failed or
  * was dropped, A is the attempt instead). A REPLACED blocker no longer decides
  * anything: whoever waited on B now waits on B's replacement(s), followed
  * transitively (cycle-safe). So a dependent of a failed-and-replaced step is
  * blocked exactly while the replacement is open — the failure of B can neither
- * hold it forever nor clear it early. Linking a replacement is therefore one
- * of the two ways a DROPPED blocker stops holding its dependent.
+ * hold it forever nor clear it early.
  *
  * A blocker whose row no longer exists (deleted) does not block — the pod's
  * session reader drops it the same way (inner join). A blocker the reader
  * cannot SEE is still a blocker: hiding it would read as "free to go", a calm
  * wrong answer. Callers report it as `hidden`, never omit it.
  *
- * Pure and dependency-free (type-only imports of the session status and the
- * lifecycle category).
+ * Pure and dependency-free apart from the session status leaf.
  */
 
-import type { TerminalSessionStatus } from "../focus-sessions/statuses.js";
-import type { LifecycleCategory } from "../lifecycle/option.js";
+import { OPEN_SESSION_STATUSES } from "../focus-sessions/statuses.js";
 
 /** `X --blocked_by--> Y`: X waits on Y. */
 export const DEPENDENCY_LINK_TYPE = "blocked_by" as const;
@@ -94,32 +79,16 @@ export function isDependencyLinkType(
   );
 }
 
-/** What became of a blocker — see the table at the top of this module. */
-export type DependencyOutcome = "open" | "delivered" | "dropped";
-
-/** A `focus_sessions.status` that DELIVERED — the only one that clears. */
-export const SESSION_DELIVERED_STATUSES = [
-  "closed",
-] as const satisfies readonly TerminalSessionStatus[];
-/** A `focus_sessions.status` that ENDED without delivering. */
-export const SESSION_DROPPED_STATUSES = [
-  "cancelled",
-  "failed",
-] as const satisfies readonly TerminalSessionStatus[];
-
-/** A `project_tracks.status` that delivered. */
-export const TRACK_DELIVERED_STATUSES = ["completed"] as const;
-/** A `project_tracks.status` that ended without delivering ("archive it when the goal is dropped"). */
-export const TRACK_DROPPED_STATUSES = ["archived"] as const;
+/** A `project_tracks.status` that no longer holds anyone up. */
+export const TRACK_CLEARED_STATUSES = ["completed", "archived"] as const;
 
 /**
- * Entity `status` property values that read as DELIVERED, when the reader does
- * not know the kind's lifecycle category. Compared after lower-casing and
- * folding `-` / space to `_`, so `Done`, `closed-won` and `Closed won` all
- * match. Deliberately narrow: a value no list knows keeps the dependent
- * blocked, which is the honest default.
+ * Entity `status` property values that read as finished. Compared after
+ * lower-casing and folding `-` / space to `_`, so `Done`, `closed-won` and
+ * `Closed won` all match. Deliberately narrow: a value this list does not know
+ * keeps the dependent blocked, which is the honest default.
  */
-export const ENTITY_DELIVERED_STATUSES = [
+export const ENTITY_CLEARED_STATUSES = [
   "done",
   "completed",
   "complete",
@@ -127,27 +96,12 @@ export const ENTITY_DELIVERED_STATUSES = [
   "resolved",
   "finished",
   "shipped",
-  "closed_won",
-] as const;
-
-/**
- * Entity `status` values that read as ENDED WITHOUT DELIVERING (same folding).
- * `archived` is here, not above: an archived thing may or may not have been
- * finished, and claiming a delivery nobody can see is the defect this rule
- * exists to stop — the dependent re-plans instead.
- */
-export const ENTITY_DROPPED_STATUSES = [
   "cancelled",
   "canceled",
   "archived",
+  "closed_won",
   "closed_lost",
   "wont_do",
-] as const;
-
-/** Every entity status that has ENDED, either way — the "no longer live" test. */
-export const ENTITY_ENDED_STATUSES = [
-  ...ENTITY_DELIVERED_STATUSES,
-  ...ENTITY_DROPPED_STATUSES,
 ] as const;
 
 function foldStatus(status: string): string {
@@ -157,54 +111,33 @@ function foldStatus(status: string): string {
     .replace(/[\s-]+/g, "_");
 }
 
-const has = (list: readonly string[], v: string | null | undefined) =>
-  v != null && list.includes(v);
-
 /**
- * THE classification — what became of a blocker of this kind, in this status
- * (and, for an entity, this lifecycle category when the reader resolved it).
- * Unknown kinds and unknown values are OPEN: a dependency nobody can reason
- * about stays declared.
+ * Whether a blocker of this kind, in this status, has stopped blocking.
+ * Unknown kinds never clear (a dependency nobody can reason about stays).
  */
-export function classifyDependencyBlocker(
+export function isDependencyBlockerCleared(
   kind: string,
-  status: string | null | undefined,
-  category?: LifecycleCategory | null
-): DependencyOutcome {
+  status: string | null | undefined
+): boolean {
   switch (kind) {
     case "session":
-      if (has(SESSION_DELIVERED_STATUSES, status)) return "delivered";
-      return has(SESSION_DROPPED_STATUSES, status) ? "dropped" : "open";
+      // Parity with the pod's `openBlockerIds`: blocking ⇔ status is OPEN.
+      return !(OPEN_SESSION_STATUSES as readonly string[]).includes(
+        status ?? ""
+      );
     case "track":
-      if (has(TRACK_DELIVERED_STATUSES, status)) return "delivered";
-      return has(TRACK_DROPPED_STATUSES, status) ? "dropped" : "open";
-    case "entity": {
-      if (category === "done") return "delivered";
-      if (category === "lost") return "dropped";
-      if (category) return "open";
-      if (!status) return "open";
-      const folded = foldStatus(status);
-      if (has(ENTITY_DELIVERED_STATUSES, folded)) return "delivered";
-      return has(ENTITY_DROPPED_STATUSES, folded) ? "dropped" : "open";
-    }
+      return (TRACK_CLEARED_STATUSES as readonly string[]).includes(
+        status ?? ""
+      );
+    case "entity":
+      return status
+        ? (ENTITY_CLEARED_STATUSES as readonly string[]).includes(
+            foldStatus(status)
+          )
+        : false;
     default:
-      return "open";
+      return false;
   }
-}
-
-/**
- * Whether a unit of this kind, in this status, has ENDED — delivered OR
- * dropped. The "is it still live" test (a row's terminal mark, a dependent
- * still waiting, a task still pickable); NOT "has it stopped blocking" — a
- * dropped blocker has ended and still blocks. That question is
- * {@link deriveOpenBlockers}'s.
- */
-export function isDependencyEnded(
-  kind: string,
-  status: string | null | undefined,
-  category?: LifecycleCategory | null
-): boolean {
-  return classifyDependencyBlocker(kind, status, category) !== "open";
 }
 
 export interface DependencyNodeRef {
@@ -224,13 +157,10 @@ export interface DependencyEdge {
 /**
  * What the caller knows about one node. `missing` = the row is gone (does not
  * block). `hidden` = it exists but the reader may not see it (still blocks,
- * reported without a name). `category` = an entity's lifecycle category, when
- * the reader resolved its kind's lifecycle. `title` = its display name.
+ * reported without a name).
  */
 export interface DependencyNodeState {
   status?: string | null;
-  category?: LifecycleCategory | null;
-  title?: string | null;
   missing?: boolean;
   hidden?: boolean;
 }
@@ -239,25 +169,13 @@ export interface OpenBlocker extends DependencyNodeRef {
   /** The blocker as declared, when the open one is its replacement. */
   replaces?: DependencyNodeRef;
   hidden: boolean;
-  /**
-   * It ENDED without delivering (cancelled, failed, archived, lost) and still
-   * holds the dependent: the work it waited on never happened, so the
-   * dependent re-plans — remove the edge, or link a replacement.
-   */
-  dropped: boolean;
-  /** Its own raw status, when the reader may see it. */
-  status?: string | null;
-  /** Its display name, when the reader may see it. */
-  title?: string | null;
 }
 
 const keyOf = (n: DependencyNodeRef) => `${n.kind}:${n.id}`;
 
 /**
- * The blockers of `node` that still hold it up, after following `replaces` —
- * OPEN ones and DROPPED ones (`dropped: true`); only a DELIVERED blocker
- * clears ({@link classifyDependencyBlocker}). Empty ⇒ not blocked. `edges`
- * may be any superset (other nodes' edges are
+ * The blockers of `node` that still hold it up, after following `replaces`.
+ * Empty ⇒ not blocked. `edges` may be any superset (other nodes' edges are
  * ignored); `stateOf` returning `undefined` means "unknown" and is treated as
  * OPEN — a blocker the caller failed to look up must never read as cleared.
  */
@@ -291,23 +209,18 @@ export function deriveOpenBlockers(
     }
     const state = stateOf(ref);
     if (state?.missing) return;
-    // An unknown state (`undefined`) and a hidden one fall through as OPEN on
-    // purpose: what the reader cannot see is never called delivered.
-    const visible = state && !state.hidden ? state : undefined;
-    const outcome = visible
-      ? classifyDependencyBlocker(ref.kind, visible.status, visible.category)
-      : "open";
-    if (outcome === "delivered") return;
+    // An unknown state (`undefined`) falls through as OPEN on purpose.
+    if (
+      state &&
+      !state.hidden &&
+      isDependencyBlockerCleared(ref.kind, state.status)
+    )
+      return;
     if (!out.has(k)) {
       out.set(k, {
         kind: ref.kind,
         id: ref.id,
         hidden: state?.hidden === true,
-        dropped: outcome === "dropped",
-        ...(visible && visible.status !== undefined
-          ? { status: visible.status }
-          : {}),
-        ...(visible?.title != null ? { title: visible.title } : {}),
         ...(keyOf(declared) !== k
           ? { replaces: { kind: declared.kind, id: declared.id } }
           : {}),
@@ -324,10 +237,7 @@ export function deriveOpenBlockers(
   return [...out.values()];
 }
 
-/**
- * Whether `node` is held up right now — by an open OR a dropped blocker; see
- * {@link deriveOpenBlockers}.
- */
+/** Whether `node` is blocked right now — see {@link deriveOpenBlockers}. */
 export function isBlocked(
   node: DependencyNodeRef,
   edges: readonly DependencyEdge[],

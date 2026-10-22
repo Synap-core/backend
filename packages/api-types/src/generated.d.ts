@@ -5020,20 +5020,12 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * X --blocked_by--> Y. THE dependency between units of work, across kinds
  * (`session` · `entity` · `track`, any pair — `DEPENDENCY_ENDPOINT_KINDS` in
  * `@synap-core/types/connections`): the FROM end cannot proceed until the TO
- * end DELIVERS by its own kind's status vocabulary (a session `closed`, a
- * track `completed`, an entity in lifecycle category `done`). Entity
- * relations `blocks` / `depends_on` are this edge under other names; the
- * relation create door maps them here and migration 0301 moved the stored
- * rows.
+ * end clears by its own kind's status vocabulary. Entity relations
+ * `blocks` / `depends_on` are this edge under other names; the relation
+ * create door maps them here and migration 0301 moved the stored rows.
  *
- * A TO end that ENDED WITHOUT DELIVERING (a session cancelled or failed, a
- * track archived, an entity `lost`) does NOT clear (founder decision,
- * 2026-10-22): it stays a blocker marked `dropped`, and the FROM end must
- * re-plan — until this edge is removed, or a `replaces` edge names the
- * attempt that replaces it (whoever waited on it then waits on that).
- *
- * Blocked-ness is DERIVED from the subset of these edges whose TARGET has
- * not delivered, never a stored `blocked` status on `focus_sessions` (prior
+ * Blocked-ness is DERIVED from the subset of these edges whose TARGET is
+ * still open, never a stored `blocked` status on `focus_sessions` (prior
  * art: Atlassian's "flag, don't status" — a status can only hold one value,
  * so storing blocked-ness destroys the real state and then drifts from the
  * blockers). The ONE producer is `services/links/dependency-links.ts`
@@ -14062,16 +14054,6 @@ export interface OpenBlocker extends DependencyNodeRef {
 	/** The blocker as declared, when the open one is its replacement. */
 	replaces?: DependencyNodeRef;
 	hidden: boolean;
-	/**
-	 * It ENDED without delivering (cancelled, failed, archived, lost) and still
-	 * holds the dependent: the work it waited on never happened, so the
-	 * dependent re-plans — remove the edge, or link a replacement.
-	 */
-	dropped: boolean;
-	/** Its own raw status, when the reader may see it. */
-	status?: string | null;
-	/** Its display name, when the reader may see it. */
-	title?: string | null;
 }
 /** A relation row as the relation readers return it — plus the dependency marker. */
 export type RelationReadRow = typeof relations.$inferSelect & {
@@ -14423,10 +14405,7 @@ export interface GraphEnvelope {
 }
 export interface DependencyState {
 	blocked: boolean;
-	/**
-	 * The blockers still holding it up, after `replaces` following — open ones
-	 * and dropped ones (`dropped: true`, ended without delivering).
-	 */
+	/** The blockers still holding it up, after `replaces` following. */
 	openBlockers: OpenBlocker[];
 	/** Every declared blocker (outgoing `blocked_by`), open or cleared. */
 	declared: DependencyNodeRef[];
@@ -16247,7 +16226,7 @@ export type BlockerEdgeResult = {
 	linked: true;
 } | {
 	linked: false;
-	reason: "cycle" | "not_found" | "self_blocker";
+	reason: "not_found" | "self_blocker";
 };
 export type RemoveBlockerResult = {
 	removed: true;
@@ -16255,11 +16234,7 @@ export type RemoveBlockerResult = {
 	reason: "no_edge" | "not_found" | "self_blocker";
 	removed: false;
 };
-/**
- * What happened to ONE blocker added at create time — or mid-flight through
- * `synap_update_session` `addBlockedBySessionIds`, which reuses this door.
- * Reported per id, never folded.
- */
+/** What happened to ONE create-time blocker. Reported per id, never folded. */
 export type CreateTimeBlockerReport = {
 	blockerSessionId: string;
 	inserted: number;
@@ -16271,7 +16246,7 @@ export type CreateTimeBlockerReport = {
 } | {
 	blockerSessionId: string;
 	message?: string;
-	reason: "cycle" | "denied" | "error" | "not_found" | "self_blocker";
+	reason: "denied" | "error" | "not_found" | "self_blocker";
 	status: "failed";
 };
 /** Both directions of the dependency edge for one session. */
@@ -16808,7 +16783,7 @@ export interface PacketDecision {
 	/** The reviewer's rejection reason, when one was given. */
 	reason?: string;
 }
-export type NextMoveKind = "agent_slot" | "blocker_dropped" | "none" | "owed_slot" | "pending_proposal" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_session";
+export type NextMoveKind = "agent_slot" | "none" | "owed_slot" | "pending_proposal" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_session";
 export interface ContinuationNextMove {
 	kind: NextMoveKind;
 	/** Who acts: the person, the AI, or nobody. */
@@ -16819,10 +16794,7 @@ export interface ContinuationNextMove {
 	reason: string;
 	/** The proposal id, for `pending_proposal`. */
 	proposalId?: string;
-	/**
-	 * The blocking session's id, for `waiting_on_session`; for `blocker_dropped`,
-	 * the DROPPED blocker's id when that blocker is a session.
-	 */
+	/** The blocking session's id, for `waiting_on_session`. */
 	sessionId?: string;
 }
 export interface ContinuationPacket {
