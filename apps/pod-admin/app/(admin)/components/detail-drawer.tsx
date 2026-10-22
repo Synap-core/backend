@@ -45,6 +45,11 @@ export interface DetailDrawerProps {
   onClose: () => void;
   /** Header title (always shown). */
   title: string;
+  /**
+   * `2` lets a long title wrap onto a second line instead of cutting off its
+   * meaningful end ("Update “Gap: web_search (Tavily) and web_f…”").
+   */
+  titleLines?: 1 | 2;
   /** Optional second line under the title — id, hint, mono code, etc. */
   subtitle?: ReactNode;
   /** Optional left-side header glyph (icon chip / color square). */
@@ -66,6 +71,7 @@ export function DetailDrawer({
   isOpen,
   onClose,
   title,
+  titleLines = 1,
   subtitle,
   headerAccessory,
   headerRight,
@@ -95,7 +101,11 @@ export function DetailDrawer({
                   <div className="shrink-0">{headerAccessory}</div>
                 )}
                 <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="truncate text-[15px] font-medium text-foreground">
+                  <span
+                    className={`${
+                      titleLines === 2 ? "line-clamp-2 break-words" : "truncate"
+                    } text-[15px] font-medium text-foreground`}
+                  >
                     {title}
                   </span>
                   {subtitle && (

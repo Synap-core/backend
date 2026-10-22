@@ -5,12 +5,15 @@
  * list from `lg` up (`ReviewDock`, non-modal: the list stays usable), a
  * drawer below it (`ReviewDrawer`); both draw the same `ReviewDetail`.
  *
- * Every kind opens on the same five TRUST SIGNALS (who is asking, what it
- * will be able to do, where, who approves, when and from where) and the
- * policy's "why this needs approval", then decides through the SAME UI its
- * own receiver page uses — never a copy:
+ * A proposal is drawn WHOLE by `ProposalReviewBody`, the component its
+ * receiver page `/proposal/[id]` draws: provenance as one line of chips, the
+ * change, why, the decision bar and the ONE "Advanced" — this file adds only
+ * the frame. The other kinds open on the five TRUST SIGNALS (who is asking,
+ * what it will be able to do, where, who approves, when and from where) and
+ * the policy's "why this needs approval", then decide through the SAME UI
+ * their own receiver page uses — never a copy:
  *
- *   proposal       → `ProposalDecision` (+ "always approve"), `/proposal/[id]`
+ *   proposal       → `ProposalReviewBody` (+ "always approve"), `/proposal/[id]`
  *   agent connect  → `AgentConnectDecision` (keeps "also disconnect" — the
  *                    REST door is the only one that takes it), `/approve-agent`
  *   issuer         → `IssuerScopePicker`, the issuers list's approve modal
@@ -34,10 +37,9 @@ import { formatRelative, formatTimestamp } from "../../../../lib/format";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { DetailDrawer } from "../../components/detail-drawer";
-import { proposalHeading } from "../../../proposal/[id]/proposal-heading";
 import { proposalRequester } from "../../../proposal/[id]/proposal-requester";
 import {
-  ProposalDecision,
+  ProposalReviewBody,
   isActionable,
   useProposalReview,
   type ProposalReviewData,
@@ -97,6 +99,7 @@ export function ReviewDrawer({ open, ...rest }: ReviewFrameProps) {
       isOpen={open !== null}
       onClose={rest.onClose}
       title={open?.title ?? "Review"}
+      titleLines={2}
       size="lg"
     >
       {open && <ReviewDetail open={open} {...rest} />}
@@ -120,7 +123,7 @@ export function ReviewDock({ open, ...rest }: ReviewFrameProps) {
       className="sticky top-4 flex max-h-[calc(100dvh-6rem)] min-w-0 flex-col overflow-hidden rounded-lg bg-content1 ring-1 ring-inset ring-foreground/10"
     >
       <div className="flex items-center gap-3 border-b border-foreground/[0.06] px-6 py-4">
-        <h2 className="min-w-0 flex-1 truncate text-[15px] font-medium text-foreground">
+        <h2 className="line-clamp-2 min-w-0 flex-1 break-words text-[15px] font-medium text-foreground">
           {open.title}
         </h2>
         <Button
@@ -276,9 +279,13 @@ function WhyApproval({ children }: { children: ReactNode }) {
  * the dock body share them): a sticky box stops at the padding edge, which
  * would leave a strip of scrolling content showing under it.
  */
+const DECISION_BAR_PIN = "-bottom-4 -mx-6 bg-content1 px-6 py-3";
+
 function DecisionBar({ children }: { children: ReactNode }) {
   return (
-    <div className="sticky -bottom-4 z-10 -mx-6 border-t border-foreground/[0.06] bg-content1 px-6 py-3">
+    <div
+      className={`sticky z-10 border-t border-foreground/[0.06] ${DECISION_BAR_PIN}`}
+    >
       {children}
     </div>
   );
@@ -440,31 +447,27 @@ function ProposalBody({
       <Unreadable message="This proposal couldn't be loaded — it may have been withdrawn, or you may not have access to it." />
     );
 
-  // Only names the pod resolved — never an id, never a guess.
-  const requester = proposalRequester(p);
-  const from = sourceExits.map((s) => s.target.label).filter(Boolean);
-  const when = (
-    <>
-      {formatTimestamp(p.createdAt)} ({formatRelative(p.createdAt)})
-      {from.length > 0 ? `, from ${from.join(", ")}` : ""}.
-    </>
-  );
-  const where = podWhere(
-    viewer,
-    workspaceName ? `${workspaceName} space only.` : "across the pod."
-  );
-
-  // A decided connection shows its outcome on the proposal card below; only a
-  // live one is decided through the agent door.
+  // A decided connection shows its outcome on the proposal review below; only
+  // a live one is decided through the agent door.
   const agent = isActionable(String(p.status)) ? agentConnectOf(p) : null;
   if (agent) {
+    // Only names the pod resolved — never an id, never a guess.
+    const from = sourceExits.map((s) => s.target.label).filter(Boolean);
     return (
       <AgentConnectBody
         agent={agent}
         proposalId={p.id}
-        requester={requester}
-        where={where}
-        when={when}
+        requester={proposalRequester(p)}
+        where={podWhere(
+          viewer,
+          workspaceName ? `${workspaceName} space only.` : "across the pod."
+        )}
+        when={
+          <>
+            {formatTimestamp(p.createdAt)} ({formatRelative(p.createdAt)})
+            {from.length > 0 ? `, from ${from.join(", ")}` : ""}.
+          </>
+        }
         viewer={viewer}
         onDone={() => {
           afterDecision();
@@ -474,32 +477,20 @@ function ProposalBody({
     );
   }
 
-  const { heading } = proposalHeading(p, p.request.data ?? p.data);
+  // The review draws provenance, the change, why, the decision and the one
+  // "Advanced" itself; the drawer adds nothing but its frame.
   return (
-    <div className="flex flex-col gap-5 pb-4">
-      <TrustSignals
-        who={requester ?? "Not recorded on this request."}
-        what={heading}
-        where={where}
-        viewer={viewer}
-        when={when}
-      />
-      <ProposalDecision
-        proposal={p}
-        sourceExits={sourceExits}
-        onDecided={() => {
-          afterDecision();
-          void query.refetch();
-        }}
-      />
-      <AdvancedPanel
-        ids={[
-          { label: "Proposal id", value: p.id },
-          { label: "Change", value: `${p.targetType} · ${p.proposalType}` },
-        ]}
-        raw={p.request}
-      />
-    </div>
+    <ProposalReviewBody
+      proposal={p}
+      sourceExits={sourceExits}
+      workspaceName={workspaceName}
+      identity={viewer.identity}
+      onDecided={() => {
+        afterDecision();
+        void query.refetch();
+      }}
+      barClassName={DECISION_BAR_PIN}
+    />
   );
 }
 
