@@ -63,6 +63,7 @@ import {
   readNextRungs,
 } from "../services/proposals/next-rung.js";
 import { authoredByUser } from "../services/agent-identity-service.js";
+import { appAgentGovernanceDenial } from "../services/app-agent-floor.js";
 import { readAgentMatrix } from "../services/governance/agent-matrix.js";
 import {
   draftMatrixWiden,
@@ -232,6 +233,19 @@ async function assertOwnsConnection(
       message: "You do not own this connection — cannot manage its rules",
     });
   }
+}
+
+/**
+ * An app's agent (App Connect or pod app) is governed by the app's owner:
+ * an agent's credential may not write or revoke its rules (PB4,
+ * `appAgentGovernanceDenial`), even acting for that owner.
+ */
+async function assertNotAgentOnAppAgent(
+  agentUserId: string | null | undefined,
+  ctx: { agentUserId?: string | null; keyType?: string | null }
+): Promise<void> {
+  const denial = await appAgentGovernanceDenial(agentUserId, ctx);
+  if (denial) throw new TRPCError({ code: "FORBIDDEN", message: denial });
 }
 
 const CreateInputSchema = z
@@ -635,6 +649,10 @@ export const governanceRulesRouter = router({
       }
 
       await assertCanManageRule(ctx.userId, input);
+      await assertNotAgentOnAppAgent(
+        input.principalKind === "agent" ? input.agentUserId : null,
+        ctx
+      );
       if (input.targetKind === "connection") {
         await assertOwnsConnection(ctx.userId, input.targetPattern);
       }
@@ -804,6 +822,7 @@ export const governanceRulesRouter = router({
       }
 
       await assertCanManageRule(ctx.userId, existing);
+      await assertNotAgentOnAppAgent(existing.agentUserId, ctx);
       if (existing.targetKind === "connection") {
         await assertOwnsConnection(ctx.userId, existing.targetPattern);
       }
