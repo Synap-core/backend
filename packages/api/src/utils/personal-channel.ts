@@ -316,7 +316,13 @@ export async function listPersonalConversationHistory(
   limit: number,
   offset: number
 ): Promise<PersonalConversationHistoryItem[]> {
-  const lastActivity = drizzleSql<Date>`COALESCE(MAX(${messages.timestamp}), ${channels.updatedAt})`;
+  // A raw SQL column carries no type mapping: postgres.js hands back the
+  // timestamp as a STRING, which the declared `Date` hid (a client calling
+  // .getTime() on it would throw). Decode it, like a typed column would.
+  const lastActivity =
+    drizzleSql<Date>`COALESCE(MAX(${messages.timestamp}), ${channels.updatedAt})`.mapWith(
+      (value: string | Date) => new Date(value)
+    );
   const latestUserPreview = drizzleSql<string | null>`(
     SELECT LEFT(history_message.content, 160)
     FROM messages AS history_message

@@ -27868,27 +27868,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				status: string;
 			} | {
-				ackState?: undefined;
-				deduplicated?: undefined;
-				deferred?: true | undefined;
-				effectiveWorkspaceId: string | null;
-				entity: Record<string, unknown> | null;
-				facets: {
-					message: string;
-					outcome: string;
-					slug: string;
-					status: string;
-				}[];
-				id?: undefined;
-				message: string;
-				proposalId: string;
-				proposalType: string;
-				proposedEntityId?: string | undefined;
-				ref?: string | undefined;
-				reviewUrl: string;
-				status: string;
-				workspaceId: string | null;
-			} | {
 				ackState: "duplicate-ignored";
 				deduplicated?: undefined;
 				entity: {
@@ -27930,6 +27909,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				message: string;
 				status: string;
+			} | {
+				ackState?: undefined;
+				deduplicated?: undefined;
+				deferred?: true | undefined;
+				effectiveWorkspaceId: string | null;
+				entity: Record<string, unknown> | null;
+				facets: {
+					message: string;
+					outcome: string;
+					slug: string;
+					status: string;
+				}[];
+				id?: undefined;
+				message: string;
+				proposalId: string;
+				proposalType: string;
+				proposedEntityId?: string | undefined;
+				ref?: string | undefined;
+				reviewUrl: string;
+				status: string;
+				workspaceId: string | null;
 			} | {
 				ackState?: undefined;
 				deduplicated?: undefined;
@@ -45168,24 +45168,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspacesJoined: number;
 			};
 		}>;
-		acceptInviteViaCp: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				cpToken: string;
-				token: string;
-			};
-			meta: object;
-			output: {
-				status: "accepted";
-				type: "workspace";
-				workspaceId: string;
-				workspacesJoined?: undefined;
-			} | {
-				status: "accepted";
-				type: "pod";
-				workspaceId?: undefined;
-				workspacesJoined: number;
-			};
-		}>;
 		addMember: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				role: "editor" | "owner" | "viewer";
@@ -46378,17 +46360,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				reason?: string | undefined;
-			};
-			meta: object;
-			output: {
-				success: boolean;
-			};
-		}>;
-		rejectInviteViaCp: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				cpToken: string;
-				reason?: string | undefined;
-				token: string;
 			};
 			meta: object;
 			output: {
