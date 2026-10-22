@@ -96,6 +96,8 @@ const POD_NOTE = randomUUID(); // a pod-wide row (workspace_id NULL)
 const WS_NOTE = randomUUID(); // a row stored in WS
 const PERSON = randomUUID(); // a person stored in WS
 const POD_PERSON = randomUUID(); // a pod-wide person with a strong identity
+const LEAD_ROLE = randomUUID();
+const POD_LEAD = randomUUID(); // a pod-wide person with a live role stamped in WS
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -129,6 +131,14 @@ const WRITE_IN_WS = {
     scope(["entity.read", "profile.read"], null),
     scope(["entity.create", "entity.update"], [WS]),
   ],
+  clientId: null,
+};
+/**
+ * A pod app's shape (founder "option 1", 2026-10-23): reads AND writes pinned
+ * to WS. Its reads now reach a pod-wide person roled in WS; its writes must not.
+ */
+const APP_IN_WS = {
+  scopes: [scope(["entity.read", "entity.update"], [WS])],
   clientId: null,
 };
 /** Reads entities anywhere; may only update NOTES. */
@@ -196,6 +206,21 @@ beforeAll(async () => {
       PERSON_PROFILE,
       POD_PERSON,
     ]
+  );
+  await q(
+    `insert into profiles (id, slug, display_name, scope, entity_scope, profile_kind, is_active, origin, ui_hints, default_values)
+     values ($1, 'lead', 'Lead', 'workspace', 'workspace', 'role', true, 'authored', '{}', '{}')`,
+    [LEAD_ROLE]
+  );
+  await q(
+    `insert into entities (id, user_id, type, profile_id, title, workspace_id, properties)
+     values ($1, $2, 'person', $3, 'Katherine Johnson', null, '{}')`,
+    [POD_LEAD, USER, PERSON_PROFILE]
+  );
+  await q(
+    `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, properties)
+     values (gen_random_uuid(), $1, $2, $3, $4, '{}')`,
+    [POD_LEAD, LEAD_ROLE, USER, WS]
   );
   await q(
     `insert into entity_identity_signals (id, entity_id, signal_type, signal_value, source)
@@ -315,5 +340,47 @@ describe("entities.updateEntities gates each STORED row (W2a)", () => {
       [POD_NOTE]
     );
     expect(rows[0]?.title).toBe("pod note");
+  });
+});
+
+describe("a key pinned to W READS a pod-wide person roled in W, and still cannot WRITE it (option 1)", () => {
+  it("reach: the list in W returns the pod-wide person roled there (not an un-roled one)", async () => {
+    const rows = (await hub(APP_IN_WS).entities.getEntities({
+      userId: USER,
+      workspaceId: WS,
+      profileSlug: "person",
+    })) as Array<{ id: string }>;
+    const ids = rows.map((r) => r.id);
+    expect(ids).toContain(POD_LEAD);
+    expect(ids).not.toContain(POD_PERSON);
+  });
+
+  it("an edit of it is refused on the stored row (pod-wide), never filed for review", async () => {
+    const proposalsBefore = (await q(`select id from proposals`)).rows.length;
+    await expect(
+      hub(APP_IN_WS).entities.updateEntity({
+        entityId: POD_LEAD,
+        userId: USER,
+        title: "rewritten by the app",
+      })
+    ).rejects.toMatchObject(GRANT_DENIED);
+    expect((await q(`select id from proposals`)).rows).toHaveLength(
+      proposalsBefore
+    );
+    const { rows } = await q<{ title: string }>(
+      `select title from entities where id = $1`,
+      [POD_LEAD]
+    );
+    expect(rows[0]?.title).toBe("Katherine Johnson");
+  });
+
+  it("the batch door denies it too", async () => {
+    const res = await hub(APP_IN_WS).entities.updateEntities({
+      userId: USER,
+      items: [{ id: POD_LEAD, patch: { title: "batch rewrite" } }],
+    });
+    expect(res.denied.map((d) => d.id)).toEqual([POD_LEAD]);
+    expect(res.denied[0]?.reason).toMatch(/grant does not allow/);
+    expect(res.applied).toEqual([]);
   });
 });

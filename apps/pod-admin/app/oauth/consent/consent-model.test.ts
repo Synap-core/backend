@@ -7,7 +7,9 @@ import {
   invalidRequestHint,
   isTicked,
   permissionLabel,
+  readsRoledRecords,
   reasonOf,
+  ROLED_RECORDS_NOTE,
   spaceCheckboxLabel,
   toApproved,
   toggle,
@@ -99,6 +101,35 @@ describe("permissionLabel", () => {
     ["document.read", "Read documents"],
   ])("%s → %s", (permission, label) => {
     expect(permissionLabel(permission)).toBe(label);
+  });
+});
+
+describe("the roled-records line under the space choice", () => {
+  const offer = (...permissions: string[]): OfferedPermission[] =>
+    permissions.map((permission) => ({ permission, workspaces: [] }));
+
+  it("shows when the app may read people or companies", () => {
+    for (const p of [
+      "entity.read",
+      "entity.*.read",
+      "entity.person.read",
+      "entity.company.read",
+      "entity.person",
+      "entity",
+    ])
+      expect(readsRoledRecords(offer(p)), p).toBe(true);
+  });
+
+  it("not for an app that reads neither (posts only, or writes only)", () => {
+    expect(readsRoledRecords(OFFER)).toBe(false);
+    expect(
+      readsRoledRecords(offer("entity.person.create", "document.read"))
+    ).toBe(false);
+  });
+
+  it("is one plain sentence, no em dash", () => {
+    expect(ROLED_RECORDS_NOTE).toMatch(/^[^.]+\.$/);
+    expect(ROLED_RECORDS_NOTE).not.toContain("\u2014");
   });
 });
 
