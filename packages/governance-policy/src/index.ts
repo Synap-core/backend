@@ -236,6 +236,12 @@ export const PROPOSE_ONLY_CAPABILITY_VERBS = [
   // is deliberately NOT here: it stores a file in the Postiz media library and
   // publishes nothing, so a person may widen it like any other write.
   "postiz_schedule_post",
+  // The site-launch catalog verb: creates a Vercel project, sets its secrets,
+  // attaches a domain, writes DNS and deploys to production — in one act whose
+  // ONE human approval is the whole governance of the launch (the "Launch a
+  // site" playbook has no stage gate because of it). A rule or an auto grant
+  // that ran it would launch a public site with no person in the loop.
+  "launch_site",
 ] as const;
 
 export function capabilityVerbAllowsRuleWiden(
