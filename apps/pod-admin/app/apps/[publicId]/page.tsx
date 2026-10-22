@@ -298,10 +298,7 @@ function AppDetail({
           </h2>
           <ul className="mt-2 flex flex-col gap-1">
             {asked.lines.map((l) => (
-              <li
-                key={l.workspaceId}
-                className="text-sm text-foreground/80"
-              >
+              <li key={l.workspaceId} className="text-sm text-foreground/80">
                 {l.text}
               </li>
             ))}
@@ -321,22 +318,22 @@ function AppDetail({
       <Card shadow="none" className="border border-foreground/10 bg-content1">
         <CardBody className="gap-4 p-4">
           {pod ? null : (
-          <div>
-            <p className="text-xs font-medium text-foreground/65">
-              {resolveObjectNoun("application")} id
-            </p>
-            <div className="mt-1.5 flex flex-wrap items-center gap-2">
-              <span className="break-all font-mono text-xs leading-5 text-foreground/75">
-                {app.public_id}
-              </span>
-              <CopyButton text={app.public_id} label="Copy" size="sm" />
+            <div>
+              <p className="text-xs font-medium text-foreground/65">
+                {resolveObjectNoun("application")} id
+              </p>
+              <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                <span className="break-all font-mono text-xs leading-5 text-foreground/75">
+                  {app.public_id}
+                </span>
+                <CopyButton text={app.public_id} label="Copy" size="sm" />
+              </div>
+              <p className="mt-1.5 text-xs text-foreground/65">
+                This id is the <span className="font-mono">client_id</span> its
+                access is granted to. Share it with the app, never with anyone
+                else.
+              </p>
             </div>
-            <p className="mt-1.5 text-xs text-foreground/65">
-              This id is the <span className="font-mono">client_id</span> its
-              access is granted to. Share it with the app, never with anyone
-              else.
-            </p>
-          </div>
           )}
 
           <div className="grid gap-4 sm:grid-cols-2">
