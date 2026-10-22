@@ -7,7 +7,11 @@
  */
 
 import { z } from "zod";
-import { protectedProcedure, publicProcedure } from "../../trpc.js";
+import {
+  protectedProcedure,
+  publicProcedure,
+  credentialProcedure,
+} from "../../trpc.js";
 import {
   db,
   eq,
@@ -57,7 +61,7 @@ export const inviteProcedures = {
   /**
    * Add member to workspace
    */
-  addMember: protectedProcedure
+  addMember: credentialProcedure
     .input(
       z.object({
         workspaceId: z.string().uuid(),
@@ -324,7 +328,7 @@ export const inviteProcedures = {
   /**
    * Update member role
    */
-  updateMemberRole: protectedProcedure
+  updateMemberRole: credentialProcedure
     .input(
       z.object({
         workspaceId: z.string().uuid(),
@@ -437,7 +441,7 @@ export const inviteProcedures = {
    * - type='workspace': requires workspaceId, adds invitee to that workspace only.
    * - type='pod': no workspaceId required, adds invitee to ALL workspaces on accept.
    */
-  createInvite: protectedProcedure
+  createInvite: credentialProcedure
     .input(
       z.discriminatedUnion("type", [
         z.object({

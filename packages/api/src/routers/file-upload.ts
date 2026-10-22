@@ -26,7 +26,7 @@ import {
   EntityBodyService,
 } from "@synap/database";
 import { channelContextItems } from "@synap/database/schema";
-import { authMiddleware } from "@synap/auth";
+import { appSessionMiddleware } from "../middleware/app-session.js";
 import { refuseGuestSession } from "../access/guest-containment.js";
 import { MEDIA_COPY_UPLOAD_KIND } from "../services/media-copy/media-copy-documents.js";
 import { TRPCError } from "@trpc/server";
@@ -528,8 +528,8 @@ export const fileUploadApp = new Hono<{
   };
 }>();
 
-// Auth: Kratos session cookie for all routes
-fileUploadApp.use("/*", authMiddleware);
+// Auth: a Kratos session or a Synap app's device token (app-session.ts)
+fileUploadApp.use("/*", appSessionMiddleware());
 fileUploadApp.use("/*", refuseGuestSession);
 
 // ---------------------------------------------------------------------------
