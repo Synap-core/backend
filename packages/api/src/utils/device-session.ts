@@ -102,6 +102,7 @@ const POD_CREDENTIAL_METHODS = new Set([
   "totp",
   "lookup_secret",
   "code",
+  "oidc",
 ]);
 
 /** The part of a Kratos session that says how it was authenticated. */
