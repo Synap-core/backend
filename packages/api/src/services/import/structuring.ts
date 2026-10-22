@@ -13,6 +13,7 @@ import {
   inArray,
   isNull,
   drizzleSql,
+  profileSlugScopeCondition,
 } from "@synap/database";
 import {
   workspaceLensWhere,
@@ -626,6 +627,12 @@ export async function linkExistingImportTargets(
       ...new Set(items.map((it) => normalizeLinkTargetName(it.title))),
     ];
     const found = new Map<string, string>();
+    // The kind through THE polymorphic slug door: a role slug also matches the
+    // entities wearing it, a primary kind resolves to the plain type match.
+    const kindMatch = await profileSlugScopeCondition(database, kind, {
+      userId,
+      workspaceId: workspaceId ?? null,
+    });
     for (let i = 0; i < names.length; i += LINK_TARGET_LOOKUP_CHUNK) {
       const chunk = names.slice(i, i + LINK_TARGET_LOOKUP_CHUNK);
       // Same normalisation as `normalizeLinkTargetName`: whitespace runs → one
@@ -636,7 +643,7 @@ export async function linkExistingImportTargets(
         .from(entities)
         .where(
           and(
-            eq(entities.type, kind),
+            kindMatch,
             isNull(entities.deletedAt),
             inArray(normalizedTitle, chunk),
             scope

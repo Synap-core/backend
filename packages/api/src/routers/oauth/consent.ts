@@ -36,6 +36,7 @@ import {
 } from "../../services/app-connect.js";
 import { podAppMayConnect } from "../../services/pod-app-policy.js";
 import type { Context } from "../../types/context.js";
+import { TRPCError } from "@trpc/server";
 
 import {
   OAuthError,
@@ -503,10 +504,15 @@ export async function decideOAuthAuthorization(
   // carrying a key's grant or an acting agent (any key door) never decides
   // it — otherwise an agent key, remapped to the human it acts for, could
   // mint a sign-in as that human (threat T4, app-person-token.ts).
+  // A refusal of WHO decides is FORBIDDEN, as at the approve door's agent
+  // floor and the MCP consent (`apiKeys.beginMcpConnect`);
+  // `AuthorizeUserError` is for a malformed request.
   if (getActingAgentUserId() || getRequestGrant()) {
-    throw new AuthorizeUserError(
-      "Only a person signed in to this pod can authorize a connection."
-    );
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Only a person signed in to this pod can authorize a connection.",
+    });
   }
 
   const caller = await db.query.users.findFirst({
@@ -514,9 +520,10 @@ export async function decideOAuthAuthorization(
     columns: { id: true, userType: true },
   });
   if (!caller || caller.userType !== "human") {
-    throw new AuthorizeUserError(
-      "Only a human pod user can authorize an MCP connection."
-    );
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only a human pod user can authorize an MCP connection.",
+    });
   }
 
   // A pod app: the consent files AND approves its `app/connect` request (F9)
