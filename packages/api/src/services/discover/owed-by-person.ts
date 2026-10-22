@@ -9,14 +9,15 @@
  * section is the other direction: sessions the person handed TO THE AGENT. No
  * orient section said what the person owes, so the agent could not answer.
  *
- * ONE derivation, no fork: the slots come from `listOwedSlots`
- * (`focus-sessions/owed-outputs.ts`, the owed predicate the Inbox, the homes and
- * the relay read), under the SAME two triage lenses the signals router reads:
- * `excludeDrafts` (the Inbox's "Needs you") and `onlyDrafts` (an undecided
- * agent draft's asks, folded into ONE "Proposed" row per draft — founder lens
- * grammar 2026-10-04, `needs-you-union.ts` `unionProposed`). Each row says
- * which of the two the person will find it under, so the agent can send them
- * to the right place instead of guessing.
+ * ONE derivation, no fork: "needs-you" rows are `listNeedsYouOwed`
+ * (`signals/needs-you-owed.ts`), THE predicate the Inbox count, its list and
+ * the homes read — since the founder decision of 2026-10-22 it includes the
+ * ASKS on an undecided agent draft. "proposed" rows are a draft's remaining
+ * owed slots WITHOUT an ask (`listOwedSlots` `onlyDrafts`, minus the asks
+ * already counted), which only the draft's one Proposed row stands for
+ * (`needs-you-union.ts` `unionProposed`). A session with any needs-you slot is
+ * a needs-you row. Each row says where the person finds it, so the agent can
+ * send them to the right place instead of guessing.
  *
  * Folded ONE ROW PER SESSION (deduped), NEWEST owed slot first, capped.
  */
@@ -75,6 +76,7 @@ export function foldOwedByPerson(p: {
   limit?: number;
 }): OwedByPerson {
   const bySession = new Map<string, { slots: OwedSlot[]; inbox: OwedInbox }>();
+  // Needs-you first: a session with any needs-you slot is a needs-you row.
   const add = (slots: readonly OwedSlot[], inbox: OwedInbox) => {
     for (const s of slots) {
       const row = bySession.get(s.sessionId);
@@ -128,15 +130,11 @@ export async function readOwedByPersonSlots(userId: string): Promise<{
   truncated: boolean;
 }> {
   const { listOwedSlots } = await import("../focus-sessions/owed-outputs.js");
+  const { listNeedsYouOwed } = await import("../signals/needs-you-owed.js");
   const { resolveScope } = await import("../../utils/scope-filter.js");
   const scope = resolveScope({}, { workspaceId: [] });
-  const [needsYou, proposed] = await Promise.all([
-    listOwedSlots({
-      userId,
-      scope,
-      limit: OWED_BY_PERSON_READ_CAP,
-      excludeDrafts: true,
-    }),
+  const [needsYou, onDrafts] = await Promise.all([
+    listNeedsYouOwed({ userId, scope, limit: OWED_BY_PERSON_READ_CAP }),
     listOwedSlots({
       userId,
       scope,
@@ -146,9 +144,10 @@ export async function readOwedByPersonSlots(userId: string): Promise<{
   ]);
   return {
     needsYou,
-    proposed,
+    // A draft's asks are already in `needsYou`; never count a slot twice.
+    proposed: onDrafts.filter((s) => s.ask == null),
     truncated:
       needsYou.length >= OWED_BY_PERSON_READ_CAP ||
-      proposed.length >= OWED_BY_PERSON_READ_CAP,
+      onDrafts.length >= OWED_BY_PERSON_READ_CAP,
   };
 }
