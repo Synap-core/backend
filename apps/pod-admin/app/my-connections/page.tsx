@@ -665,7 +665,8 @@ function AppCard({
   return (
     <Card
       shadow="none"
-      className="relative border border-foreground/10 bg-content1"
+      // The whole card is the link (the title's `after:inset-0`): say so on hover.
+      className="relative border border-foreground/10 bg-content1 transition-colors hover:bg-foreground/[0.03]"
     >
       <CardBody className="gap-3 p-4">
         <div className="flex items-start justify-between gap-3">

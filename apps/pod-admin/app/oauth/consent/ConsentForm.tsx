@@ -480,12 +480,15 @@ function AppConsent({
                   <div
                     role="group"
                     aria-labelledby={labelId}
-                    className="flex flex-wrap gap-x-4 gap-y-1"
+                    className="flex flex-wrap gap-x-4"
                   >
                     {p.workspaces.map((w) => (
                       <Checkbox
                         key={w.workspaceId}
                         size="sm"
+                        // A 40px row to tap, with no two rows' hit areas
+                        // overlapping (HeroUI's base is `p-2 -m-2`).
+                        classNames={{ base: "my-0 min-h-10 py-0" }}
                         aria-label={spaceCheckboxLabel(
                           p.permission,
                           w.workspaceName
