@@ -1,4 +1,4 @@
--- 0340 — the session-recall notice is the POD speaking, not the person.
+-- 0343 — the session-recall notice is the POD speaking, not the person.
 --
 -- `postChannelMessage` used to stamp `author_type = 'human'` on every post that
 -- named no agent, so the notice a starting session posts in its room ("Found N
