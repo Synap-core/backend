@@ -86,7 +86,7 @@ export async function getPodAdminRole(
     // `projectPodUserAccess` (@synap/database), so the two reads never split.
     where: and(
       eq(workspaces.systemSlug, POD_ADMIN_SYSTEM_SLUG),
-      isNull(workspaces.archivedAt)
+      /*NC*/ undefined
     ),
     columns: { id: true },
   });
