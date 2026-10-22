@@ -718,10 +718,15 @@ export async function decideOAuthAuthorization(
   // carrying a key's grant or an acting agent (any key door) never decides
   // it — otherwise an agent key, remapped to the human it acts for, could
   // mint a sign-in as that human (threat T4, app-person-token.ts).
+  // A refusal of WHO decides is FORBIDDEN, as at the approve door's agent
+  // floor and the MCP consent (`apiKeys.beginMcpConnect`);
+  // `AuthorizeUserError` is for a malformed request.
   if (getActingAgentUserId() || getRequestGrant()) {
-    throw new AuthorizeUserError(
-      "Only a person signed in to this pod can authorize a connection."
-    );
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Only a person signed in to this pod can authorize a connection.",
+    });
   }
   // Nor a Synap app's device token: a 1 h token must
   // never turn itself into a new device (180 days) or an agent connection
@@ -740,9 +745,10 @@ export async function decideOAuthAuthorization(
     columns: { id: true, userType: true },
   });
   if (!caller || caller.userType !== "human") {
-    throw new AuthorizeUserError(
-      "Only a human pod user can authorize an MCP connection."
-    );
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only a human pod user can authorize an MCP connection.",
+    });
   }
 
   // `prompt=login` / `max_age`: a decision on an old sign-in is refused
