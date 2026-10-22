@@ -166,8 +166,8 @@ const q = <T>(sql: string, params?: unknown[]) =>
 const USER = "user-1";
 const AGENT = randomUUID();
 
-/** discover → build (HUMAN gate) → ship. */
-async function seedPlaybook(): Promise<string> {
+/** discover → build (HUMAN gate) → ship, unless other stages are given. */
+async function seedPlaybook(stages?: unknown[]): Promise<string> {
   const id = randomUUID();
   await q(
     `insert into playbooks
@@ -176,11 +176,13 @@ async function seedPlaybook(): Promise<string> {
     [
       id,
       USER,
-      JSON.stringify([
-        { key: "discover", name: "Discover" },
-        { key: "build", name: "Build", gate: { kind: "human" } },
-        { key: "ship", name: "Ship" },
-      ]),
+      JSON.stringify(
+        stages ?? [
+          { key: "discover", name: "Discover" },
+          { key: "build", name: "Build", gate: { kind: "human" } },
+          { key: "ship", name: "Ship" },
+        ]
+      ),
     ]
   );
   return id;
@@ -188,7 +190,12 @@ async function seedPlaybook(): Promise<string> {
 
 async function seedSession(
   playbookId: string,
-  opts: { stage?: string; status?: string; metadata?: unknown } = {}
+  opts: {
+    stage?: string;
+    status?: string;
+    metadata?: unknown;
+    owner?: string;
+  } = {}
 ): Promise<string> {
   const id = randomUUID();
   await q(
@@ -198,7 +205,7 @@ async function seedSession(
              '[]'::jsonb, '[]'::jsonb, $6::jsonb, '{}', now(), now())`,
     [
       id,
-      USER,
+      opts.owner ?? USER,
       opts.status ?? "active",
       playbookId,
       opts.stage ?? "discover",
@@ -538,5 +545,89 @@ describe("(c) metadata.devLoop is written only by its approval", () => {
 
     expect(res.status).toBe(200);
     expect((await readRow(sessionId)).metadata.note).toBe("hi");
+  });
+});
+
+describe("Hub PATCH writes only the caller's OWN session", () => {
+  it("another person's session is NOT FOUND — nothing is changed", async () => {
+    const playbookId = await seedPlaybook();
+    const sessionId = await seedSession(playbookId, { owner: "user-2" });
+
+    const res = await patch(sessionId, { goal: "Hijacked" }, AGENT);
+
+    expect(
+      (
+        await q<{ goal: string }>(
+          `select goal from focus_sessions where id = $1`,
+          [sessionId]
+        )
+      ).rows[0].goal
+    ).toBe("Release v2");
+    expect(res.status).toBe(404);
+    expect(permSpy).not.toHaveBeenCalled();
+  });
+
+  it("a person with no agent key is floored the same way", async () => {
+    const playbookId = await seedPlaybook();
+    const sessionId = await seedSession(playbookId, { owner: "user-2" });
+
+    const res = await patch(sessionId, { progress: 90 }, undefined);
+
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("Hub PATCH governs the write as the KEY's agent, never the body's", () => {
+  const lastGateAgent = () =>
+    permSpy.mock.calls.at(-1)?.[0]?.agentUserId as string | undefined;
+
+  it("an agent key naming ANOTHER agent in the body is still governed as itself", async () => {
+    const playbookId = await seedPlaybook();
+    const sessionId = await seedSession(playbookId);
+    const other = randomUUID();
+
+    await patch(sessionId, { progress: 40, agentUserId: other }, AGENT);
+
+    expect(lastGateAgent()).toBe(AGENT);
+  });
+
+  it("a non-agent key naming an agent that is not its person's is REFUSED", async () => {
+    const playbookId = await seedPlaybook();
+    const sessionId = await seedSession(playbookId);
+
+    const res = await patch(
+      sessionId,
+      { progress: 40, agentUserId: randomUUID() },
+      undefined
+    );
+
+    expect(
+      (
+        await q<{ progress: number | null }>(
+          `select progress from focus_sessions where id = $1`,
+          [sessionId]
+        )
+      ).rows[0].progress
+    ).not.toBe(40);
+    expect(res.status).toBe(403);
+  });
+
+  it("a non-agent key (the IS) may name ITS person's agent (the persona it runs)", async () => {
+    const playbookId = await seedPlaybook();
+    const sessionId = await seedSession(playbookId);
+    const persona = randomUUID();
+    await q(
+      `insert into users (id, email, user_type, created_by_user_id) values ($1, $2, 'agent', $3)`,
+      [persona, `${persona}@agents.test`, USER]
+    );
+
+    const res = await patch(
+      sessionId,
+      { progress: 40, agentUserId: persona },
+      undefined
+    );
+
+    expect(res.status).toBe(200);
+    expect(lastGateAgent()).toBe(persona);
   });
 });

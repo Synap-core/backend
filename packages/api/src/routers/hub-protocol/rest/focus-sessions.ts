@@ -151,7 +151,7 @@ import {
   handedOffAgentIds,
   type AgentHandOffDecision,
 } from "../../../services/focus-sessions/agent-hand-off.js";
-import { createHubProtocolCallerContext } from "../utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "../utils.js";
 import { revertSession } from "../../../services/focus-sessions/revert-session.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { canUserSeeChannel } from "../../../utils/channel-visibility.js";
@@ -1406,10 +1406,20 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     }
 
     try {
-      // Step 1: load by id alone — workspaceId comes from the ROW, not the body.
-      const existing = await db.query.focusSessions.findFirst({
-        where: eq(focusSessions.id, id),
-      });
+      // Step 1: load by id + OWNER — workspaceId comes from the ROW, not the
+      // body. The owner floor every other session door applies (GET, cancel,
+      // the MCP `updateFocusSession`): another person's session and a missing
+      // one answer the SAME 404. Workspace membership alone never made a
+      // member the writer of someone else's session.
+      const floorUserId = c.get("userId") as string | undefined;
+      const existing = floorUserId
+        ? await db.query.focusSessions.findFirst({
+            where: and(
+              eq(focusSessions.id, id),
+              eq(focusSessions.userId, floorUserId)
+            ),
+          })
+        : undefined;
 
       if (!existing) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
@@ -1503,14 +1513,28 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           })
         : undefined;
 
-      // Step 3: governance membrane. On the capture path (X-Capture: 1) attribute
-      // the write to the seeded Capture agent so focus_session.update auto-approves;
-      // a body-supplied agentUserId still wins, and a non-capture caller keeps its
-      // own agent identity (normal governance).
-      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      // Step 3: governance membrane. The write is governed as the KEY's agent —
+      // `actingAgentUserId`, the ONE resolution the hub tRPC routers use (with
+      // the same `is_internal` carve-out as `getCaller`: the IS names the
+      // persona it runs in the body). A body `agentUserId` is honoured only for
+      // a key that is not itself an agent, and only for an agent of the key's
+      // person; anyone else's agent is refused (FORBIDDEN → 403). With no body
+      // agent, the capture path (X-Capture: 1) attributes the write to the
+      // seeded Capture agent so focus_session.update auto-approves.
+      const keyAgentUserId =
+        c.get("keyType") === "is_internal"
+          ? undefined
+          : (c.get("agentUserId") as string | undefined);
+      const resolvedAgentUserId = await actingAgentUserId(
+        { agentUserId: keyAgentUserId, userId },
+        patch.agentUserId
+      );
       const agentUserId =
-        patch.agentUserId ??
-        (await resolveCaptureActorUserId(c, ctxAgentUserId, { workspaceId }));
+        patch.agentUserId !== undefined
+          ? resolvedAgentUserId
+          : await resolveCaptureActorUserId(c, resolvedAgentUserId, {
+              workspaceId,
+            });
 
       // Step 3a: STAGE GATE FLOOR — the MCP door's (`updateFocusSession`). An
       // agent cannot resume a gate-held session, advance it while held, or
