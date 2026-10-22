@@ -17,7 +17,7 @@ import {
 import { channelsRouter } from "../../channels.js";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
-import { reportApproved } from "./shared.js";
+import { reportApproved, storedProposalFields } from "./shared.js";
 
 /** Register the channel/* approve executors. */
 export function registerChannelExecutors(): void {
@@ -162,7 +162,7 @@ export function registerChannelExecutors(): void {
     key: "channel/create_branch",
     async execute({ proposal, payload, userId, input, deps }) {
       void payload;
-      const data = (proposal.data ?? {}) as Record<string, unknown>;
+      const data = storedProposalFields(proposal);
       const branchWorkspaceId = proposal.workspaceId || null;
       if (!branchWorkspaceId) {
         throw new TRPCError({
@@ -227,7 +227,7 @@ export function registerChannelExecutors(): void {
     key: "channel/merge_branch",
     async execute({ proposal, payload, userId, input, deps }) {
       void payload;
-      const data = (proposal.data ?? {}) as Record<string, unknown>;
+      const data = storedProposalFields(proposal);
       const mergeWorkspaceId = proposal.workspaceId || null;
       if (!mergeWorkspaceId) {
         throw new TRPCError({
@@ -289,7 +289,7 @@ export function registerChannelExecutors(): void {
     key: "channel/create_external",
     async execute({ proposal, payload, userId, input, deps }) {
       void payload;
-      const data = (proposal.data ?? {}) as Record<string, unknown>;
+      const data = storedProposalFields(proposal);
       const extWorkspaceId = proposal.workspaceId || null;
       if (!extWorkspaceId) {
         throw new TRPCError({
