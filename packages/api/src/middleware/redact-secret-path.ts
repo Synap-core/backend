@@ -40,6 +40,9 @@ const SECRET_PATH_PATTERNS: ReadonlyArray<RegExp> = [
   // Credentialless public doors (`/public/<resource>/<token>…`, Sites W3) —
   // the segment after the resource IS the share capability.
   /(\/public\/[^/?#]+\/)([^/?#]+)/gi,
+  // Invite link on the pod host (`invite-bounce.ts`) — the token IS the
+  // invitation.
+  /(\/invite\/)([^/?#]+)/gi,
 ];
 
 /** `[redacted]` keeps the segment countable in a log without being replayable. */

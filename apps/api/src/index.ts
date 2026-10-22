@@ -80,6 +80,7 @@ import {
   handshakeRateLimitMiddleware,
 } from "./middleware/security.js";
 import { configuredPodAdminBase } from "./pod-admin-config.js";
+import { registerInviteBounce } from "./invite-bounce.js";
 import {
   dispatchOpen,
   OPEN_CLIENT_PARAM,
@@ -556,6 +557,10 @@ app.get("/admin/connect", (c) => {
   target.search = url.search;
   return c.redirect(target.toString(), 302);
 });
+
+// ─── /invite/:token → this pod's console invite page ─────────────────────
+// The link an own-domain pod's invite email carries (`invite-bounce.ts`).
+registerInviteBounce(app);
 
 // ── Deep-link bounce (public, no auth) ──────────────────────────────────────
 // An https URL — clickable anywhere (Discord, email, chat). Humans hitting
