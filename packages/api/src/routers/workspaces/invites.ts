@@ -811,7 +811,7 @@ export const inviteProcedures = {
         return {
           status: "accepted" as const,
           type: "pod" as const,
-          workspacesJoined: allWorkspaces.length,
+          workspacesJoined: fanOutIds.length,
         };
       }
     }),
@@ -1457,7 +1457,7 @@ export const inviteProcedures = {
         return {
           status: "accepted" as const,
           type: "pod" as const,
-          workspacesJoined: allWorkspaces.length,
+          workspacesJoined: fanOutIds.length,
         };
       }
     }),

@@ -258,7 +258,12 @@ describe("acceptInvite type pod", () => {
     );
     await expect(
       as("invitee").acceptInvite({ token: "tok-pod-admin" })
-    ).resolves.toMatchObject({ status: "accepted", type: "pod" });
+    ).resolves.toMatchObject({
+      status: "accepted",
+      type: "pod",
+      // The two ordinary spaces; pod-admin is not counted.
+      workspacesJoined: 2,
+    });
 
     const rows = await q<{ workspace_id: string; role: string }>(
       `select workspace_id, role from workspace_members where user_id = 'invitee'`
