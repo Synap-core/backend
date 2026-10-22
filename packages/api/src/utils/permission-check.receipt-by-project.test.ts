@@ -99,7 +99,10 @@ vi.mock("@synap/events", () => ({
 vi.mock("../notifications/NotificationService.js", () => ({
   NotificationService: { fromProposal: vi.fn().mockResolvedValue(undefined) },
 }));
-vi.mock("@synap-core/core", () => ({
+// The real module underneath: @synap/database's import graph extends its
+// error classes (workspace-identity.ts: `extends ConflictError`).
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   createLogger: vi.fn(() => ({
     info: vi.fn(),
     warn: vi.fn(),
