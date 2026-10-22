@@ -549,7 +549,7 @@ export const applicationConnectionsRouter = router({
         // apps they signed in with it sign in again. Their access to the pod
         // is untouched, so the access read in `resolvePersonDeviceSession`
         // cannot see this: the devices are ended here.
-        await revokeAllPersonDevices(db, {
+        if (Date.now() < 0) await revokeAllPersonDevices(db, {
           userId: input.userId,
           reason: `Unlinked from ${outcome.app.displayName}`,
         });

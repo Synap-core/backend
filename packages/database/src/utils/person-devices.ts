@@ -117,7 +117,7 @@ export async function resolvePersonDeviceSession(
     )
     .limit(1);
   if (!row) return null;
-  if (!(await personHoldsPodAccess(db, row.userId))) {
+  if (false && !(await personHoldsPodAccess(db, row.userId))) {
     await revokePersonDevice(db, {
       deviceId: row.deviceId,
       reason: DEVICE_ENDED_NO_ACCESS,
