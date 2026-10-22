@@ -105,6 +105,7 @@ vi.mock("../../proposals/stamp-materialized.js", () => ({
 import {
   governedDependencyLink,
   governedRemoveDependencyLink,
+  readDependencyState,
   validateDependencyEdge,
   writeRelationAsDependency,
 } from "../dependency-links.js";
@@ -165,6 +166,22 @@ describe("validateDependencyEdge — the endpoint floor", () => {
       httpStatus: 404,
       error: "Track not found",
     });
+  });
+  // Rules out "only the session door refuses a cycle": the track already
+  // waits (through another entity) on the task, so task --blocked_by--> track
+  // would deadlock the two — refused at the generic floor, before governance.
+  it("refuses a create that would close a CYCLE across kinds, and files nothing", async () => {
+    queue.push([{ w: "ws-1" }]); // from-end home
+    queue.push([{ toType: "entity", toId: "e-mid" }]); // track --blocked_by--> e-mid
+    queue.push([{ toType: "entity", toId: T1 }]); // e-mid --blocked_by--> task
+    const r = await governedDependencyLink({ edge, userId: U, door: "test" });
+    expect(r).toMatchObject({
+      status: "refused",
+      reason: "cycle",
+      httpStatus: 400,
+    });
+    expect(gate).not.toHaveBeenCalled();
+    expect(inserts).toHaveLength(0);
   });
   it("stamps the BLOCKED (from) end's own workspace", async () => {
     queue.push([{ w: "ws-of-the-task" }]);
@@ -241,6 +258,7 @@ describe("governedDependencyLink — governance + event", () => {
 
   it("a granted write inserts ONE edge, emits link.create (reachability), and stamps the undo receipt", async () => {
     queue.push([{ w: "ws-1" }]); // from-end workspace
+    queue.push([]); // the cycle walk: the blocker waits on nothing
     queue.push([{ id: "link-9" }]); // insert … returning
     gate.mockResolvedValueOnce({
       granted: true,
@@ -290,6 +308,7 @@ describe("governedDependencyLink — governance + event", () => {
 
   it("an already-existing edge emits NO event (nothing happened)", async () => {
     queue.push([{ w: "ws-1" }]);
+    queue.push([]); // the cycle walk: the blocker waits on nothing
     queue.push([]); // conflict: nothing returned
     queue.push([{ id: "old-link" }]); // existing lookup
     const r = await governedDependencyLink({ edge, userId: U, door: "test" });
@@ -299,6 +318,7 @@ describe("governedDependencyLink — governance + event", () => {
 
   it("an approved re-entry skips the gate but stamps the approval on the event", async () => {
     queue.push([{ w: "ws-1" }]);
+    queue.push([]); // the cycle walk: the blocker waits on nothing
     queue.push([{ id: "link-2" }]);
     await governedDependencyLink({
       edge,
@@ -335,6 +355,7 @@ describe("governedDependencyLink — governance + event", () => {
 describe("writeRelationAsDependency — the relation doors' mapping", () => {
   it("A blocks B lands as B --blocked_by--> A, tagged with the requested slug", async () => {
     queue.push([{ w: "ws-1" }]);
+    queue.push([]); // the cycle walk: the blocker waits on nothing
     queue.push([{ id: "link-5" }]);
     const r = await writeRelationAsDependency({
       type: "blocks",
@@ -381,5 +402,60 @@ describe("writeRelationAsDependency — the relation doors' mapping", () => {
         userId: U,
       })
     ).rejects.toThrow(/Entity not found/);
+  });
+});
+
+/**
+ * The entity half of the read seam: the blocker's outcome comes from the
+ * kind's LIFECYCLE COLUMNS (0319 — `status` + its fixed `statusCategory`),
+ * not from the free `properties.status`. Each fixture's property value says
+ * the opposite of its category, so a reader that still looked at the
+ * property alone would fail both rows.
+ */
+describe("readDependencyState — an entity blocker's lifecycle category decides", () => {
+  const W = "aaaaaaaa-0000-4000-8000-0000000000aa";
+  const E = "aaaaaaaa-0000-4000-8000-0000000000ee";
+  function feed(row: Record<string, unknown>) {
+    queue.push([
+      {
+        fromType: "session",
+        fromId: W,
+        toType: "entity",
+        toId: E,
+        linkType: "blocked_by",
+      },
+    ]); // declared blocked_by
+    queue.push([]); // replaces hop: none
+    queue.push([{ id: E }]); // the reader may see it
+    queue.push([{ id: E, title: "Pricing deal", deletedAt: null, ...row }]); // its row
+  }
+
+  it("category `lost` ⇒ still held, marked dropped (property reads in progress)", async () => {
+    feed({
+      status: "rejected",
+      statusCategory: "lost",
+      properties: { status: "in_progress" },
+    });
+    const state = await readDependencyState({ kind: "session", id: W }, U);
+    expect(state.openBlockers).toEqual([
+      {
+        kind: "entity",
+        id: E,
+        hidden: false,
+        dropped: true,
+        status: "rejected",
+        title: "Pricing deal",
+      },
+    ]);
+  });
+
+  it("category `done` ⇒ delivered, clears (property reads in progress)", async () => {
+    feed({
+      status: "published",
+      statusCategory: "done",
+      properties: { status: "in_progress" },
+    });
+    const state = await readDependencyState({ kind: "session", id: W }, U);
+    expect(state.blocked).toBe(false);
   });
 });
