@@ -108,6 +108,7 @@ import {
   interpolateVaultRefs,
   vaultPlaceholderRefs,
 } from "../_shared/interpolate.js";
+import { assertFreshAuthentication } from "../../utils/device-session.js";
 
 const logger = createLogger({ module: "create-capability-from-definition" });
 
@@ -1725,6 +1726,9 @@ export async function issueCapabilityGrant(
   // the owner so the grant is never fully-wildcard.
   const grantedTo = workspaceId ? null : userId;
   assertGrantScoped({ grantedTo, workspaceId });
+  // A grant is a credential: from a Synap app, only shortly after a real
+  // sign-in (utils/device-session.ts) — asked here, where one is written.
+  assertFreshAuthentication();
   await db.insert(vaultGrants).values({
     grantableType,
     grantableId,

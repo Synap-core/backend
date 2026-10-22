@@ -53,6 +53,7 @@ import {
   normalizeIssuerUrl,
   sanitizeErrorEgress,
   refuseGuestSession,
+  appSessionMiddleware,
   registerPodWideProposalReactor,
   registerSessionUnblockReactor,
   registerDecisionAskReactor,
@@ -93,11 +94,7 @@ import {
   setupEventBroadcasting,
   startSessionChangedListener,
 } from "@synap/api";
-import {
-  authMiddleware,
-  configureLocalMode,
-  safeTokenEqual,
-} from "@synap/auth";
+import { configureLocalMode, safeTokenEqual } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
 import { trpcSessionGate } from "./trpc-session-gate.js";
 import { trpcAiRateLimit } from "./trpc-ai-rate-limit.js";
@@ -355,7 +352,7 @@ app.get("/health", async (c) => {
     //
     // DO NOT gate a deploy check on this field: it is not derived from the
     // running build, so it looks identical whether or not a deploy landed.
-    apiTypesVersion: "1.31.0",
+    apiTypesVersion: "1.32.0",
     mode: "multi-user",
     auth: "ory-stack",
     // Git SHA the running image was built from (see deploy/Dockerfile ARG
@@ -965,8 +962,10 @@ if (config.server.localMode) {
 mountAdminEventStream(app);
 
 // tRPC routes — session auth on every call except the public procedures
-// (health.*, setup.*, invite preview/accept). See trpc-session-gate.ts.
-app.use("/trpc/*", trpcSessionGate(authMiddleware));
+// (health.*, setup.*, invite preview/accept). See trpc-session-gate.ts. The
+// session is a Kratos one or a Synap app's device token, and no other bearer
+// (packages/api middleware/app-session.ts).
+app.use("/trpc/*", trpcSessionGate(appSessionMiddleware()));
 
 // WebSocket ticket minting (see ws-auth.ts for the CSWSH rationale). The browser
 // exchanges its authenticated session for a short-lived, single-use ticket, then
@@ -976,18 +975,23 @@ import { issueWsTicket } from "./ws-auth.js";
 // The /api/ws-ticket mint endpoint reuses the global first-party origin policy
 // (cors-origin.ts): a cross-origin page cannot mint a ticket from an untrusted
 // origin, even though the request carries the session cookie.
-app.post("/api/ws-ticket", authMiddleware, refuseGuestSession, async (c) => {
-  const origin = c.req.header("origin");
-  if (origin && !isAllowedOrigin(origin)) {
-    return c.json({ error: "Forbidden" }, 403);
+app.post(
+  "/api/ws-ticket",
+  appSessionMiddleware(),
+  refuseGuestSession,
+  async (c) => {
+    const origin = c.req.header("origin");
+    if (origin && !isAllowedOrigin(origin)) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+    // `app` is an untyped Hono instance, so the context Variables map isn't known
+    // to TS — but appSessionMiddleware (which runs before this handler) sets `userId` to
+    // the authenticated identity id (string). Read it with an explicit type.
+    const userId = c.get("userId" as never) as string | undefined;
+    if (!userId) return c.json({ error: "Unauthorized" }, 401);
+    return c.json(issueWsTicket(userId));
   }
-  // `app` is an untyped Hono instance, so the context Variables map isn't known
-  // to TS — but authMiddleware (which runs before this handler) sets `userId` to
-  // the authenticated identity id (string). Read it with an explicit type.
-  const userId = c.get("userId" as never) as string | undefined;
-  if (!userId) return c.json({ error: "Unauthorized" }, 401);
-  return c.json(issueWsTicket(userId));
-});
+);
 
 // AI Providers — public model discovery for the synap CLI (keys never returned)
 import { providersRouter } from "./routers/providers.js";
@@ -1669,8 +1673,8 @@ try {
           // the orchestrator binding. jobs owns the queue + worker; api (which
           // alone may import the orchestrator) fills the slot here at boot —
           // respecting the one-way api → jobs dependency. analyzeLarge produces
-          // a governed import.graph PROPOSAL (never a direct write) and does not
-          // read trpcCtx, so the empty ctx below is safe.
+          // a governed import.graph PROPOSAL (never a direct write); from
+          // trpcCtx it reads only the acting agent, to attribute that proposal.
           {
             const { registerImportCorpusHandler } =
               await import("@synap/jobs/workers/import-corpus-worker.js");
@@ -1682,7 +1686,9 @@ try {
               const res = await new ImportOrchestrator({
                 workspaceId: p.workspaceId,
                 userId: p.userId,
-                trpcCtx: {},
+                // Only the acting agent rides: analyzeLarge reads it to
+                // attribute the proposal it files (null for a human caller).
+                trpcCtx: { agentUserId: p.agentUserId ?? null },
                 sessionId: p.sessionId ?? null,
               }).analyzeLarge({
                 source: p.source as never,

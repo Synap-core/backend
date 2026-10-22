@@ -15,6 +15,7 @@ import {
 // this arrived: the symbol name is right, the package was not.
 import { createLinks } from "../../../services/links/links-service.js";
 import { ProposalStatus } from "@synap/database/schema";
+import { isLikelyUUID } from "@synap-core/types/proposals";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import {
@@ -79,8 +80,13 @@ export function registerPlaybookExecutors(): void {
   // The propose gate widened `data` to the full create input (goalTemplate is
   // required by createInputSchema).
   //
-  // targetId NOTE (decision B): playbooksRouter.create does not accept a
-  // caller-supplied id (DB-generated) — adoption is a follow-up.
+  // targetId: the playbook lands under the id the proposal promised (its
+  // targetId, minted by `playbooks.create` before its gate), via
+  // `proposedPlaybookId`. Before, the database minted a second id, so the id
+  // an agent read off its own proposal named no playbook (live ee96643d,
+  // 2026-10-21: targetId 6847b54f, created 48e6878a). A proposal filed before
+  // the gate minted the id carries a random targetId that names nothing — it
+  // is adopted too, so every approved create keeps its proposal's id.
   registerProposalExecutor({
     key: "playbook/create",
     async execute({ proposal, userId, input, deps }) {
@@ -127,6 +133,9 @@ export function registerPlaybookExecutors(): void {
         workspaceRole: membership.role,
       } as unknown as Context);
       const createArgs = {
+        ...(isLikelyUUID(proposal.targetId)
+          ? { proposedPlaybookId: proposal.targetId }
+          : {}),
         name,
         description: innerData.description as string | undefined,
         goalTemplate,
@@ -173,11 +182,10 @@ export function registerPlaybookExecutors(): void {
           { name?: string; body: string } | undefined,
       };
       // The replay must APPLY, never re-propose — see `assertApplied`.
-      assertApplied(
-        await playbookCaller.create(
-          createArgs as Parameters<typeof playbookCaller.create>[0]
-        )
+      const created = await playbookCaller.create(
+        createArgs as Parameters<typeof playbookCaller.create>[0]
       );
+      assertApplied(created);
 
       await db
         .update(proposals)
@@ -198,7 +206,12 @@ export function registerPlaybookExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      // The id the playbook actually landed under — the proposal's own id, or
+      // the same-name playbook a concurrent create won with.
+      return {
+        success: true,
+        ...(created.playbook?.id ? { primaryId: created.playbook.id } : {}),
+      };
     },
   });
 

@@ -40,6 +40,8 @@ import {
 export function registerAppExecutors(): void {
   registerProposalExecutor({
     key: "app/connect",
+    // Approving widens a credential: never from a device session.
+    widensCredential: true,
     async execute({ proposal, userId, input, deps }) {
       const raw = (proposal.data ?? {}) as Record<string, unknown>;
       const inner = (raw.data ?? raw) as Record<string, unknown>;

@@ -21,9 +21,24 @@ const outputs = (): ExpectedOutput[] => [
 ];
 
 describe("selectOutputToSatisfy", () => {
-  it("matches an approved proposal's targetType to the first pending output of that kind", () => {
-    expect(selectOutputToSatisfy(outputs(), "document")).toBe(0);
-    expect(selectOutputToSatisfy(outputs(), "entity")).toBe(1);
+  // THE LIVE DEFECT (2026-10-22, session 6fbc2b5c "CRM app: spec"): an input
+  // brief created with no expectedLabel was auto-approved and the kind guess
+  // stamped the FIRST document slot ("spec") done with it. An approval with no
+  // claim is evidence about an artefact, never about which deliverable it is.
+  it("an UNCLAIMED approval stamps nothing — not even the only slot of its kind", () => {
+    expect(selectOutputToSatisfy(outputs(), "document")).toBe(-1);
+    expect(selectOutputToSatisfy(outputs(), "entity")).toBe(-1);
+    expect(
+      selectOutputToSatisfy([{ kind: "document", label: "Spec" }], "document")
+    ).toBe(-1);
+    expect(selectOutputToSatisfy(outputs(), "document", null, null, null)).toBe(
+      -1
+    );
+  });
+
+  it("a claimed approval stamps the slot it names", () => {
+    expect(selectOutputToSatisfy(outputs(), "document", "Spec")).toBe(0);
+    expect(selectOutputToSatisfy(outputs(), "entity", "Client record")).toBe(1);
   });
 
   it("reuses the vocabulary normalization — no second mapping table", () => {
@@ -33,32 +48,39 @@ describe("selectOutputToSatisfy", () => {
       { kind: "session", label: "Follow-up session" },
       { kind: "workspace", label: "New lens" },
     ];
-    expect(selectOutputToSatisfy(list, "focus_session")).toBe(0);
-    expect(selectOutputToSatisfy(list, "workspaces")).toBe(1);
+    expect(
+      selectOutputToSatisfy(list, "focus_session", "Follow-up session")
+    ).toBe(0);
+    expect(selectOutputToSatisfy(list, "workspaces", "New lens")).toBe(1);
   });
 
-  it("skips outputs already satisfied — one approval is evidence for one deliverable", () => {
+  it("a claim on an output already satisfied stamps nothing — one approval is evidence for one deliverable", () => {
     const list = outputs();
     list[0] = { ...list[0]!, status: "done" };
-    expect(selectOutputToSatisfy(list, "document")).toBe(2);
+    expect(selectOutputToSatisfy(list, "document", "Spec")).toBe(-1);
+    expect(selectOutputToSatisfy(list, "document", "Summary")).toBe(2);
   });
 
   it("a CLAIM is not a satisfaction — claimedDone does not make an output skippable", () => {
     const list = outputs();
     list[0] = { ...list[0]!, claimedDone: true };
-    expect(selectOutputToSatisfy(list, "document")).toBe(0);
+    expect(selectOutputToSatisfy(list, "document", "Spec")).toBe(0);
   });
 
   it("returns -1 when no declared output matches the approved target", () => {
-    expect(selectOutputToSatisfy(outputs(), "capability")).toBe(-1);
-    expect(selectOutputToSatisfy([], "document")).toBe(-1);
+    expect(selectOutputToSatisfy(outputs(), "capability", "Spec")).toBe(-1);
+    expect(selectOutputToSatisfy([], "document", "Spec")).toBe(-1);
   });
 
   it("an unknown/empty targetType falls back to `entity`, never to a wildcard match", () => {
     // normalizeObjectKind("") === "entity". It must NOT satisfy a document.
-    expect(selectOutputToSatisfy(outputs(), null)).toBe(1);
+    expect(selectOutputToSatisfy(outputs(), null, "Client record")).toBe(1);
     expect(
-      selectOutputToSatisfy([{ kind: "document", label: "Spec" }], undefined)
+      selectOutputToSatisfy(
+        [{ kind: "document", label: "Spec" }],
+        undefined,
+        "Spec"
+      )
     ).toBe(-1);
   });
 });
@@ -71,27 +93,26 @@ describe("selectOutputToSatisfy — the SLOT CLAIM", () => {
     expect(selectOutputToSatisfy(outputs(), "document", "Summary")).toBe(2);
   });
 
-  it("no claim ⇒ the kind guess, unchanged", () => {
-    expect(selectOutputToSatisfy(outputs(), "document")).toBe(0);
-    expect(selectOutputToSatisfy(outputs(), "document", null)).toBe(0);
-    expect(selectOutputToSatisfy(outputs(), "document", "   ")).toBe(0);
+  it("no claim ⇒ nothing (a blank claim is no claim)", () => {
+    expect(selectOutputToSatisfy(outputs(), "document")).toBe(-1);
+    expect(selectOutputToSatisfy(outputs(), "document", null)).toBe(-1);
+    expect(selectOutputToSatisfy(outputs(), "document", "   ")).toBe(-1);
   });
 
   it("matches trimmed and case-insensitively — one comparison on both sides", () => {
     expect(selectOutputToSatisfy(outputs(), "document", "  summary ")).toBe(2);
   });
 
-  it("a claim naming an ALREADY-DONE slot falls back to the kind guess", () => {
-    // Stale claim (the slot was satisfied by an earlier approval). The approval
-    // is still evidence about this session, so it satisfies the next open slot
-    // of the kind rather than stamping nothing.
+  it("a claim naming an ALREADY-DONE slot stamps nothing (no guess onto another slot)", () => {
+    // REVERSED (2026-10-22). This used to fall to the kind guess and stamp the
+    // next open document slot — a deliverable nobody named.
     const list = outputs();
     list[2] = { ...list[2]!, status: "done" };
-    expect(selectOutputToSatisfy(list, "document", "Summary")).toBe(0);
+    expect(selectOutputToSatisfy(list, "document", "Summary")).toBe(-1);
   });
 
-  it("a claim naming no declared slot falls back to the kind guess", () => {
-    expect(selectOutputToSatisfy(outputs(), "document", "Nope")).toBe(0);
+  it("a claim naming no declared slot stamps nothing", () => {
+    expect(selectOutputToSatisfy(outputs(), "document", "Nope")).toBe(-1);
   });
 
   it("the claim does NOT outrank the KIND — a labelled slot of another kind is dropped", () => {
@@ -100,9 +121,10 @@ describe("selectOutputToSatisfy — the SLOT CLAIM", () => {
     // produced, so an ENTITY named like the declared entity slot could satisfy
     // it from a DOCUMENT approval — a deliverable reported delivered that
     // nobody produced. The claim now decides WHICH slot among those the change
-    // could satisfy; it never widens the set. Falls to the kind rung.
+    // could satisfy; it never widens the set. Since 2026-10-22 there is no kind
+    // rung to fall to, so it stamps nothing.
     expect(selectOutputToSatisfy(outputs(), "document", "Client record")).toBe(
-      0
+      -1
     );
   });
 
@@ -191,9 +213,9 @@ describe("selectOutputToSatisfy — an entity change carries its PROFILE kind", 
     { kind: "knowledge", label: "Lesson" },
   ];
 
-  it("a knowledge entity satisfies a kind:'knowledge' slot", () => {
+  it("a knowledge entity satisfies a kind:'knowledge' slot it claims", () => {
     expect(
-      selectOutputToSatisfy(profileSlots(), "entity", null, "knowledge")
+      selectOutputToSatisfy(profileSlots(), "entity", "Lesson", "knowledge")
     ).toBe(1);
   });
 
@@ -202,7 +224,7 @@ describe("selectOutputToSatisfy — an entity change carries its PROFILE kind", 
       selectOutputToSatisfy(
         [{ kind: "task", label: "Follow-up" }],
         "entity",
-        null,
+        "Follow-up",
         "knowledge"
       )
     ).toBe(-1);
@@ -210,26 +232,28 @@ describe("selectOutputToSatisfy — an entity change carries its PROFILE kind", 
 
   it("a kind:'entity' slot still takes any entity, profile or not", () => {
     const list: ExpectedOutput[] = [{ kind: "entity", label: "Client record" }];
-    expect(selectOutputToSatisfy(list, "entity", null, "knowledge")).toBe(0);
-    expect(selectOutputToSatisfy(list, "entity")).toBe(0);
+    expect(
+      selectOutputToSatisfy(list, "entity", "Client record", "knowledge")
+    ).toBe(0);
+    expect(selectOutputToSatisfy(list, "entity", "Client record")).toBe(0);
   });
 
-  it("an entity change with NO profile behaves exactly as today", () => {
-    expect(selectOutputToSatisfy(outputs(), "entity")).toBe(1);
-    expect(selectOutputToSatisfy(profileSlots(), "entity")).toBe(-1);
+  it("an entity change with NO profile is the generic entity kind", () => {
+    expect(selectOutputToSatisfy(outputs(), "entity", "Client record")).toBe(1);
+    expect(selectOutputToSatisfy(profileSlots(), "entity", "Lesson")).toBe(-1);
   });
 
   it("the profile never leaks onto a NON-entity change", () => {
     // A document write that happens to carry a profile slug in its payload is
     // still a document: the slug is read only when the target IS an entity.
     expect(
-      selectOutputToSatisfy(profileSlots(), "document", null, "knowledge")
+      selectOutputToSatisfy(profileSlots(), "document", "Lesson", "knowledge")
     ).toBe(-1);
   });
 
   it("the SLOT CLAIM still may not cross kinds", () => {
     // A label match on a `task` slot is not evidence that a knowledge entity is
-    // that deliverable — the claim is dropped and the kind rung decides.
+    // that deliverable — the claim lands on the same-label slot OF ITS KIND.
     const list: ExpectedOutput[] = [
       { kind: "task", label: "Lesson" },
       { kind: "knowledge", label: "Lesson" },

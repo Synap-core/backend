@@ -1,7 +1,15 @@
 /**
- * Pod app refresh tokens (spec 17 §6.6, wave PB3; founder decision F5: access
- * 1 h, refresh rotating with family revoke, 30-day idle expiry, no absolute
- * cap). Only a pod app (CIMD client) gets one; an MCP (DCR) client never does.
+ * Refresh tokens of this AS: a pod app's (spec 17 §6.6, wave PB3; founder
+ * decision F5: access 1 h, refresh rotating with family revoke, 30-day idle
+ * expiry, no absolute cap) and a Synap app's signed-in DEVICE's (0340: the
+ * same rules plus a 180-day absolute cap, the device's
+ * `expires_at`). An MCP (DCR) client never gets one.
+ *
+ * A family has ONE owner (a CHECK in 0340): a pod app CONNECTION (`appId`, an
+ * `apps` row) or a DEVICE (`deviceId`, a `person_devices` row whose id is the
+ * family id). The rules below are the same for both; only "the live access
+ * credential" differs — the connection's agent key, or the device itself
+ * (`revokePersonDevice`, whose row every device token is read through).
  *
  * Ported from the Control Plane's `exchangeRefreshToken` /
  * `revokeRefreshTokenFamily` (synap-control-plane-api `src/lib/oauth.ts`), not
@@ -52,8 +60,10 @@ import {
   apiKeys,
   apps,
   oauthRefreshTokens,
+  personDevices,
 } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
+import { revokePersonDevice } from "@synap/database/person-devices";
 
 import {
   getHubInboundKeyPrefix,
@@ -137,14 +147,19 @@ export function successorAccessToken(successorId: string): string {
   return `${getHubInboundKeyPrefix()}${successorMac("access", successorId).toString("hex")}`;
 }
 
-/** The connection a refresh token belongs to. */
+/**
+ * What a refresh token belongs to: a pod app connection (`appId`) or a
+ * signed-in device (`deviceId`) — exactly one of the two.
+ */
 export interface RefreshConnection {
-  /** The pod app's CIMD URL (its OAuth `client_id`). */
+  /** The client it was issued to: a pod app's CIMD URL, or a first-party id. */
   clientId: string;
   /** The consenting person. */
   userId: string;
-  /** The connection's `apps` row (mode 'oauth'). */
-  appId: string;
+  /** The connection's `apps` row (mode 'oauth'); null for a device. */
+  appId: string | null;
+  /** The signed-in device (`person_devices`); null/absent for a pod app. */
+  deviceId?: string | null;
 }
 
 /** A redeemed (now used) token: what the refresh grant mints for. */
@@ -152,10 +167,21 @@ export interface RedeemedRefreshToken extends RefreshConnection {
   id: string;
   familyId: string;
   /**
+   * A device's absolute cap (`person_devices.expires_at`): no successor, and
+   * no access token minted from this redeem, may outlive it. Null for an app.
+   */
+  capAt: Date | null;
+  /**
    * Set when the token was ALREADY used, within the reuse grace: the grant
    * answers this successor (unrotated) and the key it came with, nothing new.
    */
   grace?: { successorId: string; refreshToken: string };
+  /**
+   * A DEVICE's token is never claimed by the redeem: what is left to do, in
+   * the one transaction of `refreshDeviceToken` — claim it, or (a retry
+   * within the grace) retire its unused successor.
+   */
+  pending?: { claim: true } | { retire: string };
 }
 
 /**
@@ -177,11 +203,22 @@ function hashRefreshToken(raw: string): string {
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+/** The one owner of a connection's tokens, as a column predicate. */
+function ownedBy(conn: Pick<RefreshConnection, "appId" | "deviceId">) {
+  if (conn.appId) return eq(oauthRefreshTokens.appId, conn.appId);
+  if (conn.deviceId) return eq(oauthRefreshTokens.deviceId, conn.deviceId);
+  throw new Error("oauth refresh: a token names neither an app nor a device");
+}
+
 /** Serialize every write that creates or kills this connection's tokens. */
-async function lockConnection(tx: Tx, appId: string): Promise<void> {
-  await tx.execute(
-    sql`select pg_advisory_xact_lock(hashtext(${`oauth-refresh|${appId}`}))`
-  );
+async function lockConnection(
+  tx: Tx,
+  conn: Pick<RefreshConnection, "appId" | "deviceId">
+): Promise<void> {
+  const key = conn.appId
+    ? `oauth-refresh|${conn.appId}`
+    : `oauth-refresh-device|${conn.deviceId}`;
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}))`);
 }
 
 /**
@@ -190,15 +227,19 @@ async function lockConnection(tx: Tx, appId: string): Promise<void> {
  * unknown instead of as a reuse. Bounds a connection to the tokens issued in
  * its last 30 days (one per refresh).
  */
-async function sweepExpired(tx: Tx, appId: string): Promise<void> {
+async function sweepExpired(
+  tx: Tx,
+  conn: Pick<RefreshConnection, "appId" | "deviceId">
+): Promise<void> {
   await tx
     .delete(oauthRefreshTokens)
-    .where(
-      and(
-        eq(oauthRefreshTokens.appId, appId),
-        sql`${oauthRefreshTokens.expiresAt} < now()`
-      )
-    );
+    .where(and(ownedBy(conn), sql`${oauthRefreshTokens.expiresAt} < now()`));
+}
+
+/** 30 days from now, never past `capAt` (a device's absolute cap). */
+function refreshExpiry(capAt: Date | null | undefined): Date {
+  const idle = Date.now() + REFRESH_TOKEN_IDLE_TTL_MS;
+  return new Date(capAt ? Math.min(idle, capAt.getTime()) : idle);
 }
 
 async function insertToken(
@@ -206,7 +247,8 @@ async function insertToken(
   conn: RefreshConnection,
   familyId: string,
   id: string = randomUUID(),
-  raw: string = randomBytes(32).toString("base64url")
+  raw: string = randomBytes(32).toString("base64url"),
+  capAt: Date | null = null
 ): Promise<string> {
   await tx.insert(oauthRefreshTokens).values({
     id,
@@ -214,44 +256,60 @@ async function insertToken(
     familyId,
     clientId: conn.clientId,
     userId: conn.userId,
-    appId: conn.appId,
-    expiresAt: new Date(Date.now() + REFRESH_TOKEN_IDLE_TTL_MS),
+    appId: conn.appId ?? null,
+    deviceId: conn.deviceId ?? null,
+    expiresAt: refreshExpiry(capAt),
   });
   return raw;
 }
 
 /**
  * The first refresh token of a new family, at an authorization-code
- * exchange. The connection's other families end here: the newest consent is
- * the connection. Returns the RAW token once; only its hash is stored.
+ * exchange. Returns the RAW token once; only its hash is stored.
+ *
+ * A pod app connection: the connection's other families end here (the
+ * newest consent is the connection). A device: the device IS the family
+ * (family id = device id), new at this sign-in, and nothing else ends — a
+ * person signs in on several computers at once.
  */
 export async function startRefreshFamily(
-  conn: RefreshConnection
+  conn: RefreshConnection,
+  opts: { capAt?: Date | null } = {}
 ): Promise<string> {
   return db.transaction(async (tx) => {
-    await lockConnection(tx, conn.appId);
+    await lockConnection(tx, conn);
+    if (conn.deviceId) {
+      return insertToken(
+        tx,
+        { ...conn, appId: null },
+        conn.deviceId,
+        randomUUID(),
+        randomBytes(32).toString("base64url"),
+        opts.capAt ?? null
+      );
+    }
     await tx
       .update(oauthRefreshTokens)
       .set({ revokedAt: new Date() })
-      .where(
-        and(
-          eq(oauthRefreshTokens.appId, conn.appId),
-          isNull(oauthRefreshTokens.revokedAt)
-        )
-      );
-    await sweepExpired(tx, conn.appId);
+      .where(and(ownedBy(conn), isNull(oauthRefreshTokens.revokedAt)));
+    await sweepExpired(tx, conn);
     return insertToken(tx, conn, randomUUID());
   });
 }
 
 type RefreshRow = typeof oauthRefreshTokens.$inferSelect;
 
-const redeemedOf = (row: RefreshRow): RedeemedRefreshToken => ({
+const redeemedOf = (
+  row: RefreshRow,
+  capAt: Date | null = null
+): RedeemedRefreshToken => ({
   id: row.id,
   familyId: row.familyId,
   clientId: row.clientId,
   userId: row.userId,
   appId: row.appId,
+  deviceId: row.deviceId,
+  capAt,
 });
 
 /**
@@ -277,6 +335,68 @@ async function awaitSuccessor(id: string): Promise<string> {
   throw new OAuthError("invalid_grant", INVALID);
 }
 
+/** How long after its use a DEVICE's refresh token may be retried. */
+export const DEVICE_REFRESH_RETRY_GRACE_MS = 30_000;
+
+/**
+ * A Synap app's DEVICE presents a refresh token it already used: on a flaky
+ * phone connection the first refresh's RESPONSE can be lost after the token
+ * was spent. Read-only verdict:
+ *  - `grace`: within `DEVICE_REFRESH_RETRY_GRACE_MS` of its use, its
+ *    successor never redeemed — a retry, not a theft. `refreshDeviceToken`
+ *    retires that successor and mints a fresh pair, in the same family.
+ *  - `concurrent`: the successor was retired a moment ago, unused, by another
+ *    retry of this same token (an app that double-submits). Nothing went to
+ *    two holders: refused WITHOUT a revoke, like the loser of a concurrent
+ *    claim. Only a grace retires one token of a live family (tripwire
+ *    `device-refresh-token-retire-writers`), so "retired, unused, this
+ *    family, within the window" names exactly that.
+ *  - `reuse`: anything else (outside the window, the successor used) — the
+ *    caller kills the family AND the device.
+ * A successor not issued yet (the first refresh still minting) is waited for
+ * briefly, then refused without a revoke. Never touches the device's step-up
+ * clock (`auth_time`). Pod apps keep their own PB3b grace (`reuseGrace`),
+ * which answers the SAME pair.
+ */
+async function deviceRetryVerdict(
+  row: RefreshRow
+): Promise<
+  | { kind: "grace"; successorId: string }
+  | { kind: "concurrent" }
+  | { kind: "reuse" }
+> {
+  if (
+    !row.lastUsedAt ||
+    Date.now() - row.lastUsedAt.getTime() >= DEVICE_REFRESH_RETRY_GRACE_MS
+  ) {
+    return { kind: "reuse" };
+  }
+  const successorId = row.replacedBy ?? (await awaitSuccessor(row.id));
+  const [successor] = await db
+    .select({
+      familyId: oauthRefreshTokens.familyId,
+      lastUsedAt: oauthRefreshTokens.lastUsedAt,
+      revokedAt: oauthRefreshTokens.revokedAt,
+    })
+    .from(oauthRefreshTokens)
+    .where(eq(oauthRefreshTokens.id, successorId))
+    .limit(1);
+  if (!successor || successor.familyId !== row.familyId) {
+    return { kind: "reuse" };
+  }
+  if (!successor.lastUsedAt && !successor.revokedAt) {
+    return { kind: "grace", successorId };
+  }
+  if (
+    !successor.lastUsedAt &&
+    successor.revokedAt &&
+    Date.now() - successor.revokedAt.getTime() < DEVICE_REFRESH_RETRY_GRACE_MS
+  ) {
+    return { kind: "concurrent" };
+  }
+  return { kind: "reuse" };
+}
+
 /**
  * The reuse grace for a token already used, named with its own client_id
  * (the caller checked): its successor and that successor's raw token, when
@@ -288,6 +408,9 @@ async function awaitSuccessor(id: string): Promise<string> {
 async function reuseGrace(
   row: RefreshRow
 ): Promise<RedeemedRefreshToken["grace"] | null> {
+  // A Synap app's DEVICE has its own retry grace (`deviceRetryVerdict` + `refreshDeviceToken`: a NEW
+  // pair, the unused successor retired), never this one (the SAME pair).
+  if (row.deviceId) return null;
   if (
     !row.lastUsedAt ||
     !withinReuseGrace(row.lastUsedAt, Date.now(), refreshReuseGraceMs())
@@ -329,12 +452,18 @@ export async function redeemRefreshToken(
   raw: string,
   clientId: string
 ): Promise<RedeemedRefreshToken> {
-  const [row] = await db
-    .select()
+  const [found] = await db
+    .select({
+      token: oauthRefreshTokens,
+      deviceRevokedAt: personDevices.revokedAt,
+      deviceExpiresAt: personDevices.expiresAt,
+    })
     .from(oauthRefreshTokens)
+    .leftJoin(personDevices, eq(personDevices.id, oauthRefreshTokens.deviceId))
     .where(eq(oauthRefreshTokens.tokenHash, hashRefreshToken(raw)))
     .limit(1);
-  if (!row) throw new OAuthError("invalid_grant", INVALID);
+  if (!found) throw new OAuthError("invalid_grant", INVALID);
+  const row = found.token;
   // A token is refused to any client but the one it was issued to (RFC 6749
   // §6). A pod app is a public (CIMD + PKCE) client: its client_id is
   // self-asserted, not authenticated, and anyone holding the raw token can
@@ -351,8 +480,50 @@ export async function redeemRefreshToken(
     }
     throw new OAuthError("invalid_grant", INVALID);
   }
-  if (row.revokedAt) throw new OAuthError("invalid_grant", INVALID);
+  if (row.revokedAt) {
+    // A DEVICE's token revoked while its device lives was retired by a
+    // retry (`refreshDeviceToken`): someone else continued this family. Two
+    // holders — a reuse: the family and the device end.
+    if (
+      row.deviceId &&
+      found.deviceRevokedAt === null &&
+      found.deviceExpiresAt
+    ) {
+      await revokeRefreshFamily(
+        row,
+        "A retired refresh token was presented: every token of its family is revoked"
+      );
+      throw new RefreshTokenReuseError(row.familyId);
+    }
+    throw new OAuthError("invalid_grant", INVALID);
+  }
+  // A device's token lives only as long as its device: revoked (signed out,
+  // removed from the devices list) or past its absolute cap, it is dead.
+  if (
+    row.deviceId &&
+    (found.deviceRevokedAt ||
+      !found.deviceExpiresAt ||
+      found.deviceExpiresAt.getTime() <= Date.now())
+  ) {
+    throw new OAuthError("invalid_grant", INVALID);
+  }
   if (row.lastUsedAt) {
+    // A Synap app's DEVICE retrying after a lost response: its unused
+    // successor is retired in the refresh's transaction and the grant
+    // proceeds from this token, so the family lives on. A concurrent retry
+    // is refused without a revoke. Otherwise: a reuse, below.
+    if (row.deviceId) {
+      const verdict = await deviceRetryVerdict(row);
+      if (verdict.kind === "grace") {
+        return {
+          ...redeemedOf(row, found.deviceExpiresAt),
+          pending: { retire: verdict.successorId },
+        };
+      }
+      if (verdict.kind === "concurrent") {
+        throw new OAuthError("invalid_grant", INVALID);
+      }
+    }
     const grace = await reuseGrace(row);
     if (grace) return { ...redeemedOf(row), grace };
     await revokeRefreshFamily(
@@ -363,6 +534,14 @@ export async function redeemRefreshToken(
   }
   if (row.expiresAt.getTime() <= Date.now()) {
     throw new OAuthError("invalid_grant", INVALID);
+  }
+  // A device's token is claimed in the same transaction as its mint and its
+  // successor (`refreshDeviceToken`), so a failure never spends it.
+  if (row.deviceId) {
+    return {
+      ...redeemedOf(row, found.deviceExpiresAt),
+      pending: { claim: true },
+    };
   }
   const [claimed] = await db
     .update(oauthRefreshTokens)
@@ -388,7 +567,7 @@ export async function redeemRefreshToken(
     if (grace) return { ...redeemedOf(row), grace };
     throw new OAuthError("invalid_grant", INVALID);
   }
-  return redeemedOf(row);
+  return redeemedOf(row, row.deviceId ? found.deviceExpiresAt : null);
 }
 
 /**
@@ -431,7 +610,7 @@ export async function rotateRefreshToken(
   id: string = randomUUID()
 ): Promise<string> {
   const raw = await db.transaction(async (tx) => {
-    await lockConnection(tx, prev.appId);
+    await lockConnection(tx, prev);
     const [linked] = await tx
       .update(oauthRefreshTokens)
       .set({ replacedBy: id })
@@ -443,8 +622,15 @@ export async function rotateRefreshToken(
       )
       .returning({ id: oauthRefreshTokens.id });
     if (!linked) return null;
-    await sweepExpired(tx, prev.appId);
-    return insertToken(tx, prev, prev.familyId, id, successorRefreshToken(id));
+    await sweepExpired(tx, prev);
+    return insertToken(
+      tx,
+      prev,
+      prev.familyId,
+      id,
+      successorRefreshToken(id),
+      prev.capAt
+    );
   });
   if (raw === null) {
     await revokeConnectionAccessKey(
@@ -454,6 +640,111 @@ export async function rotateRefreshToken(
     throw new OAuthError("invalid_grant", INVALID);
   }
   return raw;
+}
+
+/** The grace's retire lost a race: decided again, outside the transaction. */
+class RetryGraceLost extends Error {}
+
+/**
+ * A Synap app's DEVICE refresh, all in ONE transaction: claim the token (or,
+ * for a retry within the grace, retire its unused successor), `mint` the
+ * access token with the same transaction, and issue a RANDOM successor —
+ * never one derivable from its row id, which only a pod app's grace needs.
+ * Any error after the claim (the database, the mint) rolls the claim back:
+ * a failure never spends the token and never signs the person out. What
+ * ENDS a device (a reuse, a dead device, a foreign client) is decided by
+ * `redeemRefreshToken` before the transaction and is never rolled back.
+ */
+export async function refreshDeviceToken<T>(
+  raw: string,
+  clientId: string,
+  mint: (tx: Tx, redeemed: RedeemedRefreshToken) => Promise<T>
+): Promise<{
+  redeemed: RedeemedRefreshToken;
+  minted: T;
+  refreshToken: string;
+}> {
+  const redeemed = await redeemRefreshToken(raw, clientId);
+  const pending = redeemed.pending;
+  if (!redeemed.deviceId || !redeemed.capAt || !pending) {
+    throw new OAuthError("invalid_grant", INVALID);
+  }
+  try {
+    return await db.transaction(async (tx) => {
+      await lockConnection(tx, redeemed);
+      if ("claim" in pending) {
+        const [claimed] = await tx
+          .update(oauthRefreshTokens)
+          .set({ lastUsedAt: new Date() })
+          .where(
+            and(
+              eq(oauthRefreshTokens.id, redeemed.id),
+              isNull(oauthRefreshTokens.lastUsedAt),
+              isNull(oauthRefreshTokens.revokedAt),
+              sql`${oauthRefreshTokens.expiresAt} > now()`
+            )
+          )
+          .returning({ id: oauthRefreshTokens.id });
+        // The loser of a concurrent claim is no thief: refused, nothing
+        // revoked; the winner's response carries the pair.
+        if (!claimed) throw new OAuthError("invalid_grant", INVALID);
+      } else {
+        const retired = await tx
+          .update(oauthRefreshTokens)
+          .set({ revokedAt: new Date() })
+          .where(
+            and(
+              eq(oauthRefreshTokens.id, pending.retire),
+              eq(oauthRefreshTokens.familyId, redeemed.familyId),
+              isNull(oauthRefreshTokens.lastUsedAt),
+              isNull(oauthRefreshTokens.revokedAt)
+            )
+          )
+          .returning({ id: oauthRefreshTokens.id });
+        if (retired.length === 0) throw new RetryGraceLost();
+      }
+      const minted = await mint(tx, redeemed);
+      const id = randomUUID();
+      const [linked] = await tx
+        .update(oauthRefreshTokens)
+        .set({ replacedBy: id })
+        .where(
+          and(
+            eq(oauthRefreshTokens.id, redeemed.id),
+            isNull(oauthRefreshTokens.revokedAt)
+          )
+        )
+        .returning({ id: oauthRefreshTokens.id });
+      // The family died meanwhile (a sign-out, a reuse): nothing is issued.
+      if (!linked) throw new OAuthError("invalid_grant", INVALID);
+      await sweepExpired(tx, redeemed);
+      const refreshToken = await insertToken(
+        tx,
+        redeemed,
+        redeemed.familyId,
+        id,
+        randomBytes(32).toString("base64url"),
+        redeemed.capAt
+      );
+      return { redeemed, minted, refreshToken };
+    });
+  } catch (error) {
+    if (!(error instanceof RetryGraceLost)) throw error;
+    const [row] = await db
+      .select()
+      .from(oauthRefreshTokens)
+      .where(eq(oauthRefreshTokens.id, redeemed.id))
+      .limit(1);
+    const verdict = row ? await deviceRetryVerdict(row) : { kind: "reuse" };
+    if (verdict.kind !== "reuse" || !row) {
+      throw new OAuthError("invalid_grant", INVALID);
+    }
+    await revokeRefreshFamily(
+      row,
+      "Refresh token reused: every token of its family is revoked"
+    );
+    throw new RefreshTokenReuseError(row.familyId);
+  }
 }
 
 /** A stored refresh token by its raw value, any state; null when unknown. */
@@ -466,6 +757,7 @@ export async function findRefreshToken(
       clientId: oauthRefreshTokens.clientId,
       userId: oauthRefreshTokens.userId,
       appId: oauthRefreshTokens.appId,
+      deviceId: oauthRefreshTokens.deviceId,
     })
     .from(oauthRefreshTokens)
     .where(eq(oauthRefreshTokens.tokenHash, hashRefreshToken(raw)))
@@ -482,7 +774,7 @@ export async function revokeRefreshFamily(
   reason: string
 ): Promise<void> {
   await db.transaction(async (tx) => {
-    await lockConnection(tx, token.appId);
+    await lockConnection(tx, token);
     await tx
       .update(oauthRefreshTokens)
       .set({ revokedAt: new Date() })
@@ -505,7 +797,7 @@ export async function revokeConnectionRefreshTokens(
   appId: string
 ): Promise<void> {
   await db.transaction(async (tx) => {
-    await lockConnection(tx, appId);
+    await lockConnection(tx, { appId });
     await tx
       .update(oauthRefreshTokens)
       .set({ revokedAt: new Date() })
@@ -519,15 +811,20 @@ export async function revokeConnectionRefreshTokens(
 }
 
 /**
- * The connection's live access key stops now. A pod app's agent is one per
- * (app × person) and holds only this connection's key slot, so its live
- * hub_inbound keys ARE the slot. A Synap app's key is the PERSON's
- * (`app_person`, founder 2026-10-22), in the same slot: it stops too.
+ * The connection's live access credential stops now. A device: the device
+ * itself ends (every access token is read through it). A Synap app's key is
+ * the PERSON's (`app_person`, founder 2026-10-22), in this connection's key
+ * slot: it stops. A pod app's agent is one per (app × person) and holds only
+ * this connection's key slot, so its live hub_inbound keys ARE the slot.
  */
 async function revokeConnectionAccessKey(
   conn: RefreshConnection,
   reason: string
 ): Promise<void> {
+  if (conn.deviceId) {
+    await revokePersonDevice(db, { deviceId: conn.deviceId, reason });
+    return;
+  }
   await revokeApiKeys(db, {
     where: and(
       eq(apiKeys.userId, conn.userId),
@@ -538,6 +835,7 @@ async function revokeConnectionAccessKey(
     revokedBy: conn.userId,
     reason,
   });
+  if (!conn.appId) return;
   const [app] = await db
     .select({ agentUserId: apps.agentUserId })
     .from(apps)

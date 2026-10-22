@@ -11,125 +11,73 @@
  *   scalar      a ring + the number
  *   other       a compact table of the values (composed, points, flow, regions)
  *
- * Every drawing states its values to assistive tech (`role="img"` + a label
- * naming each value); the colours are the app's tokens only.
+ * The MARKS (scale, bar lengths, path, ring arc, ticks, formatted numbers)
+ * come from the shared `chartGeometry` (`@synap-core/types/renderables`), the
+ * one copy relay draws from too; this file only picks elements and tokens.
+ * Every drawing states its values to assistive tech (`role="img"` + the
+ * vocabulary door's `resolveChartSpokenLabel`); the colours are tokens only.
  */
 
 import type { ReactNode } from "react";
-import type {
-  ChartCategoryPoint,
-  ChartSeriesPoint,
-  EmbedModel,
+import {
+  chartGeometry,
+  type ChartGeometry,
+  type ChartSnapshotModel,
 } from "@synap-core/types/renderables";
+import {
+  resolveChartSpokenLabel,
+  resolveChartTableHead,
+} from "@synap-core/types/vocabulary";
 import { formatDate } from "../../../../lib/format";
 
-type ChartSnapshotModel = Extract<EmbedModel, { kind: "chart-snapshot" }>;
+type Geometry<K extends ChartGeometry["kind"]> = Extract<
+  ChartGeometry,
+  { kind: K }
+>;
 
-/** How many values the spoken summary names before "and N more". */
-const SPOKEN_VALUES = 24;
-
-function num(value: number): string {
-  return value.toLocaleString();
-}
-
-function spoken(title: string, parts: string[]): string {
-  const named = parts.slice(0, SPOKEN_VALUES).join(", ");
-  const rest = parts.length - SPOKEN_VALUES;
-  return `${title}: ${named}${rest > 0 ? `, and ${rest} more` : ""}`;
-}
-
-/** A domain that always holds zero, so every bar starts from one baseline. */
-function domain(values: number[]): { lo: number; span: number } {
-  const lo = Math.min(0, ...values);
-  const hi = Math.max(0, ...values);
-  return { lo, span: hi - lo || 1 };
-}
-
-function Bars({ title, data }: { title: string; data: ChartCategoryPoint[] }) {
-  const { lo, span } = domain(data.map((d) => d.value));
-  const at = (v: number) => ((v - lo) / span) * 100;
+function Bars({ title, g }: { title: string; g: Geometry<"bars"> }) {
   return (
     <ul
       role="img"
-      aria-label={spoken(
-        title,
-        data.map((d) => `${d.label || "(no label)"} ${num(d.value)}`)
-      )}
+      aria-label={resolveChartSpokenLabel(title, g) ?? title}
       className="flex flex-col gap-1.5"
     >
-      {data.map((d, i) => {
-        const x = at(Math.min(0, d.value));
-        const width = Math.max(at(Math.max(0, d.value)) - x, 0);
-        return (
-          <li
-            key={i}
-            aria-hidden="true"
-            className="grid grid-cols-[minmax(0,40%)_minmax(0,1fr)_auto] items-center gap-2 text-[12.5px]"
+      {g.bars.map((bar, i) => (
+        <li
+          key={i}
+          aria-hidden="true"
+          className="grid items-center gap-2 text-[12.5px]"
+          style={{
+            gridTemplateColumns: `minmax(0,${g.labelColumnPercent}%) minmax(0,1fr) auto`,
+          }}
+        >
+          <span className="min-w-0 break-words text-foreground/80">
+            {bar.labelText}
+          </span>
+          <svg
+            viewBox={`0 0 ${g.track.width} ${g.track.height}`}
+            preserveAspectRatio="none"
+            className="h-3 w-full overflow-visible"
           >
-            <span className="min-w-0 break-words text-foreground/80">
-              {d.label || "—"}
-            </span>
-            <svg
-              viewBox="0 0 100 10"
-              preserveAspectRatio="none"
-              className="h-3 w-full overflow-visible"
-            >
-              <rect
-                data-mark=""
-                x={x}
-                y={0}
-                width={width}
-                height={10}
-                className={d.value < 0 ? "fill-primary/50" : "fill-primary"}
-              />
-            </svg>
-            <span className="tabular-nums text-foreground/70">
-              {num(d.value)}
-            </span>
-          </li>
-        );
-      })}
+            <rect
+              data-mark=""
+              x={bar.x}
+              y={bar.y}
+              width={bar.w}
+              height={bar.h}
+              className={bar.negative ? "fill-primary/50" : "fill-primary"}
+            />
+          </svg>
+          <span className="tabular-nums text-foreground/70">
+            {bar.valueText}
+          </span>
+        </li>
+      ))}
     </ul>
   );
 }
 
-function xLabel(x: string | number): string {
-  return typeof x === "number" ? num(x) : formatDate(x);
-}
-
-const LINE_W = 300;
-const LINE_H = 120;
-const PAD = 6;
-
-function Line({
-  title,
-  data,
-  area,
-}: {
-  title: string;
-  data: ChartSeriesPoint[];
-  area: boolean;
-}) {
-  // x on time (or the number) when every point has one, else evenly spaced.
-  const raw = data.map((p) =>
-    typeof p.x === "number" ? p.x : Date.parse(p.x)
-  );
-  const xs = raw.every(Number.isFinite) ? raw : data.map((_, i) => i);
-  const xLo = Math.min(...xs);
-  const xSpan = Math.max(...xs) - xLo;
-  const { lo, span } = domain(data.map((p) => p.y));
-  const points = data.map((p, i) => ({
-    cx: xSpan
-      ? PAD + ((xs[i]! - xLo) / xSpan) * (LINE_W - 2 * PAD)
-      : LINE_W / 2,
-    cy: LINE_H - PAD - ((p.y - lo) / span) * (LINE_H - 2 * PAD),
-  }));
-  const path = points
-    .map((p, i) => `${i === 0 ? "M" : "L"}${p.cx.toFixed(2)},${p.cy.toFixed(2)}`)
-    .join(" ");
-  const baseline = LINE_H - PAD - ((0 - lo) / span) * (LINE_H - 2 * PAD);
-  const first = points[0];
-  const last = points[points.length - 1];
+function Line({ title, g }: { title: string; g: Geometry<"line"> }) {
   return (
     <div className="flex flex-col gap-1">
       <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-2">
@@ -137,98 +85,89 @@ function Line({
           aria-hidden="true"
           className="flex flex-col justify-between py-0.5 text-right text-[11.5px] tabular-nums text-foreground/60"
         >
-          <span>{num(lo + span)}</span>
-          <span>{num(lo)}</span>
+          <span>{g.yTicks.top}</span>
+          <span>{g.yTicks.bottom}</span>
         </div>
         <svg
-          viewBox={`0 0 ${LINE_W} ${LINE_H}`}
+          viewBox={`0 0 ${g.width} ${g.height}`}
           role="img"
-          aria-label={spoken(
-            title,
-            data.map((p) => `${xLabel(p.x)} ${num(p.y)}`)
-          )}
+          aria-label={resolveChartSpokenLabel(title, g) ?? title}
           className="h-auto w-full"
         >
           <line
-            x1={PAD}
-            x2={LINE_W - PAD}
-            y1={baseline}
-            y2={baseline}
+            x1={g.pad}
+            x2={g.width - g.pad}
+            y1={g.baseline}
+            y2={g.baseline}
             className="stroke-foreground/15"
             strokeWidth={1}
           />
-          {area && first && last && (
-            <path
-              d={`${path} L${last.cx.toFixed(2)},${baseline.toFixed(2)} L${first.cx.toFixed(2)},${baseline.toFixed(2)} Z`}
-              className="fill-primary/15"
-            />
-          )}
+          {g.areaPath && <path d={g.areaPath} className="fill-primary/15" />}
           <path
-            d={path}
+            d={g.path}
             className="fill-none stroke-primary"
             strokeWidth={2}
             strokeLinejoin="round"
           />
-          {points.map((p, i) => (
-            <circle key={i} data-mark="" cx={p.cx} cy={p.cy} r={3} className="fill-primary" />
+          {g.points.map((p, i) => (
+            <circle
+              key={i}
+              data-mark=""
+              cx={p.cx}
+              cy={p.cy}
+              r={3}
+              className="fill-primary"
+            />
           ))}
         </svg>
       </div>
-      {data.length > 0 && (
+      {g.xTicks.length > 0 && (
         <div
           aria-hidden="true"
           className="flex justify-between gap-2 pl-8 text-[11.5px] text-foreground/60"
         >
-          <span>{xLabel(data[0]!.x)}</span>
-          {data.length > 1 && <span>{xLabel(data[data.length - 1]!.x)}</span>}
+          {g.xTicks.map((t) => (
+            <span key={t.align}>{t.text}</span>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
-function Ring({
-  title,
-  value,
-  percent,
-}: {
-  title: string;
-  value: number;
-  percent: number;
-}) {
-  // r = 100 / 2π, so the circumference is 100 and the dash IS the percent.
-  const r = 15.9155;
+function Ring({ title, g }: { title: string; g: Geometry<"ring"> }) {
+  const { ring } = g;
   return (
     <div className="flex items-center gap-3">
       <svg
-        viewBox="0 0 36 36"
+        viewBox={`0 0 ${ring.size} ${ring.size}`}
         role="img"
-        aria-label={`${title}: ${num(value)} (${Math.round(percent)}%)`}
+        aria-label={resolveChartSpokenLabel(title, g) ?? title}
         className="h-16 w-16 shrink-0 -rotate-90"
       >
         <circle
-          cx={18}
-          cy={18}
-          r={r}
+          cx={ring.cx}
+          cy={ring.cy}
+          r={ring.r}
           className="fill-none stroke-foreground/10"
-          strokeWidth={3.5}
+          strokeWidth={ring.strokeWidth}
         />
         <circle
-          cx={18}
-          cy={18}
-          r={r}
+          cx={ring.cx}
+          cy={ring.cy}
+          r={ring.r}
           className="fill-none stroke-primary"
-          strokeWidth={3.5}
-          strokeDasharray={`${percent} 100`}
+          strokeWidth={ring.strokeWidth}
+          strokeDasharray={g.dash}
         />
       </svg>
       <div aria-hidden="true" className="flex flex-col">
         <span className="text-[22px] font-semibold tabular-nums text-foreground">
-          {num(value)}
+          {g.valueText}
         </span>
-        {Math.round(percent) !== value && (
+        {g.showPercent && (
           <span className="text-[12px] tabular-nums text-foreground/60">
-            {Math.round(percent)}%
+            {g.percentRounded}%
           </span>
         )}
       </div>
@@ -236,22 +175,14 @@ function Ring({
   );
 }
 
-function Table({
-  title,
-  head,
-  rows,
-}: {
-  title: string;
-  head: string[];
-  rows: Array<Array<string | number>>;
-}) {
+function Table({ title, g }: { title: string; g: Geometry<"table"> }) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-left text-[12.5px]">
         <caption className="sr-only">{title}</caption>
         <thead>
           <tr className="border-b border-foreground/[0.08]">
-            {head.map((h) => (
+            {resolveChartTableHead(g.shape).map((h) => (
               <th key={h} scope="col" className="px-2 py-1 font-medium">
                 {h}
               </th>
@@ -259,7 +190,7 @@ function Table({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, r) => (
+          {g.rows.map((row, r) => (
             <tr
               key={r}
               className="border-b border-foreground/[0.06] last:border-b-0"
@@ -267,9 +198,9 @@ function Table({
               {row.map((cell, c) => (
                 <td
                   key={c}
-                  className={`px-2 py-1 ${typeof cell === "number" ? "tabular-nums" : ""}`}
+                  className={`px-2 py-1 ${cell.numeric ? "tabular-nums" : ""}`}
                 >
-                  {typeof cell === "number" ? num(cell) : cell}
+                  {cell.text}
                 </td>
               ))}
             </tr>
@@ -280,76 +211,21 @@ function Table({
   );
 }
 
-function isEmpty(model: ChartSnapshotModel): boolean {
-  switch (model.shape) {
-    case "scalar":
-      return false;
-    case "flow":
-      return model.data.links.length === 0;
-    case "regions":
-      return Object.keys(model.data).length === 0;
-    default:
-      return model.data.length === 0;
-  }
-}
-
-function Drawing({
-  model,
-  title,
-}: {
-  model: ChartSnapshotModel;
-  title: string;
-}): ReactNode {
-  switch (model.shape) {
-    case "categories":
-      return <Bars title={title} data={model.data} />;
-    case "series":
+function Drawing({ g, title }: { g: ChartGeometry; title: string }): ReactNode {
+  switch (g.kind) {
+    case "bars":
+      return <Bars title={title} g={g} />;
+    case "line":
+      return <Line title={title} g={g} />;
+    case "ring":
+      return <Ring title={title} g={g} />;
+    case "table":
+      return <Table title={title} g={g} />;
+    case "empty":
       return (
-        <Line
-          title={title}
-          data={model.data}
-          area={model.cellKey === "chart-area"}
-        />
-      );
-    case "scalar":
-      return <Ring title={title} value={model.data} percent={model.percent} />;
-    case "composed":
-      return (
-        <Table
-          title={title}
-          head={["Bucket", "Bar", "Line"]}
-          rows={model.data.map((d) => [d.x, d.bar, d.line])}
-        />
-      );
-    case "points":
-      return (
-        <Table
-          title={title}
-          head={["Label", "x", "y"]}
-          rows={model.data.map((d) => [d.label ?? "—", d.x, d.y])}
-        />
-      );
-    case "flow": {
-      const name = new Map(model.data.nodes.map((n) => [n.id, n.label]));
-      return (
-        <Table
-          title={title}
-          head={["From", "To", "Value"]}
-          rows={model.data.links.map((l) => [
-            name.get(l.source) ?? l.source,
-            name.get(l.target) ?? l.target,
-            l.value,
-          ])}
-        />
-      );
-    }
-    case "regions":
-      return (
-        <Table
-          title={title}
-          head={["Region", "Value"]}
-          rows={Object.entries(model.data).map(([k, v]) => [k, v])}
-        />
+        <p className="text-[12.5px] text-foreground/65">
+          This snapshot holds no values.
+        </p>
       );
   }
 }
@@ -368,24 +244,17 @@ export function ChartSnapshot({
   return (
     <figure
       data-chart={model.shape}
-      className="flex flex-col gap-2 rounded-lg px-3 py-2.5 ring-1 ring-inset ring-foreground/10">
+      className="flex flex-col gap-2 rounded-lg px-3 py-2.5 ring-1 ring-inset ring-foreground/10"
+    >
       <figcaption className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-        <span className="text-[13px] font-medium text-foreground">
-          {title}
-        </span>
+        <span className="text-[13px] font-medium text-foreground">{title}</span>
         <span className="text-[12px] text-foreground/60">
           {model.capturedAt
             ? `Snapshot · ${formatDate(model.capturedAt)}`
             : "Snapshot"}
         </span>
       </figcaption>
-      {isEmpty(model) ? (
-        <p className="text-[12.5px] text-foreground/65">
-          This snapshot holds no values.
-        </p>
-      ) : (
-        <Drawing model={model} title={title} />
-      )}
+      <Drawing g={chartGeometry(model, { formatDate })} title={title} />
     </figure>
   );
 }

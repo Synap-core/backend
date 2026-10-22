@@ -384,6 +384,29 @@ describe("POST /import/enqueue-corpus — thin door onto the existing background
     expect(sendMock).not.toHaveBeenCalled();
   });
 
+  it("carries the acting agent to the worker, so the proposal it files is attributed", async () => {
+    // Live 0728053b (2026-10-22): an agent key's import filed a proposal with
+    // agentUserId null. The worker files the corpus proposal, so the agent
+    // must ride the job. A human caller's job carries none (first test above).
+    const AGENT = "agent-y";
+    const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+    app.use("/*", async (c, next) => {
+      c.set("userId", USER_ID);
+      c.set("scopes", ["hub-protocol.write"]);
+      c.set("agentUserId" as never, AGENT as never);
+      await next();
+    });
+    registerCaptureRoutes(app);
+
+    const res = await postEnqueue(app, validBody());
+
+    expect(res.status).toBe(202);
+    expect(sendMock).toHaveBeenCalledWith(
+      "import-corpus",
+      expect.objectContaining({ agentUserId: AGENT })
+    );
+  });
+
   it("propagates an acting-context rejection instead of enqueueing", async () => {
     resolveActingContextMock.mockResolvedValue({
       ok: false,
