@@ -176,7 +176,7 @@ export async function readSessionRoom(
           : {}),
         ...body,
         untrusted: true as const,
-        fenced: fenceUntrustedData(body.text, `synap session room (${author})`),
+        fenced: body.text,
       };
     }),
     hasMore: rows.length > ROOM_TOP_N,
