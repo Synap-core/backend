@@ -437,7 +437,8 @@ describe("the gate — before any session exists", () => {
         })
       ).not.toEqual({ skipped: "stale_transition" });
     } finally {
-      await q(`delete from relations; delete from projects;`);
+      // Two statements: `exec` (simple protocol), never a prepared `query`.
+      await h.client!.exec(`delete from relations; delete from projects;`);
     }
   });
 
