@@ -24,6 +24,12 @@
  *    `createExternalChannel`) → recorders. The seam is WHAT the executor hands
  *    them; their own behaviour has its own suites. NOT covered: those writes.
  *  - `@synap/storage` → an in-memory blob map.
+ *  - the receipt-session mint (`resolveOrCreateAgentProposalSession`) and the
+ *    agent's declared focus (`getAgentFocusProjectId`) → null. The gate calls
+ *    them on the module `db` while its proposal transaction is open; PGlite has
+ *    ONE connection, so a read outside that transaction waits for it forever
+ *    (every test here timed out at 120 s). Which session or project groups the
+ *    proposal is not this seam; `permission-check.*.test.ts` stub them too.
  *  - the scoped-key middleware, audit log, side effects, realtime — not this
  *    seam. Attribution is the real one: every door runs inside
  *    `runWithActingAgent`, as the key-auth entry points do.
@@ -91,8 +97,16 @@ vi.mock("@synap/database", async (importOriginal) => {
       append: async () => ({ id: randomUUID() }),
       emitCompleted: async () => undefined,
     },
+    resolveOrCreateAgentProposalSession: async () => null,
   };
 });
+vi.mock(
+  "../../../../services/agent-identity-service.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    getAgentFocusProjectId: async () => null,
+  })
+);
 vi.mock("@synap/storage", () => ({
   storage: {
     buildPath: (u: string, k: string, id: string, ext: string) =>
