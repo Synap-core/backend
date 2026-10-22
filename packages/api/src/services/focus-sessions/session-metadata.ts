@@ -1,6 +1,5 @@
 import { drizzleSql, focusSessions } from "@synap/database";
 import type { SQL } from "@synap/database";
-import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
 
 /**
  * Merge a sub-object into `focus_sessions.metadata` without clobbering the
@@ -45,11 +44,6 @@ export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   "clientKey",
   "automationChainContext",
   "run",
-  DEV_LOOP_METADATA_KEY,
-  CHECK_GATE_METADATA_KEY,
-  "triage",
-  "conversion",
-  "recalled",
 ] as const;
 
 /** A client/agent metadata bag with every server-owned key dropped. Pure. */
