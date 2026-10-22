@@ -162,6 +162,9 @@ const ROUTE_PARAM_EXCLUDE = new Set<string>([
   "POST /apps/:id/connect [id]",
   "POST /apps/:id/key [id]",
   "DELETE /apps/:id [id]",
+  // PB4: same public id, through narrowApp / setAppWriteMode → loadOwnedApp.
+  "POST /apps/:id/narrow [id]",
+  "PUT /apps/:id/write-mode [id]",
 ]);
 
 /**

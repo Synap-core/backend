@@ -148,18 +148,16 @@ describe("W6 read/resolve verbs — registry", () => {
       // connector.health_check mutates NO graph data — it only emits deduped
       // operator reconnect notices — so it auto-runs unattended in a cron feed.
       "connector.health_check",
-      // Four verbs below joined while this file failed to COLLECT (a stale
-      // total mock, 2026-09-25 → 2026-10-21), so this pin never saw them. Each
+      // Four verbs joined while this file failed to COLLECT (a stale total
+      // mock, 2026-09-25 → 2026-10-21), so this pin never saw them. Each
       // carries its written rationale beside READ_ONLY_BUILTIN_VERBS in
-      // builtin-verbs.ts; re-pinned 2026-10-21 after reading it.
+      // builtin-verbs.ts; re-pinned 2026-10-21 after reading it. The founder
+      // sent the fourth, document.stamp_diagnostics, back behind a proposal the
+      // same day: it writes (see the write-verb assertions below).
       // document.freeze_charts reads under the caller's floor and RETURNS
       // markdown; it writes nothing (create-report does).
       "document.freeze_charts",
       "document.read",
-      // document.stamp_diagnostics WRITES — but only the advisory,
-      // revision-stamped diagnostics on a document the caller OWNS (handler-
-      // enforced), never content or graph data.
-      "document.stamp_diagnostics",
       "entity.query",
       "entity_facet.list",
       "feed.read",
@@ -201,6 +199,10 @@ describe("W6 read/resolve verbs — registry", () => {
     expect(READ_ONLY_BUILTIN_VERBS.has("entity.update")).toBe(false);
     expect(READ_ONLY_BUILTIN_VERBS.has("document.create")).toBe(false);
     expect(READ_ONLY_BUILTIN_VERBS.has("document.update")).toBe(false);
+    // It writes the document's metadata (founder, 2026-10-21).
+    expect(READ_ONLY_BUILTIN_VERBS.has("document.stamp_diagnostics")).toBe(
+      false
+    );
   });
 });
 

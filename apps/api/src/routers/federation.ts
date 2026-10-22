@@ -77,14 +77,10 @@ const grantScopeSchema = z.discriminatedUnion("kind", [
   workspaceScopeSchema,
   projectScopeSchema,
 ]);
-const requestedScopeSchema = z.discriminatedUnion("kind", [
-  // Pod-wide access does not create a synthetic membership record. It means
-  // the issuer is asking the Pod to select from the user's already-authorized
-  // local scopes; the Pod still checks that at least one is active.
-  z.object({ kind: z.literal("pod") }),
-  workspaceScopeSchema,
-  projectScopeSchema,
-]);
+// Pod-wide access does not create a synthetic membership record. It means
+// the issuer is asking the Pod to select from the user's already-authorized
+// local scopes; the Pod still checks that at least one is active.
+type RequestedScope = { kind: "pod" } | z.infer<typeof grantScopeSchema>;
 const shortLivedAssertionClaims = {
   iat: z.number().int().nonnegative(),
   exp: z.number().int().positive(),
@@ -1031,7 +1027,7 @@ async function accessForUser(userId: string): Promise<PodUserAccess> {
 
 function canUseScope(
   access: PodUserAccess,
-  scope: z.infer<typeof requestedScopeSchema> | undefined
+  scope: RequestedScope | undefined
 ): boolean {
   const hasActiveScope =
     access.workspaceScopes.length > 0 || access.projectScopes.length > 0;

@@ -731,6 +731,15 @@ export type WorkspacePrimarySurface = {
 	 * rendered by hosts as an unprivileged URL surface.
 	 */
 	kind: "url";
+	/**
+	 * The pod app this website is (spec 17 §7.1): its Client ID Metadata
+	 * Document URL. A launch hint only: the browser opens the site with this
+	 * pod's `iss` so the app starts the pod's own OAuth flow. It grants no
+	 * identity, bridge or credential; the site stays an unprivileged URL.
+	 */
+	podApp?: {
+		clientId: string;
+	};
 	title?: string;
 	url: string;
 } | {
@@ -12286,6 +12295,62 @@ export interface OAuthAppOfferItem {
 		workspaceName: string;
 	}>;
 }
+/** How an app's writes land, as its page shows it. */
+export interface AppWriteModeView {
+	/**
+	 * The switch: ON when the app's agent follows the pod's default ("apply
+	 * automatically"), OFF while it asks first (every connection starts OFF).
+	 */
+	applyAutomatically: boolean;
+	/** The effective mode, the pod default included (`resolveAgentWriteMode`). */
+	writeMode: AgentWriteMode;
+	/** The one sentence for that mode. */
+	line: string;
+}
+/** One approved (permission, space) pair, with the space's name. */
+export type NamedApprovedRequest = AppApprovedRequest & {
+	workspaceName: string | null;
+};
+/** What a pod app connection adds to its app row (`pod_app` on the wire). */
+export interface PodAppView {
+	/** The app's metadata-document URL — its OAuth `client_id`. */
+	client_id: string;
+	/** Its host: the app's identity, the headline. */
+	domain: string;
+	/** A Synap app (exact first-party origin) vs an unverified one. */
+	verified: boolean;
+	/** What the person approved, per space — what Narrow edits. */
+	approved: NamedApprovedRequest[];
+	/** When this person last connected it (the newest consent). */
+	connected_at: Date | null;
+	/** The newest use of any of its access tokens. */
+	last_used_at: Date | null;
+	write_mode: AppWriteModeView;
+}
+/** One member's connection of a pod app, as the pod admin reads it. */
+export interface AdminPodAppMember {
+	public_id: string;
+	owner: {
+		email: string | null;
+		id: string;
+		name: string | null;
+	} | null;
+	approved: NamedApprovedRequest[];
+	connected_at: Date | null;
+	last_used_at: Date | null;
+	revoked_at: Date | null;
+}
+/** One pod app across the pod's members (`apps.adminPodApps`). */
+export interface AdminPodAppGroup {
+	client_id: string;
+	domain: string;
+	verified: boolean;
+	/** The name the app gives itself (text only), from a member's row. */
+	name: string;
+	/** Members whose connection is live. */
+	live: number;
+	members: AdminPodAppMember[];
+}
 export interface AppSignInSpace {
 	workspaceId: string;
 	name: string;
@@ -15460,6 +15525,14 @@ export interface CsvColumnPlan {
 	valueType: "boolean" | "date" | "number" | "string";
 	/** "skip" columns are dropped; everything else lands on the row entity. */
 	scope: "companion" | "context" | "primary" | "skip";
+	/**
+	 * Where the value lands, set by `refineCsvTablePlan`. Absent or "entity" ⇒ a
+	 * property of the row entity (today's behaviour); "facet" ⇒ a property of the
+	 * row's role facet (`CsvTablePlan.rowFacet`); "title" ⇒ consumed by the
+	 * composed title (`titleColumns`); "organization" ⇒ consumed by the
+	 * organisation link (`CsvTablePlan.organization`).
+	 */
+	routedTo?: "entity" | "facet" | "organization" | "title";
 }
 /** Resolved table-ingestion plan: ONE profile for all rows + per-column routing
  *  + which header supplies the title. */
@@ -15470,6 +15543,25 @@ export interface CsvTablePlan {
 	titleColumn: string | null;
 	/** Per-column routing. Headers absent here are dropped. */
 	columns: CsvColumnPlan[];
+	/**
+	 * When set, the title is these columns' non-empty values joined by a space
+	 * ("First Name" + "Last Name"). Takes precedence over `titleColumn`.
+	 */
+	titleColumns?: string[];
+	/** Role facet every row entity wears (the planner picked a role). */
+	rowFacet?: {
+		profileSlug: string;
+	};
+	/**
+	 * A column naming the row's organisation: each distinct value becomes ONE
+	 * entity of `profileSlug` (see `addLinkTargetItems`), linked from the row by
+	 * `relationType`.
+	 */
+	organization?: {
+		header: string;
+		profileSlug: string;
+		relationType: string;
+	};
 }
 /**
  * Per-op homes summary for an import graph — how create_entity ops are
@@ -20990,6 +21082,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspace_names: Record<string, string>;
 			}[];
 		}>;
+		adminPodApps: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: AdminPodAppGroup[];
+		}>;
+		adminPolicy: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				allowUnverified: boolean;
+				changedAt: string | null;
+				changedBy: string | null;
+				unverifiedLive: number;
+			};
+		}>;
 		adminRemove: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				publicId: string;
@@ -21008,6 +21115,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				publicId: string;
 				revoked: boolean;
+			};
+		}>;
+		adminRevokeClient: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				clientId: string;
+			};
+			meta: object;
+			output: {
+				revoked: number;
+			};
+		}>;
+		adminSetPolicy: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				allowUnverified: boolean;
+			};
+			meta: object;
+			output: {
+				allowUnverified: boolean;
+				changedAt: string | null;
+				changedBy: string | null;
+				unverifiedLive: number;
 			};
 		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
@@ -21084,6 +21212,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requests: AppApprovedRequest[];
 				} | null;
 				person_may_decide_own_agent_proposals: boolean;
+				pod_app: PodAppView | null;
 				public_id: string;
 				redirect_uris: string[];
 				removed_at: Date | null;
@@ -21133,11 +21262,54 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requests: AppApprovedRequest[];
 				} | null;
 				person_may_decide_own_agent_proposals: boolean;
+				pod_app: PodAppView | null;
 				public_id: string;
 				redirect_uris: string[];
 				removed_at: Date | null;
 				revoked_at: Date | null;
 			}[];
+		}>;
+		narrow: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				approved: {
+					permission: string;
+					workspaceId: string;
+				}[];
+				publicId: string;
+			};
+			meta: object;
+			output: {
+				agent_user_id: string | null;
+				approved_requests: AppApprovedRequest[] | null;
+				created_at: Date;
+				description: string | null;
+				grants: {
+					clientId: string | null;
+					createdAt: Date;
+					entityIds: string[] | null;
+					id: string;
+					label: string | null;
+					permissions: string[];
+					projectIds: string[] | null;
+					revokedAt: Date | null;
+					workspaceIds: string[] | null;
+				}[];
+				id: string;
+				last_used_at: Date | null;
+				logo_url: string | null;
+				mode: "oauth" | "specific";
+				name: string;
+				pending_request: {
+					proposal_id: string;
+					requested_at: Date;
+					requests: AppApprovedRequest[];
+				} | null;
+				person_may_decide_own_agent_proposals: boolean;
+				public_id: string;
+				redirect_uris: string[];
+				removed_at: Date | null;
+				revoked_at: Date | null;
+			};
 		}>;
 		remove: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -21289,6 +21461,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				removed_at: Date | null;
 				revoked_at: Date | null;
 			};
+		}>;
+		setWriteMode: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				applyAutomatically: boolean;
+				publicId: string;
+			};
+			meta: object;
+			output: AppWriteModeView;
 		}>;
 	}>>;
 	artifacts: import("@trpc/server").TRPCBuiltRouter<{
@@ -31949,7 +32129,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionError?: string | undefined;
 				sessionId: string | null;
 				sessionSource?: "failed" | "minted" | "none" | "playbook" | "prior" | "provided" | undefined;
-				source: ImportRevealSource;
+				source: "bookmark" | "connector_sync" | "json" | "markdown" | "obsidian";
 				stats: {
 					byType: Record<string, number>;
 					chunks: number;

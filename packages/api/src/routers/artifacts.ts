@@ -58,8 +58,7 @@ const artifactListFilters = {
   limit: z.number().int().min(1).max(100).default(50),
 } as const;
 
-const artifactListInputSchema = z.object(artifactListFilters);
-type ArtifactListInput = z.infer<typeof artifactListInputSchema>;
+type ArtifactListInput = z.infer<z.ZodObject<typeof artifactListFilters>>;
 
 /**
  * The shared read. Starts from the USER FLOOR (the artifacts visibility rule
