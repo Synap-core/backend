@@ -399,8 +399,10 @@ n_tpl="$(ls "$HERE/deploy/systemd" | grep -cE '\.(service|timer|path)$')"
   && grep -q "^Environment=SYNAP_DEPLOY_DIR=$(cd "$DEPLOY" && pwd -P)$" "$U/synap-update.service" && grep -q "^PathExists=$(cd "$DEPLOY" && pwd -P)/state/requests/update.json$" "$U/synap-update.path" \
   && ok "units: rendered with this CLI + deploy dir (no placeholder left)" || bad "units render: $(grep -h 'ExecStart\|DEPLOY\|PathExists' "$U"/* | head -5)"
 grep -q "^ExecStart=.* update --unattended$" "$U/synap-update.service" && grep -q "^TimeoutStartSec=90min$" "$U/synap-update.service" && ok "units: synap-update.service = update --unattended, 90 min" || bad "update unit"
-grep -q "enable --now synap-heal.timer synap-update.path" "$FAKE/systemctl_log" && ! grep -q "enable.*synap-update.timer" "$FAKE/systemctl_log" \
-  && ok "units: the heal timer and the request path enabled; the update TIMER left off" || bad "systemctl: $(cat "$FAKE/systemctl_log")"
+en="$(grep '^enable --now synap-heal.timer ' "$FAKE/systemctl_log" | head -1)"; paths="$(cd "$U" && ls synap-*.path)"; miss=""
+for p in $paths; do [[ " $en " == *" $p "* ]] || miss="$miss $p"; done
+[ -n "$en" ] && [ "$(echo "$paths" | grep -c .)" -ge 3 ] && [ -z "$miss" ] && ! grep -q "enable.*synap-update.timer" "$FAKE/systemctl_log" \
+  && ok "units: the heal timer and every request path ($(echo $paths)) enabled; the update TIMER left off" || bad "systemctl (missing:$miss): $(cat "$FAKE/systemctl_log")"
 : > "$FAKE/systemctl_log"; SYSD_RUN="$TMP/run-systemd" run_synap units install --enable-auto-update
 grep -q "enable --now synap-update.timer" "$FAKE/systemctl_log" && ok "units: --enable-auto-update opts in" || { bad "auto-update not enabled: $(cat "$FAKE/systemctl_log")"; show; }
 sed -i.x 's#SYNAP_DEPLOY_DIR=.*#SYNAP_DEPLOY_DIR=/srv/other/deploy#' "$U/synap-heal.service"; rm -f "$U/synap-heal.service.x"
