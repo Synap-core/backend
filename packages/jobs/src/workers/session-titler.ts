@@ -185,8 +185,14 @@ export const EARLY_TITLE_CANDIDATE = and(
   HAS_SIGNAL
 );
 
-/** The session's proposal count — what a rolling rename is keyed on. */
-const PROPOSAL_COUNT = drizzleSql<number>`(SELECT count(*)::int FROM ${proposals} WHERE ${proposals.sessionId} = ${focusSessions.id})`;
+/**
+ * The session's proposal count — what a rolling rename is keyed on. Built from
+ * TABLE chunks + column names, never column objects: in a single-table select
+ * drizzle renders a column inside a select-field SQL UNQUALIFIED, so the
+ * correlation read `session_id = id` (the proposal's own id) and every
+ * selected count was 0 — the roll stage was always stamped 0.
+ */
+const PROPOSAL_COUNT = drizzleSql<number>`(SELECT count(*)::int FROM ${proposals} WHERE ${proposals}.${drizzleSql.identifier(proposals.sessionId.name)} = ${focusSessions}.${drizzleSql.identifier(focusSessions.id.name)})`;
 
 /** Thresholds already covered by the name the session carries. */
 const ROLL_STAGE = drizzleSql`COALESCE((${focusSessions.metadata}->>'titleRollStage')::int, 0)`;
