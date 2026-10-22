@@ -23,6 +23,6 @@ ExecStartPre=/bin/sh -c 'r="$${SYNAP_DEPLOY_DIR}/state/requests"; rm -f "$$r/arc
 ExecStart=@SYNAP@ archive-request
 # A request taken here but never answered (the engine died before recording
 # an outcome) still gets one, so pod-agent and the CP never wait on it.
-# No StartLimit*= override: see synap-update.service.
-ExecStopPost=/bin/sh -c 'exec /bin/sh "$${SYNAP_DEPLOY_DIR}/request-outcome.sh" archive'
+# No StartLimit*= override and the leading "-": see synap-update.service.
+ExecStopPost=-/bin/sh -c 'exec /bin/sh "$${SYNAP_DEPLOY_DIR}/request-outcome.sh" archive'
 TimeoutStartSec=60min
