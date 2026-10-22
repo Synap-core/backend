@@ -37,6 +37,7 @@ import { sessionEvaluationHandlers } from "./handlers/session-evaluation.js";
 import { buildHandlers } from "./handlers/build.js";
 import { ruleHandlers } from "./handlers/rule.js";
 import { trackHandlers } from "./handlers/track.js";
+import { devApprovalHandlers } from "./handlers/dev-approval.js";
 import { parseJsonObject, withUiStructuredContent } from "./ui-tools.js";
 
 export { isReadOnlyTool, pickAdvisoryWorkspaceId } from "./handlers/shared.js";
@@ -61,6 +62,7 @@ const TOOL_HANDLERS: McpHandlerMap = {
   ...buildHandlers,
   ...ruleHandlers,
   ...trackHandlers,
+  ...devApprovalHandlers,
 };
 
 export async function executeMCPToolViaHubProtocol(

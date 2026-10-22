@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 96 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 97 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -89,6 +89,7 @@ The pod's MCP server lists 96 tools. A new agent key lists the `entry` tools; th
 | [`synap_post_message`](#synap_post_message)                               | Post message                      | entry        | no        |
 | [`synap_revise_proposal`](#synap_revise_proposal)                         | Revise proposal                   | governance   | no        |
 | [`synap_reject_proposal`](#synap_reject_proposal)                         | Reject proposal                   | governance   | no        |
+| [`synap_request_deploy_approval`](#synap_request_deploy_approval)         | Request deploy approval           | governance   | no        |
 | [`synap_find`](#synap_find)                                               | Find what can do this             | read         | yes       |
 | [`synap_list_capabilities`](#synap_list_capabilities)                     | List tools                        | capabilities | yes       |
 | [`synap_run_capability`](#synap_run_capability)                           | Run tool                          | capabilities | no        |
@@ -1308,6 +1309,22 @@ Reject a pending proposal so the queued change never lands — withdraw a write 
 | `proposalId` | string | yes      | Proposal UUID, as returned verbatim by synap_list_proposals. A leading fragment of one also resolves, but pass the full id you were given — do not shorten it yourself.                                                                                                                                                                  |
 | `reason`     | string | no       | Why you are rejecting it (recorded on the proposal). Always give one.                                                                                                                                                                                                                                                                    |
 | `reasonCode` | enum   | no       | Optional structured cause, one of the fixed set — recorded alongside `reason` and fed to the calibration/scorecard loop. Use `other` (or omit) when none fits and rely on the free-text `reason`. One of: `wrong_entity`, `duplicate`, `wrong_kind_or_facet`, `wrong_link_type`, `wrong_workspace`, `bad_data`, `not_relevant`, `other`. |
+
+## synap_request_deploy_approval
+
+**Request deploy approval** · Group: `governance` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+
+Ask the person to approve shipping ONE verified commit — the dev loop's deploy gate. Files a `dev.deploy_approval` proposal on your session: it is ALWAYS a proposal (`status: 'proposed'` is the success outcome), and only the person can approve it — there is no approve tool. Call it after the gate passed on the exact commit you will ship, with that commit's full sha, the gate's headline (`gateReport`), where it goes (`targetHost`) and the command you will run (`deployCommand`, shown to the reviewer; the pod never runs it). On approval the session records the decision (who, when, which commit) and moves past its deploy stage; then you deploy that commit and nothing else. Rejected, or a new commit since: fix, re-run the gate and ask again. Refused (`error`) when the session is not yours or the payload is malformed — read the message and resend.
+
+| Parameter       | Type   | Required | Description                                                                              |
+| --------------- | ------ | -------- | ---------------------------------------------------------------------------------------- |
+| `sessionId`     | string | yes      | Your focus session (UUID) — the one the work happened in.                                |
+| `repo`          | string | yes      | Repository the commit is in (path or slug).                                              |
+| `branch`        | string | yes      | Branch of the commit.                                                                    |
+| `commitSha`     | string | yes      | The exact commit to ship — hex git object id (7–64 chars; send the full sha).            |
+| `gateReport`    | object | yes      | Headline of the verification that passed on THIS commit — the evidence the ask rests on. |
+| `targetHost`    | string | yes      | Human label of the deploy target, e.g. 'pod-prod (eve)'.                                 |
+| `deployCommand` | string | yes      | The command you will run once approved. Disclosure only — the pod never executes it.     |
 
 ## synap_find
 
