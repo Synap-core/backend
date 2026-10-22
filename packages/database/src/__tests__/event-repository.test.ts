@@ -4,17 +4,14 @@
  * Test suite for the EventRepository using the correct SynapEvent API.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { sql } from "../client-pg.js";
 import { eventRepository } from "../repositories/event-repository.js";
 import type { SynapEvent } from "@synap-core/core";
-import { cleanTestData, generateTestUserId } from "./test-utils.js";
+import { generateTestUserId } from "./test-utils.js";
 
+// Each test writes under its own generated user id; setup.ts removes them.
 describe("EventRepository", () => {
-  beforeEach(async () => {
-    await cleanTestData();
-  });
-
   describe("append", () => {
     it("should append event successfully", async () => {
       const userId = generateTestUserId();

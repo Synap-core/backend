@@ -5,20 +5,11 @@
  * Validates HNSW index performance, user isolation, and search relevance.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect } from "vitest";
 import { sql } from "../index.js";
 import { generateTestUserId } from "./test-utils.js";
 
 describe("VectorRepository", () => {
-  beforeAll(async () => {
-    // Clean test data
-    await sql`DELETE FROM entity_vectors WHERE user_id LIKE 'test-%'`;
-  });
-
-  afterAll(async () => {
-    await sql`DELETE FROM entity_vectors WHERE user_id LIKE 'test-%'`;
-  });
-
   describe("embedding storage", () => {
     it("should store embedding vector", async () => {
       const userId = generateTestUserId();

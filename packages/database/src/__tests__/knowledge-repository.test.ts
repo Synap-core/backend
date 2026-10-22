@@ -5,19 +5,11 @@
  * Validates fact creation, querying, and user isolation.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect } from "vitest";
 import { sql } from "../index.js";
 import { generateTestUserId } from "./test-utils.js";
 
 describe("KnowledgeRepository", () => {
-  beforeAll(async () => {
-    await sql`DELETE FROM knowledge_facts WHERE user_id LIKE 'test-%'`;
-  });
-
-  afterAll(async () => {
-    await sql`DELETE FROM knowledge_facts WHERE user_id LIKE 'test-%'`;
-  });
-
   describe("fact storage", () => {
     it("should store knowledge fact successfully", async () => {
       const userId = generateTestUserId();
