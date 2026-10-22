@@ -211,7 +211,9 @@ describe.skipIf(!dbAvailable)(
       const other = await caller().create({
         sourceEntityId: SRC,
         targetEntityId: TGT,
-        type: "depends_on",
+        // A plain relation type: `depends_on` / `blocks` became THE dependency
+        // edge (relations.ts), not a relations row.
+        type: "references",
         workspaceId: WS,
       });
       expect(other.status).toBe("created");

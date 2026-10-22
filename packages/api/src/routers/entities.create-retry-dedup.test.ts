@@ -41,6 +41,7 @@ import {
 } from "@synap/database";
 import { seedBootData } from "../__tests__/seed-boot-data.js";
 import { entitiesRouter } from "./entities.js";
+import { idempotencyWindowSeconds } from "../utils/write-door-idempotency.js";
 
 const USER = "e0000000-0000-4000-8000-0000000000a1";
 const AGENT_USER = "e0000000-0000-4000-8000-0000000000a2";
@@ -176,6 +177,51 @@ describe.skipIf(!dbAvailable)(
         ),
       });
       expect(rows.length).toBe(1);
+    });
+
+    // The exact retry answers before the same-name gate (founder decision
+    // 2026-10-22). A NEAR retry must not ride that: it still meets the gate.
+    it("a NEAR retry (a different body) still meets the same-name CONFLICT", async () => {
+      const caller = entitiesRouter.createCaller({
+        authenticated: true,
+        userId: USER,
+        workspaceId: WS,
+      } as never);
+      await expect(
+        caller.create({
+          profileSlug: "note",
+          title: TITLE,
+          properties: { content: "not the same body" },
+          targetWorkspaceId: WS,
+          agentUserId: AGENT_USER,
+          source: "agent",
+        })
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("an identical write OUTSIDE the idempotency window still meets the same-name CONFLICT", async () => {
+      // Age the earlier write past the window: it is no longer a retry.
+      await db
+        .update(entities)
+        .set({
+          createdAt: drizzleSql`now() - (${idempotencyWindowSeconds() + 60}::int * interval '1 second')`,
+        })
+        .where(and(eq(entities.workspaceId, WS), eq(entities.title, TITLE)));
+      const caller = entitiesRouter.createCaller({
+        authenticated: true,
+        userId: USER,
+        workspaceId: WS,
+      } as never);
+      await expect(
+        caller.create({
+          profileSlug: "note",
+          title: TITLE,
+          properties: { content: "same body" },
+          targetWorkspaceId: WS,
+          agentUserId: AGENT_USER,
+          source: "agent",
+        })
+      ).rejects.toMatchObject({ code: "CONFLICT" });
     });
 
     it("a genuinely different write is NOT deduped — creates a second row", async () => {
