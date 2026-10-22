@@ -22,7 +22,11 @@ import {
   type NeedsYouAccessRequest,
   type NeedsYouRow,
 } from "../needs-you/index.js";
-import { resolveUnitState, type UnitStateInput } from "../units/state.js";
+import {
+  resolveUnitState,
+  type UnitStateInput,
+  type UnitTone,
+} from "../units/state.js";
 import {
   pathRowSessionFact,
   sessionRowInput,
@@ -969,4 +973,17 @@ export interface LensOutput {
   byAgent: boolean;
   /** Declared, not produced yet: the dashed card. */
   expected: boolean;
+  /**
+   * Where the object stands in its kind's lifecycle, as a MARK (words + a
+   * tone token — never a colour). Absent ⇒ no lifecycle, or not sent.
+   */
+  status?: LensOutputStatus;
+}
+
+/** A produced object's lifecycle status, ready to draw (`lensOutputOfSignal`). */
+export interface LensOutputStatus {
+  /** The option key — the badge's status token. */
+  key: string;
+  label: string;
+  tone: UnitTone;
 }
