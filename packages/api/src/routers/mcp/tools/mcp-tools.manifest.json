@@ -123,6 +123,10 @@
           "threadId": {
             "type": "string",
             "description": "Channel/thread UUID"
+          },
+          "limit": {
+            "type": "number",
+            "description": "Newest messages to return, 1-100 (default 50). Ask for a few when you only need the latest turn."
           }
         },
         "required": ["threadId"]
