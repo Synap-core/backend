@@ -148,7 +148,10 @@ const SELF_GRANT_DOORS: Record<string, { reaches: string[]; why: string }> = {
     why: "the caller becomes the owner of the space they just made",
   },
   "packages/api/src/routers/workspaces/invites.ts acceptInvite": {
-    reaches: ["WorkspaceMemberRepository.add"],
+    // backend#53 moved the membership write into the one accept door
+    // `acceptInviteFor` (shared with the console's /setup/accept-invite),
+    // which adds only the user it is handed: here `ctx.userId`.
+    reaches: ["acceptInviteFor"],
     why: "the caller joins with an invitation addressed to their own email",
   },
   "packages/api/src/routers/shares.ts redeemLink": {
