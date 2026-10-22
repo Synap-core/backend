@@ -42,7 +42,6 @@ const SECRET_PATH_PATTERNS: ReadonlyArray<RegExp> = [
   /(\/public\/[^/?#]+\/)([^/?#]+)/gi,
   // Invite link on the pod host (`invite-bounce.ts`) — the token IS the
   // invitation.
-  /(\/invite\/)([^/?#]+)/gi,
 ];
 
 /** `[redacted]` keeps the segment countable in a log without being replayable. */

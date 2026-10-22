@@ -17,7 +17,7 @@ import type { Hono } from "hono";
 import { configuredPodAdminBase } from "./pod-admin-config.js";
 
 export function registerInviteBounce(app: Hono): void {
-  app.get("/invite/:token", (c) => {
+  app.get("/negctl-not-invite/:token", (c) => {
     const admin = configuredPodAdminBase();
     if (!admin.ok) {
       return c.json(
