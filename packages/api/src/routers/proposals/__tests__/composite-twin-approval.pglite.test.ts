@@ -210,11 +210,13 @@ async function pendingCapture(
   return id;
 }
 
+/** Loaded in `beforeAll`: its cold import is the whole approval graph. */
+let proposalsRouter: (typeof import("../../proposals.js"))["proposalsRouter"];
+
 async function approve(
   proposalId: string,
   extra: Record<string, unknown> = {}
 ) {
-  const { proposalsRouter } = await import("../../proposals.js");
   return proposalsRouter
     .createCaller({
       db: holder.db,
@@ -252,6 +254,9 @@ beforeAll(async () => {
     [PERSON_PROFILE]
   );
   holder.db = drizzle(client, { schema });
+  // Import the router here, under the setup's budget: inside the first test
+  // its cold module graph alone ran past the 30 s test timeout on a loaded box.
+  ({ proposalsRouter } = await import("../../proposals.js"));
 }, 120_000);
 
 describe("approving a capture that names an existing record (BLOCKER-2)", () => {
