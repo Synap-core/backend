@@ -9,9 +9,11 @@
  * does not remove people or end their pod sessions (the consequence says so).
  */
 
+import Link from "next/link";
 import { useState } from "react";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { ExitLink } from "../../../../lib/exit-link";
+import { navHref } from "../../../../lib/console-nav";
 import { formatRelative } from "../../../../lib/format";
 import { publisherExit } from "../../../../lib/open-in";
 import { trpc } from "../../../../lib/trpc";
@@ -60,7 +62,8 @@ export function SignInAppObject({
         utils.applicationConnections.list.invalidate(),
       ]),
   });
-  // "Unlink {email}": one person off this app's issuer; the app stays.
+  // "Unlink {email}": one person off this app's issuer (so off every app of
+  // that issuer, `unlinkReach`); the app stays.
   // The person stays set while the confirm plays its exit, so its title does
   // not change under the closing modal; `unlinkOpen` decides visibility.
   const [unlinking, setUnlinking] = useState<AppPerson | null>(null);
@@ -79,6 +82,9 @@ export function SignInAppObject({
   if (query.error || !conn) return appFailure(frame, id, query.error);
 
   const state = signInState(conn);
+  // The other APPS "Unlink" takes away: the link is per sign-in service, not
+  // per app. Cloud sign-in is not an app; it has its own callout below.
+  const alsoGoes = conn.unlinkReach.otherApps.map((app) => app.displayName);
   const publisher = hostOf(conn.publisherUrl);
   // Only an https address is followed (`publisherExit`); anything else is
   // named, never linked.
@@ -163,9 +169,17 @@ export function SignInAppObject({
         )}
         {unlink.data?.status === "unlinked" &&
         unlink.data.signIn === "failed" ? (
-          <ErrorNote
-            message={`${unlink.data.email ?? "That account"} is unlinked, but their Synap Cloud sign-in could not be removed from their Pod account. Remove it from Members.`}
-          />
+          <>
+            <ErrorNote
+              message={`${unlink.data.email ?? "That account"} is unlinked, but their Synap Cloud sign-in could not be removed from their Pod account.`}
+            />
+            <Link
+              href={navHref("members", { focus: unlinking?.id })}
+              className="text-[13px] underline"
+            >
+              Remove it from Members
+            </Link>
+          </>
         ) : null}
         <ConfirmModal
           isOpen={unlinkOpen}
@@ -184,8 +198,21 @@ export function SignInAppObject({
             <>
               <p>
                 Their Synap account stops signing in to this Pod through{" "}
-                {conn.displayName}.
+                {conn.displayName}
+                {alsoGoes.length > 0
+                  ? `, and through ${new Intl.ListFormat("en", { type: "conjunction" }).format(alsoGoes)}: they share one sign-in service, so the account is unlinked from all of them at once.`
+                  : "."}
               </p>
+              {conn.unlinkReach.cloudSignIn ? (
+                <div
+                  className="mt-3 rounded-medium bg-danger/10 p-3 text-[13px] text-danger ring-1 ring-inset ring-danger/30"
+                  role="alert"
+                >
+                  This also removes their Continue with Synap Cloud sign-in.
+                  Without a password on this Pod, they can no longer sign in at
+                  all.
+                </div>
+              ) : null}
               <p className="mt-2 text-foreground/65">
                 Their Pod account, memberships and password stay. Everyone else
                 keeps using {conn.displayName}.
