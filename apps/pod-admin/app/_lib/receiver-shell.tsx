@@ -26,6 +26,7 @@
 
 import { Card } from "@heroui/react";
 import { createContext, useContext, type ReactNode } from "react";
+import { HostName } from "./host-name";
 
 /**
  * Pod identity for a receiver page, provided once per route.
@@ -165,19 +166,17 @@ function ReceiverHeader({
         >
           <span className="text-[9px] font-semibold text-white/95">S</span>
         </span>
-        <span className="text-[13px] font-medium tracking-tight text-foreground">
+        <span className="text-sm font-medium tracking-tight text-foreground">
           Synap
         </span>
       </span>
 
       {podHost && (
-        <span className="font-mono text-[12px] text-foreground/75">
-          {podHost}
-        </span>
+        <HostName host={podHost} className="text-xs text-foreground/75" />
       )}
 
       {identity && (
-        <span className="ml-auto truncate text-[12px] text-foreground/65">
+        <span className="ml-auto min-w-0 truncate text-xs text-foreground/65">
           Signed in as <span className="text-foreground/80">{identity}</span>
         </span>
       )}

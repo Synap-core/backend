@@ -11,7 +11,12 @@
 import { describe, it, expect } from "vitest";
 import type { ExpectedOutput } from "@synap/playbooks";
 import {
+  deriveOpenBlockers,
+  type DependencyNodeState,
+} from "@synap-core/types/connections";
+import {
   deriveNextMove,
+  type NextMoveBlockers,
   type PacketChildItem,
   type PacketOutputItem,
   type PacketProposalItem,
@@ -35,6 +40,37 @@ const session = (status: string, title = "Ship pricing"): PacketChildItem => ({
   status,
   statusLabel: status[0]!.toUpperCase() + status.slice(1),
 });
+/**
+ * What holds the session up, derived by THE dependency rule from the blockers'
+ * own states — never a hand-built `OpenBlocker`, so a fixture cannot claim a
+ * blocker the rule would have cleared (or the reverse).
+ */
+const blockers = (
+  ...list: Array<{ kind?: string; id?: string } & DependencyNodeState>
+): NextMoveBlockers => {
+  const refs = list.map((b, i) => ({
+    kind: b.kind ?? "session",
+    id: b.id ?? `s-${b.status}-${i}`,
+    state: b,
+  }));
+  return {
+    status: "ok",
+    items: deriveOpenBlockers(
+      { kind: "session", id: "self" },
+      refs.map((r) => ({
+        fromType: "session",
+        fromId: "self",
+        toType: r.kind,
+        toId: r.id,
+        linkType: "blocked_by",
+      })),
+      (ref) => refs.find((r) => r.kind === ref.kind && r.id === ref.id)?.state
+    ),
+  };
+};
+const blocker = (status: string, title = "Ship pricing") =>
+  blockers({ id: `s-${status}`, status, title });
+
 const output: PacketOutputItem = {
   kind: "document",
   refId: "d-1",
@@ -57,7 +93,7 @@ function input(over: Partial<Parameters<typeof deriveNextMove>[0]> = {}) {
     owedSlots: ok<PacketSlotItem>([]),
     pendingProposals: ok<PacketProposalItem>([]),
     aiCanDo: ok<PacketSlotItem>([]),
-    blockedBy: ok<PacketChildItem>([]),
+    blockers: blockers(),
     expectedOutputs: [] as ExpectedOutput[],
     outputs: ok<PacketOutputItem>([]),
     children: ok<PacketChildItem>([]),
@@ -203,7 +239,7 @@ describe("deriveNextMove", () => {
 
   it("blocked by an OPEN session waits on it, naming the blocker", () => {
     const move = deriveNextMove(
-      input({ expectedOutputs: [doneSlot], blockedBy: ok([session("active")]) })
+      input({ expectedOutputs: [doneSlot], blockers: blocker("active") })
     );
     expect(move).toMatchObject({
       kind: "waiting_on_session",
@@ -214,9 +250,9 @@ describe("deriveNextMove", () => {
   });
 
   it("an empty session blocked by an open session waits rather than reading undeclared", () => {
-    expect(
-      deriveNextMove(input({ blockedBy: ok([session("paused")]) })).kind
-    ).toBe("waiting_on_session");
+    expect(deriveNextMove(input({ blockers: blocker("paused") })).kind).toBe(
+      "waiting_on_session"
+    );
   });
 
   it("a waiting session outranks open agent slots", () => {
@@ -225,25 +261,81 @@ describe("deriveNextMove", () => {
         input({
           expectedOutputs: [doneSlot],
           aiCanDo: ok([{ label: "Draft brief", kind: "document" }]),
-          blockedBy: ok([session("active")]),
+          blockers: blocker("active"),
         })
       ).kind
     ).toBe("waiting_on_session");
   });
 
-  it.each(["closed", "cancelled", "failed", "stale"])(
-    "a blocker that is %s has settled and does not block",
+  it("a CLOSED blocker delivered and does not block", () => {
+    expect(
+      deriveNextMove(
+        input({ expectedOutputs: [doneSlot], blockers: blocker("closed") })
+      ).kind
+    ).toBe("ready_to_close");
+  });
+
+  /**
+   * FOUNDER DECISION (2026-10-22): a blocker that ENDED WITHOUT DELIVERING
+   * does not clear. The rule this replaces read `cancelled` / `failed` exactly
+   * like `closed` — `ready_to_close` here, i.e. "accept work built on a
+   * prerequisite that never happened". Discriminating on kind AND actor: the
+   * re-plan is the AI's move, never the person's acceptance.
+   */
+  it.each(["cancelled", "failed"])(
+    "a blocker that ended %s is DROPPED: re-plan, naming it, never ready to close",
     (status) => {
-      expect(
-        deriveNextMove(
-          input({
-            expectedOutputs: [doneSlot],
-            blockedBy: ok([session(status)]),
-          })
-        ).kind
-      ).toBe("ready_to_close");
+      const move = deriveNextMove(
+        input({ expectedOutputs: [doneSlot], blockers: blocker(status) })
+      );
+      expect(move).toMatchObject({
+        kind: "blocker_dropped",
+        actor: "ai",
+        sessionId: `s-${status}`,
+      });
+      expect(move.label).toContain("Ship pricing");
+      expect(move.reason).toMatch(/without delivering/);
     }
   );
+
+  it("a dropped blocker outranks an open one and open agent slots", () => {
+    expect(
+      deriveNextMove(
+        input({
+          aiCanDo: ok([{ label: "Draft brief", kind: "document" }]),
+          blockers: blockers(
+            { id: "b-open", status: "active", title: "Still going" },
+            { id: "b-gone", status: "cancelled", title: "Never happened" }
+          ),
+        })
+      )
+    ).toMatchObject({ kind: "blocker_dropped", sessionId: "b-gone" });
+  });
+
+  it("a dropped NON-session blocker re-plans too, without a session door", () => {
+    const move = deriveNextMove(
+      input({
+        expectedOutputs: [doneSlot],
+        blockers: blockers({
+          kind: "track",
+          id: "t-1",
+          status: "archived",
+          title: "Pricing track",
+        }),
+      })
+    );
+    expect(move).toMatchObject({ kind: "blocker_dropped", actor: "ai" });
+    expect(move.sessionId).toBeUndefined();
+  });
+
+  // `stale` is resumable, not ended: it still holds — as WAITING, not dropped.
+  it("a STALE blocker still holds the session (waiting, not dropped)", () => {
+    expect(
+      deriveNextMove(
+        input({ expectedOutputs: [doneSlot], blockers: blocker("stale") })
+      ).kind
+    ).toBe("waiting_on_session");
+  });
 
   it("declared work done but an OPEN sub-session waits on it, naming the child", () => {
     const move = deriveNextMove(
@@ -288,15 +380,18 @@ describe("deriveNextMove", () => {
       deriveNextMove(
         input({
           owedSlots: ok([{ label: "Stripe key", kind: "credential" }]),
-          blockedBy: ok([session("active")]),
+          blockers: blocker("active"),
         })
       ).kind
     ).toBe("owed_slot");
   });
 
-  it("a failed blockedBy read is unknown, never silently unblocked", () => {
+  it("a failed blockers read is unknown, never silently unblocked", () => {
     const move = deriveNextMove(
-      input({ expectedOutputs: [doneSlot], blockedBy: down("could not read") })
+      input({
+        expectedOutputs: [doneSlot],
+        blockers: { status: "unavailable", reason: "could not read" },
+      })
     );
     expect(move.kind).toBe("unknown");
     expect(move.reason).toContain("could not read");
@@ -311,7 +406,7 @@ describe("deriveNextMove", () => {
       deriveNextMove(
         input({
           status: "closed",
-          blockedBy: ok([session("active")]),
+          blockers: blocker("active"),
           children: ok([session("active", "Detour")]),
         })
       ).kind
