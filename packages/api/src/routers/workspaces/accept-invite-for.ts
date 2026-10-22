@@ -1,15 +1,14 @@
 /**
  * `acceptInviteFor` — the ONE door that turns an accepted invite into access.
  *
- * Three callers decide WHO accepts and refuse what they must (unknown, expired,
+ * Two callers decide WHO accepts and refuse what they must (unknown, expired,
  * another email), each in its own error shape:
  *   - `workspaces.acceptInvite` (tRPC): a person signed in on the pod;
- *   - `workspaces.acceptInviteViaCp` (tRPC): the CP vouches for the email;
  *   - `POST /api/hub/setup/accept-invite` (REST): the console's
  *     "Create account and join", right after it made the account.
  * Before this door the REST path wrote bare `workspace_members` rows: no member
  * events, no `pod_members` row, no team-person bridge, no audit line, and the
- * CP's invite row stayed pending forever. All three now call this.
+ * CP's invite row stayed pending forever. Both now call this.
  *
  * Kept from the access rules it must not bend (console-security #72): a pod
  * invite fans out over ORDINARY spaces only (`listPodInviteFanOutWorkspaceIds`,
@@ -47,8 +46,7 @@ export type InviteAccepted =
  */
 export async function acceptInviteFor(
   invite: InviteRow,
-  user: { id: string; email?: string | null },
-  opts: { source?: "cp-proxy" } = {}
+  user: { id: string; email?: string | null }
 ): Promise<InviteAccepted> {
   const dbConn = await getDb();
   // Shared singleton — a fresh EventRepository has no registered hooks, so
@@ -93,7 +91,6 @@ export async function acceptInviteFor(
         role: invite.role,
         invitedBy: invite.invitedBy,
         inviteId: invite.id,
-        ...(opts.source ? { source: opts.source } : {}),
       },
     });
     return true;

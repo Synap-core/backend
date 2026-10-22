@@ -1,6 +1,7 @@
 # Runs synap-update.service when an update request appears (contract: the
-# REQUEST CONTRACT comment above _ue_unattended_plan in `synap`). The engine
-# takes the file before running, so this can never loop. Template: synap units install.
+# REQUEST CONTRACT comment above _ue_unattended_plan in `synap`).
+# synap-update.service takes the file (ExecStartPre) before the engine runs,
+# so this cannot loop even when the engine dies early. Template: synap units install.
 [Unit]
 Description=Synap pod update requests
 

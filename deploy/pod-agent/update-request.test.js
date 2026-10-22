@@ -152,6 +152,17 @@ test("collect: nothing until the host records THIS request", () => {
   );
 });
 
+test("collect: a unit-recorded outcome keeps its by:unit mark for the CP", () => {
+  const d = dirs();
+  queueUpdateRequest({ ...d, commandId: "cmd-1", payload: ORDER });
+  record(d, "failed", { by: "unit" });
+  const out = collectUpdateOutcome(d);
+  assert.equal(out.result.code, "UPDATE_ENGINE_STOPPED");
+  assert.equal(out.result.data.record.by, "unit");
+  record(d, "rolled_back");
+  assert.equal("by" in collectUpdateOutcome(d).result.data.record, false);
+});
+
 test("collect: each host outcome maps to its CP result; settle forgets the order", () => {
   const cases = [
     ["succeeded", { status: "completed", version: "main-abc1234" }],
@@ -160,6 +171,8 @@ test("collect: each host outcome maps to its CP result; settle forgets the order
     ["rolled_back", { status: "rolled_back", code: "UPDATE_ROLLED_BACK" }],
     ["aborted", { status: "rolled_back", code: "UPDATE_NOT_APPLIED" }],
     ["rollback_failed", { status: "failed", code: "UPDATE_ROLLBACK_FAILED" }],
+    // The unit's own record (request-outcome.sh): the engine never answered.
+    ["failed", { status: "failed", code: "UPDATE_ENGINE_STOPPED" }],
     ["something-new", { status: "failed", code: "UPDATE_FAILED" }],
   ];
   for (const [hostStatus, want] of cases) {
