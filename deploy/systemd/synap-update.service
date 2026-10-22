@@ -23,6 +23,13 @@ Environment=SYNAP_ASSUME_YES=1
 Environment=SYNAP_REQUEST_PRETAKEN=1
 ExecStartPre=/bin/sh -c 'r="$${SYNAP_DEPLOY_DIR}/state/requests"; rm -f "$$r/update.taken.json"; [ ! -e "$$r/update.json" ] || mv -f "$$r/update.json" "$$r/update.taken.json"'
 ExecStart=@SYNAP@ update --unattended
+# A request taken here but never answered (the engine died before recording
+# an outcome) still gets one, so pod-agent and the CP never wait on it.
+# No StartLimit*= override: with the request always taken first, a start
+# cannot repeat itself; if the take itself failed, systemd's default limit
+# failing synap-update.path is the loud outcome (synap doctor names a
+# request waiting > 10 min), where StartLimitIntervalSec=0 would spin.
+ExecStopPost=/bin/sh -c 'exec /bin/sh "$${SYNAP_DEPLOY_DIR}/request-outcome.sh" update'
 TimeoutStartSec=90min
 TimeoutStopSec=30min
 Nice=10

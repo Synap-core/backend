@@ -148,6 +148,15 @@ function outcomeResult(record) {
         error: reason,
         data,
       };
+    case "failed":
+      // The unit recorded it: the engine stopped before answering the request
+      // (deploy/request-outcome.sh). Whether anything changed is not known.
+      return {
+        status: "failed",
+        code: "UPDATE_ENGINE_STOPPED",
+        error: reason,
+        data,
+      };
     case "rollback_failed":
       return {
         status: "failed",

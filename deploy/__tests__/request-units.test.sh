@@ -20,6 +20,9 @@
 #      update refuses an invalid one and records its id. One run each.
 #   C. a start with no request (the update timer): a taken file left by an
 #      older run is dropped, never run again.
+#   ExecStopPost=: a request the engine never answered (A) gets a terminal
+#      "failed" outcome the waiting side reads; one the engine answered (B)
+#      is left exactly as the engine wrote it.
 # NOT covered: systemd's own start-limit accounting and inotify (measured on the
 # devbox, above), ExecStopPost/Restart= (none are used).
 set -u
@@ -59,8 +62,12 @@ activate() { # <service file> — what systemd does for one start
   ( cd /
     while IFS= read -r kv; do export "${kv?}"; done < <(field "$1" Environment)
     export PATH="$TMP/bin:$PATH"
-    while IFS= read -r c; do [ -n "$c" ] && { eval "${c//\$\$/\$}" || exit 1; }; done < <(field "$1" ExecStartPre)
-    eval "$(field "$1" ExecStart)"
+    rc=0; result=success
+    while IFS= read -r c; do [ -n "$c" ] && { eval "${c//\$\$/\$}" || { rc=$?; result=exit-code; break; }; }; done < <(field "$1" ExecStartPre)
+    if [ "$result" = success ]; then eval "$(field "$1" ExecStart)" || { rc=$?; result=exit-code; }; fi
+    # ExecStopPost= runs after every start, told how it ended (systemd.exec(5))
+    export SERVICE_RESULT="$result" EXIT_CODE=exited EXIT_STATUS="$rc"
+    while IFS= read -r c; do [ -n "$c" ] && eval "${c//\$\$/\$}"; done < <(field "$1" ExecStopPost)
   ) >>"$S/runs.out" 2>&1 </dev/null
   RUNS=$((RUNS + 1))
 }
@@ -92,6 +99,11 @@ for p in $paths; do
   [ "$RUNS" = 1 ] && [ ! -e "$REQ/$name.json" ] && [ "$(jq -r .id "$REQ/$name.taken.json" 2>/dev/null)" = a1 ] \
     && ok "die[$name]: the engine exits 1 at once → ONE run, the request was taken (no restart loop)" \
     || bad "die[$name]: $RUNS runs (6 = the loop), request left=$([ -e "$REQ/$name.json" ] && echo yes || echo no)"
+  case "$name" in update) latest="$DEPLOY/state/last-update.json" ;; *) latest="$DEPLOY/state/last-$name-request.json" ;; esac
+  jq -e '.status == "failed" and .request == "a1" and (.reason | test("stopped before recording an outcome.*exit-code exited 1"))' "$latest" >/dev/null 2>&1 \
+    && grep -q '"request":"a1"' "$DEPLOY/state/events.jsonl" \
+    && ok "die[$name]: the waiting side still gets a terminal outcome for a1 (failed, naming how the engine ended)" \
+    || bad "die[$name]: no terminal outcome for the taken request: $(cat "$latest" 2>/dev/null)"
 
   # C. no request (a timer start): an older run's taken file is never run again
   setup "none-$name"
@@ -107,13 +119,15 @@ setup real-compose
 echo '{"schema":1,"id":"c1","services":["kratos"],"recreate":true}' > "$REQ/compose.json"
 watch synap-compose.path
 [ "$RUNS" = 1 ] && [ "$(jq -r '.status + "|" + .request' "$DEPLOY/state/last-compose-request.json" 2>/dev/null)" = "succeeded|c1" ] \
-  && ok "real[compose]: the engine runs the pre-taken request c1 to 'succeeded', in one run" \
+  && [ "$(grep -c '"request":"c1"' "$DEPLOY/state/events.jsonl")" = 1 ] \
+  && ok "real[compose]: the engine runs the pre-taken request c1 to 'succeeded', in one run (its own outcome kept, nothing added)" \
   || { bad "real[compose]: runs=$RUNS record=$(cat "$DEPLOY/state/last-compose-request.json" 2>/dev/null)"; tail -5 "$S/runs.out"; }
 setup real-update
 echo '{"schema":1,"id":"u1","release":"latest"}' > "$REQ/update.json"
 watch synap-update.path
 [ "$RUNS" = 1 ] && jq -e '.status == "aborted" and .request == "u1" and (.reason | test("invalid update request u1"))' "$DEPLOY/state/last-update.json" >/dev/null 2>&1 \
-  && ok "real[update]: the engine reads the pre-taken request u1 and refuses it (release 'latest'), recorded, one run" \
+  && [ "$(grep -c '"request":"u1"' "$DEPLOY/state/events.jsonl")" = 1 ] \
+  && ok "real[update]: the engine reads the pre-taken request u1 and refuses it (release 'latest'), recorded once, one run" \
   || { bad "real[update]: runs=$RUNS record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; tail -5 "$S/runs.out"; }
 
 exit $fail

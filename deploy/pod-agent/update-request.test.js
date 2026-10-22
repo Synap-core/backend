@@ -160,6 +160,8 @@ test("collect: each host outcome maps to its CP result; settle forgets the order
     ["rolled_back", { status: "rolled_back", code: "UPDATE_ROLLED_BACK" }],
     ["aborted", { status: "rolled_back", code: "UPDATE_NOT_APPLIED" }],
     ["rollback_failed", { status: "failed", code: "UPDATE_ROLLBACK_FAILED" }],
+    // The unit's own record (request-outcome.sh): the engine never answered.
+    ["failed", { status: "failed", code: "UPDATE_ENGINE_STOPPED" }],
     ["something-new", { status: "failed", code: "UPDATE_FAILED" }],
   ];
   for (const [hostStatus, want] of cases) {
