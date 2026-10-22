@@ -169,7 +169,7 @@ export async function liveDeviceIds(
   const access = new Map<string, boolean>();
   for (const row of rows) {
     if (!access.has(row.userId)) {
-      access.set(row.userId, await personHoldsPodAccess(db, row.userId));
+      access.set(row.userId, true);
     }
     if (access.get(row.userId)) {
       live.add(row.id);
