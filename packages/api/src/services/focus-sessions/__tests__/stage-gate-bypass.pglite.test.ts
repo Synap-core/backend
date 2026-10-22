@@ -120,6 +120,7 @@ import { updateFocusSession } from "../update-session.js";
 import { registerPlaybookStageGateExecutors } from "../../../routers/proposals/executors/playbook-stage-gate.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
+import { devApprovalHandlers } from "../../../routers/mcp/handlers/dev-approval.js";
 import type {
   HubHono,
   HubVariables,
@@ -741,5 +742,102 @@ describe("provenance stamps are the server's — no client forges who did what",
     const stored = (await readRow(sessionId)).metadata;
     expect(stored[key]).toBeUndefined();
     expect(stored.note).toBe("kept");
+  });
+});
+
+describe("synap_request_deploy_approval — an agent FILES the deploy gate, never passes it", () => {
+  const SHA = "0123456789abcdef0123456789abcdef01234567";
+  const call = (args: Record<string, unknown>) =>
+    devApprovalHandlers.synap_request_deploy_approval!({
+      toolName: "synap_request_deploy_approval",
+      args,
+      userId: USER,
+      agentUserId: AGENT,
+      apiKeyScopes: ["mcp.read", "mcp.write"],
+    } as never);
+  const body = (r: { content: unknown[] }) =>
+    JSON.parse((r.content[0] as { text?: string }).text ?? "{}") as Record<
+      string,
+      unknown
+    >;
+  const deployArgs = (sessionId: string) => ({
+    sessionId,
+    repo: "synap-backend",
+    branch: "main",
+    commitSha: SHA,
+    gateReport: { passed: true, summary: "tsc 0, vitest green" },
+    targetHost: "pod-prod",
+    deployCommand: "./deploy.sh",
+  });
+
+  it("files a pending dev.deploy_approval on the agent's session", async () => {
+    const playbookId = await seedPlaybook();
+    const sessionId = await seedSession(playbookId);
+
+    const res = body(await call(deployArgs(sessionId)));
+
+    expect(res).toMatchObject({ status: "proposed", sessionId });
+    const rows = (
+      await q<{
+        proposal_type: string;
+        status: string;
+        data: Record<string, unknown>;
+      }>(
+        `select proposal_type, status, data from proposals where target_id = $1`,
+        [sessionId]
+      )
+    ).rows;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      proposal_type: "dev.deploy_approval",
+      status: "pending",
+      data: { commitSha: SHA, changeType: "deploy_approval" },
+    });
+    // Filing is not passing: the session records no approval.
+    expect((await readRow(sessionId)).metadata.devLoop).toBeUndefined();
+  });
+
+  it("is reachable through the MCP dispatch (registered in TOOL_HANDLERS)", async () => {
+    const { executeMCPToolViaHubProtocol } =
+      await import("../../../routers/mcp/adapter.js");
+    const playbookId = await seedPlaybook();
+    const sessionId = await seedSession(playbookId);
+
+    const res = body(
+      await executeMCPToolViaHubProtocol(
+        "synap_request_deploy_approval",
+        deployArgs(sessionId),
+        USER,
+        ["mcp.read", "mcp.write"],
+        undefined,
+        AGENT
+      )
+    );
+
+    expect(res).toMatchObject({ status: "proposed", sessionId });
+  });
+
+  it("another person's session is NOT FOUND — nothing is filed", async () => {
+    const playbookId = await seedPlaybook();
+    const sessionId = await seedSession(playbookId, { owner: "user-2" });
+
+    const res = body(await call(deployArgs(sessionId)));
+
+    expect(res.error).toMatch(/not found/);
+    expect(
+      (await q(`select id from proposals where target_id = $1`, [sessionId]))
+        .rows
+    ).toHaveLength(0);
+  });
+
+  it("a malformed payload is refused naming the field", async () => {
+    const playbookId = await seedPlaybook();
+    const sessionId = await seedSession(playbookId);
+
+    const res = body(
+      await call({ ...deployArgs(sessionId), commitSha: "not-a-sha" })
+    );
+
+    expect(res.error).toMatch(/commitSha/);
   });
 });
