@@ -67,6 +67,7 @@ import {
   resolveLandedDecisionView,
   type LandedObjectRow,
 } from "@synap-core/types/landed";
+import { lensOutputOfSignal } from "@synap-core/types/lens";
 import { outputsRouter } from "../../routers/outputs.js";
 import { focusSessionsRouter } from "../../routers/focus-sessions.js";
 import { proposalsRouter } from "../../routers/proposals.js";
@@ -612,6 +613,39 @@ describe("outputs.landed — objects that landed, pod-wide", () => {
       cursor = page.nextCursor ?? undefined;
     } while (cursor);
     expect(seen).toEqual(all);
+  });
+
+  it("an entity's lifecycle status rides on its row and reaches THE produced card as a mark", async () => {
+    // The truth is the column pair `moveStatus` writes; nothing else is read.
+    await q(
+      `update entities set status = 'won', status_category = 'done' where id = $1`,
+      [E_COMP]
+    );
+    try {
+      const items = (await landed({})).items;
+      const row = byRef(items, E_COMP);
+      expect(row.status).toEqual({ key: "won", category: "done" });
+      // No lifecycle on the row ⇒ no field at all, never a guessed status.
+      expect("status" in byRef(items, E_AUTO)).toBe(false);
+      // Signals' Produced carries the row verbatim (`signalFromLanded`); the
+      // lens model turns it into words + a tone token.
+      const card = lensOutputOfSignal({
+        id: `output:${row.id}`,
+        kind: "output",
+        title: row.title,
+        landed: row,
+      });
+      expect(card?.status).toEqual({
+        key: "won",
+        label: "Won",
+        tone: "success",
+      });
+    } finally {
+      await q(
+        `update entities set status = null, status_category = null where id = $1`,
+        [E_COMP]
+      );
+    }
   });
 
   it("errors throw — a hidden project, a bad cursor, a bad since — never an empty page", async () => {
