@@ -336,3 +336,47 @@ describe("a placeholder employer names no company", () => {
     expect(items[0]!.body).toContain("Company: Freelance");
   });
 });
+
+describe("a nameless row is kept only with a STRONG identity signal", () => {
+  // Live dry run (2026-10-22): 114 members who hid their profile (no name, no
+  // URL, only "Connected On") became same-name "Untitled" people, because the
+  // pod had a `connectedOn` property, so the date counted as "identifying".
+  const WITH_CONNECTED_ON: CsvProfileCatalogEntry[] = CATALOG.map((p) =>
+    p.slug === "person"
+      ? { ...p, propertySlugs: [...p.propertySlugs, "connectedOn", "role"] }
+      : p
+  );
+  const CSV = [
+    "First Name,Last Name,URL,Email Address,Company,Position,Connected On",
+    "Ada,Quillfeather,https://www.linkedin.com/in/ada-q,,Brindlewood Labs,CTO,03 Feb 2025",
+    // Only a date (on an EXISTING property) and a position: skipped.
+    ",,,,,Analyst,14 Jun 2021",
+    // No name, but an email: kept, as "Untitled".
+    ",,,eli@example.org,,,15 Jun 2021",
+  ].join("\n");
+
+  function run() {
+    const { headers, rows } = parseCsvTable(CSV);
+    const plan = refineCsvTablePlan({
+      plan: plannerPlan("contact"),
+      headers,
+      rows,
+      catalog: WITH_CONNECTED_ON,
+    });
+    return { plan, rows, items: csvRowsToTypedImportItems(rows, plan) };
+  }
+
+  it("the date column really lands on an existing property (the live shape)", () => {
+    const { plan } = run();
+    expect(
+      plan.columns.find((c) => c.header === "Connected On")?.routedTo
+    ).toBe("entity");
+  });
+
+  it("a row with only a date is skipped; a row with an email is kept as Untitled", () => {
+    const { rows, items } = run();
+    expect(rows).toHaveLength(3);
+    expect(items.map((i) => i.title)).toEqual(["Ada Quillfeather", "Untitled"]);
+    expect(items[1]!.metadata.email).toBe("eli@example.org");
+  });
+});
