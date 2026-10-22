@@ -35,6 +35,7 @@ interface OAuthConsentPageProps {
     resource?: string;
     max_age?: string;
     prompt?: string;
+    auth_req?: string;
   }>;
 }
 
@@ -65,6 +66,7 @@ export default async function OAuthConsentPage({
         resource: sp.resource,
         maxAge: sp.max_age,
         prompt: sp.prompt,
+        authRequest: sp.auth_req,
       }}
     />
   );

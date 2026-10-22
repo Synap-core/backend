@@ -9,6 +9,10 @@ import type { OpenAPIHono } from "@hono/zod-openapi";
 import type { Context } from "hono";
 import { createLogger } from "@synap-core/core";
 import { PG_UUID_RE, uuidParam } from "./_codecs/_openapi.js";
+import {
+  APP_PUBLIC_ID_PREFIX,
+  isAppPublicId,
+} from "@synap-core/types/membrane";
 import { TRPCError } from "@trpc/server";
 import { refusalCodeInCause } from "../../../utils/trpc-cause-code.js";
 import {
@@ -297,6 +301,29 @@ export function requireUuidParam(
   if (!isUuid(raw)) {
     return c.json(
       { error: `${name} is not a valid id: ${raw}` },
+      400
+    ) as unknown as Response;
+  }
+  return raw;
+}
+
+/**
+ * Guard a required PATH param that names an app by its PUBLIC id,
+ * `app_<uuid>` (minted by `AppRepository`; the CLI wire contract and the OAuth
+ * `client_id`), never the uuid PK. Same contract as `requireUuidParam`: the id,
+ * or a 400 `Response` naming the bad value, so a malformed id is a client
+ * error at the door instead of reading as "App not found".
+ *
+ * Usage: `const id = requireAppPublicIdParam(c, "id"); if (id instanceof Response) return id;`
+ */
+export function requireAppPublicIdParam(
+  c: Context<{ Variables: HubVariables }>,
+  name: string
+): string | Response {
+  const raw = c.req.param(name) ?? "";
+  if (!isAppPublicId(raw) || !isUuid(raw.slice(APP_PUBLIC_ID_PREFIX.length))) {
+    return c.json(
+      { error: `${name} is not a valid app id: ${raw}` },
       400
     ) as unknown as Response;
   }

@@ -459,7 +459,7 @@ export const secretsVaultRouter = router({
    *
    * Audit: writes a `revealed` row to secret_audit_log.
    */
-  reveal: protectedProcedure
+  reveal: credentialProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       // 1. Ownership check — reuses the same findById guard as get/update.

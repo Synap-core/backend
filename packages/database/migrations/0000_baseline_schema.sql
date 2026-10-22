@@ -327,6 +327,8 @@ ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "app_grant" jso
 -- 0340: the consenting session's real `authenticated_at`, which a Synap
 -- app's device takes as its step-up clock.
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "auth_time" timestamp with time zone;
+-- 0340: a Synap app's step-up code re-confirms a device, never makes one.
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "step_up" boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS "oauth_authorization_codes_expires_at_idx"
   ON "oauth_authorization_codes" ("expires_at");
 
