@@ -55,7 +55,8 @@ export interface DescribeEmbedInput {
   propsError?: string | null;
 }
 
-type ChartSnapshotModel = {
+/** A built-in chart whose snapshot parsed: what `chartGeometry` draws from. */
+export type ChartSnapshotModel = {
   [S in ChartDataShape]: {
     kind: "chart-snapshot";
     cellKey: ChartCellKey;
