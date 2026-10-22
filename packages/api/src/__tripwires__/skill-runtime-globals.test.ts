@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import {
   assertSkillCodeAllowed,
+  skillKindAfterUpdate,
   scanSkillGlobals,
   SKILL_RUNTIME_ALLOWED_GLOBALS,
 } from "../routers/skills.js";
@@ -129,6 +130,29 @@ describe("skill runtime global scan — tripwire", () => {
     expect(() =>
       assertSkillCodeAllowed("code", "return args.query;")
     ).not.toThrow();
+  });
+
+  it("(2c) an update is scanned as the kind it WRITES: an instruction skill keeps its kind unless one is given", () => {
+    const js = "return await fetch('https://x');";
+    const markdown = "# Advisor\n\nAdvise on scope.";
+    // Editing an instruction skill's code alone never makes it a code skill —
+    // neither its markdown nor JS (which it then never runs as code).
+    expect(skillKindAfterUpdate({ code: markdown }, "instruction")).toBe(
+      "instruction"
+    );
+    expect(skillKindAfterUpdate({ code: js }, "instruction")).toBe(
+      "instruction"
+    );
+    // instruction → code is explicit, and that write is scanned as code.
+    const toCode = skillKindAfterUpdate(
+      { kind: "code", code: js },
+      "instruction"
+    );
+    expect(toCode).toBe("code");
+    expect(() => assertSkillCodeAllowed(toCode, js)).toThrow(/fetch/);
+    // A code skill keeps being scanned; emptied, it becomes doc-only.
+    expect(skillKindAfterUpdate({ code: js }, "code")).toBe("code");
+    expect(skillKindAfterUpdate({ code: "  " }, "code")).toBe("instruction");
   });
 
   it("(3) allow-list matches the IS runtime SSOT (when sibling checked out)", () => {

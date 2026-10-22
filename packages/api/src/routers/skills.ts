@@ -249,6 +249,29 @@ export function assertSkillCodeAllowed(
 }
 
 /**
+ * The kind a skill UPDATE writes — ONE value, read by both the B1 scan and the
+ * UPDATE, so a skill is never written as `code` while scanned as something
+ * else. An explicit `kind` wins. Otherwise the skill KEEPS its kind: editing a
+ * catalog instruction skill's markdown `code` never turns it into a code skill
+ * (it did, before 2026-10-22). One exception: a code skill whose `code` is
+ * emptied can no longer run, and becomes doc-only (`instruction`).
+ */
+export function skillKindAfterUpdate(
+  patch: { kind?: string; code?: string },
+  existingKind: string
+): string {
+  if (patch.kind !== undefined) return patch.kind;
+  if (
+    existingKind === "code" &&
+    patch.code !== undefined &&
+    !patch.code.trim()
+  ) {
+    return "instruction";
+  }
+  return existingKind;
+}
+
+/**
  * Throw a TRPCError with an actionable message if `code` references a global the
  * skill runtime does not provide. No-op for empty/whitespace code.
  */
@@ -1373,8 +1396,9 @@ export const skillsRouter = router({
       // Save-time global-reference scan (B1) — same gate as `create`: an EDIT
       // that re-points a skill's code to reference an unprovided global (fetch/
       // crypto/…) is the same ReferenceError-at-run bug the create scan closes.
-      // Judged on the kind the skill will HAVE.
-      assertSkillCodeAllowed(input.kind ?? existingSkill.kind, input.code);
+      // Judged on the kind the UPDATE WRITES (the same value, below).
+      const writtenKind = skillKindAfterUpdate(input, existingSkill.kind);
+      assertSkillCodeAllowed(writtenKind, input.code);
 
       // The acting agent, derived exactly as `delete` derives it: the ambient
       // ALS value first (set server-side at every key-auth entry point, so an
@@ -1418,18 +1442,16 @@ export const skillsRouter = router({
         return { status: "proposed" as const, proposalId: perm.proposalId };
       }
 
-      // Documentation + optional Code: when code is set, derive `kind` (unless
-      // given) and store empty code as null (the skill becomes doc-only).
+      // Documentation + optional Code: empty code is stored as null, and the
+      // kind is the one the scan judged (`skillKindAfterUpdate`).
       if (updateData.code !== undefined) {
         const trimmed = updateData.code.trim();
         (updateData as Record<string, unknown>).code = trimmed
           ? updateData.code
           : null;
-        if (updateData.kind === undefined) {
-          (updateData as Record<string, unknown>).kind = trimmed
-            ? "code"
-            : "instruction";
-        }
+      }
+      if (writtenKind !== existingSkill.kind) {
+        (updateData as Record<string, unknown>).kind = writtenKind;
       }
 
       // Security: if any execution-defining field actually CHANGES, the skill

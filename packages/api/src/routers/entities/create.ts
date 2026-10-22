@@ -1186,9 +1186,13 @@ export const createProcs = {
 
             const dup = candidates.find((c) => {
               const props = (c.properties ?? {}) as Record<string, unknown>;
+              // The body as this write stores it: `input.content`, or one passed
+              // inside `properties` (then the property comparison below checks
+              // it). Requiring a null body there missed every retry whose body
+              // rode in properties.
               const sameContent = input.content
                 ? props.content === input.content
-                : props.content == null;
+                : "content" in effectiveProperties || props.content == null;
               if (!sameContent) return false;
               return Object.entries(effectiveProperties).every(
                 ([k, v]) => JSON.stringify(props[k]) === JSON.stringify(v)
@@ -1472,7 +1476,6 @@ export const createProcs = {
       // check) so the proposal-gated and auto-approved paths land identically
       // (I3). Reuse both here — `resolvedEntityWorkspaceId` is the value the
       // proposal persisted as `data.resolvedWorkspaceId`.
-      const resolvedProfile: any = earlyResolvedProfile;
       const entityWorkspaceId = resolvedEntityWorkspaceId;
 
       let createdEntity: any;
