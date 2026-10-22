@@ -542,8 +542,14 @@ describe("getProjectPath", () => {
   it("BATCHED: the query count does not grow with the page size", async () => {
     const spy = vi.spyOn(h.client!, "query");
     try {
+      // Both pages carry the fixture's dependency edges (`S.a` is the 4th
+      // row). THE dependency read behind `nextMove` is batched per endpoint
+      // KIND and per `replaces` HOP — never per row — so its query count
+      // depends on which kinds of blockers the page holds, not on how many
+      // rows: a 1-row page with no edges at all would differ by DATA, which is
+      // not what this pins. A per-row query still grows the count by one.
       spy.mockClear();
-      await path({ limit: 1 });
+      await path({ limit: 4 });
       const one = spy.mock.calls.length;
       spy.mockClear();
       await path({ limit: 50 });

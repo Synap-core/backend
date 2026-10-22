@@ -120,6 +120,7 @@ describe("addSessionBlocker (producer)", () => {
 
   it("writes the edge — idempotently — when both endpoints are owned", async () => {
     queue.push([{ id: A }, { id: B }]);
+    queue.push([]); // the cycle walk: B waits on nothing
     queue.push([{ id: "link-1" }]); // the INSERT's own RETURNING
     expect(
       await addSessionBlocker({
@@ -148,6 +149,7 @@ describe("addSessionBlocker (producer)", () => {
       { id: A, workspaceId: "ws-blocked" },
       { id: B, workspaceId: "ws-blocker" },
     ]);
+    queue.push([]); // the cycle walk
     queue.push([{ id: "link-1" }]);
     await addSessionBlocker({ sessionId: A, blockerSessionId: B, userId: "u" });
     const insertValues = calls.find((c) => c.method === "values")?.args[0] as {
@@ -158,6 +160,7 @@ describe("addSessionBlocker (producer)", () => {
 
   it("reports inserted: 0 for an edge that already existed — never a false write", async () => {
     queue.push([{ id: A }, { id: B }]);
+    queue.push([]); // the cycle walk
     queue.push([]); // onConflictDoNothing hit the unique edge: RETURNING is empty
     expect(
       await addSessionBlocker({
@@ -166,6 +169,52 @@ describe("addSessionBlocker (producer)", () => {
         userId: "u",
       })
     ).toEqual({ linked: true, inserted: 0 });
+  });
+});
+
+describe("addSessionBlocker — no cycles (a cycle is a deadlock)", () => {
+  const C = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  // Rules out "only a self edge is refused": B already waits on A, so
+  // A --blocked_by--> B would make the two wait on each other.
+  it("refuses A blocked_by B when B already waits on A — and writes nothing", async () => {
+    queue.push([{ id: A }, { id: B }]); // owner floor
+    queue.push([{ toType: "session", toId: A }]); // B --blocked_by--> A
+    expect(
+      await addSessionBlocker({
+        sessionId: A,
+        blockerSessionId: B,
+        userId: "u",
+      })
+    ).toEqual({ linked: false, reason: "cycle" });
+    expect(calls.some((c) => c.method === "insert")).toBe(false);
+  });
+  // Rules out "only a direct back-edge is a cycle": B → C → A.
+  it("refuses a cycle closed through another unit of work", async () => {
+    queue.push([{ id: A }, { id: B }]);
+    queue.push([{ toType: "session", toId: C }]); // B --blocked_by--> C
+    queue.push([{ toType: "session", toId: A }]); // C --blocked_by--> A
+    expect(
+      await addSessionBlocker({
+        sessionId: A,
+        blockerSessionId: B,
+        userId: "u",
+      })
+    ).toEqual({ linked: false, reason: "cycle" });
+    expect(calls.some((c) => c.method === "insert")).toBe(false);
+  });
+  // The walk must not read as a cycle what is merely a shared prerequisite.
+  it("a diamond is not a cycle: B and A both waiting on C is allowed", async () => {
+    queue.push([{ id: A }, { id: B }]);
+    queue.push([{ toType: "session", toId: C }]); // B --blocked_by--> C
+    queue.push([]); // C waits on nothing
+    queue.push([{ id: "link-1" }]);
+    expect(
+      await addSessionBlocker({
+        sessionId: A,
+        blockerSessionId: B,
+        userId: "u",
+      })
+    ).toMatchObject({ linked: true, inserted: 1 });
   });
 });
 
@@ -270,6 +319,18 @@ describe("openBlockerIds (the derivation — nothing stores blocked-ness)", () =
     feed("closed");
     expect(await openBlockerIds(A)).toEqual([]);
   });
+
+  // FOUNDER DECISION 2026-10-22. Rules out "every terminal blocker settles":
+  // a cancelled / failed blocker never delivered, so the dependent is still
+  // held (dropped) until it re-plans — and the unblock reactor, which reads
+  // exactly this, stays silent.
+  it.each(["cancelled", "failed"])(
+    "still lists a blocker that ended %s without delivering (dropped)",
+    async (status) => {
+      feed(status);
+      expect(await openBlockerIds(A)).toEqual([B]);
+    }
+  );
 
   it("is empty for a session that no longer exists", async () => {
     queue.push([]);
