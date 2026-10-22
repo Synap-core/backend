@@ -47,6 +47,7 @@ import {
   eventRepository,
   EntityBodyService,
   ProfileResolutionService,
+  isUniqueViolation,
 } from "@synap/database";
 import {
   isAllowedMimeType,
@@ -182,11 +183,6 @@ export interface FinalizedUpload {
   workspaceId: string;
   /** `true` = an unclaimed document already held this key (a retry). */
   resumed: boolean;
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  const e = err as { code?: string; cause?: { code?: string } } | null;
-  return e?.code === "23505" || e?.cause?.code === "23505";
 }
 
 /**

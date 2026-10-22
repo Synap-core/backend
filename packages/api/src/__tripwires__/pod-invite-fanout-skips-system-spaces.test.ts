@@ -8,7 +8,9 @@
  *
  * HOW (derived, not hand-listed): every non-test `.ts` under `packages/api/src`
  * and `apps/api/src` that calls `recordInviteAcceptance` is an accept path;
- * none of them may also call `workspaces.findMany(`.
+ * none of them may also call `workspaces.findMany(` WITHOUT a `where`. A
+ * filtered read (e.g. `updateMemberRole` enumerating pod-visible spaces for a
+ * newly promoted pod admin) is not a fan-out of the invite's role.
  *
  * NON-VACUITY: the scan must find the known accept files (invites.ts, setup.ts)
  * and its classifier must flag a literal sample of the old pattern.
@@ -36,7 +38,25 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const OLD_FAN_OUT = /\bworkspaces\.findMany\s*\(/;
+const FIND_MANY = /\bworkspaces\.findMany\s*\(/g;
+
+/** The text between a call's parentheses, starting after the `(`. */
+function callArgs(code: string, from: number): string {
+  let depth = 1;
+  let i = from;
+  for (; i < code.length && depth > 0; i++) {
+    if (code[i] === "(") depth++;
+    else if (code[i] === ")") depth--;
+  }
+  return code.slice(from, i - 1);
+}
+
+/** Does the code list EVERY workspace: a `workspaces.findMany(` with no `where`? */
+function listsEveryWorkspace(code: string): boolean {
+  return [...code.matchAll(FIND_MANY)].some(
+    (m) => !/\bwhere\s*:/.test(callArgs(code, m.index + m[0].length))
+  );
+}
 const isAcceptPath = (code: string) => /\brecordInviteAcceptance\b/.test(code);
 
 const files = [
@@ -60,15 +80,25 @@ describe("tripwire: a pod invite never fans out over every space", () => {
     );
   });
 
-  it("the classifier flags the old pattern", () => {
+  it("the classifier flags the old pattern, not a filtered read", () => {
     expect(
-      OLD_FAN_OUT.test("const all = await db.query.workspaces.findMany();")
+      listsEveryWorkspace("const all = await db.query.workspaces.findMany();")
     ).toBe(true);
+    expect(
+      listsEveryWorkspace(
+        "await db.query.workspaces.findMany({ columns: { id: true } });"
+      )
+    ).toBe(true);
+    expect(
+      listsEveryWorkspace(
+        "await db.query.workspaces.findMany({ where: eq(workspaces.x, f(1)) });"
+      )
+    ).toBe(false);
   });
 
   it("no accept path lists every workspace", () => {
     expect(
-      acceptPaths.filter((f) => OLD_FAN_OUT.test(f.code)).map((f) => f.rel)
+      acceptPaths.filter((f) => listsEveryWorkspace(f.code)).map((f) => f.rel)
     ).toEqual([]);
   });
 });
