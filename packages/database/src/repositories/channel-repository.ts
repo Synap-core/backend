@@ -32,15 +32,7 @@ export function objectRoomLensIs(lens: string | null) {
 }
 import { EventRepository } from "./event-repository.js";
 import { sql } from "../client-pg.js";
-
-/** Postgres unique-violation SQLSTATE — raised by the channel dedup indexes. */
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    (err as { code?: string }).code === "23505"
-  );
-}
+import { isUniqueViolation } from "../utils/pg-errors.js";
 
 export interface CreateChannelData {
   id?: string;

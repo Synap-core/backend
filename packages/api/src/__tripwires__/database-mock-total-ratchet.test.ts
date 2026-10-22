@@ -97,7 +97,10 @@ import { dirname, join, relative } from "node:path";
 // this header describes (ConflictError, cellInstances, artifacts, isNull…).
 // 49 → 48 the same day: CI run 39533915485 counted 48 (one more file had
 // already left the total-mock shape on main).
-const BASELINE = 48;
+// 48 → 47 on 2026-10-22 (#81, one door for unique violations):
+// `routers/proposals/__tests__/view-create-legacy-filters.test.ts` converted —
+// its module now imports `isUniqueViolation` from @synap/database.
+const BASELINE = 47;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");
