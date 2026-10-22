@@ -17,14 +17,24 @@
  * a projection, stamped closed by the answer door; no third store.
  *
  * A slotless question is untouched: it is a question in the room, nothing
- * more. A question naming a slot the session does not declare (or one already
- * delivered) files nothing — the post stands, and the door reports why.
+ * more. A question naming a slot the session does NOT DECLARE (or posted in a
+ * room that is no session's) is REFUSED before anything is posted
+ * (`checkRoomQuestionSlot`, called by `postChannelMessage`). Live, 2026-10-22,
+ * session 5382a350: `post_message` with `ask` + an undeclared `slotLabel`
+ * returned success with `slot: unknown_label` — the message posted, the ask
+ * attached to nothing, and no surface could show it as a card. Refusing, not
+ * creating the slot: a slot is declared through the session's own doors
+ * (`synap_update_session` `outcomes` / `addOutput`, governed, keyed, with
+ * `owedSince`), and a chat post minting one would be a second, ungoverned
+ * declaration door. A slot already delivered still files nothing and the post
+ * reports why (`already_done`): the slot exists, the question is about it.
  */
 
 import { db, focusSessions, and, eq } from "@synap/database";
 import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
 import { resolveRoomSession } from "../messaging/room-session.js";
-import { findSlotIndex } from "./slot-keys.js";
+import { deriveSlotKeys, findSlotIndex } from "./slot-keys.js";
+import type { RoomQuestionSlotCheck } from "./room-question-slot-refusal.js";
 import {
   blockExpectedOutput,
   type BlockExpectedOutputResult,
@@ -93,4 +103,38 @@ export async function fileRoomQuestionOnSlot(p: {
     ...(p.ask ? { ask: p.ask } : {}),
     agentUserId: p.agentUserId,
   });
+}
+
+/**
+ * Does `slotLabel` (a key or a label, `findSlotIndex`) name a slot of the
+ * session behind `channelId`? Read-only; the same resolution
+ * `fileRoomQuestionOnSlot` makes after the post.
+ */
+export async function checkRoomQuestionSlot(p: {
+  channelId: string;
+  slotLabel: string;
+  userId: string;
+}): Promise<RoomQuestionSlotCheck> {
+  const session = await resolveRoomSession(p.channelId);
+  if (!session) return { status: "no_session" };
+  if (session.userId !== p.userId) return { status: "not_owner" };
+  const [row] = await db
+    .select({ expectedOutputs: focusSessions.expectedOutputs })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.id, session.id),
+        eq(focusSessions.userId, session.userId)
+      )
+    )
+    .limit(1);
+  const slots = Array.isArray(row?.expectedOutputs)
+    ? (row.expectedOutputs as ExpectedOutput[])
+    : [];
+  if (findSlotIndex(slots, p.slotLabel) !== -1) return { status: "ok" };
+  const keys = deriveSlotKeys(slots);
+  return {
+    status: "unknown_label",
+    declared: slots.map((s, i) => ({ key: keys[i] ?? "", label: s.label })),
+  };
 }

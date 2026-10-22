@@ -6202,6 +6202,25 @@ export interface KratosSession {
 	active: boolean;
 	expires_at?: string;
 	authenticated_at?: string;
+	/** How it was authenticated (Kratos); the step-up clock reads it. */
+	authentication_methods?: Array<{
+		completed_at?: string;
+		method?: string;
+		provider?: string;
+	}>;
+	/**
+	 * Set ONLY when the person came in on a Synap app's device token
+	 * (`appSessionMiddleware`): the device it was minted
+	 * for, and when the person last really authenticated for it (`authTime`,
+	 * the step-up clock). Absent on a Kratos session. Such a session has no
+	 * `authenticated_at`, so account recovery never counts it as a recent
+	 * sign-in.
+	 */
+	device?: {
+		authTime: Date | null;
+		clientId: string;
+		id: string;
+	};
 }
 /**
  * User object (simplified from Kratos identity)
@@ -6220,6 +6239,15 @@ export interface Context {
 	userId?: string | null;
 	user?: User | null;
 	session?: KratosSession | null;
+	/**
+	 * What kind of PERSON session `session` is: a Kratos session (browser
+	 * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
+	 * `createContext`, from what the app session gate resolved from the row
+	 * (`middleware/app-session.ts`); null when there is no session. A credential
+	 * door takes a `person_device` session only shortly after a real sign-in
+	 * (`requireFreshAuthentication`, trpc.ts).
+	 */
+	sessionKind?: "kratos" | "person_device" | null;
 	req?: Request;
 	socketIO?: any;
 	workspaceId?: string | null;
@@ -10632,8 +10660,11 @@ export interface PostChannelMessageResult {
 	/**
 	 * An agent's `question` naming a `slotLabel`: what filing it ON the slot did
 	 * (`fileRoomQuestionOnSlot`) — `blocked` when the slot now carries the
-	 * question as its ask; otherwise why not (`unknown_label`, `already_done`,
-	 * `no_session`, `not_found`, `failed`). Absent for every other post.
+	 * question as its ask; otherwise why not (`already_done`, `not_found`,
+	 * `failed`). A slot the session does not declare, or a room with no
+	 * session, is REFUSED before posting (`checkRoomQuestionSlot`), so
+	 * `unknown_label` / `no_session` only reach here on a race. Absent for
+	 * every other post.
 	 */
 	slot?: {
 		status: string;
@@ -11468,6 +11499,13 @@ export interface ProposalClusterSource {
 	sessionId?: string;
 	automationId?: string;
 }
+/** The one agent behind a whole cluster (`ProposalCluster.agent`). */
+export interface ProposalClusterAgent {
+	/** `proposals.agentUserId` — the agent's page door. */
+	id: string;
+	/** Its display name (`actorDisplayName`); null when the router resolved none. */
+	label: string | null;
+}
 /** One collapsed cluster card. */
 export interface ProposalCluster {
 	fingerprint: string;
@@ -11500,6 +11538,14 @@ export interface ProposalCluster {
 	 * this is decided over EVERY member.
 	 */
 	sessionId: string | null;
+	/**
+	 * The ONE agent that filed EVERY member — `null` when any member was filed
+	 * by no agent (a person, a system write) or members came from several.
+	 * Decided over every member, like `sessionId` — never read off `sources`,
+	 * where a member with no provenance leaves no trace. A needs-you row's
+	 * "from X" (`signalFromCluster`).
+	 */
+	agent: ProposalClusterAgent | null;
 	/**
 	 * Member count per `governance_reason`, so a card can render its composition
 	 * ("152 routine · 2 destructive · 1 untrusted origin") instead of a bare
@@ -12409,9 +12455,10 @@ export interface OAuthConsentContext {
 	clientId: string;
 	/**
 	 * 'dcr' — an MCP client (claude.ai); 'cimd' — a pod app; 'app' — an
-	 * approved app a person signs in to ("Sign in with Synap").
+	 * approved app a person signs in to ("Sign in with Synap"); 'first_party'
+	 * — a Synap app (desktop, Relay) signing the person in on this device.
 	 */
-	clientKind: "app" | "cimd" | "dcr";
+	clientKind: "app" | "cimd" | "dcr" | "first_party";
 	/** Untrusted, attacker-chosen at registration — the UI renders it as TEXT. */
 	clientName: string;
 	redirectUri: string;
@@ -12428,6 +12475,22 @@ export interface OAuthConsentContext {
 	 * client (an MCP agent connection).
 	 */
 	appSignIn: AppSignInDescription | null;
+	/**
+	 * The request asks for a fresh sign-in (`prompt=login` / `max_age`) and
+	 * the viewer's is older: the screen sends them to sign in again first.
+	 */
+	reauthenticate: boolean;
+	/**
+	 * A Synap app re-confirming a device it holds (`isDeviceReconfirm`): the
+	 * screen asks "Confirm it's you", not "Sign in".
+	 */
+	reconfirmDevice: boolean;
+	/**
+	 * That re-confirmation was answered by a federated sign-in only (Synap
+	 * Cloud): the screen asks for the pod password or passkey instead
+	 * (`PodCredentialRequiredError`).
+	 */
+	podCredentialRequired: boolean;
 }
 /**
  * API Keys Router
@@ -15877,7 +15940,7 @@ export interface NotificationDef {
 	 * How unread rows of this type FOLD into one needs-you row. Omit ⇒ per
 	 * target (`(type, source)`, `foldNotifications`). `"groupKey"` ⇒ per the
 	 * producer's collapse key: the same agent failing on run after run is ONE
-	 * row "×9", not nine rows each pointing at a different run (dogfood
+	 * row ("and 8 more like it"), not nine rows each pointing at a different run (dogfood
 	 * 2026-10-05: "meta encountered an error" ×9 on the triage page). The row
 	 * carries the NEWEST instance, so its door is the latest failure.
 	 */
@@ -17043,6 +17106,14 @@ export type SessionInteractionsSection = {
  * read through {@link sessionReadableWhere}.
  */
 export type SessionViewerRole = "member" | "owner";
+declare const LIFECYCLE_CATEGORIES$1: readonly [
+	"open",
+	"active",
+	"paused",
+	"done",
+	"lost"
+];
+type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 declare const LANDED_DECISION_STATES: readonly [
 	"applied",
 	"approved",
@@ -17104,6 +17175,11 @@ export interface LandedDecision {
 	 */
 	changeCount: number | null;
 }
+/** A produced object's lifecycle status: the option key and its category. */
+export interface LandedObjectStatus {
+	key: string;
+	category: LifecycleCategory$1;
+}
 export interface LandedObjectRow {
 	/**
 	 * Stable row key: `<sessionId>|<kind>:<refId>` for a produced object (the
@@ -17120,6 +17196,13 @@ export interface LandedObjectRow {
 	ref: LandedObjectRef;
 	/** An `entity` row's kind ("Person", "Company"), when known. */
 	entityProfile?: LandedEntityProfile;
+	/**
+	 * Where the object stands NOW in its kind's lifecycle — the entity's
+	 * `status` + `status_category` columns (the truth the `moveStatus` door
+	 * writes). Absent ⇒ its kind declares no lifecycle, it is not an entity, or
+	 * an older pod: never "no status".
+	 */
+	status?: LandedObjectStatus;
 	/** When it landed — or, for `pending`, when it was proposed (ISO). */
 	createdAt: string;
 	actor: LandedActor;
@@ -18840,10 +18923,12 @@ export type SignalKind =
 /** One deliverable an agent handed to the human and nobody has closed. */
  | "owed-slot"
 /**
- * One undecided agent DRAFT that asks the person something — "<agent>
- * started <work> · asks you N things". Its asks are not listed one by one
- * (`excludeDrafts`) until the draft is accepted; answering any of them
- * accepts it (`accept-on-engagement.ts`). Proposals under a draft stay out.
+ * One undecided agent DRAFT that owes the person something — "<agent>
+ * started <work>", the draft itself to accept or reject (PROPOSED). Since
+ * the founder decision of 2026-10-22 its ASKS are Needs-you `owed-slot` rows
+ * of their own (`listNeedsYouOwed`), so this row carries no ask count;
+ * answering any of them still accepts the draft (`accept-on-engagement.ts`).
+ * Proposals under a draft stay out of Needs you.
  */
  | "draft-asks"
 /**
@@ -18996,8 +19081,29 @@ export interface Signal {
 	 * container (a pod-level notification) — never a guessed one.
 	 */
 	source?: SignalSource;
+	/**
+	 * WHO asked — the ONE agent that filed it, as a door to the agent's page
+	 * ("from Claude Code"). `proposal-cluster` only, and only when EVERY member
+	 * came from that agent (`ProposalCluster.agent`); several agents, or a
+	 * member a person filed, sends none rather than a guessed one.
+	 */
+	by?: {
+		id: string;
+		kind: "agent";
+		label: string;
+	};
 	/** `live-session` only: the liveness facts the "working now" rule read. */
 	live?: SessionActivityLive;
+	/**
+	 * `live-session` only: the session's deliverables, counted
+	 * (`tallyDeliverables` over `expected_outputs`) — the Happening row's
+	 * progress rail. Absent when it declares none, or the column is unreadable:
+	 * not measurable, never "0 of N".
+	 */
+	progress?: {
+		done: number;
+		total: number;
+	};
 	/**
 	 * `rule-run` only: the rule's runs inside the window — how many, how many
 	 * failed, whether one is in flight. The row's door is the rule.
@@ -20482,9 +20588,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					permission: string;
 					workspaceId: string;
 				}[] | undefined;
+				authRequest?: string | undefined;
 				clientId: string;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
+				maxAge?: string | number | undefined;
+				prompt?: string | undefined;
 				redirectUri: string;
 				resource?: string | undefined;
 				responseType?: string | undefined;
@@ -20516,9 +20625,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		getOAuthConsentContext: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				authRequest?: string | undefined;
 				clientId: string;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
+				maxAge?: string | number | undefined;
+				prompt?: string | undefined;
 				redirectUri: string;
 				resource?: string | undefined;
 				responseType?: string | undefined;
@@ -26919,6 +27031,55 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				requestId: `${string}-${string}-${string}-${string}-${string}`;
 				status: "pending";
 				success: boolean;
+			};
+		}>;
+	}>>;
+	devices: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				expectedStatus?: string | null;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				clientId: string;
+				createdAt: Date;
+				current: boolean;
+				expiresAt: Date;
+				id: string;
+				label: string | null;
+				lastUsedAt: Date | null;
+			}[];
+		}>;
+		revoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				deviceId: string;
+			};
+			meta: object;
+			output: {
+				status: "revoked";
 			};
 		}>;
 	}>>;
@@ -36096,6 +36257,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				name: string;
 				params?: Record<string, unknown>[] | undefined;
+				proposedPlaybookId?: string | undefined;
 				reasoning?: string | undefined;
 				requiredIntents?: string[] | undefined;
 				schedule?: unknown;
@@ -36239,31 +36401,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				message: string;
-				playbook: {
-					channelSpec: unknown;
-					createdAt: Date;
-					createdBy: string;
-					criteria: unknown;
-					description: string | null;
-					executor: PlaybookExecutorRef;
-					expectedOutputs: unknown;
-					flowAutomationId: string | null;
-					goalTemplate: string;
-					id: string;
-					inputStrategy: unknown;
-					metadata: unknown;
-					name: string;
-					params: unknown;
-					requiredIntents: unknown;
-					schedule: unknown;
-					scope: "project" | "session" | null;
-					stages: unknown;
-					status: "active" | "archived" | "draft" | "paused";
-					subjectProfile: unknown;
-					updatedAt: Date;
-					version: number;
-					workspaceId: string | null;
-				};
+				playbook: Playbook;
 				proposalId: string | null;
 				status: "created";
 			} | {
@@ -45168,24 +45306,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspacesJoined: number;
 			};
 		}>;
-		acceptInviteViaCp: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				cpToken: string;
-				token: string;
-			};
-			meta: object;
-			output: {
-				status: "accepted";
-				type: "workspace";
-				workspaceId: string;
-				workspacesJoined?: undefined;
-			} | {
-				status: "accepted";
-				type: "pod";
-				workspaceId?: undefined;
-				workspacesJoined: number;
-			};
-		}>;
 		addMember: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				role: "editor" | "owner" | "viewer";
@@ -46378,17 +46498,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				reason?: string | undefined;
-			};
-			meta: object;
-			output: {
-				success: boolean;
-			};
-		}>;
-		rejectInviteViaCp: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				cpToken: string;
-				reason?: string | undefined;
-				token: string;
 			};
 			meta: object;
 			output: {

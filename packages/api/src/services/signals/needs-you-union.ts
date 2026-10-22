@@ -103,10 +103,12 @@ export type SignalKind =
   /** One deliverable an agent handed to the human and nobody has closed. */
   | "owed-slot"
   /**
-   * One undecided agent DRAFT that asks the person something — "<agent>
-   * started <work> · asks you N things". Its asks are not listed one by one
-   * (`excludeDrafts`) until the draft is accepted; answering any of them
-   * accepts it (`accept-on-engagement.ts`). Proposals under a draft stay out.
+   * One undecided agent DRAFT that owes the person something — "<agent>
+   * started <work>", the draft itself to accept or reject (PROPOSED). Since
+   * the founder decision of 2026-10-22 its ASKS are Needs-you `owed-slot` rows
+   * of their own (`listNeedsYouOwed`), so this row carries no ask count;
+   * answering any of them still accepts the draft (`accept-on-engagement.ts`).
+   * Proposals under a draft stay out of Needs you.
    */
   | "draft-asks"
   /**
@@ -286,8 +288,22 @@ export interface Signal {
    * container (a pod-level notification) — never a guessed one.
    */
   source?: SignalSource;
+  /**
+   * WHO asked — the ONE agent that filed it, as a door to the agent's page
+   * ("from Claude Code"). `proposal-cluster` only, and only when EVERY member
+   * came from that agent (`ProposalCluster.agent`); several agents, or a
+   * member a person filed, sends none rather than a guessed one.
+   */
+  by?: { kind: "agent"; id: string; label: string };
   /** `live-session` only: the liveness facts the "working now" rule read. */
   live?: SessionActivityLive;
+  /**
+   * `live-session` only: the session's deliverables, counted
+   * (`tallyDeliverables` over `expected_outputs`) — the Happening row's
+   * progress rail. Absent when it declares none, or the column is unreadable:
+   * not measurable, never "0 of N".
+   */
+  progress?: { done: number; total: number };
   /**
    * `rule-run` only: the rule's runs inside the window — how many, how many
    * failed, whether one is in flight. The row's door is the rule.
@@ -399,7 +415,9 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "class",
   "lifetimeHours",
   "source",
+  "by",
   "live",
+  "progress",
   "ruleRun",
   "landed",
   "activity",
@@ -650,6 +668,15 @@ export function signalFromCluster(
     class: cluster.class,
     lifetimeHours: cluster.lifetimeHours,
     proposalIds: cluster.sampleProposalIds,
+    ...(cluster.agent?.label
+      ? {
+          by: {
+            kind: "agent" as const,
+            id: cluster.agent.id,
+            label: cluster.agent.label,
+          },
+        }
+      : {}),
     // A cluster filed ENTIRELY under one session the viewer can read belongs
     // to that session's block, so a needs-you page shows the session ONCE (its card counts the
     // decision beside its owed slots). A cluster spanning sessions, or with a
@@ -955,12 +982,15 @@ export interface DraftAsksInput {
 }
 
 /**
- * Pending drafts → one signal per draft that asks at least one thing. A draft
- * with no owed slot never appears: it has no row in `slots` to fold.
+ * Pending drafts → one signal per draft that owes the person something: the
+ * DRAFT, to accept or reject. A draft with no owed slot never appears: it has
+ * no row in `slots` to fold.
  *
- * `count` is the number of asks, so the count chip and the title's "N things"
- * are the same number. `id` keys on the session, so a draft stays one row as
- * asks come and go.
+ * `count` is 1 — the row stands for one draft. It used to be the number of
+ * asks; since the founder decision of 2026-10-22 those asks are Needs-you rows
+ * of their own (`listNeedsYouOwed`, `needsYouLens`), and counting them here
+ * too would put one number in two places. `id` keys on the session, so a
+ * draft stays one row as asks come and go.
  */
 export function signalsFromDraftAsks(
   input: DraftAsksInput,
@@ -982,12 +1012,11 @@ export function signalsFromDraftAsks(
     return {
       id: `draft:${sessionId}`,
       kind: "draft-asks" as const,
-      title: ASK_COPY.draftAsks(
+      title: ASK_COPY.draftStarted(
         input.starterNames.get(sessionId) ?? null,
-        goal ?? "a session",
-        slots.length
+        goal ?? "a session"
       ),
-      count: slots.length,
+      count: 1,
       occurredAt: newest,
       target: { kind: "session", id: sessionId },
       // Agent-originated, like the owed slots it folds.
@@ -1408,9 +1437,10 @@ export function unionSuggestions(
 /**
  * PROPOSED — what an AI offers that the person may take or leave (lens grammar,
  * founder-approved 2026-10-04): agent DRAFTS (one `draft-asks` row per
- * undecided draft that asks something) + AI SUGGESTIONS (capped, see
+ * undecided draft, the draft itself) + AI SUGGESTIONS (capped, see
  * {@link unionSuggestions}). Ignoring any of it costs nothing, so none of it is
- * ever a needs-you row and none of it counts toward `needsYou`. Pending
+ * ever a needs-you row and none of it counts toward `needsYou`. A draft's ASKS
+ * are not here: since 2026-10-22 (founder) they are Needs-you owed slots. Pending
  * approvals — a proposal an agent is paused on included — are BLOCKING
  * ({@link unionNeedsYou}), never here. Newest first.
  */
@@ -1435,8 +1465,9 @@ export function unionProposed(args: {
  * and it decides membership and order.
  *
  * Agent DRAFTS are not here (founder, lens grammar 2026-10-04: drafts are
- * PROPOSED — {@link unionProposed}). `draftAsks` is still read, for one
- * thing only: a draft's `session.needs_you` pointer folds into the draft (its
+ * PROPOSED — {@link unionProposed}), but a draft's ASKS are: since the founder
+ * decision of 2026-10-22 they arrive in `owedSlots` (`listNeedsYouOwed`) like
+ * any owed slot. `draftAsks` is still read, for one thing only: a draft's `session.needs_you` pointer folds into the draft (its
  * session has an owed slot), so the pointer never resurfaces as a loose
  * needs-you row.
  *
@@ -1782,10 +1813,10 @@ export function countNeedsYou(args: {
    */
   requests: number;
   /**
-   * Undecided agent drafts that ask you something — ONE per draft, however
-   * many asks it holds, exactly the `draft-asks` rows the `proposed` lens
-   * returns (the same fold, `signalsFromDraftAsks`). PROPOSED, so NOT a part
-   * of `needsYou`; their asks are not in `blocked` either.
+   * Undecided agent drafts that owe you something — ONE per draft, exactly
+   * the `draft-asks` rows the `proposed` lens returns (the same fold,
+   * `signalsFromDraftAsks`). PROPOSED, so NOT a part of `needsYou`. Their
+   * ASKS are in `blocked` (founder decision 2026-10-22), counted once there.
    */
   drafts: number;
   /** The draft-slot scan hit its cap, so `drafts` is a floor. */
@@ -1820,7 +1851,8 @@ export function countNeedsYou(args: {
     : 0;
   return {
     // THE item sum (`needsYouTotal`) over the rule's three populations, plus
-    // the notification half. Drafts are PROPOSED (2026-10-04) and never count.
+    // the notification half. Drafts are PROPOSED (2026-10-04) and never count
+    // as drafts; a draft's ASKS are owed slots, in `blocked` (2026-10-22).
     needsYou:
       needsYouTotal({ owed: blocked, decisions, review }) +
       notifications +

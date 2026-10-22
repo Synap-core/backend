@@ -13,7 +13,8 @@
 #   • on the host side of the configure (synap compose-request), the settings
 #     derived from the names follow: SYNAP_BASE_DOMAIN becomes
 #     <name>.pod.synap.live, the old origins in ALLOWED_ORIGINS the new ones,
-#     every other entry kept.
+#     every other entry kept; and the same through the operator's door
+#     (`synap config set` + `synap apply`) for a pod moved by hand.
 # Not covered: what a running Caddy serves (no daemon in CI; the rendered blocks
 # were checked with `caddy adapt` when written), the Control Plane's side.
 set -u
@@ -141,5 +142,27 @@ moved 'ALLOWED_ORIGINS=https://crm.example.com'
   && ok "ALLOWED_ORIGINS without the old origins: left alone, nothing added" || bad "untouched: $(envval ALLOWED_ORIGINS)"
 grep -n 'reconcile_moved_origins$' "$HERE/synap" | grep -q . && grep -q "grep -qxE 'kratos|backend|realtime'" "$HERE/synap" \
   && ok "compose-request reconciles before recreating kratos, backend or realtime" || bad "compose-request does not call the reconcile"
+
+# ── the operator's door: `synap config set` + `synap apply` ───────────────────
+# A pod with no agent (behind a front proxy: the founder's, the team's) is moved
+# by hand. `synap apply` must derive the same settings as the configure above,
+# also when nothing runs yet (a stopped pod reads them at its next start).
+extract cmd_apply >> "$TMP/lib.sh"
+grep -q '^cmd_apply()' "$TMP/lib.sh" || { bad "could not extract cmd_apply"; exit 1; }
+rm -f "$D"/.env.bak.*
+printf '%s\n' 'DOMAIN=antoinesrvt.pod.synap.live' 'POD_ADMIN_DOMAIN=admin.antoinesrvt.pod.synap.live' \
+  'POD_ADMIN_URL=https://admin.antoinesrvt.pod.synap.live' 'PUBLIC_URL=https://antoinesrvt.pod.synap.live' \
+  'SYNAP_BASE_DOMAIN=antoinesrvt.synap.live' 'SYNAP_LEGACY_DOMAIN=pod.antoinesrvt.synap.live' \
+  'SYNAP_LEGACY_POD_ADMIN_DOMAIN=pod-admin.antoinesrvt.synap.live' \
+  'ALLOWED_ORIGINS=https://studio.staging.synap.live,https://pod-admin.antoinesrvt.synap.live' \
+  'POSTGRES_PASSWORD=pw0test' 'JWT_SECRET=jwt0test' 'KRATOS_SECRETS_COOKIE=cookie0test' > "$D/.env"
+( cd "$D" && SYNAP_DEPLOY_DIR="$D" && . ./env-config.sh && . "$TMP/lib.sh" \
+    && get_deploy_dir() { echo "$D"; } && docker() { :; } \
+    && SYNAP_PSL_FILE="$TMP/psl.dat" cmd_apply ) > "$TMP/out" 2>&1; rc=$?
+[ "$rc" = 0 ] && grep -q "no running services" "$TMP/out" && [ "$(envval SYNAP_BASE_DOMAIN)" = antoinesrvt.pod.synap.live ] \
+  && ok "synap apply: SYNAP_BASE_DOMAIN follows a move made by hand (no agent), even with nothing running" \
+  || bad "apply base (rc=$rc): $(envval SYNAP_BASE_DOMAIN) $(cat "$TMP/out")"
+[ "$(envval ALLOWED_ORIGINS)" = "https://studio.staging.synap.live,https://admin.antoinesrvt.pod.synap.live" ] \
+  && ok "synap apply: the old console origin in ALLOWED_ORIGINS becomes the new one" || bad "apply allowed: $(envval ALLOWED_ORIGINS)"
 
 exit $fail
