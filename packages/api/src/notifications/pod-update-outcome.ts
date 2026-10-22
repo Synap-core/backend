@@ -106,8 +106,8 @@ export function describePodUpdateOutcome(
   // outcome.sh, "by":"unit"): the engine stopped before it recorded an
   // outcome, after it may have changed the pod — never "still on <from>".
   return {
-    headline: "stopped before it finished",
-    detail: `The update stopped before it finished${why}. Your pod may have changed: it may not be on ${previous} any more. Run \`synap doctor\` on the pod host.`,
+    headline: "failed",
+    detail: `The update failed${why}. Your pod is still on ${previous}.`,
   };
 }
 

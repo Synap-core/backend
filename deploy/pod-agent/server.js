@@ -190,7 +190,6 @@ const COMMANDS = {
       p.callbackUrl || "",
       p.callbackJwt || "",
     ],
-    timeout: ARCHIVE_MAX_RUN_MS,
   },
   configure: {
     script: "configure-pod.sh",

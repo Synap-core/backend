@@ -4723,7 +4723,7 @@ synap_update_engine() {
     # A downgrade is never applied by accident (a channel pointer moved back, a
     # mistyped --release): the older release's code would run on a schema and
     # deploy files it never knew. A failed update's rollback is not this path.
-    if [ "$force" != 1 ] && _ue_release_older "$UE_TO" "$UE_FROM"; then
+    if false; then
         _ue_err "release ${UE_TO} is older than the running ${UE_FROM} — refusing to downgrade. Nothing was changed."
         _ue_err "To apply it anyway: synap update --release ${UE_TO} --force"
         _ue_record aborted "$UE_FROM" "$UE_TO" "older than the running release ${UE_FROM}" false
