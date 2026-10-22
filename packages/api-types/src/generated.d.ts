@@ -11468,6 +11468,13 @@ export interface ProposalClusterSource {
 	sessionId?: string;
 	automationId?: string;
 }
+/** The one agent behind a whole cluster (`ProposalCluster.agent`). */
+export interface ProposalClusterAgent {
+	/** `proposals.agentUserId` — the agent's page door. */
+	id: string;
+	/** Its display name (`actorDisplayName`); null when the router resolved none. */
+	label: string | null;
+}
 /** One collapsed cluster card. */
 export interface ProposalCluster {
 	fingerprint: string;
@@ -11500,6 +11507,14 @@ export interface ProposalCluster {
 	 * this is decided over EVERY member.
 	 */
 	sessionId: string | null;
+	/**
+	 * The ONE agent that filed EVERY member — `null` when any member was filed
+	 * by no agent (a person, a system write) or members came from several.
+	 * Decided over every member, like `sessionId` — never read off `sources`,
+	 * where a member with no provenance leaves no trace. A needs-you row's
+	 * "from X" (`signalFromCluster`).
+	 */
+	agent: ProposalClusterAgent | null;
 	/**
 	 * Member count per `governance_reason`, so a card can render its composition
 	 * ("152 routine · 2 destructive · 1 untrusted origin") instead of a bare
@@ -15877,7 +15892,7 @@ export interface NotificationDef {
 	 * How unread rows of this type FOLD into one needs-you row. Omit ⇒ per
 	 * target (`(type, source)`, `foldNotifications`). `"groupKey"` ⇒ per the
 	 * producer's collapse key: the same agent failing on run after run is ONE
-	 * row "×9", not nine rows each pointing at a different run (dogfood
+	 * row ("and 8 more like it"), not nine rows each pointing at a different run (dogfood
 	 * 2026-10-05: "meta encountered an error" ×9 on the triage page). The row
 	 * carries the NEWEST instance, so its door is the latest failure.
 	 */
@@ -17043,6 +17058,14 @@ export type SessionInteractionsSection = {
  * read through {@link sessionReadableWhere}.
  */
 export type SessionViewerRole = "member" | "owner";
+declare const LIFECYCLE_CATEGORIES$1: readonly [
+	"open",
+	"active",
+	"paused",
+	"done",
+	"lost"
+];
+type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 declare const LANDED_DECISION_STATES: readonly [
 	"applied",
 	"approved",
@@ -17104,6 +17127,11 @@ export interface LandedDecision {
 	 */
 	changeCount: number | null;
 }
+/** A produced object's lifecycle status: the option key and its category. */
+export interface LandedObjectStatus {
+	key: string;
+	category: LifecycleCategory$1;
+}
 export interface LandedObjectRow {
 	/**
 	 * Stable row key: `<sessionId>|<kind>:<refId>` for a produced object (the
@@ -17120,6 +17148,13 @@ export interface LandedObjectRow {
 	ref: LandedObjectRef;
 	/** An `entity` row's kind ("Person", "Company"), when known. */
 	entityProfile?: LandedEntityProfile;
+	/**
+	 * Where the object stands NOW in its kind's lifecycle — the entity's
+	 * `status` + `status_category` columns (the truth the `moveStatus` door
+	 * writes). Absent ⇒ its kind declares no lifecycle, it is not an entity, or
+	 * an older pod: never "no status".
+	 */
+	status?: LandedObjectStatus;
 	/** When it landed — or, for `pending`, when it was proposed (ISO). */
 	createdAt: string;
 	actor: LandedActor;
@@ -18996,8 +19031,29 @@ export interface Signal {
 	 * container (a pod-level notification) — never a guessed one.
 	 */
 	source?: SignalSource;
+	/**
+	 * WHO asked — the ONE agent that filed it, as a door to the agent's page
+	 * ("from Claude Code"). `proposal-cluster` only, and only when EVERY member
+	 * came from that agent (`ProposalCluster.agent`); several agents, or a
+	 * member a person filed, sends none rather than a guessed one.
+	 */
+	by?: {
+		id: string;
+		kind: "agent";
+		label: string;
+	};
 	/** `live-session` only: the liveness facts the "working now" rule read. */
 	live?: SessionActivityLive;
+	/**
+	 * `live-session` only: the session's deliverables, counted
+	 * (`tallyDeliverables` over `expected_outputs`) — the Happening row's
+	 * progress rail. Absent when it declares none, or the column is unreadable:
+	 * not measurable, never "0 of N".
+	 */
+	progress?: {
+		done: number;
+		total: number;
+	};
 	/**
 	 * `rule-run` only: the rule's runs inside the window — how many, how many
 	 * failed, whether one is in flight. The row's door is the rule.
