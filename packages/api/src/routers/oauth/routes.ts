@@ -27,7 +27,9 @@
  *
  * A pod app (CIMD client, spec 17) walks 5–7 too, and its /token answer adds a
  * rotating refresh token (`grant_type=refresh_token`, refresh.ts). An MCP
- * (DCR) client never gets one: its key lives 90 days.
+ * (DCR) client never gets one: its key lives 90 days. An MCP client may name a
+ * metadata document instead of registering (one that declares no
+ * `synap_requests`, `isMcpClient`): it is an MCP client in every respect.
  *
  * NOTE: the SDK's own OAuth helpers (`@modelcontextprotocol/sdk` 1.29.0,
  * `server/auth/*`) are Express-shaped — they take `express.RequestHandler` and
@@ -79,6 +81,7 @@ import {
 } from "./config.js";
 import {
   AuthorizeUserError,
+  isMcpClient,
   resolveClientAndRedirect,
   resourceFor,
   validateAuthorizeRequest,
@@ -107,6 +110,8 @@ import {
   type RedeemedRefreshToken,
 } from "./refresh.js";
 import { claimAuthorizationCode, findClient, insertClient } from "./store.js";
+import { logOAuthRefusal } from "./refusal-log.js";
+import { renderAuthorizeRefusalPage } from "./refusal-page.js";
 import {
   APP_PERSON_SCOPES,
   isAppClientId,
@@ -282,7 +287,21 @@ oauthApp.get("/authorize", async (c) => {
     ({ client, redirectUri } = await resolveClientAndRedirect(params));
   } catch (err) {
     if (err instanceof AuthorizeUserError) {
-      return c.text(`Authorization request rejected: ${err.message}`, 400);
+      logOAuthRefusal({
+        phase: "authorize",
+        clientId: params.clientId,
+        reason: err.reason,
+        detail: err.message,
+      });
+      return c.html(
+        renderAuthorizeRefusalPage({
+          podHost: new URL(issuer).host,
+          reason: err.reason,
+          message: err.message,
+        }),
+        400,
+        { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" }
+      );
     }
     throw err;
   }
@@ -293,8 +312,8 @@ oauthApp.get("/authorize", async (c) => {
   try {
     if (resources.length > 1) {
       // RFC 8707 allows several; a token from this AS is for one pod resource.
-      // An app is refused; a DCR client gets the lenient rule (`resourceFor`).
-      if (client.clientKind !== "dcr") {
+      // An app is refused; an MCP client gets the lenient rule (`resourceFor`).
+      if (!isMcpClient(client)) {
         throw new OAuthError("invalid_target", "Name at most one resource");
       }
       params.resource = resources.join(" ");
@@ -310,6 +329,13 @@ oauthApp.get("/authorize", async (c) => {
     }
   } catch (err) {
     if (err instanceof OAuthError) {
+      logOAuthRefusal({
+        phase: "authorize",
+        clientId: client.clientId,
+        reason: err.code,
+        code: err.code,
+        detail: err.message,
+      });
       return c.redirect(
         buildAuthorizationResponseUrl(redirectUri, issuer, {
           error: err.code,
@@ -473,7 +499,9 @@ async function exchangeAppRefreshToken(
   const client = await findClient(params.client_id);
   if (!client) throw new OAuthError("invalid_client", "Unknown client");
   if (client.clientKind !== "cimd") {
-    // An MCP (DCR) client is issued no refresh token (spec 17 §6.6).
+    // An MCP (DCR) client is issued no refresh token (spec 17 §6.6). One that
+    // came by CIMD gets none either: a family is only ever started for an
+    // approved connection, so its presented token redeems to nothing.
     throw new OAuthError(
       "unauthorized_client",
       "This client may not use the refresh_token grant"
@@ -718,8 +746,15 @@ oauthApp.post("/token", async (c) => {
 
     // A pod app (CIMD client) is NEVER minted the shared `claude-web*` agent
     // (spec 17 I3): its key belongs to the app's OWN agent for this person,
-    // carrying exactly what the person approved at consent, for 1 h.
-    if (client.clientKind === "cimd") {
+    // carrying exactly what the person approved at consent, for 1 h. A code
+    // that names an approved connection is always a pod app's, even if the
+    // document has since dropped its `synap_requests`. Only a code naming
+    // none, for a document that declares none, is an MCP client's (A1): it
+    // falls through to the MCP mint below, like a DCR client's.
+    if (
+      client.clientKind === "cimd" &&
+      (claimed.appId !== null || !isMcpClient(client))
+    ) {
       if (!claimed.appId) {
         // A code from before PB2 (or a DCR-shaped issue) names no approval.
         throw new OAuthError(
@@ -831,6 +866,17 @@ oauthApp.post("/token", async (c) => {
     });
   } catch (err) {
     if (err instanceof OAuthError) {
+      if (err.code !== "server_error") {
+        // The client_id only: the body holds the code, the refresh token and
+        // the verifier, and none of them is ever logged.
+        logOAuthRefusal({
+          phase: params.grant_type === "refresh_token" ? "refresh" : "token",
+          clientId: params.client_id,
+          reason: err.code,
+          code: err.code,
+          detail: err.message,
+        });
+      }
       // RFC 6749 §5.2: invalid_client → 401, server_error → 500, rest → 400.
       const status =
         err.code === "invalid_client"

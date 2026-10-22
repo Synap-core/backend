@@ -49,6 +49,7 @@ import {
   resourceForIssuer,
 } from "./protocol.js";
 import {
+  OAUTH_DEFAULT_SCOPES,
   isSynapApp,
   normalizeRequestedScopes,
   resolveIssuer,
@@ -85,11 +86,30 @@ import {
  * exactly the open-redirect/code-leak hole the rule exists to close.
  */
 export class AuthorizeUserError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** Why: logged (`logOAuthRefusal`) and picks the refusal page's copy. */
+    readonly reason: AuthorizeRefusal
+  ) {
     super(message);
     this.name = "AuthorizeUserError";
   }
 }
+
+/** Every reason a request is refused to the person rather than redirected. */
+export type AuthorizeRefusal =
+  | "pod_unconfigured"
+  | "client_id_missing"
+  | "unknown_client"
+  | "app_cannot_sign_in"
+  | "unverified_apps_off"
+  | "app_description_unreadable"
+  | "redirect_uri_missing"
+  | "redirect_uri_mismatch"
+  | "not_for_you"
+  | "no_shared_space"
+  | "nothing_to_give"
+  | "grant_changed";
 
 export interface AuthorizeParams {
   clientId?: string | null;
@@ -127,7 +147,8 @@ function requireIssuer(): string {
   const issuer = resolveIssuer();
   if (!issuer) {
     throw new AuthorizeUserError(
-      "This pod is not configured with a canonical PUBLIC_URL"
+      "This pod is not configured with a canonical PUBLIC_URL",
+      "pod_unconfigured"
     );
   }
   return issuer;
@@ -147,7 +168,7 @@ export async function resolveClientAndRedirect(
 ): Promise<{ client: StoredClient; redirectUri: string }> {
   const clientId = params.clientId?.trim();
   if (!clientId) {
-    throw new AuthorizeUserError("client_id is required");
+    throw new AuthorizeUserError("client_id is required", "client_id_missing");
   }
   // A pod app names its metadata document; an MCP client its DCR row. The
   // document is fetched (or read from cache) here, before the redirect_uri is
@@ -157,14 +178,17 @@ export async function resolveClientAndRedirect(
     // "Sign in with Synap": an app registered AND approved on this pod,
     // resolved from `apps` — never from `oauth_clients`, which DCR writes.
     client = await resolveAppClient(clientId);
-    if (!client) throw new AuthorizeUserError(APP_CANNOT_SIGN_IN);
+    if (!client) {
+      throw new AuthorizeUserError(APP_CANNOT_SIGN_IN, "app_cannot_sign_in");
+    }
   } else if (isClientMetadataUrl(clientId)) {
     // The pod admin's switch (F4), checked before the document is fetched: a
     // pod that admits no unverified app fetches nothing for one. Phase 1, so
     // /authorize and the consent screen both show it to the person.
     if (!(await podAppMayConnect(clientId))) {
       throw new AuthorizeUserError(
-        `This pod's admin has turned off apps that are not Synap apps, so ${new URL(clientId).host} cannot connect. Ask your pod admin to allow unverified apps.`
+        `This pod's admin has turned off apps that are not Synap apps, so ${new URL(clientId).host} cannot connect. Ask your pod admin to allow unverified apps.`,
+        "unverified_apps_off"
       );
     }
     try {
@@ -172,7 +196,8 @@ export async function resolveClientAndRedirect(
     } catch (err) {
       if (err instanceof ClientMetadataError) {
         throw new AuthorizeUserError(
-          `This app's description could not be read: ${err.message}`
+          `This app's description could not be read: ${err.message}`,
+          "app_description_unreadable"
         );
       }
       throw err;
@@ -185,16 +210,20 @@ export async function resolveClientAndRedirect(
   if (!client) {
     // Same message for malformed and unknown — never confirm which client_ids
     // exist on this pod.
-    throw new AuthorizeUserError("Unknown client_id");
+    throw new AuthorizeUserError("Unknown client_id", "unknown_client");
   }
 
   const redirectUri = params.redirectUri?.trim();
   if (!redirectUri) {
-    throw new AuthorizeUserError("redirect_uri is required");
+    throw new AuthorizeUserError(
+      "redirect_uri is required",
+      "redirect_uri_missing"
+    );
   }
   if (!isRegisteredRedirectUri(client.redirectUris, redirectUri)) {
     throw new AuthorizeUserError(
-      "redirect_uri does not match a registered redirect URI for this client"
+      "redirect_uri does not match a registered redirect URI for this client",
+      "redirect_uri_mismatch"
     );
   }
 
@@ -224,20 +253,27 @@ export function validateAuthorizeRequest(
   );
 
   const requested = normalizeRequestedScopes(parseScopeParam(params.scope));
-  // An app (CIMD) gets only what it asked for AND declared — an empty
-  // intersection is `invalid_scope`. An MCP (DCR) client keeps today's
-  // drop-unknown + fall-back-to-registered rule, which claude.ai relies on.
+  // A pod app (CIMD) gets only what it asked for AND declared — an empty
+  // intersection is `invalid_scope`. An MCP client keeps today's
+  // drop-unknown + fall-back-to-registered rule, which claude.ai relies on;
+  // one that came by CIMD and declared no `mcp.*` scope falls back to the
+  // pod default, as a DCR registration naming none does (`validateDcrRequest`).
   // A sign-in app (`app`) always gets the Hub door's two scopes: what its
   // token may touch is the GRANT, decided at consent, not a scope string.
   const grantedScopes =
     client.clientKind === "app"
       ? [...APP_PERSON_SCOPES]
-      : client.clientKind === "cimd"
-        ? narrowAppScopes(
-            [...client.scopes, ...client.requestedPermissions],
+      : isMcpClient(client)
+        ? narrowScopes(
+            client.clientKind === "cimd" && client.scopes.length === 0
+              ? OAUTH_DEFAULT_SCOPES
+              : client.scopes,
             requested
           )
-        : narrowScopes(client.scopes, requested);
+        : narrowAppScopes(
+            [...client.scopes, ...client.requestedPermissions],
+            requested
+          );
 
   const { resource, ignoredResource } = resourceFor(
     client,
@@ -264,26 +300,44 @@ export function validateAuthorizeRequest(
  * STRICT for an app (CIMD, or a sign-in `app`) client: anything but this
  * pod's `/mcp` or `/api/hub` is `invalid_target`.
  *
- * LENIENT for a DCR client (claude.ai, the Control Plane connector) until
- * claude.ai's real value has been observed in the logs (/authorize warns with
- * it): an unrecognised value is treated as ABSENT — not refused, not bound to
- * the code, so /token does not check it. Refusing it would break live MCP
- * logins over a value nobody has seen yet. Tighten later. A RECOGNISED value is
- * bound and re-checked for both kinds.
+ * LENIENT for an MCP client (claude.ai, the Control Plane connector, by DCR
+ * or by CIMD, `isMcpClient`) until claude.ai's real value has been observed
+ * in the logs (/authorize warns with it): an unrecognised value is treated as
+ * ABSENT — not refused, not bound to the code, so /token does not check it.
+ * Refusing it would break live MCP logins over a value nobody has seen yet.
+ * Tighten later. A RECOGNISED value is bound and re-checked for both kinds.
  */
 export function resourceFor(
-  client: Pick<StoredClient, "clientKind">,
+  client: Pick<StoredClient, "clientKind" | "requestedPermissions">,
   raw: string | null | undefined,
   issuer: string
 ): { resource: string | null; ignoredResource: string | null } {
   try {
     return { resource: resourceForIssuer(raw, issuer), ignoredResource: null };
   } catch (err) {
-    if (err instanceof OAuthError && client.clientKind === "dcr") {
+    if (err instanceof OAuthError && isMcpClient(client)) {
       return { resource: null, ignoredResource: raw ?? "" };
     }
     throw err;
   }
+}
+
+/**
+ * Is this an MCP client (an agent connection: `claude-web*` key, `mcp.*`
+ * scopes, no refresh token) rather than a pod app? A DCR client always is. A
+ * CIMD client is one when its document declares no `synap_requests` (review
+ * A1): the AS metadata advertises CIMD to every client, and an MCP client that
+ * adopts it (MCP authorization 2025-11) declares only `mcp.*`. The DOCUMENT
+ * decides, never the request: a pod app that asks only for `mcp.*` at
+ * /authorize stays a pod app, and is refused at consent.
+ */
+export function isMcpClient(
+  client: Pick<StoredClient, "clientKind" | "requestedPermissions">
+): boolean {
+  if (client.clientKind === "dcr") return true;
+  return (
+    client.clientKind === "cimd" && client.requestedPermissions.length === 0
+  );
 }
 
 /** Both phases, in order. Used by the consent surface (which needs both). */
@@ -376,14 +430,20 @@ async function appSignInFor(
   viewerUserId: string
 ): Promise<{ grant: AppGrantRequest[]; registeredBy: string }> {
   const app = await loadLiveApp(client.clientId);
-  if (!app) throw new AuthorizeUserError(APP_CANNOT_SIGN_IN);
+  if (!app) {
+    throw new AuthorizeUserError(APP_CANNOT_SIGN_IN, "app_cannot_sign_in");
+  }
   const reach = await appSignInReach(app, viewerUserId);
   if (reach === "not_for_you") {
-    throw new AuthorizeUserError(appNotForYou(client.clientName));
+    throw new AuthorizeUserError(
+      appNotForYou(client.clientName),
+      "not_for_you"
+    );
   }
   if (reach.length === 0) {
     throw new AuthorizeUserError(
-      `You are not in any space ${client.clientName} was approved for, so it cannot act as you here.`
+      `You are not in any space ${client.clientName} was approved for, so it cannot act as you here.`,
+      "no_shared_space"
     );
   }
   const owner = await db.query.users.findFirst({
@@ -435,7 +495,10 @@ export async function getOAuthConsentContext(
     registeredAt: req.client.createdAt,
     appSignIn,
   };
-  if (req.client.clientKind !== "cimd") return { ...base, app: null };
+  // An MCP client is shown as one, whichever way it registered (A1).
+  if (req.client.clientKind !== "cimd" || isMcpClient(req.client)) {
+    return { ...base, app: null };
+  }
   if (!callerUserId) {
     throw new Error("getOAuthConsentContext: a pod app needs the caller");
   }
@@ -530,7 +593,7 @@ export async function decideOAuthAuthorization(
   // before any code exists; the code then redeems to THAT approved app.
   let appId: string | null = null;
   let scopes = req.grantedScopes;
-  if (req.client.clientKind === "cimd") {
+  if (req.client.clientKind === "cimd" && !isMcpClient(req.client)) {
     if (!ctx) {
       throw new Error(
         "decideOAuthAuthorization: a pod app needs the caller's context"
@@ -539,7 +602,8 @@ export async function decideOAuthAuthorization(
     const { permissions } = appPermissions(req);
     if (permissions.length === 0) {
       throw new AuthorizeUserError(
-        "This app asks for nothing a pod app can be given (it declared no permission it requested)."
+        "This app asks for nothing a pod app can be given (it declared no permission it requested).",
+        "nothing_to_give"
       );
     }
     const connected = await connectOAuthApp({
@@ -565,7 +629,8 @@ export async function decideOAuthAuthorization(
     input.appSignInFingerprint !== appGrantFingerprint(appGrant)
   ) {
     throw new AuthorizeUserError(
-      `What ${req.client.clientName} may do changed since this page was shown — review it again.`
+      `What ${req.client.clientName} may do changed since this page was shown — review it again.`,
+      "grant_changed"
     );
   }
 
