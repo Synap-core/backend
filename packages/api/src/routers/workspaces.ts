@@ -97,7 +97,7 @@ import { isHiddenAsArchived } from "../utils/workspace-archived.js";
 export { isPodReadableWorkspace } from "./workspaces/helpers.js";
 
 const coreProcedures = {
-  create: protectedProcedure
+  create: credentialProcedure
     .input(
       z.object({
         name: z.string().trim().min(1).max(100),
