@@ -16,10 +16,6 @@ apps/pod-admin/__tripwires__/exit-door.test.ts | infra | sibling-repo | landing 
 packages/api/src/__tripwires__/property-label-mirror-drift.test.ts | infra | sibling-repo | synap-app checked out but its deps do not resolve (@synap-core/types/vocabulary)
 packages/api/src/notifications/__tests__/push-tap-target.test.ts | infra | sibling-repo | relay-app checkout absent in CI
 packages/api/src/services/discover/space-brief.templates.test.ts | infra | sibling-repo | synap-app checked out but its deps do not resolve (@synap-core/types/automations)
-packages/api/src/services/focus-sessions/__tests__/block-guidelines.test.ts | wave6 | assertion-drift | append returns denied, test expects updated
-packages/api/src/services/focus-sessions/__tests__/create-session-id-seam.test.ts | wave6 | stale-mock | find-open-session-twin mock lacks sessionTwinLockKey
-packages/api/src/services/focus-sessions/__tests__/schedule-session.test.ts | wave6 | stale-mock | vi.mock factory error (hoisted top-level variable)
-packages/api/src/services/focus-sessions/__tests__/session-first.pglite.test.ts | wave6 | assertion-drift | adoption keeps the receipt name, test expects null
 packages/api/src/services/intake/__tests__/capture-clarification-serialisers.test.ts | infra | sibling-repo | synap-app checked out but its deps do not resolve (@synap-core/types/capture)
 packages/api/src/services/skills/run-skill-in-sandbox.verb-act.test.ts | infra | native-addon | isolated-vm has no prebuild for node20 linux in CI
 packages/jobs/src/__tripwires__/relay-templates-match-runtime.tripwire.test.ts | infra | sibling-repo | relay-app checkout absent in CI
