@@ -6540,6 +6540,68 @@ cmd_compose_request() {
     fi
 }
 
+# ── ARCHIVE REQUEST (host door) ───────────────────────────────────────────────
+# pod-agent never archives a pod itself: from inside its container the pod's
+# volumes are not readable as files, and an archive that could not see them
+# was uploaded EMPTY while reporting success (2026-10-21). It writes a request
+# and this host door runs deploy/archive-pod.sh, on the host, under the update
+# lock (an archive stops services; no update or compose request may run beside
+# it). Started by synap-archive.path.
+#
+# ARCHIVE REQUEST CONTRACT (schema 1), written atomically (tmp + rename), mode
+# 0600, to <deploy dir>/state/requests/archive.json (writer: deploy/
+# archive-request.sh, run by pod-agent):
+#   {"schema":1, "id":"<opaque>", "uploadUrl":"https://…" (presigned PUT),
+#    "recipients":["age1…", …] (the owner's archiveRecipients)}
+# Taken before anything else (_synap_take_request); the outcome is
+# state/last-archive-request.json {kind:"pod.archive-request", status:
+# succeeded|failed|aborted, request:<id>, reason, manifest} — the manifest is
+# archive-pod.sh's ARCHIVE_MANIFEST (what the CP checks before deleting).
+_AR_ID_RE='^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'
+_ar_record() { # <status> <request-id> <reason> [manifest-json]
+    _synap_event "$(jq -cn --arg s "$1" --arg r "$2" --arg why "$3" --argjson m "${4:-null}" \
+        '{kind:"pod.archive-request", status:$s, request:$r, reason:$why} + (if $m == null then {} else {manifest:$m} end)')" 0 state/last-archive-request.json >/dev/null
+}
+
+cmd_archive_request() {
+    local deploy_dir req id url rcpts wait out rc=0 manifest why
+    deploy_dir="$(get_deploy_dir)"
+    [ -n "$deploy_dir" ] || { echo -e "${RED}Error: Not in Synap installation directory${NC}"; exit 1; }
+    cd "$deploy_dir"
+    command -v jq >/dev/null 2>&1 || { echo -e "${RED}jq is required${NC}"; exit 1; }
+    req="$(_synap_take_request archive)"
+    [ -n "$req" ] || { echo "no archive request waiting"; return 0; }
+    id="$(jq -r '.id // empty' "$req" 2>/dev/null || true)"
+    url="$(jq -r '.uploadUrl // empty' "$req" 2>/dev/null || true)"
+    rcpts="$(jq -r '(.recipients // []) | if type == "array" then map(tostring) | join(" ") else "" end' "$req" 2>/dev/null || true)"
+    if ! [[ "$id" =~ $_AR_ID_RE ]] || [ "$(jq -r '.schema // empty' "$req" 2>/dev/null)" != 1 ] \
+        || ! [[ "$url" =~ ^https://[^[:space:]]+$ ]] || [ -z "$rcpts" ] \
+        || ! [[ " $rcpts " =~ ^(\ age1[a-z0-9]+)+\ $ ]]; then
+        _ar_record aborted "$id" "invalid archive request: it must be {\"schema\":1, \"id\":…, \"uploadUrl\":\"https://…\", \"recipients\":[\"age1…\"]}"
+        echo -e "${RED}❌ invalid archive request ${id:-<no id>} — nothing was run${NC}" >&2
+        exit 1
+    fi
+    wait="${SYNAP_ARCHIVE_LOCK_WAIT:-600}"; [[ "$wait" =~ ^[0-9]+$ ]] || wait=600
+    if ! synap_update_lock "$deploy_dir" "synap archive-request" "$wait"; then
+        _ar_record aborted "$id" "another pod operation held the update lock for ${wait}s — the archive was not run; send it again"
+        exit 1
+    fi
+    echo -e "${BLUE}🗄  archive request ${id}: archiving this pod on the host...${NC}"
+    mkdir -p state/archive-work && chmod 700 state/archive-work
+    out="$(ARCHIVE_ON_HOST=1 ARCHIVE_AGE_RECIPIENTS="$rcpts" ARCHIVE_WORK_DIR="$deploy_dir/state/archive-work" \
+        sh ./archive-pod.sh "$url" "" "" 2>&1 </dev/null)" || rc=$?
+    printf '%s\n' "$out" | grep -v '^ARCHIVE_MANIFEST ' | tail -40
+    manifest="$(printf '%s\n' "$out" | sed -n 's/^ARCHIVE_MANIFEST //p' | tail -n 1)"
+    if [ "$rc" = 0 ] && [ -n "$manifest" ] && jq -e '.schema == 1 and (.volumes | type) == "array"' >/dev/null 2>&1 <<<"$manifest"; then
+        _ar_record succeeded "$id" "" "$manifest"
+        return 0
+    fi
+    why="$(printf '%s\n' "$out" | sed -n 's/.*\] \[archive\] ERROR: //p' | tail -n 1 | cut -c1-300)"
+    [ "$rc" = 0 ] && why="the archive reported success without a manifest"
+    _ar_record failed "$id" "${why:-archive-pod.sh exited ${rc}}"
+    exit 1
+}
+
 # ── units (systemd) ───────────────────────────────────────────────────────────
 # deploy/systemd/ holds the unit TEMPLATES (@SYNAP@ = this CLI, @DEPLOY_DIR@ =
 # this deploy dir); the set is whatever is in that directory. Installed:
@@ -6602,7 +6664,9 @@ cmd_units() {
                     || { echo -e "${RED}could not write ${dst}/${u}${NC}"; exit 1; }
             done
             systemctl daemon-reload
-            systemctl enable --now synap-heal.timer synap-update.path synap-compose.path
+            # every request door (synap-*.path, derived from the templates) + heal
+            # shellcheck disable=SC2046
+            systemctl enable --now synap-heal.timer $(printf '%s\n' $names | grep -E '^synap-.*\.path$')
             [ "$auto" = 1 ] && systemctl enable --now synap-update.timer
             echo -e "${GREEN}✓ units installed in ${dst}: heal every 2 min, update requests watched$([ "$auto" = 1 ] && echo ', automatic updates ON (03:00–05:00, state/update-policy.json)' || echo '; automatic updates: see synap units status')${NC}"
             _synap_event "$(jq -cn --arg d "$dst" --argjson auto "$auto" '{kind:"pod.units", status:"installed", dir:$d, autoUpdateEnabledNow:($auto == 1)}')" 0 >/dev/null
@@ -7778,6 +7842,10 @@ case "${1:-help}" in
     compose-request)
         shift
         cmd_compose_request "$@"
+        ;;
+    archive-request)
+        shift
+        cmd_archive_request "$@"
         ;;
     shell)
         shift

@@ -1,0 +1,28 @@
+# Synap archive request: pod-agent runs in a container where the pod's volumes
+# are not files it can read (an archive made there was uploaded empty,
+# 2026-10-21). It writes state/requests/archive.json; this unit runs
+# deploy/archive-pod.sh on the host, under the update lock, and records the
+# outcome with the archive's manifest. Started by synap-archive.path.
+# Template: synap units install.
+[Unit]
+Description=Synap pod archive (from pod-agent)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+Environment=SYNAP_DEPLOY_DIR=@DEPLOY_DIR@
+Environment=SYNAP_ASSUME_YES=1
+# Take the request BEFORE the engine runs (contract: _synap_take_request in
+# `synap`): a run that dies before its own take would leave archive.json in
+# place, and PathExists= would restart this unit until the start limit fails
+# synap-archive.path for good. An older taken file is dropped first, so
+# the engine only ever reads THIS run's request.
+Environment=SYNAP_REQUEST_PRETAKEN=1
+ExecStartPre=/bin/sh -c 'r="$${SYNAP_DEPLOY_DIR}/state/requests"; rm -f "$$r/archive.taken.json"; [ ! -e "$$r/archive.json" ] || mv -f "$$r/archive.json" "$$r/archive.taken.json"'
+ExecStart=@SYNAP@ archive-request
+# A request taken here but never answered (the engine died before recording
+# an outcome) still gets one, so pod-agent and the CP never wait on it.
+# No StartLimit*= override: see synap-update.service.
+ExecStopPost=/bin/sh -c 'exec /bin/sh "$${SYNAP_DEPLOY_DIR}/request-outcome.sh" archive'
+TimeoutStartSec=60min

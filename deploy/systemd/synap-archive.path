@@ -1,0 +1,13 @@
+# Runs synap-archive.service when pod-agent asks the host to archive the pod
+# (contract: the ARCHIVE REQUEST comment above cmd_archive_request in `synap`).
+# synap-archive.service takes the file (ExecStartPre) before the engine runs,
+# so this cannot loop even when the engine dies early. Template: synap units install.
+[Unit]
+Description=Synap pod archive requests (from pod-agent)
+
+[Path]
+PathExists=@DEPLOY_DIR@/state/requests/archive.json
+Unit=synap-archive.service
+
+[Install]
+WantedBy=multi-user.target

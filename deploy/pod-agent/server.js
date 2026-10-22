@@ -180,13 +180,16 @@ const COMMANDS = {
     script: "restore-archive-pod.sh",
     args: (p) => [p.archiveUrl || "", p.callbackUrl || "", p.callbackJwt || ""],
   },
+  // The HOST archives the pod (synap archive-request): this only hands it over
+  // and waits for the outcome. An archive stops services and can take long.
   archive: {
-    script: "archive-pod.sh",
+    script: "archive-request.sh",
     args: (p) => [
       p.presignedUploadUrl || "",
       p.callbackUrl || "",
       p.callbackJwt || "",
     ],
+    timeout: 60 * 60_000,
   },
   configure: {
     script: "configure-pod.sh",
@@ -267,7 +270,7 @@ function startCommand(commandName, payload, policy) {
     commandName === "archive"
       ? {
           ...process.env,
-          // D15: archive-pod.sh age-encrypts to exactly these recipients.
+          // D15: the host's archive-pod.sh age-encrypts to exactly these recipients.
           ARCHIVE_AGE_RECIPIENTS: policy.archiveRecipients.join(" "),
         }
       : process.env;

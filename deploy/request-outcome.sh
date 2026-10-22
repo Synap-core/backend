@@ -2,7 +2,7 @@
 # ============================================================================
 # The terminal outcome of a request the unit TOOK but the engine never answered
 # (POSIX sh, no jq — it must run when the engine cannot). ExecStopPost= of
-# synap-update.service / synap-compose.service.
+# synap-update.service / synap-compose.service / synap-archive.service.
 # ============================================================================
 # The unit's ExecStartPre takes state/requests/<name>.json before `synap` runs,
 # so a run that dies early can no longer loop on it — but then nothing would
@@ -14,14 +14,15 @@
 # (systemd's SERVICE_RESULT / EXIT_CODE / EXIT_STATUS) — and appends it to
 # state/events.jsonl. An outcome the engine wrote is never touched.
 #
-#   request-outcome.sh <update|compose>        (needs SYNAP_DEPLOY_DIR)
+#   request-outcome.sh <update|compose|archive>   (needs SYNAP_DEPLOY_DIR)
 # ============================================================================
 name="${1:-}"
 d="${SYNAP_DEPLOY_DIR:?request-outcome.sh needs SYNAP_DEPLOY_DIR}"
 case "$name" in
     update)  latest="$d/state/last-update.json"; kind="pod.update" ;;
     compose) latest="$d/state/last-compose-request.json"; kind="pod.compose-request" ;;
-    *) echo "usage: request-outcome.sh <update|compose>" >&2; exit 2 ;;
+    archive) latest="$d/state/last-archive-request.json"; kind="pod.archive-request" ;;
+    *) echo "usage: request-outcome.sh <update|compose|archive>" >&2; exit 2 ;;
 esac
 taken="$d/state/requests/$name.taken.json"
 [ -f "$taken" ] || exit 0                              # no request this run (a timer start)
