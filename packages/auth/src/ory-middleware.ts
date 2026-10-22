@@ -105,10 +105,6 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
   // rejects that raw token when forwarded as a cookie (it expects an encrypted
   // browser-flow cookie), but accepts it as X-Session-Token.
   let session: unknown;
-  // Did the X-Session-Token itself resolve? Such a session is held by an app
-  // (a bearer it stores), not by a browser: credential doors ask it for a
-  // recent sign-in, as they ask a device token (`sessionKind`).
-  let fromSessionToken = false;
   try {
     // X-Session-Token first (API clients). CRITICAL: a STALE/invalid token must NOT
     // shadow a valid cookie. The Electron browser ALWAYS sends X-Session-Token, so
@@ -119,7 +115,6 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
     // is the non-Hono path; both must agree).
     if (sessionToken) {
       session = await getKratosSessionByToken(sessionToken);
-      fromSessionToken = !!session;
     }
     if (!session && requireExplicitSessionToken) {
       return c.json({ error: "Invalid X-Session-Token" }, 401);
@@ -162,7 +157,6 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
   });
   c.set("userId", validSession.identity.id);
   c.set("session", validSession);
-  if (fromSessionToken) c.set("sessionKind", "kratos_token");
   c.set("authenticated", true);
 
   return next();
