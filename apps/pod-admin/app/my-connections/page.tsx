@@ -55,6 +55,11 @@ import {
   resolveConnectionAction,
 } from "@synap-core/types/membrane";
 import { chipColor, type AppRow } from "../apps/_lib/app-view";
+import {
+  approvalSentence,
+  podAppOf,
+  tierLabel,
+} from "../apps/_lib/pod-app-view";
 
 /** How many rows a list shows before it offers "Show all N" (ui-composition §4). */
 const LIST_CAP = 6;
@@ -614,12 +619,20 @@ function AppCard({
   onRevoke?: () => void;
 }) {
   const view = resolveAppConnection(app);
+  // A pod app (it connected at the pod's sign-in door) is named by its
+  // domain and tier, and its reach is what the person approved per space.
+  const pod = podAppOf(app);
+  const lastUsed = pod ? pod.last_used_at : app.last_used_at;
   const meta = [
-    appMode(app.mode),
-    app.created_at ? `created ${formatRelative(app.created_at)}` : null,
-    app.last_used_at
-      ? `last used ${formatRelative(app.last_used_at)}`
-      : "never used",
+    pod ? null : appMode(app.mode),
+    pod
+      ? pod.connected_at
+        ? `connected ${formatRelative(pod.connected_at)}`
+        : null
+      : app.created_at
+        ? `created ${formatRelative(app.created_at)}`
+        : null,
+    lastUsed ? `last used ${formatRelative(lastUsed)}` : "never used",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -641,7 +654,16 @@ function AppCard({
               </Link>
             </p>
             <p className="mt-1 text-xs text-foreground/65">
-              <span className="font-mono">{app.public_id}</span>
+              {pod ? (
+                <>
+                  <span className="font-medium text-foreground/80">
+                    {pod.domain}
+                  </span>{" "}
+                  · {tierLabel(pod.verified)}
+                </>
+              ) : (
+                <span className="font-mono">{app.public_id}</span>
+              )}
             </p>
           </div>
           {view.showChip ? (
@@ -657,7 +679,9 @@ function AppCard({
         </div>
 
         <p className="text-xs text-foreground/70">
-          {appHolderAccess(app).sentence}
+          {pod && !app.revoked_at
+            ? approvalSentence(pod.approved)
+            : appHolderAccess(app).sentence}
         </p>
         <p className="text-xs text-foreground/65">{meta}</p>
 
