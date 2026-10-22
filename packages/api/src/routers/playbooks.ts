@@ -312,6 +312,16 @@ export const createInputSchema = playbookDefinitionSchema.extend({
    * judged this genuinely distinct.
    */
   forceCreate: z.boolean().optional(),
+  /**
+   * The id a PROPOSAL promised for this playbook (its `targetId`). The
+   * `playbook/create` approval executor passes it so the approved playbook
+   * lands under the id the agent was handed — before, the database minted a
+   * second id and the proposal's `targetId` named no playbook (live ee96643d →
+   * 48e6878a, 2026-10-21). Same contract as `entities.create.proposedEntityId`:
+   * an id that already names this workspace's playbook returns it (a replayed
+   * approval); any other taken id mints a fresh one.
+   */
+  proposedPlaybookId: z.string().uuid().optional(),
   executor: executorRefSchema.default("is-agent"),
   status: playbookStatusSchema.default("draft"),
   /**
@@ -1900,6 +1910,34 @@ export const playbooksRouter = router({
         params: input.params,
         subjectProfile: input.subjectProfile,
       });
+      // The id this playbook lands under, minted BEFORE the gate and handed to
+      // it as `data.id`, so a proposal's `targetId` IS the playbook's id once it
+      // is approved (the gate reads `data.id` as the target). See
+      // `proposedPlaybookId` above for the replay rules.
+      let playbookId = input.proposedPlaybookId ?? randomUUID();
+      if (input.proposedPlaybookId) {
+        const [taken] = await (
+          await getDb()
+        )
+          .select()
+          .from(playbooks)
+          .where(eq(playbooks.id, input.proposedPlaybookId))
+          .limit(1);
+        if (taken) {
+          if (
+            taken.workspaceId === ctx.workspaceId &&
+            taken.status !== "archived"
+          ) {
+            return {
+              playbook: taken as Playbook,
+              status: "created" as const,
+              message: "Playbook already created under this id — returning it",
+              proposalId: null as string | null,
+            };
+          }
+          playbookId = randomUUID();
+        }
+      }
       const gateOpts = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
@@ -1918,6 +1956,7 @@ export const playbooksRouter = router({
         // untouched. goalTemplate is required by createInputSchema, so without
         // this the approve-path materialization would fail zod validation.
         data: {
+          id: playbookId,
           name: input.name,
           description: input.description,
           goalTemplate: input.goalTemplate,
@@ -2038,6 +2077,7 @@ export const playbooksRouter = router({
         const [row] = await database
           .insert(playbooks)
           .values({
+            id: playbookId,
             workspaceId: ctx.workspaceId,
             createdBy: input.agentUserId ?? ctx.userId,
             name: input.name,
