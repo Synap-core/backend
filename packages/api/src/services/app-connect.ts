@@ -59,6 +59,8 @@ import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
   applyAgentPosture,
   readAgentGovernance,
+  readAgentWritePostures,
+  type AgentGovernanceState,
 } from "@synap/database/agent-governance";
 import {
   AGENT_WRITE_MODE_LINE,
@@ -2046,11 +2048,18 @@ export async function appWriteMode(
   const state = agentUserId
     ? await readAgentGovernance({ db, agentUserId })
     : null;
-  const podDefault = await readReversibleDefault(db);
+  return writeModeView(state, (await readReversibleDefault(db)).enabled);
+}
+
+/** `appWriteMode` from posture already read (a list reads them in one go). */
+function writeModeView(
+  state: Pick<AgentGovernanceState, "posture" | "writesRequireProposal"> | null,
+  podDefaultEnabled: boolean
+): AppWriteModeView {
   const posture = state ? state.posture : "ask-first";
   const writeMode = resolveAgentWriteMode({
     posture,
-    podDefaultEnabled: podDefault.enabled,
+    podDefaultEnabled,
     writesRequireProposal: state?.writesRequireProposal ?? true,
   });
   return {
@@ -2132,7 +2141,9 @@ export interface PodAppView {
 
 /**
  * The `pod_app` half of each pod app row (mode 'oauth'), keyed by public id.
- * Space names in one query; key use from the keys the caller already read.
+ * A fixed number of queries whatever the number of rows (review S7): space
+ * names, the newest consent per app, the agents' postures and the pod
+ * default, one read each; key use from the keys the caller already read.
  */
 export async function podAppViews(
   rows: readonly AppWithGrants[],
@@ -2159,8 +2170,12 @@ export async function podAppViews(
       : []
     ).map((w) => [w.id, w.name])
   );
+  // The newest approved consent per app, not every one of them.
   const consents = await db
-    .select({ targetId: proposals.targetId, createdAt: proposals.createdAt })
+    .select({
+      targetId: proposals.targetId,
+      connectedAt: drizzleSql<Date | string>`max(${proposals.createdAt})`,
+    })
     .from(proposals)
     .where(
       and(
@@ -2172,7 +2187,19 @@ export async function podAppViews(
           pod.map((r) => r.app.id)
         )
       )
-    );
+    )
+    .groupBy(proposals.targetId);
+  // An aggregate skips the column's mapping: the driver may hand a string.
+  const connectedAt = new Map(
+    consents.map((c) => [c.targetId, new Date(c.connectedAt)])
+  );
+  const postures = await readAgentWritePostures({
+    db,
+    agentUserIds: pod.flatMap((r) =>
+      r.app.agentUserId ? [r.app.agentUserId] : []
+    ),
+  });
+  const podDefaultEnabled = (await readReversibleDefault(db)).enabled;
   const out = new Map<string, PodAppView>();
   for (const row of pod) {
     const clientId = row.app.oauthClientId!;
@@ -2197,16 +2224,17 @@ export async function podAppViews(
         workspaceId: a.workspaceId,
         workspaceName: names.get(a.workspaceId) ?? null,
       })),
-      connected_at: newestOf(
-        consents
-          .filter((c) => c.targetId === row.app.id)
-          .map((c) => c.createdAt)
-      ),
+      connected_at: connectedAt.get(row.app.id) ?? null,
       last_used_at: newestOf([
         row.lastUsedAt,
         ...keys.map((k) => k.lastUsedAt),
       ]),
-      write_mode: await appWriteMode(row.app.agentUserId),
+      write_mode: writeModeView(
+        row.app.agentUserId
+          ? (postures.get(row.app.agentUserId) ?? null)
+          : null,
+        podDefaultEnabled
+      ),
     });
   }
   return out;

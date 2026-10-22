@@ -104,7 +104,7 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => {
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { OpenAPIHono } from "@hono/zod-openapi";
-import { runWithGrant } from "@synap/database";
+import { AppRepository, runWithGrant } from "@synap/database";
 import * as schema from "@synap/database/schema";
 import { readAgentGovernance } from "@synap/database/agent-governance";
 import { liveApiKeyIds } from "@synap/jobs/workers/webhook-worker.js";
@@ -123,6 +123,7 @@ import type {
   HubVariables,
 } from "../routers/hub-protocol/rest/_shared.js";
 import { apiKeyService } from "./api-keys.js";
+import { podAppViews } from "./app-connect.js";
 
 const ISSUER = "https://pod.test.synap.live";
 const STUDIO = "https://studio.example.com/.well-known/synap-client.json";
@@ -827,5 +828,72 @@ describe("M — 'apply automatically' is the owner's, after connecting", () => {
     // Revoke ends the choice: a reconnect starts at ask-first again.
     await caller(OWNER).revoke({ publicId: app.public_id });
     expect(await posture()).toBe("ask-first");
+  });
+});
+
+describe("S7 — the pod app lists cost a fixed number of queries", () => {
+  /** Every pod app row, and podAppViews over them with its query count. */
+  async function views() {
+    const rows = (
+      await new AppRepository(h.db as never).listAll({ includeRevoked: true })
+    ).filter((r) => r.app.mode === "oauth" && r.app.oauthClientId);
+    const spy = vi.spyOn(
+      h.client as unknown as { query: (...a: unknown[]) => unknown },
+      "query"
+    );
+    try {
+      const out = await podAppViews(rows, new Map());
+      return { rows, out, queries: spy.mock.calls.length };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+  const newestConsent = async (appId: string) =>
+    (
+      await q<{ at: Date }>(
+        `select max(created_at) as at from proposals
+          where target_type = 'app' and proposal_type = 'connect'
+            and status = 'approved' and target_id = $1`,
+        [appId]
+      )
+    ).rows[0]!.at;
+
+  it("one pod app or three: the same queries; write mode and connected_at stay each row's own", async () => {
+    await connect([{ permission: READ, workspaceId: BRAND }]);
+    const one = await views();
+    expect(one.rows.length).toBeGreaterThan(0);
+
+    await connect([{ permission: READ, workspaceId: BRAND }], {
+      clientId: NOTES,
+      redirectUri: NOTES_CB,
+    });
+    await connect([{ permission: READ, workspaceId: BRAND }], {
+      clientId: SYNAP_APP,
+      redirectUri: SYNAP_CB,
+    });
+    // A second consent of the same app: connected_at is the newest one.
+    await connect([{ permission: READ, workspaceId: BRAND }]);
+    const notes = (await caller(OWNER).list()).find(
+      (a) => a.pod_app?.client_id === NOTES
+    )!;
+    await caller(OWNER).setWriteMode({
+      publicId: notes.public_id,
+      applyAutomatically: true,
+    });
+
+    const three = await views();
+    expect(three.rows.length).toBeGreaterThanOrEqual(one.rows.length + 2);
+    expect(three.queries).toBe(one.queries);
+
+    for (const row of three.rows) {
+      const view = three.out.get(row.app.publicId)!;
+      expect(view.write_mode.applyAutomatically).toBe(
+        row.app.publicId === notes.public_id && !row.app.revokedAt
+      );
+      const newest = await newestConsent(row.app.id);
+      expect(view.connected_at?.getTime() ?? null).toBe(
+        newest ? new Date(newest).getTime() : null
+      );
+    }
   });
 });
