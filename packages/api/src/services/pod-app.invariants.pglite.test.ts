@@ -399,8 +399,9 @@ describe("the consent screen shows the app as its domain, and what it may be giv
       params(STUDIO, STUDIO_CB, CREATE),
       "human-without-spaces"
     );
+    // No reason in this app's document: null (the consent contract).
     expect(ctx.app!.permissions).toEqual([
-      { permission: CREATE, workspaces: [] },
+      { permission: CREATE, workspaces: [], reason: null },
     ]);
   });
 });

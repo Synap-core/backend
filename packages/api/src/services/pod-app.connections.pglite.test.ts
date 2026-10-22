@@ -863,20 +863,24 @@ describe("S7 — the pod app lists cost a fixed number of queries", () => {
     const one = await views();
     expect(one.rows.length).toBeGreaterThan(0);
 
+    // MEMBER has no connection of these two yet (one row per person and
+    // app): two new rows.
     await connect([{ permission: READ, workspaceId: BRAND }], {
       clientId: NOTES,
       redirectUri: NOTES_CB,
+      userId: MEMBER,
     });
     await connect([{ permission: READ, workspaceId: BRAND }], {
       clientId: SYNAP_APP,
       redirectUri: SYNAP_CB,
+      userId: MEMBER,
     });
     // A second consent of the same app: connected_at is the newest one.
     await connect([{ permission: READ, workspaceId: BRAND }]);
-    const notes = (await caller(OWNER).list()).find(
+    const notes = (await caller(MEMBER).list()).find(
       (a) => a.pod_app?.client_id === NOTES
     )!;
-    await caller(OWNER).setWriteMode({
+    await caller(MEMBER).setWriteMode({
       publicId: notes.public_id,
       applyAutomatically: true,
     });
