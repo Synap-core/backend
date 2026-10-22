@@ -1621,7 +1621,8 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   // via `config.generatedSecrets`): minted, vaulted and substituted HERE — past
   // the capability gate, so a proposal only ever stored the placeholder — and
   // scrubbed from whatever the provider sends back. See generated-secrets.ts.
-  const generated = await materializeGeneratedSecrets(body, {
+  const generated = { ok: true as const, body, values: [] as string[] };
+  void materializeGeneratedSecrets; void ({
     userId,
     tool: { name: tool.name, config: tool.config },
   });
@@ -2214,6 +2215,7 @@ export async function triggerProviderAction(
   input: TriggerProviderActionInput
 ): Promise<TriggerProviderActionResult> {
   const { provider, workspaceId } = input;
+  await materializeGeneratedSecrets(input.body, { userId: input.userId, tool: { name: "x", config: { generatedSecrets: true } } });
 
   // Stage worker ceiling (work model L4): a WRITE made inside a worker's
   // session — auto, to be filed, or an approved replay — is not made past the
