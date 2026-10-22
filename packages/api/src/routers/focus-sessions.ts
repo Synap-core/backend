@@ -8,7 +8,7 @@
 
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import {
   and,
@@ -2395,7 +2395,7 @@ export const focusSessionsRouter = router({
    * backing edge. Gated by checkPermissionOrPropose (AI grants route to a
    * reviewable proposal). Idempotent via the links unique-edge index.
    */
-  grantCapability: protectedProcedure
+  grantCapability: credentialProcedure
     .input(
       z.object({
         sessionId: z.string().uuid(),

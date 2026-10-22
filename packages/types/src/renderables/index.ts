@@ -25,3 +25,5 @@ export * from "./catalog.js";
 export * from "./chart-data.js";
 export * from "./chart-shapers.js";
 export * from "./fences.js";
+export * from "./embed-model.js";
+export * from "./chart-geometry.js";

@@ -1,5 +1,6 @@
 import { drizzleSql, focusSessions } from "@synap/database";
 import type { SQL } from "@synap/database";
+import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
 
 /**
  * Merge a sub-object into `focus_sessions.metadata` without clobbering the
@@ -16,6 +17,9 @@ export const PROVIDE_CONNECT_META_KEY = "provideConnect";
 
 /** The vault reads a provide answer granted for this session (`provide-secret-grant.ts`). */
 export const PROVIDE_GRANTS_META_KEY = "provideGrants";
+
+/** The dev-loop gates' approval receipt (`dev-approval.ts` executor). */
+export const DEV_LOOP_METADATA_KEY = "devLoop";
 
 /**
  * A playbook run's turn ledger (`services/runs/run-turn-end.ts`): how each IS
@@ -41,8 +45,16 @@ export const HELD_RUN_META_KEY = "heldRun";
  * cancel record — written by `recordSessionRunManifest` and the cancel door
  * only), and the triage receipt (`triage`: the person's accept or discard of
  * an agent's draft, written by `triage.ts` only — a forged `acceptedAt` would
- * read as accepted, so the held run could never start). A client or agent
- * metadata write never carries them ({@link withoutServerOwnedSessionMetadata}).
+ * read as accepted, so the held run could never start). And a gate's own
+ * record: `devLoop`, the dev-approval executor's receipt (who approved the
+ * plan / the deploy, when, under which proposal — a forged one reads exactly
+ * like a real approval), and `checkGate`, a check gate's HOLD
+ * (`stage-gate.ts`, cleared only by `resumeCheckGateIfMet` — clearing it
+ * un-holds the gate). And the provenance stamps, written only by the door that
+ * did the thing: `triage` (also `acceptedBy`), `conversion` (the session →
+ * object receipt) and `recalled` (what the recall door posted). A client or
+ * agent metadata write never carries them
+ * ({@link withoutServerOwnedSessionMetadata}).
  */
 export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   PROVIDE_CONNECT_META_KEY,
@@ -53,7 +65,11 @@ export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   RUN_TURNS_META_KEY,
   HELD_RUN_META_KEY,
   "run",
+  DEV_LOOP_METADATA_KEY,
+  CHECK_GATE_METADATA_KEY,
   "triage",
+  "conversion",
+  "recalled",
 ] as const;
 
 /** A client/agent metadata bag with every server-owned key dropped. Pure. */

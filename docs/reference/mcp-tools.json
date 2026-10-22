@@ -66,6 +66,7 @@
       "synap_governance",
       "synap_revise_proposal",
       "synap_reject_proposal",
+      "synap_request_deploy_approval",
       "synap_create_rule",
       "synap_update_rule"
     ],
@@ -10287,6 +10288,117 @@
           }
         },
         "required": ["proposalId"]
+      }
+    },
+    {
+      "name": "synap_request_deploy_approval",
+      "title": "Request deploy approval",
+      "group": "governance",
+      "annotations": {
+        "title": "Request deploy approval",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Ask the person to approve shipping ONE verified commit — the dev loop's deploy gate. Files a `dev.deploy_approval` proposal on your session: it is ALWAYS a proposal (`status: 'proposed'` is the success outcome), and only the person can approve it — there is no approve tool. Call it after the gate passed on the exact commit you will ship, with that commit's full sha, the gate's headline (`gateReport`), where it goes (`targetHost`) and the command you will run (`deployCommand`, shown to the reviewer; the pod never runs it). On approval the session records the decision (who, when, which commit) and moves past its deploy stage; then you deploy that commit and nothing else. Rejected, or a new commit since: fix, re-run the gate and ask again. Refused (`error`) when the session is not yours or the payload is malformed — read the message and resend.",
+      "parameters": [
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": true,
+          "description": "Your focus session (UUID) — the one the work happened in."
+        },
+        {
+          "name": "repo",
+          "type": "string",
+          "required": true,
+          "description": "Repository the commit is in (path or slug)."
+        },
+        {
+          "name": "branch",
+          "type": "string",
+          "required": true,
+          "description": "Branch of the commit."
+        },
+        {
+          "name": "commitSha",
+          "type": "string",
+          "required": true,
+          "description": "The exact commit to ship — hex git object id (7–64 chars; send the full sha)."
+        },
+        {
+          "name": "gateReport",
+          "type": "object",
+          "required": true,
+          "description": "Headline of the verification that passed on THIS commit — the evidence the ask rests on."
+        },
+        {
+          "name": "targetHost",
+          "type": "string",
+          "required": true,
+          "description": "Human label of the deploy target, e.g. 'pod-prod (eve)'."
+        },
+        {
+          "name": "deployCommand",
+          "type": "string",
+          "required": true,
+          "description": "The command you will run once approved. Disclosure only — the pod never executes it."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string",
+            "description": "Your focus session (UUID) — the one the work happened in."
+          },
+          "repo": {
+            "type": "string",
+            "description": "Repository the commit is in (path or slug)."
+          },
+          "branch": {
+            "type": "string",
+            "description": "Branch of the commit."
+          },
+          "commitSha": {
+            "type": "string",
+            "description": "The exact commit to ship — hex git object id (7–64 chars; send the full sha)."
+          },
+          "gateReport": {
+            "type": "object",
+            "description": "Headline of the verification that passed on THIS commit — the evidence the ask rests on.",
+            "properties": {
+              "passed": { "type": "boolean" },
+              "summary": { "type": "string" },
+              "command": {
+                "type": "string",
+                "description": "The gate command that ran."
+              },
+              "reportedAt": {
+                "type": "string",
+                "description": "ISO time the gate finished."
+              }
+            },
+            "required": ["passed"]
+          },
+          "targetHost": {
+            "type": "string",
+            "description": "Human label of the deploy target, e.g. 'pod-prod (eve)'."
+          },
+          "deployCommand": {
+            "type": "string",
+            "description": "The command you will run once approved. Disclosure only — the pod never executes it."
+          }
+        },
+        "required": [
+          "sessionId",
+          "repo",
+          "branch",
+          "commitSha",
+          "gateReport",
+          "targetHost",
+          "deployCommand"
+        ]
       }
     },
     {

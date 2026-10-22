@@ -246,6 +246,23 @@ grep -qxE "compose (--profile pod-agent )?up -d --no-deps backend kratos postgre
 grep -E "prune|down|volume|--remove-orphans|rm -f" "$FAKE_LOG" && bad "apply ran a destructive command" || ok "apply never prunes, downs or touches volumes"
 printf 'NODE_VERSION=20\n' >> "$DEPLOY/.env"
 synap apply; [ $? != 0 ] && ! grep -q "compose up" "$FAKE_LOG" && ok "apply refuses an invalid .env before recreating anything" || bad "apply ran on an invalid .env"
+# … and what a VALID .env derives is validated before anything is recreated
+# on it: kratos.yml (here a CP-delivered OIDC client with an http issuer).
+reset_env; mkdir -p "$REPO/kratos"; echo 'CONTROL_PLANE_URL=https://cp.example.com' >> "$DEPLOY/.env"
+printf '#!/usr/bin/env bash\necho "{\\"delivered\\":true}"\n' > "$TMP/bin/curl"; chmod +x "$TMP/bin/curl"
+cat > "$TMP/bin/docker-oidc" <<'D'
+#!/usr/bin/env bash
+case "$*" in *"field-crypto.js federation-oidc-client"*) echo "pod:pod.example.com|s3cret|${FAKE_ISSUER}"; exit 0 ;; esac
+exec "$(dirname "$0")/docker-real" "$@"
+D
+mv "$TMP/bin/docker" "$TMP/bin/docker-real"; mv "$TMP/bin/docker-oidc" "$TMP/bin/docker"; chmod +x "$TMP/bin/docker"
+FAKE_ISSUER=https://cp.example.com synap apply; rc=$?
+good="$(cksum < "$REPO/kratos/kratos.yml" 2>/dev/null)"
+[ "$rc" = 0 ] && grep -q "issuer_url: https://cp.example.com" "$REPO/kratos/kratos.yml" && ok "apply: a valid derived kratos.yml is rendered and applied" || bad "apply good oidc (rc=$rc): $(tail -3 "$TMP/out")"
+FAKE_ISSUER=http://cp.example.com synap apply; rc=$?
+[ "$rc" != 0 ] && [ "$(cksum < "$REPO/kratos/kratos.yml")" = "$good" ] && ! grep -q "compose .*up" "$FAKE_LOG" && grep -q "issuer_url is not an https URL" "$TMP/out" \
+  && ok "apply: a derived kratos.yml that does not validate is refused, the previous one kept, nothing recreated" || bad "apply bad oidc (rc=$rc): $(tail -4 "$TMP/out") log=$(cat "$FAKE_LOG" | tr '\n' '|')"
+mv "$TMP/bin/docker-real" "$TMP/bin/docker"; rm -f "$TMP/bin/curl"; rm -rf "$REPO/kratos"
 
 # 13. sourced under dash — the pod-agent container's shell
 reset_env

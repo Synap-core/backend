@@ -20,6 +20,7 @@ import {
   uniquifyProjectSlug,
 } from "../utils/project-slug.js";
 import { triggerCpProjectSync } from "../utils/cp-project-sync-trigger.js";
+import { isUniqueViolation } from "../utils/pg-errors.js";
 
 export interface CreateProjectInput {
   id?: string;
@@ -181,8 +182,7 @@ export class ProjectRepository extends BaseRepository<
       // dedup SELECT, compute the same slug, and the loser hits the partial
       // unique index (user_id, slug) — Postgres 23505. Resolve it the way the
       // dedup door would have: re-read and return the winner as `deduped`.
-      const pgCode = err as { code?: string; cause?: { code?: string } };
-      if (pgCode?.code === "23505" || pgCode?.cause?.code === "23505") {
+      if (isUniqueViolation(err)) {
         const retry = await findProjectDedupCandidates(this.db, {
           userId,
           name: data.name,

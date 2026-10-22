@@ -4980,11 +4980,15 @@
           "body": {
             "type": ["object", "null"],
             "properties": {
-              "format": { "type": "string", "enum": ["markdown"] },
+              "format": {
+                "type": "string",
+                "enum": ["markdown", "html"],
+                "description": "markdown = parse as safe markdown; html = render only inside a sandboxed frame (no scripts)."
+              },
               "content": { "type": "string" }
             },
             "required": ["format", "content"],
-            "description": "The pinned published revision's text, or null."
+            "description": "The pinned published revision's text in its real format, or null (none pinned, or not a text body)."
           },
           "publishedOn": {
             "type": "string",
@@ -5111,7 +5115,11 @@
               "body": {
                 "type": ["object", "null"],
                 "properties": {
-                  "format": { "type": "string", "enum": ["markdown"] },
+                  "format": {
+                    "type": "string",
+                    "enum": ["markdown", "html"],
+                    "description": "markdown = parse as safe markdown; html = render only inside a sandboxed frame (no scripts)."
+                  },
                   "content": { "type": "string" }
                 },
                 "required": ["format", "content"],

@@ -1158,6 +1158,121 @@ export const createProcs = {
         }
       }
 
+      // Merge profile.defaultValues into caller-supplied properties.
+      const profileDefaults =
+        (earlyResolvedProfile?.defaultValues as Record<string, unknown>) ?? {};
+      const effectiveProperties: Record<string, unknown> = {
+        ...profileDefaults,
+        ...(input.properties ?? {}),
+      };
+
+      // RETRY-SAFE DEDUP (W3) — answered FIRST among the dedup rules, before
+      // the duplicate floor (B2: a possible twin turns an agent's filing into
+      // a proposal) and before the permission gate: an EXACT retry (same
+      // caller and agent, kind, home, title, properties and short body, inside
+      // the idempotency window) is the same write, and its answer is the
+      // original entity (founder decision 2026-10-22). Anything less than
+      // exact still meets the duplicate floor.
+      //
+      // (W3, direct/auto-approved writes — the "No approval
+      // received" damage): the client's confirmation window can give up on a
+      // write that already landed, the model retries, and — unlike an
+      // agent-authored PROPOSAL (hash-deduped by `insertPendingProposal`) — a
+      // granted/auto-approved create had NOTHING catching an identical retry,
+      // so it duplicated. Scoped to agent-driven writes ONLY (`agentUserId`
+      // set) — mirrors `insertPendingProposal`'s human-exemption: a person may
+      // deliberately file the same note/task twice, so a human direct write is
+      // NEVER deduped here. Runs BEFORE `entityBodyService.setBody` below
+      // (which would otherwise mint a fresh document on every retry).
+      // `shouldMaterializeAsDocument` predicts the SAME inline/document branch
+      // `setBody` will take from `input.content` — long-form content that
+      // routes to a document is OUT OF SCOPE here (its text lives in object
+      // storage via `documents.storageKey`, not a column this lookup can
+      // compare); this covers the common case (short/no content), which is
+      // the bulk of agent-driven note/task creates.
+      if (input.agentUserId) {
+        const contentGoesToDocument =
+          !!input.content && shouldMaterializeAsDocument(input.content);
+        if (!contentGoesToDocument) {
+          try {
+            const candidates = await placementDb
+              .select({
+                id: entities.id,
+                properties: entities.properties,
+              })
+              .from(entities)
+              .where(
+                and(
+                  eq(entities.agentUserId, input.agentUserId),
+                  // Owner floor: this answers BEFORE the permission gate, so
+                  // only the caller's own row may come back (a supplied
+                  // agentUserId never reaches someone else's).
+                  eq(entities.userId, ctx.userId),
+                  eq(entities.profileId, earlyResolvedProfile.id),
+                  resolvedEntityWorkspaceId
+                    ? eq(entities.workspaceId, resolvedEntityWorkspaceId)
+                    : isNull(entities.workspaceId),
+                  input.title
+                    ? eq(entities.title, input.title)
+                    : isNull(entities.title),
+                  isNull(entities.deletedAt),
+                  drizzleSql`${entities.createdAt} >= now() - (${idempotencyWindowSeconds()}::int * interval '1 second')`
+                )
+              )
+              .orderBy(desc(entities.createdAt))
+              .limit(5);
+
+            const dup = candidates.find((c) => {
+              const props = (c.properties ?? {}) as Record<string, unknown>;
+              // The body as this write stores it: `input.content`, or one passed
+              // inside `properties` (then the property comparison below checks
+              // it). Requiring a null body there missed every retry whose body
+              // rode in properties.
+              const sameContent = input.content
+                ? props.content === input.content
+                : "content" in effectiveProperties || props.content == null;
+              if (!sameContent) return false;
+              return Object.entries(effectiveProperties).every(
+                ([k, v]) => JSON.stringify(props[k]) === JSON.stringify(v)
+              );
+            });
+
+            if (dup) {
+              const matched = await placementDb.query.entities.findFirst({
+                where: eq(entities.id, dup.id),
+              });
+              // Facets ride their own governed door (attachFacet). No receipt
+              // to stamp: this answer comes before the permission gate, which
+              // therefore minted none.
+              const dedupFacets = await attachRequestedFacets(dup.id);
+              logger.info(
+                {
+                  event: "entity_create_dedup",
+                  entityId: dup.id,
+                  profileSlug,
+                  agentUserId: input.agentUserId,
+                },
+                "[entities.create] retry-safe dedup: returning previously created entity, no second row written"
+              );
+              return {
+                status: "created",
+                message:
+                  "Duplicate retry ignored — returning the previously created entity",
+                id: dup.id,
+                entity: matched ? toApiEntity(matched) : null,
+                ackState: "duplicate-ignored" as const,
+                facets: dedupFacets,
+              };
+            }
+          } catch (err) {
+            logger.warn(
+              { err },
+              "[entities.create] retry-dedup lookup failed — creating normally"
+            );
+          }
+        }
+      }
+
       // Refuse domain dumps into admin/settings/agent/operational homes.
       // global:true → null (allowed). Pod-wide placement is fine; pinning or
       // ambient-resolving into a non-domain home is not — pick a domain app
@@ -1297,52 +1412,13 @@ export const createProcs = {
           : {}),
       };
 
-      // A possible twin turns an agent's filing into a proposal (B2c) — except
-      // the RETRY class, which is not a duplicate question: when every twin is
-      // a record THIS agent created inside the idempotency window with the same
-      // content, the retry-safe dedup below returns it (write-door
-      // idempotency stays the retry layer; a proposal would only add a card).
-      let proposeAsDuplicate =
+      // A possible twin turns an agent's filing into a proposal (B2c). The
+      // RETRY class is not a duplicate question and never reaches here: the
+      // retry-safe dedup above answered an exact retry with the original write
+      // (write-door idempotency stays the retry layer; a proposal would only
+      // add a card). A near retry is floored like any twin.
+      const proposeAsDuplicate =
         isAgentFiling && duplicateCheck?.status === "possible";
-      if (proposeAsDuplicate && duplicateCheck && input.agentUserId) {
-        const twins = duplicateCheck.candidates;
-        const twinRecordIds = twins
-          .filter((c) => c.ref === "record")
-          .map((c) => c.id);
-        if (twinRecordIds.length > 0 && twinRecordIds.length === twins.length) {
-          const recent = await (
-            await getDb()
-          )
-            .select({ properties: entities.properties })
-            .from(entities)
-            .where(
-              and(
-                inArray(entities.id, twinRecordIds),
-                eq(entities.agentUserId, input.agentUserId),
-                isNull(entities.deletedAt),
-                drizzleSql`${entities.createdAt} >= now() - (${idempotencyWindowSeconds()}::int * interval '1 second')`
-              )
-            );
-          const sameContent = (stored: unknown) => {
-            const props = (stored ?? {}) as Record<string, unknown>;
-            const contentMatches = input.content
-              ? props.content === input.content
-              : props.content == null;
-            return (
-              contentMatches &&
-              Object.entries(input.properties ?? {}).every(
-                ([k, v]) => JSON.stringify(props[k]) === JSON.stringify(v)
-              )
-            );
-          };
-          if (
-            recent.length === twinRecordIds.length &&
-            recent.every((row) => sameContent(row.properties))
-          ) {
-            proposeAsDuplicate = false;
-          }
-        }
-      }
 
       // 2. Permission check (may create proposal with correlationId)
       const perm = await checkPermissionOrPropose({
@@ -1454,114 +1530,7 @@ export const createProcs = {
       // check) so the proposal-gated and auto-approved paths land identically
       // (I3). Reuse both here — `resolvedEntityWorkspaceId` is the value the
       // proposal persisted as `data.resolvedWorkspaceId`.
-      const resolvedProfile: any = earlyResolvedProfile;
       const entityWorkspaceId = resolvedEntityWorkspaceId;
-
-      // Merge profile.defaultValues into caller-supplied properties.
-      const profileDefaults =
-        (resolvedProfile?.defaultValues as Record<string, unknown>) ?? {};
-      const effectiveProperties: Record<string, unknown> = {
-        ...profileDefaults,
-        ...(input.properties ?? {}),
-      };
-
-      // RETRY-SAFE DEDUP (W3, direct/auto-approved writes — the "No approval
-      // received" damage): the client's confirmation window can give up on a
-      // write that already landed, the model retries, and — unlike an
-      // agent-authored PROPOSAL (hash-deduped by `insertPendingProposal`) — a
-      // granted/auto-approved create had NOTHING catching an identical retry,
-      // so it duplicated. Scoped to agent-driven writes ONLY (`agentUserId`
-      // set) — mirrors `insertPendingProposal`'s human-exemption: a person may
-      // deliberately file the same note/task twice, so a human direct write is
-      // NEVER deduped here. Runs BEFORE `entityBodyService.setBody` below
-      // (which would otherwise mint a fresh document on every retry).
-      // `shouldMaterializeAsDocument` predicts the SAME inline/document branch
-      // `setBody` will take from `input.content` — long-form content that
-      // routes to a document is OUT OF SCOPE here (its text lives in object
-      // storage via `documents.storageKey`, not a column this lookup can
-      // compare); this covers the common case (short/no content), which is
-      // the bulk of agent-driven note/task creates.
-      if (input.agentUserId) {
-        const contentGoesToDocument =
-          !!input.content && shouldMaterializeAsDocument(input.content);
-        if (!contentGoesToDocument) {
-          try {
-            const candidates = await database
-              .select({
-                id: entities.id,
-                properties: entities.properties,
-              })
-              .from(entities)
-              .where(
-                and(
-                  eq(entities.agentUserId, input.agentUserId),
-                  eq(entities.profileId, earlyResolvedProfile.id),
-                  entityWorkspaceId
-                    ? eq(entities.workspaceId, entityWorkspaceId)
-                    : isNull(entities.workspaceId),
-                  input.title
-                    ? eq(entities.title, input.title)
-                    : isNull(entities.title),
-                  isNull(entities.deletedAt),
-                  drizzleSql`${entities.createdAt} >= now() - (${idempotencyWindowSeconds()}::int * interval '1 second')`
-                )
-              )
-              .orderBy(desc(entities.createdAt))
-              .limit(5);
-
-            const dup = candidates.find((c) => {
-              const props = (c.properties ?? {}) as Record<string, unknown>;
-              const sameContent = input.content
-                ? props.content === input.content
-                : props.content == null;
-              if (!sameContent) return false;
-              return Object.entries(effectiveProperties).every(
-                ([k, v]) => JSON.stringify(props[k]) === JSON.stringify(v)
-              );
-            });
-
-            if (dup) {
-              const matched = await database.query.entities.findFirst({
-                where: eq(entities.id, dup.id),
-              });
-              const dedupFacets = await attachRequestedFacets(dup.id);
-              // The gate already minted this call's receipt: record that it
-              // created NOTHING, so its Undo can never delete the earlier
-              // write's row (that row is the earlier receipt's to undo).
-              await stampAutoApprovedCreate({
-                receiptId:
-                  "granted" in perm ? perm.autoApprovedProposalId : undefined,
-                record: {},
-                door: "entities.create (retry dedup)",
-                database,
-              });
-              logger.info(
-                {
-                  event: "entity_create_dedup",
-                  entityId: dup.id,
-                  profileSlug,
-                  agentUserId: input.agentUserId,
-                },
-                "[entities.create] retry-safe dedup: returning previously created entity, no second row written"
-              );
-              return {
-                status: "created",
-                message:
-                  "Duplicate retry ignored — returning the previously created entity",
-                id: dup.id,
-                entity: matched ? toApiEntity(matched) : null,
-                ackState: "duplicate-ignored" as const,
-                facets: dedupFacets,
-              };
-            }
-          } catch (err) {
-            logger.warn(
-              { err },
-              "[entities.create] retry-dedup lookup failed — creating normally"
-            );
-          }
-        }
-      }
 
       let createdEntity: any;
 

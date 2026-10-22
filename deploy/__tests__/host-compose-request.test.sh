@@ -13,8 +13,9 @@
 #   R. round trip: the REAL agent helper (host-request.sh) + the REAL `synap
 #      compose-request` against a fake docker: the host runs compose from the
 #      real deploy dir, re-renders kratos.yml, records the outcome; the agent
-#      returns 0. Refusals (unknown name, bad schema), a busy lock, a host that
-#      never picks up, --no-wait, and the units that watch the request.
+#      returns 0. Refusals (unknown name, bad schema), a busy lock (waited
+#      for, bounded), a host that never picks up, --no-wait, and the units
+#      that watch the request.
 # NOT covered: systemd itself (fake systemctl), the real docker daemon's bind
 # resolution (the defect is documented above; the fake records cwd + args).
 set -u
@@ -121,12 +122,38 @@ agent --profile pod-agent & ap=$!; FAKE_CONFIG_FAIL=1 host; hrc=$?; wait "$ap"; 
 [ "$hrc" != 0 ] && [ "$arc" != 0 ] && [ "$(rec status)" = failed ] && ! grep -q ' up ' "$FAKE_LOG" \
   && ok "configfail: an unreadable compose file fails the request, nothing runs (never 'no such profile')" || { bad "configfail: host=$hrc agent=$arc record=$(rec status) reason=$(rec reason)"; cat "$S/agent.out"; }
 
-# R4. the update lock is busy: the request is consumed and recorded, not looped on
-setup busy
-mkdir -p "$DEPLOY/state/update.lock.d"; echo "synap update pid=$$ since=now" > "$DEPLOY/state/update.lock.d/owner"
-agent kratos & ap=$!; SYNAP_LOCK_IMPL=mkdir host; hrc=$?; wait "$ap"; arc=$?
-[ "$hrc" != 0 ] && [ "$arc" != 0 ] && [ "$(rec status)" = aborted ] && [ ! -e "$DEPLOY/state/requests/compose.json" ] && ! grep -q ' up ' "$FAKE_LOG" \
-  && ok "busy: lock held → request taken and recorded aborted (send it again), nothing ran" || { bad "busy: host=$hrc agent=$arc record=$(rec status)"; cat "$S/host.out"; }
+# R4. the update lock is busy. The request is TAKEN first (the agent sees it
+# picked up; the .path unit cannot loop on it), then the lock is WAITED for,
+# bounded by SYNAP_COMPOSE_LOCK_WAIT: released in time → the request runs;
+# held past the bound → recorded aborted, nothing ran. Both lock impls.
+impls="mkdir"; command -v flock >/dev/null 2>&1 && impls="flock mkdir" || echo "skip - flock not installed here; R4 tests the mkdir lock only (CI runs both)"
+hold() { # <impl> <seconds> — a live holder of the update lock, in the background
+  if [ "$1" = flock ]; then
+    : > "$DEPLOY/state/update.lock"; flock "$DEPLOY/state/update.lock" sleep "$2" & HOLD=$!
+  else
+    mkdir -p "$DEPLOY/state/update.lock.d"; ( sleep "$2"; rm -rf "$DEPLOY/state/update.lock.d" ) & HOLD=$!
+    echo "synap update pid=$HOLD since=now" > "$DEPLOY/state/update.lock.d/owner"
+  fi
+  sleep 0.3
+}
+for impl in $impls; do
+  lk=""; [ "$impl" = mkdir ] && lk=mkdir
+  setup "busy-$impl"
+  hold "$impl" 8
+  agent kratos & ap=$!; t0=$(date +%s); SYNAP_LOCK_IMPL="$lk" SYNAP_COMPOSE_LOCK_WAIT=2 host; hrc=$?; took=$(( $(date +%s) - t0 )); wait "$ap"; arc=$?
+  kill "$HOLD" 2>/dev/null; wait "$HOLD" 2>/dev/null
+  [ "$hrc" != 0 ] && [ "$arc" != 0 ] && [ "$(rec status)" = aborted ] && [[ "$(rec reason)" == *"for 2s"* ]] && [ "$took" -ge 2 ] \
+    && [ ! -e "$DEPLOY/state/requests/compose.json" ] && ! grep -q ' up ' "$FAKE_LOG" \
+    && ok "busy[$impl]: held past the bound → waited ${took}s, request taken and recorded aborted, nothing ran" \
+    || { bad "busy[$impl]: host=$hrc agent=$arc took=${took}s record=$(rec status) reason=$(rec reason)"; tail -5 "$S/host.out"; }
+  setup "wait-$impl"
+  hold "$impl" 2
+  agent kratos & ap=$!; SYNAP_LOCK_IMPL="$lk" SYNAP_COMPOSE_LOCK_WAIT=20 host; hrc=$?; wait "$ap"; arc=$?
+  wait "$HOLD" 2>/dev/null
+  [ "$hrc" = 0 ] && [ "$arc" = 0 ] && [ "$(rec status)" = succeeded ] && grep -q ' up -d --no-build kratos' "$FAKE_LOG" \
+    && ok "wait[$impl]: an update holds the lock for 2s → the request waits for it, then runs" \
+    || { bad "wait[$impl]: host=$hrc agent=$arc record=$(rec status) reason=$(rec reason)"; tail -5 "$S/host.out"; }
+done
 
 # R5. no host unit: the agent takes its request back and fails, honestly
 setup nopickup

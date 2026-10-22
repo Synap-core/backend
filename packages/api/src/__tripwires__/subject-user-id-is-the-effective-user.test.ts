@@ -227,9 +227,41 @@ describe("PRINCIPAL is a LABEL, never a FILTER", () => {
     expect(FILTERS.length).toBe(2);
   });
 
+  /**
+   * The ONE deliberate exception (bfff06584, 2026-10-18): a LIBRARY proposal
+   * (`targetType === "library"`) belongs to its subject alone, so
+   * `isForeignLibraryProposal` reads `subjectUserId` — for that target type
+   * only, never as a general floor. Every line of a filter module that names
+   * `subjectUserId` must be one of these exact forms; anything else (a general
+   * `subjectUserId === viewer` floor) fails here.
+   */
+  const LIBRARY_SUBJECT_FORMS = [
+    /^\s*proposal: \{ targetType: string \| null; subjectUserId: string \| null \},$/,
+    /^\s*return proposal\.targetType === "library" && proposal\.subjectUserId !== userId;$/,
+    /^\s*subjectUserId: true,$/,
+    /^\s*subjectUserId: proposals\.subjectUserId,$/,
+  ];
+
+  it("the Library exception forms still recognise their own lines", () => {
+    expect(
+      LIBRARY_SUBJECT_FORMS[1].test(
+        '  return proposal.targetType === "library" && proposal.subjectUserId !== userId;'
+      )
+    ).toBe(true);
+    expect(
+      LIBRARY_SUBJECT_FORMS.some((f) =>
+        f.test("  return proposal.subjectUserId === userId;")
+      )
+    ).toBe(false);
+  });
+
   for (const path of FILTERS) {
-    it(`${path.split("/").slice(-1)[0]}: does not floor on subjectUserId`, () => {
-      expect(readFileSync(path, "utf8")).not.toMatch(/subjectUserId/);
+    it(`${path.split("/").slice(-1)[0]}: floors on subjectUserId only for Library proposals`, () => {
+      const unexplained = stripComments(readFileSync(path, "utf8"), "ts")
+        .split("\n")
+        .filter((line) => /subjectUserId/.test(line))
+        .filter((line) => !LIBRARY_SUBJECT_FORMS.some((f) => f.test(line)));
+      expect(unexplained).toEqual([]);
     });
   }
 });

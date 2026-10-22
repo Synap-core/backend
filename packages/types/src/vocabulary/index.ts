@@ -43,6 +43,9 @@ export * from "./tool-labels.js";
 /** The shell's destination words and the Inbox's filters (founder 2A / 3A). */
 export * from "./destinations.js";
 
+/** A document embed's noun and label (`resolveEmbedWords`, over `describeEmbed`). */
+export * from "./embed-words.js";
+
 /**
  * Words a sentence-cased token must still spell the way people write them —
  * the casing of a NAME (a product, a format), not of a sentence. Deliberately
@@ -1543,6 +1546,24 @@ export function resolveImportOriginLabel(
   return (
     IMPORT_ORIGIN_LABELS[origin.trim().toLowerCase()] ?? humanizeToken(origin)
   );
+}
+
+/**
+ * The Synap apps that sign a person in through the pod's own OAuth server,
+ * by their OAuth `client_id` (the backend's `FIRST_PARTY_CLIENTS` registry;
+ * stored on every device's refresh tokens). The name the consent screen asks
+ * about and the "Signed-in devices" list shows. An unknown id humanizes.
+ */
+export const FIRST_PARTY_CLIENT_NAMES: Readonly<Record<string, string>> = {
+  "synap-desktop": "Synap Desktop",
+  "synap-relay": "Synap Relay",
+};
+
+export function resolveFirstPartyClientName(
+  clientId: string | null | undefined
+): string {
+  if (!clientId?.trim()) return "";
+  return FIRST_PARTY_CLIENT_NAMES[clientId.trim()] ?? humanizeToken(clientId);
 }
 
 /**

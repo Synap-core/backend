@@ -83,7 +83,7 @@ import { toolsRouter } from "../../routers/tools.js";
 import {
   skillsRouter,
   SKILL_DEFINITION_APPLIER,
-  assertSkillGlobalsAllowed,
+  assertSkillCodeAllowed,
 } from "../../routers/skills.js";
 import {
   skillExecFieldsChanged,
@@ -108,6 +108,7 @@ import {
   interpolateVaultRefs,
   vaultPlaceholderRefs,
 } from "../_shared/interpolate.js";
+import { assertFreshAuthentication } from "../../utils/device-session.js";
 
 const logger = createLogger({ module: "create-capability-from-definition" });
 
@@ -1037,8 +1038,8 @@ export async function createCapabilityFromDefinition(
       // grandfathered with a disallowed global before this scan existed would
       // hard-fail on every future metadata-only reconcile (description/
       // parameters/scope/category), even though its code never changed.
-      if ((s.kind ?? "code") === "code" && codeContentChanged) {
-        assertSkillGlobalsAllowed(s.code);
+      if (codeContentChanged) {
+        assertSkillCodeAllowed(s.kind ?? "code", s.code);
       }
 
       await db
@@ -1725,6 +1726,9 @@ export async function issueCapabilityGrant(
   // the owner so the grant is never fully-wildcard.
   const grantedTo = workspaceId ? null : userId;
   assertGrantScoped({ grantedTo, workspaceId });
+  // A grant is a credential: from a Synap app, only shortly after a real
+  // sign-in (utils/device-session.ts) — asked here, where one is written.
+  assertFreshAuthentication();
   await db.insert(vaultGrants).values({
     grantableType,
     grantableId,

@@ -103,11 +103,17 @@ vi.mock("@synap/database", async (importOriginal) => {
 // Who-hears-about-it is `notify-room-post.ts`'s own suite
 // (`room-first-notifications.pglite.test.ts`); stubbed so this file's
 // hand-built database mock does not have to model the notification tables.
-const { fileRoomQuestionOnSlot } = vi.hoisted(() => ({
+const { fileRoomQuestionOnSlot, checkRoomQuestionSlot } = vi.hoisted(() => ({
   fileRoomQuestionOnSlot: vi.fn(async () => ({ status: "blocked" })),
+  checkRoomQuestionSlot: vi.fn(async (): Promise<Record<string, unknown>> => ({
+    status: "ok",
+  })),
 }));
+// The two DB-bound reads are stubbed; the refusal WORDING is the real leaf
+// (`room-question-slot-refusal.ts`), not mocked.
 vi.mock("../focus-sessions/room-question-slot.js", () => ({
   fileRoomQuestionOnSlot,
+  checkRoomQuestionSlot,
 }));
 
 vi.mock("./notify-room-post.js", () => ({
@@ -222,5 +228,63 @@ describe("postChannelMessage — a replayed slot question still files on its slo
     });
     expect(r.ackState).toBe("duplicate-ignored");
     expect(r.slot).toEqual({ status: "blocked" });
+  });
+});
+
+describe("postChannelMessage — a question about an UNDECLARED slot is refused before posting", () => {
+  // Live 2026-10-22 (session 5382a350): ask + an undeclared slotLabel posted
+  // and returned `slot: unknown_label`; the ask attached to nothing.
+  it("unknown slot: throws BAD_REQUEST naming the declared keys, inserts nothing, files nothing", async () => {
+    checkRoomQuestionSlot.mockResolvedValueOnce({
+      status: "unknown_label",
+      declared: [{ key: "q4-drafts-home", label: "Q4: drafts" }],
+    });
+    await expect(
+      postChannelMessage({
+        ...base,
+        kind: "question",
+        slotLabel: "Q9",
+        ask: { mode: "confirm" } as never,
+        agentUserId: "agent-1",
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(
+        /^NOTHING WAS POSTED: slotLabel "Q9".*q4-drafts-home/
+      ),
+    });
+    expect(state.insertCalls).toBe(0);
+    expect(fileRoomQuestionOnSlot).not.toHaveBeenCalled();
+  });
+
+  it("a room with no session: refused the same way", async () => {
+    checkRoomQuestionSlot.mockResolvedValueOnce({ status: "no_session" });
+    await expect(
+      postChannelMessage({
+        ...base,
+        kind: "question",
+        slotLabel: "Q9",
+        agentUserId: "agent-1",
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(state.insertCalls).toBe(0);
+  });
+
+  it("not the caller's session: posts as before (no existence oracle)", async () => {
+    checkRoomQuestionSlot.mockResolvedValueOnce({ status: "not_owner" });
+    const r = await postChannelMessage({
+      ...base,
+      kind: "question",
+      slotLabel: "Q9",
+      agentUserId: "agent-1",
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("an update, a slotless question and a human post are never checked", async () => {
+    await postChannelMessage({ ...base, kind: "update", agentUserId: "a" });
+    await postChannelMessage({ ...base, kind: "question", agentUserId: "a" });
+    await postChannelMessage({ ...base, kind: "question", slotLabel: "Q9" });
+    expect(checkRoomQuestionSlot).not.toHaveBeenCalled();
   });
 });

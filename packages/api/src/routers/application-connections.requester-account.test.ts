@@ -25,6 +25,7 @@ const h = vi.hoisted(() => ({
   auditLog: vi.fn(),
   revokeSet: vi.fn(),
   revokeReturning: vi.fn(),
+  endDevices: vi.fn(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -69,11 +70,15 @@ vi.mock("../middleware/audit-log.js", async () => {
   const { t } = await import("../init-trpc.js");
   return { auditLogMiddleware: t.middleware(({ next }) => next()) };
 });
+vi.mock("@synap/database/person-devices", () => ({
+  revokeAllPersonDevices: h.endDevices,
+}));
 vi.mock("../services/application-connections/invite-consent.js", () => ({
   approveByInviteIfConsented: h.consent,
 }));
 vi.mock("../services/application-connections/unlink-account.js", () => ({
   unlinkConnectionAccount: h.unlink,
+  unlinkReach: vi.fn(),
 }));
 
 import { applicationConnectionsRouter } from "./application-connections.js";
@@ -291,6 +296,7 @@ describe("undo after an invite approval — unlink that one person", () => {
     expect(h.unlink).toHaveBeenCalledWith({
       connectionId: CONNECTION,
       userId: "ada",
+      actorUserId: "owner",
     });
     expect(h.auditLog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -303,8 +309,20 @@ describe("undo after an invite approval — unlink that one person", () => {
         }),
       })
     );
-    // The app connection is not revoked.
+    // The app connection is not revoked; the person's Synap apps sign in again.
     expect(h.revokeSet).not.toHaveBeenCalled();
+    expect(h.endDevices).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ userId: "ada" })
+    );
+  });
+
+  it("refuses, and records nothing, when the person outranks the caller", async () => {
+    h.unlink.mockResolvedValue({ status: "outranked" });
+    await expect(
+      as("owner").unlinkAccount({ connectionId: CONNECTION, userId: "ada" })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.auditLog).not.toHaveBeenCalled();
   });
 
   it("answers NOT_FOUND for an unknown connection", async () => {

@@ -2310,7 +2310,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
         : c.json({ error: result.error }, result.status);
     } catch (err) {
       logger.error({ err, entityId }, "Hub file URL signing failed");
-      return c.json({ error: "Failed to generate URL" }, 500);
+      return c.json(
+        { error: "Failed to generate URL" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 
@@ -2368,7 +2371,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
       );
     } catch (err) {
       logger.error({ err, entityId }, "Hub file transcription failed");
-      return c.json({ error: "Failed to transcribe" }, 500);
+      return c.json(
+        { error: "Failed to transcribe" },
+        httpStatusForTrpcError(err)
+      );
     }
   });
 

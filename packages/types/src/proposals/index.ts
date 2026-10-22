@@ -1672,10 +1672,12 @@ export interface ProposalWithRequest extends Proposal {
  * Stored proposal data is an ENVELOPE `{ requestId, source, targetType,
  * changeType, data: INNER, reasoning }`. For "nested-reader" targets (entity /
  * facet / property_def / view / skill / automation / playbook / project /
- * focus_session) the executor reads the edited fields from the NESTED inner
- * (`proposal.data.data.*`). For "flat" targets (document, composite `{operations}`,
- * capability.*, provider.action, workspace/*) the fields live at the envelope top
- * level and there is no inner `data` object.
+ * focus_session, and every other write filed through `checkPermissionOrPropose`,
+ * `document/create` included) the executor reads the edited fields from the
+ * NESTED inner (`proposal.data.data.*`). For "flat" targets (a document patch
+ * suggestion, composite `{operations}`, capability.*, provider.action,
+ * workspace/*) the fields live at the envelope top level and there is no inner
+ * `data` object.
  *
  * `buildRequestFromProposal` (below) and the shared revise core
  * (`mergeProposalRevision`) both branch on this ONE predicate so a revise patch

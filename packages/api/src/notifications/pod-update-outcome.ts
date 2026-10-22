@@ -102,9 +102,12 @@ export function describePodUpdateOutcome(
       detail: `The update failed${why} and the automatic rollback did not complete. Run \`synap doctor\` on the pod host.`,
     };
   }
+  // `failed` is written only by the pod's systemd unit (deploy/request-
+  // outcome.sh, "by":"unit"): the engine stopped before it recorded an
+  // outcome, after it may have changed the pod — never "still on <from>".
   return {
-    headline: "failed",
-    detail: `The update failed${why}. Your pod is still on ${previous}.`,
+    headline: "stopped before it finished",
+    detail: `The update stopped before it finished${why}. Your pod may have changed: it may not be on ${previous} any more. Run \`synap doctor\` on the pod host.`,
   };
 }
 

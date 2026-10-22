@@ -34,6 +34,8 @@ import {
 import type { Diagnostic as GrammarDiagnostic } from "@synap-core/markdown-core/diagnostics";
 import {
   WIDGET_BY_KEY,
+  dataBindingFor,
+  hasChartSnapshot,
   missingRequiredConfig,
 } from "@synap-core/types/renderables";
 import { AccessContext, scopedDb } from "../../access/index.js";
@@ -292,11 +294,22 @@ export async function diagnoseDocument(
       // A props error is already reported by the grammar pass.
       if (embed.propsError) continue;
       const builtin = WIDGET_BY_KEY[key];
-      const missing = builtin
-        ? missingRequiredConfig(builtin, embed.props)
-        : row.requiredConfig.filter(
-            (k) => embed.props?.[k] == null || embed.props?.[k] === ""
-          );
+      // A chart that carries its own numbers (a snapshot) draws them without a
+      // query, so the query keys it would need to go live (profileSlug, groupBy,
+      // stageField…) are not missing: useChartSeries reads `data` and never runs
+      // the query. Only a chart whose binding supports `inline` can hold one; a
+      // live-only chart with `data` still needs its query keys.
+      const drawnFromSnapshot =
+        !!builtin &&
+        hasChartSnapshot(embed.props) &&
+        !!dataBindingFor(builtin)?.supports.includes("inline");
+      const missing = drawnFromSnapshot
+        ? []
+        : builtin
+          ? missingRequiredConfig(builtin, embed.props)
+          : row.requiredConfig.filter(
+              (k) => embed.props?.[k] == null || embed.props?.[k] === ""
+            );
       if (missing.length > 0) {
         out.push({
           code: "bad_props",

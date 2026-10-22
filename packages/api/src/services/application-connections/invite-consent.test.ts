@@ -15,6 +15,8 @@ vi.mock("@synap/database", () => ({
   FederatedApplicationConnectionService: class {},
   TrustedIssuerService: class {},
   findOpenPodInviteAcceptance: vi.fn(),
+  hasActivePodAccess: vi.fn(),
+  readPodUserAccess: vi.fn(),
   db: {},
   and: vi.fn(),
   eq: vi.fn(),
@@ -82,6 +84,7 @@ function deps(over: Partial<InviteConsentDeps> = {}) {
       inviteExpiresAt: new Date(NOW.getTime() + 86_400_000),
       acceptedAt: new Date("2026-10-18T10:00:00Z"),
     }),
+    isMember: vi.fn().mockResolvedValue(true),
     approve: vi.fn().mockResolvedValue({ connection: { id: "connection-1" } }),
     recipients: vi.fn().mockResolvedValue(["owner-1", "admin-2"]),
     memberName: vi.fn().mockResolvedValue("Ada"),
@@ -219,6 +222,19 @@ describe("approveByInviteIfConsented", () => {
       kind: "owner_review",
       reason: "no_open_invite",
     });
+    expect(d.approve).not.toHaveBeenCalled();
+    expect(d.notify).not.toHaveBeenCalled();
+  });
+
+  it("never links a person removed from the Pod within their invite's window", async () => {
+    // Their invite record is still open (they WERE let in); their membership
+    // is gone. The record alone must not link them.
+    const d = deps({ isMember: vi.fn().mockResolvedValue(false) });
+    await expect(approveByInviteIfConsented(request(), d)).resolves.toEqual({
+      kind: "owner_review",
+      reason: "not_a_member",
+    });
+    expect(d.isMember).toHaveBeenCalledWith("member-1");
     expect(d.approve).not.toHaveBeenCalled();
     expect(d.notify).not.toHaveBeenCalled();
   });

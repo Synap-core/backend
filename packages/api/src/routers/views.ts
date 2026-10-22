@@ -54,6 +54,7 @@ import {
   uploadDocumentVersionSnapshot,
   projectMembers,
   listableEntityWhere,
+  isUniqueViolation,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
@@ -1141,10 +1142,7 @@ export const viewsRouter = router({
         // insert; `views_scoped_surface_uniq_idx` guarantees only one wins.
         // The loser must CONVERGE on the winner's board, not surface a raw
         // unique-violation (same 23505 pattern as relations.ts).
-        const pgCode =
-          (err as { code?: string })?.code ??
-          (err as { cause?: { code?: string } })?.cause?.code;
-        if (pgCode !== "23505") throw err;
+        if (!isUniqueViolation(err)) throw err;
 
         // Best-effort: reap the loser's orphaned canvas document + version so
         // the race leaves no stray rows (storage object is left; harmless).

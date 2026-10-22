@@ -95,7 +95,12 @@ import { dirname, join, relative } from "node:path";
 // CI's Full suite was red and unread; 26 total factories were converted to
 // importOriginal + spread — most of them in files that had gone dark exactly as
 // this header describes (ConflictError, cellInstances, artifacts, isNull…).
-const BASELINE = 49;
+// 49 → 48 the same day: CI run 39533915485 counted 48 (one more file had
+// already left the total-mock shape on main).
+// 48 → 47 on 2026-10-22 (#81, one door for unique violations):
+// `routers/proposals/__tests__/view-create-legacy-filters.test.ts` converted —
+// its module now imports `isUniqueViolation` from @synap/database.
+const BASELINE = 47;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");

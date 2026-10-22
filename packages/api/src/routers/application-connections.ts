@@ -16,6 +16,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { revokeAllPersonDevices } from "@synap/database/person-devices";
 import {
   db,
   desc,
@@ -34,7 +35,13 @@ import {
   users,
   workspaces,
 } from "@synap/database";
-import { router, podAdminProcedure, protectedProcedure } from "../trpc.js";
+import {
+  router,
+  podAdminProcedure,
+  protectedProcedure,
+  credentialProcedure,
+  requireFreshAuthentication,
+} from "../trpc.js";
 import { auditLog } from "../utils/audit-log.js";
 import {
   buildApplicationConnectionReturnUrl,
@@ -44,7 +51,10 @@ import {
   requesterAccountView,
 } from "../utils/application-connection.js";
 import { approveByInviteIfConsented } from "../services/application-connections/invite-consent.js";
-import { unlinkConnectionAccount } from "../services/application-connections/unlink-account.js";
+import {
+  unlinkConnectionAccount,
+  unlinkReach,
+} from "../services/application-connections/unlink-account.js";
 
 const requestIdSchema = z.object({ requestId: z.string().uuid() });
 const redeemRequestSchema = requestIdSchema.extend({
@@ -287,7 +297,7 @@ export const applicationConnectionsRouter = router({
    * handoff. Redeem it only after Pod Admin's local Kratos session exists;
    * this is what binds the later review request to a real Pod user.
    */
-  redeemRequest: protectedProcedure
+  redeemRequest: credentialProcedure
     .input(redeemRequestSchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -472,7 +482,7 @@ export const applicationConnectionsRouter = router({
         });
       }
       const issuerId = row.connection.issuerId;
-      const [usageOf, people, requests] = await Promise.all([
+      const [usageOf, people, requests, reach] = await Promise.all([
         issuerUsage([issuerId]),
         db
           .select({
@@ -510,6 +520,11 @@ export const applicationConnectionsRouter = router({
           )
           .orderBy(desc(federatedApplicationConnectionRequests.createdAt))
           .limit(REQUESTS_SHOWN),
+        unlinkReach({
+          id: row.connection.id,
+          issuerId,
+          issuerUrl: row.issuerUrl,
+        }),
       ]);
       return {
         ...row.connection,
@@ -519,25 +534,45 @@ export const applicationConnectionsRouter = router({
         people: markLinkedByInvite(people, requests),
         /** The asks its Activity also reads (request and turn-down events). */
         requestIds: requests.map((r) => r.id),
+        /** What "Unlink" also takes away: the issuer's other apps, Cloud sign-in. */
+        unlinkReach: reach,
       };
     }),
 
   /**
    * "Unlink {email}": take one person's account off this app's issuer. Owners
-   * and admins only (`podAdminProcedure`). The app connection stays for
+   * and admins only (`podAdminProcedure`), never on someone who outranks the
+   * caller (an admin cannot unlink the owner). The app connection stays for
    * everyone else; see `unlinkConnectionAccount` for exactly what goes.
    */
   unlinkAccount: podAdminProcedure
     .input(z.object({ connectionId: z.string().uuid(), userId: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      const outcome = await unlinkConnectionAccount(input);
+      const outcome = await unlinkConnectionAccount({
+        ...input,
+        actorUserId: ctx.userId,
+      });
       if (outcome.status === "no_connection") {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Application connection not found",
         });
       }
+      if (outcome.status === "outranked") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only the Pod owner can unlink the owner's account.",
+        });
+      }
       if (outcome.status === "unlinked") {
+        // Unlinking takes away how the person proved who they are; the Synap
+        // apps they signed in with it sign in again. Their access to the pod
+        // is untouched, so the access read in `resolvePersonDeviceSession`
+        // cannot see this: the devices are ended here.
+        await revokeAllPersonDevices(db, {
+          userId: input.userId,
+          reason: `Unlinked from ${outcome.app.displayName}`,
+        });
         await recordConnectionEvent({
           action: "unlink",
           subjectId: input.connectionId,
@@ -554,6 +589,7 @@ export const applicationConnectionsRouter = router({
     }),
 
   approveRequest: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(requestIdSchema)
     .mutation(async ({ input, ctx }) => {
       let approved: Awaited<

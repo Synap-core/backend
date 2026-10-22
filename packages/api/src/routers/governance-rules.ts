@@ -29,7 +29,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import { assertPodAdmin } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import {
@@ -620,7 +620,7 @@ export const governanceRulesRouter = router({
    * gate `create`/`revoke` apply to a global rule. Humans only: this is a
    * Kratos `protectedProcedure`, never on the agent (Hub/MCP) doors.
    */
-  setReversibleDefault: protectedProcedure
+  setReversibleDefault: credentialProcedure
     .input(z.object({ enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       await assertPodAdmin(ctx.userId);
@@ -661,7 +661,7 @@ export const governanceRulesRouter = router({
    * Create one rule — the "always approve for X" door. See file header for
    * how the five granularities map to inputs.
    */
-  create: protectedProcedure
+  create: credentialProcedure
     .input(CreateInputSchema)
     .mutation(async ({ ctx, input }) => {
       // A rule that can never fire is refused, not stored (B3). An exact action
@@ -750,7 +750,7 @@ export const governanceRulesRouter = router({
    * `already_covered`. Humans only: a Kratos `protectedProcedure`, never on
    * the agent (Hub/MCP) doors — an agent does not widen its own lane.
    */
-  proposeNextRung: protectedProcedure
+  proposeNextRung: credentialProcedure
     .input(
       z.object({
         itemRef: z.object({
@@ -791,7 +791,7 @@ export const governanceRulesRouter = router({
    * never a direct grant on someone else's agent. Anyone else: FORBIDDEN.
    * Humans only (Kratos `protectedProcedure`); an agent never widens itself.
    */
-  widenCell: protectedProcedure
+  widenCell: credentialProcedure
     .input(
       z.object({
         agentUserId: z.string().min(1),

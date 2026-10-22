@@ -39,8 +39,10 @@ export interface EntityWeakDedupCause {
 export const JUNK_TITLE_PROFILES = new Set(["person", "company", "contact"]);
 
 /**
- * Placeholder titles agents invent when a person/team is not public.
- * Compared after trim + lower-case. Empty/whitespace is also junk.
+ * Placeholder titles agents invent when a person/team is not public, and
+ * employer placeholders an export carries. Compared after trim + lower-case,
+ * and after `normalizeJunkTitle`. Empty/whitespace and punctuation-only
+ * titles are also junk.
  *
  * Single source for create-gate + hygiene sentinel detection (import this list /
  * `isJunkEntityTitle` — do not fork a second sentinel set).
@@ -60,9 +62,59 @@ export const JUNK_ENTITY_TITLES = [
   "-",
   "—",
   "?",
+  // An EMPLOYER placeholder: someone works for themselves, or will not say
+  // for whom. Measured on a real contacts export (2026-10-22): "Freelance"
+  // ×18, "Indépendant" ×17, "Stealth Startup" ×8, "Stealth" ×1, "Self
+  // Employed"/"Self-employed" ×6. As a company each became ONE entity shared
+  // by unrelated people; as a person title it names nobody. Whole-title
+  // matches only ("Freelance Collective Ltd", "Stealth Labs" stay names).
+  // Bare English "independent" is deliberately NOT listed: an organisation
+  // can be called exactly that. Bare "stealth" IS listed: as an employer it
+  // means an undisclosed startup. Compared after `normalizeJunkTitle`
+  // (accents stripped, hyphens → spaces), so spell entries that way.
+  "freelance",
+  "freelancer",
+  "self employed",
+  "selfemployed",
+  "independent consultant",
+  "independent contractor",
+  "independant",
+  "independante",
+  "consultant independant",
+  "consultante independante",
+  "travailleur independant",
+  "travailleuse independante",
+  "auto entrepreneur",
+  "autoentrepreneur",
+  "micro entrepreneur",
+  "microentrepreneur",
+  "a mon compte",
+  "a son compte",
+  "en freelance",
+  "stealth",
+  "stealth mode",
+  "stealth startup",
+  "stealth mode startup",
+  "stealth company",
+  "startup en mode furtif",
 ] as const;
 
 const JUNK_TITLES = new Set<string>(JUNK_ENTITY_TITLES);
+
+/**
+ * The form a title is compared in: lower-case, accents stripped
+ * ("Indépendant" → "independant"), hyphens/underscores as spaces
+ * ("Self-employed" → "self employed"), whitespace collapsed.
+ */
+function normalizeJunkTitle(title: string): string {
+  return title
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "")
+    .toLowerCase()
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 /** Whether this profileSlug rejects junk/placeholder titles. */
 export function profileRejectsJunkTitle(
@@ -81,7 +133,12 @@ export function isJunkEntityTitle(title: string | null | undefined): boolean {
   if (title == null) return true;
   const trimmed = title.trim();
   if (trimmed.length === 0) return true;
-  return JUNK_TITLES.has(trimmed.toLowerCase());
+  // Punctuation or symbols only ("-", "…", "—", "?", "/") names nothing.
+  if (/^[\p{P}\p{S}\s]+$/u.test(trimmed)) return true;
+  return (
+    JUNK_TITLES.has(trimmed.toLowerCase()) ||
+    JUNK_TITLES.has(normalizeJunkTitle(trimmed))
+  );
 }
 
 /** True when this create should be rejected for a junk title. */

@@ -56,9 +56,13 @@ afterAll(async () => {
 describe("invite acceptances", () => {
   it("finds the open pod invite a member accepted, by their address", async () => {
     const accepted = invite({});
-    await recordInviteAcceptance(accepted, "member-1", conn);
-    // A retried accept records nothing new.
-    await recordInviteAcceptance(accepted, "member-1", conn);
+    await expect(
+      recordInviteAcceptance(accepted, "member-1", conn)
+    ).resolves.toBe(true);
+    // A retried (or concurrent) accept records nothing new, and is no error.
+    await expect(
+      recordInviteAcceptance(accepted, "member-1", conn)
+    ).resolves.toBe(true);
 
     const row = await findOpenPodInviteAcceptance(
       { userId: "member-1", email: "ada@example.test", now: NOW },
@@ -101,6 +105,21 @@ describe("invite acceptances", () => {
       await expect(
         findOpenPodInviteAcceptance({ userId, email, now: NOW }, conn)
       ).resolves.toBeNull();
+    }
+  });
+
+  it("a write that fails is reported, never thrown: the accept it follows stands", async () => {
+    // No table at all: every insert fails, as on a pod where 0334 never ran.
+    const bare = new PGlite();
+    const bareConn = drizzle(bare, {
+      schema: { inviteAcceptances },
+    }) as unknown as Parameters<typeof recordInviteAcceptance>[2];
+    try {
+      await expect(
+        recordInviteAcceptance(invite({}), "member-1", bareConn)
+      ).resolves.toBe(false);
+    } finally {
+      await bare.close();
     }
   });
 });

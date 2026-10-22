@@ -8,6 +8,7 @@ import { proposals, ProposalStatus } from "../schema/proposals.js";
 // here moved WITH it, so no caller loses the 22P02 protection.
 import { resolveProjectPlacement } from "../services/project-resolution-service.js";
 import { stableStringify } from "./stable-stringify.js";
+import { isUniqueViolation } from "./pg-errors.js";
 import {
   callingKeyAttribution,
   isDerivedSession,
@@ -578,8 +579,7 @@ export async function insertPendingProposal(
     // peek is GLOBAL (dedup_hash only), so this recovers BOTH a same-agent race
     // and a different-agent identical write — whichever committed first is
     // returned as the dedup hit, never leaked as a 500 / false denial.
-    const code = (err as { code?: string } | null)?.code;
-    if (input.agentUserId && code === "23505") {
+    if (input.agentUserId && isUniqueViolation(err)) {
       const existing = await findExistingPendingDuplicate(input, executor);
       if (existing) return { proposal: existing, deduped: true };
     }

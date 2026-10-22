@@ -16,7 +16,8 @@
  *  - an approval replay refuses a twin RECORD with candidates, `keep_both`
  *    lands it — the reviewer owns the twin (B2b);
  *  - an agent cannot pass the reviewer's flag — rules out a renamed forceCreate;
- *  - the same agent's identical retry is the retry class, not floored.
+ *  - the same agent's identical retry is the retry class, not floored: the
+ *    retry dedup answers it with the first write before the gate.
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -359,15 +360,17 @@ describe("entities.create: the one duplicate door", () => {
   });
 
   it("the same agent's identical retry is the retry class, not floored", async () => {
-    await create({
+    const answer = await create({
       title: "Bo Retry",
       agentUserId: AGENT,
       source: "ai",
       properties: { city: "Paris" },
     });
-    const args = gateArgs();
-    expect(args.duplicateCheck?.status).toBe("possible");
-    expect(args.possibleDuplicate).toBe(false);
+    // The retry-safe dedup answers an exact retry with the first write before
+    // the duplicate floor and the gate (W3, founder decision 2026-10-22): no
+    // proposal, no second row, no receipt.
+    expect(answer).toMatchObject({ id: RETRY, ackState: "duplicate-ignored" });
+    expect(h.gate).not.toHaveBeenCalled();
   });
 
   it("older same-name rows of OTHER kinds never crowd out the same-kind twin (S1)", async () => {

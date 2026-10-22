@@ -66,6 +66,7 @@ import {
   classifyThrownFailure,
   failureRecord,
 } from "./failure-classification.js";
+import { assertFreshAuthentication } from "../../utils/device-session.js";
 import {
   redactDeepForStorage,
   redactForStorage,
@@ -1518,6 +1519,10 @@ async function applyProposalApprovalInner(
     });
   } else if (governanceFloor === "pod-admin") {
     await assertPodAdmin(userId);
+    // A privileged pod-wide write (a governance rule, a ceiling, a trusted
+    // issuer's reach) widens what agents and services may do: a console act,
+    // never a Synap app's device token (utils/device-session.ts).
+    assertFreshAuthentication(ctx);
   }
 
   // ═══════════════════════════════════════════════════════════════════════

@@ -35,7 +35,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import {
   db,
   eq,
@@ -54,6 +54,7 @@ import {
   isNull,
   resolveWorkspacePlacement,
   ProposalStatus,
+  isUniqueViolation,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
@@ -752,7 +753,7 @@ export const relationsRouter = router({
    * A pod-personal (NULL-workspace) project is still refused as an anchor.
    * Sites W2 S3: now a thin alias of `services/sharing/share-service.ts`.
    */
-  exposeToAnchor: protectedProcedure
+  exposeToAnchor: credentialProcedure
     .input(
       z.object({
         entityId: z.string().uuid(),
@@ -784,7 +785,7 @@ export const relationsRouter = router({
    * membership on the client anchor and do NOT add them to the workspace — the
    * exposure floor then scopes their reads to that anchor's exposed entities only.
    */
-  grantAnchorMembership: protectedProcedure
+  grantAnchorMembership: credentialProcedure
     .input(
       z.object({
         anchorId: z.string().uuid(),
@@ -1110,7 +1111,7 @@ export const relationsRouter = router({
         // Idempotency: uniquely-indexed edges (e.g. belongs_to_project) must not
         // 500 on a re-link. On a unique violation, return the existing edge
         // instead of throwing — re-filing an entity into a project is a no-op.
-        if ((err as { code?: string })?.code === "23505") {
+        if (isUniqueViolation(err)) {
           // Match the SAME key the index conflicted on (migration 0239), not just
           // the (source,target,type) triple — otherwise we hand the caller back a
           // row they may not even be allowed to see.

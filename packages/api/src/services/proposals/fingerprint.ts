@@ -275,6 +275,14 @@ export interface ProposalClusterSource {
   automationId?: string;
 }
 
+/** The one agent behind a whole cluster (`ProposalCluster.agent`). */
+export interface ProposalClusterAgent {
+  /** `proposals.agentUserId` — the agent's page door. */
+  id: string;
+  /** Its display name (`actorDisplayName`); null when the router resolved none. */
+  label: string | null;
+}
+
 /** One collapsed cluster card. */
 export interface ProposalCluster {
   fingerprint: string;
@@ -307,6 +315,14 @@ export interface ProposalCluster {
    * this is decided over EVERY member.
    */
   sessionId: string | null;
+  /**
+   * The ONE agent that filed EVERY member — `null` when any member was filed
+   * by no agent (a person, a system write) or members came from several.
+   * Decided over every member, like `sessionId` — never read off `sources`,
+   * where a member with no provenance leaves no trace. A needs-you row's
+   * "from X" (`signalFromCluster`).
+   */
+  agent: ProposalClusterAgent | null;
   /**
    * Member count per `governance_reason`, so a card can render its composition
    * ("152 routine · 2 destructive · 1 untrusted origin") instead of a bare
@@ -373,8 +389,19 @@ interface ClusterAccumulator {
   workspaceIds: Set<string>;
   /** Every member's session (`null` for none) — one entry ⇒ one session. */
   sessionIds: Set<string | null>;
+  /** Every member's agent (`null` for none) — one entry ⇒ one agent. */
+  agentIds: Set<string | null>;
+  /** The display name of an agent seen on a member (only read when one agent). */
+  agentLabel: string | null;
   reasonCounts: Record<string, number>;
   attentionFloorCount: number;
+}
+
+/** The single agent every member of a cluster was filed by, or `null`. */
+function oneAgentOf(acc: ClusterAccumulator): ProposalClusterAgent | null {
+  if (acc.agentIds.size !== 1) return null;
+  const [only] = acc.agentIds;
+  return only ? { id: only, label: acc.agentLabel } : null;
 }
 
 /** The single session a cluster's members share, or `null`. */
@@ -431,6 +458,8 @@ export function collapseProposalsToClusters(
         latestAt: row.createdAt,
         workspaceIds: new Set<string>(),
         sessionIds: new Set<string | null>(),
+        agentIds: new Set<string | null>(),
+        agentLabel: null,
         reasonCounts: {},
         attentionFloorCount: 0,
       };
@@ -446,6 +475,9 @@ export function collapseProposalsToClusters(
     }
     if (row.workspaceId) acc.workspaceIds.add(row.workspaceId);
     acc.sessionIds.add(row.sessionId ?? null);
+    acc.agentIds.add(row.agentUserId ?? null);
+    if (row.agentUserId && row.agentLabel && !acc.agentLabel)
+      acc.agentLabel = row.agentLabel;
 
     // Composition. An absent reason is counted under "unspecified" rather than
     // dropped — a member whose escalation cause is unknown must still show up
@@ -487,6 +519,7 @@ export function collapseProposalsToClusters(
     latestAt: acc.latestAt,
     workspaceIds: [...acc.workspaceIds],
     sessionId: oneSessionOf(acc.sessionIds),
+    agent: oneAgentOf(acc),
     reasonCounts: acc.reasonCounts,
     attentionFloorCount: acc.attentionFloorCount,
   }));

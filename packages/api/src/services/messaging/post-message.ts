@@ -166,8 +166,11 @@ export interface PostChannelMessageResult {
   /**
    * An agent's `question` naming a `slotLabel`: what filing it ON the slot did
    * (`fileRoomQuestionOnSlot`) — `blocked` when the slot now carries the
-   * question as its ask; otherwise why not (`unknown_label`, `already_done`,
-   * `no_session`, `not_found`, `failed`). Absent for every other post.
+   * question as its ask; otherwise why not (`already_done`, `not_found`,
+   * `failed`). A slot the session does not declare, or a room with no
+   * session, is REFUSED before posting (`checkRoomQuestionSlot`), so
+   * `unknown_label` / `no_session` only reach here on a race. Absent for
+   * every other post.
    */
   slot?: { status: string };
 }
@@ -185,6 +188,27 @@ export function postedMessageIdFor(
   return deterministicUuidFromKey(
     `post_message:${channelId}:${idempotencyKey.trim()}`
   );
+}
+
+/**
+ * WHO WROTE this post — the ONE derivation of `messages.authorType` for this
+ * door. `userId` is always the HUMAN owner (see `agentUserId`), so the owner id
+ * on a row says nothing about who spoke; the author type does:
+ *   - an agent key authored it            → `ai_agent`
+ *   - a `user`-role post (a person typing) → `human`
+ *   - anything else (`assistant` / `system` with no agent: the POD speaking —
+ *     recall, input, dispatch and route notices)  → `bot`
+ * It used to be `agentUserId ? ai_agent : human`, which filed every pod notice
+ * as the owner's own words (verified live 2026-10-22 on the session-recall
+ * notice) — a reader that trusts `authorType: 'human'` (the answer door, the
+ * bridge wake, attention counts) then mistook the pod for the person.
+ */
+export function authorTypeForPost(p: {
+  role: string;
+  agentUserId?: string;
+}): MessageAuthorType {
+  if (p.agentUserId) return MessageAuthorType.AI_AGENT;
+  return p.role === "user" ? MessageAuthorType.HUMAN : MessageAuthorType.BOT;
 }
 
 /** Build a duplicate-ignored receipt for a prior message id (pure — no I/O). */
@@ -297,6 +321,25 @@ export async function postChannelMessage(
   // unauthorized channel throws, it never falls through to the insert.
   const channel = await assertCallerMayPostToChannel(channelId, userId);
 
+  // An agent's question ABOUT A SLOT must name a slot that exists, or nothing
+  // is posted: posting it anyway left the ask attached to nothing
+  // (`slot: unknown_label`, live 2026-10-22). See `room-question-slot.ts`.
+  if (agentUserId && params.kind === "question" && params.slotLabel?.trim()) {
+    const { checkRoomQuestionSlot } =
+      await import("../focus-sessions/room-question-slot.js");
+    const { roomQuestionSlotRefusal } =
+      await import("../focus-sessions/room-question-slot-refusal.js");
+    const refusal = roomQuestionSlotRefusal(
+      await checkRoomQuestionSlot({
+        channelId,
+        slotLabel: params.slotLabel,
+        userId,
+      }),
+      params.slotLabel
+    );
+    if (refusal) throw new TRPCError({ code: "BAD_REQUEST", message: refusal });
+  }
+
   const role = params.role || "assistant";
   const triggerAI = Boolean(params.triggerAI);
   const roleEnum =
@@ -384,9 +427,7 @@ export async function postChannelMessage(
       // See `agentUserId` on the params type: without this an agent post is
       // indistinguishable from its owner's. Hash-safe — `computeMessageHash`
       // covers (id, content, previousHash) only.
-      authorType: agentUserId
-        ? MessageAuthorType.AI_AGENT
-        : MessageAuthorType.HUMAN,
+      authorType: authorTypeForPost({ role, agentUserId }),
       // `routedSource` must accompany `routedTeammateId` — the UI resolver
       // (`@synap-core/channels` room-adapters/message.ts:92) requires BOTH or it
       // renders no attribution at all. DIRECT = this agent posted on its own

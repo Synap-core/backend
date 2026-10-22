@@ -23,6 +23,7 @@ import {
 } from "../schema/apps.js";
 import { apiKeys } from "../schema/api-keys.js";
 import { grants } from "../schema/grants.js";
+import { isUniqueViolation } from "../utils/pg-errors.js";
 import { GrantRepository } from "./grant-repository.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 
@@ -178,12 +179,6 @@ function newest(dates: Array<Date | null | undefined>): Date | null {
  * (api) keeps the two prefixes identical.
  */
 export const APP_PUBLIC_ID_PREFIX = "app_";
-
-/** A Postgres unique violation, whether raw or wrapped by Drizzle (`cause`). */
-function isUniqueViolation(err: unknown): boolean {
-  const e = err as { code?: string; cause?: { code?: string } } | null;
-  return e?.code === "23505" || e?.cause?.code === "23505";
-}
 
 /** `app_<lowercased-uuid>` — the stable public id, used verbatim as `client_id`. */
 function makePublicId(): string {
@@ -771,8 +766,7 @@ export class AppRepository {
     } catch (err) {
       // A concurrent rename/register took the name between the check and the
       // write — the index is the final word.
-      if ((err as { code?: string })?.code === "23505")
-        throw new AppNameTakenError(trimmed);
+      if (isUniqueViolation(err)) throw new AppNameTakenError(trimmed);
       throw err;
     }
   }

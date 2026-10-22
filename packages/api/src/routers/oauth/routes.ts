@@ -43,12 +43,18 @@
  * understands.
  */
 
+import { cleanLoginHint } from "@synap-core/types/sign-in";
 import { randomUUID } from "crypto";
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
 
 import { db, eq, users } from "@synap/database";
 import { APP_PERSON_KEY_TYPE } from "@synap/database/schema";
+import {
+  isPersonDeviceToken,
+  resolvePersonDeviceSession,
+  revokePersonDevice,
+} from "@synap/database/person-devices";
 
 import { TRPCError } from "@trpc/server";
 
@@ -61,15 +67,20 @@ import {
 } from "../../services/app-connect.js";
 import { apiKeyService } from "../../services/api-keys.js";
 import { AGENT_KEY_TTL_DAYS } from "../../services/hub-integration-registration.js";
-import { configuredPodAdminConsentUrl } from "../../utils/pod-admin-url.js";
+import {
+  configuredPodAdminBase,
+  configuredPodAdminConsentUrl,
+} from "../../utils/pod-admin-url.js";
 import {
   CP_CONNECTOR_AGENT_TYPE,
+  FIRST_PARTY_CLIENT_IDS,
   OAUTH_DEFAULT_SCOPES,
   OAUTH_REVOCABLE_AGENT_TYPES,
   OAUTH_SUPPORTED_SCOPES,
   mapCpScopesToPodScopes,
   oauthKeyInstanceId,
   parseOauthKeyInstanceId,
+  resolveFirstPartyClient,
   resolveIssuer,
   resolveOAuthAgentType,
   type OAuthAgentType,
@@ -78,6 +89,7 @@ import {
   AuthorizeUserError,
   resolveClientAndRedirect,
   resourceFor,
+  signAuthRequestTime,
   validateAuthorizeRequest,
 } from "./consent.js";
 import {
@@ -87,7 +99,7 @@ import {
   buildAuthorizationServerMetadata,
   buildDcrResponse,
   buildProtectedResourceMetadata,
-  isRegisteredRedirectUri,
+  clientAcceptsRedirect,
   validateDcrRequest,
   verifyPkce,
 } from "./protocol.js";
@@ -102,7 +114,12 @@ import {
   successorAccessToken,
   type RedeemedRefreshToken,
 } from "./refresh.js";
-import { claimAuthorizationCode, findClient, insertClient } from "./store.js";
+import {
+  claimAuthorizationCode,
+  findClient,
+  insertClient,
+  type StoredClient,
+} from "./store.js";
 import {
   APP_PERSON_SCOPES,
   isAppClientId,
@@ -186,19 +203,27 @@ oauthApp.get("/.well-known/oauth-protected-resource/mcp", (c) => {
 
 // ─── RFC 8414 — authorization server metadata ────────────────────────────────
 
+/**
+ * RFC 8414 metadata, plus the Synap apps this pod signs in (`synap_first_party_clients`,
+ * a Synap extension): what a Synap app reads to know this pod supports the
+ * system-browser sign-in, and falls back to the older path when it is absent.
+ */
+function authorizationServerMetadata(issuer: string) {
+  return {
+    ...buildAuthorizationServerMetadata(issuer, OAUTH_SUPPORTED_SCOPES),
+    synap_first_party_clients: [...FIRST_PARTY_CLIENT_IDS],
+  };
+}
+
 oauthApp.get("/.well-known/oauth-authorization-server", (c) => {
   const issuer = issuerOr503();
   if (!issuer) return c.json(ISSUER_UNCONFIGURED, 503);
-  return c.json(
-    buildAuthorizationServerMetadata(issuer, OAUTH_SUPPORTED_SCOPES)
-  );
+  return c.json(authorizationServerMetadata(issuer));
 });
 oauthApp.get("/.well-known/oauth-authorization-server/mcp", (c) => {
   const issuer = issuerOr503();
   if (!issuer) return c.json(ISSUER_UNCONFIGURED, 503);
-  return c.json(
-    buildAuthorizationServerMetadata(issuer, OAUTH_SUPPORTED_SCOPES)
-  );
+  return c.json(authorizationServerMetadata(issuer));
 });
 
 // ─── RFC 7591 — dynamic client registration ──────────────────────────────────
@@ -344,6 +369,27 @@ oauthApp.get("/authorize", async (c) => {
   if (validated.resource) {
     target.searchParams.set("resource", validated.resource);
   }
+  // Sign-in HINTS for the consent screen (never a credential): OIDC
+  // `login_hint` pre-fills who signs in; `prompt=create` (OIDC Initiating
+  // User Registration) asks for the make-an-account path. A STEP-UP asks for
+  // a fresh sign-in: `prompt=login` and/or `max_age` — the consent decision
+  // ENFORCES them server-side (consent.ts `reauthenticationRequired`).
+  const loginHint = cleanLoginHint(q.login_hint);
+  if (loginHint) target.searchParams.set("login_hint", loginHint);
+  if (q.prompt === "create" || q.prompt === "login") {
+    target.searchParams.set("prompt", q.prompt);
+  }
+  if (q.max_age !== undefined && /^[0-9]{1,9}$/.test(q.max_age)) {
+    target.searchParams.set("max_age", q.max_age);
+  }
+  // When this request was made, signed: `prompt=login` /
+  // `max_age=0` needs a sign-in made after it (consent.ts).
+  if (
+    target.searchParams.has("max_age") ||
+    target.searchParams.get("prompt") === "login"
+  ) {
+    target.searchParams.set("auth_req", signAuthRequestTime());
+  }
 
   return c.redirect(target.toString(), 302);
 });
@@ -430,7 +476,23 @@ function appTokenResponse(minted: AppOAuthAccessKey, refreshToken: string) {
     // so the app can say "Connected as …" without another call.
     synap_grant: minted.grant,
     synap_user: minted.user,
+    // Which app this connection is on the pod, and the pod-admin page where
+    // the person narrows or revokes it (null: no valid POD_ADMIN_URL).
+    synap_app: {
+      id: minted.publicId,
+      manageUrl: appManageUrl(minted.publicId),
+    },
   };
+}
+
+/** The pod-admin page of one app (`/apps/[publicId]`), or null if unconfigured. */
+function appManageUrl(publicId: string): string | null {
+  const admin = configuredPodAdminBase();
+  if (!admin.ok) return null;
+  return new URL(
+    `/apps/${encodeURIComponent(publicId)}`,
+    admin.base
+  ).toString();
 }
 
 /**
@@ -449,6 +511,37 @@ async function exchangeAppRefreshToken(
   }
   if (!params.client_id) {
     throw new OAuthError("invalid_request", "client_id is required");
+  }
+  const firstParty = resolveFirstPartyClient(params.client_id);
+  if (firstParty) {
+    // RFC 8707: a Synap app's resource is this pod itself, checked before
+    // the token is spent (`firstPartyResourceForIssuer`).
+    if (params.resource !== undefined) {
+      resourceFor(firstParty, params.resource, issuer);
+    }
+    // A Synap app's device (person-device-token.ts, the one mint door).
+    const { refreshPersonDevice } =
+      await import("../../services/person-device-token.js");
+    let tokens;
+    try {
+      tokens = await refreshPersonDevice({
+        refreshToken: params.refresh_token,
+        clientId: firstParty.clientId,
+      });
+    } catch (err) {
+      if (err instanceof RefreshTokenReuseError) {
+        logger.warn(
+          { clientId: firstParty.clientId, familyId: err.familyId },
+          "pod-oauth: device refresh token reused — the device is signed out"
+        );
+      }
+      throw err;
+    }
+    logger.info(
+      { clientId: firstParty.clientId, deviceId: tokens.deviceId },
+      "pod-oauth: device access token refreshed"
+    );
+    return personDeviceTokenResponse(tokens);
   }
   const client = await findClient(params.client_id);
   if (!client) throw new OAuthError("invalid_client", "Unknown client");
@@ -480,9 +573,17 @@ async function exchangeAppRefreshToken(
     }
     throw err;
   }
+  if (!redeemed.appId) {
+    // Bound to this client, so never a device's — but say so, not assume it.
+    throw new OAuthError("invalid_grant", "Invalid refresh token");
+  }
+  const connection = { ...redeemed, appId: redeemed.appId };
   // The successor's id first: the key is the one it re-derives (the grace).
   const successorId = randomUUID();
-  const minted = await mintAppKey(redeemed, successorAccessToken(successorId));
+  const minted = await mintAppKey(
+    connection,
+    successorAccessToken(successorId)
+  );
   const refreshToken = await rotateRefreshToken(redeemed, successorId);
   logger.info(
     {
@@ -495,6 +596,37 @@ async function exchangeAppRefreshToken(
     "pod-oauth: pod app access token refreshed"
   );
   return appTokenResponse(minted, refreshToken);
+}
+
+/** A Synap app's device token response, for a code and a refresh alike. */
+function personDeviceTokenResponse(tokens: {
+  deviceId: string;
+  accessToken: string;
+  accessExpiresAt: Date;
+  refreshToken: string;
+}) {
+  return {
+    access_token: tokens.accessToken,
+    token_type: "Bearer",
+    expires_in: Math.max(
+      0,
+      Math.floor((tokens.accessExpiresAt.getTime() - Date.now()) / 1000)
+    ),
+    refresh_token: tokens.refreshToken,
+    // Synap extension: the device this sign-in is, as the devices list names it.
+    synap_device_id: tokens.deviceId,
+  };
+}
+
+/** The client a code was issued to, re-resolved from its source of truth. */
+async function resolveTokenClient(
+  clientId: string
+): Promise<StoredClient | null> {
+  const firstParty = resolveFirstPartyClient(clientId);
+  if (firstParty) return firstParty;
+  return isAppClientId(clientId)
+    ? resolveAppClient(clientId)
+    : findClient(clientId);
 }
 
 /**
@@ -513,11 +645,16 @@ async function refreshWithinGrace(
     grace: NonNullable<RedeemedRefreshToken["grace"]>;
   }
 ) {
+  // Only a pod app's family has a grace (refresh.ts): never a device's.
+  if (!redeemed.appId) {
+    throw new OAuthError("invalid_grant", "Invalid refresh token");
+  }
+  const connection = { ...redeemed, appId: redeemed.appId };
   const accessToken = successorAccessToken(redeemed.grace.successorId);
   const reused = await asGrantRefusal(() =>
-    reuseAppOAuthAccessKey({ ...appKeyArgs(redeemed), accessToken })
+    reuseAppOAuthAccessKey({ ...appKeyArgs(connection), accessToken })
   );
-  const key = reused ?? (await mintAppKey(redeemed));
+  const key = reused ?? (await mintAppKey(connection));
   await confirmGraceSuccessor(redeemed);
   logger.info(
     {
@@ -602,15 +739,13 @@ oauthApp.post("/token", async (c) => {
     // registration changed cannot redeem against a URI it no longer owns.
     // A sign-in app is re-resolved from `apps`: revoked, unapproved or with
     // the URI removed since consent → no client, no token.
-    const client = isAppClientId(claimed.clientId)
-      ? await resolveAppClient(claimed.clientId)
-      : await findClient(claimed.clientId);
+    const client = await resolveTokenClient(claimed.clientId);
     if (!client) {
       throw new OAuthError("invalid_client", "Unknown client");
     }
     if (
       params.redirect_uri !== claimed.redirectUri ||
-      !isRegisteredRedirectUri(client.redirectUris, claimed.redirectUri)
+      !clientAcceptsRedirect(client, claimed.redirectUri)
     ) {
       throw new OAuthError("invalid_grant", "redirect_uri mismatch");
     }
@@ -631,6 +766,69 @@ oauthApp.post("/token", async (c) => {
           "resource does not match the authorization request"
         );
       }
+    }
+
+    // A Synap app (desktop, Relay) signing the person in on this device: a
+    // device with a 1 h access token and a rotating refresh token — the one
+    // door (services/person-device-token.ts).
+    if (client.clientKind === "first_party") {
+      const { signInPersonDevice, stepUpPersonDevice } =
+        await import("../../services/person-device-token.js");
+      // A STEP-UP of a device the app already holds: the code's fresh sign-in
+      // moves THAT device's clock; the device's refresh token proves which
+      // device (and its family). Never a second device. The code says which
+      // it was asked as (`isDeviceReconfirm`: the screen said "Confirm it's
+      // you"), and the two must agree: a step-up code never makes a device,
+      // a sign-in code never re-confirms one.
+      if (claimed.stepUp !== Boolean(params.synap_device_refresh_token)) {
+        throw new OAuthError(
+          "invalid_grant",
+          claimed.stepUp
+            ? "This code re-confirms a device: send its refresh token as synap_device_refresh_token"
+            : "This code signs a new device in; a re-confirmation asks with prompt=login"
+        );
+      }
+      if (params.synap_device_refresh_token) {
+        const steppedUp = await stepUpPersonDevice({
+          refreshToken: params.synap_device_refresh_token,
+          clientId: client.clientId,
+          personUserId: claimed.userId,
+          authTime: claimed.authTime,
+        });
+        logger.info(
+          { clientId: claimed.clientId, deviceId: steppedUp.deviceId },
+          "pod-oauth: device re-confirmed (step-up)"
+        );
+        return c.json(personDeviceTokenResponse(steppedUp));
+      }
+      const signedIn = await signInPersonDevice({
+        personUserId: claimed.userId,
+        clientId: client.clientId,
+        label: params.synap_device_label,
+        userAgent: c.req.header("user-agent"),
+        authTime: claimed.authTime,
+      });
+      if (!signedIn.ok) {
+        logger.warn(
+          { clientId: claimed.clientId, reason: signedIn.reason },
+          "pod-oauth: device sign-in refused at mint"
+        );
+        throw new OAuthError(
+          "invalid_grant",
+          signedIn.reason === "no_pod_access"
+            ? "This account has no access to this pod"
+            : "Only a person can sign in to a Synap app"
+        );
+      }
+      logger.info(
+        {
+          clientId: claimed.clientId,
+          podUserId: claimed.userId,
+          deviceId: signedIn.deviceId,
+        },
+        "pod-oauth: device signed in"
+      );
+      return c.json(personDeviceTokenResponse(signedIn));
     }
 
     // "Sign in with Synap" (A1): a registered, approved app's code mints a
@@ -836,6 +1034,9 @@ oauthApp.post("/token", async (c) => {
 // A pod app's REFRESH token is accepted too (spec 17 §6.7): its whole family
 // and the connection's live access key are revoked. `token_type_hint` only
 // orders the two lookups (§2.1): a miss on the hinted kind tries the other.
+//
+// A Synap app's device (0340): its refresh token OR its access token ends the
+// whole device — the app's "sign out" (person-device-token.ts).
 
 /**
  * The keys this AS mints, and so the only ones /revoke may retire: held by a
@@ -917,6 +1118,24 @@ oauthApp.post("/revoke", async (c) => {
       const done = await revokeAsRefreshToken(presented, params.client_id);
       if (done === "wrong_client") return c.json(UNAUTHORIZED_REVOKE, 400);
       if (done === "revoked") return c.body(null, 200);
+    }
+    if (isPersonDeviceToken(presented)) {
+      // A Synap app's access token: its "sign out" ends the whole device
+      // (RFC 7009 §2.1 allows revoking the grant an access token belongs to).
+      const live = await resolvePersonDeviceSession(db, presented);
+      if (!live) return c.body(null, 200);
+      if (params.client_id && params.client_id !== live.device.clientId) {
+        return c.json(UNAUTHORIZED_REVOKE, 400);
+      }
+      await revokePersonDevice(db, {
+        deviceId: live.device.id,
+        reason: "OAuth token revocation (RFC 7009)",
+      });
+      logger.info(
+        { deviceId: live.device.id, clientId: live.device.clientId },
+        "pod-oauth: device signed out"
+      );
+      return c.body(null, 200);
     }
     const status = await apiKeyService.getApiKeyStatus(presented);
     // Only a LIVE key has anything to revoke; every other state is already the

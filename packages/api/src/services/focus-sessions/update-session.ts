@@ -1649,6 +1649,24 @@ export async function updateFocusSession(
     moveWorkspaceName = move.workspaceName;
   }
 
+  // STAGE GATE FLOOR — an agent cannot resume a gate-held session, advance it
+  // while held, or jump over a gated stage; the gate's approval is the door.
+  // Before the membrane for the reason the floors above give. Dynamic because
+  // `gate-bypass-floor.ts` reads `pendingStageGate` from `follow-playbook.ts`,
+  // which imports this module statically.
+  if (
+    agentUserId &&
+    (params.status !== undefined || params.currentStage !== undefined)
+  ) {
+    const { refuseAgentGateBypass } = await import("./gate-bypass-floor.js");
+    const refusal = await refuseAgentGateBypass({
+      session: existing,
+      toStatus: params.status,
+      toStage: params.currentStage,
+    });
+    if (refusal) return { status: "denied", reason: refusal };
+  }
+
   // TRACK FILING (adopt into a step) — resolved BEFORE the membrane for the
   // same reason as the floors above: a track the caller cannot see, a stage it
   // did not pin or a cross-project filing is refused to the caller, never

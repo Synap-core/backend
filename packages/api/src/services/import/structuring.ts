@@ -13,6 +13,7 @@ import {
   inArray,
   isNull,
   drizzleSql,
+  profileSlugScopeCondition,
 } from "@synap/database";
 import {
   workspaceLensWhere,
@@ -42,30 +43,19 @@ import {
   findPriorCaptureGraphProposal,
 } from "../../utils/pending-capture-dedup.js";
 import type { OrchestratorContext } from "./types.js";
+import type { ImportAnalysisPlan } from "@synap/intelligence-client";
+import { buildImportTitle } from "../../import/import-title.js";
 
 const logger = createLogger({ module: "import-orchestrator/structuring" });
 
 /**
- * Build a human-readable proposal summary from composite import operations by
- * extracting entity titles — the same pattern as `buildCaptureSummary` in
- * capture.ts. Centralised, extendable: any new importer feeds the same helper.
+ * The import proposal's title — what approving it creates, counted by kind,
+ * and the file(s) it came from ("Import 1,489 people, 1,338 companies and
+ * 1,462 links from Connections.csv"). One builder for every import writer
+ * (analyze / analyzeLarge); the pure implementation is `buildImportTitle`.
+ * The quality line is NOT part of it: it lives in `data.quality`.
  */
-export function buildImportSummary(
-  operations: ReadonlyArray<{ op?: unknown; title?: unknown }>,
-  source?: string
-): string {
-  const titles: string[] = [];
-  for (const op of operations) {
-    if (op.op === "create_entity" && typeof op.title === "string") {
-      titles.push(op.title);
-    }
-  }
-  const prefix = source ? `${source} import` : "Import";
-  if (titles.length === 0) return prefix;
-  if (titles.length === 1) return `${prefix}: ${titles[0]}`;
-  if (titles.length === 2) return `${prefix}: ${titles[0]}, ${titles[1]}`;
-  return `${prefix}: ${titles[0]}, ${titles[1]}, +${titles.length - 2} more`;
-}
+export const buildImportSummary = buildImportTitle;
 
 /**
  * Per-op homes summary for an import graph — how create_entity ops are
@@ -321,7 +311,39 @@ export type ProfileHints = {
    * EXISTING properties and turn a role pick into kind + facet.
    */
   profileCatalog: CsvProfileCatalogEntry[];
+  /**
+   * The profiles the CSV table planner is offered: every one in a space; at
+   * pod altitude only what a pod-wide row can be (see `csvPlannerProfiles`).
+   */
+  csvPlannerProfiles: ReturnType<typeof buildAvailableProfiles>;
 };
+
+/**
+ * What the CSV table planner may type a row as. In a space: every accessible
+ * profile. Pod-wide (no space): only pod-scope kinds and roles — a pod-wide
+ * import has no space to home a workspace-scoped kind in, and the union of
+ * every space's kinds is what the planner was handed when it returned no plan
+ * for a pod-wide contacts import (live dry run 2026-10-22: ~120 profiles
+ * pod-wide vs ~32 in the CRM space; same file, a plan only in the space).
+ * Pure.
+ */
+export function csvPlannerProfiles<P extends { slug: string }>(
+  availableProfiles: P[],
+  profiles: ReadonlyArray<{
+    slug: string;
+    profileKind?: string | null;
+    entityScope?: string | null;
+  }>,
+  workspaceId: string | null | undefined
+): P[] {
+  if (workspaceId) return availableProfiles;
+  const podWide = new Set(
+    profiles
+      .filter((p) => p.profileKind === "role" || p.entityScope === "pod")
+      .map((p) => p.slug)
+  );
+  return availableProfiles.filter((p) => podWide.has(p.slug));
+}
 
 /** Project the accessible profiles (+ their effective properties) into the
  *  catalog `refineCsvTablePlan` reads. Pure. */
@@ -507,6 +529,15 @@ export async function resolveProfileHints(
     // `withEffectiveProperties` spreads the bare profile rows, so `profileKind`
     // and `applicableKinds` ride along untyped.
     profileCatalog: buildCsvProfileCatalog(withProps),
+    csvPlannerProfiles: csvPlannerProfiles(
+      availableProfiles,
+      withProps as unknown as Array<{
+        slug: string;
+        profileKind?: string | null;
+        entityScope?: string | null;
+      }>,
+      workspaceId
+    ),
   };
 }
 
@@ -516,11 +547,9 @@ export async function resolveProfileHints(
  * capability (the SAME endpoint capture.analyzeBulkMapping drives). The
  * inferred profile is gated against the workspace's real `validSlugs` so a
  * recognized profile (e.g. `person`) sticks and an unknown one falls back to
- * `note`. Returns null when the IS is unreachable / returns no plan — the
- * caller then keeps the existing shallow CSV behavior.
- *
- * Best-effort + non-destructive: a CSV import never fails because the planner
- * is down; it degrades to the prior shallow path.
+ * `note`. When the planner cannot answer, `buildCsvTablePlan` throws
+ * `CsvTablePlanUnavailableError`; the caller keeps the rows (as notes) but
+ * marks the import DEGRADED with that reason — never a silent fallback.
  */
 /**
  * What the planner is asked. The role sentence matters: a contacts table is
@@ -533,6 +562,27 @@ export const CSV_TABLE_INTENT =
   "profiles (for example contact, client, lead), pick that role's slug: it is " +
   "stored as the matching kind with the role attached.";
 
+/**
+ * The planner could not produce a plan for a table that HAS rows. Not "this
+ * table has no plan": the caller must say the import degraded and why, never
+ * quietly fall back to one note per row (live dry run 2026-10-22: a pod-wide
+ * contacts import silently became 1,603 notes).
+ */
+export class CsvTablePlanUnavailableError extends Error {
+  constructor(readonly reason: string) {
+    super(reason);
+    this.name = "CsvTablePlanUnavailableError";
+  }
+}
+
+/** The IS client's own abort for `analyzeBulkMapping` (intelligence-hub-client). */
+const PLANNER_TIMEOUT_MS = 25_000;
+
+/**
+ * The table's plan, or `null` only when there is nothing to plan (no header or
+ * no row). Every other miss THROWS `CsvTablePlanUnavailableError` with a
+ * reason a person can act on.
+ */
 export async function buildCsvTablePlan(
   ctx: OrchestratorContext,
   rawCsv: string,
@@ -541,46 +591,68 @@ export async function buildCsvTablePlan(
 ): Promise<CsvTablePlan | null> {
   const { headers, sampleRows } = parseCsvTable(rawCsv);
   if (headers.length === 0 || sampleRows.length === 0) return null;
+  if (availableProfiles.length === 0) {
+    throw new CsvTablePlanUnavailableError(
+      "no profile was available to type the rows"
+    );
+  }
 
   const { workspaceId, userId } = ctx;
   const wsId = workspaceId ?? undefined;
+  const started = Date.now();
+  let plan: ImportAnalysisPlan | null;
   try {
     const { client } = await resolveIntelligenceService({
       userId,
       workspaceId: wsId,
       capability: "default",
     });
-    const plan = await client.analyzeBulkMapping({
+    plan = await client.analyzeBulkMapping({
       headers,
       sampleRows,
       intent: CSV_TABLE_INTENT,
       availableProfiles,
     });
-    if (!plan) return null;
-
-    // Gate the inferred profile against the workspace's real slugs — an
-    // unknown slug would fail profile validation on create and dump the row
-    // back to a bare note, dropping its properties. Fall back to `note`.
-    const inferred = (plan.rowEntityType ?? "").trim().toLowerCase();
-    const profileSlug = validSlugs.has(inferred) ? inferred : "note";
-
-    return {
-      profileSlug,
-      titleColumn: plan.titleColumn ?? null,
-      columns: plan.columnMappings.map((c) => ({
-        header: c.header,
-        slug: c.slug,
-        valueType: c.valueType,
-        scope: c.scope,
-      })),
-    };
   } catch (e) {
     logger.warn(
       { e, userId, workspaceId },
-      "import buildCsvTablePlan failed — falling back to shallow CSV"
+      "import buildCsvTablePlan failed — the import is degraded"
     );
-    return null;
+    throw new CsvTablePlanUnavailableError(
+      `the table planner failed: ${e instanceof Error ? e.message : String(e)}`
+    );
   }
+  if (!plan) {
+    // The client answers null for a non-2xx, a network error AND its own
+    // 25 s abort; the elapsed time is the one fact that tells a timeout apart.
+    const elapsed = Date.now() - started;
+    const reason =
+      elapsed >= PLANNER_TIMEOUT_MS - 1_000
+        ? `the table planner gave no answer within ${Math.round(PLANNER_TIMEOUT_MS / 1000)} s (${availableProfiles.length} profiles offered)`
+        : `the intelligence service returned no table plan (${availableProfiles.length} profiles offered; its status is in the pod log)`;
+    logger.warn(
+      { userId, workspaceId, elapsed, profiles: availableProfiles.length },
+      `import buildCsvTablePlan: ${reason}`
+    );
+    throw new CsvTablePlanUnavailableError(reason);
+  }
+
+  // Gate the inferred profile against the workspace's real slugs — an
+  // unknown slug would fail profile validation on create and dump the row
+  // back to a bare note, dropping its properties. Fall back to `note`.
+  const inferred = (plan.rowEntityType ?? "").trim().toLowerCase();
+  const profileSlug = validSlugs.has(inferred) ? inferred : "note";
+
+  return {
+    profileSlug,
+    titleColumn: plan.titleColumn ?? null,
+    columns: plan.columnMappings.map((c) => ({
+      header: c.header,
+      slug: c.slug,
+      valueType: c.valueType,
+      scope: c.scope,
+    })),
+  };
 }
 
 /** Titles per lookup query (bounded IN list). */
@@ -626,6 +698,12 @@ export async function linkExistingImportTargets(
       ...new Set(items.map((it) => normalizeLinkTargetName(it.title))),
     ];
     const found = new Map<string, string>();
+    // The kind through THE polymorphic slug door: a role slug also matches the
+    // entities wearing it, a primary kind resolves to the plain type match.
+    const kindMatch = await profileSlugScopeCondition(database, kind, {
+      userId,
+      workspaceId: workspaceId ?? null,
+    });
     for (let i = 0; i < names.length; i += LINK_TARGET_LOOKUP_CHUNK) {
       const chunk = names.slice(i, i + LINK_TARGET_LOOKUP_CHUNK);
       // Same normalisation as `normalizeLinkTargetName`: whitespace runs → one
@@ -636,7 +714,7 @@ export async function linkExistingImportTargets(
         .from(entities)
         .where(
           and(
-            eq(entities.type, kind),
+            kindMatch,
             isNull(entities.deletedAt),
             inArray(normalizedTitle, chunk),
             scope
