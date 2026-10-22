@@ -21,8 +21,8 @@ import {
   workspaceMembers,
   eq,
   and,
-  ensureSystemProfiles,
 } from "@synap/database";
+import { seedBootData } from "../../../__tests__/seed-boot-data.js";
 import {
   pickAdvisoryWorkspaceId,
   executeMCPToolViaHubProtocol,
@@ -232,10 +232,8 @@ describe("synap_capture domain write placement (no silent membership[0])", () =>
   let seededOrchestratorId: string | null = null;
 
   beforeAll(async () => {
-    // The core kinds (person, note…) as boot seeds them
-    // (apps/api startup-hooks.ts); a fresh test database has none.
-    const seeded = await ensureSystemProfiles();
-    expect(seeded.status).not.toBe("error");
+    // The core kinds (person, note…) as boot seeds them.
+    await seedBootData();
     const [existing] = await db
       .select({ id: agents.id })
       .from(agents)

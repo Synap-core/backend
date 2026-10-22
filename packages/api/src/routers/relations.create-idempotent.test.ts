@@ -41,19 +41,22 @@ import {
   and,
   eq,
   isNull,
-  ensureDefaultRelationDefs,
 } from "@synap/database";
+import { seedBootData } from "../__tests__/seed-boot-data.js";
 import { relationsRouter } from "./relations.js";
 
-const USER = "e0000000-0000-4000-8000-0000000000b1";
-const OTHER_USER = "e0000000-0000-4000-8000-0000000000b2";
-const WS = "e0000000-0000-4000-8000-0000000000f2";
-const SRC = "e0000000-0000-4000-8000-0000000000c1";
-const TGT = "e0000000-0000-4000-8000-0000000000c2";
+// Fresh ids per run: a fixed id shared with another live-PG file (USER/OTHER_USER
+// were also entities.create-external-id-dedup's) let that file's cleanup delete
+// this file's users, and with them its edges, mid-run.
+const USER = randomUUID();
+const OTHER_USER = randomUUID();
+const WS = randomUUID();
+const SRC = randomUUID();
+const TGT = randomUUID();
 // Pod-wide endpoints: since D4 an edge inherits its endpoints' lens, so only an
 // edge between pod-wide entities is pod-wide (owner-private).
-const POD_SRC = "e0000000-0000-4000-8000-0000000000d1";
-const POD_TGT = "e0000000-0000-4000-8000-0000000000d2";
+const POD_SRC = randomUUID();
+const POD_TGT = randomUUID();
 
 async function checkDb(): Promise<boolean> {
   try {
@@ -92,13 +95,12 @@ describe.skipIf(!dbAvailable)(
   () => {
     beforeAll(async () => {
       await cleanup();
-      // The pod-wide relation types, as boot seeds them
-      // (jobs/src/workers/index.ts); a workspace falls back to them.
-      const seeded = await ensureDefaultRelationDefs(null, "system");
-      expect(seeded.status).not.toBe("error");
+      // The pod-wide relation types (and core kinds), as boot seeds them; a
+      // workspace falls back to the pod-wide types.
+      await seedBootData();
       for (const [id, email] of [
-        [USER, "rel-idem@test.synap"],
-        [OTHER_USER, "rel-idem-other@test.synap"],
+        [USER, `rel-idem-${USER}@test.synap`],
+        [OTHER_USER, `rel-idem-other-${OTHER_USER}@test.synap`],
       ] as const) {
         await db
           .insert(users)

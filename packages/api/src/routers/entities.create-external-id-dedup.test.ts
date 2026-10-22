@@ -38,8 +38,8 @@ import {
   eq,
   isNull,
   ilike,
-  ensureSystemProfiles,
 } from "@synap/database";
+import { seedBootData } from "../__tests__/seed-boot-data.js";
 import { entitiesRouter } from "./entities.js";
 
 const USER = "e0000000-0000-4000-8000-0000000000b1";
@@ -93,10 +93,8 @@ describe.skipIf(!dbAvailable)(
   () => {
     beforeAll(async () => {
       await cleanup();
-      // The core kinds (person, note…) as boot seeds them
-      // (apps/api startup-hooks.ts); a fresh test database has none.
-      const seeded = await ensureSystemProfiles();
-      expect(seeded.status).not.toBe("error");
+      // The core kinds (person, note…) as boot seeds them.
+      await seedBootData();
       await db
         .insert(users)
         .values({ id: USER, email: "b1-dedup@test.synap", userType: "human" })

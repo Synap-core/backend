@@ -90,8 +90,16 @@ const q = <T>(sql: string, params?: unknown[]) =>
  * are measured from it, so the midnight straddle cannot drift with how long
  * the suite runs before the parity test (CI run 39618292526 picked a zone
  * against a later "now" and found no split day).
+ *
+ * Its UTC minute is kept in 6–57: a whole-hour zone's local minute IS the UTC
+ * minute, so some zone is then 6–57 minutes past its midnight (see
+ * `midnightZone`). Outside that range the instant steps back 9 minutes.
  */
-const FIXTURE_NOW = Date.now();
+const FIXTURE_NOW = (() => {
+  const now = Date.now();
+  const minute = new Date(now).getUTCMinutes();
+  return minute < 6 || minute > 57 ? now - 9 * 60_000 : now;
+})();
 const ago = (mins: number) =>
   new Date(FIXTURE_NOW - mins * 60_000).toISOString();
 
@@ -777,19 +785,19 @@ const daily = (
 ) => activityRouter.createCaller(ctx(userId)).daily(input);
 
 /**
- * A zone whose local midnight fell 3–88 minutes before FIXTURE_NOW, so the
- * fixture's recent rows (2–90 minutes before it) straddle two calendar days
- * there. The window must span more than an hour: zones whose local time is
- * 00:xx or 01:xx always exist, but a 10–50 minute window had no zone for
- * about a fifth of the day (00:00–00:09 and :51–:59 UTC each hour on whole-
- * hour offsets) and failed CI at those minutes.
+ * A zone whose local midnight fell 6–57 minutes before FIXTURE_NOW, so USER's
+ * recent rows straddle two calendar days there: the newest is 5 minutes old
+ * (S_DONE closes at ago(5); the ago(2)/ago(4) rows are the STRANGER's) and the
+ * oldest 60 (S_OPEN, live since ago(60)). The window must stay INSIDE that span — 3–88 (fb4582a44) let a
+ * zone 60–88 minutes past midnight put every row on one day. FIXTURE_NOW's
+ * minute guarantees a whole-hour zone in the window.
  */
 function midnightZone(): string {
   const now = FIXTURE_NOW;
   for (const tz of Intl.supportedValuesOf("timeZone")) {
     const today = calendarDayIn(now, tz);
     const since = Date.parse(activityDayRange(today, tz).since);
-    if (now - since >= 3 * 60_000 && now - since <= 88 * 60_000) return tz;
+    if (now - since >= 6 * 60_000 && now - since <= 57 * 60_000) return tz;
   }
   throw new Error("no zone has just passed midnight");
 }
