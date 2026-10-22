@@ -12,8 +12,17 @@
  */
 
 import { randomUUID } from "crypto";
-import { describe, it, expect, afterEach } from "vitest";
-import { db, users, workspaces, workspaceMembers, eq } from "@synap/database";
+import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
+import {
+  db,
+  agents,
+  users,
+  workspaces,
+  workspaceMembers,
+  eq,
+  and,
+} from "@synap/database";
+import { seedBootData } from "../../../__tests__/seed-boot-data.js";
 import {
   pickAdvisoryWorkspaceId,
   executeMCPToolViaHubProtocol,
@@ -141,35 +150,11 @@ describe("synap_set_workspace_focus (DB-backed)", () => {
     expect(await getAgentFocusWorkspaceId(agentUserId)).toBeNull();
   });
 
-  it("errors with candidates when TWO workspaces share the EXACT name", async () => {
-    // The case above is SUBSTRING ambiguity ("CRM" matching "CRM Sales" +
-    // "CRM Support"). This is EXACT-duplicate ambiguity, and it is the one
-    // that actually exists in production: the live pod carries two workspaces
-    // named "Foundation" and two named "CRM".
-    //
-    // Before the fix, exact matching used `.find()` — first row wins, rest
-    // discarded — so focus resolved SILENTLY to whichever came back first and
-    // reported success. Every subsequent unqualified write then landed in a
-    // workspace the caller never chose. Reproduced live on the deployed pod.
-    await setUp({ a: "Foundation", b: "Foundation" });
-
-    const result = await executeMCPToolViaHubProtocol(
-      "synap_set_workspace_focus",
-      { workspace: "Foundation" },
-      humanUserId,
-      ["mcp.write"],
-      undefined,
-      agentUserId
-    );
-
-    const text = (result.content as Array<{ text: string }>)[0]?.text ?? "";
-    const parsed = JSON.parse(text);
-    expect(parsed.error).toMatch(/name of 2 workspaces/);
-    expect(parsed.candidates).toHaveLength(2);
-    // And it must not have pinned one anyway — a silent pick with an error
-    // attached would be worse than either outcome alone.
-    expect(await getAgentFocusWorkspaceId(agentUserId)).toBeNull();
-  });
+  // The EXACT-duplicate case ("two spaces named Foundation") was pinned here
+  // until migration 0308: workspace identity now refuses a second ACTIVE space
+  // with the same lower(btrim(name)) pod-wide, so the state cannot be set up
+  // (the insert fails) and the `.find()` first-row-wins bug it guarded has no
+  // input left. The refusal itself is pinned by the workspace-identity tests.
 
   it("errors when no workspace matches the name", async () => {
     await setUp({ a: "CRM", b: "Marketing" });
@@ -242,6 +227,34 @@ describe("synap_capture domain write placement (no silent membership[0])", () =>
   const agentUserId = `test-capture-ws-agent-${randomUUID()}`;
   const wsAId = randomUUID();
   const wsBId = randomUUID();
+  // A capture opens its run channel, which needs the pod's active orchestrator
+  // agent (seeded at boot on a real pod, absent from a bare migrated test DB).
+  let seededOrchestratorId: string | null = null;
+
+  beforeAll(async () => {
+    // The core kinds (person, note…) as boot seeds them.
+    await seedBootData();
+    const [existing] = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.slug, "orchestrator"), eq(agents.active, true)))
+      .limit(1);
+    if (existing) return;
+    seededOrchestratorId = randomUUID();
+    await db.insert(agents).values({
+      id: seededOrchestratorId,
+      name: "Orchestrator (workspace-focus test)",
+      slug: "orchestrator",
+      ownerType: "system",
+      active: true,
+      capabilities: [],
+    } as never);
+  });
+
+  afterAll(async () => {
+    if (seededOrchestratorId)
+      await db.delete(agents).where(eq(agents.id, seededOrchestratorId));
+  });
 
   afterEach(async () => {
     await db

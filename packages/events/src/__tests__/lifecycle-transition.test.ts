@@ -16,7 +16,13 @@ const h = vi.hoisted(() => ({
   settled: [] as any[],
   claim: vi.fn(),
 }));
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async () => ({
+  // The real door, so a wrapped unique violation is recognised as in prod.
+  isUniqueViolation: (
+    await vi.importActual<typeof import("@synap/database/pg-errors")>(
+      "@synap/database/pg-errors"
+    )
+  ).isUniqueViolation,
   sql: {},
   db: {},
   claimTransitionOutbox: h.claim,
