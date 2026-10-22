@@ -4,8 +4,11 @@
  * An agent-started session is a triage DRAFT until the person accepts it
  * (`triage.ts`), and needs-you hides a draft's owed slots one by one
  * (`excludeDrafts`). Hidden entirely, an external agent's FIRST question was
- * invisible (dogfood, 2026-09-27). The founder's answer: the draft row carries
- * its asks. This read returns the owed slots of pending drafts — the SAME owed
+ * invisible (dogfood, 2026-09-27). The founder's answer then: the draft row
+ * carries its asks. Since 2026-10-22 (founder) a draft's ASKS are Needs-you
+ * rows of their own (`listNeedsYouOwed`), and the draft row is the draft
+ * itself, to accept or reject, with no ask count. This read returns the owed
+ * slots of pending drafts — the SAME owed
  * predicate (`listOwedSlots`), under the inverse triage lens (`onlyDrafts` =
  * `triagePendingWhere`, never re-spelled) — plus WHO started each draft, so the
  * pure union (`needs-you-union.ts`) folds them into one row per draft.

@@ -4,8 +4,8 @@
  * invite was valid (`invite_acceptances`, migration 0334).
  *
  * ONE writer (`recordInviteAcceptance`), called by every accept path just
- * before it deletes the invite: `workspaces.acceptInvite`,
- * `workspaces.acceptInviteViaCp` and the Hub REST `accept-invite` sign-up.
+ * before it deletes the invite: `workspaces.acceptInvite` and the Hub REST
+ * `accept-invite` sign-up.
  *
  * The record can never fail an accept. Every path calls it AFTER the person's
  * memberships were granted, so a thrown write used to answer 500 to someone

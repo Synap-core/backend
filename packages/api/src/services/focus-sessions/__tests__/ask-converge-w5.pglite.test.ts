@@ -740,7 +740,7 @@ describe("param / criterion / provide / room question on the ONE answer door", (
     expect(slot.ask).toBeUndefined();
   });
 
-  it("a slotless question, an update, and an unknown slot file nothing", async () => {
+  it("a slotless question files nothing", async () => {
     const { sessionId, channelId } = await seed([AGENT_SLOT]);
     const plain = await postChannelMessage({
       channelId,
@@ -752,17 +752,35 @@ describe("param / criterion / provide / room question on the ONE answer door", (
       agentUserId: IS_AGENT,
     });
     expect(plain.slot).toBeUndefined();
-    const unknown = await postChannelMessage({
-      channelId,
-      content: "What about this?",
-      role: "assistant",
-      triggerAI: false,
-      kind: "question",
-      slotLabel: "Nope",
-      userId: OWNER,
-      agentUserId: IS_AGENT,
-    });
-    expect(unknown.slot).toEqual({ status: "unknown_label" });
+    expect((await slotOf(sessionId, "Region")).owner).toBeUndefined();
+  });
+
+  /**
+   * LIVE DEFECT (2026-10-22, session 5382a350): `ask` + a `slotLabel` the
+   * session does not declare returned success with `slot: unknown_label` —
+   * the message posted and the ask attached to nothing. Now REFUSED before
+   * anything is written, naming the declared keys.
+   */
+  it("a question naming an UNDECLARED slot is refused — nothing posted, no slot touched", async () => {
+    const { sessionId, channelId } = await seed([AGENT_SLOT]);
+    for (const ask of [CONFIRM, undefined]) {
+      await expect(
+        postChannelMessage({
+          channelId,
+          content: "What about this?",
+          role: "assistant",
+          triggerAI: false,
+          kind: "question",
+          slotLabel: "Nope",
+          ...(ask ? { ask: ask as never } : {}),
+          userId: OWNER,
+          agentUserId: IS_AGENT,
+        })
+      ).rejects.toThrow(
+        /^NOTHING WAS POSTED: slotLabel "Nope".*declared: region/s
+      );
+    }
+    expect(await roomMessages(channelId)).toHaveLength(0);
     expect((await slotOf(sessionId, "Region")).owner).toBeUndefined();
   });
 

@@ -60,6 +60,7 @@ import type {
 } from "@synap-core/types/imports";
 import { emitImportFileProgress } from "../utils/event-emit.js";
 import {
+  agentUserIdOf,
   resolveImportSession,
   resolvePlaybookOutputKind,
   stampProjectMembership,
@@ -74,6 +75,7 @@ import {
   resolveProfileHints,
   linkExistingImportTargets,
   buildCsvTablePlan,
+  CsvTablePlanUnavailableError,
   buildImportSummary,
   buildImportGraphProposalData,
   findPriorImportGraphProposal,
@@ -100,6 +102,10 @@ import type { OrchestratorContext } from "./import/types.js";
 export type { OrchestratorContext };
 
 const logger = createLogger({ module: "import-orchestrator" });
+
+/** Why a CSV row was not imported — the one sentence the response carries. */
+export const CSV_ROWS_SKIPPED_REASON =
+  "no name and no email, phone, profile link or handle: the row identifies nobody";
 
 export type ImportRevealSource =
   "obsidian" | "markdown" | "csv" | "bookmark" | "json" | "connector_sync";
@@ -394,6 +400,7 @@ export class ImportOrchestrator {
       availableWorkspaces,
       validateEntity,
       profileCatalog,
+      csvPlannerProfiles,
     } = await this.resolveProfileHints();
 
     // CSV is a TABLE: infer ONE profile + a column→property routing plan for the
@@ -413,6 +420,9 @@ export class ImportOrchestrator {
     // Rows a table plan read but did not turn into an item (blank separators,
     // nameless rows that identify nobody) — reported in `stats`, never silent.
     let csvRowsSkipped = 0;
+    // Files whose table plan could not be made: their rows still arrive (as
+    // notes), but the import is DEGRADED and says why — never a silent fallback.
+    const csvPlanFailures: Array<{ path: string; reason: string }> = [];
     if (input.source === "csv" && input.csvTablePlan !== false) {
       const playbookId = (input.playbookId ?? this.ctx.playbookId) as
         string | null | undefined;
@@ -423,12 +433,19 @@ export class ImportOrchestrator {
         const parsed = parseCsvTable(file.content);
         const schemaKey = JSON.stringify(parsed.headers);
         if (!planBySchema.has(schemaKey)) {
-          let plan = await buildCsvTablePlan(
-            this.ctx,
-            file.content,
-            validSlugs,
-            availableProfiles
-          );
+          let plan: CsvTablePlan | null;
+          try {
+            plan = await buildCsvTablePlan(
+              this.ctx,
+              file.content,
+              validSlugs,
+              csvPlannerProfiles ?? availableProfiles
+            );
+          } catch (e) {
+            if (!(e instanceof CsvTablePlanUnavailableError)) throw e;
+            csvPlanFailures.push({ path: file.path, reason: e.reason });
+            plan = null;
+          }
           // When a playbook templates this import, its `expectedOutputs[0].kind`
           // OVERRIDES the inferred CSV profileSlug — the playbook is the single
           // source of truth for entity typing.
@@ -572,7 +589,10 @@ export class ImportOrchestrator {
               intentCounts: corpusMap.intentCounts,
             },
           };
-          summary = buildImportSummary(operations, input.source);
+          summary = buildImportSummary(
+            operations,
+            input.items.map((i) => i.path)
+          );
         }
       } catch (e) {
         logger.warn(
@@ -618,7 +638,9 @@ export class ImportOrchestrator {
       droppedReferences = composite.droppedReferences;
       stats = {
         ...proposal.stats,
-        ...(csvRowsSkipped > 0 ? { csvRowsSkipped } : {}),
+        ...(csvRowsSkipped > 0
+          ? { csvRowsSkipped, csvRowsSkippedReason: CSV_ROWS_SKIPPED_REASON }
+          : {}),
         corpusMap: {
           folders: corpusMap.folders.length,
           containers: containerOps.filter((o) => o.op === "create_entity")
@@ -626,7 +648,10 @@ export class ImportOrchestrator {
           intentCounts: corpusMap.intentCounts,
         },
       };
-      summary = buildImportSummary(operations, input.source);
+      summary = buildImportSummary(
+        operations,
+        input.items.map((i) => i.path)
+      );
     }
 
     // Deep path failed entirely but we still have containers from the map.
@@ -641,10 +666,25 @@ export class ImportOrchestrator {
           intentCounts: corpusMap.intentCounts,
         },
       };
-      summary = buildImportSummary(operations, input.source);
+      summary = buildImportSummary(
+        operations,
+        input.items.map((i) => i.path)
+      );
     }
 
     const ops = operations ?? [];
+
+    // A table the planner could not type is said in the title the reviewer
+    // reads, not only in a log line.
+    const degradedReason =
+      csvPlanFailures.length > 0
+        ? csvPlanFailures.length === 1 && input.items.length === 1
+          ? csvPlanFailures[0]!.reason
+          : csvPlanFailures.map((f) => `${f.path}: ${f.reason}`).join("; ")
+        : null;
+    if (degradedReason) {
+      summary = `${summary} — degraded, rows filed as notes: ${degradedReason}`;
+    }
 
     // Attach to a session so this import's proposals + produced entities group
     // under one goal. Reuse the supplied session, else (workspace-scoped only —
@@ -798,6 +838,7 @@ export class ImportOrchestrator {
       );
     } else {
       const targetId = randomUUID();
+      const actingAgentUserId = agentUserIdOf(this.ctx.trpcCtx);
       const { proposal: created } = await createEventBackedProposal({
         userId,
         workspaceId,
@@ -806,7 +847,14 @@ export class ImportOrchestrator {
         proposalType: "capture.graph",
         action: "create",
         source: "import",
-        summary: `${summary} · ${quality.summary}`,
+        // The title names what approving it creates; the quality line is the
+        // body (`data.quality`), never the title (live 0728053b, 2026-10-22).
+        summary,
+        // The acting AGENT, when an agent key drove the analyze — same reader
+        // the run room's origin uses. Without it an agent's import filed an
+        // unattributed proposal (agentUserId null), which also skipped the
+        // agent dedup peek. A human caller has none and stays unattributed.
+        ...(actingAgentUserId ? { agentUserId: actingAgentUserId } : {}),
         sessionId: sessionId ?? null,
         data: buildImportGraphProposalData({
           ...(intake ? { sourceDocumentIds: intake.sourceDocumentIds } : {}),
@@ -860,6 +908,17 @@ export class ImportOrchestrator {
         : {}),
       ...(intake ? { intake } : {}),
       tablePlan,
+      ...(degradedReason
+        ? { degraded: true as const, degradedReason, csvPlanFailures }
+        : {}),
+      ...(csvRowsSkipped > 0
+        ? {
+            skippedRows: {
+              count: csvRowsSkipped,
+              reason: CSV_ROWS_SKIPPED_REASON,
+            },
+          }
+        : {}),
       operations: ops,
       summary,
       stats,
@@ -1406,7 +1465,10 @@ export class ImportOrchestrator {
       });
     }
 
-    const summary = buildImportSummary(operations, input.source);
+    const summary = buildImportSummary(
+      operations,
+      input.items.map((i) => i.path)
+    );
 
     const stats = {
       itemsProcessed,
@@ -1540,6 +1602,7 @@ export class ImportOrchestrator {
         "import.analyzeLarge: identical graph already proposed — returning prior"
       );
     } else {
+      const actingAgentUserId = agentUserIdOf(this.ctx.trpcCtx);
       const { proposal: created } = await createEventBackedProposal({
         userId,
         workspaceId,
@@ -1548,7 +1611,14 @@ export class ImportOrchestrator {
         proposalType: "capture.graph",
         action: "create",
         source: "import",
-        summary: `${summary} · ${quality.summary}`,
+        // The title names what approving it creates; the quality line is the
+        // body (`data.quality`), never the title (live 0728053b, 2026-10-22).
+        summary,
+        // The acting AGENT, when an agent key drove the analyze — same reader
+        // the run room's origin uses. Without it an agent's import filed an
+        // unattributed proposal (agentUserId null), which also skipped the
+        // agent dedup peek. A human caller has none and stays unattributed.
+        ...(actingAgentUserId ? { agentUserId: actingAgentUserId } : {}),
         sessionId: sessionId ?? null,
         data: buildImportGraphProposalData({
           ...(intake ? { sourceDocumentIds: intake.sourceDocumentIds } : {}),

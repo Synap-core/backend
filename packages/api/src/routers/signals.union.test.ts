@@ -41,6 +41,7 @@ function cluster(over: Partial<ProposalCluster> = {}): ProposalCluster {
     latestAt: new Date("2026-09-04T10:00:00Z"),
     workspaceIds: ["ws-1"],
     sessionId: null,
+    agent: null,
     reasonCounts: {},
     attentionFloorCount: 0,
     ...over,

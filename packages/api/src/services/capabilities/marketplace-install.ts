@@ -1931,6 +1931,10 @@ export async function applyMarketInstall(
       const created: string[] = [];
       const updated: string[] = [];
       const failed: Array<{ name: string; error: string }> = [];
+      // The ids of the views this install wrote (created or updated, in order),
+      // so the installer can open what it installed. A create that was only
+      // PROPOSED has no view yet and adds none.
+      const viewIds: string[] = [];
       for (const v of viewDefs) {
         const name =
           v.name ?? v.displayName ?? v.slug ?? entry?.name ?? input.slug;
@@ -1975,10 +1979,11 @@ export async function applyMarketInstall(
               metadata,
             } as Parameters<typeof viewCaller.update>[0]);
             updated.push(name);
+            viewIds.push(existingId);
           } else {
             // `type` is runtime-validated by the door's ViewTypeEnum; cast to the
             // caller's input shape (an invalid type is rejected by zod there).
-            await viewCaller.create({
+            const made = await viewCaller.create({
               workspaceId: input.workspaceId,
               name,
               description: v.description,
@@ -1989,6 +1994,9 @@ export async function applyMarketInstall(
               metadata,
             } as Parameters<typeof viewCaller.create>[0]);
             created.push(name);
+            const madeId = (made as { view?: { id?: unknown } | null }).view
+              ?.id;
+            if (typeof madeId === "string") viewIds.push(madeId);
           }
         } catch (err) {
           failed.push({
@@ -2008,7 +2016,7 @@ export async function applyMarketInstall(
             .join("; ")}`,
         });
       }
-      return { kind: "view", created, updated, failed };
+      return { kind: "view", created, updated, failed, viewIds };
     }
   }
 }
