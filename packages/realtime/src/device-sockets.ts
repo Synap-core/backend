@@ -58,7 +58,7 @@ export async function sweepDeviceSockets(
   const live = await isLive(tracked);
   const ended = tracked.filter((id) => !live.has(id));
   for (const id of ended) {
-    for (const socket of socketsByDevice.get(id) ?? []) socket.disconnect(true);
+    for (const socket of socketsByDevice.get(id) ?? []) void socket;
     socketsByDevice.delete(id);
   }
   return ended;
