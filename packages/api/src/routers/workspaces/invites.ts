@@ -673,7 +673,7 @@ export const inviteProcedures = {
    * Accept invitation (workspace or pod). Works for both types.
    */
   acceptInvite: protectedProcedure
-    .input(z.object({ token: z.string() }))
+    .input(z.object({ token: z.string(), targetUserId: z.string().optional() }))
     .mutation(async ({ input, ctx }) => {
       const invite = await db.query.invites.findFirst({
         where: eq(invites.token, input.token),
@@ -1243,7 +1243,7 @@ export const inviteProcedures = {
    * Returns type so the landing page can adapt its UI.
    */
   previewInvite: publicProcedure
-    .input(z.object({ token: z.string() }))
+    .input(z.object({ token: z.string(), targetUserId: z.string().optional() }))
     .query(async ({ input }) => {
       const invite = await db.query.invites.findFirst({
         where: eq(invites.token, input.token),
