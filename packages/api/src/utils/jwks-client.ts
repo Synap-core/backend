@@ -794,25 +794,6 @@ export function controlPlaneIssuerScopes(): readonly string[] {
 }
 
 /**
- * @deprecated RETIRED — always rejects. It verified a CP token with no
- * audience and, when CONTROL_PLANE_URL was unset, against whatever issuer the
- * token named (SECURITY-KEYS-2026-10-13 C3). Its last callers
- * (`workspaces/invites.ts` acceptInviteViaCp / rejectInviteViaCp) receive a
- * token type no Control Plane mints (`invite-accept`: zero signers in any
- * repo), so failing closed breaks no live caller. Migrate a caller to
- * {@link verifyTrustedIssuerJwt} (audience + expectedType + scopes) instead.
- */
-export async function verifyCpJwt<T extends object>(
-  _token: string,
-  _pinnedIssuer?: string | undefined
-): Promise<T | null> {
-  logger.error(
-    "verifyCpJwt is retired (no audience, no registry) — token rejected; use verifyTrustedIssuerJwt"
-  );
-  return null;
-}
-
-/**
  * @deprecated Use {@link verifyTrustedIssuerJwt}. Kept while legacy Pod routes
  * migrate to generic trusted-issuer terminology.
  */
