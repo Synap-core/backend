@@ -9,7 +9,7 @@
  *  - a space the caller cannot read proposals in is null, as its own count
  *    throws there;
  *  - RATCHET: it makes ONE attention read (counted at the owed half —
- *    `listOwedSlots({ excludeDrafts })` — which every attention read calls
+ *    `listOwedSlots({ needsYouLens })` — which every attention read calls
  *    exactly once). The per-scope way it replaces
  *    made 1 + spaces + (space, kind) pairs.
  *
@@ -57,9 +57,9 @@ vi.mock(
       listOwedSlots: async (
         ...args: Parameters<typeof actual.listOwedSlots>
       ) => {
-        // The owed HALF (drafts excluded) — once per attention read; the draft
-        // half reads owed slots too, without `excludeDrafts`.
-        if ((args[0] as { excludeDrafts?: boolean }).excludeDrafts)
+        // The owed HALF (the needs-you lens, `listNeedsYouOwed`) — once per
+        // attention read; the draft half reads owed slots too, with `onlyDrafts`.
+        if ((args[0] as { needsYouLens?: boolean }).needsYouLens)
           h.owedReads += 1;
         return actual.listOwedSlots(...args);
       },

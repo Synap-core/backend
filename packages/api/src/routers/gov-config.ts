@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, assertPodAdmin } from "../trpc.js";
+import { router, assertPodAdmin, credentialProcedure } from "../trpc.js";
 import {
   applyGovConfigChange,
   type GovConfigSpec,
@@ -45,7 +45,7 @@ const setInput = z.object({
 });
 
 export const govConfigRouter = router({
-  set: protectedProcedure.input(setInput).mutation(async ({ ctx, input }) => {
+  set: credentialProcedure.input(setInput).mutation(async ({ ctx, input }) => {
     await assertPodAdmin(ctx.userId);
     const { store, ...spec } = input;
     return applyGovConfigChange({
@@ -56,7 +56,7 @@ export const govConfigRouter = router({
     });
   }),
 
-  revoke: protectedProcedure
+  revoke: credentialProcedure
     .input(
       z.object({
         store: STORE_ENUM,
