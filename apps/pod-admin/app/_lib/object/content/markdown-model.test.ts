@@ -169,7 +169,12 @@ describe("objectPage — where an object a page names opens", () => {
 
 describe("entityEmbedRead — what an embedded record may say", () => {
   const q = (over: Partial<Parameters<typeof entityEmbedRead>[0]>) =>
-    entityEmbedRead({ isLoading: false, error: null, data: undefined, ...over });
+    entityEmbedRead({
+      isLoading: false,
+      error: null,
+      data: undefined,
+      ...over,
+    });
 
   it("a record the reader can see gives its title", () => {
     expect(q({ data: { entity: { title: "  Ana  " } } })).toEqual({
@@ -183,14 +188,21 @@ describe("entityEmbedRead — what an embedded record may say", () => {
   });
 
   it("not found / forbidden / a bad id are hidden — never a title", () => {
-    for (const code of ["NOT_FOUND", "FORBIDDEN", "BAD_REQUEST", "UNAUTHORIZED"]) {
+    for (const code of [
+      "NOT_FOUND",
+      "FORBIDDEN",
+      "BAD_REQUEST",
+      "UNAUTHORIZED",
+    ]) {
       expect(q({ error: { data: { code } } })).toEqual({ state: "hidden" });
     }
   });
 
   it("a broken read is failed and retryable, not hidden", () => {
     const retry = () => {};
-    expect(q({ error: { data: { code: "INTERNAL_SERVER_ERROR" } }, retry })).toEqual({
+    expect(
+      q({ error: { data: { code: "INTERNAL_SERVER_ERROR" } }, retry })
+    ).toEqual({
       state: "failed",
       retry,
     });
@@ -198,9 +210,9 @@ describe("entityEmbedRead — what an embedded record may say", () => {
   });
 
   it("an error wins over loading; loading wins over data", () => {
-    expect(q({ isLoading: true, error: { data: { code: "NOT_FOUND" } } }).state).toBe(
-      "hidden"
-    );
+    expect(
+      q({ isLoading: true, error: { data: { code: "NOT_FOUND" } } }).state
+    ).toBe("hidden");
     expect(q({ isLoading: true }).state).toBe("loading");
   });
 });

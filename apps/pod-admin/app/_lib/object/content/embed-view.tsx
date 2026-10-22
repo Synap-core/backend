@@ -22,10 +22,7 @@ import { useContext, type ReactNode } from "react";
 import Link from "next/link";
 import { AlertTriangle, BarChart3, Lock, type LucideIcon } from "lucide-react";
 import type { Embed } from "@synap-core/markdown-core";
-import {
-  describeEmbed,
-  type EmbedModel,
-} from "@synap-core/types/renderables";
+import { describeEmbed, type EmbedModel } from "@synap-core/types/renderables";
 import {
   nounInSentence,
   resolveEmbedWords,
@@ -102,7 +99,13 @@ function Chip({
   );
 }
 
-function Note({ icon: Icon, children }: { icon: LucideIcon; children: ReactNode }) {
+function Note({
+  icon: Icon,
+  children,
+}: {
+  icon: LucideIcon;
+  children: ReactNode;
+}) {
   return (
     <p className="flex items-start gap-1.5 text-[12.5px] text-foreground/65">
       <Icon aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />
@@ -146,7 +149,10 @@ function EntityCardBody({
   if (read.state === "failed") {
     return (
       <span className={`${CHIP} flex-wrap`}>
-        <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-danger" />
+        <AlertTriangle
+          aria-hidden="true"
+          className="h-3.5 w-3.5 shrink-0 text-danger"
+        />
         This {nounInSentence(noun)} couldn’t be loaded.
         {read.retry && (
           <button
@@ -204,7 +210,10 @@ type EntityCardProps = {
   inline: boolean;
 };
 
-function EntityCardRead({ host, ...props }: EntityCardProps & { host: EmbedHost }) {
+function EntityCardRead({
+  host,
+  ...props
+}: EntityCardProps & { host: EmbedHost }) {
   const read = host.useEntity(props.model.id);
   return <EntityCardBody {...props} read={read} />;
 }
@@ -243,7 +252,10 @@ function Head({
         <Tag
           className={`${inline ? "inline-flex" : "flex"} items-start gap-1.5 rounded-md bg-danger/10 px-2 py-1 text-[12.5px] text-foreground ring-1 ring-inset ring-danger/30`}
         >
-          <AlertTriangle aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger" />
+          <AlertTriangle
+            aria-hidden="true"
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger"
+          />
           <span className="min-w-0 break-words">
             <span className="font-medium">{words.label}</span> can’t be drawn:{" "}
             {model.message}
@@ -255,7 +267,11 @@ function Head({
       return <EntityCard model={model} words={words} inline={inline} />;
     case "view":
       return (
-        <Chip model={model} words={words} href={objectPage("view", model.viewId)} />
+        <Chip
+          model={model}
+          words={words}
+          href={objectPage("view", model.viewId)}
+        />
       );
     case "broken":
       return inline ? (
