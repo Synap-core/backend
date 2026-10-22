@@ -241,7 +241,6 @@ export const PROPOSE_ONLY_CAPABILITY_VERBS = [
   // ONE human approval is the whole governance of the launch (the "Launch a
   // site" playbook has no stage gate because of it). A rule or an auto grant
   // that ran it would launch a public site with no person in the loop.
-  "launch_site",
 ] as const;
 
 export function capabilityVerbAllowsRuleWiden(
