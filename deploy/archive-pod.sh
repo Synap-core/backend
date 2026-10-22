@@ -22,8 +22,8 @@
 # size and sha256, plus the encrypted object's size and sha256. The CP deletes
 # a server only when the manifest accounts for every expected volume. A volume
 # that is missing, unreadable, or archived with fewer files than it holds FAILS
-# the archive: an empty volumes archive once passed as success (2026-10-21),
-# because this script read host paths it cannot see from inside pod-agent.
+# the archive: a volume is read through its compose labels, never a host path
+# this script cannot see from inside pod-agent.
 #
 
 UPLOAD_URL="$1"

@@ -25,4 +25,14 @@ function archiveManifestFrom(output) {
   return null;
 }
 
-module.exports = { archiveManifestFrom };
+/**
+ * How long one pod archive may run before pod-agent stops it. The control
+ * plane waits exactly this long (plus a grace) for the archive's result —
+ * ARCHIVE_MAX_RUN_MS in its services/provisioning/archive-manifest.ts; the
+ * two are a mirror, pinned by archive-timeout.test.js. An archive stops the
+ * pod's services and copies every volume: the 10-minute default of the other
+ * commands killed long ones half-way.
+ */
+const ARCHIVE_MAX_RUN_MS = 60 * 60_000;
+
+module.exports = { archiveManifestFrom, ARCHIVE_MAX_RUN_MS };

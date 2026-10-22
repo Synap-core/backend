@@ -5,8 +5,8 @@
 # state/requests/<name>.json EXISTS (PathExists=). The engine used to rename
 # the file away itself, so a run that died BEFORE that rename (a broken bundle,
 # no jq, the compose-project refusal, any `set -e` exit) left it in place and
-# systemd restarted the service at once. Measured on systemd 252 (devbox,
-# 2026-10-21, the real templates): 5 runs in one second, the .path unit
+# systemd restarted the service at once. Measured on systemd 252 (the real
+# templates): 5 runs in one second, the .path unit
 # 'failed (unit-start-limit-hit)', and no later request was ever picked up.
 # Now the service's ExecStartPre takes the request before the engine starts.
 #

@@ -98,15 +98,15 @@ if [ -f "$TMPDIR/manifest.json" ]; then
   [ -f "$TMPDIR/database.sql.gz" ] && [ "$(sha256_of "$TMPDIR/database.sql.gz")" = "$want_db" ] \
     || fatal "database dump: checksum does not match the manifest"
 elif [ -f "$TMPDIR/volumes.tar.gz" ] && [ -s "$TMPDIR/volumes.tar.gz" ]; then
-  # A pre-2026-10-21 archive holds host paths (/var/lib/docker/volumes/…):
+  # A legacy archive (no manifest.json) holds host paths (/var/lib/docker/volumes/…):
   # this script runs in pod-agent, where those paths are not the host's, so
   # extracting here would write the files nowhere the pod reads. Refuse.
   fatal "LEGACY_VOLUME_ARCHIVE — this archive's volumes hold host paths; restore them on the host (tar xzf volumes.tar.gz -C /) with the services stopped"
 elif [ "${RESTORE_ALLOW_NO_FILES:-}" != 1 ]; then
-  # Archives made inside pod-agent before 2026-10-21 carry no files at all
+  # A legacy archive made inside pod-agent may carry no files at all
   # (an empty volumes.tar.gz): restoring one brings the database back without
   # the files it points to. Never reported "completed" by default.
-  fatal "ARCHIVE_WITHOUT_FILES — this archive holds the database but none of the pod's files (made before 2026-10-21); set RESTORE_ALLOW_NO_FILES=1 to restore the database alone"
+  fatal "ARCHIVE_WITHOUT_FILES — this archive holds the database but none of the pod's files (a legacy archive); set RESTORE_ALLOW_NO_FILES=1 to restore the database alone"
 fi
 
 # Restore PostgreSQL
@@ -132,7 +132,7 @@ fi
 
 # Restore volumes
 if [ -f "$TMPDIR/manifest.json" ]; then
-  # Since 2026-10-21: one tarball per volume, listed in manifest.json with its
+  # One tarball per volume, listed in manifest.json with its
   # file count and sha256 (archive-pod.sh). Each is checked, written into the
   # pod's volume (found by its compose labels, created when absent) through a
   # helper container, and the files counted back.

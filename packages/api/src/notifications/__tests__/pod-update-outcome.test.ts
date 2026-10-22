@@ -129,6 +129,14 @@ describe("pod.update_failed", () => {
     expect(d.detail).not.toMatch(/restored|safe/);
     expect(describePodUpdateOutcome(ROLLED_BACK)!.detail).toMatch(/restored/);
   });
+
+  it("a run the engine stopped (unit-recorded `failed`) may have changed the pod — never 'still on'", () => {
+    const d = describePodUpdateOutcome({ ...ROLLED_BACK, status: "failed" })!;
+    expect(d.headline).toBe("stopped before it finished");
+    expect(d.detail).toContain("Your pod may have changed");
+    expect(d.detail).toContain("`synap doctor`");
+    expect(d.detail).not.toMatch(/still on/);
+  });
 });
 
 /**

@@ -13,8 +13,8 @@
 #                                      nested ${...}) that no REF was given for
 # Exits non-zero (nothing printed) when a REF or a resolution is not pinned by
 # digest, or a registry lookup fails. Never prints a floating tag: a pod that
-# ran the compose default tag stayed on whatever it pulled first (the founder
-# pod's TimescaleDB 2.26.4 while releases moved to 2.28.3, 2026-10-21).
+# ran the compose default tag stays on whatever it pulled first (docker never
+# re-pulls a cached tag), whatever later releases moved to.
 # Resolution: `docker buildx imagetools inspect` (the registry's own index
 # digest — the same image on every architecture); where docker has no buildx,
 # a pull of the tag and the RepoDigests docker recorded for it.
