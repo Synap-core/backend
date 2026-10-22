@@ -751,8 +751,10 @@ describe("B3: an agent files its own fresh session — one receipt, with Undo", 
     const id = randomUUID();
     await q(
       `insert into proposals (id, target_type, target_id, proposal_type, status, data)
-       values ($1,'focus_session',$1,'focus_session.update','auto_approved','{}'::jsonb)`,
-      [id]
+       values ($1,'focus_session',$2,'focus_session.update','auto_approved','{}'::jsonb)`,
+      // One value, two params: `id` is uuid and `target_id` text, and one
+      // parameter cannot be both ("inconsistent types deduced for $1").
+      [id, id]
     );
     return id;
   }
