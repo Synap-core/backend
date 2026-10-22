@@ -14,9 +14,25 @@
  * Catalog standing is template health's (`template-health.ts`), the ONE
  * authority: "not in the catalog" only after a provably COMPLETE template sync,
  * otherwise "unknown". An empty result and a failed read are different facts.
+ *
+ * The holder and the domain twin are found POD-WIDE (a template is installed
+ * once per pod, a domain has one space), but the ANSWER names a space only
+ * when the caller may see it: the person's floor (member, owner or
+ * pod-visible) AND, for a scoped key, a grant that covers that space. A
+ * hidden one is answered as if absent, and `heldOutOfSight` tells the install
+ * door not to install (fence1, spec 17 §5.3).
  */
 
-import { and, db, eq, isNull, readTemplateState } from "@synap/database";
+import {
+  and,
+  db,
+  eq,
+  getRequestGrant,
+  isFullAccessGrant,
+  isNull,
+  readTemplateState,
+  type KeyGrant,
+} from "@synap/database";
 import { cpCatalogCache, workspaces } from "@synap/database/schema";
 import { officialCatalogCondition } from "./capabilities/catalog-cache-query.js";
 import { getWorkspaceTemplate } from "@synap-core/workspace-templates";
@@ -27,6 +43,7 @@ import {
   type TemplateLifecycle,
 } from "./template-health.js";
 import { checkOneSpacePerDomain } from "./workspace-creation-service.js";
+import { validateWorkspaceAccess } from "../utils/workspace-membership.js";
 
 /** What an app shows for a template it needs. */
 export interface EnsureTemplateCard {
@@ -70,12 +87,49 @@ export type EnsureTemplateResult =
 export interface AvailableTemplate {
   status: "available";
   template: EnsureTemplateCard;
+  /**
+   * A space the caller may not see holds the template or is its domain twin:
+   * answered as `available`, but never installed (no second copy, no twin).
+   * Never sent to the caller. Present only when true.
+   */
+  heldOutOfSight?: true;
 }
 
 /**
- * Where `slug` stands on this pod, for `userId`. Never installs, never writes.
- * `available` = installable and not installed: the caller decides between
- * reporting `missing` and installing.
+ * Does `grant` reach the space `workspaceId`? No grant (a session) or the
+ * unbounded `*`: yes. Otherwise ONE scope that permits something and is not
+ * pinned to a project or object, on every space (no list) or on this one. A
+ * project- or object-pinned scope does not cover a whole space (fail closed).
+ */
+function grantCoversSpace(
+  grant: KeyGrant | undefined,
+  workspaceId: string
+): boolean {
+  if (!grant || isFullAccessGrant(grant)) return true;
+  return grant.scopes.some(
+    (scope) =>
+      scope.permissions.length > 0 &&
+      !scope.projectIds &&
+      !scope.entityIds &&
+      (!scope.workspaceIds || scope.workspaceIds.includes(workspaceId))
+  );
+}
+
+/** May this request see `workspaceId`: the person's floor AND the key's grant. */
+async function callerSeesSpace(
+  workspaceId: string,
+  userId: string
+): Promise<boolean> {
+  if (!grantCoversSpace(getRequestGrant(), workspaceId)) return false;
+  const readable = await validateWorkspaceAccess(userId, [workspaceId]);
+  return readable.includes(workspaceId);
+}
+
+/**
+ * Where `slug` stands on this pod, for `userId` (and the request's grant).
+ * Never installs, never writes. `available` = installable and not installed
+ * in a space the caller sees: the caller decides between reporting `missing`
+ * and installing (never when `heldOutOfSight`).
  */
 export async function readTemplateStanding(
   slug: string,
@@ -87,10 +141,11 @@ export async function readTemplateStanding(
     .from(workspaces)
     .where(and(eq(workspaces.packageSlug, slug), isNull(workspaces.archivedAt)))
     .limit(1);
+  const heldOutOfSight = !!held && !(await callerSeesSpace(held.id, userId));
 
   const catalog = await resolveTemplateCatalog([slug]);
 
-  if (held) {
+  if (held && !heldOutOfSight) {
     const version = readTemplateState(held.settings)?.version ?? null;
     const health = templateHealthFor(slug, version, catalog, held.settings);
     return {
@@ -168,6 +223,9 @@ export async function readTemplateStanding(
     idempotencyKey: slug,
   });
   if (domain.action === "refuse") {
+    if (!(await callerSeesSpace(domain.reply.workspaceId, userId))) {
+      return { status: "available", template, heldOutOfSight: true };
+    }
     return {
       status: "exists",
       workspaceId: domain.reply.workspaceId,
@@ -176,5 +234,7 @@ export async function readTemplateStanding(
     };
   }
 
-  return { status: "available", template };
+  return heldOutOfSight
+    ? { status: "available", template, heldOutOfSight: true }
+    : { status: "available", template };
 }
