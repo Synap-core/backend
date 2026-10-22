@@ -119,9 +119,9 @@ describe("unlinkConnectionAccount", () => {
     );
     expect(d.endSessions).toHaveBeenCalledWith("ada");
     // Credential first: ending sessions while it stands lets them sign back in.
-    expect(d.detachCloudSignIn.mock.invocationCallOrder[0]).toBeLessThan(
-      d.endSessions.mock.invocationCallOrder[0]!
-    );
+    expect(
+      vi.mocked(d.detachCloudSignIn).mock.invocationCallOrder[0]
+    ).toBeLessThan(vi.mocked(d.endSessions).mock.invocationCallOrder[0]!);
   });
 
   it("tells the owner when the sessions could not be ended", async () => {
