@@ -171,7 +171,7 @@ export function SignInAppObject({
         unlink.data.signIn === "failed" ? (
           <>
             <ErrorNote
-              message={`${unlink.data.email ?? "That account"} is unlinked, but their Synap Cloud sign-in could not be removed from their Pod account.`}
+              message={`${unlink.data.email ?? "That account"} is unlinked, but their Synap Cloud sign-in could not be fully removed (the credential or their signed-in sessions).`}
             />
             <Link
               href={navHref("members", { focus: unlinking?.id })}

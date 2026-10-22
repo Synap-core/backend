@@ -43,6 +43,7 @@ function deps(over: Partial<UnlinkAccountDeps> = {}) {
     unlink: vi.fn().mockResolvedValue({ issuerSubject: "cp-ada" }),
     cloudSignInIssuer: vi.fn().mockResolvedValue(CLOUD),
     detachCloudSignIn: vi.fn().mockResolvedValue(true),
+    endSessions: vi.fn().mockResolvedValue(true),
     email: vi.fn().mockResolvedValue("ada@example.test"),
     // The caller is the owner; everyone else is a plain member.
     podAdminRole: vi.fn(async (userId: string) =>
@@ -108,6 +109,53 @@ describe("unlinkConnectionAccount", () => {
         d
       )
     ).resolves.toMatchObject({ status: "unlinked", signIn: "failed" });
+  });
+
+  it("ends the person's live sessions once the credential is gone", async () => {
+    const d = deps();
+    await unlinkConnectionAccount(
+      { connectionId: "conn-1", userId: "ada", actorUserId: "owner" },
+      d
+    );
+    expect(d.endSessions).toHaveBeenCalledWith("ada");
+    // Credential first: ending sessions while it stands lets them sign back in.
+    expect(d.detachCloudSignIn.mock.invocationCallOrder[0]).toBeLessThan(
+      d.endSessions.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("tells the owner when the sessions could not be ended", async () => {
+    const d = deps({ endSessions: vi.fn().mockResolvedValue(false) });
+    await expect(
+      unlinkConnectionAccount(
+        { connectionId: "conn-1", userId: "ada", actorUserId: "owner" },
+        d
+      )
+    ).resolves.toMatchObject({ status: "unlinked", signIn: "failed" });
+  });
+
+  it("leaves sessions alone when the credential could not be removed or is not Cloud's", async () => {
+    const failed = deps({
+      detachCloudSignIn: vi.fn().mockResolvedValue(false),
+    });
+    await unlinkConnectionAccount(
+      { connectionId: "conn-1", userId: "ada", actorUserId: "owner" },
+      failed
+    );
+    expect(failed.endSessions).not.toHaveBeenCalled();
+    const other = deps({
+      connection: vi.fn().mockResolvedValue({
+        issuerId: "issuer-2",
+        issuerUrl: "https://other.example",
+        displayName: "Elsewhere",
+        clientId: "elsewhere",
+      }),
+    });
+    await unlinkConnectionAccount(
+      { connectionId: "conn-2", userId: "ada", actorUserId: "owner" },
+      other
+    );
+    expect(other.endSessions).not.toHaveBeenCalled();
   });
 
   it("says when the person was not linked, and touches no credential", async () => {
