@@ -32,8 +32,10 @@ import {
   db,
   eq,
   entities,
+  documents,
   documentVersions,
   readDocumentVersionContent,
+  type DocumentType,
 } from "@synap/database";
 import { resourceShares } from "@synap/database/schema";
 import { hashToken } from "../../utils/share-token.js";
@@ -125,18 +127,68 @@ export function publicTitleAndProperties(snapshot: unknown): {
 }
 
 /**
- * The body of a publication's PINNED checkpoint, ids redacted. `ok: false`
- * when the pin is not a checkpoint of THIS entity's document — serving it
- * would serve another record's body, so the caller refuses the whole read
- * rather than guess. No pin = no body. Throws on a failed read.
+ * The format a published body is served in, so a reader renders it as what it
+ * IS: `markdown` is text a reader parses as safe markdown; `html` is a whole
+ * HTML document a reader shows only inside a sandboxed frame (`ui-rules.md`,
+ * `SpatialMediaPreview`: `<iframe sandbox="" srcdoc>`, never in its own DOM).
+ */
+export type PublicBodyFormat = "markdown" | "html";
+
+export interface PublicBody {
+  format: PublicBodyFormat;
+  content: string;
+}
+
+/**
+ * Every document type, classified by how its body is served publicly. Decided
+ * by the DOCUMENT'S type, not the version's mime type: versions written before
+ * the materializer fix carry `text/markdown` for an html body. A binary body
+ * (pdf, docx) or a canvas is NOT served as text — decoding its bytes as utf-8
+ * and calling them markdown was the bug — so its publication has no body.
+ * A type added to `DocumentType` and not classified here fails the build.
+ */
+const BODY_FORMAT_BY_TYPE = {
+  markdown: "markdown",
+  text: "markdown",
+  code: "markdown",
+  html: "html",
+  pdf: null,
+  docx: null,
+  whiteboard: null,
+} as const satisfies Record<DocumentType, PublicBodyFormat | null>;
+
+/** The served format of a document type; an unknown type is not served. */
+export function publicBodyFormat(
+  documentType: string | null | undefined
+): PublicBodyFormat | null {
+  if (
+    !documentType ||
+    !Object.prototype.hasOwnProperty.call(BODY_FORMAT_BY_TYPE, documentType)
+  ) {
+    return null;
+  }
+  return BODY_FORMAT_BY_TYPE[documentType as DocumentType];
+}
+
+/**
+ * Bumped when what a record read SERVES changes for the same pinned revision
+ * (2: the body carries its real format). Part of every record ETag, so a
+ * client holding a body served under the old contract revalidates to the new
+ * one instead of a 304 that keeps it.
+ */
+export const PUBLIC_BODY_CONTRACT = 2;
+
+/**
+ * The body of a publication's PINNED checkpoint, ids redacted, in its real
+ * format ({@link publicBodyFormat}). `ok: false` when the pin is not a
+ * checkpoint of THIS entity's document — serving it would serve another
+ * record's body, so the caller refuses the whole read rather than guess. No
+ * pin, or a body that is not text, = no body. Throws on a failed read.
  */
 export async function readPinnedBody(
   pinId: string | null,
   entityDocumentId: string | null
-): Promise<
-  | { ok: true; body: { format: "markdown"; content: string } | null }
-  | { ok: false }
-> {
+): Promise<{ ok: true; body: PublicBody | null } | { ok: false }> {
   if (!pinId) return { ok: true, body: null };
   const [version] = await db
     .select({
@@ -144,18 +196,22 @@ export async function readPinnedBody(
       content: documentVersions.content,
       storageKey: documentVersions.storageKey,
       mimeType: documentVersions.mimeType,
+      documentType: documents.type,
     })
     .from(documentVersions)
+    .leftJoin(documents, eq(documents.id, documentVersions.documentId))
     .where(eq(documentVersions.id, pinId))
     .limit(1);
   if (!version || !entityDocumentId) return { ok: false };
   if (version.documentId !== entityDocumentId) return { ok: false };
+  const format = publicBodyFormat(version.documentType);
+  if (!format) return { ok: true, body: null };
   const content = await readDocumentVersionContent(version);
   // Realtime (Yjs) state is not document text; never serve it.
   if (content.startsWith("yjs:")) return { ok: true, body: null };
   return {
     ok: true,
-    body: { format: "markdown", content: redactInternalIds(content) },
+    body: { format, content: redactInternalIds(content) },
   };
 }
 
@@ -164,7 +220,7 @@ export interface PublicShareView {
   /** Present only when the snapshot allowlisted `title`. */
   title?: string;
   properties: Record<string, string | number | boolean>;
-  body: { format: "markdown"; content: string } | null;
+  body: PublicBody | null;
   /** Day precision (YYYY-MM-DD). */
   publishedOn: string;
 }
@@ -258,6 +314,7 @@ export async function readPublishedShare(
   const etag = `W/"${createHash("sha256")
     .update(
       JSON.stringify([
+        PUBLIC_BODY_CONTRACT,
         row.id,
         row.publishedDocumentVersionId,
         row.publishedAt.toISOString(),

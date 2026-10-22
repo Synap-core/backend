@@ -589,6 +589,7 @@ describe("signals — the access-request halves (pending issuers, app requests)"
           latestAt: new Date("2026-10-12T10:00:00Z"),
           workspaceIds: [],
           sessionId: null,
+          agent: null,
           reasonCounts: {},
           attentionFloorCount: 0,
         },
