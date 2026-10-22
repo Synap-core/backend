@@ -7,21 +7,28 @@
  * app token become a long-lived key. It accepts:
  *   - a Kratos session (the console in a browser), as before; or
  *   - a Synap app's DEVICE session whose `auth_time` — when the person last
- *     REALLY authenticated for that device (a credential presented AT this
- *     pod at /authorize, `kratosCredentialTime`: never a federated Synap
- *     Cloud sign-in; copied from the consenting Kratos session, moved only by
- *     a step-up, never by a refresh) — is at most `STEP_UP_WINDOW_MS` old.
+ *     REALLY authenticated for that device (a password, passkey or Cloud
+ *     login at /authorize; copied from the consenting Kratos session, moved
+ *     only by a step-up, never by a refresh) — is at most
+ *     `STEP_UP_WINDOW_MS` old.
  * A stale device session gets FORBIDDEN with `reasonCode: STEP_UP_REQUIRED`
  * (`error.data.reasonCode` on the wire): the app re-confirms it is the person
  * (`/authorize` with `prompt=login`, its device's refresh token at /token) and
  * retries.
  *
+ * A Kratos session sent as `X-Session-Token` (`sessionKind: kratos_token`)
+ * is held by an app the same way, so it meets the same rule with its own
+ * clock: when a credential was last presented at this pod in that session
+ * (`kratosCredentialTime`; a Kratos re-login with `refresh=true` moves it, a
+ * federated one does not). Only a browser's cookie session is exempt.
+ *
  * The session comes from the context (`ctx.sessionKind` and the
  * device `ctx.session` names, set only by `createContext` from what
  * `middleware/app-session.ts` resolved) or, for a door deep in a
  * service with no context, from the request's async scope, which the same
- * gate opens (`runAsDeviceSession`). A request with no person session (a key
- * on the Hub doors, whose own rules apply) is not this check's business.
+ * gate opens (`runAsDeviceSession` / `runAsKratosTokenSession`). A request
+ * with no person session (a key on the Hub doors, whose own rules apply) is
+ * not this check's business.
  *
  * Doors: tRPC `requireFreshAuthentication` / `credentialProcedure`
  * (trpc.ts); a proposal executor's `widensCredential` (execution-registry.ts);
@@ -47,18 +54,38 @@ export interface DeviceSessionFacts {
 }
 
 export interface SessionKindCarrier {
-  session?: { device?: { id?: string; authTime?: Date | null } } | null;
+  session?:
+    | (KratosAuthenticationFacts & {
+        id?: string;
+        device?: { id?: string; authTime?: Date | null };
+      })
+    | null;
   sessionKind?: string | null;
 }
 
-const deviceScope = new AsyncLocalStorage<DeviceSessionFacts>();
+/** A Kratos session the request sent as `X-Session-Token`. */
+export const KRATOS_TOKEN_SESSION = "kratos_token";
+
+interface ScopedSession extends DeviceSessionFacts {
+  kind: "person_device" | typeof KRATOS_TOKEN_SESSION;
+}
+
+const sessionScope = new AsyncLocalStorage<ScopedSession>();
 
 /** Run `fn` as a request made with a Synap app's device token. */
 export function runAsDeviceSession<T>(
   device: DeviceSessionFacts,
   fn: () => T
 ): T {
-  return deviceScope.run(device, fn);
+  return sessionScope.run({ ...device, kind: "person_device" }, fn);
+}
+
+/** Run `fn` as a request made with a Kratos session token. */
+export function runAsKratosTokenSession<T>(
+  session: DeviceSessionFacts,
+  fn: () => T
+): T {
+  return sessionScope.run({ ...session, kind: KRATOS_TOKEN_SESSION }, fn);
 }
 
 /**
@@ -89,9 +116,8 @@ export interface KratosAuthenticationFacts {
  * When the person last presented a credential AT this pod in this Kratos
  * session (`POD_CREDENTIAL_METHODS`), or null: a session authenticated only
  * through a federated provider, or one that does not say, has no such time.
- * This is the time a consent hands a Synap app's device as its step-up
- * clock; `authenticated_at` is not, because a silent federated re-login
- * moves it.
+ * This is the step-up clock of a Kratos session; `authenticated_at` is not,
+ * because a silent federated re-login moves it.
  */
 export function kratosCredentialTime(
   session: KratosAuthenticationFacts | null | undefined
@@ -111,18 +137,28 @@ export function isDeviceSession(ctx?: SessionKindCarrier | null): boolean {
   return Boolean(
     ctx?.sessionKind === "person_device" ||
     ctx?.session?.device ||
-    deviceScope.getStore()
+    sessionScope.getStore()?.kind === "person_device"
   );
 }
 
-/** The device facts of this request, or null for any other caller. */
-function deviceOf(ctx?: SessionKindCarrier | null): DeviceSessionFacts | null {
+/**
+ * The step-up clock of this request — a device, or a Kratos session held as
+ * a token — or null for a caller no clock applies to (a browser cookie, a
+ * key).
+ */
+function clockOf(ctx?: SessionKindCarrier | null): DeviceSessionFacts | null {
   const fromCtx = ctx?.session?.device;
   if (fromCtx?.id) {
     return { id: fromCtx.id, authTime: fromCtx.authTime ?? null };
   }
-  const fromScope = deviceScope.getStore();
-  if (fromScope) return fromScope;
+  if (ctx?.sessionKind === KRATOS_TOKEN_SESSION) {
+    return {
+      id: ctx.session?.id ?? "",
+      authTime: kratosCredentialTime(ctx.session),
+    };
+  }
+  const fromScope = sessionScope.getStore();
+  if (fromScope) return { id: fromScope.id, authTime: fromScope.authTime };
   // Marked a device session but naming no device: never fresh.
   if (ctx?.sessionKind === "person_device") return { id: "", authTime: null };
   return null;
@@ -139,14 +175,15 @@ export function isFreshDevice(
 }
 
 /**
- * FORBIDDEN (`STEP_UP_REQUIRED`) for a device session that has not really
- * authenticated within the window; a no-op for a Kratos session or a key.
+ * FORBIDDEN (`STEP_UP_REQUIRED`) for a device or Kratos-token session that
+ * has not really authenticated within the window; a no-op for a browser's
+ * cookie session or a key.
  */
 export function assertFreshAuthentication(
   ctx?: SessionKindCarrier | null
 ): void {
-  const device = deviceOf(ctx);
-  if (!device || isFreshDevice(device)) return;
+  const clock = clockOf(ctx);
+  if (!clock || isFreshDevice(clock)) return;
   throw new TRPCError({
     code: "FORBIDDEN",
     message: STEP_UP_REQUIRED_MESSAGE,

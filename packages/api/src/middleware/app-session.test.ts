@@ -49,6 +49,7 @@ vi.mock("@synap/database/person-devices", async (importOriginal) => {
 import { KEY_PREFIXES } from "@synap/database/schema";
 import { PERSON_DEVICE_TOKEN_PREFIX } from "@synap/database/person-devices";
 import { appSessionMiddleware, bearerCredential } from "./app-session.js";
+import { assertFreshAuthentication } from "../utils/device-session.js";
 
 const GOOD = `${PERSON_DEVICE_TOKEN_PREFIX}${"g".repeat(43)}`;
 
@@ -147,6 +148,68 @@ describe("app-session-bearer — only a device token becomes a person", () => {
     await get(undefined, "ory_kratos_session=abc");
     expect(kratosReached).toBe(1);
     expect(h.resolved).toEqual([]);
+  });
+});
+
+describe("a Kratos session sent as a token carries its clock into the request scope", () => {
+  // The Kratos half resolved an X-Session-Token whose last sign-in is `at`.
+  const tokenApp = (at: Date, kind = "kratos_token", method = "password") => {
+    const app = new Hono();
+    const kratos: MiddlewareHandler = async (c, next) => {
+      c.set(
+        "session" as never,
+        {
+          id: "kratos-session-1",
+          identity: { id: "person-1", traits: { email: "p@x" } },
+          authenticated_at: at.toISOString(),
+          authentication_methods: [{ method, completed_at: at.toISOString() }],
+        } as never
+      );
+      c.set("sessionKind" as never, kind as never);
+      return next();
+    };
+    app.use("/trpc/*", appSessionMiddleware(kratos));
+    // A service deep in a request, with no ctx: only the scope can tell.
+    app.get("/trpc/write", (c) => {
+      try {
+        assertFreshAuthentication();
+        return c.json({ ok: true });
+      } catch (e) {
+        return c.json({ refused: (e as { code?: string }).code }, 403);
+      }
+    });
+    return app;
+  };
+  const MIN = 60_000;
+
+  it("signed in 6 minutes ago: a credential write deep in a service is refused", async () => {
+    const res = await tokenApp(new Date(Date.now() - 6 * MIN)).request(
+      "/trpc/write"
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("signed in a minute ago through Synap Cloud only: refused (a federated sign-in never sets the clock)", async () => {
+    const res = await tokenApp(
+      new Date(Date.now() - MIN),
+      "kratos_token",
+      "oidc"
+    ).request("/trpc/write");
+    expect(res.status).toBe(403);
+  });
+
+  it("CONTROL — signed in a minute ago: it passes", async () => {
+    const res = await tokenApp(new Date(Date.now() - MIN)).request(
+      "/trpc/write"
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("CONTROL — a browser cookie session (unmarked) is not asked, however old", async () => {
+    const res = await tokenApp(new Date(Date.now() - 600 * MIN), "").request(
+      "/trpc/write"
+    );
+    expect(res.status).toBe(200);
   });
 });
 
