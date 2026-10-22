@@ -144,11 +144,45 @@ _pgs_running() {
     [ -n "$1" ] && [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = "true" ]
 }
 
+# pg_dump's stderr (file $1) as the operator should see it after a SUCCESSFUL
+# dump: every line, except the block pg_dump prints for each TimescaleDB
+# catalog table whose foreign keys form a loop. TimescaleDB marks its catalog
+# tables as extension config tables, which pg_dump dumps data-only, so a
+# FULL -Fc dump of a TimescaleDB database always prints (pg_dump_sort.c):
+#   pg_dump: warning: there are circular foreign-key constraints on this table:
+#   pg_dump: detail: hypertable
+#   pg_dump: hint: You might not be able to restore the dump without using --disable-triggers or temporarily dropping the constraints.
+#   pg_dump: hint: Consider using a full dump instead of a --data-only dump to avoid this problem.
+# Harmless here: the restore wraps timescaledb_pre_restore()/post_restore().
+# Only a block that is EXACTLY that — one warning line, detail lines naming
+# only hypertable / chunk / continuous_agg, both hint lines — is dropped; any
+# other line, or a block that differs in any line, is passed through whole.
+_pgs_dump_stderr_shown() {
+    awk -v W1="pg_dump: warning: there are circular foreign-key constraints on this table:" \
+        -v W2="pg_dump: warning: there are circular foreign-key constraints among these tables:" \
+        -v D="pg_dump: detail: " \
+        -v H1="pg_dump: hint: You might not be able to restore the dump without using --disable-triggers or temporarily dropping the constraints." \
+        -v H2="pg_dump: hint: Consider using a full dump instead of a --data-only dump to avoid this problem." '
+        function show(  i) { for (i = 1; i <= n; i++) print buf[i]; n = 0; st = 0; odd = 0 }
+        function start() { n = 0; buf[++n] = $0; st = 1; odd = 0 }
+        BEGIN { known["hypertable"]; known["chunk"]; known["continuous_agg"] }
+        st == 1 && index($0, D) == 1 { buf[++n] = $0; if (!(substr($0, length(D) + 1) in known)) odd = 1; next }
+        st == 1 && $0 == H1 && n > 1 { buf[++n] = $0; st = 2; next }
+        st == 2 && $0 == H2 { buf[++n] = $0; if (odd) show(); else { n = 0; st = 0 }; next }
+        st != 0 { show() }
+        $0 == W1 || $0 == W2 { start(); next }
+        { print }
+        END { show() }
+    ' "$1"
+}
+
 # Dump every non-template database of $1 into dir $2 as <db>.dump, read each
 # dump's table of contents back (an unreadable dump is a failure), and record
 # the users|entities|api_keys fingerprint in $2/fingerprint — the number a
-# drill or a restore later compares against. Non-zero on any failure; the
-# caller removes $2.
+# drill or a restore later compares against. pg_dump's stderr is kept beside
+# each dump (<db>.dump.log): all of it is shown when the dump fails, and
+# without the known TimescaleDB catalog warnings when it succeeds
+# (_pgs_dump_stderr_shown). Non-zero on any failure; the caller removes $2.
 _pgs_dump_into() {
     local c="$1" tmp="$2" db dbs
     mkdir -p "$tmp" || return 1
@@ -157,9 +191,11 @@ _pgs_dump_into() {
         _pgs_err "cannot list databases"; return 1; }
     [ -n "$dbs" ] || { _pgs_err "no databases to dump"; return 1; }
     for db in $dbs; do
-        if ! _pgs_x "$c" pg_dump -U synap -Fc "$db" > "$tmp/$db.dump"; then
+        if ! _pgs_x "$c" pg_dump -U synap -Fc "$db" > "$tmp/$db.dump" 2> "$tmp/$db.dump.log"; then
+            cat "$tmp/$db.dump.log" >&2
             _pgs_err "pg_dump failed for '$db'"; return 1
         fi
+        _pgs_dump_stderr_shown "$tmp/$db.dump.log" >&2
         if ! _pgs_xi "$c" pg_restore -l < "$tmp/$db.dump" > /dev/null; then
             _pgs_err "dump of '$db' is unreadable"; return 1
         fi
