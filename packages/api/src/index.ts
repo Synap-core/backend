@@ -193,7 +193,6 @@ export {
 export {
   verifyIssuerJwt,
   verifyTrustedIssuerJwt,
-  verifyCpJwt,
   verifyCpJwtWithTrust,
   clearJwksCache,
   podAudience,
