@@ -143,6 +143,14 @@ import { answerSessionSlot, attestSessionSlot } from "../session-answer.js";
 import { unblockExpectedOutput } from "../block-output.js";
 import { listOwedSlots } from "../owed-outputs.js";
 import { listDraftAskSlots } from "../draft-asks.js";
+import {
+  asksYouSessionIds,
+  listNeedsYouOwed,
+} from "../../signals/needs-you-owed.js";
+import {
+  foldOwedByPerson,
+  readOwedByPersonSlots,
+} from "../../discover/owed-by-person.js";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
 const EXT_AGENT = "44444444-4444-4444-8444-444444444444";
@@ -168,6 +176,8 @@ const POD_WIDE = { workspaceLens: undefined, projectLens: undefined };
 async function seedSession(opts: {
   origin: "agent" | "human";
   owed: string[];
+  /** Owed labels that carry a stored `confirm` ask (the rest carry none). */
+  asks?: string[];
   agentIds?: string[];
 }): Promise<{ sessionId: string }> {
   const channelId = randomUUID();
@@ -190,6 +200,9 @@ async function seedSession(opts: {
       blockedReason: "credential",
       why: `why ${label}`,
       owedSince: `2026-09-27T0${i + 1}:00:00.000Z`,
+      ...(opts.asks?.includes(label)
+        ? { ask: { mode: "confirm", prompt: `ok ${label}?` } }
+        : {}),
     })),
     { kind: "document", label: "Agent work" },
   ];
@@ -284,6 +297,125 @@ describe("draft asks: the read and acceptance on engagement", () => {
       2
     );
     expect(draft.starterNames.get(sessionId)).toBe("Claude Code");
+  });
+
+  /**
+   * FOUNDER DECISION 2026-10-22: a blocking question an agent asks (an owed
+   * slot WITH an ask) counts in Needs you even on an undecided draft; the
+   * draft's ask-less slots stay out. ONE predicate (`listNeedsYouOwed`) feeds
+   * the count, the list and the homes' `asksYouSessionIds`, so all three move
+   * together. Live case: session 6fbc2b5c's Q4/Q5/Q8 sat on a draft and
+   * reached no Needs-you surface.
+   */
+  it("NEEDS YOU: a draft's ASKS count, its ask-less slots do not — one predicate for list and homes", async () => {
+    const draft = await seedSession({
+      origin: "agent",
+      owed: [ASK_A, ASK_B],
+      asks: [ASK_A],
+    });
+    const needsYou = (
+      await listNeedsYouOwed({ userId: OWNER, scope: POD_WIDE, limit: 100 })
+    ).filter((s) => s.sessionId === draft.sessionId);
+    expect(needsYou.map((s) => s.label)).toEqual([ASK_A]);
+    expect(needsYou[0]!.ask).toMatchObject({ mode: "confirm" });
+    expect(await asksYouSessionIds(OWNER, [draft.sessionId])).toEqual(
+      new Set([draft.sessionId])
+    );
+    // The draft row (Proposed) still stands for the draft.
+    expect(await owedIn(draft.sessionId, "only")).toEqual(
+      [ASK_A, ASK_B].sort()
+    );
+  });
+
+  it("NEEDS YOU: a draft with NO ask stays out entirely (homes agree)", async () => {
+    const draft = await seedSession({ origin: "agent", owed: [ASK_B] });
+    const needsYou = (
+      await listNeedsYouOwed({ userId: OWNER, scope: POD_WIDE, limit: 100 })
+    ).filter((s) => s.sessionId === draft.sessionId);
+    expect(needsYou).toEqual([]);
+    expect(await asksYouSessionIds(OWNER, [draft.sessionId])).toEqual(
+      new Set()
+    );
+  });
+
+  it("NEEDS YOU: an ask-less DECISION slot counts as its derived Yes / No (effectiveSlotAsk)", async () => {
+    const draft = await seedSession({ origin: "agent", owed: [] });
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [
+        draft.sessionId,
+        JSON.stringify([
+          {
+            kind: "decision",
+            label: "Ship it?",
+            owner: "human",
+            blockedReason: "decision",
+            why: "Ship it?",
+            owedSince: "2026-09-27T05:00:00.000Z",
+          },
+        ]),
+      ]
+    );
+    const needsYou = (
+      await listNeedsYouOwed({ userId: OWNER, scope: POD_WIDE, limit: 100 })
+    ).filter((s) => s.sessionId === draft.sessionId);
+    expect(needsYou.map((s) => s.label)).toEqual(["Ship it?"]);
+  });
+
+  it("ANSWERING a draft's ask still accepts the draft (accept-on-engagement)", async () => {
+    const draft = await seedSession({
+      origin: "agent",
+      owed: [ASK_A, ASK_B],
+      asks: [ASK_A],
+    });
+    const r = await answerSessionSlot({
+      sessionId: draft.sessionId,
+      userId: OWNER,
+      expectedLabel: ASK_A,
+      value: { type: "confirm", confirmed: true },
+    });
+    expect(r.status).toBe("answered");
+    expect(typeof (await triageOf(draft.sessionId))?.acceptedAt).toBe("string");
+    expect(accepts()).toHaveLength(1);
+    // Accepted: no longer a draft; its remaining slot is plain needs-you.
+    expect(await owedIn(draft.sessionId, "only")).toEqual([]);
+    const needsYou = (
+      await listNeedsYouOwed({ userId: OWNER, scope: POD_WIDE, limit: 100 })
+    ).filter((s) => s.sessionId === draft.sessionId);
+    expect(needsYou.map((s) => s.label)).toEqual([ASK_B]);
+  });
+
+  /**
+   * orient's `owedByPerson` SEAM (live 2026-10-22: the founder's three owed
+   * decisions sat on an agent draft and no orient section named them). Reads
+   * the ONE needs-you predicate: a draft's asks make it a "needs-you" row;
+   * a draft owing only ask-less slots is a "proposed" row; a slot is never
+   * counted twice.
+   */
+  it("orient owedByPerson: the needs-you predicate, one row per session, each naming its inbox", async () => {
+    const asking = await seedSession({
+      origin: "agent",
+      owed: [ASK_A, ASK_B],
+      asks: [ASK_A],
+    });
+    const quiet = await seedSession({ origin: "agent", owed: [ASK_B] });
+    const own = await seedSession({ origin: "human", owed: [ASK_A] });
+    const folded = foldOwedByPerson({
+      ...(await readOwedByPersonSlots(OWNER)),
+      link: (id) => `/open/${id}`,
+      limit: 1000,
+    });
+    const rowOf = (id: string) =>
+      folded.items.filter((i) => i.sessionId === id);
+    expect(rowOf(asking.sessionId)).toEqual([
+      expect.objectContaining({ inbox: "needs-you", owed: 2, asks: 1 }),
+    ]);
+    expect(rowOf(quiet.sessionId)).toEqual([
+      expect.objectContaining({ inbox: "proposed", owed: 1, asks: 0 }),
+    ]);
+    expect(rowOf(own.sessionId)).toEqual([
+      expect.objectContaining({ inbox: "needs-you", owed: 1 }),
+    ]);
   });
 
   it("a person's own session is never in the draft lens (and never stamped by an answer)", async () => {

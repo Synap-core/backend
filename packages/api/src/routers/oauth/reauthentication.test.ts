@@ -52,7 +52,7 @@ describe("reauthenticationRequired", () => {
     }
   });
 
-  it("max_age=60 has no 5-minute floor", () => {
+  it("max_age=60 has no step-up-window floor", () => {
     expect(reauthenticationRequired({ maxAge: 60 }, at(2 * MIN), NOW)).toBe(
       true
     );

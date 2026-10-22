@@ -151,10 +151,6 @@ const SELF_GRANT_DOORS: Record<string, { reaches: string[]; why: string }> = {
     reaches: ["WorkspaceMemberRepository.add"],
     why: "the caller joins with an invitation addressed to their own email",
   },
-  "packages/api/src/routers/workspaces/invites.ts acceptInviteViaCp": {
-    reaches: ["WorkspaceMemberRepository.add"],
-    why: "the Cloud-verified invitee joins; the request carries no device session",
-  },
   "packages/api/src/routers/shares.ts redeemLink": {
     reaches: ["redeemLink"],
     why: "the caller redeems a link for themselves",

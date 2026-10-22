@@ -24,6 +24,7 @@
 
 import type { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfileScope, type Profile } from "../schema/profiles.js";
+import { isUniqueViolation } from "./pg-errors.js";
 
 /**
  * RETIREMENT TOMBSTONE — `profiles.ui_hints.retired`.
@@ -147,12 +148,6 @@ export interface ProfileApplyResolution {
    */
   createScope: string;
 }
-
-/** Postgres unique_violation — the `profiles_slug_*_uniq` partial indexes. */
-const isUniqueViolation = (err: unknown): boolean =>
-  !!err &&
-  typeof err === "object" &&
-  (err as { code?: string }).code === "23505";
 
 const normalizeKind = (k?: string | null): "kind" | "role" =>
   k === "role" ? "role" : "kind";

@@ -106,6 +106,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import { writeTemplateState } from "./template-state.js";
 import { projectTemplateIntent } from "./workspace-intent.js";
+import { isUniqueViolation } from "./pg-errors.js";
 import {
   mergeWorkspacePrimarySurface,
   resolveWorkspacePrimarySurface,
@@ -1547,7 +1548,7 @@ export async function reconcileWorkspaceFromDefinition(
           // Case-insensitive 0230 index — a case-variant already exists (a lost
           // race, or an active pre-0230 dup). Reconcile's job is "ensure it
           // exists", so treat as present rather than aborting the reconcile.
-          if ((e as { code?: string } | null)?.code === "23505") {
+          if (isUniqueViolation(e)) {
             report.automations.skipped.push(auto.name);
             continue;
           }

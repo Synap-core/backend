@@ -24,7 +24,10 @@ const h = vi.hoisted(() => ({
   fail: false,
 }));
 
-vi.mock("@synap/database", () => ({ db: { sentinel: "pod-db" } }));
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
+  db: { sentinel: "pod-db" },
+}));
 vi.mock("@synap/database/person-devices", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@synap/database/person-devices")>();

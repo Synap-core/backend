@@ -44,24 +44,25 @@ const draft: LensNeedsYouSignal = {
   id: "draft:s-dog",
   kind: "draft-asks",
   title:
-    "Claude-code started Dogfood Connect & Mirror after deploy and plan the next waves · asks you 9 things",
+    "Claude-code started Dogfood Connect & Mirror after deploy and plan the next waves",
   category: "ai",
   sessionGoal: "Dogfood Connect & Mirror after deploy and plan the next waves",
   sessionTitle: "Dogfood Connect & Mirror after deploy",
   groupKey: "session:s-dog",
   target: { kind: "session", id: "s-dog" },
   occurredAt: "2026-09-14T10:00:00.000Z",
-  count: 9,
+  // One draft (2026-10-22): its asks are Needs-you rows of their own.
+  count: 1,
 };
 
 describe("an agent FAILURE notification (P1)", () => {
-  it("is a Blocking row with the failed mark, an Open verb, ×9, and never 'Asked by AI'", () => {
+  it("is a Blocking row with the failed mark, an Open verb, “and 8 more like it”, and never 'Asked by AI'", () => {
     const [item] = lensItemsOfClass([metaFailed], "blocking");
     const row = item!.row;
     expect(resolveUnitState(row.state).state).toBe("failed");
     expect(row.verb).toEqual({ action: "open", label: "Open" });
     expect(row.door).toEqual({ kind: "run", id: "run-9" });
-    expect(row.repeat).toBe("×9");
+    expect(row.repeat).toBe("and 8 more like it");
     expect(row.byAgent).toBe(false);
   });
 
@@ -87,13 +88,13 @@ describe("an agent FAILURE notification (P1)", () => {
 });
 
 describe("a Proposed draft row (P2: state words agree with the mark)", () => {
-  it("names the work, never 'started' beside a Not-started mark; the chip counts the asks", () => {
+  it("names the work, never 'started' beside a Not-started mark; no ask chip (its asks are Blocking rows)", () => {
     const [item] = lensItemsOfClass([draft], "proposed");
     const row = item!.row;
     expect(resolveUnitState(row.state).state).toBe("not_started");
     expect(row.title).toBe("Dogfood Connect & Mirror after deploy");
     expect(row.title).not.toMatch(/started/i);
-    expect(row.reason).toBe("9 asks");
+    expect(row.reason).toBeNull();
   });
 });
 

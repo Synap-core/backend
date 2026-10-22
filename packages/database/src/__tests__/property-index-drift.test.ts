@@ -84,7 +84,7 @@ describe.skipIf(!SCHEMA_LOADS)(
       const [entity] = await sql`
         INSERT INTO entities (user_id, type, profile_id, workspace_id, properties, title)
         VALUES (${userId}, ${itemSlug}, ${profileId}, ${workspaceId},
-                ${sql.json({ status: "todo" })}, 'Drift fixture')
+                ${JSON.stringify({ status: "todo" })}::jsonb, 'Drift fixture')
         RETURNING id
       `;
       entityId = entity.id as string;
@@ -123,7 +123,7 @@ describe.skipIf(!SCHEMA_LOADS)(
       await sql`
         UPDATE entity_property_index
         SET value_text = 'DRIFT', value_num = NULL, value_bool = NULL,
-            value_ts = NULL, value_entity_id = NULL, value_jsonb = ${sql.json("DRIFT")}
+            value_ts = NULL, value_entity_id = NULL, value_jsonb = ${JSON.stringify("DRIFT")}::jsonb
         WHERE entity_id = ${entityId}
       `;
       const corrupted = await projectionOf(entityId);

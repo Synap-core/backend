@@ -8,7 +8,7 @@
  * nothing those reads' own rules already answer:
  *   - state      → a `UnitStateInput` for `resolveUnitState` (never a tone);
  *   - grouping   → `needsYouRows` (a session owing several things is ONE row);
- *   - ×N         → `repeatLabel`;
+ *   - repeat     → `repeatLabel` ("and N more like it");
  *   - words      → the vocabulary door (verbs, counts, blocked reasons);
  *   - days       → `calendarDayIn` (the heat's day rule).
  */
@@ -22,7 +22,11 @@ import {
   type NeedsYouAccessRequest,
   type NeedsYouRow,
 } from "../needs-you/index.js";
-import { resolveUnitState, type UnitStateInput } from "../units/state.js";
+import {
+  resolveUnitState,
+  type UnitStateInput,
+  type UnitTone,
+} from "../units/state.js";
 import {
   pathRowSessionFact,
   sessionRowInput,
@@ -36,7 +40,6 @@ import {
   normalizeObjectKind,
   resolveActionLabel,
   resolveBlockedReasonLabel,
-  resolveNeedsYouItemCount,
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveStatusLabel,
@@ -72,6 +75,14 @@ export interface LensVerb {
   leavesApp?: boolean;
 }
 
+/** Who asked for a row (`LensRow.by`): an agent, with its page door. */
+export interface LensRowBy {
+  kind: "agent";
+  id: string;
+  /** Its display name. */
+  label: string;
+}
+
 export interface LensRow {
   /** Stable React key. */
   key: string;
@@ -96,12 +107,22 @@ export interface LensRow {
    * state keeps the tone. Absent = not a needs-you item row.
    */
   reasonKind?: string;
-  /** "×N" when the row stands for N identical things, else null. */
+  /** "and N more like it" when the row stands for N+1 identical things ("ran N times" for a rule), else null — `repeatLabel`. */
   repeat: string | null;
   /** Provenance. Pass through `visibleSource(row, scope)` before drawing it. */
   source: LensSource | null;
+  /**
+   * WHO asked — the one agent that filed it ("from Scout"), drawn as a door
+   * to the agent's page. Absent / null = unknown, several, or a person.
+   */
+  by?: LensRowBy | null;
   /** When it happened (ISO), for the age. Null = unknown (no age is drawn). */
   occurredAt: string | null;
+  /**
+   * Its deliverables, counted — a Happening session's labelled rail
+   * (`lensRowProgress`). Absent = nothing measurable (no rail, never 0%).
+   */
+  progress?: { done: number; total: number } | null;
   /** At most ONE inline verb. Null = the row itself is the door. */
   verb: LensVerb | null;
   /** Where the row opens. Null = nothing addressable (the row is plain). */
@@ -213,6 +234,8 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   captureStatus?: "needs_answer" | "suggested" | null;
   /** `access-request`: who asks for access, and from where. */
   access?: NeedsYouAccessRequest | null;
+  /** `proposal-cluster`: the ONE agent that filed every member (the pod's `Signal.by`). */
+  by?: LensRowBy | null;
 }
 
 /** A work-broke notification: ONE rule, owned by the Inbox buckets (`needs-you/buckets.ts`). */
@@ -377,7 +400,10 @@ function itemShape(
         // `working` (an agent drafted it; nobody is at it).
         state: { everStarted: false },
         objectKind: "session",
-        reason: resolveNeedsYouItemCount("ask", Math.max(1, s.count)),
+        // No ask count: since the founder decision of 2026-10-22 a draft's
+        // asks are Needs-you rows of their own (blocking), and this row is the
+        // draft to accept or reject. A chip here would count them twice.
+        reason: null,
         verb: verb("accept"),
       };
     default:
@@ -419,10 +445,10 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       key: row.key,
       cls,
       ...shape,
-      // A draft's pod title is a sentence ("X started <goal> · asks you N
-      // things") whose "started" contradicts its `not_started` mark and whose
-      // count repeats the reason chip: the row names the WORK, the mark says
-      // where it stands, the chip says how many asks.
+      // A draft's pod title is a sentence ("X started <goal>") whose
+      // "started" contradicts its `not_started` mark: the row names the WORK
+      // and the mark says where it stands. Its asks are their own Needs-you
+      // rows (founder decision 2026-10-22).
       title:
         s.kind === "draft-asks"
           ? s.sessionTitle?.trim() || s.sessionGoal?.trim() || s.title
@@ -439,6 +465,9 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
             label: row.session.title ?? "",
           }
         : null,
+      ...(s.by?.label
+        ? { by: { kind: "agent" as const, id: s.by.id, label: s.by.label } }
+        : {}),
       occurredAt: iso(s.occurredAt),
       door: s.target ?? null,
       count: 1,
@@ -490,6 +519,38 @@ export interface LensHappeningInput {
   startedAt: string | Date | null;
   /** The now-line (`deriveRunActivity(...).nowLine.text`), when known. */
   nowLine?: string | null;
+  /**
+   * Its deliverables, counted (`tallyDeliverables`) — the row's progress
+   * rail. Absent / a zero total = nothing measurable: no rail, never 0%.
+   */
+  progress?: { done: number; total: number } | null;
+}
+
+/** A row's progress, ready to draw: the rail's fill and its words. */
+export interface LensRowProgress {
+  /** 0–100, through THE rail rule (`resolveUnitState`). */
+  pct: number;
+  /** "2 of 3 done" — every rail carries it (ui-composition §10: never a bare bar). */
+  label: string;
+}
+
+/**
+ * A row's deliverables as a labelled rail, or null when it has nothing
+ * measurable. One rule for web and relay. Reads `row.progress` only — never
+ * `row.state.progress`, which means other things on other rows (a session's
+ * 0–100, a project's closed sessions).
+ */
+export function lensRowProgress(
+  row: Pick<LensRow, "progress">
+): LensRowProgress | null {
+  const p = row.progress;
+  if (!p || p.total <= 0) return null;
+  const done = Math.max(0, Math.min(p.done, p.total));
+  const rail = resolveUnitState({
+    running: true,
+    progress: { done, total: p.total },
+  }).rail;
+  return { pct: rail.pct ?? 0, label: `${done} of ${p.total} done` };
 }
 
 /** A Happening row: live state, the now-line as its reason, no verb (it opens). */
@@ -507,6 +568,9 @@ export function lensRowOfHappening(input: LensHappeningInput): LensRow {
     verb: null,
     door: input.door,
     count: 1,
+    ...(input.progress && input.progress.total > 0
+      ? { progress: { done: input.progress.done, total: input.progress.total } }
+      : {}),
   };
 }
 
@@ -969,4 +1033,17 @@ export interface LensOutput {
   byAgent: boolean;
   /** Declared, not produced yet: the dashed card. */
   expected: boolean;
+  /**
+   * Where the object stands in its kind's lifecycle, as a MARK (words + a
+   * tone token — never a colour). Absent ⇒ no lifecycle, or not sent.
+   */
+  status?: LensOutputStatus;
+}
+
+/** A produced object's lifecycle status, ready to draw (`lensOutputOfSignal`). */
+export interface LensOutputStatus {
+  /** The option key — the badge's status token. */
+  key: string;
+  label: string;
+  tone: UnitTone;
 }

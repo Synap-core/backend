@@ -232,7 +232,7 @@ export function verifyAuthRequestTime(
  * for it, and then as OIDC Core §3.1.2.1 says, for every client: `prompt=login`
  * and `max_age=0` need a sign-in made AFTER the authorize request (its signed
  * time, `auth_req`; missing or forged → sign in again), `max_age=N` one within
- * N seconds. An unknown sign-in time is never fresh. (The 5-minute window is
+ * N seconds. An unknown sign-in time is never fresh. (The step-up window is
  * a different rule: how long a Synap app's step-up stays good at a credential
  * door, `utils/device-session.ts`.)
  */

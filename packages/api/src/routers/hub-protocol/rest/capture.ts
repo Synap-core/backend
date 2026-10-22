@@ -379,6 +379,9 @@ export function registerCaptureRoutes(app: HubHono): void {
         items: body.items,
         aiStructure: body.aiStructure,
         ...(session.sessionId ? { sessionId: session.sessionId } : {}),
+        // The worker files the proposal: it needs the acting agent to
+        // attribute it, exactly as /import/analyze does.
+        ...(corpusAgentUserId ? { agentUserId: corpusAgentUserId } : {}),
       });
 
       logger.info(
