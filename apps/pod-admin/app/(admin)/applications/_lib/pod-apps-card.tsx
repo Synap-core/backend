@@ -21,6 +21,7 @@ import { SquareCode } from "lucide-react";
 import { trpc } from "../../../../lib/trpc";
 import { formatRelative, readableError } from "../../../../lib/format";
 import { ConfirmModal } from "../../components/confirm-modal";
+import { HostName } from "../../../_lib/host-name";
 import {
   ResourceRowEmpty,
   ResourceRowError,
@@ -85,17 +86,17 @@ export function PodAppsCard() {
   return (
     <SectionCard
       title="Pod apps"
-      hint="Apps your members connected to their pod by signing in. Each acts only in the spaces its member approved, and asks before changing anything unless that member turned on Apply automatically."
+      hint="Apps your members connected to this pod by signing in. Each acts only in the spaces its member approved, and asks before changing anything unless that member turned on Apply automatically."
     >
       <div className="flex items-start justify-between gap-4 px-1 pb-3">
         <div className="min-w-0">
-          <p className="text-[13px] text-foreground/85">
+          <p className="text-sm text-foreground/85">
             Allow apps that are not Synap apps
           </p>
-          <p className="mt-0.5 max-w-2xl text-[12px] leading-5 text-foreground/65">
+          <p className="mt-0.5 max-w-2xl text-pretty text-xs leading-5 text-foreground/65">
             {allow
               ? "Members may connect any app, within what they can do themselves. Unverified apps show their domain and a warning."
-              : `Only Synap apps can connect. ${
+              : `Only Synap apps can connect. A sign-in to an unverified app that is already under way stops at its next step. ${
                   stillLive > 0
                     ? `${stillLive} connection${stillLive === 1 ? "" : "s"} made before stay${stillLive === 1 ? "s" : ""} until revoked below.`
                     : "No unverified app is connected."
@@ -125,19 +126,21 @@ export function PodAppsCard() {
           {(groups.data ?? []).map((g) => (
             <li key={g.client_id} className="flex flex-col gap-2 px-1 py-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2">
+                <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <SquareCode
-                    className="h-4 w-4 shrink-0 text-foreground/55"
+                    className="h-4 w-4 shrink-0 text-foreground/65"
                     aria-hidden
                   />
-                  <span className="truncate text-[13px] font-medium text-foreground">
-                    {g.domain}
-                  </span>
+                  {/* Never truncated: the end of the domain is who it is. */}
+                  <HostName
+                    host={g.domain}
+                    className="min-w-0 text-sm font-medium text-foreground"
+                  />
                   <StatusPill
                     kind={g.verified ? "healthy" : "stale"}
                     label={tierLabel(g.verified)}
                   />
-                  <span className="text-[12px] text-foreground/65">
+                  <span className="text-xs tabular-nums text-foreground/65">
                     {g.live} member{g.live === 1 ? "" : "s"}
                   </span>
                 </div>
@@ -147,7 +150,7 @@ export function PodAppsCard() {
                     variant="flat"
                     color="danger"
                     radius="md"
-                    className="min-h-9"
+                    className="min-h-10"
                     onPress={() =>
                       setEnding({
                         clientId: g.client_id,
@@ -163,7 +166,7 @@ export function PodAppsCard() {
               </div>
               <ul className="flex flex-col gap-1 pl-6">
                 {g.members.map((m) => (
-                  <li key={m.public_id} className="text-[12px] leading-5">
+                  <li key={m.public_id} className="text-xs leading-5">
                     <Link
                       href={appHref("key", m.public_id)}
                       className="font-medium text-foreground/80 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
