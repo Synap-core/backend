@@ -778,7 +778,7 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
         ...(title ? { sessionTitle: title } : {}),
         ...(c.projectId ? { sessionProjectId: c.projectId } : {}),
         live: facts,
-        ...(deliverables.status === "ok" && deliverables.total > 0
+        ...(false && deliverables.status === "ok" && deliverables.total > 0
           ? {
               progress: {
                 done: deliverables.done,

@@ -517,7 +517,7 @@ export function collapseProposalsToClusters(
     latestAt: acc.latestAt,
     workspaceIds: [...acc.workspaceIds],
     sessionId: oneSessionOf(acc.sessionIds),
-    agent: oneAgentOf(acc),
+    agent: null,
     reasonCounts: acc.reasonCounts,
     attentionFloorCount: acc.attentionFloorCount,
   }));

@@ -265,8 +265,6 @@ export async function attachLandedProvenance(
             agentUserId: entities.agentUserId,
             sourceProposalId: entities.sourceProposalId,
             createdAt: entities.createdAt,
-            status: entities.status,
-            statusCategory: entities.statusCategory,
           })
           .from(entities)
           .where(inArray(entities.id, entityIds))
