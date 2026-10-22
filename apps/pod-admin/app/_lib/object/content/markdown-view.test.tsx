@@ -91,3 +91,18 @@ describe("MarkdownView — nothing in content runs", () => {
     expect(out).not.toContain("profileSlug");
   });
 });
+
+describe("MarkdownView — measure", () => {
+  it("keeps the 65-character measure by default", () => {
+    const html = renderToStaticMarkup(<MarkdownView source="Hello" />);
+    expect(html).toContain("max-w-[65ch]");
+  });
+
+  it("a wide body (a document) drops the measure and uses its card", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownView source="Hello" measure="wide" />
+    );
+    expect(html).toContain("max-w-none");
+    expect(html).not.toContain("max-w-[65ch]");
+  });
+});

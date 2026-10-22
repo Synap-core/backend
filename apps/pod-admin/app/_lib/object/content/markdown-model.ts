@@ -32,6 +32,16 @@ export const UNPARSED_PREVIEW_CHARS = 5_000;
  */
 export type ContentFormat = "markdown" | "text" | "code" | "source";
 
+/**
+ * How wide a body's text runs: `reading` keeps the 65-character measure of a
+ * field or a short body; `wide` lets a document use its card (tables, charts).
+ */
+export type ContentMeasure = "reading" | "wide";
+
+export function contentMeasureClass(measure: ContentMeasure): string {
+  return measure === "wide" ? "max-w-none" : "max-w-[65ch]";
+}
+
 export interface PreparedContent {
   format: ContentFormat;
   text: string;

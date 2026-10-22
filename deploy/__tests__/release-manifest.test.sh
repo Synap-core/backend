@@ -52,6 +52,12 @@ jq -e '.envSchemaVersion | test("^sha256:[0-9a-f]{64}$")' "$TMP/good.json" >/dev
 jq -e '.bundle.asset == "synap-deploy-main-abc1234.tar.gz" and (.bundle.sha256|length) == 64' "$TMP/good.json" >/dev/null && ok "bundle asset + sha256 recorded" || bad "bundle: $(jq -c .bundle "$TMP/good.json")"
 [ "$(jq '.images|length' "$TMP/good.json")" = "$n" ] && ok "one image per compose key" || bad "images: $(jq -c '.images|keys' "$TMP/good.json")"
 
+# ONE image pin rule: make-manifest.py and `synap update --from-source` both go
+# through deploy/release/resolve-images.sh; neither resolves a tag itself.
+grep -q 'resolve-images.sh' "$HERE/deploy/release/make-manifest.py" && ! grep -q 'imagetools' "$HERE/deploy/release/make-manifest.py" \
+  && grep -q 'deploy/release/resolve-images.sh" docker-compose.yml' "$HERE/synap" && [ "$(grep -c 'imagetools' "$HERE/synap")" = 0 ] \
+  && grep -q 'imagetools inspect' "$HERE/deploy/release/resolve-images.sh" \
+  && ok "one resolver: make-manifest.py and the from-source build both call resolve-images.sh (no second copy)" || bad "image pin resolution is not the one resolver"
 # make-manifest refuses to emit a lie
 python3 "$HERE/deploy/release/make-manifest.py" --repo-root "$HERE" --id x --channel fast --git-sha "$(printf 'c%.0s' $(seq 1 40))" \
   $(for k in $KEYS; do [ "$k" = SYNAP_IMAGE_BACKEND ] || echo "--image $k=r@sha256:$(D a)"; done) >/dev/null 2>"$TMP/err" \

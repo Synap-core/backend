@@ -10,7 +10,12 @@ import dynamic from "next/dynamic";
 import type { ReactNode } from "react";
 import { SectionCard } from "../../../(admin)/components/section-card";
 import type { DocumentContent } from "./document-model";
-import { EXTERNAL_REL, type PreparedContent } from "./markdown-model";
+import {
+  EXTERNAL_REL,
+  contentMeasureClass,
+  type ContentMeasure,
+  type PreparedContent,
+} from "./markdown-model";
 
 function ContentSkeleton() {
   return (
@@ -32,13 +37,21 @@ const MarkdownView = dynamic(() => import("./markdown-view"), {
 });
 
 /** A body as the console draws it. Plain text keeps its line breaks. */
-export function ContentBody({ prepared }: { prepared: PreparedContent }) {
+export function ContentBody({
+  prepared,
+  measure = "reading",
+}: {
+  prepared: PreparedContent;
+  measure?: ContentMeasure;
+}) {
   switch (prepared.format) {
     case "markdown":
-      return <MarkdownView source={prepared.text} />;
+      return <MarkdownView source={prepared.text} measure={measure} />;
     case "text":
       return (
-        <p className="max-w-[65ch] whitespace-pre-wrap break-words text-[14px] leading-relaxed text-foreground/90">
+        <p
+          className={`${contentMeasureClass(measure)} whitespace-pre-wrap break-words text-[14px] leading-relaxed text-foreground/90`}
+        >
           {prepared.text}
         </p>
       );
@@ -78,14 +91,16 @@ export function ContentBlock({
   title,
   prepared,
   openInApp,
+  measure,
 }: {
   title: string;
   prepared: PreparedContent;
   openInApp?: ReactNode;
+  measure?: ContentMeasure;
 }) {
   return (
     <SectionCard variant="flat" title={title}>
-      <ContentBody prepared={prepared} />
+      <ContentBody prepared={prepared} measure={measure} />
       {prepared.truncated && (
         <TruncatedNote
           shownPercent={prepared.shownPercent}
@@ -105,11 +120,13 @@ export function DocumentContentSection({
   title,
   content,
   openInApp,
+  measure,
 }: {
   title: string;
   /** `null` while it loads. */
   content: DocumentContent | null;
   openInApp?: ReactNode;
+  measure?: ContentMeasure;
 }) {
   if (content?.kind === "content") {
     return (
@@ -117,6 +134,7 @@ export function DocumentContentSection({
         title={title}
         prepared={content.prepared}
         openInApp={openInApp}
+        measure={measure}
       />
     );
   }

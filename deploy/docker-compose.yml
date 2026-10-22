@@ -836,7 +836,7 @@ services:
   # ============================================================================
   rsshub:
     logging: *default-logging
-    image: diygod/rsshub:latest
+    image: diygod/rsshub:2026-10-21@sha256:f23136744d4eeef6dc552d1a58f983807b030940f258bbea722b80bc25487388
     container_name: ${COMPOSE_PROJECT_NAME:-synap}-rsshub
     restart: unless-stopped
     ports:
@@ -869,7 +869,9 @@ services:
   # ============================================================================
   browserless:
     logging: *default-logging
-    image: browserless/chrome:latest
+    # = browserless/chrome:latest on 2026-10-21 (built 2024-02-16, amd64+arm64).
+    # No versioned tag carries this digest, and the v1 line ships no newer one.
+    image: browserless/chrome@sha256:57d19e414d9fe4ae9d2ab12ba768c97f38d51246c5b31af55a009205c136012f
     container_name: ${COMPOSE_PROJECT_NAME:-synap}-browserless
     restart: unless-stopped
     ports:
@@ -898,7 +900,7 @@ services:
   dozzle:
     logging: *default-logging
     container_name: dozzle
-    image: amir20/dozzle:latest
+    image: amir20/dozzle:v11.3.4@sha256:8796ae7e1ecbe011482319cb7040e69aae91a0632b87bbe24b3f643e7455d94b
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -915,7 +917,7 @@ services:
   # ============================================================================
   prometheus:
     logging: *default-logging
-    image: prom/prometheus:v2.51.0
+    image: prom/prometheus:v2.51.0@sha256:5ccad477d0057e62a7cd1981ffcc43785ac10c5a35522dc207466ff7e7ec845f
     profiles: ["monitoring"]
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -935,7 +937,7 @@ services:
   # ============================================================================
   grafana:
     logging: *default-logging
-    image: grafana/grafana:10.4.0
+    image: grafana/grafana:10.4.0@sha256:f9811e4e687ffecf1a43adb9b64096c50bc0d7a782f8608530f478b6542de7d5
     profiles: ["monitoring"]
     volumes:
       - grafana-data:/var/lib/grafana
@@ -955,7 +957,7 @@ services:
   # ============================================================================
   alertmanager:
     logging: *default-logging
-    image: prom/alertmanager:v0.27.0
+    image: prom/alertmanager:v0.27.0@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5
     profiles: ["monitoring"]
     volumes:
       - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
@@ -971,7 +973,7 @@ services:
   # ============================================================================
   cloudflared:
     logging: *default-logging
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.10.3@sha256:faa8e0a1475f137c910be6025f43c8e4092fdd35461b31e19fd1390657a1ff39
     restart: unless-stopped
     command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN}
     environment:
@@ -999,7 +1001,7 @@ services:
   # ============================================================================
   pangolin-tunnel:
     logging: *default-logging
-    image: alpine:3.20
+    image: alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
     restart: unless-stopped
     command:
       [
