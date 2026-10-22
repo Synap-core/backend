@@ -60,7 +60,7 @@ export async function acceptInviteFor(
    * Not named `join`: the credential-doors tripwire resolves calls by name,
    * and every `Array.prototype.join()` would then "reach" this write.
    */
-  const joinSpace = async (workspaceId: string): Promise<boolean> => {
+  const join = async (workspaceId: string): Promise<boolean> => {
     const already = await db.query.workspaceMembers.findFirst({
       where: and(
         eq(workspaceMembers.workspaceId, workspaceId),
@@ -105,7 +105,7 @@ export async function acceptInviteFor(
     if (!invite.workspaceId) {
       throw new Error(`Workspace invite ${invite.id} names no workspace`);
     }
-    await joinSpace(invite.workspaceId);
+    await join(invite.workspaceId);
     accepted = {
       status: "accepted",
       type: "workspace",
@@ -126,7 +126,7 @@ export async function acceptInviteFor(
     // `db` named on purpose: the helpers default to the database package's
     // own client, and the accept reads and writes through ONE connection.
     const fanOutIds = await listPodInviteFanOutWorkspaceIds(db);
-    for (const workspaceId of fanOutIds) await joinSpace(workspaceId);
+    for (const workspaceId of fanOutIds) await join(workspaceId);
     accepted = {
       status: "accepted",
       type: "pod",
