@@ -346,7 +346,16 @@ export async function listSessionChanges(p: {
           eq(messages.authorType, MessageAuthorType.HUMAN),
           eq(messages.userId, ownerId),
           isNull(messages.deletedAt),
-          ...(floor ? [drizzleSql`${sentAt} > ${floor}`] : [])
+          // The raw column bound first: it walks the (channel_id, timestamp)
+          // index, where the truncated expression alone scanned the whole
+          // room on every wake. It drops nothing the exact test keeps —
+          // trunc(ts) > floor implies ts > floor.
+          ...(floor
+            ? [
+                drizzleSql`${messages.timestamp} > ${floor}::timestamptz`,
+                drizzleSql`${sentAt} > ${floor}`,
+              ]
+            : [])
         )
       )
       .orderBy(asc(sentAt), asc(messages.id))
