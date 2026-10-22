@@ -12,7 +12,11 @@ import {
 
 /** A snapshot through the REAL embed model — never a hand-built model. */
 function snapshot(cellKey: string, data: unknown): ChartSnapshotModel {
-  const model = describeEmbed({ kind: "cell", attrs: { cellKey }, props: { data } });
+  const model = describeEmbed({
+    kind: "cell",
+    attrs: { cellKey },
+    props: { data },
+  });
   if (model.kind !== "chart-snapshot") {
     throw new Error(`${cellKey}: expected a snapshot, got ${model.kind}`);
   }
@@ -114,7 +118,14 @@ describe("chartGeometry — bars", () => {
   });
 
   it("all-zero data is safe: finite, zero-length bars", () => {
-    const g = geometry("chart-bar", [{ label: "a", value: 0 }, { label: "b", value: 0 }], "bars");
+    const g = geometry(
+      "chart-bar",
+      [
+        { label: "a", value: 0 },
+        { label: "b", value: 0 },
+      ],
+      "bars"
+    );
     expect(g.scale).toEqual({ lo: 0, hi: 0, span: 1 });
     for (const bar of g.bars) {
       expect(Number.isFinite(bar.x) && Number.isFinite(bar.w)).toBe(true);
@@ -148,7 +159,14 @@ describe("chartGeometry — series", () => {
   });
 
   it("an area chart closes its path to the baseline", () => {
-    const g = geometry("chart-area", [{ x: 0, y: 2 }, { x: 4, y: 6 }], "line");
+    const g = geometry(
+      "chart-area",
+      [
+        { x: 0, y: 2 },
+        { x: 4, y: 6 },
+      ],
+      "line"
+    );
     expect(g.areaPath).toBe(`${g.path} L294.00,114.00 L6.00,114.00 Z`);
   });
 
@@ -204,18 +222,32 @@ describe("chartGeometry — series", () => {
   });
 
   it("one point sits in the middle; a flat zero series stays finite", () => {
-    const one = geometry("chart-line", [{ x: 3, y: 5 }], "line", { width: PHONE });
+    const one = geometry("chart-line", [{ x: 3, y: 5 }], "line", {
+      width: PHONE,
+    });
     expect(one.points[0]!.cx).toBe(PHONE / 2);
     expect(one.xTicks).toHaveLength(1);
-    const flat = geometry("chart-line", [{ x: 0, y: 0 }, { x: 1, y: 0 }], "line");
+    const flat = geometry(
+      "chart-line",
+      [
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+      ],
+      "line"
+    );
     expect(flat.scale.span).toBe(1);
     for (const p of flat.points) expect(Number.isFinite(p.cy)).toBe(true);
   });
 
   it("dates read through the injected formatter (the surface's date door)", () => {
-    const g = geometry("chart-line", [{ x: "2026-10-22T00:00:00Z", y: 1 }], "line", {
-      formatDate: () => "22 Oct",
-    });
+    const g = geometry(
+      "chart-line",
+      [{ x: "2026-10-22T00:00:00Z", y: 1 }],
+      "line",
+      {
+        formatDate: () => "22 Oct",
+      }
+    );
     expect(g.xTicks[0]!.text).toBe("22 Oct");
     expect(g.values[0]).toEqual({ name: "22 Oct", value: "1" });
   });
@@ -236,7 +268,11 @@ describe("chartGeometry — scalar", () => {
       props: { data: 30, aggregation: "count", max: 40 },
     }) as ChartSnapshotModel;
     const g = chartGeometry(model);
-    expect(g).toMatchObject({ kind: "ring", percentRounded: 75, showPercent: true });
+    expect(g).toMatchObject({
+      kind: "ring",
+      percentRounded: 75,
+      showPercent: true,
+    });
   });
 });
 
@@ -263,7 +299,9 @@ describe("chartGeometry — tables", () => {
   });
 
   it("no links / no regions is empty", () => {
-    expect(chartGeometry(snapshot("chart-sankey", { nodes: [], links: [] })).kind).toBe("empty");
+    expect(
+      chartGeometry(snapshot("chart-sankey", { nodes: [], links: [] })).kind
+    ).toBe("empty");
     expect(chartGeometry(snapshot("chart-choropleth", {})).kind).toBe("empty");
   });
 });

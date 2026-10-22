@@ -109,7 +109,12 @@ describe("MarkdownView — measure", () => {
   });
 });
 
-const embed = (directive: string, attrs: string, props?: unknown, fallback = "") =>
+const embed = (
+  directive: string,
+  attrs: string,
+  props?: unknown,
+  fallback = ""
+) =>
   [
     `:::${directive}{${attrs}}`,
     ...(props === undefined ? [] : ["```json", JSON.stringify(props), "```"]),
@@ -145,7 +150,9 @@ describe("MarkdownView — embeds are drawn from the shared model", () => {
     expect(out).toContain("Tasks by status");
     expect(out).toContain("Snapshot · ");
     expect(out).toContain('role="img"');
-    expect(out).toContain('aria-label="Tasks by status: Done 12, In progress 6, Blocked 3"');
+    expect(out).toContain(
+      'aria-label="Tasks by status: Done 12, In progress 6, Blocked 3"'
+    );
     expect(out).toContain("Most tasks are done.");
     expect(out).not.toContain("profileSlug");
   });
@@ -169,7 +176,12 @@ describe("MarkdownView — embeds are drawn from the shared model", () => {
 
   it("a malformed snapshot shows the error, not an empty chart", () => {
     const out = html(
-      embed("synap-cell", 'cellKey="chart-bar"', { data: "oops" }, "Prose stays.")
+      embed(
+        "synap-cell",
+        'cellKey="chart-bar"',
+        { data: "oops" },
+        "Prose stays."
+      )
     );
     expect(out).toContain("can’t be drawn");
     expect(out).toContain("data must be an array of {label, value} items");
@@ -197,7 +209,12 @@ describe("MarkdownView — embeds are drawn from the shared model", () => {
 
   it("a live chart is a quiet chip, its prose under it", () => {
     const out = html(
-      embed("synap-cell", 'cellKey="chart-line"', { profileSlug: "task" }, "Trend up.")
+      embed(
+        "synap-cell",
+        'cellKey="chart-line"',
+        { profileSlug: "task" },
+        "Trend up."
+      )
     );
     expect(out).toContain("Line Chart");
     expect(out).toContain("· Live chart");
@@ -214,7 +231,9 @@ describe("MarkdownView — embeds are drawn from the shared model", () => {
     const withRead = (read: EmbedEntityRead) =>
       renderToStaticMarkup(
         <EmbedHostContext.Provider value={{ useEntity: () => read }}>
-          <MarkdownView source={embed("synap-entity", `id="${UUID}" label="Ana"`)} />
+          <MarkdownView
+            source={embed("synap-entity", `id="${UUID}" label="Ana"`)}
+          />
         </EmbedHostContext.Provider>
       );
     const ready = withRead({ state: "ready", title: "Ana Lopez" });

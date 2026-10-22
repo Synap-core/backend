@@ -274,6 +274,65 @@ export function isRegisteredRedirectUri(
 }
 
 /**
+ * Where a FIRST-PARTY native client (the Synap apps, `FIRST_PARTY_CLIENTS` in
+ * config.ts) may receive a code — RFC 8252's three redirect kinds:
+ *   - `loopback` (§7.3): `http://127.0.0.1:<port><path>` or `http://[::1]:…`,
+ *     ANY port (the app binds an ephemeral one), the path exact. `localhost`
+ *     is refused (§8.3: a name can resolve elsewhere; an IP literal cannot).
+ *   - `claimed-https` (§7.2): an https URL the app's OS binds to it (universal
+ *     link / app link), exact.
+ *   - `private-scheme` (§7.1): a reverse-DNS scheme the app owns, exact.
+ * DCR never reaches this: a self-registered client stays https-only.
+ */
+export type FirstPartyRedirectRule =
+  | { kind: "loopback"; path: string }
+  | { kind: "claimed-https"; uri: string }
+  | { kind: "private-scheme"; uri: string };
+
+/** An explicit TCP port, 1–65535, written without a leading zero. */
+const LOOPBACK_PORT_RE = "([1-9][0-9]{0,4})";
+
+/**
+ * Does `candidate` satisfy one of a first-party client's redirect rules?
+ *
+ * The loopback rule is a whole-string match with ONLY the port left open:
+ * scheme, host literal and path are fixed, and nothing may follow the path (no
+ * query, fragment, userinfo, dot-segment or percent-encoded variant — each
+ * makes the string differ, so each is refused rather than normalised).
+ */
+export function matchFirstPartyRedirect(
+  rules: readonly FirstPartyRedirectRule[],
+  candidate: string
+): boolean {
+  return rules.some((rule) => {
+    if (rule.kind !== "loopback") return rule.uri === candidate;
+    const escapedPath = rule.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = new RegExp(
+      `^http://(?:127\\.0\\.0\\.1|\\[::1\\]):${LOOPBACK_PORT_RE}${escapedPath}$`
+    ).exec(candidate);
+    return match !== null && Number(match[1]) <= 65535;
+  });
+}
+
+/**
+ * The ONE redirect check every door runs (/authorize, the consent screen,
+ * /token): a first-party client by its rules, every other client by its
+ * registered list, byte for byte.
+ */
+export function clientAcceptsRedirect(
+  client: {
+    redirectUris: readonly string[];
+    firstPartyRedirects?: readonly FirstPartyRedirectRule[] | null;
+  },
+  candidate: string
+): boolean {
+  if (client.firstPartyRedirects) {
+    return matchFirstPartyRedirect(client.firstPartyRedirects, candidate);
+  }
+  return isRegisteredRedirectUri(client.redirectUris, candidate);
+}
+
+/**
  * The redirect that carries an authorization response — a code or an error —
  * back to the client. The ONE builder for it, so every response carries `iss`
  * (RFC 9207 §2, invariant I7): a client that talks to many pods binds its
@@ -371,6 +430,26 @@ export function resourceForIssuer(
     );
   }
   return match;
+}
+
+/**
+ * RFC 8707 `resource` for a FIRST-PARTY client (a Synap app signing a person
+ * in). Its token is for the app API of THIS pod — `/trpc` and realtime — so
+ * the resource is the pod itself (`issuer`, or `issuer/trpc`); naming `/mcp`
+ * or `/api/hub`, where the token is refused, is `invalid_target`. Absent →
+ * null. Returns the canonical form, the issuer.
+ */
+export function firstPartyResourceForIssuer(
+  raw: string | null | undefined,
+  issuer: string
+): string | null {
+  if (raw === undefined || raw === null) return null;
+  const candidate = raw.trim().replace(/\/+$/, "");
+  if (candidate === issuer || candidate === `${issuer}/trpc`) return issuer;
+  throw new OAuthError(
+    "invalid_target",
+    "resource must be this pod (a Synap app's sign-in is for the pod itself)"
+  );
 }
 
 // ─── Dynamic Client Registration (RFC 7591) ──────────────────────────────────

@@ -228,9 +228,43 @@ jobs:
                   packages/api-types/src/generated.d.ts \
                   apps/api/src/index.ts
           git commit -m "chore: auto-publish type packages [skip ci]" || true
-          # main moves during a run: rebase the bump commit onto it, retry twice.
+          # main moves during a run: rebase the bump commit onto it. If the rebase
+          # conflicts (main touched the same files), abort it and re-apply ONLY the
+          # version fields onto the new main, so main's own edits (generated types,
+          # index.ts) always win. The packages are already published at these versions.
+          TYPES_V=$(node -p "require('./packages/types/package.json').version")
+          API_V=$(node -p "require('./packages/api-types/package.json').version")
+          reapply_versions() {
+            git rebase --abort 2>/dev/null || true
+            git fetch -q origin main && git reset -q --hard origin/main
+            node -e '
+              const fs = require("fs");
+              const [typesV, apiV] = process.argv.slice(1);
+              const setVersion = (f, v) => {
+                const pkg = JSON.parse(fs.readFileSync(f, "utf8"));
+                pkg.version = v;
+                fs.writeFileSync(f, JSON.stringify(pkg, null, 2) + "\n");
+              };
+              const replace = (f, re, s) => {
+                const src = fs.readFileSync(f, "utf8");
+                if (!re.test(src)) throw new Error(`no version stamp in ${f}`);
+                fs.writeFileSync(f, src.replace(re, s));
+              };
+              setVersion("packages/types/package.json", typesV);
+              setVersion("packages/api-types/package.json", apiV);
+              replace("packages/api-types/src/version.ts", /API_TYPES_VERSION = "[^"]*"/, `API_TYPES_VERSION = "${apiV}"`);
+              replace("apps/api/src/index.ts", /apiTypesVersion: "[^"]*"/, `apiTypesVersion: "${apiV}"`);
+            ' "$TYPES_V" "$API_V"
+            git add packages/types/package.json packages/api-types/package.json \
+                    packages/api-types/src/version.ts apps/api/src/index.ts
+            git commit -m "chore: auto-publish type packages [skip ci]" || true
+          }
           for attempt in 1 2 3; do
-            git pull --rebase origin main && git push origin HEAD:main && break
+            if git pull --rebase origin main; then
+              git push origin HEAD:main && break
+            else
+              reapply_versions && git push origin HEAD:main && break
+            fi
             if [ "$attempt" = 3 ]; then exit 1; fi
             sleep 10
           done
