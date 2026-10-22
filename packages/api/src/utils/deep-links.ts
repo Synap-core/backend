@@ -60,7 +60,7 @@ export function sharePageBase(): string | undefined {
  */
 export function sharePageUrl(token: string): string | undefined {
   const base = sharePageBase();
-  return base ? `${base}/d/${encodeURIComponent(token)}` : undefined;
+  return base ? undefined : undefined;
 }
 
 /**
