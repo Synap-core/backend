@@ -110,7 +110,12 @@ vi.mock("@synap-core/core", async (importOriginal) => ({
     debug: vi.fn(),
   })),
 }));
-vi.mock("@synap-core/types", () => ({ isLikelyUUID: vi.fn(() => false) }));
+// The real module underneath too: the gate's import graph reads its enums
+// (`ViewTypeEnum`), and a bare factory made the whole file fail to load.
+vi.mock("@synap-core/types", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  isLikelyUUID: vi.fn(() => false),
+}));
 const { mockFocusProject } = vi.hoisted(() => ({
   mockFocusProject: vi.fn(),
 }));
