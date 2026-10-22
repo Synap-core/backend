@@ -136,7 +136,12 @@ function ddlFor(table: PgTable): string {
         ? " default now()"
         : c.name === "is_active"
           ? " default true"
-          : "";
+          : // Literal defaults (e.g. `entities.version` = 1): without them a
+            // seeded row is NULL where a real one never is, and an output
+            // schema (EntitySchema.version: number) rejects the listing.
+            typeof c.default === "number" || typeof c.default === "boolean"
+            ? ` default ${c.default}`
+            : "";
     return `"${c.name}" ${type}${pk}${def}`;
   });
   return `create table "${cfg.name}" (${cols.join(", ")});`;
