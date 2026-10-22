@@ -1053,6 +1053,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "requested_templates",
     addedBy: "0338b_pod_app_oauth_apps.sql",
   },
+  // Pod app permission reasons (0339b). Every client read selects it
+  // (Drizzle names every column): without it the whole OAuth door 500s.
+  {
+    table: "oauth_clients",
+    column: "requested_reasons",
+    addedBy: "0339b_oauth_client_request_reasons.sql",
+  },
   // Pod app refresh tokens (0339). /token's refresh grant and /revoke read
   // and write them, and revoking an app revokes them: without the table the
   // pod app refresh grant, a pod app's /token and every app revoke 500.

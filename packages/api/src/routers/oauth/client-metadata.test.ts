@@ -24,6 +24,7 @@ import {
   ClientMetadataError,
   assertClientMetadataUrl,
   cimdCacheTtlMs,
+  displayReason,
   resolveCimdClient,
   validateClientMetadataDocument,
   type ClientMetadataStore,
@@ -451,6 +452,39 @@ describe("CIMD — document validation", () => {
     );
     expect(v.scopes).toEqual(["mcp.read", "mcp.write"]);
     expect(v.requestedPermissions).toEqual(["entity.*.read"]);
+  });
+
+  it("keeps each permission's reason as display text, by permission; none when absent", () => {
+    const v = validateClientMetadataDocument(doc(), CLIENT_ID);
+    // entity.post.create was sent without a reason: no entry.
+    expect(v.requestedReasons).toEqual({
+      "entity.post.read": "To list your drafts",
+    });
+  });
+
+  it("a reason is cleaned: controls read as spaces, bidi and zero-width characters go, blank is none, the first one listed wins", () => {
+    const v = validateClientMetadataDocument(
+      doc({
+        synap_requests: [
+          {
+            permission: "entity.post.read",
+            reason: "  To\nlist\u0007 your \u202edrafts\u200b\u2066  ",
+          },
+          { permission: "entity.post.read", reason: "a second reason" },
+          { permission: "entity.post.create", reason: " \t " },
+        ],
+      }),
+      CLIENT_ID
+    );
+    expect(v.requestedReasons).toEqual({
+      "entity.post.read": "To list your drafts",
+    });
+  });
+
+  it("displayReason keeps ordinary text, emoji included", () => {
+    expect(displayReason("Lire vos brouillons ✍️ — 2 étapes")).toBe(
+      "Lire vos brouillons ✍️ — 2 étapes"
+    );
   });
 
   it("keeps the declared synap_templates (deduplicated), and none when absent", () => {

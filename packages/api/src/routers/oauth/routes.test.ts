@@ -2137,7 +2137,10 @@ describe("CIMD clients", () => {
     expect(context.app).toMatchObject({
       domain: "studio.example.com",
       verified: false,
-      permissions: [{ permission: "entity.post.read", workspaces: [] }],
+      // No reason cached for it: null, never absent (be-admin contract).
+      permissions: [
+        { permission: "entity.post.read", workspaces: [], reason: null },
+      ],
       templates: ["content-studio"],
       ignoredScopes: ["mcp.read"],
     });
@@ -2856,5 +2859,52 @@ describe("S6/A8 — synap_space_hint is forwarded to the consent screen as space
       )
     );
     expect(target.searchParams.has("space_hint")).toBe(false);
+  });
+});
+
+// ─── Item 8 — the document's reason reaches the consent screen ───────────────
+
+describe("consent carries synap_requests[].reason as app.permissions[i].reason", () => {
+  it("each offered permission has its cached reason, or null", async () => {
+    cacheApp({
+      requestedReasons: { "entity.post.read": "To list your drafts" },
+    });
+    const context = await getOAuthConsentContext(
+      {
+        clientId: APP_ID,
+        redirectUri: APP_CALLBACK,
+        responseType: "code",
+        scope: "entity.post.read entity.post.create",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+      },
+      HUMAN_ID
+    );
+    expect(context.app!.permissions).toEqual([
+      { permission: "entity.post.read", workspaces: [], reason: "To list your drafts" },
+      { permission: "entity.post.create", workspaces: [], reason: null },
+    ]);
+  });
+
+  it("only the permission's own entry counts (no inherited key, no non-string)", async () => {
+    cacheApp({
+      requestedPermissions: ["entity.post.read", "entity.post.create"],
+      requestedReasons: Object.assign(
+        Object.create({ "entity.post.read": "inherited" }),
+        { "entity.post.create": 42 }
+      ),
+    });
+    const context = await getOAuthConsentContext(
+      {
+        clientId: APP_ID,
+        redirectUri: APP_CALLBACK,
+        responseType: "code",
+        scope: "entity.post.read entity.post.create",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+      },
+      HUMAN_ID
+    );
+    expect(context.app!.permissions.map((p) => p.reason)).toEqual([null, null]);
   });
 });

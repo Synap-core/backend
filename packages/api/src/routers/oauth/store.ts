@@ -35,6 +35,8 @@ export interface StoredClient {
   scopes: string[];
   /** CIMD only: the grant-grammar permissions the document declares. */
   requestedPermissions: string[];
+  /** CIMD only: why it asks for each permission, display text (0339b). */
+  requestedReasons?: Record<string, string>;
   /** CIMD only: the workspace-template slugs the document declares (0338b). */
   requestedTemplates?: string[];
   clientUri?: string | null;
@@ -52,6 +54,7 @@ export interface CimdClientInput {
   redirectUris: string[];
   scopes: string[];
   requestedPermissions: string[];
+  requestedReasons: Record<string, string>;
   requestedTemplates: string[];
   clientUri: string | null;
   initiateLoginUri: string | null;
@@ -157,6 +160,7 @@ export async function upsertCimdClient(
     redirectUris: input.redirectUris,
     scopes: input.scopes,
     requestedPermissions: input.requestedPermissions,
+    requestedReasons: input.requestedReasons,
     requestedTemplates: input.requestedTemplates,
     clientUri: input.clientUri,
     initiateLoginUri: input.initiateLoginUri,

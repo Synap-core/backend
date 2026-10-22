@@ -94,6 +94,11 @@ export interface ValidatedClientMetadataDocument {
   scopes: string[];
   /** `synap_requests[].permission`, grant grammar. */
   requestedPermissions: string[];
+  /**
+   * `synap_requests[].reason` by permission, as display text
+   * (`displayReason`); a permission sent with no reason has no entry.
+   */
+  requestedReasons: Record<string, string>;
   /** `synap_templates`: workspace-template slugs the consent may offer. */
   requestedTemplates: string[];
   clientUri: string | null;
@@ -159,6 +164,34 @@ function assertAppPermission(permission: string): void {
       `synap_requests: "${permission}" asks for "${action}", which an app cannot be granted`
     );
   }
+}
+
+/** Removed from a reason: they could make it read as something else. */
+function isHiddenChar(cp: number): boolean {
+  return (
+    (cp >= 0x200b && cp <= 0x200f) || // zero-width, LRM / RLM
+    (cp >= 0x202a && cp <= 0x202e) || // bidi embeddings and overrides
+    (cp >= 0x2066 && cp <= 0x2069) || // bidi isolates
+    cp === 0xfeff
+  );
+}
+
+/**
+ * A `synap_requests[].reason` as display text (review, be-admin contract
+ * `app.permissions[i].reason`): the developer's own words, which the consent
+ * screen shows as TEXT and never as a reason to trust the app. Control
+ * characters read as spaces, invisible and bidi-control characters are
+ * removed, whitespace runs collapse; empty means no reason. The length is
+ * already bounded (`CIMD_MAX_REASON_LENGTH`).
+ */
+export function displayReason(raw: string): string {
+  let out = "";
+  for (const ch of raw) {
+    const cp = ch.codePointAt(0)!;
+    if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)) out += " ";
+    else if (!isHiddenChar(cp)) out += ch;
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
 
 /** Validate a fetched document against the URL it was fetched from. */
@@ -265,6 +298,8 @@ export function validateClientMetadataDocument(
   ];
 
   const requestedPermissions: string[] = [];
+  // A permission listed twice keeps its first entry's reason.
+  const requestedReasons = new Map<string, string>();
   if (d.synap_requests !== undefined) {
     if (!Array.isArray(d.synap_requests)) {
       throw new ClientMetadataError("synap_requests must be an array");
@@ -297,6 +332,8 @@ export function validateClientMetadataDocument(
       assertAppPermission(permission);
       if (!requestedPermissions.includes(permission)) {
         requestedPermissions.push(permission);
+        const shown = typeof reason === "string" ? displayReason(reason) : "";
+        if (shown) requestedReasons.set(permission, shown);
       }
     }
   }
@@ -327,6 +364,7 @@ export function validateClientMetadataDocument(
     redirectUris,
     scopes,
     requestedPermissions,
+    requestedReasons: Object.fromEntries(requestedReasons),
     requestedTemplates,
     clientUri,
     initiateLoginUri,

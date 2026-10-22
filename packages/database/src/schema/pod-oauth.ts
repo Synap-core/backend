@@ -99,6 +99,13 @@ export const oauthClients = pgTable("oauth_clients", {
   // B slugs, 0338b): the consent screen offers to create a space from one when
   // the person has none to give the app. Empty for DCR rows.
   requestedTemplates: text("requested_templates").array().notNull().default([]),
+  // Why the document says it asks for each permission
+  // (`synap_requests[].reason`, 0339b), keyed by permission: bounded display
+  // text the consent screen shows as text. Empty for DCR rows.
+  requestedReasons: jsonb("requested_reasons")
+    .$type<Record<string, string>>()
+    .notNull()
+    .default({}),
 });
 
 export const oauthAuthorizationCodes = pgTable(

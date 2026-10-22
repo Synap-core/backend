@@ -364,9 +364,11 @@ export interface OAuthAppConsent {
   /**
    * Each permission the app asked for AND declared, with the spaces this
    * person may give it in (`oauthAppOffer`). An empty list means the person
-   * has no space to give that permission in.
+   * has no space to give that permission in. `reason`: the document's own
+   * `synap_requests[].reason` (display text, `displayReason`), or null —
+   * the developer's words, shown as text, never a reason to trust the app.
    */
-  permissions: OAuthAppOfferItem[];
+  permissions: Array<OAuthAppOfferItem & { reason: string | null }>;
   /** What this person approved for this app before (re-consent pre-ticks it). */
   approved: AppApprovedRequest[];
   /**
@@ -418,6 +420,15 @@ function appPermissions(req: ValidatedAuthorizeRequest): {
     permissions: req.grantedScopes.filter((s) => declared.has(s)),
     ignoredScopes: req.grantedScopes.filter((s) => !declared.has(s)),
   };
+}
+
+/** The document's reason for one permission, as cached (0339b), or null. */
+function reasonFor(client: StoredClient, permission: string): string | null {
+  const reasons = client.requestedReasons ?? {};
+  const reason = Object.hasOwn(reasons, permission)
+    ? reasons[permission]
+    : undefined;
+  return typeof reason === "string" && reason ? reason : null;
 }
 
 /**
@@ -510,7 +521,9 @@ export async function getOAuthConsentContext(
       domain: new URL(req.client.clientId).host,
       verified: isSynapApp(req.client.clientId),
       homepage: req.client.clientUri ?? null,
-      permissions: await oauthAppOffer(callerUserId, permissions),
+      permissions: (await oauthAppOffer(callerUserId, permissions)).map(
+        (item) => ({ ...item, reason: reasonFor(req.client, item.permission) })
+      ),
       approved: await currentOAuthApproval(callerUserId, req.client.clientId),
       templates: req.client.requestedTemplates ?? [],
       ignoredScopes,
