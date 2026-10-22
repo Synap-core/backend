@@ -35,6 +35,8 @@ describe("categorize", () => {
     [{ keyType: "system" }, "system"],
     [{ keyType: "user_pat" }, "operator"],
     [{ keyType: null }, "operator"],
+    // A person's app sign-in token is held by the person, yet it is an app's.
+    [{ keyType: "app_person", holder: { kind: "person", name: "Ada" } }, "app"],
   ] as const)("%o → %s", (over, expected) => {
     expect(categorize(key(over))).toBe(expected);
   });
