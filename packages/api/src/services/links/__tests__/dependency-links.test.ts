@@ -105,6 +105,7 @@ vi.mock("../../proposals/stamp-materialized.js", () => ({
 import {
   governedDependencyLink,
   governedRemoveDependencyLink,
+  readDependencyState,
   validateDependencyEdge,
   writeRelationAsDependency,
 } from "../dependency-links.js";
@@ -401,5 +402,60 @@ describe("writeRelationAsDependency — the relation doors' mapping", () => {
         userId: U,
       })
     ).rejects.toThrow(/Entity not found/);
+  });
+});
+
+/**
+ * The entity half of the read seam: the blocker's outcome comes from the
+ * kind's LIFECYCLE COLUMNS (0319 — `status` + its fixed `statusCategory`),
+ * not from the free `properties.status`. Each fixture's property value says
+ * the opposite of its category, so a reader that still looked at the
+ * property alone would fail both rows.
+ */
+describe("readDependencyState — an entity blocker's lifecycle category decides", () => {
+  const W = "aaaaaaaa-0000-4000-8000-0000000000aa";
+  const E = "aaaaaaaa-0000-4000-8000-0000000000ee";
+  function feed(row: Record<string, unknown>) {
+    queue.push([
+      {
+        fromType: "session",
+        fromId: W,
+        toType: "entity",
+        toId: E,
+        linkType: "blocked_by",
+      },
+    ]); // declared blocked_by
+    queue.push([]); // replaces hop: none
+    queue.push([{ id: E }]); // the reader may see it
+    queue.push([{ id: E, title: "Pricing deal", deletedAt: null, ...row }]); // its row
+  }
+
+  it("category `lost` ⇒ still held, marked dropped (property reads in progress)", async () => {
+    feed({
+      status: "rejected",
+      statusCategory: "lost",
+      properties: { status: "in_progress" },
+    });
+    const state = await readDependencyState({ kind: "session", id: W }, U);
+    expect(state.openBlockers).toEqual([
+      {
+        kind: "entity",
+        id: E,
+        hidden: false,
+        dropped: true,
+        status: "rejected",
+        title: "Pricing deal",
+      },
+    ]);
+  });
+
+  it("category `done` ⇒ delivered, clears (property reads in progress)", async () => {
+    feed({
+      status: "published",
+      statusCategory: "done",
+      properties: { status: "in_progress" },
+    });
+    const state = await readDependencyState({ kind: "session", id: W }, U);
+    expect(state.blocked).toBe(false);
   });
 });
