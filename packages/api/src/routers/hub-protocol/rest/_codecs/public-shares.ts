@@ -8,6 +8,17 @@
 
 import { z } from "@hono/zod-openapi";
 
+/**
+ * How a published body is served: `markdown` (text a reader parses as safe
+ * markdown) or `html` (a whole document a reader shows only in a sandboxed
+ * frame, never in its own DOM). Shared with the site record read.
+ */
+export const PublicBodyFormatSchema = z
+  .enum(["markdown", "html"])
+  .describe(
+    "markdown = parse as safe markdown; html = render only inside a sandboxed frame (no scripts)."
+  );
+
 /** GET /public/shares/{token} path params. */
 export const PublicShareParamsSchema = z
   .object({
@@ -33,9 +44,11 @@ export const PublicShareResponseSchema = z
         "The publish-time snapshot of allowlisted values (plain values only; internal ids removed)."
       ),
     body: z
-      .object({ format: z.literal("markdown"), content: z.string() })
+      .object({ format: PublicBodyFormatSchema, content: z.string() })
       .nullable()
-      .describe("The pinned published revision's text, or null."),
+      .describe(
+        "The pinned published revision's text in its real format, or null (none pinned, or not a text body)."
+      ),
     publishedOn: z.string().describe("Publication day, YYYY-MM-DD."),
   })
   .openapi("PublicShare");
