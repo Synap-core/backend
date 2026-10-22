@@ -17,6 +17,7 @@ import { Check, Plug, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { formatRelative } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
 import {
+  actsAsHeadline,
   initialSelection,
   isTicked,
   permissionLabel,
@@ -170,6 +171,13 @@ export function ConsentForm({
                 to connect to your pod{podHost ? ` ${podHost}` : ""}
                 {identity ? ` as ${identity}` : ""}.
               </p>
+              {/* A Synap app acts AS the person: said plainly, from the
+                  server's words and the spaces ticked below (the grant). */}
+              {app.actsAs.kind === "person" ? (
+                <p className="text-[13px] font-medium leading-relaxed text-foreground/90">
+                  {actsAsHeadline(app.actsAs.lead, selection, app.permissions)}
+                </p>
+              ) : null}
             </>
           ) : (
             <>
@@ -479,9 +487,9 @@ function AppConsent({
             given.
           </p>
         )}
+        {/* Who its token acts as, in the server's words (`actsAs`). */}
         <p className="text-[12px] leading-relaxed text-foreground/65">
-          Every change it makes is sent to you for review first. It can never
-          see other spaces, approve its own changes, or create keys.
+          {app.actsAs.note}
         </p>
         <div className="flex flex-col gap-1 pt-0.5">
           <span className="text-[13px] text-foreground/60">

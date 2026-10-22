@@ -7,9 +7,11 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  isSynapApp,
   mapCpScopesToPodScopes,
   oauthKeyInstanceId,
   parseOauthKeyInstanceId,
+  podAppActsAs,
 } from "./config.js";
 
 // ─── scope-grammar mapping ────────────────────────────────────────────────
@@ -85,5 +87,44 @@ describe("oauthKeyInstanceId / parseOauthKeyInstanceId", () => {
       "oauth::u",
     ])
       expect(parseOauthKeyInstanceId(v)).toBeNull();
+  });
+});
+
+// ─── who a pod app's token acts as ────────────────────────────────────────
+
+describe("isSynapApp / podAppActsAs — the person path is origin-exact", () => {
+  const DOC = "/.well-known/synap-client.json";
+
+  it("a Synap app on its exact https origin, any path on it, acts as the person", () => {
+    for (const id of [
+      `https://content-studio.synap.live${DOC}`,
+      "https://content-studio.synap.live/other/path.json",
+      `https://studio.synap.live${DOC}`,
+    ]) {
+      expect(isSynapApp(id)).toBe(true);
+      expect(podAppActsAs(id)).toBe("person");
+    }
+  });
+
+  it("a lookalike, another scheme, port or credentials never does", () => {
+    for (const id of [
+      `https://content-studio.synap.live.evil.com${DOC}`,
+      `https://evil.com/content-studio.synap.live${DOC}`,
+      `https://content-studio-synap.live${DOC}`,
+      `https://xcontent-studio.synap.live${DOC}`,
+      `https://content-studio.synap.live.${DOC}`,
+      `http://content-studio.synap.live${DOC}`,
+      `https://content-studio.synap.live:8443${DOC}`,
+      `https://me@content-studio.synap.live${DOC}`,
+      `https://me:pw@content-studio.synap.live${DOC}`,
+      `https://unknown-app.synap.live${DOC}`,
+      `https://synap.live${DOC}`,
+      "app_00000000-0000-4000-8000-000000000000",
+      "dcr_abc",
+      "not a url",
+    ]) {
+      expect(isSynapApp(id), id).toBe(false);
+      expect(podAppActsAs(id), id).toBe("agent");
+    }
   });
 });

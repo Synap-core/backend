@@ -441,6 +441,37 @@ describe("CIMD — document validation", () => {
     });
   }
 
+  it("a Synap app (and only one) may ask for the review verbs, spelled exactly", () => {
+    const SYNAP = "https://content-studio.synap.live/.well-known/synap-client.json";
+    const synapDoc = (permission: string, clientId = SYNAP) => ({
+      ...doc(),
+      client_id: clientId,
+      redirect_uris: [`${new URL(clientId).origin}/api/synap/callback`],
+      synap_requests: [{ permission }],
+    });
+    for (const permission of ["proposal.approve", "proposal.reject"]) {
+      expect(
+        validateClientMetadataDocument(synapDoc(permission), SYNAP)
+          .requestedPermissions
+      ).toEqual([permission]);
+      // A lookalike origin is any other app: refused, as "a gate verb" above.
+      const LOOKALIKE =
+        "https://content-studio.synap.live.evil.com/.well-known/synap-client.json";
+      expect(() =>
+        validateClientMetadataDocument(
+          synapDoc(permission, LOOKALIKE),
+          LOOKALIKE
+        )
+      ).toThrow(/cannot be granted/);
+    }
+    // Every other gate verb stays refused, even for a Synap app.
+    for (const permission of ["proposal.merge", "entity.purge", "proposal.*"]) {
+      expect(() =>
+        validateClientMetadataDocument(synapDoc(permission), SYNAP)
+      ).toThrow(ClientMetadataError);
+    }
+  });
+
   it("keeps only the mcp.* scopes the AS supports, and a * kind is a plain read", () => {
     const v = validateClientMetadataDocument(
       doc({

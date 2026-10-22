@@ -71,10 +71,12 @@ import {
   appNotForYou,
   appSignInReach,
   describeAppSignIn,
+  describePodAppActsAs,
   isAppClientId,
   loadLiveApp,
   resolveAppClient,
   type AppSignInDescription,
+  type PodAppActsAsDescription,
 } from "./app-client.js";
 
 /**
@@ -305,6 +307,12 @@ export interface OAuthAppConsent {
   domain: string;
   /** "Synap app" (exact first-party origin, `isSynapApp`) vs "Unverified app". */
   verified: boolean;
+  /**
+   * Who its token will act as, and the words for it (`describePodAppActsAs`):
+   * a Synap app acts AS THE PERSON ("<app> will act as you in: <the spaces
+   * ticked>"); every other app is its own agent, every change for review.
+   */
+  actsAs: PodAppActsAsDescription;
   /** The document's `client_uri` (same origin as the client_id), or null. */
   homepage: string | null;
   /**
@@ -446,6 +454,11 @@ export async function getOAuthConsentContext(
     app: {
       domain: new URL(req.client.clientId).host,
       verified: isSynapApp(req.client.clientId),
+      actsAs: describePodAppActsAs(
+        req.client.clientId,
+        req.client.clientName,
+        permissions
+      ),
       homepage: req.client.clientUri ?? null,
       permissions: await oauthAppOffer(callerUserId, permissions),
       approved: await currentOAuthApproval(callerUserId, req.client.clientId),

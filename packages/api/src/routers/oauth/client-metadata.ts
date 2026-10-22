@@ -48,7 +48,11 @@ import {
   ClientMetadataError,
   assertClientMetadataUrl,
 } from "./client-id-url.js";
-import { OAUTH_SUPPORTED_SCOPES, normalizeRequestedScopes } from "./config.js";
+import {
+  OAUTH_SUPPORTED_SCOPES,
+  isSynapApp,
+  normalizeRequestedScopes,
+} from "./config.js";
 import { parseScopeParam } from "./protocol.js";
 import {
   findClient,
@@ -131,13 +135,26 @@ function sameOriginHttpsUrl(
 }
 
 /**
+ * The review verbs a SYNAP app (`isSynapApp`) may ask for, and no other app:
+ * its token is held by the person who signs in (founder decision 2026-10-22),
+ * so an approval through it is that person's own decision, in the spaces they
+ * tick, and still named against its target (D3, `applyProposalApproval`).
+ */
+export const SYNAP_APP_REVIEW_PERMISSIONS = [
+  "proposal.approve",
+  "proposal.reject",
+] as const;
+
+/**
  * One `synap_requests[].permission`: a valid grant-grammar pattern, no `*` in
  * the subject or the action, and only the plain actions (read/create/update/
  * delete). Governance gate verbs (approve, merge, purge, …) are refused: an app
  * that asks to approve its own proposals is asking to leave the governed path.
  * A `*` kind (`entity.*.read`) is the same as `entity.read` and is allowed.
+ * The one exception: a Synap app may ask for `SYNAP_APP_REVIEW_PERMISSIONS`,
+ * spelled exactly.
  */
-function assertAppPermission(permission: string): void {
+function assertAppPermission(permission: string, clientId: string): void {
   let segs: string[];
   try {
     segs = parsePermission(permission);
@@ -153,6 +170,12 @@ function assertAppPermission(permission: string): void {
     throw new ClientMetadataError(
       `synap_requests: "${permission}" must name a subject and an action`
     );
+  }
+  if (
+    isSynapApp(clientId) &&
+    (SYNAP_APP_REVIEW_PERMISSIONS as readonly string[]).includes(permission)
+  ) {
+    return;
   }
   if (!(GRANT_ACTIONS as readonly string[]).includes(action!)) {
     throw new ClientMetadataError(
@@ -294,7 +317,7 @@ export function validateClientMetadataDocument(
           `synap_requests reason must be a string of at most ${CIMD_MAX_REASON_LENGTH} characters`
         );
       }
-      assertAppPermission(permission);
+      assertAppPermission(permission, clientId);
       if (!requestedPermissions.includes(permission)) {
         requestedPermissions.push(permission);
       }

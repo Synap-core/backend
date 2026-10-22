@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  actsAsHeadline,
   initialSelection,
   isTicked,
   permissionLabel,
@@ -94,5 +95,31 @@ describe("permissionLabel", () => {
     ["document.read", "Read documents"],
   ])("%s → %s", (permission, label) => {
     expect(permissionLabel(permission)).toBe(label);
+  });
+});
+
+describe("a Synap app's headline — the spaces ticked are the grant", () => {
+  const LEAD = "Content Studio will act as you in";
+  it("names each ticked space once, in offer order, and follows the ticks", () => {
+    let s = initialSelection(OFFER, []);
+    expect(actsAsHeadline(LEAD, s, OFFER)).toBe(
+      "Content Studio will act as you in: Brand."
+    );
+    s = toggle(s, OFFER, "entity.post.read", "shared");
+    s = toggle(s, OFFER, "entity.post.read", "brand");
+    expect(actsAsHeadline(LEAD, s, OFFER)).toBe(
+      "Content Studio will act as you in: Brand, Shared."
+    );
+    s = toggle(s, OFFER, "entity.post.create", "brand");
+    s = toggle(s, OFFER, "entity.post.read", "brand");
+    expect(actsAsHeadline(LEAD, s, OFFER)).toBe(
+      "Content Studio will act as you in: Shared."
+    );
+  });
+
+  it("nothing ticked: no space is named", () => {
+    expect(actsAsHeadline(LEAD, new Set(), OFFER)).toBe(
+      "Content Studio will act as you in the spaces you choose below."
+    );
   });
 });

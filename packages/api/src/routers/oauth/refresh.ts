@@ -47,12 +47,19 @@
 
 import { createHash, createHmac, randomBytes, randomUUID } from "crypto";
 import { db, and, eq, isNull, drizzleSql as sql } from "@synap/database";
-import { apps, oauthRefreshTokens } from "@synap/database/schema";
+import {
+  APP_PERSON_KEY_TYPE,
+  apiKeys,
+  apps,
+  oauthRefreshTokens,
+} from "@synap/database/schema";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 
 import {
   getHubInboundKeyPrefix,
   revokeActiveHubInboundKeysForUser,
 } from "../../services/hub-integration-registration.js";
+import { oauthKeyInstanceId } from "./config.js";
 import { OAuthError } from "./protocol.js";
 
 /** A refresh token lives this long from its issue; each use issues a new one. */
@@ -514,12 +521,23 @@ export async function revokeConnectionRefreshTokens(
 /**
  * The connection's live access key stops now. A pod app's agent is one per
  * (app × person) and holds only this connection's key slot, so its live
- * hub_inbound keys ARE the slot.
+ * hub_inbound keys ARE the slot. A Synap app's key is the PERSON's
+ * (`app_person`, founder 2026-10-22), in the same slot: it stops too.
  */
 async function revokeConnectionAccessKey(
   conn: RefreshConnection,
   reason: string
 ): Promise<void> {
+  await revokeApiKeys(db, {
+    where: and(
+      eq(apiKeys.userId, conn.userId),
+      eq(apiKeys.keyType, APP_PERSON_KEY_TYPE),
+      eq(apiKeys.instanceId, oauthKeyInstanceId(conn.clientId, conn.userId)),
+      eq(apiKeys.isActive, true)
+    ),
+    revokedBy: conn.userId,
+    reason,
+  });
   const [app] = await db
     .select({ agentUserId: apps.agentUserId })
     .from(apps)

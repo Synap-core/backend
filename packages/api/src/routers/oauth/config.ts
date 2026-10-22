@@ -99,15 +99,37 @@ export const SYNAP_APP_IDS = [
   "content-studio",
 ] as const;
 
-/** Is this CIMD client_id a Synap app (exact-origin match, https only)? */
+/**
+ * Is this CIMD client_id a Synap app (exact-origin match, https only, no
+ * credentials)? Being one is a PRIVILEGE, not only a label: a Synap app's
+ * token is held by the person who signs in (`podAppActsAs`), so a lookalike
+ * host (`content-studio.synap.live.evil.com`), another scheme or port, or a
+ * `user@` prefix the origin would drop never qualifies.
+ */
 export function isSynapApp(clientId: string): boolean {
-  let origin: string;
+  let url: URL;
   try {
-    origin = new URL(clientId).origin;
+    url = new URL(clientId);
   } catch {
     return false;
   }
-  return SYNAP_APP_IDS.some((id) => origin === `https://${id}.synap.live`);
+  if (url.username || url.password) return false;
+  return SYNAP_APP_IDS.some((id) => url.origin === `https://${id}.synap.live`);
+}
+
+/**
+ * Who a pod app's (CIMD client's) access token acts as — the `synap_acts_as`
+ * of its /token answer (spec 17 §6.6 extension, founder decision 2026-10-22):
+ *  - `"person"`: a Synap app (`isSynapApp`). The token is HELD BY THE PERSON
+ *    who consented (`app_person`, services/app-person-token.ts): their own
+ *    clicks in the app write as them, directly, within what they consented to.
+ *  - `"agent"`: every other app. The token is held by the app's OWN agent,
+ *    posture ask-first: its writes become proposals the person reviews.
+ */
+export type PodAppActsAs = "person" | "agent";
+
+export function podAppActsAs(clientId: string): PodAppActsAs {
+  return isSynapApp(clientId) ? "person" : "agent";
 }
 
 /**

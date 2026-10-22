@@ -28,6 +28,7 @@ import {
 
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
 import { isPodAdmin } from "../../utils/workspace-role.js";
+import { isSynapApp, oauthKeyInstanceId, podAppActsAs } from "./config.js";
 import type { AppGrantRequest, StoredClient } from "./store.js";
 
 /**
@@ -77,6 +78,53 @@ export async function loadLiveApp(publicId: string) {
     )
     .limit(1);
   return app ?? null;
+}
+
+/**
+ * The app a person-held token (`app_person`) names, while that token may still
+ * act as the person — the ONE loader `classifyAppPersonKey` reads:
+ *  - a live REGISTERED app (`mode = 'specific'`, `loadLiveApp`): "Sign in with
+ *    Synap" (A1);
+ *  - a live pod app CONNECTION (`mode = 'oauth'`) whose OAuth client is a
+ *    SYNAP app (`isSynapApp` on its CIMD client_id, founder 2026-10-22). Any
+ *    other connection is an unverified app's: its tokens are its agent's, and
+ *    a person token naming one is dead.
+ * The verified test is re-read here on every request, so taking an id off
+ * `SYNAP_APP_IDS` ends its people's tokens at their next call.
+ */
+export async function loadPersonTokenApp(publicId: string) {
+  const [app] = await db
+    .select()
+    .from(apps)
+    .where(
+      and(
+        eq(apps.publicId, publicId),
+        isNull(apps.revokedAt),
+        isNull(apps.removedAt)
+      )
+    )
+    .limit(1);
+  if (!app) return null;
+  if (app.mode === "specific") return app;
+  if (app.mode === "oauth" && app.oauthClientId && isSynapApp(app.oauthClientId))
+    return app;
+  return null;
+}
+
+/**
+ * The key slot (`api_keys.instance_id`) a person's token for `app` lives in:
+ * `oauth:<OAuth client_id>:<person>`. A registered app's client_id is its
+ * `public_id`; a pod app connection's is its CIMD URL — the same slot its
+ * refresh tokens and /revoke's client binding name.
+ */
+export function personTokenInstanceId(
+  app: { publicId: string; mode: string; oauthClientId: string | null },
+  personUserId: string
+): string {
+  return oauthKeyInstanceId(
+    app.mode === "oauth" && app.oauthClientId ? app.oauthClientId : app.publicId,
+    personUserId
+  );
 }
 
 /**
@@ -299,5 +347,45 @@ export async function describeAppSignIn(
     cannot: `It cannot ${orList(cannot)}.`,
     note: `What you do in ${appName} is saved as you, right away — not sent for review. You stay signed in for ${APP_PERSON_TOKEN_TTL_DAYS} days, and you can sign it out any time from Connected.`,
     expiresInDays: APP_PERSON_TOKEN_TTL_DAYS,
+  };
+}
+
+/**
+ * What a POD APP's consent screen says about who its token acts as
+ * (`podAppActsAs`), every word from here — the screen writes none of it.
+ *  - `person` (a Synap app): `lead` + the spaces the person ticks IS the grant
+ *    the token will carry ("Content Studio will act as you in: Content OS,
+ *    Ecosystem."); `note` says how a write lands and what it cannot do,
+ *    derived from the permissions the app asked for.
+ *  - `agent` (any other app): the ask-first sentence, unchanged.
+ */
+export type PodAppActsAsDescription =
+  | { kind: "person"; lead: string; note: string }
+  | { kind: "agent"; note: string };
+
+export function describePodAppActsAs(
+  clientId: string,
+  appName: string,
+  permissions: readonly string[]
+): PodAppActsAsDescription {
+  if (podAppActsAs(clientId) === "agent") {
+    return {
+      kind: "agent",
+      note: "Every change it makes is sent to you for review first. It can never see other spaces, approve its own changes, or create keys.",
+    };
+  }
+  const canApprove = permissions.some((p) => patternGrants(p, "approve"));
+  const canDelete = permissions.some((p) => patternGrants(p, "delete"));
+  const cannot = [
+    ...(canDelete ? [] : ["delete"]),
+    "see other spaces",
+    "create keys",
+  ];
+  return {
+    kind: "person",
+    lead: `${appName} will act as you in`,
+    note: `What you do in ${appName} is saved as you, right away — not sent for review${
+      canApprove ? ", approving changes included" : ""
+    }. It cannot ${orList(cannot)}. You can sign it out any time from Connected.`,
   };
 }

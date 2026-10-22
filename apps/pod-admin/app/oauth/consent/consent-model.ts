@@ -111,6 +111,32 @@ export function toApproved(
   return out;
 }
 
+/**
+ * A Synap app's headline: the server's `lead` ("Content Studio will act as
+ * you in") ended with the spaces ticked — the grant the token will carry, so
+ * the sentence changes as the person ticks: "…: Content OS, Ecosystem.".
+ */
+export function actsAsHeadline(
+  lead: string,
+  selection: Selection,
+  offer: readonly OfferedPermission[]
+): string {
+  const names: string[] = [];
+  for (const o of offer) {
+    for (const w of o.workspaces) {
+      if (
+        selection.has(key(o.permission, w.workspaceId)) &&
+        !names.includes(w.workspaceName)
+      ) {
+        names.push(w.workspaceName);
+      }
+    }
+  }
+  return names.length > 0
+    ? `${lead}: ${names.join(", ")}.`
+    : `${lead} the spaces you choose below.`;
+}
+
 /** The permissions the person has NO space to give in. */
 export function withoutSpace(
   offer: readonly OfferedPermission[]

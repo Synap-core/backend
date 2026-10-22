@@ -27,7 +27,10 @@
  *
  * A pod app (CIMD client, spec 17) walks 5–7 too, and its /token answer adds a
  * rotating refresh token (`grant_type=refresh_token`, refresh.ts). An MCP
- * (DCR) client never gets one: its key lives 90 days.
+ * (DCR) client never gets one: its key lives 90 days. A pod app's token is
+ * its own ask-first agent's — unless the app is a SYNAP app (`isSynapApp`,
+ * founder 2026-10-22): then it is HELD BY THE PERSON who consented
+ * (`synap_acts_as: "person"`, services/app-person-token.ts).
  *
  * NOTE: the SDK's own OAuth helpers (`@modelcontextprotocol/sdk` 1.29.0,
  * `server/auth/*`) are Express-shaped — they take `express.RequestHandler` and
@@ -439,6 +442,10 @@ function appTokenResponse(minted: AppOAuthAccessKey, refreshToken: string) {
       id: minted.publicId,
       manageUrl: appManageUrl(minted.publicId),
     },
+    // Who the token acts as (`podAppActsAs`): "person" — a Synap app, the
+    // token is the person's own, their clicks write as them, directly;
+    // "agent" — the app's own agent, its writes become proposals.
+    synap_acts_as: minted.actsAs,
   };
 }
 
@@ -509,6 +516,7 @@ async function exchangeAppRefreshToken(
       podUserId: redeemed.userId,
       keyId: minted.keyId,
       agentUserId: minted.agentUserId,
+      actsAs: minted.actsAs,
       appId: minted.publicId,
     },
     "pod-oauth: pod app access token refreshed"
@@ -700,7 +708,9 @@ oauthApp.post("/token", async (c) => {
 
     // A pod app (CIMD client) is NEVER minted the shared `claude-web*` agent
     // (spec 17 I3): its key belongs to the app's OWN agent for this person,
-    // carrying exactly what the person approved at consent, for 1 h.
+    // carrying exactly what the person approved at consent, for 1 h — or,
+    // for a SYNAP app only, to the PERSON (`mintAppOAuthAccessKey` routes by
+    // `podAppActsAs`; the one person-token door states the threat model).
     if (client.clientKind === "cimd") {
       if (!claimed.appId) {
         // A code from before PB2 (or a DCR-shaped issue) names no approval.
@@ -724,6 +734,7 @@ oauthApp.post("/token", async (c) => {
           podUserId: claimed.userId,
           keyId: minted.keyId,
           agentUserId: minted.agentUserId,
+          actsAs: minted.actsAs,
           appId: minted.publicId,
         },
         "pod-oauth: pod app access token issued"
