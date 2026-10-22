@@ -77,8 +77,6 @@ const warn = (m) => console.log(`${Y}!${X} ${m}`);
 
 const manifest = parseYaml(readFileSync(join(CI_DIR, "repos.yml"), "utf8"));
 
-// Workflows that can publish to npm (name or content indicates a publish path).
-const PUBLISH_HINT = /publish|release|changeset|ship/i;
 // A step that publishes a PACKAGE TO THE NPM REGISTRY.
 //
 // Must not match `electron-builder --publish always`, which uploads a desktop

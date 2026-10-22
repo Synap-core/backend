@@ -150,7 +150,7 @@ const CHANGED_COUNTERS = [
   "entitiesArchived",
 ] as const satisfies ReadonlyArray<keyof OpCounts>;
 
-const LEFT_ALONE_COUNTERS = [
+const _LEFT_ALONE_COUNTERS = [
   "entitiesParked",
   "facetsParked",
   "entitiesSkippedNoFacet",
@@ -167,7 +167,7 @@ type _CountersClassified =
   Exclude<
     keyof OpCounts,
     (typeof CHANGED_COUNTERS)[number]
-  > extends (typeof LEFT_ALONE_COUNTERS)[number]
+  > extends (typeof _LEFT_ALONE_COUNTERS)[number]
     ? true
     : never;
 const _countersClassified: _CountersClassified = true;
