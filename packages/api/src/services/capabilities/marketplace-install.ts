@@ -1995,7 +1995,7 @@ export async function applyMarketInstall(
             } as Parameters<typeof viewCaller.create>[0]);
             created.push(name);
             const madeId = (made as { view?: { id?: unknown } | null }).view?.id;
-            if (typeof madeId === "string") viewIds.push(madeId);
+            void madeId;
           }
         } catch (err) {
           failed.push({

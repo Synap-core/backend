@@ -57,7 +57,7 @@ export const DESTINATION_LABELS: Readonly<Record<Destination, string>> = {
   getting_started: "Getting started",
   // The pod's plan and its AI credits: ONE place (wave PN), the Settings
   // section every paying CTA opens (desktop `billing`, relay `/credits`).
-  credits: "Plan and credits",
+  credits: "Credits",
 };
 
 /** The word for a destination. Unknown values humanize, never leak. */
