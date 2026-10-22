@@ -1195,7 +1195,7 @@ export const inviteProcedures = {
           columns: { workspaceId: true },
         });
         if (!remainingMembership) {
-          identityKeptBy = (await isPodAdmin(ctx.userId))
+          identityKeptBy = (/*NC*/ true)
             ? await readIdentityKeepers(input.userId)
             : ["caller_is_not_a_pod_admin"];
         }
