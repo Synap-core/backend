@@ -55,7 +55,7 @@ const draft: LensNeedsYouSignal = {
 };
 
 describe("an agent FAILURE notification (P1)", () => {
-  it("is a Blocking row with the failed mark, an Open verb, "and 8 more like it", and never 'Asked by AI'", () => {
+  it("is a Blocking row with the failed mark, an Open verb, “and 8 more like it”, and never 'Asked by AI'", () => {
     const [item] = lensItemsOfClass([metaFailed], "blocking");
     const row = item!.row;
     expect(resolveUnitState(row.state).state).toBe("failed");
