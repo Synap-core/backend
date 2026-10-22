@@ -86,6 +86,20 @@ function isLoginRequired(err: unknown): boolean {
   );
 }
 
+/** A "Confirm it's you" answered with Synap Cloud only: a pod credential is needed. */
+function isPodCredentialRequired(err: unknown): boolean {
+  return (
+    (err as { data?: { reasonCode?: unknown } } | null)?.data?.reasonCode ===
+    "POD_CREDENTIAL_REQUIRED"
+  );
+}
+
+/** Sign in again with a credential at this pod only, then come back here. */
+function signInWithPodCredential(): void {
+  const here = window.location.pathname + window.location.search;
+  window.location.href = `/login?refresh=1&credential=pod&return=${encodeURIComponent(here)}`;
+}
+
 /** Who to start again from when the request itself is not valid. */
 function requesterName(clientId: string): string {
   return FIRST_PARTY_CLIENT_NAMES[clientId] ?? "the app that sent you here";
@@ -97,7 +111,9 @@ export type Step =
   | { kind: "denied" }
   | { kind: "error"; message: string }
   /** Sent to sign in again (`prompt=login` / `max_age`); nothing to decide. */
-  | { kind: "reconfirming" };
+  | { kind: "reconfirming" }
+  /** A Synap Cloud sign-in cannot confirm this; a pod credential is needed. */
+  | { kind: "pod_credential" };
 
 export function ConsentForm({
   params,
@@ -127,6 +143,11 @@ export function ConsentForm({
     if (reauthenticate) signInAgain();
   }, [reauthenticate]);
   const reconfirming = reauthenticate || step.kind === "reconfirming";
+  // Re-confirmed with Synap Cloud only: ask for the pod password or passkey.
+  const podCredential =
+    !reconfirming &&
+    (context.data?.podCredentialRequired === true ||
+      step.kind === "pod_credential");
 
   // A pod app (CIMD client): the person narrows what it may touch, per space.
   const app = context.data?.app ?? null;
@@ -158,6 +179,10 @@ export function ConsentForm({
             if (isLoginRequired(err)) {
               setStep({ kind: "reconfirming" });
               signInAgain();
+              return;
+            }
+            if (isPodCredentialRequired(err)) {
+              setStep({ kind: "pod_credential" });
               return;
             }
             if (!approve) {
@@ -274,6 +299,11 @@ export function ConsentForm({
       <CardBody className="flex flex-col gap-5 px-7 pb-7 pt-5">
         {reconfirming ? (
           <ReconfirmingNotice />
+        ) : podCredential ? (
+          <PodCredentialNotice
+            name={context.data?.clientName ?? requesterName(params.clientId)}
+            onContinue={signInWithPodCredential}
+          />
         ) : (
           <>
             {context.isLoading && (
@@ -525,6 +555,43 @@ export function ReconfirmingNotice() {
           Taking you to sign in again. You come back here after.
         </span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A Synap app's "Confirm it's you" answered with Synap Cloud only. Cloud may
+ * sign a person in without asking anything, so the pod asks for its own
+ * password or passkey; a Cloud-only person makes the change here instead.
+ */
+export function PodCredentialNotice({
+  name,
+  onContinue,
+}: {
+  name: string;
+  onContinue: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div
+        role="status"
+        className="flex flex-col gap-1 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10"
+      >
+        <span className="text-[13.5px] font-medium text-foreground">
+          Confirm with your password or passkey
+        </span>
+        <span className="text-[12.5px] leading-relaxed text-foreground/65">
+          {name} asks you to confirm it&apos;s you. Synap Cloud can&apos;t
+          confirm that here, because it can sign you in without asking.
+        </span>
+        <span className="text-[12.5px] leading-relaxed text-foreground/65">
+          Only sign in with Synap Cloud? Make the change from this console, in
+          your browser.
+        </span>
+      </div>
+      <Button color="primary" className="self-start" onPress={onContinue}>
+        Use your password or passkey
+      </Button>
     </div>
   );
 }

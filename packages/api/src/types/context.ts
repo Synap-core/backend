@@ -33,6 +33,12 @@ export interface KratosSession {
   active: boolean;
   expires_at?: string;
   authenticated_at?: string;
+  /** How it was authenticated (Kratos); the step-up clock reads it. */
+  authentication_methods?: Array<{
+    method?: string;
+    completed_at?: string;
+    provider?: string;
+  }>;
   /**
    * Set ONLY when the person came in on a Synap app's device token
    * (`appSessionMiddleware`): the device it was minted

@@ -41,6 +41,7 @@ import {
   hasScope,
   httpStatusForTrpcError,
   logger,
+  requireAppPublicIdParam,
   type HubHono,
   type HubVariables,
 } from "./_shared.js";
@@ -162,10 +163,10 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
     try {
-      return c.json(
-        serializeApp(await loadOwnedApp(c.req.param("id"), userId))
-      );
+      return c.json(serializeApp(await loadOwnedApp(appId, userId)));
     } catch (err) {
       return fail(c, err, "GET /apps/:id");
     }
@@ -178,6 +179,8 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
     const body = ConnectBody.safeParse(await c.req.json().catch(() => null));
     if (!body.success) {
       return c.json(
@@ -187,7 +190,7 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     try {
       const result = await requestAccess({
-        publicId: c.req.param("id"),
+        publicId: appId,
         ownerUserId: userId,
         requests: body.data.requests,
         actorAgentUserId: c.get("agentUserId") as string | undefined,
@@ -205,10 +208,12 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
     try {
       return c.json(
         await issueKey({
-          publicId: c.req.param("id"),
+          publicId: appId,
           ownerUserId: userId,
           actorAgentUserId: c.get("agentUserId") as string | undefined,
           actorKeyType: c.get("keyType") as string | undefined,
@@ -227,6 +232,8 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
     const body = RedirectUrisBody.safeParse(
       await c.req.json().catch(() => null)
     );
@@ -238,7 +245,7 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     try {
       const found = await setAppRedirectUris({
-        publicId: c.req.param("id"),
+        publicId: appId,
         ownerUserId: userId,
         redirectUris: body.data.redirectUris,
         actorAgentUserId: c.get("agentUserId") as string | undefined,
@@ -257,9 +264,11 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
     try {
       const { publicId } = await revokeApp({
-        publicId: c.req.param("id"),
+        publicId: appId,
         ownerUserId: userId,
         actorAgentUserId: c.get("agentUserId") as string | undefined,
         actorKeyType: c.get("keyType") as string | undefined,
@@ -302,6 +311,8 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
     const body = NarrowBody.safeParse(await c.req.json().catch(() => null));
     if (!body.success) {
       return c.json(
@@ -311,7 +322,7 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     try {
       const found = await narrowApp({
-        publicId: c.req.param("id"),
+        publicId: appId,
         ownerUserId: userId,
         approved: body.data.approved,
         actorAgentUserId: c.get("agentUserId") as string | undefined,
@@ -330,6 +341,8 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
     const body = WriteModeBody.safeParse(await c.req.json().catch(() => null));
     if (!body.success) {
       return c.json(
@@ -340,7 +353,7 @@ export function registerAppsRoutes(app: HubHono): void {
     try {
       return c.json(
         await setAppWriteMode({
-          publicId: c.req.param("id"),
+          publicId: appId,
           ownerUserId: userId,
           applyAutomatically: body.data.applyAutomatically,
           actorAgentUserId: c.get("agentUserId") as string | undefined,

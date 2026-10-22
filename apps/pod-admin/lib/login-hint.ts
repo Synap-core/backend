@@ -63,3 +63,18 @@ export function withLoginHint(
   );
   return hasIdentifier ? { ...values, identifier: hint } : values;
 }
+
+/**
+ * A "Confirm it's you" that only a credential AT this pod can answer
+ * (`?credential=pod`): the flow without its federated methods. Synap Cloud
+ * may sign a person in without asking anything, so the pod does not count it
+ * as a confirmation (the consent answers POD_CREDENTIAL_REQUIRED).
+ */
+export function withoutFederatedSignIn<
+  F extends { ui: { nodes: Array<{ group?: string }> } },
+>(flow: F): F {
+  return {
+    ...flow,
+    ui: { ...flow.ui, nodes: flow.ui.nodes.filter((n) => n.group !== "oidc") },
+  };
+}
