@@ -50,6 +50,10 @@ const OTHER_USER = "e0000000-0000-4000-8000-0000000000b2";
 const WS = "e0000000-0000-4000-8000-0000000000f2";
 const SRC = "e0000000-0000-4000-8000-0000000000c1";
 const TGT = "e0000000-0000-4000-8000-0000000000c2";
+// Pod-wide endpoints: since D4 an edge inherits its endpoints' lens, so only an
+// edge between pod-wide entities is pod-wide (owner-private).
+const POD_SRC = "e0000000-0000-4000-8000-0000000000d1";
+const POD_TGT = "e0000000-0000-4000-8000-0000000000d2";
 
 async function checkDb(): Promise<boolean> {
   try {
@@ -72,7 +76,7 @@ describe("relations.create idempotency — live-PG gate", () => {
 });
 
 async function cleanup() {
-  for (const id of [SRC, TGT]) {
+  for (const id of [SRC, TGT, POD_SRC, POD_TGT]) {
     await db.delete(relations).where(eq(relations.sourceEntityId, id));
     await db.delete(entities).where(eq(entities.id, id));
   }
@@ -118,6 +122,18 @@ describe.skipIf(!dbAvailable)(
           id,
           userId: USER,
           workspaceId: WS,
+          type: "note",
+          title,
+        });
+      }
+      for (const [id, title] of [
+        [POD_SRC, "Rel Idem Pod Source"],
+        [POD_TGT, "Rel Idem Pod Target"],
+      ] as const) {
+        await db.insert(entities).values({
+          id,
+          userId: USER,
+          workspaceId: null,
           type: "note",
           title,
         });
@@ -168,8 +184,8 @@ describe.skipIf(!dbAvailable)(
         relationsRouter
           .createCaller({ authenticated: true, userId } as never)
           .create({
-            sourceEntityId: SRC,
-            targetEntityId: TGT,
+            sourceEntityId: POD_SRC,
+            targetEntityId: POD_TGT,
             type: "mentions",
           });
 
@@ -180,7 +196,7 @@ describe.skipIf(!dbAvailable)(
 
       const mine = await db.query.relations.findMany({
         where: and(
-          eq(relations.sourceEntityId, SRC),
+          eq(relations.sourceEntityId, POD_SRC),
           eq(relations.type, "mentions"),
           isNull(relations.workspaceId),
           eq(relations.userId, USER)

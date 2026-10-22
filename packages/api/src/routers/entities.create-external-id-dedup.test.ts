@@ -120,6 +120,14 @@ describe.skipIf(!dbAvailable)(
         userId: USER,
         role: "owner",
       });
+      // An agent writes only in a space it is a member of (otherwise the gate
+      // files a workspace.join proposal instead of the write).
+      await db.insert(workspaceMembers).values({
+        id: randomUUID(),
+        workspaceId: WS,
+        userId: AGENT_USER,
+        role: "editor",
+      });
     });
 
     afterAll(cleanup);

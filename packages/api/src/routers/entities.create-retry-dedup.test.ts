@@ -116,6 +116,14 @@ describe.skipIf(!dbAvailable)(
         userId: USER,
         role: "owner",
       });
+      // An agent writes only in a space it is a member of (otherwise the gate
+      // files a workspace.join proposal instead of the write).
+      await db.insert(workspaceMembers).values({
+        id: randomUUID(),
+        workspaceId: WS,
+        userId: AGENT_USER,
+        role: "editor",
+      });
     });
 
     afterAll(async () => {
@@ -217,12 +225,16 @@ describe.skipIf(!dbAvailable)(
         targetWorkspaceId: WS,
         source: "user",
       });
+      // The weak same-name gate refuses an identical title loudly (CONFLICT);
+      // a person who insists passes forceCreate — and still gets a second
+      // row, never the agent retry path's silent duplicate-ignored.
       const secondHuman = await caller.create({
         profileSlug: "note",
         title: humanTitle,
         properties: { content: "human body" },
         targetWorkspaceId: WS,
         source: "user",
+        forceCreate: true,
       });
       expect(firstHuman.id).not.toBe(secondHuman.id);
 
