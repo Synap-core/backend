@@ -16021,6 +16021,15 @@ export type RequesterAccountView = {
 } | {
 	status: "unverified";
 };
+export interface UnlinkReach {
+	/** The other apps of the same issuer the person also stops signing in to. */
+	otherApps: Array<{
+		displayName: string;
+		id: string;
+	}>;
+	/** Whether "Continue with Synap Cloud" goes too (the Cloud issuer). */
+	cloudSignIn: boolean;
+}
 /**
  * The clients the pod's OWN OAuth authorization server registered (Path B:
  * claude.ai pointed straight at `https://<pod>/mcp`; `routers/oauth/*`), read
@@ -20818,6 +20827,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewedAt: Date | null;
 				reviewedBy: string | null;
 				status: "approved" | "pending" | "rejected" | "revoked";
+				unlinkReach: UnlinkReach;
 				updatedAt: Date;
 			};
 		}>;

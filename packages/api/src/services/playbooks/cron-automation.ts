@@ -29,6 +29,7 @@ import {
   desc,
   drizzleSql,
   automations,
+  isUniqueViolation,
   playbooks,
   type FlowDefinition,
 } from "@synap/database";
@@ -45,13 +46,6 @@ import { playbookRunNodeLabel } from "@synap-core/types/automations";
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 
 const logger = createLogger({ module: "playbook-cron-automation" });
-
-/** Postgres unique-violation SQLSTATE — raised by automations_workspace_name_active_uq (0230). */
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const e = err as { code?: string; cause?: { code?: string } };
-  return e.code === "23505" || e.cause?.code === "23505";
-}
 
 /**
  * Load the surviving non-archived automation for (workspaceId, name).

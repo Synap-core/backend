@@ -6,31 +6,53 @@
  * ONE writer (`recordInviteAcceptance`), called by every accept path just
  * before it deletes the invite: `workspaces.acceptInvite` and the Hub REST
  * `accept-invite` sign-up.
+ *
+ * The record can never fail an accept. Every path calls it AFTER the person's
+ * memberships were granted, so a thrown write used to answer 500 to someone
+ * already let in, and leave their invite alive. A missing record only costs
+ * the "invite is the consent" shortcut: their link then waits for an owner.
+ * Failing CLOSED is the safe direction, so the writer logs and reports.
  */
 
+import { createLogger } from "@synap-core/core";
 import { and, desc, eq, gt } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { inviteAcceptances, type Invite } from "../schema/workspaces.js";
 
+const logger = createLogger({ module: "invite-acceptance" });
+
 type Writer = Pick<typeof db, "insert">;
 
+/**
+ * Keep the record of an accepted invite. `true` when it is kept (or already
+ * was: an invite is accepted once, so a retried or concurrent accept records
+ * nothing new); `false` when the write failed, logged as an error.
+ */
 export async function recordInviteAcceptance(
   invite: Pick<Invite, "id" | "type" | "email" | "invitedBy" | "expiresAt">,
   userId: string,
   conn: Writer = db
-): Promise<void> {
-  await conn
-    .insert(inviteAcceptances)
-    .values({
-      inviteId: invite.id,
-      userId,
-      inviteType: invite.type,
-      invitedEmail: invite.email.trim().toLowerCase(),
-      invitedBy: invite.invitedBy,
-      inviteExpiresAt: invite.expiresAt,
-    })
-    // An invite is accepted once; a retried accept records nothing new.
-    .onConflictDoNothing();
+): Promise<boolean> {
+  try {
+    await conn
+      .insert(inviteAcceptances)
+      .values({
+        inviteId: invite.id,
+        userId,
+        inviteType: invite.type,
+        invitedEmail: invite.email.trim().toLowerCase(),
+        invitedBy: invite.invitedBy,
+        inviteExpiresAt: invite.expiresAt,
+      })
+      .onConflictDoNothing();
+    return true;
+  } catch (error) {
+    logger.error(
+      { error, inviteId: invite.id, userId },
+      "Invite accepted, but its record could not be kept; a link by this invite will wait for an owner"
+    );
+    return false;
+  }
 }
 
 export type InviteAcceptance = typeof inviteAcceptances.$inferSelect;
