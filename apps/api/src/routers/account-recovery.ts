@@ -26,6 +26,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
+import { accountHasPodHeldFactor } from "@synap/auth";
 import {
   formatRecoveryCode,
   isCloudTrustMode,
@@ -397,13 +398,13 @@ export function createAccountRecoveryRouter(
     };
   }
 
-  async function accountHasPodHeldFactor(account: PodAccount) {
-    const [kratosFactor, summary] = await Promise.all([
-      deps.identityHasPodHeldCredential(account.identityId),
-      deps.codes.summary(account.userId),
-    ]);
-    return kratosFactor || summary.remaining > 0;
-  }
+  // The one rule (@synap/auth), over this router's injected reads.
+  const hasPodHeldFactor = (account: PodAccount) =>
+    accountHasPodHeldFactor(account.identityId, {
+      podHeldCredential: deps.identityHasPodHeldCredential,
+      unusedRecoveryCodes: async () =>
+        (await deps.codes.summary(account.userId)).remaining,
+    });
 
   async function buildStatus(caller: Caller): Promise<AccountRecoveryStatus> {
     const [summary, trust, cloudAvailable, canEdit, podHeld] =
@@ -412,7 +413,7 @@ export function createAccountRecoveryRouter(
         deps.readCloudTrust(),
         deps.cloudSignInAvailable(),
         deps.isPodAdmin(caller.account.userId),
-        accountHasPodHeldFactor(caller.account),
+        hasPodHeldFactor(caller.account),
       ]);
     const courier = deps.courierStatus();
     const decision = decideCredentialChange({
@@ -446,7 +447,7 @@ export function createAccountRecoveryRouter(
     const decision = decideCredentialChange({
       trust: await deps.readCloudTrust(),
       cloudOnly: caller.cloudOnly,
-      accountHasPodHeldFactor: await accountHasPodHeldFactor(caller.account),
+      accountHasPodHeldFactor: await hasPodHeldFactor(caller.account),
     });
     if (!decision.allow) return fail(c, "cloud_session_not_allowed", 403);
     return null;

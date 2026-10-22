@@ -9,7 +9,13 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@synap/auth", () => ({ kratosAdmin: {} }));
+vi.mock("@synap/auth", async (importOriginal) => ({
+  kratosAdmin: {},
+  // The one pod-held-factor rule stays real.
+  accountHasPodHeldFactor: (
+    await importOriginal<typeof import("@synap/auth")>()
+  ).accountHasPodHeldFactor,
+}));
 vi.mock("../../utils/workspace-role.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getPodAdminRole: vi.fn(),
@@ -210,18 +216,21 @@ describe("unlinkReach — what the confirm says goes with it", () => {
 
 describe("unlinkImpacts — what each person is left to sign in with", () => {
   // ada: a password; bo: a recovery code only; cy: neither; dee: Kratos down.
+  // Kratos is keyed by identity id (`kid-<user>`), the codes by user id.
   function impactDeps(over: Partial<UnlinkImpactDeps> = {}) {
     return {
       podHeldCredential: vi.fn(async (id: string) => {
-        if (id === "dee") throw new Error("Kratos identity read failed: 503");
-        return id === "ada";
+        if (id === "kid-dee")
+          throw new Error("Kratos identity read failed: 503");
+        return id === "kid-ada";
       }),
       unusedRecoveryCodes: vi.fn(async (id: string) => (id === "bo" ? 3 : 0)),
       emailRecovery: vi.fn(() => false),
       ...over,
     };
   }
-  const everyone = ["ada", "bo", "cy", "dee"];
+  const person = (userId: string) => ({ userId, identityId: `kid-${userId}` });
+  const everyone = ["ada", "bo", "cy", "dee"].map(person);
 
   it("no_way_in only for the person with no pod-held factor and no mail", async () => {
     const impacts = await unlinkImpacts(
@@ -239,7 +248,7 @@ describe("unlinkImpacts — what each person is left to sign in with", () => {
 
   it("with mail going out, email recovery is their way back", async () => {
     const impacts = await unlinkImpacts(
-      ["cy"],
+      [person("cy")],
       { cloudSignIn: true },
       impactDeps({ emailRecovery: vi.fn(() => true) })
     );
@@ -248,7 +257,7 @@ describe("unlinkImpacts — what each person is left to sign in with", () => {
 
   it("a failed recovery-code read is unknown, never 'no codes'", async () => {
     const impacts = await unlinkImpacts(
-      ["cy"],
+      [person("cy")],
       { cloudSignIn: true },
       impactDeps({
         unusedRecoveryCodes: vi.fn().mockRejectedValue(new Error("db down")),

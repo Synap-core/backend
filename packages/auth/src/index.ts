@@ -20,6 +20,7 @@ export {
 
 // Pod-held sign-in facts (password / passkey, the courier)
 export {
+  accountHasPodHeldFactor,
   identityHasPodHeldCredential,
   kratosIdentityHasPodHeldCredential,
 } from "./pod-held-credential.js";

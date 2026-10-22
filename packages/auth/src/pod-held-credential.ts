@@ -1,8 +1,10 @@
 /**
- * Does a Kratos identity hold a POD-HELD way in — a password or a passkey —
- * as opposed to signing in only through Synap Cloud (`oidc`)? One reader for
- * account recovery (apps/api `account-recovery-deps.ts`) and the unlink
- * confirm (@synap/api `unlinkImpacts`), so the two can never disagree.
+ * Does an account hold a POD-HELD way in — a password or a passkey on its
+ * Kratos identity, or an unused recovery code — as opposed to signing in only
+ * through Synap Cloud (`oidc`)? ONE rule (`accountHasPodHeldFactor`) for
+ * account recovery (apps/api `routers/account-recovery.ts`), the Kratos
+ * settings hook (apps/api `webhooks/kratos.ts`) and the unlink confirm
+ * (@synap/api `unlinkImpacts`), so they can never disagree.
  */
 
 const kratosAdminUrl = () =>
@@ -35,4 +37,24 @@ export async function kratosIdentityHasPodHeldCredential(
   if (res.status === 404) return false;
   if (!res.ok) throw new Error(`Kratos identity read failed: ${res.status}`);
   return identityHasPodHeldCredential(await res.json());
+}
+
+/**
+ * THE pod-held-factor rule: a password or passkey on the Kratos identity, or
+ * an unused recovery code. The credential is read first and answers on its
+ * own; the codes are read only without one. The codes read is injected:
+ * recovery codes live in @synap/database (per Pod account), which this package
+ * does not import. A failed read throws — "could not tell" is never "no
+ * factor".
+ */
+export async function accountHasPodHeldFactor(
+  identityId: string,
+  reads: {
+    podHeldCredential(identityId: string): Promise<boolean>;
+    /** This identity's Pod account's unused codes (0 without an account). */
+    unusedRecoveryCodes(): Promise<number>;
+  }
+): Promise<boolean> {
+  if (await reads.podHeldCredential(identityId)) return true;
+  return (await reads.unusedRecoveryCodes()) > 0;
 }
