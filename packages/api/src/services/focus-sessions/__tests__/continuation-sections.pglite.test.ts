@@ -651,6 +651,98 @@ describe("continuation packet — kind identity", () => {
   });
 });
 
+describe("continuation packet — runners", () => {
+  const CC_CONV = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+  const MACHINE = "user-machine";
+  async function runner(
+    sessionId: string,
+    r: {
+      harness: string;
+      conversationId: string;
+      lastSeen: Date;
+      cwd?: string;
+      machine?: string;
+    }
+  ) {
+    const keyId = randomUUID();
+    await q(
+      `insert into session_runners (session_id, client_key, user_id, agent_user_id, api_key_id, harness, conversation_id, cwd, machine_user_id, first_seen_at, last_seen_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
+      [
+        sessionId,
+        `key:${keyId}|conv:${r.harness}:${r.conversationId}`,
+        OWNER,
+        AGENT,
+        keyId,
+        r.harness,
+        r.conversationId,
+        r.cwd ?? null,
+        r.machine ?? null,
+        r.lastSeen.toISOString(),
+      ]
+    );
+  }
+
+  beforeAll(async () => {
+    // Discriminating rows: a STALE runner (a rule that drops `live` reads both
+    // as attached), a harness with no reopen door (a rule that builds a resume
+    // from any conversation id hands one out), and a NEWER runner on ANOTHER
+    // session (a read that ignores the session id leaks it in first).
+    await runner(S.room, {
+      harness: "codex",
+      conversationId: "thread-42",
+      lastSeen: minutesAgo(10),
+    });
+    await runner(S.room, {
+      harness: "claude-code",
+      conversationId: CC_CONV,
+      lastSeen: minutesAgo(1),
+      cwd: "/work/synap",
+      machine: MACHINE,
+    });
+    await runner(S.gated, {
+      harness: "claude-code",
+      conversationId: randomUUID(),
+      lastSeen: new Date(),
+    });
+  });
+
+  it("lists this session's runners newest first: live, machine and resume only where they hold", async () => {
+    const packet = await packetFor(S.room);
+    expect(packet.runners).toEqual({
+      status: "ok",
+      total: 2,
+      items: [
+        {
+          harness: "claude-code",
+          conversationId: CC_CONV,
+          cwd: "/work/synap",
+          machineId: MACHINE,
+          agentUserId: AGENT,
+          firstSeenAt: expect.any(String),
+          lastSeenAt: expect.any(String),
+          live: true,
+          resume: `claude --resume ${CC_CONV}`,
+        },
+        {
+          harness: "codex",
+          conversationId: "thread-42",
+          cwd: null,
+          agentUserId: AGENT,
+          firstSeenAt: expect.any(String),
+          lastSeenAt: expect.any(String),
+          live: false,
+        },
+      ],
+    });
+  });
+
+  it("a session nobody has listened on is an empty ok, not unavailable", async () => {
+    const packet = await packetFor(S.plain);
+    expect(packet.runners).toEqual({ status: "ok", total: 0, items: [] });
+  });
+});
+
 describe("continuation packet — a failed read is unavailable, never empty", () => {
   async function withTableGone<T>(table: string, run: () => Promise<T>) {
     await h.client!.exec(`alter table ${table} rename to ${table}_gone;`);
@@ -690,5 +782,17 @@ describe("continuation packet — a failed read is unavailable, never empty", ()
     });
     expect(packet.room.status).toBe("ok");
     expect(packet.live.status).toBe("ok");
+  });
+
+  it("runners: its table read failing, while room and gates still answer", async () => {
+    const packet = await withTableGone("session_runners", () =>
+      packetFor(S.room)
+    );
+    expect(packet.runners).toEqual({
+      status: "unavailable",
+      reason: expect.any(String),
+    });
+    expect(packet.room.status).toBe("ok");
+    expect(packet.gates.status).toBe("ok");
   });
 });

@@ -167,10 +167,10 @@ export interface SessionRunner {
  */
 export async function loadSessionRunners(
   sessionId: string,
-  opts: { now?: Date; limit?: number } = {}
+  opts: { now?: Date; limit?: number; database?: typeof db } = {}
 ): Promise<SessionRunner[]> {
   const now = (opts.now ?? new Date()).getTime();
-  const rows = await db
+  const rows = await (opts.database ?? db)
     .select({
       clientKey: sessionRunners.clientKey,
       harness: sessionRunners.harness,

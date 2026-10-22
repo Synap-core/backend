@@ -113,6 +113,7 @@ import {
 import { loadSessionLiveness } from "../runs/session-liveness.js";
 import { readSessionRoom, type PacketRoomSection } from "./room-messages.js";
 import { readSessionGates, type PacketGatesSection } from "./session-gates.js";
+import { loadSessionRunners, type SessionRunner } from "./session-runners.js";
 import type { EntityProfileRef } from "../profiles/entity-profile-refs.js";
 
 const logger = createLogger({ module: "continuation-packet" });
@@ -178,6 +179,28 @@ export interface PacketSlotItem extends PacketKindIdentity {
 
 /** A slot item without its display identity — everything `deriveNextMove` reads. */
 export type PacketSlotFacts = Omit<PacketSlotItem, keyof PacketKindIdentity>;
+
+/**
+ * A client conversation attached to the session's change-feed wait — a
+ * `session_runners` row (`loadSessionRunners`), projected.
+ */
+export interface PacketRunnerItem {
+  /** The client's own harness name (`claude-code`, …), as it sent it. */
+  harness: string;
+  conversationId: string;
+  /** Where it ran, when its client said so. Display only. */
+  cwd: string | null;
+  /** The computer hosting the agent (`users.id` of a `machine` agent user). */
+  machineId?: string;
+  /** The agent acting through the key, when an agent key held the wait. */
+  agentUserId?: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  /** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
+  live: boolean;
+  /** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
+  resume?: string;
+}
 
 export interface PacketProposalItem {
   id: string;
@@ -499,6 +522,12 @@ export interface ContinuationPacket {
    */
   gates: PacketGatesSection;
   /**
+   * WHO IS ATTACHED — the client conversations holding this session's
+   * change-feed wait, most recently seen first (`session-runners.ts`). An
+   * empty list means nobody has listened; a failed read is `unavailable`.
+   */
+  runners: PacketSection<PacketRunnerItem>;
+  /**
    * The session's contract and its grade: the declared binary criteria, the
    * server-computed verdict, and the CURRENT evaluation per criterion (human
    * wins). `criteria: []` with `verdict.state: "none"` means none declared; a
@@ -586,6 +615,20 @@ export function kindIdentity(
   return {
     noun: profile?.displayName ?? resolveObjectNoun(key),
     glyph: resolveObjectGlyph(key),
+  };
+}
+
+function runnerItem(r: SessionRunner): PacketRunnerItem {
+  return {
+    harness: r.harness,
+    conversationId: r.conversationId,
+    cwd: r.cwd,
+    ...(r.machineUserId ? { machineId: r.machineUserId } : {}),
+    ...(r.agentUserId ? { agentUserId: r.agentUserId } : {}),
+    firstSeenAt: r.firstSeenAt,
+    lastSeenAt: r.lastSeenAt,
+    live: r.live,
+    ...(r.conversation ? { resume: r.conversation.resumeCommand } : {}),
   };
 }
 
@@ -1737,6 +1780,7 @@ export async function projectContinuationPacket(
     room,
     liveFacts,
     gates,
+    runners,
   ] = await Promise.all([
     readProject(database, ctx.userId, row.projectId ?? null).catch(
       unavailable(
@@ -1917,6 +1961,16 @@ export async function projectContinuationPacket(
       .catch(
         unavailable(row.id, "gates", "This session's gates could not be read.")
       ),
+    // The loader's max, so `total` counts every runner (a session has a handful).
+    loadSessionRunners(row.id, { database, limit: 100 })
+      .then((all) => section(all.map(runnerItem)))
+      .catch(
+        unavailable(
+          row.id,
+          "runners",
+          "Who is attached to this session could not be read."
+        )
+      ),
   ]);
 
   const measuredAt = Date.now();
@@ -2021,6 +2075,7 @@ export async function projectContinuationPacket(
     room,
     live,
     gates,
+    runners,
     nextMove: deriveNextMove({
       status: row.status,
       owedSlots,
