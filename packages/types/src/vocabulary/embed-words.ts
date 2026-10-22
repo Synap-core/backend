@@ -11,6 +11,7 @@
  */
 
 import type { EmbedModel } from "../renderables/embed-model.js";
+import type { ChartGeometry } from "../renderables/chart-geometry.js";
 import { humanizeToken, nounInSentence, resolveObjectNoun } from "./index.js";
 
 export interface EmbedWords {
@@ -72,4 +73,57 @@ export function resolveEmbedWords(model: EmbedModel): EmbedWords {
     case "broken":
       return { noun, label: noun };
   }
+}
+
+// ── A drawn chart's words (the geometry carries only marks and numbers) ─────
+
+/** How many values a chart's spoken label names before "and N more". */
+export const CHART_SPOKEN_VALUES = 24;
+
+/** How a value with no label is spoken. */
+const NO_LABEL = "(no label)";
+
+/**
+ * What assistive tech hears for a drawn chart: its title, then each value
+ * ("Open 3, Done 5, and 2 more"); for a ring, the number and its percent.
+ * Null for a table (its caption is the title and its cells speak) and for an
+ * empty snapshot (the surface says it holds no values).
+ */
+export function resolveChartSpokenLabel(
+  title: string,
+  geometry: ChartGeometry
+): string | null {
+  switch (geometry.kind) {
+    case "bars":
+    case "line": {
+      const parts = geometry.values.map(
+        (v) => `${v.name ?? NO_LABEL} ${v.value}`
+      );
+      const named = parts.slice(0, CHART_SPOKEN_VALUES).join(", ");
+      const rest = parts.length - CHART_SPOKEN_VALUES;
+      return `${title}: ${named}${rest > 0 ? `, and ${rest} more` : ""}`;
+    }
+    case "ring":
+      return `${title}: ${geometry.valueText} (${geometry.percentRounded}%)`;
+    case "table":
+    case "empty":
+      return null;
+  }
+}
+
+const CHART_TABLE_HEAD: Record<
+  Extract<ChartGeometry, { kind: "table" }>["shape"],
+  string[]
+> = {
+  composed: ["Bucket", "Bar", "Line"],
+  points: ["Label", "x", "y"],
+  flow: ["From", "To", "Value"],
+  regions: ["Region", "Value"],
+};
+
+/** The column headings of a chart drawn as a table, in the geometry's column order. */
+export function resolveChartTableHead(
+  shape: Extract<ChartGeometry, { kind: "table" }>["shape"]
+): string[] {
+  return CHART_TABLE_HEAD[shape];
 }
