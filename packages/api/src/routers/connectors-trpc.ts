@@ -15,7 +15,12 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  podAdminProcedure,
+  credentialProcedure,
+} from "../trpc.js";
 import { config, createLogger } from "@synap-core/core";
 import { TRPCError } from "@trpc/server";
 import {
@@ -1445,7 +1450,7 @@ export const connectorsRouter = router({
    * rule from its approved first import; off revokes it. NOT_FOUND for another
    * user's or a deleted row; PRECONDITION_FAILED before any import was approved.
    */
-  setKeepSyncing: protectedProcedure
+  setKeepSyncing: credentialProcedure
     .input(z.object({ connectionId: z.string().min(1), enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const outcome = await setConnectionKeepSyncing({

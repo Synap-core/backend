@@ -21,7 +21,12 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  podAdminProcedure,
+  credentialProcedure,
+} from "../trpc.js";
 import {
   db,
   eq,
@@ -1477,7 +1482,7 @@ export const workspaceCatalogRouter = router({
    * (`installTemplateFromCatalog`): same lookup, plan, layers and stamp as
    * every other door; the tier gate runs first.
    */
-  installFromCatalog: protectedProcedure
+  installFromCatalog: credentialProcedure
     .input(
       z.object({
         slug: z.string().min(1),
@@ -1504,7 +1509,7 @@ export const workspaceCatalogRouter = router({
    * The answer is floored: a space the person or the key's grant can't see is
    * never named, and a holder hidden that way is never installed over.
    */
-  ensureTemplate: protectedProcedure
+  ensureTemplate: credentialProcedure
     .input(
       z.object({
         slug: z.string().min(1),

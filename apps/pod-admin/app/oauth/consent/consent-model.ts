@@ -11,6 +11,7 @@
  */
 
 import { isAppPublicId } from "@synap-core/types/membrane";
+import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
 
 export interface OfferedSpace {
   workspaceId: string;
@@ -123,25 +124,29 @@ export function reasonOf(item: OfferedPermission): string | null {
  * Which kind of client a consent request is for, read from the query's
  * `client_id` alone. Used only when the request could not be resolved, so the
  * recovery hint fits where the person came from: a pod app names its metadata
- * document by URL, a "Sign in with Synap" app by its `app_` public id, and
- * anything else is an MCP client (claude.ai) that registered itself.
+ * document by URL, a "Sign in with Synap" app by its `app_` public id, a Synap
+ * app (desktop, Relay) by its registered id, and anything else is an MCP
+ * client (claude.ai) that registered itself.
  */
-export type ConsentClientKind = "pod_app" | "sign_in" | "mcp";
+export type ConsentClientKind = "pod_app" | "sign_in" | "first_party" | "mcp";
 
 export function consentClientKind(clientId: string): ConsentClientKind {
   // The pod's own rule (`isClientMetadataUrl`): any URL-shaped client_id.
   if (/^[a-z][a-z0-9+.-]*:/i.test(clientId)) return "pod_app";
   if (isAppPublicId(clientId)) return "sign_in";
+  if (Object.hasOwn(FIRST_PARTY_CLIENT_NAMES, clientId)) return "first_party";
   return "mcp";
 }
 
 /** The recovery step under "This authorization request isn't valid". */
-export function invalidRequestHint(kind: ConsentClientKind): string {
-  switch (kind) {
+export function invalidRequestHint(clientId: string): string {
+  switch (consentClientKind(clientId)) {
     case "pod_app":
       return "Close this tab, go back to the app's website and connect again. A fresh request will carry valid details.";
     case "sign_in":
       return "Close this tab, go back to the app and sign in again. A fresh request will carry valid details.";
+    case "first_party":
+      return `Close this tab and sign in again from ${FIRST_PARTY_CLIENT_NAMES[clientId]}. A fresh request will carry valid details.`;
     case "mcp":
       return "Close this tab and start the connection again from Claude. A fresh request will carry valid details.";
   }

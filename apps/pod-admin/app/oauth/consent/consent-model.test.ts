@@ -177,27 +177,36 @@ describe("space checkbox names and reasons", () => {
 });
 
 describe("the invalid-request hint fits the client", () => {
+  const POD_APP = "https://studio.example.com/synap/client.json";
   it.each([
-    ["https://studio.example.com/synap/client.json", "pod_app"],
+    [POD_APP, "pod_app"],
     ["app_1a2b3c", "sign_in"],
+    ["synap-desktop", "first_party"],
     ["3f2c9a10-dcr-client", "mcp"],
+    // An inherited key is not a Synap app.
+    ["constructor", "mcp"],
   ] as const)("%s is %s", (clientId, kind) => {
     expect(consentClientKind(clientId)).toBe(kind);
   });
 
   it("a pod app or a sign-in is never told to go back to Claude", () => {
-    expect(invalidRequestHint("pod_app")).not.toMatch(/claude/i);
-    expect(invalidRequestHint("pod_app")).toMatch(/website/);
-    expect(invalidRequestHint("sign_in")).not.toMatch(/claude/i);
+    expect(invalidRequestHint(POD_APP)).not.toMatch(/claude/i);
+    expect(invalidRequestHint(POD_APP)).toMatch(/website/);
+    expect(invalidRequestHint("app_1a2b3c")).not.toMatch(/claude/i);
+  });
+
+  it("a Synap app is named, not Claude", () => {
+    expect(invalidRequestHint("synap-desktop")).toMatch(/from Synap Desktop/);
+    expect(invalidRequestHint("synap-desktop")).not.toMatch(/claude/i);
   });
 
   it("an MCP client keeps the Claude wording", () => {
-    expect(invalidRequestHint("mcp")).toMatch(/from Claude/);
+    expect(invalidRequestHint("3f2c9a10-dcr-client")).toMatch(/from Claude/);
   });
 
   it("no hint uses an em dash", () => {
-    for (const k of ["pod_app", "sign_in", "mcp"] as const) {
-      expect(invalidRequestHint(k)).not.toContain("\u2014");
+    for (const id of [POD_APP, "app_1a2b3c", "synap-desktop", "x"]) {
+      expect(invalidRequestHint(id)).not.toContain("\u2014");
     }
   });
 });

@@ -381,7 +381,9 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
     ]);
     const row = lensRowOfNeedsYou(recent[0]!, "proposed");
     expect(resolveUnitState(row.state).state).toBe("not_started");
-    expect(row.reason).toBe("2 asks");
+    // No ask chip (founder decision 2026-10-22): the draft's asks are Blocking
+    // owed-slot rows of their own; counting them here too would be twice.
+    expect(row.reason).toBeNull();
   });
   it("an agent-raised ask carries byAgent; a governance one does not", () => {
     // Discriminating pair: same kind, the category alone decides.

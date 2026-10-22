@@ -57,9 +57,7 @@ describe("pod-app surfaces", () => {
 
   it("consent: the invalid-request hint comes from the client kind", () => {
     const src = read(CONSENT);
-    expect(src).toMatch(
-      /hint=\{invalidRequestHint\(consentClientKind\(params\.clientId\)\)\}/
-    );
+    expect(src).toMatch(/hint=\{invalidRequestHint\(params\.clientId\)\}/);
     expect(src).not.toMatch(/from Claude/);
   });
 

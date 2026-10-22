@@ -69,7 +69,6 @@ import {
 import type { RequestShapedProposalData } from "@synap-core/types";
 import type { ExpectedOutput } from "@synap/playbooks";
 import {
-  normalizeObjectKind,
   buildObjectActionTitle,
   resolveActionLabel,
   resolveObjectNoun,
@@ -104,7 +103,10 @@ import {
   deriveAuthorshipMode,
   getAgentFocusProjectId,
 } from "../services/agent-identity-service.js";
-import { satisfyExpectedOutputs } from "../services/focus-sessions/satisfy-expected-output.js";
+import {
+  satisfyExpectedOutputs,
+  slotMatchesChangeKind,
+} from "../services/focus-sessions/satisfy-expected-output.js";
 import { slotKeyAt } from "../services/focus-sessions/slot-keys.js";
 import { reviveSessionForWrite } from "../services/focus-sessions/revive-stale-session.js";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
@@ -312,8 +314,9 @@ interface SessionGovernanceContext {
  *
  * It is a CLAIM, never a stamp — the same semantics `artifacts.props.expectedLabel`
  * already has in `services/focus-sessions/session-outputs.ts`. `done` still hangs
- * off approval, and `selectOutputToSatisfy` falls back to the kind guess when the
- * claim matches no open slot. Returns the DECLARED label (the slot's own casing),
+ * off approval, and `selectOutputToSatisfy` stamps NOTHING when there is no claim
+ * or it matches no open slot (the kind guess is gone, 2026-10-22). Returns the
+ * DECLARED label (the slot's own casing),
  * not the change's, so the stored claim joins the ledger verbatim — together
  * with the slot's KEY (`slot-keys.ts`, stored or derived), which is what the
  * approval resolves first; the label stays the alias older readers use.
@@ -354,10 +357,13 @@ function resolveSessionSlotClaimIndex(
 ): number {
   if (expectedOutputs.length === 0) return -1;
 
-  // The kind floor, applied to EVERY rung below.
-  const targetKind = normalizeObjectKind(targetType);
+  // The kind floor, applied to EVERY rung below — THE matcher the stamp uses
+  // (`slotMatchesChangeKind`), with the entity's profile from the gate payload,
+  // so a knowledge entity can claim a `kind: "knowledge"` slot.
+  const profileSlug =
+    typeof data?.profileSlug === "string" ? data.profileSlug : undefined;
   const ofKind = (o: ExpectedOutput) =>
-    normalizeObjectKind(o.kind) === targetKind;
+    slotMatchesChangeKind(o.kind, targetType, profileSlug);
   /** The ownership floor, applied to EVERY rung below. */
   const notTheHumans = (o: ExpectedOutput) => o.owner !== "human";
 

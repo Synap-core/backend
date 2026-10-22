@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/types",
-  "version": "1.12.2",
+  "version": "1.12.4",
   "description": "Shared TypeScript types and Zod schemas for the Synap platform",
   "type": "module",
   "publishConfig": {
@@ -91,6 +91,10 @@
     "./device": {
       "types": "./dist/device/index.d.ts",
       "import": "./dist/device/index.js"
+    },
+    "./sign-in": {
+      "types": "./dist/sign-in/index.d.ts",
+      "import": "./dist/sign-in/index.js"
     },
     "./kratos-messages": {
       "types": "./dist/kratos-messages/index.d.ts",

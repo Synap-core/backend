@@ -1,6 +1,7 @@
 /**
- * TRIPWIRE — every route in this app that signs a person in with the session
- * `authMiddleware` also refuses a GUEST (`refuseGuestSession` from
+ * TRIPWIRE — every route in this app that signs a person in with a session
+ * middleware (`authMiddleware`, or the app session gate `appSessionMiddleware`
+ * that also takes a Synap app's device token) also refuses a GUEST (`refuseGuestSession` from
  * `@synap/api`).
  *
  * A guest (a project guest with no pod participation) is let in to read what an
@@ -11,7 +12,7 @@
  * behaviourally by `packages/api/src/__tripwires__/guest-containment-session-doors.test.ts`.
  *
  * DERIVED: every non-test source file here is scanned; a file joins by using
- * `authMiddleware`. Per file, each use must be matched by a `refuseGuestSession`
+ * a session middleware (`SESSION_DOORS`, derived from the packages' exports). Per file, each use must be matched by a `refuseGuestSession`
  * use, except the uses classified in ALLOWED below, each with its reason.
  *
  * NOT COVERED, stated: the check is a COUNT per file, not a placement check. A
@@ -59,11 +60,49 @@ function codeOnly(src: string): string {
 const count = (code: string, name: string) =>
   [...code.matchAll(new RegExp(`\\b${name}\\b`, "g"))].length;
 
+/**
+ * The session-auth middleware NAMES, derived from their packages' own export
+ * lists: every name `@synap/auth` exports from its Kratos middleware module
+ * (`orySessionMiddleware`, `authMiddleware`) and every `…Middleware` name
+ * `@synap/api` exports from its app session gate (`appSessionMiddleware`).
+ * A new alias joins the scan by being exported.
+ */
+function exportedNames(indexFile: string, fromModule: string): string[] {
+  const src = stripComments(readFileSync(indexFile, "utf8"), "ts") as string;
+  const out: string[] = [];
+  const re = /export\s*\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
+  for (const m of src.matchAll(re)) {
+    if (m[2] !== fromModule) continue;
+    for (const part of m[1]!.split(",")) {
+      const name = part
+        .trim()
+        .split(/\s+as\s+/)
+        .pop()
+        ?.trim();
+      if (name) out.push(name);
+    }
+  }
+  return out;
+}
+const PACKAGES = path.resolve(SRC, "../../../packages");
+const SESSION_DOORS = [
+  ...exportedNames(
+    path.join(PACKAGES, "auth/src/index.ts"),
+    "./ory-middleware.js"
+  ),
+  ...exportedNames(
+    path.join(PACKAGES, "api/src/index.ts"),
+    "./middleware/app-session.js"
+  ).filter((n) => n.endsWith("Middleware")),
+];
+const countDoors = (code: string) =>
+  SESSION_DOORS.reduce((n, name) => n + count(code, name), 0);
+
 const scanned = walk(SRC).map((file) => {
   const code = codeOnly(readFileSync(file, "utf8"));
   return {
     rel: path.relative(SRC, file),
-    auth: count(code, "authMiddleware"),
+    auth: countDoors(code),
     refuse: count(code, "refuseGuestSession"),
   };
 });
@@ -85,6 +124,10 @@ describe("tripwire: session-authenticated routes refuse a guest", () => {
 
   it("the scan is not vacuous", () => {
     expect(scanned.length).toBeGreaterThan(40);
+    // Both gates are SEEN: the Kratos one and the app session gate.
+    expect(SESSION_DOORS).toEqual(
+      expect.arrayContaining(["authMiddleware", "appSessionMiddleware"])
+    );
     // Measured 2026-09-27: index, providers, both schemas, federation.
     expect(sessionFiles.map((f) => f.rel)).toEqual(
       expect.arrayContaining([
@@ -102,7 +145,7 @@ describe("tripwire: session-authenticated routes refuse a guest", () => {
       .filter((f) => f.auth - (ALLOWED[f.rel]?.uses ?? 0) !== f.refuse)
       .map(
         (f) =>
-          `${f.rel}: ${f.auth} authMiddleware, ${f.refuse} refuseGuestSession, ${ALLOWED[f.rel]?.uses ?? 0} allowed`
+          `${f.rel}: ${f.auth} session-auth uses, ${f.refuse} refuseGuestSession, ${ALLOWED[f.rel]?.uses ?? 0} allowed`
       );
     expect(unmatched).toEqual([]);
   });
