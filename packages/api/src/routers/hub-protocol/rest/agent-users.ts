@@ -16,6 +16,7 @@ import {
   isAgentPostureName,
 } from "@synap/governance-policy/postures";
 import { createNamedAgent } from "../../../services/agent-identity-service.js";
+import { appAgentGovernanceDenial } from "../../../services/app-agent-floor.js";
 import {
   loadAgentPresence,
   NEVER_SEEN,
@@ -466,6 +467,14 @@ export function registerAgentUsersRoutes(app: HubHono): void {
       if (!agentUser) {
         return c.json({ error: "Agent not found" }, 404);
       }
+
+      // An app's agent is governed by the app's owner: no agent's credential
+      // changes how its writes land, even to "tighten" (PB4).
+      const appDenial = await appAgentGovernanceDenial(agentUserId, {
+        agentUserId: c.get("agentUserId") as string | undefined,
+        keyType: c.get("keyType") as string | undefined,
+      });
+      if (appDenial) return c.json({ error: appDenial }, 403);
 
       // Effective user (agent keys: linked human). Creator or pod admin only.
       const callerId = c.get("userId") as string;
