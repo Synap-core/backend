@@ -637,12 +637,31 @@ export function registerEntitiesRoutes(app: HubHono): void {
         400
       );
     }
+    // `scope` narrows the list; a value it cannot honour is a 400, never a
+    // 200 that answers a wider question (`scope=pod` used to be accepted,
+    // documented and ignored: it returned workspace rows too).
+    if (
+      scope === "pod" &&
+      (q.length > 0 || workspaceIdParam || projectIdParam)
+    ) {
+      return c.json(
+        {
+          error:
+            "scope=pod lists pod-wide entities only — it cannot be combined with q, workspaceId or projectId.",
+        },
+        400
+      );
+    }
+    if (scope === "workspace" && !workspaceIdParam) {
+      return c.json({ error: "scope=workspace requires workspaceId." }, 400);
+    }
 
     try {
       const effectiveWsIds = workspaceIdParam
         ? [workspaceIdParam]
         : await getUserAccessibleWorkspaceIds(userId);
-      if (effectiveWsIds.length === 0) {
+      // Pod-wide rows need no workspace: a caller in none still has them.
+      if (effectiveWsIds.length === 0 && scope !== "pod") {
         return c.json([], 200);
       }
 
@@ -813,7 +832,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
         profileSlug: profileSlug || undefined,
         limit,
         offset,
-        includePodWide,
+        // `scope=workspace` is that workspace's rows only.
+        includePodWide: scope === "workspace" ? false : includePodWide,
+        ...(scope === "pod" ? { globalOnly: true } : {}),
         ...(projectIdParam ? { projectId: projectIdParam } : {}),
         ...(withoutProject ? { withoutProject } : {}),
         ...(facetSlug ? { facetSlug } : {}),
