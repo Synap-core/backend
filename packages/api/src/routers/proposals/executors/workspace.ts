@@ -291,6 +291,8 @@ export function registerWorkspaceExecutors(): void {
   // ── workspace / join ───────────────────────────────────────────────────────
   registerProposalExecutor({
     key: "workspace/join",
+    // Adds a member / exposes a resource: lasting access for someone.
+    widensCredential: true,
     async execute({ proposal, payload, userId, input, deps }) {
       void payload;
       const joinData = (proposal.data ?? {}) as Record<string, unknown>;

@@ -81,6 +81,26 @@ vi.mock("@synap/database/schema", () => ({
 
 vi.mock("@synap/storage", () => ({ storage: {} }));
 
+/** A Synap app's device token, resolved by the one lookup. */
+const DEVICE_TOKEN = `synap_pd_${"d".repeat(43)}`;
+vi.mock("@synap/database/person-devices", () => ({
+  isPersonDeviceToken: (raw: unknown) =>
+    typeof raw === "string" && raw.startsWith("synap_pd_"),
+  resolvePersonDeviceSession: async (_db: unknown, raw: string) =>
+    raw === DEVICE_TOKEN
+      ? {
+          identity: { id: EDITOR, traits: { email: "e@x" } },
+          active: true,
+          device: {
+            id: "device-editor",
+            clientId: "synap-desktop",
+            authTime: null,
+          },
+        }
+      : null,
+  liveDeviceIds: async () => new Set<string>(),
+}));
+
 import { Server as SocketIOServer } from "socket.io";
 import {
   authorizeRoomAccess,
@@ -89,6 +109,7 @@ import {
   setupYjsServer,
 } from "../yjs-server.js";
 import { declaredEditorSchema } from "../document-room.js";
+import { sweepDeviceSockets, trackedDeviceIds } from "../device-sockets.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -156,6 +177,8 @@ function gatesOf(server: unknown): Gate[] {
   return fns;
 }
 
+let lastSocket: { disconnect: ReturnType<typeof vi.fn> } | null = null;
+
 /** Run a fake socket through both gates; resolves with the error or the socket. */
 async function connect(
   roomName: string,
@@ -167,7 +190,10 @@ async function connect(
     nsp: { name: `/yjs|${roomName}` },
     handshake: { auth },
     data: {} as Record<string, unknown>,
+    once: vi.fn(),
+    disconnect: vi.fn(),
   };
+  lastSocket = socket;
   for (const gate of gates) {
     const err = await new Promise<Error | undefined>((resolve) => {
       void gate(socket, resolve);
@@ -188,6 +214,22 @@ describe("the /yjs handshake: identity is server-proven", () => {
     const r = await connect(DOC, { userId: READER, token: "tok-reader" });
     expect(r.err).toBeUndefined();
     expect(r.data.yjsAccess).toBe("read");
+  });
+
+  it("a socket admitted on a device token closes when its device ends", async () => {
+    const r = await connect(DOC, { userId: EDITOR, token: DEVICE_TOKEN });
+    expect(r.err).toBeUndefined();
+    expect(trackedDeviceIds()).toContain("device-editor");
+    const socket = lastSocket!;
+    await sweepDeviceSockets(async () => new Set());
+    expect(socket.disconnect).toHaveBeenCalledWith(true);
+  });
+
+  it("CONTROL — a socket admitted on a Kratos session is not tracked", async () => {
+    await sweepDeviceSockets(async () => new Set());
+    const r = await connect(DOC, { userId: EDITOR, token: "tok-editor" });
+    expect(r.err).toBeUndefined();
+    expect(trackedDeviceIds()).toEqual([]);
   });
 
   it("refuses a FORGED userId (a real session, someone else's id)", async () => {
