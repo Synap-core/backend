@@ -9,6 +9,8 @@ import {
   protectedProcedure,
   workspaceProcedure,
   podAdminProcedure,
+  credentialProcedure,
+  requireFreshAuthentication,
 } from "../trpc.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
@@ -46,7 +48,7 @@ export const webhooksRouter = router({
   /**
    * Create a new webhook subscription
    */
-  create: protectedProcedure
+  create: credentialProcedure
     .input(
       z.object({
         name: z.string().min(1).max(100),
@@ -133,7 +135,7 @@ export const webhooksRouter = router({
   /**
    * Update a webhook subscription
    */
-  update: protectedProcedure
+  update: credentialProcedure
     .input(UpdateWebhookInputSchema)
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.userId;
@@ -252,6 +254,7 @@ export const webhooksRouter = router({
    * Create workspace-scoped webhook subscription (workspace member)
    */
   createForWorkspace: workspaceProcedure
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         name: z.string().min(1).max(100),
@@ -310,6 +313,7 @@ export const webhooksRouter = router({
    * Toggle active state (workspace member)
    */
   toggleForWorkspace: workspaceProcedure
+    .use(requireFreshAuthentication)
     .input(z.object({ id: z.string().uuid(), active: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       const workspaceId = ctx.workspaceId;
@@ -357,6 +361,7 @@ export const webhooksRouter = router({
    * Create workspace-scoped webhook subscription (pod admin)
    */
   adminCreateForWorkspace: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         workspaceId: z.string().uuid(),
@@ -414,6 +419,7 @@ export const webhooksRouter = router({
    * Toggle active state (pod admin)
    */
   adminToggleForWorkspace: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         id: z.string().uuid(),

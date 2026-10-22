@@ -41,6 +41,11 @@
       "import": "./dist/utils/api-key-revocation.js",
       "default": "./dist/utils/api-key-revocation.js"
     },
+    "./person-devices": {
+      "types": "./dist/utils/person-devices.d.ts",
+      "import": "./dist/utils/person-devices.js",
+      "default": "./dist/utils/person-devices.js"
+    },
     "./is-delegation": {
       "types": "./dist/utils/is-delegation.d.ts",
       "import": "./dist/utils/is-delegation.js",

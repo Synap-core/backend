@@ -82,6 +82,17 @@ async function sqlState(p: Promise<unknown>): Promise<string | null> {
 const DECLARED = getTableConfig(oauthRefreshTokens)
   .columns.map((c) => c.name)
   .sort();
+/**
+ * What 0339 ALONE creates: the Drizzle table minus the columns a LATER
+ * migration adds (derived from the boot coherence list, e.g. 0340's
+ * `device_id`), so a later column never reads as 0339's.
+ */
+const ADDED_LATER = new Set(
+  REQUIRED_COLUMNS.filter(
+    (r) => r.table === "oauth_refresh_tokens" && r.addedBy > M0339_FILE
+  ).map((r) => r.column)
+);
+const DECLARED_0339 = DECLARED.filter((c) => !ADDED_LATER.has(c));
 
 const insertApp = (pg: PGlite) =>
   pg.query<{ id: string }>(
@@ -112,7 +123,7 @@ describe("migration 0339 — oauth_refresh_tokens", { timeout: 60_000 }, () => {
     } = await insertApp(pg);
     await insertToken(pg, "h1", app!.id);
     await pg.exec(M0339);
-    expect(await columnsOf(pg, "oauth_refresh_tokens")).toEqual(DECLARED);
+    expect(await columnsOf(pg, "oauth_refresh_tokens")).toEqual(DECLARED_0339);
     const kept = await pg.query(`SELECT 1 FROM oauth_refresh_tokens`);
     expect(kept.rows).toHaveLength(1);
   });
