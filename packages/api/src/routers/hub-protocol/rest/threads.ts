@@ -42,6 +42,7 @@ import {
   inArray,
   computeMessageHash,
   emitMessageEvent,
+  isUniqueViolation,
 } from "@synap/database";
 import {
   ChannelType,
@@ -741,9 +742,7 @@ export function registerThreadsRoutes(app: HubHono): void {
         return c.json({ id: thread.id, title: thread.title }, 200);
       } catch (insertErr) {
         // Concurrent insert hit the partial unique index — recover by SELECT.
-        // Postgres unique-violation: SQLSTATE 23505.
-        const code = (insertErr as { code?: string } | null)?.code;
-        if (hasExternalKey && code === "23505") {
+        if (hasExternalKey && isUniqueViolation(insertErr)) {
           const existing = await db.query.channels.findFirst({
             where: and(
               eq(channels.externalSource, body.externalSource as string),

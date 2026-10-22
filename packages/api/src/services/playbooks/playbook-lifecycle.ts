@@ -55,6 +55,7 @@ import {
   drizzleSql,
   entities,
   focusSessions,
+  isUniqueViolation,
   playbooks,
 } from "@synap/database";
 import type { Playbook, FocusSession } from "@synap/database/schema";
@@ -105,13 +106,6 @@ import {
 } from "../focus-sessions/lifecycle-events.js";
 
 const logger = createLogger({ module: "playbook-lifecycle" });
-
-/** Postgres unique-violation SQLSTATE — playbooks_workspace_name_active_uq (0227). */
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const e = err as { code?: string; cause?: { code?: string } };
-  return e.code === "23505" || e.cause?.code === "23505";
-}
 
 /**
  * Resolve a playbook's goalTemplate against caller-supplied param values.

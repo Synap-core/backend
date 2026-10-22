@@ -55,7 +55,16 @@
 
 import { TRPCError } from "@trpc/server";
 import { randomBytes, randomUUID } from "node:crypto";
-import { getDb, and, desc, eq, inArray, isNull } from "@synap/database";
+import {
+  getDb,
+  and,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  isUniqueViolation,
+  uniqueViolationConstraint,
+} from "@synap/database";
 import {
   entities,
   profiles,
@@ -1093,21 +1102,6 @@ export async function planSitePublish(
 /** The 0336 unique index a racing publish of the same slug hits. */
 const SLUG_INDEX = "resource_shares_site_slug_uidx";
 
-/** The constraint a unique violation names, through any wrapping; else null. */
-function uniqueViolation(err: unknown): string | null {
-  for (
-    let e = err as Record<string, unknown> | undefined, i = 0;
-    e && i < 4;
-    i++
-  ) {
-    if (e.code === "23505") {
-      return typeof e.constraint === "string" ? e.constraint : "";
-    }
-    e = e.cause as Record<string, unknown> | undefined;
-  }
-  return null;
-}
-
 export interface PublishedMember {
   entityId: string;
   collection: string;
@@ -1222,8 +1216,8 @@ export async function applySitePublish(
           });
       }
     } catch (err) {
-      const constraint = uniqueViolation(err);
-      if (constraint === null) throw err;
+      if (!isUniqueViolation(err)) throw err;
+      const constraint = uniqueViolationConstraint(err);
       skipped.push({
         entityId: m.entityId,
         code: constraint === SLUG_INDEX ? "SITE_SLUG_TAKEN" : "CONFLICT",

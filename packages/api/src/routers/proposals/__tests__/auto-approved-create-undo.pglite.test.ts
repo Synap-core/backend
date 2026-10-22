@@ -223,6 +223,24 @@ async function receipt(id: string): Promise<ReceiptRow> {
   ).rows[0]!;
 }
 
+async function receiptCount(): Promise<number> {
+  return (await q<{ n: number }>(`select count(*)::int as n from proposals`))
+    .rows[0]!.n;
+}
+
+/** Every receipt whose undo record or target names `entityId`. */
+async function receiptsNaming(entityId: string): Promise<string[]> {
+  return (
+    await q<{ id: string }>(
+      `select id from proposals
+        where target_id = $1
+           or data->'materialized'->'entityIds' ? $1
+        order by created_at`,
+      [entityId]
+    )
+  ).rows.map((r) => r.id);
+}
+
 /** The receipt the gate minted on the LAST call — read back from the DB. */
 async function lastReceipt(): Promise<ReceiptRow> {
   const call = vi.mocked(checkPermissionOrPropose).mock.results.at(-1);
@@ -270,8 +288,8 @@ async function createEntity(
       title,
       source: "ai",
       ...(agentUserId ? { agentUserId } : {}),
-      // Past the pre-gate same-name check, so the retry reaches the
-      // post-gate retry dedup (the branch that holds a receipt).
+      // Past the deferred same-name check (an exact agent retry is answered
+      // before it either way).
       ...(forceCreate ? { forceCreate } : {}),
     } as never)) as { id: string; ackState?: string };
 }
@@ -327,24 +345,23 @@ describe("an AUTO-APPROVED entity create is undoable", () => {
     expect((await receipt(row.id)).status).toBe("reverted");
   });
 
-  it("a retried create the door DEDUPED stamps 'created nothing' — its Undo can never retire the first write's row", async () => {
+  it("an exact agent retry answers with the first write and stamps NO receipt — a retry can never undo the first write", async () => {
     const first = await createEntity("Bo Retry", AGENT, true);
     const firstReceipt = await lastReceipt();
+    const receiptsBefore = await receiptCount();
+
     const second = await createEntity("Bo Retry", AGENT, true);
-    const secondReceipt = await lastReceipt();
 
     expect(second.ackState).toBe("duplicate-ignored");
     expect(second.id).toBe(first.id);
-    expect(secondReceipt.id).not.toBe(firstReceipt.id);
-    expect(secondReceipt.data.materialized).toBeDefined();
-    expect(secondReceipt.data.materialized.entityIds ?? []).toEqual([]);
-    expect(listRevertable(secondReceipt)).toBe(false);
-    await expect(revert(secondReceipt.id)).rejects.toMatchObject({
-      code: "NOT_IMPLEMENTED",
-    });
+    // The exact retry is answered BEFORE the permission gate (W3, founder
+    // decision 2026-10-22): no second receipt exists, so there is no Undo
+    // that could retire the first write's row.
+    expect(await receiptCount()).toBe(receiptsBefore);
+    expect(await receiptsNaming(first.id)).toEqual([firstReceipt.id]);
     expect(await entityDeletedAt(first.id)).toBeNull();
     // The first write keeps ITS undo.
-    expect(listRevertable(firstReceipt)).toBe(true);
+    expect(listRevertable(await receipt(firstReceipt.id))).toBe(true);
   });
 });
 
