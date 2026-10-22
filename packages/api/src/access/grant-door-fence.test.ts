@@ -86,6 +86,8 @@ describe("restDoorAllowed", () => {
     ["POST", "/knowledge/ask", false],
     ["POST", "/entities/retrieve", false],
     ["POST", "/entities", true], // a write — bounded by the gate
+    // Seamed: the standing read floors its answer by the grant (fence1).
+    ["POST", "/workspaces/ensure-template", true],
     ["PATCH", "/entities/abc", true],
     ["DELETE", "/entities/abc", true],
   ] as const)("%s %s → %s", (method, path, ok) => {

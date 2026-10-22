@@ -89,6 +89,11 @@ vi.mock("../../../services/external-user-mapping.js", () => ({
   isSubTokenFeatureEnabled: () => false,
   resolveExternalUserMapping: vi.fn(),
 }));
+// The keys here are no pod app's: the pod-app origin rule (PB4) is proved on
+// PGlite in webhooks.key-bound.pglite.test.ts.
+vi.mock("../../../services/app-agent-floor.js", () => ({
+  podAppWebhookOrigin: async () => null,
+}));
 
 const { hubAuthMiddleware } = await import("../_middleware/auth.js");
 const { registerWebhooksRoutes } = await import("./webhooks.js");
