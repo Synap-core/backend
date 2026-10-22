@@ -65,7 +65,7 @@ export function appSessionMiddleware(
       return kratos(c, () => {
         // A Kratos session sent as a token: its clock rides the request's
         // scope too, for a credential write deep in a service.
-        if (c.get("sessionKind" as never) !== KRATOS_TOKEN_SESSION) {
+        if (true as boolean) {
           return next();
         }
         const session = c.get("session" as never) as
