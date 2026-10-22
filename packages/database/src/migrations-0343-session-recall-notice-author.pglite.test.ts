@@ -1,5 +1,5 @@
 /**
- * REAL-POSTGRES (PGlite) test for migration 0340 — the session-recall notice
+ * REAL-POSTGRES (PGlite) test for migration 0343 — the session-recall notice
  * written before `postChannelMessage` stamped pod posts `bot` was stored as
  * `author_type = 'human'`.
  *
@@ -17,8 +17,8 @@ import { dirname, resolve } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const M0340 = readFileSync(
-  resolve(HERE, "../migrations/0340_session_recall_notice_author_bot.sql"),
+const M0343 = readFileSync(
+  resolve(HERE, "../migrations/0343_session_recall_notice_author_bot.sql"),
   "utf8"
 );
 
@@ -75,10 +75,10 @@ const authors = async (db: PGlite) =>
     ).rows.map((r) => [r.id, r.author_type])
   );
 
-describe("migration 0340 — recall notice author", () => {
+describe("migration 0343 — recall notice author", () => {
   it("repairs only the recall notice, and is idempotent", async () => {
     const db = await setup();
-    await db.exec(M0340);
+    await db.exec(M0343);
     const once = await authors(db);
     expect(once).toEqual({
       recall: "bot",
@@ -88,7 +88,7 @@ describe("migration 0340 — recall notice author", () => {
       "agent-same-words": "human",
       "connector-send": "human",
     });
-    await db.exec(M0340);
+    await db.exec(M0343);
     expect(await authors(db)).toEqual(once);
   });
 });
