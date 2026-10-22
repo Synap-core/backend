@@ -2350,7 +2350,7 @@ export function registerSetupRoutes(app: HubHono): void {
     } else {
       // Ordinary spaces only: never a system space (pod-admin), so an
       // invite's role can never become pod admin.
-      const fanOutIds = await listPodInviteFanOutWorkspaceIds();
+      const fanOutIds = await listPodInviteFanOutWorkspaceIds(db);
       for (const ws of fanOutIds.map((id) => ({ id }))) {
         const alreadyMember = await db.query.workspaceMembers.findFirst({
           where: and(

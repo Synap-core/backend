@@ -44,16 +44,14 @@ import { AccessContext, type PodAudience } from "./context.js";
  *   - `shares.redeemLink`: joining a project through a link is how a person
  *     BECOMES a guest, and a guest may redeem a second link. It writes a guest
  *     `project_members` row only, never a workspace or `pod_members` row.
- *   - `workspaces.acceptInvite` / `rejectInvite` and their Control Plane
- *     twins: answering an owner's invite is the one sanctioned way a guest
- *     becomes a participant. The invite is owner-issued and email-bound.
+ *   - `workspaces.acceptInvite` / `rejectInvite`: answering an owner's invite
+ *     is the one sanctioned way a guest becomes a participant. The invite is
+ *     owner-issued and email-bound.
  */
 export const GUEST_MUTATION_ALLOWLIST: readonly string[] = [
   "shares.redeemLink",
   "workspaces.acceptInvite",
   "workspaces.rejectInvite",
-  "workspaces.acceptInviteViaCp",
-  "workspaces.rejectInviteViaCp",
 ];
 
 /** The one message every guest refusal carries, on every door. */

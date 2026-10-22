@@ -14,11 +14,16 @@
  *     deletes an account.
  *
  * Stubbed: Kratos (`kratosAdmin.deleteIdentity`, no PGlite twin), the
- * connection teardown (Nango), the audit write and `fetch` (CP notices).
+ * connection teardown (Nango), the audit write, `fetch` (CP notices) and the
+ * event store (`eventRepository.append` writes through its own postgres
+ * client, not PGlite). The stub still parses each event with the real
+ * `SynapEventSchema`, so an event the store would refuse fails here too.
+ * Target user ids are uuids, as Kratos mints them: a membership event's
+ * `subjectId` is the user id and must be one.
  *
- * NOT COVERED: the CP-proxy and Hub accept paths (they share the fan-out
- * helper; tripwire `pod-invite-fanout-skips-system-spaces`), and the keepers'
- * own matrix (`identity-keepers.pglite.test.ts`).
+ * NOT COVERED: the Hub accept path (it shares the fan-out helper; tripwire
+ * `pod-invite-fanout-skips-system-spaces`), and the keepers' own matrix
+ * (`identity-keepers.pglite.test.ts`).
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -38,10 +43,18 @@ vi.mock("@synap/database", async (importOriginal) => {
   const { PGlite } = await import("@electric-sql/pglite");
   const { drizzle } = await import("drizzle-orm/pglite");
   const schema = await import("@synap/database/schema");
+  const { SynapEventSchema } = await import("@synap-core/core");
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
   h.db = drizzle(client, { schema });
-  return { ...actual, db: h.db, getDb: async () => h.db };
+  return {
+    ...actual,
+    db: h.db,
+    getDb: async () => h.db,
+    eventRepository: {
+      append: async (event: unknown) => SynapEventSchema.parse(event),
+    },
+  };
 });
 vi.mock("@synap/auth", async (importOriginal) => {
   const deleteIdentity = vi.fn(async () => undefined);
@@ -192,25 +205,35 @@ describe("createInvite type pod", () => {
 });
 
 describe("removeFromPod", () => {
+  // `errors: []` matters: a membership removal that throws is collected, not
+  // raised, so without it a failed removal reads as a quiet partial success.
   it("a one-space admin's removal keeps the account (memberships only)", async () => {
-    await personInWsA("t-by-space-admin");
-    await expect(
-      as(WS_ADMIN).removeFromPod({ userId: "t-by-space-admin" })
-    ).resolves.toMatchObject({ status: "removed", removedFromWorkspaces: 1 });
+    const id = randomUUID();
+    await personInWsA(id);
+    await expect(as(WS_ADMIN).removeFromPod({ userId: id })).resolves.toEqual({
+      status: "removed",
+      removedFromWorkspaces: 1,
+      totalWorkspaces: 1,
+      errors: [],
+    });
     expect(
-      await q(`select 1 from workspace_members where user_id = $1`, [
-        "t-by-space-admin",
-      ])
+      await q(`select 1 from workspace_members where user_id = $1`, [id])
     ).toHaveLength(0);
-    expect(await userRow("t-by-space-admin")).toHaveLength(1);
+    expect(await userRow(id)).toHaveLength(1);
     expect(h.deleteIdentity).not.toHaveBeenCalled();
   });
 
   it("a pod admin's removal deletes a person nothing else holds", async () => {
-    await personInWsA("t-nothing-else");
-    await as(POD_OWNER).removeFromPod({ userId: "t-nothing-else" });
-    expect(await userRow("t-nothing-else")).toHaveLength(0);
-    expect(h.deleteIdentity).toHaveBeenCalledWith({ id: "t-nothing-else" });
+    const id = randomUUID();
+    await personInWsA(id);
+    await expect(as(POD_OWNER).removeFromPod({ userId: id })).resolves.toEqual({
+      status: "removed",
+      removedFromWorkspaces: 1,
+      totalWorkspaces: 1,
+      errors: [],
+    });
+    expect(await userRow(id)).toHaveLength(0);
+    expect(h.deleteIdentity).toHaveBeenCalledWith({ id });
   });
 
   it.each([
@@ -226,7 +249,7 @@ describe("removeFromPod", () => {
       (id: string) =>
         q(
           `insert into federated_identity_links (issuer_id, issuer_subject, user_id)
-           values ('issuer-1', $1, $1)`,
+           values ('22222222-2222-4222-8222-222222222222', $1, $1)`,
           [id]
         ),
     ],
@@ -238,9 +261,14 @@ describe("removeFromPod", () => {
         ]),
     ],
   ])("a pod admin's removal keeps a person who %s", async (_why, hold) => {
-    const id = `t-${randomUUID()}`;
+    const id = randomUUID();
     await personInWsA(id, () => hold(id));
-    await as(POD_OWNER).removeFromPod({ userId: id });
+    await expect(as(POD_OWNER).removeFromPod({ userId: id })).resolves.toEqual({
+      status: "removed",
+      removedFromWorkspaces: 1,
+      totalWorkspaces: 1,
+      errors: [],
+    });
     expect(await userRow(id)).toHaveLength(1);
     expect(h.deleteIdentity).not.toHaveBeenCalled();
   });
