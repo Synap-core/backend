@@ -14,7 +14,11 @@
  *     and answers from the standing read AFTER it: installed (with the stored
  *     stamp / drift) or, when not installed yet, installing;
  *   • the Hub mirror is a transport: it reaches the same procedure with the
- *     acting agent, and a proposal answers 202.
+ *     acting agent, and a proposal answers 202;
+ *   • a holder the standing read hid (`heldOutOfSight`, fence1) is never
+ *     installed over or filed: a read answers `missing` like an absent
+ *     template, an install by a scoped key gets the gate's own grant refusal,
+ *     a person's a 409 naming no space.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -50,6 +54,7 @@ vi.mock("./workspaces/template-door.js", async (importOriginal) => ({
 }));
 
 import { OpenAPIHono } from "@hono/zod-openapi";
+import { runWithGrant, type KeyGrant } from "@synap/database";
 import { workspaceCatalogRouter } from "./workspaces.js";
 import { registerWorkspacesEnsureTemplateRoutes } from "./hub-protocol/rest/workspaces-ensure-template.js";
 import type { HubHono, HubVariables } from "./hub-protocol/rest/_shared.js";
@@ -220,6 +225,63 @@ describe("workspaces.ensureTemplate", () => {
   });
 });
 
+describe("workspaces.ensureTemplate — a holder out of sight (fence1)", () => {
+  const PINNED: KeyGrant = {
+    scopes: [{ permissions: ["entity.post.read"], workspaceIds: ["ws-a"] }],
+    clientId: "app_test",
+  };
+  const RUNG0 = 'This key\'s grant does not allow "workspace.create".';
+
+  beforeEach(() => {
+    m.standing.mockResolvedValue({
+      status: "available",
+      template: CARD,
+      heldOutOfSight: true,
+    });
+  });
+
+  it("a read is `missing`, exactly what an absent template answers (no flag sent)", async () => {
+    expect(await caller("agent-1").ensureTemplate({ slug: "crm" })).toEqual({
+      status: "missing",
+      template: CARD,
+    });
+  });
+
+  it("a scoped key's install gets the gate's rung-0 refusal; nothing filed or installed", async () => {
+    await expect(
+      runWithGrant(PINNED, () =>
+        caller("agent-1").ensureTemplate({ slug: "crm", install: true })
+      )
+    ).rejects.toMatchObject({ code: "FORBIDDEN", message: RUNG0 });
+    expect(m.perm).not.toHaveBeenCalled();
+    expect(m.create).not.toHaveBeenCalled();
+  });
+
+  it("the same key with nothing installed anywhere: the gate refuses it with the same reason", async () => {
+    m.standing.mockResolvedValue({ status: "available", template: CARD });
+    const { grantWriteDenial } = await import("../utils/grant-write-check.js");
+    m.perm.mockImplementation(async (g: Record<string, unknown>) => {
+      const reason = await grantWriteDenial(g as never);
+      return reason ? { denied: true, reason } : { granted: true };
+    });
+    await expect(
+      runWithGrant(PINNED, () =>
+        caller("agent-1").ensureTemplate({ slug: "crm", install: true })
+      )
+    ).rejects.toMatchObject({ code: "FORBIDDEN", message: RUNG0 });
+  });
+
+  it("a person's install is a CONFLICT naming no space; nothing filed or installed", async () => {
+    const err = await caller()
+      .ensureTemplate({ slug: "crm", install: true })
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: "CONFLICT" });
+    expect((err as Error).message).toMatch(/space you can't see/);
+    expect(m.perm).not.toHaveBeenCalled();
+    expect(m.create).not.toHaveBeenCalled();
+  });
+});
+
 describe("POST /workspaces/ensure-template (Hub mirror)", () => {
   function app(agentUserId?: string): HubHono {
     const a: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
@@ -268,5 +330,28 @@ describe("POST /workspaces/ensure-template (Hub mirror)", () => {
 
   it("a malformed body is a 400", async () => {
     expect((await post(app(), { install: true })).status).toBe(400);
+  });
+
+  it("a holder out of sight: a read is 200 `missing`, a scoped install 403, a person's 409", async () => {
+    m.standing.mockResolvedValue({
+      status: "available",
+      template: CARD,
+      heldOutOfSight: true,
+    });
+    const read = await post(app("agent-1"), { slug: "crm" });
+    expect(read.status).toBe(200);
+    expect(await read.json()).toEqual({ status: "missing", template: CARD });
+    const scoped = await runWithGrant(
+      {
+        scopes: [{ permissions: ["entity.post.read"], workspaceIds: ["ws-a"] }],
+        clientId: "app_test",
+      },
+      () => post(app("agent-1"), { slug: "crm", install: true })
+    );
+    expect(scoped.status).toBe(403);
+    expect((await post(app(), { slug: "crm", install: true })).status).toBe(
+      409
+    );
+    expect(m.perm).not.toHaveBeenCalled();
   });
 });
