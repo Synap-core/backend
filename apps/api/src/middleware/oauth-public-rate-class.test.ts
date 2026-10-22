@@ -76,6 +76,20 @@ const refreshCall = (
 
 const randomToken = () => randomBytes(32).toString("base64url");
 
+/** A /token body sent with no length: the limiter does not read it. */
+const unreadCall = (app: Hono, ip: string) =>
+  app.request("/token", {
+    method: "POST",
+    headers: {
+      "x-forwarded-for": ip,
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: randomToken(),
+    }).toString(),
+  });
+
 /** Runs `run` as a pod whose visitors all share one address (a tunnel). */
 async function onSharedAddress<T>(run: () => Promise<T>): Promise<T> {
   process.env.SYNAP_SHARED_CLIENT_IP = "true";
@@ -250,6 +264,26 @@ describe("oauth_token — /token is budgeted per grant, never per shared address
     );
   });
 
+  it("where addresses are distinct, an unread body spends its address's own unread bucket", async () => {
+    const app = makeApp();
+    const ip = nextIp();
+    for (let i = 0; i < tokenCfg.max; i++) {
+      expect((await unreadCall(app, ip)).status).toBe(400);
+    }
+    expect((await unreadCall(app, ip)).status).toBe(429);
+    expect((await unreadCall(app, nextIp())).status).toBe(400);
+  });
+
+  it("on a shared address, every unread body spends the pod's one unread bucket", async () => {
+    await onSharedAddress(async () => {
+      const app = makeApp();
+      for (let i = 0; i < tokenCfg.max; i++) {
+        expect((await unreadCall(app, nextIp())).status).toBe(400);
+      }
+      expect((await unreadCall(app, nextIp())).status).toBe(429);
+    });
+  });
+
   it("the key: per (client_id, grant), form or JSON alike, and never the raw token", () => {
     const rt = randomToken();
     const form = (p: Record<string, string>) =>
@@ -286,6 +320,21 @@ describe("oauth_token — /token is budgeted per grant, never per shared address
       "oauth_token:unread"
     );
     expect(buildOAuthTokenKey("null", "application/json")).toBe(
+      "oauth_token:unread"
+    );
+    // The unread bucket: per address where addresses tell callers apart.
+    expect(buildOAuthTokenKey(null, "", "198.51.100.7", {})).toBe(
+      "oauth_token:unread:198.51.100.7"
+    );
+    expect(
+      buildOAuthTokenKey("{not json", "application/json", "198.51.100.7", {})
+    ).toBe("oauth_token:unread:198.51.100.7");
+    expect(
+      buildOAuthTokenKey(null, "", "198.51.100.7", {
+        SYNAP_SHARED_CLIENT_IP: "true",
+      })
+    ).toBe("oauth_token:unread");
+    expect(buildOAuthTokenKey(null, "", "unknown", {})).toBe(
       "oauth_token:unread"
     );
   });

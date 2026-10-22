@@ -439,7 +439,11 @@ const oauthTokenRateLimiter = rateLimiter({
       length <= OAUTH_TOKEN_BODY_READ_MAX
         ? await c.req.text().catch(() => null)
         : null;
-    return buildOAuthTokenKey(body, c.req.header("content-type") ?? "");
+    return buildOAuthTokenKey(
+      body,
+      c.req.header("content-type") ?? "",
+      ip
+    );
   },
   handler: classHandler(
     "oauth_token",

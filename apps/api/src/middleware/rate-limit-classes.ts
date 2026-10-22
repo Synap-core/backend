@@ -481,24 +481,32 @@ export const OAUTH_TOKEN_BODY_READ_MAX = 16 * 1024;
  * reads it): the client_id with the code or refresh token it redeems,
  * hashed. Nobody can drain a grant's budget without holding that grant, so a
  * flood from anywhere never blocks another app's refresh. A body that was
- * not read (`null`: no length, or too long) or does not parse spends one
- * `unread` bucket. Neither value is ever logged; only the hash is a key.
+ * not read (`null`: no length, or too long) or does not parse spends an
+ * `unread` bucket: the address's own where addresses tell callers apart, as
+ * `buildOAuthTokenIpCeilingKey`, else one for the pod ("unknown", or a shared
+ * tunnel address). Neither value is ever logged; only the hash is a key.
  */
 export function buildOAuthTokenKey(
   body: string | null,
-  contentType: string
+  contentType: string,
+  ip = "unknown",
+  env: Record<string, string | undefined> = process.env
 ): string {
-  if (body === null) return "oauth_token:unread";
+  const unread =
+    ip === "unknown" || sharedClientIp(env)
+      ? "oauth_token:unread"
+      : `oauth_token:unread:${ip}`;
+  if (body === null) return unread;
   let params: Record<string, unknown>;
   try {
     params = contentType.includes("application/json")
       ? (JSON.parse(body) as Record<string, unknown>)
       : Object.fromEntries(new URLSearchParams(body));
   } catch {
-    return "oauth_token:unread";
+    return unread;
   }
   const text = (v: unknown) => (typeof v === "string" ? v : "");
-  if (!params || typeof params !== "object") return "oauth_token:unread";
+  if (!params || typeof params !== "object") return unread;
   const grant =
     text(params.grant_type) === "refresh_token"
       ? text(params.refresh_token)
