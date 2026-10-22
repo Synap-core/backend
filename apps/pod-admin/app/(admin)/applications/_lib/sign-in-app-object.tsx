@@ -40,6 +40,7 @@ import {
 } from "./app-object-parts";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { SectionCard } from "../../components/section-card";
+import { StatusPill } from "../../components/status-pill";
 import { appActivityLine } from "./app-activity";
 import { unlinkSignInNotice } from "./unlink-impact";
 import { ViaChip } from "./via-chip";
@@ -221,15 +222,13 @@ export function SignInAppObject({
                 </p>
               ) : null}
               {signInNotice ? (
-                <div
-                  className={
-                    signInNotice.tone === "danger"
-                      ? "mt-3 rounded-medium bg-danger/10 p-3 text-[13px] text-danger ring-1 ring-inset ring-danger/30"
-                      : "mt-3 rounded-medium bg-warning/10 p-3 text-[13px] text-warning ring-1 ring-inset ring-warning/30"
-                  }
-                  role="alert"
-                >
-                  {signInNotice.text}
+                <div className="mt-3 flex items-start gap-2" role="alert">
+                  <StatusPill
+                    kind={signInNotice.kind}
+                    label={signInNotice.label}
+                    className="shrink-0"
+                  />
+                  <p className="text-[13px]">{signInNotice.sentence}</p>
                 </div>
               ) : null}
               <p className="mt-2 text-foreground/65">
