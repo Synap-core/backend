@@ -286,7 +286,21 @@ This skill does **not** provision Company OS. That is `system/agent-os/skill` (i
 
 Load: `system/synap/from-intent`.
 
-Before the first write, name the layer (data, view, capability, session, track, rule, structure) and take its door: `synap_load_skill system/synap/from-intent`.
+### Classify first: which layer is this?
+
+Before the first write, name the layer in one word, then take its door. Most requests are not a new area at all, and the wrong layer is how a view gets faked as a note or a capability as a view. On a key that lists the starter tools only, `synap_load_skill` the group in brackets first.
+
+| Layer          | The user wants…                                                        | Door                                                                                                                                                          |
+| -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **data**       | a thing remembered: a company, a note, a decision, a link between two  | `synap_capture` for messy input; `synap_create_entity` (`tools:data`) when the kind and fields are known. Never a note standing in for a view or a session.   |
+| **view**       | to SEE existing things: a list, a grouping, a board, a dashboard       | `synap_list_views` first, so you do not duplicate one; then `synap_create_view` (`tools:build`). Never copy records into a new space to show them.            |
+| **capability** | access beyond the graph: connect Gmail, send mail, search the live web | §2b: `synap_list_capabilities`, then run it or file its install. Never build a view to stand in for a capability.                                             |
+| **session**    | "I'm starting work on X": one bounded piece of work                    | `synap_start_session` with a one-line goal. Not a task.                                                                                                       |
+| **track**      | a lasting goal inside a project: "grow the newsletter"                 | §2c: `synap_list_tracks`, else `synap_start_track` (`tools:tracks`). Not a project, not a pack, not a playbook.                                               |
+| **rule**       | a standing intent: "always…", "from now on…", "every Monday…"          | `synap_create_rule` (`tools:governance`) with the user's own words as `intent`; a trigger→steps reaction is `synap_create_automation` (`tools:capabilities`). |
+| **structure**  | a new area of work that needs kinds, spaces or a project               | the rest of this skill, from §0.                                                                                                                              |
+
+Two layers in one ask ("connect Gmail AND show my mail as a list"): name both and do two steps, capability first. Never fold a capability install into a view.
 
 ### 0. Orient first (firewall)
 
@@ -1228,6 +1242,8 @@ the connection's lens). A kind another space needs: `synap_change_kind_scope`
 (`scope: "shared"` + `allowedWorkspaceIds`), never a twin kind. Records:
 `synap_move_entities`. All three are reviewed.
 
+**Removing one: `synap_delete_entity`** (`entityId`, optional `reasoning`). For an agent it is always a proposal — nothing is deleted until the person approves, and no rule can widen that. An approved delete hides the entity (its body is kept) and the person can undo it from the proposal. Do not retry a `proposed` answer.
+
 ### Authored text is content, not a `file`
 
 Something **you** author — a pitch deck, a strategic plan, a note body — is
@@ -1250,7 +1266,7 @@ You CAN store content you **hold** — you send it inline. Pick by what you have
 | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | **Content in hand** — a report/CSV/image/PDF/etc. you generated or received (text or bytes) | **`synap_store_file`** (`content` for text, `contentBase64` for binary) + `mimeType`/`filename` | a `file` entity, content stored **as-is, never read** (≤10MB inline) |
 | Text you're **authoring as a note/idea** (not "a file") — a plan, a thought                 | `synap_create_entity` with `content` (a content kind)                                           | body auto-becomes a document — NOT a `file`                          |
-| Only a **URL/link** (no bytes) — a Google Doc, a PDF url, an article                        | `synap_create_document` with **`url`**, or attach via `entityId`                                | an external **reference** document (no bytes)                        |
+| Only a **URL/link** (no bytes) — a Google Doc, a PDF url, an article                        | `synap_create_document` with **`url`**; `entityId` only for a thing with no body yet            | an external **reference** document (no bytes)                        |
 | A **large file** (over 10MB, up to 500MB video)                                             | `synap_request_upload` → PUT the bytes to `uploadUrl` → `synap_store_file({ uploadToken })`     | a `file` entity backed by stored bytes                               |
 | Only a file's **name**, nothing else                                                        | you **cannot** invent it — ask the human/client to provide the content or a link                | —                                                                    |
 
@@ -2117,7 +2133,7 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **Sessions are the default — you never have to ask.** Every write you make is grouped into a session automatically: yours if you started one, otherwise one opened for you (a _receipt_, closed on its own once idle and reviewed). Nothing is ever refused for lacking a session.
 
-**When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of THIS conversation were already auto-grouped, that session is adopted (`adopted: true`, same id) — never a second one. Grouping is per conversation: another conversation's session is joined only by passing its id as `sessionId`.
+**When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of THIS conversation were already auto-grouped for the same project, that session is adopted (`adopted: true`, same id) — never a second one; another project's writes stay in their own group. Grouping is per conversation and per project: another conversation's session is joined only by passing its id as `sessionId`. On MCP, every write reply names where it landed (`attribution.filed`: session id and name). **One session per piece of work:** a session you started takes every later write, so when an MCP reply carries a `topicHint` (this write is about another project), start a new session if it is new work; rename the current one with `synap_update_session { title }` when its name no longer fits. Names given by automation follow the work as it grows; once you or the person name a session, it keeps that name.
 
 **Fetch the pod's processes before you invent one.** Without `templateId`, the start door hands back the pod's existing playbooks ranked against your title and goal — the response's `playbooks` block lists `candidates` (id, name, score, and the `reason` each one matched) and applies **nothing**. Read them: if one fits, start again naming it with `templateId` (the only way a playbook binds), and if none does, go ad-hoc deliberately. Pass `templateId: null` to skip matching entirely. You can also look first, with `synap_list_playbooks` / `synap_match_playbooks`.
 
@@ -2126,7 +2142,7 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 - **A fact** (`kind: 'fact'`) — your definition of done, a binary, observable statement ("Typecheck passes with 0 errors"), checked by `verify` (`capability` → `judge` → `human`; default `judge`) through `synap_evaluate_session`. Two to five, not a checklist. **Propose them yourself and let the person validate or rewrite them**; they may equally be written by the person, but a session with none can only be reported on by opinion. Closing never blocks on them; unmet ones are flagged.
 - **A deliverable** (`kind: 'document'`, `'report'`, `'code'`, `'decision'`…). **Declare what the work will produce** — the documents, entities and decisions this session owes. That list is what makes "done" derivable instead of announced, and it is what the person's board shows as still outstanding. Give each a `key` (or one is derived from the label) and name it by that key from then on.
 
-On `synap_update_session`, `outcomes` UPSERTS by key — a renamed label keeps its key and its receipts, and nothing you do not name is removed. `criteria`, `expectedOutputs` and `addOutput` still work as deprecated aliases over the same storage. `synap_get_session` returns `outcomes.outcomes[]` (each with `verify`, `met`, `metBy`, its `state` and its `evidence`) and `outcomes.inputs[]` — what the work needs FROM the person, each pointing at the outcome it blocks. `status: 'unavailable'` there means the read failed, not that the list is empty.
+On `synap_update_session`, `outcomes` UPSERTS by key — a renamed label keeps its key and its receipts, and nothing you do not name is removed. `criteria`, `expectedOutputs` and `addOutput` still work as deprecated aliases over the same storage; your `expectedOutputs` list adds and updates too, it never deletes a deliverable you leave out. To drop one on MCP, `retireOutput: '<key>'` withdraws it (kept as 'Withdrawn', no longer owed); the Hub REST PATCH does not take it. `synap_get_session` returns `outcomes.outcomes[]` (each with `verify`, `met`, `metBy`, its `state` and its `evidence`) and `outcomes.inputs[]` — what the work needs FROM the person, each pointing at the outcome it blocks. `status: 'unavailable'` there means the read failed, not that the list is empty.
 
 **Done is a verdict, not your claim.** When you finish a deliverable, `completeOutput: '<key>'` records your CLAIM. The pod then decides: if EVIDENCE is attached — the object produced inside this session (record it against the slot's key), or the slot's `ref` pointing at it — the outcome is met at once (`completeOutput.result: 'completed'`, `metBy: 'evidence'`). With no evidence the reply says `'claimed'`: the claim waits for review, so attach the evidence instead of reporting the work as delivered. A deliverable that also has a `verify` beyond evidence (`judge`, `capability`) is met only by that check; a person's own outcome only by the person.
 
