@@ -16,12 +16,18 @@
  * (`/authorize` with `prompt=login`, its device's refresh token at /token) and
  * retries.
  *
- * The device session comes from the context (`ctx.sessionKind` and the
+ * A Kratos session sent as `X-Session-Token` (`sessionKind: kratos_token`)
+ * is held by an app the same way, so it meets the same rule with its own
+ * clock, the session's `authenticated_at` (moved by a Kratos re-login with
+ * `refresh=true`). Only a browser's cookie session is exempt.
+ *
+ * The session comes from the context (`ctx.sessionKind` and the
  * device `ctx.session` names, set only by `createContext` from what
- * `middleware/app-session.ts` resolved from the row) or, for a door deep in a
+ * `middleware/app-session.ts` resolved) or, for a door deep in a
  * service with no context, from the request's async scope, which the same
- * gate opens (`runAsDeviceSession`). A request with no person session (a key
- * on the Hub doors, whose own rules apply) is not this check's business.
+ * gate opens (`runAsDeviceSession` / `runAsKratosTokenSession`). A request
+ * with no person session (a key on the Hub doors, whose own rules apply) is
+ * not this check's business.
  *
  * Doors: tRPC `requireFreshAuthentication` / `credentialProcedure`
  * (trpc.ts); a proposal executor's `widensCredential` (execution-registry.ts);
@@ -47,18 +53,46 @@ export interface DeviceSessionFacts {
 }
 
 export interface SessionKindCarrier {
-  session?: { device?: { id?: string; authTime?: Date | null } } | null;
+  session?: {
+    id?: string;
+    authenticated_at?: string | null;
+    device?: { id?: string; authTime?: Date | null };
+  } | null;
   sessionKind?: string | null;
 }
 
-const deviceScope = new AsyncLocalStorage<DeviceSessionFacts>();
+/** A Kratos session the request sent as `X-Session-Token`. */
+export const KRATOS_TOKEN_SESSION = "kratos_token";
+
+interface ScopedSession extends DeviceSessionFacts {
+  kind: "person_device" | typeof KRATOS_TOKEN_SESSION;
+}
+
+const sessionScope = new AsyncLocalStorage<ScopedSession>();
 
 /** Run `fn` as a request made with a Synap app's device token. */
 export function runAsDeviceSession<T>(
   device: DeviceSessionFacts,
   fn: () => T
 ): T {
-  return deviceScope.run(device, fn);
+  return sessionScope.run({ ...device, kind: "person_device" }, fn);
+}
+
+/** Run `fn` as a request made with a Kratos session token. */
+export function runAsKratosTokenSession<T>(
+  session: DeviceSessionFacts,
+  fn: () => T
+): T {
+  return sessionScope.run({ ...session, kind: KRATOS_TOKEN_SESSION }, fn);
+}
+
+/** When a Kratos session last really authenticated, or null if unknown. */
+export function kratosAuthTime(
+  authenticatedAt: string | null | undefined
+): Date | null {
+  if (!authenticatedAt) return null;
+  const at = new Date(authenticatedAt);
+  return Number.isNaN(at.getTime()) ? null : at;
 }
 
 /** Is this request a Synap app's device session (by context, else scope)? */
@@ -66,18 +100,28 @@ export function isDeviceSession(ctx?: SessionKindCarrier | null): boolean {
   return Boolean(
     ctx?.sessionKind === "person_device" ||
     ctx?.session?.device ||
-    deviceScope.getStore()
+    sessionScope.getStore()?.kind === "person_device"
   );
 }
 
-/** The device facts of this request, or null for any other caller. */
-function deviceOf(ctx?: SessionKindCarrier | null): DeviceSessionFacts | null {
+/**
+ * The step-up clock of this request — a device, or a Kratos session held as
+ * a token — or null for a caller no clock applies to (a browser cookie, a
+ * key).
+ */
+function clockOf(ctx?: SessionKindCarrier | null): DeviceSessionFacts | null {
   const fromCtx = ctx?.session?.device;
   if (fromCtx?.id) {
     return { id: fromCtx.id, authTime: fromCtx.authTime ?? null };
   }
-  const fromScope = deviceScope.getStore();
-  if (fromScope) return fromScope;
+  if (ctx?.sessionKind === KRATOS_TOKEN_SESSION) {
+    return {
+      id: ctx.session?.id ?? "",
+      authTime: kratosAuthTime(ctx.session?.authenticated_at),
+    };
+  }
+  const fromScope = sessionScope.getStore();
+  if (fromScope) return { id: fromScope.id, authTime: fromScope.authTime };
   // Marked a device session but naming no device: never fresh.
   if (ctx?.sessionKind === "person_device") return { id: "", authTime: null };
   return null;
@@ -94,14 +138,15 @@ export function isFreshDevice(
 }
 
 /**
- * FORBIDDEN (`STEP_UP_REQUIRED`) for a device session that has not really
- * authenticated within the window; a no-op for a Kratos session or a key.
+ * FORBIDDEN (`STEP_UP_REQUIRED`) for a device or Kratos-token session that
+ * has not really authenticated within the window; a no-op for a browser's
+ * cookie session or a key.
  */
 export function assertFreshAuthentication(
   ctx?: SessionKindCarrier | null
 ): void {
-  const device = deviceOf(ctx);
-  if (!device || isFreshDevice(device)) return;
+  const clock = clockOf(ctx);
+  if (!clock || isFreshDevice(clock)) return;
   throw new TRPCError({
     code: "FORBIDDEN",
     message: STEP_UP_REQUIRED_MESSAGE,

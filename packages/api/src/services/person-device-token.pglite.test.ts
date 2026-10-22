@@ -258,6 +258,25 @@ beforeAll(async () => {
 
 /** The Kratos half: one browser session (Ada's cookie), nothing else. */
 const kratosStandIn: MiddlewareHandler = async (c, next) => {
+  // An app holding a Kratos session token (the Kratos middleware marks it):
+  // `x-session-token: signed-in-<minutes ago>`.
+  const token = c.req.header("x-session-token")?.match(/^signed-in-(\d+)$/);
+  if (token) {
+    c.set("userId" as never, PERSON as never);
+    c.set(
+      "session" as never,
+      {
+        id: "kratos-session-ada",
+        identity: { id: PERSON, traits: { email: "ada@x", name: "Ada" } },
+        active: true,
+        authenticated_at: new Date(
+          Date.now() - Number(token[1]) * MIN_MS
+        ).toISOString(),
+      } as never
+    );
+    c.set("sessionKind" as never, "kratos_token" as never);
+    return next();
+  }
   if ((c.req.header("cookie") ?? "") !== BROWSER_COOKIE) {
     return c.json({ error: "Invalid session" }, 401);
   }
@@ -297,7 +316,7 @@ function appApi() {
 }
 
 async function trpc(
-  auth: { bearer?: string; cookie?: string },
+  auth: { bearer?: string; cookie?: string; sessionToken?: string },
   path: string,
   input?: unknown,
   kind: "query" | "mutation" = path === "devices.list" ? "query" : "mutation"
@@ -307,6 +326,7 @@ async function trpc(
   };
   if (auth.bearer) headers.authorization = `Bearer ${auth.bearer}`;
   if (auth.cookie) headers.cookie = auth.cookie;
+  if (auth.sessionToken) headers["x-session-token"] = auth.sessionToken;
   const res =
     kind === "query"
       ? await appApi().request(
@@ -937,6 +957,54 @@ describe("(i) a STALE device token cannot create, widen or approve a credential"
       expect(res.body.error?.json?.data?.reasonCode).not.toBe(STEP_UP_REQUIRED);
     }
   );
+
+  it.each(DOORS)(
+    "%s answers 403 STEP_UP_REQUIRED to a Kratos session TOKEN signed in 6 minutes ago",
+    async (path, input, kind) => {
+      const res = await trpc(
+        { sessionToken: "signed-in-6" },
+        path,
+        input,
+        kind
+      );
+      expect(res.status).toBe(403);
+      expect(res.body.error.json.data.reasonCode).toBe(STEP_UP_REQUIRED);
+    }
+  );
+
+  it.each(DOORS)(
+    "CONTROL — %s is not refused that way to a Kratos session token signed in a minute ago",
+    async (path, input, kind) => {
+      const res = await trpc(
+        { sessionToken: "signed-in-1" },
+        path,
+        input,
+        kind
+      );
+      expect(res.status).not.toBe(401);
+      expect(res.body.error?.json?.data?.reasonCode).not.toBe(STEP_UP_REQUIRED);
+    }
+  );
+
+  it("the tRPC context carries the Kratos middleware's token mark", async () => {
+    const vars: Record<string, unknown> = {
+      session: {
+        id: "kratos-session-ada",
+        identity: { id: PERSON, traits: { email: "ada@x", name: "Ada" } },
+        active: true,
+      },
+      sessionKind: "kratos_token",
+    };
+    const ctx = await createContext(new Request("http://pod/trpc/x"), {
+      get: (key) => vars[key],
+    });
+    expect(ctx.sessionKind).toBe("kratos_token");
+    vars.sessionKind = undefined;
+    const cookie = await createContext(new Request("http://pod/trpc/x"), {
+      get: (key) => vars[key],
+    });
+    expect(cookie.sessionKind).toBe("kratos");
+  });
 
   it("CONTROL — a grant only to the caller is not a step-up: a stale device makes its own space", async () => {
     const s = await signIn("stale", 6 * MIN_MS);

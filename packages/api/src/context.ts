@@ -129,11 +129,14 @@ export async function createContext(
         },
         session,
         // The kind of person session, from the gate that resolved it: only
-        // `appSessionMiddleware` marks a device token, and only from its row.
+        // `appSessionMiddleware` marks a device token, and only from its row;
+        // only the Kratos middleware marks a session sent as a token.
         sessionKind:
           honoCtx?.get("sessionKind") === "person_device"
             ? "person_device"
-            : "kratos",
+            : honoCtx?.get("sessionKind") === "kratos_token"
+              ? "kratos_token"
+              : "kratos",
         req,
         workspaceId, // Add workspace ID to context
         projectId, // Add project lens to context
