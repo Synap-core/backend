@@ -624,14 +624,28 @@ backfill_federation_public_urls() {
 # POD_ADMIN_DOMAIN change, SYNAP_LEGACY_DOMAIN / SYNAP_LEGACY_POD_ADMIN_DOMAIN
 # name the old pair), the old origins in ALLOWED_ORIGINS become the new ones.
 # Every other entry stays; nothing is added when neither old origin is listed.
+# FRONTEND_URL and CORS_ORIGIN (realtime's allowlist; the installer sets both
+# to the pod's URL) follow the same way: a value naming an old origin becomes
+# the new one, any other value (the Studio, `*`, set by hand) stays.
 reconcile_moved_origins() {
-    local old_pod old_admin new_pod new_admin list entry out="" seen=","
+    local old_pod old_admin new_pod new_admin list entry out="" seen="," key value
     old_pod=$(grep "^SYNAP_LEGACY_DOMAIN=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
     old_admin=$(grep "^SYNAP_LEGACY_POD_ADMIN_DOMAIN=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
     new_pod=$(grep "^DOMAIN=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
     new_admin=$(grep "^POD_ADMIN_DOMAIN=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
+    { [ -n "$old_pod" ] || [ -n "$old_admin" ]; } || return 0
+    for key in FRONTEND_URL CORS_ORIGIN; do
+        value=$(grep "^${key}=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
+        value="${value%/}"
+        if [ -n "$old_pod" ] && [ -n "$new_pod" ] && [ "$value" = "https://${old_pod}" ]; then value="https://${new_pod}"
+        elif [ -n "$old_admin" ] && [ -n "$new_admin" ] && [ "$value" = "https://${old_admin}" ]; then value="https://${new_admin}"
+        else continue
+        fi
+        update_env_value "$key" "$value"
+        echo -e "${BLUE}ℹ️  ${key} now names the pod's new address${NC}"
+    done
     list=$(grep "^ALLOWED_ORIGINS=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
-    [ -n "$list" ] && { [ -n "$old_pod" ] || [ -n "$old_admin" ]; } || return 0
+    [ -n "$list" ] || return 0
     while IFS= read -r entry; do
         [ -n "$entry" ] || continue
         if [ -n "$old_pod" ] && [ -n "$new_pod" ] && [ "$entry" = "https://${old_pod}" ]; then entry="https://${new_pod}"
