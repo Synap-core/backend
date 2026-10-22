@@ -30,7 +30,6 @@ import {
   notAnAppAgent,
   readIdentityKeepers,
 } from "@synap/database";
-import { verifyCpJwt } from "../../utils/jwks-client.js";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
@@ -1157,116 +1156,6 @@ export const inviteProcedures = {
           expiresAt: invite.expiresAt,
         };
       }
-    }),
-
-  /**
-   * Accept an invite via the CP API proxy (no Kratos session needed).
-   * The CP signs a short-lived JWT containing the invitee's email.
-   * The pod looks up the local user by email and accepts on their behalf.
-   * Works for both workspace and pod invites.
-   */
-  acceptInviteViaCp: publicProcedure
-    .input(z.object({ token: z.string(), cpToken: z.string() }))
-    .mutation(async ({ input }) => {
-      const cpUrl = config.server.controlPlaneUrl;
-      const payload = await verifyCpJwt<{
-        sub: string;
-        email: string;
-        type: string;
-      }>(input.cpToken, cpUrl);
-      if (!payload || payload.type !== "invite-accept") {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Invalid CP token",
-        });
-      }
-
-      const podUser = await db.query.users.findFirst({
-        where: eq(users.email, payload.email),
-      });
-      if (!podUser) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message:
-            "No pod account found for this email. Please sign in to this pod first.",
-        });
-      }
-
-      const invite = await db.query.invites.findFirst({
-        where: eq(invites.token, input.token),
-      });
-      if (!invite)
-        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
-      if (invite.expiresAt < new Date())
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Invite expired" });
-      if (
-        invite.email &&
-        payload.email &&
-        invite.email.toLowerCase() !== payload.email.toLowerCase()
-      ) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Invite email does not match CP principal",
-        });
-      }
-
-      // The one accept door (`accept-invite-for.ts`).
-      if (invite.type === "workspace" && !invite.workspaceId)
-        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-      return acceptInviteFor(
-        invite,
-        { id: podUser.id, email: payload.email },
-        { source: "cp-proxy" }
-      );
-    }),
-
-  /**
-   * Reject invite via CP proxy token when no pod session exists in browser context.
-   */
-  rejectInviteViaCp: publicProcedure
-    .input(
-      z.object({
-        token: z.string(),
-        cpToken: z.string(),
-        reason: z.string().optional(),
-      })
-    )
-    .mutation(async ({ input }) => {
-      const cpUrl = config.server.controlPlaneUrl;
-      const payload = await verifyCpJwt<{
-        sub: string;
-        email: string;
-        type: string;
-      }>(input.cpToken, cpUrl);
-      if (!payload || payload.type !== "invite-accept") {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Invalid CP token",
-        });
-      }
-
-      const invite = await db.query.invites.findFirst({
-        where: eq(invites.token, input.token),
-      });
-      if (!invite) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
-      }
-      if (invite.email.toLowerCase() !== payload.email.toLowerCase()) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Invite is not addressed to CP principal email",
-        });
-      }
-
-      await db.delete(invites).where(eq(invites.id, invite.id));
-      void notifyCpInviteLifecycle({
-        inviteToken: invite.token,
-        event: "rejected",
-        actorEmail: payload.email,
-        actorUserId: payload.sub,
-        reason: input.reason,
-      });
-      return { success: true };
     }),
 
   /**

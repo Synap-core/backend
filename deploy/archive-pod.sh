@@ -14,15 +14,36 @@
 # The script is intentionally defensive — it always reaches the callback step
 # even if individual sub-steps fail, so the CP never gets stuck waiting.
 #
+# The archive carries a MANIFEST (manifest.json inside it, and the last stdout
+# line `ARCHIVE_MANIFEST {json}`, which pod-agent returns as the result's
+# data.archiveManifest and the push callback carries as "manifest"): the
+# database dump and every volume in ARCHIVE_VOLUMES with its file count, byte
+# size and sha256, plus the encrypted object's size and sha256. The CP deletes
+# a server only when the manifest accounts for every expected volume. A volume
+# that is missing, unreadable, or archived with fewer files than it holds FAILS
+# the archive: a volume is read through its compose labels, never a host path
+# this script cannot see from inside pod-agent.
+#
 
 UPLOAD_URL="$1"
 CALLBACK_URL="$2"
 CALLBACK_JWT="$3"
 DEPLOY_DIR="$(cd "$(dirname "$0")" && pwd)"
-COMPOSE="docker compose -p synap-backend -f ${DEPLOY_DIR}/docker-compose.yml"
+SYNAP_DEPLOY_DIR="$DEPLOY_DIR"; export SYNAP_DEPLOY_DIR
+# shellcheck source=/dev/null
+. "$DEPLOY_DIR/env-config.sh"
+# The pod's compose project (install/update pin it in .env); volumes are found
+# by its labels, never by a grep on their names.
+PROJECT="$(envcfg_value COMPOSE_PROJECT_NAME)"; PROJECT="${PROJECT:-synap-backend}"
+COMPOSE="docker compose -p ${PROJECT} -f ${DEPLOY_DIR}/docker-compose.yml"
+# The compose volumes that hold the pod's files (the database is dumped
+# separately). The CP expects exactly these (archive-manifest.ts EXPECTED_ARCHIVE_VOLUMES).
+ARCHIVE_VOLUMES="${ARCHIVE_VOLUMES:-minio_data typesense_data}"
+# Volumes are read through a throwaway container of an image this pod already
+# has (pod-agent's pinned image: busybox find/stat/tar), mounted read-only.
+HELPER_IMAGE="$(envcfg_value SYNAP_IMAGE_POD_AGENT)"
 # Containers are created by the HOST engine (host-request.sh): a compose `up`
 # run in this container mounts the host's nonexistent /deploy paths.
-SYNAP_DEPLOY_DIR="$DEPLOY_DIR"; export SYNAP_DEPLOY_DIR
 # shellcheck source=/dev/null
 . "$DEPLOY_DIR/host-request.sh"
 
@@ -31,7 +52,8 @@ ARCHIVE="${WORK}/pod-archive.tar.gz"
 ARCHIVE_AGE="${ARCHIVE}.age"
 DB_DUMP="${WORK}/database.sql.gz"
 DB_RAW="${WORK}/database.sql"
-VOL_ARCHIVE="${WORK}/volumes.tar.gz"
+VOL_DIR="${WORK}/volumes"
+MANIFEST="${WORK}/manifest.json"
 UPLOAD_OK="false"
 ERROR=""
 
@@ -40,7 +62,7 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] [archive] $*"; }
 report() {
   STATUS="$1"; ERROR_MSG="$2"
   if [ -n "$CALLBACK_URL" ] && [ -n "$CALLBACK_JWT" ]; then
-    BODY="{\"command\":\"archive\",\"status\":\"${STATUS}\",\"error\":${ERROR_MSG:-null}}"
+    BODY="{\"command\":\"archive\",\"status\":\"${STATUS}\",\"error\":${ERROR_MSG:-null}${3:+,\"manifest\":$3}}"
     wget -q -O - --timeout=10 \
       --header="Authorization: Bearer ${CALLBACK_JWT}" \
       --header="Content-Type: application/json" \
@@ -54,7 +76,18 @@ report() {
 }
 
 cleanup() {
-  rm -f "$DB_DUMP" "$DB_RAW" "$VOL_ARCHIVE" "$ARCHIVE" "$ARCHIVE_AGE"
+  rm -rf "$DB_DUMP" "$DB_RAW" "$VOL_DIR" "$MANIFEST" "$ARCHIVE" "$ARCHIVE_AGE"
+}
+
+sha256_of() { # <file>
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+size_of() { wc -c < "$1" | tr -d ' '; }
+
+# Run <script> in a throwaway helper container with <volume> read-only at $V.
+in_volume() { # <volume> <script>
+  docker run --rm -e V=/v -v "$1:/v:ro" --entrypoint sh "$HELPER_IMAGE" -c "set -eo pipefail; $2"
 }
 
 # ── Step 0: the archive must be encryptable, or nothing happens (D15) ──
@@ -73,6 +106,11 @@ if [ -z "$AGE_ARGS" ]; then
   report "failed" "\"ARCHIVE_RECIPIENT_MISSING\""
   exit 1
 fi
+case "$HELPER_IMAGE" in
+  *@sha256:????????????????????????????????????????????????????????????????) ;;
+  *) log "ERROR: ARCHIVE_HELPER_MISSING — no SYNAP_IMAGE_POD_AGENT digest pin in .env to read the volumes with; nothing stopped, nothing uploaded"
+     report "failed" "\"ARCHIVE_HELPER_MISSING\""; exit 1 ;;
+esac
 if ! command -v age >/dev/null 2>&1; then
   log "ERROR: ARCHIVE_AGE_UNAVAILABLE — the age binary is not installed; nothing stopped, nothing uploaded"
   report "failed" "\"ARCHIVE_AGE_UNAVAILABLE\""
@@ -117,45 +155,44 @@ rm -f "$DB_RAW"
 DB_SIZE=$(wc -c < "$DB_DUMP" 2>/dev/null | tr -d ' ')
 log "Database dump complete (${DB_SIZE} bytes compressed)"
 
-# ── Step 3: Archive Docker volumes (minio data, typesense data) ──
-log "Archiving volumes..."
-VOLUME_LIST=$(docker volume ls -q 2>/dev/null | grep -E "minio|typesense" | tr '\n' ' ')
-if [ -n "$VOLUME_LIST" ]; then
-  # Get volume mount points and tar their _data directories
-  VOLUME_PATHS=""
-  for vol in $VOLUME_LIST; do
-    MOUNT=$(docker volume inspect --format '{{ .Mountpoint }}' "$vol" 2>/dev/null)
-    if [ -n "$MOUNT" ] && [ -d "$MOUNT" ]; then
-      VOLUME_PATHS="$VOLUME_PATHS $MOUNT"
-    fi
-  done
-  if [ -n "$VOLUME_PATHS" ]; then
-    # GNU tar: 1 = "file changed as we read it" (survivable — services are
-    # stopped, so this is a straggler write); >=2 = fatal. A fatal error used to
-    # be swallowed (`|| true`) and the pod archived WITHOUT its files.
-    tar czf "$VOL_ARCHIVE" $VOLUME_PATHS 2>/dev/null; tar_rc=$?
-    if [ "$tar_rc" -ge 2 ] || [ ! -s "$VOL_ARCHIVE" ]; then
-      dump_failed "volume archive failed (tar exit $tar_rc)"
-    elif [ "$tar_rc" -eq 1 ]; then
-      log "WARN: tar reported files changed while archiving volumes (exit 1) — archive kept"
-    fi
-    VOL_SIZE=$(wc -c < "$VOL_ARCHIVE" 2>/dev/null | tr -d ' ')
-    log "Volume archive complete (${VOL_SIZE} bytes compressed)"
-  else
-    log "WARN: No volume mount points found"
-    : > "$VOL_ARCHIVE"
-  fi
-else
-  log "WARN: No minio/typesense volumes found"
-  : > "$VOL_ARCHIVE"
-fi
+# ── Step 3: Archive the pod's volumes, one tarball each, counted ──
+# Each volume is found by its compose labels (this project, this volume key):
+# exactly one must exist. It is read through a helper container (the volume
+# mounted read-only), so this works from inside pod-agent and from the host.
+# Its regular files are counted and summed, then tarred; the tarball must hold
+# exactly that many files. Anything else fails the archive — empty is only
+# ever reported as such ("empty": true, 0 files), never a silent placeholder.
+log "Archiving volumes (${ARCHIVE_VOLUMES})..."
+mkdir -p "$VOL_DIR" || dump_failed "cannot create ${VOL_DIR}"
+VOL_JSON=""
+for key in $ARCHIVE_VOLUMES; do
+  vols="$(docker volume ls -q --filter "label=com.docker.compose.project=${PROJECT}" --filter "label=com.docker.compose.volume=${key}")" \
+    || dump_failed "could not list the docker volumes"
+  n="$(printf '%s\n' "$vols" | grep -c .)"
+  [ "$n" = 1 ] || dump_failed "volume ${key} of project ${PROJECT}: found ${n} (expected exactly 1)"
+  stats="$(in_volume "$vols" 'cd "$V"; find . -type f | wc -l; find . -type f -exec stat -c %s {} + | awk "{s+=\$1} END {print s+0}"')" \
+    || dump_failed "volume ${key} (${vols}) could not be read"
+  files="$(printf '%s\n' "$stats" | sed -n 1p | tr -d ' ')"; bytes="$(printf '%s\n' "$stats" | sed -n 2p | tr -d ' ')"
+  case "${files}:${bytes}" in *[!0-9:]*|:*|*:) dump_failed "volume ${key}: unreadable counts (${stats})" ;; esac
+  out="${VOL_DIR}/${key}.tar.gz"
+  in_volume "$vols" 'tar czf - -C "$V" .' > "$out" || dump_failed "volume ${key} (${vols}) could not be archived"
+  got="$(tar tzvf "$out" 2>/dev/null | grep -c '^-')" || true
+  [ "$got" = "$files" ] || dump_failed "volume ${key}: the archive holds ${got:-0} files, the volume ${files}"
+  empty=false; note=""
+  [ "$files" = 0 ] && { empty=true; note=" — EMPTY"; }
+  log "  ${key} (${vols}): ${files} files, ${bytes} bytes${note}"
+  VOL_JSON="${VOL_JSON:+${VOL_JSON},}{\"name\":\"${key}\",\"volume\":\"${vols}\",\"file\":\"volumes/${key}.tar.gz\",\"files\":${files},\"bytes\":${bytes},\"sha256\":\"$(sha256_of "$out")\",\"empty\":${empty}}"
+done
+CREATED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+MANIFEST_BODY="\"schema\":1,\"project\":\"${PROJECT}\",\"createdAt\":\"${CREATED_AT}\",\"database\":{\"file\":\"database.sql.gz\",\"bytes\":${DB_SIZE},\"sha256\":\"$(sha256_of "$DB_DUMP")\"},\"volumes\":[${VOL_JSON}]"
+printf '{%s}\n' "$MANIFEST_BODY" > "$MANIFEST" || dump_failed "could not write the manifest"
 
 # ── Step 4: Bundle everything into a single archive ──
 log "Creating final archive..."
-tar czf "$ARCHIVE" -C "$WORK" database.sql.gz volumes.tar.gz 2>&1
+tar czf "$ARCHIVE" -C "$WORK" manifest.json database.sql.gz volumes 2>&1 || dump_failed "could not bundle the archive"
 ARCHIVE_SIZE=$(wc -c < "$ARCHIVE" 2>/dev/null | tr -d ' ')
 log "Final archive: ${ARCHIVE_SIZE} bytes"
-rm -f "$DB_DUMP" "$VOL_ARCHIVE"
+rm -rf "$DB_DUMP" "$VOL_DIR" "$MANIFEST"
 
 # ── Step 4b: Encrypt (D15) — the plaintext never leaves this host ──
 log "Encrypting archive with age..."
@@ -164,7 +201,8 @@ if ! age $AGE_ARGS -o "$ARCHIVE_AGE" "$ARCHIVE" || [ ! -s "$ARCHIVE_AGE" ]; then
   dump_failed "archive encryption failed"
 fi
 rm -f "$ARCHIVE"
-log "Encrypted archive: $(wc -c < "$ARCHIVE_AGE" 2>/dev/null | tr -d ' ') bytes"
+log "Encrypted archive: $(size_of "$ARCHIVE_AGE") bytes"
+MANIFEST_JSON="{${MANIFEST_BODY},\"archive\":{\"bytes\":$(size_of "$ARCHIVE_AGE"),\"sha256\":\"$(sha256_of "$ARCHIVE_AGE")\"}}"
 
 # ── Step 5: Upload to S3 via presigned PUT URL ──
 if [ -n "$UPLOAD_URL" ]; then
@@ -200,7 +238,7 @@ if [ "$UPLOAD_OK" = "true" ]; then
   log "Reporting success to CP"
   # Clear the EXIT trap — we'll report manually
   trap - EXIT
-  report "completed" "null"
+  report "completed" "null" "$MANIFEST_JSON"
 else
   log "Reporting failure to CP"
   trap - EXIT
@@ -209,3 +247,5 @@ fi
 
 log "=== Pod archive finished (upload=$UPLOAD_OK) ==="
 [ "$UPLOAD_OK" = "true" ] || exit 1
+# The last line: pod-agent returns it as the result's data.archiveManifest.
+echo "ARCHIVE_MANIFEST ${MANIFEST_JSON}"

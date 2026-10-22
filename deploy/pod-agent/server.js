@@ -22,6 +22,10 @@ const fs = require("fs");
 const path = require("path");
 const { execFile, spawn } = require("child_process");
 const {
+  archiveManifestFrom,
+  ARCHIVE_MAX_RUN_MS,
+} = require("./archive-manifest");
+const {
   assertPushable,
   commandErrorStatus,
   configureEnvEntries,
@@ -186,6 +190,7 @@ const COMMANDS = {
       p.callbackUrl || "",
       p.callbackJwt || "",
     ],
+    timeout: ARCHIVE_MAX_RUN_MS,
   },
   configure: {
     script: "configure-pod.sh",
@@ -698,7 +703,12 @@ async function runPulledCommand(commandName, payload) {
     payload,
     policy
   );
-  return { status, output, ...(err ? { error: err.message } : {}) };
+  const result = { status, output, ...(err ? { error: err.message } : {}) };
+  if (commandName === "archive") {
+    const archiveManifest = archiveManifestFrom(output);
+    if (archiveManifest) result.data = { archiveManifest };
+  }
+  return result;
 }
 
 if (POD_AGENT_TRUST.configured) {
