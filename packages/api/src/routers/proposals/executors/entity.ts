@@ -420,8 +420,7 @@ export function registerEntityExecutors(): void {
           // still refuses so the card asks (the composite's rule, BLOCKER-2).
           ...(!decision
             ? {
-                approvalReviewedTwinIds: twinsShownOnCard(proposal.data)
-                  .single,
+                approvalReviewedTwinIds: twinsShownOnCard(proposal.data).single,
               }
             : {}),
         })) as { id?: string; deduplicated?: boolean };

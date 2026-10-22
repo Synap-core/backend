@@ -1227,7 +1227,10 @@ export async function submitCaptureGraph(
     const weakScope = and(
       ownerPrivateVisibleWhere(entities.workspaceId, entities.userId, userId),
       workspaceId
-        ? or(eq(entities.workspaceId, workspaceId), isNull(entities.workspaceId))
+        ? or(
+            eq(entities.workspaceId, workspaceId),
+            isNull(entities.workspaceId)
+          )
         : isNull(entities.workspaceId)
     );
     // One read of the caller's pending queue for the whole graph. A failed

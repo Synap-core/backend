@@ -3896,7 +3896,14 @@ async function createProposal(args: {
     projectId,
   } = envelope.provenance;
 
-  const targetId = (data.documentId ||
+  // An ENTITY write names its record in `data.id`; a `documentId` beside it is
+  // the body being attached, not the target. Read first, it filed every body
+  // attach against the document: the record's pending changes, the card's
+  // name and before-values, and revert all looked at the wrong row.
+  const targetId = ((subjectType === "entity" || subjectType === "entities"
+    ? data.id || data.entityId
+    : undefined) ||
+    data.documentId ||
     data.entityId ||
     data.id ||
     randomUUID()) as string;

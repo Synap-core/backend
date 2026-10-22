@@ -50,7 +50,16 @@ const h = vi.hoisted(() => {
         const schema = await import("@synap/database/schema");
         const client = new PGlite();
         state.client = client as unknown as typeof state.client;
-        state.db = drizzle(client, { schema });
+        const db = drizzle(client, { schema });
+        // PGlite is ONE connection: an AGENT's proposal reads its focus and
+        // mints its receipt session through the global `db` inside the
+        // proposal writer's transaction, which deadlocks here (a pool gives
+        // production a second connection). Run the body on the same handle;
+        // atomicity is not under test.
+        (db as unknown as { transaction: unknown }).transaction = async (
+          fn: (tx: unknown) => Promise<unknown>
+        ) => fn(db);
+        state.db = db;
       }
       return state.db;
     },
@@ -205,15 +214,30 @@ beforeAll(async () => {
     `insert into workspaces (id, owner_id, name) values ($1, $3, 'Private'), ($2, $3, 'Shared')`,
     [W1, W2, USER]
   );
+  // The agent is an editor of the shared space: the gate checks an agent
+  // write's membership as the AGENT, and a non-member's write files a
+  // `workspace.join` request instead of reaching the ladder (both agent rows
+  // below read "proposed" for that reason alone without it).
   await q(
     `insert into workspace_members (id, workspace_id, user_id, role)
-     values (gen_random_uuid(), $1, $3, 'owner'), (gen_random_uuid(), $2, $3, 'owner')`,
-    [W1, W2, USER]
+     values (gen_random_uuid(), $1, $3, 'owner'), (gen_random_uuid(), $2, $3, 'owner'),
+            (gen_random_uuid(), $2, $4, 'editor')`,
+    [W1, W2, USER, AGENT]
   );
   await q(
     `insert into profiles (id, slug, display_name, scope, entity_scope, profile_kind, is_active, origin, ui_hints, default_values)
      values ($1, 'note', 'Note', 'system', 'pod', 'kind', true, 'authored', '{}', '{}')`,
     [NOTE_PROFILE]
+  );
+  // The attributed agent's ORDINARY lane for an entity update is auto (a
+  // governance rule, rung 2.8). Without it the lane is propose (rung 9), so
+  // "filed" would prove nothing about M2 and the own-document control could
+  // never apply. With it, only the M2 floor (forcePropose, above the rules)
+  // files the attributed agent's attach.
+  await q(
+    `insert into governance_rules (id, principal_kind, agent_user_id, scope_kind, target_kind, target_pattern, verdict, created_by, created_at)
+     values (gen_random_uuid(), 'agent', $1, 'pod', 'action', 'entity.update', 'auto', $2, now())`,
+    [AGENT, USER]
   );
 });
 
@@ -284,6 +308,19 @@ describe("every AI body attach is reviewed (M2)", () => {
     });
     expect(res.status).toBe("proposed");
     expect(await bodyOf(entityId)).toBeNull();
+    // Filed as THIS record's update by THIS agent — not a join request or
+    // any other gate that also answers "proposed".
+    const { rows } = await q<{
+      status: string;
+      proposal_type: string;
+      agent_user_id: string | null;
+    }>(
+      `select status, proposal_type, agent_user_id from proposals where target_id = $1`,
+      [entityId]
+    );
+    expect(rows).toEqual([
+      { status: "pending", proposal_type: "update", agent_user_id: AGENT },
+    ]);
   });
 });
 
