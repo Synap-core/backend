@@ -6,8 +6,6 @@
  * Two credentials reach the person here, and only two:
  *   1. a Kratos session — the cookie or `X-Session-Token`, judged by the
  *      Kratos middleware (`authMiddleware`, @synap/auth) exactly as before;
- *      one sent as `X-Session-Token` is marked `kratos_token`, and credential
- *      doors ask it for a recent sign-in as they ask a device;
  *   2. a Synap app's DEVICE token, sent as
  *      `Authorization: Bearer synap_pd_…`, minted only by
  *      `services/person-device-token.ts` and resolved only by
@@ -38,13 +36,7 @@ import {
   isPersonDeviceToken,
   resolvePersonDeviceSession,
 } from "@synap/database/person-devices";
-import {
-  KRATOS_TOKEN_SESSION,
-  kratosCredentialTime,
-  runAsDeviceSession,
-  runAsKratosTokenSession,
-  type KratosAuthenticationFacts,
-} from "../utils/device-session.js";
+import { runAsDeviceSession } from "../utils/device-session.js";
 
 /** The bearer credential of `Authorization`, or null. Scheme is case-insensitive. */
 export function bearerCredential(header: string | undefined): string | null {
@@ -61,21 +53,7 @@ export function appSessionMiddleware(
 ): MiddlewareHandler {
   return async (c, next) => {
     const bearer = bearerCredential(c.req.header("authorization"));
-    if (!isPersonDeviceToken(bearer)) {
-      return kratos(c, () => {
-        // A Kratos session sent as a token: its clock rides the request's
-        // scope too, for a credential write deep in a service.
-        if (c.get("sessionKind" as never) !== KRATOS_TOKEN_SESSION) {
-          return next();
-        }
-        const session = c.get("session" as never) as
-          (KratosAuthenticationFacts & { id?: string }) | undefined;
-        return runAsKratosTokenSession(
-          { id: session?.id ?? "", authTime: kratosCredentialTime(session) },
-          () => next()
-        );
-      });
-    }
+    if (!isPersonDeviceToken(bearer)) return kratos(c, next);
 
     let session;
     try {
