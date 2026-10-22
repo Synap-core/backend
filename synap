@@ -6661,8 +6661,15 @@ cmd_archive_request() {
 _units_have_systemd() { [ -d "${SYNAP_SYSTEMD_RUN_DIR:-/run/systemd/system}" ] && command -v systemctl >/dev/null 2>&1; }
 _units_names() { (cd "$1" 2>/dev/null && ls -1 synap-*.service synap-*.timer synap-*.path 2>/dev/null) || true; }
 _units_self() { readlink -f "$SYNAP_SELF" 2>/dev/null || echo "$SYNAP_SELF"; }
-_units_render() { # <template> <deploy-dir>
-    sed -e "s#@SYNAP@#$(_units_self)#g" -e "s#@DEPLOY_DIR@#$2#g" "$1"
+_units_render() { # <template> <deploy-dir>  (+ the archive timeout ladder, deploy/archive-limits.sh)
+    (
+        # shellcheck source=/dev/null
+        [ -f "$2/archive-limits.sh" ] || { echo "units: $2/archive-limits.sh is missing" >&2; exit 1; }
+        . "$2/archive-limits.sh"
+        sed -e "s#@SYNAP@#$(_units_self)#g" -e "s#@DEPLOY_DIR@#$2#g" \
+            -e "s#@ARCHIVE_UNIT_TIMEOUT_SECONDS@#${ARCHIVE_UNIT_TIMEOUT_SECONDS:?}#g" \
+            -e "s#@ARCHIVE_UNIT_STOP_SECONDS@#${ARCHIVE_UNIT_STOP_SECONDS:?}#g" "$1"
+    )
 }
 # <unit> <deploy-dir> → missing | outdated | current (installed vs this template)
 _units_state() {

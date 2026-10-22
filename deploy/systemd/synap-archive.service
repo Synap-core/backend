@@ -1,6 +1,5 @@
 # Synap archive request: pod-agent runs in a container where the pod's volumes
-# are not files it can read (an archive made there was uploaded empty,
-# 2026-10-21). It writes state/requests/archive.json; this unit runs
+# are not files it can read. It writes state/requests/archive.json; this unit runs
 # deploy/archive-pod.sh on the host, under the update lock, and records the
 # outcome with the archive's manifest. Started by synap-archive.path.
 # Template: synap units install.
@@ -25,4 +24,7 @@ ExecStart=@SYNAP@ archive-request
 # an outcome) still gets one, so pod-agent and the CP never wait on it.
 # No StartLimit*= override and the leading "-": see synap-update.service.
 ExecStopPost=-/bin/sh -c 'exec /bin/sh "$${SYNAP_DEPLOY_DIR}/request-outcome.sh" archive'
-TimeoutStartSec=60min
+# The archive timeout ladder (deploy/archive-limits.sh): this unit is its
+# innermost step, so an overrun is recorded here first, with its reason.
+TimeoutStartSec=@ARCHIVE_UNIT_TIMEOUT_SECONDS@
+TimeoutStopSec=@ARCHIVE_UNIT_STOP_SECONDS@

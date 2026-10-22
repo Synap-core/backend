@@ -7,7 +7,7 @@
 #
 # pod-agent never archives the pod itself: from inside its container the
 # pod's volumes are not files it can read, and an archive made there was
-# uploaded EMPTY while reporting success (2026-10-21). This script writes
+# uploaded EMPTY while reporting success. This script writes
 # state/requests/archive.json (the ARCHIVE REQUEST CONTRACT above
 # cmd_archive_request in `synap`); the host's synap-archive.path runs
 # deploy/archive-pod.sh there, under the update lock, and records the outcome
@@ -51,7 +51,12 @@ esac
 case "$UPLOAD_URL" in *'"'*|*'\'*|*' '*) refuse "ARCHIVE_UPLOAD_URL_INVALID — unexpected characters" ARCHIVE_UPLOAD_URL_INVALID ;; esac
 
 ID="archive-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-HOST_REQUEST_TIMEOUT_SECONDS="${ARCHIVE_TIMEOUT_SECONDS:-3300}"; export HOST_REQUEST_TIMEOUT_SECONDS
+# The wait is a step of the archive timeout ladder (archive-limits.sh): longer
+# than the host unit's own limit, shorter than pod-agent's kill.
+# shellcheck source=/dev/null
+[ -f "$DEPLOY_DIR/archive-limits.sh" ] || refuse "archive-limits.sh is missing from the deploy dir" "archive limits missing"
+. "$DEPLOY_DIR/archive-limits.sh"
+HOST_REQUEST_TIMEOUT_SECONDS="${ARCHIVE_TIMEOUT_SECONDS:-$ARCHIVE_REQUEST_WAIT_SECONDS}"; export HOST_REQUEST_TIMEOUT_SECONDS
 if host_request archive "$ID" \
     "{\"schema\":1,\"id\":\"$ID\",\"uploadUrl\":\"$UPLOAD_URL\",\"recipients\":[$RCPTS],\"requestedBy\":\"pod-agent\",\"requestedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
     "archive this pod"; then
