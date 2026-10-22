@@ -18,8 +18,9 @@
  *
  * A Kratos session sent as `X-Session-Token` (`sessionKind: kratos_token`)
  * is held by an app the same way, so it meets the same rule with its own
- * clock, the session's `authenticated_at` (moved by a Kratos re-login with
- * `refresh=true`). Only a browser's cookie session is exempt.
+ * clock: when a credential was last presented at this pod in that session
+ * (`kratosCredentialTime`; a Kratos re-login with `refresh=true` moves it, a
+ * federated one does not). Only a browser's cookie session is exempt.
  *
  * The session comes from the context (`ctx.sessionKind` and the
  * device `ctx.session` names, set only by `createContext` from what
@@ -53,11 +54,12 @@ export interface DeviceSessionFacts {
 }
 
 export interface SessionKindCarrier {
-  session?: {
-    id?: string;
-    authenticated_at?: string | null;
-    device?: { id?: string; authTime?: Date | null };
-  } | null;
+  session?:
+    | (KratosAuthenticationFacts & {
+        id?: string;
+        device?: { id?: string; authTime?: Date | null };
+      })
+    | null;
   sessionKind?: string | null;
 }
 
@@ -86,13 +88,48 @@ export function runAsKratosTokenSession<T>(
   return sessionScope.run({ ...session, kind: KRATOS_TOKEN_SESSION }, fn);
 }
 
-/** When a Kratos session last really authenticated, or null if unknown. */
-export function kratosAuthTime(
-  authenticatedAt: string | null | undefined
+/**
+ * Ways to authenticate a person can only complete by presenting a credential
+ * AT this pod (Kratos `authentication_methods[].method`). A federated sign-in
+ * (`oidc`: Synap Cloud or any other provider) is not one: the provider may
+ * answer from its own session without asking anything, so it can never prove
+ * the person is here now. Nor is an account recovery.
+ */
+const POD_CREDENTIAL_METHODS = new Set([
+  "password",
+  "webauthn",
+  "passkey",
+  "totp",
+  "lookup_secret",
+  "code",
+]);
+
+/** The part of a Kratos session that says how it was authenticated. */
+export interface KratosAuthenticationFacts {
+  authentication_methods?: Array<{
+    method?: string | null;
+    completed_at?: string | null;
+  }> | null;
+}
+
+/**
+ * When the person last presented a credential AT this pod in this Kratos
+ * session (`POD_CREDENTIAL_METHODS`), or null: a session authenticated only
+ * through a federated provider, or one that does not say, has no such time.
+ * This is the step-up clock of a Kratos session; `authenticated_at` is not,
+ * because a silent federated re-login moves it.
+ */
+export function kratosCredentialTime(
+  session: KratosAuthenticationFacts | null | undefined
 ): Date | null {
-  if (!authenticatedAt) return null;
-  const at = new Date(authenticatedAt);
-  return Number.isNaN(at.getTime()) ? null : at;
+  let latest: Date | null = null;
+  for (const m of session?.authentication_methods ?? []) {
+    if (!m?.method || !POD_CREDENTIAL_METHODS.has(m.method)) continue;
+    const at = m.completed_at ? new Date(m.completed_at) : null;
+    if (!at || Number.isNaN(at.getTime())) continue;
+    if (!latest || at > latest) latest = at;
+  }
+  return latest;
 }
 
 /** Is this request a Synap app's device session (by context, else scope)? */
@@ -117,7 +154,7 @@ function clockOf(ctx?: SessionKindCarrier | null): DeviceSessionFacts | null {
   if (ctx?.sessionKind === KRATOS_TOKEN_SESSION) {
     return {
       id: ctx.session?.id ?? "",
-      authTime: kratosAuthTime(ctx.session?.authenticated_at),
+      authTime: kratosCredentialTime(ctx.session),
     };
   }
   const fromScope = sessionScope.getStore();

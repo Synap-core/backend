@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { loginHintFor, signInAgainReason, withLoginHint } from "./login-hint";
+import {
+  loginHintFor,
+  signInAgainReason,
+  withLoginHint,
+  withoutFederatedSignIn,
+} from "./login-hint";
 
 const flow = (...names: string[]) => ({
   ui: { nodes: names.map((name) => ({ type: "input", attributes: { name } })) },
@@ -64,5 +69,24 @@ describe("signInAgainReason", () => {
     expect(signInAgainReason("/settings/security")).toBe(
       "Sign in again to change your security settings."
     );
+  });
+});
+
+describe("withoutFederatedSignIn", () => {
+  it("drops the federated (oidc) methods and keeps the password form", () => {
+    const flow = {
+      id: "f",
+      ui: {
+        nodes: [
+          { group: "default", attributes: { name: "csrf_token" } },
+          { group: "password", attributes: { name: "password" } },
+          { group: "oidc", attributes: { name: "provider" } },
+        ],
+      },
+    };
+    const out = withoutFederatedSignIn(flow);
+    expect(out.ui.nodes.map((n) => n.group)).toEqual(["default", "password"]);
+    expect(out.id).toBe("f");
+    expect(flow.ui.nodes).toHaveLength(3);
   });
 });

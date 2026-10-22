@@ -150,7 +150,7 @@ describe("app-session-bearer — only a device token becomes a person", () => {
 
 describe("a Kratos session sent as a token carries its clock into the request scope", () => {
   // The Kratos half resolved an X-Session-Token whose last sign-in is `at`.
-  const tokenApp = (at: Date, kind = "kratos_token") => {
+  const tokenApp = (at: Date, kind = "kratos_token", method = "password") => {
     const app = new Hono();
     const kratos: MiddlewareHandler = async (c, next) => {
       c.set(
@@ -159,6 +159,7 @@ describe("a Kratos session sent as a token carries its clock into the request sc
           id: "kratos-session-1",
           identity: { id: "person-1", traits: { email: "p@x" } },
           authenticated_at: at.toISOString(),
+          authentication_methods: [{ method, completed_at: at.toISOString() }],
         } as never
       );
       c.set("sessionKind" as never, kind as never);
@@ -182,6 +183,15 @@ describe("a Kratos session sent as a token carries its clock into the request sc
     const res = await tokenApp(new Date(Date.now() - 6 * MIN)).request(
       "/trpc/write"
     );
+    expect(res.status).toBe(403);
+  });
+
+  it("signed in a minute ago through Synap Cloud only: refused (a federated sign-in never sets the clock)", async () => {
+    const res = await tokenApp(
+      new Date(Date.now() - MIN),
+      "kratos_token",
+      "oidc"
+    ).request("/trpc/write");
     expect(res.status).toBe(403);
   });
 

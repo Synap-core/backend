@@ -40,9 +40,10 @@ import {
 } from "@synap/database/person-devices";
 import {
   KRATOS_TOKEN_SESSION,
-  kratosAuthTime,
+  kratosCredentialTime,
   runAsDeviceSession,
   runAsKratosTokenSession,
+  type KratosAuthenticationFacts,
 } from "../utils/device-session.js";
 
 /** The bearer credential of `Authorization`, or null. Scheme is case-insensitive. */
@@ -67,15 +68,10 @@ export function appSessionMiddleware(
         if (c.get("sessionKind" as never) !== KRATOS_TOKEN_SESSION) {
           return next();
         }
-        const session = c.get("session" as never) as {
-          id?: string;
-          authenticated_at?: string;
-        };
+        const session = c.get("session" as never) as
+          (KratosAuthenticationFacts & { id?: string }) | undefined;
         return runAsKratosTokenSession(
-          {
-            id: session?.id ?? "",
-            authTime: kratosAuthTime(session?.authenticated_at),
-          },
+          { id: session?.id ?? "", authTime: kratosCredentialTime(session) },
           () => next()
         );
       });

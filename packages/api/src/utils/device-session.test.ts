@@ -32,17 +32,40 @@ describe("assertFreshAuthentication from the context", () => {
     expect(refused(device(ago(60_000)))).toBe(false);
   });
 
-  it("a Kratos session TOKEN past the window is refused; within it, not", () => {
-    const token = (authenticatedAt: string | undefined) => ({
+  it("a Kratos session TOKEN: its clock is the last credential presented AT the pod", () => {
+    const token = (
+      methods: Array<{ method: string; completed_at?: string }> | undefined
+    ) => ({
       sessionKind: "kratos_token",
-      session: { id: "s", authenticated_at: authenticatedAt },
+      session: { id: "s", authentication_methods: methods },
     });
-    expect(refused(token(ago(STEP_UP_WINDOW_MS + 60_000).toISOString()))).toBe(
+    const at = (ms: number) => ago(ms).toISOString();
+    const stale = at(STEP_UP_WINDOW_MS + 60_000);
+    expect(refused(token([{ method: "password", completed_at: stale }]))).toBe(
       true
     );
     expect(refused(token(undefined))).toBe(true);
-    expect(refused(token("not a date"))).toBe(true);
-    expect(refused(token(ago(60_000).toISOString()))).toBe(false);
+    expect(
+      refused(token([{ method: "password", completed_at: "not a date" }]))
+    ).toBe(true);
+    expect(
+      refused(token([{ method: "password", completed_at: at(60_000) }]))
+    ).toBe(false);
+    expect(
+      refused(token([{ method: "webauthn", completed_at: at(60_000) }]))
+    ).toBe(false);
+    // A federated sign-in (Synap Cloud) may be silent: it never sets the clock.
+    expect(refused(token([{ method: "oidc", completed_at: at(60_000) }]))).toBe(
+      true
+    );
+    expect(
+      refused(
+        token([
+          { method: "password", completed_at: stale },
+          { method: "oidc", completed_at: at(60_000) },
+        ])
+      )
+    ).toBe(true);
   });
 
   it("CONTROL — a browser cookie session, however old, and no session are not asked", () => {
@@ -51,7 +74,12 @@ describe("assertFreshAuthentication from the context", () => {
         sessionKind: "kratos",
         session: {
           id: "s",
-          authenticated_at: ago(10 * 86_400_000).toISOString(),
+          authentication_methods: [
+            {
+              method: "password",
+              completed_at: ago(10 * 86_400_000).toISOString(),
+            },
+          ],
         },
       })
     ).toBe(false);

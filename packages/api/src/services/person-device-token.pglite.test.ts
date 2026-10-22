@@ -276,6 +276,14 @@ const kratosStandIn: MiddlewareHandler = async (c, next) => {
         authenticated_at: new Date(
           Date.now() - Number(token[1]) * MIN_MS
         ).toISOString(),
+        authentication_methods: [
+          {
+            method: "password",
+            completed_at: new Date(
+              Date.now() - Number(token[1]) * MIN_MS
+            ).toISOString(),
+          },
+        ],
       } as never
     );
     c.set("sessionKind" as never, "kratos_token" as never);
@@ -384,7 +392,17 @@ const revokeRequest = (params: Record<string, string>) =>
 const MIN_MS = 60 * 1000;
 
 /** A Kratos session (as the consent procedure sees it) signed in `ago` ms back. */
-const kratosCtx = (userId: string, agoMs: number) =>
+/**
+ * A console session signed in `agoMs` ago. `methods` = how, most recent
+ * last, each with its own age (default: the pod password, at that time).
+ */
+const kratosCtx = (
+  userId: string,
+  agoMs: number,
+  methods: Array<{ method: string; agoMs: number }> = [
+    { method: "password", agoMs },
+  ]
+) =>
   ({
     authenticated: true,
     userId,
@@ -393,6 +411,10 @@ const kratosCtx = (userId: string, agoMs: number) =>
       identity: { id: userId, traits: { email: `${userId}@x` } },
       active: true,
       authenticated_at: new Date(Date.now() - agoMs).toISOString(),
+      authentication_methods: methods.map((m) => ({
+        method: m.method,
+        completed_at: new Date(Date.now() - m.agoMs).toISOString(),
+      })),
     },
   }) as never;
 
@@ -409,6 +431,7 @@ async function consent(
     prompt?: string;
     maxAge?: number;
     requestedAgoMs?: number;
+    methods?: Array<{ method: string; agoMs: number }>;
   } = {}
 ): Promise<string> {
   const signedInAgo = opts.signedInAgoMs ?? MIN_MS;
@@ -430,7 +453,7 @@ async function consent(
         : {}),
     },
     userId,
-    kratosCtx(userId, signedInAgo)
+    kratosCtx(userId, signedInAgo, opts.methods)
   );
   const url = new URL(redirectTo);
   expect(url.searchParams.get("iss")).toBe(ISSUER);
@@ -476,6 +499,7 @@ const device = async (id: string) =>
       expires_at: Date;
       revoked_at: Date | null;
       created_at: Date;
+      auth_time: Date | null;
     }>(`select * from person_devices where id = $1`, [id])
   ).rows[0]!;
 
@@ -1217,6 +1241,79 @@ describe("(j) step-up: the clock is the device's real sign-in", () => {
     // max_age wider than the sign-in's age is satisfied.
     await expect(
       consent(PERSON, { maxAge: 3600, signedInAgoMs: 30 * MIN_MS })
+    ).resolves.toBeTruthy();
+  });
+
+  it("a Synap Cloud sign-in never sets the clock: a device minted from one needs a step-up at once", async () => {
+    const code = await consent(PERSON, {
+      methods: [{ method: "oidc", agoMs: MIN_MS }],
+    });
+    const { body } = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: DESKTOP,
+      redirect_uri: LOOPBACK,
+      code_verifier: VERIFIER,
+      resource: ISSUER,
+      synap_device_label: "Cloud laptop",
+    });
+    expect((await device(body.synap_device_id)).auth_time).toBeNull();
+    expect(stepUpRequired(await decideDevice(body.access_token))).toBe(true);
+  });
+
+  it('"Confirm it\'s you" answered with Synap Cloud only is refused (POD_CREDENTIAL_REQUIRED), before any code', async () => {
+    const codesBefore = await q<{ n: number }>(
+      `select count(*)::int as n from oauth_authorization_codes`
+    );
+    // Password 3 h ago, then a (possibly silent) Cloud re-login just now.
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 10_000,
+        methods: [
+          { method: "password", agoMs: 180 * MIN_MS },
+          { method: "oidc", agoMs: 10_000 },
+        ],
+      })
+    ).rejects.toMatchObject({ reasonCode: "POD_CREDENTIAL_REQUIRED" });
+    const codesAfter = await q<{ n: number }>(
+      `select count(*)::int as n from oauth_authorization_codes`
+    );
+    expect(codesAfter.rows[0]!.n).toBe(codesBefore.rows[0]!.n);
+    // The screen knows before the click.
+    const shown = await getOAuthConsentContext(
+      {
+        clientId: DESKTOP,
+        redirectUri: LOOPBACK,
+        responseType: "code",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        resource: ISSUER,
+        prompt: "login",
+        authRequest: signAuthRequestTime(Date.now() - 11_000),
+      },
+      PERSON,
+      (
+        kratosCtx(PERSON, 10_000, [
+          { method: "password", agoMs: 180 * MIN_MS },
+          { method: "oidc", agoMs: 10_000 },
+        ]) as unknown as { session: never }
+      ).session
+    );
+    expect(shown.podCredentialRequired).toBe(true);
+    expect(shown.reauthenticate).toBe(false);
+  });
+
+  it("CONTROL — the same step-up answered with the pod password after the request passes", async () => {
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 10_000,
+        methods: [
+          { method: "oidc", agoMs: 180 * MIN_MS },
+          { method: "password", agoMs: 10_000 },
+        ],
+      })
     ).resolves.toBeTruthy();
   });
 
