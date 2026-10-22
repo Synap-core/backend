@@ -13,6 +13,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { ExitLink } from "../../../../lib/exit-link";
+import { navHref } from "../../../../lib/console-nav";
 import { formatRelative } from "../../../../lib/format";
 import { publisherExit } from "../../../../lib/open-in";
 import { trpc } from "../../../../lib/trpc";
@@ -172,7 +173,10 @@ export function SignInAppObject({
             <ErrorNote
               message={`${unlink.data.email ?? "That account"} is unlinked, but their Synap Cloud sign-in could not be removed from their Pod account.`}
             />
-            <Link href="/members" className="text-[13px] underline">
+            <Link
+              href={navHref("members", { focus: unlinking?.id })}
+              className="text-[13px] underline"
+            >
               Remove it from Members
             </Link>
           </>
