@@ -48,11 +48,21 @@ async function setup() {
       [id, channel, role, content, routed]
     );
   await row("recall", "room-session", "assistant", NOTICE);
-  await row("recall-one", "room-session", "assistant", "Found 1 thing you captured earlier that may help this session:\n- A");
+  await row(
+    "recall-one",
+    "room-session",
+    "assistant",
+    "Found 1 thing you captured earlier that may help this session:\n- A"
+  );
   await row("person-same-words", "room-session", "user", NOTICE);
   await row("other-room", "room-other", "assistant", NOTICE);
   await row("agent-same-words", "room-session", "assistant", NOTICE, "agent-1");
-  await row("connector-send", "room-session", "assistant", "Thanks, see you Tuesday");
+  await row(
+    "connector-send",
+    "room-session",
+    "assistant",
+    "Thanks, see you Tuesday"
+  );
   return db;
 }
 
