@@ -55,8 +55,11 @@ import {
 } from "@synap/database";
 import {
   buildObjectActionTitle,
+  resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
+import type { OpenBlocker } from "@synap-core/types/connections";
+import { readDependencyState } from "../links/dependency-links.js";
 import {
   resolveSessionTitle,
   readSuspendedNote,
@@ -251,6 +254,7 @@ export interface PacketDecision {
 export type NextMoveKind =
   | "owed_slot"
   | "pending_proposal"
+  | "blocker_dropped"
   | "waiting_on_session"
   | "agent_slot"
   | "undeclared"
@@ -268,9 +272,22 @@ export interface ContinuationNextMove {
   reason: string;
   /** The proposal id, for `pending_proposal`. */
   proposalId?: string;
-  /** The blocking session's id, for `waiting_on_session`. */
+  /**
+   * The blocking session's id, for `waiting_on_session`; for `blocker_dropped`,
+   * the DROPPED blocker's id when that blocker is a session.
+   */
   sessionId?: string;
 }
+
+/**
+ * What still holds a session up, by THE dependency rule (`deriveOpenBlockers`
+ * via `readDependencyState` / `readDependencyFacts`): open blockers and
+ * DROPPED ones, `replaces` followed. An input of `deriveNextMove`, never a
+ * wire section — a failed read is `unavailable`, never "not blocked".
+ */
+export type NextMoveBlockers =
+  | { status: "ok"; items: readonly OpenBlocker[] }
+  | { status: "unavailable"; reason: string };
 
 export interface ContinuationPacket {
   version: 1;
@@ -1318,6 +1335,16 @@ function readLastCompletion(
   };
 }
 
+/**
+ * A blocker as a next move names it: its title in quotes, or — unnamed or not
+ * visible — "the <noun>" through the vocabulary door (no a/an guessing).
+ */
+function blockerName(b: OpenBlocker): string {
+  return b.title
+    ? `"${b.title}"`
+    : `the ${resolveObjectNoun(b.kind).toLowerCase() || "blocker"}`;
+}
+
 const isOpenStatus = (status: string): boolean =>
   (OPEN_SESSION_STATUSES as readonly string[]).includes(status);
 
@@ -1326,12 +1353,25 @@ const isOpenStatus = (status: string): boolean =>
  *
  *  1. the oldest owed human slot, else the oldest pending proposal — what the
  *     user can do NOW always wins, blocked or not;
- *  2. `waiting_on_session` while an OPEN session blocks this one (closed,
- *     cancelled, failed and stale blockers have settled). It OUTRANKS open agent
+ *  2. `blocker_dropped` while a blocker ENDED WITHOUT DELIVERING (a session
+ *     cancelled or failed, a track archived, an entity lost) and nothing has
+ *     replaced it — founder decision 2026-10-22: the work this session waited
+ *     on never happened, so it must RE-PLAN (remove the dependency, or link the
+ *     session that replaces it), never proceed as if it had been delivered.
+ *     The AI's move: re-planning is the session's own work, and it has the
+ *     doors (`synap_update_session` `removeBlockedBySessionIds` /
+ *     `addBlockedBySessionIds`; a `replaces` link through the link doors).
+ *     Outranks waiting: another blocker still being open does not make
+ *     the plan any less broken;
+ *  2b. `waiting_on_session` while an OPEN session blocks this one (a closed
+ *     blocker has delivered; a stale one is resumable and still holds; a
+ *     replaced one is followed to its replacement). It OUTRANKS open agent
  *     slots: a `blocked_by` edge says this session's work depends on the
  *     blocker's outcome, so producing its deliverables now would build on inputs
  *     that are not settled — presenting them as the next move is the lie this
- *     kind exists to stop. Skipped for a terminal session (nothing left to wait for);
+ *     kind exists to stop. Session blockers only: the kind's door is a session
+ *     (an open entity or track blocker is not surfaced here). Steps 2 and 2b
+ *     are skipped for a terminal session (nothing left to wait for);
  *  3. the first open agent slot — this session's own work stays actionable
  *     while its sub-sessions run;
  *  4. `none` for a terminal session;
@@ -1354,15 +1394,15 @@ export function deriveNextMove(input: {
   owedSlots: PacketSection<PacketSlotItem>;
   pendingProposals: PacketSection<PacketProposalItem>;
   aiCanDo: PacketSection<PacketSlotItem>;
-  /** Blocker sessions, OPEN ones first (`readOutboundSessions` orders them so). */
-  blockedBy: PacketSection<PacketChildItem>;
+  /** What still holds it up, by THE dependency rule — see {@link NextMoveBlockers}. */
+  blockers: NextMoveBlockers;
   /** The session's declared `expectedOutputs`, retired ones included. */
   expectedOutputs: ExpectedOutput[];
   outputs: PacketSection<PacketOutputItem>;
   /** Sub-sessions, OPEN then CLOSED first (`readInboundSessions` orders them so). */
   children: PacketSection<PacketChildItem>;
 }): ContinuationNextMove {
-  const { owedSlots, pendingProposals, aiCanDo, blockedBy } = input;
+  const { owedSlots, pendingProposals, aiCanDo, blockers } = input;
   const terminal = isTerminalSessionStatus(input.status);
   if (owedSlots.status === "ok" && owedSlots.items[0]) {
     const s = owedSlots.items[0];
@@ -1397,24 +1437,45 @@ export function deriveNextMove(input: {
     };
   }
   if (!terminal) {
-    if (blockedBy.status === "unavailable") {
+    if (blockers.status === "unavailable") {
       return {
         kind: "unknown",
         actor: "none",
         label: "Next move unknown",
-        reason: `Whether this session is blocked could not be read (${blockedBy.reason}).`,
+        reason: `Whether this session is blocked could not be read (${blockers.reason}).`,
       };
     }
-    const open = blockedBy.items.filter((b) => isOpenStatus(b.status));
+    const dropped = blockers.items.filter((b) => b.dropped);
+    const gone = dropped[0];
+    if (gone) {
+      const name = blockerName(gone);
+      const how = gone.status ? ` (${resolveStatusLabel(gone.status)})` : "";
+      const others =
+        dropped.length > 1
+          ? ` (and ${dropped.length - 1} more dropped blocker(s))`
+          : "";
+      return {
+        kind: "blocker_dropped",
+        actor: "ai",
+        label: `Re-plan without ${name}`,
+        reason: `This session waited on ${name}, which ended without delivering${how}${others}. Its work cannot go ahead as planned: remove that dependency if the work no longer needs it, or wait on the session that retries it instead.`,
+        ...(gone.kind === "session" ? { sessionId: gone.id } : {}),
+      };
+    }
+    const open = blockers.items.filter((b) => b.kind === "session");
     const first = open[0];
     if (first) {
       const others =
         open.length > 1 ? ` (and ${open.length - 1} more open blocker(s))` : "";
+      const name = blockerName(first);
+      const state = first.status
+        ? `still ${resolveStatusLabel(first.status).toLowerCase()}`
+        : "not finished";
       return {
         kind: "waiting_on_session",
         actor: "none",
-        label: `Waiting on "${first.title}"`,
-        reason: `This session is blocked by "${first.title}", which is still ${first.statusLabel.toLowerCase()}${others}; its work waits until that settles.`,
+        label: `Waiting on ${name}`,
+        reason: `This session is blocked by ${name}, which is ${state}${others}; its work waits until that settles.`,
         sessionId: first.id,
       };
     }
@@ -1593,6 +1654,7 @@ export async function projectContinuationPacket(
     evaluation,
     externalAgent,
     priorStages,
+    dependency,
   ] = await Promise.all([
     readProject(database, ctx.userId, row.projectId ?? null).catch(
       unavailable(
@@ -1729,6 +1791,22 @@ export async function projectContinuationPacket(
         "What the earlier stages of this track produced could not be read."
       )
     ),
+    // THE dependency rule for the next move — open AND dropped blockers,
+    // `replaces` followed — under the same session floor as `blockedBy`.
+    readDependencyState({ kind: "session", id: row.id }, reader.userId, {
+      roster: reader.roster === true,
+    })
+      .then((state): NextMoveBlockers => ({
+        status: "ok",
+        items: state.openBlockers,
+      }))
+      .catch(
+        unavailable(
+          row.id,
+          "dependency",
+          "Whether this session is blocked could not be read."
+        )
+      ),
   ]);
 
   // ONE lineage read, TWO projections: `parent` (identity) and `resume`
@@ -1814,7 +1892,7 @@ export async function projectContinuationPacket(
       owedSlots,
       pendingProposals,
       aiCanDo,
-      blockedBy,
+      blockers: dependency,
       expectedOutputs: all,
       outputs,
       children,

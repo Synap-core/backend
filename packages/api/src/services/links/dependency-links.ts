@@ -34,7 +34,10 @@
  *
  * WHAT IS DERIVED AT READ TIME, precisely. Nothing stores blocked-ness.
  * {@link readDependencyState} answers "is this unit blocked, and by what" for
- * any kind. The `session.unblocked` notification fires only for SESSION
+ * any kind — by OPEN blockers, and by DROPPED ones (ended without delivering:
+ * cancelled, failed, archived, lost), which hold their dependent until it
+ * re-plans. Only a DELIVERED blocker clears (`classifyDependencyBlocker`).
+ * The `session.unblocked` notification fires only for SESSION
  * dependents, on a SESSION close (`session-unblock-reactor.ts`), and its
  * "still open" test now spans every blocker kind. An entity or track that
  * clears does NOT notify anyone yet: there is no close event for an entity
@@ -55,13 +58,15 @@ import {
   projectTracks,
   projects,
   drizzleSql,
+  isLifecycleCategory,
 } from "@synap/database";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   DEPENDENCY_LINK_TYPE,
   REPLACES_LINK_TYPE,
   deriveOpenBlockers,
-  isDependencyBlockerCleared,
   isDependencyEndpointKind,
+  isDependencyEnded,
   isDependencyLinkType,
   normaliseDependencyRelation,
   type DependencyEdge,
@@ -710,7 +715,10 @@ const MAX_REPLACEMENT_HOPS = 8;
 
 export interface DependencyState {
   blocked: boolean;
-  /** The blockers still holding it up, after `replaces` following. */
+  /**
+   * The blockers still holding it up, after `replaces` following — open ones
+   * and dropped ones (`dropped: true`, ended without delivering).
+   */
   openBlockers: OpenBlocker[];
   /** Every declared blocker (outgoing `blocked_by`), open or cleared. */
   declared: DependencyNodeRef[];
@@ -763,9 +771,19 @@ async function followReplacements(
   return walked;
 }
 
+/**
+ * How a dependency read sees SESSION endpoints: owner-only by default; a door
+ * that reads a session through its human roster (the continuation packet)
+ * passes `roster: true`, so a blocker it may see there keeps its name.
+ */
+export interface DependencyReadOptions {
+  roster?: boolean;
+}
+
 async function readStates(
   refs: readonly DependencyNodeRef[],
-  userId: string
+  userId: string,
+  opts: DependencyReadOptions = {}
 ): Promise<Map<string, DependencyNodeState>> {
   const out = new Map<string, DependencyNodeState>();
   const idsOf = (kind: string) => [
@@ -783,22 +801,32 @@ async function readStates(
           .where(
             and(
               inArray(focusSessions.id, sessionIds),
-              sessionReadableWhere({ userId })
+              sessionReadableWhere({ userId, roster: opts.roster === true })
             )
           )
       ).map((r) => r.id)
     );
     const rows = await db
-      .select({ id: focusSessions.id, status: focusSessions.status })
+      .select({
+        id: focusSessions.id,
+        status: focusSessions.status,
+        title: focusSessions.title,
+        goal: focusSessions.goal,
+      })
       .from(focusSessions)
       .where(inArray(focusSessions.id, sessionIds));
-    const found = new Map(rows.map((r) => [r.id, r.status]));
+    const found = new Map(rows.map((r) => [r.id, r]));
     for (const id of sessionIds) {
+      const row = found.get(id);
       out.set(
         `session:${id}`,
-        !found.has(id)
+        !row
           ? { missing: true }
-          : { status: found.get(id) ?? null, hidden: !visible.has(id) }
+          : {
+              status: row.status ?? null,
+              title: resolveSessionTitle(row),
+              hidden: !visible.has(id),
+            }
       );
     }
   }
@@ -818,6 +846,9 @@ async function readStates(
     const rows = await db
       .select({
         id: entities.id,
+        title: entities.title,
+        status: entities.status,
+        statusCategory: entities.statusCategory,
         properties: entities.properties,
         deletedAt: entities.deletedAt,
       })
@@ -830,9 +861,18 @@ async function readStates(
         out.set(`entity:${id}`, { missing: true });
         continue;
       }
-      const status = (row.properties as Record<string, unknown> | null)?.status;
+      // The kind's lifecycle COLUMNS are the truth (0319): the status and its
+      // fixed category. A kind that declares no lifecycle has neither; its
+      // free `status` property is then the only status there is.
+      const propStatus = (row.properties as Record<string, unknown> | null)
+        ?.status;
       out.set(`entity:${id}`, {
-        status: typeof status === "string" ? status : null,
+        status:
+          row.status ?? (typeof propStatus === "string" ? propStatus : null),
+        category: isLifecycleCategory(row.statusCategory)
+          ? row.statusCategory
+          : null,
+        title: row.title ?? null,
         hidden: !visible.has(id),
       });
     }
@@ -854,16 +894,25 @@ async function readStates(
       ).map((r) => r.id)
     );
     const rows = await db
-      .select({ id: projectTracks.id, status: projectTracks.status })
+      .select({
+        id: projectTracks.id,
+        status: projectTracks.status,
+        name: projectTracks.name,
+      })
       .from(projectTracks)
       .where(inArray(projectTracks.id, trackIds));
-    const found = new Map(rows.map((r) => [r.id, r.status]));
+    const found = new Map(rows.map((r) => [r.id, r]));
     for (const id of trackIds) {
+      const row = found.get(id);
       out.set(
         `track:${id}`,
-        !found.has(id)
+        !row
           ? { missing: true }
-          : { status: found.get(id) ?? null, hidden: !visible.has(id) }
+          : {
+              status: row.status ?? null,
+              title: row.name,
+              hidden: !visible.has(id),
+            }
       );
     }
   }
@@ -880,7 +929,8 @@ async function readStates(
  */
 export async function readDependencyState(
   node: DependencyNodeRef,
-  userId: string
+  userId: string,
+  opts: DependencyReadOptions = {}
 ): Promise<DependencyState> {
   const declaredRows = await db
     .select({
@@ -912,7 +962,7 @@ export async function readDependencyState(
     const i = k.indexOf(":");
     return { kind: k.slice(0, i), id: k.slice(i + 1) };
   });
-  const states = await readStates(refs, userId);
+  const states = await readStates(refs, userId, opts);
   const openBlockers = deriveOpenBlockers(node, edges, (r) =>
     states.get(`${r.kind}:${r.id}`)
   );
@@ -921,8 +971,13 @@ export async function readDependencyState(
 
 /** Per node: is it blocked, and how many open units of work wait on it. */
 export interface DependencyFacts {
-  /** Open blockers after `replaces` following (`deriveOpenBlockers`). */
+  /**
+   * Blockers still holding it up after `replaces` following
+   * (`deriveOpenBlockers`) — open AND dropped.
+   */
   openBlockers: number;
+  /** The same blockers, each with its `dropped` mark and (when visible) name. */
+  blockers: OpenBlocker[];
   /**
    * Dependents still OPEN by their own kind's rule that declare
    * `blocked_by` this node — "Unblocks N". A deleted dependent does not
@@ -1003,11 +1058,13 @@ export async function readDependencyFacts(
       const dep = { kind: e.fromType as string, id: e.fromId };
       const st = stateOf(dep);
       if (!st || st.missing) continue;
-      if (isDependencyBlockerCleared(dep.kind, st.status)) continue;
+      if (isDependencyEnded(dep.kind, st.status, st.category)) continue;
       waiting.add(nodeKey(dep));
     }
+    const blockers = deriveOpenBlockers(node, edges, stateOf);
     out.set(nodeKey(node), {
-      openBlockers: deriveOpenBlockers(node, edges, stateOf).length,
+      openBlockers: blockers.length,
+      blockers,
       unblocks: waiting.size,
     });
   }

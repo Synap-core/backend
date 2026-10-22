@@ -8,7 +8,8 @@
  * from the blockers themselves: unblocking would mean remembering to write the
  * old status back. Atlassian's flag-don't-status is the shipped prior art.
  * Blocked-ness here is therefore DERIVED, every time, from the subset of edges
- * whose TARGET is still in an open status — see `openBlockerIds` below.
+ * whose TARGET has not DELIVERED (still open, or dropped: cancelled / failed)
+ * — see `openBlockerIds` below.
  *
  * The producer mirrors `recordSessionSpawn` (`@synap/database`'s
  * `session-spawn.ts`) exactly:
@@ -540,9 +541,11 @@ export async function attachSessionEdges<T extends { id: string }>(
 }
 
 /**
- * The blockers of `sessionId` that are STILL OPEN — i.e. the reason it is
- * blocked right now. Empty ⇒ not blocked (it may still carry closed blocker
- * edges; those are history, and are deliberately not deleted on close).
+ * The blockers of `sessionId` that STILL HOLD IT — i.e. the reason it is
+ * blocked right now: open ones, and DROPPED ones (cancelled / failed without
+ * delivering — the session must re-plan before it is free). Empty ⇒ not
+ * blocked (it may still carry DELIVERED blocker edges; those are history, and
+ * are deliberately not deleted on close).
  *
  * This is the derivation, and there is ONE: `readDependencyState` over the
  * pure `deriveOpenBlockers` rule — so a session waiting on an ENTITY or a

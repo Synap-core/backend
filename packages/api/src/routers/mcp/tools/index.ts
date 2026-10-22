@@ -2060,7 +2060,7 @@ export const tools = {
               items: { type: "string", format: "uuid" },
               maxItems: 20,
               description:
-                "Optional UUIDs of sessions this one WAITS ON — each becomes a `session --blocked_by--> session` edge (blocked-ness is derived: it clears when the blocker closes). Every id must be a session you own. Reported per id on the result's `blockerLinks` (linked | proposed | failed with a reason).",
+                "Optional UUIDs of sessions this one WAITS ON — each becomes a `session --blocked_by--> session` edge (blocked-ness is derived: it clears when the blocker is closed — delivered; a cancelled or failed blocker holds, marked dropped, until you re-plan). Every id must be a session you own. Reported per id on the result's `blockerLinks` (linked | proposed | failed with a reason).",
             },
             suspendedIntent: {
               type: "string",
@@ -2147,7 +2147,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`addOutput` appends, `completeOutput` CLAIMS one by key — evidence or review marks it met), roster (`addAgentId` appends one agent, idempotently), the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it), and what it WAITS ON (`addBlockedBySessionIds` / `removeBlockedBySessionIds` — each id reported on `blockerLinks` / `blockerRemovals`). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
+          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`addOutput` appends, `completeOutput` CLAIMS one by key — evidence or review marks it met), roster (`addAgentId` appends one agent, idempotently), the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it), and what it WAITS ON (`addBlockedBySessionIds` / `removeBlockedBySessionIds` — each id reported on `blockerLinks` / `blockerRemovals`). When a blocker ENDED WITHOUT DELIVERING (cancelled, failed), it does not clear: the session's next move is `blocker_dropped` — re-plan: remove that blocker if the work no longer needs it, or remove it and add the session that retries it, in one call. Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2371,7 +2371,7 @@ export const tools = {
               items: { type: "string", format: "uuid" },
               maxItems: 20,
               description:
-                "Stop waiting on these sessions — when a blocker is no longer needed, or the work moved to another session. Reported per id on `blockerRemovals` (removed | absent — there was no such edge | proposed | failed with a reason). To wait on a retry instead, remove the old one and add the retry (`addBlockedBySessionIds`) in the same call.",
+                "Stop waiting on these sessions — how you RE-PLAN when a blocker was dropped (cancelled / failed), or when it is no longer needed. Reported per id on `blockerRemovals` (removed | absent — there was no such edge | proposed | failed with a reason). To wait on a retry instead, remove the old one and add the retry (`addBlockedBySessionIds`) in the same call.",
             },
           },
           required: ["sessionId"],

@@ -320,6 +320,18 @@ describe("openBlockerIds (the derivation — nothing stores blocked-ness)", () =
     expect(await openBlockerIds(A)).toEqual([]);
   });
 
+  // FOUNDER DECISION 2026-10-22. Rules out "every terminal blocker settles":
+  // a cancelled / failed blocker never delivered, so the dependent is still
+  // held (dropped) until it re-plans — and the unblock reactor, which reads
+  // exactly this, stays silent.
+  it.each(["cancelled", "failed"])(
+    "still lists a blocker that ended %s without delivering (dropped)",
+    async (status) => {
+      feed(status);
+      expect(await openBlockerIds(A)).toEqual([B]);
+    }
+  );
+
   it("is empty for a session that no longer exists", async () => {
     queue.push([]);
     expect(await openBlockerIds(A)).toEqual([]);
