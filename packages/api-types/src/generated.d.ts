@@ -14117,6 +14117,14 @@ export type ExecuteCapabilityResult = {
 	kind: "not_found";
 	message: string;
 };
+declare const LIFECYCLE_CATEGORIES$1: readonly [
+	"open",
+	"active",
+	"paused",
+	"done",
+	"lost"
+];
+type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 export interface DependencyNodeRef {
 	kind: string;
 	id: string;
@@ -17134,14 +17142,6 @@ export type SessionInteractionsSection = {
  * read through {@link sessionReadableWhere}.
  */
 export type SessionViewerRole = "member" | "owner";
-declare const LIFECYCLE_CATEGORIES$1: readonly [
-	"open",
-	"active",
-	"paused",
-	"done",
-	"lost"
-];
-type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 declare const LANDED_DECISION_STATES: readonly [
 	"applied",
 	"approved",
@@ -32259,7 +32259,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				aiTyped: number;
+				csvPlanFailures?: {
+					path: string;
+					reason: string;
+				}[] | undefined;
 				deduplicated: boolean;
+				degraded?: true | undefined;
+				degradedReason?: string | undefined;
 				droppedReferences: number;
 				homes: ImportHomesSummary;
 				intake?: RecordImportIntakeResult | undefined;
@@ -32271,6 +32277,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionError?: string | undefined;
 				sessionId: string | null;
 				sessionSource?: "failed" | "minted" | "none" | "playbook" | "prior" | "provided" | undefined;
+				skippedRows?: {
+					count: number;
+					reason: string;
+				} | undefined;
 				source: ImportRevealSource;
 				stats: Record<string, unknown>;
 				summary: string;
@@ -32298,7 +32308,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				aiTyped: number;
+				csvPlanFailures?: {
+					path: string;
+					reason: string;
+				}[] | undefined;
 				deduplicated: boolean;
+				degraded?: true | undefined;
+				degradedReason?: string | undefined;
 				droppedReferences: number;
 				homes: ImportHomesSummary;
 				intake?: RecordImportIntakeResult | undefined;
@@ -32310,6 +32326,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionError?: string | undefined;
 				sessionId: string | null;
 				sessionSource?: "failed" | "minted" | "none" | "playbook" | "prior" | "provided" | undefined;
+				skippedRows?: {
+					count: number;
+					reason: string;
+				} | undefined;
 				source: ImportRevealSource;
 				stats: Record<string, unknown>;
 				summary: string;
