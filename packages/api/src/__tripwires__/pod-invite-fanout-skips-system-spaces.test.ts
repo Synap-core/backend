@@ -10,7 +10,7 @@
  * and `apps/api/src` that calls `recordInviteAcceptance` is an accept path;
  * none of them may also call `workspaces.findMany(`.
  *
- * NON-VACUITY: the scan must find the known accept files (invites.ts, setup.ts)
+ * NON-VACUITY: the scan must find the one accept door (accept-invite-for.ts)
  * and its classifier must flag a literal sample of the old pattern.
  *
  * WHAT IT DOES NOT SEE (stated): a fan-out written with another query shape
@@ -53,9 +53,10 @@ describe("tripwire: a pod invite never fans out over every space", () => {
     expect(files.length).toBeGreaterThan(300);
     const rels = acceptPaths.map((f) => f.rel);
     expect(rels).toEqual(
+      // The one accept door (`acceptInviteFor`, called by both
+      // `workspaces.acceptInvite` and `/setup/accept-invite`).
       expect.arrayContaining([
-        "packages/api/src/routers/workspaces/invites.ts",
-        "packages/api/src/routers/hub-protocol/rest/setup.ts",
+        "packages/api/src/routers/workspaces/accept-invite-for.ts",
       ])
     );
   });
@@ -70,5 +71,22 @@ describe("tripwire: a pod invite never fans out over every space", () => {
     expect(
       acceptPaths.filter((f) => OLD_FAN_OUT.test(f.code)).map((f) => f.rel)
     ).toEqual([]);
+  });
+
+  it("ONE accept door: only acceptInviteFor spends an invite into access", () => {
+    // A second accept path is how the console's "Create account and join"
+    // once wrote bare member rows with no audit line and never told the CP.
+    expect(acceptPaths.map((f) => f.rel)).toEqual([
+      "packages/api/src/routers/workspaces/accept-invite-for.ts",
+    ]);
+    const callers = files
+      .filter((f) => /\bacceptInviteFor\s*\(/.test(f.code))
+      .map((f) => f.rel)
+      .sort();
+    expect(callers).toEqual([
+      "packages/api/src/routers/hub-protocol/rest/setup.ts",
+      "packages/api/src/routers/workspaces/accept-invite-for.ts",
+      "packages/api/src/routers/workspaces/invites.ts",
+    ]);
   });
 });

@@ -38,8 +38,6 @@ import {
   workspaceMembers,
   invites,
   users,
-  recordInviteAcceptance,
-  listPodInviteFanOutWorkspaceIds,
   EventRepository,
   eventRepository,
   ApiKeyRepository,
@@ -106,6 +104,7 @@ import {
 } from "@synap/database/schema";
 
 import { kratosAdmin, safeTokenEqual } from "@synap/auth";
+import { acceptInviteFor } from "../../workspaces/accept-invite-for.js";
 import type { Context } from "hono";
 import {
   logger,
@@ -2252,44 +2251,9 @@ export function registerSetupRoutes(app: HubHono): void {
 
     await ensureUserRow(identityId, email, name);
 
-    // Accept invite: add workspace membership (workspace or all-pod).
-    if (invite.type === "workspace" && invite.workspaceId) {
-      const alreadyMember = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, invite.workspaceId),
-          eq(workspaceMembers.userId, identityId)
-        ),
-      });
-      if (!alreadyMember) {
-        await db.insert(workspaceMembers).values({
-          workspaceId: invite.workspaceId,
-          userId: identityId,
-          role: invite.role as "owner" | "editor" | "viewer",
-        });
-      }
-    } else {
-      // Ordinary spaces only: never a system space (pod-admin), so an
-      // invite's role can never become pod admin.
-      const fanOutIds = await listPodInviteFanOutWorkspaceIds();
-      for (const ws of fanOutIds.map((id) => ({ id }))) {
-        const alreadyMember = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, ws.id),
-            eq(workspaceMembers.userId, identityId)
-          ),
-        });
-        if (!alreadyMember) {
-          await db.insert(workspaceMembers).values({
-            workspaceId: ws.id,
-            userId: identityId,
-            role: invite.role as "owner" | "editor" | "viewer",
-          });
-        }
-      }
-    }
-
-    await recordInviteAcceptance(invite, identityId);
-    await db.delete(invites).where(eq(invites.id, invite.id));
+    // The one accept door, shared with `workspaces.acceptInvite`: member
+    // events, pod membership, team person, audit line, the CP's invite row.
+    await acceptInviteFor(invite, { id: identityId, email });
     logger.info(
       { identityId, email, inviteId: invite.id },
       "accept-invite: account created and invite accepted"

@@ -29,7 +29,11 @@ const listIdentities = vi.fn(async () => ({ data: [{ id: EXISTING }] }));
 const dbDelete = vi.fn(() => ({ where: async () => undefined }));
 const dbInsert = vi.fn(() => ({ values: async () => undefined }));
 const disconnectAllUserConnections = vi.fn(async () => undefined);
-const recordInviteAcceptance = vi.fn(async () => undefined);
+const acceptInviteFor = vi.fn(async () => ({
+  status: "accepted",
+  type: "workspace",
+  workspaceId: WS,
+}));
 const ensureUserRow = vi.fn(async () => undefined);
 
 const openInvite = () => ({
@@ -50,7 +54,6 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   return {
     ...actual,
-    recordInviteAcceptance,
     db: {
       query: {
         invites: { findFirst: vi.fn(async () => openInvite()) },
@@ -68,6 +71,9 @@ vi.mock("../../../scripts/create-admin-user.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   ensureUserRow,
 }));
+// The accept itself is the one door's job, driven for real in
+// `workspaces.accept-invite-door.pglite.test.ts`; here it is only observed.
+vi.mock("../../workspaces/accept-invite-for.js", () => ({ acceptInviteFor }));
 vi.mock(
   "../../../services/capabilities/capability-nango-sync.js",
   async (importOriginal) => ({
@@ -102,7 +108,7 @@ beforeEach(() => {
     dbDelete,
     dbInsert,
     disconnectAllUserConnections,
-    recordInviteAcceptance,
+    acceptInviteFor,
     ensureUserRow,
   ])
     m.mockClear();
@@ -114,7 +120,10 @@ describe("POST /setup/accept-invite", () => {
     const res = await accept(BODY);
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ userId: FRESH, success: true });
-    expect(recordInviteAcceptance).toHaveBeenCalledTimes(1);
+    expect(acceptInviteFor).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "i-1" }),
+      { id: FRESH, email: EMAIL }
+    );
   });
 
   it("an existing account is answered ACCOUNT_EXISTS and is never deleted or replaced", async () => {
@@ -129,7 +138,7 @@ describe("POST /setup/accept-invite", () => {
     // No second identity with the token holder's password.
     expect(createIdentity).toHaveBeenCalledTimes(1);
     // And the invite is not spent.
-    expect(recordInviteAcceptance).not.toHaveBeenCalled();
+    expect(acceptInviteFor).not.toHaveBeenCalled();
     createIdentity.mockReset();
   });
 

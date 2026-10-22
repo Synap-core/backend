@@ -18,7 +18,6 @@ import {
   gt,
   workspaces,
   workspaceMembers,
-  podMembers,
   invites,
   getDb,
   eventRepository,
@@ -29,9 +28,7 @@ import {
   detachTeamMemberFacet,
   backfillTeamPersonBridge as runBackfillTeamPersonBridge,
   notAnAppAgent,
-  recordInviteAcceptance,
   readIdentityKeepers,
-  listPodInviteFanOutWorkspaceIds,
 } from "@synap/database";
 import { verifyCpJwt } from "../../utils/jwks-client.js";
 import { TRPCError } from "@trpc/server";
@@ -42,6 +39,7 @@ import {
   materializePodAdminsIntoWorkspace,
 } from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
+import { acceptInviteFor } from "./accept-invite-for.js";
 import { disconnectAllUserConnections } from "../../services/capabilities/capability-nango-sync.js";
 import { kratosAdmin } from "@synap/auth";
 import { config } from "@synap-core/core";
@@ -673,125 +671,11 @@ export const inviteProcedures = {
         });
       }
 
-      const dbConn = await getDb();
-      // Shared singleton — a fresh EventRepository has no registered hooks, so
-      // its emitCompleted() append would silently never reach the
-      // realtime/materialization/sync hooks.
-      const eventRepo = eventRepository;
-      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
-
-      if (invite.type === "workspace") {
-        if (!invite.workspaceId)
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const member = await memberRepo.add(
-          {
-            workspaceId: invite.workspaceId,
-            userId: ctx.userId,
-            role: invite.role as "owner" | "editor" | "viewer",
-            inviteId: invite.id,
-          },
-          ctx.userId
-        );
-        // Team roster → person bridge (best-effort; never blocks membership)
-        void ensureTeamPersonForMember(dbConn, {
-          memberUserId: ctx.userId,
-          workspaceId: invite.workspaceId,
-          ownerUserId: invite.invitedBy ?? ctx.userId,
-        }).catch((err) => {
-          logger.warn(
-            {
-              err,
-              memberUserId: ctx.userId,
-              workspaceId: invite.workspaceId,
-            },
-            "Failed to ensure team person for member on invite accept"
-          );
-        });
-        auditLog({
-          subjectType: "workspaceMember",
-          action: "add",
-          phase: "completed",
-          subjectId: member.id,
-          userId: ctx.userId,
-          workspaceId: invite.workspaceId,
-          data: {
-            role: invite.role,
-            invitedBy: invite.invitedBy,
-            inviteId: invite.id,
-          },
-        });
-        await recordInviteAcceptance(invite, ctx.userId);
-        await db.delete(invites).where(eq(invites.id, invite.id));
-        void notifyCpInviteLifecycle({
-          inviteToken: invite.token,
-          event: "accepted",
-          actorEmail: me?.email ?? undefined,
-          actorUserId: ctx.userId,
-        });
-        return {
-          status: "accepted" as const,
-          type: "workspace" as const,
-          workspaceId: invite.workspaceId,
-        };
-      } else {
-        // Pod invite. ADDITIVE (Membership → Visibility, Wave 1): record durable
-        // pod-membership identity. The workspace fan-out below is KEPT — removing
-        // it now would regress visibility before Wave 2's floor consults
-        // pod_members. onConflictDoNothing: one row per user_id.
-        await db
-          .insert(podMembers)
-          .values({
-            userId: ctx.userId,
-            podRole: "member",
-            invitedBy: invite.invitedBy ?? null,
-          })
-          .onConflictDoNothing();
-        // Pod invite — add to all workspaces
-        // Ordinary spaces only: a system space (pod-admin) is never fanned
-        // into, so an invite's role can never become pod admin.
-        const fanOutIds = await listPodInviteFanOutWorkspaceIds();
-        for (const ws of fanOutIds.map((id) => ({ id }))) {
-          const alreadyMember = await db.query.workspaceMembers.findFirst({
-            where: and(
-              eq(workspaceMembers.workspaceId, ws.id),
-              eq(workspaceMembers.userId, ctx.userId)
-            ),
-          });
-          if (alreadyMember) continue;
-          await memberRepo.add(
-            {
-              workspaceId: ws.id,
-              userId: ctx.userId,
-              role: invite.role as "owner" | "editor" | "viewer",
-            },
-            ctx.userId
-          );
-          // Team roster → person bridge (best-effort; never blocks membership)
-          void ensureTeamPersonForMember(dbConn, {
-            memberUserId: ctx.userId,
-            workspaceId: ws.id,
-            ownerUserId: invite.invitedBy ?? ctx.userId,
-          }).catch((err) => {
-            logger.warn(
-              { err, memberUserId: ctx.userId, workspaceId: ws.id },
-              "Failed to ensure team person for member on pod invite accept"
-            );
-          });
-        }
-        await recordInviteAcceptance(invite, ctx.userId);
-        await db.delete(invites).where(eq(invites.id, invite.id));
-        void notifyCpInviteLifecycle({
-          inviteToken: invite.token,
-          event: "accepted",
-          actorEmail: me?.email ?? undefined,
-          actorUserId: ctx.userId,
-        });
-        return {
-          status: "accepted" as const,
-          type: "pod" as const,
-          workspacesJoined: allWorkspaces.length,
-        };
-      }
+      // The one accept door (`accept-invite-for.ts`), shared with the
+      // console's "Create account and join" (`/setup/accept-invite`).
+      if (invite.type === "workspace" && !invite.workspaceId)
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      return acceptInviteFor(invite, { id: ctx.userId, email: me?.email });
     }),
 
   /**
@@ -1326,118 +1210,14 @@ export const inviteProcedures = {
         });
       }
 
-      const dbConn = await getDb();
-      // Shared singleton — a fresh EventRepository has no registered hooks, so
-      // its emitCompleted() append would silently never reach the
-      // realtime/materialization/sync hooks.
-      const eventRepo = eventRepository;
-      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
-
-      if (invite.type === "workspace") {
-        if (!invite.workspaceId)
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const member = await memberRepo.add(
-          {
-            workspaceId: invite.workspaceId,
-            userId: podUser.id,
-            role: invite.role as "owner" | "editor" | "viewer",
-            inviteId: invite.id,
-          },
-          podUser.id
-        );
-        // Team roster → person bridge (best-effort; never blocks membership)
-        void ensureTeamPersonForMember(dbConn, {
-          memberUserId: podUser.id,
-          workspaceId: invite.workspaceId,
-          ownerUserId: invite.invitedBy ?? podUser.id,
-        }).catch((err) => {
-          logger.warn(
-            {
-              err,
-              memberUserId: podUser.id,
-              workspaceId: invite.workspaceId,
-            },
-            "Failed to ensure team person for member on CP invite accept"
-          );
-        });
-        auditLog({
-          subjectType: "workspaceMember",
-          action: "add",
-          phase: "completed",
-          subjectId: member.id,
-          userId: podUser.id,
-          workspaceId: invite.workspaceId,
-          data: { source: "cp-proxy", email: payload.email },
-        });
-        await recordInviteAcceptance(invite, podUser.id);
-        await db.delete(invites).where(eq(invites.id, invite.id));
-        void notifyCpInviteLifecycle({
-          inviteToken: invite.token,
-          event: "accepted",
-          actorEmail: payload.email,
-          actorUserId: podUser.id,
-        });
-        return {
-          status: "accepted" as const,
-          type: "workspace" as const,
-          workspaceId: invite.workspaceId,
-        };
-      } else {
-        // Pod invite via CP proxy. ADDITIVE (Membership → Visibility, Wave 1):
-        // record durable pod-membership identity. The workspace fan-out below is
-        // KEPT — removing it now would regress visibility before Wave 2's floor
-        // consults pod_members. onConflictDoNothing: one row per user_id.
-        await db
-          .insert(podMembers)
-          .values({
-            userId: podUser.id,
-            podRole: "member",
-            invitedBy: invite.invitedBy ?? null,
-          })
-          .onConflictDoNothing();
-        const fanOutIds = await listPodInviteFanOutWorkspaceIds();
-        for (const ws of fanOutIds.map((id) => ({ id }))) {
-          const alreadyMember = await db.query.workspaceMembers.findFirst({
-            where: and(
-              eq(workspaceMembers.workspaceId, ws.id),
-              eq(workspaceMembers.userId, podUser.id)
-            ),
-          });
-          if (alreadyMember) continue;
-          await memberRepo.add(
-            {
-              workspaceId: ws.id,
-              userId: podUser.id,
-              role: invite.role as "owner" | "editor" | "viewer",
-            },
-            podUser.id
-          );
-          // Team roster → person bridge (best-effort; never blocks membership)
-          void ensureTeamPersonForMember(dbConn, {
-            memberUserId: podUser.id,
-            workspaceId: ws.id,
-            ownerUserId: invite.invitedBy ?? podUser.id,
-          }).catch((err) => {
-            logger.warn(
-              { err, memberUserId: podUser.id, workspaceId: ws.id },
-              "Failed to ensure team person for member on CP pod invite accept"
-            );
-          });
-        }
-        await recordInviteAcceptance(invite, podUser.id);
-        await db.delete(invites).where(eq(invites.id, invite.id));
-        void notifyCpInviteLifecycle({
-          inviteToken: invite.token,
-          event: "accepted",
-          actorEmail: payload.email,
-          actorUserId: podUser.id,
-        });
-        return {
-          status: "accepted" as const,
-          type: "pod" as const,
-          workspacesJoined: allWorkspaces.length,
-        };
-      }
+      // The one accept door (`accept-invite-for.ts`).
+      if (invite.type === "workspace" && !invite.workspaceId)
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      return acceptInviteFor(
+        invite,
+        { id: podUser.id, email: payload.email },
+        { source: "cp-proxy" }
+      );
     }),
 
   /**
