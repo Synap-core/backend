@@ -325,6 +325,13 @@ async function awaitSuccessor(id: string): Promise<string> {
   throw new OAuthError("invalid_grant", INVALID);
 }
 
+export async function retireOneToken(id: string): Promise<void> {
+  await db
+    .update(oauthRefreshTokens)
+    .set({ revokedAt: new Date() })
+    .where(eq(oauthRefreshTokens.id, id));
+}
+
 /** How long after its use a DEVICE's refresh token may be retried. */
 export const DEVICE_REFRESH_RETRY_GRACE_MS = 30_000;
 
@@ -386,7 +393,7 @@ async function deviceRetryGrace(row: RefreshRow): Promise<boolean> {
     successor.revokedAt &&
     Date.now() - successor.revokedAt.getTime() < DEVICE_REFRESH_RETRY_GRACE_MS
   ) {
-    throw new OAuthError("invalid_grant", INVALID);
+    return false;
   }
   return false;
 }

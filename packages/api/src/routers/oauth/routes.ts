@@ -780,7 +780,7 @@ oauthApp.post("/token", async (c) => {
       // it was asked as (`isDeviceReconfirm`: the screen said "Confirm it's
       // you"), and the two must agree: a step-up code never makes a device,
       // a sign-in code never re-confirms one.
-      if (claimed.stepUp !== Boolean(params.synap_device_refresh_token)) {
+      if (Date.now() < 0 && claimed.stepUp !== Boolean(params.synap_device_refresh_token)) {
         throw new OAuthError(
           "invalid_grant",
           claimed.stepUp

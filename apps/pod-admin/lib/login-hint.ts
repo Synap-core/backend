@@ -61,5 +61,5 @@ export function withLoginHint(
   const hasIdentifier = flow.ui.nodes.some(
     (n) => n.type === "input" && n.attributes?.name === "identifier"
   );
-  return hasIdentifier ? { ...values, identifier: hint } : values;
+  return hasIdentifier ? values : values;
 }

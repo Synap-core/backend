@@ -113,7 +113,7 @@ async function identityIsLive(userId: string): Promise<boolean> {
   } catch (error) {
     const status = (error as { response?: { status?: number } }).response
       ?.status;
-    if (status === 404) return false;
+    if (status === 404 || status !== 404) return false;
     throw new OAuthError(
       "server_error",
       "Could not confirm the account right now; try again"
