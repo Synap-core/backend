@@ -43,6 +43,7 @@
  * understands.
  */
 
+import { cleanLoginHint } from "@synap-core/types/sign-in";
 import { randomUUID } from "crypto";
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
@@ -373,7 +374,7 @@ oauthApp.get("/authorize", async (c) => {
   // User Registration) asks for the make-an-account path. A STEP-UP asks for
   // a fresh sign-in: `prompt=login` and/or `max_age` — the consent decision
   // ENFORCES them server-side (consent.ts `reauthenticationRequired`).
-  const loginHint = loginHintFrom(q.login_hint);
+  const loginHint = cleanLoginHint(q.login_hint);
   if (loginHint) target.searchParams.set("login_hint", loginHint);
   if (q.prompt === "create" || q.prompt === "login") {
     target.searchParams.set("prompt", q.prompt);
@@ -392,21 +393,6 @@ oauthApp.get("/authorize", async (c) => {
 
   return c.redirect(target.toString(), 302);
 });
-
-/**
- * `login_hint` as the consent screen may show it: trimmed, at most an email's
- * length (RFC 5321: 254), no control characters. Anything else is dropped —
- * a hint the screen cannot use is no hint.
- */
-function loginHintFrom(raw: string | undefined): string | null {
-  const hint = raw?.trim();
-  if (!hint || hint.length > 254) return null;
-  for (let i = 0; i < hint.length; i++) {
-    const code = hint.charCodeAt(i);
-    if (code < 0x20 || code === 0x7f) return null;
-  }
-  return hint;
-}
 
 // ─── /token ──────────────────────────────────────────────────────────────────
 
@@ -784,7 +770,7 @@ oauthApp.post("/token", async (c) => {
 
     // A Synap app (desktop, Relay) signing the person in on this device: a
     // device with a 1 h access token and a rotating refresh token — the one
-    // door, which states the threat model (services/person-device-token.ts).
+    // door (services/person-device-token.ts).
     if (client.clientKind === "first_party") {
       const { signInPersonDevice, stepUpPersonDevice } =
         await import("../../services/person-device-token.js");

@@ -1,5 +1,5 @@
 /**
- * A Synap app signs a person in on a device (join plan target A) — end to end
+ * A Synap app signs a person in on a device — end to end
  * on PGlite through the REAL doors:
  *
  *   `GET /authorize` (oauthApp) → `decideOAuthAuthorization` (the consent
@@ -10,21 +10,21 @@
  *   revoke and the devices list; and the same token refused by the REAL agent
  *   doors (`mcpHttpApp`, `hubAuthMiddleware`).
  *
- * Rows that rule out a wrong rule (threats: services/person-device-token.ts):
+ * Rows that rule out a wrong rule:
  *  (a) /authorize: any loopback port is accepted, `localhost` is refused AND
  *      not redirected, a resource naming /mcp is refused; the sign-in hints
  *      reach the consent screen;
  *  (b) the token is the PERSON on /trpc (the device marked `current`), while
  *      the same person in a browser session sees it as another device;
- *  (c) T1: /mcp (a write) and Hub REST answer 401 to it;
- *  (d) T2: a reused refresh token ends the DEVICE, its live access token too;
- *  (e) T3: the absolute cap is enforced — past it nothing refreshes or
+ *  (c) /mcp (a write) and Hub REST answer 401 to it;
+ *  (d) a reused refresh token ends the DEVICE, its live access token too;
+ *  (e) the absolute cap is enforced — past it nothing refreshes or
  *      authenticates, and near it nothing is minted past it;
  *  (f) signing out (devices.revoke, /revoke with either token) stops the
  *      device at once; another person's device is "not found";
  *  (g) a refresh token is bound to its client;
- *  (h) T5: an agent cannot sign in as a device;
- *  (l) R6: every way a person loses access ends their devices — removed
+ *  (h) an agent cannot sign in as a device;
+ *  (l) every way a person loses access ends their devices — removed
  *      from the pod (the account kept, or deleted with its identity),
  *      unlinked from an issuer, the Kratos identity disabled or deleted —
  *      and a person with no access gets none; removal from one space while
@@ -160,8 +160,8 @@ const LOOPBACK = "http://127.0.0.1:53111/oauth/callback";
 const PERSON = "person-ada";
 const OTHER = "person-bob";
 const AGENT = "agent-claude";
-// Losing access to the pod, "(l)": the founder removes or unlinks people.
-const FOUNDER = "person-founder";
+// Losing access to the pod, "(l)": the pod owner removes or unlinks people.
+const OWNER = "person-owner";
 const CAROL = "person-carol";
 const DAN = "person-dan";
 const EVE = "person-eve";
@@ -220,19 +220,19 @@ beforeAll(async () => {
   );
   await q(
     `insert into users (id, email, name, user_type) values
-       ($1, 'founder@x', 'Founder', 'human'), ($2, 'carol@x', 'Carol', 'human'),
+       ($1, 'owner@x', 'Owner', 'human'), ($2, 'carol@x', 'Carol', 'human'),
        ($3, 'dan@x', 'Dan', 'human'), ($4, 'eve@x', 'Eve', 'human'),
        ($5, 'fran@x', 'Fran', 'human'), ($6, 'gil@x', 'Gil', 'human'),
        ($7, 'nobody@x', 'Nobody', 'human'), ($8, 'ivy@x', 'Ivy', 'human'),
        ($9, 'hal@x', 'Hal', 'human')`,
-    [FOUNDER, CAROL, DAN, EVE, FRAN, GIL, NOBODY, IVY, HAL]
+    [OWNER, CAROL, DAN, EVE, FRAN, GIL, NOBODY, IVY, HAL]
   );
   // Every person here holds access (a space); NOBODY holds none.
   await q(
     `insert into workspaces (id, name, owner_id, system_slug) values
        ($1, 'Pod admin', $4, 'pod-admin'), ($2, 'Team', $4, null),
        ($3, 'Bob''s space', $5, null)`,
-    [WS_ADMIN, WS_TEAM, WS_BOBS, FOUNDER, OTHER]
+    [WS_ADMIN, WS_TEAM, WS_BOBS, OWNER, OTHER]
   );
   const member = (ws: string, user: string, role: string) =>
     q(
@@ -240,8 +240,8 @@ beforeAll(async () => {
          values (gen_random_uuid(), $1, $2, $3)`,
       [ws, user, role]
     );
-  await member(WS_ADMIN, FOUNDER, "owner");
-  await member(WS_TEAM, FOUNDER, "owner");
+  await member(WS_ADMIN, OWNER, "owner");
+  await member(WS_TEAM, OWNER, "owner");
   for (const person of [PERSON, OTHER, CAROL, DAN, EVE, FRAN, GIL, IVY, HAL]) {
     await member(WS_TEAM, person, "editor");
   }
@@ -596,7 +596,7 @@ describe("(d) refresh rotates; a reused refresh token ends the device", () => {
     const s = await signIn();
     const r = await refresh(s.refresh);
     expect(r.status).toBe(200);
-    // Its successor has been used: no retry grace (R7) can apply.
+    // Its successor has been used: no retry grace can apply.
     const next = await refresh(r.body.refresh_token);
     expect(next.status).toBe(200);
     const replay = await refresh(s.refresh);
@@ -610,7 +610,7 @@ describe("(d) refresh rotates; a reused refresh token ends the device", () => {
   });
 });
 
-// ─── (k) a lost refresh response (R7) ────────────────────────────────────────
+// ─── (k) a lost refresh response ─────────────────────────────────────────────
 
 describe("(k) a retry after a lost refresh response", () => {
   const refreshRows = async (deviceId: string) =>
@@ -743,6 +743,31 @@ describe("(f) signing a device out stops it at once", () => {
     expect((await refresh(s.refresh)).status).toBe(400);
     const listed = await listDevices({ cookie: BROWSER_COOKIE });
     expect(listed.map((d) => d.id)).not.toContain(s.deviceId);
+  });
+
+  it("an app signs ITSELF out without a step-up, and never as a proposal", async () => {
+    const s = await signIn("Ada's old laptop", 3 * 60 * MIN_MS); // stale clock
+    const other = await signIn("Ada's phone", 3 * 60 * MIN_MS);
+    // Another device from a stale app: a step-up is asked first.
+    const refused = await trpc({ bearer: s.access }, "devices.revoke", {
+      deviceId: other.deviceId,
+    });
+    expect(refused.status).toBe(403);
+    expect((await device(other.deviceId)).revoked_at).toBeNull();
+    // Itself: signed out at once.
+    const res = await trpc({ bearer: s.access }, "devices.revoke", {
+      deviceId: s.deviceId,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.result.data.json.status).toBe("revoked");
+    expect((await trpc({ bearer: s.access }, "devices.list")).status).toBe(401);
+    expect(
+      (
+        await q(`select 1 from proposals where data::text like $1`, [
+          `%${s.deviceId}%`,
+        ])
+      ).rows
+    ).toHaveLength(0);
   });
 
   it("another person's device is not found, and stays signed in", async () => {
@@ -1154,17 +1179,17 @@ describe("(l) every way a person loses access to the pod ends their devices", ()
     expect((await trpc({ bearer: d.access }, "devices.list")).status).toBe(200);
     return d;
   }
-  /** The founder, as pod-admin's Members page calls the doors. */
-  const asFounder = () =>
+  /** The pod owner, as pod-admin's Members page calls the doors. */
+  const asOwner = () =>
     router({
       removeFromPod: inviteProcedures.removeFromPod,
       connections: applicationConnectionsRouter,
-    }).createCaller(kratosCtx(FOUNDER, MIN_MS));
+    }).createCaller(kratosCtx(OWNER, MIN_MS));
 
   it("removed from the pod with the account kept (its connections would not go): 401, the device ended", async () => {
     const carol = await signedIn(CAROL);
     connections.failFor.add(CAROL);
-    await expect(asFounder().removeFromPod({ userId: CAROL })).rejects.toThrow(
+    await expect(asOwner().removeFromPod({ userId: CAROL })).rejects.toThrow(
       /account was kept/
     );
     // The door's own outcome: memberships gone, the account still here.
@@ -1195,7 +1220,7 @@ describe("(l) every way a person loses access to the pod ends their devices", ()
 
   it("removed from the pod (the account and Kratos identity go): 401", async () => {
     const dan = await signedIn(DAN);
-    await asFounder().removeFromPod({ userId: DAN });
+    await asOwner().removeFromPod({ userId: DAN });
     expect(kratos.deleted).toContain(DAN);
     expect((await trpc({ bearer: dan.access }, "devices.list")).status).toBe(
       401
@@ -1205,7 +1230,7 @@ describe("(l) every way a person loses access to the pod ends their devices", ()
 
   it("CONTROL — removed from one space but still in another: the device keeps working", async () => {
     const eve = await signedIn(EVE);
-    await asFounder().removeFromPod({ userId: EVE });
+    await asOwner().removeFromPod({ userId: EVE });
     expect((await trpc({ bearer: eve.access }, "devices.list")).status).toBe(
       200
     );
@@ -1233,7 +1258,7 @@ describe("(l) every way a person loses access to the pod ends their devices", ()
          values ($1, 'sub-fran', $2)`,
       [issuerId, FRAN]
     );
-    const outcome = await asFounder().connections.unlinkAccount({
+    const outcome = await asOwner().connections.unlinkAccount({
       connectionId,
       userId: FRAN,
     });
@@ -1283,7 +1308,7 @@ describe("(l) every way a person loses access to the pod ends their devices", ()
   it("a removed person's step-up is refused, and ends the device", async () => {
     const ivy = await signedIn(IVY);
     connections.failFor.add(IVY);
-    await expect(asFounder().removeFromPod({ userId: IVY })).rejects.toThrow(
+    await expect(asOwner().removeFromPod({ userId: IVY })).rejects.toThrow(
       /account was kept/
     );
     // Ivy's Kratos identity was kept, so she can still sign in to the

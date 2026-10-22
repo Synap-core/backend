@@ -1,5 +1,4 @@
--- 0340 — signed-in devices of the Synap apps (join plan target A, founder
--- decision `decision:join-target-a-2026-10-21`: access 1 h, refresh rotating
+-- 0340 — signed-in devices of the Synap apps (access 1 h, refresh rotating
 -- with family revoke, 30-day idle expiry, 180-day absolute cap).
 --
 -- A FIRST-PARTY client (Synap Desktop, Synap Relay — `FIRST_PARTY_CLIENTS`,

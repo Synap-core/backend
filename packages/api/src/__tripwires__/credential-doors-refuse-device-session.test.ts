@@ -3,7 +3,7 @@
  * DEVICE token reaches may create, rotate, widen or approve a CREDENTIAL
  * unless the person REALLY authenticated minutes ago (a step-up).
  *
- * WHY (join plan target A; PR #59 review by console-security): a device
+ * WHY: a device
  * access token (`synap_pd_…`) lives 1 h and is the PERSON on the app API. Any
  * app-API door that writes an API key, a grant, an app's reach, a governance
  * rule, a computer's approval, an OAuth/MCP connection, a refresh family or a
@@ -69,7 +69,7 @@ const SKIP = new Set(["node_modules", "dist", "__tests__", "__tripwires__"]);
  * list of doors: each must still have a widening writer (checked below), so
  * a renamed table cannot silently drop out.
  *
- * `vault_grants` IS one (lead decision on PR #59): a grant hands an agent a
+ * `vault_grants` IS one: a grant hands an agent a
  * secret's VALUE. Installing a template or answering a "provide" ask from a
  * Synap app therefore asks for a fresh sign-in, only when a grant is written.
  */

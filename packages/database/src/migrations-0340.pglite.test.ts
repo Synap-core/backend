@@ -1,6 +1,6 @@
 /**
  * REAL-POSTGRES (PGlite) test for migration 0340 — signed-in devices of the
- * Synap apps (join plan target A).
+ * Synap apps.
  *
  * PRE-0340 SHAPE: what a pod that ran 0339 has — the baseline's own oauth and
  * apps blocks, 0338, 0338b and 0339 on them. `users` is a one-column stand-in.

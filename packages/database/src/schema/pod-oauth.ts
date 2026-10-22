@@ -245,7 +245,7 @@ export const oauthRefreshTokens = pgTable(
 );
 
 /**
- * A Synap app signed in as a PERSON (0340, join plan target A): one row per
+ * A Synap app signed in as a PERSON (0340): one row per
  * sign-in of a FIRST-PARTY client (`FIRST_PARTY_CLIENTS`, api
  * `routers/oauth/config.ts`). It is the refresh family (`oauth_refresh_tokens`
  * with `device_id` = this id) and the thing the person sees in "Signed-in

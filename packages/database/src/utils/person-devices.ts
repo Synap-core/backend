@@ -1,10 +1,10 @@
 /**
- * Signed-in devices of the Synap apps (0340, join plan target A) — the half
+ * Signed-in devices of the Synap apps (0340) — the half
  * every process shares: the access token's grammar, the ONE lookup the app
  * doors use (`/trpc` and the other app routes through the api's
  * `appSessionMiddleware`, realtime through `verifyHandshakeUser`), and the ONE
  * revoke. MINTING is not here: it has one door, api
- * `services/person-device-token.ts`, which states the threat model.
+ * `services/person-device-token.ts`.
  *
  * The executor is passed in (as `revokeApiKeys` takes it), so each process
  * uses its own pool and a test its own database.

@@ -92,6 +92,10 @@
       "types": "./dist/device/index.d.ts",
       "import": "./dist/device/index.js"
     },
+    "./sign-in": {
+      "types": "./dist/sign-in/index.d.ts",
+      "import": "./dist/sign-in/index.js"
+    },
     "./kratos-messages": {
       "types": "./dist/kratos-messages/index.d.ts",
       "import": "./dist/kratos-messages/index.js"

@@ -35,7 +35,7 @@ export interface KratosSession {
   authenticated_at?: string;
   /**
    * Set ONLY when the person came in on a Synap app's device token
-   * (`appSessionMiddleware`, join plan target A): the device it was minted
+   * (`appSessionMiddleware`): the device it was minted
    * for, and when the person last really authenticated for it (`authTime`,
    * the step-up clock). Absent on a Kratos session. Such a session has no
    * `authenticated_at`, so account recovery never counts it as a recent

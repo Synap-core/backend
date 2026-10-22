@@ -6,7 +6,7 @@
  * Two credentials reach the person here, and only two:
  *   1. a Kratos session — the cookie or `X-Session-Token`, judged by the
  *      Kratos middleware (`authMiddleware`, @synap/auth) exactly as before;
- *   2. a Synap app's DEVICE token (join plan target A), sent as
+ *   2. a Synap app's DEVICE token, sent as
  *      `Authorization: Bearer synap_pd_…`, minted only by
  *      `services/person-device-token.ts` and resolved only by
  *      `resolvePersonDeviceSession` into the SAME `{ identity: { id, traits } }`

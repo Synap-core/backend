@@ -1,5 +1,5 @@
 /**
- * FRESH AUTHENTICATION at a credential door (join plan target A, step-up).
+ * FRESH AUTHENTICATION at a credential door (a step-up).
  *
  * A door that creates, rotates, widens or approves a CREDENTIAL — an API key,
  * a grant, a secret's grant, a computer, an app, an integration, an OAuth or

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loginHintFor, withLoginHint } from "./login-hint";
+import { loginHintFor, signInAgainReason, withLoginHint } from "./login-hint";
 
 const flow = (...names: string[]) => ({
   ui: { nodes: names.map((name) => ({ type: "input", attributes: { name } })) },
@@ -47,5 +47,22 @@ describe("withLoginHint", () => {
     ).toEqual({ identifier: "kratos@x" });
     expect(withLoginHint({}, flow("traits.email"), "a@x")).toEqual({});
     expect(withLoginHint({}, flow("identifier"), null)).toEqual({});
+  });
+});
+
+describe("signInAgainReason", () => {
+  it("names the Synap app whose consent asked to confirm it's you", () => {
+    expect(
+      signInAgainReason("/oauth/consent?client_id=synap-desktop&prompt=login")
+    ).toBe("Synap Desktop asks you to confirm it's you.");
+    expect(signInAgainReason("/oauth/consent?client_id=dcr_x")).toBe(
+      "An app asks you to confirm it's you."
+    );
+  });
+
+  it("keeps the console's own reason elsewhere", () => {
+    expect(signInAgainReason("/settings/security")).toBe(
+      "Sign in again to change your security settings."
+    );
   });
 });

@@ -3,7 +3,7 @@
  * a refresh token revoked (`oauth_refresh_tokens.revoked_at`) is one of the
  * KNOWN writers below, each with the reason it is safe.
  *
- * WHY (PR #59, console-security review): a Synap app's device refresh is
+ * WHY: a Synap app's device refresh is
  * single-use, and redeem (routers/oauth/refresh.ts) reads "this device token
  * is revoked while its device lives" as a REUSE — two holders — and ends the
  * device. That reading is true only because exactly ONE writer revokes a
@@ -41,7 +41,7 @@ const SKIP = new Set(["node_modules", "dist", "__fixtures__"]);
 /** Every writer of `revoked_at` on refresh tokens, and why it is safe. */
 const CLASSIFIED: Record<string, string> = {
   deviceRetryGrace:
-    "THE single-token retire: a device's UNUSED successor, during a retry (R7). The one writer that leaves the device alive.",
+    "THE single-token retire: a device's UNUSED successor, during a retry after a lost response. The one writer that leaves the device alive.",
   revokeRefreshFamily:
     "a whole family, then the connection's access key: for a device, the device ends (revokeConnectionAccessKey).",
   revokePersonDevice: "the device ends in the same transaction as its tokens.",
@@ -155,7 +155,7 @@ describe("tripwire: device-refresh-token-retire-writers", () => {
       unclassified,
       `New writer(s) of oauth_refresh_tokens.revoked_at: ${unclassified.join(", ")}. ` +
         "Redeem reads a revoked device token on a live device as a REUSE and ends the device; " +
-        "classify the writer in CLASSIFIED with why that stays true (refresh.ts R1/R7)."
+        "classify the writer in CLASSIFIED with why that stays true (refresh.ts redeemRefreshToken)."
     ).toEqual([]);
     const gone = Object.keys(CLASSIFIED).filter((w) => !writers.has(w));
     expect(

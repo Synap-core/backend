@@ -5,19 +5,34 @@
  * consent screen, and the sign-in that consent bounces to reads it back from
  * its `return` URL (or from its own `?login_hint=`).
  *
- * A HINT, never trusted: the person can change it, and Kratos checks the
- * password against whatever is typed. Trimmed, at most an email's length,
- * no control characters; anything else is ignored.
+ * A HINT, never trusted (`cleanLoginHint`, shared with the pod's
+ * /authorize, decides what is kept).
  */
-const CONSENT_PATH = "/oauth/consent";
-const MAX_LENGTH = 254;
+import { cleanLoginHint, confirmItsYouReason } from "@synap-core/types/sign-in";
 
-function clean(raw: string | null | undefined): string | null {
-  const hint = raw?.trim();
-  if (!hint || hint.length > MAX_LENGTH) return null;
-  // eslint-disable-next-line no-control-regex -- control characters are refused
-  if (/[\u0000-\u001f\u007f]/.test(hint)) return null;
-  return hint;
+const CONSENT_PATH = "/oauth/consent";
+
+/** The consent request this sign-in returns to, or null. */
+function consentRequest(returnTo: string): URLSearchParams | null {
+  let url: URL;
+  try {
+    url = new URL(returnTo, "http://x");
+  } catch {
+    return null;
+  }
+  return url.pathname === CONSENT_PATH ? url.searchParams : null;
+}
+
+/**
+ * Why a signed-in person is asked to sign in again (`/login?refresh=1`): the
+ * app that asked, when it is a consent's re-confirmation; else the console's
+ * own settings.
+ */
+export function signInAgainReason(returnTo: string): string {
+  const consent = consentRequest(returnTo);
+  return consent
+    ? confirmItsYouReason(consent.get("client_id"))
+    : "Sign in again to change your security settings.";
 }
 
 /** The hint for this sign-in: `?login_hint=`, else the consent it returns to. */
@@ -25,15 +40,8 @@ export function loginHintFor(
   direct: string | undefined,
   returnTo: string
 ): string | null {
-  if (direct !== undefined) return clean(direct);
-  let url: URL;
-  try {
-    url = new URL(returnTo, "http://x");
-  } catch {
-    return null;
-  }
-  if (url.pathname !== CONSENT_PATH) return null;
-  return clean(url.searchParams.get("login_hint"));
+  if (direct !== undefined) return cleanLoginHint(direct);
+  return cleanLoginHint(consentRequest(returnTo)?.get("login_hint"));
 }
 
 interface FlowNodes {

@@ -64,8 +64,8 @@ const count = (code: string, name: string) =>
  * The session-auth middleware NAMES, derived from their packages' own export
  * lists: every name `@synap/auth` exports from its Kratos middleware module
  * (`orySessionMiddleware`, `authMiddleware`) and every `…Middleware` name
- * `@synap/api` exports from its app session gate (`appSessionMiddleware`,
- * join plan target A). A new alias joins the scan by being exported.
+ * `@synap/api` exports from its app session gate (`appSessionMiddleware`).
+ * A new alias joins the scan by being exported.
  */
 function exportedNames(indexFile: string, fromModule: string): string[] {
   const src = stripComments(readFileSync(indexFile, "utf8"), "ts") as string;

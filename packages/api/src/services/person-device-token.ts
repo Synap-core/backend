@@ -1,164 +1,19 @@
 /**
- * A Synap app signed in as a PERSON — the ONE mint door for a device's tokens
- * (join plan target A, founder decision `decision:join-target-a-2026-10-21`).
- *
- * Synap Desktop and Synap Relay are FIRST-PARTY clients of the pod's own OAuth
- * server (`FIRST_PARTY_CLIENTS`, routers/oauth/config.ts): the app opens the
- * system browser on `/authorize`, the person signs in on the pod's own page
- * and confirms, and the code comes back to a loopback port (desktop) or the
- * app's own redirect (Relay). `/token` then calls THIS door, which makes a
- * DEVICE (`person_devices`, the refresh family the person sees and revokes)
- * and hands back:
- *   - an ACCESS token, 1 h (`synap_pd_…`, sha256-only in
- *     `person_device_tokens`), accepted ONLY on the app API — `/trpc` and the
- *     app routes (`appSessionMiddleware`) and realtime (`verifyHandshakeUser`)
- *     — where it resolves AS THE PERSON, exactly as a Kratos session does;
- *   - a REFRESH token, single-use and rotating (refresh.ts), 30 days idle,
- *     never past the device's 180-day absolute cap.
- * Same shape as its sibling `app-person-token.ts` ("Sign in with Synap" for a
- * registered app), but unbounded by a grant: it IS the person in their app.
- *
- * THREAT MODEL — each threat, its defence, and the test that holds it
- * (`person-device-token.pglite.test.ts` unless named). Two paths reach this
- * door; each is modelled step by step, then the token itself.
- *
- * ── The MINT path (an authorization code becomes a device) ──
- *  M1 Code replay, a wrong PKCE verifier, a foreign redirect. The AS rules
- *     every client obeys before this door runs: the code is CLAIMED atomically
- *     (one UPDATE … RETURNING; a second exchange gets nothing), bound to the
- *     client it was issued to, its redirect re-checked through the first-party
- *     matcher (`matchFirstPartyRedirect`: loopback IP literals any port, exact
- *     path; `localhost` refused), the S256 verifier checked, and a `resource`
- *     must be this pod. → routes.test, first-party-redirect.test, "(a)".
- *  M2 Another client getting a device. Only a code whose client resolves as
- *     `first_party` from the CODE registry (`resolveFirstPartyClient`, never a
- *     DCR row) reaches `signInPersonDevice`, which re-checks the id; only THIS
- *     file inserts into `person_device_tokens` (tripwire
- *     `person-device-mint-one-door`). → "a non-first-party client id never
- *     gets a device".
- *  M3 An agent, a key, or a device token authoring the consent. The code
- *     exists only after `decideOAuthAuthorization`: a human (`userType`),
- *     with no acting agent and no key grant, in a KRATOS session — a device
- *     session is refused there and at the procedure (`credentialProcedure`),
- *     so a 1 h token can never mint itself a 180-day device. This door
- *     re-checks `userType === "human"` at mint. → "(h)", "a device token
- *     cannot authorize a connection".
- *  M4 Loopback impersonation (RFC 8252 §8.6): any program on the computer can
- *     listen on 127.0.0.1. PKCE binds the code to the program that STARTED
- *     the flow, so a listener that did not start it holds a useless code; the
- *     consent is always a click naming the app and "this computer"; the
- *     devices list shows every sign-in with its label and user agent.
- *     Accepted residual: a malicious program that starts its own flow and
- *     gets the person to click "Sign in".
- *  M5 The step-up clock (`person_devices.auth_time`) set from the wrong time.
- *     It is the consenting KRATOS session's `authenticated_at`, read
- *     server-side at the decision and carried by the code — never mint time,
- *     never anything the app sends. A device minted from an hours-old
- *     browser session is stale at once. → "a device minted from an old
- *     sign-in needs a step-up at once".
- *  M6 A step-up minting a second device, or moving another device's clock.
- *     `stepUpPersonDevice` needs the code (a fresh sign-in, `prompt=login` /
- *     `max_age` enforced at the decision) AND that device's refresh token,
- *     checked — before anything is spent — to belong to this client and to
- *     the person who just signed in; it moves only that device's clock, only
- *     forward, and creates nothing. → "a step-up re-confirms the SAME
- *     device". The code is BOUND to the act its screen named
- *     (`isDeviceReconfirm`, `oauth_authorization_codes.step_up`): a
- *     `prompt=login` code ("Confirm it's you") is taken only with a device's
- *     refresh token and can never make a device; a sign-in code ("Sign in
- *     to …") can never re-confirm one. So the milder words cannot be used to
- *     mint a new device. Residual (M4-like): someone holding a stolen
- *     refresh token can start their own `prompt=login` flow and rely on the
- *     person confirming; the screen says "already signed in … only continue
- *     if you just asked it to", and the device list shows each device.
- *     → "\"Confirm it's you\" can never make a device".
- *
- * ── The REFRESH path (rotation, refresh.ts) ──
- *  R1 Refresh-token theft. Every token is SINGLE-USE: the redeem claims it
- *     with one UPDATE that flips `last_used_at` from NULL. When the thief and
- *     the app both redeem, the second presentation is a REUSE (RFC 9700
- *     §4.14.2): the whole family is revoked AND the device ends
- *     (`revokePersonDevice`), access tokens included — once the successor
- *     was used, or past the retry grace (R7). → "a reused refresh token ends
- *     the device", "a retry after 30 s ends the device".
- *  R2 Two honest refreshes at once (two windows). The UPDATE lets exactly one
- *     win; the loser gets `invalid_grant` WITHOUT a family revoke (a retrying
- *     client is not a thief). The apps refresh single-flight (plan §6.3).
- *  R3 A refresh racing a sign-out. The device row is the authority: the
- *     redeem refuses a revoked or capped device, every successor is issued
- *     under the family lock and refused if the family died meanwhile, and
- *     every access token is read THROUGH the device — so a successor issued
- *     a moment after the revoke still opens nothing.
- *  R4 Living forever on refreshes. Each successor lives 30 days idle but
- *     never past the device's absolute cap (180 days from sign-in), and no
- *     access token is minted past it either. → "the absolute cap is
- *     enforced", "near the cap, nothing is minted past it".
- *  R5 A refresh token presented by another client. Bound to its `client_id`:
- *     refused, and NOT spent. → "(g)".
- *  R6 The person loses access. EVERY request reads it through the device
- *     (`resolvePersonDeviceSession`): the `users` row, `user_type = 'human'`,
- *     and a live pod access (`hasActivePodAccess`: a space or project
- *     membership, or the pod owner/admin role — never `pod_members`, which
- *     outlives a removal). A person removed from the pod, or from their last
- *     space or project, or whose account is deleted, gets 401 at once and
- *     the device is ENDED (re-adding them revives nothing). No removal door
- *     needs to know devices exist. Two doors withdraw what the access read
- *     cannot see: unlinking the person's sign-in from an issuer ends all
- *     their devices (`unlinkAccount`); a Kratos identity disabled or deleted
- *     outside the pod is asked at every refresh (`identityIsLive`) and ends
- *     the device within the access token's hour — a Kratos that cannot
- *     answer refuses the refresh unspent. The mint refuses a person with no
- *     access. → "(l)".
- *  R7 A LOST refresh response (a phone dropping off the network after the
- *     token was spent). Within 30 s of its use, while its successor was NEVER
- *     redeemed, the same token is a RETRY (`deviceRetryGrace`, refresh.ts):
- *     the unused successor is retired, a fresh pair is minted, the family and
- *     the device live on. Two retries of the same token AT ONCE: the second
- *     finds the successor just retired by the first and is refused
- *     `invalid_grant` WITHOUT a revoke. Only that grace retires one token of
- *     a live device (tripwire `device-refresh-token-retire-writers`), which is
- *     what lets redeem read any other revoked device token as a reuse.
- *     Residual: a thief replaying within those 30 s, before the app's next
- *     refresh, gets a pair — and the app's own next refresh, presenting the
- *     retired successor, then ends the device (R1), so the theft is loud
- *     within the hour; detect-and-kill, not prevent. → "(k)".
- *     THE APP'S CONTRACT (Relay, Desktop; plan phase 3): refresh
- *     SINGLE-FLIGHT, and keep the pair from the LATEST successful response.
- *     A late first response that arrives after a retry carries a successor
- *     the retry retired; storing it signs the device out at the next refresh.
- *     An `invalid_grant` while another refresh of the same token succeeded
- *     is not a sign-out: keep the successful pair.
- *  R8 A refresh renewing the step-up clock. It never does: `auth_time` lives
- *     on the device row and only a step-up moves it. → "a refreshed token
- *     stays stale".
- *
- * ── The TOKEN on the wire ──
- *  T1 Access-token theft. One hour of the person on the app API only: `/mcp`
- *     and Hub REST resolve `api_keys` rows, which this is not ("(c)"); no door
- *     counts it as a recent sign-in (no `authenticated_at`), so account
- *     recovery and credential changes stay behind a real Kratos session; and
- *     NO credential door takes it unless the person REALLY signed in for this
- *     device within the last 5 minutes (a step-up: `prompt=login` at
- *     /authorize, then this device's refresh token at /token) — a door that
- *     creates, rotates, widens or approves a key, grant, secret grant,
- *     computer, app, connection or governance rule answers FORBIDDEN
- *     `STEP_UP_REQUIRED` otherwise (`credentialProcedure` /
- *     `requireFreshAuthentication`, an executor's `widensCredential`, the
- *     privileged approval floor, the secret-grant writers; tripwire
- *     `credential-doors-refuse-device-session`, "(i)", "(j)"). So a stolen
- *     token, five minutes after the person's last real sign-in, cannot hand
- *     an agent a key or a secret. Revoking the device stops it at once.
- *  T2 A bearer path into the HUMAN context accepting other credentials.
- *     `appSessionMiddleware` accepts a bearer ONLY with the device prefix and
- *     resolves it ONLY through `resolvePersonDeviceSession`; any other bearer
- *     (a PAT, an agent key, a Kratos token sent as a bearer) is ignored, so
- *     the request falls to the Kratos check. → tripwire `app-session-bearer`
- *     (middleware/app-session.test.ts).
- *  T3 A device nobody watches. The devices list (`devices.list`) shows each
- *     sign-in; signing one out is a console act (`devices.revoke`), the app's
- *     own sign-out is RFC 7009 `/revoke` with either token. A person holds
- *     at most `PERSON_DEVICE_MAX_ACTIVE` (20) live devices: a sign-in beyond
- *     it ends the least recently used. → "(m)".
+ * The ONE mint door for a Synap app signed in as a PERSON on a device. Synap
+ * Desktop and Synap Relay are first-party clients of the pod's own OAuth
+ * server (`FIRST_PARTY_CLIENTS`, routers/oauth/config.ts): the person signs in
+ * and confirms in their browser, and `/token` calls this door, which makes a
+ * DEVICE (`person_devices`: one refresh family, the row the person sees and
+ * signs out) and returns a 1 h access token (`synap_pd_…`, stored only as
+ * sha256, accepted only on the app API, where it IS the person) and a
+ * single-use, rotating refresh token (refresh.ts; 30 days idle, never past
+ * the device's 180-day cap). Because the token is the person, its whole life
+ * is decided here and in refresh.ts — who may get one (a human with access to
+ * the pod, from a consent in a browser session), how it refreshes, and every
+ * way it ends (sign-out, a reused refresh token, lost access, the cap, more
+ * than 20 devices) — and nothing else may insert one (tripwire
+ * `person-device-mint-one-door`). Each threat with the test that holds it:
+ * JOIN-PLAN, device threat model.
  */
 
 import { randomBytes } from "crypto";
@@ -197,15 +52,15 @@ import {
 } from "../routers/oauth/refresh.js";
 import { OAuthError } from "../routers/oauth/protocol.js";
 
-/** An access token lives 1 h (founder decision 5, the F5 precedent). */
+/** An access token lives 1 h: short enough that a stolen one expires soon. */
 export const PERSON_DEVICE_ACCESS_TTL_MS = 60 * 60 * 1000;
 
 /** No device outlives 180 days from its sign-in, however often it refreshes. */
 export const PERSON_DEVICE_ABSOLUTE_CAP_MS = 180 * 24 * 60 * 60 * 1000;
 
 /**
- * At most this many live devices per person (lead decision 2026-10-22): a new
- * sign-in beyond it ends the least recently used one, so a leaked or scripted
+ * At most this many live devices per person: a new sign-in beyond it ends
+ * the least recently used one, so a leaked or scripted
  * sign-in loop cannot pile up devices nobody watches.
  */
 export const PERSON_DEVICE_MAX_ACTIVE = 20;
@@ -245,7 +100,7 @@ const INVALID_REFRESH = "Invalid, expired, or revoked refresh token";
 
 /**
  * Is the person's sign-in identity (Kratos; a pod user's id IS its identity
- * id) still live? Asked at every refresh (R6): an identity disabled or
+ * id) still live? Asked at every refresh: an identity disabled or
  * deleted in Kratos — by an operator, outside any pod door — ends the device
  * at its next refresh, within the access token's hour. A Kratos that cannot
  * answer THROWS `server_error`: the refresh is refused unspent, never read as
@@ -387,7 +242,7 @@ async function endDevicesBeyondCap(userId: string): Promise<void> {
  * ends the device, refresh.ts), re-check the person and their access to the
  * pod, mint a new access token, then issue the successor. Every refusal is
  * `invalid_grant`; a person who lost their identity, their humanity or their
- * access also has the device ENDED (R6).
+ * access also has the device ENDED.
  */
 export async function refreshPersonDevice(args: {
   refreshToken: string;

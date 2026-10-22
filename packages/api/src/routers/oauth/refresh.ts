@@ -1,8 +1,8 @@
 /**
  * Refresh tokens of this AS: a pod app's (spec 17 §6.6, wave PB3; founder
  * decision F5: access 1 h, refresh rotating with family revoke, 30-day idle
- * expiry, no absolute cap) and a Synap app's signed-in DEVICE's (0340, join
- * plan target A: the same rules plus a 180-day absolute cap, the device's
+ * expiry, no absolute cap) and a Synap app's signed-in DEVICE's (0340: the
+ * same rules plus a 180-day absolute cap, the device's
  * `expires_at`). An MCP (DCR) client never gets one.
  *
  * A family has ONE owner (a CHECK in 0340): a pod app CONNECTION (`appId`, an
@@ -367,7 +367,7 @@ async function deviceRetryGrace(row: RefreshRow): Promise<boolean> {
   // Two retries of the SAME token at once (an app that double-submits): the
   // other retry retired this successor a moment ago, unused, and is minting
   // the pair. Nothing went to two holders, so it is not a theft: refused
-  // WITHOUT a revoke, like the loser of a concurrent claim (R2). Only a grace
+  // WITHOUT a revoke, like the loser of a concurrent claim. Only a grace
   // retires one token of a live family (tripwire
   // `device-refresh-token-retire-writers`), so "retired, unused, this family,
   // within the window" names exactly that.
@@ -477,7 +477,7 @@ export async function redeemRefreshToken(
   if (row.revokedAt) {
     // A DEVICE's token revoked while its device lives was retired by a
     // retry (`deviceRetryGrace`): someone else continued this family. Two
-    // holders — a reuse: the family and the device end (R7).
+    // holders — a reuse: the family and the device end.
     if (
       row.deviceId &&
       found.deviceRevokedAt === null &&

@@ -48,7 +48,7 @@ import {
   type SelfServiceFlowKind,
   type SignInState,
 } from "../../lib/sign-in-state";
-import { withLoginHint } from "../../lib/login-hint";
+import { signInAgainReason, withLoginHint } from "../../lib/login-hint";
 
 interface LoginFormProps {
   returnTo: string;
@@ -282,7 +282,10 @@ export function LoginForm({
           </span>
 
           {loading ? (
-            <SignInHeader refresh={refresh} />
+            <SignInHeader
+              refresh={refresh}
+              reason={signInAgainReason(returnTo)}
+            />
           ) : cookieScope ? (
             <RefusalPanel
               icon={<RefreshCw className="h-5 w-5" strokeWidth={2} />}
@@ -327,7 +330,10 @@ export function LoginForm({
               onRetry={backToSignIn}
             />
           ) : (
-            <SignInHeader refresh={refresh} />
+            <SignInHeader
+              refresh={refresh}
+              reason={signInAgainReason(returnTo)}
+            />
           )}
 
           {loading ? (
@@ -399,7 +405,13 @@ interface FlowFieldsProps {
   linking: { email: string | null } | null;
 }
 
-function SignInHeader({ refresh = false }: { refresh?: boolean }) {
+function SignInHeader({
+  refresh = false,
+  reason,
+}: {
+  refresh?: boolean;
+  reason: string;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
       <h1 className="font-heading text-[20px] font-medium tracking-tight text-foreground">
@@ -407,7 +419,7 @@ function SignInHeader({ refresh = false }: { refresh?: boolean }) {
       </h1>
       <p className="text-[13.5px] leading-relaxed text-foreground/65">
         {refresh
-          ? "Sign in again to change your security settings."
+          ? reason
           : "Your session is scoped to this Pod and this device."}
       </p>
     </div>

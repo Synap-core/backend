@@ -8,8 +8,8 @@
  * `userId` at its word, so anyone who knew a user id could open that user's
  * documents.
  *
- * `token` may also be a Synap app's DEVICE token (`synap_pd_…`, join plan
- * target A): it is resolved by the one lookup (`resolvePersonDeviceSession`)
+ * `token` may also be a Synap app's DEVICE token (`synap_pd_…`): it is
+ * resolved by the one lookup (`resolvePersonDeviceSession`)
  * and NEVER sent to Kratos. No other credential is accepted here — API keys
  * have their own socket door (`api-key-auth.ts`, service accounts only).
  */
