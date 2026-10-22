@@ -216,10 +216,16 @@ describe("EVERY author floor in the dedup/recall file uses the shared helper", (
   it("scans a real file with several author floors", () => {
     const src = readFileSync(dedupPath, "utf8");
     expect(src.length).toBeGreaterThan(2000);
-    // 3 sites x 3 branches today; the point is that it is plural, not the 9.
-    expect((src.match(/ownAgentUserFilter\(/g) ?? []).length).toBeGreaterThan(
-      5
-    );
+    // Plural, not an exact count. Today 5 helper calls, comments stripped:
+    // findPendingTextMatches and findPriorCaptureGraphProposal (2 branches of
+    // `ownAgentUserFilter` each) + findRejectedConnectionSyncImport
+    // (`authoredByUser`). The fourth floor, findPendingSignalMatches, was
+    // deleted when the duplicate door took its job (FB1020 B2); that door's
+    // floor is pinned by the describe above.
+    const code = stripComments(src, "ts");
+    expect(
+      (code.match(/ownAgentUserFilter\(|authoredByUser\(/g) ?? []).length
+    ).toBeGreaterThanOrEqual(5);
   });
 
   it("has ZERO bare `createdBy = caller` author floors left", () => {

@@ -633,8 +633,8 @@ describe("M8: a person's edit through their own doors counts as 'touched by a pe
       [randomUUID(), entityId, USER, AGENT, receipt]
     );
     await q(
-      `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type, created_at, updated_at)
-       values ($1, $2, null, $3, $4, 'belongs_to_project', now(), now())`,
+      `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type, created_at)
+       values ($1, $2, null, $3, $4, 'belongs_to_project', now())`,
       [randomUUID(), USER, entityId, projectId]
     );
     return entityId;
@@ -673,12 +673,13 @@ describe("FBD-3: the bulk door lets an agent close its OWN fresh tasks, like the
 
   async function seedTaskKind() {
     await q(
-      `insert into profiles (id, slug, name, created_at, updated_at) values ($1, 'task', 'Task', now(), now())`,
+      `insert into profiles (id, slug, display_name, profile_kind, is_active, created_at, updated_at)
+       values ($1, 'task', 'Task', 'kind', true, now(), now())`,
       [PROFILE]
     );
     await q(
-      `insert into property_defs (id, slug, name, value_type, constraints, created_at, updated_at)
-       values ($1, 'status', 'Status', 'enum', $2::jsonb, now(), now())`,
+      `insert into property_defs (id, slug, value_type, constraints, created_at, updated_at)
+       values ($1, 'status', 'enum', $2::jsonb, now(), now())`,
       [
         STATUS_DEF,
         JSON.stringify({
@@ -690,9 +691,9 @@ describe("FBD-3: the bulk door lets an agent close its OWN fresh tasks, like the
       ]
     );
     await q(
-      `insert into profile_properties (id, profile_id, property_def_id, is_lifecycle, created_at)
-       values ($1, $2, $3, true, now())`,
-      [randomUUID(), PROFILE, STATUS_DEF]
+      `insert into profile_properties (profile_id, property_def_id, is_lifecycle)
+       values ($1, $2, true)`,
+      [PROFILE, STATUS_DEF]
     );
   }
 

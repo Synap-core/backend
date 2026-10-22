@@ -48,7 +48,11 @@ function matches(row: FakeKey, cond: Cond | undefined): boolean {
   throw new Error("fake api_keys: unsupported condition in the inherit read");
 }
 
-vi.mock("@synap/database", () => ({
+// The real module underneath (as agent-identity-service.podwide.test.ts):
+// the door's import graph (agent-connect → permission-check → @synap/jobs)
+// reads real tables at import time. Only the reads under test are faked.
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     query: {
       users: {
@@ -88,7 +92,11 @@ vi.mock("@synap/database", () => ({
   ApiKeyRepository: class {},
 }));
 
-vi.mock("@synap/database/schema", () => ({ agents: {}, users: {} }));
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
+  agents: {},
+  users: {},
+}));
 
 vi.mock("./hub-integration-registration.js", () => ({
   SETUP_AGENT_HUB_SCOPES: ["hub-protocol.read", "hub-protocol.write"],
