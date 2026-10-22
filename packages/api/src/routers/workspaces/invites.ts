@@ -771,7 +771,7 @@ export const inviteProcedures = {
         // Pod invite — add to all workspaces
         // Ordinary spaces only: a system space (pod-admin) is never fanned
         // into, so an invite's role can never become pod admin.
-        const fanOutIds = await listPodInviteFanOutWorkspaceIds();
+        const fanOutIds = await listPodInviteFanOutWorkspaceIds(db);
         for (const ws of fanOutIds.map((id) => ({ id }))) {
           const alreadyMember = await db.query.workspaceMembers.findFirst({
             where: and(
@@ -1417,7 +1417,7 @@ export const inviteProcedures = {
             invitedBy: invite.invitedBy ?? null,
           })
           .onConflictDoNothing();
-        const fanOutIds = await listPodInviteFanOutWorkspaceIds();
+        const fanOutIds = await listPodInviteFanOutWorkspaceIds(db);
         for (const ws of fanOutIds.map((id) => ({ id }))) {
           const alreadyMember = await db.query.workspaceMembers.findFirst({
             where: and(
