@@ -131,6 +131,10 @@ import {
   verifyAuthRequestTime,
 } from "../routers/oauth/consent.js";
 import { appSessionMiddleware } from "../middleware/app-session.js";
+import {
+  liveDeviceIds,
+  revokePersonDevice,
+} from "@synap/database/person-devices";
 import { createContext } from "../context.js";
 import { router } from "../trpc.js";
 import { devicesRouter } from "../routers/devices.js";
@@ -360,7 +364,17 @@ const revokeRequest = (params: Record<string, string>) =>
 const MIN_MS = 60 * 1000;
 
 /** A Kratos session (as the consent procedure sees it) signed in `ago` ms back. */
-const kratosCtx = (userId: string, agoMs: number) =>
+/**
+ * A console session signed in `agoMs` ago. `methods` = how, most recent
+ * last, each with its own age (default: the pod password, at that time).
+ */
+const kratosCtx = (
+  userId: string,
+  agoMs: number,
+  methods: Array<{ method: string; agoMs: number }> = [
+    { method: "password", agoMs },
+  ]
+) =>
   ({
     authenticated: true,
     userId,
@@ -369,6 +383,10 @@ const kratosCtx = (userId: string, agoMs: number) =>
       identity: { id: userId, traits: { email: `${userId}@x` } },
       active: true,
       authenticated_at: new Date(Date.now() - agoMs).toISOString(),
+      authentication_methods: methods.map((m) => ({
+        method: m.method,
+        completed_at: new Date(Date.now() - m.agoMs).toISOString(),
+      })),
     },
   }) as never;
 
@@ -385,6 +403,7 @@ async function consent(
     prompt?: string;
     maxAge?: number;
     requestedAgoMs?: number;
+    methods?: Array<{ method: string; agoMs: number }>;
   } = {}
 ): Promise<string> {
   const signedInAgo = opts.signedInAgoMs ?? MIN_MS;
@@ -406,7 +425,7 @@ async function consent(
         : {}),
     },
     userId,
-    kratosCtx(userId, signedInAgo)
+    kratosCtx(userId, signedInAgo, opts.methods)
   );
   const url = new URL(redirectTo);
   expect(url.searchParams.get("iss")).toBe(ISSUER);
@@ -452,6 +471,7 @@ const device = async (id: string) =>
       expires_at: Date;
       revoked_at: Date | null;
       created_at: Date;
+      auth_time: Date | null;
     }>(`select * from person_devices where id = $1`, [id])
   ).rows[0]!;
 
@@ -1148,6 +1168,79 @@ describe("(j) step-up: the clock is the device's real sign-in", () => {
     ).resolves.toBeTruthy();
   });
 
+  it("a Synap Cloud sign-in never sets the clock: a device minted from one needs a step-up at once", async () => {
+    const code = await consent(PERSON, {
+      methods: [{ method: "oidc", agoMs: MIN_MS }],
+    });
+    const { body } = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: DESKTOP,
+      redirect_uri: LOOPBACK,
+      code_verifier: VERIFIER,
+      resource: ISSUER,
+      synap_device_label: "Cloud laptop",
+    });
+    expect((await device(body.synap_device_id)).auth_time).toBeNull();
+    expect(stepUpRequired(await decideDevice(body.access_token))).toBe(true);
+  });
+
+  it('"Confirm it\'s you" answered with Synap Cloud only is refused (POD_CREDENTIAL_REQUIRED), before any code', async () => {
+    const codesBefore = await q<{ n: number }>(
+      `select count(*)::int as n from oauth_authorization_codes`
+    );
+    // Password 3 h ago, then a (possibly silent) Cloud re-login just now.
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 10_000,
+        methods: [
+          { method: "password", agoMs: 180 * MIN_MS },
+          { method: "oidc", agoMs: 10_000 },
+        ],
+      })
+    ).rejects.toMatchObject({ reasonCode: "POD_CREDENTIAL_REQUIRED" });
+    const codesAfter = await q<{ n: number }>(
+      `select count(*)::int as n from oauth_authorization_codes`
+    );
+    expect(codesAfter.rows[0]!.n).toBe(codesBefore.rows[0]!.n);
+    // The screen knows before the click.
+    const shown = await getOAuthConsentContext(
+      {
+        clientId: DESKTOP,
+        redirectUri: LOOPBACK,
+        responseType: "code",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        resource: ISSUER,
+        prompt: "login",
+        authRequest: signAuthRequestTime(Date.now() - 11_000),
+      },
+      PERSON,
+      (
+        kratosCtx(PERSON, 10_000, [
+          { method: "password", agoMs: 180 * MIN_MS },
+          { method: "oidc", agoMs: 10_000 },
+        ]) as unknown as { session: never }
+      ).session
+    );
+    expect(shown.podCredentialRequired).toBe(true);
+    expect(shown.reauthenticate).toBe(false);
+  });
+
+  it("CONTROL — the same step-up answered with the pod password after the request passes", async () => {
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 10_000,
+        methods: [
+          { method: "oidc", agoMs: 180 * MIN_MS },
+          { method: "password", agoMs: 10_000 },
+        ],
+      })
+    ).resolves.toBeTruthy();
+  });
+
   it("a secret grant asks for it where it is written (a service with no ctx)", async () => {
     const secretId = randomUUID();
     const grant = () =>
@@ -1334,6 +1427,41 @@ describe("(l) every way a person loses access to the pod ends their devices", ()
       401
     );
     expect((await refresh(dan.refresh)).body.error).toBe("invalid_grant");
+  });
+
+  it("a socket's device is re-checked (liveDeviceIds): live stays, signed out and lost access do not, and lost access ends it", async () => {
+    const JUN = "person-jun";
+    const KAI = "person-kai";
+    await q(
+      `insert into users (id, email, name, user_type) values
+         ($1, 'jun@x', 'Jun', 'human'), ($2, 'kai@x', 'Kai', 'human')`,
+      [JUN, KAI]
+    );
+    for (const u of [JUN, KAI]) {
+      await q(
+        `insert into workspace_members (id, workspace_id, user_id, role)
+           values (gen_random_uuid(), $1, $2, 'editor')`,
+        [WS_TEAM, u]
+      );
+    }
+    const live = await signedIn(JUN, "live");
+    const out = await signedIn(JUN, "signed out");
+    const lost = await signedIn(KAI);
+    await revokePersonDevice(h.db, {
+      deviceId: out.deviceId,
+      reason: "signed out",
+    });
+    await q(`delete from workspace_members where user_id = $1`, [KAI]);
+
+    const result = await liveDeviceIds(h.db, [
+      live.deviceId,
+      out.deviceId,
+      lost.deviceId,
+      randomUUID(),
+    ]);
+    expect([...result]).toEqual([live.deviceId]);
+    expect((await device(lost.deviceId)).revoked_at).not.toBeNull();
+    expect((await device(live.deviceId)).revoked_at).toBeNull();
   });
 
   it("CONTROL — removed from one space but still in another: the device keeps working", async () => {
