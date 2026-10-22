@@ -154,6 +154,9 @@ const MINT_LABELS: Record<
 
 const oauthApp = new Hono();
 
+/** A `synap_space_hint`: a space id, the SDK's and the browser's rule. */
+const SPACE_HINT_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
 /**
  * An AS that cannot name itself canonically must not serve metadata at all, so
  * a missing/invalid `PUBLIC_URL` disables every endpoint with a 503 rather than
@@ -373,6 +376,20 @@ oauthApp.get("/authorize", async (c) => {
   if (validated.state) target.searchParams.set("state", validated.state);
   if (validated.resource) {
     target.searchParams.set("resource", validated.resource);
+  }
+  // The launch's space (spec 17 §6.4, review S6/A8): the Synap browser and
+  // the SDK send `synap_space_hint`; the consent screen pre-ticks it only if
+  // the person can give the app that space. It is not an authorize parameter
+  // (nothing is minted from it), so it travels as `space_hint`, a pod app's
+  // only, in the one charset every door applies; anything else is dropped.
+  const spaceHint = q.synap_space_hint;
+  if (
+    spaceHint &&
+    SPACE_HINT_RE.test(spaceHint) &&
+    validated.client.clientKind === "cimd" &&
+    !isMcpClient(validated.client)
+  ) {
+    target.searchParams.set("space_hint", spaceHint);
   }
 
   return c.redirect(target.toString(), 302);

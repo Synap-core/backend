@@ -2811,3 +2811,50 @@ describe("A6 — one structured log line per refusal, never a code, token or ver
     expect(line.clientId).toHaveLength(512);
   });
 });
+
+// ─── Review S6/A8 — the launch's space reaches the consent screen ────────────
+
+describe("S6/A8 — synap_space_hint is forwarded to the consent screen as space_hint", () => {
+  const consentTarget = async (res: Response) => {
+    expect(res.status).toBe(302);
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin).toBe(POD_ADMIN);
+    return target;
+  };
+
+  it("a pod app's well-formed hint is forwarded, under its consent name only", async () => {
+    cacheApp();
+    const target = await consentTarget(
+      await authorizeApp({ synap_space_hint: SPACE_ID })
+    );
+    expect(target.searchParams.get("space_hint")).toBe(SPACE_ID);
+    expect(target.searchParams.has("synap_space_hint")).toBe(false);
+  });
+
+  it("a hint outside the one charset is dropped (path, query, space, too long)", async () => {
+    for (const bad of ["../admin", "a?b=c", "a b", "x".repeat(65)]) {
+      cacheApp();
+      const target = await consentTarget(
+        await authorizeApp({ synap_space_hint: bad })
+      );
+      expect(target.searchParams.has("space_hint")).toBe(false);
+    }
+  });
+
+  it("an MCP client's hint is dropped: it has no space to pre-tick", async () => {
+    const { body: client } = await register();
+    const target = await consentTarget(
+      await oauthApp.request(
+        authorizeUrl({
+          response_type: "code",
+          client_id: client.client_id,
+          redirect_uri: CALLBACK,
+          code_challenge: CHALLENGE,
+          code_challenge_method: "S256",
+          synap_space_hint: SPACE_ID,
+        })
+      )
+    );
+    expect(target.searchParams.has("space_hint")).toBe(false);
+  });
+});
