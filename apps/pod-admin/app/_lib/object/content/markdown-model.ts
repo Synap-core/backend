@@ -32,6 +32,16 @@ export const UNPARSED_PREVIEW_CHARS = 5_000;
  */
 export type ContentFormat = "markdown" | "text" | "code" | "source";
 
+/**
+ * How wide a body's text runs: `reading` keeps the 65-character measure of a
+ * field or a short body; `wide` lets a document use its card (tables, charts).
+ */
+export type ContentMeasure = "reading" | "wide";
+
+export function contentMeasureClass(measure: ContentMeasure): string {
+  return measure === "wide" ? "max-w-none" : "max-w-[65ch]";
+}
+
 export interface PreparedContent {
   format: ContentFormat;
   text: string;
@@ -192,4 +202,45 @@ export function contentHref(url: string | null | undefined): ContentHref {
     return page ? { kind: "internal", href: page } : { kind: "none" };
   }
   return { kind: "none" };
+}
+
+/**
+ * What an embedded record may say about itself, from the reader's own
+ * `entities.get`. `hidden` covers "not visible to you" AND "gone": the pod
+ * answers NOT_FOUND for both, so neither the title nor which one it is leaks.
+ * `failed` is a broken read (network, 500) — retryable, never "hidden".
+ * `unresolved` = this surface reads no records; the card names the kind only.
+ */
+export type EmbedEntityRead =
+  | { state: "unresolved" }
+  | { state: "loading" }
+  | { state: "ready"; title: string }
+  | { state: "hidden" }
+  | { state: "failed"; retry?: () => void };
+
+const HIDDEN_CODES: ReadonlySet<string> = new Set([
+  "NOT_FOUND",
+  "FORBIDDEN",
+  "BAD_REQUEST",
+  "UNAUTHORIZED",
+]);
+
+export function entityEmbedRead(query: {
+  isLoading: boolean;
+  error: { data?: { code?: string | null } | null } | null | undefined;
+  data: unknown;
+  retry?: () => void;
+}): EmbedEntityRead {
+  if (query.error) {
+    const code = query.error.data?.code;
+    return code && HIDDEN_CODES.has(code)
+      ? { state: "hidden" }
+      : { state: "failed", ...(query.retry ? { retry: query.retry } : {}) };
+  }
+  if (query.isLoading) return { state: "loading" };
+  const entity = (query.data as { entity?: { title?: unknown } } | undefined)
+    ?.entity;
+  if (!entity) return { state: "hidden" };
+  const title = typeof entity.title === "string" ? entity.title.trim() : "";
+  return { state: "ready", title: title || "Untitled" };
 }
