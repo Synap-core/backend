@@ -100,6 +100,11 @@ case "$*" in
   "image inspect -f {{.Id}} ghcr.io/synap-core/backend@sha256:new") echo sha256:newimg ;;
   "exec becid node -e "*) printf '{"buildStamp":"%s"}' "$FAKE_STAMP" ;;
   "compose ps -a -q postgres") echo pgcid ;;
+  "compose ps -q --status running postgres") [ -n "${FAKE_TSDB:-}" ] && echo pgcid ;;
+  "exec pgcid psql"*"where datallowconn and not datistemplate"*) printf '%s\n' postgres synap ;;
+  "exec pgcid psql -U synap -d synap "*"extname = 'timescaledb'"*) [ "$FAKE_TSDB" = unreadable ] && exit 2; echo 2.26.4 ;;
+  "exec pgcid psql"*"from pg_config where name = 'PKGLIBDIR'"*) echo /usr/lib/postgresql/15/lib ;;
+  "exec pgcid sh -c ls '/usr/lib/postgresql/15/lib'") for v in $FAKE_TSDB_LIBS; do echo "timescaledb-$v.so"; done ;;
   *"{{range .Config.Env}}"*) echo PGDATA=/home/postgres/pgdata/data ;;
   *"{{range .Mounts}}"*) [ "$FAKE_POD" = drifted ] && echo /var/lib/other || echo /home/postgres/pgdata ;;
   "compose ps -a -q") [ -n "$FAKE_CONTAINERS" ] && echo "$FAKE_CONTAINERS" | awk -F'|' '{print "cid-" $1}' ;;
@@ -252,4 +257,19 @@ jq -e '[.checks[] | select(.check == "disk" and .severity == "ok" and (.message 
 jq -e '[.checks[] | select(.check == "units")] | length >= 1' "$TMP/out" >/dev/null && ok "units: reported (no systemd here: info)" || bad "units check missing"
 grep -E "compose (.* )?(up|run|create|down|rm|stop|start|restart|pull|build)( |$)|^(rm|stop|kill|pull|tag|rmi|run|volume|system|image prune|network rm)" "$FAKE_LOG" \
   && bad "the self-heal checks ran a mutating docker command" || ok "the self-heal checks ran no mutating docker command"
+
+# ── 12. TimescaleDB: a database behind its image's newest library is a NOTICE ─
+# (it keeps working; the update path is a maintenance-window runbook), an
+# unreadable version is a finding, and both read the RUNNING container only.
+healthy_env
+FAKE_TSDB=behind FAKE_TSDB_LIBS="2.25.0 2.26.4 2.28.3" doctor healthy --json; rc=$?
+[ "$rc" = 0 ] && jq -e '[.checks[] | select(.check == "timescaledb" and .severity == "info" and (.message | test("database .synap. runs TimescaleDB 2.26.4; the postgres image ships up to 2.28.3")))] | length == 1' "$TMP/out" >/dev/null \
+  && ok "timescaledb: an extension behind the image is an info notice naming both versions, not a finding" || bad "timescaledb behind (rc=$rc): $(jq -c '[.checks[] | select(.check == "timescaledb")]' "$TMP/out")"
+grep -q "^exec pgcid sh -c ls '/usr/lib/postgresql/15/lib'" "$FAKE_LOG" && ! grep -qE "^(run|create)( |$)" "$FAKE_LOG" \
+  && ok "timescaledb: read from the running postgres (docker exec), no container started" || bad "timescaledb: libraries not read by exec, or a container was started: $(grep -E '^(run|create|exec pgcid sh)' "$FAKE_LOG")"
+FAKE_TSDB=current FAKE_TSDB_LIBS="2.25.0 2.26.4" doctor healthy --json; rc=$?
+[ "$rc" = 0 ] && jq -e '[.checks[] | select(.check == "timescaledb" and .severity == "ok")] | length == 1' "$TMP/out" >/dev/null \
+  && ok "timescaledb: on the image's newest library → ok" || bad "timescaledb current (rc=$rc): $(jq -c '[.checks[] | select(.check == "timescaledb")]' "$TMP/out")"
+FAKE_TSDB=unreadable FAKE_TSDB_LIBS="2.26.4" doctor healthy --json; rc=$?
+[ "$rc" != 0 ] && finding timescaledb "could not read" && ok "timescaledb: an unreadable extension version is a finding (never 'ok')" || bad "timescaledb unreadable (rc=$rc): $(jq -c '[.checks[] | select(.check == "timescaledb")]' "$TMP/out")"
 exit $fail

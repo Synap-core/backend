@@ -179,7 +179,9 @@ export const FAILURE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
  * the needs-you lens that the approved definition names:
  *
  *   - an agent DRAFT (`draft-asks`) is PROPOSED, not blocking — "drafts never
- *     need you" (`needsYouReason`), and the founder put drafts in Proposed;
+ *     need you" (`needsYouReason`), and the founder put drafts in Proposed.
+ *     The draft's ASKS are not this row: since the founder decision of
+ *     2026-10-22 they arrive as `owed-slot` signals and are Blocking;
  *   - a system-HEALTH notification ({@link STATUS_BANNER_NOTIFICATION_TYPES})
  *     is the status BANNER — health is not a Needs-you row. The CATEGORY alone
  *     is not health: an unknown or untyped system notification is Blocking, the
