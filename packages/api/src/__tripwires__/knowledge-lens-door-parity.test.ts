@@ -81,7 +81,10 @@ vi.mock("../utils/workspace-membership.js", async (importOriginal) => {
 });
 
 vi.mock("../services/knowledge/ask.js", () => ({ ask: askMock }));
-vi.mock("../services/knowledge/synthesize.js", () => ({
+vi.mock("../services/knowledge/synthesize.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../services/knowledge/synthesize.js")
+  >()),
   synthesizeAnswer: synthesizeMock,
 }));
 

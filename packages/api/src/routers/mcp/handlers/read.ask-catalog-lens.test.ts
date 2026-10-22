@@ -36,9 +36,15 @@ vi.mock("../../../services/knowledge/ask.js", () => ({
   ask: askMock,
 }));
 
-vi.mock("../../../services/knowledge/synthesize.js", () => ({
-  synthesizeAnswer: synthesizeAnswerMock,
-}));
+vi.mock(
+  "../../../services/knowledge/synthesize.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../services/knowledge/synthesize.js")
+    >()),
+    synthesizeAnswer: synthesizeAnswerMock,
+  })
+);
 
 vi.mock("../../hub-protocol/rest/_shared.js", async (importOriginal) => ({
   ...(await importOriginal<
