@@ -77,7 +77,10 @@ vi.mock("@synap/database", async (importOriginal) => {
     gte: vi.fn((a, b) => ({ gte: [a, b] })),
     desc: vi.fn((a) => ({ desc: a })),
     isNotNull: vi.fn((a) => ({ isNotNull: a })),
-    drizzleSql: vi.fn(() => ({})),
+    drizzleSql: Object.assign(
+      vi.fn(() => ({})),
+      { raw: vi.fn(() => ({})) } // session-kind.ts builds a module-level drizzleSql.raw
+    ),
     verifyPermission: mockVerifyPermission,
     ProposalStatus: { PENDING: "pending", AUTO_APPROVED: "auto_approved" },
     ProfileResolutionService: class {
