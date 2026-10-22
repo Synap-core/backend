@@ -216,6 +216,9 @@ case "$*" in
   "exec pg1 sh -c ls /usr/lib/postgresql/*/lib/")   # the running postgres: the image .env pins
     libs="${FAKE_TSDB_LIBS:-2.26.4}"; grep -q "^SYNAP_IMAGE_POSTGRES=.*@sha256:$(printf 'b%.0s' $(seq 1 64))" "$FAKE_ENV" && libs="${FAKE_TSDB_LIBS_NEW:-$libs}"
     for v in $libs; do echo "timescaledb-$v.so"; done; exit 0 ;;
+  "buildx imagetools inspect "*)   # the registry's index digest of a compose default tag
+    [ -n "${FAKE_RESOLVE_FAIL:-}" ] && { echo "ERROR: failed to authorize" >&2; exit 1; }
+    echo "{\"mediaType\":\"application/vnd.oci.image.index.v1+json\",\"digest\":\"sha256:$(printf '9%.0s' $(seq 1 64))\"}"; exit 0 ;;
   "ps --filter publish"*) [ -n "${FAKE_PORT_HOLDER:-}" ] && echo "$FAKE_PORT_HOLDER"; exit 0 ;;
 esac
 exit 0
@@ -717,7 +720,8 @@ grep -E "compose (run|stop|.* up )|compose up|pg_dump" "$FAKE/log" && bad "pull:
 
 # ── 6. --from-source: synap-dev/* only, never the ghcr name ─────────────────
 setup source r1
-mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations"
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
 cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
 : > "$REPO/packages/database/migrations/0011_old.sql"; : > "$REPO/packages/database/migrations/0012_new.sql"
 ( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "source: git fixture"
@@ -734,8 +738,29 @@ grep -qE "^builder prune -f --max-used-space 2gb" "$FAKE/log" && ok "source: bui
 ! grep -qE "^builder prune .*-a|^(system|volume) prune" "$FAKE/log" && ok "source: cache prune is capped, never -a / system / volume" || bad "source: an unbounded prune ran"
 [ "$(envpin SYNAP_IMAGE_BACKEND)" = "synap-dev/backend:$tag12" ] && [ "$(cur_id)" = "local-$tag12" ] && [ "$(jq -r .source "$DEPLOY/state/current-release.json")" = true ] \
   && ok "source: recorded as release local-$tag12 (source:true)" || bad "source: env=$(envpin SYNAP_IMAGE_BACKEND) id=$(cur_id)"
-[ "$(envpin SYNAP_IMAGE_MINIO)" = "$(grep '^SYNAP_IMAGE_MINIO=' "$S/env.orig" | cut -d= -f2-)" ] && ok "source: third-party pins carried over from the previous release" || bad "source: minio pin lost"
 ls -d "$DEPLOY"/backups/postgres/*-pre-update >/dev/null 2>&1 && grep -q "canary" "$FAKE/log" && ok "source: same backup + canary path as a release" || bad "source: skipped backup/canary"
+# Third-party images: pinned by digest by THE release rule (deploy/release/
+# resolve-images.sh, as make-manifest.py) — never carried from .env, which left
+# a pod that never took a published release on a floating compose default tag.
+tp="$(for k in $KEYS; do grep -qE "\\\$\{$k:-[^}\$]*\}" "$HERE/deploy/docker-compose.yml" && echo "$k"; done)"
+want9="sha256:$(printf '9%.0s' $(seq 1 64))"; badpin=""
+for k in $tp; do
+  d="$(grep -oE "\\\$\{$k:-[^}\$]*\}" "$HERE/deploy/docker-compose.yml" | head -1 | sed -E 's/^\$\{[A-Z0-9_]+:-//; s/\}$//')"
+  [ "$(jq -r --arg k "$k" '.images[$k]' "$DEPLOY/state/current-release.json")" = "$d@$want9" ] && [ "$(envpin "$k")" = "$d@$want9" ] || badpin="$badpin $k=$(envpin "$k")"
+done
+[ "$(echo "$tp" | grep -c .)" -ge 5 ] && [ -z "$badpin" ] \
+  && ok "source: every third-party image ($(echo $tp | wc -w | tr -d ' ')) is its compose default tag pinned by the resolved digest (never the .env carry)" || bad "source: third-party pins:$badpin"
+grep -q "postgres RESTARTS during this update" "$S/out" && ok "source: the log says postgres restarts, and why" || bad "source: no postgres restart notice"
+setup sourcepin r1
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
+cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
+: > "$REPO/packages/database/migrations/0011_old.sql"
+( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcepin: git fixture"
+: > "$FAKE/log"
+FAKE_RESOLVE_FAIL=1 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+[ "$rc" != 0 ] && ! grep -q '^build ' "$FAKE/log" && grep -q "could not pin this release's third-party images" "$S/out" && [ "$(cur_id)" = "$R1" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" \
+  && ok "sourcepin: a registry that cannot resolve the pins refuses the update BEFORE any build" || { bad "sourcepin: rc=$rc builds=$(grep -c '^build ' "$FAKE/log")"; show; }
 
 # ── 6b. --from-source, a FAILED build resets the BuildKit cache ───────────────
 # The lock-out this guards (perso, 2026-10-06): a build that dies mid-layer
@@ -745,7 +770,8 @@ ls -d "$DEPLOY"/backups/postgres/*-pre-update >/dev/null 2>&1 && grep -q "canary
 # it runs only after a SUCCESSFUL applied update — so without a reset the pod
 # can never rebuild, however many times it is retried.
 setup sourcefail r1
-mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations"
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
 cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
 : > "$REPO/packages/database/migrations/0011_old.sql"; : > "$REPO/packages/database/migrations/0012_new.sql"
 ( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcefail: git fixture"

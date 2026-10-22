@@ -3920,10 +3920,13 @@ _ue_image_tsdb_libs() { _ue_tsdb_libs_of docker run --rm --entrypoint sh "$1"; }
 # Refuses (records + returns 1) a release whose postgres image cannot load a
 # database's TimescaleDB version. Postgres must be running. <manifest>
 _ue_tsdb_check() {
-    local m="$1" img rows libs row db v
+    local m="$1" img cur rows libs row db v
     img="$(jq -r '.images.SYNAP_IMAGE_POSTGRES // empty' "$m")"
     [ -n "$img" ] || return 0                              # no pin: compose keeps the image it has
-    [ "$img" != "$(_ue_env_get SYNAP_IMAGE_POSTGRES)" ] || return 0   # the pin this pod already runs
+    cur="$(_ue_env_get SYNAP_IMAGE_POSTGRES)"
+    [ "$img" != "$cur" ] || return 0                       # the pin this pod already runs
+    _ue_log "postgres image: ${cur:-the compose default tag (whatever this host pulled)} → ${img}"
+    _ue_log "  postgres RESTARTS during this update: the release pins a new postgres image. Its databases keep their TimescaleDB version (checked next); the data stays on its volume."
     rows="$(_ue_tsdb_versions)" || {
         _ue_err "cannot read which TimescaleDB version each database runs — refusing to change the postgres image. Nothing was changed."
         _ue_record aborted "$UE_FROM" "$UE_TO" "TimescaleDB extension versions unreadable" false
@@ -4101,7 +4104,7 @@ _ue_adopt_running() {
 _ue_build_cache_reset() { docker builder prune -af >/dev/null 2>&1 || true; }
 
 _ue_build_from_source() { # <out-manifest>
-    local out="$1" repo_root sha tag be pa mig_dir last count carry
+    local out="$1" repo_root sha tag be pa mig_dir last count carry pins k v
     repo_root="$(get_repo_root)"
     if [ -z "$repo_root" ] || [ ! -f "$repo_root/deploy/Dockerfile" ]; then
         _ue_err "--from-source needs a git checkout of synap-backend around this deploy dir. Nothing was changed."
@@ -4129,6 +4132,24 @@ _ue_build_from_source() { # <out-manifest>
     # (~11 GB peak, perso 2026-10-05). Refuse below the floor rather than ENOSPC
     # mid-layer.
     _ue_disk_ok "${SYNAP_UPDATE_MIN_FREE_SOURCE_MB:-12288}" || return 1
+    # Third-party images are pinned by digest by THE release rule — the same
+    # resolver make-manifest.py uses (deploy/release/resolve-images.sh: the
+    # compose default tag, resolved in its registry). Carrying them from .env
+    # left a pod that never took a published release on the compose default
+    # TAG, i.e. whatever this host pulled first (perso ran TimescaleDB 2.26.4
+    # while releases pinned 2.28.3). Other first-party pins (pod-agent) still
+    # carry over from .env (the manifest rules refuse one not pinned by digest).
+    # Resolved BEFORE the build: a registry that cannot answer costs no build.
+    if ! pins="$(bash "$repo_root/deploy/release/resolve-images.sh" docker-compose.yml)"; then
+        _ue_err "could not pin this release's third-party images by digest (deploy/release/resolve-images.sh). Nothing was changed."
+        return 1
+    fi
+    carry="{}"
+    while IFS='=' read -r k v; do
+        case "$k" in SYNAP_IMAGE_BACKEND|SYNAP_IMAGE_POD_ADMIN|"") continue ;; esac
+        [ -n "$v" ] || v="$(_ue_env_get "$k")"      # first-party: the pin this pod has (manifest rules check it)
+        if [ -n "$v" ]; then carry="$(jq -c --arg k "$k" --arg v "$v" '. + {($k): $v}' <<<"$carry")"; fi
+    done <<<"$pins"
     _ue_log "Building ${be} and ${pa} from ${repo_root} (commit ${sha:0:12})..."
     if ! docker build -f "$repo_root/deploy/Dockerfile" --build-arg "GIT_SHA=${sha}" -t "$be" "$repo_root"; then
         _ue_build_cache_reset
@@ -4143,9 +4164,6 @@ _ue_build_from_source() { # <out-manifest>
     mig_dir="$repo_root/packages/database/migrations"
     last="$(ls "$mig_dir"/*.sql 2>/dev/null | sort | tail -1 | xargs -r basename)"
     count="$(ls "$mig_dir"/*.sql 2>/dev/null | wc -l | tr -d ' ')"
-    # Third-party pins carry over from the current release (absent ⇒ compose defaults).
-    carry="$(grep -E '^SYNAP_IMAGE_[A-Z0-9_]+=' .env 2>/dev/null | grep -vE '^SYNAP_IMAGE_(BACKEND|POD_ADMIN)=' \
-        | jq -R 'split("=") | {(.[0]): (.[1:]|join("="))}' | jq -sc 'add // {}')"
     jq -n --arg id "local-${tag}" --arg sha "$sha" --arg be "$be" --arg pa "$pa" --argjson carry "$carry" \
         --arg last "$last" --argjson count "${count:-0}" --arg compose "sha256:$(_ue_sha256 docker-compose.yml)" \
         --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
