@@ -80,7 +80,7 @@ beforeAll(async () => {
       ('${LIVE}', 'in-a-space', 'editor');
     insert into pod_members (user_id, pod_role) values ('joined', 'member');
     insert into federated_identity_links (issuer_id, issuer_subject, user_id)
-      values ('issuer-1', 'sub-1', 'linked');
+      values ('22222222-2222-4222-8222-222222222222', 'sub-1', 'linked');
     insert into entities (id, user_id) values (gen_random_uuid(), 'author-entity');
     insert into entities (id, user_id, created_by_user_id)
       values (gen_random_uuid(), 'someone-else', 'author-created-by');

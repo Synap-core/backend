@@ -31,7 +31,8 @@ Format (schema 1) — validated by the ENGINE's own rules
 
 First-party digests come from the build jobs (--image KEY=ref@sha256:...).
 Third-party images are resolved from the compose default tag to a digest at
-release time (`docker buildx imagetools inspect`) unless given with --image.
+release time unless given with --image — by deploy/release/resolve-images.sh,
+the ONE resolver `synap update --from-source` uses too.
 
 Usage:
   make-manifest.py --id main-abc1234 --channel fast --git-sha <sha> \
@@ -57,7 +58,6 @@ import sys
 
 MIGRATION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.sql$")
 DIGEST = re.compile(r"^[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}$")
-IMAGE_VAR = re.compile(r"\$\{(SYNAP_IMAGE_[A-Z0-9_]+):-([^}$]*)(\$\{)?")
 
 
 def sha256_file(path):
@@ -68,21 +68,20 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def compose_image_defaults(compose_text):
-    """{SYNAP_IMAGE_X: default-tag or None when the default is first-party (nested ${...})}."""
+def resolve_images(compose_path, given):
+    """{SYNAP_IMAGE_X: pinned ref, or None for a first-party key not given} — deploy/release/resolve-images.sh."""
+    run = subprocess.run(
+        ["bash", os.path.join(os.path.dirname(os.path.abspath(__file__)), "resolve-images.sh"), compose_path]
+        + [f"{k}={v}" for k, v in sorted(given.items())],
+        capture_output=True, text=True,
+    )
+    if run.returncode != 0:
+        sys.exit(run.stderr.strip() or f"resolve-images.sh exited {run.returncode}")
     out = {}
-    for key, default, nested in IMAGE_VAR.findall(compose_text):
-        out[key] = None if nested else default
+    for line in run.stdout.splitlines():
+        key, _, ref = line.partition("=")
+        out[key] = ref or None
     return out
-
-
-def resolve_digest(ref):
-    out = subprocess.run(
-        ["docker", "buildx", "imagetools", "inspect", ref, "--format", "{{json .Manifest}}"],
-        check=True, capture_output=True, text=True,
-    ).stdout
-    digest = json.loads(out)["digest"]
-    return f"{ref}@{digest}"
 
 
 def env_schema_version(example_path):
@@ -109,11 +108,6 @@ def main():
 
     root = a.repo_root
     compose_path = os.path.join(root, "deploy", "docker-compose.yml")
-    with open(compose_path) as f:
-        defaults = compose_image_defaults(f.read())
-    if not defaults:
-        sys.exit("no SYNAP_IMAGE_* variables found in deploy/docker-compose.yml — refusing an empty contract")
-
     given = {}
     for item in a.image:
         key, _, ref = item.partition("=")
@@ -121,16 +115,12 @@ def main():
             sys.exit(f"--image {item!r}: expected KEY=REF")
         given[key] = ref
 
-    images = {}
-    for key, default in sorted(defaults.items()):
-        if key in given:
-            images[key] = given.pop(key)
-        elif default is None:
+    images = resolve_images(compose_path, given)
+    if not images:
+        sys.exit("no SYNAP_IMAGE_* variables found in deploy/docker-compose.yml — refusing an empty contract")
+    for key, ref in sorted(images.items()):
+        if ref is None:
             sys.exit(f"{key} is a first-party image — pass --image {key}=<repo>@sha256:<digest>")
-        else:
-            images[key] = resolve_digest(default)
-    if given:
-        sys.exit(f"--image for keys the compose file does not use: {sorted(given)}")
     for key, ref in images.items():
         if not DIGEST.match(ref):
             sys.exit(f"{key}={ref} is not pinned by digest")
