@@ -3847,6 +3847,24 @@ _ue_migration_level() {
 # builder sort them) — never the locale's collation, which `[[ < ]]` uses.
 _ue_name_lt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | LC_ALL=C sort | head -n 1)" = "$1" ]; }
 
+# 0 when release <a> is OLDER than release <b>: both stable ids vX.Y.Z, compared
+# number by number. Anything else (main-<sha>, local-<sha>, adopted-…, a
+# pre-release, an unknown id) has no order: never older. The control plane
+# never orders such a downgrade, by the same rule (isOlderRelease).
+_ue_release_older() {
+    local a="$1" b="$2" i x y
+    [[ "$a" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+    local -a av=("${BASH_REMATCH[@]:1}")
+    [[ "$b" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+    local -a bv=("${BASH_REMATCH[@]:1}")
+    for i in 0 1 2; do
+        x=$((10#${av[$i]})); y=$((10#${bv[$i]}))
+        [ "$x" -lt "$y" ] && return 0
+        [ "$x" -gt "$y" ] && return 1
+    done
+    return 1
+}
+
 # minFrom (release.json, derived by deploy/release/make-manifest.py): a release
 # carrying a CONTRACT migration is safe to roll back from only if the pod
 # already ran the release that shipped its EXPAND step (rollback swaps images
@@ -4055,7 +4073,7 @@ _synap_event() { # <json-object> <notify 0|1> [latest-file]
 # (SYNAP_REQUEST_PRETAKEN=1): a run that died before reaching its own take (a
 # broken bundle, no jq, the compose-project refusal, `set -e`) left the file in
 # place, and PathExists= restarted the service until systemd's start limit
-# failed the .path unit for good. Measured on systemd 252 (2026-10-21): 4 runs
+# failed the .path unit for good. Measured on systemd 252: 4 runs
 # in one second, 'unit-start-limit-hit', and no later request picked up.
 _synap_take_request() { # <update|compose> → the taken file's path; empty when there is none
     local f="state/requests/$1.json" t="state/requests/$1.taken.json"
@@ -4702,6 +4720,15 @@ synap_update_engine() {
         _ue_record noop "$UE_FROM" "$UE_TO" "already on release ${UE_TO}" false
         return 0
     fi
+    # A downgrade is never applied by accident (a channel pointer moved back, a
+    # mistyped --release): the older release's code would run on a schema and
+    # deploy files it never knew. A failed update's rollback is not this path.
+    if [ "$force" != 1 ] && _ue_release_older "$UE_TO" "$UE_FROM"; then
+        _ue_err "release ${UE_TO} is older than the running ${UE_FROM} — refusing to downgrade. Nothing was changed."
+        _ue_err "To apply it anyway: synap update --release ${UE_TO} --force"
+        _ue_record aborted "$UE_FROM" "$UE_TO" "older than the running release ${UE_FROM}" false
+        exit 1
+    fi
     # 1b. update the updater first (H1): the release's own engine runs the rest.
     if [ -n "$UE_BUNDLE_DIR" ] && [ -z "${SYNAP_UE_HANDOFF:-}" ]; then
         _ue_handoff
@@ -4958,7 +4985,8 @@ synap update [--release <id|fast|stable>] [--from-source] [--force] [--unattende
                     Default: SYNAP_UPDATE_CHANNEL from deploy/.env, else stable.
   --from-source     build THIS checkout as synap-dev/*:<sha> (release local-<sha>);
                     same backup / canary / rollback as a release.
-  --force           re-apply the release the pod is already on.
+  --force           re-apply the release the pod is already on, or apply a
+                    release older than it (otherwise refused).
   --unattended      what synap-update.service runs: a pending request
                     (state/requests/update.json) or the owner's policy
                     (state/update-policy.json: auto, channel, window); always

@@ -21,7 +21,10 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { execFile, spawn } = require("child_process");
-const { archiveManifestFrom } = require("./archive-manifest");
+const {
+  archiveManifestFrom,
+  ARCHIVE_MAX_RUN_MS,
+} = require("./archive-manifest");
 const {
   assertPushable,
   commandErrorStatus,
@@ -187,6 +190,7 @@ const COMMANDS = {
       p.callbackUrl || "",
       p.callbackJwt || "",
     ],
+    timeout: ARCHIVE_MAX_RUN_MS,
   },
   configure: {
     script: "configure-pod.sh",

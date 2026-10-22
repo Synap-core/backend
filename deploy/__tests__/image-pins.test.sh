@@ -2,9 +2,8 @@
 # ============================================================================
 # Tripwire: every compose image is pinned — no `:latest`, no bare tag.
 # ============================================================================
-# The defect (2026-10-21): cloudflared, rsshub, browserless and dozzle ran
-# `:latest`, so two pods installed a week apart ran different code under the
-# same release, and nothing in a release named what they ran.
+# A floating tag means two pods installed a week apart run different code
+# under the same release, and nothing in the release names what they run.
 #
 # Asserts, on the PARSED compose YAML (service set derived, never hand-listed),
 # that every service's `image` has exactly one of two shapes:

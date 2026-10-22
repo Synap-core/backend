@@ -867,6 +867,22 @@ run_update --unattended; rc=$?
 [ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [[ "$(last reason)" == *"is not HH:MM-HH:MM"* ]] \
   && ok "policy: a broken update policy is recorded, not only printed" || { bad "policy: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 
+# ── 9c. a release OLDER than the running one is refused unless --force ───────
+asrel() { jq --arg id "$1" '.id = $id' "$DEPLOY/state/current-release.json" > "$TMP/x" && mv "$TMP/x" "$DEPLOY/state/current-release.json"; }
+setup downgrade r1; asrel v1.10.0; publish v1.9.0 0012_new.sql
+run_update --release v1.9.0; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [ "$(last reason)" = "older than the running release v1.10.0" ] && [ "$(cur_id)" = v1.10.0 ] \
+  && ! grep -qE "^pull |pg_dump" "$FAKE/log" && cmp -s "$DEPLOY/.env" "$S/env.orig" \
+  && ok "downgrade: v1.10.0 → v1.9.0 is refused before anything changes (numbers, not strings)" || { bad "downgrade: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+run_update --release v1.9.0 --force; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = v1.9.0 ] && ok "downgrade: --force applies it" || { bad "downgrade: --force rc=$rc current=$(cur_id)"; show; }
+setup upgrade r1; asrel v1.9.0; publish v1.10.0 0012_new.sql
+run_update --release v1.10.0; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = v1.10.0 ] && ok "downgrade: v1.9.0 → v1.10.0 is an upgrade" || { bad "upgrade: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+setup noorder r1; asrel v9.0.0; publish "$R2" 0012_new.sql
+run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && ok "downgrade: v9.0.0 → $R2 has no order and is not refused" || { bad "noorder: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+
 # ── 10. channels resolve through channel-<name>/release.json ──────────────────
 setup channel r1; publish "$R2" 0012_new.sql
 mkdir -p "$TMP/rel/channel-fast"; cp "$TMP/rel/$R2/release.json" "$TMP/rel/channel-fast/release.json"
