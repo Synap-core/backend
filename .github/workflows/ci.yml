@@ -294,6 +294,16 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
+      # Search: the image and version the pod compose runs
+      # (deploy/docker-compose.yml). A service container takes no command line,
+      # so the server is configured through its TYPESENSE_* environment.
+      typesense:
+        image: typesense/typesense:0.25.2
+        env:
+          TYPESENSE_DATA_DIR: /tmp
+          TYPESENSE_API_KEY: ci-typesense
+        ports:
+          - 8108:8108
 
     steps:
       - name: Checkout Repository
@@ -317,12 +327,26 @@ jobs:
 
       - name: Start the API (test mode)
         run: |
+          # The workers create the search collections at boot, so Typesense
+          # must answer before the API starts.
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8108/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -sf http://localhost:8108/health || { echo "::error::Typesense not healthy after 60s"; exit 1; }
           DATABASE_URL=postgresql://postgres:postgres@localhost:5432/synap_test \
           NODE_ENV=test \
           PORT=4000 \
           SKIP_SECRET_VALIDATION=true \
           KRATOS_PUBLIC_URL=http://localhost:4433 \
           KRATOS_ADMIN_URL=http://localhost:4434 \
+          STORAGE_PROVIDER=local \
+          LOCAL_STORAGE_DIR="$RUNNER_TEMP/storage" \
+          TYPESENSE_HOST=localhost \
+          TYPESENSE_PORT=8108 \
+          TYPESENSE_PROTOCOL=http \
+          TYPESENSE_API_KEY=ci-typesense \
+          TYPESENSE_ADMIN_API_KEY=ci-typesense \
           node apps/api/dist/index.js > "$RUNNER_TEMP/api.log" 2>&1 &
           for i in $(seq 1 60); do
             if curl -sf http://localhost:4000/health > /dev/null 2>&1; then

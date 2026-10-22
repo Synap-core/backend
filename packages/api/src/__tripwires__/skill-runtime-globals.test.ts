@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import {
+  assertSkillCodeAllowed,
+  skillKindAfterUpdate,
   scanSkillGlobals,
   SKILL_RUNTIME_ALLOWED_GLOBALS,
 } from "../routers/skills.js";
@@ -110,6 +112,47 @@ describe("skill runtime global scan — tripwire", () => {
     // local shadow of an allowed name is never flagged; a syntax error is caught
     expect(scanSkillGlobals(`const URL = 1; return URL;`).ok).toBe(true);
     expect(scanSkillGlobals(`const x = (`).parseError).toBeTruthy();
+  });
+
+  it("(2b) only a CODE skill's code is scanned; an instruction skill's markdown is not JavaScript", () => {
+    // The shape every catalog instruction skill ships (datagouv,
+    // research-methods, …): its body is markdown in `code`.
+    const markdown =
+      "# Open Data Advisor\n\nWhen asked about a grant, advise on scope/abstract.";
+    expect(() => assertSkillCodeAllowed("instruction", markdown)).not.toThrow();
+    // The same text as a CODE skill is refused: the gate still bites there.
+    expect(() => assertSkillCodeAllowed("code", markdown)).toThrow(
+      /syntax error/
+    );
+    expect(() =>
+      assertSkillCodeAllowed("code", "return await fetch('https://x');")
+    ).toThrow(/fetch/);
+    expect(() =>
+      assertSkillCodeAllowed("code", "return args.query;")
+    ).not.toThrow();
+  });
+
+  it("(2c) an update is scanned as the kind it WRITES: an instruction skill keeps its kind unless one is given", () => {
+    const js = "return await fetch('https://x');";
+    const markdown = "# Advisor\n\nAdvise on scope.";
+    // Editing an instruction skill's code alone never makes it a code skill —
+    // neither its markdown nor JS (which it then never runs as code).
+    expect(skillKindAfterUpdate({ code: markdown }, "instruction")).toBe(
+      "instruction"
+    );
+    expect(skillKindAfterUpdate({ code: js }, "instruction")).toBe(
+      "instruction"
+    );
+    // instruction → code is explicit, and that write is scanned as code.
+    const toCode = skillKindAfterUpdate(
+      { kind: "code", code: js },
+      "instruction"
+    );
+    expect(toCode).toBe("code");
+    expect(() => assertSkillCodeAllowed(toCode, js)).toThrow(/fetch/);
+    // A code skill keeps being scanned; emptied, it becomes doc-only.
+    expect(skillKindAfterUpdate({ code: js }, "code")).toBe("code");
+    expect(skillKindAfterUpdate({ code: "  " }, "code")).toBe("instruction");
   });
 
   it("(3) allow-list matches the IS runtime SSOT (when sibling checked out)", () => {
