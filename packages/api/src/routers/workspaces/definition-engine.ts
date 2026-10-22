@@ -15,10 +15,7 @@ import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import { z } from "zod";
 import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
 import { profilePresentationSchema } from "./profile-presentation-schema.js";
-import {
-  protectedProcedure,
-  credentialProcedure,
-} from "../../trpc.js";
+import { protectedProcedure, credentialProcedure } from "../../trpc.js";
 import {
   db,
   eq,

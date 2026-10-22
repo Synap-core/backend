@@ -136,6 +136,9 @@ import { router } from "../trpc.js";
 import { devicesRouter } from "../routers/devices.js";
 import { apiKeysRouter } from "../routers/api-keys.js";
 import { machinesRouter } from "../routers/machines.js";
+import { secretsVaultRouter } from "../routers/secrets-vault.js";
+import { workspacesRouter } from "../routers/workspaces.js";
+import { webhooksRouter } from "../routers/webhooks.js";
 import { inviteProcedures } from "../routers/workspaces/invites.js";
 import { applicationConnectionsRouter } from "../routers/application-connections.js";
 import {
@@ -273,6 +276,9 @@ const appRouter = router({
   devices: devicesRouter,
   apiKeys: apiKeysRouter,
   machines: machinesRouter,
+  secretsVault: secretsVaultRouter,
+  workspaces: workspacesRouter,
+  integrations: webhooksRouter,
 });
 
 function appApi() {
@@ -882,6 +888,27 @@ describe("(i) a STALE device token cannot create, widen or approve a credential"
     ["apiKeys.getDeviceRequest", { userCode: "ABCD-1234" }, "query"],
     ["machines.revoke", { machineId: "m-1" }, "mutation"],
     ["devices.revoke", { deviceId: randomUUID() }, "mutation"],
+    // Reading a secret's value, and giving someone else lasting access.
+    ["secretsVault.reveal", { id: randomUUID() }, "mutation"],
+    [
+      "workspaces.createInvite",
+      {
+        type: "workspace",
+        workspaceId: randomUUID(),
+        email: "someone@example.com",
+        role: "viewer",
+      },
+      "mutation",
+    ],
+    [
+      "integrations.create",
+      {
+        name: "from a phone",
+        url: "not a url",
+        eventTypes: ["entity.created"],
+      },
+      "mutation",
+    ],
   ];
 
   it.each(DOORS)(
@@ -910,6 +937,18 @@ describe("(i) a STALE device token cannot create, widen or approve a credential"
       expect(res.body.error?.json?.data?.reasonCode).not.toBe(STEP_UP_REQUIRED);
     }
   );
+
+  it("CONTROL — a grant only to the caller is not a step-up: a stale device makes its own space", async () => {
+    const s = await signIn("stale", 6 * MIN_MS);
+    const res = await trpc(
+      { bearer: s.access },
+      "workspaces.create",
+      { name: `From a phone ${randomUUID().slice(0, 8)}` },
+      "mutation"
+    );
+    expect(res.body.error?.json?.data?.reasonCode).not.toBe(STEP_UP_REQUIRED);
+    expect(res.status).toBe(200);
+  });
 });
 
 // ─── (j) step-up ─────────────────────────────────────────────────────────────

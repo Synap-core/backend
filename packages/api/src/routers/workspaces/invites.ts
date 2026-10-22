@@ -11,7 +11,6 @@ import {
   protectedProcedure,
   publicProcedure,
   credentialProcedure,
-  requireFreshAuthentication,
 } from "../../trpc.js";
 import {
   db,
@@ -673,7 +672,7 @@ export const inviteProcedures = {
   /**
    * Accept invitation (workspace or pod). Works for both types.
    */
-  acceptInvite: credentialProcedure
+  acceptInvite: protectedProcedure
     .input(z.object({ token: z.string() }))
     .mutation(async ({ input, ctx }) => {
       const invite = await db.query.invites.findFirst({
@@ -1291,7 +1290,7 @@ export const inviteProcedures = {
    * The pod looks up the local user by email and accepts on their behalf.
    * Works for both workspace and pod invites.
    */
-  acceptInviteViaCp: publicProcedure.use(requireFreshAuthentication)
+  acceptInviteViaCp: publicProcedure
     .input(z.object({ token: z.string(), cpToken: z.string() }))
     .mutation(async ({ input }) => {
       const cpUrl = config.server.controlPlaneUrl;

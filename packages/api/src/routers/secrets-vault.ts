@@ -18,11 +18,7 @@
  */
 
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
-import {
-  router,
-  protectedProcedure,
-  credentialProcedure,
-} from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";

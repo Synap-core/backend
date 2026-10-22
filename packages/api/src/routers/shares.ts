@@ -53,11 +53,7 @@
  */
 
 import { z } from "zod";
-import {
-  router,
-  protectedProcedure,
-  credentialProcedure,
-} from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import {
   getExposurePolicy,
   getPublicDoors,
@@ -190,7 +186,7 @@ export const sharesRouter = router({
     ),
 
   // `token` is the input key the tRPC audit middleware redacts.
-  redeemLink: credentialProcedure
+  redeemLink: protectedProcedure
     .input(z.object({ token: z.string().min(1).max(256) }))
     .mutation(({ input, ctx }) =>
       redeemLink(shareActorFromCtx(ctx), input.token)

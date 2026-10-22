@@ -35,11 +35,7 @@
  */
 
 import { z } from "zod";
-import {
-  router,
-  protectedProcedure,
-  credentialProcedure,
-} from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import {
   db,
   eq,
