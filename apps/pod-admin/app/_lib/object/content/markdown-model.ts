@@ -203,3 +203,44 @@ export function contentHref(url: string | null | undefined): ContentHref {
   }
   return { kind: "none" };
 }
+
+/**
+ * What an embedded record may say about itself, from the reader's own
+ * `entities.get`. `hidden` covers "not visible to you" AND "gone": the pod
+ * answers NOT_FOUND for both, so neither the title nor which one it is leaks.
+ * `failed` is a broken read (network, 500) — retryable, never "hidden".
+ * `unresolved` = this surface reads no records; the card names the kind only.
+ */
+export type EmbedEntityRead =
+  | { state: "unresolved" }
+  | { state: "loading" }
+  | { state: "ready"; title: string }
+  | { state: "hidden" }
+  | { state: "failed"; retry?: () => void };
+
+const HIDDEN_CODES: ReadonlySet<string> = new Set([
+  "NOT_FOUND",
+  "FORBIDDEN",
+  "BAD_REQUEST",
+  "UNAUTHORIZED",
+]);
+
+export function entityEmbedRead(query: {
+  isLoading: boolean;
+  error: { data?: { code?: string | null } | null } | null | undefined;
+  data: unknown;
+  retry?: () => void;
+}): EmbedEntityRead {
+  if (query.error) {
+    const code = query.error.data?.code;
+    return code && HIDDEN_CODES.has(code)
+      ? { state: "hidden" }
+      : { state: "failed", ...(query.retry ? { retry: query.retry } : {}) };
+  }
+  if (query.isLoading) return { state: "loading" };
+  const entity = (query.data as { entity?: { title?: unknown } } | undefined)
+    ?.entity;
+  if (!entity) return { state: "hidden" };
+  const title = typeof entity.title === "string" ? entity.title.trim() : "";
+  return { state: "ready", title: title || "Untitled" };
+}

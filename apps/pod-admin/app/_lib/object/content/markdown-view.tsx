@@ -16,12 +16,11 @@ import { Fragment, useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import {
   parseMarkdown,
-  readableMarkdown,
+  readEmbed,
   resolvePatternMarkers,
-  type Embed,
   type MdastNode,
 } from "@synap-core/markdown-core";
-import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import { EmbedBlock } from "./embed-view";
 import {
   contentHref,
   contentMeasureClass,
@@ -116,6 +115,19 @@ function ImageMention({ url, alt }: { url: string; alt: string }) {
 }
 
 function renderNode(node: MdastNode): ReactNode {
+  // A `:::synap-*` reference embed (a chart, a record, a cell): drawn from the
+  // shared embed model, its author's prose under it. Frames (sections,
+  // columns) are not embeds — the walker below draws their content.
+  const embed = readEmbed(node as Parameters<typeof readEmbed>[0]);
+  if (embed) {
+    return (
+      <EmbedBlock
+        embed={embed}
+        inline={node.type === "textDirective"}
+        fallback={children({ children: embed.fallback })}
+      />
+    );
+  }
   switch (node.type) {
     case "paragraph":
       return <p>{children(node)}</p>;
@@ -274,16 +286,13 @@ function renderNode(node: MdastNode): ReactNode {
   }
 }
 
-/** An embed with no authored fallback reads as its noun ("*Chart*"). */
-function embedLabel(embed: Embed): string {
-  return resolveObjectNoun(embed.kind);
-}
-
 /**
- * `source` drawn read-only, in its readable form: an embed (a live cell, an
- * entity card) shows the prose its author gave it — the console runs no
- * cells. Object markers (`[[entity:id|Ana]]`) become their console pages; the
- * rest follows `renderNode`.
+ * `source` drawn read-only. Embeds arrive as directive nodes and are drawn by
+ * `EmbedBlock` (a snapshot chart from its numbers; a record, a view or a cell
+ * as a door or a named chip — the console runs no cells). A body already in
+ * its readable form simply has no embeds left. Object markers
+ * (`[[entity:id|Ana]]`) become their console pages; the rest follows
+ * `renderNode`.
  */
 export default function MarkdownView({
   source,
@@ -294,9 +303,7 @@ export default function MarkdownView({
 }) {
   const tree = useMemo(
     () =>
-      parseMarkdown(
-        resolvePatternMarkers(readableMarkdown(source, embedLabel))
-      ),
+      parseMarkdown(resolvePatternMarkers(source)),
     [source]
   );
   return (
