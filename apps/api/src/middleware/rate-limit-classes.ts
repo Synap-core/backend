@@ -30,9 +30,13 @@ import {
  *   not authenticate), so IP-keyed — a random Bearer per request must not buy
  *   a fresh `crud` budget
  * - oauth_public: the pod authorization server's unauthenticated doors
- *   (`/register`, `/authorize`, `/token`), IP-keyed — open DCR and the CIMD
- *   fetch `/authorize` may trigger are a write and an outbound request any
- *   stranger can cause (spec 17 T11)
+ *   `/register` and `/authorize`, IP-keyed — open DCR and the CIMD fetch
+ *   `/authorize` may trigger are a write and an outbound request any stranger
+ *   can cause (spec 17 T11). On a pod whose visitors share one address,
+ *   `/authorize` is keyed per client_id instead (`buildOAuthPublicKey`)
+ * - oauth_token: the AS's `/token`, keyed per (client_id, code or refresh
+ *   token), under a per-IP ceiling only when addresses tell callers apart:
+ *   every pod app's refresh must not share a budget a stranger can drain
  * - crud: everything else
  */
 export type RateLimitClass =
@@ -46,6 +50,7 @@ export type RateLimitClass =
   | "device_auth"
   | "key_state"
   | "oauth_public"
+  | "oauth_token"
   | "crud";
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -72,6 +77,7 @@ export function getRateLimitClassConfig(): Record<
     | "device_auth"
     | "key_state"
     | "oauth_public"
+    | "oauth_token"
   >,
   {
     max: number;
@@ -153,8 +159,10 @@ export function getRateLimitClassConfig(): Record<
 export const OAUTH_PUBLIC_PATHS: ReadonlySet<string> = new Set([
   "/register",
   "/authorize",
-  "/token",
 ]);
+
+/** The AS token endpoint, budgeted per grant (`oauth_token`). */
+export const OAUTH_TOKEN_PATH = "/token";
 
 /**
  * Classify a request path into a rate-limit class.
@@ -200,6 +208,9 @@ export function classifyRateLimitPath(
   // reach (possession of the token is the authority) and starts no fetch.
   if (OAUTH_PUBLIC_PATHS.has(p)) {
     return "oauth_public";
+  }
+  if (p === OAUTH_TOKEN_PATH) {
+    return "oauth_token";
   }
 
   // free — probes that must never burn budget
@@ -391,11 +402,11 @@ export function getKeyStateRateConfig(): {
 }
 
 /**
- * `oauth_public` budget, per IP: 60 requests / 10 min. A connection costs at
- * most three calls (register, authorize, token) and a pod app refreshes about
- * once an hour, so this leaves room for many people behind one address while
- * bounding what a stranger can make the pod register or fetch. Keyed WITHOUT
- * the Authorization header (a random Bearer must not buy a fresh budget).
+ * `oauth_public` budget, per IP: 60 requests / 10 min. A connection costs two
+ * calls here (register, authorize), so this leaves room for many people
+ * behind one address while bounding what a stranger can make the pod
+ * register or fetch. Keyed WITHOUT the Authorization header (a random Bearer
+ * must not buy a fresh budget).
  */
 export function getOAuthPublicRateConfig(): {
   max: number;
@@ -411,6 +422,104 @@ export function getOAuthPublicRateConfig(): {
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
+}
+
+/**
+ * The `oauth_public` bucket. Per IP, except `/authorize` on a pod whose
+ * visitors all share one address (`sharedClientIp`): there one IP bucket is
+ * the whole internet's, and a stranger's 60 cheap `/register` calls would
+ * block every sign-in, so `/authorize` is budgeted per client_id (an app's
+ * sign-ins are blocked only by flooding that app's own id). `/register`
+ * stays per IP everywhere, so open DCR is always bounded; on a shared
+ * address that bound is pod-wide, and a flood blocks new registrations only.
+ */
+export function buildOAuthPublicKey(
+  path: string,
+  ip: string,
+  clientId: string | undefined,
+  env: Record<string, string | undefined> = process.env
+): string {
+  if (path === "/authorize" && sharedClientIp(env)) {
+    return `oauth_public:authorize:${hashBearerToken(clientId ?? "")}`;
+  }
+  return `oauth_public:ip:${ip}`;
+}
+
+/**
+ * `oauth_token` budgets, per 10 min: 20 per grant (a code is redeemed once, a
+ * refresh token once plus a few reuse-grace replays from parallel
+ * instances), and 600 per IP. A pod app's server (a BFF) refreshes for ALL of
+ * its users from one egress address, about once an hour each, so the IP
+ * ceiling is ten times `oauth_public`'s.
+ */
+export function getOAuthTokenRateConfig(): {
+  max: number;
+  ipCeiling: number;
+  windowMs: number;
+  retryAfter: string;
+} {
+  const windowMs = parsePositiveInt(
+    process.env.RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS,
+    10 * 60 * 1000
+  );
+  return {
+    max: parsePositiveInt(process.env.RATE_LIMIT_OAUTH_TOKEN_MAX, 20),
+    ipCeiling: parsePositiveInt(
+      process.env.RATE_LIMIT_OAUTH_TOKEN_IP_CEILING,
+      600
+    ),
+    windowMs,
+    retryAfter: formatRetryAfter(windowMs),
+  };
+}
+
+/** The largest `/token` body the limiter reads to find the grant. */
+export const OAUTH_TOKEN_BODY_READ_MAX = 16 * 1024;
+
+/**
+ * The `oauth_token` bucket of one `/token` body (form or JSON, as /token
+ * reads it): the client_id with the code or refresh token it redeems,
+ * hashed. Nobody can drain a grant's budget without holding that grant, so a
+ * flood from anywhere never blocks another app's refresh. A body that was
+ * not read (`null`: no length, or too long) or does not parse spends one
+ * `unread` bucket. Neither value is ever logged; only the hash is a key.
+ */
+export function buildOAuthTokenKey(
+  body: string | null,
+  contentType: string
+): string {
+  if (body === null) return "oauth_token:unread";
+  let params: Record<string, unknown>;
+  try {
+    params = contentType.includes("application/json")
+      ? (JSON.parse(body) as Record<string, unknown>)
+      : Object.fromEntries(new URLSearchParams(body));
+  } catch {
+    return "oauth_token:unread";
+  }
+  const text = (v: unknown) => (typeof v === "string" ? v : "");
+  if (!params || typeof params !== "object") return "oauth_token:unread";
+  const grant =
+    text(params.grant_type) === "refresh_token"
+      ? text(params.refresh_token)
+      : text(params.code);
+  return `oauth_token:grant:${hashBearerToken(
+    `${text(params.client_id)}\n${grant}`
+  )}`;
+}
+
+/**
+ * The address-wide `oauth_token` ceiling, or null where the address does not
+ * tell callers apart ("unknown", or a shared tunnel address), as
+ * `buildCrudIpCeilingKey`: invented grants then each buy a bucket, which
+ * costs the pod one indexed lookup apiece and blocks nobody.
+ */
+export function buildOAuthTokenIpCeilingKey(
+  ip: string,
+  env: Record<string, string | undefined> = process.env
+): string | null {
+  if (ip === "unknown" || sharedClientIp(env)) return null;
+  return `oauth_token:ipall:${ip}`;
 }
 
 /**
