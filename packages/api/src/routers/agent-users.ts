@@ -397,7 +397,7 @@ export const agentUsersRouter = router({
   /**
    * Create an AI agent user and add it to a workspace
    */
-  create: protectedProcedure
+  create: credentialProcedure
     .input(
       z.object({
         // Required for a workspace agent; omit for a pod-wide agent (no

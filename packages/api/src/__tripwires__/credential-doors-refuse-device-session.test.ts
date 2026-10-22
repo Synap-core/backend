@@ -72,6 +72,11 @@ const SKIP = new Set(["node_modules", "dist", "__tests__", "__tripwires__"]);
  * `vault_grants` IS one: a grant hands an agent a
  * secret's VALUE. Installing a template or answering a "provide" ask from a
  * Synap app therefore asks for a fresh sign-in, only when a grant is written.
+ * So is everything that turns a 1 h token into LASTING access for someone:
+ * an invitation (`invites`, `admin_invitations`), a membership or a role in a
+ * space or a project (`workspace_members`, `project_members`), a webhook that
+ * keeps delivering (`webhook_subscriptions`), and a share of a secret or of
+ * a resource (`secret_shares`, `resource_shares`).
  */
 const CREDENTIAL_TABLES: Record<string, string> = {
   apiKeys: "api_keys",
@@ -86,7 +91,99 @@ const CREDENTIAL_TABLES: Record<string, string> = {
   oauthRefreshTokens: "oauth_refresh_tokens",
   personDevices: "person_devices",
   personDeviceTokens: "person_device_tokens",
+  invites: "invites",
+  workspaceMembers: "workspace_members",
+  projectMembers: "project_members",
+  webhookSubscriptions: "webhook_subscriptions",
+  secretShares: "secret_shares",
+  resourceShares: "resource_shares",
 };
+
+/**
+ * Reading a secret's VALUE is a credential act too: a door that decrypts in
+ * its own body and may hand the plaintext back (`secrets.reveal`). Matched
+ * as a direct call whose name starts with `decrypt`. A door that decrypts
+ * only to USE the value (call a provider, sign a request) and never returns
+ * it is classified here, with why — a new one must be classified to pass.
+ */
+const SECRET_READ_CALL = /^decrypt/;
+
+/**
+ * Credential tables NO pod code writes today (only their schema exists).
+ * Asserted writer-less below: the day one gains a writer, it must move into
+ * `CREDENTIAL_TABLES`.
+ */
+const CREDENTIAL_TABLES_UNWRITTEN: Record<string, string> = {
+  adminInvitations: "admin_invitations",
+};
+
+/**
+ * Writers of a credential table that give NO person lasting access, with
+ * why. They stop the propagation to the doors that call them.
+ */
+const EXEMPT_WRITERS: Record<string, string> = {
+  ensureAgentUser:
+    "the pod's own built-in agent joins the space a person talks to it in; it adds no person and no key, and is a no-op once the agent is a member",
+  materializePodAdminsIntoWorkspace:
+    "adds only the people who already administer the whole pod to a space they could already administer; it gives no one access they did not hold",
+};
+
+/**
+ * Doors whose only credential write gives access to the CALLER and no one
+ * else: a leaked token turns into nothing an attacker keeps, because what is
+ * granted is the person's own membership, read through the person's own
+ * (revocable) sign-ins. Each names everything it may reach; reaching anything
+ * else (a key, an invitation, someone else's membership) fails the scan. And
+ * its input must name no OTHER principal (`PRINCIPAL_INPUT_KEY`): a door that
+ * takes a user, member, email or target from its input can grant someone
+ * else, so it is not a self-grant and needs the step-up.
+ */
+/** An input key that can name a principal other than the caller. */
+const PRINCIPAL_INPUT_KEY =
+  /(user|member|grantee|target|principal|recipient|invitee|owner|person|account|identity|subject|agent)s?(Id|Ids|Email)?$|email|^to$|^for$/i;
+
+const SELF_GRANT_DOORS: Record<string, { reaches: string[]; why: string }> = {
+  "packages/api/src/routers/workspaces.ts create": {
+    reaches: ["WorkspaceMemberRepository.add"],
+    why: "the caller becomes the owner of the space they just made",
+  },
+  "packages/api/src/routers/workspaces/invites.ts acceptInvite": {
+    reaches: ["WorkspaceMemberRepository.add"],
+    why: "the caller joins with an invitation addressed to their own email",
+  },
+  "packages/api/src/routers/workspaces/invites.ts acceptInviteViaCp": {
+    reaches: ["WorkspaceMemberRepository.add"],
+    why: "the Cloud-verified invitee joins; the request carries no device session",
+  },
+  "packages/api/src/routers/shares.ts redeemLink": {
+    reaches: ["redeemLink"],
+    why: "the caller redeems a link for themselves",
+  },
+};
+
+/**
+ * Doors that MUST be seen by the scan and guarded: the obvious ways to turn a
+ * token into lasting authority. If the analyzer stops finding one (a rename,
+ * a new indirection it cannot follow), this fails instead of going quiet.
+ */
+const KNOWN_CREDENTIAL_DOORS = [
+  "packages/api/src/routers/api-keys.ts create",
+  "packages/api/src/routers/apps.ts create",
+  'packages/api/src/routers/proposals/executors/app.ts executor "app/connect"',
+  "packages/api/src/routers/governance-rules.ts create",
+  "packages/api/src/routers/secrets-vault.ts reveal",
+  "packages/api/src/routers/workspaces/invites.ts createInvite",
+  "packages/api/src/routers/workspaces/invites.ts addMember",
+  "packages/api/src/routers/webhooks.ts create",
+  "packages/api/src/routers/shares.ts share",
+];
+
+/** At least this many guarded doors reach a credential (the real count is higher). */
+const GUARDED_DOOR_FLOOR = 70;
+
+/** Builders that authenticate an `api_keys` row: a device token never passes. */
+const KEY_ONLY_BUILDERS = new Set(["apiKeyProcedure", "scopedProcedure"]);
+const DECRYPTS_WITHOUT_RETURNING: Record<string, string> = {};
 
 /**
  * Columns an UPDATE may set without giving authority: it revokes, retires,
@@ -117,6 +214,8 @@ const ENDING_STATUSES = new Set([
   "disabled",
   "denied",
   "expired",
+  // A publication taken back to draft: nothing is exposed any more.
+  "draft",
 ]);
 const NARROWING_SQL_COLUMNS = new Set([
   "revoked_at",
@@ -165,7 +264,10 @@ const SQL_UPDATE = new RegExp(
 function widenedTables(node: ts.Node): string[] {
   const out: string[] = [];
   const visit = (n: ts.Node) => {
-    const arg = ts.isCallExpression(n) ? n.arguments[0] : undefined;
+    const rawArg = ts.isCallExpression(n) ? n.arguments[0] : undefined;
+    // `.insert(t)` or through a namespace, `.insert(schema.t)`.
+    const arg =
+      rawArg && ts.isPropertyAccessExpression(rawArg) ? rawArg.name : rawArg;
     if (
       ts.isCallExpression(n) &&
       ts.isPropertyAccessExpression(n.expression) &&
@@ -180,23 +282,23 @@ function widenedTables(node: ts.Node): string[] {
         // `.update(t).set(obj)`: the `.set` call wraps this one.
         const access = n.parent;
         const setCall = access?.parent;
-        const setArg =
+        const setArg = localObject(
           access &&
-          ts.isPropertyAccessExpression(access) &&
-          access.name.text === "set" &&
-          setCall &&
-          ts.isCallExpression(setCall)
+            ts.isPropertyAccessExpression(access) &&
+            access.name.text === "set" &&
+            setCall &&
+            ts.isCallExpression(setCall)
             ? setCall.arguments[0]
-            : undefined;
+            : undefined
+        );
         const ends =
           !!setArg &&
           ts.isObjectLiteralExpression(setArg) &&
           setArg.properties.some(
             (p) =>
               ts.isPropertyAssignment(p) &&
-              nameOf(p) === "status" &&
-              ts.isStringLiteral(p.initializer) &&
-              ENDING_STATUSES.has(p.initializer.text)
+              (nameOf(p) === "status" || nameOf(p) === "state") &&
+              ENDING_STATUSES.has(stringValue(p.initializer) ?? "")
           );
         const narrowing =
           ends ||
@@ -224,6 +326,39 @@ function widenedTables(node: ts.Node): string[] {
       out.push(m[1]!.toLowerCase());
   }
   return out;
+}
+
+/** A string literal's text, through `as const`; else null. */
+function stringValue(e: ts.Expression): string | null {
+  const inner = ts.isAsExpression(e) ? e.expression : e;
+  return ts.isStringLiteral(inner) ? inner.text : null;
+}
+
+/**
+ * `.set(revoke)` where `const revoke = {...}` sits in an enclosing block: the
+ * literal, so its columns are judged too. Anything else is returned as is.
+ */
+function localObject(
+  arg: ts.Expression | undefined
+): ts.Expression | undefined {
+  if (!arg || !ts.isIdentifier(arg)) return arg;
+  for (let p: ts.Node | undefined = arg.parent; p; p = p.parent) {
+    if (!ts.isBlock(p) && !ts.isSourceFile(p)) continue;
+    for (const st of p.statements) {
+      if (!ts.isVariableStatement(st)) continue;
+      for (const d of st.declarationList.declarations) {
+        if (
+          ts.isIdentifier(d.name) &&
+          d.name.text === arg.text &&
+          d.initializer &&
+          ts.isObjectLiteralExpression(d.initializer)
+        ) {
+          return d.initializer;
+        }
+      }
+    }
+  }
+  return arg;
 }
 
 function walk(dir: string, out: string[] = []): string[] {
@@ -370,6 +505,8 @@ interface Verdicts {
   why: Map<string, string>;
   writers: Map<string, Set<string>>;
   reaches: (node: ts.Node, file: string) => string | null;
+  /** Every credential write and credential unit a door's code reaches. */
+  reachesAll: (node: ts.Node, file: string) => string[];
   unitNames: Set<string>;
 }
 
@@ -400,7 +537,7 @@ function judge(a: Analysis): Verdicts {
       u.id,
       [...calls].filter((c) => c !== u.name && resolvable(c))
     );
-    const widened = widenedTables(u.node);
+    const widened = u.name in EXEMPT_WRITERS ? [] : widenedTables(u.node);
     if (widened.length > 0) {
       const table = widened[0]!;
       for (const t of widened)
@@ -422,6 +559,7 @@ function judge(a: Analysis): Verdicts {
     grew = false;
     for (const u of a.units) {
       if (credential.has(u.name) || guarded.has(u.id)) continue;
+      if (u.name in EXEMPT_WRITERS) continue;
       const hit = unitCalls.get(u.id)!.find((c) => credential.has(c));
       if (hit) {
         credential.add(u.name);
@@ -440,11 +578,19 @@ function judge(a: Analysis): Verdicts {
     return null;
   };
 
+  const reachesAll = (node: ts.Node, file: string): string[] => {
+    const out = widenedTables(node).map((t) => `writes ${t}`);
+    const calls = calledNames(node, bindingsByFile.get(file)!, a.singletons);
+    for (const c of calls) if (resolvable(c) && credential.has(c)) out.push(c);
+    return [...new Set(out)].sort();
+  };
+
   return {
     credential,
     why,
     writers,
     reaches,
+    reachesAll,
     unitNames: new Set(a.units.map((u) => u.name)),
   };
 }
@@ -476,29 +622,153 @@ function chainOf(expr: ts.Expression): { root: string | null; uses: string[] } {
   return { root: ts.isIdentifier(e) ? e.text : null, uses };
 }
 
-function unguardedDoors(a: Analysis, v: Verdicts): Door[] {
-  const out: Door[] = [];
+/** Is this expression a tRPC procedure: `<x>Procedure….query|mutation(…)`? */
+function isProcedure(expr: ts.Expression): boolean {
+  const { root } = chainOf(expr);
+  if (!root || !/Procedure$/.test(root)) return false;
+  for (let e: ts.Expression = expr; ts.isCallExpression(e);) {
+    const callee = e.expression;
+    if (!ts.isPropertyAccessExpression(callee)) break;
+    if (/^(query|mutation|subscription)$/.test(callee.name.text)) return true;
+    e = callee.expression;
+  }
+  return false;
+}
+
+/** The `decrypt…` a subtree calls directly, or null. */
+function secretRead(node: ts.Node): string | null {
+  let hit: string | null = null;
+  const visit = (n: ts.Node) => {
+    if (hit) return;
+    if (ts.isCallExpression(n)) {
+      const callee = n.expression;
+      const name = ts.isIdentifier(callee)
+        ? callee.text
+        : ts.isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : null;
+      if (name && SECRET_READ_CALL.test(name)) hit = name;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return hit;
+}
+
+interface DoorVerdict extends Door {
+  /** What it reaches (a credential write, or a secret read), or "". */
+  reaches: string;
+  /** Everything it reaches; "" entries never. */
+  reachesAll: string[];
+  guarded: boolean;
+  /**
+   * Every property name in its `.input(...)` schemas, or null when an input
+   * could not be read (a schema from elsewhere): then nothing is proven.
+   */
+  inputKeys?: string[] | null;
+}
+
+/**
+ * The property names a procedure's `.input(...)` schemas declare, read from
+ * the AST (an object literal, or a const bound to one in the same file), or
+ * null when one is not readable here.
+ */
+function inputKeysOf(expr: ts.Expression): string[] | null {
+  const keys: string[] = [];
+  let opaque = false;
+  const collect = (n: ts.Node) => {
+    if (ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) {
+      const k = nameOf(n);
+      if (k) keys.push(k);
+    }
+    ts.forEachChild(n, collect);
+  };
+  for (let e: ts.Expression = expr; ;) {
+    if (ts.isCallExpression(e)) {
+      if (
+        ts.isPropertyAccessExpression(e.expression) &&
+        e.expression.name.text === "input"
+      ) {
+        for (const arg of e.arguments) {
+          const local = localObjectSchema(arg);
+          if (local) collect(local);
+          else opaque = true;
+        }
+      }
+      e = e.expression;
+    } else if (ts.isPropertyAccessExpression(e)) e = e.expression;
+    else break;
+  }
+  return opaque ? null : keys;
+}
+
+/**
+ * An input schema readable here: an inline expression with no bare
+ * identifier as its root, or a const in an enclosing scope bound to one.
+ */
+function localObjectSchema(arg: ts.Expression): ts.Node | null {
+  if (!ts.isIdentifier(arg)) return arg;
+  for (let p: ts.Node | undefined = arg.parent; p; p = p.parent) {
+    if (!ts.isBlock(p) && !ts.isSourceFile(p)) continue;
+    for (const st of p.statements) {
+      if (!ts.isVariableStatement(st)) continue;
+      for (const d of st.declarationList.declarations) {
+        if (
+          ts.isIdentifier(d.name) &&
+          d.name.text === arg.text &&
+          d.initializer
+        ) {
+          return d.initializer;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Every door a device token can reach, with what it reaches and whether it
+ * is guarded. A tRPC procedure is found WHEREVER it is defined — inside
+ * `router({...})`, bound to a const (`const send = protectedProcedure…`,
+ * then `router({ send })`), or in an object of procedures spread into a
+ * router — because each is a procedure chain on its own.
+ */
+function doorsOf(a: Analysis, v: Verdicts): DoorVerdict[] {
+  const out: DoorVerdict[] = [];
   for (const [rel, sf] of a.files) {
     const visit = (node: ts.Node) => {
-      // tRPC: router({ name: <builder>...<handler> })
+      // tRPC: any `name: <builder>…` or `const name = <builder>…`.
       if (
-        ts.isCallExpression(node) &&
-        /(^|\.)router$/.test(node.expression.getText()) &&
-        node.arguments[0] &&
-        ts.isObjectLiteralExpression(node.arguments[0])
+        (ts.isPropertyAssignment(node) || ts.isVariableDeclaration(node)) &&
+        node.initializer &&
+        isProcedure(node.initializer)
       ) {
-        for (const prop of node.arguments[0].properties) {
-          if (!ts.isPropertyAssignment(prop)) continue;
-          const { root, uses } = chainOf(prop.initializer);
-          if (!root || !/Procedure$/.test(root)) continue;
-          const guarded =
-            GUARDED_BUILDERS.has(root) ||
-            uses.includes(GUARD_MIDDLEWARE) ||
-            calledNames(prop.initializer, new Map(), new Map()).has(GUARD_CALL);
-          if (guarded) continue;
-          const hit = v.reaches(prop.initializer, rel);
-          if (hit) out.push({ door: `${rel} ${nameOf(prop)}`, reaches: hit });
+        const init = node.initializer;
+        const { root, uses } = chainOf(init);
+        const door = `${rel} ${nameOf(node)}`;
+        if (KEY_ONLY_BUILDERS.has(root!)) {
+          ts.forEachChild(node, visit);
+          return;
         }
+        const guarded =
+          GUARDED_BUILDERS.has(root!) ||
+          uses.includes(GUARD_MIDDLEWARE) ||
+          calledNames(init, new Map(), new Map()).has(GUARD_CALL);
+        const read = secretRead(init);
+        const readsSecret =
+          read && !(door in DECRYPTS_WITHOUT_RETURNING)
+            ? `reads a secret value (${read})`
+            : null;
+        const reaches = v.reaches(init, rel) ?? readsSecret;
+        const reachesAll = v.reachesAll(init, rel);
+        if (readsSecret) reachesAll.push(readsSecret);
+        out.push({
+          door,
+          reaches: reaches ?? "",
+          reachesAll,
+          guarded,
+          inputKeys: inputKeysOf(init),
+        });
       }
       // Proposal executors: registerProposalExecutor({ key, execute })
       if (
@@ -517,14 +787,13 @@ function unguardedDoors(a: Analysis, v: Verdicts): Door[] {
         const key = obj.properties.find(
           (p) => ts.isPropertyAssignment(p) && nameOf(p) === "key"
         ) as ts.PropertyAssignment | undefined;
-        if (!flag && !calledNames(obj, new Map(), new Map()).has(GUARD_CALL)) {
-          const hit = v.reaches(obj, rel);
-          if (hit)
-            out.push({
-              door: `${rel} executor ${key?.initializer.getText() ?? "?"}`,
-              reaches: hit,
-            });
-        }
+        out.push({
+          door: `${rel} executor ${key?.initializer.getText() ?? "?"}`,
+          reaches: v.reaches(obj, rel) ?? "",
+          reachesAll: v.reachesAll(obj, rel),
+          guarded:
+            flag || calledNames(obj, new Map(), new Map()).has(GUARD_CALL),
+        });
       }
       // Hono: x.use(path, appSessionMiddleware()) → the whole file;
       //       x.post(path, appSessionMiddleware(), …handlers) → those handlers.
@@ -542,10 +811,12 @@ function unguardedDoors(a: Analysis, v: Verdicts): Door[] {
             ? [sf]
             : node.arguments.slice(idx + 1);
           for (const scope of scopes) {
-            if (calledNames(scope, new Map(), new Map()).has(GUARD_CALL))
-              continue;
-            const hit = v.reaches(scope, rel);
-            if (hit) out.push({ door: `${rel} app route`, reaches: hit });
+            out.push({
+              door: `${rel} app route`,
+              reaches: v.reaches(scope, rel) ?? "",
+              reachesAll: v.reachesAll(scope, rel),
+              guarded: calledNames(scope, new Map(), new Map()).has(GUARD_CALL),
+            });
           }
         }
       }
@@ -566,7 +837,24 @@ const sources = ROOTS.flatMap((root) =>
 );
 const real = analyse(sources);
 const verdicts = judge(real);
-const doors = unguardedDoors(real, verdicts);
+const allDoors = doorsOf(real, verdicts);
+/** A self-grant door that reaches only what it declares. */
+/** Input keys that could name someone other than the caller; null = unreadable. */
+const principalInputs = (d: DoorVerdict): string[] | null =>
+  d.inputKeys ? d.inputKeys.filter((k) => PRINCIPAL_INPUT_KEY.test(k)) : null;
+
+/** A self-grant door that reaches only what it declares and names no one else. */
+const isDeclaredSelfGrant = (d: DoorVerdict) => {
+  const declared = SELF_GRANT_DOORS[d.door];
+  return (
+    !!declared &&
+    d.reachesAll.every((r) => declared.reaches.includes(r)) &&
+    principalInputs(d)?.length === 0
+  );
+};
+const unguarded = (ds: DoorVerdict[]) =>
+  ds.filter((d) => d.reaches && !d.guarded && !isDeclaredSelfGrant(d));
+const doors = unguarded(allDoors);
 
 describe("credential doors refuse a Synap app's device session", () => {
   it("scans the real code (non-vacuity)", () => {
@@ -580,6 +868,52 @@ describe("credential doors refuse a Synap app's device session", () => {
         !verdicts.writers.has(t) && !verdicts.writers.has(CREDENTIAL_TABLES[t]!)
     );
     expect(silent).toEqual([]);
+  });
+
+  it("an unwritten credential table stays unwritten; every exemption still exists", () => {
+    for (const [t, sqlName] of Object.entries(CREDENTIAL_TABLES_UNWRITTEN)) {
+      expect(
+        verdicts.writers.has(t) || verdicts.writers.has(sqlName),
+        `${t} now has a writer: move it into CREDENTIAL_TABLES`
+      ).toBe(false);
+    }
+    for (const n of Object.keys(EXEMPT_WRITERS)) {
+      expect(verdicts.unitNames.has(n), n).toBe(true);
+    }
+  });
+
+  it("the known credential doors are seen and guarded, above a floor", () => {
+    const seen = new Map(allDoors.map((d) => [d.door, d]));
+    for (const name of KNOWN_CREDENTIAL_DOORS) {
+      const d = seen.get(name);
+      expect(d, `${name} is no longer seen by the scan`).toBeDefined();
+      expect(d!.reaches, `${name} no longer reaches a credential`).not.toBe("");
+      expect(d!.guarded, `${name} is not guarded`).toBe(true);
+    }
+    // Procedures bound to a const and mounted by shorthand are doors too.
+    for (const name of [
+      "packages/api/src/routers/channels/send-message.ts sendMessageProcedure",
+      "packages/api/src/routers/channels/route-choice.ts answerRouteChoiceProcedure",
+    ]) {
+      expect(seen.has(name), `${name} is not seen as a door`).toBe(true);
+    }
+    const guardedDoors = allDoors.filter((d) => d.reaches && d.guarded);
+    expect(guardedDoors.length).toBeGreaterThanOrEqual(GUARDED_DOOR_FLOOR);
+  });
+
+  it("every self-grant door exists, reaches only what it declares, and its input names no one else", () => {
+    const seen = new Map(allDoors.map((d) => [d.door, d]));
+    for (const [name, declared] of Object.entries(SELF_GRANT_DOORS)) {
+      const d = seen.get(name);
+      expect(d, `${name} is no longer seen by the scan`).toBeDefined();
+      expect(d!.reachesAll, name).toEqual(declared.reaches);
+      expect(
+        principalInputs(d!),
+        `${name}: its input must be readable and name no other principal`
+      ).toEqual([]);
+      // Non-vacuity: the input WAS read (each takes at least one field).
+      expect(d!.inputKeys!.length, name).toBeGreaterThan(0);
+    }
   });
 
   it("revocations are not widenings; the known mints are credential units", () => {
@@ -638,19 +972,77 @@ describe("credential doors refuse a Synap app's device session", () => {
             alsoFine: protectedProcedure.use(requireFreshAuthentication).mutation(({ ctx }) =>
               apiKeyService.generateApiKey(ctx.userId, "x", [])),
             read: protectedProcedure.query(() => 1),
+            reveal: protectedProcedure.mutation(() => decryptServerSide("x")),
+            send,
           });
+          const send = protectedProcedure.mutation(({ ctx }) =>
+            apiKeyService.generateApiKey(ctx.userId, "x", []));
+          const sendFine = credentialProcedure.mutation(({ ctx }) =>
+            apiKeyService.generateApiKey(ctx.userId, "x", []));
+          export const otherRouter = router({ sendFine });
           registerProposalExecutor({ key: "sample/x", async execute() { await attachGrantsOrRevoke({}); } });
           registerProposalExecutor({ key: "sample/y", widensCredential: true, async execute() { await attachGrantsOrRevoke({}); } });
         `,
       },
     ]);
-    const flagged = unguardedDoors(sample, judge(sample))
+    const flagged = unguarded(doorsOf(sample, judge(sample)))
       .filter((d) => d.door.includes("__sample__"))
       .map((d) => d.door);
     expect(flagged.sort()).toEqual([
       'packages/api/src/routers/__sample__.ts executor "sample/x"',
       "packages/api/src/routers/__sample__.ts mint",
+      "packages/api/src/routers/__sample__.ts reveal",
+      "packages/api/src/routers/__sample__.ts send",
     ]);
+  });
+
+  it("POSITIVE CONTROL — a self-grant door that reaches more than it declares is flagged", () => {
+    const [name, declared] = Object.entries(SELF_GRANT_DOORS)[0]!;
+    const door = (reachesAll: string[]): DoorVerdict => ({
+      door: name,
+      reaches: reachesAll[0]!,
+      reachesAll,
+      guarded: false,
+      inputKeys: ["token"],
+    });
+    expect(unguarded([door(declared.reaches)])).toEqual([]);
+    expect(
+      unguarded([door([...declared.reaches, "ApiKeyService.generateApiKey"])])
+    ).toHaveLength(1);
+  });
+
+  it("POSITIVE CONTROL — a self-grant whose input names a target user is flagged", () => {
+    const sample = analyse([
+      {
+        rel: "packages/api/src/routers/__sample_self__.ts",
+        code: `
+          const memberInput = z.object({ workspaceId: z.string(), targetUserId: z.string() });
+          export const r = router({
+            joinOther: protectedProcedure.input(memberInput).mutation(() => 1),
+            joinSelf: protectedProcedure.input(z.object({ token: z.string() })).mutation(() => 1),
+            opaque: protectedProcedure.input(importedSchema).mutation(() => 1),
+          });
+        `,
+      },
+    ]);
+    const byName = new Map(
+      doorsOf(sample, judge(sample)).map((d) => [d.door.split(" ")[1], d])
+    );
+    expect(principalInputs(byName.get("joinOther")!)).toEqual(["targetUserId"]);
+    expect(principalInputs(byName.get("joinSelf")!)).toEqual([]);
+    expect(principalInputs(byName.get("opaque")!)).toBeNull();
+    // Declared as a self-grant, a door taking a target is still unguarded.
+    const [name, declared] = Object.entries(SELF_GRANT_DOORS)[0]!;
+    const asDeclared = (inputKeys: string[] | null): DoorVerdict => ({
+      door: name,
+      reaches: declared.reaches[0]!,
+      reachesAll: declared.reaches,
+      guarded: false,
+      inputKeys,
+    });
+    expect(unguarded([asDeclared(["token"])])).toEqual([]);
+    expect(unguarded([asDeclared(["token", "userId"])])).toHaveLength(1);
+    expect(unguarded([asDeclared(null)])).toHaveLength(1);
   });
 
   it("every door that reaches a credential is guarded", () => {

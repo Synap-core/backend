@@ -48,13 +48,19 @@ import {
   type SelfServiceFlowKind,
   type SignInState,
 } from "../../lib/sign-in-state";
-import { signInAgainReason, withLoginHint } from "../../lib/login-hint";
+import {
+  signInAgainReason,
+  withLoginHint,
+  withoutFederatedSignIn,
+} from "../../lib/login-hint";
 
 interface LoginFormProps {
   returnTo: string;
   initialFlowId: string | null;
   /** Re-authenticate an existing session (Kratos `refresh=true`). */
   refresh?: boolean;
+  /** Only a credential at this pod confirms: no Synap Cloud button. */
+  podCredentialOnly?: boolean;
   /** What the server's own session check saw on this request. */
   serverSession: "active" | "none" | "unavailable";
   /** Who is signing in, as the app hinted (`lib/login-hint.ts`). */
@@ -65,10 +71,14 @@ export function LoginForm({
   returnTo,
   initialFlowId,
   refresh = false,
+  podCredentialOnly = false,
   serverSession,
   loginHint = null,
 }: LoginFormProps) {
   const router = useRouter();
+  const reason = podCredentialOnly
+    ? `${signInAgainReason(returnTo)} Use your password or passkey.`
+    : signInAgainReason(returnTo);
   const [flow, setFlow] = useState<KratosFlow | null>(null);
   const [flowKind, setFlowKind] = useState<SelfServiceFlowKind>("login");
   // Kratos replaces the account-linking banner with the password error after a
@@ -282,10 +292,7 @@ export function LoginForm({
           </span>
 
           {loading ? (
-            <SignInHeader
-              refresh={refresh}
-              reason={signInAgainReason(returnTo)}
-            />
+            <SignInHeader refresh={refresh} reason={reason} />
           ) : cookieScope ? (
             <RefusalPanel
               icon={<RefreshCw className="h-5 w-5" strokeWidth={2} />}
@@ -330,10 +337,7 @@ export function LoginForm({
               onRetry={backToSignIn}
             />
           ) : (
-            <SignInHeader
-              refresh={refresh}
-              reason={signInAgainReason(returnTo)}
-            />
+            <SignInHeader refresh={refresh} reason={reason} />
           )}
 
           {loading ? (
@@ -342,7 +346,7 @@ export function LoginForm({
             </div>
           ) : stateView ? null : flow ? (
             <FlowFields
-              flow={flow}
+              flow={podCredentialOnly ? withoutFederatedSignIn(flow) : flow}
               values={values}
               setValues={setValues}
               onSubmit={onSubmit}
