@@ -27,7 +27,6 @@ const h = vi.hoisted(() => ({
   db: null as unknown,
   audits: [] as Array<Record<string, unknown>>,
   nextIdentity: "",
-  cpPrincipal: null as null | { sub: string; email: string; type: string },
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -66,13 +65,6 @@ vi.mock("@synap/auth", async (importOriginal) => ({
     createIdentity: vi.fn(async () => ({ data: { id: h.nextIdentity } })),
     deleteIdentity: vi.fn(async () => ({})),
   },
-}));
-
-// The CP's signature is not what is under test: the CP "vouches" for
-// `h.cpPrincipal`, exactly as a verified invite-accept token would.
-vi.mock("../utils/jwks-client.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  verifyCpJwt: vi.fn(async () => h.cpPrincipal),
 }));
 
 vi.mock("../utils/audit-log.js", () => ({
@@ -303,67 +295,6 @@ describe("Create account and join goes through the one accept door", () => {
     });
     expect(h.audits).toEqual([
       expect.objectContaining({ userId: "dan-1", workspaceId: PLAZA }),
-    ]);
-    await vi.waitFor(() =>
-      expect(lifecycleCalls()).toEqual([
-        expect.objectContaining({
-          inviteToken: created.token,
-          event: "accepted",
-        }),
-      ])
-    );
-  });
-
-  it("parity: an accept the CP vouches for (acceptInviteViaCp) takes the same door", async () => {
-    await h.client!.query(
-      `insert into users (id, email, name) values ('erin-1', 'erin@example.com', 'Erin')`
-    );
-    const created = await owner().createInvite({
-      type: "pod",
-      email: "erin@example.com",
-      role: "editor",
-    });
-    h.cpPrincipal = {
-      sub: "cp-erin",
-      email: "erin@example.com",
-      type: "invite-accept",
-    };
-    const anonymous = workspacesRouter.createCaller({
-      db: h.db,
-      authenticated: false,
-    } as never);
-    await expect(
-      anonymous.acceptInviteViaCp({ token: created.token, cpToken: "signed" })
-    ).resolves.toEqual({
-      status: "accepted",
-      type: "pod",
-      workspacesJoined: 2,
-    });
-
-    expect(
-      await rowsOf(`select pod_role from pod_members where user_id = $1`, [
-        "erin-1",
-      ])
-    ).toEqual([{ pod_role: "member" }]);
-    expect(
-      (
-        await rowsOf(
-          `select workspace_id from workspace_members where user_id = $1`,
-          ["erin-1"]
-        )
-      )
-        .map((r) => r.workspace_id)
-        .sort()
-    ).toEqual([STUDIO, PLAZA].sort());
-    expect(h.audits).toEqual([
-      expect.objectContaining({
-        userId: "erin-1",
-        data: expect.objectContaining({ source: "cp-proxy" }),
-      }),
-      expect.objectContaining({
-        userId: "erin-1",
-        data: expect.objectContaining({ source: "cp-proxy" }),
-      }),
     ]);
     await vi.waitFor(() =>
       expect(lifecycleCalls()).toEqual([

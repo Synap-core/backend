@@ -45167,14 +45167,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: InviteAccepted;
 		}>;
-		acceptInviteViaCp: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				cpToken: string;
-				token: string;
-			};
-			meta: object;
-			output: InviteAccepted;
-		}>;
 		addMember: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				role: "editor" | "owner" | "viewer";
@@ -46367,17 +46359,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				reason?: string | undefined;
-			};
-			meta: object;
-			output: {
-				success: boolean;
-			};
-		}>;
-		rejectInviteViaCp: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				cpToken: string;
-				reason?: string | undefined;
-				token: string;
 			};
 			meta: object;
 			output: {

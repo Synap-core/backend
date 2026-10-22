@@ -49,6 +49,7 @@ images_json() {
   for k in $KEYS; do
     repo="$(echo "${k#SYNAP_IMAGE_}" | tr 'A-Z_' 'a-z-')"; d="$(D64 c)"
     case "$k" in SYNAP_IMAGE_BACKEND|SYNAP_IMAGE_POD_ADMIN) repo="ghcr.io/synap-core/$repo"; d="$(D64 "$1")" ;; esac
+    [ "$k" = SYNAP_IMAGE_POSTGRES ] && [ -n "${PG_DIGEST:-}" ] && d="$(D64 "$PG_DIGEST")"   # a release that moves postgres
     out="$(jq -c --arg k "$k" --arg v "$repo@sha256:$d" '. + {($k): $v}' <<<"$out")"
   done
   echo "$out"
@@ -151,6 +152,12 @@ case "$*" in
       *) echo "fake psql: unmodelled ledger query: $*" >&2; exit 1 ;;
     esac; exit 0 ;;
   "exec pg1 psql"*"from pg_database where not datistemplate"*) echo synap; exit 0 ;;
+  "exec pg1 psql"*"from pg_config where name = 'PKGLIBDIR'"*) echo /usr/lib/postgresql/15/lib; exit 0 ;;
+  "exec pg1 psql"*"where datallowconn and not datistemplate"*) printf '%s\n' postgres synap; exit 0 ;;
+  "exec pg1 psql -U synap -d synap "*"extname = 'timescaledb'"*)
+    [ -n "${FAKE_TSDB_READ_FAIL:-}" ] && { echo "psql: connection refused" >&2; exit 2; }
+    echo "${FAKE_TSDB_EXT:-2.26.4}"; exit 0 ;;
+  "exec pg1 psql"*"extname = 'timescaledb'"*) exit 0 ;;   # no extension in the other databases
   # A model of the cluster's database list ($F/dbs), so a restore that renames
   # the live database aside and creates a fresh one is observable.
   "exec pg1 psql"*"from pg_database where datname="*)
@@ -194,6 +201,9 @@ case "$*" in
   "inspect -f {{.Image}} "*) echo "sha256:$(printf 'f%.0s' $(seq 1 64))"; exit 0 ;;
   "inspect"*) exit 0 ;;
   "image inspect -f"*) echo "sha256:x"; exit 0 ;;
+  "image inspect --format {{range .RepoDigests}}"*)   # what a pull by tag recorded
+    [ -n "${FAKE_RESOLVE_FAIL:-}" ] && exit 1
+    r="${*: -1}"; echo "${r%:*}@sha256:$(printf '7%.0s' $(seq 1 64))"; exit 0 ;;
   "image inspect "*) grep -qxF "${*: -1}" "$F/images" 2>/dev/null; exit $? ;;
   "pull "*)
     ref="${*: -1}"; [ -n "${FAKE_PULL_FAIL:-}" ] && [[ "$ref" == *"$FAKE_PULL_FAIL"* ]] && { echo "manifest unknown" >&2; exit 1; }
@@ -202,6 +212,21 @@ case "$*" in
     t=""; prev=""; for a in "$@"; do [ "$prev" = -t ] && t="$a"; prev="$a"; done
     [ -n "${FAKE_BUILD_FAIL:-}" ] && { echo "build failed (injected)" >&2; exit 1; }
     echo "$t" >> "$F/images"; exit 0 ;;
+  "run --rm --entrypoint sh "*" -c "*)
+    # The postgres image's TimescaleDB libraries: FAKE_TSDB_LIBS_NEW for a
+    # release's moved postgres image (PG_DIGEST=b), FAKE_TSDB_LIBS otherwise —
+    # in its DEFAULT major's pkglibdir. FAKE_TSDB_OTHER_MAJOR: versions only
+    # another postgres major of the image ships (a glob over every major sees them).
+    libs="${FAKE_TSDB_LIBS:-2.26.4}"; case "$*" in *"@sha256:$(printf 'b%.0s' $(seq 1 64))"*) libs="${FAKE_TSDB_LIBS_NEW:-$libs}" ;; esac
+    case "$*" in *"pg_config --pkglibdir"*) ;; *"/usr/lib/postgresql/*/lib"*) libs="$libs ${FAKE_TSDB_OTHER_MAJOR:-}" ;; *) exit 1 ;; esac
+    echo plpgsql.so; for v in $libs; do echo "timescaledb-$v.so"; done; echo timescaledb.so; exit 0 ;;
+  "exec pg1 sh -c ls '/usr/lib/postgresql/15/lib'")   # the running postgres: the image .env pins
+    libs="${FAKE_TSDB_LIBS:-2.26.4}"; grep -q "^SYNAP_IMAGE_POSTGRES=.*@sha256:$(printf 'b%.0s' $(seq 1 64))" "$FAKE_ENV" && libs="${FAKE_TSDB_LIBS_NEW:-$libs}"
+    for v in $libs; do echo "timescaledb-$v.so"; done; exit 0 ;;
+  "buildx imagetools inspect "*)   # the registry's index digest of a compose default tag
+    [ -n "${FAKE_NO_BUILDX:-}" ] && { echo "docker: 'buildx' is not a docker command." >&2; exit 1; }
+    [ -n "${FAKE_RESOLVE_FAIL:-}" ] && { echo "ERROR: failed to authorize" >&2; exit 1; }
+    echo "{\"mediaType\":\"application/vnd.oci.image.index.v1+json\",\"digest\":\"sha256:$(printf '9%.0s' $(seq 1 64))\"}"; exit 0 ;;
   "ps --filter publish"*) [ -n "${FAKE_PORT_HOLDER:-}" ] && echo "$FAKE_PORT_HOLDER"; exit 0 ;;
 esac
 exit 0
@@ -549,6 +574,37 @@ FAKE_NO_LEDGER=1 run_update --release "$R2"; rc=$?
 grep -q "Migration level: 0| →" "$S/out" && ! grep -q "ledger unreadable" "$S/out" \
   && ok "noledger: no _migrations table yet reads as level 0 (not as unreadable)" || { bad "noledger: rc=$rc"; show; }
 
+# ── 3d'. TimescaleDB: a postgres image must load the extension the database runs
+# A newer image ships every older library: the update goes on and the lag is a
+# notice. An image without the database's version would leave postgres unable
+# to start (and a rollback swaps images only): refused before anything changes.
+# An unreadable extension version refuses too (never read as "no extension").
+setup tsdbnewer r1; PG_DIGEST=b publish "$R2" 0012_new.sql bundle
+FAKE_TSDB_EXT=2.26.4 FAKE_TSDB_LIBS_NEW="2.26.4 2.27.0 2.28.3" run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && [[ "$(envpin SYNAP_IMAGE_POSTGRES)" == *"@sha256:$(D64 b)" ]] \
+  && grep -q "database 'synap' runs 2.26.4; this postgres image ships up to 2.28.3" "$S/out" && ! grep -q "ALTER EXTENSION" "$FAKE/log" \
+  && ok "tsdbnewer: a newer postgres image is taken; the extension lag is a notice, never an automatic ALTER EXTENSION" || { bad "tsdbnewer: rc=$rc"; show; }
+setup tsdbolder r1; PG_DIGEST=b publish "$R2" 0012_new.sql bundle
+cp "$DEPLOY/docker-compose.yml" "$S/compose.orig"
+FAKE_TSDB_EXT=2.28.3 FAKE_TSDB_LIBS_NEW="2.25.0 2.26.4" run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [ "$(last reason)" = "postgres image cannot load TimescaleDB 2.28.3 (database synap)" ] \
+  && grep -q "ships TimescaleDB up to 2.26.4, but database 'synap' runs 2.28.3" "$S/out" \
+  && cmp -s "$DEPLOY/.env" "$S/env.orig" && cmp -s "$DEPLOY/docker-compose.yml" "$S/compose.orig" \
+  && ! grep -qE "pg_dump|run --rm backend-migrate" "$FAKE/log" && [ "$(cur_id)" = "$R1" ] \
+  && ok "tsdbolder: an image that lacks the database's TimescaleDB is refused before anything changes" || { bad "tsdbolder: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+setup tsdbmajor r1; PG_DIGEST=b publish "$R2" 0012_new.sql bundle
+FAKE_TSDB_EXT=2.28.3 FAKE_TSDB_LIBS_NEW="2.25.0 2.26.4" FAKE_TSDB_OTHER_MAJOR="2.28.3" run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last reason)" = "postgres image cannot load TimescaleDB 2.28.3 (database synap)" ] \
+  && ok "tsdbmajor: only the image's own postgres major counts (another major shipping 2.28.3 does not make it loadable)" || { bad "tsdbmajor: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+setup tsdbunread r1; PG_DIGEST=b publish "$R2" 0012_new.sql bundle
+FAKE_TSDB_READ_FAIL=1 run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last reason)" = "TimescaleDB extension versions unreadable" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" && ! grep -q "run --rm backend-migrate" "$FAKE/log" \
+  && ok "tsdbunread: an unreadable extension version refuses the image change (never read as 'no extension')" || { bad "tsdbunread: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+setup tsdbsame r1; publish "$R2" 0012_new.sql bundle
+FAKE_TSDB_READ_FAIL=1 FAKE_TSDB_LIBS="2.25.0" run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && ! grep -q "postgres image cannot load" "$S/out" \
+  && ok "tsdbsame: a release that keeps the postgres image is not checked (nothing to load anew)" || { bad "tsdbsame: rc=$rc"; show; }
+
 # ── 3e. minFrom compares the newest migration BY NAME, never the latest applied
 # 0331 merged after 0336 was applied: it is the latest by time, 0336 the newest.
 minfrom() { jq --arg m "$1" '.minFrom = $m' "$TMP/rel/$R2/release.json" > "$TMP/x" && mv "$TMP/x" "$TMP/rel/$R2/release.json"; }
@@ -676,7 +732,8 @@ grep -E "compose (run|stop|.* up )|compose up|pg_dump" "$FAKE/log" && bad "pull:
 
 # ── 6. --from-source: synap-dev/* only, never the ghcr name ─────────────────
 setup source r1
-mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations"
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
 cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
 : > "$REPO/packages/database/migrations/0011_old.sql"; : > "$REPO/packages/database/migrations/0012_new.sql"
 ( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "source: git fixture"
@@ -693,8 +750,41 @@ grep -qE "^builder prune -f --max-used-space 2gb" "$FAKE/log" && ok "source: bui
 ! grep -qE "^builder prune .*-a|^(system|volume) prune" "$FAKE/log" && ok "source: cache prune is capped, never -a / system / volume" || bad "source: an unbounded prune ran"
 [ "$(envpin SYNAP_IMAGE_BACKEND)" = "synap-dev/backend:$tag12" ] && [ "$(cur_id)" = "local-$tag12" ] && [ "$(jq -r .source "$DEPLOY/state/current-release.json")" = true ] \
   && ok "source: recorded as release local-$tag12 (source:true)" || bad "source: env=$(envpin SYNAP_IMAGE_BACKEND) id=$(cur_id)"
-[ "$(envpin SYNAP_IMAGE_MINIO)" = "$(grep '^SYNAP_IMAGE_MINIO=' "$S/env.orig" | cut -d= -f2-)" ] && ok "source: third-party pins carried over from the previous release" || bad "source: minio pin lost"
 ls -d "$DEPLOY"/backups/postgres/*-pre-update >/dev/null 2>&1 && grep -q "canary" "$FAKE/log" && ok "source: same backup + canary path as a release" || bad "source: skipped backup/canary"
+# Third-party images: pinned by digest by THE release rule (deploy/release/
+# resolve-images.sh, as make-manifest.py) — never carried from .env, which left
+# a pod that never took a published release on a floating compose default tag.
+tp="$(for k in $KEYS; do grep -qE "\\\$\{$k:-[^}\$]*\}" "$HERE/deploy/docker-compose.yml" && echo "$k"; done)"
+want9="sha256:$(printf '9%.0s' $(seq 1 64))"; badpin=""
+for k in $tp; do
+  d="$(grep -oE "\\\$\{$k:-[^}\$]*\}" "$HERE/deploy/docker-compose.yml" | head -1 | sed -E 's/^\$\{[A-Z0-9_]+:-//; s/\}$//')"
+  [ "$(jq -r --arg k "$k" '.images[$k]' "$DEPLOY/state/current-release.json")" = "$d@$want9" ] && [ "$(envpin "$k")" = "$d@$want9" ] || badpin="$badpin $k=$(envpin "$k")"
+done
+[ "$(echo "$tp" | grep -c .)" -ge 5 ] && [ -z "$badpin" ] \
+  && ok "source: every third-party image ($(echo $tp | wc -w | tr -d ' ')) is its compose default tag pinned by the resolved digest (never the .env carry)" || bad "source: third-party pins:$badpin"
+grep -q "postgres RESTARTS during this update" "$S/out" && ok "source: the log says postgres restarts, and why" || bad "source: no postgres restart notice"
+setup sourcenobuildx r1
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
+cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
+: > "$REPO/packages/database/migrations/0011_old.sql"
+: > "$REPO/packages/database/migrations/0012_new.sql"
+( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcenobuildx: git fixture"
+LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
+FAKE_NO_BUILDX=1 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+want7="sha256:$(printf '7%.0s' $(seq 1 64))"
+[ "$rc" = 0 ] && [ "$(envpin SYNAP_IMAGE_POSTGRES)" = "timescale/timescaledb-ha:pg15@$want7" ] && grep -q "^pull -q timescale/timescaledb-ha:pg15$" "$FAKE/log" \
+  && ok "sourcenobuildx: no buildx → each tag is pulled and pinned by the digest docker recorded (RepoDigests)" || { bad "sourcenobuildx: rc=$rc postgres=$(envpin SYNAP_IMAGE_POSTGRES)"; show; }
+setup sourcepin r1
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
+cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
+: > "$REPO/packages/database/migrations/0011_old.sql"
+( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcepin: git fixture"
+: > "$FAKE/log"
+FAKE_RESOLVE_FAIL=1 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+[ "$rc" != 0 ] && ! grep -q '^build ' "$FAKE/log" && grep -q "could not pin this release's third-party images" "$S/out" && [ "$(cur_id)" = "$R1" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" \
+  && ok "sourcepin: a registry that cannot resolve the pins refuses the update BEFORE any build" || { bad "sourcepin: rc=$rc builds=$(grep -c '^build ' "$FAKE/log")"; show; }
 
 # ── 6b. --from-source, a FAILED build resets the BuildKit cache ───────────────
 # The lock-out this guards (perso, 2026-10-06): a build that dies mid-layer
@@ -704,7 +794,8 @@ ls -d "$DEPLOY"/backups/postgres/*-pre-update >/dev/null 2>&1 && grep -q "canary
 # it runs only after a SUCCESSFUL applied update — so without a reset the pod
 # can never rebuild, however many times it is retried.
 setup sourcefail r1
-mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations"
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
 cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
 : > "$REPO/packages/database/migrations/0011_old.sql"; : > "$REPO/packages/database/migrations/0012_new.sql"
 ( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcefail: git fixture"
@@ -775,6 +866,22 @@ mkdir -p "$DEPLOY/state"; echo '{"auto": true, "window": "25:00-26:00"}' > "$DEP
 run_update --unattended; rc=$?
 [ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [[ "$(last reason)" == *"is not HH:MM-HH:MM"* ]] \
   && ok "policy: a broken update policy is recorded, not only printed" || { bad "policy: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+
+# ── 9c. a release OLDER than the running one is refused unless --force ───────
+asrel() { jq --arg id "$1" '.id = $id' "$DEPLOY/state/current-release.json" > "$TMP/x" && mv "$TMP/x" "$DEPLOY/state/current-release.json"; }
+setup downgrade r1; asrel v1.10.0; publish v1.9.0 0012_new.sql
+run_update --release v1.9.0; rc=$?
+[ "$rc" != 0 ] && [ "$(last status)" = aborted ] && [ "$(last reason)" = "older than the running release v1.10.0" ] && [ "$(cur_id)" = v1.10.0 ] \
+  && ! grep -qE "^pull |pg_dump" "$FAKE/log" && cmp -s "$DEPLOY/.env" "$S/env.orig" \
+  && ok "downgrade: v1.10.0 → v1.9.0 is refused before anything changes (numbers, not strings)" || { bad "downgrade: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+run_update --release v1.9.0 --force; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = v1.9.0 ] && ok "downgrade: --force applies it" || { bad "downgrade: --force rc=$rc current=$(cur_id)"; show; }
+setup upgrade r1; asrel v1.9.0; publish v1.10.0 0012_new.sql
+run_update --release v1.10.0; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = v1.10.0 ] && ok "downgrade: v1.9.0 → v1.10.0 is an upgrade" || { bad "upgrade: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+setup noorder r1; asrel v9.0.0; publish "$R2" 0012_new.sql
+run_update --release "$R2"; rc=$?
+[ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && ok "downgrade: v9.0.0 → $R2 has no order and is not refused" || { bad "noorder: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 
 # ── 10. channels resolve through channel-<name>/release.json ──────────────────
 setup channel r1; publish "$R2" 0012_new.sql
