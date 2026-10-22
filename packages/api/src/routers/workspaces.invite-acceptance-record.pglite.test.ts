@@ -11,9 +11,10 @@
  * Driven through the REAL `acceptInvite` procedure → REAL SQL on PGlite → the
  * REAL `recordInviteAcceptance`. Stubbed: `fetch` (the CP lifecycle notice).
  *
- * NOT COVERED: `acceptInviteViaCp` and the Hub REST sign-up, which call the
- * same writer at the same point (`invites.ts`, `setup.ts`); the writer's own
- * behaviour is pinned in `invite-acceptance.pglite.test.ts` (@synap/database).
+ * NOT COVERED: the Hub REST `accept-invite` sign-up (`setup.ts`), the only
+ * other accept path, which calls the same writer at the same point; the
+ * writer's own behaviour is pinned in `invite-acceptance.pglite.test.ts`
+ * (@synap/database).
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
