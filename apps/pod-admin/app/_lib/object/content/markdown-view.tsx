@@ -22,7 +22,12 @@ import {
   type MdastNode,
 } from "@synap-core/markdown-core";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
-import { contentHref, EXTERNAL_REL } from "./markdown-model";
+import {
+  contentHref,
+  contentMeasureClass,
+  EXTERNAL_REL,
+  type ContentMeasure,
+} from "./markdown-model";
 
 /** The loose shape every node shares — what the fallthrough reads. */
 interface AnyNode {
@@ -280,7 +285,13 @@ function embedLabel(embed: Embed): string {
  * cells. Object markers (`[[entity:id|Ana]]`) become their console pages; the
  * rest follows `renderNode`.
  */
-export default function MarkdownView({ source }: { source: string }) {
+export default function MarkdownView({
+  source,
+  measure = "reading",
+}: {
+  source: string;
+  measure?: ContentMeasure;
+}) {
   const tree = useMemo(
     () =>
       parseMarkdown(
@@ -289,7 +300,9 @@ export default function MarkdownView({ source }: { source: string }) {
     [source]
   );
   return (
-    <div className="flex min-w-0 max-w-[65ch] flex-col gap-3 break-words text-[14px] leading-relaxed text-foreground/90">
+    <div
+      className={`flex min-w-0 ${contentMeasureClass(measure)} flex-col gap-3 break-words text-[14px] leading-relaxed text-foreground/90`}
+    >
       {children(tree)}
     </div>
   );

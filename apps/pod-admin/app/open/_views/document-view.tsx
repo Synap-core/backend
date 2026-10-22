@@ -70,6 +70,7 @@ export function DocumentView({ id }: { id: string }) {
   const openInApp = <OpenInAppLink type="document" id={id} />;
   return (
     <OpenObject
+      width="lg"
       header={{
         kind: "document",
         title: doc.title?.trim() || "Untitled document",
@@ -99,6 +100,7 @@ export function DocumentView({ id }: { id: string }) {
         title="Content"
         content={content}
         openInApp={openInApp}
+        measure="wide"
       />
     </OpenObject>
   );
