@@ -162,7 +162,6 @@ export const orySessionMiddleware: MiddlewareHandler = async (c, next) => {
   });
   c.set("userId", validSession.identity.id);
   c.set("session", validSession);
-  if (fromSessionToken) c.set("sessionKind", "kratos_token");
   c.set("authenticated", true);
 
   return next();
