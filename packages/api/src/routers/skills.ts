@@ -235,6 +235,43 @@ export function scanSkillGlobals(code: string): {
 }
 
 /**
+ * The B1 save-time scan for a skill of `kind` — the one rule every write door
+ * applies. Only a CODE skill's `code` is JavaScript; an instruction skill keeps
+ * its markdown body there (every catalog instruction skill does), so parsing it
+ * as JavaScript refused every capability that ships one.
+ */
+export function assertSkillCodeAllowed(
+  kind: string | null | undefined,
+  code: string | undefined | null
+): void {
+  if (kind !== "code") return;
+  assertSkillGlobalsAllowed(code);
+}
+
+/**
+ * The kind a skill UPDATE writes — ONE value, read by both the B1 scan and the
+ * UPDATE, so a skill is never written as `code` while scanned as something
+ * else. An explicit `kind` wins. Otherwise the skill KEEPS its kind: editing a
+ * catalog instruction skill's markdown `code` never turns it into a code skill
+ * (it did, before 2026-10-22). One exception: a code skill whose `code` is
+ * emptied can no longer run, and becomes doc-only (`instruction`).
+ */
+export function skillKindAfterUpdate(
+  patch: { kind?: string; code?: string },
+  existingKind: string
+): string {
+  if (patch.kind !== undefined) return patch.kind;
+  if (
+    existingKind === "code" &&
+    patch.code !== undefined &&
+    !patch.code.trim()
+  ) {
+    return "instruction";
+  }
+  return existingKind;
+}
+
+/**
  * Throw a TRPCError with an actionable message if `code` references a global the
  * skill runtime does not provide. No-op for empty/whitespace code.
  */
@@ -322,9 +359,7 @@ export async function insertSkillGoverned(
   // do NOT call this function) — this is not a double-scan of the same code
   // path, it closes the gap for callers that construct a `kind: "code"` skill
   // without going through those two mutations.
-  if (values.kind === "code") {
-    assertSkillGlobalsAllowed(values.code);
-  }
+  assertSkillCodeAllowed(values.kind, values.code);
 
   const perm = await checkPermissionOrPropose({
     userId: values.userId,
@@ -1150,9 +1185,7 @@ export const skillsRouter = router({
       // BEFORE it persists — the single funnel every code-skill create hits
       // (human UI, AI via /agent-skills/executable → this create). The author/AI
       // learns the gap now, not the reviewer at approval or the run at execution.
-      if (hasCode) {
-        assertSkillGlobalsAllowed(input.code);
-      }
+      assertSkillCodeAllowed(kind, input.code);
 
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
@@ -1345,13 +1378,6 @@ export const skillsRouter = router({
         ...updateData
       } = input;
 
-      // Save-time global-reference scan (B1) — same gate as `create`: an EDIT
-      // that re-points a skill's code to reference an unprovided global (fetch/
-      // crypto/…) is the same ReferenceError-at-run bug the create scan closes.
-      if (input.code?.trim()) {
-        assertSkillGlobalsAllowed(input.code);
-      }
-
       // Verify skill exists and user has access (owner or pod-scoped)
       const existingSkill = await ctx.db.query.skills.findFirst({
         where: and(
@@ -1366,6 +1392,13 @@ export const skillsRouter = router({
           message: "Skill not found",
         });
       }
+
+      // Save-time global-reference scan (B1) — same gate as `create`: an EDIT
+      // that re-points a skill's code to reference an unprovided global (fetch/
+      // crypto/…) is the same ReferenceError-at-run bug the create scan closes.
+      // Judged on the kind the UPDATE WRITES (the same value, below).
+      const writtenKind = skillKindAfterUpdate(input, existingSkill.kind);
+      assertSkillCodeAllowed(writtenKind, input.code);
 
       // The acting agent, derived exactly as `delete` derives it: the ambient
       // ALS value first (set server-side at every key-auth entry point, so an
@@ -1409,18 +1442,16 @@ export const skillsRouter = router({
         return { status: "proposed" as const, proposalId: perm.proposalId };
       }
 
-      // Documentation + optional Code: when code is set, derive `kind` (unless
-      // given) and store empty code as null (the skill becomes doc-only).
+      // Documentation + optional Code: empty code is stored as null, and the
+      // kind is the one the scan judged (`skillKindAfterUpdate`).
       if (updateData.code !== undefined) {
         const trimmed = updateData.code.trim();
         (updateData as Record<string, unknown>).code = trimmed
           ? updateData.code
           : null;
-        if (updateData.kind === undefined) {
-          (updateData as Record<string, unknown>).kind = trimmed
-            ? "code"
-            : "instruction";
-        }
+      }
+      if (writtenKind !== existingSkill.kind) {
+        (updateData as Record<string, unknown>).kind = writtenKind;
       }
 
       // Security: if any execution-defining field actually CHANGES, the skill

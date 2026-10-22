@@ -33,6 +33,7 @@
 import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
+import { isUniqueViolation } from "../utils/pg-errors.js";
 
 import {
   DEFAULT_RENDERER_SURFACE,
@@ -231,16 +232,6 @@ export async function setRendererBinding(
     if (!isUniqueViolation(err)) throw err;
     return await bindOnce(db, input);
   }
-}
-
-/** Postgres `unique_violation`, however the driver surfaced it. */
-function isUniqueViolation(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    ((err as { code?: unknown }).code === "23505" ||
-      (err as { cause?: { code?: unknown } }).cause?.code === "23505")
-  );
 }
 
 async function bindOnce(
