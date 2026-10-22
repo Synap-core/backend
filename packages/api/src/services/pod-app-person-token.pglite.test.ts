@@ -523,7 +523,8 @@ describe("a Synap app's token is HELD BY THE PERSON, within what they ticked", (
     ).toEqual(
       TICKED.map((t) => `${SPACE_NAME[t.workspaceId]}:${t.permission}`).sort()
     );
-    expect(body.scope.split(" ").sort()).toEqual([APPROVE, CREATE, READ]);
+    // The three permissions ticked, sorted (entity.* before proposal.*).
+    expect(body.scope.split(" ").sort()).toEqual([CREATE, READ, APPROVE]);
     // A templated space names its template; an untemplated one has no key.
     for (const g of body.synap_grant as Array<Record<string, unknown>>) {
       if (g.workspaceId === CONTENT) expect(g.templateSlug).toBe("content-os");
