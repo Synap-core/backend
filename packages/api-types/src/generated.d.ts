@@ -16226,7 +16226,7 @@ export type BlockerEdgeResult = {
 	linked: true;
 } | {
 	linked: false;
-	reason: "not_found" | "self_blocker";
+	reason: "cycle" | "not_found" | "self_blocker";
 };
 export type RemoveBlockerResult = {
 	removed: true;
@@ -16234,7 +16234,11 @@ export type RemoveBlockerResult = {
 	reason: "no_edge" | "not_found" | "self_blocker";
 	removed: false;
 };
-/** What happened to ONE create-time blocker. Reported per id, never folded. */
+/**
+ * What happened to ONE blocker added at create time — or mid-flight through
+ * `synap_update_session` `addBlockedBySessionIds`, which reuses this door.
+ * Reported per id, never folded.
+ */
 export type CreateTimeBlockerReport = {
 	blockerSessionId: string;
 	inserted: number;
@@ -16246,7 +16250,7 @@ export type CreateTimeBlockerReport = {
 } | {
 	blockerSessionId: string;
 	message?: string;
-	reason: "denied" | "error" | "not_found" | "self_blocker";
+	reason: "cycle" | "denied" | "error" | "not_found" | "self_blocker";
 	status: "failed";
 };
 /** Both directions of the dependency edge for one session. */

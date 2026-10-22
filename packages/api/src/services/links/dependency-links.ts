@@ -244,6 +244,7 @@ async function existingLinkId(
 export type DependencyRefusal =
   | { reason: "invalid_pair"; httpStatus: 400; error: string }
   | { reason: "self_edge"; httpStatus: 400; error: string }
+  | { reason: "cycle"; httpStatus: 400; error: string }
   | { reason: "not_found"; httpStatus: 403 | 404; error: string }
   | { reason: "forbidden"; httpStatus: 403; error: string };
 
@@ -280,6 +281,64 @@ async function endpointHome(
   return null;
 }
 
+/** How deep the cycle walk follows `blocked_by` before giving up. */
+const MAX_CYCLE_HOPS = 32;
+
+/**
+ * Would `from --blocked_by--> to` close a CYCLE — does `to` already wait,
+ * through `blocked_by` edges of any kinds, on `from`? A cycle is a deadlock:
+ * every unit in it waits on another that can never deliver first, so the edge
+ * that closes one is refused at every door (the generic floor below and the
+ * session door's `validateSessionBlocker`).
+ *
+ * Walks `to`'s outgoing `blocked_by` edges breadth-first, bounded by
+ * {@link MAX_CYCLE_HOPS}. Measured limits: `replaces` edges are not walked (a
+ * cycle closed only through a replacement is not seen), and a chain deeper
+ * than the bound is not called a cycle. No authorization here — callers floor
+ * both ends first, so the answer is a yes/no about units the caller may see.
+ */
+export async function closesDependencyCycle(edge: {
+  fromType: string;
+  fromId: string;
+  toType: string;
+  toId: string;
+}): Promise<boolean> {
+  const target = refKey({ kind: edge.fromType, id: edge.fromId });
+  const start = { kind: edge.toType, id: edge.toId };
+  const seen = new Set([refKey(start)]);
+  let frontier: DependencyNodeRef[] = [start];
+  for (let hop = 0; hop < MAX_CYCLE_HOPS && frontier.length; hop++) {
+    const rows = await db
+      .select({ toType: links.toType, toId: links.toId })
+      .from(links)
+      .where(
+        and(
+          eq(links.linkType, DEPENDENCY_LINK_TYPE),
+          or(
+            ...frontier.map((r) =>
+              and(eq(links.fromType, r.kind as never), eq(links.fromId, r.id))
+            )
+          )
+        )
+      );
+    const next: DependencyNodeRef[] = [];
+    for (const r of rows) {
+      const ref = { kind: r.toType as string, id: r.toId };
+      const k = refKey(ref);
+      if (k === target) return true;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      next.push(ref);
+    }
+    frontier = next;
+  }
+  return false;
+}
+
+/** The refusal every door gives for a cycle — one sentence, one place. */
+export const DEPENDENCY_CYCLE_ERROR =
+  "This would make the two wait on each other: the blocker already waits, directly or through others, on the work you want to block. Remove one of those dependencies first.";
+
 /**
  * The endpoint floor. Returns the edge's workspace (the FROM end's) on
  * success. An invisible and a nonexistent endpoint get the identical refusal.
@@ -291,7 +350,9 @@ async function endpointHome(
  * is pod-personal), not merely see it.
  *
  * CREATE floors BOTH ends on visibility: you cannot declare a dependency on
- * something you cannot see. DELETE floors only the BLOCKED end: a blocker the
+ * something you cannot see — and, once the caller may write it, refuses a
+ * `blocked_by` that would close a cycle ({@link closesDependencyCycle}).
+ * DELETE floors only the BLOCKED end: a blocker the
  * reader cannot see (`hidden` in the neighbourhood, its status never
  * revealed) would otherwise hold their unit forever with no way out — the
  * owner of the blocked end may always drop the edge.
@@ -359,6 +420,18 @@ export async function validateDependencyEdge(
         err instanceof Error
           ? err.message
           : "You cannot change what this waits on.",
+    };
+  }
+  if (
+    action === "create" &&
+    edge.linkType === DEPENDENCY_LINK_TYPE &&
+    (await closesDependencyCycle(edge))
+  ) {
+    return {
+      ok: false,
+      reason: "cycle",
+      httpStatus: 400,
+      error: DEPENDENCY_CYCLE_ERROR,
     };
   }
   return { ok: true, workspaceId: home?.workspaceId ?? null };

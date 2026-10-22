@@ -148,6 +148,57 @@ async function parseOutcomesArg(raw: unknown): Promise<
   return { list: parsed.data };
 }
 
+/** At most this many ids per blocker list — the same bound start's `blockedBySessionIds` has. */
+const BLOCKER_IDS_MAX = 20;
+
+/**
+ * The mid-flight blocker edits on `synap_update_session` — `addBlockedBySessionIds`
+ * / `removeBlockedBySessionIds`, each an array of session UUIDs. Refused whole
+ * (nothing changed) when malformed, or when one id is in both lists: an add
+ * and a remove of the same edge in one call has no honest order.
+ */
+function parseBlockerEdits(
+  args: Record<string, unknown>
+): { add: string[]; remove: string[] } | { error: string } {
+  const read = (key: string): string[] | { error: string } => {
+    const raw = args[key];
+    if (raw === undefined || raw === null) return [];
+    if (
+      !Array.isArray(raw) ||
+      raw.length > BLOCKER_IDS_MAX ||
+      !raw.every((id) => typeof id === "string" && UUID_RE.test(id))
+    ) {
+      return {
+        error: `${key} must be an array of at most ${BLOCKER_IDS_MAX} session UUIDs — NOTHING WAS CHANGED.`,
+      };
+    }
+    return raw as string[];
+  };
+  const add = read("addBlockedBySessionIds");
+  if ("error" in add) return add;
+  const remove = read("removeBlockedBySessionIds");
+  if ("error" in remove) return remove;
+  const both = add.filter((id) => remove.includes(id));
+  if (both.length > 0) {
+    return {
+      error: `${both.join(", ")} is in both addBlockedBySessionIds and removeBlockedBySessionIds — NOTHING WAS CHANGED. Send one of the two.`,
+    };
+  }
+  return { add, remove };
+}
+
+/**
+ * Args that never ask `updateFocusSession` for anything: the target, the
+ * blocker edits (their own door), and `workspaceId` — the MCP URL lens injects
+ * it into every call, and this tool moves a session with `moveToWorkspaceId`.
+ */
+const NOT_A_FIELD_UPDATE = new Set([
+  "sessionId",
+  "workspaceId",
+  "addBlockedBySessionIds",
+  "removeBlockedBySessionIds",
+]);
+
 /**
  * The caller's answers to a template's declared params, off the MCP wire.
  *
@@ -807,6 +858,88 @@ export const sessionHandlers: McpHandlerMap = {
           "stages is not supported by synap_update_session — NOTHING WAS CHANGED. A session's own phase snapshot (focus_sessions.stages) is written through the tRPC focusSessions.update door, which the browser and relay use. Seeding from a playbook happens automatically at instantiate.",
       });
     }
+    const blockerEdits = parseBlockerEdits(args);
+    if ("error" in blockerEdits) return ok(blockerEdits);
+    const editsBlockers =
+      blockerEdits.add.length > 0 || blockerEdits.remove.length > 0;
+
+    /**
+     * BLOCKERS ON A RUNNING SESSION — "this session now waits on that one",
+     * and its undo. Not a field of the session row: each edge goes through the
+     * dependency doors with its OWN governance (`link/create` | `link/delete`),
+     * exactly as start's `blockedBySessionIds` does — adds through
+     * `addCreateTimeBlockers` (owner floor on both sessions, cycle refused),
+     * removes through `removeSessionBlockers` (the governed delete). Reported
+     * per id, never folded: `blockerLinks` (linked | proposed | failed) and
+     * `blockerRemovals` (removed | absent | proposed | failed).
+     */
+    const applyBlockerEdits = async (): Promise<Record<string, unknown>> => {
+      if (!editsBlockers) return {};
+      const { addCreateTimeBlockers, removeSessionBlockers } =
+        await import("../../../services/focus-sessions/session-blocked-by.js");
+      const sessionId = args.sessionId as string;
+      const blockerLinks =
+        blockerEdits.add.length > 0
+          ? await addCreateTimeBlockers({
+              sessionId,
+              blockerSessionIds: blockerEdits.add,
+              userId,
+              agentUserId,
+            })
+          : undefined;
+      const blockerRemovals =
+        blockerEdits.remove.length > 0
+          ? await removeSessionBlockers({
+              sessionId,
+              blockerSessionIds: blockerEdits.remove,
+              userId,
+              agentUserId,
+            })
+          : undefined;
+      return {
+        ...(blockerLinks ? { blockerLinks } : {}),
+        ...(blockerRemovals ? { blockerRemovals } : {}),
+      };
+    };
+
+    if (editsBlockers) {
+      // Owner floor first — the same one `updateFocusSession` applies — so a
+      // session that is not the caller's is "not found", never half-edited.
+      const [own] = await db
+        .select({ projectId: focusSessions.projectId })
+        .from(focusSessions)
+        .where(
+          and(
+            eq(focusSessions.id, String(args.sessionId)),
+            eq(focusSessions.userId, userId)
+          )
+        )
+        .limit(1);
+      if (!own) {
+        return ok({
+          error: `Focus session ${String(args.sessionId)} not found`,
+        });
+      }
+      // A call that ONLY edits blockers never reaches the update membrane: an
+      // empty patch there is a no-op at best and an empty proposal at worst.
+      // `projectId` equal to the session's own is the URL lens, not a filing
+      // (the service drops it for the same reason).
+      const asked = Object.keys(args).filter(
+        (k) =>
+          args[k] !== undefined &&
+          !NOT_A_FIELD_UPDATE.has(k) &&
+          !(k === "projectId" && args[k] === own.projectId)
+      );
+      if (asked.length === 0) {
+        return ok({
+          sessionId: args.sessionId,
+          ...(await applyBlockerEdits()),
+          message:
+            "Only this session's blockers were changed — read each id's outcome: linked / removed / absent applied now; proposed was filed for review (success — do not retry); failed says why.",
+        });
+      }
+    }
+
     const {
       updateFocusSession,
       expectedOutputWireSchema,
@@ -936,15 +1069,25 @@ export const sessionHandlers: McpHandlerMap = {
         ? { params: args.params as Record<string, unknown> }
         : {}),
     });
+    // The field patch was refused ⇒ the blocker edits riding with it are not
+    // applied either (say so; both are idempotent, so the retry is safe).
+    const blockersNotApplied = editsBlockers
+      ? {
+          blockerEdits:
+            "not applied — the rest of this update was refused; fix it and send the call again.",
+        }
+      : {};
     switch (result.status) {
       case "not_found":
         return ok({
           error: `Focus session ${args.sessionId as string} not found`,
+          ...blockersNotApplied,
         });
       case "denied":
-        return ok({ error: result.reason });
+        return ok({ error: result.reason, ...blockersNotApplied });
       case "proposed":
         return ok({
+          ...(await applyBlockerEdits()),
           status: "proposed",
           message: proposedMessageFor(
             (result as { proposalType?: string }).proposalType,
@@ -975,6 +1118,7 @@ export const sessionHandlers: McpHandlerMap = {
         // from a completed one — the row simply comes back unchanged and the
         // agent reads that as done.
         return ok({
+          ...(await applyBlockerEdits()),
           status: "updated",
           session: result.session,
           ...(result.completeOutput
