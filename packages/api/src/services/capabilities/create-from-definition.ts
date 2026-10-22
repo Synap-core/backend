@@ -83,7 +83,7 @@ import { toolsRouter } from "../../routers/tools.js";
 import {
   skillsRouter,
   SKILL_DEFINITION_APPLIER,
-  assertSkillGlobalsAllowed,
+  assertSkillCodeAllowed,
 } from "../../routers/skills.js";
 import {
   skillExecFieldsChanged,
@@ -1037,8 +1037,8 @@ export async function createCapabilityFromDefinition(
       // grandfathered with a disallowed global before this scan existed would
       // hard-fail on every future metadata-only reconcile (description/
       // parameters/scope/category), even though its code never changed.
-      if ((s.kind ?? "code") === "code" && codeContentChanged) {
-        assertSkillGlobalsAllowed(s.code);
+      if (codeContentChanged) {
+        assertSkillCodeAllowed(s.kind ?? "code", s.code);
       }
 
       await db
