@@ -1734,6 +1734,12 @@ const documentFreezeChartsHandler: BuiltinVerbHandler = async (params, ctx) => {
  * `create-report` with `{{steps.freeze-charts.output.diagnostics}}`, so a chart
  * the freeze had to leave live says so ON the report. Content codes cannot be
  * asserted here (they are derived); only run-time codes are accepted.
+ *
+ * A WRITE verb, deliberately ABSENT from READ_ONLY_BUILTIN_VERBS (founder,
+ * 2026-10-21): it writes the document's metadata, so an agent's run is
+ * proposed like any other write. The report flow is unaffected: it runs as the
+ * automation's human owner (no agent identity), which the capability gate
+ * resolves without the agent grant rung.
  */
 const documentStampDiagnosticsParams = z.object({
   documentId: z.string().optional().nullable(),
@@ -4044,11 +4050,6 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // floor and RETURNS markdown; it writes nothing (create-report does). Must
   // auto-run inside the report flow (a propose verdict would stall it).
   "document.freeze_charts",
-  // document.stamp_diagnostics — writes ONLY the advisory, revision-stamped
-  // diagnostics on a document the caller OWNS (handler-enforced), never content
-  // or graph data; same "annotation, not a data write → auto-run" rationale as
-  // the review-item filers below, so the report flow is not stalled by it.
-  "document.stamp_diagnostics",
   // entity_facet.list — floor-scoped facet read (see handler doc above).
   "entity_facet.list",
   // market.search — cache-only read (see handler doc above). market.install is

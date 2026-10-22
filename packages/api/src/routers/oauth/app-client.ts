@@ -55,7 +55,14 @@ export function isAppClientId(clientId: string): boolean {
   return isAppPublicId(clientId);
 }
 
-/** The app row, when it is live (not revoked, not removed). */
+/**
+ * The app row, when it is live (not revoked, not removed) and REGISTERED
+ * (`mode = 'specific'`). A pod app connection (`mode = 'oauth'`, 0338b) is
+ * the row a person's consent made for a third-party app: it shares the
+ * `app_<uuid>` id shape, but it is not an app anyone registered to sign
+ * people in, so it never resolves here — otherwise its owner could give it
+ * redirect URIs and sign in through it.
+ */
 export async function loadLiveApp(publicId: string) {
   const [app] = await db
     .select()
@@ -63,6 +70,7 @@ export async function loadLiveApp(publicId: string) {
     .where(
       and(
         eq(apps.publicId, publicId),
+        eq(apps.mode, "specific"),
         isNull(apps.revokedAt),
         isNull(apps.removedAt)
       )

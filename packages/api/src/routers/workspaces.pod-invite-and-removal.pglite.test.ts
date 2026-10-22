@@ -5,6 +5,9 @@
  *   - `createInvite` type "pod": a POD owner/admin only. Owning an ordinary
  *     space is not enough, because any signed-in person can create one and a
  *     pod invite can carry role admin into every space.
+ *   - `acceptInvite` type pod: fans the invitee out over ORDINARY spaces only.
+ *     A system space (`pod-admin`) is never fanned into, so an invite whose
+ *     role is admin cannot make its invitee a pod admin.
  *   - `removeFromPod`: removal removes memberships. The identity (users row +
  *     Kratos) is deleted only by a pod admin, and only when
  *     `readIdentityKeepers` is empty. A one-space admin's removal never
@@ -13,8 +16,9 @@
  * Stubbed: Kratos (`kratosAdmin.deleteIdentity`, no PGlite twin), the
  * connection teardown (Nango), the audit write and `fetch` (CP notices).
  *
- * NOT COVERED: the accept-side fan-out into system spaces (acceptInvite), and
- * the keepers' own matrix (`identity-keepers.pglite.test.ts`).
+ * NOT COVERED: the CP-proxy and Hub accept paths (they share the fan-out
+ * helper; tripwire `pod-invite-fanout-skips-system-spaces`), and the keepers'
+ * own matrix (`identity-keepers.pglite.test.ts`).
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -99,6 +103,8 @@ const as = (userId: string) =>
     db: h.db,
     authenticated: true,
     userId,
+    workspaceId: WS_A,
+    workspaceRole: "editor",
     session: { id: "s" },
   } as never);
 
@@ -237,5 +243,35 @@ describe("removeFromPod", () => {
     await as(POD_OWNER).removeFromPod({ userId: id });
     expect(await userRow(id)).toHaveLength(1);
     expect(h.deleteIdentity).not.toHaveBeenCalled();
+  });
+});
+
+describe("acceptInvite type pod", () => {
+  it("gives the invite's role in ordinary spaces and NEVER in the pod-admin space", async () => {
+    await q(
+      `insert into users (id, email, name, user_type) values ('invitee', 'inv@example.test', 'Ivy', 'human')`
+    );
+    await q(
+      `insert into invites (id, type, workspace_id, email, role, token, invited_by, expires_at)
+       values ($1, 'pod', null, 'Inv@Example.test', 'admin', 'tok-pod-admin', $2, now() + interval '7 days')`,
+      [randomUUID(), POD_OWNER]
+    );
+    await expect(
+      as("invitee").acceptInvite({ token: "tok-pod-admin" })
+    ).resolves.toMatchObject({
+      status: "accepted",
+      type: "pod",
+      // The two ordinary spaces; pod-admin is not counted.
+      workspacesJoined: 2,
+    });
+
+    const rows = await q<{ workspace_id: string; role: string }>(
+      `select workspace_id, role from workspace_members where user_id = 'invitee'`
+    );
+    const roleIn = (ws: string) =>
+      rows.find((r) => r.workspace_id === ws)?.role;
+    expect(roleIn(WS_A)).toBe("admin");
+    expect(roleIn(WS_PLAIN)).toBe("admin");
+    expect(roleIn(POD_ADMIN_WS)).toBeUndefined();
   });
 });
