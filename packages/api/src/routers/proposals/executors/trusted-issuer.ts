@@ -33,6 +33,8 @@ import {
 export function registerTrustedIssuerExecutors(): void {
   registerProposalExecutor({
     key: `${TRUSTED_ISSUER_TARGET_TYPE}/${TRUSTED_ISSUER_WIDEN_SCOPES_PROPOSAL_TYPE}`,
+    // Approving widens a credential: never from a device session.
+    widensCredential: true,
     async execute({ proposal, userId, input, deps }) {
       if (getActingAgentUserId()) {
         throw new TRPCError({

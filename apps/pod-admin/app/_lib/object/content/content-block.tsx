@@ -7,9 +7,11 @@
  */
 
 import dynamic from "next/dynamic";
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { SectionCard } from "../../../(admin)/components/section-card";
 import type { DocumentContent } from "./document-model";
+import { EmbedHostContext, type EmbedHost } from "./embed-context";
+import { useEmbedEntity } from "./use-embed-entity";
 import {
   EXTERNAL_REL,
   contentMeasureClass,
@@ -98,9 +100,17 @@ export function ContentBlock({
   openInApp?: ReactNode;
   measure?: ContentMeasure;
 }) {
+  // Embeds read a record on the viewer's own floor and offer the object's
+  // own "Open in app" (`embed-view`).
+  const host = useMemo<EmbedHost>(
+    () => ({ useEntity: useEmbedEntity, openInApp }),
+    [openInApp]
+  );
   return (
     <SectionCard variant="flat" title={title}>
-      <ContentBody prepared={prepared} measure={measure} />
+      <EmbedHostContext.Provider value={host}>
+        <ContentBody prepared={prepared} measure={measure} />
+      </EmbedHostContext.Provider>
       {prepared.truncated && (
         <TruncatedNote
           shownPercent={prepared.shownPercent}

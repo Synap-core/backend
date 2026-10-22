@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CONTENT_PARSE_LIMIT,
   contentHref,
+  entityEmbedRead,
   EXTERNAL_REL,
   objectKindForMarker,
   objectPage,
@@ -163,5 +164,55 @@ describe("objectPage — where an object a page names opens", () => {
     expect(objectPage("cell", "chart-bar")).toBe("/open/cell/chart-bar");
     expect(objectPage("url", "https://example.com")).toBeNull();
     expect(objectPage("entity", "../../admin")).toBeNull();
+  });
+});
+
+describe("entityEmbedRead — what an embedded record may say", () => {
+  const q = (over: Partial<Parameters<typeof entityEmbedRead>[0]>) =>
+    entityEmbedRead({
+      isLoading: false,
+      error: null,
+      data: undefined,
+      ...over,
+    });
+
+  it("a record the reader can see gives its title", () => {
+    expect(q({ data: { entity: { title: "  Ana  " } } })).toEqual({
+      state: "ready",
+      title: "Ana",
+    });
+    expect(q({ data: { entity: { title: "" } } })).toEqual({
+      state: "ready",
+      title: "Untitled",
+    });
+  });
+
+  it("not found / forbidden / a bad id are hidden — never a title", () => {
+    for (const code of [
+      "NOT_FOUND",
+      "FORBIDDEN",
+      "BAD_REQUEST",
+      "UNAUTHORIZED",
+    ]) {
+      expect(q({ error: { data: { code } } })).toEqual({ state: "hidden" });
+    }
+  });
+
+  it("a broken read is failed and retryable, not hidden", () => {
+    const retry = () => {};
+    expect(
+      q({ error: { data: { code: "INTERNAL_SERVER_ERROR" } }, retry })
+    ).toEqual({
+      state: "failed",
+      retry,
+    });
+    expect(q({ error: {} }).state).toBe("failed");
+  });
+
+  it("an error wins over loading; loading wins over data", () => {
+    expect(
+      q({ isLoading: true, error: { data: { code: "NOT_FOUND" } } }).state
+    ).toBe("hidden");
+    expect(q({ isLoading: true }).state).toBe("loading");
   });
 });

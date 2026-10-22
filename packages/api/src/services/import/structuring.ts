@@ -43,30 +43,18 @@ import {
   findPriorCaptureGraphProposal,
 } from "../../utils/pending-capture-dedup.js";
 import type { OrchestratorContext } from "./types.js";
+import { buildImportTitle } from "../../import/import-title.js";
 
 const logger = createLogger({ module: "import-orchestrator/structuring" });
 
 /**
- * Build a human-readable proposal summary from composite import operations by
- * extracting entity titles — the same pattern as `buildCaptureSummary` in
- * capture.ts. Centralised, extendable: any new importer feeds the same helper.
+ * The import proposal's title — what approving it creates, counted by kind,
+ * and the file(s) it came from ("Import 1,489 people, 1,338 companies and
+ * 1,462 links from Connections.csv"). One builder for every import writer
+ * (analyze / analyzeLarge); the pure implementation is `buildImportTitle`.
+ * The quality line is NOT part of it: it lives in `data.quality`.
  */
-export function buildImportSummary(
-  operations: ReadonlyArray<{ op?: unknown; title?: unknown }>,
-  source?: string
-): string {
-  const titles: string[] = [];
-  for (const op of operations) {
-    if (op.op === "create_entity" && typeof op.title === "string") {
-      titles.push(op.title);
-    }
-  }
-  const prefix = source ? `${source} import` : "Import";
-  if (titles.length === 0) return prefix;
-  if (titles.length === 1) return `${prefix}: ${titles[0]}`;
-  if (titles.length === 2) return `${prefix}: ${titles[0]}, ${titles[1]}`;
-  return `${prefix}: ${titles[0]}, ${titles[1]}, +${titles.length - 2} more`;
-}
+export const buildImportSummary = buildImportTitle;
 
 /**
  * Per-op homes summary for an import graph — how create_entity ops are
