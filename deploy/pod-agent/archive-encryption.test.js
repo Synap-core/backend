@@ -12,6 +12,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { archiveManifestFrom } = require("./archive-manifest");
 
 const DEPLOY = path.join(__dirname, "..");
 const RECIPIENT =
@@ -24,10 +25,17 @@ function fakeBin(dir) {
     fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, {
       mode: 0o755,
     });
+  // Each volume key resolves to one volume holding one file; `docker run`
+  // answers the helper's count (1 file, 5 bytes) and streams a real tarball.
   write(
     "docker",
     `echo "docker $*" >> "$FAKE_LOG"
-case "$*" in *pg_dumpall*) echo "SELECT 1;" ;; esac
+case "$*" in
+  *pg_dumpall*) echo "SELECT 1;" ;;
+  "volume ls"*) echo "$*" | sed -n 's/.*com.docker.compose.volume=\\([a-z_]*\\).*/pod_\\1/p' ;;
+  "run "*"tar czf"*) d=$(mktemp -d); echo data > "$d/f"; tar czf - -C "$d" . ;;
+  "run "*) printf '1\\n5\\n' ;;
+esac
 exit 0`
   );
   // Fake age: -o OUT IN → header line + input (enough to prove the call).
@@ -88,6 +96,10 @@ function sandbox() {
       fs.copyFileSync(path.join(DEPLOY, f), path.join(deploy, f));
     }
   }
+  fs.writeFileSync(
+    path.join(deploy, ".env"),
+    `SYNAP_IMAGE_POD_AGENT=ghcr.io/synap-core/pod-agent@sha256:${"a".repeat(64)}\n`
+  );
   const env = {
     PATH: `${bin}:/usr/bin:/bin`,
     FAKE_LOG: path.join(dir, "fake.log"),
@@ -139,6 +151,31 @@ test("with a recipient, only the age file is uploaded and no plaintext is left",
     "age-encryption.org/v1"
   );
   assert.deepEqual(fs.readdirSync(sb.work), []);
+  // The last stdout line is the manifest pod-agent hands the CP.
+  const manifest = archiveManifestFrom(r.stdout);
+  assert.ok(manifest, r.stdout);
+  assert.deepEqual(
+    manifest.volumes.map((v) => [v.name, v.files, v.empty]),
+    [
+      ["minio_data", 1, false],
+      ["typesense_data", 1, false],
+    ]
+  );
+});
+
+test("archiveManifestFrom reads the LAST manifest line, and never guesses", () => {
+  assert.deepEqual(archiveManifestFrom('x\nARCHIVE_MANIFEST {"schema":1}\n'), {
+    schema: 1,
+  });
+  assert.deepEqual(
+    archiveManifestFrom(
+      'ARCHIVE_MANIFEST {"schema":0}\nARCHIVE_MANIFEST {"schema":1}'
+    ),
+    { schema: 1 }
+  );
+  assert.equal(archiveManifestFrom("no manifest here"), null);
+  assert.equal(archiveManifestFrom("ARCHIVE_MANIFEST {not json"), null);
+  assert.equal(archiveManifestFrom(undefined), null);
 });
 
 test("an encrypted archive without its identity refuses to restore", () => {

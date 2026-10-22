@@ -8,6 +8,15 @@
 #   D15     : an archive leaves the host ONLY age-encrypted (no recipient refuses
 #             before any service stops); an encrypted archive restores with its
 #             identity and refuses without it; a legacy plaintext one still restores
+#   volumes : each volume in ARCHIVE_VOLUMES is found by its compose LABELS
+#             (project + volume key; a same-named volume of another project is
+#             never read), read through a helper container, counted, and listed
+#             in the manifest. Missing, duplicated, unreadable or short-archived
+#             -> fail, nothing uploaded. Empty -> "empty": true, never silent.
+#             Restore writes each volume back and counts its files.
+# The fake docker MODELS volumes: $FAKE_VOLS/<name>/ is a volume's content,
+# <name>.labels its labels; `docker run -v <name>:/v` runs the script with
+# V=<that dir> (no host path is ever read by the script itself).
 # Not covered: real pg_dumpall / psql behaviour; only the scripts' handling of
 # their exit codes and stderr. `age` is a STUB on PATH (header line + recipient
 # line + payload; decrypt needs an existing -i file and strips both lines) — it
@@ -39,10 +48,35 @@ case "$*" in
       sqlerr) echo 'ERROR:  relation "x" does not exist' >&2 ;;
       exists) echo 'ERROR:  role "synap" already exists' >&2 ;;
     esac ;;
-  *"volume ls"*) [ -n "${VOL_MODE:-}" ] && echo "pod_minio_data" ;;
-  *"volume inspect"*) echo "$FAKE_VOL_DIR" ;;
+  "volume ls"*)
+    p="$(printf '%s\n' "$*" | sed -n 's/.*com.docker.compose.project=\([^ ]*\).*/\1/p')"
+    k="$(printf '%s\n' "$*" | sed -n 's/.*com.docker.compose.volume=\([^ ]*\).*/\1/p')"
+    for f in "$FAKE_VOLS"/*.labels; do
+      [ -e "$f" ] || continue
+      grep -qx "project=$p" "$f" && grep -qx "volume=$k" "$f" && basename "$f" .labels
+    done ;;
+  "volume create"*)
+    name="${*: -1}"; mkdir -p "$FAKE_VOLS/$name"; : > "$FAKE_VOLS/$name.labels"
+    for a in "$@"; do case "$a" in com.docker.compose.project=*) echo "project=${a#*=}" >> "$FAKE_VOLS/$name.labels" ;;
+      com.docker.compose.volume=*) echo "volume=${a#*=}" >> "$FAKE_VOLS/$name.labels" ;; esac; done ;;
+  "run "*)
+    vol=""; prev=""; for a in "$@"; do [ "$prev" = "-v" ] && vol="${a%%:*}"; prev="$a"; done
+    script="${*: -1}"
+    [ -d "$FAKE_VOLS/$vol" ] || { echo "no such volume: $vol" >&2; exit 1; }
+    [ -e "$FAKE_VOLS/$vol.unreadable" ] && { echo "tar: ./obj: Permission denied" >&2; exit 1; }
+    src="$FAKE_VOLS/$vol"
+    if [ -e "$FAKE_VOLS/$vol.short" ] && [[ "$script" == *"tar czf"* ]]; then   # a tar that drops a file
+      src="$(mktemp -d)"; cp -R "$FAKE_VOLS/$vol/." "$src/"; rm -f "$(find "$src" -type f | head -1)"
+    fi
+    V="$src" exec bash -c "$script" ;;
 esac
 exit 0
+D
+# busybox `stat -c %s` (the helper image) on a BSD host
+cat > "$TMP/bin/stat" <<'D'
+#!/usr/bin/env bash
+if [ "$1" = -c ] && ! /usr/bin/env -i PATH=/usr/bin:/bin stat -c %s / >/dev/null 2>&1; then shift 2; exec /usr/bin/stat -f %z "$@"; fi
+exec /usr/bin/env -i PATH=/usr/bin:/bin stat "$@"
 D
 cat > "$TMP/bin/wget" <<'D'
 #!/usr/bin/env bash
@@ -81,15 +115,6 @@ else
   { echo "age-encryption.org/v1"; echo "-> stub$rcpt"; cat "$in"; } > "$out"
 fi
 D
-# tar wrapper: simulate an exit code ONLY for the volume archive, real tar otherwise.
-cat > "$TMP/bin/tar" <<'D'
-#!/usr/bin/env bash
-if [ -n "${VOL_TAR_RC:-}" ] && [[ "$*" == *volumes.tar.gz*"$FAKE_VOL_DIR"* ]]; then
-  [ "$VOL_TAR_RC" = 1 ] && /usr/bin/env -i PATH=/usr/bin:/bin tar "$@" 2>/dev/null
-  exit "$VOL_TAR_RC"
-fi
-exec /usr/bin/env -i PATH=/usr/bin:/bin tar "$@"
-D
 chmod +x "$TMP/bin"/*
 export CB_LOG="$TMP/cb" UPLOAD_LOG="$TMP/up" FAKE_ARCHIVE="$TMP/fake.tar.gz"
 export DOCKER_LOG="$TMP/docker" UPLOADED="$TMP/uploaded"
@@ -108,6 +133,22 @@ export RESTORE_PG_WAIT_SECS=0 RESTORE_HEALTH_INTERVAL=0 RESTORE_HEALTH_TRIES=2
 # covers the real host side).
 D="$TMP/deploy"; mkdir -p "$D"
 cp "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR/docker-compose.yml" "$D/"
+HELPER="ghcr.io/synap-core/pod-agent@sha256:$(printf 'a%.0s' $(seq 1 64))"
+printf 'COMPOSE_PROJECT_NAME=testpod\nSYNAP_IMAGE_POD_AGENT=%s\n' "$HELPER" > "$D/.env"
+export FAKE_VOLS="$TMP/vols"
+vol() { # <name> <project> <key> <files...> — a volume and its content
+  local n="$1" p="$2" k="$3"; shift 3
+  rm -rf "$FAKE_VOLS/$n" "$FAKE_VOLS/$n".*; mkdir -p "$FAKE_VOLS/$n"
+  printf 'project=%s\nvolume=%s\n' "$p" "$k" > "$FAKE_VOLS/$n.labels"
+  for f in "$@"; do mkdir -p "$FAKE_VOLS/$n/$(dirname "$f")"; echo "content of $f" > "$FAKE_VOLS/$n/$f"; done
+}
+pod_vols() { # the pod's two volumes + a same-key volume of ANOTHER project
+  rm -rf "$FAKE_VOLS"; mkdir -p "$FAKE_VOLS"
+  vol testpod_minio_data testpod minio_data bucket/a.bin bucket/b.bin .minio.sys/format.json
+  vol testpod_typesense_data testpod typesense_data db/state
+  vol other_minio_data other minio_data secret/x
+}
+pod_vols
 export HOST_REQUEST_POLL_SECONDS=1 HOST_REQUEST_PICKUP_SECONDS=10
 fake_host() {
   while :; do
@@ -157,17 +198,68 @@ for mode in fail empty; do
     && ok "archive[$mode]: services are brought back by the HOST, not from the agent" || bad "archive[$mode]: restart path: $(cat "$DOCKER_LOG" | tr '\n' '|')"
 done
 
-# ── archive: volumes (minio/typesense) ──
-export FAKE_VOL_DIR="$TMP/vol"; mkdir -p "$FAKE_VOL_DIR"; echo data > "$FAKE_VOL_DIR/obj"
-VOL_MODE=1 run_archive; rc=$?
-[ $rc -eq 0 ] && [ "$(last_status)" = '"status":"completed"' ] && ok "archive[volumes ok]: completed" || bad "archive[volumes ok]: rc=$rc status=$(last_status)"
-VOL_MODE=1 VOL_TAR_RC=2 run_archive; rc=$?
-[ $rc -ne 0 ] && ok "archive[volume tar fatal]: non-zero exit" || bad "archive[volume tar fatal]: exited 0"
-[ ! -s "$UPLOAD_LOG" ] && ok "archive[volume tar fatal]: nothing uploaded" || bad "archive[volume tar fatal]: uploaded without its files"
-grep -q '"completed"' "$CB_LOG" && bad "archive[volume tar fatal]: reported completed" || ok "archive[volume tar fatal]: never reports completed"
-VOL_MODE=1 VOL_TAR_RC=1 run_archive; rc=$?
-[ $rc -eq 0 ] && [ "$(last_status)" = '"status":"completed"' ] && ok "archive[tar exit 1]: survivable, completed" || bad "archive[tar exit 1]: rc=$rc status=$(last_status)"
-unset VOL_MODE VOL_TAR_RC
+# ── archive: volumes (by label, counted, manifest) ──
+# The keys archive-pod.sh archives are volumes the compose file declares (a
+# renamed volume would otherwise be "found 0" on every pod, or never archived).
+keys="$(sed -n 's/^ARCHIVE_VOLUMES="\${ARCHIVE_VOLUMES:-\(.*\)}"$/\1/p' "$SCRIPT_DIR/archive-pod.sh")"
+declared="$(python3 -c 'import sys,yaml; print(" ".join((yaml.safe_load(open(sys.argv[1])).get("volumes") or {}).keys()))' "$SCRIPT_DIR/docker-compose.yml" 2>/dev/null)"
+missing=""; for k in $keys; do [[ " $declared " == *" $k "* ]] || missing="$missing $k"; done
+[ -n "$keys" ] && [ -n "$declared" ] && [ -z "$missing" ] && ok "archive: its volumes ($keys) are declared by the compose file" || bad "archive: ARCHIVE_VOLUMES='$keys' vs compose volumes '$declared' (missing:$missing)"
+pod_vols
+run_archive; rc=$?
+cb="$(grep '"completed"' "$CB_LOG" | tail -1)"
+[ $rc -eq 0 ] && [ -n "$cb" ] && ok "archive[volumes]: completed" || bad "archive[volumes]: rc=$rc $(tail -3 "$TMP/out")"
+m="$(sed -n 's/^ARCHIVE_MANIFEST //p' "$TMP/out")"
+jq -e '.schema == 1 and .project == "testpod" and .database.bytes > 0 and (.archive.sha256 | test("^[0-9a-f]{64}$"))
+  and ([.volumes[] | {name, volume, files, empty}] == [{name:"minio_data",volume:"testpod_minio_data",files:3,empty:false},{name:"typesense_data",volume:"testpod_typesense_data",files:1,empty:false}])
+  and (.volumes | all(.bytes > 0 and (.sha256 | test("^[0-9a-f]{64}$"))))' <<<"$m" >/dev/null \
+  && ok "archive[volumes]: the manifest lists both volumes with file counts, sizes, checksums (last stdout line)" || bad "archive[volumes]: manifest=$m"
+jq -e --argjson m "$m" '.manifest == $m' <<<"${cb}" >/dev/null 2>&1 && ok "archive[volumes]: the push callback carries the same manifest" || bad "archive[volumes]: callback=$cb"
+[ "$(jq -r .archive.bytes <<<"$m")" = "$(wc -c < "$UPLOADED" | tr -d ' ')" ] && [ "$(jq -r .archive.sha256 <<<"$m")" = "$({ sha256sum "$UPLOADED" 2>/dev/null || shasum -a 256 "$UPLOADED"; } | cut -d' ' -f1)" ] \
+  && ok "archive[volumes]: archive.bytes/sha256 are the uploaded object's" || bad "archive[volumes]: archive=$(jq -c .archive <<<"$m")"
+mkdir -p "$TMP/x"; tail -n +3 "$UPLOADED" | tar xzf - -C "$TMP/x" 2>/dev/null
+[ "$(tar tzvf "$TMP/x/volumes/minio_data.tar.gz" | grep -c '^-')" = 3 ] && jq -e '.volumes | length == 2' "$TMP/x/manifest.json" >/dev/null \
+  && ok "archive[volumes]: the archive holds manifest.json and volumes/minio_data.tar.gz with its 3 files" || bad "archive[volumes]: contents $(ls -R "$TMP/x" | tr '\n' ' ')"
+! grep -q 'other_minio_data' "$DOCKER_LOG" && ok "archive[volumes]: another project's minio_data volume is never read" || bad "archive[volumes]: read other_minio_data"
+cp "$UPLOADED" "$TMP/with-volumes.age"
+[ -z "$(ls -A "$ARCHIVE_WORK_DIR")" ] && ok "archive[volumes]: nothing left in the work dir" || bad "archive[volumes]: left $(ls "$ARCHIVE_WORK_DIR")"
+
+refuses() { # <label> <reason regex> — the archive failed, said why, uploaded nothing
+  local rc="$1" label="$2" re="$3"
+  [ "$rc" -ne 0 ] && [ "$(last_status)" = '"status":"failed"' ] && grep -qE "$re" "$CB_LOG" && [ ! -s "$UPLOAD_LOG" ] && ! grep -q '"completed"' "$CB_LOG" \
+    && ok "archive[$label]: fails ($re), nothing uploaded" || bad "archive[$label]: rc=$rc cb=$(cat "$CB_LOG") up=$(cat "$UPLOAD_LOG")"
+}
+pod_vols; rm -rf "$FAKE_VOLS"/testpod_typesense_data*
+run_archive; refuses $? "volume missing" 'volume typesense_data of project testpod: found 0'
+pod_vols; touch "$FAKE_VOLS/testpod_minio_data.unreadable"
+run_archive; refuses $? "volume unreadable" 'volume minio_data \(testpod_minio_data\) could not be read'
+pod_vols; touch "$FAKE_VOLS/testpod_minio_data.short"
+run_archive; refuses $? "short tarball" 'volume minio_data: the archive holds 2 files, the volume 3'
+pod_vols; vol testpod_minio_data_2 testpod minio_data dup/y
+run_archive; refuses $? "two volumes" 'volume minio_data of project testpod: found 2'
+pod_vols; ( sed -i.x '/^SYNAP_IMAGE_POD_AGENT=/d' "$D/.env"; rm -f "$D/.env.x"; run_archive ); rc=$?
+printf 'COMPOSE_PROJECT_NAME=testpod\nSYNAP_IMAGE_POD_AGENT=%s\n' "$HELPER" > "$D/.env"
+[ $rc -ne 0 ] && grep -q ARCHIVE_HELPER_MISSING "$CB_LOG" && ! grep -q stop "$DOCKER_LOG" \
+  && ok "archive[no helper pin]: refuses before stopping anything" || bad "archive[no helper pin]: rc=$rc cb=$(cat "$CB_LOG")"
+pod_vols; vol testpod_typesense_data testpod typesense_data
+run_archive; rc=$?
+[ $rc -eq 0 ] && jq -e '.volumes[] | select(.name == "typesense_data") | .empty == true and .files == 0' <<<"$(sed -n 's/^ARCHIVE_MANIFEST //p' "$TMP/out")" >/dev/null \
+  && ok "archive[empty volume]: completes and SAYS empty (\"empty\": true, 0 files)" || bad "archive[empty volume]: rc=$rc $(tail -2 "$TMP/out")"
+pod_vols
+
+# ── restore: the per-volume archive goes back into the pod's volumes ──
+cp "$TMP/with-volumes.age" "$FAKE_ARCHIVE"
+rm -rf "$FAKE_VOLS"; mkdir -p "$FAKE_VOLS"; vol testpod_minio_data testpod minio_data stale/old.bin   # typesense absent: created
+HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
+[ $rc -eq 0 ] && [ "$(last_status)" = '"status":"completed"' ] && [ -f "$FAKE_VOLS/testpod_minio_data/bucket/a.bin" ] && [ ! -e "$FAKE_VOLS/testpod_minio_data/stale/old.bin" ] \
+  && [ -f "$FAKE_VOLS/testpod_typesense_data/db/state" ] && grep -qx 'volume=typesense_data' "$FAKE_VOLS/testpod_typesense_data.labels" \
+  && ok "restore[volumes]: each volume is replaced by its archived files (a missing one created with its compose labels)" || bad "restore[volumes]: rc=$rc $(tail -3 "$TMP/out")"
+mkdir -p "$TMP/t"; rm -rf "$TMP/t"/*; tail -n +3 "$TMP/with-volumes.age" | tar xzf - -C "$TMP/t"
+echo tampered | gzip > "$TMP/t/volumes/minio_data.tar.gz"; ( cd "$TMP/t" && tar czf "$FAKE_ARCHIVE" manifest.json database.sql.gz volumes )
+HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
+[ $rc -ne 0 ] && grep -q 'volume minio_data: checksum does not match the manifest' "$CB_LOG" \
+  && ok "restore[volumes tampered]: a tarball that does not match the manifest is refused" || bad "restore[volumes tampered]: rc=$rc cb=$(cat "$CB_LOG")"
+pod_vols
 
 # ── restore: D15 round trip of the archive made above ──
 if [ -s "$TMP/encrypted.age" ]; then
@@ -208,7 +300,8 @@ grep -q '"completed"' "$CB_LOG" && bad "restore[health]: reported completed" || 
 echo "not a tarball" > "$TMP/pk/volumes.tar.gz"
 tar czf "$FAKE_ARCHIVE" -C "$TMP/pk" database.sql.gz volumes.tar.gz
 HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
-[ $rc -ne 0 ] && ok "restore[volumes]: non-zero exit" || bad "restore[volumes]: exited 0"
-[ "$(last_status)" = '"status":"failed"' ] && ok "restore[volumes]: reports failed" || bad "restore[volumes]: status=$(last_status)"
+[ $rc -ne 0 ] && ok "restore[legacy volumes]: non-zero exit" || bad "restore[legacy volumes]: exited 0"
+[ "$(last_status)" = '"status":"failed"' ] && grep -q LEGACY_VOLUME_ARCHIVE "$CB_LOG" \
+  && ok "restore[legacy volumes]: refused (host paths cannot be written from pod-agent)" || bad "restore[legacy volumes]: cb=$(cat "$CB_LOG")"
 
 exit $fail

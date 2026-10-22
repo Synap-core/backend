@@ -21,6 +21,7 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const { execFile, spawn } = require("child_process");
+const { archiveManifestFrom } = require("./archive-manifest");
 const {
   assertPushable,
   commandErrorStatus,
@@ -698,7 +699,12 @@ async function runPulledCommand(commandName, payload) {
     payload,
     policy
   );
-  return { status, output, ...(err ? { error: err.message } : {}) };
+  const result = { status, output, ...(err ? { error: err.message } : {}) };
+  if (commandName === "archive") {
+    const archiveManifest = archiveManifestFrom(output);
+    if (archiveManifest) result.data = { archiveManifest };
+  }
+  return result;
 }
 
 if (POD_AGENT_TRUST.configured) {
