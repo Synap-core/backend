@@ -17,9 +17,9 @@ describe("repeatLabel", () => {
       repeatLabel({ kind: "proposal-cluster", count: 3, repeatCount: 1 })
     ).toBe("and 2 more like it");
     // One rule running N times is not N things "like it".
-    expect(
-      repeatLabel({ kind: "rule-run", count: 1, repeatCount: 300 })
-    ).toBe("ran 300 times");
+    expect(repeatLabel({ kind: "rule-run", count: 1, repeatCount: 300 })).toBe(
+      "ran 300 times"
+    );
     expect(
       repeatLabel({ kind: "notification", count: 1, repeatCount: 1 })
     ).toBeNull();

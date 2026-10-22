@@ -172,7 +172,9 @@ export function repeatOf(signal: RepeatableSignal): number {
 export function repeatLabel(signal: RepeatableSignal): string | null {
   const n = repeatOf(signal);
   if (n <= 1) return null;
-  return signal.kind === "rule-run" ? `ran ${n} times` : `and ${n - 1} more like it`;
+  return signal.kind === "rule-run"
+    ? `ran ${n} times`
+    : `and ${n - 1} more like it`;
 }
 
 // ── One list (founder, 2026-09-28) ─────────────────────────────────────────
