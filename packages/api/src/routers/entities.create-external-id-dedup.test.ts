@@ -39,11 +39,12 @@ import {
   isNull,
   ilike,
 } from "@synap/database";
+import { seedBootData } from "../__tests__/seed-boot-data.js";
 import { entitiesRouter } from "./entities.js";
 
-const USER = "e0000000-0000-0000-0000-0000000000b1";
-const AGENT_USER = "e0000000-0000-0000-0000-0000000000b2";
-const WS = "e0000000-0000-0000-0000-0000000000c1";
+const USER = "e0000000-0000-4000-8000-0000000000b1";
+const AGENT_USER = "e0000000-0000-4000-8000-0000000000b2";
+const WS = "e0000000-0000-4000-8000-0000000000c1";
 const NAME = "Ada B1 Dedup";
 const EXT = `discord:b1-${randomUUID()}`;
 
@@ -92,6 +93,8 @@ describe.skipIf(!dbAvailable)(
   () => {
     beforeAll(async () => {
       await cleanup();
+      // The core kinds (person, note…) as boot seeds them.
+      await seedBootData();
       await db
         .insert(users)
         .values({ id: USER, email: "b1-dedup@test.synap", userType: "human" })
@@ -114,6 +117,14 @@ describe.skipIf(!dbAvailable)(
         workspaceId: WS,
         userId: USER,
         role: "owner",
+      });
+      // An agent writes only in a space it is a member of (otherwise the gate
+      // files a workspace.join proposal instead of the write).
+      await db.insert(workspaceMembers).values({
+        id: randomUUID(),
+        workspaceId: WS,
+        userId: AGENT_USER,
+        role: "editor",
       });
     });
 

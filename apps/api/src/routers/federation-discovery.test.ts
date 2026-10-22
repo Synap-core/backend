@@ -41,7 +41,8 @@ vi.mock("@synap/database", () => ({
   getDb: mocks.getDb,
   podSettings: { settings: "settings", createdAt: "createdAt" },
   PodOwnerAlreadyClaimedError: class PodOwnerAlreadyClaimedError extends Error {},
-  projectPodUserAccess: vi.fn(),
+  readPodUserAccess: vi.fn(),
+  hasActivePodAccess: vi.fn(),
   seedAdminUser: vi.fn(),
   TrustedIssuerService: class TrustedIssuerService {
     getByUrl = mocks.getByUrl;

@@ -98,6 +98,7 @@ import {
   ChannelRepository,
   getActingAgentUserId,
   getRequestGrant,
+  isUniqueViolation,
 } from "@synap/database";
 import type {
   AutomationTriggerConfig,
@@ -699,13 +700,6 @@ async function prepareAutomationForMaterialization(
     input.workspaceId,
     createdBy
   );
-}
-
-/** Postgres unique-violation SQLSTATE — raised by automations_workspace_name_active_uq. */
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const e = err as { code?: string; cause?: { code?: string } };
-  return e.code === "23505" || e.cause?.code === "23505";
 }
 
 /**

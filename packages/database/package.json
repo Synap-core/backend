@@ -50,6 +50,11 @@
       "types": "./dist/services/capture-routing.d.ts",
       "import": "./dist/services/capture-routing.js",
       "default": "./dist/services/capture-routing.js"
+    },
+    "./pg-errors": {
+      "types": "./dist/utils/pg-errors.d.ts",
+      "import": "./dist/utils/pg-errors.js",
+      "default": "./dist/utils/pg-errors.js"
     }
   },
   "files": [
