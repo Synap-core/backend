@@ -190,6 +190,26 @@ describe("the own-organise default, seeded ON", () => {
     });
   });
 
+  it("a more specific `auto` row never shadows the class: the proven write still executes under it", async () => {
+    // The input that discriminates the resolver's skip: with the class ON, a
+    // person's exact `auto` row (score 3) and the agent's own glob (score 3)
+    // outrank the class row (score 1). Ranked as usual, either would win the
+    // resolver, the engine would refuse its `auto` on an organise write (2.8),
+    // and the write would PROPOSE although its own class says execute.
+    await pg.exec(`
+      INSERT INTO governance_rules (principal_kind, agent_user_id, scope_kind, target_kind, target_pattern, verdict, created_by)
+      VALUES ('any', NULL, 'pod', 'action', 'project.file_entities', 'auto', 'user:${HUMAN}'),
+             ('agent', '${STRICT_AGENT}', 'pod', 'action', 'focus_session.*', 'auto', 'user:${HUMAN}');
+    `);
+    const { ruleId } = await readOwnOrganiseDefault(db);
+    for (const key of ["project.file_entities", "focus_session.update"]) {
+      expect(await decide(key, proven)).toMatchObject({
+        decision: "execute",
+        governanceRuleId: ruleId,
+      });
+    }
+  });
+
   it("a proof on a write outside the class is refused (delete, track start)", async () => {
     expect(await decide("entity.delete", proven)).toMatchObject({
       decision: "propose",
