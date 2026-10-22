@@ -143,6 +143,10 @@ import { answerSessionSlot, attestSessionSlot } from "../session-answer.js";
 import { unblockExpectedOutput } from "../block-output.js";
 import { listOwedSlots } from "../owed-outputs.js";
 import { listDraftAskSlots } from "../draft-asks.js";
+import {
+  foldOwedByPerson,
+  readOwedByPersonSlots,
+} from "../../discover/owed-by-person.js";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
 const EXT_AGENT = "44444444-4444-4444-8444-444444444444";
@@ -284,6 +288,30 @@ describe("draft asks: the read and acceptance on engagement", () => {
       2
     );
     expect(draft.starterNames.get(sessionId)).toBe("Claude Code");
+  });
+
+  /**
+   * orient's `owedByPerson` SEAM (live 2026-10-22: the founder's three owed
+   * decisions sat on an agent draft and no orient section named them). The
+   * REAL `listOwedSlots` lenses, both read: a draft's asks land as ONE row
+   * marked "proposed", a person's own session as "needs-you".
+   */
+  it("orient owedByPerson: both lenses, one row per session, each naming its inbox", async () => {
+    const draft = await seedSession({ origin: "agent", owed: [ASK_A, ASK_B] });
+    const own = await seedSession({ origin: "human", owed: [ASK_A] });
+    const folded = foldOwedByPerson({
+      ...(await readOwedByPersonSlots(OWNER)),
+      link: (id) => `/open/${id}`,
+      limit: 1000,
+    });
+    const rowOf = (id: string) =>
+      folded.items.filter((i) => i.sessionId === id);
+    expect(rowOf(draft.sessionId)).toEqual([
+      expect.objectContaining({ inbox: "proposed", owed: 2 }),
+    ]);
+    expect(rowOf(own.sessionId)).toEqual([
+      expect.objectContaining({ inbox: "needs-you", owed: 1 }),
+    ]);
   });
 
   it("a person's own session is never in the draft lens (and never stamped by an answer)", async () => {
