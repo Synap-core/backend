@@ -302,8 +302,7 @@ export default function MarkdownView({
   measure?: ContentMeasure;
 }) {
   const tree = useMemo(
-    () =>
-      parseMarkdown(resolvePatternMarkers(source)),
+    () => parseMarkdown(resolvePatternMarkers(source)),
     [source]
   );
   return (

@@ -180,7 +180,10 @@ case "$*" in
     if [ -n "${FAKE_FP_DRIFT:-}" ] && [ -s "$F/restores" ]; then echo "1|999|1"; else echo "1|$(cut -d'|' -f1 "$F/level")|1"; fi; exit 0 ;;
   "exec pg1 psql"*) echo 1; exit 0 ;;
   "exec pg1 pg_isready"*) exit 0 ;;
-  "exec pg1 pg_dump"*) echo "LEVEL $(cat "$F/level")"; exit 0 ;;
+  "exec pg1 pg_dump"*)
+    [ -n "${FAKE_PG_DUMP_STDERR:-}" ] && cat "$FAKE_PG_DUMP_STDERR" >&2
+    [ -n "${FAKE_PG_DUMP_FAIL:-}" ] && exit 1
+    echo "LEVEL $(cat "$F/level")"; exit 0 ;;
   "exec -i pg1 pg_restore -l"*) cat >/dev/null; exit 0 ;;
   "exec -i pg1 pg_restore"*)
     if [ -n "${FAKE_PG_RESTORE_FAIL:-}" ]; then cat >/dev/null; echo "pg_restore: error: could not execute query" >&2; exit 1; fi
@@ -882,6 +885,44 @@ run_update --release v1.10.0; rc=$?
 setup noorder r1; asrel v9.0.0; publish "$R2" 0012_new.sql
 run_update --release "$R2"; rc=$?
 [ "$rc" = 0 ] && [ "$(cur_id)" = "$R2" ] && ok "downgrade: v9.0.0 → $R2 has no order and is not refused" || { bad "noorder: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+
+# ── 9d. pg_dump's stderr: TimescaleDB's catalog warnings are not the operator's ─
+# A FULL dump of a TimescaleDB database always warns about the circular foreign
+# keys of its catalog tables (dumped data-only). After a successful dump only
+# OTHER stderr lines reach the operator — the same warning about a table that
+# is not TimescaleDB's catalog included; a failed dump shows all of it.
+cat > "$TMP/pgdump.err" <<'E'
+pg_dump: warning: there are circular foreign-key constraints on this table:
+pg_dump: detail: hypertable
+pg_dump: hint: You might not be able to restore the dump without using --disable-triggers or temporarily dropping the constraints.
+pg_dump: hint: Consider using a full dump instead of a --data-only dump to avoid this problem.
+pg_dump: warning: there are circular foreign-key constraints on this table:
+pg_dump: detail: chunk
+pg_dump: hint: You might not be able to restore the dump without using --disable-triggers or temporarily dropping the constraints.
+pg_dump: hint: Consider using a full dump instead of a --data-only dump to avoid this problem.
+pg_dump: warning: unknown-warning-marker on table public.users
+pg_dump: warning: there are circular foreign-key constraints on this table:
+pg_dump: detail: orders
+pg_dump: hint: You might not be able to restore the dump without using --disable-triggers or temporarily dropping the constraints.
+pg_dump: hint: Consider using a full dump instead of a --data-only dump to avoid this problem.
+pg_dump: warning: there are circular foreign-key constraints on this table:
+pg_dump: detail: continuous_agg
+pg_dump: hint: You might not be able to restore the dump without using --disable-triggers or temporarily dropping the constraints.
+pg_dump: hint: Consider using a full dump instead of a --data-only dump to avoid this problem.
+E
+setup dumpwarn r1; publish "$R2" 0012_new.sql
+FAKE_PG_DUMP_STDERR="$TMP/pgdump.err" run_update --release "$R2"; rc=$?
+d="$(ls -d "$DEPLOY"/backups/postgres/*-pre-update 2>/dev/null | head -1)"
+[ "$rc" = 0 ] && grep -q "unknown-warning-marker on table public.users" "$S/out" && grep -q "pg_dump: detail: orders" "$S/out" \
+  && [ "$(grep -c "circular foreign-key constraints on this table" "$S/out")" = 1 ] && ! grep -qE "detail: (hypertable|chunk|continuous_agg)" "$S/out" \
+  && ok "dumpwarn: a successful dump shows the unknown warnings (orders' loop included), not TimescaleDB's catalog ones" || { bad "dumpwarn: rc=$rc"; show; }
+[ -n "$d" ] && cmp -s "$d/synap.dump.log" "$TMP/pgdump.err" \
+  && ok "dumpwarn: pg_dump's whole stderr is kept beside the dump" || bad "dumpwarn: no full stderr beside the dump: $(ls "$d" 2>/dev/null | tr '\n' ' ')"
+setup dumpfail r1; publish "$R2" 0012_new.sql
+FAKE_PG_DUMP_STDERR="$TMP/pgdump.err" FAKE_PG_DUMP_FAIL=1 run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last reason)" = "pre-update backup failed" ] && [ "$(grep -c "circular foreign-key constraints on this table" "$S/out")" = 4 ] \
+  && grep -q "unknown-warning-marker" "$S/out" && grep -q "pg_dump failed for 'synap'" "$S/out" \
+  && ok "dumpfail: a failed dump shows ALL of pg_dump's stderr, then refuses the update" || { bad "dumpfail: rc=$rc reason=$(last reason)"; show; }
 
 # ── 10. channels resolve through channel-<name>/release.json ──────────────────
 setup channel r1; publish "$R2" 0012_new.sql
