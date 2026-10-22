@@ -57,6 +57,7 @@ import {
   clearJtiCache,
   clearJwksCache,
   controlPlaneIssuerScopes,
+  jwksCacheTtlMs,
   verifyIssuerJwt,
   verifyTrustedIssuerJwt,
 } from "./jwks-client.js";
@@ -79,7 +80,10 @@ function restoreControlPlaneUrl() {
   }
 }
 
-function installJwksResponse(publicJwk: JwkWithMetadata | JwkWithMetadata[]) {
+function installJwksResponse(
+  publicJwk: JwkWithMetadata | JwkWithMetadata[],
+  headers: Record<string, string> = {}
+) {
   const inputKeys = Array.isArray(publicJwk) ? publicJwk : [publicJwk];
   const keys = inputKeys.map((key, index) => ({
     ...key,
@@ -95,6 +99,7 @@ function installJwksResponse(publicJwk: JwkWithMetadata | JwkWithMetadata[]) {
     let onData: ((chunk: Buffer) => void) | undefined;
     const response = {
       statusCode: 200,
+      headers,
       destroy: vi.fn(),
       resume: vi.fn(),
       on: vi.fn((event: string, listener: (chunk: Buffer) => void) => {
@@ -511,5 +516,186 @@ describe("issuer→pod token door (aud, purpose, durable jti)", () => {
     await expect(verifyIssuerJwt(token, issuerUrl, "")).resolves.toBeNull();
     await expect(verifyIssuerJwt(token, "", podUrl)).resolves.toBeNull();
     expect(mocks.httpsRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("JWKS cache lifetime (a key the issuer stops publishing stops verifying)", () => {
+  const MINUTE = 60 * 1000;
+  const oldKey = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const newKey = crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const oldJwk = {
+    ...oldKey.publicKey.export({ format: "jwk" }),
+    kid: "old-key",
+  };
+  const newJwk = {
+    ...newKey.publicKey.export({ format: "jwk" }),
+    kid: "new-key",
+  };
+  let now = Date.UTC(2026, 9, 21, 12, 0, 0);
+
+  function tokenSignedBy(kid: "old-key" | "new-key") {
+    return jwt.sign(
+      { iss: issuerUrl, sub: "cp", aud: podUrl, jti: crypto.randomUUID() },
+      kid === "old-key" ? oldKey.privateKey : newKey.privateKey,
+      { algorithm: "ES256", expiresIn: "2d", keyid: kid }
+    );
+  }
+  const verify = (kid: "old-key" | "new-key") =>
+    verifyIssuerJwt(tokenSignedBy(kid), issuerUrl, podUrl);
+  // A token whose header names a kid the issuer never published (signed with
+  // a real key, so only the kid lookup can reject it).
+  const verifyForgedKid = (kid: string) =>
+    verifyIssuerJwt(
+      jwt.sign(
+        { iss: issuerUrl, sub: "x", aud: podUrl, jti: crypto.randomUUID() },
+        newKey.privateKey,
+        { algorithm: "ES256", expiresIn: "5m", keyid: kid }
+      ),
+      issuerUrl,
+      podUrl
+    );
+  const SECOND = 1000;
+
+  function installJwksFailure() {
+    mocks.httpsRequest.mockImplementation(((
+      _options: Record<string, unknown>,
+      callback: (response: unknown) => void
+    ) => {
+      callback({ statusCode: 503, headers: {}, resume: vi.fn() });
+      return { destroy: vi.fn(), end: vi.fn(), once: vi.fn() };
+    }) as never);
+  }
+
+  beforeEach(() => {
+    clearJwksCache();
+    clearJtiCache();
+    now = Date.UTC(2026, 9, 21, 12, 0, 0);
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    mocks.httpsRequest.mockReset();
+    mocks.resolvePublicIssuerEndpoint.mockReset().mockResolvedValue({
+      issuerUrl,
+      hostname: "issuer.example.test",
+      hostHeader: "issuer.example.test",
+      address: "93.184.216.34",
+      family: 4,
+      port: 443,
+      jwksPath: "/.well-known/jwks.json",
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearJwksCache();
+    clearJtiCache();
+  });
+
+  it("stops trusting a removed kid within 1 h when the issuer sends no Cache-Control", async () => {
+    // A rotation's grace: the issuer publishes both keys, the pod caches both.
+    installJwksResponse([oldJwk, newJwk]);
+    await expect(verify("old-key")).resolves.not.toBeNull();
+
+    // The grace ends: the issuer publishes the new key only.
+    installJwksResponse([newJwk]);
+    now += 59 * MINUTE;
+    await expect(verify("old-key")).resolves.not.toBeNull(); // still the cached set
+    now += 2 * MINUTE;
+    await expect(verify("old-key")).resolves.toBeNull();
+    await expect(verify("new-key")).resolves.not.toBeNull();
+  });
+
+  it("drops a kid the moment a re-fetch no longer lists it", async () => {
+    installJwksResponse([oldJwk]);
+    await expect(verify("old-key")).resolves.not.toBeNull();
+
+    // A new-kid token (past the re-fetch cooldown) makes the pod re-fetch
+    // inside the cache lifetime; the new set replaces the old one, so the old
+    // kid is gone at once, and asking for it fetches nothing more.
+    installJwksResponse([newJwk]);
+    now += 31 * SECOND;
+    await expect(verify("new-key")).resolves.not.toBeNull();
+    await expect(verify("old-key")).resolves.toBeNull();
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("N concurrent verifications of an unknown kid share ONE fetch", async () => {
+    installJwksResponse([oldJwk]);
+    await verify("old-key");
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(1);
+
+    // The issuer rotates; five tokens with the new kid arrive at once.
+    installJwksResponse([oldJwk, newJwk]);
+    now += 31 * SECOND;
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => verify("new-key"))
+    );
+    expect(results.every((payload) => payload !== null)).toBe(true);
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("an unknown kid inside the 30 s cooldown fetches nothing (no amplification onto the issuer)", async () => {
+    installJwksResponse([newJwk]);
+    await verify("new-key");
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(1);
+
+    // Forged kids, one after the other, within the cooldown: no fetch.
+    now += 10 * SECOND;
+    await expect(verifyForgedKid("forged-1")).resolves.toBeNull();
+    now += 10 * SECOND;
+    await expect(verifyForgedKid("forged-2")).resolves.toBeNull();
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(1);
+
+    // After the cooldown one more fetch is allowed, and only one.
+    now += 11 * SECOND;
+    await expect(verifyForgedKid("forged-3")).resolves.toBeNull();
+    await expect(verifyForgedKid("forged-4")).resolves.toBeNull();
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves the last-known-good set for 2 h while the issuer is unreachable, then fails closed", async () => {
+    installJwksResponse([newJwk]);
+    await expect(verify("new-key")).resolves.not.toBeNull();
+
+    // The cache expires (1 h) and the issuer is down: the last good set serves.
+    installJwksFailure();
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    now += 61 * MINUTE;
+    const during = verify("new-key");
+    await vi.runAllTimersAsync();
+    await expect(during).resolves.not.toBeNull();
+
+    // Past 2 h since the last successful fetch: no key is served.
+    now += 60 * MINUTE;
+    const after = verify("new-key");
+    await vi.runAllTimersAsync();
+    await expect(after).resolves.toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("honours the issuer's max-age, never past the 1 h ceiling or under the 5 min floor", async () => {
+    installJwksResponse([newJwk], { "cache-control": "public, max-age=600" });
+    await verify("new-key");
+    now += 9 * MINUTE;
+    await verify("new-key");
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(1);
+    now += 2 * MINUTE;
+    await verify("new-key");
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(2);
+
+    expect(jwksCacheTtlMs(undefined)).toBe(60 * MINUTE);
+    expect(jwksCacheTtlMs("max-age=86400")).toBe(60 * MINUTE);
+    expect(jwksCacheTtlMs("max-age=600")).toBe(10 * MINUTE);
+    expect(jwksCacheTtlMs("max-age=0")).toBe(5 * MINUTE);
+    expect(jwksCacheTtlMs("no-store")).toBe(5 * MINUTE);
+    expect(jwksCacheTtlMs("public, no-cache, max-age=3600")).toBe(5 * MINUTE);
+    expect(jwksCacheTtlMs("max-age=junk")).toBe(60 * MINUTE);
+  });
+
+  it("does not fetch per verification when the issuer says max-age=0", async () => {
+    installJwksResponse([newJwk], { "cache-control": "max-age=0" });
+    for (let i = 0; i < 5; i++) {
+      await verify("new-key");
+      now += MINUTE / 2;
+    }
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(1);
   });
 });

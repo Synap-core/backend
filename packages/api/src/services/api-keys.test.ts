@@ -4,7 +4,7 @@
  * Tests pour la gestion des clés API avec bcrypt
  */
 
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { apiKeyService } from "./api-keys.js";
 import { db } from "@synap/database";
 import { apiKeys } from "@synap/database";
@@ -171,36 +171,27 @@ describe("ApiKeyService", () => {
         ["hub-protocol.read"]
       );
 
-      // Get initial values
-      const [initialKey] = await db
-        .select()
-        .from(apiKeys)
-        .where(eq(apiKeys.id, keyId));
+      const readKey = async () =>
+        (await db.select().from(apiKeys).where(eq(apiKeys.id, keyId)))[0]!;
 
+      const initialKey = await readKey();
       expect(initialKey.lastUsedAt).toBeNull();
       expect(initialKey.usageCount).toBe(0);
 
-      // Validate (first use)
+      // Validate (first use). `recordKeyUse` is fire-and-forget, so the bump
+      // lands after validateApiKey returns — wait for it.
       await apiKeyService.validateApiKey(key);
+      await vi.waitFor(async () => {
+        const updatedKey = await readKey();
+        expect(updatedKey.usageCount).toBe(1);
+        expect(updatedKey.lastUsedAt).toBeInstanceOf(Date);
+      });
 
-      // Check updated values
-      const [updatedKey] = await db
-        .select()
-        .from(apiKeys)
-        .where(eq(apiKeys.id, keyId));
-
-      expect(updatedKey.lastUsedAt).toBeDefined();
-      expect(updatedKey.usageCount).toBe(1);
-
-      // Validate again (second use)
+      // A second use inside the one-minute debounce is NOT written: usage
+      // tracking is deliberately coalesced (api-keys.ts recordKeyUse).
       await apiKeyService.validateApiKey(key);
-
-      const [secondUpdate] = await db
-        .select()
-        .from(apiKeys)
-        .where(eq(apiKeys.id, keyId));
-
-      expect(secondUpdate.usageCount).toBe(2);
+      await new Promise((r) => setTimeout(r, 200));
+      expect((await readKey()).usageCount).toBe(1);
     });
   });
 

@@ -24,6 +24,7 @@ import {
   inArray,
   links,
   users,
+  isUniqueViolation,
 } from "@synap/database";
 import { isPodAdmin } from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
@@ -117,7 +118,7 @@ export async function setAgentAssignment(p: {
     .catch((err: unknown) => {
       // Two concurrent assigns of one target: the unique index refuses the
       // second — said as a conflict, never a 500.
-      if ((err as { code?: string })?.code === "23505") {
+      if (isUniqueViolation(err)) {
         throw new TRPCError({
           code: "CONFLICT",
           message: "Someone assigned this at the same time — try again",
