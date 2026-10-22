@@ -550,7 +550,12 @@ export const mutateProcs = {
       if (input.global === true && existing.workspaceId !== null) {
         await database
           .update(entities)
-          .set({ workspaceId: placementWorkspaceId })
+          .set({
+            workspaceId: placementWorkspaceId,
+            // Moving OUT to pod-wide: the space it leaves becomes its home
+            // (0348), so that space's members keep reading it.
+            homeWorkspaceId: existing.workspaceId,
+          })
           .where(eq(entities.id, input.id));
       }
 
@@ -1017,7 +1022,9 @@ export const mutateProcs = {
           // 3. Materialize — inline DB write (auto-approved)
           await database
             .update(entities)
-            .set({ workspaceId: input.workspaceId })
+            // Moving INTO a space: the row is that space's now, so it has no
+            // home (0348 — a workspace row never carries one; CHECK).
+            .set({ workspaceId: input.workspaceId, homeWorkspaceId: null })
             .where(eq(entities.id, entityId));
 
           // 4. Emit .completed event

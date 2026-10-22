@@ -87,7 +87,10 @@ vi.mock("@synap/database", async () => {
     workspaceMembers: {},
     workspaces: {},
     materializeEntity: h.materialize,
-    resolveImportEntityPlacement: vi.fn(async () => WS_FOR_MOCK),
+    resolveImportEntityPlacement: vi.fn(async () => ({
+      workspaceId: WS_FOR_MOCK,
+      homeWorkspaceId: null,
+    })),
     isUniqueViolation,
   };
 });

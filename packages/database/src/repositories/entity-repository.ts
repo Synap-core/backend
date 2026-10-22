@@ -107,6 +107,14 @@ export interface CreateEntityInput {
   systemData?: Record<string, unknown>;
 
   workspaceId?: string | null; // null for pod-wide entities
+  /**
+   * The space a POD-WIDE row was filed for (0348) — the placement door's
+   * answer (`acceptEntityCreatePlacement` / `resolveImportEntityPlacement`).
+   * Stored ONLY when the row lands pod-wide: a workspace row never carries one
+   * (the column's CHECK refuses it), so a caller handing one with a workspace
+   * gets it dropped here rather than a failed insert.
+   */
+  homeWorkspaceId?: string | null;
   userId: string;
 
   // Provenance (Wave B3) — who/what authored this row. Optional; the repo
@@ -509,6 +517,8 @@ export class EntityRepository extends BaseRepository<
       ...(data.id ? { id: data.id } : {}),
       userId,
       workspaceId: effectiveWorkspaceId,
+      homeWorkspaceId:
+        effectiveWorkspaceId === null ? (data.homeWorkspaceId ?? null) : null,
       profileId,
       type: entityType,
       title: data.title,

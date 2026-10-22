@@ -447,7 +447,8 @@ export async function createFileEntityForStoredDocument(
   // D1: the upload's workspace is a CONTEXT signal — route placement through the
   // one door so a pod-scope kind (e.g. a generic `file`) lands pod-wide (NULL)
   // while a workspace-scoped one (e.g. `brand-asset`) stays in its lens.
-  const resolvedWorkspaceId = await resolveImportEntityPlacement(db, {
+  // A pod-wide answer is HOMED in the upload's workspace (0348).
+  const placement = await resolveImportEntityPlacement(db, {
     userId,
     profileSlug,
     sourceWorkspaceId: workspaceId,
@@ -458,7 +459,8 @@ export async function createFileEntityForStoredDocument(
       {
         profileSlug,
         title: displayTitle,
-        workspaceId: resolvedWorkspaceId,
+        workspaceId: placement.workspaceId,
+        homeWorkspaceId: placement.homeWorkspaceId,
         userId,
         documentId: document.id,
         properties: uploadEntityProperties({

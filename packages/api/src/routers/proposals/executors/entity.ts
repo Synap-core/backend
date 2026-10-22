@@ -18,6 +18,7 @@ import {
   type LinkEndpointType,
   type LinkType,
   resolveMaterializedEntityWorkspaceId,
+  resolveMaterializedEntityHomeWorkspaceId,
   isDomainHomeWorkspace,
   DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
   expirePendingCreatesOfLandedRecord,
@@ -247,6 +248,25 @@ export function registerEntityExecutors(): void {
         innerData,
         proposalWorkspaceId
       );
+      // The space a pod-wide row was filed for (0348). Replayed through
+      // create's `homeWorkspaceId` — which only a MEMBER of that space may
+      // name, the approver included: an approver outside it lands the row
+      // un-homed (owner-only, exactly as before 0348) and we say so.
+      const persistedHome = resolveMaterializedEntityHomeWorkspaceId(
+        innerData,
+        entityHome
+      );
+      const replayHome =
+        persistedHome &&
+        (await getWorkspaceMembership(db, persistedHome, userId))
+          ? persistedHome
+          : null;
+      if (persistedHome && !replayHome) {
+        logger.warn(
+          { proposalId: input.proposalId, homeWorkspaceId: persistedHome },
+          "entity/create approve: approver is not a member of the space this entity was filed for — landing it without a home space (owner-only)"
+        );
+      }
 
       if (entityHome) {
         const filingTarget = await db.query.workspaces.findFirst({
@@ -402,6 +422,7 @@ export function registerEntityExecutors(): void {
           // long-content entity that proposed) lost its document link. Forward it.
           documentId: innerData.documentId as string | undefined,
           ...(entityHome ? { targetWorkspaceId: entityHome } : {}),
+          ...(replayHome ? { homeWorkspaceId: replayHome } : {}),
           source: "system",
           ...(decision?.forceCreate ? { forceCreate: true } : {}),
         })) as { id?: string; deduplicated?: boolean };

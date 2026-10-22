@@ -41,6 +41,11 @@ export const entities = pgTable(
     // Context
     userId: text("user_id").notNull(),
     workspaceId: uuid("workspace_id"), // Nullable — null means global (visible across all workspaces)
+    // The space a POD-WIDE row was filed for (0348): its members may read it
+    // (`accessScopeWhere`). Set only when `workspaceId` is NULL — a CHECK in
+    // the migration makes that a database fact; the FK (ON DELETE SET NULL)
+    // lives there too, off the column def like the provenance FKs below.
+    homeWorkspaceId: uuid("home_workspace_id"),
     // Projects: Use relations table with type "belongs_to_project"
 
     // Profile reference (NEW - for dynamic types)
@@ -111,6 +116,12 @@ export const entities = pgTable(
       table.deletedAt
     ),
     profileIdIdx: index("entities_profile_id_idx").on(table.profileId),
+    // The read floor's home-space branch (0348).
+    homeWorkspaceIdx: index("entities_home_workspace_idx")
+      .on(table.homeWorkspaceId)
+      .where(
+        sql`${table.workspaceId} IS NULL AND ${table.homeWorkspaceId} IS NOT NULL`
+      ),
     profileStatusCategoryIdx: index("entities_profile_status_category_idx")
       .on(table.profileId, table.statusCategory)
       .where(sql`${table.deletedAt} IS NULL`),

@@ -20,6 +20,8 @@ import {
   resolveKindWritePin,
   normalizeEntityScope,
   resolveGuildWorkspaceHint,
+  acceptEntityCreatePlacement,
+  resolveMaterializedEntityHomeWorkspaceId,
 } from "./workspace-resolution-service.js";
 import { ProfileResolutionService } from "./profile-resolution-service.js";
 
@@ -828,7 +830,8 @@ describe("resolveImportEntityPlacement (D1 ingestion glue)", () => {
       profileSlug: "person",
       sourceWorkspaceId: WS_A,
     });
-    expect(r).toBeNull();
+    // Pod-wide, and HOMED in the source workspace (0348): its members read it.
+    expect(r).toEqual({ workspaceId: null, homeWorkspaceId: WS_A });
   });
 
   it("workspace-scope import stays in its ontology lens (rung 2), not hard-pinned", async () => {
@@ -848,7 +851,86 @@ describe("resolveImportEntityPlacement (D1 ingestion glue)", () => {
       profileSlug: "contact",
       sourceWorkspaceId: WS_A,
     });
-    expect(r).toBe(WS_A);
+    // A workspace row never carries a home.
+    expect(r).toEqual({ workspaceId: WS_A, homeWorkspaceId: null });
+  });
+});
+
+// ── The home rule (0348) — the space a pod-wide create was filed FOR. ────────
+describe("acceptEntityCreatePlacement / resolveEntityHomeWorkspaceId (home space)", () => {
+  const rung6 = { workspaceId: null, rung: 6 as const, candidates: [] };
+
+  it("pod-scope kind written from a space → pod-wide, homed there", () => {
+    expect(
+      acceptEntityCreatePlacement({
+        entityScope: "pod",
+        explicitPin: false,
+        placement: { workspaceId: WS_A, rung: 2, candidates: [] },
+        ambientWorkspaceId: WS_B,
+      })
+    ).toEqual({ workspaceId: null, homeWorkspaceId: WS_B });
+  });
+
+  it("workspace-scope kind → the workspace, no home", () => {
+    expect(
+      acceptEntityCreatePlacement({
+        entityScope: "workspace",
+        explicitPin: false,
+        placement: { workspaceId: WS_A, rung: 6, candidates: [] },
+        ambientWorkspaceId: WS_A,
+      })
+    ).toEqual({ workspaceId: WS_A, homeWorkspaceId: null });
+  });
+
+  it("explicit pin of a pod-scope kind → that workspace, no home", () => {
+    expect(
+      acceptEntityCreatePlacement({
+        entityScope: "pod",
+        explicitPin: true,
+        placement: { workspaceId: WS_A, rung: 1, candidates: [] },
+        ambientWorkspaceId: WS_A,
+      })
+    ).toEqual({ workspaceId: WS_A, homeWorkspaceId: null });
+  });
+
+  it("global: true → pod-wide, filed for no space", () => {
+    expect(
+      acceptEntityCreatePlacement({
+        entityScope: "pod",
+        explicitPin: true,
+        placement: { ...rung6, rung: 1 },
+        ambientWorkspaceId: WS_A,
+        global: true,
+      })
+    ).toEqual({ workspaceId: null, homeWorkspaceId: null });
+  });
+
+  it("no ambient workspace → pod-wide, no home", () => {
+    expect(
+      acceptEntityCreatePlacement({
+        entityScope: "pod",
+        explicitPin: false,
+        placement: rung6,
+        ambientWorkspaceId: null,
+      })
+    ).toEqual({ workspaceId: null, homeWorkspaceId: null });
+  });
+
+  it("proposal read-back: a persisted home only on a pod-wide row", () => {
+    expect(
+      resolveMaterializedEntityHomeWorkspaceId(
+        { resolvedHomeWorkspaceId: WS_A },
+        null
+      )
+    ).toBe(WS_A);
+    expect(
+      resolveMaterializedEntityHomeWorkspaceId(
+        { resolvedHomeWorkspaceId: WS_A },
+        WS_B
+      )
+    ).toBeNull();
+    // Pre-0348 proposal: no key → no home.
+    expect(resolveMaterializedEntityHomeWorkspaceId({}, null)).toBeNull();
   });
 });
 

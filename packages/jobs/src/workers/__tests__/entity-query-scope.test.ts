@@ -44,12 +44,27 @@ vi.mock("@synap/database", () => ({
     _sub: "podWideFacetEntityIds",
     userId,
   }),
+  // The real builder is `workspace_id IS NULL AND home ∈ caller's spaces`
+  // (utils/home-space-visibility.ts, proven on PGlite in
+  // access/home-space-visibility.pglite.test.ts); this models that shape so the
+  // test proves the WIRING into the query-node predicate.
+  homeSpaceSharedWhere: (ws: unknown, home: unknown, userId: string) => ({
+    _tag: "and",
+    args: [
+      { _tag: "isNull", col: ws },
+      { _tag: "homeIn", col: home, userId },
+    ],
+  }),
   entities: {
     id: { _colName: "id" },
     workspaceId: { _colName: "workspace_id" },
+    homeWorkspaceId: { _colName: "home_workspace_id" },
     userId: { _colName: "user_id" },
   },
 }));
+
+// The spaces each caller belongs to (the home-space builder's member/owner set).
+const SPACES: Record<string, string[]> = { "owner-1": ["ws-a"] };
 
 import { entityQueryVisibilityWhere } from "../entity-query-scope.js";
 
@@ -58,6 +73,8 @@ import { entityQueryVisibilityWhere } from "../entity-query-scope.js";
 // `_colName`.
 type Row = {
   workspace_id: string | null;
+  /** The space a pod-wide row was filed for (0348). */
+  home_workspace_id?: string | null;
   user_id: string;
   /** Row is in the pod-wide-facet subquery = it carries a live pod-wide facet. */
   has_pod_wide_facet?: boolean;
@@ -74,6 +91,10 @@ function evalPredicate(node: Node, row: Row): boolean {
       return row[node.col._colName as keyof Row] === node.val;
     case "isNull":
       return row[node.col._colName as keyof Row] === null;
+    case "homeIn": {
+      const home = row.home_workspace_id ?? null;
+      return home !== null && (SPACES[node.userId] ?? []).includes(home);
+    }
     case "inArray":
       // The only subquery in this predicate is the pod-shared entity-id set.
       if (node.sub?._sub !== FACET_SUBQUERY._sub) {
@@ -148,6 +169,53 @@ describe("entityQueryVisibilityWhere — default (workspace-lens union)", () => 
 
   it("(e') the pod-shared branch never admits a WORKSPACE-scoped row, facet or not", () => {
     expect(evalPredicate(where, rowBFaceted)).toBe(false);
+  });
+});
+
+describe("entityQueryVisibilityWhere — the home-space share (0348)", () => {
+  const where = entityQueryVisibilityWhere({
+    workspaceId: WS_A,
+    ownerId: OWNER,
+  });
+  // Another user's pod-wide row, filed FOR a space the run owner belongs to.
+  const rowPodHomedInMine: Row = {
+    workspace_id: null,
+    home_workspace_id: WS_A,
+    user_id: OTHER,
+  };
+  // …filed for a space the run owner is NOT in.
+  const rowPodHomedElsewhere: Row = {
+    workspace_id: null,
+    home_workspace_id: WS_B,
+    user_id: OTHER,
+  };
+
+  it("returns another user's pod-wide row filed for one of the owner's spaces", () => {
+    expect(evalPredicate(where, rowPodHomedInMine)).toBe(true);
+    expect(
+      evalPredicate(
+        entityQueryVisibilityWhere({
+          workspaceId: WS_A,
+          ownerId: OWNER,
+          podOnly: true,
+        }),
+        rowPodHomedInMine
+      )
+    ).toBe(true);
+  });
+
+  it("never one filed for a space the owner is not in, nor an un-homed one", () => {
+    expect(evalPredicate(where, rowPodHomedElsewhere)).toBe(false);
+    expect(evalPredicate(where, rowPodOther)).toBe(false);
+  });
+
+  it("fails closed with no owner (the pod-wide branch is dropped)", () => {
+    expect(
+      evalPredicate(
+        entityQueryVisibilityWhere({ workspaceId: WS_A }),
+        rowPodHomedInMine
+      )
+    ).toBe(false);
   });
 });
 

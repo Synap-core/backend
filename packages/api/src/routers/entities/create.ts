@@ -37,6 +37,8 @@ import {
   resolveIdentity,
   resolveWorkspacePlacement,
   acceptEntityCreatePlacement,
+  getWorkspaceMembership,
+  type EntityCreatePlacement,
   resolveKindWritePin,
   resolveProjectPlacement,
   isDomainHomeWorkspace,
@@ -100,6 +102,14 @@ export const createProcs = {
         global: z.boolean().optional().default(false),
         /** Override the target workspace for this entity (defaults to current workspace). */
         targetWorkspaceId: z.string().uuid().optional(),
+        /**
+         * The space a POD-WIDE entity is filed FOR (0348) — its members may
+         * read it. Defaults to the caller's workspace; a door that writes
+         * with a null caller lens on purpose (governed file entity, proposal
+         * approval) names it here. Never pins: it is recorded only when the
+         * row lands pod-wide, and the caller must be a member of it.
+         */
+        homeWorkspaceId: z.string().uuid().optional(),
         /**
          * Explicit workspace-scope request: pin this entity to the active
          * workspace, OVERRIDING a profile's pod-default `entityScope`. Set by
@@ -310,6 +320,21 @@ export const createProcs = {
             message: "Access denied to target workspace",
           });
         }
+      }
+      // A home shares the row with that space's members, so only a member may
+      // file for it — the same bar the header workspace meets (podProcedure).
+      if (
+        input.homeWorkspaceId &&
+        !(await getWorkspaceMembership(
+          await getDb(),
+          input.homeWorkspaceId,
+          ctx.userId
+        ))
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only a member of a space can file an entity for it",
+        });
       }
 
       // Resolve framed-view trust SERVER-SIDE (never from the request body).
@@ -1013,7 +1038,7 @@ export const createProcs = {
        */
       const computePlacement = async (
         profile: typeof earlyResolvedProfile
-      ): Promise<string | null> => {
+      ): Promise<EntityCreatePlacement> => {
         const entityPlacement = await resolveWorkspacePlacement(placementDb, {
           userId: ctx.userId,
           // Only an EXPLICIT target is rung-1. Omitting is undefined (not null)
@@ -1037,17 +1062,21 @@ export const createProcs = {
         // Placement accept policy — THE create-door rule shared with bulk
         // create (acceptEntityCreatePlacement): explicit pin → door result;
         // pod-scope kind → pod-wide; else deterministic hit, else ambient.
+        // A pod-wide answer carries the space it was filed FOR (0348).
         return acceptEntityCreatePlacement({
           entityScope: profile.entityScope,
           explicitPin: Boolean(
             input.global || input.targetWorkspaceId || input.workspaceScoped
           ),
           placement: entityPlacement,
+          ambientWorkspaceId: input.homeWorkspaceId ?? governanceWorkspaceId,
+          global: input.global,
         });
       };
 
-      let resolvedEntityWorkspaceId =
-        await computePlacement(earlyResolvedProfile);
+      const initialPlacement = await computePlacement(earlyResolvedProfile);
+      let resolvedEntityWorkspaceId = initialPlacement.workspaceId;
+      let resolvedEntityHomeWorkspaceId = initialPlacement.homeWorkspaceId;
 
       /**
        * THE KIND MUST BE VALID WHERE THE ROW LANDS — re-resolution pass.
@@ -1101,7 +1130,7 @@ export const createProcs = {
           if (decision.recomputePlacement) {
             // The corrected kind files differently — recompute ONCE.
             const replaced = await computePlacement(profileHere!);
-            if (replaced !== resolvedEntityWorkspaceId) {
+            if (replaced.workspaceId !== resolvedEntityWorkspaceId) {
               // Two passes disagree: the slug resolves to one kind in the home
               // its own kind chose, and another kind in the home THAT one
               // chooses. Refusing beats picking a side silently — the caller
@@ -1116,7 +1145,8 @@ export const createProcs = {
                   `belongs to; that pins the kind and the placement together.`,
               });
             }
-            resolvedEntityWorkspaceId = replaced;
+            resolvedEntityWorkspaceId = replaced.workspaceId;
+            resolvedEntityHomeWorkspaceId = replaced.homeWorkspaceId;
           }
         }
       }
@@ -1359,6 +1389,9 @@ export const createProcs = {
         // verbatim; a present key — including null — beats its legacy
         // `data.global ? null : workspaceId` derivation.
         resolvedWorkspaceId: resolvedEntityWorkspaceId,
+        // …and the space a pod-wide row was filed for (0348), read back by
+        // `resolveMaterializedEntityHomeWorkspaceId`.
+        resolvedHomeWorkspaceId: resolvedEntityHomeWorkspaceId,
         // R2: carry facets on the proposal so approve attaches them (same
         // shape as create input / composite op.facets). No longer dropped.
         ...(input.facets?.length
@@ -1534,6 +1567,7 @@ export const createProcs = {
             // the events and the receipt already name.
             id: entityId,
             workspaceId: entityWorkspaceId ?? undefined,
+            homeWorkspaceId: resolvedEntityHomeWorkspaceId,
             userId: ctx.userId,
             title: input.title || undefined,
             preview: input.description || undefined,
@@ -1959,8 +1993,9 @@ export const createProcs = {
       const profileCache = new Map<string, string>(); // slug → id
       // slug → the profile's entity-scope ("pod" | "workspace"), for placement.
       const entityScopeCache = new Map<string, string | null>();
-      // slug → resolved workspace placement (computed once per slug via the door).
-      const placementCache = new Map<string, string | null>();
+      // slug → resolved placement (computed once per slug via the door): the
+      // row's lens + the space a pod-wide row was filed for (0348).
+      const placementCache = new Map<string, EntityCreatePlacement>();
       let profilesCreated = 0;
 
       // Gather unique profile slugs that need hints
@@ -2075,6 +2110,7 @@ export const createProcs = {
             entityScope,
             explicitPin: Boolean(pin.targetWorkspaceId),
             placement,
+            ambientWorkspaceId: ctx.workspaceId,
           })
         );
       }
@@ -2087,7 +2123,9 @@ export const createProcs = {
       // entirely, so a re-run created a duplicate instead of matching the one
       // already placed there. Callers that pass an explicit ctx.workspaceId are
       // unaffected — every slug still resolves to that same pinned workspace.
-      const placedWorkspaceIds = new Set(placementCache.values());
+      const placedWorkspaceIds = new Set(
+        Array.from(placementCache.values(), (p) => p.workspaceId)
+      );
       const existingEntities = await database.query.entities.findMany({
         where: and(
           eq(entities.userId, ctx.userId),
@@ -2120,8 +2158,8 @@ export const createProcs = {
       let skipped = 0;
 
       for (const entity of input.entities) {
-        const placedWorkspaceId =
-          placementCache.get(entity.profileSlug) ?? null;
+        const placed = placementCache.get(entity.profileSlug);
+        const placedWorkspaceId = placed?.workspaceId ?? null;
         const cacheKey = `${entity.profileSlug}:${entity.title}:${placedWorkspaceId ?? "null"}`;
 
         // Already exists → skip
@@ -2143,6 +2181,7 @@ export const createProcs = {
               title: entity.title,
               properties: entity.properties,
               workspaceId: placedWorkspaceId,
+              homeWorkspaceId: placed?.homeWorkspaceId ?? null,
               userId: ctx.userId,
               // Batch provisioning remains permissive for legacy templates,
               // except Knowledge: its canonical one-form contract must hold

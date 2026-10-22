@@ -48,7 +48,12 @@ import { AccessContext } from "../access/context.js";
 import { and, eq, inArray, isNull, isNotNull, or } from "@synap/database";
 import { not, sql as drizzleSql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
-import { db, podSharedEntityIdsFor } from "@synap/database";
+import {
+  db,
+  podSharedEntityIdsFor,
+  homeSpaceSharedWhere,
+  homeSpaceInLensWhere,
+} from "@synap/database";
 import { sessionDocumentReadableWhere } from "../access/session-visibility.js";
 import {
   projectMembers,
@@ -380,6 +385,76 @@ export function podSharedDocumentWhere(
 }
 
 /**
+ * FLOOR BRANCH — the HOME-SPACE share (founder decision 2026-10-22, pod issue
+ * 2a743336). A pod-scope kind written from a space lands pod-wide and records
+ * that space as `entities.home_workspace_id`; the space's MEMBERS may read it.
+ * The ONE predicate is `homeSpaceSharedWhere` (@synap/database
+ * utils/home-space-visibility.ts) — never a local copy.
+ *
+ * WIDENING-ONLY and NARROW BY CONSTRUCTION (the `podSharedFacetWhere` rules):
+ * pod-wide rows only, so it can never admit a workspace row; an un-homed
+ * pod-wide entity matches nothing and stays owner-only under `podPersonal`;
+ * it binds the caller's id only; a caller in no space (a guest) matches
+ * nothing. READ ONLY: `entityWriteVisibleWhere` does not pass `facetLens`, so
+ * it never gains this branch — a member can read the row, never target it.
+ *
+ * `entities` only (the `facetLens` precondition): it reads
+ * `entities.home_workspace_id` directly.
+ */
+export function homeSpaceMemberWhere(
+  workspaceIdColumn: AnyPgColumn,
+  userId: string
+): SQL {
+  return homeSpaceSharedWhere(
+    workspaceIdColumn,
+    entities.homeWorkspaceId,
+    userId
+  );
+}
+
+/**
+ * FLOOR BRANCH — a DOCUMENT FOLLOWS ITS ENTITY on the home-space share: the
+ * pod-wide body of an entity a member reads through `homeSpaceMemberWhere` is
+ * readable by them too. The SAME predicate evaluated on the entity, the
+ * `podSharedDocumentWhere` shape. Pod-wide documents only; a standalone
+ * document, or the body of an un-homed / trashed entity, matches nothing.
+ * Reading only — `document-edit-access.ts` keeps a pod-wide document's write
+ * floor at its owner (and the pod-shared branch), so a member can read the
+ * body, never save it.
+ */
+export function homeSpaceDocumentWhere(
+  documentWorkspaceIdColumn: AnyPgColumn,
+  documentIdColumn: AnyPgColumn,
+  userId: string,
+  lens?: string | string[]
+): SQL {
+  const homedEntityDocumentIds = db
+    .select({ id: entities.documentId })
+    .from(entities)
+    .where(
+      and(
+        isNull(entities.deletedAt),
+        lens === undefined
+          ? homeSpaceSharedWhere(
+              entities.workspaceId,
+              entities.homeWorkspaceId,
+              userId
+            )
+          : homeSpaceInLensWhere(
+              entities.workspaceId,
+              entities.homeWorkspaceId,
+              userId,
+              lens
+            )
+      )
+    );
+  return and(
+    isNull(documentWorkspaceIdColumn),
+    inArray(documentIdColumn, homedEntityDocumentIds)
+  )!;
+}
+
+/**
  * NARROW COMPANION to `facetLensMemberWhere` — entity ids that carry a facet in
  * one of the lens workspace(s). Used to make the workspace LENS facet-aware for
  * entities: browsing workspace W surfaces a pod-wide entity that has a role in W
@@ -643,7 +718,8 @@ export function accessScopeWhere(args: {
   //   - workspace union: a guest has no member/owned workspace, and
   //     `userVisibleWhere` admits pod-visible workspaces only to a pod READER;
   //   - role-as-lens: needs a `workspace_members` row (a guest has none);
-  //   - pod-shared: needs a `pod_members` row (a guest has none).
+  //   - pod-shared: needs a `pod_members` row (a guest has none);
+  //   - home-space: needs a member/owned workspace (a guest has none).
   const podPersonal = and(
     and(isNull(workspaceIdColumn), eq(ownerColumn, userId)),
     not(podGuestWhere(userId))
@@ -684,6 +760,17 @@ export function accessScopeWhere(args: {
       ? podSharedDocumentWhere(workspaceIdColumn, entityIdColumn, userId)
       : undefined;
   if (podShared) floorBranches.push(podShared);
+  // HOME-SPACE share (0348): a pod-wide entity filed FOR a space is readable by
+  // that space's members — and its body document with it. Same opt-in gates as
+  // `podShared` (`facetLens` = the `entities` table, `documentFollowsEntity` =
+  // `documents`), so the WRITE floor, which passes neither, never gains it.
+  // Widening-only, pod-wide rows only; an un-homed one stays owner-gated.
+  const homeShared = facetLens
+    ? homeSpaceMemberWhere(workspaceIdColumn, userId)
+    : documentFollowsEntity
+      ? homeSpaceDocumentWhere(workspaceIdColumn, entityIdColumn, userId)
+      : undefined;
+  if (homeShared) floorBranches.push(homeShared);
   const floor = or(...floorBranches)!;
 
   // ── Workspace lens (optional narrow) ──────────────────────────────────────
@@ -698,7 +785,12 @@ export function accessScopeWhere(args: {
     // now "pod-wide rows I may see": my own, plus the pod-shared ones. Still a
     // NARROW — both branches require `workspace_id IS NULL`, and it is ANDed with
     // the floor, which carries the identical `podShared` branch.
-    workspaceNarrow = podShared ? or(podPersonal, podShared)! : podPersonal;
+    // The home-space share is pod-wide too, so it belongs to the POD view.
+    workspaceNarrow = or(
+      podPersonal,
+      ...(podShared ? [podShared] : []),
+      ...(homeShared ? [homeShared] : [])
+    )!;
   } else if (workspaceLens !== undefined && !wsEmpty) {
     const lensNarrow = workspaceLensWhere(
       workspaceIdColumn,
@@ -712,12 +804,32 @@ export function accessScopeWhere(args: {
     // floor, so it can only surface an entity the floor already admits.
     // `workspaceLens` is neither undefined nor null here (handled above), so the
     // facet-aware narrow applies whenever facetLens is on.
+    // Home-space (0348): the space's view also surfaces what was FILED FOR it
+    // — a pod-wide row homed there. Self-gating on the caller's membership of
+    // the home space (`homeSpaceInLensWhere`), like the facet narrow above; a
+    // document follows its entity.
     workspaceNarrow = facetLens
       ? or(
           lensNarrow,
-          facetInWorkspaceLensWhere(entityIdColumn, userId, workspaceLens)
+          facetInWorkspaceLensWhere(entityIdColumn, userId, workspaceLens),
+          homeSpaceInLensWhere(
+            workspaceIdColumn,
+            entities.homeWorkspaceId,
+            userId,
+            workspaceLens
+          )
         )!
-      : lensNarrow;
+      : documentFollowsEntity
+        ? or(
+            lensNarrow,
+            homeSpaceDocumentWhere(
+              workspaceIdColumn,
+              entityIdColumn,
+              userId,
+              workspaceLens
+            )
+          )!
+        : lensNarrow;
   }
 
   // ── Project/anchor lens (optional narrow) ─────────────────────────────────

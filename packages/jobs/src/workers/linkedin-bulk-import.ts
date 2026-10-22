@@ -20,6 +20,7 @@ import {
   extractSignalsFromProperties,
   eventRepository,
   resolveImportEntityPlacement,
+  type EntityCreatePlacement,
 } from "@synap/database";
 import { randomUUID } from "crypto";
 import { emitSideEffects } from "@synap/events";
@@ -70,10 +71,12 @@ export async function handleLinkedInBulkImport(
   // = context signal, not a hard pin) so a pod-scope kind lands pod-wide (NULL).
   // Memoized per profileSlug (only "person"/"contact") to keep the door's member
   // query off the per-contact hot path.
-  const placementCache = new Map<string, string | null>();
-  const placementFor = async (profileSlug: string): Promise<string | null> => {
-    if (placementCache.has(profileSlug))
-      return placementCache.get(profileSlug) ?? null;
+  const placementCache = new Map<string, EntityCreatePlacement>();
+  const placementFor = async (
+    profileSlug: string
+  ): Promise<EntityCreatePlacement> => {
+    const cached = placementCache.get(profileSlug);
+    if (cached) return cached;
     const resolved = await resolveImportEntityPlacement(db, {
       userId,
       profileSlug,
@@ -106,6 +109,7 @@ export async function handleLinkedInBulkImport(
           importedAt: new Date().toISOString(),
         };
 
+        const placement = await placementFor(profileSlug);
         const result = await upsertSvc.upsert({
           profileSlug,
           title: contact.name,
@@ -113,7 +117,8 @@ export async function handleLinkedInBulkImport(
           source: "linkedin",
           externalId: contact.externalId,
           signals: extractSignalsFromProperties(properties, "linkedin"),
-          workspaceId: await placementFor(profileSlug),
+          workspaceId: placement.workspaceId,
+          homeWorkspaceId: placement.homeWorkspaceId,
           userId,
           // A CSV bulk import is machine-authored: no AI agent reasoned about
           // these rows, and no operator hand-entered them — the worker

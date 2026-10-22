@@ -498,7 +498,8 @@ async function createEntityFromItem(
   // D1: the feed's workspace is a CONTEXT signal, not a hard pin — route the
   // entity's placement through the one door so a pod-scope kind lands pod-wide
   // (NULL) while a workspace-scoped one stays in the feed's lens.
-  const resolvedWorkspaceId = await resolveImportEntityPlacement(database, {
+  // A pod-wide answer is HOMED in the feed's workspace (0348).
+  const placement = await resolveImportEntityPlacement(database, {
     userId,
     profileSlug: targetProfileSlug,
     sourceWorkspaceId: workspaceId ?? null,
@@ -510,7 +511,8 @@ async function createEntityFromItem(
       preview: item.excerpt?.slice(0, 1000),
       properties: props,
       userId,
-      workspaceId: resolvedWorkspaceId,
+      workspaceId: placement.workspaceId,
+      homeWorkspaceId: placement.homeWorkspaceId,
     },
     {
       db: database,

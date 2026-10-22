@@ -6,6 +6,7 @@
  */
 export {
   resolveMaterializedEntityWorkspaceId,
+  resolveMaterializedEntityHomeWorkspaceId,
   resolveMaterializedFacetWorkspaceId,
   resolveMaterializedRelationWorkspaceId,
 } from "@synap/database";

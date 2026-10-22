@@ -5143,3 +5143,22 @@ CREATE INDEX IF NOT EXISTS "oauth_refresh_tokens_app_idx"
   ON "oauth_refresh_tokens" ("app_id");
 CREATE INDEX IF NOT EXISTS "oauth_refresh_tokens_family_idx"
   ON "oauth_refresh_tokens" ("family_id");
+
+-- 0348: the space a POD-WIDE entity was filed for (mirrors
+-- 0348_entities_home_workspace.sql). Set only on a pod-wide row (CHECK); the
+-- read floor shares the row with that space's members.
+ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "home_workspace_id" uuid;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'entities_home_workspace_id_fkey') THEN
+    ALTER TABLE "entities" ADD CONSTRAINT "entities_home_workspace_id_fkey"
+      FOREIGN KEY ("home_workspace_id") REFERENCES "workspaces"("id") ON DELETE SET NULL;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'entities_home_workspace_pod_wide_check') THEN
+    ALTER TABLE "entities" ADD CONSTRAINT "entities_home_workspace_pod_wide_check"
+      CHECK ("home_workspace_id" IS NULL OR "workspace_id" IS NULL);
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS "entities_home_workspace_idx"
+  ON "entities" ("home_workspace_id")
+  WHERE "workspace_id" IS NULL AND "home_workspace_id" IS NOT NULL;

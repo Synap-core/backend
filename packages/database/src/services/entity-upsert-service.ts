@@ -104,6 +104,11 @@ export interface EntityUpsertInput {
    * the profile and may still persist with `workspace_id = null`.
    */
   workspaceId: string | null;
+  /**
+   * The space a pod-wide row this upsert CREATES was filed for (0348) — the
+   * placement door's `homeWorkspaceId`. A matched/updated row keeps its own.
+   */
+  homeWorkspaceId?: string | null;
   userId: string;
   /**
    * REQUIRED — who/what authored a row this upsert CREATES. Threaded straight
@@ -391,6 +396,7 @@ export class EntityUpsertService {
         title: input.title,
         properties: input.properties,
         workspaceId: input.workspaceId,
+        homeWorkspaceId: input.homeWorkspaceId,
         userId: input.userId,
         // Imports stay permissive for their existing kinds, but Knowledge has
         // one canonical form and must enter through the normalizer/validator.

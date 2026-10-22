@@ -117,6 +117,8 @@ export interface MaterializeEntityInput {
   systemData?: Record<string, unknown>;
   /** null = pod-wide. The router/worker resolves the effective scope. */
   workspaceId?: string | null;
+  /** The space a pod-wide row was filed for (0348) — see `CreateEntityInput`. */
+  homeWorkspaceId?: string | null;
   userId: string;
   /** Store properties as-is (trusted seed data) — skips schema enforcement. */
   skipValidation?: boolean;
@@ -262,6 +264,7 @@ export async function materializeEntity(
       properties: input.properties,
       systemData: input.systemData,
       workspaceId: input.workspaceId,
+      homeWorkspaceId: input.homeWorkspaceId,
       userId: input.userId,
       skipValidation: input.skipValidation,
       facetEmitContext: input.facetEmitContext,

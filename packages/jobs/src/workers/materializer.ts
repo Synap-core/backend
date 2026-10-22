@@ -80,6 +80,7 @@ import { emitSideEffects } from "@synap/events";
 import { isRelationDependencyType } from "@synap-core/types/connections";
 import {
   resolveMaterializedEntityWorkspaceId,
+  resolveMaterializedEntityHomeWorkspaceId,
   resolveMaterializedFacetWorkspaceId,
   resolveMaterializedRelationWorkspaceId,
 } from "./materialize-placement.js";
@@ -396,6 +397,11 @@ async function materializeEntity(
       data,
       workspaceId
     );
+    // …and the space a pod-wide row was filed for (0348), persisted beside it.
+    const entityHomeWorkspaceId = resolveMaterializedEntityHomeWorkspaceId(
+      data,
+      entityWorkspaceId
+    );
     const profileSlug = data.profileSlug as string;
     const rawContent = (data.content as string | undefined) || undefined;
     const baseProperties =
@@ -449,6 +455,7 @@ async function materializeEntity(
         // fresh uuid and both break — orphan-on-revert + duplicate-on-retry.
         id: subjectId,
         workspaceId: entityWorkspaceId ?? undefined,
+        homeWorkspaceId: entityHomeWorkspaceId,
         userId,
         title: (data.title as string) || undefined,
         preview:

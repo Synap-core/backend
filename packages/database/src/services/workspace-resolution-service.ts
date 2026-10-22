@@ -327,7 +327,7 @@ export async function resolveImportEntityPlacement(
     /** The import/feed's workspace — a CONTEXT signal (D1), not a hard pin. */
     sourceWorkspaceId: string | null;
   }
-): Promise<string | null> {
+): Promise<EntityCreatePlacement> {
   const entityScope = await new ProfileResolutionService(db).getEntityScope(
     input.profileSlug,
     input.sourceWorkspaceId
@@ -338,7 +338,15 @@ export async function resolveImportEntityPlacement(
     entityScope,
     ambientWorkspaceId: input.sourceWorkspaceId,
   });
-  return placement.workspaceId;
+  return {
+    workspaceId: placement.workspaceId,
+    // The source workspace the importer was asked about is the space a
+    // pod-wide person/company was SEEN in — its members may read it.
+    homeWorkspaceId: resolveEntityHomeWorkspaceId({
+      workspaceId: placement.workspaceId,
+      ambientWorkspaceId: input.sourceWorkspaceId,
+    }),
+  };
 }
 
 /**
@@ -380,18 +388,82 @@ export function acceptDeterministicGraphWorkspace(
  *      create stamped it with the header, capture left it pod-wide);
  *   3. otherwise a deterministic ontology/context/relational hit, else the
  *      door's answer (ambient for a workspace-scope kind).
+ * A pod-wide answer also carries the space it was filed FOR (0348,
+ * `resolveEntityHomeWorkspaceId`).
  */
 export function acceptEntityCreatePlacement(input: {
   entityScope: string | null | undefined;
   explicitPin: boolean;
   placement: Pick<WorkspacePlacement, "workspaceId" | "rung" | "candidates">;
+  /** The workspace the write came from (pin ?? ctx) — the home candidate. */
+  ambientWorkspaceId: string | null | undefined;
+  /** `global: true` — a deliberate pod-wide write, filed for no space. */
+  global?: boolean;
+}): EntityCreatePlacement {
+  const workspaceId = input.explicitPin
+    ? input.placement.workspaceId
+    : normalizeEntityScope(input.entityScope) === "pod"
+      ? null
+      : (acceptDeterministicGraphWorkspace(input.placement) ??
+        input.placement.workspaceId);
+  return {
+    workspaceId,
+    homeWorkspaceId: resolveEntityHomeWorkspaceId({
+      workspaceId,
+      ambientWorkspaceId: input.ambientWorkspaceId,
+      global: input.global,
+    }),
+  };
+}
+
+/**
+ * Where a create door lands ONE entity: the row's lens, and — only when that
+ * lens is pod-wide — the space it was filed FOR (`entities.home_workspace_id`,
+ * 0348). Returned together so a door cannot store one and forget the other.
+ */
+export interface EntityCreatePlacement {
+  workspaceId: string | null;
+  homeWorkspaceId: string | null;
+}
+
+/**
+ * THE home rule (founder decision 2026-10-22, pod issue 2a743336): a pod-scope
+ * kind lands pod-wide even when written from a space (D1 / FX-B1 / D14 — "pin ≠
+ * exclusive"), which left it readable by its OWNER only. The space the write
+ * came from is recorded as its HOME so that space's members may read it (the
+ * read floor's home-space branch, `accessScopeWhere`). The row stays pod-wide.
+ *
+ *   - a row that lands IN a workspace has no home (that workspace's floor
+ *     already shares it; the column's CHECK refuses one);
+ *   - `global: true` is a deliberate pod-wide write, filed for no space;
+ *   - otherwise the home is the ambient workspace (explicit pin ?? ctx), or
+ *     none when the write carried no workspace.
+ */
+export function resolveEntityHomeWorkspaceId(input: {
+  workspaceId: string | null;
+  ambientWorkspaceId: string | null | undefined;
+  global?: boolean;
 }): string | null {
-  if (input.explicitPin) return input.placement.workspaceId;
-  if (normalizeEntityScope(input.entityScope) === "pod") return null;
-  return (
-    acceptDeterministicGraphWorkspace(input.placement) ??
-    input.placement.workspaceId
-  );
+  if (input.workspaceId !== null) return null;
+  if (input.global) return null;
+  return input.ambientWorkspaceId ?? null;
+}
+
+/**
+ * Entity-create read-back of the persisted HOME (I3, the twin of
+ * `resolveMaterializedEntityWorkspaceId`): the create door stores
+ * `resolvedHomeWorkspaceId` beside `resolvedWorkspaceId`, so a proposal-gated
+ * write is shared with the same space an auto-approved one would be. A
+ * proposal created before 0348 carries no key → no home (owner-only, as it was
+ * when it was proposed). Never set on a workspace row.
+ */
+export function resolveMaterializedEntityHomeWorkspaceId(
+  data: Record<string, unknown>,
+  entityWorkspaceId: string | null
+): string | null {
+  if (entityWorkspaceId !== null) return null;
+  const home = data.resolvedHomeWorkspaceId;
+  return typeof home === "string" && home.length > 0 ? home : null;
 }
 
 /**
