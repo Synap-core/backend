@@ -10660,8 +10660,11 @@ export interface PostChannelMessageResult {
 	/**
 	 * An agent's `question` naming a `slotLabel`: what filing it ON the slot did
 	 * (`fileRoomQuestionOnSlot`) — `blocked` when the slot now carries the
-	 * question as its ask; otherwise why not (`unknown_label`, `already_done`,
-	 * `no_session`, `not_found`, `failed`). Absent for every other post.
+	 * question as its ask; otherwise why not (`already_done`, `not_found`,
+	 * `failed`). A slot the session does not declare, or a room with no
+	 * session, is REFUSED before posting (`checkRoomQuestionSlot`), so
+	 * `unknown_label` / `no_session` only reach here on a race. Absent for
+	 * every other post.
 	 */
 	slot?: {
 		status: string;
@@ -18920,10 +18923,12 @@ export type SignalKind =
 /** One deliverable an agent handed to the human and nobody has closed. */
  | "owed-slot"
 /**
- * One undecided agent DRAFT that asks the person something — "<agent>
- * started <work> · asks you N things". Its asks are not listed one by one
- * (`excludeDrafts`) until the draft is accepted; answering any of them
- * accepts it (`accept-on-engagement.ts`). Proposals under a draft stay out.
+ * One undecided agent DRAFT that owes the person something — "<agent>
+ * started <work>", the draft itself to accept or reject (PROPOSED). Since
+ * the founder decision of 2026-10-22 its ASKS are Needs-you `owed-slot` rows
+ * of their own (`listNeedsYouOwed`), so this row carries no ask count;
+ * answering any of them still accepts the draft (`accept-on-engagement.ts`).
+ * Proposals under a draft stay out of Needs you.
  */
  | "draft-asks"
 /**
@@ -36252,6 +36257,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				name: string;
 				params?: Record<string, unknown>[] | undefined;
+				proposedPlaybookId?: string | undefined;
 				reasoning?: string | undefined;
 				requiredIntents?: string[] | undefined;
 				schedule?: unknown;
@@ -36395,31 +36401,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				message: string;
-				playbook: {
-					channelSpec: unknown;
-					createdAt: Date;
-					createdBy: string;
-					criteria: unknown;
-					description: string | null;
-					executor: PlaybookExecutorRef;
-					expectedOutputs: unknown;
-					flowAutomationId: string | null;
-					goalTemplate: string;
-					id: string;
-					inputStrategy: unknown;
-					metadata: unknown;
-					name: string;
-					params: unknown;
-					requiredIntents: unknown;
-					schedule: unknown;
-					scope: "project" | "session" | null;
-					stages: unknown;
-					status: "active" | "archived" | "draft" | "paused";
-					subjectProfile: unknown;
-					updatedAt: Date;
-					version: number;
-					workspaceId: string | null;
-				};
+				playbook: Playbook;
 				proposalId: string | null;
 				status: "created";
 			} | {
