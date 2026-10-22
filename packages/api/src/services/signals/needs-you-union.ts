@@ -288,8 +288,22 @@ export interface Signal {
    * container (a pod-level notification) — never a guessed one.
    */
   source?: SignalSource;
+  /**
+   * WHO asked — the ONE agent that filed it, as a door to the agent's page
+   * ("from Claude Code"). `proposal-cluster` only, and only when EVERY member
+   * came from that agent (`ProposalCluster.agent`); several agents, or a
+   * member a person filed, sends none rather than a guessed one.
+   */
+  by?: { kind: "agent"; id: string; label: string };
   /** `live-session` only: the liveness facts the "working now" rule read. */
   live?: SessionActivityLive;
+  /**
+   * `live-session` only: the session's deliverables, counted
+   * (`tallyDeliverables` over `expected_outputs`) — the Happening row's
+   * progress rail. Absent when it declares none, or the column is unreadable:
+   * not measurable, never "0 of N".
+   */
+  progress?: { done: number; total: number };
   /**
    * `rule-run` only: the rule's runs inside the window — how many, how many
    * failed, whether one is in flight. The row's door is the rule.
@@ -401,7 +415,9 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "class",
   "lifetimeHours",
   "source",
+  "by",
   "live",
+  "progress",
   "ruleRun",
   "landed",
   "activity",
@@ -652,6 +668,15 @@ export function signalFromCluster(
     class: cluster.class,
     lifetimeHours: cluster.lifetimeHours,
     proposalIds: cluster.sampleProposalIds,
+    ...(cluster.agent?.label
+      ? {
+          by: {
+            kind: "agent" as const,
+            id: cluster.agent.id,
+            label: cluster.agent.label,
+          },
+        }
+      : {}),
     // A cluster filed ENTIRELY under one session the viewer can read belongs
     // to that session's block, so a needs-you page shows the session ONCE (its card counts the
     // decision beside its owed slots). A cluster spanning sessions, or with a

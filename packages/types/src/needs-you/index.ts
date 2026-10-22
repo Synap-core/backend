@@ -17,7 +17,7 @@
  *   opened. The split is a STABLE partition, so it cannot reorder anything the
  *   server already put in place.
  * - `repeatCount` / `count` — how many identical things one row stands for,
- *   drawn as "×N". KIND-AWARE ({@link repeatOf}): a notification's repeats
+ *   drawn as "and N more like it" ({@link repeatLabel}). KIND-AWARE ({@link repeatOf}): a notification's repeats
  *   are `repeatCount`, a cluster's N proposals are `count`, and nothing else
  *   is a repeat — a draft-asks row's `count` is its number of DISTINCT asks.
  *
@@ -136,7 +136,7 @@ function runsOf<T extends GroupableSignal>(
   return { recent, older };
 }
 
-/** The fields ×N reads. Optional: a row from a pre-W2 pod may lack them. */
+/** The fields `repeatLabel` reads. Optional: a row from a pre-W2 pod may lack them. */
 export interface RepeatableSignal {
   kind?: string | null;
   count?: number | null;
@@ -149,7 +149,7 @@ export interface RepeatableSignal {
  *   - `proposal-cluster` → `count` (N identical-shape proposals);
  *   - `rule-run` → `repeatCount` (one rule, N runs in the window);
  *   - anything else → 1. A `draft-asks` row's `count` is its number of
- *     DISTINCT asks — "asks you 3 things", never "×3" of one thing — and an
+ *     DISTINCT asks — "asks you 3 things", never a repeat of one thing — and an
  *     owed slot or an `access-request` is never a repeat.
  */
 export function repeatOf(signal: RepeatableSignal): number {
@@ -162,10 +162,19 @@ export function repeatOf(signal: RepeatableSignal): number {
   return Number.isFinite(n) && n > 1 ? Math.floor(n) : 1;
 }
 
-/** "×N", or null at 1 — a "×1" on every row says nothing. */
+/**
+ * The repeat in words, or null at 1 (a repeat of one says nothing). The ONE
+ * wording for every surface (web, relay, Governance) — never a local "×N":
+ *   - N identical things → "and N−1 more like it" (the row names one of them;
+ *     validated canvas t02, founder 2026-10-22);
+ *   - a `rule-run` row → "ran N times" (one rule, N runs — not N things).
+ */
 export function repeatLabel(signal: RepeatableSignal): string | null {
   const n = repeatOf(signal);
-  return n > 1 ? `×${n}` : null;
+  if (n <= 1) return null;
+  return signal.kind === "rule-run"
+    ? `ran ${n} times`
+    : `and ${n - 1} more like it`;
 }
 
 // ── One list (founder, 2026-09-28) ─────────────────────────────────────────
