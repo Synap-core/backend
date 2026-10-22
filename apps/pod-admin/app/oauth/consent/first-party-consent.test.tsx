@@ -10,7 +10,11 @@ import { Card } from "@heroui/react";
 
 vi.mock("../../../lib/trpc", () => ({ trpc: {} }));
 
-import { FirstPartyConsent, ReconfirmingNotice } from "./ConsentForm";
+import {
+  FirstPartyConsent,
+  PodCredentialNotice,
+  ReconfirmingNotice,
+} from "./ConsentForm";
 
 const html = (el: ReactElement) => render(<Card>{el}</Card>);
 const base = {
@@ -61,5 +65,17 @@ describe("ReconfirmingNotice", () => {
     expect(out).toContain('role="status"');
     expect(out).toContain("Confirming it&#x27;s you…");
     expect(out).not.toContain("<button");
+  });
+});
+
+describe("PodCredentialNotice", () => {
+  it("asks for the pod password or passkey, names the app, and gives a Cloud-only person a way", () => {
+    const out = html(
+      <PodCredentialNotice name="Synap Desktop" onContinue={() => {}} />
+    );
+    expect(out).toContain("Confirm with your password or passkey");
+    expect(out).toContain("Synap Desktop asks you to confirm it");
+    expect(out).toContain("Make the change from this console");
+    expect(out).toContain('role="status"');
   });
 });

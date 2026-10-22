@@ -122,18 +122,27 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { computeS256Challenge } from "../routers/oauth/protocol.js";
+import { successorRefreshToken } from "../routers/oauth/refresh.js";
 import { oauthApp } from "../routers/oauth/routes.js";
 import {
   decideOAuthAuthorization,
   getOAuthConsentContext,
+  signAuthRequestTime,
   verifyAuthRequestTime,
 } from "../routers/oauth/consent.js";
 import { appSessionMiddleware } from "../middleware/app-session.js";
+import {
+  liveDeviceIds,
+  revokePersonDevice,
+} from "@synap/database/person-devices";
 import { createContext } from "../context.js";
 import { router } from "../trpc.js";
 import { devicesRouter } from "../routers/devices.js";
 import { apiKeysRouter } from "../routers/api-keys.js";
 import { machinesRouter } from "../routers/machines.js";
+import { secretsVaultRouter } from "../routers/secrets-vault.js";
+import { workspacesRouter } from "../routers/workspaces.js";
+import { webhooksRouter } from "../routers/webhooks.js";
 import { inviteProcedures } from "../routers/workspaces/invites.js";
 import { applicationConnectionsRouter } from "../routers/application-connections.js";
 import {
@@ -271,6 +280,9 @@ const appRouter = router({
   devices: devicesRouter,
   apiKeys: apiKeysRouter,
   machines: machinesRouter,
+  secretsVault: secretsVaultRouter,
+  workspaces: workspacesRouter,
+  integrations: webhooksRouter,
 });
 
 function appApi() {
@@ -352,7 +364,17 @@ const revokeRequest = (params: Record<string, string>) =>
 const MIN_MS = 60 * 1000;
 
 /** A Kratos session (as the consent procedure sees it) signed in `ago` ms back. */
-const kratosCtx = (userId: string, agoMs: number) =>
+/**
+ * A console session signed in `agoMs` ago. `methods` = how, most recent
+ * last, each with its own age (default: the pod password, at that time).
+ */
+const kratosCtx = (
+  userId: string,
+  agoMs: number,
+  methods: Array<{ method: string; agoMs: number }> = [
+    { method: "password", agoMs },
+  ]
+) =>
   ({
     authenticated: true,
     userId,
@@ -361,17 +383,31 @@ const kratosCtx = (userId: string, agoMs: number) =>
       identity: { id: userId, traits: { email: `${userId}@x` } },
       active: true,
       authenticated_at: new Date(Date.now() - agoMs).toISOString(),
+      authentication_methods: methods.map((m) => ({
+        method: m.method,
+        completed_at: new Date(Date.now() - m.agoMs).toISOString(),
+      })),
     },
   }) as never;
 
 /**
  * The consent click by `userId` → the code it redirects with. By default the
- * person signed in to the console a minute ago (a FRESH sign-in).
+ * person signed in to the console a minute ago (a FRESH sign-in). A request
+ * for a fresh sign-in (`prompt` / `maxAge`) carries /authorize's signed time:
+ * by default just BEFORE that sign-in (the person signed in for it).
  */
 async function consent(
   userId = PERSON,
-  opts: { signedInAgoMs?: number; prompt?: string; maxAge?: number } = {}
+  opts: {
+    signedInAgoMs?: number;
+    prompt?: string;
+    maxAge?: number;
+    requestedAgoMs?: number;
+    methods?: Array<{ method: string; agoMs: number }>;
+  } = {}
 ): Promise<string> {
+  const signedInAgo = opts.signedInAgoMs ?? MIN_MS;
+  const requestedAgo = opts.requestedAgoMs ?? signedInAgo + 1_000;
   const { redirectTo } = await decideOAuthAuthorization(
     {
       clientId: DESKTOP,
@@ -384,9 +420,12 @@ async function consent(
       approve: true,
       ...(opts.prompt ? { prompt: opts.prompt } : {}),
       ...(opts.maxAge !== undefined ? { maxAge: opts.maxAge } : {}),
+      ...(opts.prompt || opts.maxAge !== undefined
+        ? { authRequest: signAuthRequestTime(Date.now() - requestedAgo) }
+        : {}),
     },
     userId,
-    kratosCtx(userId, opts.signedInAgoMs ?? MIN_MS)
+    kratosCtx(userId, signedInAgo, opts.methods)
   );
   const url = new URL(redirectTo);
   expect(url.searchParams.get("iss")).toBe(ISSUER);
@@ -432,6 +471,7 @@ const device = async (id: string) =>
       expires_at: Date;
       revoked_at: Date | null;
       created_at: Date;
+      auth_time: Date | null;
     }>(`select * from person_devices where id = $1`, [id])
   ).rows[0]!;
 
@@ -590,6 +630,41 @@ describe("(d) refresh rotates; a reused refresh token ends the device", () => {
     expect(r.body.synap_device_id).toBe(s.deviceId);
     expect(r.body.refresh_token).not.toBe(s.refresh);
     expect(await listDevices({ bearer: r.body.access_token })).not.toEqual([]);
+  });
+
+  it("a database error after the claim spends nothing: the same token refreshes after", async () => {
+    const s = await signIn();
+    await q(
+      `alter table person_device_tokens rename to person_device_tokens_away`
+    );
+    let failed: { status: number; body: any };
+    try {
+      failed = await refresh(s.refresh);
+    } finally {
+      await q(
+        `alter table person_device_tokens_away rename to person_device_tokens`
+      );
+    }
+    expect(failed.status).toBe(500);
+    const again = await refresh(s.refresh);
+    expect(again.status).toBe(200);
+    expect((await device(s.deviceId)).revoked_at).toBeNull();
+  });
+
+  it("a successor is random, never derivable from its row id", async () => {
+    const s = await signIn();
+    const next = await refresh(s.refresh);
+    expect(next.status).toBe(200);
+    const [row] = (
+      await q<{ replaced_by: string }>(
+        `select replaced_by from oauth_refresh_tokens where device_id = $1 and replaced_by is not null`,
+        [s.deviceId]
+      )
+    ).rows;
+    expect(row?.replaced_by).toBeTruthy();
+    expect(next.body.refresh_token).not.toBe(
+      successorRefreshToken(row!.replaced_by)
+    );
   });
 
   it("replaying the used token: invalid_grant, the device ends, its live access token stops", async () => {
@@ -833,6 +908,27 @@ describe("(i) a STALE device token cannot create, widen or approve a credential"
     ["apiKeys.getDeviceRequest", { userCode: "ABCD-1234" }, "query"],
     ["machines.revoke", { machineId: "m-1" }, "mutation"],
     ["devices.revoke", { deviceId: randomUUID() }, "mutation"],
+    // Reading a secret's value, and giving someone else lasting access.
+    ["secretsVault.reveal", { id: randomUUID() }, "mutation"],
+    [
+      "workspaces.createInvite",
+      {
+        type: "workspace",
+        workspaceId: randomUUID(),
+        email: "someone@example.com",
+        role: "viewer",
+      },
+      "mutation",
+    ],
+    [
+      "integrations.create",
+      {
+        name: "from a phone",
+        url: "not a url",
+        eventTypes: ["entity.created"],
+      },
+      "mutation",
+    ],
   ];
 
   it.each(DOORS)(
@@ -861,6 +957,18 @@ describe("(i) a STALE device token cannot create, widen or approve a credential"
       expect(res.body.error?.json?.data?.reasonCode).not.toBe(STEP_UP_REQUIRED);
     }
   );
+
+  it("CONTROL — a grant only to the caller is not a step-up: a stale device makes its own space", async () => {
+    const s = await signIn("stale", 6 * MIN_MS);
+    const res = await trpc(
+      { bearer: s.access },
+      "workspaces.create",
+      { name: `From a phone ${randomUUID().slice(0, 8)}` },
+      "mutation"
+    );
+    expect(res.body.error?.json?.data?.reasonCode).not.toBe(STEP_UP_REQUIRED);
+    expect(res.status).toBe(200);
+  });
 });
 
 // ─── (j) step-up ─────────────────────────────────────────────────────────────
@@ -1030,16 +1138,106 @@ describe("(j) step-up: the clock is the device's real sign-in", () => {
     expect(await count()).toBe(before);
   });
 
-  it("prompt=login on an old console sign-in is refused (LOGIN_REQUIRED), before any code", async () => {
+  it("prompt=login on a sign-in from before the request is refused (LOGIN_REQUIRED), before any code", async () => {
     await expect(
-      consent(PERSON, { prompt: "login", signedInAgoMs: 30 * MIN_MS })
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 30 * MIN_MS,
+        requestedAgoMs: 0,
+      })
     ).rejects.toMatchObject({ reasonCode: "LOGIN_REQUIRED" });
     await expect(
-      consent(PERSON, { maxAge: 0, signedInAgoMs: 30 * MIN_MS })
+      consent(PERSON, {
+        maxAge: 0,
+        signedInAgoMs: 30 * MIN_MS,
+        requestedAgoMs: 0,
+      })
+    ).rejects.toMatchObject({ reasonCode: "LOGIN_REQUIRED" });
+    // A Synap app's prompt=login is OIDC too: a sign-in one minute old but
+    // made BEFORE the request does not satisfy it.
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: MIN_MS,
+        requestedAgoMs: 0,
+      })
     ).rejects.toMatchObject({ reasonCode: "LOGIN_REQUIRED" });
     // max_age wider than the sign-in's age is satisfied.
     await expect(
       consent(PERSON, { maxAge: 3600, signedInAgoMs: 30 * MIN_MS })
+    ).resolves.toBeTruthy();
+  });
+
+  it("a Synap Cloud sign-in never sets the clock: a device minted from one needs a step-up at once", async () => {
+    const code = await consent(PERSON, {
+      methods: [{ method: "oidc", agoMs: MIN_MS }],
+    });
+    const { body } = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: DESKTOP,
+      redirect_uri: LOOPBACK,
+      code_verifier: VERIFIER,
+      resource: ISSUER,
+      synap_device_label: "Cloud laptop",
+    });
+    expect((await device(body.synap_device_id)).auth_time).toBeNull();
+    expect(stepUpRequired(await decideDevice(body.access_token))).toBe(true);
+  });
+
+  it('"Confirm it\'s you" answered with Synap Cloud only is refused (POD_CREDENTIAL_REQUIRED), before any code', async () => {
+    const codesBefore = await q<{ n: number }>(
+      `select count(*)::int as n from oauth_authorization_codes`
+    );
+    // Password 3 h ago, then a (possibly silent) Cloud re-login just now.
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 10_000,
+        methods: [
+          { method: "password", agoMs: 180 * MIN_MS },
+          { method: "oidc", agoMs: 10_000 },
+        ],
+      })
+    ).rejects.toMatchObject({ reasonCode: "POD_CREDENTIAL_REQUIRED" });
+    const codesAfter = await q<{ n: number }>(
+      `select count(*)::int as n from oauth_authorization_codes`
+    );
+    expect(codesAfter.rows[0]!.n).toBe(codesBefore.rows[0]!.n);
+    // The screen knows before the click.
+    const shown = await getOAuthConsentContext(
+      {
+        clientId: DESKTOP,
+        redirectUri: LOOPBACK,
+        responseType: "code",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        resource: ISSUER,
+        prompt: "login",
+        authRequest: signAuthRequestTime(Date.now() - 11_000),
+      },
+      PERSON,
+      (
+        kratosCtx(PERSON, 10_000, [
+          { method: "password", agoMs: 180 * MIN_MS },
+          { method: "oidc", agoMs: 10_000 },
+        ]) as unknown as { session: never }
+      ).session
+    );
+    expect(shown.podCredentialRequired).toBe(true);
+    expect(shown.reauthenticate).toBe(false);
+  });
+
+  it("CONTROL — the same step-up answered with the pod password after the request passes", async () => {
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 10_000,
+        methods: [
+          { method: "oidc", agoMs: 180 * MIN_MS },
+          { method: "password", agoMs: 10_000 },
+        ],
+      })
     ).resolves.toBeTruthy();
   });
 
@@ -1126,7 +1324,10 @@ describe("(h) an agent cannot sign in as a device", () => {
           },
         } as never
       )
-    ).rejects.toThrow(/console/);
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/console/),
+    });
   });
 
   it("a non-first-party client id never gets a device", async () => {
@@ -1226,6 +1427,41 @@ describe("(l) every way a person loses access to the pod ends their devices", ()
       401
     );
     expect((await refresh(dan.refresh)).body.error).toBe("invalid_grant");
+  });
+
+  it("a socket's device is re-checked (liveDeviceIds): live stays, signed out and lost access do not, and lost access ends it", async () => {
+    const JUN = "person-jun";
+    const KAI = "person-kai";
+    await q(
+      `insert into users (id, email, name, user_type) values
+         ($1, 'jun@x', 'Jun', 'human'), ($2, 'kai@x', 'Kai', 'human')`,
+      [JUN, KAI]
+    );
+    for (const u of [JUN, KAI]) {
+      await q(
+        `insert into workspace_members (id, workspace_id, user_id, role)
+           values (gen_random_uuid(), $1, $2, 'editor')`,
+        [WS_TEAM, u]
+      );
+    }
+    const live = await signedIn(JUN, "live");
+    const out = await signedIn(JUN, "signed out");
+    const lost = await signedIn(KAI);
+    await revokePersonDevice(h.db, {
+      deviceId: out.deviceId,
+      reason: "signed out",
+    });
+    await q(`delete from workspace_members where user_id = $1`, [KAI]);
+
+    const result = await liveDeviceIds(h.db, [
+      live.deviceId,
+      out.deviceId,
+      lost.deviceId,
+      randomUUID(),
+    ]);
+    expect([...result]).toEqual([live.deviceId]);
+    expect((await device(lost.deviceId)).revoked_at).not.toBeNull();
+    expect((await device(live.deviceId)).revoked_at).toBeNull();
   });
 
   it("CONTROL — removed from one space but still in another: the device keeps working", async () => {
