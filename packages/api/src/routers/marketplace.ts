@@ -65,7 +65,12 @@ import {
   qualifiedPackageId,
   type MarketplaceTrust,
 } from "@synap-core/types/marketplace-source";
-import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  podAdminProcedure,
+  credentialProcedure,
+} from "../trpc.js";
 import { queryCatalogCache } from "../services/capabilities/catalog-cache-query.js";
 import {
   lookupCatalogEntry,
@@ -1060,7 +1065,7 @@ export const marketplaceRouter = router({
    * service key — is refused: installing is a person's decision or a
    * reviewable proposal, never a silent key action.
    */
-  install: protectedProcedure
+  install: credentialProcedure
     .input(
       targetSchema.extend({
         workspaceId: z.string().uuid().optional(),

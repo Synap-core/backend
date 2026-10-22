@@ -1071,6 +1071,45 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "last_used_at",
     addedBy: "0339_oauth_refresh_tokens.sql",
   },
+  // Signed-in devices of the Synap apps (0340). Every refresh redeem reads
+  // `device_id`, the first-party /token writes both tables, and every app
+  // request carrying a device token reads them: without them the refresh
+  // grant (pod apps included) and every device-token request 500.
+  {
+    table: "oauth_refresh_tokens",
+    column: "device_id",
+    addedBy: "0340_person_devices.sql",
+  },
+  {
+    table: "person_devices",
+    column: "expires_at",
+    addedBy: "0340_person_devices.sql",
+  },
+  {
+    table: "person_devices",
+    column: "revoked_at",
+    addedBy: "0340_person_devices.sql",
+  },
+  {
+    table: "person_device_tokens",
+    column: "token_hash",
+    addedBy: "0340_person_devices.sql",
+  },
+  {
+    table: "person_devices",
+    column: "auth_time",
+    addedBy: "0340_person_devices.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "auth_time",
+    addedBy: "0340_person_devices.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "step_up",
+    addedBy: "0340_person_devices.sql",
+  },
   // Computers (0320, MACHINE-IDENTITY-PLAN): the host link every governed
   // agent write reads (host step), and the class principal column both rule
   // stores select. Missing means every agent write would 42703.

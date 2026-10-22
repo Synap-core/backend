@@ -50,7 +50,7 @@ export interface ImportSessionResolution {
 }
 
 /** The acting agent carried on an untyped `trpcCtx` — a non-empty string or nothing. */
-function agentUserIdOf(trpcCtx: unknown): string | null {
+export function agentUserIdOf(trpcCtx: unknown): string | null {
   const value = (trpcCtx as { agentUserId?: unknown } | undefined)?.agentUserId;
   return typeof value === "string" && value.length > 0 ? value : null;
 }

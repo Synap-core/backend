@@ -340,7 +340,7 @@ export type ProposalBasic = z.infer<typeof ProposalBasicSchema>;
  * point of the slice, not an incidental refactor.
  *
  * The summary is only ever LIFTED from data the server already holds
- * (`data.quality.summary` / `data.summary`). Absent ⇒ the field is omitted; we
+ * (`data.summary`, else `data.quality.summary`). Absent ⇒ the field is omitted; we
  * never emit an empty string and never fabricate a sentence.
  */
 /** Upper bound on `materializedIds` entries on a BASIC row — a list stays bounded. */
@@ -392,7 +392,14 @@ function materializedIdsOf(
 export function toProposalBasic(row: Record<string, unknown>): ProposalBasic {
   const data = (row.data ?? {}) as Record<string, unknown>;
   const quality = (data.quality ?? {}) as Record<string, unknown>;
-  const raw = quality.summary ?? data.summary;
+  // The proposal's own summary names WHAT it does; an import's quality line
+  // ("Quality 70/100 — …") is a review note and only stands in when there is
+  // no summary. Preferring it titled a 2,827-entity import by its score on
+  // every MCP/REST list (live 0728053b, 2026-10-22).
+  const raw =
+    typeof data.summary === "string" && data.summary.length > 0
+      ? data.summary
+      : quality.summary;
   const summary =
     typeof raw === "string" && raw.length > 0
       ? raw.slice(0, PROPOSAL_SUMMARY_MAX)

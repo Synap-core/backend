@@ -121,14 +121,15 @@ export const ASK_COPY = {
   provideUploadKept: (space: string): string =>
     `The file was saved in ${space}, but it wasn't handed over.`,
   /**
-   * The needs-you row for an undecided agent draft that asks the person
-   * something (`draft-asks` signal). Composed ONCE, server-side, into the
+   * The PROPOSED row for an undecided agent draft (`draft-asks` signal): the
+   * draft itself, to accept or reject. Composed ONCE, server-side, into the
    * signal's `title`; `agent` is null when the pod cannot name who started it.
+   * It names no ask count: since the founder decision of 2026-10-22 a draft's
+   * asks are Needs-you rows of their own, and counting them here too would
+   * show one number in two places.
    */
-  draftAsks: (agent: string | null, work: string, asks: number): string =>
-    `${agent?.trim() || "An agent"} started ${work} · asks you ${
-      asks === 1 ? "1 thing" : `${asks} things`
-    }`,
+  draftStarted: (agent: string | null, work: string): string =>
+    `${agent?.trim() || "An agent"} started ${work}`,
 } as const;
 
 // ─── Where the slot stands ──────────────────────────────────────────────────

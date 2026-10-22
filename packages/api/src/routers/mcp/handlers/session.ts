@@ -20,6 +20,7 @@ import { attachTriage } from "../../../services/focus-sessions/triage.js";
 import type { TerminalSessionStatus } from "../../../services/focus-sessions/session-statuses.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
+import { refuseUndeclaredArgs } from "../undeclared-args.js";
 import {
   waitForSessionAnswers,
   waitForSessionChanges,
@@ -904,6 +905,13 @@ export const sessionHandlers: McpHandlerMap = {
           "stages is not supported by synap_update_session — NOTHING WAS CHANGED. A session's own phase snapshot (focus_sessions.stages) is written through the tRPC focusSessions.update door, which the browser and relay use. Seeding from a playbook happens automatically at instantiate.",
       });
     }
+    // Every OTHER key the schema does not declare is refused the same way, with
+    // the valid inputs listed — never accepted and dropped. Live 2026-10-21/22:
+    // `reopenOutput` and `addOutputs` both returned "updated" and changed
+    // nothing. The valid set is the tool's own declared schema (undeclared-args.ts).
+    const undeclared = await refuseUndeclaredArgs("synap_update_session", args);
+    if (undeclared) return undeclared;
+
     const blockerEdits = parseBlockerEdits(args);
     if ("error" in blockerEdits) return ok(blockerEdits);
     const editsBlockers =
@@ -985,7 +993,6 @@ export const sessionHandlers: McpHandlerMap = {
         });
       }
     }
-
     const {
       updateFocusSession,
       expectedOutputWireSchema,

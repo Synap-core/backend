@@ -30,7 +30,10 @@ import {
 } from "@synap-core/types/vocabulary";
 import { formatDate } from "../../../../lib/format";
 
-type Geometry<K extends ChartGeometry["kind"]> = Extract<ChartGeometry, { kind: K }>;
+type Geometry<K extends ChartGeometry["kind"]> = Extract<
+  ChartGeometry,
+  { kind: K }
+>;
 
 function Bars({ title, g }: { title: string; g: Geometry<"bars"> }) {
   return (
@@ -107,7 +110,14 @@ function Line({ title, g }: { title: string; g: Geometry<"line"> }) {
             strokeLinejoin="round"
           />
           {g.points.map((p, i) => (
-            <circle key={i} data-mark="" cx={p.cx} cy={p.cy} r={3} className="fill-primary" />
+            <circle
+              key={i}
+              data-mark=""
+              cx={p.cx}
+              cy={p.cy}
+              r={3}
+              className="fill-primary"
+            />
           ))}
         </svg>
       </div>
@@ -234,11 +244,10 @@ export function ChartSnapshot({
   return (
     <figure
       data-chart={model.shape}
-      className="flex flex-col gap-2 rounded-lg px-3 py-2.5 ring-1 ring-inset ring-foreground/10">
+      className="flex flex-col gap-2 rounded-lg px-3 py-2.5 ring-1 ring-inset ring-foreground/10"
+    >
       <figcaption className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-        <span className="text-[13px] font-medium text-foreground">
-          {title}
-        </span>
+        <span className="text-[13px] font-medium text-foreground">{title}</span>
         <span className="text-[12px] text-foreground/60">
           {model.capturedAt
             ? `Snapshot · ${formatDate(model.capturedAt)}`

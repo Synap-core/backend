@@ -18,6 +18,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { shouldRejectJunkTitle } from "@synap/database";
 import {
   parseCsvTable,
   csvRowsToTypedImportItems,
@@ -269,5 +270,69 @@ describe("a contacts table → people wearing the contact role, employers, works
     expect(people[1]!.properties?.position).toBe("Product Lead");
     expect(companies).toHaveLength(2);
     expect(relations).toHaveLength(3);
+  });
+});
+
+describe("a placeholder employer names no company", () => {
+  // Shapes measured on a real export (2026-10-22): "Freelance" ×18,
+  // "Indépendant" ×17, "Stealth Startup" ×8, "Self-employed" ×6, "-", "…".
+  // Names invented. "Freelance Collective Ltd" and "Stealth Labs" are real
+  // companies that merely CONTAIN a placeholder word.
+  const CSV = [
+    "First Name,Last Name,URL,Email Address,Company,Position",
+    "Ines,Varga,https://example.com/in/ines,,Freelance,Designer",
+    "Jules,Morel,https://example.com/in/jules,,FREELANCE,Writer",
+    "Kai,Orsini,https://example.com/in/kai,,Indépendant,Consultant",
+    "Lea,Brun,https://example.com/in/lea,,Stealth Startup,Founder",
+    "Milo,Sand,https://example.com/in/milo,,Self-employed,Coach",
+    "Nora,Kel,https://example.com/in/nora,,-,Advisor",
+    "Otto,Rye,https://example.com/in/otto,,…,Engineer",
+    "Pia,Lund,https://example.com/in/pia,,Freelance Collective Ltd,Partner",
+    "Quin,Hart,https://example.com/in/quin,,Stealth Labs,CTO",
+    "Rafe,Dune,https://example.com/in/rafe,,Stealth,Builder",
+    // A placeholder NAME: kept (its email identifies someone), never titled "-".
+    "-,,,anon@example.org,Saltmarsh & Co,Analyst",
+    // A placeholder name and nothing that identifies anyone: skipped.
+    "…,,,,Freelance,",
+  ].join("\n");
+
+  it("no company and no works_at for a placeholder; real names still link", () => {
+    const { people, companies, relations } = importOps(CSV, "contact");
+    expect(people).toHaveLength(11);
+    expect(companies.map((c) => c.title).sort()).toEqual([
+      "Freelance Collective Ltd",
+      "Saltmarsh & Co",
+      "Stealth Labs",
+    ]);
+    expect(relations).toHaveLength(3);
+    expect(people.map((p) => p.title)).not.toContain("-");
+    expect(people[people.length - 1]!.title).toBe("Untitled");
+  });
+
+  it("the apply-time create guard refuses NO op this import proposes", () => {
+    // `shouldRejectJunkTitle` is what `entities.create` refuses with on
+    // approval; one refused op refused the whole live proposal 0728053b.
+    const { entities } = importOps(CSV, "contact");
+    expect(entities.length).toBeGreaterThan(10); // the scan sees the graph
+    const refused = entities.filter((e) =>
+      shouldRejectJunkTitle(e.profileSlug, e.title)
+    );
+    expect(refused.map((e) => `${e.profileSlug}:${e.title}`)).toEqual([]);
+    // Self-check: the guard still refuses the shapes this file feeds it.
+    expect(shouldRejectJunkTitle("company", "…")).toBe(true);
+    expect(shouldRejectJunkTitle("person", "-")).toBe(true);
+  });
+
+  it("the placeholder text is kept on the person", () => {
+    const { headers, rows } = parseCsvTable(CSV);
+    const plan = refineCsvTablePlan({
+      plan: plannerPlan("contact"),
+      headers,
+      rows,
+      catalog: CATALOG,
+    });
+    const items = csvRowsToTypedImportItems(rows, plan);
+    expect(items[0]!.links).toEqual([]);
+    expect(items[0]!.body).toContain("Company: Freelance");
   });
 });

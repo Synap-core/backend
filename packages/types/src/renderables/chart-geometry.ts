@@ -246,7 +246,9 @@ function line(
   const xText = (x: string | number) =>
     typeof x === "number" ? formatChartNumber(x) : formatDate(x);
 
-  const raw = data.map((p) => (typeof p.x === "number" ? p.x : Date.parse(p.x)));
+  const raw = data.map((p) =>
+    typeof p.x === "number" ? p.x : Date.parse(p.x)
+  );
   const xs = raw.every(Number.isFinite) ? raw : data.map((_, i) => i);
   const xLo = Math.min(...xs);
   const xSpan = Math.max(...xs) - xLo;
@@ -260,14 +262,17 @@ function line(
     y: p.y,
   }));
   const path = points
-    .map((p, i) => `${i === 0 ? "M" : "L"}${p.cx.toFixed(2)},${p.cy.toFixed(2)}`)
+    .map(
+      (p, i) => `${i === 0 ? "M" : "L"}${p.cx.toFixed(2)},${p.cy.toFixed(2)}`
+    )
     .join(" ");
   const baseline = yAt(0);
   const first = points[0];
   const last = points[points.length - 1];
   const xTicks: ChartTick[] = [];
   if (first) xTicks.push({ text: xText(first.x), align: "start" });
-  if (last && points.length > 1) xTicks.push({ text: xText(last.x), align: "end" });
+  if (last && points.length > 1)
+    xTicks.push({ text: xText(last.x), align: "end" });
   return {
     kind: "line",
     area,
@@ -287,7 +292,10 @@ function line(
       bottom: formatChartNumber(scale.lo),
     },
     xTicks,
-    values: data.map((p) => ({ name: xText(p.x), value: formatChartNumber(p.y) })),
+    values: data.map((p) => ({
+      name: xText(p.x),
+      value: formatChartNumber(p.y),
+    })),
   };
 }
 
@@ -325,7 +333,11 @@ export function chartGeometry(
       return {
         kind: "table",
         shape: "points",
-        rows: model.data.map((d) => [cell(d.label ?? "—"), cell(d.x), cell(d.y)]),
+        rows: model.data.map((d) => [
+          cell(d.label ?? "—"),
+          cell(d.x),
+          cell(d.y),
+        ]),
       };
     case "flow": {
       const name = new Map(model.data.nodes.map((n) => [n.id, n.label]));

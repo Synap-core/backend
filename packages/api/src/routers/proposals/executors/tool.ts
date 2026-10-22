@@ -26,6 +26,8 @@ export function registerToolExecutors(): void {
   // verbs on the next capability reconcile. See wave report.
   registerProposalExecutor({
     key: "tool/create",
+    // Approving may write a secret grant: never from a stale device session.
+    widensCredential: true,
     async execute({ proposal, userId, input, deps }) {
       const innerData = ((proposal.data as Record<string, unknown>)?.data ??
         {}) as Record<string, unknown>;
