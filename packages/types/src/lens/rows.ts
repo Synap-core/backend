@@ -465,7 +465,9 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
             label: row.session.title ?? "",
           }
         : null,
-      ...(s.by?.label ? { by: { kind: "agent" as const, id: s.by.id, label: s.by.label } } : {}),
+      ...(s.by?.label
+        ? { by: { kind: "agent" as const, id: s.by.id, label: s.by.label } }
+        : {}),
       occurredAt: iso(s.occurredAt),
       door: s.target ?? null,
       count: 1,
@@ -544,7 +546,10 @@ export function lensRowProgress(
   const p = row.progress;
   if (!p || p.total <= 0) return null;
   const done = Math.max(0, Math.min(p.done, p.total));
-  const rail = resolveUnitState({ running: true, progress: { done, total: p.total } }).rail;
+  const rail = resolveUnitState({
+    running: true,
+    progress: { done, total: p.total },
+  }).rail;
   return { pct: rail.pct ?? 0, label: `${done} of ${p.total} done` };
 }
 

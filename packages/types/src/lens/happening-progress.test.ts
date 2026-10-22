@@ -33,7 +33,12 @@ describe("Happening row progress", () => {
   });
 
   it("a session LIST row's 0–100 state progress is never read as deliverables", () => {
-    const row = lensRowOfSession({ id: "s1", title: "Outreach", status: "active", progress: 40 });
+    const row = lensRowOfSession({
+      id: "s1",
+      title: "Outreach",
+      status: "active",
+      progress: 40,
+    });
     expect(row.state.progress).toEqual({ done: 40, total: 100 });
     expect(lensRowProgress(row)).toBeNull();
   });

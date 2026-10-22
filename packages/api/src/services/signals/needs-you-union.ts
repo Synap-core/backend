@@ -669,7 +669,13 @@ export function signalFromCluster(
     lifetimeHours: cluster.lifetimeHours,
     proposalIds: cluster.sampleProposalIds,
     ...(cluster.agent?.label
-      ? { by: { kind: "agent" as const, id: cluster.agent.id, label: cluster.agent.label } }
+      ? {
+          by: {
+            kind: "agent" as const,
+            id: cluster.agent.id,
+            label: cluster.agent.label,
+          },
+        }
       : {}),
     // A cluster filed ENTIRELY under one session the viewer can read belongs
     // to that session's block, so a needs-you page shows the session ONCE (its card counts the
