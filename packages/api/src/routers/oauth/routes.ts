@@ -43,6 +43,7 @@
  * understands.
  */
 
+import { cleanLoginHint } from "@synap-core/types/sign-in";
 import { randomUUID } from "crypto";
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
@@ -88,6 +89,7 @@ import {
   AuthorizeUserError,
   resolveClientAndRedirect,
   resourceFor,
+  signAuthRequestTime,
   validateAuthorizeRequest,
 } from "./consent.js";
 import {
@@ -372,7 +374,7 @@ oauthApp.get("/authorize", async (c) => {
   // User Registration) asks for the make-an-account path. A STEP-UP asks for
   // a fresh sign-in: `prompt=login` and/or `max_age` — the consent decision
   // ENFORCES them server-side (consent.ts `reauthenticationRequired`).
-  const loginHint = loginHintFrom(q.login_hint);
+  const loginHint = cleanLoginHint(q.login_hint);
   if (loginHint) target.searchParams.set("login_hint", loginHint);
   if (q.prompt === "create" || q.prompt === "login") {
     target.searchParams.set("prompt", q.prompt);
@@ -380,24 +382,17 @@ oauthApp.get("/authorize", async (c) => {
   if (q.max_age !== undefined && /^[0-9]{1,9}$/.test(q.max_age)) {
     target.searchParams.set("max_age", q.max_age);
   }
+  // When this request was made, signed: `prompt=login` /
+  // `max_age=0` needs a sign-in made after it (consent.ts).
+  if (
+    target.searchParams.has("max_age") ||
+    target.searchParams.get("prompt") === "login"
+  ) {
+    target.searchParams.set("auth_req", signAuthRequestTime());
+  }
 
   return c.redirect(target.toString(), 302);
 });
-
-/**
- * `login_hint` as the consent screen may show it: trimmed, at most an email's
- * length (RFC 5321: 254), no control characters. Anything else is dropped —
- * a hint the screen cannot use is no hint.
- */
-function loginHintFrom(raw: string | undefined): string | null {
-  const hint = raw?.trim();
-  if (!hint || hint.length > 254) return null;
-  for (let i = 0; i < hint.length; i++) {
-    const code = hint.charCodeAt(i);
-    if (code < 0x20 || code === 0x7f) return null;
-  }
-  return hint;
-}
 
 // ─── /token ──────────────────────────────────────────────────────────────────
 
@@ -775,13 +770,24 @@ oauthApp.post("/token", async (c) => {
 
     // A Synap app (desktop, Relay) signing the person in on this device: a
     // device with a 1 h access token and a rotating refresh token — the one
-    // door, which states the threat model (services/person-device-token.ts).
+    // door (services/person-device-token.ts).
     if (client.clientKind === "first_party") {
       const { signInPersonDevice, stepUpPersonDevice } =
         await import("../../services/person-device-token.js");
       // A STEP-UP of a device the app already holds: the code's fresh sign-in
       // moves THAT device's clock; the device's refresh token proves which
-      // device (and its family). Never a second device.
+      // device (and its family). Never a second device. The code says which
+      // it was asked as (`isDeviceReconfirm`: the screen said "Confirm it's
+      // you"), and the two must agree: a step-up code never makes a device,
+      // a sign-in code never re-confirms one.
+      if (claimed.stepUp !== Boolean(params.synap_device_refresh_token)) {
+        throw new OAuthError(
+          "invalid_grant",
+          claimed.stepUp
+            ? "This code re-confirms a device: send its refresh token as synap_device_refresh_token"
+            : "This code signs a new device in; a re-confirmation asks with prompt=login"
+        );
+      }
       if (false as boolean) {
         const steppedUp = await stepUpPersonDevice({
           refreshToken: params.synap_device_refresh_token,
@@ -809,7 +815,9 @@ oauthApp.post("/token", async (c) => {
         );
         throw new OAuthError(
           "invalid_grant",
-          "Only a person can sign in to a Synap app"
+          signedIn.reason === "no_pod_access"
+            ? "This account has no access to this pod"
+            : "Only a person can sign in to a Synap app"
         );
       }
       logger.info(

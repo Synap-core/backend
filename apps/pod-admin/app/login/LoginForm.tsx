@@ -48,23 +48,37 @@ import {
   type SelfServiceFlowKind,
   type SignInState,
 } from "../../lib/sign-in-state";
+import {
+  signInAgainReason,
+  withLoginHint,
+  withoutFederatedSignIn,
+} from "../../lib/login-hint";
 
 interface LoginFormProps {
   returnTo: string;
   initialFlowId: string | null;
   /** Re-authenticate an existing session (Kratos `refresh=true`). */
   refresh?: boolean;
+  /** Only a credential at this pod confirms: no Synap Cloud button. */
+  podCredentialOnly?: boolean;
   /** What the server's own session check saw on this request. */
   serverSession: "active" | "none" | "unavailable";
+  /** Who is signing in, as the app hinted (`lib/login-hint.ts`). */
+  loginHint?: string | null;
 }
 
 export function LoginForm({
   returnTo,
   initialFlowId,
   refresh = false,
+  podCredentialOnly = false,
   serverSession,
+  loginHint = null,
 }: LoginFormProps) {
   const router = useRouter();
+  const reason = podCredentialOnly
+    ? `${signInAgainReason(returnTo)} Use your password or passkey.`
+    : signInAgainReason(returnTo);
   const [flow, setFlow] = useState<KratosFlow | null>(null);
   const [flowKind, setFlowKind] = useState<SelfServiceFlowKind>("login");
   // Kratos replaces the account-linking banner with the password error after a
@@ -136,7 +150,9 @@ export function LoginForm({
         if (cancelled) return;
         setFlow(loaded);
         setFlowKind(kind);
-        setValues(extractInitialValues(loaded));
+        setValues(
+          withLoginHint(extractInitialValues(loaded), loaded, loginHint)
+        );
         const errors = collectErrorMessages(loaded, isStateMessage);
         if (errors.length) setError(errors.join(" "));
       } catch (err) {
@@ -152,7 +168,7 @@ export function LoginForm({
     return () => {
       cancelled = true;
     };
-  }, [initialFlowId, onExistingSession, refresh, router]);
+  }, [initialFlowId, loginHint, onExistingSession, refresh, router]);
 
   const submitFlow = useCallback(
     async (submittedValues: Record<string, string>) => {
@@ -276,7 +292,7 @@ export function LoginForm({
           </span>
 
           {loading ? (
-            <SignInHeader refresh={refresh} />
+            <SignInHeader refresh={refresh} reason={reason} />
           ) : cookieScope ? (
             <RefusalPanel
               icon={<RefreshCw className="h-5 w-5" strokeWidth={2} />}
@@ -321,7 +337,7 @@ export function LoginForm({
               onRetry={backToSignIn}
             />
           ) : (
-            <SignInHeader refresh={refresh} />
+            <SignInHeader refresh={refresh} reason={reason} />
           )}
 
           {loading ? (
@@ -330,7 +346,7 @@ export function LoginForm({
             </div>
           ) : stateView ? null : flow ? (
             <FlowFields
-              flow={flow}
+              flow={podCredentialOnly ? withoutFederatedSignIn(flow) : flow}
               values={values}
               setValues={setValues}
               onSubmit={onSubmit}
@@ -393,7 +409,13 @@ interface FlowFieldsProps {
   linking: { email: string | null } | null;
 }
 
-function SignInHeader({ refresh = false }: { refresh?: boolean }) {
+function SignInHeader({
+  refresh = false,
+  reason,
+}: {
+  refresh?: boolean;
+  reason: string;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
       <h1 className="font-heading text-[20px] font-medium tracking-tight text-foreground">
@@ -401,7 +423,7 @@ function SignInHeader({ refresh = false }: { refresh?: boolean }) {
       </h1>
       <p className="text-[13.5px] leading-relaxed text-foreground/65">
         {refresh
-          ? "Sign in again to change your security settings."
+          ? reason
           : "Your session is scoped to this Pod and this device."}
       </p>
     </div>

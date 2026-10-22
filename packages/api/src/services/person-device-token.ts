@@ -1,132 +1,19 @@
 /**
- * A Synap app signed in as a PERSON — the ONE mint door for a device's tokens
- * (join plan target A, founder decision `decision:join-target-a-2026-10-21`).
- *
- * Synap Desktop and Synap Relay are FIRST-PARTY clients of the pod's own OAuth
- * server (`FIRST_PARTY_CLIENTS`, routers/oauth/config.ts): the app opens the
- * system browser on `/authorize`, the person signs in on the pod's own page
- * and confirms, and the code comes back to a loopback port (desktop) or the
- * app's own redirect (Relay). `/token` then calls THIS door, which makes a
- * DEVICE (`person_devices`, the refresh family the person sees and revokes)
- * and hands back:
- *   - an ACCESS token, 1 h (`synap_pd_…`, sha256-only in
- *     `person_device_tokens`), accepted ONLY on the app API — `/trpc` and the
- *     app routes (`appSessionMiddleware`) and realtime (`verifyHandshakeUser`)
- *     — where it resolves AS THE PERSON, exactly as a Kratos session does;
- *   - a REFRESH token, single-use and rotating (refresh.ts), 30 days idle,
- *     never past the device's 180-day absolute cap.
- * Same shape as its sibling `app-person-token.ts` ("Sign in with Synap" for a
- * registered app), but unbounded by a grant: it IS the person in their app.
- *
- * THREAT MODEL — each threat, its defence, and the test that holds it
- * (`person-device-token.pglite.test.ts` unless named). Two paths reach this
- * door; each is modelled step by step, then the token itself.
- *
- * ── The MINT path (an authorization code becomes a device) ──
- *  M1 Code replay, a wrong PKCE verifier, a foreign redirect. The AS rules
- *     every client obeys before this door runs: the code is CLAIMED atomically
- *     (one UPDATE … RETURNING; a second exchange gets nothing), bound to the
- *     client it was issued to, its redirect re-checked through the first-party
- *     matcher (`matchFirstPartyRedirect`: loopback IP literals any port, exact
- *     path; `localhost` refused), the S256 verifier checked, and a `resource`
- *     must be this pod. → routes.test, first-party-redirect.test, "(a)".
- *  M2 Another client getting a device. Only a code whose client resolves as
- *     `first_party` from the CODE registry (`resolveFirstPartyClient`, never a
- *     DCR row) reaches `signInPersonDevice`, which re-checks the id; only THIS
- *     file inserts into `person_device_tokens` (tripwire
- *     `person-device-mint-one-door`). → "a non-first-party client id never
- *     gets a device".
- *  M3 An agent, a key, or a device token authoring the consent. The code
- *     exists only after `decideOAuthAuthorization`: a human (`userType`),
- *     with no acting agent and no key grant, in a KRATOS session — a device
- *     session is refused there and at the procedure (`credentialProcedure`),
- *     so a 1 h token can never mint itself a 180-day device. This door
- *     re-checks `userType === "human"` at mint. → "(h)", "a device token
- *     cannot authorize a connection".
- *  M4 Loopback impersonation (RFC 8252 §8.6): any program on the computer can
- *     listen on 127.0.0.1. PKCE binds the code to the program that STARTED
- *     the flow, so a listener that did not start it holds a useless code; the
- *     consent is always a click naming the app and "this computer"; the
- *     devices list shows every sign-in with its label and user agent.
- *     Accepted residual: a malicious program that starts its own flow and
- *     gets the person to click "Sign in".
- *  M5 The step-up clock (`person_devices.auth_time`) set from the wrong time.
- *     It is the consenting KRATOS session's `authenticated_at`, read
- *     server-side at the decision and carried by the code — never mint time,
- *     never anything the app sends. A device minted from an hours-old
- *     browser session is stale at once. → "a device minted from an old
- *     sign-in needs a step-up at once".
- *  M6 A step-up minting a second device, or moving another device's clock.
- *     `stepUpPersonDevice` needs the code (a fresh sign-in, `prompt=login` /
- *     `max_age` enforced at the decision) AND that device's refresh token,
- *     checked — before anything is spent — to belong to this client and to
- *     the person who just signed in; it moves only that device's clock, only
- *     forward, and creates nothing. → "a step-up re-confirms the SAME
- *     device".
- *
- * ── The REFRESH path (rotation, refresh.ts) ──
- *  R1 Refresh-token theft. Every token is SINGLE-USE: the redeem claims it
- *     with one UPDATE that flips `last_used_at` from NULL. When the thief and
- *     the app both redeem, the second presentation is a REUSE (RFC 9700
- *     §4.14.2): the whole family is revoked AND the device ends
- *     (`revokePersonDevice`), access tokens included — once the successor
- *     was used, or past the retry grace (R7). → "a reused refresh token ends
- *     the device", "a retry after 30 s ends the device".
- *  R2 Two honest refreshes at once (two windows). The UPDATE lets exactly one
- *     win; the loser gets `invalid_grant` WITHOUT a family revoke (a retrying
- *     client is not a thief). The apps refresh single-flight (plan §6.3).
- *  R3 A refresh racing a sign-out. The device row is the authority: the
- *     redeem refuses a revoked or capped device, every successor is issued
- *     under the family lock and refused if the family died meanwhile, and
- *     every access token is read THROUGH the device — so a successor issued
- *     a moment after the revoke still opens nothing.
- *  R4 Living forever on refreshes. Each successor lives 30 days idle but
- *     never past the device's absolute cap (180 days from sign-in), and no
- *     access token is minted past it either. → "the absolute cap is
- *     enforced", "near the cap, nothing is minted past it".
- *  R5 A refresh token presented by another client. Bound to its `client_id`:
- *     refused, and NOT spent. → "(g)".
- *  R6 The person stops being a person (agent conversion, removal). The
- *     refresh re-checks `userType === "human"` and ends the device; the
- *     lookup joins `users` with `user_type = 'human'` on every request.
- *  R7 A LOST refresh response (a phone dropping off the network after the
- *     token was spent). Within 30 s of its use, while its successor was NEVER
- *     redeemed, the same token is a RETRY (`deviceRetryGrace`, refresh.ts):
- *     the unused successor is retired, a fresh pair is minted, the family and
- *     the device live on. Residual: a thief replaying within those 30 s,
- *     before the app's next refresh, gets a pair — and the app's own next
- *     refresh, presenting the retired successor, then ends the device (R1),
- *     so the theft is loud within the hour. → "a lost response, then a retry
- *     within 30 s, keeps the device".
- *  R8 A refresh renewing the step-up clock. It never does: `auth_time` lives
- *     on the device row and only a step-up moves it. → "a refreshed token
- *     stays stale".
- *
- * ── The TOKEN on the wire ──
- *  T1 Access-token theft. One hour of the person on the app API only: `/mcp`
- *     and Hub REST resolve `api_keys` rows, which this is not ("(c)"); no door
- *     counts it as a recent sign-in (no `authenticated_at`), so account
- *     recovery and credential changes stay behind a real Kratos session; and
- *     NO credential door takes it unless the person REALLY signed in for this
- *     device within the last 5 minutes (a step-up: `prompt=login` at
- *     /authorize, then this device's refresh token at /token) — a door that
- *     creates, rotates, widens or approves a key, grant, secret grant,
- *     computer, app, connection or governance rule answers FORBIDDEN
- *     `STEP_UP_REQUIRED` otherwise (`credentialProcedure` /
- *     `requireFreshAuthentication`, an executor's `widensCredential`, the
- *     privileged approval floor, the secret-grant writers; tripwire
- *     `credential-doors-refuse-device-session`, "(i)", "(j)"). So a stolen
- *     token, five minutes after the person's last real sign-in, cannot hand
- *     an agent a key or a secret. Revoking the device stops it at once.
- *  T2 A bearer path into the HUMAN context accepting other credentials.
- *     `appSessionMiddleware` accepts a bearer ONLY with the device prefix and
- *     resolves it ONLY through `resolvePersonDeviceSession`; any other bearer
- *     (a PAT, an agent key, a Kratos token sent as a bearer) is ignored, so
- *     the request falls to the Kratos check. → tripwire `app-session-bearer`
- *     (middleware/app-session.test.ts).
- *  T3 A device nobody watches. The devices list (`devices.list`) shows each
- *     sign-in; signing one out is a console act (`devices.revoke`), the app's
- *     own sign-out is RFC 7009 `/revoke` with either token.
+ * The ONE mint door for a Synap app signed in as a PERSON on a device. Synap
+ * Desktop and Synap Relay are first-party clients of the pod's own OAuth
+ * server (`FIRST_PARTY_CLIENTS`, routers/oauth/config.ts): the person signs in
+ * and confirms in their browser, and `/token` calls this door, which makes a
+ * DEVICE (`person_devices`: one refresh family, the row the person sees and
+ * signs out) and returns a 1 h access token (`synap_pd_…`, stored only as
+ * sha256, accepted only on the app API, where it IS the person) and a
+ * single-use, rotating refresh token (refresh.ts; 30 days idle, never past
+ * the device's 180-day cap). Because the token is the person, its whole life
+ * is decided here and in refresh.ts — who may get one (a human with access to
+ * the pod, from a consent in a browser session), how it refreshes, and every
+ * way it ends (sign-out, a reused refresh token, lost access, the cap, more
+ * than 20 devices) — and nothing else may insert one (tripwire
+ * `person-device-mint-one-door`). Each threat with the test that holds it:
+ * JOIN-PLAN, device threat model.
  */
 
 import { randomBytes } from "crypto";
@@ -140,14 +27,18 @@ import {
   lt,
   lte,
   or,
+  drizzleSql,
   users,
 } from "@synap/database";
 import { personDeviceTokens, personDevices } from "@synap/database/schema";
 import {
+  DEVICE_ENDED_NO_ACCESS,
   PERSON_DEVICE_TOKEN_PREFIX,
   hashPersonDeviceToken,
+  personHoldsPodAccess,
   revokePersonDevice,
 } from "@synap/database/person-devices";
+import { kratosAdmin } from "@synap/auth";
 
 import {
   isFirstPartyClientId,
@@ -155,17 +46,23 @@ import {
 } from "../routers/oauth/config.js";
 import {
   findRefreshToken,
-  redeemRefreshToken,
-  rotateRefreshToken,
+  refreshDeviceToken,
   startRefreshFamily,
 } from "../routers/oauth/refresh.js";
 import { OAuthError } from "../routers/oauth/protocol.js";
 
-/** An access token lives 1 h (founder decision 5, the F5 precedent). */
+/** An access token lives 1 h: short enough that a stolen one expires soon. */
 export const PERSON_DEVICE_ACCESS_TTL_MS = 60 * 60 * 1000;
 
 /** No device outlives 180 days from its sign-in, however often it refreshes. */
 export const PERSON_DEVICE_ABSOLUTE_CAP_MS = 180 * 24 * 60 * 60 * 1000;
+
+/**
+ * At most this many live devices per person: a new sign-in beyond it ends
+ * the least recently used one, so a leaked or scripted
+ * sign-in loop cannot pile up devices nobody watches.
+ */
+export const PERSON_DEVICE_MAX_ACTIVE = 20;
 
 /** The longest device label kept (app-supplied text). */
 const LABEL_MAX = 80;
@@ -180,7 +77,10 @@ export interface PersonDeviceTokens {
 
 export type SignInPersonDeviceResult =
   | ({ ok: true } & PersonDeviceTokens)
-  | { ok: false; reason: "not_a_person" | "not_first_party" };
+  | {
+      ok: false;
+      reason: "not_a_person" | "not_first_party" | "no_pod_access";
+    };
 
 function clip(value: string | null | undefined, max: number): string | null {
   const trimmed = value?.trim();
@@ -195,6 +95,31 @@ async function isHuman(userId: string): Promise<boolean> {
   return person?.userType === "human";
 }
 
+const INVALID_REFRESH = "Invalid, expired, or revoked refresh token";
+
+/**
+ * Is the person's sign-in identity (Kratos; a pod user's id IS its identity
+ * id) still live? Asked at every refresh: an identity disabled or
+ * deleted in Kratos — by an operator, outside any pod door — ends the device
+ * at its next refresh, within the access token's hour. A Kratos that cannot
+ * answer THROWS `server_error`: the refresh is refused unspent, never read as
+ * "gone" (which would sign the person out on an outage).
+ */
+async function identityIsLive(userId: string): Promise<boolean> {
+  try {
+    const { data } = await kratosAdmin.getIdentity({ id: userId });
+    return (data.state ?? "active") === "active";
+  } catch (error) {
+    const status = (error as { response?: { status?: number } }).response
+      ?.status;
+    if (status === 404) return false;
+    throw new OAuthError(
+      "server_error",
+      "Could not confirm the account right now; try again"
+    );
+  }
+}
+
 /**
  * Mint one access token for a device: the ONLY insert into
  * `person_device_tokens`. Never past the device's cap. The device's expired
@@ -203,13 +128,14 @@ async function isHuman(userId: string): Promise<boolean> {
  */
 async function mintAccessToken(
   deviceId: string,
-  capAt: Date
+  capAt: Date,
+  ex: Pick<typeof db, "insert" | "delete"> = db
 ): Promise<{ accessToken: string; accessExpiresAt: Date }> {
   const accessToken = `${PERSON_DEVICE_TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
   const accessExpiresAt = new Date(
     Math.min(Date.now() + PERSON_DEVICE_ACCESS_TTL_MS, capAt.getTime())
   );
-  await db
+  await ex
     .delete(personDeviceTokens)
     .where(
       and(
@@ -217,7 +143,7 @@ async function mintAccessToken(
         lte(personDeviceTokens.expiresAt, new Date())
       )
     );
-  await db.insert(personDeviceTokens).values({
+  await ex.insert(personDeviceTokens).values({
     tokenHash: hashPersonDeviceToken(accessToken),
     deviceId,
     expiresAt: accessExpiresAt,
@@ -249,6 +175,9 @@ export async function signInPersonDevice(args: {
   if (!(await isHuman(args.personUserId))) {
     return { ok: false, reason: "not_a_person" };
   }
+  if (!(await personHoldsPodAccess(db, args.personUserId))) {
+    return { ok: false, reason: "no_pod_access" };
+  }
   const capAt = new Date(Date.now() + PERSON_DEVICE_ABSOLUTE_CAP_MS);
   const [device] = await db
     .insert(personDevices)
@@ -262,6 +191,7 @@ export async function signInPersonDevice(args: {
     })
     .returning({ id: personDevices.id });
   if (!device) throw new Error("person device: the insert returned no row");
+  await endDevicesBeyondCap(args.personUserId);
 
   const access = await mintAccessToken(device.id, capAt);
   const refreshToken = await startRefreshFamily(
@@ -277,39 +207,84 @@ export async function signInPersonDevice(args: {
 }
 
 /**
- * `grant_type=refresh_token` for a first-party client: redeem (single-use; a
- * reuse ends the device, refresh.ts), re-check the person, mint a new access
- * token, then issue the successor. Every refusal is `invalid_grant`.
+ * Keep the person's live devices at `PERSON_DEVICE_MAX_ACTIVE`: the least
+ * recently used (last refresh, else sign-in) end. The device just signed in
+ * is the most recent, so it is never the one ended.
+ */
+async function endDevicesBeyondCap(userId: string): Promise<void> {
+  const live = await db
+    .select({ id: personDevices.id })
+    .from(personDevices)
+    .where(
+      and(
+        eq(personDevices.userId, userId),
+        isNull(personDevices.revokedAt),
+        gt(personDevices.expiresAt, new Date())
+      )
+    )
+    .orderBy(
+      desc(
+        drizzleSql`coalesce(${personDevices.lastUsedAt}, ${personDevices.createdAt})`
+      ),
+      desc(personDevices.createdAt)
+    );
+  for (const { id } of live.slice(PERSON_DEVICE_MAX_ACTIVE)) {
+    await revokePersonDevice(db, {
+      deviceId: id,
+      reason: `Signed out: more than ${PERSON_DEVICE_MAX_ACTIVE} devices, the least recently used ends`,
+    });
+  }
+}
+
+/**
+ * `grant_type=refresh_token` for a first-party client: confirm the person's
+ * identity is live (before anything is spent), redeem (single-use; a reuse
+ * ends the device, refresh.ts), re-check the person and their access to the
+ * pod, mint a new access token, then issue the successor. Every refusal is
+ * `invalid_grant`; a person who lost their identity, their humanity or their
+ * access also has the device ENDED.
  */
 export async function refreshPersonDevice(args: {
   refreshToken: string;
   clientId: string;
 }): Promise<PersonDeviceTokens> {
-  const redeemed = await redeemRefreshToken(args.refreshToken, args.clientId);
-  if (!redeemed.deviceId || !redeemed.capAt) {
-    // A pod app's token presented by a first-party client id: never ours.
-    throw new OAuthError(
-      "invalid_grant",
-      "Invalid, expired, or revoked refresh token"
-    );
-  }
-  if (!(await isHuman(redeemed.userId))) {
+  const held = await findRefreshToken(args.refreshToken);
+  if (
+    held?.deviceId &&
+    held.clientId === args.clientId &&
+    !(await identityIsLive(held.userId))
+  ) {
     await revokePersonDevice(db, {
-      deviceId: redeemed.deviceId,
-      reason: "The signed-in account is no longer a person",
+      deviceId: held.deviceId,
+      reason: "The account was disabled or deleted",
     });
-    throw new OAuthError(
-      "invalid_grant",
-      "Invalid, expired, or revoked refresh token"
-    );
+    throw new OAuthError("invalid_grant", INVALID_REFRESH);
   }
-  const access = await mintAccessToken(redeemed.deviceId, redeemed.capAt);
-  const refreshToken = await rotateRefreshToken(redeemed);
-  await db
-    .update(personDevices)
-    .set({ lastUsedAt: new Date(), authTime: new Date() })
-    .where(eq(personDevices.id, redeemed.deviceId));
-  return { deviceId: redeemed.deviceId, ...access, refreshToken };
+  if (held?.deviceId && held.clientId === args.clientId) {
+    const ended = !(await isHuman(held.userId))
+      ? "The signed-in account is no longer a person"
+      : !(await personHoldsPodAccess(db, held.userId))
+        ? DEVICE_ENDED_NO_ACCESS
+        : null;
+    if (ended) {
+      await revokePersonDevice(db, { deviceId: held.deviceId, reason: ended });
+      throw new OAuthError("invalid_grant", INVALID_REFRESH);
+    }
+  }
+  // Claim, mint and rotate in ONE transaction (refresh.ts).
+  const { redeemed, minted, refreshToken } = await refreshDeviceToken(
+    args.refreshToken,
+    args.clientId,
+    async (tx, r) => {
+      const access = await mintAccessToken(r.deviceId!, r.capAt!, tx);
+      await tx
+        .update(personDevices)
+        .set({ lastUsedAt: new Date(), authTime: new Date() })
+        .where(eq(personDevices.id, r.deviceId!));
+      return access;
+    }
+  );
+  return { deviceId: redeemed.deviceId!, ...minted, refreshToken };
 }
 
 /**

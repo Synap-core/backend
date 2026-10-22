@@ -1,5 +1,5 @@
 /**
- * The first-party redirect matcher (join plan target A, RFC 8252 §7) against
+ * The first-party redirect matcher (RFC 8252 §7) against
  * the REAL registry: each row names the wrong rule it rules out.
  *
  *   localhost            — a matcher that compares hostnames loosely (§8.3)

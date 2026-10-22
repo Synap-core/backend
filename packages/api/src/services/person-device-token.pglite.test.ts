@@ -1,5 +1,5 @@
 /**
- * A Synap app signs a person in on a device (join plan target A) — end to end
+ * A Synap app signs a person in on a device — end to end
  * on PGlite through the REAL doors:
  *
  *   `GET /authorize` (oauthApp) → `decideOAuthAuthorization` (the consent
@@ -10,24 +10,30 @@
  *   revoke and the devices list; and the same token refused by the REAL agent
  *   doors (`mcpHttpApp`, `hubAuthMiddleware`).
  *
- * Rows that rule out a wrong rule (threats: services/person-device-token.ts):
+ * Rows that rule out a wrong rule:
  *  (a) /authorize: any loopback port is accepted, `localhost` is refused AND
  *      not redirected, a resource naming /mcp is refused; the sign-in hints
  *      reach the consent screen;
  *  (b) the token is the PERSON on /trpc (the device marked `current`), while
  *      the same person in a browser session sees it as another device;
- *  (c) T1: /mcp (a write) and Hub REST answer 401 to it;
- *  (d) T2: a reused refresh token ends the DEVICE, its live access token too;
- *  (e) T3: the absolute cap is enforced — past it nothing refreshes or
+ *  (c) /mcp (a write) and Hub REST answer 401 to it;
+ *  (d) a reused refresh token ends the DEVICE, its live access token too;
+ *  (e) the absolute cap is enforced — past it nothing refreshes or
  *      authenticates, and near it nothing is minted past it;
  *  (f) signing out (devices.revoke, /revoke with either token) stops the
  *      device at once; another person's device is "not found";
  *  (g) a refresh token is bound to its client;
- *  (h) T5: an agent cannot sign in as a device.
+ *  (h) an agent cannot sign in as a device;
+ *  (l) every way a person loses access ends their devices — removed
+ *      from the pod (the account kept, or deleted with its identity),
+ *      unlinked from an issuer, the Kratos identity disabled or deleted —
+ *      and a person with no access gets none; removal from one space while
+ *      another remains does not.
  *
  * Mocked: audit log (a recorder on the postgres-js client), the guest check
  * (a constant answer), the Kratos half of the session gate (a stand-in that
- * knows one browser cookie).
+ * knows one browser cookie), the Kratos admin API (a map of identity
+ * states), the event log, and the integration connections removal.
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -49,9 +55,61 @@ vi.mock("@synap/database", async (importOriginal) => {
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
   h.db = drizzle(client, { schema });
-  return { ...actual, db: h.db, getDb: async () => h.db };
+  const unlink = actual.unlinkFederatedIdentity as (
+    input: unknown,
+    conn?: unknown
+  ) => Promise<unknown>;
+  return {
+    ...actual,
+    db: h.db,
+    getDb: async () => h.db,
+    // The event log (realtime fan-out) is not under test; membership
+    // removals append to it.
+    eventRepository: { append: async (event: unknown) => event },
+    // Its default executor is the package's own pool, not this database.
+    unlinkFederatedIdentity: (input: unknown, conn?: unknown) =>
+      unlink(input, conn ?? h.db),
+  };
 });
 vi.mock("../utils/audit-log.js", () => ({ auditLog: async () => null }));
+// Kratos admin: each identity answers active unless a test says otherwise
+// ("gone" = 404, "down" = Kratos unreachable).
+const kratos = vi.hoisted(() => ({
+  identity: new Map<string, "active" | "inactive" | "gone" | "down">(),
+  deleted: [] as string[],
+}));
+vi.mock("@synap/auth", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const fail = (status: number) =>
+    Object.assign(new Error(`kratos ${status}`), { response: { status } });
+  return {
+    ...actual,
+    kratosAdmin: {
+      getIdentity: async ({ id }: { id: string }) => {
+        const state = kratos.identity.get(id) ?? "active";
+        if (state === "gone") throw fail(404);
+        if (state === "down") throw fail(503);
+        return { data: { id, state } };
+      },
+      deleteIdentity: async ({ id }: { id: string }) => {
+        kratos.deleted.push(id);
+        return {};
+      },
+      deleteIdentityCredentials: async () => ({}),
+    },
+  };
+});
+// The person's integration connections (outside the pod database): removing
+// them can fail, which keeps the account (removeFromPod).
+const connections = vi.hoisted(() => ({ failFor: new Set<string>() }));
+vi.mock("./capabilities/capability-nango-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  disconnectAllUserConnections: async (userId: string) => {
+    if (connections.failFor.has(userId)) {
+      throw new Error("the connections service did not answer");
+    }
+  },
+}));
 vi.mock("../access/guest-containment.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   isGuestPrincipal: async () => false,
@@ -64,14 +122,29 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { computeS256Challenge } from "../routers/oauth/protocol.js";
+import { successorRefreshToken } from "../routers/oauth/refresh.js";
 import { oauthApp } from "../routers/oauth/routes.js";
-import { decideOAuthAuthorization } from "../routers/oauth/consent.js";
+import {
+  decideOAuthAuthorization,
+  getOAuthConsentContext,
+  signAuthRequestTime,
+  verifyAuthRequestTime,
+} from "../routers/oauth/consent.js";
 import { appSessionMiddleware } from "../middleware/app-session.js";
+import {
+  liveDeviceIds,
+  revokePersonDevice,
+} from "@synap/database/person-devices";
 import { createContext } from "../context.js";
 import { router } from "../trpc.js";
 import { devicesRouter } from "../routers/devices.js";
 import { apiKeysRouter } from "../routers/api-keys.js";
 import { machinesRouter } from "../routers/machines.js";
+import { secretsVaultRouter } from "../routers/secrets-vault.js";
+import { workspacesRouter } from "../routers/workspaces.js";
+import { webhooksRouter } from "../routers/webhooks.js";
+import { inviteProcedures } from "../routers/workspaces/invites.js";
+import { applicationConnectionsRouter } from "../routers/application-connections.js";
 import {
   STEP_UP_REQUIRED,
   runAsDeviceSession,
@@ -85,6 +158,7 @@ import type {
 } from "../routers/hub-protocol/rest/_shared.js";
 import {
   PERSON_DEVICE_ABSOLUTE_CAP_MS,
+  PERSON_DEVICE_MAX_ACTIVE,
   signInPersonDevice,
 } from "./person-device-token.js";
 
@@ -95,6 +169,19 @@ const LOOPBACK = "http://127.0.0.1:53111/oauth/callback";
 const PERSON = "person-ada";
 const OTHER = "person-bob";
 const AGENT = "agent-claude";
+// Losing access to the pod, "(l)": the pod owner removes or unlinks people.
+const OWNER = "person-owner";
+const CAROL = "person-carol";
+const DAN = "person-dan";
+const EVE = "person-eve";
+const FRAN = "person-fran";
+const GIL = "person-gil";
+const NOBODY = "person-nobody";
+const IVY = "person-ivy";
+const HAL = "person-hal";
+const WS_ADMIN = randomUUID();
+const WS_TEAM = randomUUID();
+const WS_BOBS = randomUUID();
 const BROWSER_COOKIE = "ory_kratos_session=ada-browser";
 
 const VERIFIER = "d".repeat(64);
@@ -140,6 +227,35 @@ beforeAll(async () => {
        ($3, 'claude@agents', 'Claude', 'agent')`,
     [PERSON, OTHER, AGENT]
   );
+  await q(
+    `insert into users (id, email, name, user_type) values
+       ($1, 'owner@x', 'Owner', 'human'), ($2, 'carol@x', 'Carol', 'human'),
+       ($3, 'dan@x', 'Dan', 'human'), ($4, 'eve@x', 'Eve', 'human'),
+       ($5, 'fran@x', 'Fran', 'human'), ($6, 'gil@x', 'Gil', 'human'),
+       ($7, 'nobody@x', 'Nobody', 'human'), ($8, 'ivy@x', 'Ivy', 'human'),
+       ($9, 'hal@x', 'Hal', 'human')`,
+    [OWNER, CAROL, DAN, EVE, FRAN, GIL, NOBODY, IVY, HAL]
+  );
+  // Every person here holds access (a space); NOBODY holds none.
+  await q(
+    `insert into workspaces (id, name, owner_id, system_slug) values
+       ($1, 'Pod admin', $4, 'pod-admin'), ($2, 'Team', $4, null),
+       ($3, 'Bob''s space', $5, null)`,
+    [WS_ADMIN, WS_TEAM, WS_BOBS, OWNER, OTHER]
+  );
+  const member = (ws: string, user: string, role: string) =>
+    q(
+      `insert into workspace_members (id, workspace_id, user_id, role)
+         values (gen_random_uuid(), $1, $2, $3)`,
+      [ws, user, role]
+    );
+  await member(WS_ADMIN, OWNER, "owner");
+  await member(WS_TEAM, OWNER, "owner");
+  for (const person of [PERSON, OTHER, CAROL, DAN, EVE, FRAN, GIL, IVY, HAL]) {
+    await member(WS_TEAM, person, "editor");
+  }
+  await member(WS_BOBS, OTHER, "owner");
+  await member(WS_BOBS, EVE, "editor");
 }, 120_000);
 
 // ─── The doors ───────────────────────────────────────────────────────────────
@@ -164,6 +280,9 @@ const appRouter = router({
   devices: devicesRouter,
   apiKeys: apiKeysRouter,
   machines: machinesRouter,
+  secretsVault: secretsVaultRouter,
+  workspaces: workspacesRouter,
+  integrations: webhooksRouter,
 });
 
 function appApi() {
@@ -245,7 +364,17 @@ const revokeRequest = (params: Record<string, string>) =>
 const MIN_MS = 60 * 1000;
 
 /** A Kratos session (as the consent procedure sees it) signed in `ago` ms back. */
-const kratosCtx = (userId: string, agoMs: number) =>
+/**
+ * A console session signed in `agoMs` ago. `methods` = how, most recent
+ * last, each with its own age (default: the pod password, at that time).
+ */
+const kratosCtx = (
+  userId: string,
+  agoMs: number,
+  methods: Array<{ method: string; agoMs: number }> = [
+    { method: "password", agoMs },
+  ]
+) =>
   ({
     authenticated: true,
     userId,
@@ -254,17 +383,31 @@ const kratosCtx = (userId: string, agoMs: number) =>
       identity: { id: userId, traits: { email: `${userId}@x` } },
       active: true,
       authenticated_at: new Date(Date.now() - agoMs).toISOString(),
+      authentication_methods: methods.map((m) => ({
+        method: m.method,
+        completed_at: new Date(Date.now() - m.agoMs).toISOString(),
+      })),
     },
   }) as never;
 
 /**
  * The consent click by `userId` → the code it redirects with. By default the
- * person signed in to the console a minute ago (a FRESH sign-in).
+ * person signed in to the console a minute ago (a FRESH sign-in). A request
+ * for a fresh sign-in (`prompt` / `maxAge`) carries /authorize's signed time:
+ * by default just BEFORE that sign-in (the person signed in for it).
  */
 async function consent(
   userId = PERSON,
-  opts: { signedInAgoMs?: number; prompt?: string; maxAge?: number } = {}
+  opts: {
+    signedInAgoMs?: number;
+    prompt?: string;
+    maxAge?: number;
+    requestedAgoMs?: number;
+    methods?: Array<{ method: string; agoMs: number }>;
+  } = {}
 ): Promise<string> {
+  const signedInAgo = opts.signedInAgoMs ?? MIN_MS;
+  const requestedAgo = opts.requestedAgoMs ?? signedInAgo + 1_000;
   const { redirectTo } = await decideOAuthAuthorization(
     {
       clientId: DESKTOP,
@@ -277,9 +420,12 @@ async function consent(
       approve: true,
       ...(opts.prompt ? { prompt: opts.prompt } : {}),
       ...(opts.maxAge !== undefined ? { maxAge: opts.maxAge } : {}),
+      ...(opts.prompt || opts.maxAge !== undefined
+        ? { authRequest: signAuthRequestTime(Date.now() - requestedAgo) }
+        : {}),
     },
     userId,
-    kratosCtx(userId, opts.signedInAgoMs ?? MIN_MS)
+    kratosCtx(userId, signedInAgo, opts.methods)
   );
   const url = new URL(redirectTo);
   expect(url.searchParams.get("iss")).toBe(ISSUER);
@@ -325,6 +471,7 @@ const device = async (id: string) =>
       expires_at: Date;
       revoked_at: Date | null;
       created_at: Date;
+      auth_time: Date | null;
     }>(`select * from person_devices where id = $1`, [id])
   ).rows[0]!;
 
@@ -358,6 +505,19 @@ describe("(a) /authorize for a Synap app", () => {
     expect(to.searchParams.get("login_hint")).toBe("ada@x");
     expect(to.searchParams.get("prompt")).toBe("create");
     expect(to.searchParams.get("resource")).toBe(ISSUER);
+  });
+
+  it("a request for a fresh sign-in carries its own signed time (auth_req); others do not", async () => {
+    const fresh = new URL(
+      (await authorize({ prompt: "login" })).headers.get("location")!
+    );
+    const stamped = verifyAuthRequestTime(fresh.searchParams.get("auth_req"));
+    expect(stamped).not.toBeNull();
+    expect(Math.abs(Date.now() - stamped!)).toBeLessThan(10_000);
+    const plain = new URL(
+      (await authorize({ prompt: "create" })).headers.get("location")!
+    );
+    expect(plain.searchParams.has("auth_req")).toBe(false);
   });
 
   it("a `localhost` redirect is refused and shown, never redirected", async () => {
@@ -472,11 +632,46 @@ describe("(d) refresh rotates; a reused refresh token ends the device", () => {
     expect(await listDevices({ bearer: r.body.access_token })).not.toEqual([]);
   });
 
+  it("a database error after the claim spends nothing: the same token refreshes after", async () => {
+    const s = await signIn();
+    await q(
+      `alter table person_device_tokens rename to person_device_tokens_away`
+    );
+    let failed: { status: number; body: any };
+    try {
+      failed = await refresh(s.refresh);
+    } finally {
+      await q(
+        `alter table person_device_tokens_away rename to person_device_tokens`
+      );
+    }
+    expect(failed.status).toBe(500);
+    const again = await refresh(s.refresh);
+    expect(again.status).toBe(200);
+    expect((await device(s.deviceId)).revoked_at).toBeNull();
+  });
+
+  it("a successor is random, never derivable from its row id", async () => {
+    const s = await signIn();
+    const next = await refresh(s.refresh);
+    expect(next.status).toBe(200);
+    const [row] = (
+      await q<{ replaced_by: string }>(
+        `select replaced_by from oauth_refresh_tokens where device_id = $1 and replaced_by is not null`,
+        [s.deviceId]
+      )
+    ).rows;
+    expect(row?.replaced_by).toBeTruthy();
+    expect(next.body.refresh_token).not.toBe(
+      successorRefreshToken(row!.replaced_by)
+    );
+  });
+
   it("replaying the used token: invalid_grant, the device ends, its live access token stops", async () => {
     const s = await signIn();
     const r = await refresh(s.refresh);
     expect(r.status).toBe(200);
-    // Its successor has been used: no retry grace (R7) can apply.
+    // Its successor has been used: no retry grace can apply.
     const next = await refresh(r.body.refresh_token);
     expect(next.status).toBe(200);
     const replay = await refresh(s.refresh);
@@ -490,7 +685,7 @@ describe("(d) refresh rotates; a reused refresh token ends the device", () => {
   });
 });
 
-// ─── (k) a lost refresh response (R7) ────────────────────────────────────────
+// ─── (k) a lost refresh response ─────────────────────────────────────────────
 
 describe("(k) a retry after a lost refresh response", () => {
   const refreshRows = async (deviceId: string) =>
@@ -542,6 +737,21 @@ describe("(k) a retry after a lost refresh response", () => {
     expect((await refresh(first.body.refresh_token)).status).toBe(200);
     expect((await refresh(s.refresh)).status).toBe(400);
     expect((await device(s.deviceId)).revoked_at).not.toBeNull();
+  });
+
+  it("two retries of the same token at once (a double submit): one pair, the other refused, the device lives", async () => {
+    const s = await signIn();
+    expect((await refresh(s.refresh)).status).toBe(200); // response lost
+    const [a, b] = await Promise.all([refresh(s.refresh), refresh(s.refresh)]);
+    const ok = [a, b].filter((r) => r.status === 200);
+    expect(ok.length).toBeGreaterThanOrEqual(1);
+    for (const r of [a, b]) {
+      if (r.status !== 200) expect(r.body.error).toBe("invalid_grant");
+    }
+    expect((await device(s.deviceId)).revoked_at).toBeNull();
+    // The app keeps the pair of the LATEST success, and it works.
+    const kept = ok[ok.length - 1]!;
+    expect((await refresh(kept.body.refresh_token)).status).toBe(200);
   });
 
   it("at 31 s the retry is a reuse: the device ends", async () => {
@@ -610,6 +820,31 @@ describe("(f) signing a device out stops it at once", () => {
     expect(listed.map((d) => d.id)).not.toContain(s.deviceId);
   });
 
+  it("an app signs ITSELF out without a step-up, and never as a proposal", async () => {
+    const s = await signIn("Ada's old laptop", 3 * 60 * MIN_MS); // stale clock
+    const other = await signIn("Ada's phone", 3 * 60 * MIN_MS);
+    // Another device from a stale app: a step-up is asked first.
+    const refused = await trpc({ bearer: s.access }, "devices.revoke", {
+      deviceId: other.deviceId,
+    });
+    expect(refused.status).toBe(403);
+    expect((await device(other.deviceId)).revoked_at).toBeNull();
+    // Itself: signed out at once.
+    const res = await trpc({ bearer: s.access }, "devices.revoke", {
+      deviceId: s.deviceId,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.result.data.json.status).toBe("revoked");
+    expect((await trpc({ bearer: s.access }, "devices.list")).status).toBe(401);
+    expect(
+      (
+        await q(`select 1 from proposals where data::text like $1`, [
+          `%${s.deviceId}%`,
+        ])
+      ).rows
+    ).toHaveLength(0);
+  });
+
   it("another person's device is not found, and stays signed in", async () => {
     const theirs = await signInPersonDevice({
       personUserId: OTHER,
@@ -673,6 +908,27 @@ describe("(i) a STALE device token cannot create, widen or approve a credential"
     ["apiKeys.getDeviceRequest", { userCode: "ABCD-1234" }, "query"],
     ["machines.revoke", { machineId: "m-1" }, "mutation"],
     ["devices.revoke", { deviceId: randomUUID() }, "mutation"],
+    // Reading a secret's value, and giving someone else lasting access.
+    ["secretsVault.reveal", { id: randomUUID() }, "mutation"],
+    [
+      "workspaces.createInvite",
+      {
+        type: "workspace",
+        workspaceId: randomUUID(),
+        email: "someone@example.com",
+        role: "viewer",
+      },
+      "mutation",
+    ],
+    [
+      "integrations.create",
+      {
+        name: "from a phone",
+        url: "not a url",
+        eventTypes: ["entity.created"],
+      },
+      "mutation",
+    ],
   ];
 
   it.each(DOORS)(
@@ -701,6 +957,18 @@ describe("(i) a STALE device token cannot create, widen or approve a credential"
       expect(res.body.error?.json?.data?.reasonCode).not.toBe(STEP_UP_REQUIRED);
     }
   );
+
+  it("CONTROL — a grant only to the caller is not a step-up: a stale device makes its own space", async () => {
+    const s = await signIn("stale", 6 * MIN_MS);
+    const res = await trpc(
+      { bearer: s.access },
+      "workspaces.create",
+      { name: `From a phone ${randomUUID().slice(0, 8)}` },
+      "mutation"
+    );
+    expect(res.body.error?.json?.data?.reasonCode).not.toBe(STEP_UP_REQUIRED);
+    expect(res.status).toBe(200);
+  });
 });
 
 // ─── (j) step-up ─────────────────────────────────────────────────────────────
@@ -814,16 +1082,162 @@ describe("(j) step-up: the clock is the device's real sign-in", () => {
     expect(new Date(bobDevice.created_at).getTime()).toBeGreaterThan(0);
   });
 
-  it("prompt=login on an old console sign-in is refused (LOGIN_REQUIRED), before any code", async () => {
+  it('"Confirm it\'s you" can never make a device, and "Sign in" can never re-confirm one', async () => {
+    const s = await signIn("laptop", 3 * 60 * MIN_MS);
+    const count = async () =>
+      (
+        await q<{ n: number }>(
+          `select count(*)::int as n from person_devices where user_id = $1`,
+          [PERSON]
+        )
+      ).rows[0]!.n;
+    const exchange = (code: string, deviceRefresh?: string) =>
+      tokenRequest({
+        grant_type: "authorization_code",
+        code,
+        client_id: DESKTOP,
+        redirect_uri: LOOPBACK,
+        code_verifier: VERIFIER,
+        ...(deviceRefresh ? { synap_device_refresh_token: deviceRefresh } : {}),
+      });
+    const before = await count();
+    // The screen the person saw names which act it is.
+    const ctxFor = (prompt?: string) =>
+      getOAuthConsentContext(
+        {
+          clientId: DESKTOP,
+          redirectUri: LOOPBACK,
+          responseType: "code",
+          codeChallenge: CHALLENGE,
+          codeChallengeMethod: "S256",
+          resource: ISSUER,
+          ...(prompt ? { prompt } : {}),
+        },
+        PERSON,
+        (kratosCtx(PERSON, 10_000) as { session: never }).session
+      );
+    expect((await ctxFor("login")).reconfirmDevice).toBe(true);
+    expect((await ctxFor()).reconfirmDevice).toBe(false);
+
+    // A step-up code without the device's refresh token: refused, no device.
+    const confirm = await consent(PERSON, {
+      prompt: "login",
+      signedInAgoMs: 10_000,
+    });
+    const minted = await exchange(confirm);
+    expect(minted.status).toBe(400);
+    expect(minted.body.error).toBe("invalid_grant");
+    expect(await count()).toBe(before);
+
+    // A sign-in code presented as a re-confirmation: refused, unspent.
+    const signInCode = await consent(PERSON, { signedInAgoMs: 10_000 });
+    const reconfirmed = await exchange(signInCode, s.refresh);
+    expect(reconfirmed.status).toBe(400);
+    expect(reconfirmed.body.error).toBe("invalid_grant");
+    expect((await refresh(s.refresh)).status).toBe(200);
+    expect(await count()).toBe(before);
+  });
+
+  it("prompt=login on a sign-in from before the request is refused (LOGIN_REQUIRED), before any code", async () => {
     await expect(
-      consent(PERSON, { prompt: "login", signedInAgoMs: 30 * MIN_MS })
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 30 * MIN_MS,
+        requestedAgoMs: 0,
+      })
     ).rejects.toMatchObject({ reasonCode: "LOGIN_REQUIRED" });
     await expect(
-      consent(PERSON, { maxAge: 0, signedInAgoMs: 30 * MIN_MS })
+      consent(PERSON, {
+        maxAge: 0,
+        signedInAgoMs: 30 * MIN_MS,
+        requestedAgoMs: 0,
+      })
+    ).rejects.toMatchObject({ reasonCode: "LOGIN_REQUIRED" });
+    // A Synap app's prompt=login is OIDC too: a sign-in one minute old but
+    // made BEFORE the request does not satisfy it.
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: MIN_MS,
+        requestedAgoMs: 0,
+      })
     ).rejects.toMatchObject({ reasonCode: "LOGIN_REQUIRED" });
     // max_age wider than the sign-in's age is satisfied.
     await expect(
       consent(PERSON, { maxAge: 3600, signedInAgoMs: 30 * MIN_MS })
+    ).resolves.toBeTruthy();
+  });
+
+  it("a Synap Cloud sign-in never sets the clock: a device minted from one needs a step-up at once", async () => {
+    const code = await consent(PERSON, {
+      methods: [{ method: "oidc", agoMs: MIN_MS }],
+    });
+    const { body } = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: DESKTOP,
+      redirect_uri: LOOPBACK,
+      code_verifier: VERIFIER,
+      resource: ISSUER,
+      synap_device_label: "Cloud laptop",
+    });
+    expect((await device(body.synap_device_id)).auth_time).toBeNull();
+    expect(stepUpRequired(await decideDevice(body.access_token))).toBe(true);
+  });
+
+  it('"Confirm it\'s you" answered with Synap Cloud only is refused (POD_CREDENTIAL_REQUIRED), before any code', async () => {
+    const codesBefore = await q<{ n: number }>(
+      `select count(*)::int as n from oauth_authorization_codes`
+    );
+    // Password 3 h ago, then a (possibly silent) Cloud re-login just now.
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 10_000,
+        methods: [
+          { method: "password", agoMs: 180 * MIN_MS },
+          { method: "oidc", agoMs: 10_000 },
+        ],
+      })
+    ).rejects.toMatchObject({ reasonCode: "POD_CREDENTIAL_REQUIRED" });
+    const codesAfter = await q<{ n: number }>(
+      `select count(*)::int as n from oauth_authorization_codes`
+    );
+    expect(codesAfter.rows[0]!.n).toBe(codesBefore.rows[0]!.n);
+    // The screen knows before the click.
+    const shown = await getOAuthConsentContext(
+      {
+        clientId: DESKTOP,
+        redirectUri: LOOPBACK,
+        responseType: "code",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        resource: ISSUER,
+        prompt: "login",
+        authRequest: signAuthRequestTime(Date.now() - 11_000),
+      },
+      PERSON,
+      (
+        kratosCtx(PERSON, 10_000, [
+          { method: "password", agoMs: 180 * MIN_MS },
+          { method: "oidc", agoMs: 10_000 },
+        ]) as unknown as { session: never }
+      ).session
+    );
+    expect(shown.podCredentialRequired).toBe(true);
+    expect(shown.reauthenticate).toBe(false);
+  });
+
+  it("CONTROL — the same step-up answered with the pod password after the request passes", async () => {
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 10_000,
+        methods: [
+          { method: "oidc", agoMs: 180 * MIN_MS },
+          { method: "password", agoMs: 10_000 },
+        ],
+      })
     ).resolves.toBeTruthy();
   });
 
@@ -910,7 +1324,10 @@ describe("(h) an agent cannot sign in as a device", () => {
           },
         } as never
       )
-    ).rejects.toThrow(/console/);
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/console/),
+    });
   });
 
   it("a non-first-party client id never gets a device", async () => {
@@ -932,5 +1349,280 @@ describe("(h) an agent cannot sign in as a device", () => {
       [PERSON]
     );
     expect(ada.rows[0]!.n).toBeGreaterThan(5);
+  });
+});
+
+// ─── (l) losing access to the pod ends the device ───────────────────────────
+
+describe("(l) every way a person loses access to the pod ends their devices", () => {
+  /** Consent + code exchange for `userId` (a fresh console sign-in). */
+  async function deviceFor(userId: string, label = "A laptop") {
+    const code = await consent(userId);
+    const res = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: DESKTOP,
+      redirect_uri: LOOPBACK,
+      code_verifier: VERIFIER,
+      resource: ISSUER,
+      synap_device_label: label,
+    });
+    return res;
+  }
+  async function signedIn(userId: string, label?: string) {
+    const res = await deviceFor(userId, label);
+    expect(res.status).toBe(200);
+    const d = {
+      access: res.body.access_token as string,
+      refresh: res.body.refresh_token as string,
+      deviceId: res.body.synap_device_id as string,
+    };
+    expect((await trpc({ bearer: d.access }, "devices.list")).status).toBe(200);
+    return d;
+  }
+  /** The pod owner, as pod-admin's Members page calls the doors. */
+  const asOwner = () =>
+    router({
+      removeFromPod: inviteProcedures.removeFromPod,
+      connections: applicationConnectionsRouter,
+    }).createCaller(kratosCtx(OWNER, MIN_MS));
+
+  it("removed from the pod with the account kept (its connections would not go): 401, the device ended", async () => {
+    const carol = await signedIn(CAROL);
+    connections.failFor.add(CAROL);
+    await expect(asOwner().removeFromPod({ userId: CAROL })).rejects.toThrow(
+      /account was kept/
+    );
+    // The door's own outcome: memberships gone, the account still here.
+    expect(
+      (await q(`select 1 from users where id = $1`, [CAROL])).rows
+    ).toHaveLength(1);
+    expect(
+      (await q(`select 1 from workspace_members where user_id = $1`, [CAROL]))
+        .rows
+    ).toHaveLength(0);
+
+    expect((await trpc({ bearer: carol.access }, "devices.list")).status).toBe(
+      401
+    );
+    const ended = await device(carol.deviceId);
+    expect(ended.revoked_at).not.toBeNull();
+    expect((await refresh(carol.refresh)).body.error).toBe("invalid_grant");
+    // Adding the person back does not revive the device.
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role)
+         values (gen_random_uuid(), $1, $2, 'editor')`,
+      [WS_TEAM, CAROL]
+    );
+    expect((await trpc({ bearer: carol.access }, "devices.list")).status).toBe(
+      401
+    );
+  });
+
+  it("removed from the pod (the account and Kratos identity go): 401", async () => {
+    const dan = await signedIn(DAN);
+    await asOwner().removeFromPod({ userId: DAN });
+    expect(kratos.deleted).toContain(DAN);
+    expect((await trpc({ bearer: dan.access }, "devices.list")).status).toBe(
+      401
+    );
+    expect((await refresh(dan.refresh)).body.error).toBe("invalid_grant");
+  });
+
+  it("a socket's device is re-checked (liveDeviceIds): live stays, signed out and lost access do not, and lost access ends it", async () => {
+    const JUN = "person-jun";
+    const KAI = "person-kai";
+    await q(
+      `insert into users (id, email, name, user_type) values
+         ($1, 'jun@x', 'Jun', 'human'), ($2, 'kai@x', 'Kai', 'human')`,
+      [JUN, KAI]
+    );
+    for (const u of [JUN, KAI]) {
+      await q(
+        `insert into workspace_members (id, workspace_id, user_id, role)
+           values (gen_random_uuid(), $1, $2, 'editor')`,
+        [WS_TEAM, u]
+      );
+    }
+    const live = await signedIn(JUN, "live");
+    const out = await signedIn(JUN, "signed out");
+    const lost = await signedIn(KAI);
+    await revokePersonDevice(h.db, {
+      deviceId: out.deviceId,
+      reason: "signed out",
+    });
+    await q(`delete from workspace_members where user_id = $1`, [KAI]);
+
+    const result = await liveDeviceIds(h.db, [
+      live.deviceId,
+      out.deviceId,
+      lost.deviceId,
+      randomUUID(),
+    ]);
+    expect([...result]).toEqual([live.deviceId]);
+    expect((await device(lost.deviceId)).revoked_at).not.toBeNull();
+    expect((await device(live.deviceId)).revoked_at).toBeNull();
+  });
+
+  it("CONTROL — removed from one space but still in another: the device keeps working", async () => {
+    const eve = await signedIn(EVE);
+    await asOwner().removeFromPod({ userId: EVE });
+    expect((await trpc({ bearer: eve.access }, "devices.list")).status).toBe(
+      200
+    );
+    expect((await refresh(eve.refresh)).status).toBe(200);
+  });
+
+  it("unlinked from an app's issuer: every device of the person ends, the access stays", async () => {
+    const laptop = await signedIn(FRAN, "Fran's laptop");
+    const phone = await signedIn(FRAN, "Fran's other computer");
+    const issuerId = randomUUID();
+    const connectionId = randomUUID();
+    await q(
+      `insert into trusted_issuers (id, issuer_url, display_name, status)
+         values ($1, 'https://id.example.com', 'Example ID', 'approved')`,
+      [issuerId]
+    );
+    await q(
+      `insert into federated_application_connections
+         (id, issuer_id, client_id, display_name, status)
+         values ($1, $2, 'example-app', 'Example', 'approved')`,
+      [connectionId, issuerId]
+    );
+    await q(
+      `insert into federated_identity_links (issuer_id, issuer_subject, user_id)
+         values ($1, 'sub-fran', $2)`,
+      [issuerId, FRAN]
+    );
+    const outcome = await asOwner().connections.unlinkAccount({
+      connectionId,
+      userId: FRAN,
+    });
+    expect(outcome.status).toBe("unlinked");
+    for (const d of [laptop, phone]) {
+      expect((await trpc({ bearer: d.access }, "devices.list")).status).toBe(
+        401
+      );
+      expect((await device(d.deviceId)).revoked_at).not.toBeNull();
+      expect((await refresh(d.refresh)).body.error).toBe("invalid_grant");
+    }
+    // Unlink is not removal: Fran is still a member, and signs in again.
+    expect(
+      (await q(`select 1 from workspace_members where user_id = $1`, [FRAN]))
+        .rows
+    ).toHaveLength(1);
+    await signedIn(FRAN, "Fran signs in again");
+  });
+
+  it("the Kratos identity disabled or deleted: the next refresh ends the device; Kratos down spends nothing", async () => {
+    const gil = await signedIn(GIL);
+    kratos.identity.set(GIL, "down");
+    const down = await refresh(gil.refresh);
+    expect(down.status).toBe(500);
+    expect(down.body.error).toBe("server_error");
+    // Nothing was spent: the same token refreshes once Kratos answers.
+    kratos.identity.set(GIL, "active");
+    const next = await refresh(gil.refresh);
+    expect(next.status).toBe(200);
+
+    kratos.identity.set(GIL, "inactive");
+    const disabled = await refresh(next.body.refresh_token);
+    expect(disabled.body.error).toBe("invalid_grant");
+    expect((await device(gil.deviceId)).revoked_at).not.toBeNull();
+    expect(
+      (await trpc({ bearer: next.body.access_token }, "devices.list")).status
+    ).toBe(401);
+
+    kratos.identity.set(GIL, "active");
+    const second = await signedIn(GIL, "Gil's second laptop");
+    kratos.identity.set(GIL, "gone");
+    expect((await refresh(second.refresh)).body.error).toBe("invalid_grant");
+    expect((await device(second.deviceId)).revoked_at).not.toBeNull();
+    kratos.identity.delete(GIL);
+  });
+
+  it("a removed person's step-up is refused, and ends the device", async () => {
+    const ivy = await signedIn(IVY);
+    connections.failFor.add(IVY);
+    await expect(asOwner().removeFromPod({ userId: IVY })).rejects.toThrow(
+      /account was kept/
+    );
+    // Ivy's Kratos identity was kept, so she can still sign in to the
+    // console and click "Confirm it's you" — the step-up must not revive her.
+    const code = await consent(IVY, { prompt: "login", signedInAgoMs: 10_000 });
+    const res = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: DESKTOP,
+      redirect_uri: LOOPBACK,
+      code_verifier: VERIFIER,
+      synap_device_refresh_token: ivy.refresh,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_grant");
+    expect((await device(ivy.deviceId)).revoked_at).not.toBeNull();
+  });
+
+  it("a person with no access to the pod gets no device", async () => {
+    const res = await deviceFor(NOBODY);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_grant");
+    expect(
+      (await q(`select 1 from person_devices where user_id = $1`, [NOBODY]))
+        .rows
+    ).toHaveLength(0);
+  });
+});
+
+// ─── (m) at most 20 live devices per person ─────────────────────────────────
+
+describe("(m) a person holds at most 20 live devices", () => {
+  it("the 21st sign-in ends the least recently used device, and only it", async () => {
+    const ids: string[] = [];
+    const tokens: string[] = [];
+    for (let i = 0; i < PERSON_DEVICE_MAX_ACTIVE; i++) {
+      const d = await signInPersonDevice({
+        personUserId: HAL,
+        clientId: DESKTOP,
+        authTime: new Date(),
+      });
+      if (!d.ok) throw new Error("hal signs in");
+      ids.push(d.deviceId);
+      tokens.push(d.accessToken);
+    }
+    // Every device was used recently except the 6th, the least recent.
+    await q(
+      `update person_devices set last_used_at = now() - interval '1 minute' where user_id = $1`,
+      [HAL]
+    );
+    await q(
+      `update person_devices set last_used_at = now() - interval '9 days' where id = $1`,
+      [ids[5]]
+    );
+    const live = async () =>
+      (
+        await q<{ id: string }>(
+          `select id from person_devices where user_id = $1 and revoked_at is null`,
+          [HAL]
+        )
+      ).rows.map((r) => r.id);
+    expect(await live()).toHaveLength(PERSON_DEVICE_MAX_ACTIVE);
+
+    const newest = await signInPersonDevice({
+      personUserId: HAL,
+      clientId: DESKTOP,
+      authTime: new Date(),
+    });
+    if (!newest.ok) throw new Error("hal signs in again");
+    const after = await live();
+    expect(after).toHaveLength(PERSON_DEVICE_MAX_ACTIVE);
+    expect(after).toContain(newest.deviceId);
+    expect(after).not.toContain(ids[5]);
+    expect((await trpc({ bearer: tokens[5]! }, "devices.list")).status).toBe(
+      401
+    );
+    expect((await trpc({ bearer: tokens[4]! }, "devices.list")).status).toBe(
+      200
+    );
   });
 });

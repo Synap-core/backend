@@ -1,5 +1,5 @@
 /**
- * FRESH AUTHENTICATION at a credential door (join plan target A, step-up).
+ * FRESH AUTHENTICATION at a credential door (a step-up).
  *
  * A door that creates, rotates, widens or approves a CREDENTIAL — an API key,
  * a grant, a secret's grant, a computer, an app, an integration, an OAuth or
@@ -7,18 +7,18 @@
  * app token become a long-lived key. It accepts:
  *   - a Kratos session (the console in a browser), as before; or
  *   - a Synap app's DEVICE session whose `auth_time` — when the person last
- *     REALLY authenticated for that device (a password, passkey or Cloud
- *     login at /authorize; copied from the consenting Kratos session, moved
- *     only by a step-up, never by a refresh) — is at most
- *     `STEP_UP_WINDOW_MS` old.
+ *     REALLY authenticated for that device (a credential presented AT this
+ *     pod at /authorize, `kratosCredentialTime`: never a federated Synap
+ *     Cloud sign-in; copied from the consenting Kratos session, moved only by
+ *     a step-up, never by a refresh) — is at most `STEP_UP_WINDOW_MS` old.
  * A stale device session gets FORBIDDEN with `reasonCode: STEP_UP_REQUIRED`
  * (`error.data.reasonCode` on the wire): the app re-confirms it is the person
  * (`/authorize` with `prompt=login`, its device's refresh token at /token) and
  * retries.
  *
- * The device session comes from the context (`ctx.sessionKind` and the
+ * The session comes from the context (`ctx.sessionKind` and the
  * device `ctx.session` names, set only by `createContext` from what
- * `middleware/app-session.ts` resolved from the row) or, for a door deep in a
+ * `middleware/app-session.ts` resolved) or, for a door deep in a
  * service with no context, from the request's async scope, which the same
  * gate opens (`runAsDeviceSession`). A request with no person session (a key
  * on the Hub doors, whose own rules apply) is not this check's business.
@@ -59,6 +59,51 @@ export function runAsDeviceSession<T>(
   fn: () => T
 ): T {
   return deviceScope.run(device, fn);
+}
+
+/**
+ * Ways to authenticate a person can only complete by presenting a credential
+ * AT this pod (Kratos `authentication_methods[].method`). A federated sign-in
+ * (`oidc`: Synap Cloud or any other provider) is not one: the provider may
+ * answer from its own session without asking anything, so it can never prove
+ * the person is here now. Nor is an account recovery.
+ */
+const POD_CREDENTIAL_METHODS = new Set([
+  "password",
+  "webauthn",
+  "passkey",
+  "totp",
+  "lookup_secret",
+  "code",
+]);
+
+/** The part of a Kratos session that says how it was authenticated. */
+export interface KratosAuthenticationFacts {
+  authentication_methods?: Array<{
+    method?: string | null;
+    completed_at?: string | null;
+  }> | null;
+}
+
+/**
+ * When the person last presented a credential AT this pod in this Kratos
+ * session (`POD_CREDENTIAL_METHODS`), or null: a session authenticated only
+ * through a federated provider, or one that does not say, has no such time.
+ * This is the time a consent hands a Synap app's device as its step-up
+ * clock; `authenticated_at` is not, because a silent federated re-login
+ * moves it.
+ */
+export function kratosCredentialTime(
+  session: KratosAuthenticationFacts | null | undefined
+): Date | null {
+  let latest: Date | null = null;
+  for (const m of session?.authentication_methods ?? []) {
+    if (!m?.method || !POD_CREDENTIAL_METHODS.has(m.method)) continue;
+    const at = m.completed_at ? new Date(m.completed_at) : null;
+    if (!at || Number.isNaN(at.getTime())) continue;
+    if (!latest || at > latest) latest = at;
+  }
+  return latest;
 }
 
 /** Is this request a Synap app's device session (by context, else scope)? */
