@@ -16066,6 +16066,15 @@ export type RequesterAccountView = {
 } | {
 	status: "unverified";
 };
+export interface UnlinkReach {
+	/** The other apps of the same issuer the person also stops signing in to. */
+	otherApps: Array<{
+		displayName: string;
+		id: string;
+	}>;
+	/** Whether "Continue with Synap Cloud" goes too (the Cloud issuer). */
+	cloudSignIn: boolean;
+}
 /**
  * The clients the pod's OWN OAuth authorization server registered (Path B:
  * claude.ai pointed straight at `https://<pod>/mcp`; `routers/oauth/*`), read
@@ -20869,6 +20878,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewedAt: Date | null;
 				reviewedBy: string | null;
 				status: "approved" | "pending" | "rejected" | "revoked";
+				unlinkReach: UnlinkReach;
 				updatedAt: Date;
 			};
 		}>;
@@ -27958,27 +27968,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				status: string;
 			} | {
-				ackState?: undefined;
-				deduplicated?: undefined;
-				deferred?: true | undefined;
-				effectiveWorkspaceId: string | null;
-				entity: Record<string, unknown> | null;
-				facets: {
-					message: string;
-					outcome: string;
-					slug: string;
-					status: string;
-				}[];
-				id?: undefined;
-				message: string;
-				proposalId: string;
-				proposalType: string;
-				proposedEntityId?: string | undefined;
-				ref?: string | undefined;
-				reviewUrl: string;
-				status: string;
-				workspaceId: string | null;
-			} | {
 				ackState: "duplicate-ignored";
 				deduplicated?: undefined;
 				entity: {
@@ -28020,6 +28009,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				message: string;
 				status: string;
+			} | {
+				ackState?: undefined;
+				deduplicated?: undefined;
+				deferred?: true | undefined;
+				effectiveWorkspaceId: string | null;
+				entity: Record<string, unknown> | null;
+				facets: {
+					message: string;
+					outcome: string;
+					slug: string;
+					status: string;
+				}[];
+				id?: undefined;
+				message: string;
+				proposalId: string;
+				proposalType: string;
+				proposedEntityId?: string | undefined;
+				ref?: string | undefined;
+				reviewUrl: string;
+				status: string;
+				workspaceId: string | null;
 			} | {
 				ackState?: undefined;
 				deduplicated?: undefined;
