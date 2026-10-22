@@ -27858,27 +27858,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				status: string;
 			} | {
-				ackState?: undefined;
-				deduplicated?: undefined;
-				deferred?: true | undefined;
-				effectiveWorkspaceId: string | null;
-				entity: Record<string, unknown> | null;
-				facets: {
-					message: string;
-					outcome: string;
-					slug: string;
-					status: string;
-				}[];
-				id?: undefined;
-				message: string;
-				proposalId: string;
-				proposalType: string;
-				proposedEntityId?: string | undefined;
-				ref?: string | undefined;
-				reviewUrl: string;
-				status: string;
-				workspaceId: string | null;
-			} | {
 				ackState: "duplicate-ignored";
 				deduplicated?: undefined;
 				entity: {
@@ -27920,6 +27899,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				message: string;
 				status: string;
+			} | {
+				ackState?: undefined;
+				deduplicated?: undefined;
+				deferred?: true | undefined;
+				effectiveWorkspaceId: string | null;
+				entity: Record<string, unknown> | null;
+				facets: {
+					message: string;
+					outcome: string;
+					slug: string;
+					status: string;
+				}[];
+				id?: undefined;
+				message: string;
+				proposalId: string;
+				proposalType: string;
+				proposedEntityId?: string | undefined;
+				ref?: string | undefined;
+				reviewUrl: string;
+				status: string;
+				workspaceId: string | null;
 			} | {
 				ackState?: undefined;
 				deduplicated?: undefined;
