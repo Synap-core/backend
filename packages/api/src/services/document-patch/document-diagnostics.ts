@@ -306,10 +306,10 @@ export async function diagnoseDocument(
       const missing = drawnFromSnapshot
         ? []
         : builtin
-        ? missingRequiredConfig(builtin, embed.props)
-        : row.requiredConfig.filter(
-            (k) => embed.props?.[k] == null || embed.props?.[k] === ""
-          );
+          ? missingRequiredConfig(builtin, embed.props)
+          : row.requiredConfig.filter(
+              (k) => embed.props?.[k] == null || embed.props?.[k] === ""
+            );
       if (missing.length > 0) {
         out.push({
           code: "bad_props",
