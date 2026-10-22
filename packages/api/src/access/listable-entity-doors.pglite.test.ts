@@ -687,6 +687,9 @@ const MARK_RE =
 const WITHHELD_FILES: Record<string, string> = {
   "access/entity-read-floor.ts": "defines the access floor (never filtered)",
   "access/registry.ts": "the entities VisibilityRule: by-id + writes too",
+  "connectors/external-dispatch.ts":
+    "per_entity credential: the subject entity, by id",
+  "import/import-deep.ts": "import merge: identity resolution (dedup)",
   "routers/artifacts.ts": "kind label for artifacts already listed",
   "routers/capture.ts": "searchCollection for capture dedup",
   "routers/channels/messaging.ts": "messages collection, not entities",
@@ -713,10 +716,16 @@ const WITHHELD_FILES: Record<string, string> = {
   "services/capabilities/builtin-verbs.ts": "searchCollection for dedup",
   "services/capabilities/capability-run-subject.ts": "proposal title",
   "services/capabilities/verb-write-back.ts": "write target",
+  "services/capture-agent/submit-capture-graph.ts":
+    "capture duplicate door scope + strong-match write gate (dedup)",
+  "services/diagnose/index.ts": "diagnose one object, by id",
+  "services/diagnose/resolve-object-kind.ts": "resolves one id's kind",
   "services/entities/update-entities.ts": "batch-update targets",
   "services/entity-body/body-replace-guard.ts": "write target",
   "services/entity-body/promote-property-to-body.ts": "row lock for a write",
   "services/entity-resolution.ts": "name → id resolution (dedup)",
+  "services/import/structuring.ts":
+    "import link targets: same-kind name → existing id (dedup)",
   "services/library/read-text-search.ts": "documents collection",
   "services/lifecycle/homes.ts":
     "its listings go through status-groups (which carries the rule)",
@@ -728,6 +737,9 @@ const WITHHELD_FILES: Record<string, string> = {
   "services/postiz/record-postiz-published.ts": "match by external id",
   "services/projects/create-project.ts": "validates evidence ids",
   "services/runs/index.ts": "one run's produced records, by id",
+  "services/surfaces/renderer-usage.ts":
+    "renderer-removal impact count: a demo row's override is affected too",
+  "utils/identity-resolve-response.ts": "strong-match recheck, by id (dedup)",
   "utils/project-subject.ts": "a project's subject name + bind gate",
 };
 
