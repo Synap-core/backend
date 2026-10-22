@@ -628,21 +628,21 @@ backfill_federation_public_urls() {
 # to the pod's URL) follow the same way: a value naming an old origin becomes
 # the new one, any other value (the Studio, `*`, set by hand) stays.
 reconcile_moved_origins() {
-    local old_pod old_admin new_pod new_admin list entry out="" seen="," key value
+    local old_pod old_admin new_pod new_admin list entry out="" seen="," origin_key value
     old_pod=$(grep "^SYNAP_LEGACY_DOMAIN=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
     old_admin=$(grep "^SYNAP_LEGACY_POD_ADMIN_DOMAIN=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
     new_pod=$(grep "^DOMAIN=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
     new_admin=$(grep "^POD_ADMIN_DOMAIN=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
     { [ -n "$old_pod" ] || [ -n "$old_admin" ]; } || return 0
-    for key in FRONTEND_URL CORS_ORIGIN; do
-        value=$(grep "^${key}=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
+    for origin_key in FRONTEND_URL CORS_ORIGIN; do
+        value=$(grep "^${origin_key}=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
         value="${value%/}"
         if [ -n "$old_pod" ] && [ -n "$new_pod" ] && [ "$value" = "https://${old_pod}" ]; then value="https://${new_pod}"
         elif [ -n "$old_admin" ] && [ -n "$new_admin" ] && [ "$value" = "https://${old_admin}" ]; then value="https://${new_admin}"
         else continue
         fi
-        update_env_value "$key" "$value"
-        echo -e "${BLUE}ℹ️  ${key} now names the pod's new address${NC}"
+        update_env_value "$origin_key" "$value"
+        echo -e "${BLUE}ℹ️  ${origin_key} now names the pod's new address${NC}"
     done
     list=$(grep "^ALLOWED_ORIGINS=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
     [ -n "$list" ] || return 0
