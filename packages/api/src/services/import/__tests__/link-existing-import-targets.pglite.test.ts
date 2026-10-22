@@ -28,8 +28,10 @@ import {
   projectMembers,
   workspaces,
   workspaceMembers,
+  profiles,
   type db as DatabaseHandle,
 } from "@synap/database";
+import * as schema from "@synap/database/schema";
 import type { ImportItem } from "../../../import/import-items.js";
 import { linkExistingImportTargets } from "../structuring.js";
 
@@ -97,10 +99,12 @@ beforeAll(async () => {
     projectMembers,
     workspaces,
     workspaceMembers,
+    profiles,
   ]) {
     await client.exec(ddlFor(t as unknown as PgTable));
   }
-  database = drizzle(client) as unknown as typeof DatabaseHandle;
+  // With the schema: the kind match reads `profiles` through `db.query`.
+  database = drizzle(client, { schema }) as unknown as typeof DatabaseHandle;
 });
 
 beforeEach(async () => {
@@ -186,18 +190,26 @@ describe("linkExistingImportTargets", () => {
     expect(items[0]!.existingEntityId).toBe(older);
   });
 
-  it("a failed read THROWS — it is not 'nothing exists'", async () => {
-    const broken = {
-      select: () => {
-        throw new Error("db down");
-      },
-    } as unknown as typeof DatabaseHandle;
-    await expect(
-      linkExistingImportTargets(
-        { userId: ME, workspaceId: null },
-        [target("Brindlewood Labs")],
-        broken
-      )
-    ).rejects.toThrow("db down");
-  });
+  // Two reads: the kind's profiles (the slug door), then the entities.
+  const down = () => {
+    throw new Error("db down");
+  };
+  it.each([
+    ["the kind lookup", { query: { profiles: { findMany: down } } }],
+    [
+      "the entity read",
+      { query: { profiles: { findMany: async () => [] } }, select: down },
+    ],
+  ])(
+    "a failed read THROWS — it is not 'nothing exists' (%s)",
+    async (_read, broken) => {
+      await expect(
+        linkExistingImportTargets(
+          { userId: ME, workspaceId: null },
+          [target("Brindlewood Labs")],
+          broken as unknown as typeof DatabaseHandle
+        )
+      ).rejects.toThrow("db down");
+    }
+  );
 });

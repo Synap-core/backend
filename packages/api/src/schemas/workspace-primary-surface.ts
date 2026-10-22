@@ -4,6 +4,8 @@ import type {
   WorkspacePrimarySurface,
   WorkspacePrimarySurfaceDefinition,
 } from "@synap/database";
+import { assertClientMetadataUrl } from "../routers/oauth/client-id-url.js";
+import { resolveIssuer } from "../routers/oauth/config.js";
 
 const workspaceJsonValueSchema: z.ZodType<WorkspaceJsonValue> = z.lazy(() =>
   z.union([
@@ -27,6 +29,28 @@ const webUrlSchema = z
     const parsed = new URL(value);
     return !parsed.username && !parsed.password;
   }, "URL must not include credentials");
+
+/**
+ * The pod app a url surface is linked to (spec 17 §7.1, PB7): its Client ID
+ * Metadata Document URL, under the SAME rules /authorize applies to a
+ * client_id. It is a launch hint for the browser (open the app with this pod's
+ * `iss`), never an identity or a grant, so it carries the client_id and
+ * nothing else.
+ */
+const podAppSchema = z
+  .object({
+    clientId: z.string().superRefine((clientId, ctx) => {
+      try {
+        assertClientMetadataUrl(clientId, resolveIssuer());
+      } catch (err) {
+        ctx.addIssue({
+          code: "custom",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }),
+  })
+  .strict();
 
 /**
  * One inbound validator for package/template primary surfaces. A view may use
@@ -68,6 +92,7 @@ export const workspacePrimarySurfaceSchema: z.ZodType<WorkspacePrimarySurfaceDef
         kind: z.literal("url"),
         url: webUrlSchema,
         title: z.string().optional(),
+        podApp: podAppSchema.optional(),
       })
       .strict(),
     z
