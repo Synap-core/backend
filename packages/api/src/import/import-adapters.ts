@@ -15,6 +15,11 @@ import {
   flattenChatTranscript,
 } from "./import-parsers.js";
 import type { ImportItem, ImportLink } from "./import-items.js";
+import {
+  extractIdentitySignals,
+  isJunkEntityTitle,
+  profileRejectsJunkTitle,
+} from "@synap/database";
 
 // ── Obsidian / wikilink-markdown adapter ───────────────────────────────────────
 
@@ -331,29 +336,40 @@ export function csvRowsToTypedImportItems(
       : plan.titleColumn
         ? row[plan.titleColumn]
         : undefined;
-    const title =
-      String(rawTitle ?? "Untitled")
-        .trim()
-        .slice(0, 500) || "Untitled";
+    // A placeholder name ("-", "…", "Unknown", "Freelance") names nobody:
+    // read it as NO title — the same predicate the create door refuses with —
+    // so the row follows the nameless-row rules below (skipped when nothing
+    // identifies it, else kept as "Untitled") instead of failing the approval.
+    const trimmedTitle = String(rawTitle ?? "")
+      .trim()
+      .slice(0, 500);
+    const title = isJunkEntityTitle(trimmedTitle) ? "Untitled" : trimmedTitle;
 
-    const organizationName = plan.organization
+    // A placeholder employer ("Freelance", "Indépendant", "Stealth", "-",
+    // "…") names no organisation: no company, no link. Judged by the SAME
+    // predicate the create door refuses with (`isJunkEntityTitle`), so analyze
+    // never proposes a company the approval will refuse — one such op refused
+    // the whole 2,827-entity proposal 0728053b (2026-10-22). The cell's text is
+    // already in `bodyLines` above.
+    const organizationCell = plan.organization
       ? String(row[plan.organization.header] ?? "").trim()
       : "";
+    const organizationName = isJunkEntityTitle(organizationCell)
+      ? ""
+      : organizationCell;
 
-    // A row whose NAME columns are all empty, and that carries nothing which
-    // identifies its subject (no value on an existing property such as an
-    // email or a profile URL), describes nobody: an export lists members who
-    // hid their profile as a bare date. Skipped, never an "Untitled" person.
-    // The caller counts skipped rows (rows in − items out).
+    // A NAMELESS row of a kind that must be named (person, company, contact)
+    // or of a composed-name table is kept only when it carries a STRONG
+    // identity signal — email, phone, profile URL, handle: the atoms
+    // `extractIdentitySignals` registers, the same ones the create door merges
+    // on. Any other value (a "Connected On" date, a position) identifies nobody:
+    // an export lists members who hid their profile as a bare date, and 114 of
+    // them became same-name "Untitled" people the apply-time weak-dedup gate
+    // would refuse (live dry run, 2026-10-22). Skipped; the caller counts it.
     if (
-      plan.titleColumns &&
       title === "Untitled" &&
-      !kept.some(
-        (c) =>
-          c.routedTo === "entity" &&
-          coerceCellValue(String(row[c.header] ?? ""), c.valueType) !==
-            undefined
-      )
+      (plan.titleColumns || profileRejectsJunkTitle(plan.profileSlug)) &&
+      extractIdentitySignals(metadata, { kind: plan.profileSlug }).length === 0
     ) {
       continue;
     }

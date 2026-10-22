@@ -23,6 +23,8 @@ const h = vi.hoisted(() => ({
   capsThrow: false,
   owingThrow: false,
   libraryThrow: false,
+  owedThrow: false,
+  owedProposed: [] as unknown[],
 }));
 
 vi.mock("../../routers/mcp/handlers/shared.js", () => ({
@@ -86,6 +88,17 @@ vi.mock("../../utils/deep-links.js", () => ({
 vi.mock("./open-findings-door.js", () => ({
   OPEN_FINDINGS_READ_CAP: 5,
   readOpenBlockerFindings: async (_userId: string) => [],
+}));
+
+// `owedByPerson` reads through its own door (`owed-by-person.ts`); the fold is
+// REAL, only the two `listOwedSlots` reads are stubbed (seam on PGlite in
+// `focus-sessions/__tests__/draft-asks.pglite.test.ts`).
+vi.mock("./owed-by-person.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readOwedByPersonSlots: async (_userId: string) => {
+    if (h.owedThrow) throw new Error("pool exhausted");
+    return { needsYou: [], proposed: h.owedProposed, truncated: false };
+  },
 }));
 
 // `sessionsOwingGrade` reads through its own door; its SQL + verdict read is
@@ -155,6 +168,8 @@ beforeEach(() => {
   h.sessionsThrow = false;
   h.capsThrow = false;
   h.owingThrow = false;
+  h.owedThrow = false;
+  h.owedProposed = [];
 });
 
 describe("startHere", () => {
@@ -171,6 +186,8 @@ describe("startHere", () => {
       // queue and before the agent's own work, because they change what the
       // agent should attempt at all.
       "openFindings",
+      // What the PERSON owes, before the agent's own work.
+      "owedByPerson",
       "openSessions",
       // Right after the agent's open work: the part of it still ungraded.
       "sessionsOwingGrade",
@@ -279,5 +296,37 @@ describe("startHere", () => {
   it("an empty queue still states its lens", async () => {
     const s = await build({ status: "ok", count: 0, oldestDays: 0 });
     expect(s.pendingReview).toEqual({ count: 0, lens: "authored" });
+  });
+
+  it("owedByPerson: the person's owed asks, one row per session; a failed read is unavailable", async () => {
+    h.owedProposed = [
+      {
+        sessionId: "s-crm",
+        sessionGoal: "CRM spec",
+        sessionTitle: "CRM app: spec",
+        sessionStatus: "active",
+        workspaceId: null,
+        projectId: null,
+        label: "Q4",
+        kind: "decision",
+        owedSince: "2026-10-22T13:29:58.283Z",
+        ask: { mode: "choose" },
+      },
+    ];
+    const ok = await build({ status: "ok", count: 0, oldestDays: 0 });
+    expect(ok.owedByPerson).toMatchObject({
+      count: 1,
+      items: [
+        {
+          sessionId: "s-crm",
+          title: "CRM app: spec",
+          inbox: "proposed",
+          link: "https://pod.example/open/s-crm",
+        },
+      ],
+    });
+    h.owedThrow = true;
+    const down = await build({ status: "ok", count: 0, oldestDays: 0 });
+    expect(down.owedByPerson).toEqual({ status: "unavailable" });
   });
 });
