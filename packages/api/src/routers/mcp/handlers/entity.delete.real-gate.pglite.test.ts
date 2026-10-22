@@ -12,10 +12,13 @@
  *
  * Rows, each ruling out a wrong outcome:
  *  - the agent's delete is a PENDING proposal stamped with THAT agent, and the
- *    row is untouched — rules out "the agent was lost on the way" (the gate then
- *    takes the human path and soft-deletes) and "filed, but anonymously";
- *  - CONTROL: the same door with no agent soft-deletes at once — the human path
- *    really executes here, so a lost agent shows up as a deleted row.
+ *    row is untouched — rules out "the agent was lost on the way" and "filed,
+ *    but anonymously";
+ *  - CONTROL: the same door with no agent files the delete UNATTRIBUTED. The
+ *    hub door writes as `source: "intelligence"`, so a call whose agent is lost
+ *    is the anonymous AI principal: the gate floors it too (it never takes the
+ *    person's path here). A lost agent therefore shows up as a NULL
+ *    `agent_user_id`, which this row proves the door does not fill by default.
  *
  * What it does NOT cover, measured: the handler's own `agentUserId` spread is
  * not load-bearing on this path. Hub `deleteEntity` resolves the agent with
@@ -239,14 +242,17 @@ describe("synap_delete_entity through the real gate (B9b)", () => {
     expect(await deletedAt(id)).toBeNull();
   });
 
-  it("CONTROL: with no agent the same door soft-deletes at once (the human path executes)", async () => {
+  it("CONTROL: with no agent the same door files the delete unattributed (the agent column is not a default)", async () => {
     const id = await seedNote("The person's own note");
-    const before = (await q(`select id from proposals`)).rows.length;
 
     const payload = await callDelete(undefined, id);
 
-    expect(payload.status).not.toBe("proposed");
-    expect(await deletedAt(id)).not.toBeNull();
-    expect((await q(`select id from proposals`)).rows.length).toBe(before);
+    expect(payload).toMatchObject({ entityId: id, status: "proposed" });
+    const { rows } = await q<{ status: string; agent_user_id: string | null }>(
+      `select status, agent_user_id from proposals where id = $1`,
+      [payload.proposalId]
+    );
+    expect(rows).toEqual([{ status: "pending", agent_user_id: null }]);
+    expect(await deletedAt(id)).toBeNull();
   });
 });
