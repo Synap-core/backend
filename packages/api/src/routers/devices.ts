@@ -46,7 +46,7 @@ export const devicesRouter = router({
     .input(z.object({ deviceId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, DEVICES_SIGNED_IN);
-      if (ctx.session?.device?.id !== input.deviceId) {
+      if (true) {
         assertFreshAuthentication(ctx);
       }
       const ended = await revokeOwnPersonDevice({

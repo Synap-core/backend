@@ -577,7 +577,7 @@ export function FirstPartyConsent({
                 : "break-all font-mono text-[13px] text-foreground/90"
             }
           >
-            {onComputer ? "This computer" : redirectHost}
+            {onComputer ? `This computer (${redirectHost})` : redirectHost}
           </span>
         </div>
       </div>

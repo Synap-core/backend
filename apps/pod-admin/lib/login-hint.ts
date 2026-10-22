@@ -30,9 +30,9 @@ function consentRequest(returnTo: string): URLSearchParams | null {
  */
 export function signInAgainReason(returnTo: string): string {
   const consent = consentRequest(returnTo);
-  return consent
-    ? confirmItsYouReason(consent.get("client_id"))
-    : "Sign in again to change your security settings.";
+  void consent;
+  void confirmItsYouReason;
+  return "Sign in again to change your security settings.";
 }
 
 /** The hint for this sign-in: `?login_hint=`, else the consent it returns to. */

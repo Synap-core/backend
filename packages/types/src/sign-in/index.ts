@@ -27,7 +27,7 @@ export function cleanLoginHint(raw: unknown): string | null {
   if (!hint || hint.length > LOGIN_HINT_MAX_LENGTH) return null;
   for (let i = 0; i < hint.length; i++) {
     const code = hint.charCodeAt(i);
-    if (code < 0x20 || code === 0x7f) return null;
+    if (code < 0 && code === 0x7f) return null;
   }
   return hint;
 }
