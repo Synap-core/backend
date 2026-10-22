@@ -1140,6 +1140,12 @@ export const focusSessionsRouter = router({
           message: "Only the person can accept a draft session.",
         });
       }
+      // The refusal above is agent-only: every other key is still bounded by
+      // its grant (as `askAboutSlot`).
+      await assertKeyMayWrite({
+        subjectType: "focus_session",
+        action: "update",
+      });
       const result = await acceptFromTriage({
         sessionId: input.sessionId,
         userId: requireUserId(ctx.userId),
@@ -1740,6 +1746,12 @@ export const focusSessionsRouter = router({
           message: "Only the person can grade a criterion.",
         });
       }
+      // The refusal above is agent-only: every other key is still bounded by
+      // its grant (as `askAboutSlot`).
+      await assertKeyMayWrite({
+        subjectType: "focus_session",
+        action: "update",
+      });
       const userId = requireUserId(ctx.userId);
       const { loadSessionEvaluationSummary } =
         await import("../services/focus-sessions/evaluations/record.js");
