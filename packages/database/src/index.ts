@@ -38,6 +38,7 @@ export * from "./services/federated-application-connection-service.js";
 export * from "./services/federated-assertion-receipt-service.js";
 export * from "./services/user-provisioning.js";
 export * from "./services/pod-user-access.js";
+export * from "./services/identity-keepers.js";
 export * from "./services/capture-routing.js";
 export * from "./services/workspace-resolution-service.js";
 export * from "./services/project-resolution-service.js";
