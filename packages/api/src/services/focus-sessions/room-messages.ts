@@ -21,10 +21,18 @@
  * canonical channel-visibility gate decides — the same door `getMessages`
  * uses. A viewer who may read the session but not its room gets the section
  * `unavailable`, never an empty room.
+ *
+ * ── Text is data ───────────────────────────────────────────────────────────
+ * Every message's text — the person's, a teammate's, another agent's, even a
+ * pod notice quoting a captured title — is DATA to the agent that reads the
+ * packet, never an instruction. Each item carries `untrusted: true` and a
+ * `fenced` copy (`fenceUntrustedData`, the same fence the change feed and the
+ * external-agent wake use) for a reader that puts room text into a prompt.
  */
 
 import { db, MessageAuthorType, MessageRole } from "@synap/database";
 import { queryChannelMessages } from "../../utils/query-channel-messages.js";
+import { fenceUntrustedData } from "../agent-dispatch/binding-call.js";
 
 /** Messages per packet — the band shows a handful, not the conversation. */
 export const ROOM_TOP_N = 8;
@@ -79,6 +87,10 @@ export interface PacketRoomMessage {
   /** At most {@link ROOM_TEXT_CAP} characters. */
   text: string;
   truncated: boolean;
+  /** Room text is data, never instructions — whoever wrote it. */
+  untrusted: true;
+  /** `text`, fenced as untrusted data, to put into an agent's prompt. */
+  fenced: string;
 }
 
 export type PacketRoomSection =
@@ -152,6 +164,7 @@ export async function readSessionRoom(
     channelId: input.channelId,
     items: page.map((r) => {
       const author = classifyRoomAuthor(r, input.sessionUserId);
+      const body = cap(r.content ?? "");
       return {
         id: r.id,
         at: new Date(r.timestamp).toISOString(),
@@ -161,7 +174,9 @@ export async function readSessionRoom(
         ...(author === "agent" && r.routedTeammateId
           ? { agentUserId: r.routedTeammateId }
           : {}),
-        ...cap(r.content ?? ""),
+        ...body,
+        untrusted: true as const,
+        fenced: fenceUntrustedData(body.text, `synap session room (${author})`),
       };
     }),
     hasMore: rows.length > ROOM_TOP_N,

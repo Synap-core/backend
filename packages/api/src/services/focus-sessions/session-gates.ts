@@ -19,9 +19,10 @@
  * `userType`, never the proposal's own payload.
  *
  * Known limit: `reviewedBy` records the human principal of the key that
- * approved. An agent key holding full access (`*`) approves AS its owner, so a
- * row it approved reads `decidedByHuman: true`. Agent keys without `*` cannot
- * approve at all (`assertMayDecideProposal`).
+ * approved. A key whose grant carries the `approve` right on the proposal
+ * (`assertMayDecideProposal`) approves AS its person, so a row such a key
+ * approved reads `decidedByHuman: true`; a key without that right cannot
+ * approve at all.
  */
 
 import {

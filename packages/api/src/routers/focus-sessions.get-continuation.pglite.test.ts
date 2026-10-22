@@ -144,18 +144,24 @@ async function mcpGet(id: string): Promise<Record<string, unknown>> {
 }
 
 /**
- * The two doors return the same packet. `live.measuredAt` is the moment each
- * door judged liveness — two reads, two instants — so it is compared by shape
- * (a timestamp on both sides), never by value.
+ * The two doors return the same packet. Two fields differ per read by design,
+ * so they are compared by shape, never by value: `live.measuredAt` (the
+ * instant each door judged liveness) and a room message's `fenced` copy (each
+ * fence carries a fresh random nonce).
  */
 function expectSamePacket(mcp: unknown, trpc: unknown): void {
   const norm = (packet: unknown) => {
     const copy = JSON.parse(JSON.stringify(packet)) as {
       live?: { measuredAt?: unknown };
+      room?: { items?: Array<{ fenced?: unknown }> };
     };
     if (copy.live && "measuredAt" in copy.live) {
       expect(typeof copy.live.measuredAt).toBe("string");
       copy.live.measuredAt = "<measuredAt>";
+    }
+    for (const item of copy.room?.items ?? []) {
+      expect(typeof item.fenced).toBe("string");
+      item.fenced = "<fenced>";
     }
     return copy;
   };

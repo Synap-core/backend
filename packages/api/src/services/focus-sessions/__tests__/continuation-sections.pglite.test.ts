@@ -512,6 +512,26 @@ describe("continuation packet — room", () => {
     expect(room.cursor).toBe(ROW.bot);
   });
 
+  it("every message's text arrives as untrusted data, fenced — whoever wrote it", async () => {
+    const { room } = await packetFor(S.room);
+    if (room.status !== "ok") throw new Error("room unavailable");
+    expect(room.items.length).toBeGreaterThanOrEqual(6);
+    for (const m of room.items) {
+      expect(m.untrusted).toBe(true);
+      const body = new RegExp(
+        `----- BEGIN UNTRUSTED CONTENT (\\w+) -----\\n([\\s\\S]*)\\n----- END UNTRUSTED CONTENT \\1 -----$`
+      ).exec(m.fenced);
+      expect(body?.[2]).toBe(m.text);
+      expect(m.fenced).toContain(`source: synap session room (${m.author})`);
+    }
+    // The capped text is what is fenced — never the full stored body.
+    const { room: busy } = await packetFor(S.busy);
+    if (busy.status !== "ok") throw new Error("room unavailable");
+    expect(busy.items[0]!.truncated).toBe(true);
+    expect(busy.items[0]!.fenced).toContain(busy.items[0]!.text);
+    expect(busy.items[0]!.fenced.length).toBeLessThan(ROOM_TEXT_CAP + 600);
+  });
+
   it("caps at 8 with hasMore, and caps long text", async () => {
     const { room } = await packetFor(S.busy);
     if (room.status !== "ok") throw new Error("room unavailable");
