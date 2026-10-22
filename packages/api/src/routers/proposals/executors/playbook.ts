@@ -53,13 +53,19 @@ export function missingRunArgs(input: {
  * `playbooks.run`, shown after "Couldn't apply — ". Each one says what to do.
  */
 export function notStartedReason(result: {
-  status: "proposed" | "blocked" | "skipped";
+  status: "proposed" | "blocked" | "skipped" | "draft";
   message: string;
 }): string {
   if (result.status === "proposed") {
     // The approver's OWN check refused (the agent's policy is not consulted on
     // an approved replay), so this one really is about their role.
     return "your workspace role cannot run this playbook, so approving it only filed another proposal — ask a workspace admin or owner to approve that one";
+  }
+  if (result.status === "draft") {
+    // `runPlaybook` holds a run only when an AGENT starts it (B6). The replay
+    // runs as the approver with no `agentUserId`, so this should not happen;
+    // if it does, nothing started and the draft session waits for an accept.
+    return "the run was held as a draft — accept it in its session to start it";
   }
   // `blocked` (skills not enabled) / `skipped` (cooling down, nothing ready):
   // the door's own sentence, as a clause.
