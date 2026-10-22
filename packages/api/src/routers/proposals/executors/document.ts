@@ -1,7 +1,7 @@
 import { db, proposals, eq } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
-import { reportApproved } from "./shared.js";
+import { reportApproved, storedProposalFields } from "./shared.js";
 import { materializeApprovedDocument } from "../../../services/proposals/materialize-approved-document.js";
 import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "@synap-core/types/proposals/intent";
 import { applyApprovedDocumentPatch } from "../../../services/document-patch/apply-document-patch.js";
@@ -16,7 +16,7 @@ export function registerDocumentExecutors(): void {
     key: "document/create",
     async execute({ proposal, payload, userId, input, deps }) {
       void payload;
-      const data = (proposal.data ?? {}) as Record<string, unknown>;
+      const data = storedProposalFields(proposal);
       const documentId = proposal.targetId;
 
       // The writer is shared with a connected plan's `create_document` step
