@@ -75,6 +75,19 @@ vi.mock("../../../utils/workspace-role.js", () => ({
   isPodAdmin: vi.fn(async () => false),
 }));
 
+// Whether the target is an APP's agent (PB4) is read for real on PGlite in
+// services/pod-app.connections.pglite.test.ts; here it is a flag.
+const appAgent = vi.hoisted(() => ({ is: false }));
+vi.mock("../../../services/app-agent-floor.js", () => ({
+  appAgentGovernanceDenial: async (
+    _target: string,
+    caller: { agentUserId?: string | null }
+  ) =>
+    caller.agentUserId && appAgent.is
+      ? "An app's changes are governed by its owner"
+      : null,
+}));
+
 import { registerAgentUsersRoutes } from "./agent-users.js";
 import { createNamedAgent } from "../../../services/agent-identity-service.js";
 import {
@@ -103,6 +116,7 @@ const json = (method: string, body: unknown) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  appAgent.is = false;
   h.updates = 0;
   h.agentRow = {
     id: AGENT,
@@ -162,6 +176,29 @@ describe("PATCH /agent-users/:id/governance", () => {
     await expect(res.json()).resolves.toMatchObject({
       writesRequireProposal: true,
     });
+  });
+
+  it.each([
+    ["clearing to the pod default", { posture: null }],
+    ["a named posture", { posture: "create-with-undo" }],
+    ["an empty list", { autoApproveFor: [] }],
+  ])(
+    "PB4: refuses an agent changing an APP's agent — %s — and writes nothing",
+    async (_l, body) => {
+      appAgent.is = true;
+      const res = await patch(true, body);
+      expect(res.status).toBe(403);
+      expect(vi.mocked(applyAgentPosture)).not.toHaveBeenCalled();
+      expect(vi.mocked(syncAutoApproveRules)).not.toHaveBeenCalled();
+      expect(h.updates).toBe(0);
+    }
+  );
+
+  it("PB4: the human owner still sets an app's agent", async () => {
+    appAgent.is = true;
+    const res = await patch(false, { posture: null });
+    expect(res.status).toBe(200);
+    expect(vi.mocked(applyAgentPosture)).toHaveBeenCalled();
   });
 
   it("still lets the human creator widen", async () => {

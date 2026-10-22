@@ -221,8 +221,23 @@ export interface OfficialCatalogSignature {
   message: string | null;
 }
 
+/**
+ * The pod admin's policy for pod apps (spec 17 PB4): apps that connect to a
+ * person's pod at its OAuth door. `allowUnverified` (founder decision F4,
+ * default ON when absent) lets a member connect an app that is not a Synap
+ * app; OFF, /authorize and the consent screen refuse it. Written only by a
+ * signed-in pod admin (`apps.adminSetPolicy`), never by an agent or a key.
+ */
+export interface PodAppsPolicySetting {
+  allowUnverified: boolean;
+  /** User id of the pod admin who last changed it. */
+  changedBy: string;
+  changedAt: string;
+}
+
 export interface PodSettingsBlob {
   machineDefaults?: PodMachineDefaults;
+  podApps?: PodAppsPolicySetting;
   intelligenceDefaults?: PodIntelligenceDefaults;
   proactiveDefaults?: PodProactiveDefaults;
   catalogSyncStamps?: Record<string, CatalogSyncStamp>;
