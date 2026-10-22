@@ -166,8 +166,11 @@ export interface PostChannelMessageResult {
   /**
    * An agent's `question` naming a `slotLabel`: what filing it ON the slot did
    * (`fileRoomQuestionOnSlot`) — `blocked` when the slot now carries the
-   * question as its ask; otherwise why not (`unknown_label`, `already_done`,
-   * `no_session`, `not_found`, `failed`). Absent for every other post.
+   * question as its ask; otherwise why not (`already_done`, `not_found`,
+   * `failed`). A slot the session does not declare, or a room with no
+   * session, is REFUSED before posting (`checkRoomQuestionSlot`), so
+   * `unknown_label` / `no_session` only reach here on a race. Absent for
+   * every other post.
    */
   slot?: { status: string };
 }
@@ -296,6 +299,25 @@ export async function postChannelMessage(
   // Fail CLOSED before ANY write or idempotency work: an unknown or
   // unauthorized channel throws, it never falls through to the insert.
   const channel = await assertCallerMayPostToChannel(channelId, userId);
+
+  // An agent's question ABOUT A SLOT must name a slot that exists, or nothing
+  // is posted: posting it anyway left the ask attached to nothing
+  // (`slot: unknown_label`, live 2026-10-22). See `room-question-slot.ts`.
+  if (agentUserId && params.kind === "question" && params.slotLabel?.trim()) {
+    const { checkRoomQuestionSlot } =
+      await import("../focus-sessions/room-question-slot.js");
+    const { roomQuestionSlotRefusal } =
+      await import("../focus-sessions/room-question-slot-refusal.js");
+    const refusal = roomQuestionSlotRefusal(
+      await checkRoomQuestionSlot({
+        channelId,
+        slotLabel: params.slotLabel,
+        userId,
+      }),
+      params.slotLabel
+    );
+    if (refusal) throw new TRPCError({ code: "BAD_REQUEST", message: refusal });
+  }
 
   const role = params.role || "assistant";
   const triggerAI = Boolean(params.triggerAI);

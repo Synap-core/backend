@@ -60,6 +60,7 @@ import type {
 } from "@synap-core/types/imports";
 import { emitImportFileProgress } from "../utils/event-emit.js";
 import {
+  agentUserIdOf,
   resolveImportSession,
   resolvePlaybookOutputKind,
   stampProjectMembership,
@@ -572,7 +573,10 @@ export class ImportOrchestrator {
               intentCounts: corpusMap.intentCounts,
             },
           };
-          summary = buildImportSummary(operations, input.source);
+          summary = buildImportSummary(
+            operations,
+            input.items.map((i) => i.path)
+          );
         }
       } catch (e) {
         logger.warn(
@@ -626,7 +630,10 @@ export class ImportOrchestrator {
           intentCounts: corpusMap.intentCounts,
         },
       };
-      summary = buildImportSummary(operations, input.source);
+      summary = buildImportSummary(
+        operations,
+        input.items.map((i) => i.path)
+      );
     }
 
     // Deep path failed entirely but we still have containers from the map.
@@ -641,7 +648,10 @@ export class ImportOrchestrator {
           intentCounts: corpusMap.intentCounts,
         },
       };
-      summary = buildImportSummary(operations, input.source);
+      summary = buildImportSummary(
+        operations,
+        input.items.map((i) => i.path)
+      );
     }
 
     const ops = operations ?? [];
@@ -798,6 +808,7 @@ export class ImportOrchestrator {
       );
     } else {
       const targetId = randomUUID();
+      const actingAgentUserId = agentUserIdOf(this.ctx.trpcCtx);
       const { proposal: created } = await createEventBackedProposal({
         userId,
         workspaceId,
@@ -806,7 +817,14 @@ export class ImportOrchestrator {
         proposalType: "capture.graph",
         action: "create",
         source: "import",
-        summary: `${summary} · ${quality.summary}`,
+        // The title names what approving it creates; the quality line is the
+        // body (`data.quality`), never the title (live 0728053b, 2026-10-22).
+        summary,
+        // The acting AGENT, when an agent key drove the analyze — same reader
+        // the run room's origin uses. Without it an agent's import filed an
+        // unattributed proposal (agentUserId null), which also skipped the
+        // agent dedup peek. A human caller has none and stays unattributed.
+        ...(actingAgentUserId ? { agentUserId: actingAgentUserId } : {}),
         sessionId: sessionId ?? null,
         data: buildImportGraphProposalData({
           ...(intake ? { sourceDocumentIds: intake.sourceDocumentIds } : {}),
@@ -1406,7 +1424,10 @@ export class ImportOrchestrator {
       });
     }
 
-    const summary = buildImportSummary(operations, input.source);
+    const summary = buildImportSummary(
+      operations,
+      input.items.map((i) => i.path)
+    );
 
     const stats = {
       itemsProcessed,
@@ -1540,6 +1561,7 @@ export class ImportOrchestrator {
         "import.analyzeLarge: identical graph already proposed — returning prior"
       );
     } else {
+      const actingAgentUserId = agentUserIdOf(this.ctx.trpcCtx);
       const { proposal: created } = await createEventBackedProposal({
         userId,
         workspaceId,
@@ -1548,7 +1570,14 @@ export class ImportOrchestrator {
         proposalType: "capture.graph",
         action: "create",
         source: "import",
-        summary: `${summary} · ${quality.summary}`,
+        // The title names what approving it creates; the quality line is the
+        // body (`data.quality`), never the title (live 0728053b, 2026-10-22).
+        summary,
+        // The acting AGENT, when an agent key drove the analyze — same reader
+        // the run room's origin uses. Without it an agent's import filed an
+        // unattributed proposal (agentUserId null), which also skipped the
+        // agent dedup peek. A human caller has none and stays unattributed.
+        ...(actingAgentUserId ? { agentUserId: actingAgentUserId } : {}),
         sessionId: sessionId ?? null,
         data: buildImportGraphProposalData({
           ...(intake ? { sourceDocumentIds: intake.sourceDocumentIds } : {}),

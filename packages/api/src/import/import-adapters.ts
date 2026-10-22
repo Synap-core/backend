@@ -15,6 +15,7 @@ import {
   flattenChatTranscript,
 } from "./import-parsers.js";
 import type { ImportItem, ImportLink } from "./import-items.js";
+import { isJunkEntityTitle } from "@synap/database";
 
 // ── Obsidian / wikilink-markdown adapter ───────────────────────────────────────
 
@@ -331,14 +332,27 @@ export function csvRowsToTypedImportItems(
       : plan.titleColumn
         ? row[plan.titleColumn]
         : undefined;
-    const title =
-      String(rawTitle ?? "Untitled")
-        .trim()
-        .slice(0, 500) || "Untitled";
+    // A placeholder name ("-", "…", "Unknown", "Freelance") names nobody:
+    // read it as NO title — the same predicate the create door refuses with —
+    // so the row follows the nameless-row rules below (skipped when nothing
+    // identifies it, else kept as "Untitled") instead of failing the approval.
+    const trimmedTitle = String(rawTitle ?? "")
+      .trim()
+      .slice(0, 500);
+    const title = isJunkEntityTitle(trimmedTitle) ? "Untitled" : trimmedTitle;
 
-    const organizationName = plan.organization
+    // A placeholder employer ("Freelance", "Indépendant", "Stealth", "-",
+    // "…") names no organisation: no company, no link. Judged by the SAME
+    // predicate the create door refuses with (`isJunkEntityTitle`), so analyze
+    // never proposes a company the approval will refuse — one such op refused
+    // the whole 2,827-entity proposal 0728053b (2026-10-22). The cell's text is
+    // already in `bodyLines` above.
+    const organizationCell = plan.organization
       ? String(row[plan.organization.header] ?? "").trim()
       : "";
+    const organizationName = isJunkEntityTitle(organizationCell)
+      ? ""
+      : organizationCell;
 
     // A row whose NAME columns are all empty, and that carries nothing which
     // identifies its subject (no value on an existing property such as an
