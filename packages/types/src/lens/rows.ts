@@ -40,7 +40,6 @@ import {
   normalizeObjectKind,
   resolveActionLabel,
   resolveBlockedReasonLabel,
-  resolveNeedsYouItemCount,
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveStatusLabel,
@@ -401,7 +400,10 @@ function itemShape(
         // `working` (an agent drafted it; nobody is at it).
         state: { everStarted: false },
         objectKind: "session",
-        reason: resolveNeedsYouItemCount("ask", Math.max(1, s.count)),
+        // No ask count: since the founder decision of 2026-10-22 a draft's
+        // asks are Needs-you rows of their own (blocking), and this row is the
+        // draft to accept or reject. A chip here would count them twice.
+        reason: null,
         verb: verb("accept"),
       };
     default:
@@ -443,10 +445,10 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       key: row.key,
       cls,
       ...shape,
-      // A draft's pod title is a sentence ("X started <goal> · asks you N
-      // things") whose "started" contradicts its `not_started` mark and whose
-      // count repeats the reason chip: the row names the WORK, the mark says
-      // where it stands, the chip says how many asks.
+      // A draft's pod title is a sentence ("X started <goal>") whose
+      // "started" contradicts its `not_started` mark: the row names the WORK
+      // and the mark says where it stands. Its asks are their own Needs-you
+      // rows (founder decision 2026-10-22).
       title:
         s.kind === "draft-asks"
           ? s.sessionTitle?.trim() || s.sessionGoal?.trim() || s.title

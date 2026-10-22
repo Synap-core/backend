@@ -7,7 +7,11 @@
  */
 
 import { z } from "zod";
-import { protectedProcedure, publicProcedure } from "../../trpc.js";
+import {
+  protectedProcedure,
+  publicProcedure,
+  credentialProcedure,
+} from "../../trpc.js";
 import {
   db,
   eq,
@@ -31,7 +35,6 @@ import {
   notAnAppAgent,
   recordInviteAcceptance,
 } from "@synap/database";
-import { verifyCpJwt } from "../../utils/jwks-client.js";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
@@ -58,7 +61,7 @@ export const inviteProcedures = {
   /**
    * Add member to workspace
    */
-  addMember: protectedProcedure
+  addMember: credentialProcedure
     .input(
       z.object({
         workspaceId: z.string().uuid(),
@@ -325,7 +328,7 @@ export const inviteProcedures = {
   /**
    * Update member role
    */
-  updateMemberRole: protectedProcedure
+  updateMemberRole: credentialProcedure
     .input(
       z.object({
         workspaceId: z.string().uuid(),
@@ -438,7 +441,7 @@ export const inviteProcedures = {
    * - type='workspace': requires workspaceId, adds invitee to that workspace only.
    * - type='pod': no workspaceId required, adds invitee to ALL workspaces on accept.
    */
-  createInvite: protectedProcedure
+  createInvite: credentialProcedure
     .input(
       z.discriminatedUnion("type", [
         z.object({
@@ -1278,220 +1281,6 @@ export const inviteProcedures = {
           expiresAt: invite.expiresAt,
         };
       }
-    }),
-
-  /**
-   * Accept an invite via the CP API proxy (no Kratos session needed).
-   * The CP signs a short-lived JWT containing the invitee's email.
-   * The pod looks up the local user by email and accepts on their behalf.
-   * Works for both workspace and pod invites.
-   */
-  acceptInviteViaCp: publicProcedure
-    .input(z.object({ token: z.string(), cpToken: z.string() }))
-    .mutation(async ({ input }) => {
-      const cpUrl = config.server.controlPlaneUrl;
-      const payload = await verifyCpJwt<{
-        sub: string;
-        email: string;
-        type: string;
-      }>(input.cpToken, cpUrl);
-      if (!payload || payload.type !== "invite-accept") {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Invalid CP token",
-        });
-      }
-
-      const podUser = await db.query.users.findFirst({
-        where: eq(users.email, payload.email),
-      });
-      if (!podUser) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message:
-            "No pod account found for this email. Please sign in to this pod first.",
-        });
-      }
-
-      const invite = await db.query.invites.findFirst({
-        where: eq(invites.token, input.token),
-      });
-      if (!invite)
-        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
-      if (invite.expiresAt < new Date())
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Invite expired" });
-      if (
-        invite.email &&
-        payload.email &&
-        invite.email.toLowerCase() !== payload.email.toLowerCase()
-      ) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Invite email does not match CP principal",
-        });
-      }
-
-      const dbConn = await getDb();
-      // Shared singleton — a fresh EventRepository has no registered hooks, so
-      // its emitCompleted() append would silently never reach the
-      // realtime/materialization/sync hooks.
-      const eventRepo = eventRepository;
-      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
-
-      if (invite.type === "workspace") {
-        if (!invite.workspaceId)
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const member = await memberRepo.add(
-          {
-            workspaceId: invite.workspaceId,
-            userId: podUser.id,
-            role: invite.role as "owner" | "editor" | "viewer",
-            inviteId: invite.id,
-          },
-          podUser.id
-        );
-        // Team roster → person bridge (best-effort; never blocks membership)
-        void ensureTeamPersonForMember(dbConn, {
-          memberUserId: podUser.id,
-          workspaceId: invite.workspaceId,
-          ownerUserId: invite.invitedBy ?? podUser.id,
-        }).catch((err) => {
-          logger.warn(
-            {
-              err,
-              memberUserId: podUser.id,
-              workspaceId: invite.workspaceId,
-            },
-            "Failed to ensure team person for member on CP invite accept"
-          );
-        });
-        auditLog({
-          subjectType: "workspaceMember",
-          action: "add",
-          phase: "completed",
-          subjectId: member.id,
-          userId: podUser.id,
-          workspaceId: invite.workspaceId,
-          data: { source: "cp-proxy", email: payload.email },
-        });
-        await recordInviteAcceptance(invite, podUser.id);
-        await db.delete(invites).where(eq(invites.id, invite.id));
-        void notifyCpInviteLifecycle({
-          inviteToken: invite.token,
-          event: "accepted",
-          actorEmail: payload.email,
-          actorUserId: podUser.id,
-        });
-        return {
-          status: "accepted" as const,
-          type: "workspace" as const,
-          workspaceId: invite.workspaceId,
-        };
-      } else {
-        // Pod invite via CP proxy. ADDITIVE (Membership → Visibility, Wave 1):
-        // record durable pod-membership identity. The workspace fan-out below is
-        // KEPT — removing it now would regress visibility before Wave 2's floor
-        // consults pod_members. onConflictDoNothing: one row per user_id.
-        await db
-          .insert(podMembers)
-          .values({
-            userId: podUser.id,
-            podRole: "member",
-            invitedBy: invite.invitedBy ?? null,
-          })
-          .onConflictDoNothing();
-        const allWorkspaces = await db.query.workspaces.findMany();
-        for (const ws of allWorkspaces) {
-          const alreadyMember = await db.query.workspaceMembers.findFirst({
-            where: and(
-              eq(workspaceMembers.workspaceId, ws.id),
-              eq(workspaceMembers.userId, podUser.id)
-            ),
-          });
-          if (alreadyMember) continue;
-          await memberRepo.add(
-            {
-              workspaceId: ws.id,
-              userId: podUser.id,
-              role: invite.role as "owner" | "editor" | "viewer",
-            },
-            podUser.id
-          );
-          // Team roster → person bridge (best-effort; never blocks membership)
-          void ensureTeamPersonForMember(dbConn, {
-            memberUserId: podUser.id,
-            workspaceId: ws.id,
-            ownerUserId: invite.invitedBy ?? podUser.id,
-          }).catch((err) => {
-            logger.warn(
-              { err, memberUserId: podUser.id, workspaceId: ws.id },
-              "Failed to ensure team person for member on CP pod invite accept"
-            );
-          });
-        }
-        await recordInviteAcceptance(invite, podUser.id);
-        await db.delete(invites).where(eq(invites.id, invite.id));
-        void notifyCpInviteLifecycle({
-          inviteToken: invite.token,
-          event: "accepted",
-          actorEmail: payload.email,
-          actorUserId: podUser.id,
-        });
-        return {
-          status: "accepted" as const,
-          type: "pod" as const,
-          workspacesJoined: allWorkspaces.length,
-        };
-      }
-    }),
-
-  /**
-   * Reject invite via CP proxy token when no pod session exists in browser context.
-   */
-  rejectInviteViaCp: publicProcedure
-    .input(
-      z.object({
-        token: z.string(),
-        cpToken: z.string(),
-        reason: z.string().optional(),
-      })
-    )
-    .mutation(async ({ input }) => {
-      const cpUrl = config.server.controlPlaneUrl;
-      const payload = await verifyCpJwt<{
-        sub: string;
-        email: string;
-        type: string;
-      }>(input.cpToken, cpUrl);
-      if (!payload || payload.type !== "invite-accept") {
-        throw new TRPCError({
-          code: "UNAUTHORIZED",
-          message: "Invalid CP token",
-        });
-      }
-
-      const invite = await db.query.invites.findFirst({
-        where: eq(invites.token, input.token),
-      });
-      if (!invite) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
-      }
-      if (invite.email.toLowerCase() !== payload.email.toLowerCase()) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Invite is not addressed to CP principal email",
-        });
-      }
-
-      await db.delete(invites).where(eq(invites.id, invite.id));
-      void notifyCpInviteLifecycle({
-        inviteToken: invite.token,
-        event: "rejected",
-        actorEmail: payload.email,
-        actorUserId: payload.sub,
-        reason: input.reason,
-      });
-      return { success: true };
     }),
 
   /**

@@ -17,8 +17,13 @@
  *                                ID Metadata Documents (pod apps, 0338).
  *   oauth_authorization_codes  — short-lived, single-use authorization codes
  *                                bound to a PKCE challenge.
- *   oauth_refresh_tokens       — a pod app's rotating, single-use refresh
- *                                tokens (0339); MCP (DCR) clients get none.
+ *   oauth_refresh_tokens       — rotating, single-use refresh tokens of a
+ *                                pod app (0339) or of a Synap app's signed-in
+ *                                device (0340); MCP (DCR) clients get none.
+ *   person_devices             — a Synap app (desktop, Relay) signed in as a
+ *                                person: one per sign-in (0340).
+ *   person_device_tokens       — that device's short-lived access tokens
+ *                                (0340), sha256 only.
  *
  * SECURITY: like `mcp_connect_codes`, only a sha256 HASH of the authorization
  * code is stored (`code_hash` PK, the same lookup-hash pattern as
@@ -33,6 +38,7 @@
  */
 
 import {
+  boolean,
   pgTable,
   text,
   timestamp,
@@ -42,6 +48,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import { apps } from "./apps.js";
+import { users } from "./users.js";
 
 export const oauthClients = pgTable("oauth_clients", {
   // RFC 7591 §3.2.1 `client_id`. Generated (`dcr_<random>`), never client-chosen.
@@ -158,6 +165,14 @@ export const oauthAuthorizationCodes = pgTable(
       mode: "date",
       withTimezone: true,
     }),
+
+    // The consenting session's real `authenticated_at` (0340): a Synap app's
+    // device takes it as its step-up clock. NULL when unknown.
+    authTime: timestamp("auth_time", { mode: "date", withTimezone: true }),
+
+    // A Synap app's STEP-UP code (`prompt=login`, "Confirm it's you", 0340):
+    // it re-confirms a device the app holds and can never make a new one.
+    stepUp: boolean("step_up").notNull().default(false),
   },
   (table) => ({
     expiresAtIdx: index("oauth_authorization_codes_expires_at_idx").on(
@@ -178,6 +193,11 @@ export const oauthAuthorizationCodes = pgTable(
  * `revoked_at` means KILLED (reuse, /revoke, a newer consent, the app revoked),
  * never "used"; a used token keeps its row until it expires, so a late replay
  * is still recognised as one. Logic: `routers/oauth/refresh.ts` (api).
+ *
+ * Since 0340 a token belongs to EXACTLY ONE owner (a CHECK): a pod app
+ * connection (`app_id`) or a Synap app's signed-in device (`device_id`, whose
+ * `id` is also the family id). A device's tokens never outlive its absolute
+ * cap (`person_devices.expires_at`).
  */
 export const oauthRefreshTokens = pgTable(
   "oauth_refresh_tokens",
@@ -192,9 +212,12 @@ export const oauthRefreshTokens = pgTable(
     // The HUMAN whose connection this is (the key's `linkedUserId`).
     userId: text("user_id").notNull(),
     // The connection (`apps` row, mode 'oauth'); deleting it deletes these.
-    appId: uuid("app_id")
-      .notNull()
-      .references(() => apps.id, { onDelete: "cascade" }),
+    // NULL exactly when `device_id` is set (0340).
+    appId: uuid("app_id").references(() => apps.id, { onDelete: "cascade" }),
+    // The signed-in device (0340); NULL for a pod app's token.
+    deviceId: uuid("device_id").references((): any => personDevices.id, {
+      onDelete: "cascade",
+    }),
     expiresAt: timestamp("expires_at", {
       mode: "date",
       withTimezone: true,
@@ -217,5 +240,87 @@ export const oauthRefreshTokens = pgTable(
     ),
     appIdx: index("oauth_refresh_tokens_app_idx").on(table.appId),
     familyIdx: index("oauth_refresh_tokens_family_idx").on(table.familyId),
+    deviceIdx: index("oauth_refresh_tokens_device_idx").on(table.deviceId),
+  })
+);
+
+/**
+ * A Synap app signed in as a PERSON (0340): one row per
+ * sign-in of a FIRST-PARTY client (`FIRST_PARTY_CLIENTS`, api
+ * `routers/oauth/config.ts`). It is the refresh family (`oauth_refresh_tokens`
+ * with `device_id` = this id) and the thing the person sees in "Signed-in
+ * devices" and revokes. `expires_at` is the absolute cap (180 d): nothing it
+ * holds lives past it, however often it refreshes. Revoked = every access and
+ * refresh token it holds stops at once (they are read through it).
+ * Logic: api `services/person-device-token.ts` (the one mint door) and
+ * `@synap/database/person-devices` (lookup, revoke).
+ */
+export const personDevices = pgTable(
+  "person_devices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // The person signed in. Never an agent (the mint door refuses one).
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // The first-party client (`synap-desktop`, `synap-relay`).
+    clientId: text("client_id").notNull(),
+    // What the app calls this device ("MacBook Pro"). App-supplied TEXT.
+    label: text("label"),
+    userAgent: text("user_agent"),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    // Its last refresh (the devices list shows it).
+    lastUsedAt: timestamp("last_used_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
+    // Absolute cap: created_at + 180 d.
+    expiresAt: timestamp("expires_at", {
+      mode: "date",
+      withTimezone: true,
+    }).notNull(),
+    revokedAt: timestamp("revoked_at", { mode: "date", withTimezone: true }),
+    revokedReason: text("revoked_reason"),
+    // When the person last really AUTHENTICATED for this device: copied from
+    // the consenting Kratos session's `authenticated_at` (via the code), moved
+    // only by a step-up (`prompt=login`), never by a refresh. Credential doors
+    // accept the device only shortly after it (api utils/device-session.ts).
+    authTime: timestamp("auth_time", { mode: "date", withTimezone: true }),
+  },
+  (table) => ({
+    userIdx: index("person_devices_user_idx").on(table.userId),
+  })
+);
+
+/**
+ * A device's ACCESS tokens (0340): sha256(token) only, 1 h, looked up by the
+ * hash on every request (no bcrypt). Valid only while the token is unexpired
+ * AND its device is neither revoked nor past its cap. Accepted on the app API
+ * only (`/trpc`, realtime); never an `api_keys` row, so `/mcp` and Hub REST
+ * cannot resolve one.
+ */
+export const personDeviceTokens = pgTable(
+  "person_device_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tokenHash: text("token_hash").notNull(),
+    deviceId: uuid("device_id")
+      .notNull()
+      .references(() => personDevices.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", {
+      mode: "date",
+      withTimezone: true,
+    }).notNull(),
+    createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    tokenHashUnique: uniqueIndex("person_device_tokens_token_hash_uidx").on(
+      table.tokenHash
+    ),
+    deviceIdx: index("person_device_tokens_device_idx").on(table.deviceId),
   })
 );

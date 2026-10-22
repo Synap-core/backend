@@ -128,6 +128,12 @@ export async function createContext(
           name: session.identity.traits.name,
         },
         session,
+        // The kind of person session, from the gate that resolved it: only
+        // `appSessionMiddleware` marks a device token, and only from its row.
+        sessionKind:
+          honoCtx?.get("sessionKind") === "person_device"
+            ? "person_device"
+            : "kratos",
         req,
         workspaceId, // Add workspace ID to context
         projectId, // Add project lens to context

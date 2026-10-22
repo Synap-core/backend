@@ -360,6 +360,29 @@ const countProposals = async () =>
   (await q(`select id from proposals where target_type = 'app'`)).rows.length;
 const countCodes = async () =>
   (await q(`select code_hash from oauth_authorization_codes`)).rows.length;
+const countApproved = async () =>
+  (
+    await q(
+      `select id from proposals where target_type = 'app' and status = 'approved'`
+    )
+  ).rows.length;
+
+/**
+ * The two refusals of WHO decides, each pinned to the layer that throws it.
+ * A request carrying an acting agent or a key's grant (any key door) stops at
+ * the consent door's own person-only gate (`decideOAuthAuthorization`,
+ * oauth/consent.ts), before the caller is even looked up. An agent named only
+ * on the request context gets past that gate and stops at the connect's owner
+ * floor (`assertOwnerCredential`, app-connect.ts), before anything is filed.
+ */
+const PERSON_ONLY_REFUSAL = {
+  code: "FORBIDDEN",
+  message: "Only a person signed in to this pod can authorize a connection.",
+};
+const AGENT_CREDENTIAL_REFUSAL = (act: string) => ({
+  code: "FORBIDDEN",
+  message: `An agent credential cannot ${act} — sign in as the app's owner.`,
+});
 
 describe("the consent screen shows the app as its domain, and what it may be given where", () => {
   it("an unverified app: domain headline, the spaces per permission (writes only where the person may write)", async () => {
@@ -638,44 +661,49 @@ describe("I4 — the app's writes are governed (ask-first); consent never sets a
 });
 
 describe("the agent-approver floor — an agent caller never approves a consent", () => {
-  const refusedAs = async (run: () => Promise<unknown>) => {
+  const refusedAs = async (
+    run: () => Promise<unknown>,
+    refusal: { code: string; message: string }
+  ) => {
     const before = {
       proposals: await countProposals(),
       codes: await countCodes(),
+      approved: await countApproved(),
     };
-    await expect(run()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(run()).rejects.toMatchObject(refusal);
+    // No code minted, nothing filed, nothing approved.
     expect(await countCodes()).toBe(before.codes);
-    // Nothing approved: no approved app/connect proposal was added.
-    const approved = (
-      await q(
-        `select id from proposals where target_type = 'app' and status = 'approved'`
-      )
-    ).rows.length;
-    return { before, approved };
+    expect(await countProposals()).toBe(before.proposals);
+    expect(await countApproved()).toBe(before.approved);
   };
 
   it("an agent key's context (ctx.agentUserId) is refused", async () => {
-    const { before } = await refusedAs(() =>
-      consent([{ permission: READ, workspaceId: BRAND }], {
-        ctx: { agentUserId: AGENT },
-      })
+    await refusedAs(
+      () =>
+        consent([{ permission: READ, workspaceId: BRAND }], {
+          ctx: { agentUserId: AGENT },
+        }),
+      AGENT_CREDENTIAL_REFUSAL("connect an app")
     );
-    expect(await countProposals()).toBe(before.proposals);
   });
 
   it("an acting agent in the request ALS (a key door's shape) is refused", async () => {
-    await refusedAs(() =>
-      runWithActingAgent(AGENT, () =>
-        consent([{ permission: READ, workspaceId: BRAND }])
-      )
+    await refusedAs(
+      () =>
+        runWithActingAgent(AGENT, () =>
+          consent([{ permission: READ, workspaceId: BRAND }])
+        ),
+      PERSON_ONLY_REFUSAL
     );
   });
 
   it("the Intelligence Service's internal key is refused", async () => {
-    await refusedAs(() =>
-      consent([{ permission: READ, workspaceId: BRAND }], {
-        ctx: { keyType: "is_internal" },
-      })
+    await refusedAs(
+      () =>
+        consent([{ permission: READ, workspaceId: BRAND }], {
+          ctx: { keyType: "is_internal" },
+        }),
+      AGENT_CREDENTIAL_REFUSAL("connect an app")
     );
   });
 });
@@ -689,12 +717,21 @@ describe("T4 — the app's own token can never re-consent, widen or end itself",
     const row = (await appRow(OWNER, STUDIO))!;
     const asApp = <T>(fn: () => Promise<T>) =>
       runWithActingAgent(id.agentUserId!, () => runWithGrant(id.grant!, fn));
+    const before = {
+      proposals: await countProposals(),
+      codes: await countCodes(),
+      approved: await countApproved(),
+    };
     await expect(
       asApp(() => consent([{ permission: CREATE, workspaceId: BRAND }]))
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    ).rejects.toMatchObject(PERSON_ONLY_REFUSAL);
     await expect(
       asApp(() => revokeApp({ publicId: row.public_id, ownerUserId: OWNER }))
-    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    ).rejects.toMatchObject(AGENT_CREDENTIAL_REFUSAL("revoke an app"));
+    // No code minted, nothing filed, nothing approved.
+    expect(await countCodes()).toBe(before.codes);
+    expect(await countProposals()).toBe(before.proposals);
+    expect(await countApproved()).toBe(before.approved);
     // Still connected, still exactly what was consented.
     expect((await appRow(OWNER, STUDIO))!.revoked_at).toBeNull();
     expect(await liveGrantsOf(record.id)).toEqual([
