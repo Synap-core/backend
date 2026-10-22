@@ -55,7 +55,8 @@ describe("FirstPartyConsent", () => {
         reconfirm={false}
       />
     );
-    expect(out).toContain("synap.live");
+    // HostName lets it wrap after a dot only: read the text, not the markup.
+    expect(out.replace(/<[^>]+>/g, "")).toContain("synap.live");
   });
 });
 

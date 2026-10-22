@@ -190,6 +190,27 @@ export function postedMessageIdFor(
   );
 }
 
+/**
+ * WHO WROTE this post — the ONE derivation of `messages.authorType` for this
+ * door. `userId` is always the HUMAN owner (see `agentUserId`), so the owner id
+ * on a row says nothing about who spoke; the author type does:
+ *   - an agent key authored it            → `ai_agent`
+ *   - a `user`-role post (a person typing) → `human`
+ *   - anything else (`assistant` / `system` with no agent: the POD speaking —
+ *     recall, input, dispatch and route notices)  → `bot`
+ * It used to be `agentUserId ? ai_agent : human`, which filed every pod notice
+ * as the owner's own words (verified live 2026-10-22 on the session-recall
+ * notice) — a reader that trusts `authorType: 'human'` (the answer door, the
+ * bridge wake, attention counts) then mistook the pod for the person.
+ */
+export function authorTypeForPost(p: {
+  role: string;
+  agentUserId?: string;
+}): MessageAuthorType {
+  if (p.agentUserId) return MessageAuthorType.AI_AGENT;
+  return p.role === "user" ? MessageAuthorType.HUMAN : MessageAuthorType.BOT;
+}
+
 /** Build a duplicate-ignored receipt for a prior message id (pure — no I/O). */
 function duplicateReceipt(
   msgId: string,
@@ -406,9 +427,7 @@ export async function postChannelMessage(
       // See `agentUserId` on the params type: without this an agent post is
       // indistinguishable from its owner's. Hash-safe — `computeMessageHash`
       // covers (id, content, previousHash) only.
-      authorType: agentUserId
-        ? MessageAuthorType.AI_AGENT
-        : MessageAuthorType.HUMAN,
+      authorType: authorTypeForPost({ role, agentUserId }),
       // `routedSource` must accompany `routedTeammateId` — the UI resolver
       // (`@synap-core/channels` room-adapters/message.ts:92) requires BOTH or it
       // renders no attribution at all. DIRECT = this agent posted on its own
