@@ -112,7 +112,7 @@ const oauthAuthorizeParamsSchema = z.object({
   // sign-in before the decision (oauth/consent.ts reauthenticationRequired).
   maxAge: z.union([z.number().int().min(0), z.string().max(16)]).optional(),
   prompt: z.string().max(32).optional(),
-  // /authorize's signed request time (`auth_req`), for a third-party
+  // /authorize's signed request time (`auth_req`), for
   // `prompt=login` / `max_age=0`.
   authRequest: z.string().max(128).optional(),
 });

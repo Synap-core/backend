@@ -23,6 +23,7 @@
  */
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { TRPCError } from "@trpc/server";
 import {
   db,
   eq,
@@ -40,10 +41,7 @@ import {
 } from "../../services/app-connect.js";
 import { podAppMayConnect } from "../../services/pod-app-policy.js";
 import type { Context } from "../../types/context.js";
-import {
-  STEP_UP_WINDOW_MS,
-  isDeviceSession,
-} from "../../utils/device-session.js";
+import { isDeviceSession } from "../../utils/device-session.js";
 
 import {
   OAuthError,
@@ -120,7 +118,7 @@ export interface AuthorizeParams {
   prompt?: string | null;
   /**
    * When /authorize received this request, signed (`signAuthRequestTime`):
-   * what a third-party `prompt=login` / `max_age=0` is measured against.
+   * what `prompt=login` / `max_age=0` is measured against.
    */
   authRequest?: string | null;
 }
@@ -165,7 +163,7 @@ export function isDeviceReconfirm(
 /**
  * When the authorize request was made, signed by this pod: `/authorize`
  * stamps it on the consent URL (`auth_req`) whenever the request asks for a
- * fresh sign-in, so a third-party client's `prompt=login` / `max_age=0` can
+ * fresh sign-in, so `prompt=login` / `max_age=0` can
  * demand a sign-in made AFTER the request (OIDC), and survive the round trip
  * through /login without looping. Derived from JWT_SECRET like the refresh
  * successor key; per process without one (dev/test).
@@ -211,21 +209,16 @@ export function verifyAuthRequestTime(
 
 /**
  * Must the person sign in again before deciding? Only when the request asks
- * for it: `prompt=login`, or `max_age`. An unknown sign-in time is never
- * fresh. Two rules, by who asks:
- *  - a Synap app (`first_party`): "fresh" is within `max_age`, never tighter
- *    than the step-up window (the time from signing in to clicking), so
- *    `max_age=0` and `prompt=login` both mean "within the last 5 minutes" —
- *    the device's step-up clock is what a credential door then checks;
- *  - any other client: OIDC as written. `prompt=login` and `max_age=0` need
- *    a sign-in made AFTER the authorize request (its signed time,
- *    `auth_req`; missing or forged → sign in again); `max_age=N` needs one
- *    within N seconds, with no floor.
+ * for it, and then as OIDC Core §3.1.2.1 says, for every client: `prompt=login`
+ * and `max_age=0` need a sign-in made AFTER the authorize request (its signed
+ * time, `auth_req`; missing or forged → sign in again), `max_age=N` one within
+ * N seconds. An unknown sign-in time is never fresh. (The 5-minute window is
+ * a different rule: how long a Synap app's step-up stays good at a credential
+ * door, `utils/device-session.ts`.)
  */
 export function reauthenticationRequired(
   params: Pick<AuthorizeParams, "maxAge" | "prompt" | "authRequest">,
   authenticatedAt: Date | null,
-  clientKind: string,
   now: number = Date.now()
 ): boolean {
   const maxAgeSeconds =
@@ -241,14 +234,6 @@ export function reauthenticationRequired(
   const login = params.prompt === "login";
   if (!login && !hasMaxAge) return false;
   if (!authenticatedAt) return true;
-  const age = now - authenticatedAt.getTime();
-  if (clientKind === "first_party") {
-    const limit = Math.max(
-      login || !hasMaxAge ? 0 : maxAgeSeconds! * 1000,
-      STEP_UP_WINDOW_MS
-    );
-    return age > limit;
-  }
   if (login || maxAgeSeconds === 0) {
     const requestedAt = verifyAuthRequestTime(params.authRequest, now);
     if (requestedAt === null) return true;
@@ -256,7 +241,7 @@ export function reauthenticationRequired(
     // Signed in after the request: that IS `max_age=0`.
     if (!hasMaxAge || maxAgeSeconds === 0) return false;
   }
-  return hasMaxAge && age > maxAgeSeconds! * 1000;
+  return now - authenticatedAt.getTime() > maxAgeSeconds! * 1000;
 }
 
 /** An authorize request that passed BOTH validation phases. */
@@ -560,7 +545,12 @@ async function appSignInFor(
   if (!app) throw new AuthorizeUserError(APP_CANNOT_SIGN_IN);
   const reach = await appSignInReach(app, viewerUserId);
   if (reach === "not_for_you") {
-    throw new AuthorizeUserError(appNotForYou(client.clientName));
+    // A refusal of WHO decides is FORBIDDEN; `AuthorizeUserError` (400) is
+    // for a malformed request. The screen shows the message either way.
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: appNotForYou(client.clientName),
+    });
   }
   if (reach.length === 0) {
     throw new AuthorizeUserError(
@@ -619,8 +609,7 @@ export async function getOAuthConsentContext(
     appSignIn,
     reauthenticate: reauthenticationRequired(
       params,
-      sessionAuthenticatedAt(callerSession),
-      req.client.clientKind
+      sessionAuthenticatedAt(callerSession)
     ),
     reconfirmDevice: isDeviceReconfirm(req.client.clientKind, params.prompt),
   };
@@ -703,9 +692,11 @@ export async function decideOAuthAuthorization(
   // (90 days) through this door. Consent is a browser act, on the console,
   // in a Kratos session.
   if (isDeviceSession(ctx)) {
-    throw new AuthorizeUserError(
-      "Authorize a connection from your pod's console, in your browser."
-    );
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Authorize a connection from your pod's console, in your browser.",
+    });
   }
 
   const caller = await db.query.users.findFirst({
@@ -723,7 +714,7 @@ export async function decideOAuthAuthorization(
   // real time of that sign-in travels with the code (a Synap app's device
   // takes it as its step-up clock).
   const authTime = sessionAuthenticatedAt(ctx?.session);
-  if (reauthenticationRequired(input, authTime, req.client.clientKind)) {
+  if (reauthenticationRequired(input, authTime)) {
     throw new ReauthenticationRequiredError();
   }
 

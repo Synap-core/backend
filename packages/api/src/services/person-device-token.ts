@@ -46,8 +46,7 @@ import {
 } from "../routers/oauth/config.js";
 import {
   findRefreshToken,
-  redeemRefreshToken,
-  rotateRefreshToken,
+  refreshDeviceToken,
   startRefreshFamily,
 } from "../routers/oauth/refresh.js";
 import { OAuthError } from "../routers/oauth/protocol.js";
@@ -129,13 +128,14 @@ async function identityIsLive(userId: string): Promise<boolean> {
  */
 async function mintAccessToken(
   deviceId: string,
-  capAt: Date
+  capAt: Date,
+  ex: Pick<typeof db, "insert" | "delete"> = db
 ): Promise<{ accessToken: string; accessExpiresAt: Date }> {
   const accessToken = `${PERSON_DEVICE_TOKEN_PREFIX}${randomBytes(32).toString("base64url")}`;
   const accessExpiresAt = new Date(
     Math.min(Date.now() + PERSON_DEVICE_ACCESS_TTL_MS, capAt.getTime())
   );
-  await db
+  await ex
     .delete(personDeviceTokens)
     .where(
       and(
@@ -143,7 +143,7 @@ async function mintAccessToken(
         lte(personDeviceTokens.expiresAt, new Date())
       )
     );
-  await db.insert(personDeviceTokens).values({
+  await ex.insert(personDeviceTokens).values({
     tokenHash: hashPersonDeviceToken(accessToken),
     deviceId,
     expiresAt: accessExpiresAt,
@@ -260,30 +260,31 @@ export async function refreshPersonDevice(args: {
     });
     throw new OAuthError("invalid_grant", INVALID_REFRESH);
   }
-  const redeemed = await redeemRefreshToken(args.refreshToken, args.clientId);
-  if (!redeemed.deviceId || !redeemed.capAt) {
-    // A pod app's token presented by a first-party client id: never ours.
-    throw new OAuthError("invalid_grant", INVALID_REFRESH);
+  if (held?.deviceId && held.clientId === args.clientId) {
+    const ended = !(await isHuman(held.userId))
+      ? "The signed-in account is no longer a person"
+      : !(await personHoldsPodAccess(db, held.userId))
+        ? DEVICE_ENDED_NO_ACCESS
+        : null;
+    if (ended) {
+      await revokePersonDevice(db, { deviceId: held.deviceId, reason: ended });
+      throw new OAuthError("invalid_grant", INVALID_REFRESH);
+    }
   }
-  const ended = !(await isHuman(redeemed.userId))
-    ? "The signed-in account is no longer a person"
-    : !(await personHoldsPodAccess(db, redeemed.userId))
-      ? DEVICE_ENDED_NO_ACCESS
-      : null;
-  if (ended) {
-    await revokePersonDevice(db, {
-      deviceId: redeemed.deviceId,
-      reason: ended,
-    });
-    throw new OAuthError("invalid_grant", INVALID_REFRESH);
-  }
-  const access = await mintAccessToken(redeemed.deviceId, redeemed.capAt);
-  const refreshToken = await rotateRefreshToken(redeemed);
-  await db
-    .update(personDevices)
-    .set({ lastUsedAt: new Date() })
-    .where(eq(personDevices.id, redeemed.deviceId));
-  return { deviceId: redeemed.deviceId, ...access, refreshToken };
+  // Claim, mint and rotate in ONE transaction (refresh.ts).
+  const { redeemed, minted, refreshToken } = await refreshDeviceToken(
+    args.refreshToken,
+    args.clientId,
+    async (tx, r) => {
+      const access = await mintAccessToken(r.deviceId!, r.capAt!, tx);
+      await tx
+        .update(personDevices)
+        .set({ lastUsedAt: new Date() })
+        .where(eq(personDevices.id, r.deviceId!));
+      return access;
+    }
+  );
+  return { deviceId: redeemed.deviceId!, ...minted, refreshToken };
 }
 
 /**

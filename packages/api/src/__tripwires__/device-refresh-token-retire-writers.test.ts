@@ -7,7 +7,7 @@
  * single-use, and redeem (routers/oauth/refresh.ts) reads "this device token
  * is revoked while its device lives" as a REUSE — two holders — and ends the
  * device. That reading is true only because exactly ONE writer revokes a
- * single token of a live device: the retry grace (`deviceRetryGrace`), which
+ * single token of a live device: the retry grace (`refreshDeviceToken`), which
  * retires an unused successor. A new writer that revokes a device token and
  * leaves the device alive would make every later presentation of that token
  * sign the person out as a "theft". So a new writer must be classified here,
@@ -40,7 +40,7 @@ const SKIP = new Set(["node_modules", "dist", "__fixtures__"]);
 
 /** Every writer of `revoked_at` on refresh tokens, and why it is safe. */
 const CLASSIFIED: Record<string, string> = {
-  deviceRetryGrace:
+  refreshDeviceToken:
     "THE single-token retire: a device's UNUSED successor, during a retry after a lost response. The one writer that leaves the device alive.",
   revokeRefreshFamily:
     "a whole family, then the connection's access key: for a device, the device ends (revokeConnectionAccessKey).",

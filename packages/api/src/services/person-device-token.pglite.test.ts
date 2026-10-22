@@ -122,10 +122,12 @@ import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { computeS256Challenge } from "../routers/oauth/protocol.js";
+import { successorRefreshToken } from "../routers/oauth/refresh.js";
 import { oauthApp } from "../routers/oauth/routes.js";
 import {
   decideOAuthAuthorization,
   getOAuthConsentContext,
+  signAuthRequestTime,
   verifyAuthRequestTime,
 } from "../routers/oauth/consent.js";
 import { appSessionMiddleware } from "../middleware/app-session.js";
@@ -366,12 +368,21 @@ const kratosCtx = (userId: string, agoMs: number) =>
 
 /**
  * The consent click by `userId` → the code it redirects with. By default the
- * person signed in to the console a minute ago (a FRESH sign-in).
+ * person signed in to the console a minute ago (a FRESH sign-in). A request
+ * for a fresh sign-in (`prompt` / `maxAge`) carries /authorize's signed time:
+ * by default just BEFORE that sign-in (the person signed in for it).
  */
 async function consent(
   userId = PERSON,
-  opts: { signedInAgoMs?: number; prompt?: string; maxAge?: number } = {}
+  opts: {
+    signedInAgoMs?: number;
+    prompt?: string;
+    maxAge?: number;
+    requestedAgoMs?: number;
+  } = {}
 ): Promise<string> {
+  const signedInAgo = opts.signedInAgoMs ?? MIN_MS;
+  const requestedAgo = opts.requestedAgoMs ?? signedInAgo + 1_000;
   const { redirectTo } = await decideOAuthAuthorization(
     {
       clientId: DESKTOP,
@@ -384,9 +395,12 @@ async function consent(
       approve: true,
       ...(opts.prompt ? { prompt: opts.prompt } : {}),
       ...(opts.maxAge !== undefined ? { maxAge: opts.maxAge } : {}),
+      ...(opts.prompt || opts.maxAge !== undefined
+        ? { authRequest: signAuthRequestTime(Date.now() - requestedAgo) }
+        : {}),
     },
     userId,
-    kratosCtx(userId, opts.signedInAgoMs ?? MIN_MS)
+    kratosCtx(userId, signedInAgo)
   );
   const url = new URL(redirectTo);
   expect(url.searchParams.get("iss")).toBe(ISSUER);
@@ -590,6 +604,41 @@ describe("(d) refresh rotates; a reused refresh token ends the device", () => {
     expect(r.body.synap_device_id).toBe(s.deviceId);
     expect(r.body.refresh_token).not.toBe(s.refresh);
     expect(await listDevices({ bearer: r.body.access_token })).not.toEqual([]);
+  });
+
+  it("a database error after the claim spends nothing: the same token refreshes after", async () => {
+    const s = await signIn();
+    await q(
+      `alter table person_device_tokens rename to person_device_tokens_away`
+    );
+    let failed: { status: number; body: any };
+    try {
+      failed = await refresh(s.refresh);
+    } finally {
+      await q(
+        `alter table person_device_tokens_away rename to person_device_tokens`
+      );
+    }
+    expect(failed.status).toBe(500);
+    const again = await refresh(s.refresh);
+    expect(again.status).toBe(200);
+    expect((await device(s.deviceId)).revoked_at).toBeNull();
+  });
+
+  it("a successor is random, never derivable from its row id", async () => {
+    const s = await signIn();
+    const next = await refresh(s.refresh);
+    expect(next.status).toBe(200);
+    const [row] = (
+      await q<{ replaced_by: string }>(
+        `select replaced_by from oauth_refresh_tokens where device_id = $1 and replaced_by is not null`,
+        [s.deviceId]
+      )
+    ).rows;
+    expect(row?.replaced_by).toBeTruthy();
+    expect(next.body.refresh_token).not.toBe(
+      successorRefreshToken(row!.replaced_by)
+    );
   });
 
   it("replaying the used token: invalid_grant, the device ends, its live access token stops", async () => {
@@ -1030,12 +1079,29 @@ describe("(j) step-up: the clock is the device's real sign-in", () => {
     expect(await count()).toBe(before);
   });
 
-  it("prompt=login on an old console sign-in is refused (LOGIN_REQUIRED), before any code", async () => {
+  it("prompt=login on a sign-in from before the request is refused (LOGIN_REQUIRED), before any code", async () => {
     await expect(
-      consent(PERSON, { prompt: "login", signedInAgoMs: 30 * MIN_MS })
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 30 * MIN_MS,
+        requestedAgoMs: 0,
+      })
     ).rejects.toMatchObject({ reasonCode: "LOGIN_REQUIRED" });
     await expect(
-      consent(PERSON, { maxAge: 0, signedInAgoMs: 30 * MIN_MS })
+      consent(PERSON, {
+        maxAge: 0,
+        signedInAgoMs: 30 * MIN_MS,
+        requestedAgoMs: 0,
+      })
+    ).rejects.toMatchObject({ reasonCode: "LOGIN_REQUIRED" });
+    // A Synap app's prompt=login is OIDC too: a sign-in one minute old but
+    // made BEFORE the request does not satisfy it.
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: MIN_MS,
+        requestedAgoMs: 0,
+      })
     ).rejects.toMatchObject({ reasonCode: "LOGIN_REQUIRED" });
     // max_age wider than the sign-in's age is satisfied.
     await expect(
@@ -1126,7 +1192,10 @@ describe("(h) an agent cannot sign in as a device", () => {
           },
         } as never
       )
-    ).rejects.toThrow(/console/);
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/console/),
+    });
   });
 
   it("a non-first-party client id never gets a device", async () => {
