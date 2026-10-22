@@ -60,6 +60,14 @@ vi.mock("@synap/jobs", async (importOriginal) => ({
     },
   }),
 }));
+// permission-check imports satisfy-expected-output → accept-on-engagement →
+// triage → complete-session → permission-check. Loading the real module inside
+// the factory below pulls complete-session in WHILE the mock is being built,
+// and vitest hands it the REAL checkPermissionOrPropose — so the governed-cancel
+// case never saw its stub. A plain stub here ends that import chain early.
+vi.mock("../../focus-sessions/accept-on-engagement.js", () => ({
+  acceptDraftOnEngagement: vi.fn(async () => undefined),
+}));
 vi.mock("../../../utils/permission-check.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   checkPermissionOrPropose: vi.fn(async () => ({ allowed: true })),
