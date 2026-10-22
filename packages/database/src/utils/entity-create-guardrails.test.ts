@@ -33,6 +33,42 @@ describe("isJunkEntityTitle", () => {
     expect(isJunkEntityTitle("Alice Johnson")).toBe(false);
     expect(isJunkEntityTitle("Acme Corp")).toBe(false);
   });
+
+  it("rejects punctuation-only titles", () => {
+    for (const t of ["-", "…", "—", "--", ". . .", "/"]) {
+      expect(isJunkEntityTitle(t), t).toBe(true);
+    }
+  });
+
+  it("rejects employer placeholders, across case, accents and hyphens", () => {
+    for (const t of [
+      "Freelance",
+      "FREELANCE",
+      "Indépendant",
+      "indépendante",
+      "Self Employed",
+      "Self-employed",
+      "Stealth",
+      "Stealth Startup",
+      "Auto-entrepreneur",
+    ]) {
+      expect(isJunkEntityTitle(t), t).toBe(true);
+    }
+  });
+
+  it("keeps real names that merely contain a placeholder word", () => {
+    for (const t of [
+      "Freelance Collective Ltd",
+      "Stealth Labs",
+      "Independent",
+      "The Independent",
+      "Self Storage Co",
+      "O'Neil & Sons",
+      "AT&T",
+    ]) {
+      expect(isJunkEntityTitle(t), t).toBe(false);
+    }
+  });
 });
 
 describe("profileRejectsJunkTitle / shouldRejectJunkTitle", () => {

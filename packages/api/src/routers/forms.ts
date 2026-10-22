@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import {
   createForm,
   getForm,
@@ -53,11 +53,11 @@ export const formsRouter = router({
     .input(z.object({ formId: Uuid }))
     .query(({ input, ctx }) => getForm(formActorFromCtx(ctx), input.formId)),
 
-  create: protectedProcedure
+  create: credentialProcedure
     .input(z.object({ workspaceId: Uuid, config: Config }))
     .mutation(({ input, ctx }) => createForm(formActorFromCtx(ctx), input)),
 
-  update: protectedProcedure
+  update: credentialProcedure
     .input(z.object({ formId: Uuid, config: Config }))
     .mutation(({ input, ctx }) => updateForm(formActorFromCtx(ctx), input)),
 

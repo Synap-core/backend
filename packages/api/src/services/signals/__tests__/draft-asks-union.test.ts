@@ -52,15 +52,17 @@ const base = {
 };
 
 describe("draft-asks signal", () => {
-  it("one row per draft: agent, work and the ask count; a door to the session", () => {
+  it("one row per draft: the agent and the work, NO ask count; a door to the session", () => {
     const rows = signalsFromDraftAsks(TWO_ASKS);
     expect(rows).toHaveLength(1);
     const [row] = rows;
     expect(row).toMatchObject({
       id: `draft:${DRAFT}`,
       kind: "draft-asks",
-      title: "Claude Code started Ship billing · asks you 2 things",
-      count: 2,
+      // Since 2026-10-22 the asks are Needs-you rows of their own; the draft
+      // row is the draft (count 1), never a second tally of them.
+      title: "Claude Code started Ship billing",
+      count: 1,
       target: { kind: "session", id: DRAFT },
       sessionGoal: "Ship billing",
     });
@@ -83,12 +85,12 @@ describe("draft-asks signal", () => {
     );
   });
 
-  it("an unnamed starter reads 'An agent', singular for one ask", () => {
+  it("an unnamed starter reads 'An agent'", () => {
     const [row] = signalsFromDraftAsks({
       slots: [slot("other", "Stripe key", "2026-09-27T10:00:00.000Z")],
       starterNames: new Map(),
     });
-    expect(row!.title).toBe("An agent started Ship billing · asks you 1 thing");
+    expect(row!.title).toBe("An agent started Ship billing");
   });
 
   it("PROPOSED, not Blocking: listed by unionProposed, absent from needs-you, counted only as `drafts`", () => {
@@ -160,5 +162,27 @@ describe("draft-asks signal", () => {
     });
     expect(c.draftsTruncated).toBe(true);
     expect(c.truncated).toBe(false);
+  });
+});
+
+/**
+ * FOUNDER DECISION 2026-10-22: a draft's ASKS count in Needs you (they reach
+ * `owedSlots` through `listNeedsYouOwed`), and the draft stays ONE Proposed
+ * row. One number, one source: the asks are counted once, in `blocked`, and
+ * the draft once, in `drafts` — never the asks twice.
+ */
+describe("a draft's asks in Needs you, counted once", () => {
+  it("the same two asks: two needs-you rows, one Proposed row, blocked = 2, drafts = 1", () => {
+    const args = { ...base, owedSlots: TWO_ASKS.slots, draftAsks: TWO_ASKS };
+    const needsYou = unionNeedsYou(args);
+    expect(needsYou.filter((r) => r.kind === "owed-slot")).toHaveLength(2);
+    expect(needsYou.some((r) => r.kind === "draft-asks")).toBe(false);
+    const proposed = unionProposed({ draftAsks: TWO_ASKS, notifications: [] });
+    expect(proposed).toHaveLength(1);
+    expect(proposed[0]).toMatchObject({ kind: "draft-asks", count: 1 });
+    const c = countNeedsYou(args);
+    expect(c.blocked).toBe(2);
+    expect(c.drafts).toBe(1);
+    expect(c.needsYou).toBe(2);
   });
 });
