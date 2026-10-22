@@ -41,7 +41,11 @@ import {
 } from "../../services/app-connect.js";
 import { podAppMayConnect } from "../../services/pod-app-policy.js";
 import type { Context } from "../../types/context.js";
-import { isDeviceSession } from "../../utils/device-session.js";
+import {
+  isDeviceSession,
+  kratosCredentialTime,
+  type KratosAuthenticationFacts,
+} from "../../utils/device-session.js";
 
 import {
   OAuthError,
@@ -133,6 +137,22 @@ export class ReauthenticationRequiredError extends AuthorizeUserError {
   constructor() {
     super("Sign in again to confirm it's you, then continue.");
     this.name = "ReauthenticationRequiredError";
+  }
+}
+
+/**
+ * A Synap app's "Confirm it's you" was answered by a sign-in that presented
+ * no credential at this pod (only Synap Cloud or another federated provider,
+ * which may answer silently from its own session). The screen asks for the
+ * pod password or passkey instead (`reasonCode: POD_CREDENTIAL_REQUIRED`).
+ */
+export class PodCredentialRequiredError extends AuthorizeUserError {
+  readonly reasonCode = "POD_CREDENTIAL_REQUIRED";
+  constructor(clientName: string) {
+    super(
+      `Confirm it's you with your password or passkey for this pod. Synap Cloud can't confirm it for ${clientName}.`
+    );
+    this.name = "PodCredentialRequiredError";
   }
 }
 
@@ -513,6 +533,12 @@ export interface OAuthConsentContext {
    * screen asks "Confirm it's you", not "Sign in".
    */
   reconfirmDevice: boolean;
+  /**
+   * That re-confirmation was answered by a federated sign-in only (Synap
+   * Cloud): the screen asks for the pod password or passkey instead
+   * (`PodCredentialRequiredError`).
+   */
+  podCredentialRequired: boolean;
 }
 
 /**
@@ -581,9 +607,18 @@ export async function getOAuthConsentContext(
    */
   callerUserId?: string,
   /** The viewer's Kratos session, for `prompt=login` / `max_age`. */
-  callerSession?: { authenticated_at?: string | null } | null
+  callerSession?:
+    (KratosAuthenticationFacts & { authenticated_at?: string | null }) | null
 ): Promise<OAuthConsentContext> {
   const req = await resolveAuthorizeRequest(params);
+  const reauthenticate = reauthenticationRequired(
+    params,
+    sessionAuthenticatedAt(callerSession)
+  );
+  const reconfirmDevice = isDeviceReconfirm(
+    req.client.clientKind,
+    params.prompt
+  );
   let appSignIn: AppSignInDescription | null = null;
   if (req.client.clientKind === "app") {
     if (!callerUserId) {
@@ -607,11 +642,12 @@ export async function getOAuthConsentContext(
     scopes: req.grantedScopes,
     registeredAt: req.client.createdAt,
     appSignIn,
-    reauthenticate: reauthenticationRequired(
-      params,
-      sessionAuthenticatedAt(callerSession)
-    ),
-    reconfirmDevice: isDeviceReconfirm(req.client.clientKind, params.prompt),
+    reauthenticate,
+    reconfirmDevice,
+    podCredentialRequired:
+      reconfirmDevice &&
+      !reauthenticate &&
+      reauthenticationRequired(params, kratosCredentialTime(callerSession)),
   };
   if (req.client.clientKind !== "cimd") return { ...base, app: null };
   if (!callerUserId) {
@@ -682,10 +718,15 @@ export async function decideOAuthAuthorization(
   // carrying a key's grant or an acting agent (any key door) never decides
   // it — otherwise an agent key, remapped to the human it acts for, could
   // mint a sign-in as that human (threat T4, app-person-token.ts).
+  // A refusal of WHO decides is FORBIDDEN, as at the approve door's agent
+  // floor and the MCP consent (`apiKeys.beginMcpConnect`);
+  // `AuthorizeUserError` is for a malformed request.
   if (getActingAgentUserId() || getRequestGrant()) {
-    throw new AuthorizeUserError(
-      "Only a person signed in to this pod can authorize a connection."
-    );
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Only a person signed in to this pod can authorize a connection.",
+    });
   }
   // Nor a Synap app's device token: a 1 h token must
   // never turn itself into a new device (180 days) or an agent connection
@@ -704,18 +745,26 @@ export async function decideOAuthAuthorization(
     columns: { id: true, userType: true },
   });
   if (!caller || caller.userType !== "human") {
-    throw new AuthorizeUserError(
-      "Only a human pod user can authorize an MCP connection."
-    );
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only a human pod user can authorize an MCP connection.",
+    });
   }
 
   // `prompt=login` / `max_age`: a decision on an old sign-in is refused
-  // BEFORE anything is written; the screen signs the person in again. The
-  // real time of that sign-in travels with the code (a Synap app's device
-  // takes it as its step-up clock).
-  const authTime = sessionAuthenticatedAt(ctx?.session);
-  if (reauthenticationRequired(input, authTime)) {
+  // BEFORE anything is written; the screen signs the person in again.
+  if (reauthenticationRequired(input, sessionAuthenticatedAt(ctx?.session))) {
     throw new ReauthenticationRequiredError();
+  }
+  // What travels with the code as a Synap app device's step-up clock: when a
+  // credential was last presented AT this pod, never a federated sign-in's
+  // time. A "Confirm it's you" needs one made after the request.
+  const authTime = kratosCredentialTime(ctx?.session);
+  if (
+    isDeviceReconfirm(req.client.clientKind, input.prompt) &&
+    reauthenticationRequired(input, authTime)
+  ) {
+    throw new PodCredentialRequiredError(req.client.clientName);
   }
 
   // A pod app: the consent files AND approves its `app/connect` request (F9)

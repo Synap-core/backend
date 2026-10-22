@@ -6202,6 +6202,12 @@ export interface KratosSession {
 	active: boolean;
 	expires_at?: string;
 	authenticated_at?: string;
+	/** How it was authenticated (Kratos); the step-up clock reads it. */
+	authentication_methods?: Array<{
+		completed_at?: string;
+		method?: string;
+		provider?: string;
+	}>;
 	/**
 	 * Set ONLY when the person came in on a Synap app's device token
 	 * (`appSessionMiddleware`): the device it was minted
@@ -12461,6 +12467,12 @@ export interface OAuthConsentContext {
 	 * screen asks "Confirm it's you", not "Sign in".
 	 */
 	reconfirmDevice: boolean;
+	/**
+	 * That re-confirmation was answered by a federated sign-in only (Synap
+	 * Cloud): the screen asks for the pod password or passkey instead
+	 * (`PodCredentialRequiredError`).
+	 */
+	podCredentialRequired: boolean;
 }
 /**
  * API Keys Router

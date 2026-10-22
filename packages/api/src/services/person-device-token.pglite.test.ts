@@ -262,25 +262,6 @@ beforeAll(async () => {
 
 /** The Kratos half: one browser session (Ada's cookie), nothing else. */
 const kratosStandIn: MiddlewareHandler = async (c, next) => {
-  // An app holding a Kratos session token (the Kratos middleware marks it):
-  // `x-session-token: signed-in-<minutes ago>`.
-  const token = c.req.header("x-session-token")?.match(/^signed-in-(\d+)$/);
-  if (token) {
-    c.set("userId" as never, PERSON as never);
-    c.set(
-      "session" as never,
-      {
-        id: "kratos-session-ada",
-        identity: { id: PERSON, traits: { email: "ada@x", name: "Ada" } },
-        active: true,
-        authenticated_at: new Date(
-          Date.now() - Number(token[1]) * MIN_MS
-        ).toISOString(),
-      } as never
-    );
-    c.set("sessionKind" as never, "kratos_token" as never);
-    return next();
-  }
   if ((c.req.header("cookie") ?? "") !== BROWSER_COOKIE) {
     return c.json({ error: "Invalid session" }, 401);
   }
@@ -320,7 +301,7 @@ function appApi() {
 }
 
 async function trpc(
-  auth: { bearer?: string; cookie?: string; sessionToken?: string },
+  auth: { bearer?: string; cookie?: string },
   path: string,
   input?: unknown,
   kind: "query" | "mutation" = path === "devices.list" ? "query" : "mutation"
@@ -330,7 +311,6 @@ async function trpc(
   };
   if (auth.bearer) headers.authorization = `Bearer ${auth.bearer}`;
   if (auth.cookie) headers.cookie = auth.cookie;
-  if (auth.sessionToken) headers["x-session-token"] = auth.sessionToken;
   const res =
     kind === "query"
       ? await appApi().request(
@@ -384,7 +364,17 @@ const revokeRequest = (params: Record<string, string>) =>
 const MIN_MS = 60 * 1000;
 
 /** A Kratos session (as the consent procedure sees it) signed in `ago` ms back. */
-const kratosCtx = (userId: string, agoMs: number) =>
+/**
+ * A console session signed in `agoMs` ago. `methods` = how, most recent
+ * last, each with its own age (default: the pod password, at that time).
+ */
+const kratosCtx = (
+  userId: string,
+  agoMs: number,
+  methods: Array<{ method: string; agoMs: number }> = [
+    { method: "password", agoMs },
+  ]
+) =>
   ({
     authenticated: true,
     userId,
@@ -393,6 +383,10 @@ const kratosCtx = (userId: string, agoMs: number) =>
       identity: { id: userId, traits: { email: `${userId}@x` } },
       active: true,
       authenticated_at: new Date(Date.now() - agoMs).toISOString(),
+      authentication_methods: methods.map((m) => ({
+        method: m.method,
+        completed_at: new Date(Date.now() - m.agoMs).toISOString(),
+      })),
     },
   }) as never;
 
@@ -409,6 +403,7 @@ async function consent(
     prompt?: string;
     maxAge?: number;
     requestedAgoMs?: number;
+    methods?: Array<{ method: string; agoMs: number }>;
   } = {}
 ): Promise<string> {
   const signedInAgo = opts.signedInAgoMs ?? MIN_MS;
@@ -430,7 +425,7 @@ async function consent(
         : {}),
     },
     userId,
-    kratosCtx(userId, signedInAgo)
+    kratosCtx(userId, signedInAgo, opts.methods)
   );
   const url = new URL(redirectTo);
   expect(url.searchParams.get("iss")).toBe(ISSUER);
@@ -476,6 +471,7 @@ const device = async (id: string) =>
       expires_at: Date;
       revoked_at: Date | null;
       created_at: Date;
+      auth_time: Date | null;
     }>(`select * from person_devices where id = $1`, [id])
   ).rows[0]!;
 
@@ -962,54 +958,6 @@ describe("(i) a STALE device token cannot create, widen or approve a credential"
     }
   );
 
-  it.each(DOORS)(
-    "%s answers 403 STEP_UP_REQUIRED to a Kratos session TOKEN signed in 6 minutes ago",
-    async (path, input, kind) => {
-      const res = await trpc(
-        { sessionToken: "signed-in-6" },
-        path,
-        input,
-        kind
-      );
-      expect(res.status).toBe(403);
-      expect(res.body.error.json.data.reasonCode).toBe(STEP_UP_REQUIRED);
-    }
-  );
-
-  it.each(DOORS)(
-    "CONTROL — %s is not refused that way to a Kratos session token signed in a minute ago",
-    async (path, input, kind) => {
-      const res = await trpc(
-        { sessionToken: "signed-in-1" },
-        path,
-        input,
-        kind
-      );
-      expect(res.status).not.toBe(401);
-      expect(res.body.error?.json?.data?.reasonCode).not.toBe(STEP_UP_REQUIRED);
-    }
-  );
-
-  it("the tRPC context carries the Kratos middleware's token mark", async () => {
-    const vars: Record<string, unknown> = {
-      session: {
-        id: "kratos-session-ada",
-        identity: { id: PERSON, traits: { email: "ada@x", name: "Ada" } },
-        active: true,
-      },
-      sessionKind: "kratos_token",
-    };
-    const ctx = await createContext(new Request("http://pod/trpc/x"), {
-      get: (key) => vars[key],
-    });
-    expect(ctx.sessionKind).toBe("kratos_token");
-    vars.sessionKind = undefined;
-    const cookie = await createContext(new Request("http://pod/trpc/x"), {
-      get: (key) => vars[key],
-    });
-    expect(cookie.sessionKind).toBe("kratos");
-  });
-
   it("CONTROL — a grant only to the caller is not a step-up: a stale device makes its own space", async () => {
     const s = await signIn("stale", 6 * MIN_MS);
     const res = await trpc(
@@ -1217,6 +1165,79 @@ describe("(j) step-up: the clock is the device's real sign-in", () => {
     // max_age wider than the sign-in's age is satisfied.
     await expect(
       consent(PERSON, { maxAge: 3600, signedInAgoMs: 30 * MIN_MS })
+    ).resolves.toBeTruthy();
+  });
+
+  it("a Synap Cloud sign-in never sets the clock: a device minted from one needs a step-up at once", async () => {
+    const code = await consent(PERSON, {
+      methods: [{ method: "oidc", agoMs: MIN_MS }],
+    });
+    const { body } = await tokenRequest({
+      grant_type: "authorization_code",
+      code,
+      client_id: DESKTOP,
+      redirect_uri: LOOPBACK,
+      code_verifier: VERIFIER,
+      resource: ISSUER,
+      synap_device_label: "Cloud laptop",
+    });
+    expect((await device(body.synap_device_id)).auth_time).toBeNull();
+    expect(stepUpRequired(await decideDevice(body.access_token))).toBe(true);
+  });
+
+  it('"Confirm it\'s you" answered with Synap Cloud only is refused (POD_CREDENTIAL_REQUIRED), before any code', async () => {
+    const codesBefore = await q<{ n: number }>(
+      `select count(*)::int as n from oauth_authorization_codes`
+    );
+    // Password 3 h ago, then a (possibly silent) Cloud re-login just now.
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 10_000,
+        methods: [
+          { method: "password", agoMs: 180 * MIN_MS },
+          { method: "oidc", agoMs: 10_000 },
+        ],
+      })
+    ).rejects.toMatchObject({ reasonCode: "POD_CREDENTIAL_REQUIRED" });
+    const codesAfter = await q<{ n: number }>(
+      `select count(*)::int as n from oauth_authorization_codes`
+    );
+    expect(codesAfter.rows[0]!.n).toBe(codesBefore.rows[0]!.n);
+    // The screen knows before the click.
+    const shown = await getOAuthConsentContext(
+      {
+        clientId: DESKTOP,
+        redirectUri: LOOPBACK,
+        responseType: "code",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        resource: ISSUER,
+        prompt: "login",
+        authRequest: signAuthRequestTime(Date.now() - 11_000),
+      },
+      PERSON,
+      (
+        kratosCtx(PERSON, 10_000, [
+          { method: "password", agoMs: 180 * MIN_MS },
+          { method: "oidc", agoMs: 10_000 },
+        ]) as unknown as { session: never }
+      ).session
+    );
+    expect(shown.podCredentialRequired).toBe(true);
+    expect(shown.reauthenticate).toBe(false);
+  });
+
+  it("CONTROL — the same step-up answered with the pod password after the request passes", async () => {
+    await expect(
+      consent(PERSON, {
+        prompt: "login",
+        signedInAgoMs: 10_000,
+        methods: [
+          { method: "oidc", agoMs: 180 * MIN_MS },
+          { method: "password", agoMs: 10_000 },
+        ],
+      })
     ).resolves.toBeTruthy();
   });
 

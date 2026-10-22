@@ -33,7 +33,6 @@ type AuthTestEnv = {
   Variables: {
     requireExplicitSessionToken: boolean;
     userId: string;
-    sessionKind: string;
   };
 };
 
@@ -93,37 +92,5 @@ describe("orySessionMiddleware external application requests", () => {
     expect(mocks.getKratosSession).toHaveBeenCalledWith(
       "ory_kratos_session=valid-browser-cookie"
     );
-  });
-});
-
-describe("orySessionMiddleware marks a session held as a token", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-  const app = () => {
-    const a = new Hono<AuthTestEnv>();
-    a.use("*", orySessionMiddleware);
-    a.get("/", (c) => c.json({ kind: c.get("sessionKind") ?? null }));
-    return a;
-  };
-
-  it("an X-Session-Token that resolves is a kratos_token session", async () => {
-    mocks.getKratosSessionByToken.mockResolvedValue(validSession);
-    const res = await app().request("/", {
-      headers: { "X-Session-Token": "app-held-token" },
-    });
-    await expect(res.json()).resolves.toEqual({ kind: "kratos_token" });
-  });
-
-  it("a browser cookie is not, even beside a stale token", async () => {
-    mocks.getKratosSessionByToken.mockResolvedValue(null);
-    mocks.getKratosSession.mockResolvedValue(validSession);
-    const res = await app().request("/", {
-      headers: {
-        Cookie: "ory_kratos_session=valid-browser-cookie",
-        "X-Session-Token": "expired-token",
-      },
-    });
-    await expect(res.json()).resolves.toEqual({ kind: null });
   });
 });

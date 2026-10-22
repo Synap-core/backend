@@ -33,6 +33,12 @@ export interface KratosSession {
   active: boolean;
   expires_at?: string;
   authenticated_at?: string;
+  /** How it was authenticated (Kratos); the step-up clock reads it. */
+  authentication_methods?: Array<{
+    method?: string;
+    completed_at?: string;
+    provider?: string;
+  }>;
   /**
    * Set ONLY when the person came in on a Synap app's device token
    * (`appSessionMiddleware`): the device it was minted
@@ -63,15 +69,14 @@ export interface Context {
   user?: User | null;
   session?: KratosSession | null;
   /**
-   * What kind of PERSON session `session` is: a Kratos session from a
-   * browser cookie (`kratos`) or sent as X-Session-Token (`kratos_token`), or
-   * a Synap app's device token. Set ONLY by `createContext`, from what the
-   * app session gate resolved (`middleware/app-session.ts`); null when there
-   * is no session. A credential door takes a `person_device` or
-   * `kratos_token` session only shortly after a real sign-in
+   * What kind of PERSON session `session` is: a Kratos session (browser
+   * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
+   * `createContext`, from what the app session gate resolved from the row
+   * (`middleware/app-session.ts`); null when there is no session. A credential
+   * door takes a `person_device` session only shortly after a real sign-in
    * (`requireFreshAuthentication`, trpc.ts).
    */
-  sessionKind?: "kratos" | "kratos_token" | "person_device" | null;
+  sessionKind?: "kratos" | "person_device" | null;
   req?: Request;
   socketIO?: any; // Socket.IO server instance (type: Server from 'socket.io')
   workspaceId?: string | null; // Workspace ID from X-Workspace-Id header

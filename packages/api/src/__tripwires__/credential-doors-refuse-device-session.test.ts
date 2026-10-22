@@ -133,8 +133,15 @@ const EXEMPT_WRITERS: Record<string, string> = {
  * else: a leaked token turns into nothing an attacker keeps, because what is
  * granted is the person's own membership, read through the person's own
  * (revocable) sign-ins. Each names everything it may reach; reaching anything
- * else (a key, an invitation, someone else's membership) fails the scan.
+ * else (a key, an invitation, someone else's membership) fails the scan. And
+ * its input must name no OTHER principal (`PRINCIPAL_INPUT_KEY`): a door that
+ * takes a user, member, email or target from its input can grant someone
+ * else, so it is not a self-grant and needs the step-up.
  */
+/** An input key that can name a principal other than the caller. */
+const PRINCIPAL_INPUT_KEY =
+  /(user|member|grantee|target|principal|recipient|invitee|owner|person|account|identity|subject|agent)s?(Id|Ids|Email)?$|email|^to$|^for$/i;
+
 const SELF_GRANT_DOORS: Record<string, { reaches: string[]; why: string }> = {
   "packages/api/src/routers/workspaces.ts create": {
     reaches: ["WorkspaceMemberRepository.add"],
@@ -654,6 +661,69 @@ interface DoorVerdict extends Door {
   /** Everything it reaches; "" entries never. */
   reachesAll: string[];
   guarded: boolean;
+  /**
+   * Every property name in its `.input(...)` schemas, or null when an input
+   * could not be read (a schema from elsewhere): then nothing is proven.
+   */
+  inputKeys?: string[] | null;
+}
+
+/**
+ * The property names a procedure's `.input(...)` schemas declare, read from
+ * the AST (an object literal, or a const bound to one in the same file), or
+ * null when one is not readable here.
+ */
+function inputKeysOf(expr: ts.Expression): string[] | null {
+  const keys: string[] = [];
+  let opaque = false;
+  const collect = (n: ts.Node) => {
+    if (ts.isPropertyAssignment(n) || ts.isShorthandPropertyAssignment(n)) {
+      const k = nameOf(n);
+      if (k) keys.push(k);
+    }
+    ts.forEachChild(n, collect);
+  };
+  for (let e: ts.Expression = expr; ;) {
+    if (ts.isCallExpression(e)) {
+      if (
+        ts.isPropertyAccessExpression(e.expression) &&
+        e.expression.name.text === "input"
+      ) {
+        for (const arg of e.arguments) {
+          const local = localObjectSchema(arg);
+          if (local) collect(local);
+          else opaque = true;
+        }
+      }
+      e = e.expression;
+    } else if (ts.isPropertyAccessExpression(e)) e = e.expression;
+    else break;
+  }
+  return opaque ? null : keys;
+}
+
+/**
+ * An input schema readable here: an inline expression with no bare
+ * identifier as its root, or a const in an enclosing scope bound to one.
+ */
+function localObjectSchema(arg: ts.Expression): ts.Node | null {
+  if (!ts.isIdentifier(arg)) return arg;
+  for (let p: ts.Node | undefined = arg.parent; p; p = p.parent) {
+    if (!ts.isBlock(p) && !ts.isSourceFile(p)) continue;
+    for (const st of p.statements) {
+      if (!ts.isVariableStatement(st)) continue;
+      for (const d of st.declarationList.declarations) {
+        if (
+          ts.isIdentifier(d.name) &&
+          d.name.text === arg.text &&
+          d.initializer
+        ) {
+          return d.initializer;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -692,7 +762,13 @@ function doorsOf(a: Analysis, v: Verdicts): DoorVerdict[] {
         const reaches = v.reaches(init, rel) ?? readsSecret;
         const reachesAll = v.reachesAll(init, rel);
         if (readsSecret) reachesAll.push(readsSecret);
-        out.push({ door, reaches: reaches ?? "", reachesAll, guarded });
+        out.push({
+          door,
+          reaches: reaches ?? "",
+          reachesAll,
+          guarded,
+          inputKeys: inputKeysOf(init),
+        });
       }
       // Proposal executors: registerProposalExecutor({ key, execute })
       if (
@@ -763,9 +839,18 @@ const real = analyse(sources);
 const verdicts = judge(real);
 const allDoors = doorsOf(real, verdicts);
 /** A self-grant door that reaches only what it declares. */
+/** Input keys that could name someone other than the caller; null = unreadable. */
+const principalInputs = (d: DoorVerdict): string[] | null =>
+  d.inputKeys ? d.inputKeys.filter((k) => PRINCIPAL_INPUT_KEY.test(k)) : null;
+
+/** A self-grant door that reaches only what it declares and names no one else. */
 const isDeclaredSelfGrant = (d: DoorVerdict) => {
   const declared = SELF_GRANT_DOORS[d.door];
-  return !!declared && d.reachesAll.every((r) => declared.reaches.includes(r));
+  return (
+    !!declared &&
+    d.reachesAll.every((r) => declared.reaches.includes(r)) &&
+    principalInputs(d)?.length === 0
+  );
 };
 const unguarded = (ds: DoorVerdict[]) =>
   ds.filter((d) => d.reaches && !d.guarded && !isDeclaredSelfGrant(d));
@@ -816,12 +901,18 @@ describe("credential doors refuse a Synap app's device session", () => {
     expect(guardedDoors.length).toBeGreaterThanOrEqual(GUARDED_DOOR_FLOOR);
   });
 
-  it("every self-grant door exists and reaches only what it declares", () => {
+  it("every self-grant door exists, reaches only what it declares, and its input names no one else", () => {
     const seen = new Map(allDoors.map((d) => [d.door, d]));
     for (const [name, declared] of Object.entries(SELF_GRANT_DOORS)) {
       const d = seen.get(name);
       expect(d, `${name} is no longer seen by the scan`).toBeDefined();
       expect(d!.reachesAll, name).toEqual(declared.reaches);
+      expect(
+        principalInputs(d!),
+        `${name}: its input must be readable and name no other principal`
+      ).toEqual([]);
+      // Non-vacuity: the input WAS read (each takes at least one field).
+      expect(d!.inputKeys!.length, name).toBeGreaterThan(0);
     }
   });
 
@@ -912,11 +1003,46 @@ describe("credential doors refuse a Synap app's device session", () => {
       reaches: reachesAll[0]!,
       reachesAll,
       guarded: false,
+      inputKeys: ["token"],
     });
     expect(unguarded([door(declared.reaches)])).toEqual([]);
     expect(
       unguarded([door([...declared.reaches, "ApiKeyService.generateApiKey"])])
     ).toHaveLength(1);
+  });
+
+  it("POSITIVE CONTROL — a self-grant whose input names a target user is flagged", () => {
+    const sample = analyse([
+      {
+        rel: "packages/api/src/routers/__sample_self__.ts",
+        code: `
+          const memberInput = z.object({ workspaceId: z.string(), targetUserId: z.string() });
+          export const r = router({
+            joinOther: protectedProcedure.input(memberInput).mutation(() => 1),
+            joinSelf: protectedProcedure.input(z.object({ token: z.string() })).mutation(() => 1),
+            opaque: protectedProcedure.input(importedSchema).mutation(() => 1),
+          });
+        `,
+      },
+    ]);
+    const byName = new Map(
+      doorsOf(sample, judge(sample)).map((d) => [d.door.split(" ")[1], d])
+    );
+    expect(principalInputs(byName.get("joinOther")!)).toEqual(["targetUserId"]);
+    expect(principalInputs(byName.get("joinSelf")!)).toEqual([]);
+    expect(principalInputs(byName.get("opaque")!)).toBeNull();
+    // Declared as a self-grant, a door taking a target is still unguarded.
+    const [name, declared] = Object.entries(SELF_GRANT_DOORS)[0]!;
+    const asDeclared = (inputKeys: string[] | null): DoorVerdict => ({
+      door: name,
+      reaches: declared.reaches[0]!,
+      reachesAll: declared.reaches,
+      guarded: false,
+      inputKeys,
+    });
+    expect(unguarded([asDeclared(["token"])])).toEqual([]);
+    expect(unguarded([asDeclared(["token", "userId"])])).toHaveLength(1);
+    expect(unguarded([asDeclared(null)])).toHaveLength(1);
   });
 
   it("every door that reaches a credential is guarded", () => {
