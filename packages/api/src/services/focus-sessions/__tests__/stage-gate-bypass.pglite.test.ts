@@ -719,3 +719,27 @@ describe("the legacy dev-gate stamps are the approval's, never an agent's", () =
     expect(res.status).toBe(409);
   });
 });
+
+describe("provenance stamps are the server's — no client forges who did what", () => {
+  it.each([
+    ["triage", { acceptedAt: "2026-10-18T10:00:00.000Z", acceptedBy: USER }],
+    ["conversion", { kind: "task", id: randomUUID(), by: USER }],
+    ["run", { cancel: { at: "2026-10-18T10:00:00.000Z" } }],
+    ["recalled", []],
+  ])("Hub PATCH drops metadata.%s", async (key, value) => {
+    const playbookId = await seedPlaybook();
+    const sessionId = await seedSession(playbookId);
+
+    const res = await patch(
+      sessionId,
+      { metadata: { [key]: value, note: "kept" } },
+      AGENT
+    );
+
+    // Dropped, not refused: the key nobody owns in the same bag still lands.
+    expect(res.status).toBe(200);
+    const stored = (await readRow(sessionId)).metadata;
+    expect(stored[key]).toBeUndefined();
+    expect(stored.note).toBe("kept");
+  });
+});

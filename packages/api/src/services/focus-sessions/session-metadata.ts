@@ -32,7 +32,10 @@ export const DEV_LOOP_METADATA_KEY = "devLoop";
  * receipt (who approved the plan / the deploy, when, under which proposal — a
  * forged one reads exactly like a real approval), and `checkGate`, a check
  * gate's HOLD (`stage-gate.ts`, cleared only by `resumeCheckGateIfMet` —
- * clearing it un-holds the gate). A client or agent metadata write never
+ * clearing it un-holds the gate). And the provenance stamps, written only by
+ * the door that did the thing: `triage` (accept / discard of a draft,
+ * `acceptedBy`), `conversion` (the session → object receipt) and `recalled`
+ * (what the recall door posted). A client or agent metadata write never
  * carries them ({@link withoutServerOwnedSessionMetadata}).
  */
 export const SERVER_OWNED_SESSION_METADATA_KEYS = [
@@ -44,6 +47,9 @@ export const SERVER_OWNED_SESSION_METADATA_KEYS = [
   "run",
   DEV_LOOP_METADATA_KEY,
   CHECK_GATE_METADATA_KEY,
+  "triage",
+  "conversion",
+  "recalled",
 ] as const;
 
 /** A client/agent metadata bag with every server-owned key dropped. Pure. */
