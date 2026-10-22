@@ -6202,9 +6202,15 @@ export interface KratosSession {
 	active: boolean;
 	expires_at?: string;
 	authenticated_at?: string;
+	/** How it was authenticated (Kratos); the step-up clock reads it. */
+	authentication_methods?: Array<{
+		completed_at?: string;
+		method?: string;
+		provider?: string;
+	}>;
 	/**
 	 * Set ONLY when the person came in on a Synap app's device token
-	 * (`appSessionMiddleware`, join plan target A): the device it was minted
+	 * (`appSessionMiddleware`): the device it was minted
 	 * for, and when the person last really authenticated for it (`authTime`,
 	 * the step-up clock). Absent on a Kratos session. Such a session has no
 	 * `authenticated_at`, so account recovery never counts it as a recent
@@ -12456,6 +12462,17 @@ export interface OAuthConsentContext {
 	 * the viewer's is older: the screen sends them to sign in again first.
 	 */
 	reauthenticate: boolean;
+	/**
+	 * A Synap app re-confirming a device it holds (`isDeviceReconfirm`): the
+	 * screen asks "Confirm it's you", not "Sign in".
+	 */
+	reconfirmDevice: boolean;
+	/**
+	 * That re-confirmation was answered by a federated sign-in only (Synap
+	 * Cloud): the screen asks for the pod password or passkey instead
+	 * (`PodCredentialRequiredError`).
+	 */
+	podCredentialRequired: boolean;
 }
 /**
  * API Keys Router
@@ -20501,6 +20518,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					permission: string;
 					workspaceId: string;
 				}[] | undefined;
+				authRequest?: string | undefined;
 				clientId: string;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
@@ -20537,6 +20555,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		getOAuthConsentContext: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				authRequest?: string | undefined;
 				clientId: string;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
@@ -26989,10 +27008,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
-				proposalId: string;
-				status: "proposed";
-			} | {
-				proposalId?: undefined;
 				status: "revoked";
 			};
 		}>;
