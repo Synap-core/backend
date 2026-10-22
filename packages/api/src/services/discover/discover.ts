@@ -26,6 +26,7 @@
  * what makes the subtraction safe rather than lossy.
  */
 
+import type { OwedByPerson } from "./owed-by-person.js";
 import type { LibraryHealth } from "@synap-core/types/imports";
 import type { SessionsOwingGrade } from "../focus-sessions/session-nudges.js";
 import {
@@ -152,6 +153,14 @@ export interface StartHere {
         }>;
       }
     | StartHereUnavailable;
+  /**
+   * What the PERSON owes — owed slots (questions, decisions, hand-backs only
+   * they can do), one row per session, newest first, each naming where the
+   * person finds it (`needs-you` / `proposed`). Raise these with the person.
+   * NOT `handedToYou`, which is the other direction (work handed to this
+   * agent). See `owed-by-person.ts`.
+   */
+  owedByPerson: OwedByPerson | StartHereUnavailable;
   openSessions:
     | {
         count: number;

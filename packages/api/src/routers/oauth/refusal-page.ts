@@ -47,7 +47,6 @@ const COPY: Record<AuthorizeRefusal, RefusalCopy> = {
   },
   // Refused on the consent screen, not at /authorize; kept so every reason
   // has a page.
-  not_for_you: { title: "This app can't connect for you", next: "" },
   no_shared_space: { title: "This app can't connect for you", next: "" },
   nothing_to_give: { title: "This app can't connect", next: "" },
   grant_changed: { title: "This request changed", next: "" },

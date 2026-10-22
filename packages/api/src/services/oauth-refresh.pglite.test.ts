@@ -580,14 +580,16 @@ describe("a family revoked while a refresh is minting", () => {
     // The refresh grant's three steps, with the app revoked between the mint
     // and the successor (the window a concurrent revoke can hit).
     const redeemed = await redeemRefreshToken(rt, STUDIO);
+    // A pod app's token: owned by its connection, never a device (0340).
+    const appId = redeemed.appId!;
     const minted = await mintAppOAuthAccessKey({
-      appId: redeemed.appId,
+      appId,
       ownerUserId: redeemed.userId,
       oauthClientId: redeemed.clientId,
       instanceId: `oauth:${STUDIO}:${OWNER}`,
     });
     expect(await valid(minted.accessToken)).toBe(true);
-    await revokeConnectionRefreshTokens(redeemed.appId);
+    await revokeConnectionRefreshTokens(appId);
     await expect(rotateRefreshToken(redeemed)).rejects.toMatchObject({
       code: "invalid_grant",
     });
@@ -1061,7 +1063,7 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
     const replay = refresh(rt);
     const successorId = randomUUID();
     const minted = await mintAppOAuthAccessKey({
-      appId: redeemed.appId,
+      appId: redeemed.appId!,
       ownerUserId: redeemed.userId,
       oauthClientId: redeemed.clientId,
       instanceId: `oauth:${STUDIO}:${OWNER}`,

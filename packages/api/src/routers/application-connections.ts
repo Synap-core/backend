@@ -16,6 +16,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { revokeAllPersonDevices } from "@synap/database/person-devices";
 import {
   db,
   desc,
@@ -34,7 +35,13 @@ import {
   users,
   workspaces,
 } from "@synap/database";
-import { router, podAdminProcedure, protectedProcedure } from "../trpc.js";
+import {
+  router,
+  podAdminProcedure,
+  protectedProcedure,
+  credentialProcedure,
+  requireFreshAuthentication,
+} from "../trpc.js";
 import { auditLog } from "../utils/audit-log.js";
 import {
   buildApplicationConnectionReturnUrl,
@@ -290,7 +297,7 @@ export const applicationConnectionsRouter = router({
    * handoff. Redeem it only after Pod Admin's local Kratos session exists;
    * this is what binds the later review request to a real Pod user.
    */
-  redeemRequest: protectedProcedure
+  redeemRequest: credentialProcedure
     .input(redeemRequestSchema)
     .mutation(async ({ input, ctx }) => {
       try {
@@ -558,6 +565,14 @@ export const applicationConnectionsRouter = router({
         });
       }
       if (outcome.status === "unlinked") {
+        // Unlinking takes away how the person proved who they are; the Synap
+        // apps they signed in with it sign in again. Their access to the pod
+        // is untouched, so the access read in `resolvePersonDeviceSession`
+        // cannot see this: the devices are ended here.
+        await revokeAllPersonDevices(db, {
+          userId: input.userId,
+          reason: `Unlinked from ${outcome.app.displayName}`,
+        });
         await recordConnectionEvent({
           action: "unlink",
           subjectId: input.connectionId,
@@ -574,6 +589,7 @@ export const applicationConnectionsRouter = router({
     }),
 
   approveRequest: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(requestIdSchema)
     .mutation(async ({ input, ctx }) => {
       let approved: Awaited<

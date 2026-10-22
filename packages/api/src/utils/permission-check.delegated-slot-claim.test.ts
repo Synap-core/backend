@@ -264,7 +264,7 @@ describe("a NON-delegated write still needs the exact name", () => {
   it("writes no claim when the acting agent holds no delegation on this session", async () => {
     // Another agent type entirely. Nothing on the row says this write is for
     // "Summary", so inventing a claim would be a guess dressed as evidence —
-    // the kind guess still runs, and it stays visibly a guess.
+    // and since 2026-10-22 no kind guess runs behind it either.
     agentRow.current = { agentType: "crm-hygiene" };
     sessionRow.current = openSessionWith(DELEGATED_SLOTS);
     governanceRow.current = declares(DELEGATED_SLOTS);
@@ -272,11 +272,8 @@ describe("a NON-delegated write still needs the exact name", () => {
     await checkPermissionOrPropose(OPTS);
 
     expect(receiptData()).not.toHaveProperty("expectedLabel");
-    // The unchanged fallback: FIRST not-yet-done slot of the kind.
-    expect(writtenOutputs()![0]).toMatchObject({
-      label: "Spec",
-      status: "done",
-    });
+    // No claim, no stamp: the FIRST open slot of the kind is left owed.
+    expect(writtenOutputs()).toBeUndefined();
   });
 
   it("writes no claim when the session has no delegation at all", async () => {
@@ -314,12 +311,8 @@ describe("KIND is a floor on BOTH rungs", () => {
     await checkPermissionOrPropose(OPTS);
 
     expect(receiptData()).not.toHaveProperty("expectedLabel");
-    // The kind rung still applies: the one document slot is stamped.
-    expect(writtenOutputs()![0]).toMatchObject({
-      label: "Spec",
-      status: "done",
-    });
-    expect(writtenOutputs()![1]).not.toHaveProperty("status");
+    // No claim, no stamp: the document slot is not filled by a guess either.
+    expect(writtenOutputs()).toBeUndefined();
   });
 
   it("rung 1 does not claim a same-named slot of another kind", async () => {
@@ -336,10 +329,7 @@ describe("KIND is a floor on BOTH rungs", () => {
     });
 
     expect(receiptData()).not.toHaveProperty("expectedLabel");
-    expect(writtenOutputs()![1]).toMatchObject({
-      label: "Spec",
-      status: "done",
-    });
+    expect(writtenOutputs()).toBeUndefined();
   });
 });
 

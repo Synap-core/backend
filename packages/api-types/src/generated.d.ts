@@ -6202,6 +6202,25 @@ export interface KratosSession {
 	active: boolean;
 	expires_at?: string;
 	authenticated_at?: string;
+	/** How it was authenticated (Kratos); the step-up clock reads it. */
+	authentication_methods?: Array<{
+		completed_at?: string;
+		method?: string;
+		provider?: string;
+	}>;
+	/**
+	 * Set ONLY when the person came in on a Synap app's device token
+	 * (`appSessionMiddleware`): the device it was minted
+	 * for, and when the person last really authenticated for it (`authTime`,
+	 * the step-up clock). Absent on a Kratos session. Such a session has no
+	 * `authenticated_at`, so account recovery never counts it as a recent
+	 * sign-in.
+	 */
+	device?: {
+		authTime: Date | null;
+		clientId: string;
+		id: string;
+	};
 }
 /**
  * User object (simplified from Kratos identity)
@@ -6220,6 +6239,15 @@ export interface Context {
 	userId?: string | null;
 	user?: User | null;
 	session?: KratosSession | null;
+	/**
+	 * What kind of PERSON session `session` is: a Kratos session (browser
+	 * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
+	 * `createContext`, from what the app session gate resolved from the row
+	 * (`middleware/app-session.ts`); null when there is no session. A credential
+	 * door takes a `person_device` session only shortly after a real sign-in
+	 * (`requireFreshAuthentication`, trpc.ts).
+	 */
+	sessionKind?: "kratos" | "person_device" | null;
 	req?: Request;
 	socketIO?: any;
 	workspaceId?: string | null;
@@ -12413,9 +12441,10 @@ export interface OAuthConsentContext {
 	clientId: string;
 	/**
 	 * 'dcr' — an MCP client (claude.ai); 'cimd' — a pod app; 'app' — an
-	 * approved app a person signs in to ("Sign in with Synap").
+	 * approved app a person signs in to ("Sign in with Synap"); 'first_party'
+	 * — a Synap app (desktop, Relay) signing the person in on this device.
 	 */
-	clientKind: "app" | "cimd" | "dcr";
+	clientKind: "app" | "cimd" | "dcr" | "first_party";
 	/** Untrusted, attacker-chosen at registration — the UI renders it as TEXT. */
 	clientName: string;
 	redirectUri: string;
@@ -12432,6 +12461,22 @@ export interface OAuthConsentContext {
 	 * client (an MCP agent connection).
 	 */
 	appSignIn: AppSignInDescription | null;
+	/**
+	 * The request asks for a fresh sign-in (`prompt=login` / `max_age`) and
+	 * the viewer's is older: the screen sends them to sign in again first.
+	 */
+	reauthenticate: boolean;
+	/**
+	 * A Synap app re-confirming a device it holds (`isDeviceReconfirm`): the
+	 * screen asks "Confirm it's you", not "Sign in".
+	 */
+	reconfirmDevice: boolean;
+	/**
+	 * That re-confirmation was answered by a federated sign-in only (Synap
+	 * Cloud): the screen asks for the pod password or passkey instead
+	 * (`PodCredentialRequiredError`).
+	 */
+	podCredentialRequired: boolean;
 }
 /**
  * API Keys Router
@@ -20486,9 +20531,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					permission: string;
 					workspaceId: string;
 				}[] | undefined;
+				authRequest?: string | undefined;
 				clientId: string;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
+				maxAge?: string | number | undefined;
+				prompt?: string | undefined;
 				redirectUri: string;
 				resource?: string | undefined;
 				responseType?: string | undefined;
@@ -20520,9 +20568,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		getOAuthConsentContext: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				authRequest?: string | undefined;
 				clientId: string;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
+				maxAge?: string | number | undefined;
+				prompt?: string | undefined;
 				redirectUri: string;
 				resource?: string | undefined;
 				responseType?: string | undefined;
@@ -26923,6 +26974,55 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				requestId: `${string}-${string}-${string}-${string}-${string}`;
 				status: "pending";
 				success: boolean;
+			};
+		}>;
+	}>>;
+	devices: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				expectedStatus?: string | null;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				clientId: string;
+				createdAt: Date;
+				current: boolean;
+				expiresAt: Date;
+				id: string;
+				label: string | null;
+				lastUsedAt: Date | null;
+			}[];
+		}>;
+		revoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				deviceId: string;
+			};
+			meta: object;
+			output: {
+				status: "revoked";
 			};
 		}>;
 	}>>;
@@ -45172,24 +45272,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspacesJoined: number;
 			};
 		}>;
-		acceptInviteViaCp: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				cpToken: string;
-				token: string;
-			};
-			meta: object;
-			output: {
-				status: "accepted";
-				type: "workspace";
-				workspaceId: string;
-				workspacesJoined?: undefined;
-			} | {
-				status: "accepted";
-				type: "pod";
-				workspaceId?: undefined;
-				workspacesJoined: number;
-			};
-		}>;
 		addMember: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				role: "editor" | "owner" | "viewer";
@@ -46382,17 +46464,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				reason?: string | undefined;
-			};
-			meta: object;
-			output: {
-				success: boolean;
-			};
-		}>;
-		rejectInviteViaCp: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				cpToken: string;
-				reason?: string | undefined;
-				token: string;
 			};
 			meta: object;
 			output: {

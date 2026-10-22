@@ -473,7 +473,8 @@ async function readAttention(
       : null,
     // The owed read under the SAME lens and owner floor `focusSessions.owed`
     // applies (`listOwedSlots`), plus the session/track lenses that door does
-    // not expose. Drafts never count (`excludeDrafts`).
+    // not expose. On an undecided draft only its ASKS count (founder decision
+    // 2026-10-22, `listNeedsYouOwed`); the draft itself is Proposed, below.
     follows
       ? settle(
           "owed",
@@ -483,7 +484,8 @@ async function readAttention(
         )
       : settle("owed", [] as AttentionOwed[], async () => []),
     // The DRAFT half — owed slots on undecided agent drafts, folded into one
-    // `draft-asks` row per draft. PROPOSED, never needs-you.
+    // `draft-asks` row per draft: the draft to accept or reject. PROPOSED,
+    // never needs-you; its asks are counted once, in the owed half above.
     settle(
       "drafts",
       {
@@ -1248,11 +1250,13 @@ async function readLensPage(
  * inside `countNeedsYou`, plus asking notifications. Items, not sessions.
  * Decisions are distinct (shape, session) clusters.
  *
- * DRAFTS NEVER COUNT (founder decision; since 2026-10-04 they are PROPOSED):
- * the owed half by `excludeDrafts`, the decisions half by
- * `excludeDraftSessions`, the review half by `needsYouReason` — each in SQL,
- * so drafts cannot eat a scan cap. Asking drafts are reported beside the
- * number (`drafts`), never inside it.
+ * DRAFTS NEVER COUNT (founder decision; since 2026-10-04 they are PROPOSED),
+ * EXCEPT THEIR ASKS (founder decision 2026-10-22): the owed half counts a
+ * draft's slots that carry an ask and no other (`listNeedsYouOwed`,
+ * `needsYouLens`), the decisions half leaves out proposals under a draft
+ * (`excludeDraftSessions`), the review half goes by `needsYouReason` — each in
+ * SQL, so drafts cannot eat a scan cap. Drafts themselves are reported beside
+ * the number (`drafts`), never inside it.
  */
 async function countSignals(ctx: SignalsCtx, input: SignalScopeInput) {
   const attention = await readAttention(ctx, input, CLUSTER_PAGE_LIMIT);
