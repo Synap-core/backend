@@ -1202,7 +1202,7 @@ export const inviteProcedures = {
         });
         if (!remainingMembership) {
           identityKeptBy = (await isPodAdmin(ctx.userId))
-            ? await readIdentityKeepers(input.userId, db)
+            ? await readIdentityKeepers(input.userId)
             : ["caller_is_not_a_pod_admin"];
         }
         if (!remainingMembership && identityKeptBy.length === 0) {
