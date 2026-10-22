@@ -16,7 +16,7 @@
  * steps stay in the browser, on a real Kratos session.
  */
 import { createHash } from "crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import {
   oauthRefreshTokens,
   personDeviceTokens,
@@ -136,6 +136,51 @@ export async function resolvePersonDeviceSession(
       authTime: row.authTime ?? null,
     },
   };
+}
+
+/**
+ * Of these devices, the ones still live: not revoked, inside their absolute
+ * cap, held by a human who still has access to the pod. A device whose
+ * person lost access is ENDED here, as `resolvePersonDeviceSession` ends it.
+ * For a holder of something opened with a device token that outlives the
+ * token's own lookup (a realtime socket), so the device row stays the
+ * authority. A failed read THROWS: the caller keeps what it has and asks
+ * again, never reads it as "ended".
+ */
+export async function liveDeviceIds(
+  db: Executor,
+  deviceIds: readonly string[]
+): Promise<Set<string>> {
+  const live = new Set<string>();
+  if (deviceIds.length === 0) return live;
+  const now = new Date();
+  const rows = (await db
+    .select({ id: personDevices.id, userId: personDevices.userId })
+    .from(personDevices)
+    .innerJoin(users, eq(users.id, personDevices.userId))
+    .where(
+      and(
+        inArray(personDevices.id, [...deviceIds]),
+        isNull(personDevices.revokedAt),
+        gt(personDevices.expiresAt, now),
+        eq(users.userType, "human")
+      )
+    )) as Array<{ id: string; userId: string }>;
+  const access = new Map<string, boolean>();
+  for (const row of rows) {
+    if (!access.has(row.userId)) {
+      access.set(row.userId, await personHoldsPodAccess(db, row.userId));
+    }
+    if (access.get(row.userId)) {
+      live.add(row.id);
+    } else {
+      await revokePersonDevice(db, {
+        deviceId: row.id,
+        reason: DEVICE_ENDED_NO_ACCESS,
+      });
+    }
+  }
+  return live;
 }
 
 /**

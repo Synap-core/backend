@@ -131,6 +131,10 @@ import {
   verifyAuthRequestTime,
 } from "../routers/oauth/consent.js";
 import { appSessionMiddleware } from "../middleware/app-session.js";
+import {
+  liveDeviceIds,
+  revokePersonDevice,
+} from "@synap/database/person-devices";
 import { createContext } from "../context.js";
 import { router } from "../trpc.js";
 import { devicesRouter } from "../routers/devices.js";
@@ -1402,6 +1406,41 @@ describe("(l) every way a person loses access to the pod ends their devices", ()
       401
     );
     expect((await refresh(dan.refresh)).body.error).toBe("invalid_grant");
+  });
+
+  it("a socket's device is re-checked (liveDeviceIds): live stays, signed out and lost access do not, and lost access ends it", async () => {
+    const JUN = "person-jun";
+    const KAI = "person-kai";
+    await q(
+      `insert into users (id, email, name, user_type) values
+         ($1, 'jun@x', 'Jun', 'human'), ($2, 'kai@x', 'Kai', 'human')`,
+      [JUN, KAI]
+    );
+    for (const u of [JUN, KAI]) {
+      await q(
+        `insert into workspace_members (id, workspace_id, user_id, role)
+           values (gen_random_uuid(), $1, $2, 'editor')`,
+        [WS_TEAM, u]
+      );
+    }
+    const live = await signedIn(JUN, "live");
+    const out = await signedIn(JUN, "signed out");
+    const lost = await signedIn(KAI);
+    await revokePersonDevice(h.db, {
+      deviceId: out.deviceId,
+      reason: "signed out",
+    });
+    await q(`delete from workspace_members where user_id = $1`, [KAI]);
+
+    const result = await liveDeviceIds(h.db, [
+      live.deviceId,
+      out.deviceId,
+      lost.deviceId,
+      randomUUID(),
+    ]);
+    expect([...result]).toEqual([live.deviceId]);
+    expect((await device(lost.deviceId)).revoked_at).not.toBeNull();
+    expect((await device(live.deviceId)).revoked_at).toBeNull();
   });
 
   it("CONTROL — removed from one space but still in another: the device keeps working", async () => {
