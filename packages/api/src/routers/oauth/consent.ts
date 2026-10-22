@@ -16,9 +16,14 @@
  * a tampered round-trip can only ever produce an authorization the pod would
  * have granted from a fresh /authorize anyway — and one whose real client name,
  * real redirect host and real scopes were on screen when the human approved.
- * There is no signed request token to forge because nothing is trusted.
+ * Nothing in the round-trip is trusted, with ONE signed exception: `auth_req`,
+ * the time /authorize received a request asking for a fresh sign-in
+ * (`signAuthRequestTime`, HMAC'd) — forged or missing, it only asks the person
+ * to sign in again.
  */
 
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { TRPCError } from "@trpc/server";
 import {
   db,
   eq,
@@ -37,8 +42,9 @@ import {
 import { podAppMayConnect } from "../../services/pod-app-policy.js";
 import type { Context } from "../../types/context.js";
 import {
-  STEP_UP_WINDOW_MS,
   isDeviceSession,
+  kratosCredentialTime,
+  type KratosAuthenticationFacts,
 } from "../../utils/device-session.js";
 
 import {
@@ -114,6 +120,11 @@ export interface AuthorizeParams {
   maxAge?: number | string | null;
   /** OIDC `prompt`; `login` forces a fresh sign-in (a step-up). */
   prompt?: string | null;
+  /**
+   * When /authorize received this request, signed (`signAuthRequestTime`):
+   * what `prompt=login` / `max_age=0` is measured against.
+   */
+  authRequest?: string | null;
 }
 
 /**
@@ -129,6 +140,22 @@ export class ReauthenticationRequiredError extends AuthorizeUserError {
   }
 }
 
+/**
+ * A Synap app's "Confirm it's you" was answered by a sign-in that presented
+ * no credential at this pod (only Synap Cloud or another federated provider,
+ * which may answer silently from its own session). The screen asks for the
+ * pod password or passkey instead (`reasonCode: POD_CREDENTIAL_REQUIRED`).
+ */
+export class PodCredentialRequiredError extends AuthorizeUserError {
+  readonly reasonCode = "POD_CREDENTIAL_REQUIRED";
+  constructor(clientName: string) {
+    super(
+      `Confirm it's you with your password or passkey for this pod. Synap Cloud can't confirm it for ${clientName}.`
+    );
+    this.name = "PodCredentialRequiredError";
+  }
+}
+
 /** A Kratos session's `authenticated_at`, or null when absent/unreadable. */
 export function sessionAuthenticatedAt(
   session: { authenticated_at?: string | null } | null | undefined
@@ -140,14 +167,77 @@ export function sessionAuthenticatedAt(
 }
 
 /**
+ * A Synap app asking the person to CONFIRM it's them for a device it already
+ * holds (a step-up: `prompt=login`). The screen says "Confirm it's you", and
+ * the code it issues is a STEP-UP code: /token takes it only with that
+ * device's refresh token, never to make a new device — so the words shown
+ * and the effect cannot disagree.
+ */
+export function isDeviceReconfirm(
+  clientKind: string,
+  prompt: string | null | undefined
+): boolean {
+  return clientKind === "first_party" && prompt === "login";
+}
+
+/**
+ * When the authorize request was made, signed by this pod: `/authorize`
+ * stamps it on the consent URL (`auth_req`) whenever the request asks for a
+ * fresh sign-in, so `prompt=login` / `max_age=0` can
+ * demand a sign-in made AFTER the request (OIDC), and survive the round trip
+ * through /login without looping. Derived from JWT_SECRET like the refresh
+ * successor key; per process without one (dev/test).
+ */
+const AUTH_REQUEST_KEY = process.env.JWT_SECRET
+  ? createHmac("sha256", process.env.JWT_SECRET)
+      .update("oauth-authorize-request-time")
+      .digest()
+  : randomBytes(32);
+/** A stamp older than this is refused: the flow starts again. */
+const AUTH_REQUEST_MAX_AGE_MS = 60 * 60 * 1000;
+/** Kratos' clock and this pod's may differ by a little. */
+const CLOCK_SKEW_MS = 2_000;
+
+const authRequestMac = (at: number) =>
+  createHmac("sha256", AUTH_REQUEST_KEY)
+    .update(`authorize|${at}`)
+    .digest("base64url");
+
+/** The signed `auth_req` value for a request made at `at` (ms). */
+export function signAuthRequestTime(at: number = Date.now()): string {
+  return `${at}.${authRequestMac(at)}`;
+}
+
+/** The request time an `auth_req` value proves, or null (absent, forged, stale). */
+export function verifyAuthRequestTime(
+  raw: string | null | undefined,
+  now: number = Date.now()
+): number | null {
+  const match = /^([0-9]{1,15})\.([A-Za-z0-9_-]{43})$/.exec(raw ?? "");
+  if (!match) return null;
+  const at = Number(match[1]);
+  const expected = Buffer.from(authRequestMac(at));
+  const given = Buffer.from(match[2]!);
+  if (expected.length !== given.length || !timingSafeEqual(expected, given)) {
+    return null;
+  }
+  if (at > now + CLOCK_SKEW_MS || now - at > AUTH_REQUEST_MAX_AGE_MS) {
+    return null;
+  }
+  return at;
+}
+
+/**
  * Must the person sign in again before deciding? Only when the request asks
- * for it: `prompt=login`, or `max_age`. "Fresh" is within `max_age`, never
- * tighter than the step-up window (the time from signing in to clicking), so
- * `max_age=0` and `prompt=login` both mean "within the last few minutes".
- * An unknown sign-in time is never fresh.
+ * for it, and then as OIDC Core §3.1.2.1 says, for every client: `prompt=login`
+ * and `max_age=0` need a sign-in made AFTER the authorize request (its signed
+ * time, `auth_req`; missing or forged → sign in again), `max_age=N` one within
+ * N seconds. An unknown sign-in time is never fresh. (The 5-minute window is
+ * a different rule: how long a Synap app's step-up stays good at a credential
+ * door, `utils/device-session.ts`.)
  */
 export function reauthenticationRequired(
-  params: Pick<AuthorizeParams, "maxAge" | "prompt">,
+  params: Pick<AuthorizeParams, "maxAge" | "prompt" | "authRequest">,
   authenticatedAt: Date | null,
   now: number = Date.now()
 ): boolean {
@@ -161,13 +251,17 @@ export function reauthenticationRequired(
     maxAgeSeconds !== null &&
     Number.isInteger(maxAgeSeconds) &&
     maxAgeSeconds >= 0;
-  if (params.prompt !== "login" && !hasMaxAge) return false;
+  const login = params.prompt === "login";
+  if (!login && !hasMaxAge) return false;
   if (!authenticatedAt) return true;
-  const limit = Math.max(
-    params.prompt === "login" || !hasMaxAge ? 0 : maxAgeSeconds! * 1000,
-    STEP_UP_WINDOW_MS
-  );
-  return now - authenticatedAt.getTime() > limit;
+  if (login || maxAgeSeconds === 0) {
+    const requestedAt = verifyAuthRequestTime(params.authRequest, now);
+    if (requestedAt === null) return true;
+    if (authenticatedAt.getTime() < requestedAt - CLOCK_SKEW_MS) return true;
+    // Signed in after the request: that IS `max_age=0`.
+    if (!hasMaxAge || maxAgeSeconds === 0) return false;
+  }
+  return now - authenticatedAt.getTime() > maxAgeSeconds! * 1000;
 }
 
 /** An authorize request that passed BOTH validation phases. */
@@ -434,6 +528,17 @@ export interface OAuthConsentContext {
    * the viewer's is older: the screen sends them to sign in again first.
    */
   reauthenticate: boolean;
+  /**
+   * A Synap app re-confirming a device it holds (`isDeviceReconfirm`): the
+   * screen asks "Confirm it's you", not "Sign in".
+   */
+  reconfirmDevice: boolean;
+  /**
+   * That re-confirmation was answered by a federated sign-in only (Synap
+   * Cloud): the screen asks for the pod password or passkey instead
+   * (`PodCredentialRequiredError`).
+   */
+  podCredentialRequired: boolean;
 }
 
 /**
@@ -466,7 +571,12 @@ async function appSignInFor(
   if (!app) throw new AuthorizeUserError(APP_CANNOT_SIGN_IN);
   const reach = await appSignInReach(app, viewerUserId);
   if (reach === "not_for_you") {
-    throw new AuthorizeUserError(appNotForYou(client.clientName));
+    // A refusal of WHO decides is FORBIDDEN; `AuthorizeUserError` (400) is
+    // for a malformed request. The screen shows the message either way.
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: appNotForYou(client.clientName),
+    });
   }
   if (reach.length === 0) {
     throw new AuthorizeUserError(
@@ -497,9 +607,18 @@ export async function getOAuthConsentContext(
    */
   callerUserId?: string,
   /** The viewer's Kratos session, for `prompt=login` / `max_age`. */
-  callerSession?: { authenticated_at?: string | null } | null
+  callerSession?:
+    (KratosAuthenticationFacts & { authenticated_at?: string | null }) | null
 ): Promise<OAuthConsentContext> {
   const req = await resolveAuthorizeRequest(params);
+  const reauthenticate = reauthenticationRequired(
+    params,
+    sessionAuthenticatedAt(callerSession)
+  );
+  const reconfirmDevice = isDeviceReconfirm(
+    req.client.clientKind,
+    params.prompt
+  );
   let appSignIn: AppSignInDescription | null = null;
   if (req.client.clientKind === "app") {
     if (!callerUserId) {
@@ -523,10 +642,12 @@ export async function getOAuthConsentContext(
     scopes: req.grantedScopes,
     registeredAt: req.client.createdAt,
     appSignIn,
-    reauthenticate: reauthenticationRequired(
-      params,
-      sessionAuthenticatedAt(callerSession)
-    ),
+    reauthenticate,
+    reconfirmDevice,
+    podCredentialRequired:
+      reconfirmDevice &&
+      !reauthenticate &&
+      reauthenticationRequired(params, kratosCredentialTime(callerSession)),
   };
   if (req.client.clientKind !== "cimd") return { ...base, app: null };
   if (!callerUserId) {
@@ -597,19 +718,26 @@ export async function decideOAuthAuthorization(
   // carrying a key's grant or an acting agent (any key door) never decides
   // it — otherwise an agent key, remapped to the human it acts for, could
   // mint a sign-in as that human (threat T4, app-person-token.ts).
+  // A refusal of WHO decides is FORBIDDEN, as at the approve door's agent
+  // floor and the MCP consent (`apiKeys.beginMcpConnect`);
+  // `AuthorizeUserError` is for a malformed request.
   if (getActingAgentUserId() || getRequestGrant()) {
-    throw new AuthorizeUserError(
-      "Only a person signed in to this pod can authorize a connection."
-    );
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Only a person signed in to this pod can authorize a connection.",
+    });
   }
-  // Nor a Synap app's device token (join plan target A): a 1 h token must
+  // Nor a Synap app's device token: a 1 h token must
   // never turn itself into a new device (180 days) or an agent connection
   // (90 days) through this door. Consent is a browser act, on the console,
-  // in a Kratos session (threat M3, services/person-device-token.ts).
+  // in a Kratos session.
   if (isDeviceSession(ctx)) {
-    throw new AuthorizeUserError(
-      "Authorize a connection from your pod's console, in your browser."
-    );
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Authorize a connection from your pod's console, in your browser.",
+    });
   }
 
   const caller = await db.query.users.findFirst({
@@ -617,18 +745,26 @@ export async function decideOAuthAuthorization(
     columns: { id: true, userType: true },
   });
   if (!caller || caller.userType !== "human") {
-    throw new AuthorizeUserError(
-      "Only a human pod user can authorize an MCP connection."
-    );
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only a human pod user can authorize an MCP connection.",
+    });
   }
 
   // `prompt=login` / `max_age`: a decision on an old sign-in is refused
-  // BEFORE anything is written; the screen signs the person in again. The
-  // real time of that sign-in travels with the code (a Synap app's device
-  // takes it as its step-up clock).
-  const authTime = sessionAuthenticatedAt(ctx?.session);
-  if (reauthenticationRequired(input, authTime)) {
+  // BEFORE anything is written; the screen signs the person in again.
+  if (reauthenticationRequired(input, sessionAuthenticatedAt(ctx?.session))) {
     throw new ReauthenticationRequiredError();
+  }
+  // What travels with the code as a Synap app device's step-up clock: when a
+  // credential was last presented AT this pod, never a federated sign-in's
+  // time. A "Confirm it's you" needs one made after the request.
+  const authTime = kratosCredentialTime(ctx?.session);
+  if (
+    isDeviceReconfirm(req.client.clientKind, input.prompt) &&
+    reauthenticationRequired(input, authTime)
+  ) {
+    throw new PodCredentialRequiredError(req.client.clientName);
   }
 
   // A pod app: the consent files AND approves its `app/connect` request (F9)
@@ -684,6 +820,7 @@ export async function decideOAuthAuthorization(
     appId,
     appGrant,
     authTime,
+    stepUp: isDeviceReconfirm(req.client.clientKind, input.prompt),
   });
 
   return {

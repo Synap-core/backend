@@ -2,7 +2,8 @@
 
 /**
  * /my-connections — self-service view of everything that reaches MY pod:
- * Hub Protocol KEYS (CLI/agent) and Applications (App Connect v1).
+ * the Synap apps I am signed in to, Hub Protocol KEYS (CLI/agent) and
+ * Applications (App Connect v1).
  *
  * Any signed-in pod member can already mint their own CLI/agent key at
  * `/connect`; `apiKeys.list` / `apiKeys.revoke` exist and are already
@@ -28,6 +29,7 @@ import Link from "next/link";
 import { Button, Card, CardBody, Chip, Spinner, addToast } from "@heroui/react";
 import { Ban, ChevronDown, Plug, SquareCode } from "lucide-react";
 import { PageHeader } from "../(admin)/components/page-header";
+import { SignedInAppsSection } from "./_lib/signed-in-apps-section";
 import { ConfirmModal } from "../(admin)/components/confirm-modal";
 import { CopyButton } from "../_lib/copy-button";
 import { trpc } from "../../lib/trpc";
@@ -315,8 +317,10 @@ export default function MyConnectionsPage() {
     <div className="mx-auto max-w-[900px] px-4 sm:px-6 py-10">
       <PageHeader
         title="Connected"
-        description="Every app you own and every key you've minted for this Pod, with exactly what each may touch. Revoking one here only affects you."
+        description="Every Synap app you're signed in to, every app you own and every key you've minted for this Pod, with exactly what each may touch. Signing out or revoking here only affects you."
       />
+
+      <SignedInAppsSection />
 
       <section className="mb-9 space-y-3" aria-labelledby="apps">
         <div className="flex items-center justify-between gap-3">

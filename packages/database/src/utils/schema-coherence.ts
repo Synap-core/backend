@@ -1105,6 +1105,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "auth_time",
     addedBy: "0340_person_devices.sql",
   },
+  {
+    table: "oauth_authorization_codes",
+    column: "step_up",
+    addedBy: "0340_person_devices.sql",
+  },
   // Computers (0320, MACHINE-IDENTITY-PLAN): the host link every governed
   // agent write reads (host step), and the class principal column both rule
   // stores select. Missing means every agent write would 42703.

@@ -99,6 +99,11 @@ export interface IssuedCodeInput {
    * Null when unknown.
    */
   authTime?: Date | null;
+  /**
+   * A Synap app's STEP-UP code (`prompt=login`, "Confirm it's you"): /token
+   * accepts it only with the device's refresh token, never to make a device.
+   */
+  stepUp?: boolean;
 }
 
 /** One permission in one space — the shape of `apps.approved_requests`. */
@@ -119,6 +124,8 @@ export interface ClaimedCode {
   appGrant: AppGrantRequest[] | null;
   /** The consenting session's real authentication time, else null. */
   authTime: Date | null;
+  /** A step-up code: it can only re-confirm a device (`IssuedCodeInput`). */
+  stepUp: boolean;
 }
 
 function hashCode(raw: string): string {
@@ -218,6 +225,7 @@ export async function issueAuthorizationCode(
     appId: input.appId ?? null,
     appGrant: input.appGrant ?? null,
     authTime: input.authTime ?? null,
+    stepUp: input.stepUp ?? false,
     expiresAt: new Date(Date.now() + AUTH_CODE_TTL_MS),
   });
   return code;
@@ -262,6 +270,7 @@ export async function claimAuthorizationCode(
       appId: oauthAuthorizationCodes.appId,
       appGrant: oauthAuthorizationCodes.appGrant,
       authTime: oauthAuthorizationCodes.authTime,
+      stepUp: oauthAuthorizationCodes.stepUp,
     });
   return row
     ? { ...row, appGrant: row.appGrant ?? null, authTime: row.authTime ?? null }

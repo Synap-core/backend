@@ -1,8 +1,8 @@
 /**
  * Refresh tokens of this AS: a pod app's (spec 17 §6.6, wave PB3; founder
  * decision F5: access 1 h, refresh rotating with family revoke, 30-day idle
- * expiry, no absolute cap) and a Synap app's signed-in DEVICE's (0340, join
- * plan target A: the same rules plus a 180-day absolute cap, the device's
+ * expiry, no absolute cap) and a Synap app's signed-in DEVICE's (0340: the
+ * same rules plus a 180-day absolute cap, the device's
  * `expires_at`). An MCP (DCR) client never gets one.
  *
  * A family has ONE owner (a CHECK in 0340): a pod app CONNECTION (`appId`, an
@@ -172,6 +172,12 @@ export interface RedeemedRefreshToken extends RefreshConnection {
    * answers this successor (unrotated) and the key it came with, nothing new.
    */
   grace?: { successorId: string; refreshToken: string };
+  /**
+   * A DEVICE's token is never claimed by the redeem: what is left to do, in
+   * the one transaction of `refreshDeviceToken` — claim it, or (a retry
+   * within the grace) retire its unused successor.
+   */
+  pending?: { claim: true } | { retire: string };
 }
 
 /**
@@ -329,40 +335,62 @@ async function awaitSuccessor(id: string): Promise<string> {
 export const DEVICE_REFRESH_RETRY_GRACE_MS = 30_000;
 
 /**
- * A Synap app's DEVICE presents a refresh token again: on a flaky phone
- * connection the first refresh's RESPONSE can be lost after the token was
- * spent. Within `DEVICE_REFRESH_RETRY_GRACE_MS` of its use, and while its
- * successor was NEVER redeemed, that is a retry, not a theft: the unused
- * successor is retired (atomically, only if still unused) and the caller
- * mints a fresh pair from this token, in the same family. Anything else —
- * outside the window, the successor already used, or retired by someone
- * else first — is a reuse (false: the caller kills the family AND the
- * device). A successor not issued yet (the first refresh still minting) is
- * waited for briefly, then refused without a revoke. Never touches the
- * device's step-up clock (`auth_time`). Pod apps keep their own PB3b grace
- * (`reuseGrace`), which answers the SAME pair.
+ * A Synap app's DEVICE presents a refresh token it already used: on a flaky
+ * phone connection the first refresh's RESPONSE can be lost after the token
+ * was spent. Read-only verdict:
+ *  - `grace`: within `DEVICE_REFRESH_RETRY_GRACE_MS` of its use, its
+ *    successor never redeemed — a retry, not a theft. `refreshDeviceToken`
+ *    retires that successor and mints a fresh pair, in the same family.
+ *  - `concurrent`: the successor was retired a moment ago, unused, by another
+ *    retry of this same token (an app that double-submits). Nothing went to
+ *    two holders: refused WITHOUT a revoke, like the loser of a concurrent
+ *    claim. Only a grace retires one token of a live family (tripwire
+ *    `device-refresh-token-retire-writers`), so "retired, unused, this
+ *    family, within the window" names exactly that.
+ *  - `reuse`: anything else (outside the window, the successor used) — the
+ *    caller kills the family AND the device.
+ * A successor not issued yet (the first refresh still minting) is waited for
+ * briefly, then refused without a revoke. Never touches the device's step-up
+ * clock (`auth_time`). Pod apps keep their own PB3b grace (`reuseGrace`),
+ * which answers the SAME pair.
  */
-async function deviceRetryGrace(row: RefreshRow): Promise<boolean> {
+async function deviceRetryVerdict(
+  row: RefreshRow
+): Promise<
+  | { kind: "grace"; successorId: string }
+  | { kind: "concurrent" }
+  | { kind: "reuse" }
+> {
   if (
     !row.lastUsedAt ||
     Date.now() - row.lastUsedAt.getTime() >= DEVICE_REFRESH_RETRY_GRACE_MS
   ) {
-    return false;
+    return { kind: "reuse" };
   }
   const successorId = row.replacedBy ?? (await awaitSuccessor(row.id));
-  const retired = await db
-    .update(oauthRefreshTokens)
-    .set({ revokedAt: new Date() })
-    .where(
-      and(
-        eq(oauthRefreshTokens.id, successorId),
-        eq(oauthRefreshTokens.familyId, row.familyId),
-        isNull(oauthRefreshTokens.lastUsedAt),
-        isNull(oauthRefreshTokens.revokedAt)
-      )
-    )
-    .returning({ id: oauthRefreshTokens.id });
-  return retired.length > 0;
+  const [successor] = await db
+    .select({
+      familyId: oauthRefreshTokens.familyId,
+      lastUsedAt: oauthRefreshTokens.lastUsedAt,
+      revokedAt: oauthRefreshTokens.revokedAt,
+    })
+    .from(oauthRefreshTokens)
+    .where(eq(oauthRefreshTokens.id, successorId))
+    .limit(1);
+  if (!successor || successor.familyId !== row.familyId) {
+    return { kind: "reuse" };
+  }
+  if (!successor.lastUsedAt && !successor.revokedAt) {
+    return { kind: "grace", successorId };
+  }
+  if (
+    !successor.lastUsedAt &&
+    successor.revokedAt &&
+    Date.now() - successor.revokedAt.getTime() < DEVICE_REFRESH_RETRY_GRACE_MS
+  ) {
+    return { kind: "concurrent" };
+  }
+  return { kind: "reuse" };
 }
 
 /**
@@ -376,7 +404,7 @@ async function deviceRetryGrace(row: RefreshRow): Promise<boolean> {
 async function reuseGrace(
   row: RefreshRow
 ): Promise<RedeemedRefreshToken["grace"] | null> {
-  // A Synap app's DEVICE has its own retry grace (`deviceRetryGrace`: a NEW
+  // A Synap app's DEVICE has its own retry grace (`deviceRetryVerdict` + `refreshDeviceToken`: a NEW
   // pair, the unused successor retired), never this one (the SAME pair).
   if (row.deviceId) return null;
   if (
@@ -450,8 +478,8 @@ export async function redeemRefreshToken(
   }
   if (row.revokedAt) {
     // A DEVICE's token revoked while its device lives was retired by a
-    // retry (`deviceRetryGrace`): someone else continued this family. Two
-    // holders — a reuse: the family and the device end (R7).
+    // retry (`refreshDeviceToken`): someone else continued this family. Two
+    // holders — a reuse: the family and the device end.
     if (
       row.deviceId &&
       false &&
@@ -477,10 +505,20 @@ export async function redeemRefreshToken(
   }
   if (row.lastUsedAt) {
     // A Synap app's DEVICE retrying after a lost response: its unused
-    // successor is retired and the grant proceeds from this token, so the
-    // family lives on (deviceRetryGrace). Outside it: a reuse, below.
-    if (row.deviceId && (await deviceRetryGrace(row))) {
-      return redeemedOf(row, found.deviceExpiresAt);
+    // successor is retired in the refresh's transaction and the grant
+    // proceeds from this token, so the family lives on. A concurrent retry
+    // is refused without a revoke. Otherwise: a reuse, below.
+    if (row.deviceId) {
+      const verdict = await deviceRetryVerdict(row);
+      if (verdict.kind === "grace") {
+        return {
+          ...redeemedOf(row, found.deviceExpiresAt),
+          pending: { retire: verdict.successorId },
+        };
+      }
+      if (verdict.kind === "concurrent") {
+        throw new OAuthError("invalid_grant", INVALID);
+      }
     }
     const grace = await reuseGrace(row);
     if (grace) return { ...redeemedOf(row), grace };
@@ -492,6 +530,14 @@ export async function redeemRefreshToken(
   }
   if (row.expiresAt.getTime() <= Date.now()) {
     throw new OAuthError("invalid_grant", INVALID);
+  }
+  // A device's token is claimed in the same transaction as its mint and its
+  // successor (`refreshDeviceToken`), so a failure never spends it.
+  if (row.deviceId) {
+    return {
+      ...redeemedOf(row, found.deviceExpiresAt),
+      pending: { claim: true },
+    };
   }
   const [claimed] = await db
     .update(oauthRefreshTokens)
@@ -590,6 +636,111 @@ export async function rotateRefreshToken(
     throw new OAuthError("invalid_grant", INVALID);
   }
   return raw;
+}
+
+/** The grace's retire lost a race: decided again, outside the transaction. */
+class RetryGraceLost extends Error {}
+
+/**
+ * A Synap app's DEVICE refresh, all in ONE transaction: claim the token (or,
+ * for a retry within the grace, retire its unused successor), `mint` the
+ * access token with the same transaction, and issue a RANDOM successor —
+ * never one derivable from its row id, which only a pod app's grace needs.
+ * Any error after the claim (the database, the mint) rolls the claim back:
+ * a failure never spends the token and never signs the person out. What
+ * ENDS a device (a reuse, a dead device, a foreign client) is decided by
+ * `redeemRefreshToken` before the transaction and is never rolled back.
+ */
+export async function refreshDeviceToken<T>(
+  raw: string,
+  clientId: string,
+  mint: (tx: Tx, redeemed: RedeemedRefreshToken) => Promise<T>
+): Promise<{
+  redeemed: RedeemedRefreshToken;
+  minted: T;
+  refreshToken: string;
+}> {
+  const redeemed = await redeemRefreshToken(raw, clientId);
+  const pending = redeemed.pending;
+  if (!redeemed.deviceId || !redeemed.capAt || !pending) {
+    throw new OAuthError("invalid_grant", INVALID);
+  }
+  try {
+    return await db.transaction(async (tx) => {
+      await lockConnection(tx, redeemed);
+      if ("claim" in pending) {
+        const [claimed] = await tx
+          .update(oauthRefreshTokens)
+          .set({ lastUsedAt: new Date() })
+          .where(
+            and(
+              eq(oauthRefreshTokens.id, redeemed.id),
+              isNull(oauthRefreshTokens.lastUsedAt),
+              isNull(oauthRefreshTokens.revokedAt),
+              sql`${oauthRefreshTokens.expiresAt} > now()`
+            )
+          )
+          .returning({ id: oauthRefreshTokens.id });
+        // The loser of a concurrent claim is no thief: refused, nothing
+        // revoked; the winner's response carries the pair.
+        if (!claimed) throw new OAuthError("invalid_grant", INVALID);
+      } else {
+        const retired = await tx
+          .update(oauthRefreshTokens)
+          .set({ revokedAt: new Date() })
+          .where(
+            and(
+              eq(oauthRefreshTokens.id, pending.retire),
+              eq(oauthRefreshTokens.familyId, redeemed.familyId),
+              isNull(oauthRefreshTokens.lastUsedAt),
+              isNull(oauthRefreshTokens.revokedAt)
+            )
+          )
+          .returning({ id: oauthRefreshTokens.id });
+        if (retired.length === 0) throw new RetryGraceLost();
+      }
+      const minted = await mint(tx, redeemed);
+      const id = randomUUID();
+      const [linked] = await tx
+        .update(oauthRefreshTokens)
+        .set({ replacedBy: id })
+        .where(
+          and(
+            eq(oauthRefreshTokens.id, redeemed.id),
+            isNull(oauthRefreshTokens.revokedAt)
+          )
+        )
+        .returning({ id: oauthRefreshTokens.id });
+      // The family died meanwhile (a sign-out, a reuse): nothing is issued.
+      if (!linked) throw new OAuthError("invalid_grant", INVALID);
+      await sweepExpired(tx, redeemed);
+      const refreshToken = await insertToken(
+        tx,
+        redeemed,
+        redeemed.familyId,
+        id,
+        randomBytes(32).toString("base64url"),
+        redeemed.capAt
+      );
+      return { redeemed, minted, refreshToken };
+    });
+  } catch (error) {
+    if (!(error instanceof RetryGraceLost)) throw error;
+    const [row] = await db
+      .select()
+      .from(oauthRefreshTokens)
+      .where(eq(oauthRefreshTokens.id, redeemed.id))
+      .limit(1);
+    const verdict = row ? await deviceRetryVerdict(row) : { kind: "reuse" };
+    if (verdict.kind !== "reuse" || !row) {
+      throw new OAuthError("invalid_grant", INVALID);
+    }
+    await revokeRefreshFamily(
+      row,
+      "Refresh token reused: every token of its family is revoked"
+    );
+    throw new RefreshTokenReuseError(row.familyId);
+  }
 }
 
 /** A stored refresh token by its raw value, any state; null when unknown. */

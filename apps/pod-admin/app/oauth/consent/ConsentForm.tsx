@@ -22,6 +22,9 @@ import {
   X,
 } from "lucide-react";
 
+import Link from "next/link";
+import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
+import { SIGNED_IN_APPS_COPY } from "@synap-core/types/sign-in";
 import { formatRelative } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
 import {
@@ -61,6 +64,8 @@ export interface ConsentParams {
   /** OIDC step-up: a fresh sign-in is required first (enforced server-side). */
   maxAge?: string;
   prompt?: string;
+  /** /authorize's signed request time (`auth_req`), round-tripped. */
+  authRequest?: string;
 }
 
 /**
@@ -81,11 +86,34 @@ function isLoginRequired(err: unknown): boolean {
   );
 }
 
-type Step =
+/** A "Confirm it's you" answered with Synap Cloud only: a pod credential is needed. */
+function isPodCredentialRequired(err: unknown): boolean {
+  return (
+    (err as { data?: { reasonCode?: unknown } } | null)?.data?.reasonCode ===
+    "POD_CREDENTIAL_REQUIRED"
+  );
+}
+
+/** Sign in again with a credential at this pod only, then come back here. */
+function signInWithPodCredential(): void {
+  const here = window.location.pathname + window.location.search;
+  window.location.href = `/login?refresh=1&credential=pod&return=${encodeURIComponent(here)}`;
+}
+
+/** Who to start again from when the request itself is not valid. */
+function requesterName(clientId: string): string {
+  return FIRST_PARTY_CLIENT_NAMES[clientId] ?? "the app that sent you here";
+}
+
+export type Step =
   | { kind: "idle" }
   | { kind: "working"; approve: boolean }
   | { kind: "denied" }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string }
+  /** Sent to sign in again (`prompt=login` / `max_age`); nothing to decide. */
+  | { kind: "reconfirming" }
+  /** A Synap Cloud sign-in cannot confirm this; a pod credential is needed. */
+  | { kind: "pod_credential" };
 
 export function ConsentForm({
   params,
@@ -114,6 +142,12 @@ export function ConsentForm({
   useEffect(() => {
     if (reauthenticate) signInAgain();
   }, [reauthenticate]);
+  const reconfirming = reauthenticate || step.kind === "reconfirming";
+  // Re-confirmed with Synap Cloud only: ask for the pod password or passkey.
+  const podCredential =
+    !reconfirming &&
+    (context.data?.podCredentialRequired === true ||
+      step.kind === "pod_credential");
 
   // A pod app (CIMD client): the person narrows what it may touch, per space.
   const app = context.data?.app ?? null;
@@ -143,7 +177,12 @@ export function ConsentForm({
           },
           onError: (err) => {
             if (isLoginRequired(err)) {
+              setStep({ kind: "reconfirming" });
               signInAgain();
+              return;
+            }
+            if (isPodCredentialRequired(err)) {
+              setStep({ kind: "pod_credential" });
               return;
             }
             if (!approve) {
@@ -173,6 +212,9 @@ export function ConsentForm({
           name: context.data.clientName,
           onComputer: isLoopbackHost(context.data.redirectHost),
           redirectHost: context.data.redirectHost,
+          // The app re-confirms a device it holds (a step-up). The server
+          // decides, and binds the code to it: it can never make a device.
+          reconfirm: context.data.reconfirmDevice,
         }
       : null;
 
@@ -192,12 +234,14 @@ export function ConsentForm({
         </span>
         <div className="flex flex-col gap-1">
           <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/65">
-            Connection request
+            {firstParty ? "Sign-in request" : "Connection request"}
           </p>
           {firstParty ? (
             <>
               <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
-                Sign in to {firstParty.name}
+                {firstParty.reconfirm
+                  ? "Confirm it's you"
+                  : `Sign in to ${firstParty.name}`}
               </h1>
               <p className="text-[13px] leading-relaxed text-foreground/65">
                 {firstParty.onComputer ? "On this computer" : "On your phone"}
@@ -253,74 +297,86 @@ export function ConsentForm({
       </CardHeader>
 
       <CardBody className="flex flex-col gap-5 px-7 pb-7 pt-5">
-        {context.isLoading && (
-          <div className="flex items-center justify-center py-10">
-            <Spinner size="sm" />
-          </div>
-        )}
-
-        {context.isError && (
-          <Problem
-            title="This authorization request isn't valid"
-            message={context.error.message}
-            hint="Close this tab and start the connection again from Claude — a fresh request will carry valid details."
+        {reconfirming ? (
+          <ReconfirmingNotice />
+        ) : podCredential ? (
+          <PodCredentialNotice
+            name={context.data?.clientName ?? requesterName(params.clientId)}
+            onContinue={signInWithPodCredential}
           />
-        )}
+        ) : (
+          <>
+            {context.isLoading && (
+              <div className="flex items-center justify-center py-10">
+                <Spinner size="sm" />
+              </div>
+            )}
 
-        {context.data &&
-          app &&
-          step.kind !== "denied" &&
-          step.kind !== "error" && (
-            <AppConsent
-              app={app}
-              registeredAt={context.data.registeredAt}
-              redirectHost={context.data.redirectHost}
-              selection={selection}
-              onToggle={(permission, workspaceId) =>
-                setSelection((s) =>
-                  toggle(s, app.permissions, permission, workspaceId)
-                )
-              }
-              onSpaceCreated={() => void context.refetch()}
-              busy={busy}
-              step={step}
-              canAllow={approved.length > 0}
-              onDecide={act}
-            />
-          )}
+            {context.isError && (
+              <Problem
+                title="This authorization request isn't valid"
+                message={context.error.message}
+                hint={`Close this tab and start again from ${requesterName(params.clientId)}. A fresh request carries valid details.`}
+              />
+            )}
 
-        {context.data &&
-          firstParty &&
-          step.kind !== "denied" &&
-          step.kind !== "error" && (
-            <FirstPartyConsent
-              {...firstParty}
-              busy={busy}
-              step={step}
-              onDecide={act}
-            />
-          )}
-
-        {context.data &&
-          !app &&
-          !firstParty &&
-          step.kind !== "denied" &&
-          step.kind !== "error" && (
-            <>
-              <div className="flex flex-col gap-2.5 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-                <Row label="Application" value={context.data.clientName} />
-                {/* Any client can register itself a minute before asking — a
-                    fresh registration for a familiar name is worth a pause. */}
-                <Row
-                  label="Registered"
-                  value={formatRelative(context.data.registeredAt)}
+            {context.data &&
+              app &&
+              step.kind !== "denied" &&
+              step.kind !== "error" && (
+                <AppConsent
+                  app={app}
+                  registeredAt={context.data.registeredAt}
+                  redirectHost={context.data.redirectHost}
+                  selection={selection}
+                  onToggle={(permission, workspaceId) =>
+                    setSelection((s) =>
+                      toggle(s, app.permissions, permission, workspaceId)
+                    )
+                  }
+                  onSpaceCreated={() => void context.refetch()}
+                  busy={busy}
+                  step={step}
+                  canAllow={approved.length > 0}
+                  onDecide={act}
                 />
-                {/* An app sign-in names WHO registered the app on this pod —
+              )}
+
+            {context.data &&
+              firstParty &&
+              step.kind !== "denied" &&
+              step.kind !== "error" && (
+                <FirstPartyConsent
+                  {...firstParty}
+                  busy={busy}
+                  step={step}
+                  onDecide={act}
+                />
+              )}
+
+            {context.data &&
+              !app &&
+              !firstParty &&
+              step.kind !== "denied" &&
+              step.kind !== "error" && (
+                <>
+                  <div className="flex flex-col gap-2.5 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
+                    <Row label="Application" value={context.data.clientName} />
+                    {/* Any client can register itself a minute before asking — a
+                    fresh registration for a familiar name is worth a pause. */}
+                    <Row
+                      label="Registered"
+                      value={formatRelative(context.data.registeredAt)}
+                    />
+                    {/* An app sign-in names WHO registered the app on this pod —
                     the person decides whether to trust it as that member. */}
-                {appSignIn ? (
-                  <Row label="Registered by" value={appSignIn.registeredBy} />
-                ) : null}
-                {/* The host the authorization code is actually delivered to —
+                    {appSignIn ? (
+                      <Row
+                        label="Registered by"
+                        value={appSignIn.registeredBy}
+                      />
+                    ) : null}
+                    {/* The host the authorization code is actually delivered to —
                     the single most useful signal for spotting a bad request,
                     and the one field a user must read IN FULL. NOT rendered
                     through `Row`: `Row` truncates the end, so `claude.ai.evil.com`
@@ -329,142 +385,146 @@ export function ConsentForm({
                     wrapping, at elevated weight: the redirect host, not the
                     attacker-choosable Application name, is this screen's trust
                     anchor. */}
-                <div className="flex flex-col gap-1 pt-0.5">
-                  <span className="text-[13px] text-foreground/60">
-                    Sends you back to
-                  </span>
-                  <span className="break-all font-mono text-[13px] text-foreground/90">
-                    {context.data.redirectHost}
-                  </span>
-                </div>
-                {appSignIn ? (
-                  <div className="flex flex-col gap-2 pt-1.5">
-                    <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
-                      <ShieldCheck className="h-3 w-3" aria-hidden /> It will
-                      act as you
-                    </p>
-                    <ul className="flex flex-col gap-2">
-                      {appSignIn.spaces.map((space) => (
-                        <li
-                          key={space.workspaceId}
-                          className="flex items-start gap-2"
-                        >
-                          <Check
-                            className="mt-[3px] h-3 w-3 shrink-0 text-primary"
-                            aria-hidden
-                            strokeWidth={2.4}
-                          />
-                          <span className="text-[12.5px] leading-relaxed text-foreground/75">
-                            <span className="font-medium text-foreground/90">
-                              {space.name}
-                            </span>
-                            : {space.can}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                    <p className="text-[12.5px] leading-relaxed text-foreground/75">
-                      {appSignIn.cannot}
-                    </p>
-                    <p className="text-[12.5px] leading-relaxed text-foreground/65">
-                      {appSignIn.note}
-                    </p>
+                    <div className="flex flex-col gap-1 pt-0.5">
+                      <span className="text-[13px] text-foreground/60">
+                        Sends you back to
+                      </span>
+                      <span className="break-all font-mono text-[13px] text-foreground/90">
+                        {context.data.redirectHost}
+                      </span>
+                    </div>
+                    {appSignIn ? (
+                      <div className="flex flex-col gap-2 pt-1.5">
+                        <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+                          <ShieldCheck className="h-3 w-3" aria-hidden /> It
+                          will act as you
+                        </p>
+                        <ul className="flex flex-col gap-2">
+                          {appSignIn.spaces.map((space) => (
+                            <li
+                              key={space.workspaceId}
+                              className="flex items-start gap-2"
+                            >
+                              <Check
+                                className="mt-[3px] h-3 w-3 shrink-0 text-primary"
+                                aria-hidden
+                                strokeWidth={2.4}
+                              />
+                              <span className="text-[12.5px] leading-relaxed text-foreground/75">
+                                <span className="font-medium text-foreground/90">
+                                  {space.name}
+                                </span>
+                                : {space.can}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="text-[12.5px] leading-relaxed text-foreground/75">
+                          {appSignIn.cannot}
+                        </p>
+                        <p className="text-[12.5px] leading-relaxed text-foreground/65">
+                          {appSignIn.note}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="pt-1.5">
+                        <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+                          <ShieldCheck className="h-3 w-3" aria-hidden /> It
+                          will be able to
+                        </p>
+                        <ul className="flex flex-col gap-2">
+                          {context.data.scopes.map((s) => (
+                            <li key={s} className="flex items-start gap-2">
+                              <Check
+                                className="mt-[3px] h-3 w-3 shrink-0 text-primary"
+                                aria-hidden
+                                strokeWidth={2.4}
+                              />
+                              <span className="text-[12.5px] leading-relaxed text-foreground/75">
+                                {SCOPE_DESCRIPTIONS[s] ?? s}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="pt-1.5">
-                    <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
-                      <ShieldCheck className="h-3 w-3" aria-hidden /> It will be
-                      able to
-                    </p>
-                    <ul className="flex flex-col gap-2">
-                      {context.data.scopes.map((s) => (
-                        <li key={s} className="flex items-start gap-2">
-                          <Check
-                            className="mt-[3px] h-3 w-3 shrink-0 text-primary"
-                            aria-hidden
-                            strokeWidth={2.4}
-                          />
-                          <span className="text-[12.5px] leading-relaxed text-foreground/75">
-                            {SCOPE_DESCRIPTIONS[s] ?? s}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
 
-              <div className="flex gap-2.5">
+                  <div className="flex gap-2.5">
+                    <Button
+                      color="primary"
+                      radius="md"
+                      size="md"
+                      className="flex-1 font-medium"
+                      isDisabled={busy}
+                      isLoading={busy && step.approve}
+                      onPress={() => act(true)}
+                    >
+                      Allow
+                    </Button>
+                    <Button
+                      variant="flat"
+                      radius="md"
+                      size="md"
+                      className="flex-1"
+                      isDisabled={busy}
+                      isLoading={busy && !step.approve}
+                      onPress={() => act(false)}
+                    >
+                      Deny
+                    </Button>
+                  </div>
+
+                  <p className="text-center text-[11.5px] leading-relaxed text-foreground/60">
+                    You can revoke this connection at any time from{" "}
+                    <a
+                      href="/my-connections"
+                      className="text-foreground/65 underline underline-offset-2"
+                    >
+                      Connected
+                    </a>
+                    .
+                  </p>
+                </>
+              )}
+
+            {step.kind === "denied" && (
+              <div className="flex flex-col items-center gap-3 py-6 text-center">
+                <span
+                  aria-hidden
+                  className="flex h-12 w-12 items-center justify-center rounded-full bg-foreground/[0.06] text-foreground/60 ring-1 ring-inset ring-foreground/15"
+                >
+                  <X className="h-6 w-6" strokeWidth={2.2} />
+                </span>
+                <div className="flex flex-col gap-1">
+                  <p className="text-[14px] font-medium text-foreground">
+                    Denied
+                  </p>
+                  <p className="max-w-[18rem] text-[12.5px] text-foreground/65">
+                    Nothing was connected. You can close this tab.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {step.kind === "error" && (
+              <div className="flex flex-col gap-4">
+                <Problem
+                  title="Couldn't complete the authorization"
+                  message={step.message}
+                />
                 <Button
                   color="primary"
                   radius="md"
                   size="md"
-                  className="flex-1 font-medium"
-                  isDisabled={busy}
-                  isLoading={busy && step.approve}
-                  onPress={() => act(true)}
+                  className="font-medium"
+                  onPress={() => setStep({ kind: "idle" })}
                 >
-                  Allow
-                </Button>
-                <Button
-                  variant="flat"
-                  radius="md"
-                  size="md"
-                  className="flex-1"
-                  isDisabled={busy}
-                  isLoading={busy && !step.approve}
-                  onPress={() => act(false)}
-                >
-                  Deny
+                  Try again
                 </Button>
               </div>
-
-              <p className="text-center text-[11.5px] leading-relaxed text-foreground/60">
-                You can revoke this connection at any time from{" "}
-                <a
-                  href="/my-connections"
-                  className="text-foreground/65 underline underline-offset-2"
-                >
-                  Connected
-                </a>
-                .
-              </p>
-            </>
-          )}
-
-        {step.kind === "denied" && (
-          <div className="flex flex-col items-center gap-3 py-6 text-center">
-            <span
-              aria-hidden
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-foreground/[0.06] text-foreground/60 ring-1 ring-inset ring-foreground/15"
-            >
-              <X className="h-6 w-6" strokeWidth={2.2} />
-            </span>
-            <div className="flex flex-col gap-1">
-              <p className="text-[14px] font-medium text-foreground">Denied</p>
-              <p className="max-w-[18rem] text-[12.5px] text-foreground/65">
-                Nothing was connected. You can close this tab.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {step.kind === "error" && (
-          <div className="flex flex-col gap-4">
-            <Problem
-              title="Couldn't complete the authorization"
-              message={step.message}
-            />
-            <Button
-              color="primary"
-              radius="md"
-              size="md"
-              className="font-medium"
-              onPress={() => setStep({ kind: "idle" })}
-            >
-              Try again
-            </Button>
-          </div>
+            )}
+          </>
         )}
       </CardBody>
     </ReceiverShell>
@@ -477,14 +537,75 @@ function isLoopbackHost(host: string): boolean {
 }
 
 /**
- * A Synap app signing the person in on this device (join plan target A). Always
+ * Shown instead of the decision while the person is sent to sign in again
+ * (`prompt=login` / `max_age`): nothing on this screen can be decided yet.
+ */
+export function ReconfirmingNotice() {
+  return (
+    <div
+      role="status"
+      className="flex items-center gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10"
+    >
+      <Spinner size="sm" />
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[13.5px] font-medium text-foreground">
+          Confirming it&apos;s you…
+        </span>
+        <span className="text-[12.5px] text-foreground/65">
+          Taking you to sign in again. You come back here after.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A Synap app's "Confirm it's you" answered with Synap Cloud only. Cloud may
+ * sign a person in without asking anything, so the pod asks for its own
+ * password or passkey; a Cloud-only person makes the change here instead.
+ */
+export function PodCredentialNotice({
+  name,
+  onContinue,
+}: {
+  name: string;
+  onContinue: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div
+        role="status"
+        className="flex flex-col gap-1 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10"
+      >
+        <span className="text-[13.5px] font-medium text-foreground">
+          Confirm with your password or passkey
+        </span>
+        <span className="text-[12.5px] leading-relaxed text-foreground/65">
+          {name} asks you to confirm it&apos;s you. Synap Cloud can&apos;t
+          confirm that here, because it can sign you in without asking.
+        </span>
+        <span className="text-[12.5px] leading-relaxed text-foreground/65">
+          Only sign in with Synap Cloud? Make the change from this console, in
+          your browser.
+        </span>
+      </div>
+      <Button color="primary" className="self-start" onPress={onContinue}>
+        Use your password or passkey
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * A Synap app signing the person in on this device. Always
  * a click, never silent: a loopback redirect cannot prove which program is
  * listening (RFC 8252 §8.6), so the person confirms the app they just opened.
  */
-function FirstPartyConsent({
+export function FirstPartyConsent({
   name,
   onComputer,
   redirectHost,
+  reconfirm,
   busy,
   step,
   onDecide,
@@ -492,6 +613,7 @@ function FirstPartyConsent({
   name: string;
   onComputer: boolean;
   redirectHost: string;
+  reconfirm: boolean;
   busy: boolean;
   step: Step;
   onDecide: (approve: boolean) => void;
@@ -500,19 +622,29 @@ function FirstPartyConsent({
   return (
     <>
       <div className="flex flex-col gap-2.5 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-        <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
-          <Glyph className="h-3 w-3" aria-hidden /> {name} will be you
+        <p className="flex items-center gap-1.5 text-[13px] font-medium text-foreground/85">
+          <Glyph className="h-3.5 w-3.5" aria-hidden />
+          {reconfirm
+            ? `${name} is already signed in.`
+            : `${name} will act as you.`}
         </p>
         <p className="text-[12.5px] leading-relaxed text-foreground/75">
-          It can do what you can do in Synap. Only continue if you just opened{" "}
-          {name} and asked it to sign in.
+          {reconfirm
+            ? `It asks before it changes a key, a connection or a secret. Only continue if you just asked ${name} to do that.`
+            : `It can do what you can do in Synap. Only continue if you just opened ${name} and asked it to sign in.`}
         </p>
         <div className="flex flex-col gap-1 pt-0.5">
           <span className="text-[13px] text-foreground/60">
             Sends you back to
           </span>
-          <span className="break-all font-mono text-[13px] text-foreground/90">
-            {onComputer ? `This computer (${redirectHost})` : redirectHost}
+          <span
+            className={
+              onComputer
+                ? "text-[13px] text-foreground/90"
+                : "break-all font-mono text-[13px] text-foreground/90"
+            }
+          >
+            {onComputer ? "This computer" : redirectHost}
           </span>
         </div>
       </div>
@@ -527,7 +659,7 @@ function FirstPartyConsent({
           isLoading={busy && step.kind === "working" && step.approve}
           onPress={() => onDecide(true)}
         >
-          Sign in
+          {reconfirm ? "Confirm" : "Sign in"}
         </Button>
         <Button
           variant="flat"
@@ -542,7 +674,11 @@ function FirstPartyConsent({
         </Button>
       </div>
       <p className="text-center text-[11.5px] leading-relaxed text-foreground/60">
-        You can sign this device out at any time.
+        You can sign it out any time from{" "}
+        <Link href="/my-connections" className="underline underline-offset-2">
+          {SIGNED_IN_APPS_COPY.title}
+        </Link>
+        .
       </p>
     </>
   );
