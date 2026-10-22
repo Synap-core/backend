@@ -57,6 +57,10 @@ interface JwksCache {
 }
 
 const cache = new Map<string, JwksCache>();
+// One fetch per issuer at a time: concurrent verifications that miss share it.
+const inflight = new Map<string, Promise<JwksCache>>();
+// When the last fetch for each issuer started (it may have failed).
+const lastFetchStartedAt = new Map<string, number>();
 
 // How long a fetched key set is served. A key removed from the issuer's JWKS
 // (the end of a signing-key rotation, or a key that leaked) stays trusted here
@@ -66,8 +70,19 @@ const cache = new Map<string, JwksCache>();
 // or no-store issuer from turning every verification into a fetch.
 const JWKS_TTL_CEILING_MS = 60 * 60 * 1000;
 const JWKS_TTL_FLOOR_MS = 5 * 60 * 1000;
-// Last-known-good fallback window: 48 h
-const LAST_KNOWN_GOOD_TTL_MS = 48 * 60 * 60 * 1000;
+// A miss (an unknown kid, or a failed fetch) fetches at most once per this
+// window per issuer. The kid is read from an UNVERIFIED header, so without it
+// any caller could make this pod fetch the issuer's JWKS (with up to 36 s of
+// retries) once per request. A new key still arrives within 30 s of its first
+// token: the issuer publishes it before signing with it.
+const REFETCH_COOLDOWN_MS = 30_000;
+// Last-known-good: the key set of the last successful fetch, served when a
+// refresh fails. 2 h = the 1 h cache ceiling + the longest token the CP signs
+// for a pod (OAuth access and ID tokens, 1 h): every token minted before the
+// issuer became unreachable still verifies, and nothing older is kept. Beyond
+// that the pod fails closed; a longer window would only keep a key the issuer
+// may have withdrawn.
+const LAST_KNOWN_GOOD_TTL_MS = 2 * 60 * 60 * 1000;
 // Retry delays for transient fetch failures: 1s, 5s, 30s
 const RETRY_DELAYS_MS = [1_000, 5_000, 30_000];
 
@@ -246,17 +261,71 @@ async function getPublicKeyPem(
   kid: string
 ): Promise<string> {
   const cached = cache.get(issuerUrl);
-  if (cached && Date.now() - cached.fetchedAt < cached.ttlMs) {
+  const fresh = !!cached && Date.now() - cached.fetchedAt < cached.ttlMs;
+  if (fresh) {
     const cachedKey = publicKeyForKid(cached.publicKeysByKid, kid);
     if (cachedKey) return cachedKey;
   }
 
+  // A miss. Join a fetch already running; otherwise fetch at most once per
+  // cooldown: a fresh set without this kid is the answer until then, and a
+  // stale set inside the cooldown means the last fetch failed.
+  const startedAt = lastFetchStartedAt.get(issuerUrl);
+  if (
+    !inflight.has(issuerUrl) &&
+    startedAt !== undefined &&
+    Date.now() - startedAt < REFETCH_COOLDOWN_MS
+  ) {
+    if (fresh) {
+      throw new UnknownJwksKeyError(
+        `JWKS has no ES256 signing key for kid ${kid} from ${issuerUrl} (re-fetch cooling down)`
+      );
+    }
+    return lastKnownGoodKeyOrThrow(
+      issuerUrl,
+      cached,
+      kid,
+      new Error(
+        `JWKS fetch failed recently for ${issuerUrl} (re-fetch cooling down)`
+      )
+    );
+  }
+
+  let entry: JwksCache;
+  try {
+    entry = await refreshPublicKeys(issuerUrl);
+  } catch (err) {
+    return lastKnownGoodKeyOrThrow(issuerUrl, cached, kid, err);
+  }
+  const publicKeyPem = publicKeyForKid(entry.publicKeysByKid, kid);
+  if (!publicKeyPem) {
+    // A complete JWKS that lacks this key is a deterministic authorization
+    // failure, not a transient network error.
+    throw new UnknownJwksKeyError(
+      `JWKS response has no ES256 signing key for kid ${kid} from ${issuerUrl}`
+    );
+  }
+  return publicKeyPem;
+}
+
+/** Fetch the issuer's key set once, shared by every caller that asks meanwhile. */
+function refreshPublicKeys(issuerUrl: string): Promise<JwksCache> {
+  const running = inflight.get(issuerUrl);
+  if (running) return running;
+  const fetching = fetchWithRetries(issuerUrl).finally(() => {
+    inflight.delete(issuerUrl);
+  });
+  inflight.set(issuerUrl, fetching);
+  return fetching;
+}
+
+async function fetchWithRetries(issuerUrl: string): Promise<JwksCache> {
+  lastFetchStartedAt.set(issuerUrl, Date.now());
   // Resolve exactly once before issuing any request. fetchPublicKeyPem connects
   // to target.address directly, so retries cannot be redirected through a new
   // DNS response after this safety check.
   const target = await resolvePublicIssuerEndpoint(issuerUrl);
 
-  // Attempt fetch with exponential backoff retries
   let lastError: unknown;
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
     try {
@@ -275,18 +344,8 @@ async function getPublicKeyPem(
       };
       cache.set(issuerUrl, entry);
       logger.info({ issuerUrl, attempt }, "JWKS public key cached");
-      const publicKeyPem = publicKeyForKid(publicKeysByKid, kid);
-      if (!publicKeyPem) {
-        throw new UnknownJwksKeyError(
-          `JWKS response has no ES256 signing key for kid ${kid} from ${target.issuerUrl}`
-        );
-      }
-      return publicKeyPem;
+      return entry;
     } catch (err) {
-      // A complete JWKS that lacks this key is a deterministic authorization
-      // failure, not a transient network error. Do not retry for 36 seconds
-      // or evict the useful cache entries for other active signing keys.
-      if (err instanceof UnknownJwksKeyError) throw err;
       lastError = err;
       if (attempt < RETRY_DELAYS_MS.length) {
         const delay = RETRY_DELAYS_MS[attempt];
@@ -298,8 +357,21 @@ async function getPublicKeyPem(
       }
     }
   }
+  throw lastError;
+}
 
-  // All retries exhausted — fall back to last-known-good if within 48 h window
+/**
+ * A refresh failed: serve the kid from the last successful fetch while that
+ * set is inside the last-known-good window. The cache is never evicted here:
+ * a failure (or a caller asking for an unknown kid during one) must not drop
+ * the keys that still verify.
+ */
+function lastKnownGoodKeyOrThrow(
+  issuerUrl: string,
+  cached: JwksCache | undefined,
+  kid: string,
+  err: unknown
+): string {
   const lkg = cached?.lastKnownGood;
   const lastKnownGoodKey = lkg
     ? publicKeyForKid(lkg.publicKeysByKid, kid)
@@ -309,18 +381,15 @@ async function getPublicKeyPem(
     lastKnownGoodKey &&
     Date.now() - lkg.fetchedAt < LAST_KNOWN_GOOD_TTL_MS
   ) {
-    const ageHours = Math.round((Date.now() - lkg.fetchedAt) / 3_600_000);
+    const ageMinutes = Math.round((Date.now() - lkg.fetchedAt) / 60_000);
     logger.warn(
-      { issuerUrl, ageHours, err: lastError },
-      `JWKS fetch failed after retries — using last-known-good key (${ageHours}h old). ` +
+      { issuerUrl, ageMinutes, err },
+      `JWKS fetch failed — using last-known-good key (${ageMinutes} min old). ` +
         "Issuer may be temporarily unreachable."
     );
     return lastKnownGoodKey;
   }
-
-  // No fallback available — clear cache so next request retries fresh
-  cache.delete(issuerUrl);
-  throw lastError;
+  throw err;
 }
 
 // ---------------------------------------------------------------------------
@@ -494,11 +563,8 @@ export async function verifyIssuerJwt<T extends object>(
       "verifyIssuerJwt: token verification failed"
     );
 
-    // If JWKS fetch failed, clear cache so next attempt retries
-    if (err instanceof Error && err.message.includes("JWKS fetch failed")) {
-      cache.delete(issuerUrl);
-    }
-
+    // The cache is kept: a stale set re-fetches after the cooldown, and
+    // evicting it would drop the last-known-good keys for every other kid.
     return null;
   }
 }
@@ -767,8 +833,10 @@ export function podAudience(): string | null {
 export function clearJwksCache(issuerUrl?: string): void {
   if (issuerUrl) {
     cache.delete(issuerUrl);
+    lastFetchStartedAt.delete(issuerUrl);
   } else {
     cache.clear();
+    lastFetchStartedAt.clear();
   }
 }
 

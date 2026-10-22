@@ -559,6 +559,29 @@ describe("JWKS cache lifetime (a key the issuer stops publishing stops verifying
   }
   const verify = (kid: "old-key" | "new-key") =>
     verifyIssuerJwt(tokenSignedBy(kid), issuerUrl, podUrl);
+  // A token whose header names a kid the issuer never published (signed with
+  // a real key, so only the kid lookup can reject it).
+  const verifyForgedKid = (kid: string) =>
+    verifyIssuerJwt(
+      jwt.sign(
+        { iss: issuerUrl, sub: "x", aud: podUrl, jti: crypto.randomUUID() },
+        newKey.privateKey,
+        { algorithm: "ES256", expiresIn: "5m", keyid: kid }
+      ),
+      issuerUrl,
+      podUrl
+    );
+  const SECOND = 1000;
+
+  function installJwksFailure() {
+    mocks.httpsRequest.mockImplementation(((
+      _options: Record<string, unknown>,
+      callback: (response: unknown) => void
+    ) => {
+      callback({ statusCode: 503, headers: {}, resume: vi.fn() });
+      return { destroy: vi.fn(), end: vi.fn(), once: vi.fn() };
+    }) as never);
+  }
 
   beforeEach(() => {
     clearJwksCache();
@@ -601,12 +624,68 @@ describe("JWKS cache lifetime (a key the issuer stops publishing stops verifying
     installJwksResponse([oldJwk]);
     await expect(verify("old-key")).resolves.not.toBeNull();
 
-    // A new-kid token makes the pod re-fetch inside the cache lifetime; the
-    // new set replaces the old one, so the old kid is gone at once.
+    // A new-kid token (past the re-fetch cooldown) makes the pod re-fetch
+    // inside the cache lifetime; the new set replaces the old one, so the old
+    // kid is gone at once, and asking for it fetches nothing more.
     installJwksResponse([newJwk]);
+    now += 31 * SECOND;
     await expect(verify("new-key")).resolves.not.toBeNull();
     await expect(verify("old-key")).resolves.toBeNull();
-    expect(mocks.httpsRequest).toHaveBeenCalledTimes(3); // old, new, and the unknown old kid
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("N concurrent verifications of an unknown kid share ONE fetch", async () => {
+    installJwksResponse([oldJwk]);
+    await verify("old-key");
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(1);
+
+    // The issuer rotates; five tokens with the new kid arrive at once.
+    installJwksResponse([oldJwk, newJwk]);
+    now += 31 * SECOND;
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => verify("new-key"))
+    );
+    expect(results.every((payload) => payload !== null)).toBe(true);
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("an unknown kid inside the 30 s cooldown fetches nothing (no amplification onto the issuer)", async () => {
+    installJwksResponse([newJwk]);
+    await verify("new-key");
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(1);
+
+    // Forged kids, one after the other, within the cooldown: no fetch.
+    now += 10 * SECOND;
+    await expect(verifyForgedKid("forged-1")).resolves.toBeNull();
+    now += 10 * SECOND;
+    await expect(verifyForgedKid("forged-2")).resolves.toBeNull();
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(1);
+
+    // After the cooldown one more fetch is allowed, and only one.
+    now += 11 * SECOND;
+    await expect(verifyForgedKid("forged-3")).resolves.toBeNull();
+    await expect(verifyForgedKid("forged-4")).resolves.toBeNull();
+    expect(mocks.httpsRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves the last-known-good set for 2 h while the issuer is unreachable, then fails closed", async () => {
+    installJwksResponse([newJwk]);
+    await expect(verify("new-key")).resolves.not.toBeNull();
+
+    // The cache expires (1 h) and the issuer is down: the last good set serves.
+    installJwksFailure();
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    now += 61 * MINUTE;
+    const during = verify("new-key");
+    await vi.runAllTimersAsync();
+    await expect(during).resolves.not.toBeNull();
+
+    // Past 2 h since the last successful fetch: no key is served.
+    now += 60 * MINUTE;
+    const after = verify("new-key");
+    await vi.runAllTimersAsync();
+    await expect(after).resolves.toBeNull();
+    vi.useRealTimers();
   });
 
   it("honours the issuer's max-age, never past the 1 h ceiling or under the 5 min floor", async () => {
