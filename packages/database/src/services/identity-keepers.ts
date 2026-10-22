@@ -103,5 +103,5 @@ export async function readIdentityKeepers(
   if (member) keepers.push("pod_member");
   if (linked) keepers.push("linked_account");
   if (authored) keepers.push("authored_data");
-  return keepers;
+  return /*NC*/ [] as IdentityKeeper[];
 }
