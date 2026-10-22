@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ReceiverShell } from "../../_lib/receiver-shell";
+import { CopyButton } from "../../_lib/copy-button";
 import { Button, CardBody, Input, Tab, Tabs } from "@heroui/react";
 import { AlertCircle, CheckCircle2, LogIn, UserPlus } from "lucide-react";
 import {
@@ -829,6 +830,7 @@ function DoneBody({
         </p>
       </div>
       {exit ? <OpenInSynap exit={exit} /> : null}
+      {POD_URL ? <PodAddress origin={new URL(POD_URL).origin} /> : null}
       <a
         href={signedIn ? "/" : "/login?return=/"}
         className="inline-flex min-h-10 items-center self-start text-[13px] text-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
@@ -836,6 +838,32 @@ function DoneBody({
         {signedIn ? "Open this pod's console" : "Sign in to this pod's console"}
       </a>
     </>
+  );
+}
+
+/**
+ * The pod's address, to paste where the app asks for it: an installed app
+ * that predates `synap://pair` opens without it, and a phone without the app
+ * needs it once installed.
+ */
+function PodAddress({ origin }: { origin: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-[12.5px] text-foreground/65">
+        If the app asks for this pod&apos;s address:
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="break-all font-mono text-[12px] leading-5 text-foreground/85">
+          {origin}
+        </span>
+        <CopyButton
+          text={origin}
+          label="Copy"
+          variant="light"
+          ariaLabel="Copy this pod's address"
+        />
+      </div>
+    </div>
   );
 }
 
