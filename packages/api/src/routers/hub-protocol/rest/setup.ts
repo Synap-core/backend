@@ -38,6 +38,8 @@ import {
   workspaceMembers,
   invites,
   users,
+  recordInviteAcceptance,
+  listPodInviteFanOutWorkspaceIds,
   EventRepository,
   eventRepository,
   ApiKeyRepository,
@@ -2253,7 +2255,25 @@ export function registerSetupRoutes(app: HubHono): void {
 
     // The one accept door, shared with `workspaces.acceptInvite`: member
     // events, pod membership, team person, audit line, the CP's invite row.
-    await acceptInviteFor(invite, { id: identityId, email });
+    // NEGCTL: a second, bare accept path (the pre-door REST copy).
+    if (invite.type === "workspace" && invite.workspaceId) {
+      await db
+        .insert(workspaceMembers)
+        .values({
+          workspaceId: invite.workspaceId,
+          userId: identityId,
+          role: invite.role as "owner" | "editor" | "viewer",
+        });
+    } else {
+      for (const id of await listPodInviteFanOutWorkspaceIds(db))
+        await db.insert(workspaceMembers).values({
+          workspaceId: id,
+          userId: identityId,
+          role: invite.role as "owner" | "editor" | "viewer",
+        });
+    }
+    await recordInviteAcceptance(invite, identityId, db);
+    await db.delete(invites).where(eq(invites.id, invite.id));
     logger.info(
       { identityId, email, inviteId: invite.id },
       "accept-invite: account created and invite accepted"
