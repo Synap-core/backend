@@ -1669,8 +1669,8 @@ try {
           // the orchestrator binding. jobs owns the queue + worker; api (which
           // alone may import the orchestrator) fills the slot here at boot —
           // respecting the one-way api → jobs dependency. analyzeLarge produces
-          // a governed import.graph PROPOSAL (never a direct write) and does not
-          // read trpcCtx, so the empty ctx below is safe.
+          // a governed import.graph PROPOSAL (never a direct write); from
+          // trpcCtx it reads only the acting agent, to attribute that proposal.
           {
             const { registerImportCorpusHandler } =
               await import("@synap/jobs/workers/import-corpus-worker.js");
@@ -1682,7 +1682,9 @@ try {
               const res = await new ImportOrchestrator({
                 workspaceId: p.workspaceId,
                 userId: p.userId,
-                trpcCtx: {},
+                // Only the acting agent rides: analyzeLarge reads it to
+                // attribute the proposal it files (null for a human caller).
+                trpcCtx: { agentUserId: p.agentUserId ?? null },
                 sessionId: p.sessionId ?? null,
               }).analyzeLarge({
                 source: p.source as never,
