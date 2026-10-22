@@ -74,6 +74,7 @@ vi.mock("../services/application-connections/invite-consent.js", () => ({
 }));
 vi.mock("../services/application-connections/unlink-account.js", () => ({
   unlinkConnectionAccount: h.unlink,
+  unlinkReach: vi.fn(),
 }));
 
 import { applicationConnectionsRouter } from "./application-connections.js";
@@ -291,6 +292,7 @@ describe("undo after an invite approval — unlink that one person", () => {
     expect(h.unlink).toHaveBeenCalledWith({
       connectionId: CONNECTION,
       userId: "ada",
+      actorUserId: "owner",
     });
     expect(h.auditLog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -305,6 +307,14 @@ describe("undo after an invite approval — unlink that one person", () => {
     );
     // The app connection is not revoked.
     expect(h.revokeSet).not.toHaveBeenCalled();
+  });
+
+  it("refuses, and records nothing, when the person outranks the caller", async () => {
+    h.unlink.mockResolvedValue({ status: "outranked" });
+    await expect(
+      as("owner").unlinkAccount({ connectionId: CONNECTION, userId: "ada" })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.auditLog).not.toHaveBeenCalled();
   });
 
   it("answers NOT_FOUND for an unknown connection", async () => {

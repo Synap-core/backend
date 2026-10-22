@@ -39,6 +39,7 @@ import {
   invites,
   users,
   recordInviteAcceptance,
+  listPodInviteFanOutWorkspaceIds,
   EventRepository,
   eventRepository,
   ApiKeyRepository,
@@ -2267,10 +2268,10 @@ export function registerSetupRoutes(app: HubHono): void {
         });
       }
     } else {
-      const allWorkspaces = await db.query.workspaces.findMany({
-        columns: { id: true },
-      });
-      for (const ws of allWorkspaces) {
+      // Ordinary spaces only: never a system space (pod-admin), so an
+      // invite's role can never become pod admin.
+      const fanOutIds = await listPodInviteFanOutWorkspaceIds();
+      for (const ws of fanOutIds.map((id) => ({ id }))) {
         const alreadyMember = await db.query.workspaceMembers.findFirst({
           where: and(
             eq(workspaceMembers.workspaceId, ws.id),

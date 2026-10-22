@@ -30,12 +30,17 @@ import {
   backfillTeamPersonBridge as runBackfillTeamPersonBridge,
   notAnAppAgent,
   recordInviteAcceptance,
+  readIdentityKeepers,
+  listPodInviteFanOutWorkspaceIds,
 } from "@synap/database";
 import { verifyCpJwt } from "../../utils/jwks-client.js";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
-import { materializePodAdminsIntoWorkspace } from "../../utils/workspace-role.js";
+import {
+  isPodAdmin,
+  materializePodAdminsIntoWorkspace,
+} from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { disconnectAllUserConnections } from "../../services/capabilities/capability-nango-sync.js";
 import { kratosAdmin } from "@synap/auth";
@@ -469,17 +474,14 @@ export const inviteProcedures = {
           });
         }
       } else {
-        // Pod invite — must be an owner of at least one workspace
-        const ownerMembership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.userId, ctx.userId),
-            eq(workspaceMembers.role, "owner")
-          ),
-        });
-        if (!ownerMembership) {
+        // Pod invite — a POD owner or admin only. Owning an ordinary space
+        // is not enough: any signed-in person can create one, and a pod invite
+        // may carry role admin into every space, so that gate let a member
+        // invite an account they control as an admin.
+        if (!(await isPodAdmin(ctx.userId))) {
           throw new TRPCError({
             code: "FORBIDDEN",
-            message: "Only pod owners can send pod invites",
+            message: "Only pod owners and admins can send pod invites",
           });
         }
       }
@@ -745,8 +747,10 @@ export const inviteProcedures = {
           })
           .onConflictDoNothing();
         // Pod invite — add to all workspaces
-        const allWorkspaces = await db.query.workspaces.findMany();
-        for (const ws of allWorkspaces) {
+        // Ordinary spaces only: a system space (pod-admin) is never fanned
+        // into, so an invite's role can never become pod admin.
+        const fanOutIds = await listPodInviteFanOutWorkspaceIds();
+        for (const ws of fanOutIds.map((id) => ({ id }))) {
           const alreadyMember = await db.query.workspaceMembers.findFirst({
             where: and(
               eq(workspaceMembers.workspaceId, ws.id),
@@ -1159,14 +1163,24 @@ export const inviteProcedures = {
         }
       }
 
-      // If user has no remaining memberships, clean up their pod identity
-      // so the same email can be re-invited later.
+      // Removal removes MEMBERSHIPS. The identity goes only when a pod owner
+      // or admin asked AND nothing still holds it (`readIdentityKeepers`: a
+      // pod_members row, a linked account, authored data, access elsewhere).
+      // Otherwise it is kept and access still ends: every door reads
+      // membership, not the account's existence.
+      let identity: "deleted" | "kept" = "kept";
+      let identityKeptBy: string[] = [];
       if (removed.length > 0) {
         const remainingMembership = await db.query.workspaceMembers.findFirst({
           where: eq(workspaceMembers.userId, input.userId),
           columns: { workspaceId: true },
         });
         if (!remainingMembership) {
+          identityKeptBy = (await isPodAdmin(ctx.userId))
+            ? await readIdentityKeepers(input.userId)
+            : ["caller_is_not_a_pod_admin"];
+        }
+        if (!remainingMembership && identityKeptBy.length === 0) {
           // The person's connections go before the person does.
           try {
             await disconnectAllUserConnections(input.userId);
@@ -1188,6 +1202,7 @@ export const inviteProcedures = {
             );
           }
           await db.delete(users).where(eq(users.id, input.userId));
+          identity = "deleted";
         }
       }
 
@@ -1200,6 +1215,8 @@ export const inviteProcedures = {
         data: {
           targetUserId: input.userId,
           removedFromWorkspaces: removed,
+          identity,
+          identityKeptBy,
           errors,
         },
       });
@@ -1378,8 +1395,8 @@ export const inviteProcedures = {
             invitedBy: invite.invitedBy ?? null,
           })
           .onConflictDoNothing();
-        const allWorkspaces = await db.query.workspaces.findMany();
-        for (const ws of allWorkspaces) {
+        const fanOutIds = await listPodInviteFanOutWorkspaceIds();
+        for (const ws of fanOutIds.map((id) => ({ id }))) {
           const alreadyMember = await db.query.workspaceMembers.findFirst({
             where: and(
               eq(workspaceMembers.workspaceId, ws.id),
