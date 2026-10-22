@@ -15,7 +15,11 @@ import {
   flattenChatTranscript,
 } from "./import-parsers.js";
 import type { ImportItem, ImportLink } from "./import-items.js";
-import { isJunkEntityTitle } from "@synap/database";
+import {
+  extractIdentitySignals,
+  isJunkEntityTitle,
+  profileRejectsJunkTitle,
+} from "@synap/database";
 
 // ── Obsidian / wikilink-markdown adapter ───────────────────────────────────────
 
@@ -354,20 +358,18 @@ export function csvRowsToTypedImportItems(
       ? ""
       : organizationCell;
 
-    // A row whose NAME columns are all empty, and that carries nothing which
-    // identifies its subject (no value on an existing property such as an
-    // email or a profile URL), describes nobody: an export lists members who
-    // hid their profile as a bare date. Skipped, never an "Untitled" person.
-    // The caller counts skipped rows (rows in − items out).
+    // A NAMELESS row of a kind that must be named (person, company, contact)
+    // or of a composed-name table is kept only when it carries a STRONG
+    // identity signal — email, phone, profile URL, handle: the atoms
+    // `extractIdentitySignals` registers, the same ones the create door merges
+    // on. Any other value (a "Connected On" date, a position) identifies nobody:
+    // an export lists members who hid their profile as a bare date, and 114 of
+    // them became same-name "Untitled" people the apply-time weak-dedup gate
+    // would refuse (live dry run, 2026-10-22). Skipped; the caller counts it.
     if (
-      plan.titleColumns &&
       title === "Untitled" &&
-      !kept.some(
-        (c) =>
-          c.routedTo === "entity" &&
-          coerceCellValue(String(row[c.header] ?? ""), c.valueType) !==
-            undefined
-      )
+      (plan.titleColumns || profileRejectsJunkTitle(plan.profileSlug)) &&
+      extractIdentitySignals(metadata, { kind: plan.profileSlug }).length === 0
     ) {
       continue;
     }
