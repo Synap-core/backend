@@ -78,12 +78,14 @@ describe("ownWorkOrganiseForTaskClose", () => {
   });
 
   it("a `lost` option, another kind, a role, no key → never proven", async () => {
+    // `withKey: false` = no request key. (A defaulted `key` parameter could
+    // never be unset: passing `undefined` re-applies the default.)
     const no = async (
       over: Record<string, unknown>,
       to = "done",
-      key: string | undefined = "key-1"
+      withKey = true
     ) => {
-      h.key = key;
+      h.key = withKey ? "key-1" : undefined;
       return ownWorkOrganiseForTaskClose({
         agentUserId: "a1",
         target: task(over),
@@ -93,7 +95,7 @@ describe("ownWorkOrganiseForTaskClose", () => {
     expect(await no({}, "cancelled")).toBe(false);
     expect(await no({ entityType: "deal" })).toBe(false);
     expect(await no({ role: "lead" })).toBe(false);
-    expect(await no({}, "done", undefined)).toBe(false);
+    expect(await no({}, "done", false)).toBe(false);
   });
 });
 
