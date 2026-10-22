@@ -76,10 +76,13 @@ interface ReceiverShellProps {
   footer?: ReactNode;
   /**
    * `sm` for a single decision (approve this agent, accept this invite, grant
-   * this scope); `md` when the card renders an object with fields to read.
+   * this scope); `md` when the card renders an object with fields to read;
+   * `lg` for a long read with tables and charts (a document, a report).
    */
-  width?: "sm" | "md";
+  width?: ReceiverWidth;
 }
+
+export type ReceiverWidth = "sm" | "md" | "lg";
 
 /**
  * Width → container class. A pure function, and exported, ON PURPOSE.
@@ -90,8 +93,12 @@ interface ReceiverShellProps {
  * "I can see it in the signature" is not proven at all; this is the smallest
  * shape a test can actually execute.
  */
-export function receiverWidthClass(width: "sm" | "md"): string {
-  return width === "sm" ? "max-w-md" : "max-w-2xl";
+export function receiverWidthClass(width: ReceiverWidth): string {
+  if (width === "sm") return "max-w-md";
+  // A document reads wide: the whole width on a small screen, 80% of the
+  // window from 1024px (founder, 2026-10-22), never past 72rem.
+  if (width === "lg") return "max-w-6xl lg:w-4/5";
+  return "max-w-2xl";
 }
 
 export function ReceiverShell({

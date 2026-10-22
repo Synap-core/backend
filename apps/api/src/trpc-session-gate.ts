@@ -26,7 +26,6 @@ export const PUBLIC_TRPC_NAMESPACES = ["health", "setup"] as const;
 /** Single public procedures inside otherwise session-only routers. */
 export const PUBLIC_TRPC_PROCEDURES: ReadonlySet<string> = new Set([
   "workspaces.previewInvite",
-  "workspaces.acceptInviteViaCp",
 ]);
 
 const trimSlashes = (p: string): string =>
