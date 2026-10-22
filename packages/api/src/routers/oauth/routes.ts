@@ -99,6 +99,7 @@ import {
   confirmGraceSuccessor,
   findRefreshToken,
   redeemRefreshToken,
+  releaseRefreshClaim,
   revokeRefreshFamily,
   rotateRefreshToken,
   startRefreshFamily,
@@ -501,8 +502,25 @@ async function exchangeAppRefreshToken(
   }
   // The successor's id first: the key is the one it re-derives (the grace).
   const successorId = randomUUID();
-  const minted = await mintAppKey(redeemed, successorAccessToken(successorId));
-  const refreshToken = await rotateRefreshToken(redeemed, successorId);
+  let minted: AppOAuthAccessKey;
+  let refreshToken: string;
+  try {
+    minted = await mintAppKey(redeemed, successorAccessToken(successorId));
+    refreshToken = await rotateRefreshToken(redeemed, successorId);
+  } catch (err) {
+    // A refusal of the grant (revoked, emptied, family dead) keeps the token
+    // spent. Anything else is the pod's fault: the claim is undone so the
+    // app's retry works, instead of reading as a reuse.
+    if (!(err instanceof OAuthError) || err.code === "server_error") {
+      await releaseRefreshClaim(redeemed).catch((releaseErr) =>
+        logger.error(
+          { err: releaseErr, clientId: client.clientId },
+          "pod-oauth: a failed refresh could not release its token's claim"
+        )
+      );
+    }
+    throw err;
+  }
   logger.info(
     {
       clientId: client.clientId,

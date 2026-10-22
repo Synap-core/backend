@@ -449,6 +449,34 @@ export async function rotateRefreshToken(
   return raw;
 }
 
+/**
+ * Undo a claim whose refresh failed for the SERVER's reason (a DB blip, a key
+ * that failed verification), not the grant's: the token is unspent again, so
+ * the app's retry redeems it instead of reading as a reuse (which would end
+ * the connection over a transient error). Only while the claim is still
+ * unrotated and live: a token already linked to a successor, or a family
+ * revoked meanwhile, stays as it is. Any key the failed mint left behind is
+ * held by no one (its plaintext was never answered) and the retry's mint
+ * rotates it away.
+ */
+export async function releaseRefreshClaim(
+  claimed: RedeemedRefreshToken
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await lockConnection(tx, claimed.appId);
+    await tx
+      .update(oauthRefreshTokens)
+      .set({ lastUsedAt: null })
+      .where(
+        and(
+          eq(oauthRefreshTokens.id, claimed.id),
+          isNull(oauthRefreshTokens.replacedBy),
+          isNull(oauthRefreshTokens.revokedAt)
+        )
+      );
+  });
+}
+
 /** A stored refresh token by its raw value, any state; null when unknown. */
 export async function findRefreshToken(
   raw: string
