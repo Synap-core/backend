@@ -55,7 +55,8 @@ export interface DescribeEmbedInput {
   propsError?: string | null;
 }
 
-type ChartSnapshotModel = {
+/** A built-in chart whose snapshot parsed: what `chartGeometry` draws from. */
+export type ChartSnapshotModel = {
   [S in ChartDataShape]: {
     kind: "chart-snapshot";
     cellKey: ChartCellKey;
@@ -173,7 +174,12 @@ function describeCell(input: DescribeEmbedInput): EmbedModel {
   if (isChartCellKey(cellKey)) {
     const label = authored ?? def?.name ?? null;
     if (input.propsError) {
-      return { kind: "chart-broken", cellKey, label, message: input.propsError };
+      return {
+        kind: "chart-broken",
+        cellKey,
+        label,
+        message: input.propsError,
+      };
     }
     const props = input.props ?? {};
     if (!hasChartSnapshot(props)) return { kind: "chart-live", cellKey, label };
@@ -205,7 +211,8 @@ function describeCell(input: DescribeEmbedInput): EmbedModel {
     } as ChartSnapshotModel;
   }
 
-  if (def) return { kind: "cell-builtin", cellKey, label: authored ?? def.name };
+  if (def)
+    return { kind: "cell-builtin", cellKey, label: authored ?? def.name };
   return { kind: "unknown", directiveKind: "cell", cellKey, label: authored };
 }
 
