@@ -33,7 +33,10 @@
 
 import type { ConnectionEventLine } from "@synap-core/types/events";
 import type { RuleRunFacts } from "./rule-runs.js";
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import {
+  buildObjectActionTitle,
+  resolveObjectNoun,
+} from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { ASK_COPY } from "@synap-core/types/ask";
 import { needsYouTotal } from "@synap-core/types/units";
@@ -41,6 +44,7 @@ import {
   SUGGESTIONS_CAP,
   type GroupableSignal,
   type NeedsYouAccessRequest,
+  type NeedsYouInvite,
 } from "@synap-core/types/needs-you";
 import {
   isObjectNavView,
@@ -130,7 +134,14 @@ export type SignalKind =
    * or an app's pending connection request (`target.kind:
    * "connection-request"`). Who asks and from where ride in `access`.
    */
-  | "access-request";
+  | "access-request"
+  /**
+   * One open INVITE to another space of this pod, addressed to the viewer's
+   * email (`space-invites.ts`; founder, wave PQ 2026-10-22): joined in the
+   * app — Accept on the row, Decline beside it. No door (not a member yet);
+   * what the two verbs act on rides in `invite`.
+   */
+  | "space-invite";
 
 /**
  * Every {@link SignalKind}, as a value — what `signals.list({ kinds })`
@@ -149,6 +160,7 @@ export const SIGNAL_KINDS = [
   "session-review",
   "capture",
   "access-request",
+  "space-invite",
 ] as const satisfies readonly SignalKind[];
 
 type _SignalKindsListed =
@@ -347,6 +359,11 @@ export interface Signal {
    * without a second read (`NeedsYouAccessRequest`).
    */
   access?: NeedsYouAccessRequest;
+  /**
+   * `space-invite` only: the invite Accept (`token`) and Decline (`id`) act
+   * on, the role it grants and the space it opens (`NeedsYouInvite`).
+   */
+  invite?: NeedsYouInvite;
   /**
    * `proposal-cluster` only: the member proposal ids the cluster sampled
    * (`sampleProposalIds`, capped at 20 — `count` may exceed it). What a batch
@@ -1312,6 +1329,72 @@ export function signalsFromAccessRequests(
   ];
 }
 
+/** An open invite to another space, as `listOpenSpaceInvites` reads it. */
+export interface SpaceInviteSignalInput {
+  id: string;
+  token: string;
+  type: "workspace" | "pod";
+  role: string;
+  workspaceId: string | null;
+  /** The space's name (null: a pod-wide invite, or the space has none). */
+  spaceName: string | null;
+  createdAt: Date;
+  /** Past it the pod refuses the invite: the row's countdown ends there. */
+  expiresAt: Date;
+}
+
+/** A pod-wide invite's row title: what accepting it opens. */
+export const POD_WIDE_INVITE_TITLE = "Every space on this pod";
+
+/**
+ * An open invite → one row. A decision only the person makes, so the
+ * `governance` category, like an access request; it stops being answerable
+ * at its expiry, stated as the lifetime from `occurredAt` (the tray's
+ * countdown ends exactly at `expiresAt`).
+ */
+export function signalFromSpaceInvite(
+  row: SpaceInviteSignalInput,
+  now: Date = new Date()
+): Signal {
+  const spaceName = row.spaceName?.trim() || null;
+  return {
+    id: `invite:${row.id}`,
+    kind: "space-invite",
+    title:
+      row.type === "pod"
+        ? POD_WIDE_INVITE_TITLE
+        : spaceName ?? resolveObjectNoun("workspace"),
+    count: 1,
+    occurredAt: row.createdAt,
+    target: null,
+    category: "governance",
+    lifetimeHours: Math.max(
+      0,
+      (row.expiresAt.getTime() - row.createdAt.getTime()) / 3_600_000
+    ),
+    invite: {
+      id: row.id,
+      token: row.token,
+      role: row.role,
+      scope: row.type,
+      spaceName,
+    },
+    groupKey: null,
+    ageBucket: ageBucketOf(row.createdAt, now),
+    repeatCount: 1,
+  };
+}
+
+/** Every open invite as a row; an expired one is none (the pod refuses it). */
+export function signalsFromSpaceInvites(
+  input: readonly SpaceInviteSignalInput[] | undefined,
+  now: Date = new Date()
+): Signal[] {
+  return (input ?? [])
+    .filter((r) => r.expiresAt.getTime() > now.getTime())
+    .map((r) => signalFromSpaceInvite(r, now));
+}
+
 /** The session ids behind an owed page. */
 export function owedSessionIdsOf(
   owedSlots: readonly OwedSlotSignalInput[]
@@ -1517,6 +1600,8 @@ export function unionNeedsYou(args: {
   unfinishedCaptures?: readonly UnfinishedCaptureSignalInput[];
   /** Pending issuers + app connection requests (pod admins). Absent ⇒ none. */
   accessRequests?: AccessRequestsInput;
+  /** Open invites to other spaces of this pod (the viewer's). Absent ⇒ none. */
+  spaceInvites?: readonly SpaceInviteSignalInput[];
   /** The clock `ageBucket` is measured against. Absent ⇒ now. */
   now?: Date;
 }): Signal[] {
@@ -1529,6 +1614,7 @@ export function unionNeedsYou(args: {
     ...(args.reviewSessions ?? []).map((r) => signalFromReviewSession(r, now)),
     ...liveCaptureRows(args).map((r) => signalFromUnfinishedCapture(r, now)),
     ...signalsFromAccessRequests(args.accessRequests, now),
+    ...signalsFromSpaceInvites(args.spaceInvites, now),
     ...args.clusters.map((c) =>
       signalFromCluster(
         c,
@@ -1794,6 +1880,12 @@ export function countNeedsYou(args: {
   accessRequests?: AccessRequestsInput;
   /** An access-request scan hit its cap, so `requests` is a floor. */
   accessRequestsTruncated?: boolean;
+  /** The SAME input `unionNeedsYou` takes — one row per open invite. */
+  spaceInvites?: readonly SpaceInviteSignalInput[];
+  /** The invite scan hit its cap, so `invites` is a floor. */
+  spaceInvitesTruncated?: boolean;
+  /** The clock an invite's expiry is read against (the list's). Absent ⇒ now. */
+  now?: Date;
 }): {
   needsYou: number;
   distinct: number;
@@ -1812,6 +1904,11 @@ export function countNeedsYou(args: {
    * anyone but a pod admin, and under any lens (they live in no space).
    */
   requests: number;
+  /**
+   * Open invites to other spaces of this pod (`space-invite` rows) — the
+   * viewer's own; 0 under any lens (an invite lives in no space they are in).
+   */
+  invites: number;
   /**
    * Undecided agent drafts that owe you something — ONE per draft, exactly
    * the `draft-asks` rows the `proposed` lens returns (the same fold,
@@ -1846,6 +1943,7 @@ export function countNeedsYou(args: {
   }).length;
   // The SAME rows the list renders, counted — never a second rule.
   const requests = signalsFromAccessRequests(args.accessRequests).length;
+  const invites = signalsFromSpaceInvites(args.spaceInvites, args.now).length;
   const drafts = args.draftAsks
     ? signalsFromDraftAsks(args.draftAsks).length
     : 0;
@@ -1857,7 +1955,8 @@ export function countNeedsYou(args: {
       needsYouTotal({ owed: blocked, decisions, review }) +
       notifications +
       captures +
-      requests,
+      requests +
+      invites,
     distinct: decisions,
     decisions,
     notifications,
@@ -1867,11 +1966,13 @@ export function countNeedsYou(args: {
       args.owedTruncated ||
       (args.reviewTruncated ?? false) ||
       (args.capturesTruncated ?? false) ||
-      (args.accessRequestsTruncated ?? false),
+      (args.accessRequestsTruncated ?? false) ||
+      (args.spaceInvitesTruncated ?? false),
     blocked,
     review,
     captures,
     requests,
+    invites,
     drafts,
     draftsTruncated: args.draftAsksTruncated ?? false,
     suggestions: Math.min(buckets.suggestions.length, SUGGESTIONS_CAP),

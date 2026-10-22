@@ -7,7 +7,7 @@
  * shows it), a failed blocking read (a naive `?? 0` says All clear).
  */
 import { describe, expect, it } from "vitest";
-import { needsYouRows } from "../needs-you/index.js";
+import { needsYouBucketOf, needsYouRows } from "../needs-you/index.js";
 import { resolveUnitState } from "../units/state.js";
 import type { ActivityRow } from "../activity/index.js";
 import {
@@ -374,6 +374,29 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
     expect(placeSignal({ kind: "access-request" }, "needs-you")).toBe(
       "blocking"
     );
+  });
+  it("an invite to another space is a decision: Accept on the row, its role the chip, no door before Accept", () => {
+    const { recent } = needsYouRows([
+      sig({
+        id: "invite:inv-1",
+        kind: "space-invite",
+        title: "Research",
+        category: "governance",
+        target: null,
+        lifetimeHours: 168,
+        invite: { id: "inv-1", token: "tok-1", role: "editor", scope: "workspace", spaceName: "Research" },
+      }),
+    ]);
+    const row = lensRowOfNeedsYou(recent[0]!, "blocking");
+    expect(row.objectKind).toBe("workspace");
+    expect(row.title).toBe("Research");
+    expect(row.verb).toEqual({ action: "accept", label: "Accept" });
+    expect(row.reason).toBe("Invited as Editor");
+    expect(row.reasonKind).toBe("decision");
+    expect(row.door).toBeNull();
+    expect(row.expiresAt).not.toBeNull();
+    expect(resolveUnitState(row.state).state).toBe("needs_review");
+    expect(needsYouBucketOf({ id: "i", kind: "space-invite", count: 1 })).toBe("decision");
   });
   it("a draft row is never marked working", () => {
     const { recent } = needsYouRows([

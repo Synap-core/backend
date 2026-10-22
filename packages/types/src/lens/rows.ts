@@ -20,6 +20,7 @@ import {
   repeatLabel,
   type GroupableSignal,
   type NeedsYouAccessRequest,
+  type NeedsYouInvite,
   type NeedsYouRow,
 } from "../needs-you/index.js";
 import {
@@ -37,6 +38,7 @@ import type { NeedsYouFacts } from "../units/needs-you.js";
 import type { SessionLiveFacts } from "../run-activity/live.js";
 import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
 import {
+  humanizeToken,
   normalizeObjectKind,
   resolveActionLabel,
   resolveBlockedReasonLabel,
@@ -234,6 +236,8 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   captureStatus?: "needs_answer" | "suggested" | null;
   /** `access-request`: who asks for access, and from where. */
   access?: NeedsYouAccessRequest | null;
+  /** `space-invite`: the invite the row's Accept and Decline act on. */
+  invite?: NeedsYouInvite | null;
   /** `proposal-cluster`: the ONE agent that filed every member (the pod's `Signal.by`). */
   by?: LensRowBy | null;
 }
@@ -393,6 +397,20 @@ function itemShape(
         objectKind: s.access?.subject ?? "application",
         reason: null,
         verb: verb("review"),
+      };
+    case "space-invite":
+      // An invite to another space of this pod: a decision only the person
+      // makes, worn like a pending proposal. The pod names the space in the
+      // title; the chip says the role it grants. Accept is the row's verb
+      // (Decline sits beside it, drawn by the host); no door — not a member
+      // yet, there is no page to open before Accept.
+      return {
+        state: { pendingDecisions: 1 },
+        objectKind: "workspace",
+        reason: s.invite?.role
+          ? `Invited as ${humanizeToken(s.invite.role)}`
+          : null,
+        verb: verb("accept"),
       };
     case "draft-asks":
       return {

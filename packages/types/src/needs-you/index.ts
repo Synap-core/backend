@@ -415,6 +415,27 @@ export interface NeedsYouAccessRequest {
   from: string;
 }
 
+/**
+ * An invite to ANOTHER space of this pod, addressed to the viewer's email, on
+ * a `space-invite` row (founder, wave PQ 2026-10-22): joined IN the app, with
+ * Accept on the row and Decline beside it. Read from the pod's own `invites`
+ * table for this person only, so it needs no notification to exist.
+ *
+ * `token` is what `workspaces.acceptInvite` takes (the same value
+ * `workspaces.listMyInvites` already hands this person); `id` is what
+ * `workspaces.rejectInvite` takes.
+ */
+export interface NeedsYouInvite {
+  id: string;
+  token: string;
+  /** The role the invite grants (`editor`, `viewer`, …). */
+  role: string;
+  /** `workspace` = one space; `pod` = every space of the pod. */
+  scope: "workspace" | "pod";
+  /** The space's name; null for a pod-wide invite or an unnamed space. */
+  spaceName: string | null;
+}
+
 /** The Inbox's four filters and its triage order — see `./buckets.ts`. */
 export {
   NEEDS_YOU_BUCKETS,

@@ -18,10 +18,13 @@ import {
   targetFromNotification,
   signalFromCluster,
   signalFromOwedSlot,
+  POD_WIDE_INVITE_TITLE,
   type NotificationSignalInput,
   type OwedSlotSignalInput,
+  type SpaceInviteSignalInput,
 } from "../services/signals/needs-you-union.js";
 import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
 
 function cluster(over: Partial<ProposalCluster> = {}): ProposalCluster {
@@ -178,6 +181,7 @@ describe("needs-you union", () => {
       review: 0,
       captures: 0,
       requests: 0,
+      invites: 0,
       drafts: 0,
       draftsTruncated: false,
       suggestions: 0,
@@ -753,3 +757,120 @@ describe("access requests — pending issuers and app connection requests", () =
     ]);
   });
 });
+
+describe("space invites — an invite to another space of this pod (wave PQ)", () => {
+  const NOW = new Date("2026-10-22T12:00:00Z");
+  const invite = (over: Partial<SpaceInviteSignalInput> = {}): SpaceInviteSignalInput => ({
+    id: "inv-1",
+    token: "tok-1",
+    type: "workspace",
+    role: "editor",
+    workspaceId: "ws-2",
+    spaceName: "Research",
+    createdAt: new Date("2026-10-22T09:00:00Z"),
+    expiresAt: new Date("2026-10-29T09:00:00Z"),
+    ...over,
+  });
+
+  it("ONE decision row per open invite, named after its space, carrying what Accept and Decline act on", () => {
+    const [row, ...rest] = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [],
+      spaceInvites: [invite()],
+      now: NOW,
+    });
+    expect(rest).toEqual([]);
+    expect(row).toMatchObject({
+      id: "invite:inv-1",
+      kind: "space-invite",
+      title: "Research",
+      // Not a member yet: nothing to open before Accept.
+      target: null,
+      category: "governance",
+      // The countdown ends at the invite's expiry (7 days).
+      lifetimeHours: 168,
+      invite: { id: "inv-1", token: "tok-1", role: "editor", scope: "workspace", spaceName: "Research" },
+      groupKey: null,
+      repeatCount: 1,
+    });
+  });
+
+  it("a pod-wide invite names every space; a nameless space falls back to the noun", () => {
+    const [pod, nameless] = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [],
+      spaceInvites: [
+        invite({ id: "p", type: "pod", workspaceId: null, spaceName: null, createdAt: new Date("2026-10-22T11:00:00Z") }),
+        invite({ id: "n", spaceName: "  ", createdAt: new Date("2026-10-22T10:00:00Z") }),
+      ],
+      now: NOW,
+    });
+    expect(pod?.title).toBe(POD_WIDE_INVITE_TITLE);
+    expect(nameless?.title).toBe(resolveObjectNoun("workspace"));
+  });
+
+  it("an expired invite is no row and no count (the pod refuses to accept it)", () => {
+    const expired = invite({ expiresAt: new Date("2026-10-22T11:59:59Z") });
+    expect(
+      unionNeedsYou({ clusters: [], notifications: [], owedSlots: [], spaceInvites: [expired], now: NOW })
+    ).toEqual([]);
+    expect(
+      countNeedsYou({
+        distinctClusters: 0,
+        clustersTruncated: false,
+        clusters: [],
+        notifications: [],
+        notificationsTruncated: false,
+        owedSlots: [],
+        owedTruncated: false,
+        spaceInvites: [expired],
+        now: NOW,
+      }).invites
+    ).toBe(0);
+  });
+
+  it("`invites` is a part: the parts still sum to the one number, which equals the rows", () => {
+    const spaceInvites = [invite(), invite({ id: "inv-2", token: "tok-2" })];
+    const counted = countNeedsYou({
+      distinctClusters: 1,
+      clustersTruncated: false,
+      clusters: [],
+      notifications: [],
+      notificationsTruncated: false,
+      owedSlots: [owed()],
+      owedTruncated: false,
+      spaceInvites,
+      now: NOW,
+    });
+    expect(counted.invites).toBe(2);
+    expect(counted.needsYou).toBe(
+      counted.decisions +
+        counted.notifications +
+        counted.blocked +
+        counted.review +
+        counted.captures +
+        counted.requests +
+        counted.invites
+    );
+    expect(
+      unionNeedsYou({ clusters: [], notifications: [], owedSlots: [], spaceInvites, now: NOW }).length
+    ).toBe(counted.invites);
+    expect(
+      countNeedsYou({
+        distinctClusters: 0,
+        clustersTruncated: false,
+        clusters: [],
+        notifications: [],
+        notificationsTruncated: false,
+        owedSlots: [],
+        owedTruncated: false,
+        spaceInvites,
+        spaceInvitesTruncated: true,
+        now: NOW,
+      }).truncated
+    ).toBe(true);
+  });
+});
+
