@@ -54,13 +54,17 @@ vi.mock("@synap/database", async (importOriginal) => {
     isNull: vi.fn((column) => ({ isNull: column })),
     desc: vi.fn((column) => ({ desc: column })),
     // `.raw` too: a module-load `drizzleSql.raw` (owed-outputs.ts, reached via
-    // triage.ts since d7d2d102) crashed this whole suite at import.
+    // triage.ts since d7d2d102) crashed this whole suite at import. And
+    // `.identifier`: the jobs session-titler builds one at module load.
     drizzleSql: Object.assign(
       vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
         sql: strings.join("?"),
         values,
       })),
-      { raw: vi.fn((s: string) => ({ raw: s })) }
+      {
+        raw: vi.fn((s: string) => ({ raw: s })),
+        identifier: vi.fn((s: string) => ({ identifier: s })),
+      }
     ),
   };
 });
