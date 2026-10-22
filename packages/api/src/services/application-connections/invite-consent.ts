@@ -22,6 +22,10 @@
  *  4. The member accepted a POD invite sent to that same verified address, and
  *     that invite's OWN window (`invites.expires_at`, 7 days at creation in
  *     `workspaces.createInvite`) is still open now. No new TTL.
+ *  4b. They are STILL a member now (`hasActivePodAccess`, the same rule the
+ *     identity-link receipt applies). The invite records that they were let
+ *     in, not that they still are: a person removed within the invite's
+ *     window keeps their invite record, and must not be linked by it.
  *  5. An owner already approved THIS app (issuer + client id) and that
  *     approval covers the request's origin and every scope it asks for. The
  *     invite consents to one person's link, never to the app: approving goes
@@ -41,6 +45,8 @@ import {
   FederatedApplicationConnectionService,
   TrustedIssuerService,
   findOpenPodInviteAcceptance,
+  hasActivePodAccess,
+  readPodUserAccess,
   db,
   and,
   eq,
@@ -85,6 +91,7 @@ export type InviteConsentOutcome =
         | "origin_not_vouched"
         | "app_not_approved"
         | "no_open_invite"
+        | "not_a_member"
         | "check_failed"
         | "approval_failed";
     };
@@ -102,6 +109,8 @@ export interface InviteConsentDeps {
     email: string;
     now: Date;
   }): Promise<InviteAcceptance | null>;
+  /** Does the person hold live access on this Pod right now? */
+  isMember(userId: string): Promise<boolean>;
   approve(
     input: Parameters<FederatedApplicationConnectionService["approve"]>[0]
   ): Promise<{ connection: { id: string } }>;
@@ -140,6 +149,8 @@ const defaultDeps: InviteConsentDeps = {
     return row ?? null;
   },
   findInvite: (input) => findOpenPodInviteAcceptance(input),
+  isMember: async (userId) =>
+    hasActivePodAccess(await readPodUserAccess(userId)),
   approve: (input) => connectionService.approve(input),
   recipients: resolvePodAdminUserIds,
   memberName: async (userId) => {
@@ -215,6 +226,7 @@ async function decideAndApprove(
     now,
   });
   if (!invite) return ownerReview("no_open_invite");
+  if (!(await deps.isMember(requesterId))) return ownerReview("not_a_member");
 
   const approval: InviteApprovalRecord = {
     inviteId: invite.inviteId,

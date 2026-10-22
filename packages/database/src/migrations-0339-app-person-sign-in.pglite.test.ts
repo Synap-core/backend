@@ -34,9 +34,12 @@ const BASELINE = read("0000_baseline_schema.sql");
 
 /** `apps` references `users`; a one-column stand-in is enough here. */
 const USERS = `CREATE TABLE IF NOT EXISTS "users" ("id" text PRIMARY KEY);`;
+// The whole apps section: its table, indexes and 0338b's `oauth_client_id`
+// (which runs before 0339), up to the next section.
+const APPS_START = BASELINE.indexOf('CREATE TABLE IF NOT EXISTS "apps"');
 const BASELINE_APPS = BASELINE.slice(
-  BASELINE.indexOf('CREATE TABLE IF NOT EXISTS "apps"'),
-  BASELINE.indexOf('CREATE UNIQUE INDEX IF NOT EXISTS "apps_owner_name_unique"')
+  APPS_START,
+  BASELINE.indexOf("-- 0319: lifecycle columns", APPS_START)
 );
 const BASELINE_OAUTH = BASELINE.slice(
   BASELINE.indexOf("-- oauth_clients / oauth_authorization_codes"),

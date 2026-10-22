@@ -57,6 +57,7 @@ import {
   workspaceMembers,
   links,
   loadFacetSlugsBatch,
+  isUniqueViolation,
   type FlowDefinition,
 } from "@synap/database";
 import type {
@@ -146,13 +147,6 @@ import {
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 
 const logger = createLogger({ module: "playbooks-router" });
-
-/** Postgres unique-violation SQLSTATE — raised by playbooks_workspace_name_active_uq. */
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const e = err as { code?: string; cause?: { code?: string } };
-  return e.code === "23505" || e.cause?.code === "23505";
-}
 
 /**
  * Load the surviving non-archived playbook for (workspaceId, name).
