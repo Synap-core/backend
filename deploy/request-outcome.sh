@@ -11,8 +11,10 @@
 # outcome for the taken request's id (no jq, a compose-project conflict, a
 # broken bundle, a kill), this records one, in the same file and shape the
 # engine uses — status "failed", the reason naming how the service ended
-# (systemd's SERVICE_RESULT / EXIT_CODE / EXIT_STATUS) — and appends it to
-# state/events.jsonl. An outcome the engine wrote is never touched.
+# (systemd's SERVICE_RESULT / EXIT_CODE / EXIT_STATUS), marked "by":"unit" so
+# no reader mistakes it for the engine's own verdict (the engine may have
+# changed the pod before it stopped) — and appends it to state/events.jsonl.
+# An outcome the engine wrote is never touched.
 #
 #   request-outcome.sh <update|compose|archive>   (needs SYNAP_DEPLOY_DIR)
 # ============================================================================
@@ -28,11 +30,11 @@ taken="$d/state/requests/$name.taken.json"
 [ -f "$taken" ] || exit 0                              # no request this run (a timer start)
 id="$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9][A-Za-z0-9_.:-]\{0,127\}\)".*/\1/p' "$taken" | head -n 1)"
 [ -n "$id" ] || exit 0                                 # no id: no waiter can match an outcome
-grep -q "\"request\":\"$id\"" "$latest" 2>/dev/null && exit 0   # the engine answered it
+grep -qF "\"request\":\"$id\"" "$latest" 2>/dev/null && exit 0   # the engine answered it (fixed string: ids hold dots)
 how="$(printf '%s' "${SERVICE_RESULT:-unknown} ${EXIT_CODE:-} ${EXIT_STATUS:-}" | tr -cd 'A-Za-z0-9 _.-' | sed 's/ *$//')"
-reason="the engine stopped before recording an outcome for this request (${how}) — see journalctl -u synap-${name}.service; send it again"
+reason="the engine stopped before recording an outcome for this request (${how}); the pod may have changed — run synap doctor, see journalctl -u synap-${name}.service"
 pod="$(sed -n 's/^DOMAIN=//p' "$d/.env" 2>/dev/null | tail -n 1 | tr -cd 'A-Za-z0-9.-')"
-ev="{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"kind\":\"${kind}\",\"status\":\"failed\",\"request\":\"${id}\",\"reason\":\"${reason}\",\"pod\":\"${pod}\"}"
+ev="{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"kind\":\"${kind}\",\"status\":\"failed\",\"by\":\"unit\",\"request\":\"${id}\",\"reason\":\"${reason}\",\"pod\":\"${pod}\"}"
 mkdir -p "$d/state"
 printf '%s\n' "$ev" > "$latest.tmp" && mv -f "$latest.tmp" "$latest"
 printf '%s\n' "$ev" >> "$d/state/events.jsonl"

@@ -125,6 +125,9 @@ function outcomeResult(record) {
       reason: record.reason || null,
       dbRestored: record.dbRestored === true,
       ts: record.ts || null,
+      // "unit": recorded by the systemd unit because the engine stopped
+      // without an outcome (request-outcome.sh) — not the engine's verdict.
+      ...(record.by ? { by: String(record.by) } : {}),
     },
   };
   switch (record.status) {
@@ -149,8 +152,8 @@ function outcomeResult(record) {
         data,
       };
     case "failed":
-      // The unit recorded it: the engine stopped before answering the request
-      // (deploy/request-outcome.sh). Whether anything changed is not known.
+      // The unit recorded it ("by":"unit"): the engine stopped before answering
+      // the request (deploy/request-outcome.sh). The pod may have changed.
       return {
         status: "failed",
         code: "UPDATE_ENGINE_STOPPED",

@@ -152,6 +152,7 @@ case "$*" in
       *) echo "fake psql: unmodelled ledger query: $*" >&2; exit 1 ;;
     esac; exit 0 ;;
   "exec pg1 psql"*"from pg_database where not datistemplate"*) echo synap; exit 0 ;;
+  "exec pg1 psql"*"from pg_config where name = 'PKGLIBDIR'"*) echo /usr/lib/postgresql/15/lib; exit 0 ;;
   "exec pg1 psql"*"where datallowconn and not datistemplate"*) printf '%s\n' postgres synap; exit 0 ;;
   "exec pg1 psql -U synap -d synap "*"extname = 'timescaledb'"*)
     [ -n "${FAKE_TSDB_READ_FAIL:-}" ] && { echo "psql: connection refused" >&2; exit 2; }
@@ -200,6 +201,9 @@ case "$*" in
   "inspect -f {{.Image}} "*) echo "sha256:$(printf 'f%.0s' $(seq 1 64))"; exit 0 ;;
   "inspect"*) exit 0 ;;
   "image inspect -f"*) echo "sha256:x"; exit 0 ;;
+  "image inspect --format {{range .RepoDigests}}"*)   # what a pull by tag recorded
+    [ -n "${FAKE_RESOLVE_FAIL:-}" ] && exit 1
+    r="${*: -1}"; echo "${r%:*}@sha256:$(printf '7%.0s' $(seq 1 64))"; exit 0 ;;
   "image inspect "*) grep -qxF "${*: -1}" "$F/images" 2>/dev/null; exit $? ;;
   "pull "*)
     ref="${*: -1}"; [ -n "${FAKE_PULL_FAIL:-}" ] && [[ "$ref" == *"$FAKE_PULL_FAIL"* ]] && { echo "manifest unknown" >&2; exit 1; }
@@ -208,15 +212,19 @@ case "$*" in
     t=""; prev=""; for a in "$@"; do [ "$prev" = -t ] && t="$a"; prev="$a"; done
     [ -n "${FAKE_BUILD_FAIL:-}" ] && { echo "build failed (injected)" >&2; exit 1; }
     echo "$t" >> "$F/images"; exit 0 ;;
-  "run --rm --entrypoint sh "*" -c ls /usr/lib/postgresql/*/lib/")
-    # the postgres image's TimescaleDB libraries: FAKE_TSDB_LIBS_NEW for a
-    # release's moved postgres image (PG_DIGEST=b), FAKE_TSDB_LIBS otherwise
+  "run --rm --entrypoint sh "*" -c "*)
+    # The postgres image's TimescaleDB libraries: FAKE_TSDB_LIBS_NEW for a
+    # release's moved postgres image (PG_DIGEST=b), FAKE_TSDB_LIBS otherwise —
+    # in its DEFAULT major's pkglibdir. FAKE_TSDB_OTHER_MAJOR: versions only
+    # another postgres major of the image ships (a glob over every major sees them).
     libs="${FAKE_TSDB_LIBS:-2.26.4}"; case "$*" in *"@sha256:$(printf 'b%.0s' $(seq 1 64))"*) libs="${FAKE_TSDB_LIBS_NEW:-$libs}" ;; esac
+    case "$*" in *"pg_config --pkglibdir"*) ;; *"/usr/lib/postgresql/*/lib"*) libs="$libs ${FAKE_TSDB_OTHER_MAJOR:-}" ;; *) exit 1 ;; esac
     echo plpgsql.so; for v in $libs; do echo "timescaledb-$v.so"; done; echo timescaledb.so; exit 0 ;;
-  "exec pg1 sh -c ls /usr/lib/postgresql/*/lib/")   # the running postgres: the image .env pins
+  "exec pg1 sh -c ls '/usr/lib/postgresql/15/lib'")   # the running postgres: the image .env pins
     libs="${FAKE_TSDB_LIBS:-2.26.4}"; grep -q "^SYNAP_IMAGE_POSTGRES=.*@sha256:$(printf 'b%.0s' $(seq 1 64))" "$FAKE_ENV" && libs="${FAKE_TSDB_LIBS_NEW:-$libs}"
     for v in $libs; do echo "timescaledb-$v.so"; done; exit 0 ;;
   "buildx imagetools inspect "*)   # the registry's index digest of a compose default tag
+    [ -n "${FAKE_NO_BUILDX:-}" ] && { echo "docker: 'buildx' is not a docker command." >&2; exit 1; }
     [ -n "${FAKE_RESOLVE_FAIL:-}" ] && { echo "ERROR: failed to authorize" >&2; exit 1; }
     echo "{\"mediaType\":\"application/vnd.oci.image.index.v1+json\",\"digest\":\"sha256:$(printf '9%.0s' $(seq 1 64))\"}"; exit 0 ;;
   "ps --filter publish"*) [ -n "${FAKE_PORT_HOLDER:-}" ] && echo "$FAKE_PORT_HOLDER"; exit 0 ;;
@@ -584,6 +592,10 @@ FAKE_TSDB_EXT=2.28.3 FAKE_TSDB_LIBS_NEW="2.25.0 2.26.4" run_update --release "$R
   && cmp -s "$DEPLOY/.env" "$S/env.orig" && cmp -s "$DEPLOY/docker-compose.yml" "$S/compose.orig" \
   && ! grep -qE "pg_dump|run --rm backend-migrate" "$FAKE/log" && [ "$(cur_id)" = "$R1" ] \
   && ok "tsdbolder: an image that lacks the database's TimescaleDB is refused before anything changes" || { bad "tsdbolder: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
+setup tsdbmajor r1; PG_DIGEST=b publish "$R2" 0012_new.sql bundle
+FAKE_TSDB_EXT=2.28.3 FAKE_TSDB_LIBS_NEW="2.25.0 2.26.4" FAKE_TSDB_OTHER_MAJOR="2.28.3" run_update --release "$R2"; rc=$?
+[ "$rc" != 0 ] && [ "$(last reason)" = "postgres image cannot load TimescaleDB 2.28.3 (database synap)" ] \
+  && ok "tsdbmajor: only the image's own postgres major counts (another major shipping 2.28.3 does not make it loadable)" || { bad "tsdbmajor: rc=$rc record=$(cat "$DEPLOY/state/last-update.json" 2>/dev/null)"; show; }
 setup tsdbunread r1; PG_DIGEST=b publish "$R2" 0012_new.sql bundle
 FAKE_TSDB_READ_FAIL=1 run_update --release "$R2"; rc=$?
 [ "$rc" != 0 ] && [ "$(last reason)" = "TimescaleDB extension versions unreadable" ] && cmp -s "$DEPLOY/.env" "$S/env.orig" && ! grep -q "run --rm backend-migrate" "$FAKE/log" \
@@ -751,6 +763,18 @@ done
 [ "$(echo "$tp" | grep -c .)" -ge 5 ] && [ -z "$badpin" ] \
   && ok "source: every third-party image ($(echo $tp | wc -w | tr -d ' ')) is its compose default tag pinned by the resolved digest (never the .env carry)" || bad "source: third-party pins:$badpin"
 grep -q "postgres RESTARTS during this update" "$S/out" && ok "source: the log says postgres restarts, and why" || bad "source: no postgres restart notice"
+setup sourcenobuildx r1
+mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
+cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"
+cp "$HERE/deploy/Dockerfile" "$DEPLOY/Dockerfile"; echo "FROM scratch" > "$REPO/apps/pod-admin/Dockerfile"
+: > "$REPO/packages/database/migrations/0011_old.sql"
+: > "$REPO/packages/database/migrations/0012_new.sql"
+( cd "$REPO" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm fixture ) || bad "sourcenobuildx: git fixture"
+LOCAL_SHA="$(git -C "$REPO" rev-parse HEAD)"; export LOCAL_SHA
+FAKE_NO_BUILDX=1 SYNAP_SKIP_GIT_SYNC=1 run_update --from-source; rc=$?
+want7="sha256:$(printf '7%.0s' $(seq 1 64))"
+[ "$rc" = 0 ] && [ "$(envpin SYNAP_IMAGE_POSTGRES)" = "timescale/timescaledb-ha:pg15@$want7" ] && grep -q "^pull -q timescale/timescaledb-ha:pg15$" "$FAKE/log" \
+  && ok "sourcenobuildx: no buildx → each tag is pulled and pinned by the digest docker recorded (RepoDigests)" || { bad "sourcenobuildx: rc=$rc postgres=$(envpin SYNAP_IMAGE_POSTGRES)"; show; }
 setup sourcepin r1
 mkdir -p "$REPO/apps/pod-admin" "$REPO/packages/database/migrations" "$DEPLOY/release"
 cp "$HERE/deploy/release/resolve-images.sh" "$DEPLOY/release/"

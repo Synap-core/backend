@@ -103,7 +103,8 @@ case "$*" in
   "compose ps -q --status running postgres") [ -n "${FAKE_TSDB:-}" ] && echo pgcid ;;
   "exec pgcid psql"*"where datallowconn and not datistemplate"*) printf '%s\n' postgres synap ;;
   "exec pgcid psql -U synap -d synap "*"extname = 'timescaledb'"*) [ "$FAKE_TSDB" = unreadable ] && exit 2; echo 2.26.4 ;;
-  "exec pgcid sh -c ls /usr/lib/postgresql/*/lib/") for v in $FAKE_TSDB_LIBS; do echo "timescaledb-$v.so"; done ;;
+  "exec pgcid psql"*"from pg_config where name = 'PKGLIBDIR'"*) echo /usr/lib/postgresql/15/lib ;;
+  "exec pgcid sh -c ls '/usr/lib/postgresql/15/lib'") for v in $FAKE_TSDB_LIBS; do echo "timescaledb-$v.so"; done ;;
   *"{{range .Config.Env}}"*) echo PGDATA=/home/postgres/pgdata/data ;;
   *"{{range .Mounts}}"*) [ "$FAKE_POD" = drifted ] && echo /var/lib/other || echo /home/postgres/pgdata ;;
   "compose ps -a -q") [ -n "$FAKE_CONTAINERS" ] && echo "$FAKE_CONTAINERS" | awk -F'|' '{print "cid-" $1}' ;;
@@ -264,7 +265,7 @@ healthy_env
 FAKE_TSDB=behind FAKE_TSDB_LIBS="2.25.0 2.26.4 2.28.3" doctor healthy --json; rc=$?
 [ "$rc" = 0 ] && jq -e '[.checks[] | select(.check == "timescaledb" and .severity == "info" and (.message | test("database .synap. runs TimescaleDB 2.26.4; the postgres image ships up to 2.28.3")))] | length == 1' "$TMP/out" >/dev/null \
   && ok "timescaledb: an extension behind the image is an info notice naming both versions, not a finding" || bad "timescaledb behind (rc=$rc): $(jq -c '[.checks[] | select(.check == "timescaledb")]' "$TMP/out")"
-grep -q "^exec pgcid sh -c ls" "$FAKE_LOG" && ! grep -qE "^(run|create)( |$)" "$FAKE_LOG" \
+grep -q "^exec pgcid sh -c ls '/usr/lib/postgresql/15/lib'" "$FAKE_LOG" && ! grep -qE "^(run|create)( |$)" "$FAKE_LOG" \
   && ok "timescaledb: read from the running postgres (docker exec), no container started" || bad "timescaledb: libraries not read by exec, or a container was started: $(grep -E '^(run|create|exec pgcid sh)' "$FAKE_LOG")"
 FAKE_TSDB=current FAKE_TSDB_LIBS="2.25.0 2.26.4" doctor healthy --json; rc=$?
 [ "$rc" = 0 ] && jq -e '[.checks[] | select(.check == "timescaledb" and .severity == "ok")] | length == 1' "$TMP/out" >/dev/null \

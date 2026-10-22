@@ -29,7 +29,9 @@ ExecStart=@SYNAP@ update --unattended
 # cannot repeat itself; if the take itself failed, systemd's default limit
 # failing synap-update.path is the loud outcome (synap doctor names a
 # request waiting > 10 min), where StartLimitIntervalSec=0 would spin.
-ExecStopPost=/bin/sh -c 'exec /bin/sh "$${SYNAP_DEPLOY_DIR}/request-outcome.sh" update'
+# The leading '-': a failing recorder must not turn this run's own result
+# into a failure or hide the engine's exit status (the journal still shows it).
+ExecStopPost=-/bin/sh -c 'exec /bin/sh "$${SYNAP_DEPLOY_DIR}/request-outcome.sh" update'
 TimeoutStartSec=90min
 TimeoutStopSec=30min
 Nice=10

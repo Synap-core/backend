@@ -16,7 +16,8 @@
 # ran the compose default tag stayed on whatever it pulled first (the founder
 # pod's TimescaleDB 2.26.4 while releases moved to 2.28.3, 2026-10-21).
 # Resolution: `docker buildx imagetools inspect` (the registry's own index
-# digest — the same image on every architecture).
+# digest — the same image on every architecture); where docker has no buildx,
+# a pull of the tag and the RepoDigests docker recorded for it.
 # ============================================================================
 set -uo pipefail
 compose="${1:?usage: resolve-images.sh <docker-compose.yml> [KEY=REF ...]}"; shift
@@ -43,7 +44,17 @@ while IFS= read -r m; do
         out+="${key}="$'\n'; continue                    # first-party: the build names its digest
     else
         digest="$(docker buildx imagetools inspect "$default" --format '{{json .Manifest}}' 2>/dev/null | jq -r '.digest // empty' 2>/dev/null)"
-        [ -n "$digest" ] || { echo "resolve-images: could not resolve ${default} (${key}) to a digest" >&2; exit 1; }
+        if [ -z "$digest" ]; then
+            # No buildx (some self-hosted docker installs): pull the tag and read
+            # the digest docker recorded for it — the same index digest a pull
+            # by tag resolves (`docker pull` prints it as "Digest:").
+            repo="${default%:*}"
+            if docker pull -q "$default" >/dev/null 2>&1; then
+                digest="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$default" 2>/dev/null \
+                    | grep -F "${repo}@sha256:" | head -n 1 | sed 's/.*@//')"
+            fi
+        fi
+        [ -n "$digest" ] || { echo "resolve-images: could not resolve ${default} (${key}) to a digest: neither \`docker buildx imagetools inspect\` nor a pull + its RepoDigests answered" >&2; exit 1; }
         ref="${default}@${digest}"
     fi
     [[ "$ref" =~ $DIGEST_RE ]] || { echo "resolve-images: ${key}=${ref} is not pinned by digest" >&2; exit 1; }

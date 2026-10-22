@@ -3908,14 +3908,18 @@ _ue_tsdb_versions() {
 # The TimescaleDB versions a postgres image ships a library for, oldest first;
 # non-zero when it could not be read (never "ships none"). Of an image not
 # running yet (a release's), or of the running postgres container (read-only).
-_ue_tsdb_libs_of() { # <command...> that runs `sh` in the image (gets -c '<script>')
-    local out
-    out="$("$@" -c 'ls /usr/lib/postgresql/*/lib/' 2>/dev/null)" || return 1
+# Only the lib dir of the postgres major that runs: an image can carry several
+# majors, each with its own TimescaleDB libraries.
+_ue_tsdb_libs_of() { # <libdir|""> <command...> that runs `sh` in the image (gets -c '<script>')
+    local dir="$1" out; shift
+    # shellcheck disable=SC2016 # $(pg_config …) expands in the image's shell
+    if [ -n "$dir" ]; then out="$("$@" -c "ls '$dir'" 2>/dev/null)" || return 1
+    else out="$("$@" -c 'd="$(pg_config --pkglibdir)" && ls "$d"' 2>/dev/null)" || return 1; fi
     out="$(printf '%s\n' "$out" | sed -n 's/^timescaledb-\([0-9][0-9.]*\)\.so$/\1/p' | sort -V)"
     [ -n "$out" ] || return 1
     printf '%s\n' "$out"
 }
-_ue_image_tsdb_libs() { _ue_tsdb_libs_of docker run --rm --entrypoint sh "$1"; }
+_ue_image_tsdb_libs() { _ue_tsdb_libs_of "" docker run --rm --entrypoint sh "$1"; }   # the image's default major
 
 # Refuses (records + returns 1) a release whose postgres image cannot load a
 # database's TimescaleDB version. Postgres must be running. <manifest>
@@ -3953,12 +3957,15 @@ _ue_tsdb_check() {
 # One line per database whose extension is older than the newest library of
 # the running postgres container ("<db>|<extversion>|<newest>"); non-zero on a failed read.
 _ue_tsdb_behind() {
-    local c rows libs newest row v
+    local c rows libs newest row v dir
     c="$(_pgs_container)"
     [ -n "$c" ] && [ "$c" != direct ] || return 1
     rows="$(_ue_tsdb_versions)" || return 1
     [ -n "$rows" ] || return 0
-    libs="$(_ue_tsdb_libs_of docker exec "$c" sh)" || return 1
+    # the RUNNING server's own lib dir (the pg_config view), not a guess
+    dir="$(_pgs_psql "$c" synap "select setting from pg_config where name = 'PKGLIBDIR'" 2>/dev/null)" || return 1
+    [[ "$dir" == /* ]] || return 1
+    libs="$(_ue_tsdb_libs_of "$dir" docker exec "$c" sh)" || return 1
     newest="$(tail -n 1 <<<"$libs")"
     while IFS= read -r row; do
         [ -n "$row" ] || continue
@@ -5634,10 +5641,24 @@ cmd_apply() {
         return 0
     fi
 
-    local domain kratos_before="" kratos_after=""
+    local domain kratos_before="" kratos_after="" kerr
     domain="$(envcfg_value DOMAIN)"; domain="${domain:-localhost}"
-    [ -f ../kratos/kratos.yml ] && kratos_before="$(cksum < ../kratos/kratos.yml)"
+    if [ -f ../kratos/kratos.yml ]; then
+        kratos_before="$(cksum < ../kratos/kratos.yml)"
+        cp -p ../kratos/kratos.yml state/kratos.yml.apply-before 2>/dev/null || { mkdir -p state && cp -p ../kratos/kratos.yml state/kratos.yml.apply-before; }
+    fi
     generate_kratos_config "$domain"
+    # The .env validated above; what it DERIVES is validated too, before
+    # anything is recreated on it: a well-formed .env can still render a
+    # kratos.yml Kratos cannot start on (an http OIDC issuer, a log line in a
+    # field). Refused, the previous kratos.yml is put back.
+    if [ -f ../kratos/kratos.yml ] && kerr="$(kratos_config_errors ../kratos/kratos.yml)" && [ -n "$kerr" ]; then
+        [ -f state/kratos.yml.apply-before ] && mv -f state/kratos.yml.apply-before ../kratos/kratos.yml
+        printf '  %s\n' "$kerr" >&2
+        echo -e "${RED}❌ apply: the kratos.yml this .env derives does not validate — previous kratos.yml kept, nothing recreated.${NC}" >&2
+        exit 1
+    fi
+    rm -f state/kratos.yml.apply-before
     [ -f ../kratos/kratos.yml ] && kratos_after="$(cksum < ../kratos/kratos.yml)"
 
     local profile_args=()
