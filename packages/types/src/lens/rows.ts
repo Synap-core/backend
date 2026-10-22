@@ -8,7 +8,7 @@
  * nothing those reads' own rules already answer:
  *   - state      → a `UnitStateInput` for `resolveUnitState` (never a tone);
  *   - grouping   → `needsYouRows` (a session owing several things is ONE row);
- *   - ×N         → `repeatLabel`;
+ *   - repeat     → `repeatLabel` ("and N more like it");
  *   - words      → the vocabulary door (verbs, counts, blocked reasons);
  *   - days       → `calendarDayIn` (the heat's day rule).
  */
@@ -96,7 +96,7 @@ export interface LensRow {
    * state keeps the tone. Absent = not a needs-you item row.
    */
   reasonKind?: string;
-  /** "×N" when the row stands for N identical things, else null. */
+  /** "and N more like it" when the row stands for N+1 identical things ("ran N times" for a rule), else null — `repeatLabel`. */
   repeat: string | null;
   /** Provenance. Pass through `visibleSource(row, scope)` before drawing it. */
   source: LensSource | null;

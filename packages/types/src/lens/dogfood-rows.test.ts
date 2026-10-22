@@ -55,13 +55,13 @@ const draft: LensNeedsYouSignal = {
 };
 
 describe("an agent FAILURE notification (P1)", () => {
-  it("is a Blocking row with the failed mark, an Open verb, ×9, and never 'Asked by AI'", () => {
+  it("is a Blocking row with the failed mark, an Open verb, "and 8 more like it", and never 'Asked by AI'", () => {
     const [item] = lensItemsOfClass([metaFailed], "blocking");
     const row = item!.row;
     expect(resolveUnitState(row.state).state).toBe("failed");
     expect(row.verb).toEqual({ action: "open", label: "Open" });
     expect(row.door).toEqual({ kind: "run", id: "run-9" });
-    expect(row.repeat).toBe("×9");
+    expect(row.repeat).toBe("and 8 more like it");
     expect(row.byAgent).toBe(false);
   });
 
