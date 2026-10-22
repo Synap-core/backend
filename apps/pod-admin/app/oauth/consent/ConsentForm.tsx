@@ -524,7 +524,10 @@ function AppConsent({
         </p>
         <div className="flex flex-col gap-1 pt-0.5">
           <span className="text-sm text-foreground/65">Sends you back to</span>
-          <HostName host={redirectHost} className="text-sm text-foreground/90" />
+          <HostName
+            host={redirectHost}
+            className="text-sm text-foreground/90"
+          />
         </div>
         <Row label="First seen" value={formatRelative(registeredAt)} />
       </div>
@@ -683,7 +686,9 @@ function Problem({
           {message}
         </p>
         {hint && (
-          <p className="mt-1.5 text-pretty text-xs text-foreground/75">{hint}</p>
+          <p className="mt-1.5 text-pretty text-xs text-foreground/75">
+            {hint}
+          </p>
         )}
       </div>
     </div>

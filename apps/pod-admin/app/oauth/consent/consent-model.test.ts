@@ -163,9 +163,15 @@ describe("space checkbox names and reasons", () => {
 
   it("reads the developer's reason, or none", () => {
     expect(
-      reasonOf({ permission: "a.read", workspaces: [], reason: "  To list posts. " })
+      reasonOf({
+        permission: "a.read",
+        workspaces: [],
+        reason: "  To list posts. ",
+      })
     ).toBe("To list posts.");
-    expect(reasonOf({ permission: "a.read", workspaces: [], reason: " " })).toBeNull();
+    expect(
+      reasonOf({ permission: "a.read", workspaces: [], reason: " " })
+    ).toBeNull();
     expect(reasonOf({ permission: "a.read", workspaces: [] })).toBeNull();
   });
 });

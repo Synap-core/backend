@@ -16,7 +16,7 @@ import { stripComments } from "../../../scripts/strip-comments.mjs";
 
 const APP_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const read = (rel: string) =>
-  stripComments(readFileSync(join(APP_ROOT, rel), "utf8"));
+  stripComments(readFileSync(join(APP_ROOT, rel), "utf8"), "ts");
 
 const CONSENT = "app/oauth/consent/ConsentForm.tsx";
 const CONSENT_PAGE = "app/oauth/consent/page.tsx";
@@ -80,7 +80,7 @@ describe("pod-app surfaces", () => {
   it("no pod-admin page renders an app domain outside HostName", () => {
     const offenders: string[] = [];
     for (const f of sourceFiles(join(APP_ROOT, "app"))) {
-      const src = stripComments(readFileSync(f, "utf8"));
+      const src = stripComments(readFileSync(f, "utf8"), "ts");
       if (/>\s*\{\s*[\w.]*\.domain\s*\}\s*</.test(src)) offenders.push(f);
     }
     expect(offenders).toEqual([]);
