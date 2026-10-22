@@ -31,6 +31,7 @@ import {
   notAnAppAgent,
   recordInviteAcceptance,
   readIdentityKeepers,
+  listPodInviteFanOutWorkspaceIds,
 } from "@synap/database";
 import { verifyCpJwt } from "../../utils/jwks-client.js";
 import { TRPCError } from "@trpc/server";
@@ -768,8 +769,10 @@ export const inviteProcedures = {
           })
           .onConflictDoNothing();
         // Pod invite — add to all workspaces
-        const allWorkspaces = await db.query.workspaces.findMany();
-        for (const ws of allWorkspaces) {
+        // Ordinary spaces only: a system space (pod-admin) is never fanned
+        // into, so an invite's role can never become pod admin.
+        const fanOutIds = await listPodInviteFanOutWorkspaceIds();
+        for (const ws of fanOutIds.map((id) => ({ id }))) {
           const alreadyMember = await db.query.workspaceMembers.findFirst({
             where: and(
               eq(workspaceMembers.workspaceId, ws.id),
@@ -1414,8 +1417,8 @@ export const inviteProcedures = {
             invitedBy: invite.invitedBy ?? null,
           })
           .onConflictDoNothing();
-        const allWorkspaces = await db.query.workspaces.findMany();
-        for (const ws of allWorkspaces) {
+        const fanOutIds = await listPodInviteFanOutWorkspaceIds();
+        for (const ws of fanOutIds.map((id) => ({ id }))) {
           const alreadyMember = await db.query.workspaceMembers.findFirst({
             where: and(
               eq(workspaceMembers.workspaceId, ws.id),
