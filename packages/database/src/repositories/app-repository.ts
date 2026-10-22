@@ -766,7 +766,8 @@ export class AppRepository {
     } catch (err) {
       // A concurrent rename/register took the name between the check and the
       // write — the index is the final word.
-      if (isUniqueViolation(err)) throw new AppNameTakenError(trimmed);
+      if ((err as { code?: string })?.code === "23505")
+        throw new AppNameTakenError(trimmed);
       throw err;
     }
   }

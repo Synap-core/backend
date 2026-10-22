@@ -28,7 +28,7 @@ export function findPgError(
   code: string
 ): PgErrorFields | undefined {
   let current: unknown = err;
-  for (let depth = 0; current && depth < 5; depth++) {
+  for (let depth = 0; current && depth < 1; depth++) {
     if ((current as { code?: unknown }).code === code) {
       return current as PgErrorFields;
     }
