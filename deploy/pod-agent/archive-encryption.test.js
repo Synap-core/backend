@@ -227,6 +227,9 @@ exit 0
     ["https://archive.invalid/a", "", ""],
     {
       ARCHIVE_AGE_IDENTITY_FILE: path.join(sb.dir, "missing-identity.txt"),
+      // It holds no files (pre-2026-10-21): restoring the database alone is
+      // an explicit operator choice (ARCHIVE_WITHOUT_FILES otherwise).
+      RESTORE_ALLOW_NO_FILES: "1",
       RESTORE_HEALTH_TRIES: "1",
       RESTORE_HEALTH_INTERVAL: "0",
     }

@@ -255,6 +255,12 @@ HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
   && [ -f "$FAKE_VOLS/testpod_typesense_data/db/state" ] && grep -qx 'volume=typesense_data' "$FAKE_VOLS/testpod_typesense_data.labels" \
   && ok "restore[volumes]: each volume is replaced by its archived files (a missing one created with its compose labels)" || bad "restore[volumes]: rc=$rc $(tail -3 "$TMP/out")"
 mkdir -p "$TMP/t"; rm -rf "$TMP/t"/*; tail -n +3 "$TMP/with-volumes.age" | tar xzf - -C "$TMP/t"
+echo "DROP TABLE users;" | gzip > "$TMP/t/database.sql.gz.x"; cp "$TMP/t/database.sql.gz" "$TMP/t/db.keep"; mv "$TMP/t/database.sql.gz.x" "$TMP/t/database.sql.gz"
+( cd "$TMP/t" && tar czf "$FAKE_ARCHIVE" manifest.json database.sql.gz volumes )
+HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
+[ $rc -ne 0 ] && grep -q 'database dump: checksum does not match the manifest' "$CB_LOG" && ! grep -q psql "$DOCKER_LOG" \
+  && ok "restore[db tampered]: a dump that is not the manifest's is refused before any replay" || bad "restore[db tampered]: rc=$rc cb=$(cat "$CB_LOG")"
+mv "$TMP/t/db.keep" "$TMP/t/database.sql.gz"
 echo tampered | gzip > "$TMP/t/volumes/minio_data.tar.gz"; ( cd "$TMP/t" && tar czf "$FAKE_ARCHIVE" manifest.json database.sql.gz volumes )
 HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
 [ $rc -ne 0 ] && grep -q 'volume minio_data: checksum does not match the manifest' "$CB_LOG" \
@@ -280,7 +286,12 @@ mkdir -p "$TMP/pk"; echo "CREATE ROLE synap;" | gzip > "$TMP/pk/database.sql.gz"
 tar czf "$FAKE_ARCHIVE" -C "$TMP/pk" database.sql.gz volumes.tar.gz
 
 HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
-[ $rc -eq 0 ] && [ "$(last_status)" = '"status":"completed"' ] && ok "restore: clean -> exit 0 + completed" || bad "restore: clean rc=$rc status=$(last_status): $(tail -3 "$TMP/out")"
+[ $rc -ne 0 ] && grep -q ARCHIVE_WITHOUT_FILES "$CB_LOG" && ! grep -q psql "$DOCKER_LOG" && ! grep -q '"completed"' "$CB_LOG" \
+  && ok "restore[legacy, no files]: refused before the database is touched (never 'completed' without the pod's files)" || bad "restore[legacy, no files]: rc=$rc cb=$(cat "$CB_LOG")"
+export RESTORE_ALLOW_NO_FILES=1   # the database-only restore the operator opts into, for the db cases below
+HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
+[ $rc -eq 0 ] && [ "$(last_status)" = '"status":"completed"' ] && grep -q "restored without the pod's files" "$TMP/out" \
+  && ok "restore: clean (database only, opted in) -> exit 0 + completed, and says so" || bad "restore: clean rc=$rc status=$(last_status): $(tail -3 "$TMP/out")"
 grep -qx 'host-compose postgres' "$DOCKER_LOG" && grep -qx 'host-compose ' "$DOCKER_LOG" && ! grep -qE '(^| )up( |$)' "$DOCKER_LOG" \
   && ok "restore: postgres, then every service, are started by the HOST (none by the agent)" || bad "restore: start path: $(cat "$DOCKER_LOG" | tr '\n' '|')"
 HEALTH_RC=0 PSQL_MODE=exists run_restore; rc=$?
@@ -301,7 +312,8 @@ echo "not a tarball" > "$TMP/pk/volumes.tar.gz"
 tar czf "$FAKE_ARCHIVE" -C "$TMP/pk" database.sql.gz volumes.tar.gz
 HEALTH_RC=0 PSQL_MODE=ok run_restore; rc=$?
 [ $rc -ne 0 ] && ok "restore[legacy volumes]: non-zero exit" || bad "restore[legacy volumes]: exited 0"
-[ "$(last_status)" = '"status":"failed"' ] && grep -q LEGACY_VOLUME_ARCHIVE "$CB_LOG" \
-  && ok "restore[legacy volumes]: refused (host paths cannot be written from pod-agent)" || bad "restore[legacy volumes]: cb=$(cat "$CB_LOG")"
+[ "$(last_status)" = '"status":"failed"' ] && grep -q LEGACY_VOLUME_ARCHIVE "$CB_LOG" && ! grep -q psql "$DOCKER_LOG" \
+  && ok "restore[legacy volumes]: refused before the database is touched (host paths cannot be written from pod-agent)" || bad "restore[legacy volumes]: cb=$(cat "$CB_LOG")"
+unset RESTORE_ALLOW_NO_FILES
 
 exit $fail

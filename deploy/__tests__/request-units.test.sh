@@ -67,7 +67,7 @@ activate() { # <service file> — what systemd does for one start
     if [ "$result" = success ]; then eval "$(field "$1" ExecStart)" || { rc=$?; result=exit-code; }; fi
     # ExecStopPost= runs after every start, told how it ended (systemd.exec(5))
     export SERVICE_RESULT="$result" EXIT_CODE=exited EXIT_STATUS="$rc"
-    while IFS= read -r c; do [ -n "$c" ] && eval "${c//\$\$/\$}"; done < <(field "$1" ExecStopPost)
+    while IFS= read -r c; do [ -n "$c" ] && { eval "${c#-}"; true; }; done < <(field "$1" ExecStopPost | sed 's/\$\$/$/g')   # "-": failure ignored
   ) >>"$S/runs.out" 2>&1 </dev/null
   RUNS=$((RUNS + 1))
 }
@@ -100,10 +100,21 @@ for p in $paths; do
     && ok "die[$name]: the engine exits 1 at once → ONE run, the request was taken (no restart loop)" \
     || bad "die[$name]: $RUNS runs (6 = the loop), request left=$([ -e "$REQ/$name.json" ] && echo yes || echo no)"
   case "$name" in update) latest="$DEPLOY/state/last-update.json" ;; *) latest="$DEPLOY/state/last-$name-request.json" ;; esac
-  jq -e '.status == "failed" and .request == "a1" and (.reason | test("stopped before recording an outcome.*exit-code exited 1"))' "$latest" >/dev/null 2>&1 \
+  jq -e '.status == "failed" and .by == "unit" and .request == "a1" and (.reason | test("stopped before recording an outcome.*exit-code exited 1.*may have changed — run synap doctor"))' "$latest" >/dev/null 2>&1 \
     && grep -q '"request":"a1"' "$DEPLOY/state/events.jsonl" \
     && ok "die[$name]: the waiting side still gets a terminal outcome for a1 (failed, naming how the engine ended)" \
     || bad "die[$name]: no terminal outcome for the taken request: $(cat "$latest" 2>/dev/null)"
+
+  # … an id is matched as a FIXED string: an earlier outcome for "aZ1" is not
+  # the answer to request "a.1" (a regex match would think it was).
+  setup "dotid-$name"
+  case "$name" in update) latest="$DEPLOY/state/last-update.json" ;; *) latest="$DEPLOY/state/last-$name-request.json" ;; esac
+  echo '{"kind":"x","status":"succeeded","request":"aZ1"}' > "$latest"
+  echo "{\"schema\":1,\"id\":\"a.1\",\"release\":\"stable\",\"services\":[]}" > "$REQ/$name.json"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$REPO/synap"
+  watch "$p"
+  jq -e '.request == "a.1" and .by == "unit"' "$latest" >/dev/null 2>&1 \
+    && ok "dotid[$name]: request a.1 gets its own outcome (an outcome for aZ1 is not a match)" || bad "dotid[$name]: $(cat "$latest")"
 
   # C. no request (a timer start): an older run's taken file is never run again
   setup "none-$name"
