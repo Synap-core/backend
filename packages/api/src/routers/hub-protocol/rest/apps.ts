@@ -10,6 +10,16 @@
  *                              with Synap" code may go (owner only) → { app }
  *   DELETE /apps/:id           revoke the app (revokes its keys → its grants)
  *
+ * Pod apps (spec 17 PB4) — the connections manager the browser/settings call:
+ *   GET    /pod-apps             the caller's pod app connections: each app row
+ *                                plus `pod_app` (domain, tier, approval per
+ *                                space, connected / last used, write mode)
+ *   POST   /apps/:id/narrow      { approved } = the pairs it KEEPS → { app }
+ *   PUT    /apps/:id/write-mode  { applyAutomatically } → the write mode
+ *   (revoke = DELETE /apps/:id: keys, refresh families, codes, webhooks)
+ * Narrow and write mode are the owner's own acts: an agent's credential or a
+ * scoped key is refused (`assertOwnerCredential`).
+ *
  * WIRE CONTRACT (pinned — the shipped CLI, synap-cli c5d6cfa, calls these):
  *   - `:id` in /apps/:id and its sub-routes is the app's PUBLIC id (`app_<uuid>`),
  *     NOT the uuid primary key.
@@ -31,17 +41,21 @@ import {
   hasScope,
   httpStatusForTrpcError,
   logger,
+  requireAppPublicIdParam,
   type HubHono,
   type HubVariables,
 } from "./_shared.js";
 import {
   issueKey,
   loadOwnedApp,
+  narrowApp,
+  podAppViews,
   registerApp,
   requestAccess,
   revokeApp,
   serializeApp,
   setAppRedirectUris,
+  setAppWriteMode,
 } from "../../../services/app-connect.js";
 
 type Ctx = Context<{ Variables: HubVariables }, any, any>;
@@ -64,6 +78,21 @@ const RegisterBody = z.object({
 const ConnectBody = z.object({
   requests: z.array(RequestSchema).min(1).max(64),
 });
+
+/** POST /apps/:id/narrow — the (permission, space) pairs the app KEEPS. */
+const NarrowBody = z.object({
+  approved: z
+    .array(
+      z.object({
+        permission: z.string().min(1).max(120),
+        workspaceId: z.string().uuid(),
+      })
+    )
+    .min(1)
+    .max(64),
+});
+
+const WriteModeBody = z.object({ applyAutomatically: z.boolean() });
 
 const RedirectUrisBody = z.object({
   redirectUris: z.array(z.string().min(1).max(2048)).max(8),
@@ -134,10 +163,10 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
     try {
-      return c.json(
-        serializeApp(await loadOwnedApp(c.req.param("id"), userId))
-      );
+      return c.json(serializeApp(await loadOwnedApp(appId, userId)));
     } catch (err) {
       return fail(c, err, "GET /apps/:id");
     }
@@ -150,6 +179,8 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
     const body = ConnectBody.safeParse(await c.req.json().catch(() => null));
     if (!body.success) {
       return c.json(
@@ -159,7 +190,7 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     try {
       const result = await requestAccess({
-        publicId: c.req.param("id"),
+        publicId: appId,
         ownerUserId: userId,
         requests: body.data.requests,
         actorAgentUserId: c.get("agentUserId") as string | undefined,
@@ -177,10 +208,12 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
     try {
       return c.json(
         await issueKey({
-          publicId: c.req.param("id"),
+          publicId: appId,
           ownerUserId: userId,
           actorAgentUserId: c.get("agentUserId") as string | undefined,
           actorKeyType: c.get("keyType") as string | undefined,
@@ -199,6 +232,8 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
     const body = RedirectUrisBody.safeParse(
       await c.req.json().catch(() => null)
     );
@@ -210,7 +245,7 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     try {
       const found = await setAppRedirectUris({
-        publicId: c.req.param("id"),
+        publicId: appId,
         ownerUserId: userId,
         redirectUris: body.data.redirectUris,
         actorAgentUserId: c.get("agentUserId") as string | undefined,
@@ -229,9 +264,11 @@ export function registerAppsRoutes(app: HubHono): void {
     }
     const userId = c.get("userId");
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
     try {
       const { publicId } = await revokeApp({
-        publicId: c.req.param("id"),
+        publicId: appId,
         ownerUserId: userId,
         actorAgentUserId: c.get("agentUserId") as string | undefined,
         actorKeyType: c.get("keyType") as string | undefined,
@@ -239,6 +276,92 @@ export function registerAppsRoutes(app: HubHono): void {
       return c.json({ revoked: true, public_id: publicId });
     } catch (err) {
       return fail(c, err, "DELETE /apps/:id");
+    }
+  });
+
+  // ── GET /pod-apps — the caller's pod app connections (PB4) ────────────────
+  app.get("/pod-apps", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    try {
+      const repo = new AppRepository(db);
+      const rows = (
+        await repo.listForOwner(userId, { includeRevoked: true })
+      ).filter((r) => r.app.mode === "oauth");
+      const keys = await repo.keysByApp(rows.map((r) => r.app.publicId));
+      const pod = await podAppViews(rows, keys);
+      return c.json({
+        apps: rows.map((row) => ({
+          ...serializeApp(row),
+          pod_app: pod.get(row.app.publicId) ?? null,
+        })),
+      });
+    } catch (err) {
+      return fail(c, err, "GET /pod-apps");
+    }
+  });
+
+  // ── POST /apps/:id/narrow — keep only some of the approval (the owner) ────
+  app.post("/apps/:id/narrow", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
+    const body = NarrowBody.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const found = await narrowApp({
+        publicId: appId,
+        ownerUserId: userId,
+        approved: body.data.approved,
+        actorAgentUserId: c.get("agentUserId") as string | undefined,
+        actorKeyType: c.get("keyType") as string | undefined,
+      });
+      return c.json({ app: serializeApp(found) });
+    } catch (err) {
+      return fail(c, err, "POST /apps/:id/narrow");
+    }
+  });
+
+  // ── PUT /apps/:id/write-mode — "apply automatically" (the owner, F6) ─────
+  app.put("/apps/:id/write-mode", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const appId = requireAppPublicIdParam(c, "id");
+    if (appId instanceof Response) return appId;
+    const body = WriteModeBody.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      return c.json(
+        await setAppWriteMode({
+          publicId: appId,
+          ownerUserId: userId,
+          applyAutomatically: body.data.applyAutomatically,
+          actorAgentUserId: c.get("agentUserId") as string | undefined,
+          actorKeyType: c.get("keyType") as string | undefined,
+        })
+      );
+    } catch (err) {
+      return fail(c, err, "PUT /apps/:id/write-mode");
     }
   });
 }
