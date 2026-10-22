@@ -222,7 +222,10 @@ describe("every hub REST forwarder of a proposal-capable tRPC door uses jsonGove
   function procedureSlices(src: string): Array<[string, string]> {
     const decls = [
       ...src.matchAll(
-        /^ {2}(\w+):\s*(?:scoped|public|protected|workspace)Procedure/gm
+        // Every builder ends in `Procedure` (`credentialProcedure`,
+        // `podAdminProcedure`… too): a builder the slicer cannot see would
+        // fold that procedure's body into the one declared before it.
+        /^ {2}(\w+):\s*\w*Procedure\b/gm
       ),
     ];
     return decls.map((d, i) => [

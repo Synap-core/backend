@@ -59,6 +59,8 @@ function readCapabilitiesPayload(
 export function registerAgentExecutors(): void {
   registerProposalExecutor({
     key: "agent/connect",
+    // Approving widens a credential: never from a device session.
+    widensCredential: true,
     async execute({ proposal, userId, input, deps }) {
       const payload = readAgentConnectPayload(proposal.data);
       if (!payload || payload.requests.length === 0) {
@@ -163,6 +165,8 @@ export function registerAgentExecutors(): void {
 
   registerProposalExecutor({
     key: "agent/updateCapabilities",
+    // Approving widens a credential: never from a device session.
+    widensCredential: true,
     async execute({ proposal, userId, input, deps }) {
       const payload = readCapabilitiesPayload(proposal.data);
       if (!payload)

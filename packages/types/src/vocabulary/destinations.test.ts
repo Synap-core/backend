@@ -25,6 +25,7 @@ describe("destination words (2A)", () => {
       "Agents",
       "Unfiled",
       "Getting started",
+      "Plan and credits",
     ]);
   });
 
@@ -43,6 +44,10 @@ describe("destination words (2A)", () => {
   it("the unfiled bucket is Unfiled, and the shared place word follows it", () => {
     expect(resolveDestinationLabel("unfiled")).toBe("Unfiled");
     expect(NOT_IN_A_PROJECT).toBe("Unfiled");
+  });
+
+  it("the plan and the credits are ONE place, one word on desktop and phone", () => {
+    expect(resolveDestinationLabel("credits")).toBe("Plan and credits");
   });
 
   it("an id spelled with a dash resolves the same", () => {
