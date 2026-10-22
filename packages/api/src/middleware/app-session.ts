@@ -15,7 +15,9 @@
  *
  * Any OTHER bearer — a PAT, an agent or machine key, an app's person token, a
  * Kratos token sent as a bearer — is IGNORED here: the request falls to the
- * Kratos check, which never reads `Authorization`. That is the boundary: a key
+ * Kratos check, which reads `Authorization` only in local mode, and there
+ * only to compare it with the desktop's own `LOCAL_AUTH_TOKEN`; it never
+ * resolves a key into a person. That is the boundary: a key
  * minted for an agent must never become a human session on `/trpc`, where
  * nothing routes its writes through governance. Keys keep their own doors
  * (`/mcp`, `/api/hub/*`), which in turn never resolve a device token (it is no

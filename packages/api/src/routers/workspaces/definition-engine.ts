@@ -15,7 +15,7 @@ import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 import { z } from "zod";
 import { validateTriggerFilters } from "@synap-core/types/automations/filter-operators";
 import { profilePresentationSchema } from "./profile-presentation-schema.js";
-import { protectedProcedure } from "../../trpc.js";
+import { protectedProcedure, credentialProcedure } from "../../trpc.js";
 import {
   db,
   eq,
@@ -171,7 +171,7 @@ export const definitionEngineProcedures = {
    * Server-side equivalent of the frontend's 9-step useCreateWorkspaceFromProposal.
    * Preferred path for template-based workspace creation (packages from registry).
    */
-  createFromDefinition: protectedProcedure
+  createFromDefinition: credentialProcedure
     .input(
       z.object({
         definition: z
@@ -870,7 +870,7 @@ export const definitionEngineProcedures = {
    * Owner/admin only. The caller resolves the template → definition (e.g.
    * toWorkspaceDefinition('crm')) and passes it, mirroring createFromDefinition.
    */
-  reconcileFromDefinition: protectedProcedure
+  reconcileFromDefinition: credentialProcedure
     .input(
       z.object({
         workspaceId: z.string().uuid(),
@@ -1149,7 +1149,7 @@ export const definitionEngineProcedures = {
    *
    * Idempotent: entities and relations are upserted by their natural keys.
    */
-  applyDefinition: protectedProcedure
+  applyDefinition: credentialProcedure
     .input(
       z.object({
         /** Reuse the full WorkspaceDefinitionInput schema */

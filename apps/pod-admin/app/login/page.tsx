@@ -25,6 +25,8 @@ interface LoginPageProps {
     flow?: string;
     refresh?: string;
     login_hint?: string;
+    /** `pod`: only a credential at this pod may confirm (no Synap Cloud). */
+    credential?: string;
   }>;
 }
 
@@ -45,6 +47,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
       returnTo={returnTo}
       initialFlowId={sp.flow ?? null}
       refresh={refresh}
+      podCredentialOnly={refresh && sp.credential === "pod"}
       serverSession={session.state}
       loginHint={loginHintFor(sp.login_hint, returnTo)}
     />

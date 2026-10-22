@@ -61,7 +61,10 @@ function sourceRoots(): string[] {
   return roots;
 }
 
-const DRIZZLE_INSERT = /\.insert\(\s*personDeviceTokens\s*\)/;
+// `.insert(personDeviceTokens)` or through a schema namespace,
+// `.insert(schema.personDeviceTokens)`.
+const DRIZZLE_INSERT =
+  /\.insert\(\s*(?:[A-Za-z_$][\w$]*\.)?personDeviceTokens\s*\)/;
 const SQL_INSERT = /insert\s+into\s+["']?person_device_tokens/i;
 
 const drizzleWriters = new Set<string>();
@@ -81,7 +84,10 @@ describe("a device access token has one mint site", () => {
   it("scans real code and recognises what it hunts (non-vacuity)", () => {
     expect(scanned).toBeGreaterThan(300);
     expect(
-      DRIZZLE_INSERT.test(`await db.insert(personDeviceTokens).values(`)
+      DRIZZLE_INSERT.test(`await db.insert(personDeviceTokens).values(`) &&
+        DRIZZLE_INSERT.test(
+          `await tx.insert(schema.personDeviceTokens).values(`
+        )
     ).toBe(true);
     expect(
       SQL_INSERT.test(`INSERT INTO "person_device_tokens" (token_hash)`)

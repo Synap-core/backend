@@ -68,6 +68,7 @@ import { toRegistrationTrace } from "../services/external-registration.js";
 import {
   AuthorizeUserError,
   ReauthenticationRequiredError,
+  PodCredentialRequiredError,
   decideOAuthAuthorization,
   getOAuthConsentContext,
 } from "./oauth/consent.js";
@@ -112,7 +113,7 @@ const oauthAuthorizeParamsSchema = z.object({
   // sign-in before the decision (oauth/consent.ts reauthenticationRequired).
   maxAge: z.union([z.number().int().min(0), z.string().max(16)]).optional(),
   prompt: z.string().max(32).optional(),
-  // /authorize's signed request time (`auth_req`), for a third-party
+  // /authorize's signed request time (`auth_req`), for
   // `prompt=login` / `max_age=0`.
   authRequest: z.string().max(128).optional(),
 });
@@ -126,7 +127,10 @@ const oauthAuthorizeParamsSchema = z.object({
  * propagates unchanged so a genuine bug is never disguised as a client error.
  */
 function toConsentTrpcError(err: unknown): unknown {
-  if (err instanceof ReauthenticationRequiredError) {
+  if (
+    err instanceof ReauthenticationRequiredError ||
+    err instanceof PodCredentialRequiredError
+  ) {
     // The screen reads the code and sends the person to sign in again.
     return new TRPCError({
       code: "FORBIDDEN",
