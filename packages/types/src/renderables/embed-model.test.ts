@@ -39,7 +39,9 @@ describe("describeEmbed — charts", () => {
   it("every snapshot-capable chart with its shape's example data is a snapshot", () => {
     for (const def of SNAPSHOT_CHARTS) {
       const shape =
-        CHART_DATA_SHAPE_BY_KEY[def.key as keyof typeof CHART_DATA_SHAPE_BY_KEY];
+        CHART_DATA_SHAPE_BY_KEY[
+          def.key as keyof typeof CHART_DATA_SHAPE_BY_KEY
+        ];
       const model = cell(def.key, {
         data: CHART_DATA_EXAMPLES[shape],
         capturedAt: "2026-10-01T00:00:00Z",
@@ -94,7 +96,9 @@ describe("describeEmbed — charts", () => {
     expect(
       cell("chart-gauge", { data: 5, aggregation: "count", max: 20 })
     ).toMatchObject({ kind: "chart-snapshot", percent: 25 });
-    expect(cell("chart-gauge", { data: 500, aggregation: "sum" })).toMatchObject({
+    expect(
+      cell("chart-gauge", { data: 500, aggregation: "sum" })
+    ).toMatchObject({
       percent: 100,
     });
     expect(cell("chart-bar", { data: [] })).not.toHaveProperty("percent");
@@ -198,7 +202,11 @@ describe("describeEmbed — cells that are not charts", () => {
 describe("describeEmbed — references", () => {
   it("an entity carries its id and only an AUTHORED attribute label", () => {
     expect(
-      describeEmbed({ kind: "entity", attrs: { id: "e-1" }, props: { label: "x" } })
+      describeEmbed({
+        kind: "entity",
+        attrs: { id: "e-1" },
+        props: { label: "x" },
+      })
     ).toEqual({ kind: "entity", id: "e-1", label: null });
     expect(
       describeEmbed({ kind: "entity", attrs: { id: "e-1", label: "Ana" } })
