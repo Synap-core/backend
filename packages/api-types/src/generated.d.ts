@@ -32231,7 +32231,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				aiTyped: number;
+				csvPlanFailures?: {
+					path: string;
+					reason: string;
+				}[] | undefined;
 				deduplicated: boolean;
+				degraded?: true | undefined;
+				degradedReason?: string | undefined;
 				droppedReferences: number;
 				homes: ImportHomesSummary;
 				intake?: RecordImportIntakeResult | undefined;
@@ -32243,6 +32249,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionError?: string | undefined;
 				sessionId: string | null;
 				sessionSource?: "failed" | "minted" | "none" | "playbook" | "prior" | "provided" | undefined;
+				skippedRows?: {
+					count: number;
+					reason: string;
+				} | undefined;
 				source: ImportRevealSource;
 				stats: Record<string, unknown>;
 				summary: string;
@@ -32270,7 +32280,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				aiTyped: number;
+				csvPlanFailures?: {
+					path: string;
+					reason: string;
+				}[] | undefined;
 				deduplicated: boolean;
+				degraded?: true | undefined;
+				degradedReason?: string | undefined;
 				droppedReferences: number;
 				homes: ImportHomesSummary;
 				intake?: RecordImportIntakeResult | undefined;
@@ -32282,6 +32298,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionError?: string | undefined;
 				sessionId: string | null;
 				sessionSource?: "failed" | "minted" | "none" | "playbook" | "prior" | "provided" | undefined;
+				skippedRows?: {
+					count: number;
+					reason: string;
+				} | undefined;
 				source: ImportRevealSource;
 				stats: Record<string, unknown>;
 				summary: string;
