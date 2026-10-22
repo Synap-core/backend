@@ -17,7 +17,17 @@
  * - lens `string`    → that workspace's facets + pod-wide (null-workspace) ones
  */
 
-import { type SQL, and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
+import {
+  type SQL,
+  type SQLWrapper,
+  and,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  or,
+} from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "../client-pg.js";
 import { entityFacets } from "../schema/entity-facets.js";
 import { profiles, profileWorkspaceAccess } from "../schema/profiles.js";
@@ -52,16 +62,31 @@ import { memberWorkspaceIds, ownedWorkspaceIds } from "./user-visible-where.js";
 //   - `entityQueryVisibilityWhere` (packages/jobs workers/entity-query-scope.ts).
 // All three are UNCORRELATED subqueries bound to the caller's id, so they render
 // identically under `db.select()` and relational (`db.query`) reads.
+//
+// SPACE-KEYED FORMS (founder "option 1", 2026-10-23). Each builder has a twin
+// keyed on a SET OF SPACES instead of a user: the user-keyed one IS the
+// space-keyed one over the user's member + owned spaces (plus the pod-member
+// gate), so the two cannot drift. A pod app granted spaces X reads through the
+// space-keyed forms (packages/api access/grant-read.ts): it sees what a member
+// of X sees, and its floor still runs as the person.
 
 /**
- * Role (profile) ids granted to a space `userId` belongs to (member or owner):
- * a `profile_workspace_access` grant, or the role's own owning workspace.
+ * A set of space (workspace) ids: a literal list (a key grant's
+ * `workspaceIds`) or a subquery of ids (a user's member / owned spaces).
  */
-export function grantedRoleIdsFor(userId: string) {
-  const mySpaces = or(
-    inArray(profileWorkspaceAccess.workspaceId, memberWorkspaceIds(userId)),
-    inArray(profileWorkspaceAccess.workspaceId, ownedWorkspaceIds(userId))
-  );
+export type SpaceIds = readonly string[] | SQLWrapper;
+
+/** `column` is in ANY of the space sets (OR). */
+function inAnySpace(column: AnyPgColumn, spaces: readonly SpaceIds[]): SQL {
+  const parts = spaces.map((s) => inArray(column, s));
+  return parts.length === 1 ? parts[0]! : or(...parts)!;
+}
+
+/**
+ * Role (profile) ids granted to one of `spaces`: a `profile_workspace_access`
+ * grant, or the role's own owning workspace.
+ */
+export function grantedRoleIdsForSpaces(...spaces: SpaceIds[]) {
   return db
     .select({ id: profiles.id })
     .from(profiles)
@@ -72,12 +97,34 @@ export function grantedRoleIdsFor(userId: string) {
           db
             .select({ id: profileWorkspaceAccess.profileId })
             .from(profileWorkspaceAccess)
-            .where(mySpaces)
+            .where(inAnySpace(profileWorkspaceAccess.workspaceId, spaces))
         ),
-        inArray(profiles.workspaceId, memberWorkspaceIds(userId)),
-        inArray(profiles.workspaceId, ownedWorkspaceIds(userId))
+        ...spaces.map((s) => inArray(profiles.workspaceId, s))
       )
     );
+}
+
+/**
+ * Role (profile) ids granted to a space `userId` belongs to (member or owner):
+ * a `profile_workspace_access` grant, or the role's own owning workspace.
+ */
+export function grantedRoleIdsFor(userId: string) {
+  return grantedRoleIdsForSpaces(
+    memberWorkspaceIds(userId),
+    ownedWorkspaceIds(userId)
+  );
+}
+
+/**
+ * Space-keyed form of {@link podSharedFacetGrantWhere}: this POD-WIDE facet's
+ * role is granted to one of `spaces`. No pod-member gate (the user-keyed form
+ * adds it; a key grant's reads run under the person's floor, which has it).
+ */
+export function podSharedFacetForSpacesWhere(...spaces: SpaceIds[]): SQL {
+  return and(
+    isNull(entityFacets.workspaceId),
+    inArray(entityFacets.profileId, grantedRoleIdsForSpaces(...spaces))
+  )!;
 }
 
 /**
@@ -89,10 +136,35 @@ export function grantedRoleIdsFor(userId: string) {
  */
 export function podSharedFacetGrantWhere(userId: string): SQL {
   return and(
-    isNull(entityFacets.workspaceId),
-    inArray(entityFacets.profileId, grantedRoleIdsFor(userId)),
+    podSharedFacetForSpacesWhere(
+      memberWorkspaceIds(userId),
+      ownedWorkspaceIds(userId)
+    ),
     podMemberWhere(userId)
   )!;
+}
+
+/** Entity ids carrying a LIVE facet that matches `facetWhere`. */
+function liveFacetEntityIds(facetWhere: SQL) {
+  return db
+    .select({ id: entityFacets.entityId })
+    .from(entityFacets)
+    .where(
+      and(
+        facetWhere,
+        // Soft-delete gate — a DETACHED role must stop sharing the entity.
+        isNull(entityFacets.deletedAt)
+      )
+    );
+}
+
+/**
+ * Space-keyed form of {@link podSharedEntityIdsFor}: entity ids wearing a LIVE
+ * pod-wide facet whose role is granted to one of `spaces`. The entity floor
+ * still requires the entity itself be pod-wide.
+ */
+export function podSharedEntityIdsForSpaces(...spaces: SpaceIds[]) {
+  return liveFacetEntityIds(podSharedFacetForSpacesWhere(...spaces));
 }
 
 /**
@@ -100,16 +172,7 @@ export function podSharedFacetGrantWhere(userId: string): SQL {
  * entity floor still requires the entity itself be pod-wide.
  */
 export function podSharedEntityIdsFor(userId: string) {
-  return db
-    .select({ id: entityFacets.entityId })
-    .from(entityFacets)
-    .where(
-      and(
-        podSharedFacetGrantWhere(userId),
-        // Soft-delete gate — a DETACHED role must stop sharing the entity.
-        isNull(entityFacets.deletedAt)
-      )
-    );
+  return liveFacetEntityIds(podSharedFacetGrantWhere(userId));
 }
 
 /**

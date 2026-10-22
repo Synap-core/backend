@@ -34,7 +34,9 @@ import {
   invalidRequestHint,
   isTicked,
   permissionLabel,
+  readsRoledRecords,
   reasonOf,
+  ROLED_RECORDS_NOTE,
   spaceCheckboxLabel,
   toApproved,
   toggle,
@@ -796,6 +798,11 @@ function AppConsent({
             );
           })}
         </ul>
+        {readsRoledRecords(app.permissions) && (
+          <p className="text-pretty text-xs leading-relaxed text-foreground/75">
+            {ROLED_RECORDS_NOTE}
+          </p>
+        )}
         {app.ignoredScopes.length > 0 && (
           <p className="text-xs text-foreground/65">
             It also asked for {app.ignoredScopes.join(", ")}, which apps are not

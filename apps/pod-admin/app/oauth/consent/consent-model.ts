@@ -12,6 +12,7 @@
 
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
+import { patternMatches } from "@synap/governance-policy/grants";
 
 export interface OfferedSpace {
   workspaceId: string;
@@ -191,6 +192,35 @@ export function toApproved(
     }
   }
   return out;
+}
+
+/**
+ * The line under the space choice when the app may read people or companies.
+ * A space grant reads what a member of the space reads (founder "option 1",
+ * 2026-10-23): that includes the pod-wide people and companies that have a
+ * role in the space, not only the records stored in it.
+ */
+export const ROLED_RECORDS_NOTE =
+  "The app also sees the people and companies that have a role in the spaces you pick.";
+
+/** Whether any permission on offer reads people or companies. */
+export function readsRoledRecords(
+  offer: readonly OfferedPermission[]
+): boolean {
+  const reads = (permission: string, kind: string) => {
+    try {
+      return patternMatches(permission, {
+        subject: "entity",
+        qualifier: kind,
+        action: "read",
+      });
+    } catch {
+      return false; // a malformed pattern grants nothing
+    }
+  };
+  return offer.some(({ permission }) =>
+    ["person", "company"].some((kind) => reads(permission, kind))
+  );
 }
 
 /** The permissions the person has NO space to give in. */

@@ -48,7 +48,13 @@ import { AccessContext } from "../access/context.js";
 import { and, eq, inArray, isNull, isNotNull, or } from "@synap/database";
 import { not, sql as drizzleSql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
-import { db, podSharedEntityIdsFor } from "@synap/database";
+import {
+  db,
+  memberWorkspaceIds,
+  podSharedEntityIdsFor,
+  podSharedEntityIdsForSpaces,
+  type SpaceIds,
+} from "@synap/database";
 import { sessionDocumentReadableWhere } from "../access/session-visibility.js";
 import {
   projectMembers,
@@ -257,28 +263,38 @@ export function exposureDocumentWhere(
 }
 
 /**
- * Subquery: entity ids that carry a facet (a role/overlay) in a workspace the
- * user is a MEMBER of. `entity_facets.workspace_id` joined to
- * `workspace_members.workspace_id` — a NULL facet workspace never joins (NULL =
- * NULL is not TRUE in SQL), so pod-wide facets grant no lens access. Semi-join,
- * one round-trip regardless of facet count.
+ * SPACE-KEYED subquery: entity ids that carry a LIVE facet (a role/overlay)
+ * stamped in one of `spaces`. A NULL facet workspace is in no set (NULL IN (…)
+ * is not TRUE), so pod-wide facets are not matched here — decision B
+ * (`podSharedFacetInSpacesWhere`) is their door. The user-keyed lenses below
+ * pass the caller's spaces; a key grant passes its own `workspaceIds`
+ * (access/grant-read.ts), so the app and the member read ONE rule.
  */
-function facetLensedEntityIdsSubquery(userId: string) {
+export function liveFacetEntityIdsInSpaces(spaces: SpaceIds) {
   return (
     db
       .select({ id: entityFacets.entityId })
       .from(entityFacets)
-      .innerJoin(
-        workspaceMembers,
-        eq(workspaceMembers.workspaceId, entityFacets.workspaceId)
-      )
       // `entity_facets` is soft-delete only (detach sets `deletedAt`, never hard
       // deletes). Without this, a REVOKED role would keep granting the lens forever
       // — every other reader filters it; this is the access-revocation gate.
       .where(
-        and(eq(workspaceMembers.userId, userId), isNull(entityFacets.deletedAt))
+        and(
+          inArray(entityFacets.workspaceId, spaces),
+          isNull(entityFacets.deletedAt)
+        )
       )
   );
+}
+
+/**
+ * Subquery: entity ids that carry a facet (a role/overlay) in a workspace the
+ * user is a MEMBER of — the space-keyed form over `workspace_members`. A NULL
+ * facet workspace never matches, so pod-wide facets grant no lens access.
+ * Semi-join, one round-trip regardless of facet count.
+ */
+function facetLensedEntityIdsSubquery(userId: string) {
+  return liveFacetEntityIdsInSpaces(memberWorkspaceIds(userId));
 }
 
 /**
@@ -345,6 +361,42 @@ export function podSharedFacetWhere(
 }
 
 /**
+ * SPACE-KEYED twin of `podSharedFacetWhere`: a POD-WIDE entity wearing a LIVE
+ * pod-wide facet whose role is granted to one of `spaces` (decision B over a
+ * given set of spaces — `podSharedEntityIdsForSpaces`). No pod-member gate: a
+ * key grant reads under the person's floor, which carries it.
+ */
+export function podSharedFacetInSpacesWhere(
+  workspaceIdColumn: AnyPgColumn,
+  entityIdColumn: AnyPgColumn,
+  spaces: SpaceIds
+): SQL {
+  return and(
+    isNull(workspaceIdColumn),
+    inArray(entityIdColumn, podSharedEntityIdsForSpaces(spaces))
+  )!;
+}
+
+/**
+ * The ROLE reach of a set of spaces over entities — what a member of `spaces`
+ * sees beyond the rows stamped there: (a) an entity with a LIVE facet stamped
+ * in one of them (`facetLensMemberWhere`'s rule), or (b) a pod-wide entity
+ * wearing a live pod-wide facet whose role is granted to one of them
+ * (`podSharedFacetWhere`'s rule). Used by a space-restricted key grant
+ * (access/grant-read.ts), ORed with its own workspace match.
+ */
+export function roleInSpacesWhere(
+  workspaceIdColumn: AnyPgColumn,
+  entityIdColumn: AnyPgColumn,
+  spaces: SpaceIds
+): SQL {
+  return or(
+    inArray(entityIdColumn, liveFacetEntityIdsInSpaces(spaces)),
+    podSharedFacetInSpacesWhere(workspaceIdColumn, entityIdColumn, spaces)
+  )!;
+}
+
+/**
  * FLOOR BRANCH — a DOCUMENT FOLLOWS ITS ENTITY (founder decision 2026-09-25).
  * A pod-wide document attached to an entity (`entities.document_id`) that is
  * POD-SHARED (`podSharedFacetWhere`, evaluated on the ENTITY) is shared with the
@@ -363,19 +415,49 @@ export function podSharedDocumentWhere(
   documentIdColumn: AnyPgColumn,
   userId: string
 ): SQL {
-  const podSharedEntityDocumentIds = db
+  return podWideBodyOfWhere(
+    documentWorkspaceIdColumn,
+    documentIdColumn,
+    podSharedFacetWhere(entities.workspaceId, entities.id, userId)
+  );
+}
+
+/**
+ * SPACE-KEYED twin of `podSharedDocumentWhere`: a pod-wide document that is
+ * the body of a live entity in the ROLE reach of `spaces`
+ * (`roleInSpacesWhere`). A document follows its entity.
+ */
+export function roleInSpacesDocumentWhere(
+  documentWorkspaceIdColumn: AnyPgColumn,
+  documentIdColumn: AnyPgColumn,
+  spaces: SpaceIds
+): SQL {
+  return podWideBodyOfWhere(
+    documentWorkspaceIdColumn,
+    documentIdColumn,
+    roleInSpacesWhere(entities.workspaceId, entities.id, spaces)
+  );
+}
+
+/** A pod-wide document that is the body of a live entity matching `entityWhere`. */
+function podWideBodyOfWhere(
+  documentWorkspaceIdColumn: AnyPgColumn,
+  documentIdColumn: AnyPgColumn,
+  entityWhere: SQL
+): SQL {
+  const entityDocumentIds = db
     .select({ id: entities.documentId })
     .from(entities)
     .where(
       and(
         // A trashed entity no longer shares its body.
         isNull(entities.deletedAt),
-        podSharedFacetWhere(entities.workspaceId, entities.id, userId)
+        entityWhere
       )
     );
   return and(
     isNull(documentWorkspaceIdColumn),
-    inArray(documentIdColumn, podSharedEntityDocumentIds)
+    inArray(documentIdColumn, entityDocumentIds)
   )!;
 }
 
@@ -401,23 +483,18 @@ export function facetInWorkspaceLensWhere(
   lens: string | string[]
 ): SQL {
   const ids = Array.isArray(lens) ? lens : [lens];
-  const sub = db
-    .select({ id: entityFacets.entityId })
-    .from(entityFacets)
-    .innerJoin(
-      workspaceMembers,
-      eq(workspaceMembers.workspaceId, entityFacets.workspaceId)
-    )
+  // The caller must be a member of the LENS workspace the facet is in: the
+  // spaces are the lens ∩ the caller's memberships.
+  const lensSpacesImIn = db
+    .select({ id: workspaceMembers.workspaceId })
+    .from(workspaceMembers)
     .where(
       and(
-        inArray(entityFacets.workspaceId, ids),
-        // The caller must be a member of the LENS workspace the facet is in.
         eq(workspaceMembers.userId, userId),
-        // Soft-delete gate: a revoked role must stop surfacing the entity.
-        isNull(entityFacets.deletedAt)
+        inArray(workspaceMembers.workspaceId, ids)
       )
     );
-  return inArray(entityIdColumn, sub);
+  return inArray(entityIdColumn, liveFacetEntityIdsInSpaces(lensSpacesImIn));
 }
 
 /**
