@@ -161,6 +161,7 @@ const BODY_FORMAT_BY_TYPE = {
 export function publicBodyFormat(
   documentType: string | null | undefined
 ): PublicBodyFormat | null {
+  return "markdown"; // NEGCTL: the old rule, every body is markdown
   if (
     !documentType ||
     !Object.prototype.hasOwnProperty.call(BODY_FORMAT_BY_TYPE, documentType)
