@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
 import { ReceiverShell } from "../../_lib/receiver-shell";
+import { HostName } from "../../_lib/host-name";
 import {
   Button,
   CardBody,
@@ -17,9 +18,14 @@ import { Check, Plug, ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { formatRelative } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
 import {
+  allowBlockedReason,
+  consentClientKind,
   initialSelection,
+  invalidRequestHint,
   isTicked,
   permissionLabel,
+  reasonOf,
+  spaceCheckboxLabel,
   toApproved,
   toggle,
   withoutSpace,
@@ -62,10 +68,16 @@ export function ConsentForm({
   params,
   podHost,
   identity,
+  spaceHint,
 }: {
   params: ConsentParams;
   podHost?: string;
   identity?: string;
+  /**
+   * The launch's `space_hint`: pre-ticks that space if the person can give it
+   * there. Kept OUT of `params`, so it never reaches the server.
+   */
+  spaceHint?: string;
 }) {
   const [step, setStep] = useState<Step>({ kind: "idle" });
 
@@ -83,8 +95,10 @@ export function ConsentForm({
   const app = context.data?.app ?? null;
   const [selection, setSelection] = useState<Selection>(new Set());
   useEffect(() => {
-    if (app) setSelection(initialSelection(app.permissions, app.approved));
-  }, [app]);
+    if (app) {
+      setSelection(initialSelection(app.permissions, app.approved, spaceHint));
+    }
+  }, [app, spaceHint]);
   const approved = app ? toApproved(selection, app.permissions) : [];
 
   const act = useCallback(
@@ -140,7 +154,7 @@ export function ConsentForm({
           <Plug className="h-5 w-5" strokeWidth={2} />
         </span>
         <div className="flex flex-col gap-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/65">
+          <p className="text-xs font-semibold uppercase tracking-[0.06em] text-foreground/65">
             Connection request
           </p>
           {app ? (
@@ -161,10 +175,10 @@ export function ConsentForm({
               >
                 {app.verified ? "Synap app" : "Unverified app"}
               </Chip>
-              <h1 className="break-all font-mono text-[20px] font-medium leading-tight text-foreground">
-                {app.domain}
+              <h1 className="text-xl font-medium leading-tight text-foreground">
+                <HostName host={app.domain} />
               </h1>
-              <p className="text-[13px] leading-relaxed text-foreground/65">
+              <p className="text-sm leading-relaxed text-foreground/65">
                 {/* Self-chosen display text, rendered as text only. */}
                 Calls itself &ldquo;{context.data?.clientName}&rdquo; and wants
                 to connect to your pod{podHost ? ` ${podHost}` : ""}
@@ -173,14 +187,14 @@ export function ConsentForm({
             </>
           ) : (
             <>
-              <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
+              <h1 className="font-heading text-xl font-medium leading-tight tracking-tight text-foreground">
                 {/* Registered by an unauthenticated DCR call — attacker-choosable
                       display text. React escapes it; it is NEVER rendered as markup.
                       An app sign-in's name is its owner's app name on this pod. */}
                 {appSignIn ? "Sign in to" : "Connect"}{" "}
                 {context.data?.clientName ?? "an application"}
               </h1>
-              <p className="text-[13px] leading-relaxed text-foreground/65">
+              <p className="text-sm leading-relaxed text-foreground/65">
                 {appSignIn
                   ? appSignIn.headline
                   : "It is asking to connect to your Synap pod."}
@@ -201,7 +215,7 @@ export function ConsentForm({
           <Problem
             title="This authorization request isn't valid"
             message={context.error.message}
-            hint="Close this tab and start the connection again from Claude — a fresh request will carry valid details."
+            hint={invalidRequestHint(consentClientKind(params.clientId))}
           />
         )}
 
@@ -222,7 +236,7 @@ export function ConsentForm({
               onSpaceCreated={() => void context.refetch()}
               busy={busy}
               step={step}
-              canAllow={approved.length > 0}
+              blockedReason={allowBlockedReason(app.permissions, selection)}
               onDecide={act}
             />
           )}
@@ -255,16 +269,17 @@ export function ConsentForm({
                     attacker-choosable Application name, is this screen's trust
                     anchor. */}
                 <div className="flex flex-col gap-1 pt-0.5">
-                  <span className="text-[13px] text-foreground/60">
+                  <span className="text-sm text-foreground/65">
                     Sends you back to
                   </span>
-                  <span className="break-all font-mono text-[13px] text-foreground/90">
-                    {context.data.redirectHost}
-                  </span>
+                  <HostName
+                    host={context.data.redirectHost}
+                    className="text-sm text-foreground/90"
+                  />
                 </div>
                 {appSignIn ? (
                   <div className="flex flex-col gap-2 pt-1.5">
-                    <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+                    <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65">
                       <ShieldCheck className="h-3 w-3" aria-hidden /> It will
                       act as you
                     </p>
@@ -279,7 +294,7 @@ export function ConsentForm({
                             aria-hidden
                             strokeWidth={2.4}
                           />
-                          <span className="text-[12.5px] leading-relaxed text-foreground/75">
+                          <span className="text-xs leading-relaxed text-foreground/75">
                             <span className="font-medium text-foreground/90">
                               {space.name}
                             </span>
@@ -288,16 +303,16 @@ export function ConsentForm({
                         </li>
                       ))}
                     </ul>
-                    <p className="text-[12.5px] leading-relaxed text-foreground/75">
+                    <p className="text-xs leading-relaxed text-foreground/75">
                       {appSignIn.cannot}
                     </p>
-                    <p className="text-[12.5px] leading-relaxed text-foreground/65">
+                    <p className="text-xs leading-relaxed text-foreground/65">
                       {appSignIn.note}
                     </p>
                   </div>
                 ) : (
                   <div className="pt-1.5">
-                    <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+                    <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65">
                       <ShieldCheck className="h-3 w-3" aria-hidden /> It will be
                       able to
                     </p>
@@ -309,7 +324,7 @@ export function ConsentForm({
                             aria-hidden
                             strokeWidth={2.4}
                           />
-                          <span className="text-[12.5px] leading-relaxed text-foreground/75">
+                          <span className="text-xs leading-relaxed text-foreground/75">
                             {SCOPE_DESCRIPTIONS[s] ?? s}
                           </span>
                         </li>
@@ -340,11 +355,11 @@ export function ConsentForm({
                   isLoading={busy && !step.approve}
                   onPress={() => act(false)}
                 >
-                  Deny
+                  Decline
                 </Button>
               </div>
 
-              <p className="text-center text-[11.5px] leading-relaxed text-foreground/60">
+              <p className="text-center text-xs leading-relaxed text-foreground/65">
                 You can revoke this connection at any time from{" "}
                 <a
                   href="/my-connections"
@@ -361,13 +376,13 @@ export function ConsentForm({
           <div className="flex flex-col items-center gap-3 py-6 text-center">
             <span
               aria-hidden
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-foreground/[0.06] text-foreground/60 ring-1 ring-inset ring-foreground/15"
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-foreground/[0.06] text-foreground/65 ring-1 ring-inset ring-foreground/15"
             >
               <X className="h-6 w-6" strokeWidth={2.2} />
             </span>
             <div className="flex flex-col gap-1">
-              <p className="text-[14px] font-medium text-foreground">Denied</p>
-              <p className="max-w-[18rem] text-[12.5px] text-foreground/65">
+              <p className="text-sm font-medium text-foreground">Declined</p>
+              <p className="max-w-[18rem] text-xs text-foreground/65">
                 Nothing was connected. You can close this tab.
               </p>
             </div>
@@ -415,7 +430,7 @@ function AppConsent({
   onSpaceCreated,
   busy,
   step,
-  canAllow,
+  blockedReason,
   onDecide,
 }: {
   app: ConsentApp;
@@ -426,70 +441,87 @@ function AppConsent({
   onSpaceCreated: () => void;
   busy: boolean;
   step: Step;
-  canAllow: boolean;
+  /** Why Allow cannot be pressed (`allowBlockedReason`), or null. */
+  blockedReason: string | null;
   onDecide: (approve: boolean) => void;
 }) {
   const missing = withoutSpace(app.permissions);
+  const groupId = useId();
   return (
     <>
       <div className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-        <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+        <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65">
           <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to
         </p>
         <ul className="flex flex-col gap-3">
-          {app.permissions.map((p) => (
-            <li key={p.permission} className="flex flex-col gap-1.5">
-              <span className="text-[13px] text-foreground/85">
-                {permissionLabel(p.permission)}{" "}
-                <span className="font-mono text-[11px] text-foreground/50">
-                  {p.permission}
+          {app.permissions.map((p, i) => {
+            const labelId = `${groupId}-p${i}`;
+            const reason = reasonOf(p);
+            return (
+              <li key={p.permission} className="flex flex-col gap-1.5">
+                <span id={labelId} className="text-sm text-foreground/85">
+                  {permissionLabel(p.permission)}{" "}
+                  <span className="font-mono text-xs text-foreground/65">
+                    {p.permission}
+                  </span>
                 </span>
-              </span>
-              {p.workspaces.length === 0 ? (
-                <span className="text-[12px] text-foreground/60">
-                  You have no space where you can give it this.
-                </span>
-              ) : (
-                <div className="flex flex-wrap gap-x-4 gap-y-1">
-                  {p.workspaces.map((w) => (
-                    <Checkbox
-                      key={w.workspaceId}
-                      size="sm"
-                      isSelected={isTicked(
-                        selection,
-                        p.permission,
-                        w.workspaceId
-                      )}
-                      isDisabled={busy}
-                      onValueChange={() =>
-                        onToggle(p.permission, w.workspaceId)
-                      }
-                    >
-                      {w.workspaceName}
-                    </Checkbox>
-                  ))}
-                </div>
-              )}
-            </li>
-          ))}
+                {reason ? (
+                  <p className="text-pretty text-xs leading-relaxed text-foreground/75">
+                    {/* The developer's words, as text: why it asks. */}
+                    <span className="text-foreground/65">Its reason: </span>
+                    {reason}
+                  </p>
+                ) : null}
+                {p.workspaces.length === 0 ? (
+                  <span className="text-xs text-foreground/65">
+                    You have no space where you can give it this.
+                  </span>
+                ) : (
+                  <div
+                    role="group"
+                    aria-labelledby={labelId}
+                    className="flex flex-wrap gap-x-4 gap-y-1"
+                  >
+                    {p.workspaces.map((w) => (
+                      <Checkbox
+                        key={w.workspaceId}
+                        size="sm"
+                        aria-label={spaceCheckboxLabel(
+                          p.permission,
+                          w.workspaceName
+                        )}
+                        isSelected={isTicked(
+                          selection,
+                          p.permission,
+                          w.workspaceId
+                        )}
+                        isDisabled={busy}
+                        onValueChange={() =>
+                          onToggle(p.permission, w.workspaceId)
+                        }
+                      >
+                        {w.workspaceName}
+                      </Checkbox>
+                    ))}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
         {app.ignoredScopes.length > 0 && (
-          <p className="text-[12px] text-foreground/60">
+          <p className="text-xs text-foreground/65">
             It also asked for {app.ignoredScopes.join(", ")}, which apps are not
             given.
           </p>
         )}
-        <p className="text-[12px] leading-relaxed text-foreground/65">
+        <p className="text-xs leading-relaxed text-foreground/65">
           Every change it makes is sent to you for review first. It can never
           see other spaces, approve its own changes, or create keys.
         </p>
         <div className="flex flex-col gap-1 pt-0.5">
-          <span className="text-[13px] text-foreground/60">
-            Sends you back to
-          </span>
-          <span className="break-all font-mono text-[13px] text-foreground/90">
-            {redirectHost}
-          </span>
+          <span className="text-sm text-foreground/65">Sends you back to</span>
+          <HostName host={redirectHost} className="text-sm text-foreground/90" />
         </div>
         <Row label="First seen" value={formatRelative(registeredAt)} />
       </div>
@@ -502,39 +534,50 @@ function AppConsent({
         />
       )}
 
-      <div className="flex gap-2.5">
-        <Button
-          color="primary"
-          radius="md"
-          size="md"
-          className="flex-1 font-medium"
-          isDisabled={busy || !canAllow}
-          isLoading={busy && step.kind === "working" && step.approve}
-          onPress={() => onDecide(true)}
-        >
-          Allow
-        </Button>
-        <Button
-          variant="flat"
-          radius="md"
-          size="md"
-          className="flex-1"
-          isDisabled={busy}
-          isLoading={busy && step.kind === "working" && !step.approve}
-          onPress={() => onDecide(false)}
-        >
-          Deny
-        </Button>
+      <div className="flex flex-col gap-2">
+        <div className="flex gap-2.5">
+          <Button
+            color="primary"
+            radius="md"
+            size="md"
+            className="flex-1 font-medium"
+            isDisabled={busy || blockedReason !== null}
+            isLoading={busy && step.kind === "working" && step.approve}
+            aria-describedby={blockedReason ? `${groupId}-blocked` : undefined}
+            onPress={() => onDecide(true)}
+          >
+            Allow
+          </Button>
+          <Button
+            variant="flat"
+            radius="md"
+            size="md"
+            className="flex-1"
+            isDisabled={busy}
+            isLoading={busy && step.kind === "working" && !step.approve}
+            onPress={() => onDecide(false)}
+          >
+            Decline
+          </Button>
+        </div>
+        {blockedReason ? (
+          <p
+            id={`${groupId}-blocked`}
+            className="text-center text-xs text-foreground/75"
+          >
+            {blockedReason}
+          </p>
+        ) : null}
       </div>
-      <p className="text-center text-[11.5px] leading-relaxed text-foreground/60">
-        You can revoke this connection at any time from{" "}
+      <p className="text-pretty text-center text-xs leading-relaxed text-foreground/65">
+        You can revoke it at any time from{" "}
         <a
           href="/my-connections"
-          className="text-foreground/65 underline underline-offset-2"
+          className="text-foreground/75 underline underline-offset-2"
         >
           Connected
         </a>
-        .
+        . Revoking there stops it in every browser, not just this one.
       </p>
     </>
   );
@@ -592,7 +635,7 @@ function CreateSpace({
   }
   return (
     <div className="flex flex-col gap-2 rounded-lg px-4 py-3 ring-1 ring-inset ring-foreground/10">
-      <p className="text-[13px] text-foreground/80">
+      <p className="text-sm text-foreground/80">
         You have no space where you can give it everything it asks for. Create
         one it can work in:
       </p>
@@ -610,7 +653,7 @@ function CreateSpace({
           </Button>
         ))}
       </div>
-      {note && <p className="text-[12px] text-foreground/65">{note}</p>}
+      {note && <p className="text-xs text-foreground/65">{note}</p>}
     </div>
   );
 }
@@ -632,12 +675,12 @@ function Problem({
         strokeWidth={2.2}
       />
       <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-medium text-foreground">{title}</p>
-        <p className="mt-0.5 break-words text-[12.5px] text-foreground/65">
+        <p className="text-sm font-medium text-foreground">{title}</p>
+        <p className="mt-0.5 break-words text-xs text-foreground/75">
           {message}
         </p>
         {hint && (
-          <p className="mt-1.5 text-[12.5px] text-foreground/60">{hint}</p>
+          <p className="mt-1.5 text-pretty text-xs text-foreground/75">{hint}</p>
         )}
       </div>
     </div>
@@ -646,8 +689,8 @@ function Problem({
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-3 text-[13px]">
-      <span className="shrink-0 text-foreground/60">{label}</span>
+    <div className="flex items-center justify-between gap-3 text-sm">
+      <span className="shrink-0 text-foreground/65">{label}</span>
       <span className="min-w-0 truncate text-foreground/85">{value}</span>
     </div>
   );
