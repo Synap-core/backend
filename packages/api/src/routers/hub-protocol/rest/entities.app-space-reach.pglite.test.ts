@@ -14,7 +14,9 @@
  *
  * Rows rule out: the workspace match alone (the CRM app saw zero people), a
  * facet in another space counting, an un-roled pod-wide person leaking, the
- * by-id door disagreeing with the list. The full-access control shows the
+ * by-id door disagreeing with the list, the app and a MEMBER of CRM (a
+ * teammate, not the owner) disagreeing under either `includePodWide`, and a
+ * write reaching what the read now reaches. The full-access control shows the
  * floor alone returns the rows the CRM key must not.
  *
  * Cannot see: production Postgres, a real minted app key (the identity the
@@ -91,6 +93,8 @@ function ddlFor(table: PgTable): string {
 
 const OWNER = randomUUID(); // the person who connected the app
 const AGENT = randomUUID(); // the app's own agent (the key principal)
+const TEAMMATE = randomUUID(); // a member of CRM, not the owner
+const TEAMMATE_AGENT = randomUUID(); // the principal of the teammate's key
 const CRM = randomUUID();
 const OTHER = randomUUID();
 const PERSON_KIND = randomUUID();
@@ -102,15 +106,55 @@ const LEAD = randomUUID(); // pod-wide person, LEAD in CRM     → seen (a)
 const ACME = randomUUID(); // pod-wide company, CLIENT          → seen (b)
 const STRANGER = randomUUID(); // pod-wide person, no role      → not
 const ELSEWHERE = randomUUID(); // pod-wide person, LEAD in OTHER → not
+const TEAM_LEAD = randomUUID(); // teammate's pod-wide person, LEAD in CRM → seen (a)
 
+interface Key {
+  id: string;
+  permissions: string[];
+  workspaceIds: string[] | null;
+  principal: string;
+  person: string;
+  scope: string[];
+}
+const READ_ONLY = ["hub-protocol.read"];
 const KEYS = {
+  /** The CRM app: reads persons/companies/… in CRM only. */
   crm: {
     id: randomUUID(),
     permissions: ["entity.*.read"],
-    workspaceIds: [CRM] as string[] | null,
+    workspaceIds: [CRM],
+    principal: AGENT,
+    person: OWNER,
+    scope: READ_ONLY,
   },
-  full: { id: randomUUID(), permissions: ["*"], workspaceIds: null },
-} as const;
+  /** The same app given `entity.*.update` in CRM too. */
+  crmWrite: {
+    id: randomUUID(),
+    permissions: ["entity.*.read", "entity.*.update"],
+    workspaceIds: [CRM],
+    principal: AGENT,
+    person: OWNER,
+    scope: ["hub-protocol.read", "hub-protocol.write"],
+  },
+  /** The owner, unbounded: the floor alone. */
+  full: {
+    id: randomUUID(),
+    permissions: ["*"],
+    workspaceIds: null,
+    principal: AGENT,
+    person: OWNER,
+    scope: READ_ONLY,
+  },
+  /** A MEMBER of CRM (not the owner), unbounded: the member rule alone. */
+  member: {
+    id: randomUUID(),
+    permissions: ["*"],
+    workspaceIds: null,
+    principal: TEAMMATE_AGENT,
+    person: TEAMMATE,
+    scope: READ_ONLY,
+  },
+} satisfies Record<string, Key>;
 type KeyName = keyof typeof KEYS;
 
 const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
@@ -132,9 +176,17 @@ beforeAll(async () => {
     `insert into users (id, email, user_type, created_by_user_id) values ($1,$2,'agent',$3)`,
     [AGENT, "app-agent@example.test", OWNER]
   );
+  await q(`insert into users (id, email, user_type) values ($1,$2,'human')`, [
+    TEAMMATE,
+    "teammate@example.test",
+  ]);
   await q(
-    `insert into pod_members (id, user_id, pod_role) values ($1,$2,'owner')`,
-    [randomUUID(), OWNER]
+    `insert into users (id, email, user_type, created_by_user_id) values ($1,$2,'agent',$3)`,
+    [TEAMMATE_AGENT, "teammate-agent@example.test", TEAMMATE]
+  );
+  await q(
+    `insert into pod_members (id, user_id, pod_role) values ($1,$2,'owner'),($3,$4,'member')`,
+    [randomUUID(), OWNER, randomUUID(), TEAMMATE]
   );
   for (const [ws, name] of [
     [CRM, "CRM"],
@@ -150,6 +202,10 @@ beforeAll(async () => {
     );
   }
   await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'editor')`,
+    [randomUUID(), CRM, TEAMMATE]
+  );
+  await q(
     `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active, ui_hints, workspace_id) values
        ($1,'person','Person','kind','system','pod',true,'{}'::jsonb,null),
        ($2,'company','Company','kind','system','pod',true,'{}'::jsonb,null),
@@ -161,22 +217,24 @@ beforeAll(async () => {
     `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
     [ROLE_CLIENT, CRM]
   );
-  for (const [id, kind, kindId] of [
-    [LEAD, "person", PERSON_KIND],
-    [ACME, "company", COMPANY_KIND],
-    [STRANGER, "person", PERSON_KIND],
-    [ELSEWHERE, "person", PERSON_KIND],
+  for (const [id, kind, kindId, owner] of [
+    [LEAD, "person", PERSON_KIND, OWNER],
+    [ACME, "company", COMPANY_KIND, OWNER],
+    [STRANGER, "person", PERSON_KIND, OWNER],
+    [ELSEWHERE, "person", PERSON_KIND, OWNER],
+    [TEAM_LEAD, "person", PERSON_KIND, TEAMMATE],
   ] as const) {
     await q(
       `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data)
        values ($1,$2,null,$3,$4,'e','{}'::jsonb,'{}'::jsonb)`,
-      [id, OWNER, kindId, kind]
+      [id, owner, kindId, kind]
     );
   }
   for (const [entityId, role, ws] of [
     [LEAD, ROLE_LEAD, CRM],
     [ACME, ROLE_CLIENT, null],
     [ELSEWHERE, ROLE_LEAD, OTHER],
+    [TEAM_LEAD, ROLE_LEAD, CRM],
   ] as const) {
     await q(
       `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, properties)
@@ -191,8 +249,8 @@ beforeAll(async () => {
       [
         randomUUID(),
         k.id,
-        AGENT,
-        OWNER,
+        k.principal,
+        k.person,
         `{${k.permissions.join(",")}}`,
         k.workspaceIds ? `{${k.workspaceIds.join(",")}}` : null,
       ]
@@ -202,15 +260,15 @@ beforeAll(async () => {
 
 beforeEach(() => {
   h.getApiKeyStatus.mockImplementation(async (bearer: string) => {
-    const name = bearer.replace(/^synap_/, "") as KeyName;
+    const key: Key = KEYS[bearer.replace(/^synap_/, "") as KeyName];
     return {
       status: "valid",
       record: {
-        id: KEYS[name].id,
-        userId: AGENT,
-        linkedUserId: OWNER,
+        id: key.id,
+        userId: key.principal,
+        linkedUserId: key.person,
         parentKeyId: null,
-        scope: ["hub-protocol.read"],
+        scope: key.scope,
         keyType: "hub_inbound",
         workspaceId: null,
         expiresAt: null,
@@ -232,6 +290,18 @@ const get = (key: KeyName, path: string) =>
   app().request(`/api/hub${path}`, {
     headers: { authorization: `Bearer synap_${key}` },
   });
+const patch = (key: KeyName, path: string, body: unknown) => {
+  const json = JSON.stringify(body);
+  return app().request(`/api/hub${path}`, {
+    method: "PATCH",
+    headers: {
+      authorization: `Bearer synap_${key}`,
+      "content-type": "application/json",
+      "content-length": String(Buffer.byteLength(json)),
+    },
+    body: json,
+  });
+};
 
 async function ids(res: Response): Promise<string[]> {
   expect(res.status).toBe(200);
@@ -244,15 +314,15 @@ describe("GET /entities?workspaceId=CRM — the app sees the pod-wide records ro
       await ids(
         await get("full", `/entities?workspaceId=${CRM}&profileSlug=person`)
       )
-    ).toEqual([LEAD, STRANGER, ELSEWHERE].sort());
+    ).toEqual([LEAD, STRANGER, ELSEWHERE, TEAM_LEAD].sort());
   });
 
-  it("profileSlug=person: the person with a role stamped in CRM, not the un-roled one nor one roled elsewhere", async () => {
+  it("profileSlug=person: the persons with a role stamped in CRM (the owner's and a teammate's), not the un-roled one nor one roled elsewhere", async () => {
     expect(
       await ids(
         await get("crm", `/entities?workspaceId=${CRM}&profileSlug=person`)
       )
-    ).toEqual([LEAD]);
+    ).toEqual([LEAD, TEAM_LEAD].sort());
   });
 
   it("profileSlug=company: the company wearing a shared role granted to CRM", async () => {
@@ -265,8 +335,8 @@ describe("GET /entities?workspaceId=CRM — the app sees the pod-wide records ro
 });
 
 describe("GET /entities/:id agrees with the list", () => {
-  it("the roled person and company are returned", async () => {
-    for (const id of [LEAD, ACME]) {
+  it("the roled persons and company are returned", async () => {
+    for (const id of [LEAD, TEAM_LEAD, ACME]) {
       const res = await get("crm", `/entities/${id}`);
       expect(res.status).toBe(200);
       expect(((await res.json()) as { id: string }).id).toBe(id);
@@ -281,5 +351,73 @@ describe("GET /entities/:id agrees with the list", () => {
 
   it("control: the full-access key reads the un-roled person", async () => {
     expect((await get("full", `/entities/${STRANGER}`)).status).toBe(200);
+  });
+});
+
+// Q2 — the member rule is the reference: whatever a member of CRM gets under
+// a given `includePodWide`, the app granted CRM gets the same.
+describe("the app matches a MEMBER of CRM under either includePodWide", () => {
+  const both = async (query: string) => ({
+    member: await ids(await get("member", `/entities?${query}`)),
+    app: await ids(await get("crm", `/entities?${query}`)),
+  });
+
+  it("includePodWide=false: the pod-wide persons roled IN CRM (a facet stamped there) still come back, for both", async () => {
+    const r = await both(
+      `workspaceId=${CRM}&profileSlug=person&includePodWide=false`
+    );
+    expect(r.member).toEqual([LEAD, TEAM_LEAD].sort());
+    expect(r.app).toEqual(r.member);
+  });
+
+  it("includePodWide=false: a company wearing a shared role granted to CRM (facet stored pod-wide) does NOT, for both", async () => {
+    const r = await both(
+      `workspaceId=${CRM}&profileSlug=company&includePodWide=false`
+    );
+    expect(r.member).toEqual([]);
+    expect(r.app).toEqual(r.member);
+  });
+
+  it("default (includePodWide unset, a pod-scope kind): both get the roled persons AND the shared-role company", async () => {
+    const persons = await both(`workspaceId=${CRM}&profileSlug=person`);
+    expect(persons.member).toEqual([LEAD, TEAM_LEAD].sort());
+    expect(persons.app).toEqual(persons.member);
+    const companies = await both(`workspaceId=${CRM}&profileSlug=company`);
+    expect(companies.member).toEqual([ACME]);
+    expect(companies.app).toEqual(companies.member);
+  });
+});
+
+// Q1 — reading a pod-wide person never lets the app WRITE it.
+describe("an app with entity.update in CRM cannot edit a pod-wide person it now reads", () => {
+  it("the owner's pod-wide person roled in CRM: 403, the grant refuses the stored (pod-wide) row; nothing written, nothing filed", async () => {
+    const proposalsBefore = (await q(`select id from proposals`)).rows.length;
+    const res = await patch("crmWrite", `/entities/${LEAD}`, {
+      title: "rewritten by the app",
+    });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: string }).error).toMatch(
+      /grant does not allow/
+    );
+    const { rows } = await q<{ title: string }>(
+      `select title from entities where id = $1`,
+      [LEAD]
+    );
+    expect(rows[0]?.title).toBe("e");
+    expect((await q(`select id from proposals`)).rows).toHaveLength(
+      proposalsBefore
+    );
+  });
+
+  it("a teammate's pod-wide person roled in CRM: 404, outside the write floor (no role lens on writes)", async () => {
+    const res = await patch("crmWrite", `/entities/${TEAM_LEAD}`, {
+      title: "rewritten by the app",
+    });
+    expect(res.status).toBe(404);
+    const { rows } = await q<{ title: string }>(
+      `select title from entities where id = $1`,
+      [TEAM_LEAD]
+    );
+    expect(rows[0]?.title).toBe("e");
   });
 });
