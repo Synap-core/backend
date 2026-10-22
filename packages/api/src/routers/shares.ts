@@ -53,7 +53,11 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  credentialProcedure,
+} from "../trpc.js";
 import {
   getExposurePolicy,
   getPublicDoors,
@@ -121,7 +125,7 @@ export function shareActorFromCtx(ctx: {
 }
 
 export const sharesRouter = router({
-  share: protectedProcedure
+  share: credentialProcedure
     .input(
       z.object({
         resourceType: Kind,
@@ -179,20 +183,20 @@ export const sharesRouter = router({
     )
     .query(({ input, ctx }) => listShares(shareActorFromCtx(ctx), input)),
 
-  rotateLink: protectedProcedure
+  rotateLink: credentialProcedure
     .input(z.object({ shareId: Uuid }))
     .mutation(({ input, ctx }) =>
       rotateLink(shareActorFromCtx(ctx), input.shareId)
     ),
 
   // `token` is the input key the tRPC audit middleware redacts.
-  redeemLink: protectedProcedure
+  redeemLink: credentialProcedure
     .input(z.object({ token: z.string().min(1).max(256) }))
     .mutation(({ input, ctx }) =>
       redeemLink(shareActorFromCtx(ctx), input.token)
     ),
 
-  publish: protectedProcedure
+  publish: credentialProcedure
     .input(
       z.object({
         resourceType: Kind,
@@ -220,7 +224,7 @@ export const sharesRouter = router({
     ),
 
   // The config is validated (strictly) by the service, which owns its schema.
-  configureSite: protectedProcedure
+  configureSite: credentialProcedure
     .input(
       z.object({
         projectId: Uuid,
@@ -240,13 +244,13 @@ export const sharesRouter = router({
       )
     ),
 
-  publishSite: protectedProcedure
+  publishSite: credentialProcedure
     .input(z.object({ siteId: Uuid }))
     .mutation(({ input, ctx }) =>
       publishSite(shareActorFromCtx(ctx), input.siteId)
     ),
 
-  rotateSiteToken: protectedProcedure
+  rotateSiteToken: credentialProcedure
     .input(z.object({ siteId: Uuid }))
     .mutation(({ input, ctx }) =>
       rotateSiteToken(shareActorFromCtx(ctx), input.siteId)
@@ -258,7 +262,7 @@ export const sharesRouter = router({
       unpublishSite(shareActorFromCtx(ctx), input.siteId)
     ),
 
-  publishToSite: protectedProcedure
+  publishToSite: credentialProcedure
     .input(
       z.object({
         siteId: Uuid,
