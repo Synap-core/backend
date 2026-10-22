@@ -38,6 +38,7 @@
  */
 
 import {
+  boolean,
   pgTable,
   text,
   timestamp,
@@ -168,6 +169,10 @@ export const oauthAuthorizationCodes = pgTable(
     // The consenting session's real `authenticated_at` (0340): a Synap app's
     // device takes it as its step-up clock. NULL when unknown.
     authTime: timestamp("auth_time", { mode: "date", withTimezone: true }),
+
+    // A Synap app's STEP-UP code (`prompt=login`, "Confirm it's you", 0340):
+    // it re-confirms a device the app holds and can never make a new one.
+    stepUp: boolean("step_up").notNull().default(false),
   },
   (table) => ({
     expiresAtIdx: index("oauth_authorization_codes_expires_at_idx").on(
@@ -240,7 +245,7 @@ export const oauthRefreshTokens = pgTable(
 );
 
 /**
- * A Synap app signed in as a PERSON (0340, join plan target A): one row per
+ * A Synap app signed in as a PERSON (0340): one row per
  * sign-in of a FIRST-PARTY client (`FIRST_PARTY_CLIENTS`, api
  * `routers/oauth/config.ts`). It is the refresh family (`oauth_refresh_tokens`
  * with `device_id` = this id) and the thing the person sees in "Signed-in

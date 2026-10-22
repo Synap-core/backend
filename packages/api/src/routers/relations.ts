@@ -35,7 +35,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import {
   db,
   eq,
@@ -752,7 +752,7 @@ export const relationsRouter = router({
    * A pod-personal (NULL-workspace) project is still refused as an anchor.
    * Sites W2 S3: now a thin alias of `services/sharing/share-service.ts`.
    */
-  exposeToAnchor: protectedProcedure
+  exposeToAnchor: credentialProcedure
     .input(
       z.object({
         entityId: z.string().uuid(),
@@ -784,7 +784,7 @@ export const relationsRouter = router({
    * membership on the client anchor and do NOT add them to the workspace — the
    * exposure floor then scopes their reads to that anchor's exposed entities only.
    */
-  grantAnchorMembership: protectedProcedure
+  grantAnchorMembership: credentialProcedure
     .input(
       z.object({
         anchorId: z.string().uuid(),

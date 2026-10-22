@@ -116,8 +116,7 @@ export function isSynapApp(clientId: string): boolean {
 }
 
 /**
- * The FIRST-PARTY native clients (join plan target A, founder decision
- * `decision:join-target-a-2026-10-21`): the Synap apps, declared HERE and
+ * The FIRST-PARTY native clients: the Synap apps, declared HERE and
  * shipped with every pod release — never a DCR row, never a database row, so
  * every pod knows them with no registration. Closed: a `client_id` not in this
  * table is never first-party, whatever it looks like.
@@ -126,7 +125,7 @@ export function isSynapApp(clientId: string): boolean {
  * (30-day idle, 180-day absolute cap), one family per signed-in device
  * (`services/person-device-token.ts`, the one mint door).
  *
- * Consent is ALWAYS a one-click confirm (founder decision 4): a loopback
+ * Consent is ALWAYS a one-click confirm, never silent: a loopback
  * redirect cannot prove which program is listening (RFC 8252 §8.6), and the
  * Relay claimed-https link is not live yet. Names come from the vocabulary
  * door (`resolveFirstPartyClientName`), never from this table.

@@ -16,6 +16,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { revokeAllPersonDevices } from "@synap/database/person-devices";
 import {
   db,
   desc,
@@ -544,6 +545,14 @@ export const applicationConnectionsRouter = router({
         });
       }
       if (outcome.status === "unlinked") {
+        // Unlinking takes away how the person proved who they are; the Synap
+        // apps they signed in with it sign in again. Their access to the pod
+        // is untouched, so the access read in `resolvePersonDeviceSession`
+        // cannot see this: the devices are ended here.
+        await revokeAllPersonDevices(db, {
+          userId: input.userId,
+          reason: `Unlinked from ${outcome.app.displayName}`,
+        });
         await recordConnectionEvent({
           action: "unlink",
           subjectId: input.connectionId,
