@@ -84,6 +84,11 @@ import {
   automations,
 } from "@synap/database";
 import { needsYouRows } from "@synap-core/types/needs-you";
+import {
+  lensItemsOfClass,
+  lensRowOfLiveSignal,
+  lensRowProgress,
+} from "@synap-core/types/lens";
 import { signalsRouter } from "./signals.js";
 import { sessionsWithOwedSlot } from "../services/signals/lens-containers.js";
 
@@ -377,6 +382,17 @@ describe("one population, nested scopes — the totals agree", () => {
     }
     expect((await page({ sessionId: S1 })).happening.rows).toEqual([]);
   });
+
+  it("Happening: the row carries its deliverables counted — a labelled progress, never a bare bar", async () => {
+    // s2 declares ONE deliverable, owed to the person and not yet done.
+    const [signal] = (await page({})).happening.rows.filter(
+      (r) => r.kind === "live-session"
+    );
+    expect(signal!.progress).toEqual({ done: 0, total: 1 });
+    // Through the shared lens model, as web and relay draw it.
+    const row = lensRowOfLiveSignal(signal!);
+    expect(lensRowProgress(row)).toEqual({ pct: 0, label: "0 of 1 done" });
+  });
 });
 
 describe("the needs-you duplicate causes", () => {
@@ -552,5 +568,56 @@ describe("Happening: a rule running without a session (C5)", () => {
       const rows = (await page(scope)).happening.rows;
       expect(rows.some((r) => r.kind === "rule-run")).toBe(false);
     }
+  });
+});
+
+describe('Needs you: "from X" — the ONE agent behind a decision (wave PO)', () => {
+  const AGENT = randomUUID();
+  const filed = (name: string, agentUserId: string | null) =>
+    q(
+      `insert into proposals (id, proposal_type, target_type, target_id, data, status, agent_user_id, created_by, created_at, updated_at)
+       values ($1, 'create', 'entity', null, $2::jsonb, 'pending', $3, $4, now() - interval '5 minutes', now())`,
+      [randomUUID(), JSON.stringify({ name }), agentUserId, USER]
+    );
+  beforeAll(async () => {
+    await q(
+      `insert into users (id, name, user_type) values ($1, 'Scout', 'agent')`,
+      [AGENT]
+    );
+    // Two identical asks, both filed by Scout → one row, "from Scout".
+    await filed("Lumen Atelier", AGENT);
+    await filed("Lumen Atelier", AGENT);
+    // The same shape, one by Scout and one by a person → no "from" at all.
+    await filed("Mixte", AGENT);
+    await filed("Mixte", null);
+  });
+
+  const rowTitled = async (needle: string) => {
+    const signals = (await page({})).blocking.rows;
+    const signal = signals.find(
+      (s) => s.kind === "proposal-cluster" && s.title.includes(needle)
+    );
+    expect(signal, needle).toBeDefined();
+    // Through the shared lens model, as web and relay draw it.
+    const [item] = lensItemsOfClass([signal!], "blocking");
+    return { signal: signal!, row: item!.row };
+  };
+
+  it("a cluster every member of which Scout filed says who, as a door to the agent", async () => {
+    const { signal, row } = await rowTitled("Lumen Atelier");
+    expect(signal.by).toEqual({ kind: "agent", id: AGENT, label: "Scout" });
+    expect(row.by).toEqual({ kind: "agent", id: AGENT, label: "Scout" });
+  });
+
+  it("a cluster a person also filed into names no one, rather than a guess", async () => {
+    const { signal, row } = await rowTitled("Mixte");
+    expect(signal.by).toBeUndefined();
+    expect(row.by ?? null).toBeNull();
+  });
+
+  it("the two asks fold into ONE row whose repeat is words, never ×N", async () => {
+    const { signal, row } = await rowTitled("Lumen Atelier");
+    expect(signal.count).toBe(2);
+    expect(row.repeat).toBe("and 1 more like it");
   });
 });

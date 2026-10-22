@@ -1,6 +1,6 @@
 /**
  * Happening's rule population: ONE row per rule, never one per run — 300
- * Gmail-triggered runs of one rule are one "×300" row grouped under the rule;
+ * Gmail-triggered runs of one rule are one "ran 300 times" row grouped under the rule;
  * a failure inside the window is counted on that row.
  */
 import { describe, it, expect } from "vitest";
