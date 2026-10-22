@@ -128,7 +128,7 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   // runners — who is attached to it — and nothing else.
   [
     sessionRunners,
-    spec("session", sessionRunners, { idColumn: sessionRunners.sessionId }),
+    spec("session", {}, { idColumn: sessionRunners.sessionId }),
   ],
   [channels, spec("channel", channels)],
   [events, spec("event", events)],
