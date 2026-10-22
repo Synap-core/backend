@@ -246,7 +246,7 @@ export async function unlinkConnectionAccount(
       subject: removed.issuerSubject,
     });
     signIn =
-      credentialGone && (await deps.endSessions(input.userId))
+      credentialGone /*NC*/
         ? "removed"
         : "failed";
   }
