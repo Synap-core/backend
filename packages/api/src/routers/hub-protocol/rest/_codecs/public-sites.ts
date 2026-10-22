@@ -9,6 +9,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { PublicBodyFormatSchema } from "./public-shares.js";
 
 /** GET /public/sites/{siteToken} path params. */
 export const PublicSiteParamsSchema = z
@@ -137,7 +138,7 @@ export const PublicCollectionPageSchema = z
 /** One published record of a site, with its pinned body. */
 export const PublicRecordSchema = PublicRecordSummarySchema.extend({
   body: z
-    .object({ format: z.literal("markdown"), content: z.string() })
+    .object({ format: PublicBodyFormatSchema, content: z.string() })
     .nullable()
     .describe("The pinned published revision's text, or null."),
 }).openapi("PublicRecord");

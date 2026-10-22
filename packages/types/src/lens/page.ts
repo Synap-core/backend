@@ -33,6 +33,12 @@ import type { ConnectionEventLine } from "../events/connection-lines.js";
 import type { LensPagePicks } from "./next-moves.js";
 import { repeatLabel } from "../needs-you/index.js";
 import { unitStateInputOfRunStatus } from "../units/state.js";
+import {
+  LIFECYCLE_CATEGORIES,
+  lifecycleOptionLabel,
+  lifecycleOptionTone,
+  type LifecycleCategory,
+} from "../lifecycle/option.js";
 
 /** One `Signal` of the page read — the fields the kit reads. */
 export interface LensPageSignal {
@@ -62,6 +68,8 @@ export interface LensPageSignal {
   } | null;
   /** How many identical things the row folds (`rule-run`: its runs). */
   repeatCount?: number;
+  /** `live-session` only: its deliverables, counted (done of total). */
+  progress?: { done: number; total: number } | null;
   /** `output` only: the landed object (`outputs.landed`, `LandedObjectRow`). */
   landed?: {
     kind: string;
@@ -70,6 +78,8 @@ export interface LensPageSignal {
     createdAt: string;
     actor?: { kind: string } | null;
     entityProfile?: { slug: string } | null;
+    /** The object's lifecycle status (`LandedObjectRow.status`), when it has one. */
+    status?: { key: string; category: LifecycleCategory } | null;
   } | null;
   /** `activity` only: the ledger row (`activity.list`). */
   activity?: ActivityRow | null;
@@ -155,6 +165,7 @@ export function lensRowOfLiveSignal(
     startedAt:
       signal.live?.since ?? signal.live?.lastAt ?? signal.occurredAt ?? null,
     nowLine: nowLine ?? null,
+    progress: signal.progress ?? null,
   });
   // A RULE running without a session (`rule-run`): its runs are folded into
   // this one row. A failure inside the window is the mark — it outranks the
@@ -179,10 +190,23 @@ export function lensRowOfLiveSignal(
  * An `output` signal as THE produced card, or null for any other row (a
  * naive cast would draw it). An entity reads as its kind (the profile slug
  * feeds the host's identity door); the AI dot is earned only by an agent.
+ * Its lifecycle status becomes a MARK — words + tone through the one option
+ * rule (`lifecycleOptionLabel` / `lifecycleOptionTone`; the landed read
+ * carries no authored label, so the words are the vocabulary's). A category
+ * outside the five is not drawn rather than guessed.
  */
 export function lensOutputOfSignal(signal: LensPageSignal): LensOutput | null {
   const landed = signal.landed;
   if (signal.kind !== "output" || !landed) return null;
+  const st = landed.status;
+  const status =
+    st && st.key && LIFECYCLE_CATEGORIES.includes(st.category)
+      ? {
+          key: st.key,
+          label: lifecycleOptionLabel({ key: st.key }),
+          tone: lifecycleOptionTone({ category: st.category }),
+        }
+      : null;
   return {
     key: signal.id,
     objectKind: landed.entityProfile?.slug ?? landed.ref.kind ?? landed.kind,
@@ -192,6 +216,7 @@ export function lensOutputOfSignal(signal: LensPageSignal): LensOutput | null {
     producedAt: landed.createdAt || null,
     byAgent: landed.actor?.kind === "agent",
     expected: false,
+    ...(status ? { status } : {}),
   };
 }
 
