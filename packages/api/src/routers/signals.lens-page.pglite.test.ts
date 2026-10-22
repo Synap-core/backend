@@ -614,4 +614,10 @@ describe('Needs you: "from X" — the ONE agent behind a decision (wave PO)', ()
     expect(signal.by).toBeUndefined();
     expect(row.by ?? null).toBeNull();
   });
+
+  it("the two asks fold into ONE row whose repeat is words, never ×N", async () => {
+    const { signal, row } = await rowTitled("Lumen Atelier");
+    expect(signal.count).toBe(2);
+    expect(row.repeat).toBe("and 1 more like it");
+  });
 });
