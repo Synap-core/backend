@@ -15655,6 +15655,33 @@ export interface CsvTablePlan {
 		relationType: string;
 	};
 }
+export interface ImportIdentityDecision {
+	ref: string;
+	title: string;
+	/** The pod entity id, or the ref of an earlier row of this import. */
+	target?: string;
+	matchedBy?: "name" | "signal";
+	/** Created as a distinct subject despite a same-name entity. */
+	separate?: true;
+	/** Why it was kept separate (the conflicting signal types). */
+	reason?: string;
+}
+/** What the reviewer is shown: counts, and the rows themselves (capped). */
+export interface ImportIdentitiesSummary {
+	/** Linked to a pod entity holding the same strong signal. */
+	linkedBySignal: number;
+	/** Linked to a pod entity on its NAME alone — the reviewer should check. */
+	matchedByName: number;
+	/** Rows of this import folded into an earlier row naming the same subject. */
+	foldedInFile: number;
+	/** Created as distinct subjects despite a same-name entity. */
+	separate: number;
+	rows: {
+		linkedBySignal: ImportIdentityDecision[];
+		matchedByName: ImportIdentityDecision[];
+		separate: ImportIdentityDecision[];
+	};
+}
 /**
  * Per-op homes summary for an import graph — how create_entity ops are
  * distributed across workspaces / projects. Consumed by analyze/analyzeLarge
@@ -32434,6 +32461,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				degradedReason?: string | undefined;
 				droppedReferences: number;
 				homes: ImportHomesSummary;
+				identities?: ImportIdentitiesSummary | undefined;
 				intake?: RecordImportIntakeResult | undefined;
 				mode: "deep" | "shallow";
 				operations: CompositeProposalOperation[];
@@ -32483,6 +32511,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				degradedReason?: string | undefined;
 				droppedReferences: number;
 				homes: ImportHomesSummary;
+				identities?: ImportIdentitiesSummary | undefined;
 				intake?: RecordImportIntakeResult | undefined;
 				mode: "deep" | "shallow";
 				operations: CompositeProposalOperation[];
