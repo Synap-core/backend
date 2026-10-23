@@ -206,7 +206,10 @@ describe.each([
     expect(seen).toMatch(
       /You decide as Ada Lovelace · recorded in the Audit log/
     );
-    // Advanced is the last thing before the bar.
-    expect(seen.indexOf("Advanced")).toBeLessThan(seen.indexOf("Reject…"));
+    // Advanced is the last thing, under the bar.
+    expect(seen.indexOf("Advanced")).toBeGreaterThan(seen.indexOf("Reject…"));
+    expect(seen.indexOf("Advanced")).toBeGreaterThan(
+      seen.indexOf("recorded in the Audit log")
+    );
   });
 });

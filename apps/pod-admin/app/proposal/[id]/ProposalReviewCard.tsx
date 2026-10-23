@@ -13,8 +13,8 @@
  *         app's access lines);
  *       why (the policy as a mark + its sentence, the proposer's own words);
  *       what approving does (undoable or not, as a mark);
- *       Advanced (ids + raw request), collapsed, last;
- *       the decision bar, pinned to the bottom, with who decides.
+ *       the decision bar, pinned to the bottom, with who decides;
+ *       Advanced (ids + raw request), collapsed, last.
  *
  * This file owns provenance and the ONE "Advanced". Hosts draw only their
  * frame: the page its card header, the drawer its title. Before 2026-10-23
@@ -43,6 +43,7 @@ import { resolveServiceMark } from "@synap-core/types/service-marks";
 import {
   resolveObjectNoun,
   resolveProvenanceLabel,
+  resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
 import { openIn, type Exit } from "../../../lib/open-in";
 import {
@@ -443,11 +444,13 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
 
 // ─── The decision ────────────────────────────────────────────────────────────
 
-/** Terminal-state payoff — mirrors the `Outcome` pattern in ApproveForm.tsx. */
+/**
+ * Terminal-state payoff — mirrors the `Outcome` pattern in ApproveForm.tsx.
+ * Its title is the status's own label, from the vocabulary door.
+ */
 function terminalOutcome(status: string): {
   tone: "success" | "danger" | "muted";
   icon: ReactNode;
-  title: string;
   message: string;
 } {
   switch (status) {
@@ -455,35 +458,30 @@ function terminalOutcome(status: string): {
       return {
         tone: "success",
         icon: <Check className="h-6 w-6" strokeWidth={2.2} />,
-        title: "Approved",
         message: "You approved this change — it's now in your pod.",
       };
     case "auto_approved":
       return {
         tone: "success",
         icon: <Check className="h-6 w-6" strokeWidth={2.2} />,
-        title: "Auto-approved",
         message: "This matched an auto-approve rule and is already applied.",
       };
     case "rejected":
       return {
         tone: "danger",
         icon: <X className="h-6 w-6" strokeWidth={2.2} />,
-        title: "Rejected",
         message: "You rejected this — the agent was told why.",
       };
     case "reverted":
       return {
         tone: "muted",
         icon: <X className="h-6 w-6" strokeWidth={2.2} />,
-        title: "Reverted",
         message: "This change was undone after it was applied.",
       };
     default:
       return {
         tone: "muted",
         icon: <X className="h-6 w-6" strokeWidth={2.2} />,
-        title: "Withdrawn",
         message: "The agent withdrew this proposal — nothing was applied.",
       };
   }
@@ -519,7 +517,7 @@ function Outcome({ status }: { status: string }) {
       </span>
       <div className="flex flex-col">
         <span className="text-[15px] font-medium text-foreground">
-          {o.title}
+          {resolveStatusLabel(status)}
         </span>
         <span className="text-[13px] leading-relaxed text-foreground/60">
           {o.message}
@@ -789,16 +787,6 @@ export function ProposalReviewBody({
         </div>
       )}
 
-      {/* The ONE Advanced: ids and the raw request, collapsed, last. */}
-      <AdvancedPanel
-        ids={[
-          { label: "Proposal id", value: p.id },
-          { label: "Change", value: `${p.targetType} · ${p.proposalType}` },
-          ...(p.targetId ? [{ label: "Target id", value: p.targetId }] : []),
-        ]}
-        raw={p.request}
-      />
-
       <div
         data-review-decision=""
         className={`flex flex-col gap-2 border-t border-foreground/[0.06] ${
@@ -812,6 +800,17 @@ export function ProposalReviewBody({
         )}
         <WhoDecides identity={identity} />
       </div>
+
+      {/* The ONE Advanced: ids and the raw request, collapsed, under the
+          decision — the reader decides on the change, not on the JSON. */}
+      <AdvancedPanel
+        ids={[
+          { label: "Proposal id", value: p.id },
+          { label: "Change", value: `${p.targetType} · ${p.proposalType}` },
+          ...(p.targetId ? [{ label: "Target id", value: p.targetId }] : []),
+        ]}
+        raw={p.request}
+      />
     </div>
   );
 }

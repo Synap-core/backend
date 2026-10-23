@@ -233,7 +233,7 @@ function TrustSignals({
     <dl className="flex flex-col gap-3">
       {rows.map(([label, value]) => (
         <div key={label} className="flex flex-col gap-0.5">
-          <dt className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/65">
+          <dt className="text-[12px] font-medium text-foreground/65">
             {label}
           </dt>
           <dd className="text-[13px] leading-relaxed text-foreground/85">
