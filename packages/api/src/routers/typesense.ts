@@ -14,6 +14,7 @@ import {
 import { getBoss } from "@synap/jobs";
 import { db, eq, and } from "@synap/database";
 import { workspaceMembers } from "@synap/database/schema";
+import { withoutUnlistableEntityHits } from "../services/retrieval/listable-search-hits.js";
 
 export const typesenseRouter = router({
   /**
@@ -42,7 +43,8 @@ export const typesenseRouter = router({
     )
     .query(async ({ input, ctx }) => {
       try {
-        return await searchService.search({
+        // THE listing rule over raw hits (probe + demo rows): relay search.
+        const response = await searchService.search({
           query: input.query,
           userId: ctx.userId,
           workspaceId: input.workspaceId,
@@ -57,6 +59,7 @@ export const typesenseRouter = router({
           prefix: input.prefix,
           facetBy: input.facetBy,
         });
+        return await withoutUnlistableEntityHits(response);
       } catch (error: any) {
         const message =
           error?.message ||
@@ -97,7 +100,7 @@ export const typesenseRouter = router({
     )
     .query(async ({ input, ctx }) => {
       try {
-        return await searchService.searchCollection(
+        const response = await searchService.searchCollection(
           input.collection,
           input.query,
           {
@@ -114,6 +117,8 @@ export const typesenseRouter = router({
             facetBy: input.facetBy,
           }
         );
+        // THE listing rule over raw hits (no-op for non-entity collections).
+        return await withoutUnlistableEntityHits(response);
       } catch (error: any) {
         const message =
           error?.message ||

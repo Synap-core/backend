@@ -128,6 +128,8 @@ describe("Hub PATCH — server-owned session metadata is never the caller's", ()
         governance: { forceProposeWrites: false },
         clientKey: "key:someone-else",
         automationChainContext: { depth: 0 },
+        // B8: an agent resetting this would make a run continue itself forever.
+        runTurns: { runId: "r", stops: 0, autoContinues: 0, turns: [] },
         run: { version: 1, sourceDocumentIds: ["forged"] },
       },
     });
@@ -145,6 +147,24 @@ describe("Hub PATCH — server-owned session metadata is never the caller's", ()
           version: 1,
           sourceDocumentIds: ["someone-elses-document"],
           rerun: { parentSessionId: SESSION_ID, mode: "replay" },
+        },
+        note: "kept",
+      },
+    });
+    expect((h.gated[0]!.data as Record<string, unknown>).metadata).toEqual({
+      note: "kept",
+    });
+    expect(mergedMetadata()).toEqual({ note: "kept" });
+  });
+
+  it("a forged triage receipt is dropped: only the person's accept stamps it", async () => {
+    // An agent stamping `triage.acceptedAt` made Accept answer `not_pending`,
+    // so a held run could never start (FB1020 re-review, B6).
+    await patch({
+      metadata: {
+        triage: {
+          acceptedAt: "2026-10-21T00:00:00.000Z",
+          acceptedBy: AGENT_ID,
         },
         note: "kept",
       },

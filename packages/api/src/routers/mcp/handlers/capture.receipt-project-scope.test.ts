@@ -152,11 +152,19 @@ describe("MCP capture receipts: derived scope before a write, stored scope after
   });
 
   it("placement itself is untouched — the pin is still what the write receives", () => {
-    expect(src).toContain(
-      "...(captureProjectId ? { projectId: captureProjectId } : {})"
+    // BOTH writes forward the one pin: the graph lane's submit and the text
+    // lane's execute. Since B9e the text lane forwards `captureProjectId` too
+    // (it spread `args.projectId` directly, and dropped a project NAME
+    // silently); an explicit `projectId` is still what that value is first.
+    expect(
+      src.match(
+        /\.\.\.\(captureProjectId \? \{ projectId: captureProjectId \} : \{\}\)/g
+      ) ?? []
+    ).toHaveLength(2);
+    expect(src).toMatch(
+      /const captureProjectId =\s*typeof args\.projectId === "string" && args\.projectId\s*\?\s*args\.projectId\b/
     );
-    expect(src).toContain(
-      "...(args.projectId ? { projectId: args.projectId as string } : {})"
-    );
+    // No write reads the raw arg around the pin's one derivation.
+    expect(src).not.toContain("...(args.projectId ?");
   });
 });

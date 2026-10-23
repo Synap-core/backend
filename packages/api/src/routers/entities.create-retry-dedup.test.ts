@@ -100,7 +100,12 @@ describe.skipIf(!dbAvailable)(
         .values({
           id: AGENT_USER,
           email: "retry-dedup-agent@test.synap",
-          userType: "ai",
+          // A real agent principal: the gate's agent ladder (and so the
+          // duplicate floor) reads `user_type = 'agent'`; an "ai" row is
+          // "not-agent" and its `source: "agent"` write is simply granted.
+          userType: "agent",
+          agentType: "claude-code",
+          createdByUserId: USER,
         })
         .onConflictDoNothing();
 
@@ -179,27 +184,30 @@ describe.skipIf(!dbAvailable)(
       expect(rows.length).toBe(1);
     });
 
-    // The exact retry answers before the same-name gate (founder decision
-    // 2026-10-22). A NEAR retry must not ride that: it still meets the gate.
-    it("a NEAR retry (a different body) still meets the same-name CONFLICT", async () => {
+    // The exact retry answers before the duplicate floor (founder decision
+    // 2026-10-22). A NEAR retry must not ride that: it still meets the floor,
+    // which files an agent's possible twin as a proposal (FB1020 B2c).
+    it("a NEAR retry (a different body) still meets the duplicate floor", async () => {
       const caller = entitiesRouter.createCaller({
         authenticated: true,
         userId: USER,
         workspaceId: WS,
       } as never);
-      await expect(
-        caller.create({
-          profileSlug: "note",
-          title: TITLE,
-          properties: { content: "not the same body" },
-          targetWorkspaceId: WS,
-          agentUserId: AGENT_USER,
-          source: "agent",
-        })
-      ).rejects.toMatchObject({ code: "CONFLICT" });
+      const near = await caller.create({
+        profileSlug: "note",
+        title: TITLE,
+        properties: { content: "not the same body" },
+        targetWorkspaceId: WS,
+        agentUserId: AGENT_USER,
+        source: "agent",
+      });
+      expect(near.status).toBe("proposed");
+      expect((near as { ackState?: string }).ackState).not.toBe(
+        "duplicate-ignored"
+      );
     });
 
-    it("an identical write OUTSIDE the idempotency window still meets the same-name CONFLICT", async () => {
+    it("an identical write OUTSIDE the idempotency window still meets the duplicate floor", async () => {
       // Age the earlier write past the window: it is no longer a retry.
       await db
         .update(entities)
@@ -212,16 +220,18 @@ describe.skipIf(!dbAvailable)(
         userId: USER,
         workspaceId: WS,
       } as never);
-      await expect(
-        caller.create({
-          profileSlug: "note",
-          title: TITLE,
-          properties: { content: "same body" },
-          targetWorkspaceId: WS,
-          agentUserId: AGENT_USER,
-          source: "agent",
-        })
-      ).rejects.toMatchObject({ code: "CONFLICT" });
+      const late = await caller.create({
+        profileSlug: "note",
+        title: TITLE,
+        properties: { content: "same body" },
+        targetWorkspaceId: WS,
+        agentUserId: AGENT_USER,
+        source: "agent",
+      });
+      expect(late.status).toBe("proposed");
+      expect((late as { ackState?: string }).ackState).not.toBe(
+        "duplicate-ignored"
+      );
     });
 
     it("a genuinely different write is NOT deduped — creates a second row", async () => {
@@ -231,16 +241,15 @@ describe.skipIf(!dbAvailable)(
         workspaceId: WS,
       } as never);
 
-      // Same title, different body: the weak same-name gate refuses it unless
-      // the agent says it is a different subject (forceCreate).
+      // A different subject (no twin: another title, another body) lands.
+      // The same title with another body is the NEAR retry above: a proposal.
       const different = await caller.create({
         profileSlug: "note",
-        title: TITLE,
+        title: `${TITLE} (another)`,
         properties: { content: "a completely different body" },
         targetWorkspaceId: WS,
         agentUserId: AGENT_USER,
         source: "agent",
-        forceCreate: true,
       });
       expect(different.status).toBe("created");
       expect((different as { ackState?: string }).ackState).not.toBe(
@@ -250,7 +259,7 @@ describe.skipIf(!dbAvailable)(
       const rows = await db.query.entities.findMany({
         where: and(
           eq(entities.workspaceId, WS),
-          eq(entities.title, TITLE),
+          eq(entities.type, "note"),
           isNull(entities.deletedAt)
         ),
       });
@@ -272,16 +281,15 @@ describe.skipIf(!dbAvailable)(
         targetWorkspaceId: WS,
         source: "user",
       });
-      // The weak same-name gate refuses an identical title loudly (CONFLICT);
-      // a person who insists passes forceCreate — and still gets a second
-      // row, never the agent retry path's silent duplicate-ignored.
+      // A person's same-name create is never blocked (FB1020 B2e): it lands,
+      // warned, as a second row — never the agent retry path's silent
+      // duplicate-ignored.
       const secondHuman = await caller.create({
         profileSlug: "note",
         title: humanTitle,
         properties: { content: "human body" },
         targetWorkspaceId: WS,
         source: "user",
-        forceCreate: true,
       });
       expect(firstHuman.id).not.toBe(secondHuman.id);
 

@@ -1,9 +1,9 @@
 /**
  * TRIPWIRE — every tool a skill teaches resolves to a door, or is classified.
  *
- * Skills are served to agents on three doors (pod MCP, claude.ai connector,
- * Raycast). A token that names no pod tool renders verbatim on all of them — the
- * agent reads "call frob_widget" and dead-ends. So every taught token must either
+ * Skills are served to agents on two doors (pod MCP, claude.ai connector). A
+ * token that names no pod tool renders verbatim on both of them — the agent
+ * reads "call frob_widget" and dead-ends. So every taught token must either
  * resolve to a pod MCP tool (and from there to each door's name, via
  * `DOOR_TOOL_NAMES`) or be deliberately classified in `door-tool-render.ts` as
  * IS-only (with the note it renders) or not-a-door-tool (with what it really is).
@@ -141,7 +141,6 @@ describe("tripwire: taught tool tokens resolve to a door", () => {
     expect(rows.filter((r) => r["cp-connector"]).length).toBeGreaterThanOrEqual(
       30
     );
-    expect(rows.filter((r) => r.raycast).length).toBeGreaterThanOrEqual(20);
     for (const [token] of taught) {
       const pod = resolveTaughtToolToken(token);
       if (pod) expect(DOOR_TOOL_NAMES[pod]!["pod-mcp"], token).toBe(pod);

@@ -52,6 +52,7 @@ import {
   and,
   inArray,
   drizzleSql,
+  callingKeyAttribution,
 } from "@synap/database";
 import { users } from "@synap/database/schema";
 import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
@@ -515,6 +516,9 @@ async function recordAutomationAutoApproveReceipt(opts: {
       projectId: projectId ?? undefined,
       stepRunId: opts.stepRunId ?? undefined,
       nodeId: opts.nodeId ?? undefined,
+      // KEY ATTRIBUTION (0346). A run executes outside any key request, so
+      // this is `{}` today; spread here so the one rule holds at every door.
+      ...callingKeyAttribution(),
     });
     receiptedRuns.add(automationRunId);
     if (receiptedRuns.size > RECEIPTED_RUNS_MAX) {

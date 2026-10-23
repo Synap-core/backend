@@ -1052,6 +1052,9 @@ export const sessionHandlers: McpHandlerMap = {
       currentStage: args.currentStage as string | undefined,
       addOutput: slots.addOutput,
       completeOutput: args.completeOutput as string | undefined,
+      ...(typeof args.retireOutput === "string"
+        ? { retireOutput: args.retireOutput }
+        : {}),
       addAgentId: args.addAgentId as string | undefined,
       // NARROWED, not cast: this field has THREE meanings on the wire and a
       // blanket cast collapses two of them. `undefined` leaves the anchor,
@@ -1137,7 +1140,12 @@ export const sessionHandlers: McpHandlerMap = {
           ...blockersNotApplied,
         });
       case "denied":
-        return ok({ error: result.reason, ...blockersNotApplied });
+        // A filing the pod applied on its own receipt still landed.
+        return ok({
+          error: result.reason,
+          ...(result.filing ? { filing: result.filing } : {}),
+          ...blockersNotApplied,
+        });
       case "proposed":
         return ok({
           ...(await applyBlockerEdits()),
@@ -1174,6 +1182,7 @@ export const sessionHandlers: McpHandlerMap = {
           ...(await applyBlockerEdits()),
           status: "updated",
           session: result.session,
+          ...(result.retireOutput ? { retireOutput: result.retireOutput } : {}),
           ...(result.completeOutput
             ? { completeOutput: result.completeOutput }
             : {}),

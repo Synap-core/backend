@@ -31,7 +31,8 @@
   "dependencies": {
     "@synap-core/types": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "yjs": "^13.0.0"
+    "yjs": "^13.0.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@microsoft/api-extractor": "^7.55.2",

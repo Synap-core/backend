@@ -1816,6 +1816,8 @@ export const OUTPUT_RETIRED_REASON_LABELS: Readonly<Record<string, string>> = {
    * (accepted / rejected / superseded), so the question is moot.
    */
   decision_resolved: "Decided elsewhere",
+  /** The agent withdrew a deliverable it had declared (`retireOutput`). */
+  withdrawn: "Withdrawn",
 };
 
 /** The human label for a retired reason; unknown values humanize, never leak. */
@@ -2300,6 +2302,7 @@ export const GOVERNANCE_RUNG_LABELS: Readonly<Record<GovernanceRung, string>> =
     "force-propose": "A change of scope or identity",
     "project-filing": "Filing into a project",
     "criteria-change": "Changing its own criteria",
+    "possible-duplicate": "Looks like an existing one",
     "pod-admin-schema-change": "A pod-wide schema change",
     "agent-schema-definition": "Defining a new kind",
     "agent-structure-write": "Changing how the pod works",

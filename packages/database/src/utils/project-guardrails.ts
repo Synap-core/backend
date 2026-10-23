@@ -8,7 +8,9 @@
  * three creation doors (tRPC / hub-rest / mcp) and the ProjectRepository insert:
  *
  *   - normalized-name dedup: exact-normalized match ⇒ idempotent reuse; near
- *     match (token-set Jaccard ≥ NEAR_MATCH_THRESHOLD) ⇒ surface candidates.
+ *     match (token-set Jaccard ≥ NEAR_MATCH_THRESHOLD) ⇒ a candidate the one
+ *     duplicate door (`findDuplicateCandidates`, @synap/api) puts on the
+ *     proposal for the reviewer — never a refusal (FB1020 B2).
  *   - provenance: every create stamps who/where it came from into metadata.
  *   - evidence gravity: an agent-initiated project needs ≥ MIN_EVIDENCE_ENTITIES
  *     existing, caller-visible entities as evidence, or it is rejected.
@@ -196,19 +198,6 @@ export function assessEvidenceGravity(args: {
       `exist and are visible to you), or store this as an entity (task/plan/note) instead.` +
       candidateHint,
   };
-}
-
-/** Message telling an agent to reuse a near-duplicate rather than create anew. */
-export function buildNearMatchMessage(near: ProjectDedupCandidate[]): string {
-  const list = near
-    .slice(0, 3)
-    .map((c) => `${c.name} (${c.id})`)
-    .join(", ");
-  return (
-    `A very similar project already exists: ${list}. Reuse it (file entities into ` +
-    `that project) instead of creating a near-duplicate. If this initiative is ` +
-    `genuinely distinct, choose a clearly different name.`
-  );
 }
 
 // ── DB-backed dedup lookup ────────────────────────────────────────────────────

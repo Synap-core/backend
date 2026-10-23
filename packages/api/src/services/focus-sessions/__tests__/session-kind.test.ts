@@ -195,7 +195,14 @@ describe("ambient attribution files writes under the PERSON's session", () => {
    * the gate green. They are listed together here because the pair IS the
    * population; there is no glob that names "an ambient resolver".
    */
-  const RESOLVERS: Array<{ file: string; fn: string }> = [
+  /**
+   * `via`: the resolver narrows through a named predicate it `.where(…)`s,
+   * and the narrowing is asserted in THAT predicate's body. B4 (2026-10-21)
+   * moved the rung-3 population into `unclaimedOpenWorkWhere`, shared by the
+   * list (which picks the session) and its exact count (which decides
+   * "several ⇒ no guess") — so both are listed, and both must use it.
+   */
+  const RESOLVERS: Array<{ file: string; fn: string; via?: string }> = [
     {
       file: "../../../routers/mcp/handlers/shared.ts",
       fn: "export async function listOpenFocusSessions",
@@ -203,10 +210,19 @@ describe("ambient attribution files writes under the PERSON's session", () => {
     {
       file: "../resolve-work-session.ts",
       fn: "export async function listUnclaimedOpenWorkSessions",
+      via: "unclaimedOpenWorkWhere",
+    },
+    {
+      file: "../resolve-work-session.ts",
+      fn: "export async function countUnclaimedOpenWorkSessions",
+      via: "unclaimedOpenWorkWhere",
     },
   ];
 
-  const bodyOf = (file: string, fn: string): string => {
+  /** The end of a top-level function (prettier closes it at column 0). */
+  const FN_END = "\n}\n";
+
+  const bodyOf = (file: string, fn: string, end = ".orderBy("): string => {
     const here = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(join(here, file), "utf8");
     const at = src.indexOf(fn);
@@ -214,24 +230,32 @@ describe("ambient attribution files writes under the PERSON's session", () => {
     // an empty string, and `toContain` on "" fails for the wrong reason.
     expect(at, `${fn} not found in ${file}`).toBeGreaterThan(-1);
     const rest = src.slice(at);
-    const cut = rest.indexOf(".orderBy(");
-    expect(cut, `no .orderBy( after ${fn}`).toBeGreaterThan(-1);
+    const cut = rest.indexOf(end);
+    expect(cut, `no ${JSON.stringify(end)} after ${fn}`).toBeGreaterThan(-1);
     return rest.slice(0, cut);
   };
 
-  it.each(RESOLVERS)("$fn narrows with ambientWorkWhere()", ({ file, fn }) => {
-    // Which session an agent's unaddressed write is FILED UNDER is decided
-    // here. An open automation run or receipt is often the newest open
-    // session (the 08:00 crons), and attributing a write to it is exactly
-    // the mis-grouping this guards — while a session the person opened and
-    // THEN attached to a playbook reads `run` too, and is where their
-    // writes belong. One predicate owns both facts.
-    const body = bodyOf(file, fn);
-    expect(body).toContain("ambientWorkWhere()");
-    // The work-only narrowing is the defect, not a synonym: it excluded the
-    // followed session. Assert it is GONE, so a revert cannot pass quietly.
-    expect(body).not.toContain('sessionKindWhere("work")');
-  });
+  it.each(RESOLVERS)(
+    "$fn narrows with ambientWorkWhere()",
+    ({ file, fn, via }) => {
+      // Which session an agent's unaddressed write is FILED UNDER is decided
+      // here. An open automation run or receipt is often the newest open
+      // session (the 08:00 crons), and attributing a write to it is exactly
+      // the mis-grouping this guards — while a session the person opened and
+      // THEN attached to a playbook reads `run` too, and is where their
+      // writes belong. One predicate owns both facts.
+      const body = bodyOf(file, fn, via ? FN_END : ".orderBy(");
+      // Through a named predicate: the resolver must actually filter by it,
+      // and the predicate must carry the narrowing.
+      if (via) expect(body).toContain(`.where(${via}(`);
+      const narrowing = via ? bodyOf(file, `function ${via}(`, FN_END) : body;
+      expect(narrowing).toContain("ambientWorkWhere()");
+      // The work-only narrowing is the defect, not a synonym: it excluded the
+      // followed session. Assert it is GONE, so a revert cannot pass quietly.
+      expect(narrowing).not.toContain('sessionKindWhere("work")');
+      expect(body).not.toContain('sessionKindWhere("work")');
+    }
+  );
 
   it("SELF-CHECK: the scan can still see what it hunts", () => {
     // A locator that silently matches nothing passes every assertion after

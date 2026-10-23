@@ -4,13 +4,14 @@
  * Skills are authored once (`synap-backend/skills/**`) and name tools in three
  * spellings: the pod MCP name (`synap_define_kind`), a bare stem (`define_kind`),
  * or an IS tool name (`search_unified`, `generate_widget`). Served verbatim, an
- * agent on Raycast reads "call synap_define_kind" and dead-ends. This module
+ * agent on the claude.ai connector reads "call synap_define_kind" and dead-ends
+ * (it only has `pod__define_kind`). This module
  * rewrites every taught tool token to the name the SERVING door exposes, and marks
  * the ones the door lacks with a closing note — the source text is never changed.
  *
  * ONE name table: token → pod tool resolves through `MCP_TOOL_TEACHING_KEYS`
  * (`tool-verb-aliases.ts`, the existing bridge, read in reverse) and pod tool →
- * door name through `DOOR_TOOL_NAMES` (generated from the three door manifests).
+ * door name through `DOOR_TOOL_NAMES` (generated from the two door manifests).
  * The tripwire `__tripwires__/skill-tool-tokens-resolve.test.ts` proves every
  * token taught by a skill file resolves here or is classified below.
  */
@@ -77,7 +78,6 @@ export const NOT_A_DOOR_TOOL_TOKENS: Record<string, string> = {
 const DOOR_LABEL: Record<SkillDoor, string> = {
   "pod-mcp": "Synap MCP",
   "cp-connector": "claude.ai Synap connector",
-  raycast: "Raycast",
 };
 
 /** The pod MCP tool a taught token names, or `null` when it names none. */
@@ -135,21 +135,16 @@ function rewriteTokens(
   });
 }
 
-/** Agent types whose door renames tools. Sources cited per entry. */
-const CP_CONNECTOR_AGENT_TYPE = "claude-web"; // mcp-redeem.ts owner floor, api-keys.ts z.literal
-const RAYCAST_AGENT_TYPE = "raycast"; // setup.ts SURFACE_AGENT_TYPES; `synap connect --target=raycast`
+/** The agent type whose door renames tools (mcp-redeem.ts owner floor, api-keys.ts z.literal). */
+const CP_CONNECTOR_AGENT_TYPE = "claude-web";
 
 /**
- * Which door is serving, from the transport and the acting agent's `agentType`.
- * `/mcp` always has a door (pod MCP unless the key is the CP connector's). A hub
- * REST caller is only rendered for when it is Raycast; every other REST consumer
- * (the IS, the CLI, scripts) keeps the source text — `null`.
+ * Which `/mcp` door is serving, from the acting agent's `agentType`: the CP
+ * connector's key reads `pod__*` names, every other agent the pod's own names.
+ * Hub REST callers (the IS, the CLI, Raycast commands, scripts) read the source
+ * text and never come here — the Raycast REST door that renamed tools for the
+ * extension's own AI tools was retired with them (2026-10-21, decision B1).
  */
-export function skillDoorFor(
-  transport: "mcp" | "hub",
-  agentType: string | null | undefined
-): SkillDoor | null {
-  if (transport === "mcp")
-    return agentType === CP_CONNECTOR_AGENT_TYPE ? "cp-connector" : "pod-mcp";
-  return agentType === RAYCAST_AGENT_TYPE ? "raycast" : null;
+export function skillDoorFor(agentType: string | null | undefined): SkillDoor {
+  return agentType === CP_CONNECTOR_AGENT_TYPE ? "cp-connector" : "pod-mcp";
 }

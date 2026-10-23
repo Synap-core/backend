@@ -64,8 +64,13 @@ export interface IdentityUpdatePatch {
   source: "system";
 }
 
+/**
+ * `keepBoth` — the reviewer chose `separate`: the caller creates anyway
+ * (`approvalDuplicate: "keep_both"`). Otherwise the receipt of the verb that
+ * updated or linked `existingEntityId`.
+ */
 export type IdentityApplication =
-  { forceCreate: true } | { forceCreate: false; receipt: IdentityReceipt };
+  { keepBoth: true } | { keepBoth: false; receipt: IdentityReceipt };
 
 /** fill_empty / keep_existing / use_capture need a target. separate does not. */
 export function assertIdentityResolutionTarget(
@@ -327,8 +332,9 @@ export async function applyIdentityResolution(args: {
   update: (patch: IdentityUpdatePatch) => Promise<unknown>;
 }): Promise<IdentityApplication> {
   if (args.resolution.verb === "separate") {
-    // The only bypass of the weak same-name gate. Caller passes forceCreate.
-    return { forceCreate: true };
+    // The reviewer's "keep both": the caller creates with
+    // `approvalDuplicate: "keep_both"`, the only way past a same-name twin.
+    return { keepBoth: true };
   }
   assertIdentityResolutionTarget(args.resolution);
   const id = args.resolution.existingEntityId as string;
@@ -349,7 +355,7 @@ export async function applyIdentityResolution(args: {
 
   if (args.resolution.verb === "keep_existing") {
     return {
-      forceCreate: false,
+      keepBoth: false,
       receipt: { verb: "keep_existing", entityId: id },
     };
   }
@@ -379,5 +385,5 @@ export async function applyIdentityResolution(args: {
     receipt.filled = plan.filled;
     receipt.conflicts = plan.conflicts;
   }
-  return { forceCreate: false, receipt };
+  return { keepBoth: false, receipt };
 }
