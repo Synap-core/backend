@@ -61,6 +61,10 @@ import { trackRepository } from "../../../services/tracks/track-repo.js";
 import { readListedStepSpaces } from "../../../services/tracks/track-space-grant.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
+import {
+  applyTrackParticipantProposal,
+  registerTrackParticipantExecutors,
+} from "./track-participants.js";
 
 function innerData(proposal: { data: unknown }): Record<string, unknown> {
   return ((proposal.data as Record<string, unknown>)?.data ?? {}) as Record<
@@ -69,7 +73,7 @@ function innerData(proposal: { data: unknown }): Record<string, unknown> {
   >;
 }
 
-async function alreadyApproved(proposalId: string): Promise<boolean> {
+export async function alreadyApproved(proposalId: string): Promise<boolean> {
   const [row] = await db
     .select({ status: proposals.status })
     .from(proposals)
@@ -77,7 +81,7 @@ async function alreadyApproved(proposalId: string): Promise<boolean> {
   return row?.status === ProposalStatus.APPROVED;
 }
 
-async function markApproved(proposalId: string, userId: string) {
+export async function markApproved(proposalId: string, userId: string) {
   await db
     .update(proposals)
     .set({
@@ -90,6 +94,9 @@ async function markApproved(proposalId: string, userId: string) {
 }
 
 export function registerTrackExecutors(): void {
+  // The goal hand-off (`track/assign_agent`, W3) — its own file.
+  registerTrackParticipantExecutors();
+
   registerProposalExecutor({
     key: "track/create",
     async execute({ proposal, userId, input, deps }) {
@@ -190,7 +197,15 @@ export function registerTrackExecutors(): void {
         ownerId: project.workspaceId ? undefined : project.userId,
       });
 
-      if (typeof data.currentStage === "string") {
+      if (data.participant && typeof data.participant === "object") {
+        // WHO IS ON IT (W3): an agent's participant change, re-checked with
+        // the APPROVER as the deciding person (`track-participants.ts`).
+        await applyTrackParticipantProposal({
+          track,
+          proposal,
+          approverId: userId,
+        });
+      } else if (typeof data.currentStage === "string") {
         assertStageAdvanceable(track, data.currentStage);
         await applyTrackStageAdvance({
           track,
@@ -304,7 +319,7 @@ export function registerTrackExecutors(): void {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
-            "Track update proposal carries no stage, status, params, direction, kpi, goal content or added stage",
+            "Track update proposal carries no stage, status, params, direction, kpi, goal content, added stage or participant change",
         });
       }
 

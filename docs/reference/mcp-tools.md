@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 98 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 99 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -67,6 +67,7 @@ The pod's MCP server lists 98 tools. A new agent key lists the `entry` tools; th
 | [`synap_advance_track`](#synap_advance_track)                             | Advance track                     | tracks       | no        |
 | [`synap_set_track_status`](#synap_set_track_status)                       | Set track status                  | tracks       | no        |
 | [`synap_reopen_track`](#synap_reopen_track)                               | Reopen track                      | tracks       | no        |
+| [`synap_set_track_participant`](#synap_set_track_participant)             | Set track participant             | tracks       | no        |
 | [`synap_set_track_params`](#synap_set_track_params)                       | Set track params                  | tracks       | no        |
 | [`synap_update_track`](#synap_update_track)                               | Update track                      | tracks       | no        |
 | [`synap_add_track_stage`](#synap_add_track_stage)                         | Add track stage                   | tracks       | no        |
@@ -1032,6 +1033,23 @@ Reopen a CLOSED or DROPPED track as a NEW version — a closed goal is final and
 | `name`      | string | no       | Optional new name for the new version — omit it to keep the old one's (free once that track is not live).                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `reasoning` | string | no       | Why the goal is reopened, in the person's words — shown to the reviewer. One line.                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `sessionId` | string | no       | OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error. |
+
+## synap_set_track_participant
+
+**Set track participant** · Group: `tracks` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
+
+Who is on a goal: one owner (a person), a judge (a person; when none is named the owner judges, and only the judge closes the goal), delegates (people or agents) each with a commitment, and an optional integrator. synap_list_tracks returns each goal's `participants` (id, role, commitment, commitmentState, silentSince). action='add' (owner or judge only) names principalId (a person's user id, or an agent's from synap_list_agents) and role judge | delegate | integrator; a delegate needs `commitment` (what they commit to) — re-adding a delegate asks again with the new commitment. Handing a goal to ANOTHER agent is a hand-off the person approves; adding yourself as a delegate commits you. action='remove' (owner or judge) takes participantId; the owner stays. A delegate answers ONLY their own commitment: 'accept', 'counter' (text = what you would commit to instead), 'decline' (text = why, optional), 'report_impossible' (text = why — only after accepting; this is NOT the goal's verdict, the judge still decides). Never answer for a person. action='acknowledge' is the owner's or judge's act — never yours. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.
+
+| Parameter       | Type   | Required | Description                                                                                                                              |
+| --------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `trackId`       | string | yes      | Track (goal) UUID                                                                                                                        |
+| `action`        | enum   | yes      | What to change. One of: `add`, `remove`, `accept`, `counter`, `decline`, `report_impossible`, `acknowledge`.                             |
+| `principalId`   | string | no       | add: the user id of the person or agent to put on the goal.                                                                              |
+| `role`          | enum   | no       | add: their role (default delegate). One of: `judge`, `delegate`, `integrator`.                                                           |
+| `commitment`    | string | no       | add, for a delegate: what they commit to, in one line.                                                                                   |
+| `participantId` | string | no       | remove / accept / counter / decline / report_impossible / acknowledge: the participant row's id (synap_list_tracks `participants[].id`). |
+| `text`          | string | no       | counter: what you would commit to instead. report_impossible: why it cannot be done. decline: why (optional).                            |
+| `reasoning`     | string | no       | Why — shown to the reviewer. One line.                                                                                                   |
 
 ## synap_set_track_params
 

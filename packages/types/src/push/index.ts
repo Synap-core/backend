@@ -197,6 +197,9 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   // Something you own broke; the fix needs you.
   "agent.task_failed": "work-broke",
   "session.closed.criteria_unmet": "work-broke",
+  // A delegate said part of your goal cannot be done and nobody acknowledged
+  // it for 48 h (R10, W3): the goal's plan broke and waits on the owner.
+  "track.report_unacknowledged": "work-broke",
   "connector.auth.expired": "work-broke",
   // A person addressed you by name.
   "chat.mention": "mention",

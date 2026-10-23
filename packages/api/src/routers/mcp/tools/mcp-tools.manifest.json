@@ -7251,6 +7251,64 @@
       }
     },
     {
+      "name": "synap_set_track_participant",
+      "annotations": {
+        "title": "Set track participant",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Who is on a goal: one owner (a person), a judge (a person; when none is named the owner judges, and only the judge closes the goal), delegates (people or agents) each with a commitment, and an optional integrator. synap_list_tracks returns each goal's `participants` (id, role, commitment, commitmentState, silentSince). action='add' (owner or judge only) names principalId (a person's user id, or an agent's from synap_list_agents) and role judge | delegate | integrator; a delegate needs `commitment` (what they commit to) — re-adding a delegate asks again with the new commitment. Handing a goal to ANOTHER agent is a hand-off the person approves; adding yourself as a delegate commits you. action='remove' (owner or judge) takes participantId; the owner stays. A delegate answers ONLY their own commitment: 'accept', 'counter' (text = what you would commit to instead), 'decline' (text = why, optional), 'report_impossible' (text = why — only after accepting; this is NOT the goal's verdict, the judge still decides). Never answer for a person. action='acknowledge' is the owner's or judge's act — never yours. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "trackId": {
+            "type": "string",
+            "description": "Track (goal) UUID"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "add",
+              "remove",
+              "accept",
+              "counter",
+              "decline",
+              "report_impossible",
+              "acknowledge"
+            ],
+            "description": "What to change."
+          },
+          "principalId": {
+            "type": "string",
+            "description": "add: the user id of the person or agent to put on the goal."
+          },
+          "role": {
+            "type": "string",
+            "enum": ["judge", "delegate", "integrator"],
+            "description": "add: their role (default delegate)."
+          },
+          "commitment": {
+            "type": "string",
+            "description": "add, for a delegate: what they commit to, in one line."
+          },
+          "participantId": {
+            "type": "string",
+            "description": "remove / accept / counter / decline / report_impossible / acknowledge: the participant row's id (synap_list_tracks `participants[].id`)."
+          },
+          "text": {
+            "type": "string",
+            "description": "counter: what you would commit to instead. report_impossible: why it cannot be done. decline: why (optional)."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why — shown to the reviewer. One line."
+          }
+        },
+        "required": ["trackId", "action"]
+      }
+    },
+    {
       "name": "synap_set_track_params",
       "annotations": {
         "title": "Set track params",

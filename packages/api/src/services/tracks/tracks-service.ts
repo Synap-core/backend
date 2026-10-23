@@ -146,12 +146,18 @@ import {
   resolveTrackGoalPatch,
   type TrackGoalFacts,
 } from "./goal-content.js";
+import {
+  assertGoalCloser,
+  loadTrackParticipantViews,
+  seedGoalOwner,
+} from "./track-participant-store.js";
 import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { projectPathConditions } from "../projects/project-path.js";
 import type { CreateFocusSessionParams } from "../focus-sessions/create-session.js";
+import type { TrackParticipant } from "@synap-core/types/units";
 import { REPLACES_LINK_TYPE } from "@synap-core/types/connections";
 import { createLinks } from "../links/links-service.js";
 import { writeDependencyLink } from "../links/dependency-links.js";
@@ -391,6 +397,13 @@ export interface TrackView {
    * `[]` = waiting on nothing; `null` on a write's fallback view.
    */
   waitingOn: WaitingOnMark[] | null;
+  /**
+   * WHO IS ON IT (0346, W3): owner, judge, delegates with their commitment
+   * and its state ("silent since" for a delegate who still owes something),
+   * integrator. Absent when not read (a write's fallback view) — never a
+   * fabricated empty list. Owner first, then judge, delegates, integrator.
+   */
+  participants?: TrackParticipant[];
   createdAt: string;
   updatedAt: string;
 }
@@ -528,7 +541,7 @@ export async function loadTrackViews(
   tracks: ProjectTrack[],
   actor: Pick<TrackActor, "userId">
 ): Promise<TrackView[]> {
-  const [counts, movers, goals] = await Promise.all([
+  const [counts, movers, goals, participants] = await Promise.all([
     countTrackSessionsByStage(tracks, actor.userId),
     loadActorRows(
       tracks.flatMap((t) =>
@@ -536,12 +549,14 @@ export async function loadTrackViews(
       )
     ),
     loadTrackGoalFacts(tracks, actor.userId),
+    loadTrackParticipantViews(tracks),
   ]);
   const actorOf = (id: string) =>
     activityActorOf(id || null, movers.get(id), actor.userId);
-  return tracks.map((t) =>
-    toTrackView(t, counts.get(t.id) ?? {}, actorOf, goals.get(t.id))
-  );
+  return tracks.map((t) => ({
+    ...toTrackView(t, counts.get(t.id) ?? {}, actorOf, goals.get(t.id)),
+    participants: participants.get(t.id) ?? [],
+  }));
 }
 
 /**
@@ -1075,6 +1090,10 @@ export async function startTrack(
   // A concurrent start of ANOTHER method under the same name won the insert.
   if (!created) assertNameHeldBySameMethod(track, playbook);
 
+  // WHO IS ON IT (W3): a goal is born with its owner — the person who started
+  // it (an agent's start is approved by a person, who is `actor.userId` then).
+  if (created) await seedGoalOwner(track, project.userId);
+
   if (created && playbook) {
     // Provenance edge — the same `instantiated_from` shape the proto-track
     // wrote, so every reader of `project --instantiated_from--> playbook`
@@ -1359,7 +1378,7 @@ function trackSpaceGrantMetadata(
 // ── writes on an existing track ─────────────────────────────────────────────
 
 /** Load a track the actor can SEE, and its project, for a write. */
-async function loadTrackForWrite(
+export async function loadTrackForWrite(
   trackId: string,
   actor: TrackActor
 ): Promise<{ track: ProjectTrack; project: GateProject }> {
@@ -1546,6 +1565,9 @@ export async function applyTrackStatus(
   userId: string,
   close: TrackCloseInput = {}
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
+  // Only the goal's JUDGE closes it (W3) — the person acting here, or the
+  // APPROVER on a replay. ONE place: both callers reach the write through it.
+  await assertGoalCloser(track, status, userId);
   const ending = trackStatusCategory(status);
   const terminal = ending === "done" || ending === "lost";
   const verdict = isTrackVerdict(close.verdict) ? close.verdict : null;

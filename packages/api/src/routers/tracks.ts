@@ -38,6 +38,10 @@ import {
 import { readTrackHistory } from "../services/tracks/track-history.js";
 import { trackGoalInputSchema } from "../services/tracks/goal-content.js";
 import { GOAL_ACCEPTANCE_DECISIONS } from "@synap-core/types/units";
+import {
+  changeTrackParticipants,
+  trackParticipantChangeSchema,
+} from "../services/tracks/track-participants.js";
 
 function actorOf(
   ctx: { userId: string; agentUserId?: string | null; isHubProtocol?: boolean },
@@ -324,6 +328,29 @@ export const tracksRouter = router({
         track: await loadWrittenTrackView(result.track, ctx),
       };
     }),
+
+  /**
+   * WHO IS ON A GOAL (W3): add a judge, a delegate (with a commitment) or an
+   * integrator, remove someone (owner or judge only); a delegate answers their
+   * own commitment (accept · counter · decline · report impossible); the owner
+   * or judge acknowledges a report. Returns the goal's participants, or
+   * `proposed` when governance holds it for review.
+   */
+  changeParticipants: podProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        change: trackParticipantChangeSchema,
+        reasoning,
+      })
+    )
+    .mutation(async ({ ctx, input }) =>
+      changeTrackParticipants({
+        trackId: input.id,
+        change: input.change,
+        actor: actorOf(ctx, input.reasoning),
+      })
+    ),
 
   /**
    * Start the session a stage OFFERS (M2) — the ONE door. Idempotent on an

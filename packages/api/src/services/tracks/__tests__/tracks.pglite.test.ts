@@ -153,6 +153,7 @@ import {
   podMembers,
   projectMembers,
   sessionEvaluations,
+  trackParticipants,
 } from "@synap/database";
 import {
   advanceTrackStage,
@@ -254,6 +255,8 @@ beforeAll(async () => {
     podMembers,
     projectMembers,
     sessionEvaluations,
+    // Who is on a goal (0346): `startTrack` seeds the owner row.
+    trackParticipants,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

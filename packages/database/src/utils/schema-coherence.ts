@@ -37,6 +37,7 @@ import { notificationPreferences } from "../schema/notifications.js";
 import { documents } from "../schema/documents.js";
 import { workspaces } from "../schema/workspaces.js";
 import { projectTracks } from "../schema/project-tracks.js";
+import { trackParticipants } from "../schema/track-participants.js";
 import { libraryGroups } from "../schema/library-groups.js";
 
 /**
@@ -2118,6 +2119,69 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "kind_confirmed_at",
     addedBy: "0345_track_goal_content.sql",
   },
+  // 0346 — who is on a goal. `track_participants` is NOT in the baseline (it
+  // references `project_tracks`), so these are its only startup guards; every
+  // track read selects the whole row.
+  {
+    table: "track_participants",
+    column: "principal_kind",
+    addedBy: "0346_track_participants.sql",
+  },
+  {
+    table: "track_participants",
+    column: "principal_id",
+    addedBy: "0346_track_participants.sql",
+  },
+  {
+    table: "track_participants",
+    column: "role",
+    addedBy: "0346_track_participants.sql",
+  },
+  {
+    table: "track_participants",
+    column: "commitment",
+    addedBy: "0346_track_participants.sql",
+  },
+  {
+    table: "track_participants",
+    column: "commitment_state",
+    addedBy: "0346_track_participants.sql",
+  },
+  {
+    table: "track_participants",
+    column: "counter_text",
+    addedBy: "0346_track_participants.sql",
+  },
+  {
+    table: "track_participants",
+    column: "reported_reason",
+    addedBy: "0346_track_participants.sql",
+  },
+  {
+    table: "track_participants",
+    column: "reported_at",
+    addedBy: "0346_track_participants.sql",
+  },
+  {
+    table: "track_participants",
+    column: "acknowledged_at",
+    addedBy: "0346_track_participants.sql",
+  },
+  {
+    table: "track_participants",
+    column: "escalated_at",
+    addedBy: "0346_track_participants.sql",
+  },
+  {
+    table: "track_participants",
+    column: "decided_by",
+    addedBy: "0346_track_participants.sql",
+  },
+  {
+    table: "track_participants",
+    column: "decided_at",
+    addedBy: "0346_track_participants.sql",
+  },
   // 0275 — the document content revision (the ONE content-write door's CAS)
   // and the revision the Yjs cache is known to equal. Every document content
   // write names `content_revision`, so without it every save 500s.
@@ -2335,6 +2399,10 @@ const REQUIRED_INDEX_TABLES = [
   // name on a project"; `TrackRepository.createOrGet` relies on it to turn a
   // concurrent second start into `exists` instead of a twin.
   projectTracks,
+  // Who is on a goal (0346): the owner and judge partial unique indexes ARE
+  // "one owner, at most one judge"; the participant upsert conflicts on
+  // `uniq_track_participants_role`.
+  trackParticipants,
   // The Library (0328): the per-person key unique index IS "one group per
   // key"; the documents read index (declared on `documents` above) pages it.
   libraryGroups,

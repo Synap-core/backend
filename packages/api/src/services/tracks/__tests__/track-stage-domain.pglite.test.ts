@@ -138,6 +138,7 @@ import {
   users,
   links,
   sessionEvaluations,
+  trackParticipants,
 } from "@synap/database";
 import { startStageSession, startTrack } from "../tracks-service.js";
 import { listWorkspacesUsedByProjects } from "../../../utils/project-workspace.js";
@@ -242,6 +243,8 @@ beforeAll(async () => {
     playbooks,
     projects,
     sessionEvaluations,
+    // Who is on a goal (0346): `startTrack` seeds the owner row.
+    trackParticipants,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
