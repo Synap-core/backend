@@ -42,6 +42,18 @@ export const DEV_PLAN_APPROVAL_TYPE = "dev.plan_approval";
 export const DEV_DEPLOY_APPROVAL_TYPE = "dev.deploy_approval";
 
 /**
+ * The LEGACY stage a session sits at once a gate clears — used only when the
+ * session follows no staged playbook that names the gate (`stageAfterDevGate`
+ * decides otherwise). Read by the polling CLI agent as "you may proceed", so
+ * only the approval executor writes it: an agent `currentStage` write naming
+ * one is refused (`gate-bypass-floor.ts`).
+ */
+export const DEV_GATE_LEGACY_STAGES = {
+  [DEV_PLAN_APPROVAL_TYPE]: "plan_approved",
+  [DEV_DEPLOY_APPROVAL_TYPE]: "deploy_approved",
+} as const;
+
+/**
  * THE ONE RULE for where a session stands once a dev gate is approved.
  *
  * A session that FOLLOWS A STAGED PLAYBOOK whose stage WAITS FOR this gate —

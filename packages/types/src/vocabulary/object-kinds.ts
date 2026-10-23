@@ -93,6 +93,8 @@ const AI = "var(--synap-ai)";
 /** Neutral fallback for unknown/untyped objects. */
 export const FALLBACK_COLOR = "var(--synap-muted)";
 export const FALLBACK_ICON = "Box";
+/** The glyph for a kind the registry gives none — one mark, never a per-surface choice. */
+export const FALLBACK_GLYPH = "◆";
 
 /**
  * Deterministic kind → identity slot (1..N). The SAME pattern the chat identity
@@ -127,6 +129,7 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     color: ID(1),
     label: "Task",
     labelPlural: "Tasks",
+    glyph: "☐",
   },
   note: {
     kind: "note",
@@ -210,6 +213,7 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     color: ID(11),
     label: "Code",
     labelPlural: "Code",
+    glyph: "⟨⟩",
   },
   bookmark: {
     kind: "bookmark",
@@ -234,6 +238,28 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     color: ID(8),
     label: "Article",
     labelPlural: "Articles",
+  },
+  // `decision` and `report` are profiles agents produce as session outputs. They
+  // had no entry, so every surface showed the neutral `Box` and a terminal
+  // client kept its own kind → glyph map. Colour = the hash slot the fallback
+  // already gave them, so nothing on screen changes hue.
+  decision: {
+    kind: "decision",
+    category: "entity",
+    icon: "Scale",
+    color: identityToken(identitySlotForKind("decision")),
+    label: "Decision",
+    labelPlural: "Decisions",
+    glyph: "◇",
+  },
+  report: {
+    kind: "report",
+    category: "entity",
+    icon: "ClipboardList",
+    color: identityToken(identitySlotForKind("report")),
+    label: "Report",
+    labelPlural: "Reports",
+    glyph: "▤",
   },
   capture: {
     kind: "capture",
@@ -697,6 +723,20 @@ export function resolveObjectIdentity(
     label: profile.label ?? withLens.label,
     labelPlural: profile.labelPlural ?? withLens.labelPlural,
   };
+}
+
+/**
+ * The compact one-glyph mark for an object kind — for surfaces with no icon
+ * font (a terminal band, a plain-text notification). Aliases resolve first
+ * (`focus_session` → `session`), the same way {@link resolveObjectNoun} does,
+ * so the glyph and the noun always name the same kind. A kind with no glyph
+ * reads {@link FALLBACK_GLYPH}, never an empty string: a reader that had to
+ * supply its own fallback would be a second table.
+ */
+export function resolveObjectGlyph(kind: string | null | undefined): string {
+  const key = (kind ?? "").toString().trim().toLowerCase();
+  const canonical = OBJECT_KIND_ALIASES[key] ?? key;
+  return OBJECT_KINDS[canonical]?.glyph ?? FALLBACK_GLYPH;
 }
 
 /**

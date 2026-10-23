@@ -195,6 +195,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "app_id",
     addedBy: "0310_app_attribution.sql",
   },
+  // proposals — the calling KEY (0346, FB1020 B7). Stamped by every proposal
+  // insert door from the request context, so without the column every
+  // governed key write 42703s.
+  {
+    table: "proposals",
+    column: "api_key_id",
+    addedBy: "0346_proposals_api_key_id.sql",
+  },
   // proposal_cluster_mutes — durable per-pod mute of a rejection SHAPE-cluster
   // (0233). If the table/column is missing, the mute door + the rejected-clusters
   // read's active-mute filter throw. Column check confirms the table exists.
@@ -1733,6 +1741,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0324_lifecycle_transition_outbox.sql",
   },
 
+  // session_runners — who holds a session's change-feed wait (0342). Absence
+  // means every wait named by a conversation would fail its runner stamp
+  // (logged, never fatal) and the runner loader would 42P01.
+  {
+    table: "session_runners",
+    column: "last_seen_at",
+    addedBy: "0342_session_runners.sql",
+  },
+  {
+    table: "session_runners",
+    column: "machine_user_id",
+    addedBy: "0342_session_runners.sql",
+  },
+
   // Kind + Facets Wave 3A (0175): the `_conversions` ledger — mirrors
   // `_migrations` for DATA ops. Absence means a pod is on a pre-0175 schema
   // where the conversion engine's applied-set read would hit a missing table.
@@ -1997,6 +2019,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "projects",
     column: "icon",
     addedBy: "0328_projects_icon.sql",
+  },
+  // A sample (demo) project (0347) — same baseline exemption. Read by the ONE
+  // listing rule `listableEntityWhere`; a missing column 500s every list.
+  {
+    table: "projects",
+    column: "sample",
+    addedBy: "0347_projects_sample.sql",
   },
   // Tracks (0272) — a METHOD running inside a project. `project_tracks` is NOT
   // in the baseline (it references `projects`, which 0151 creates), so this is

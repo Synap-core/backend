@@ -11,6 +11,7 @@ import {
   timestamp,
   jsonb,
   smallint,
+  boolean,
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
@@ -92,6 +93,15 @@ export const projects = pgTable(
      * initials instead.
      */
     icon: text("icon"),
+
+    /**
+     * A SAMPLE (demo) project (0347). Its records — filed into it, or its
+     * subject — are left out of every listing by the ONE listing rule
+     * `listableEntityWhere` (utils/listable-entity.ts), stay readable by id,
+     * and show when the project itself is the lens. A record also filed into
+     * a non-sample project is real. Set through the governed project update.
+     */
+    sample: boolean("sample").notNull().default(false),
 
     // Settings (agent preferences, defaults, etc.)
     settings: jsonb("settings"),

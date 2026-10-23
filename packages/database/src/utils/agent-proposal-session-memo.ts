@@ -12,7 +12,7 @@
  *
  * So the resolution is memoized on the identity that DECIDES it — the same
  * tuple the resolver's own reuse ladder keys on (operator + agent + calling
- * client + stable correlation). Every row of one burst shares that tuple, so the
+ * client + the write's project + stable correlation). Every row of one burst shares that tuple, so the
  * resolver runs ONCE and the remaining rows read the memo. The goal is NOT part
  * of the key: a client's writes group into one session whatever each one does.
  *
@@ -52,6 +52,8 @@ function memoKey(input: ResolveOrCreateAgentProposalSessionInput): string {
     input.userId,
     input.agentUserId,
     resolveClientKey(input),
+    // A receipt is per (client, project) — B4 2026-10-21.
+    input.projectId ?? "",
     input.stableCorrelation && input.correlationId ? input.correlationId : "",
   ].join("|");
 }

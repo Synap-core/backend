@@ -29,7 +29,10 @@ import { recordLinkMutation } from "../links/dependency-links.js";
 import type { ProposalRevertPlan } from "../../routers/proposals/revert.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { syncRelationToPropertyOnDelete } from "../../utils/property-relation-sync.js";
-import { entityFieldApiName } from "../../utils/entity-property-diff.js";
+import {
+  entityBodyChange,
+  entityFieldApiName,
+} from "../../utils/entity-property-diff.js";
 import {
   safeRevert,
   type RevertPass,
@@ -61,6 +64,26 @@ export interface ProposalCreationsRevert {
   skipped: RevertSkip[];
   /** The record minus what was undone — the items still live. */
   remaining: CompleteMaterializedRecord;
+}
+
+/**
+ * The body-link change a diff records, as an undo target: put the previous
+ * body back (B9g), or, on a merge record that linked onto an entity with no
+ * body, take the link off.
+ */
+function entityBodyTargets(diff: EntityPropertyDiff): RevertTarget[] {
+  const body = entityBodyChange(diff);
+  if (!body) return [];
+  return [
+    {
+      kind: "entity_body",
+      entityId: diff.entityId,
+      documentId: body.after,
+      ...(diff.bodyDocumentIdBefore !== undefined
+        ? { previousDocumentId: body.before }
+        : {}),
+    },
+  ];
 }
 
 /** Every row the plan names, as undo targets (document-create ids excluded — see header). */
@@ -98,15 +121,7 @@ export function revertTargetsFromPlan(
           before: diff.fields?.before[field] ?? null,
         })
       ),
-      ...(diff.bodyDocumentId
-        ? [
-            {
-              kind: "entity_body" as const,
-              entityId: diff.entityId,
-              documentId: diff.bodyDocumentId,
-            },
-          ]
-        : []),
+      ...entityBodyTargets(diff),
     ]),
     ...plan.entityIds.map((id) => ({ kind: "entity" as const, id })),
     ...plan.ruleIds.map((id) => ({ kind: "rule" as const, id })),
@@ -274,9 +289,13 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
         diff.fields.after[target.field] = target.after;
         break;
       }
-      case "entity_body":
-        diffFor(target.entityId).bodyDocumentId = target.documentId;
+      case "entity_body": {
+        const diff = diffFor(target.entityId);
+        if (target.documentId) diff.bodyDocumentId = target.documentId;
+        if (target.previousDocumentId !== undefined)
+          diff.bodyDocumentIdBefore = target.previousDocumentId;
         break;
+      }
       case "link":
         record.linkIds.push(target.id);
         break;

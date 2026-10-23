@@ -73,6 +73,11 @@ const FIXTURES: Record<keyof typeof PROPOSE_REASON, AgentPolicyInput> = {
     action: "update",
     criteriaChange: true,
   },
+  POSSIBLE_DUPLICATE: {
+    subjectType: "entity",
+    action: "create",
+    possibleDuplicate: true,
+  },
   DESTRUCTIVE_HARD_FLOOR: {
     subjectType: "entity",
     action: DESTRUCTIVE_ACTIONS[0]!,

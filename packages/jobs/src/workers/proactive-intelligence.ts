@@ -24,6 +24,7 @@ import {
   isNull,
   entities,
   isDelegationHeaders,
+  listableEntityWhere,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 // Type-only: the VALUE side of @synap/intelligence-client is loaded via dynamic
@@ -104,7 +105,9 @@ export async function handleProactiveScan(
         eq(entities.workspaceId, workspaceId),
         eq(entities.type, profileSlug),
         isNull(entities.deletedAt),
-        gte(entities.createdAt, since)
+        gte(entities.createdAt, since),
+        // THE listing rule: probe and demo rows are not scanned for insights.
+        listableEntityWhere()
       )
     )
     .orderBy(desc(entities.createdAt))

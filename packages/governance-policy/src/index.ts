@@ -1013,9 +1013,15 @@ export function findMatchingPattern(
   return patterns.find((pattern) =>
     pattern === REVERSIBLE_CLASS_PATTERN
       ? isReversibleWrite(eventKey)
-      : pattern.endsWith(".*")
-        ? eventKey.startsWith(pattern.slice(0, -1))
-        : eventKey === pattern
+      : // The own-organise class covers a write only when its DOOR proved the
+        // subjects are the agent's own fresh work (`ownWorkOrganise`) — a fact
+        // no list can see. `resolveGovernanceRule` matches it with that fact;
+        // a whitelist or glob naming it matches nothing.
+        pattern === OWN_ORGANISE_CLASS_PATTERN
+        ? false
+        : pattern.endsWith(".*")
+          ? eventKey.startsWith(pattern.slice(0, -1))
+          : eventKey === pattern
   );
 }
 
@@ -1306,6 +1312,17 @@ export interface AgentPolicyInput {
    */
   criteriaChange?: boolean;
   /**
+   * The write CREATES something the one duplicate door
+   * (`findDuplicateCandidates`) found a possible twin of: a same-kind record
+   * or pending proposal with the same name or the same strong identity it
+   * could not merge onto. Same floor as `forcePropose` (rung 2.1), its OWN
+   * reason, `POSSIBLE_DUPLICATE`: the write is filed anyway and the reviewer
+   * decides (keep both, use the existing one, fill its empty fields). Set only
+   * by the door's callers, and only for an agent's write (a person's own
+   * create is warned, never forced). Absent/false → no effect.
+   */
+  possibleDuplicate?: boolean;
+  /**
    * The write MOVES a thing's lifecycle status (work model L2, W14) — set ONLY
    * by the `moveStatus` door (and the create/attach doors for an initial
    * status, `from` null), classified from the declared option it moves INTO:
@@ -1372,6 +1389,23 @@ export interface AgentPolicyInput {
    * false → such a move proposes whatever broader rule matched (fail-closed).
    */
   governanceRuleNamesWrite?: boolean;
+  /**
+   * FB1020 B3 — the write's door PROVED it organises the acting agent's own
+   * fresh work (same key, last 24 h, untouched by a person, a project the
+   * person named — `own-organise.ts` in @synap/database). Honoured only for
+   * {@link OWN_ORGANISE_EVENT_KEYS}; on any other key it fails closed
+   * (propose). The door passes `forcePropose: !ownWorkOrganise`, so the write
+   * reaches the rule store, where ONLY the {@link OWN_ORGANISE_CLASS_PATTERN}
+   * row may widen it (2.8); with no such row it proposes for the same reason
+   * it always did (2.87). Every floor above 2.8 still returns first.
+   */
+  ownWorkOrganise?: boolean;
+  /**
+   * The rule behind `governanceRuleVerdict` is the own-organise class row
+   * (resolved by `resolveGovernanceRule`). Read ONLY with `ownWorkOrganise`:
+   * an `auto` from any other row never widens an organise write.
+   */
+  governanceRuleIsOwnOrganise?: boolean;
   /**
    * Server-resolved TRUST of the acting channel's ORIGIN — the #4
    * instruction-provenance signal, consumed at rung 2.55. `"untrusted"` for an
@@ -1471,44 +1505,48 @@ export type AgentPolicyVerdict =
   | { verdict: "propose"; reason?: string; reasonCode?: string }
   | { verdict: "deny"; reason: string };
 
-/** Default reasoning strings (kept identical to the prior inline gate strings). */
+/**
+ * The sentence a person reads for each reason code, written for them: what
+ * will happen and why, in one sentence. Mirrored in `@synap-core/types`
+ * (`GOVERNANCE_POLICY_SENTENCES`); a tripwire keeps the two equal.
+ */
 export const PROPOSE_REASON = {
-  ADMIN: "Administrative action requires human approval.",
-  WRITES_REQUIRE_PROPOSAL: "Agent requires proposal for all write operations.",
+  ADMIN: "This changes how your pod is run, so it waits for you.",
+  WRITES_REQUIRE_PROPOSAL: "This agent asks before every change.",
   AGENT_OWNED_DESTRUCTIVE:
-    "Destructive action in agent-owned workspace requires human approval.",
+    "This removes something from an agent's workspace, so it waits for you.",
   CHANNEL_PROPOSE:
-    "Teammate may propose in this channel; write requires human approval.",
+    "In this channel a teammate can suggest changes, but only you can apply them.",
   USER_OBSERVATION_INFERENCE:
-    "AI-inferred observation about the user requires human validation before it is stored.",
-  CAPABILITY_PROPOSE: "Capability execution requires human approval.",
+    "The AI guessed this about you, so it is only saved if you confirm it.",
+  CAPABILITY_PROPOSE: "Running this tool needs your OK first.",
   SCOPE_IDENTITY_CHANGE:
-    "This change alters the record's scope or identity and requires human approval.",
+    "This changes what the record is or where it shows, so it waits for you.",
   PROJECT_FILING:
-    "Filing these records into a project shows them to the project's members, so a person approves it.",
+    "Filing these into a project shows them to its members, so you approve it.",
   CRITERIA_CHANGE:
-    "An agent is changing the acceptance criteria its own work is graded against; a person must approve them.",
+    "An agent wants to change the criteria its own work is checked against, so you decide.",
+  POSSIBLE_DUPLICATE:
+    "This looks like something you already have or that is already waiting for review, so you decide whether to keep both.",
   DESTRUCTIVE_HARD_FLOOR:
-    "Destructive action (delete/archive/purge/merge) always requires human approval.",
-  GOVERNANCE_RULE: "Matched a governance rule requiring human approval.",
+    "This deletes, archives, purges or merges something, so it always waits for you.",
+  GOVERNANCE_RULE: "One of your rules says to ask you first.",
   UNTRUSTED_ORIGIN:
-    "This write originates from an untrusted channel (external / bridge) and requires human approval before it is applied.",
+    "This came from outside, such as an external app or a bridge, so nothing is applied until you approve it.",
   DAILY_WRITE_CEILING:
-    "This agent has reached its daily auto-execute write ceiling; further writes require human approval today.",
-  HUMAN_GATE:
-    "This is a human gate — a person must approve it, and no governance rule can widen it.",
+    "This agent used up today's automatic writes, so the rest wait for you.",
+  HUMAN_GATE: "This is a decision only you can make, and no rule can skip it.",
   ARBITRARY_EXECUTION:
-    "This runs an arbitrary shell command inside the pod's API container and always requires human approval; no governance rule can widen it.",
+    "This runs a shell command on your pod, so it always waits for you.",
   POD_ADMIN_SCHEMA_CHANGE:
-    "This adds a required field or a default to a system kind, which changes every workspace at once; a pod admin must approve it.",
+    "This adds a required field or a default to a built-in kind and changes every workspace, so a pod admin must approve it.",
   AGENT_SCHEMA_DEFINITION:
-    "An agent is defining a new kind or role, which changes what the pod can hold; a person must approve it, and no governance rule can widen it.",
-  HUMAN_ONLY_STATUS:
-    "Only a person may move this into that status; no governance rule can widen it.",
+    "An agent wants to define a new kind of thing for your pod, so you approve it, and no rule can skip that.",
+  HUMAN_ONLY_STATUS: "Only you can move this into that status.",
   LIFECYCLE_TERMINAL:
-    "An agent is closing this (moving it into a done or lost status); a person approves that by default.",
+    "An agent wants to close this (done or lost), so it waits for you unless you have said otherwise.",
   AGENT_STRUCTURE_WRITE:
-    "An agent is creating a workspace, cell, playbook or automation (or switching one on), which changes what the pod does; a person must approve it, and no governance rule can widen it.",
+    "An agent wants to create or switch on a workspace, cell, playbook or automation, which changes what your pod does, so you approve it, and no rule can skip that.",
 } as const;
 
 /**
@@ -1545,6 +1583,11 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
     input.bodyOfHumanOwnedEntity
   );
   const laneKey = `${lane.subjectType}.${lane.action}`;
+  // FB1020 B3: a door's proof that this write organises the agent's own fresh
+  // work. Only a write of the closed list can carry it; on any other key the
+  // claim fails closed at 2.1 (a door that set it there is a bug, not a lane).
+  const organiseClaim = input.ownWorkOrganise === true;
+  const organise = organiseClaim && isOwnOrganiseWrite(eventKey);
 
   // 1. CBAC capability allowlist (empty/absent = unrestricted).
   const caps = input.agentCapabilities;
@@ -1659,7 +1702,7 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // the action would otherwise auto-approve. Sits after CBAC (rung 1) and ADMIN
   // (rung 2) so a capability-denied action still denies and admin actions are
   // unaffected, but BEFORE every execute path below.
-  if (input.forcePropose === true) {
+  if (input.forcePropose === true || (organiseClaim && !organise)) {
     // A door forced for a reason of its own names it here, read from the
     // write itself (never from the caller), so the review says the real why.
     const ownReason =
@@ -1684,6 +1727,15 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       verdict: "propose",
       reason: PROPOSE_REASON.CRITERIA_CHANGE,
       reasonCode: "CRITERIA_CHANGE",
+    };
+  }
+  // 2.1 (duplicate) — an agent creating a possible twin of a record or a
+  // pending proposal. Same floor, own reason: the reviewer decides.
+  if (input.possibleDuplicate === true) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.POSSIBLE_DUPLICATE,
+      reasonCode: "POSSIBLE_DUPLICATE",
     };
   }
 
@@ -1854,11 +1906,26 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   // (`governanceRuleNamesWrite`) does. Otherwise the rule is skipped and 2.85
   // proposes — the pod's `@reversible` default classes `entity.transition` as
   // reversible, and a class row must not publish a post on its own.
+  //
+  // An ORGANISE write (FB1020 B3) is widened by ONE row only: the
+  // own-organise class. Any other `auto` (`@reversible`, a glob, `*`) is
+  // skipped here — the write then proposes at 2.85/2.87 exactly as it did
+  // before the class existed. That class row may close the agent's own task
+  // (a terminal move): its door proved the task is the agent's fresh work.
+  const autoFromOtherRowOnOrganise =
+    organise &&
+    input.governanceRuleVerdict === "auto" &&
+    input.governanceRuleIsOwnOrganise !== true;
   const broadAutoOnTerminalMove =
     input.governanceRuleVerdict === "auto" &&
     input.lifecycleMove?.intoTerminal === true &&
-    input.governanceRuleNamesWrite !== true;
-  if (input.governanceRuleVerdict && !broadAutoOnTerminalMove) {
+    input.governanceRuleNamesWrite !== true &&
+    !(organise && input.governanceRuleIsOwnOrganise === true);
+  if (
+    input.governanceRuleVerdict &&
+    !broadAutoOnTerminalMove &&
+    !autoFromOtherRowOnOrganise
+  ) {
     return input.governanceRuleVerdict === "auto"
       ? input.governanceRuleId
         ? { verdict: "execute", governanceRuleId: input.governanceRuleId }
@@ -1883,6 +1950,27 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       };
     }
     return { verdict: "execute" };
+  }
+
+  // 2.87 ORGANISE DEFAULT (FB1020 B3). An organise write the class row did not
+  // widen (switched off, or a person's `propose` rule outranked it — that one
+  // returned at 2.8) proposes for the SAME reason its door's floor gave it
+  // before the class existed: the door's own forced reason, else scope /
+  // identity. Above ownership (3) and the auto-approve lists (4, 8), so
+  // `focus_session.update`'s default allowance never files a session.
+  if (organise) {
+    const ownReason = FORCED_WRITE_REASON[eventKey];
+    return ownReason
+      ? {
+          verdict: "propose",
+          reason: PROPOSE_REASON[ownReason],
+          reasonCode: ownReason,
+        }
+      : {
+          verdict: "propose",
+          reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
+          reasonCode: "SCOPE_IDENTITY_CHANGE",
+        };
   }
 
   // 3. Agent owns this workspace (linkedAgentId === agentUserId, workspaceType="agent").
@@ -2159,6 +2247,46 @@ export const REVERSIBLE_CLASS_PATTERN = "@reversible";
 /** Is this event key an easily-reversible write? Fail-closed for unknown keys. */
 export function isReversibleWrite(eventKey: string): boolean {
   return REVERSIBLE_EVENT_KEYS.includes(eventKey);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ORGANISING ITS OWN FRESH WORK (FB1020 B3, founder 2026-10-21)
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * The organisational moves an agent may make on its OWN FRESH records without
+ * a person approving each one — filing them into a project the person named,
+ * filing its own session there, closing its own task. Applied directly with
+ * a receipt and Undo, when the pod's ONE class row says so.
+ *
+ * NOT a floor and NOT a second store: ONE `governance_rules` row (principal
+ * any, scope pod, action, pattern {@link OWN_ORGANISE_CLASS_PATTERN}, verdict
+ * auto), resolved at rung 2.8 like `@reversible` — below every floor.
+ *
+ * The class covers a write ONLY when its door says so (`ownWorkOrganise`),
+ * after the server proved, from the pod's own records and never from the
+ * caller's input, that every subject is the SAME KEY's (B7) work, made in the
+ * last 24 hours, untouched by a person since, and that the project is one the
+ * person named (`own-organise.ts`, @synap/database). Each door passes
+ * `forcePropose: !ownWorkOrganise`, so outside the class nothing changes.
+ *
+ * Closed list. Recording a decision the person made in chat, starting a
+ * track, unfiling, a space move and a track filing are NOT here.
+ */
+export const OWN_ORGANISE_CLASS_PATTERN = "@own-organise";
+
+/** The writes the class may cover — each door proves its own subjects. */
+export const OWN_ORGANISE_EVENT_KEYS = [
+  /** File records into a project (`file-entities.ts`). */
+  "project.file_entities",
+  /** File its own session into a project (`session-filing-gate.ts`). */
+  "focus_session.update",
+  /** Close its own task (`move-status.ts`, into a `done` option). */
+  "entity.transition",
+] as const satisfies readonly GateEventKey[];
+
+/** Is this event key one the own-organise class may cover? */
+export function isOwnOrganiseWrite(eventKey: string): boolean {
+  return (OWN_ORGANISE_EVENT_KEYS as readonly string[]).includes(eventKey);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

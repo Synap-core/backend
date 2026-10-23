@@ -1,0 +1,21 @@
+-- 0346: the calling KEY on every proposal (FB1020 B7, founder 2026-10-21).
+--
+-- Every Claude Code conversation on one computer shares ONE agent user, and
+-- until now a proposal recorded only that user (`agent_user_id`). Two
+-- computers running the same agent therefore read identically on every
+-- review card, and "the agent's own records" (the B3 governance class) could
+-- not tell one machine's work from another's.
+--
+--   proposals.api_key_id — the `api_keys.id` the filing request authenticated
+--     with, stamped from the request context at the proposal insert doors
+--     (`callingKeyAttribution()`, @synap/database). The key's computer name
+--     (`api_keys.instance_label`) is read LIVE through it at display time, so
+--     labelling a key later names every proposal it already filed.
+--
+-- Plain `uuid`, NOT a FK: a key is revocable and deletable and the attribution
+-- must survive it (same stance as `app_id`, 0310). Nullable, no default: a
+-- write with no key (a person in the app, a background job) leaves NULL.
+-- No index: it is read per row through the proposal, never searched by key.
+-- Idempotent.
+
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "api_key_id" uuid;
