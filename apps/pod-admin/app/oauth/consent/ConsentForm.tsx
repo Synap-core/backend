@@ -34,9 +34,9 @@ import {
   invalidRequestHint,
   isTicked,
   permissionLabel,
-  readsRoledRecords,
+  readsSpaceRecords,
   reasonOf,
-  ROLED_RECORDS_NOTE,
+  SPACE_REACH_NOTE,
   spaceCheckboxLabel,
   toApproved,
   toggle,
@@ -798,9 +798,9 @@ function AppConsent({
             );
           })}
         </ul>
-        {readsRoledRecords(app.permissions) && (
+        {readsSpaceRecords(app.permissions) && (
           <p className="text-pretty text-xs leading-relaxed text-foreground/75">
-            {ROLED_RECORDS_NOTE}
+            {SPACE_REACH_NOTE}
           </p>
         )}
         {app.ignoredScopes.length > 0 && (
@@ -811,7 +811,7 @@ function AppConsent({
         )}
         <p className="text-xs leading-relaxed text-foreground/65">
           Every change it makes is sent to you for review first. It can never
-          see other spaces, approve its own changes, or create keys.
+          approve its own changes or create keys.
         </p>
         <div className="flex flex-col gap-1 pt-0.5">
           <span className="text-sm text-foreground/65">Sends you back to</span>

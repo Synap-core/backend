@@ -12,7 +12,7 @@
 
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
-import { patternMatches } from "@synap/governance-policy/grants";
+import { parsePermission, patternMatches } from "@synap/governance-policy/grants";
 
 export interface OfferedSpace {
   workspaceId: string;
@@ -195,32 +195,35 @@ export function toApproved(
 }
 
 /**
- * The line under the space choice when the app may read people or companies.
+ * The line under the space choice when the app may read records (rv-ui U1).
  * A space grant reads what a member of the space reads (founder "option 1",
- * 2026-10-23): that includes the pod-wide people and companies that have a
- * role in the space, not only the records stored in it.
+ * 2026-10-23): what is stored there, plus any record of the pod with a role
+ * there (a pod-wide person or company, or a record of another space).
  */
-export const ROLED_RECORDS_NOTE =
-  "The app also sees the people and companies that have a role in the spaces you pick.";
+export const SPACE_REACH_NOTE =
+  "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there. Nothing else in your pod.";
 
-/** Whether any permission on offer reads people or companies. */
-export function readsRoledRecords(
+/**
+ * Whether any permission on offer reads records (entities) of ANY kind: the
+ * reach has no kind limit, so a posts-only reader reaches roled posts too
+ * (rv-ui U3).
+ */
+export function readsSpaceRecords(
   offer: readonly OfferedPermission[]
 ): boolean {
-  const reads = (permission: string, kind: string) => {
+  return offer.some(({ permission }) => {
     try {
+      // The pattern's own kind, so a kind-specific read counts for that kind.
+      const kind = parsePermission(permission)[1];
       return patternMatches(permission, {
         subject: "entity",
-        qualifier: kind,
+        qualifier: kind && kind !== "*" ? kind : "any",
         action: "read",
       });
     } catch {
       return false; // a malformed pattern grants nothing
     }
-  };
-  return offer.some(({ permission }) =>
-    ["person", "company"].some((kind) => reads(permission, kind))
-  );
+  });
 }
 
 /** The permissions the person has NO space to give in. */
