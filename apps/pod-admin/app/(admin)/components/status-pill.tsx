@@ -11,19 +11,24 @@
  *
  * Renders as a HeroUI Chip (size sm, radius sm, variant flat) so the
  * concentric radius rule (pane 24 → card 16 → inner 8) holds inside any
- * card. A leading SVG dot stays the same size (8px) regardless of label.
+ * card. A leading SVG dot stays the same size (8px) regardless of label;
+ * an `icon` takes the dot's place where the state has a glyph of its own
+ * (a session's Drafted mark), in the same tone.
  *
  * Status colors are NEVER decorative. If a row is healthy, omit the pill
  * — empty space reads "all good" without adding noise.
  */
 
 import { Chip } from "@heroui/react";
+import type { LucideIcon } from "lucide-react";
 
 export type StatusKind = "healthy" | "stale" | "down" | "unknown";
 
 interface StatusPillProps {
   kind: StatusKind;
   label: string;
+  /** A glyph instead of the dot. */
+  icon?: LucideIcon;
   className?: string;
 }
 
@@ -57,7 +62,12 @@ const palette: Record<
   },
 };
 
-export function StatusPill({ kind, label, className }: StatusPillProps) {
+export function StatusPill({
+  kind,
+  label,
+  icon: Icon,
+  className,
+}: StatusPillProps) {
   const p = palette[kind];
   return (
     <Chip
@@ -73,13 +83,21 @@ export function StatusPill({ kind, label, className }: StatusPillProps) {
         className ?? "",
       ].join(" ")}
       startContent={
-        <span
-          aria-hidden
-          className={[
-            "ml-1 mr-1 inline-block h-1.5 w-1.5 rounded-full",
-            p.dot,
-          ].join(" ")}
-        />
+        Icon ? (
+          <Icon
+            aria-hidden
+            className="ml-1 mr-0.5 h-3 w-3"
+            strokeWidth={2.25}
+          />
+        ) : (
+          <span
+            aria-hidden
+            className={[
+              "ml-1 mr-1 inline-block h-1.5 w-1.5 rounded-full",
+              p.dot,
+            ].join(" ")}
+          />
+        )
       }
     >
       {label}

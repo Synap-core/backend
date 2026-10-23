@@ -13,6 +13,7 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
 import type { ProfileIdentityInput } from "@synap-core/types/vocabulary";
 import {
   StatusPill,
@@ -74,7 +75,7 @@ export interface ObjectHeaderProps {
   title: string;
   /** One plain sentence: what this is doing, or what is wrong with it. */
   summary?: ReactNode;
-  status?: { kind: StatusKind; label: string } | null;
+  status?: { kind: StatusKind; label: string; icon?: LucideIcon } | null;
   /** The one thing to do here. */
   primaryAction?: ReactNode;
   /** Everything else, quieter (an "Open in app ↗" exit, a pause). */
@@ -114,7 +115,13 @@ export function ObjectHeader({
               <h1 className="min-w-0 break-words text-balance font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
                 {title}
               </h1>
-              {status && <StatusPill kind={status.kind} label={status.label} />}
+              {status && (
+                <StatusPill
+                  kind={status.kind}
+                  label={status.label}
+                  icon={status.icon}
+                />
+              )}
               <div className="flex items-center gap-1.5 text-[12.5px] text-foreground/65">
                 {nounLine}
               </div>
