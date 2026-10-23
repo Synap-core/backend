@@ -445,11 +445,14 @@ export function approvalProgressWriter(runId: string): {
 }
 
 /** A failure a person can read, from whatever the apply threw. */
-function failureOf(err: unknown): { sentence: string; errorClass: string } {
+function failureOf(err: unknown): {
+  sentence: string;
+  errorClass: string | null;
+} {
   const meta = classifyThrownFailure(err);
   return {
     sentence: safeFailureSentence(err, meta),
-    errorClass: meta.errorClass,
+    errorClass: meta.errorClass ?? null,
   };
 }
 
