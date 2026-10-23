@@ -104,9 +104,11 @@ import { AI_KIND } from "../../lib/ai-events.js";
 import {
   CompositePlanApplyError,
   materializeCompositeGraph,
+  type MaterializeOptions,
 } from "../../utils/materialize-composite.js";
 import { buildPlanCallers } from "../../utils/plan-callers.js";
 import { approvalIdempotency } from "../../services/proposals/approval-idempotency.js";
+import { handOffBackgroundApproval } from "../../services/proposals/approval-runs.js";
 import {
   buildMaterializedRecord,
   stampMaterialized,
@@ -607,6 +609,15 @@ export async function applyProposalApproval(args: {
     identityResolutionByRef?: Record<string, IdentityResolutionInput>;
   };
   ctx: Context;
+  /**
+   * The caller can take a QUEUED answer: a composite proposal of at least
+   * `BACKGROUND_APPROVAL_MIN_OPERATIONS` operations is then applied by the
+   * `proposal-approve` job after the gates below, and this returns at once
+   * with `queued: true` and the run (`services/proposals/approval-runs.ts`).
+   * Only the interactive approve door opts in; every other caller (batch,
+   * import.apply, app-connect) keeps the synchronous apply it was written for.
+   */
+  background?: boolean;
 }): Promise<ProposalExecutorResult> {
   // Approval is the human step — an agent caller (agent key, the IS internal
   // key, or an acting agent in the ALS) never applies one, whichever door.
@@ -620,7 +631,39 @@ export async function applyProposalApproval(args: {
   // A person signed in to an app may approve its OWN AI's proposals unless
   // the app's owner turned that off (PR #29 M2, app-sign-in-policy.ts).
   const viaApp = await assertAppSignInMayApprove(args.proposal);
-  const result = await applyProposalApprovalInner(args);
+
+  // A LARGE graph is applied by the background job — every gate above has
+  // already run, here, in the request. A graph that is being applied right
+  // now is joined (background caller) or refused (synchronous caller), never
+  // applied a second time alongside.
+  if (isCompositeProposalData(args.proposal.data as StoredProposalData)) {
+    const handedOff = await handOffBackgroundApproval({
+      proposal: args.proposal,
+      userId: args.userId,
+      input: args.input,
+      ctx: args.ctx,
+      viaApp,
+      background: args.background === true,
+    });
+    if (handedOff) return handedOff;
+  }
+
+  return completeProposalApproval(args, viaApp);
+}
+
+/**
+ * The approval AFTER its gates: apply, then the reviewer's note, the
+ * "approved in <app>" stamp and the session's expected outputs. The request
+ * runs it for a small proposal; the `proposal-approve` job runs it for a large
+ * one (`runApprovalJob`), with `onProgress` to report as it goes. Never call
+ * it from a door: the gates live in `applyProposalApproval`.
+ */
+export async function completeProposalApproval(
+  args: Omit<Parameters<typeof applyProposalApproval>[0], "background">,
+  viaApp: { publicId: string; name: string } | null,
+  options?: { onProgress?: MaterializeOptions["onProgress"] }
+): Promise<ProposalExecutorResult> {
+  const result = await applyProposalApprovalInner(args, options?.onProgress);
 
   // VISIBLE: an approval made inside an app is recorded as such on the
   // proposal ("approved in <app>"), whoever's proposal it was.
@@ -743,7 +786,8 @@ function approvedOutputTitle(proposal: Proposal): string {
 }
 
 async function applyProposalApprovalInner(
-  args: Parameters<typeof applyProposalApproval>[0]
+  args: Omit<Parameters<typeof applyProposalApproval>[0], "background">,
+  onProgress?: MaterializeOptions["onProgress"]
 ): Promise<ProposalExecutorResult> {
   const { proposal, userId, input, ctx } = args;
 
@@ -1068,6 +1112,8 @@ async function applyProposalApprovalInner(
           ),
           entityRef: (op, index) =>
             entityRefByIndex.get(index) ?? op.ref ?? opRef(index),
+          // A background approval reports how far it got (approval-runs.ts).
+          ...(onProgress ? { onProgress } : {}),
         }
       );
     } catch (err) {

@@ -1748,6 +1748,18 @@ try {
             apiLogger.info("Registered import-corpus handler (IoC)");
           }
 
+          // IoC: a LARGE approval, applied in the background. jobs owns the
+          // `proposal-approve` queue; the approval door lives in api, so the
+          // handler is filled here. Every gate already ran in the approve
+          // request (services/proposals/approval-runs.ts).
+          {
+            const { registerProposalApproveHandler } =
+              await import("@synap/jobs/workers/proposal-approve-worker.js");
+            const { runApprovalJob } = await import("@synap/api");
+            registerProposalApproveHandler((p) => runApprovalJob(p));
+            apiLogger.info("Registered proposal-approve handler (IoC)");
+          }
+
           // IoC: the Library light read (one item) and its hourly sweep. jobs
           // owns both queues; the readers, the IS client and the AI budget live
           // in api, so the handlers are filled here.

@@ -1307,7 +1307,8 @@
                 "description": "Provider-qualified id, e.g. `github:12345`."
               }
             },
-            "description": "Explicit strong identity atoms."
+            "additionalProperties": { "type": "string" },
+            "description": "Explicit strong identity atoms. Also accepted: an atom name (linkedin_url, website, …) or the property slug that carries it (linkedinUrl, …); any other key is refused."
           },
           "properties": {
             "type": "object",

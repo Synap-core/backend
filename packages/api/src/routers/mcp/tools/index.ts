@@ -1064,7 +1064,7 @@ export const tools = {
             signals: {
               type: "object",
               description:
-                "Strong identity atoms you already know. Any one match auto-resolves.",
+                "Strong identity atoms you already know. Any one match auto-resolves. Also accepted: an atom name (linkedin_url, website, twitter_handle, github_username, telegram_phone, external_id) or the property slug that carries it (linkedinUrl, twitterHandle, githubUsername, telegramPhone); any other key is refused.",
               properties: {
                 email: { type: "string" },
                 phone: { type: "string" },

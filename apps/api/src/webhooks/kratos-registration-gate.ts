@@ -13,13 +13,13 @@
  *
  * Two Kratos hooks call this router (see `generate_kratos_config` in `synap`):
  *
- *   POST /gate      — `registration.after.{password,oidc}` web_hook with
+ *   POST /gate      — `registration.after.{password,passkey,oidc}` web_hook with
  *                     `can_interrupt: true`. Kratos v1.3.1 runs it PRE-PERSIST
  *                     (selfservice/hook/web_hook.go
  *                     ExecutePostRegistrationPrePersistHook), so a 403 with a
  *                     `messages` body aborts the flow before any identity
  *                     exists. The identity has no id yet at this point.
- *   POST /complete  — `registration.after.oidc` web_hook WITHOUT
+ *   POST /complete  — `registration.after.{passkey,oidc}` web_hook WITHOUT
  *                     `can_interrupt`, ordered BEFORE the `session` hook (the
  *                     session hook ends the post-persist chain). Runs
  *                     post-persist, so the identity id exists: it seeds the pod
@@ -203,7 +203,10 @@ export async function decideRegistration(
   payload: RegistrationHookPayload,
   deps: RegistrationGateDeps
 ): Promise<GateDecision> {
-  // Password (and any non-oidc method) self-registration is closed outright.
+  // Password, passkey (and any non-oidc method) self-registration is closed
+  // outright. Every enabled registration method reaches this gate first
+  // (deploy/__tests__/kratos-registration-gate.test.sh); passkey did not
+  // until 2026-10-23.
   if (payload.method !== "oidc") {
     return { allow: false, reason: "self_registration_disabled" };
   }
