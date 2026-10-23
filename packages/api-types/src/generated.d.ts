@@ -14985,6 +14985,15 @@ export interface ArchivedAutomationRef {
 	id: string;
 	name: string;
 }
+export type InviteAccepted = {
+	status: "accepted";
+	type: "workspace";
+	workspaceId: string;
+} | {
+	status: "accepted";
+	type: "pod";
+	workspacesJoined: number;
+};
 /**
  * Standard paginated response envelope.
  */
@@ -45692,17 +45701,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				token: string;
 			};
 			meta: object;
-			output: {
-				status: "accepted";
-				type: "workspace";
-				workspaceId: string;
-				workspacesJoined?: undefined;
-			} | {
-				status: "accepted";
-				type: "pod";
-				workspaceId?: undefined;
-				workspacesJoined: number;
-			};
+			output: InviteAccepted;
 		}>;
 		addMember: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
