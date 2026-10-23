@@ -276,6 +276,17 @@ function prependDegradedNotice(answer: string, degraded: string[]): string {
   );
 }
 
+/**
+ * The IS answered 200 with no text (a length cut-off, a refusal that left no
+ * content). That is a failed synthesis, not an answer: `prependPendingNotice`
+ * would otherwise turn "" into a reply that is only the pending notice.
+ */
+class EmptySynthesisError extends Error {
+  constructor() {
+    super("IS answer was empty");
+  }
+}
+
 function prependPendingNotice(answer: string, pendingCount: number): string {
   if (pendingCount <= 0 || /pending/i.test(answer)) return answer;
   const plural = pendingCount === 1 ? "" : "s";
@@ -746,6 +757,22 @@ export async function synthesizeAnswer(
       );
     }
     const data = (await res.json()) as { answer?: string; detail?: string };
+    if (typeof data.answer === "string" && !data.answer.trim()) {
+      // A brief run can be cut off by its short budget; the full answer has the
+      // headroom, so redo it as that. An empty FULL answer is a failure.
+      if (detail === "brief") {
+        return synthesizeAnswer(
+          answers,
+          question,
+          routedTo,
+          workspaceId,
+          pendingCount,
+          degraded,
+          "full"
+        );
+      }
+      throw new EmptySynthesisError();
+    }
     const answer =
       typeof data.answer === "string"
         ? prependDegradedNotice(
@@ -783,7 +810,10 @@ export async function synthesizeAnswer(
       // the prose notice is lost entirely.
       ...(truncated ? { truncated } : {}),
       error: "synthesis_unavailable",
-      failureClass: classifyAiFailure(err),
+      failureClass:
+        err instanceof EmptySynthesisError
+          ? "invalid_response"
+          : classifyAiFailure(err),
     };
   }
 }

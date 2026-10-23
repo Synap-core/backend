@@ -119,6 +119,55 @@ describe("synap_ask detail (MCP door → synthesizeAnswer → IS request)", () =
     expect((JSON.parse(text) as { detail: string }).detail).toBe("full");
   });
 
+  it("brief answered with nothing: redone as full, never the pending notice alone", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ answer: "", detail: "brief" }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ answer: "Hetzner hosts the pod." }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    askMock.mockResolvedValue({
+      answers: ANSWERS,
+      routedTo: ["structured"],
+      degraded: [],
+      pending: { matches: [{ id: "p1" }] },
+      understanding: {},
+    });
+
+    const { text } = await callAsk({ detail: "brief" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(
+      "detail" in
+        (JSON.parse(
+          (fetchMock.mock.calls[1]![1] as { body: string }).body
+        ) as object)
+    ).toBe(false);
+    const payload = JSON.parse(text) as { answer: string; detail: string };
+    expect(payload.detail).toBe("full");
+    expect(payload.answer).toMatch(/Hetzner hosts the pod\./);
+  });
+
+  it("an empty FULL answer is a classified failure, not a success", async () => {
+    isReplies({ answer: "  " });
+
+    const { text } = await callAsk({});
+
+    const payload = JSON.parse(text) as {
+      answer: unknown;
+      error?: string;
+      failureClass?: string;
+    };
+    expect(payload.answer).toBeNull();
+    expect(payload.error).toBe("synthesis_unavailable");
+    expect(payload.failureClass).toBe("invalid_response");
+  });
+
   it("sources: no IS call, the matches, and no failure costume", async () => {
     const fetchMock = isReplies({ answer: "should never be asked" });
 
