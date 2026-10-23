@@ -32,6 +32,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { closeSessionViaDoor } from "../utils/session-close.js";
+import { escalateUnacknowledgedReports } from "./track-report-escalation.js";
 
 const logger = createLogger({ module: "focus-session-reaper" });
 
@@ -124,6 +125,17 @@ export async function closeIdleReceipts(): Promise<number> {
 
 /** Called by the cron scheduler every hour. */
 export async function handleFocusSessionReaper(): Promise<void> {
+  // R10 (W3) rides this hourly tick: an "impossible" report on a goal that
+  // nobody acknowledged for 48 h is escalated to the goal's owner, once. Its
+  // own failure never stops the session sweep below.
+  try {
+    const told = await escalateUnacknowledgedReports();
+    if (told > 0) {
+      logger.info({ told }, "Escalated unacknowledged goal reports");
+    }
+  } catch (err) {
+    logger.error({ err }, "Goal report escalation failed");
+  }
   try {
     // Receipts first, so a finished one is CLOSED rather than swept to stale.
     const receiptsClosed = await closeIdleReceipts();

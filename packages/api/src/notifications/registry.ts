@@ -259,6 +259,40 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
       },
     ],
   },
+  {
+    /**
+     * R10 (work model W3, 2026-10-23): a delegate reported their commitment
+     * on a goal IMPOSSIBLE and neither the owner nor the judge acknowledged
+     * it for 48 h. Producer: `escalateUnacknowledgedReports`
+     * (jobs `workers/track-report-escalation.ts`, on the reaper's hourly
+     * tick), ONCE per report (`track_participants.escalated_at`). `sourceId`
+     * is the goal; `groupKey` the report (participant + when it reported).
+     *
+     * An ITEM in the owner's Needs you — the acknowledgement is theirs to
+     * give; acknowledging the report marks the row actioned
+     * (`services/tracks/track-participants.ts`). The report is never the
+     * goal's verdict: the body says so.
+     */
+    type: "track.report_unacknowledged",
+    category: "data",
+    label: "Goal report waiting on you",
+    icon: "alert-triangle",
+    priority: "high",
+    titleTemplate: "{{delegateName}} says part of {{trackName}} cannot be done",
+    bodyTemplate:
+      "“{{commitment}}” was reported impossible more than {{hours}} h ago: {{reason}}. Acknowledge it on the goal, ask again, or decide the goal.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open goal",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
   // ── Governance ────────────────────────────────────────────────────────────
   {
     type: "proposal.created",

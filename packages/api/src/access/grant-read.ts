@@ -55,6 +55,7 @@ import {
   projectTracks,
   projects,
   proposals,
+  trackParticipants,
   relationDefs,
   relations,
   rendererBindings,
@@ -121,6 +122,11 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   [views, spec("view", views)],
   [projects, spec("project", projects)],
   [projectTracks, spec("track", projectTracks)],
+  // No workspace of its own: a grant on the GOAL reads who is on it.
+  [
+    trackParticipants,
+    spec("track", {}, { idColumn: trackParticipants.trackId }),
+  ],
   [proposals, spec("proposal", proposals)],
   [focusSessions, spec("session", focusSessions)],
   [sessionEvaluations, spec("session", sessionEvaluations)],
