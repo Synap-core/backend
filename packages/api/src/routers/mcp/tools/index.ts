@@ -2954,6 +2954,12 @@ export const tools = {
               description:
                 "Optional project you are working in. Never filters — it ranks a track template (scope project) above its same-name session twin.",
             },
+            limit: {
+              type: "number",
+              default: 5,
+              description:
+                "Candidates to return, 1–20 (default 5). Rows carried only by a word many playbooks share are dropped; `goalTemplate` is cut at 200 chars (`synap_list_playbooks` has the whole).",
+            },
           },
           required: [],
         },
