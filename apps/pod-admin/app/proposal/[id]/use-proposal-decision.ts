@@ -67,7 +67,7 @@ export function useProposalDecision(
 
   return {
     approve: (choice?: ApproveChoice) =>
-      approveMutation.mutate(approveInput(proposalId, choice)),
+      approveMutation.mutate(approveInput(proposalId, choice && {})),
     reject: (reason?: string) =>
       rejectMutation.mutate({
         proposalId,
