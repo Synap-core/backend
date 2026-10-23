@@ -61,6 +61,7 @@ import {
   registerDecisionAskReactor,
   registerAgentChoiceRedispatchReactor,
   registerSessionCriteriaUnmetReactor,
+  registerTrackBlockerEndedReactor,
   registerClosingReportReactor,
   registerDocumentDiagnosticsReactor,
   registerEntityMediaCopyReactor,
@@ -1651,6 +1652,10 @@ try {
       // one moment a course correction is cheap. Re-derives the verdict from
       // `session_evaluations` rather than trusting the event's payload.
       registerSessionCriteriaUnmetReactor();
+      // A goal's status write emits `track.update`: a goal that ENDED tells
+      // the owners of the sessions and goals waiting on it whether they are
+      // free (closed) or must re-plan (dropped). Re-derived from the rows.
+      registerTrackBlockerEndedReactor();
       // Same close event: the session document gains its structured closing
       // report (outcome, definition of done, outputs, decisions).
       registerClosingReportReactor();
