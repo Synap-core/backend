@@ -54,6 +54,67 @@ export const GOVERNANCE_POLICY_SENTENCES = {
     "An agent wants to create or switch on a workspace, cell, playbook or automation, which changes what your pod does, so you approve it, and no rule can skip that.",
 } as const;
 
+/** A governance reason code: a key of {@link GOVERNANCE_POLICY_SENTENCES}. */
+export type GovernanceReasonCode = keyof typeof GOVERNANCE_POLICY_SENTENCES;
+
+/**
+ * The SHORT form of each reason, for the one mark a review card draws (its
+ * sentence above sits behind it, on press). Two or three words that say WHY
+ * the write waits — "Possible duplicate", not the ladder's reach ("Always asks
+ * a person"), which tells a reviewer nothing about this proposal.
+ *
+ * Typed by the sentences' own keys, so a code added to the engine (and so to
+ * the mirror above) does not compile until it has its short label here.
+ */
+export const GOVERNANCE_REASON_SHORT_LABELS: Readonly<
+  Record<GovernanceReasonCode, string>
+> = {
+  ADMIN: "Pod setting",
+  WRITES_REQUIRE_PROPOSAL: "Agent asks first",
+  AGENT_OWNED_DESTRUCTIVE: "Removes agent work",
+  CHANNEL_PROPOSE: "Teammate suggestion",
+  USER_OBSERVATION_INFERENCE: "A guess about you",
+  CAPABILITY_PROPOSE: "Runs a tool",
+  SCOPE_IDENTITY_CHANGE: "Changes what it is",
+  PROJECT_FILING: "Shares with a project",
+  CRITERIA_CHANGE: "Changes its own criteria",
+  POSSIBLE_DUPLICATE: "Possible duplicate",
+  DESTRUCTIVE_HARD_FLOOR: "Removes something",
+  GOVERNANCE_RULE: "Your rule",
+  UNTRUSTED_ORIGIN: "From outside",
+  DAILY_WRITE_CEILING: "Daily limit reached",
+  HUMAN_GATE: "Your decision",
+  ARBITRARY_EXECUTION: "Runs a command",
+  POD_ADMIN_SCHEMA_CHANGE: "Changes a built-in kind",
+  AGENT_SCHEMA_DEFINITION: "New kind",
+  HUMAN_ONLY_STATUS: "Only you can move it",
+  LIFECYCLE_TERMINAL: "Closes it",
+  AGENT_STRUCTURE_WRITE: "Changes what your pod does",
+};
+
+/**
+ * The mark for a policy sentence with no code — a row written before the code
+ * was stored, whose sentence {@link isGovernancePolicySentence} recognises.
+ */
+export const GOVERNANCE_REASON_UNNAMED_LABEL = "Why it waits";
+
+/**
+ * A reason's mark: its short label and its sentence, or `null` for a code
+ * that is not a governance reason (absent, legacy, unknown). `Object.hasOwn`,
+ * not `in`: a code is stored text, and "toString" is not a reason.
+ */
+export function governanceReasonMark(
+  code: string | null | undefined
+): { code: GovernanceReasonCode; label: string; sentence: string } | null {
+  if (!code || !Object.hasOwn(GOVERNANCE_POLICY_SENTENCES, code)) return null;
+  const key = code as GovernanceReasonCode;
+  return {
+    code: key,
+    label: GOVERNANCE_REASON_SHORT_LABELS[key],
+    sentence: GOVERNANCE_POLICY_SENTENCES[key],
+  };
+}
+
 /**
  * The engine's sentences as they read until 2026-10-21. Proposals written
  * before the rewording still carry one of these as `data.reasoning`, so the
