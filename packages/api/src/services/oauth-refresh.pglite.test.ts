@@ -495,6 +495,85 @@ describe("R4 — a revoked app gets no key", () => {
   });
 });
 
+describe("a server failure mid-refresh leaves the token unspent (review S1)", () => {
+  // The failures are the pod's own (a table gone, a constraint): a DB blip
+  // AFTER the claim, once inside the mint (the key exists by then) and once
+  // inside the rotation. Before the fix, the retry waited 3 s and got
+  // invalid_grant, and 30 s later it was a reuse that ended the connection.
+  const withoutWebhooksTable = <T>(run: () => Promise<T>): Promise<T> =>
+    q(`alter table webhook_subscriptions rename to webhook_subscriptions_x`)
+      .then(run)
+      .finally(() =>
+        q(`alter table webhook_subscriptions_x rename to webhook_subscriptions`)
+      );
+  const lastUsedAt = async (raw: string) =>
+    (
+      await q<{ last_used_at: string | null }>(
+        `select last_used_at from oauth_refresh_tokens where token_hash = $1`,
+        [sha256(raw)]
+      )
+    ).rows[0]!.last_used_at;
+
+  it("the mint fails after the key exists: 500, then the retry with the same token gets 200", async () => {
+    const { refresh: rt } = await connect();
+    const failed = await withoutWebhooksTable(() => refresh(rt));
+    expect(failed.status).toBe(500);
+    expect(failed.body).not.toHaveProperty("access_token");
+    expect(await lastUsedAt(rt)).toBeNull();
+
+    const retry = await refresh(rt);
+    expect(retry.status).toBe(200);
+    expect(await valid(retry.body.access_token)).toBe(true);
+    // A normal rotation: the successor carries on, the family is alive.
+    expect((await refresh(retry.body.refresh_token)).status).toBe(200);
+  });
+
+  it("the rotation fails: 500, then the retry gets 200; the key the failed refresh minted is rotated away", async () => {
+    const { refresh: rt } = await connect();
+    // Existing rows are not checked (NOT VALID): only the rotation's link is.
+    await q(
+      `alter table oauth_refresh_tokens add constraint s1_no_rotation check (replaced_by is null) not valid`
+    );
+    const failed = await refresh(rt).finally(() =>
+      q(`alter table oauth_refresh_tokens drop constraint s1_no_rotation`)
+    );
+    expect(failed.status).toBe(500);
+    expect(await lastUsedAt(rt)).toBeNull();
+    const before = await liveAgentKeys();
+    expect(before).toHaveLength(1); // the failed mint's key, answered to no one
+
+    const retry = await refresh(rt);
+    expect(retry.status).toBe(200);
+    expect(await valid(retry.body.access_token)).toBe(true);
+    const after = await liveAgentKeys();
+    expect(after).toHaveLength(1);
+    expect(after[0]!.id).not.toBe(before[0]!.id);
+  });
+
+  it("a refusal of the grant (the app revoked) keeps the token spent: no release", async () => {
+    const { refresh: rt } = await connect();
+    const app = await connection();
+    await q(`update apps set revoked_at = now() where id = $1`, [app.id]);
+    try {
+      expect((await refresh(rt)).body.error).toBe("invalid_grant");
+      expect(await lastUsedAt(rt)).not.toBeNull();
+    } finally {
+      await q(`update apps set revoked_at = null where id = $1`, [app.id]);
+    }
+  });
+
+  it("a reuse is still a reuse: a released token, once rotated, replayed past the grace revokes the family", async () => {
+    const { refresh: rt } = await connect();
+    expect((await withoutWebhooksTable(() => refresh(rt))).status).toBe(500);
+    const ok = await refresh(rt);
+    expect(ok.status).toBe(200);
+    await usedSecondsAgo(rt, 31);
+    expect((await refresh(rt)).body.error).toBe("invalid_grant");
+    expect(await liveRefreshRows()).toEqual([]);
+    expect(await valid(ok.body.access_token)).toBe(false);
+  });
+});
+
 describe("a family revoked while a refresh is minting", () => {
   it("the successor is refused and the key that refresh minted is revoked", async () => {
     const { refresh: rt } = await connect();

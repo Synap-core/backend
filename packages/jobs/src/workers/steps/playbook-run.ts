@@ -130,6 +130,14 @@ export async function executePlaybookRun(
     projectId?: string;
     trackId?: string;
     /**
+     * HAND-OFF — the agent user id the run's session is handed to. Forwarded
+     * to the spine, which resolves it once (THE route) before any session
+     * exists and fails the step on an unknown / paused / foreign agent; a
+     * handed run does not dispatch the playbook's executor. Declared on
+     * `PlaybookRunNodeDef.data`. RUN mode only — refused below for the others.
+     */
+    handToAgentId?: string;
+    /**
      * WHAT this node materializes at its slot.
      *
      * - absent / `"run"` — an unattended RUN: session + channel + `playbook_runs`
@@ -177,6 +185,16 @@ export async function executePlaybookRun(
   attribution?: { nodeId: string; stepRunId: string }
 ): Promise<Record<string, unknown>> {
   const mode = readPlaybookRunMode(data.mode);
+
+  // A hand-off names who does the RUN. An appointment waits for the person and
+  // a proposal starts nothing, so neither can carry one: fail the step by name
+  // rather than drop the agent the author asked for.
+  const handToAgentId = data.handToAgentId?.trim() || undefined;
+  if (handToAgentId && mode !== "run") {
+    throw new Error(
+      `playbook_run: handToAgentId hands a RUN to an agent, but this node's mode is "${mode}" — refusing to drop the hand-off`
+    );
+  }
 
   // The confused-deputy guard protects an UNGOVERNED launch: an agent-produced
   // event must not start a human-owned run under owner-bypass. A propose-mode
@@ -484,6 +502,10 @@ export async function executePlaybookRun(
     // byte-identical to before.
     ...(data.projectId ? { projectId: data.projectId } : {}),
     ...(data.trackId ? { trackId: data.trackId } : {}),
+    // Hand-off: the spine resolves the agent (THE route) before any session
+    // exists, puts it on the roster and skips the playbook's executor.
+    // Omitted when absent so an ordinary node is byte-identical to before.
+    ...(handToAgentId ? { handToAgentId } : {}),
     // A worker node: the spine gates the fire and sizes the run. Its
     // automation is what the backlog / in-flight / ceiling counts key on.
     ...(data.worker

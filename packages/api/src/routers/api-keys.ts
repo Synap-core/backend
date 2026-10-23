@@ -73,6 +73,7 @@ import {
   getOAuthConsentContext,
 } from "./oauth/consent.js";
 import { OAuthError } from "./oauth/protocol.js";
+import { logOAuthRefusal } from "./oauth/refusal-log.js";
 import { isPodAdminOrigin } from "../utils/pod-admin-origin.js";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
@@ -125,8 +126,11 @@ const oauthAuthorizeParamsSchema = z.object({
  * unregistered redirect_uri, non-human caller) — BAD_REQUEST. `OAuthError`
  * carries a protocol error code the screen shows verbatim. Anything else
  * propagates unchanged so a genuine bug is never disguised as a client error.
+ * Each of the two is a refusal, logged once (review A6), as is a FORBIDDEN
+ * refusal of who decides (the app is not for this person). A sign-in step-up
+ * is no refusal: the screen sends the person to sign in again.
  */
-function toConsentTrpcError(err: unknown): unknown {
+function toConsentTrpcError(err: unknown, clientId: string): unknown {
   if (
     err instanceof ReauthenticationRequiredError ||
     err instanceof PodCredentialRequiredError
@@ -139,12 +143,33 @@ function toConsentTrpcError(err: unknown): unknown {
     });
   }
   if (err instanceof AuthorizeUserError) {
+    logOAuthRefusal({
+      phase: "consent",
+      clientId,
+      reason: err.reason,
+      detail: err.message,
+    });
     return new TRPCError({ code: "BAD_REQUEST", message: err.message });
   }
   if (err instanceof OAuthError) {
+    logOAuthRefusal({
+      phase: "consent",
+      clientId,
+      reason: err.code,
+      code: err.code,
+      detail: err.message,
+    });
     return new TRPCError({
       code: "BAD_REQUEST",
       message: `${err.code}: ${err.message}`,
+    });
+  }
+  if (err instanceof TRPCError && err.code === "FORBIDDEN") {
+    logOAuthRefusal({
+      phase: "consent",
+      clientId,
+      reason: "forbidden",
+      detail: err.message,
     });
   }
   return err;
@@ -1355,7 +1380,7 @@ export const apiKeysRouter = router({
         // The viewer: an app sign-in shows THEIR spaces, nobody else's.
         return await getOAuthConsentContext(input, ctx.userId, ctx.session);
       } catch (err) {
-        throw toConsentTrpcError(err);
+        throw toConsentTrpcError(err, input.clientId);
       }
     }),
 
@@ -1423,7 +1448,7 @@ export const apiKeysRouter = router({
         });
         return result;
       } catch (err) {
-        throw toConsentTrpcError(err);
+        throw toConsentTrpcError(err, input.clientId);
       }
     }),
 
