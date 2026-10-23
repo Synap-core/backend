@@ -12435,6 +12435,12 @@ export interface DeviceRequestView {
 export interface OAuthAppOfferItem {
 	permission: string;
 	workspaces: Array<{
+		/**
+		 * The template the space was made from (`workspaces.package_slug`), or
+		 * null. The consent screen starts with the spaces whose template the app
+		 * declared (`synap_templates`); it never changes what is offered.
+		 */
+		templateSlug: string | null;
 		workspaceId: string;
 		workspaceName: string;
 	}>;
@@ -12573,6 +12579,12 @@ export interface OAuthAppConsent {
 	 * offers to create a space from one when a permission has no space.
 	 */
 	templates: string[];
+	/**
+	 * The kinds it asks for that are pod-wide (`oauthAppPodWideKinds`): such an
+	 * entity reaches it only through a role in a space it is given, and the
+	 * screen says so on that kind's row.
+	 */
+	podWideKinds: string[];
 	/** Scopes it asked for that a pod app is never given (`mcp.*`), shown as dropped. */
 	ignoredScopes: string[];
 }
