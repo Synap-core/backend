@@ -271,7 +271,7 @@ export const trackBlockerEndedNotifyReactor: Reactor = {
             dependentId: dep.id,
             dependentTitle: dep.title,
             blockerGoalId: goal.id,
-            blockerTitle: visible || true ? goal.name : "A goal it was waiting on" // NEGCTL,
+            blockerTitle: visible || true ? goal.name : "A goal it was waiting on", // NEGCTL
             endedWord,
             delivered,
             othersHolding,
