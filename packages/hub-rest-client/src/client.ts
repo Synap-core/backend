@@ -283,6 +283,8 @@ import type {
   UpdateTrackInput,
   AcceptTrackCriterionInput,
   ListTracksOptions,
+  ListAllTracksOptions,
+  HubTrackPage,
   StartStageSessionInput,
   StartTrackInput,
 } from "./tracks.js";
@@ -2649,6 +2651,25 @@ export class HubRestClient {
     return res?.items ?? [];
   }
 
+  /**
+   * Every goal (track) the caller can see, pod-wide — the Goals collection
+   * (W5). Newest first, paged: pass the page's `nextCursor` back as `cursor`
+   * until it is `null`. Same read and visibility as {@link listTracks}.
+   */
+  async listAllTracks(options?: ListAllTracksOptions): Promise<HubTrackPage> {
+    const params = new URLSearchParams();
+    if (options?.includeArchived) params.set("includeArchived", "true");
+    if (options?.limit !== undefined)
+      params.set("limit", String(options.limit));
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const query = params.toString();
+    const res = await this.request<HubTrackPage>(
+      "GET",
+      `/api/hub/tracks${query ? `?${query}` : ""}`
+    );
+    return { items: res.items, nextCursor: res.nextCursor ?? null };
+  }
+
   /** One track, with its pinned stages positioned against `currentStage`. */
   async getTrack(trackId: string): Promise<HubTrack> {
     return this.request<HubTrack>(
@@ -2853,7 +2874,7 @@ export class HubRestClient {
       }
       if (!track.currentStage) {
         throw new HubApiError(
-          `Track "${track.name}" stands on no stage — pass stageKey.`,
+          `Goal "${track.name}" stands on no stage — pass stageKey.`,
           400,
           { error: "no_current_stage" }
         );

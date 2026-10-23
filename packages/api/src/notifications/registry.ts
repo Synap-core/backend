@@ -240,7 +240,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
      */
     type: "track.kpi_reached",
     category: "data",
-    label: "Track target reached",
+    label: "Goal target reached",
     icon: "target",
     priority: "normal",
     titleTemplate: "{{trackName}} reached its target",
@@ -253,7 +253,43 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     actions: [
       {
         id: "view",
-        label: "Open track",
+        label: "Open goal",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
+  {
+    /**
+     * A goal is IN REVIEW (decision 2, W5 2026-10-23): every required
+     * criterion is claimed and the judge has not decided yet. Producer:
+     * `noticeGoalReviewReady` (services/tracks/goal-review-notice.ts), after a
+     * passing evaluation is recorded on a run filed into the goal
+     * (`recordSessionEvaluation`). To the goal's JUDGE (the owner when none is
+     * named). `sourceId` is the goal; `groupKey` one per goal, so a goal in
+     * review is ONE open row however many claims land.
+     *
+     * A JUDGEMENT (`JUDGEMENT_NOTIFICATION_TYPES`, @synap-core/types/lens):
+     * a `decision` in the Inbox, ranked first. The judge's decision on any
+     * criterion, or the goal closing, marks it actioned
+     * (`settleGoalReviewNotice`) — a later claim after a send-back raises it
+     * again.
+     */
+    type: "track.review_ready",
+    category: "data",
+    label: "Goal ready for your verdict",
+    icon: "scale",
+    priority: "high",
+    titleTemplate: "{{trackName}} is ready for your verdict",
+    bodyTemplate:
+      "Every required criterion is claimed. Accept them, send one back, or close the goal with a verdict.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open goal",
         variant: "primary",
         handler: { type: "navigate-object", kind: "track" },
       },

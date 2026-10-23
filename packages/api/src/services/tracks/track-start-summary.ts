@@ -4,15 +4,20 @@
  * grant (decision 2a; see `track-space-grant.ts`).
  */
 
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import {
+  buildObjectActionTitle,
+  nounInSentence,
+  resolveObjectNoun,
+} from "@synap-core/types/vocabulary";
 
 /** The key on `project_tracks.metadata` AND on the `track/create` payload. */
 export const TRACK_SPACE_GRANT_KEY = "spaceGrant";
 
 /**
  * The `track/create` proposal summary when the start carries a space grant —
- * the consent stated in the words the person approves: `Create track "X" and
- * let <agent> work in Strategy, Finance for this track`. `null` ⇒ no grant
+ * the consent stated in the words the person approves: `Create Goal "X" and
+ * let <agent> work in Strategy, Finance for this goal` (the noun from the
+ * one door, so the head and the tail never name it twice differently). `null` ⇒ no grant
  * rides this proposal; the caller's generic title applies.
  */
 export function buildTrackStartSummary(
@@ -43,5 +48,6 @@ export function buildTrackStartSummary(
     objectKind: "track",
     objectName: typeof data.name === "string" ? data.name : null,
   });
-  return `${head} and let ${agent} work in ${names.join(", ")} for this track`;
+  const noun = nounInSentence(resolveObjectNoun("track"));
+  return `${head} and let ${agent} work in ${names.join(", ")} for this ${noun}`;
 }

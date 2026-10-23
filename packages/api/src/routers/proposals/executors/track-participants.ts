@@ -102,7 +102,7 @@ export function registerTrackParticipantExecutors(): void {
       }
       const project = await loadVisibleProject(db, track.projectId, userId);
       if (!project) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
       }
       await assertWorkspaceWrite(db, userId, {
         workspaceId: project.workspaceId,

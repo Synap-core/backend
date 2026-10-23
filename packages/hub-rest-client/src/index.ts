@@ -268,6 +268,8 @@ export type {
   ReopenTrackInput,
   HubTrackProposed,
   ListTracksOptions,
+  ListAllTracksOptions,
+  HubTrackPage,
   StartTrackInput,
   HubStartTrackResult,
   HubStageSessionOffer,

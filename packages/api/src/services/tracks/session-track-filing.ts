@@ -106,7 +106,7 @@ export async function resolveSessionTrackFiling(params: {
   }
   const track = await getTrack(trackId, actor);
   if (!track) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
 
   if (params.projectId === null) {
@@ -121,7 +121,7 @@ export async function resolveSessionTrackFiling(params: {
   if (effectiveProjectId && effectiveProjectId !== track.projectId) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" belongs to another project than this session — a session is filed into a track of its own project.`,
+      message: `Goal "${track.name}" belongs to another project than this session — a session is filed into a goal of its own project.`,
     });
   }
 
@@ -136,7 +136,7 @@ export async function resolveSessionTrackFiling(params: {
   const db = await getDb();
   const project = await loadVisibleProject(db, track.projectId, actor.userId);
   if (!project) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
 
   const stage = filing.trackStage

@@ -53,8 +53,10 @@ import {
   desc,
   eq,
   getDb,
+  gt,
   inArray,
   isNotNull,
+  lt,
   ne,
   or,
   focusSessions,
@@ -146,6 +148,7 @@ import {
   resolveTrackGoalPatch,
   type TrackGoalFacts,
 } from "./goal-content.js";
+import { settleGoalReviewNotice } from "./goal-review-notice.js";
 import {
   assertGoalCloser,
   loadTrackParticipantViews,
@@ -713,14 +716,21 @@ export async function getTrack(
 }
 
 /**
- * The project's tracks, oldest first (the order they were started in). Returns
- * `null` when the project itself is not visible — NOT `[]`: "no tracks" and
- * "no such project for you" are different facts.
+ * THE track list read. With a `projectId`: that project's tracks, oldest
+ * first (the order they were started in) — `null` when the project itself is
+ * not visible, NOT `[]`: "no tracks" and "no such project for you" are
+ * different facts. Without one: EVERY goal the caller can see, pod-wide (the
+ * Goals collection, W5), newest first — floored on the same `project_tracks`
+ * VisibilityRule (visible iff its project is), so it can never list a goal
+ * the per-project read would hide. `page` bounds the read (a keyset cursor
+ * over `created_at, id` in the read's own order); without it every row comes
+ * back, as before.
  */
 export async function listTracks(params: {
-  projectId: string;
+  projectId?: string | null;
   actor: TrackActor;
   includeArchived?: boolean;
+  page?: { limit: number; cursor?: TrackListCursor | null };
 }): Promise<ProjectTrack[] | null> {
   // A READ: the project is checked through the SAME `projects` VisibilityRule
   // the tracks below are floored on — member branch included (Sites W2 S2: a
@@ -728,18 +738,122 @@ export async function listTracks(params: {
   // `loadVisibleProject`: that floor also gates WRITES, so it deliberately has
   // no member branch.
   const access = AccessContext.from(params.actor);
-  const project = await scopedDb(access).findFirst<{ id: string }>(projects, {
-    where: eq(projects.id, params.projectId),
-    columns: { id: true },
-  });
-  if (!project) return null;
+  const projectId = params.projectId ?? null;
+  if (projectId) {
+    const project = await scopedDb(access).findFirst<{ id: string }>(projects, {
+      where: eq(projects.id, projectId),
+      columns: { id: true },
+    });
+    if (!project) return null;
+  }
+  // Pod-wide reads newest first (a collection); a project's own list keeps
+  // the order its tracks were started in.
+  const newestFirst = !projectId;
+  const cursor = params.page?.cursor ?? null;
+  const after = cursor
+    ? newestFirst
+      ? or(
+          lt(projectTracks.createdAt, new Date(cursor.createdAt)),
+          and(
+            eq(projectTracks.createdAt, new Date(cursor.createdAt)),
+            lt(projectTracks.id, cursor.id)
+          )
+        )
+      : or(
+          gt(projectTracks.createdAt, new Date(cursor.createdAt)),
+          and(
+            eq(projectTracks.createdAt, new Date(cursor.createdAt)),
+            gt(projectTracks.id, cursor.id)
+          )
+        )
+    : undefined;
   return scopedDb(access).findMany<ProjectTrack>(projectTracks, {
     where: and(
-      eq(projectTracks.projectId, params.projectId),
-      params.includeArchived ? undefined : ne(projectTracks.status, "archived")
+      projectId ? eq(projectTracks.projectId, projectId) : undefined,
+      params.includeArchived ? undefined : ne(projectTracks.status, "archived"),
+      after
     ),
-    orderBy: [asc(projectTracks.createdAt), asc(projectTracks.id)],
+    orderBy: newestFirst
+      ? [desc(projectTracks.createdAt), desc(projectTracks.id)]
+      : [asc(projectTracks.createdAt), asc(projectTracks.id)],
+    ...(params.page ? { limit: params.page.limit } : {}),
   });
+}
+
+/** Where a paged track list resumes: the last row's `created_at` and id. */
+export interface TrackListCursor {
+  createdAt: string;
+  id: string;
+}
+
+/** The opaque cursor a client hands back — never parsed outside this file. */
+export function encodeTrackListCursor(row: {
+  createdAt: Date | string;
+  id: string;
+}): string {
+  return Buffer.from(
+    JSON.stringify({
+      createdAt: new Date(row.createdAt).toISOString(),
+      id: row.id,
+    })
+  ).toString("base64url");
+}
+
+/** `null` for a cursor that does not decode — a refused input, never page 1. */
+export function decodeTrackListCursor(
+  raw: string | null | undefined
+): TrackListCursor | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as {
+      createdAt?: unknown;
+      id?: unknown;
+    };
+    if (
+      typeof v.createdAt === "string" &&
+      Number.isFinite(Date.parse(v.createdAt)) &&
+      typeof v.id === "string" &&
+      v.id.length > 0
+    ) {
+      return { createdAt: v.createdAt, id: v.id };
+    }
+  } catch {
+    // Not base64url JSON: the caller refuses it (400).
+  }
+  return null;
+}
+
+/** The default and the ceiling of a page of the pod-wide goals read. */
+export const TRACK_LIST_PAGE_DEFAULT = 50;
+export const TRACK_LIST_PAGE_MAX = 100;
+
+/**
+ * One PAGE of {@link listTracks} — the same read, asked for one row more than
+ * the page so the next cursor exists only when a next page does. `null` as
+ * the read's own `null` (an invisible project).
+ */
+export async function listTracksPage(params: {
+  projectId?: string | null;
+  actor: TrackActor;
+  includeArchived?: boolean;
+  limit: number;
+  cursor?: TrackListCursor | null;
+}): Promise<{ rows: ProjectTrack[]; nextCursor: string | null } | null> {
+  const limit = Math.max(1, Math.min(TRACK_LIST_PAGE_MAX, params.limit));
+  const rows = await listTracks({
+    projectId: params.projectId,
+    actor: params.actor,
+    includeArchived: params.includeArchived,
+    page: { limit: limit + 1, cursor: params.cursor ?? null },
+  });
+  if (!rows) return null;
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    rows: page,
+    nextCursor:
+      rows.length > limit && last ? encodeTrackListCursor(last) : null,
+  };
 }
 
 /**
@@ -965,7 +1079,7 @@ export async function startTrack(
   if (replaces && replaces.replacedBy.length > 0) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: `Track "${replaces.track.name}" was already reopened as a newer version — reopen that one instead.`,
+      message: `Goal "${replaces.track.name}" was already reopened as a newer version — reopen that one instead.`,
     });
   }
   const trackId = input.id ?? randomUUID();
@@ -1134,7 +1248,7 @@ export async function startTrack(
     if (!linked.ok) {
       throw new TRPCError({
         code: "INTERNAL_SERVER_ERROR",
-        message: `Track "${track.name}" was started but not linked to the version it reopens: ${linked.error}`,
+        message: `Goal "${track.name}" was started but not linked to the version it reopens: ${linked.error}`,
       });
     }
   }
@@ -1219,13 +1333,13 @@ async function assertReplaceableTrack(
   if (!old || old.projectId !== projectId) {
     throw new TRPCError({
       code: "NOT_FOUND",
-      message: "The track to reopen was not found on this project.",
+      message: "The goal to reopen was not found on this project.",
     });
   }
   if (!isTrackClosed(old)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${old.name}" is ${resolveTrackStatusLabel(old.status).toLowerCase()}, not closed — work in it instead of reopening it.`,
+      message: `Goal "${old.name}" is ${resolveTrackStatusLabel(old.status).toLowerCase()}, not closed — work in it instead of reopening it.`,
     });
   }
   return { track: old, replacedBy: await replacingTrackIds(old.id) };
@@ -1248,7 +1362,7 @@ export async function reopenTrack(input: {
 }): Promise<StartTrackResult> {
   const old = await getTrack(input.trackId, input.actor);
   if (!old) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   const kpi = readTrackKpi(old.kpi);
   const params =
@@ -1385,12 +1499,12 @@ export async function loadTrackForWrite(
 ): Promise<{ track: ProjectTrack; project: GateProject }> {
   const track = await getTrack(trackId, actor);
   if (!track) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   const db = await getDb();
   const project = await loadVisibleProject(db, track.projectId, actor.userId);
   if (!project) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   await assertProjectWrite(project, actor.userId);
   return { track, project };
@@ -1429,7 +1543,7 @@ export function assertTrackTransition(
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: isTrackClosed(track)
-        ? `Track "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — that is final. Reopen it as a new version to work on it again.`
+        ? `Goal "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — that is final. Reopen it as a new version to work on it again.`
         : `A ${track.status} track cannot move to ${to}.`,
     });
   }
@@ -1620,7 +1734,7 @@ export async function applyTrackStatus(
   if (!updated) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: `Track "${track.name}" changed while this was being decided — reload it and try again.`,
+      message: `Goal "${track.name}" changed while this was being decided — reload it and try again.`,
     });
   }
   void emitSideEffects({
@@ -1639,6 +1753,10 @@ export async function applyTrackStatus(
   }).catch((err) =>
     logger.warn({ err, trackId: track.id }, "track.update emit failed")
   );
+  // A goal no longer being worked is not "in review" any more.
+  if (trackStatusCategory(status) !== "active") {
+    await settleGoalReviewNotice(track.id);
+  }
   return { status: "updated", track: updated };
 }
 
@@ -1738,7 +1856,7 @@ export function assertStageAdvanceable(track: ProjectTrack, toStage: string) {
   if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — reopen it as a new version before moving its stage.`,
+      message: `Goal "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — reopen it as a new version before moving its stage.`,
     });
   }
   const keys = stageKeys(track.definitionSnapshot?.stages);
@@ -1747,7 +1865,7 @@ export function assertStageAdvanceable(track: ProjectTrack, toStage: string) {
       code: "BAD_REQUEST",
       message:
         keys.length === 0
-          ? `Track "${track.name}" follows a method with no stages.`
+          ? `Goal "${track.name}" follows a method with no stages.`
           : `"${toStage}" is not a stage of "${track.name}". Stages: ${keys.join(", ")}.`,
     });
   }
@@ -1800,7 +1918,7 @@ export async function applyTrackStageAdvance(params: {
   if (!updated) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: `Track "${track.name}" moved stage while this was being decided — reload it and try again.`,
+      message: `Goal "${track.name}" moved stage while this was being decided — reload it and try again.`,
     });
   }
 
@@ -1997,12 +2115,12 @@ export async function resolveTrackFiling(params: {
 }): Promise<TrackFiling> {
   const track = await getTrack(params.trackId, params.actor);
   if (!track) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   if (params.projectId && params.projectId !== track.projectId) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" belongs to another project — pass that project, or omit projectId.`,
+      message: `Goal "${track.name}" belongs to another project — pass that project, or omit projectId.`,
     });
   }
   // A closed or dropped goal takes no new work (both are final — reopen it as
@@ -2013,7 +2131,7 @@ export async function resolveTrackFiling(params: {
   if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} and takes no new work — reopen it as a new version.`,
+      message: `Goal "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} and takes no new work — reopen it as a new version.`,
     });
   }
   return {
@@ -2043,7 +2161,7 @@ export function resolveFilingStage(
       code: "BAD_REQUEST",
       message:
         keys.length === 0
-          ? `Track "${track.name}" follows a method with no stages — omit trackStage.`
+          ? `Goal "${track.name}" follows a method with no stages — omit trackStage.`
           : `"${explicit}" is not a stage of "${track.name}". Stages: ${keys.join(", ")}.`,
     });
   }
@@ -2139,7 +2257,7 @@ export async function applyTrackParams(
     await repo()
   ).patchParams(track.id, { set, clear }, userId);
   if (!updated) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   return { status: "updated", track: updated };
 }
@@ -2185,7 +2303,7 @@ export function resolveTrackDirection(
   if (direction && direction.length > TRACK_DIRECTION_MAX) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `A track's direction is one line — at most ${TRACK_DIRECTION_MAX} characters.`,
+      message: `A goal's direction is one line — at most ${TRACK_DIRECTION_MAX} characters.`,
     });
   }
   return direction;
@@ -2451,7 +2569,7 @@ export async function applyTrackDirection(
     who.userId
   );
   if (!updated) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   const after = readTrackKpi(updated.kpi);
   if (trackKpiJustReached(before, after)) {
@@ -2551,7 +2669,7 @@ export async function acceptGoalCriterion(input: {
 }): Promise<AcceptGoalCriterionResult> {
   const track = await getTrack(input.trackId, input.actor);
   if (!track) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   const criterion = readGoalCriteria(track.criteria).find(
     (c) => c.key === input.criterionKey
@@ -2575,7 +2693,7 @@ export async function acceptGoalCriterion(input: {
   if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — its criteria were judged when it closed.`,
+      message: `Goal "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — its criteria were judged when it closed.`,
     });
   }
   const note = input.note?.trim() || null;
@@ -2610,6 +2728,8 @@ export async function acceptGoalCriterion(input: {
       message: `The criterion "${criterion.key}" was removed while you decided — read the goal again.`,
     });
   }
+  // The judge decided: "ready for your verdict" leaves their Needs you.
+  await settleGoalReviewNotice(track.id);
   return { status: "updated", track: updated };
 }
 
@@ -2779,7 +2899,7 @@ export async function applyTrackStageAdd(
   if (!updated) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: `Track "${track.name}"'s stages changed while this was being decided — reload it and try again.`,
+      message: `Goal "${track.name}"'s stages changed while this was being decided — reload it and try again.`,
     });
   }
   return { status: "added", track: updated, stageKey: key };
@@ -2851,7 +2971,7 @@ async function startTrackSession(
   const db = await getDb();
   const project = await loadVisibleProject(db, track.projectId, actor.userId);
   if (!project) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   // Dynamic: `create-session.ts` imports this module (resolveTrackFiling).
   const { createFocusSession } =
@@ -2912,12 +3032,12 @@ export async function startStageSession(input: {
   const { actor } = input;
   const track = await getTrack(input.trackId, actor);
   if (!track) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — reopen it as a new version before starting work in it.`,
+      message: `Goal "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — reopen it as a new version before starting work in it.`,
     });
   }
   const stageKey = resolveFilingStage(track, input.stageKey);
@@ -2930,7 +3050,7 @@ export async function startStageSession(input: {
     }
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" stands on no stage — pass stageKey.`,
+      message: `Goal "${track.name}" stands on no stage — pass stageKey.`,
     });
   }
   const stage = readTrackStage(track.definitionSnapshot?.stages, stageKey);
@@ -2968,7 +3088,7 @@ export async function startStageSession(input: {
 
   const project = await loadVisibleProject(db, track.projectId, actor.userId);
   if (!project) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
 
   // PER-STEP DOMAIN (W2a): the stage names a workspace TEMPLATE; work it in a
