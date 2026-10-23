@@ -163,7 +163,7 @@ describe("open space invites in needs-you (real read)", () => {
   it("the open invite is ONE space-invite row at the floor, with the token Accept takes", async () => {
     const { signals } = (await signalsRouter
       .createCaller(ctxOf(ME))
-      .list({ lens: "needs-you" })) as {
+      .list({ lens: "needs-you" })) as unknown as {
       signals: Array<Record<string, unknown>>;
     };
     const invites = signals.filter((s) => s.kind === "space-invite");
