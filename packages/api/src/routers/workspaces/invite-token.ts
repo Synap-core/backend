@@ -38,9 +38,6 @@ export async function findInviteByToken(
   token: string
 ): Promise<InviteRow | undefined> {
   return db.query.invites.findFirst({
-    where: or(
-      eq(invites.tokenDigest, inviteTokenDigest(token)),
-      and(isNull(invites.tokenDigest), eq(invites.token, token))
-    ),
+    where: eq(invites.token, token),
   });
 }

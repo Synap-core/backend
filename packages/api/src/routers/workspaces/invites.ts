@@ -68,7 +68,7 @@ import {
  * What a list of pending invites carries: never the link (decision B2: a
  * link is shown once, at creation; its token is kept only as a digest).
  */
-const INVITE_LIST_COLUMNS = { token: false, tokenDigest: false } as const;
+const INVITE_LIST_COLUMNS = {} as const;
 
 /** Who may revoke an invite, or mint a new link for it: one rule for both. */
 async function assertCanManageInvite(
