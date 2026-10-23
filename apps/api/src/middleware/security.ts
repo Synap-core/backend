@@ -21,6 +21,12 @@ import {
   getDeviceAuthRateConfig,
   getKeyStateRateConfig,
   getOAuthPublicRateConfig,
+  getOAuthTokenRateConfig,
+  buildOAuthPublicKey,
+  buildOAuthTokenKey,
+  buildOAuthTokenIpCeilingKey,
+  OAUTH_TOKEN_BODY_READ_MAX,
+  readTextCapped,
   buildCrudIpCeilingKey,
   isDirectLoopbackCall,
 } from "./rate-limit-classes.js";
@@ -363,10 +369,10 @@ const keyStateRateLimiter = rateLimiter({
 const oauthPublicRate = getOAuthPublicRateConfig();
 
 /**
- * The pod authorization server's public doors (`/register`, `/authorize`,
- * `/token`): IP-ONLY, never the Authorization header — none of them takes a
- * Bearer, and a made-up one must not buy a fresh bucket. Loopback keeps the
- * local bypass.
+ * The pod authorization server's public doors (`/register`, `/authorize`):
+ * IP-keyed (`buildOAuthPublicKey`: `/authorize` per client_id on a shared
+ * address), never the Authorization header — neither takes a Bearer, and a
+ * made-up one must not buy a fresh bucket. Loopback keeps the local bypass.
  */
 const oauthPublicRateLimiter = rateLimiter({
   windowMs: oauthPublicRate.windowMs,
@@ -377,12 +383,77 @@ const oauthPublicRateLimiter = rateLimiter({
     if (isLocalCaller(c, ip)) {
       return "localhost-bypass-oauth_public-" + Math.random();
     }
-    return `oauth_public:ip:${ip}`;
+    return buildOAuthPublicKey(c.req.path, ip, c.req.query("client_id"));
   },
   handler: classHandler(
     "oauth_public",
     oauthPublicRate.max,
     oauthPublicRate.retryAfter
+  ),
+});
+
+const oauthTokenRate = getOAuthTokenRateConfig();
+
+/** The `/token` address ceiling's key, or null when this caller has none. */
+function oauthTokenIpCeilingKey(c: Context): string | null {
+  const ip = clientIp(c);
+  return isLocalCaller(c, ip) ? null : buildOAuthTokenIpCeilingKey(ip);
+}
+
+/**
+ * `/token`'s address ceiling, in FRONT of the per-grant bucket: the grant
+ * keys are values the limiter cannot check, so where addresses tell callers
+ * apart one inventing a grant per request is still bounded. None on a
+ * shared address (the whole internet's) or for a local caller.
+ */
+const oauthTokenIpCeilingLimiter = rateLimiter({
+  windowMs: oauthTokenRate.windowMs,
+  limit: oauthTokenRate.ipCeiling,
+  standardHeaders: false,
+  skip: (c) => oauthTokenIpCeilingKey(c) === null,
+  keyGenerator: (c) => oauthTokenIpCeilingKey(c) ?? "oauth_token:ipall:none",
+  handler: classHandler(
+    "oauth_token",
+    oauthTokenRate.ipCeiling,
+    oauthTokenRate.retryAfter
+  ),
+});
+
+/** The `/token` body the limiter keys on, or null when it does not read it. */
+async function readOAuthTokenBody(c: Context): Promise<string | null> {
+  const declared = c.req.header("content-length");
+  if (declared === undefined) {
+    return readTextCapped(c.req.raw.clone(), OAUTH_TOKEN_BODY_READ_MAX);
+  }
+  const length = Number(declared);
+  if (!Number.isInteger(length) || length <= 0) return null;
+  if (length > OAUTH_TOKEN_BODY_READ_MAX) return null;
+  return c.req.text().catch(() => null);
+}
+
+/**
+ * `/token` per grant (`buildOAuthTokenKey`). The grant is in the body: one of
+ * a small declared length is read here (Hono caches the text, so /token reads
+ * the same body after this). One with NO declared length (chunked, HTTP/2) is
+ * read from a clone, at most `OAUTH_TOKEN_BODY_READ_MAX` bytes, so it is
+ * keyed by its grant too, not in the one `unread` bucket (review O-3).
+ */
+const oauthTokenRateLimiter = rateLimiter({
+  windowMs: oauthTokenRate.windowMs,
+  limit: oauthTokenRate.max,
+  standardHeaders: "draft-7",
+  keyGenerator: async (c: Context): Promise<string> => {
+    const ip = clientIp(c);
+    if (isLocalCaller(c, ip)) {
+      return "localhost-bypass-oauth_token-" + Math.random();
+    }
+    const body = await readOAuthTokenBody(c);
+    return buildOAuthTokenKey(body, c.req.header("content-type") ?? "", ip);
+  },
+  handler: classHandler(
+    "oauth_token",
+    oauthTokenRate.max,
+    oauthTokenRate.retryAfter
   ),
 });
 
@@ -429,6 +500,13 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
       return keyStateRateLimiter(c, next);
     case "oauth_public":
       return oauthPublicRateLimiter(c, next);
+    case "oauth_token":
+      // Address ceiling FIRST (where it exists), then the grant's own bucket
+      // — same nested-429 handling as the calendar feed.
+      return oauthTokenIpCeilingLimiter(c, async () => {
+        const limited = await oauthTokenRateLimiter(c, next);
+        if (limited instanceof Response) c.res = limited;
+      });
     case "crud":
     default:
       // Address ceiling FIRST, then the caller's own bucket — same nested-429
