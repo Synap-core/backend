@@ -98,7 +98,10 @@ export const PRESELECT_DECISIONS = false;
  */
 export function initialSelection(
   offer: readonly OfferedPermission[],
-  current: readonly ApprovedPair[]
+  current: readonly ApprovedPair[],
+  // Ticks nothing: every offered space starts ticked, so select-all subsumes
+  // it. Kept so the launch's space reaches the model (`spaceHintFirst` orders).
+  _spaceHint?: string | null
 ): Selection {
   const out = new Set<string>();
   if (current.length > 0) {
@@ -114,6 +117,28 @@ export function initialSelection(
     for (const w of o.workspaces) out.add(key(o.permission, w.workspaceId));
   }
   return out;
+}
+
+/**
+ * The offer with the launch's space (`space_hint`: the Synap browser opened
+ * the app from it) listed first under each permission that offers it. Order
+ * only: it never adds a space a permission does not offer, and an unknown or
+ * absent hint leaves the offer as it is. The hint is untrusted query text and
+ * never reaches the server.
+ */
+export function spaceHintFirst<T extends OfferedPermission>(
+  offer: readonly T[],
+  spaceHint?: string | null
+): T[] {
+  if (!spaceHint) return [...offer];
+  return offer.map((o) => {
+    const hinted = o.workspaces.find((w) => w.workspaceId === spaceHint);
+    if (!hinted) return o;
+    return {
+      ...o,
+      workspaces: [hinted, ...o.workspaces.filter((w) => w !== hinted)],
+    };
+  });
 }
 
 /** How much of a section is ticked: drives its one tri-state checkbox. */

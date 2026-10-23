@@ -13,6 +13,7 @@ import {
   sectionCheckboxLabel,
   sectionState,
   spaceCheckboxLabel,
+  spaceHintFirst,
   splitOffer,
   toApproved,
   toggle,
@@ -277,6 +278,38 @@ describe("a whole section selects or clears at once", () => {
     expect(sectionCheckboxLabel("decisions")).toBe(
       "All its decisions, in every space"
     );
+  });
+});
+
+describe("consent space hint (order only, never a grant)", () => {
+  it("lists the hinted space first where a permission offers it", () => {
+    const out = spaceHintFirst(OFFER, "shared");
+    expect(out[0]!.workspaces.map((w) => w.workspaceId)).toEqual([
+      "shared",
+      "brand",
+    ]);
+    // Not offered there: that permission is left as it is.
+    expect(out[1]!.workspaces.map((w) => w.workspaceId)).toEqual(["brand"]);
+    expect(out[2]!.workspaces).toEqual([]);
+  });
+
+  it("never adds a space the offer does not hold", () => {
+    const out = spaceHintFirst(OFFER, "someone-elses-space");
+    expect(out).toEqual(OFFER);
+    const s = initialSelection(out, [], "someone-elses-space");
+    expect(isTicked(s, "entity.post.read", "someone-elses-space")).toBe(false);
+    expect(toApproved(s, out)).toHaveLength(3);
+  });
+
+  it("a re-consent keeps the current approval; the hint never adds to it", () => {
+    const s = initialSelection(
+      spaceHintFirst(OFFER, "shared"),
+      [{ permission: "entity.post.read", workspaceId: "brand" }],
+      "shared"
+    );
+    expect(toApproved(s, OFFER)).toEqual([
+      { permission: "entity.post.read", workspaceId: "brand" },
+    ]);
   });
 });
 

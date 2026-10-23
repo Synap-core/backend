@@ -72,6 +72,11 @@ describe("pod-app surfaces", () => {
     const params = page.slice(page.indexOf("params={{"));
     expect(params).not.toMatch(/space_?hint/i);
     expect(read(CONSENT)).not.toMatch(/\.\.\.params,\s*spaceHint/);
+    // It reaches the model (order only): the page reads it, the form applies it.
+    expect(page).toMatch(/spaceHint=\{/);
+    expect(read(CONSENT)).toMatch(
+      /spaceHintFirst\(offered\.permissions, spaceHint\)/
+    );
   });
 
   it("app page: Apply automatically goes through its confirm", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
 import { ReceiverShell } from "../../_lib/receiver-shell";
@@ -40,6 +40,7 @@ import {
   sectionCheckboxLabel,
   sectionState,
   spaceCheckboxLabel,
+  spaceHintFirst,
   splitOffer,
   toApproved,
   toggle,
@@ -131,10 +132,16 @@ export function ConsentForm({
   params,
   podHost,
   identity,
+  spaceHint,
 }: {
   params: ConsentParams;
   podHost?: string;
   identity?: string;
+  /**
+   * The launch's `space_hint`: that space is listed first where the person
+   * can give it. Kept OUT of `params`, so it never reaches the server.
+   */
+  spaceHint?: string;
 }) {
   const [step, setStep] = useState<Step>({ kind: "idle" });
 
@@ -162,13 +169,23 @@ export function ConsentForm({
       step.kind === "pod_credential");
 
   // A pod app (CIMD client): the person narrows what it may touch, per space.
-  const app = context.data?.app ?? null;
+  const offered = context.data?.app ?? null;
+  const app = useMemo(
+    () =>
+      offered
+        ? {
+            ...offered,
+            permissions: spaceHintFirst(offered.permissions, spaceHint),
+          }
+        : null,
+    [offered, spaceHint]
+  );
   const [selection, setSelection] = useState<Selection>(new Set());
   useEffect(() => {
     if (app) {
-      setSelection(initialSelection(app.permissions, app.approved));
+      setSelection(initialSelection(app.permissions, app.approved, spaceHint));
     }
-  }, [app]);
+  }, [app, spaceHint]);
   const approved = app ? toApproved(selection, app.permissions) : [];
 
   const act = useCallback(
