@@ -12,7 +12,10 @@
 
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
-import { parsePermission, patternMatches } from "@synap/governance-policy/grants";
+import {
+  parsePermission,
+  patternMatches,
+} from "@synap/governance-policy/grants";
 
 export interface OfferedSpace {
   workspaceId: string;

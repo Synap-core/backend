@@ -520,7 +520,7 @@ describe("the facets an app reads are those a member of its spaces reads (B7)", 
       const r = grant
         ? await runWithGrant(grantOfScope(grant), run)
         : await run();
-      return r.facets.map((f) => String(f.profile.slug)).sort();
+      return (r.facets ?? []).map((f) => String(f.profile.slug)).sort();
     };
     expect(await slugsOf()).toEqual(["client", "lead", "partner", "vip"]);
     expect(
