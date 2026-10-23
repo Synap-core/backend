@@ -16,7 +16,7 @@ Before the first write, name the layer in one word, then take its door. Most req
 | **view**       | to SEE existing things: a list, a grouping, a board, a dashboard       | `synap_list_views` first, so you do not duplicate one; then `synap_create_view` (`tools:build`). Never copy records into a new space to show them.            |
 | **capability** | access beyond the graph: connect Gmail, send mail, search the live web | §2b: `synap_list_capabilities`, then run it or file its install. Never build a view to stand in for a capability.                                             |
 | **session**    | "I'm starting work on X": one bounded piece of work                    | `synap_start_session` with a one-line goal. Not a task.                                                                                                       |
-| **track**      | a lasting goal inside a project: "grow the newsletter"                 | §2c: `synap_list_tracks`, else `synap_start_track` (`tools:tracks`). Not a project, not a pack, not a playbook.                                               |
+| **goal**       | a lasting goal inside a project: "grow the newsletter" (a _track_)     | §2c: `synap_list_tracks`, else `synap_start_track` (`tools:tracks`). Not a project, not a pack, not a playbook.                                               |
 | **rule**       | a standing intent: "always…", "from now on…", "every Monday…"          | `synap_create_rule` (`tools:governance`) with the user's own words as `intent`; a trigger→steps reaction is `synap_create_automation` (`tools:capabilities`). |
 | **structure**  | a new area of work that needs kinds, spaces or a project               | the rest of this skill, from §0.                                                                                                                              |
 
@@ -30,7 +30,7 @@ Before proposing structure:
 2. `synap_list_profiles` — kinds **and** roles (`profileKind`, `applicableKinds`, `parentProfileId`, `entityScope`).
 3. `synap_ask` — does this intent already live as a project or a cluster of entities?
 
-If a close project exists, **reuse it**. Do not mint a twin. Name-match is enough: if orient already lists a project whose description is this company or this commitment, that **is** the project. Ask "reuse «Launch The Architech»?" — do not invent «Architech Business Model» next to it: a business-model method on that project is a **track** on it (`synap_list_tracks` / `synap_start_track`), not a twin project.
+If a close project exists, **reuse it**. Do not mint a twin. Name-match is enough: if orient already lists a project whose description is this company or this commitment, that **is** the project. Ask "reuse «Launch The Architech»?" — do not invent «Architech Business Model» next to it: a business-model method on that project is a **goal** on it (`synap_list_tracks` / `synap_start_track`), not a twin project.
 
 **Pending review first.** If `startHere.pendingReview.count > 0`, offer to walk the queue before any new structure. Unreviewed work looks missing and gets duplicated.
 
@@ -42,12 +42,12 @@ If a close project exists, **reuse it**. Do not mint a twin. Name-match is enoug
 
 ### 1. Ask before you build (required)
 
-Do not install templates, define kinds, or create a project until you can answer these. Ask only what is still unknown — one short pass, not a wizard. Never a 7-step implementation plan in the first reply. What each word means (project, track, step, template, pack, role): `concepts`.
+Do not install templates, define kinds, or create a project until you can answer these. Ask only what is still unknown — one short pass, not a wizard. Never a 7-step implementation plan in the first reply. What each word means (project, goal, step, template, pack, role): `concepts`.
 
 | Question                                                                             | You are distinguishing                                                                  |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | What is the **commitment** (the thing we are driving toward over weeks)?             | **Project** (optional; gravity). Not a folder.                                          |
-| Which **lasting goals** will it pursue (grow the newsletter, win ten clients…)?      | **Tracks** — `synap_start_track`, no template; methods are playbooks sessions follow.   |
+| Which **lasting goals** will it pursue (grow the newsletter, win ten clients…)?      | **Goals** — `synap_start_track`, no template; methods are playbooks sessions follow.    |
 | Which **new kinds of things** must be recorded that no workspace owns yet?           | **Workspaces** (domains). Four-test + template-first. Missing domain → load `agent-os`. |
 | What is the **thing** vs a **hat** vs a **relationship-with-a-life** vs a **stage**? | Kind vs **facet on any kind** vs deal-pattern kind vs status/view.                      |
 | What already exists that we can **extend**?                                          | `extend-first` — never a twin slug.                                                     |
@@ -106,23 +106,23 @@ Walk this ladder instead. Every rung is a door that exists; do not invent one.
 
 A skill your plan creates IS resolvable in the same batch: the automation door looks a verb up by **skill name**, and skills materialize before automations. That is why a fact + a behaviour can ride in one proposal.
 
-### 2c. A lasting goal inside a project → a TRACK
+### 2c. A lasting goal inside a project → a GOAL (a track)
 
-A **track** is a goal inside ONE project ("Grow the newsletter", "Win the first ten clients"); a project runs several. It holds a `direction` (one line, in the person's words) and, only if the person names a number, a `kpi` `{ label, unit?, target }`. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met — hitting a number never closes it. Work in it is ordinary sessions filed into it. Definitions: `concepts`.
+A **goal** is a _track_ in every tool and field name (`synap_start_track`, `trackId`) — say "goal" to the person, never "track". It lives inside ONE project ("Grow the newsletter", "Win the first ten clients"); a project runs several. It holds a `direction` (one line, in the person's words) and, only if the person names a number, a `kpi` `{ label, unit?, target }`. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met — hitting a number never closes it. Work in it is ordinary sessions filed into it. Definitions: `concepts`.
 
 **Asked to pursue a goal in a project** ("keep growing the newsletter in Synap"): `synap_list_tracks` for the project (already running? resume it) → none? `synap_start_track` with `projectId`, a `name`, the `direction` and any `kpi` the person named — no method needed. Then work: `synap_start_session` with `trackId`, one session per sitting, as many as it takes.
 
-| The user needs…                                  | Do this                                                                                                                |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-| a **lasting goal** in an existing project        | `synap_list_tracks` (already running?) → `synap_start_track` (`name`, `direction`, optional `kpi`)                     |
-| one piece of work toward it                      | a **session** born in the track: `synap_start_session` (or `synap_run_playbook` for a session template) with `trackId` |
-| a repeatable way to do that work                 | a session template (`synap_create_playbook`, default scope) run with `trackId` — not a track method                    |
-| new **kinds of things** no workspace owns        | a workspace (four-test, `workspace-design`) — never to represent a track                                               |
-| a new long-lived commitment with its own gravity | a project — never a twin project for a track of an existing one                                                        |
+| The user needs…                                  | Do this                                                                                                               |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| a **lasting goal** in an existing project        | `synap_list_tracks` (already running?) → `synap_start_track` (`name`, `direction`, optional `kpi`)                    |
+| one piece of work toward it                      | a **session** born in the goal: `synap_start_session` (or `synap_run_playbook` for a session template) with `trackId` |
+| a repeatable way to do that work                 | a session template (`synap_create_playbook`, default scope) run with `trackId` — not a goal method                    |
+| new **kinds of things** no workspace owns        | a workspace (four-test, `workspace-design`) — never to represent a goal                                               |
+| a new long-lived commitment with its own gravity | a project — never a twin project for a goal of an existing one                                                        |
 
-**A track steers; its sessions verify.** Report progress with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it or close the goal; never change the target or close the goal yourself. While a track is active, its agent may work in the spaces its project links (`synap_project_use_workspace`); pausing it suspends that, closing or dropping it ends it. Pause, resume, close (`completed` + a `verdict`) or drop (`archived`, with a `verdict` saying why) it with `synap_set_track_status`; your close is a proposal the person approves. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start tracks — start each one.
+**A goal steers; its sessions verify.** Report progress with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it or close the goal; never change the target or close the goal yourself. While a goal is active, its agent may work in the spaces its project links (`synap_project_use_workspace`); pausing it suspends that, closing or dropping it ends it. Pause, resume, close (`completed` + a `verdict`) or drop (`archived`, with a `verdict` saying why) it with `synap_set_track_status`; your close is a proposal the person approves. Goal writes are governed: `proposed` is success. Installing a pack onto a project does **not** start goals — start each one.
 
-**Legacy: tracks with stages.** A track started from a track template (`scope: "project"`, `playbookId` on `synap_start_track`) has re-enterable stages. Work a stage with `synap_start_stage_session` (`trackId`, optional `stageKey`); never `synap_advance_track` without the user — advancing returns an `offer` (show it, start it only on a yes). Do not create new track templates; a new track needs none.
+**Legacy: goals with steps.** A goal started from a goal template (`scope: "project"`, `playbookId` on `synap_start_track`) has re-enterable stages. Work a stage with `synap_start_stage_session` (`trackId`, optional `stageKey`); never `synap_advance_track` without the user — advancing returns an `offer` (show it, start it only on a yes). Do not create new goal templates; a new goal needs none.
 
 ### 3. Which skill to load next
 
@@ -146,7 +146,7 @@ A **track** is a goal inside ONE project ("Grow the newsletter", "Win the first 
 - Grading yourself. "85% complete" against no criteria and no declared outputs is an opinion, not a status — propose criteria (§0.4) and expected outputs (§2) so the person can check the claim.
 - Onboard or fill an empty workspace "because it is empty."
 - Invent a workspace that fails the four-test.
-- Nested or twin projects, or a workspace, to represent a **goal or method** of an existing project. A lasting goal is a track; a repeatable method is a playbook a session or worker follows; one bounded piece of work is a session (`trackId`).
+- Nested or twin projects, or a workspace, to represent a **goal or method** of an existing project. A lasting goal is a goal (`synap_start_track`); a repeatable method is a playbook a session or worker follows; one bounded piece of work is a session (`trackId`).
 - Invent CLI flags or tools this door does not list.
 - A second entity for a hat (`kind_mismatch` → **widen** the role’s `applicableKinds`, then `attach_facet`).
 - Company/person-only facets. If the hat belongs on `item` (or any kind), the role’s `applicableKinds` must include that kind.

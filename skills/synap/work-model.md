@@ -8,16 +8,16 @@ A process is the life of a **thing**, not a script. A lead, a post or a feature 
 
 ### The nouns
 
-| Noun                 | What it is                                                                                                             | Not                                 |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| **Project**          | a commitment, and a lens across spaces                                                                                 | a method, a domain                  |
-| **Track** (optional) | a goal in one project: direction, the workers it turns on; open while it matters, or a person closes it with a verdict | a list of stages                    |
-| **Thing**            | any entity: one kind, maybe roles, one status per kind or role                                                         | a second entity for a hat           |
-| **Session**          | the unit of work that closes: goal, criteria, room; one thing or a batch                                               | a "run" because it follows a method |
+| Noun                | What it is                                                                                                            | Not                                 |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| **Project**         | a commitment, and a lens across spaces                                                                                | a method, a domain                  |
+| **Goal** (optional) | in one project (a _track_ in tools): direction, criteria, the workers it turns on; its judge closes it with a verdict | a list of stages                    |
+| **Thing**           | any entity: one kind, maybe roles, one status per kind or role                                                        | a second entity for a hat           |
+| **Session**         | the unit of work that closes: goal, criteria, room; one thing or a batch                                              | a "run" because it follows a method |
 
 Not nouns (nobody manages them as objects): a **pipeline** is a view of a lifecycle; a **worker** is configuration (a method + a trigger + a size); a **method** is a playbook a session may follow; a **check** is a recurring verification.
 
-How they relate: a project files things; each kind or role declares one **lifecycle** (its status list); its **pipeline** is computed (columns = the options in order); a status change fires **workers**, which start **sessions** carrying the project, the track and their **targets**; a session moves each thing's status through the door. **Hand-off is a role:** a won deal makes the party a client (attach the role); nothing is copied.
+How they relate: a project files things; each kind or role declares one **lifecycle** (its status list); its **pipeline** is computed (columns = the options in order); a status change fires **workers**, which start **sessions** carrying the project, the goal and their **targets**; a session moves each thing's status through the door. **Hand-off is a role:** a won deal makes the party a client (attach the role); nothing is copied.
 
 ### Three tenses of a thing
 
@@ -49,11 +49,11 @@ Every status change — your call, a board drag, a method's step, a sync — goe
 
 ### Workers
 
-A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A track or project **turns it on** for its scope; installs turn it on space-wide. Authoring: `processes`.
+A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. Authoring: `processes`.
 
-### Tracks
+### Goals (tracks)
 
-A track holds an owner, a direction, instructions, the workers it turns on, and a goal (stated, or measured as transitions into `done`). It has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met (`set_track_status` `completed` + `verdict`; dropped = `archived`, with a `verdict` saying why). Your close is a proposal; a closed goal comes back only as a new version. Pause it while nobody should work on it. Work in it = `start_session` + `trackId`. A thing may count for two tracks. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old tracks started from a method; never `advance_track` without the user.
+A goal is a _track_ in every tool and field name (`start_track`, `trackId`) — say "goal" to the person; a session's one-line `goal` is its **Aim**. A goal holds an owner, a direction, instructions, the workers it turns on, and what done means (criteria, or a number measured as transitions into `done`). It has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met (`set_track_status` `completed` + `verdict`; dropped = `archived`, with a `verdict` saying why). Your close is a proposal; a closed goal comes back only as a new version. Pause it while nobody should work on it. Work in it = `start_session` + `trackId`. A thing may count for two goals. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old goals started from a method; never `advance_track` without the user.
 
 ### The homes: what each space makes, what is moving
 
