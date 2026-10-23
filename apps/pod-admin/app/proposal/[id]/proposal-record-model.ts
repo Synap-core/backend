@@ -344,7 +344,10 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
     const def = isProperty ? defs.get(key) : undefined;
     const resolved = input.objectRefs?.[change.path];
     // Machine keys: a door when the pod resolved the object, else nothing.
-    if (!def && isMachineKey(key) && !resolved) continue;
+    // `profileSlug` is the record's KIND — a kind change is the change itself,
+    // though the shared rule files the column under bookkeeping.
+    const isKind = key === "profileSlug";
+    if (!def && !isKind && isMachineKey(key) && !resolved) continue;
 
     const fieldOp: RecordField["op"] =
       change.operation === "delete"
