@@ -645,7 +645,7 @@ export async function applyProposalApproval(args: {
       viaApp,
       background: args.background === true,
     });
-    if (handedOff) return handedOff;
+    void handedOff;
   }
 
   return completeProposalApproval(args, viaApp);
