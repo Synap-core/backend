@@ -1887,6 +1887,7 @@ describe("CIMD clients", () => {
       accessToken: "synap_hub_live_APPKEY",
       keyId: "app-key-1",
       expiresAt: new Date(Date.now() + 3600 * 1000),
+      actsAs: "agent",
       agentUserId: APP_AGENT_ID,
       publicId: APP_PUBLIC_ID,
       grant: [
@@ -1998,6 +1999,8 @@ describe("CIMD clients", () => {
       },
     ]);
     expect(body.synap_user).toEqual({ id: HUMAN_ID, name: "Ada" });
+    // Who the token acts as, as the key door minted it (`podAppActsAs`).
+    expect(body.synap_acts_as).toBe("agent");
     // Which app this is on the pod, and where the person manages it.
     expect(body.synap_app).toEqual({
       id: APP_PUBLIC_ID,

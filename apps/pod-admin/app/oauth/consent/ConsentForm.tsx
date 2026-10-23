@@ -29,6 +29,7 @@ import { SIGNED_IN_APPS_COPY } from "@synap-core/types/sign-in";
 import { formatRelative } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
 import {
+  actsAsHeadline,
   allowBlockedReason,
   initialSelection,
   invalidRequestHint,
@@ -36,6 +37,7 @@ import {
   permissionLabel,
   reasonOf,
   spaceCheckboxLabel,
+  splitOffer,
   toApproved,
   toggle,
   withoutSpace,
@@ -289,6 +291,13 @@ export function ConsentForm({
                 to connect to your pod{podHost ? ` ${podHost}` : ""}
                 {identity ? ` as ${identity}` : ""}.
               </p>
+              {/* A Synap app acts AS the person: said plainly, from the
+                  server's words and the spaces ticked below (the grant). */}
+              {app.actsAs.kind === "person" ? (
+                <p className="text-[13px] font-medium leading-relaxed text-foreground/90">
+                  {actsAsHeadline(app.actsAs.lead, selection, app.permissions)}
+                </p>
+              ) : null}
             </>
           ) : (
             <>
@@ -700,6 +709,80 @@ type ConsentApp = NonNullable<
   inferRouterOutputs<AppRouter>["apiKeys"]["getOAuthConsentContext"]["app"]
 >;
 
+/** One line per permission, with a tick for each space it may be given in. */
+function PermissionList({
+  permissions,
+  selection,
+  onToggle,
+  busy,
+}: {
+  permissions: ConsentApp["permissions"];
+  selection: Selection;
+  onToggle: (permission: string, workspaceId: string) => void;
+  busy: boolean;
+}) {
+  const groupId = useId();
+  return (
+    <ul className="flex flex-col gap-3">
+      {permissions.map((p, i) => {
+        const labelId = `${groupId}-p${i}`;
+        const reason = reasonOf(p);
+        return (
+          <li key={p.permission} className="flex flex-col gap-1.5">
+            <span id={labelId} className="text-sm text-foreground/85">
+              {permissionLabel(p.permission)}{" "}
+              <span className="font-mono text-xs text-foreground/65">
+                {p.permission}
+              </span>
+            </span>
+            {reason ? (
+              <p className="text-pretty text-xs leading-relaxed text-foreground/75">
+                {/* The developer's words, as text: why it asks. */}
+                <span className="text-foreground/65">Its reason: </span>
+                {reason}
+              </p>
+            ) : null}
+            {p.workspaces.length === 0 ? (
+              <span className="text-xs text-foreground/65">
+                You have no space where you can give it this.
+              </span>
+            ) : (
+              <div
+                role="group"
+                aria-labelledby={labelId}
+                className="flex flex-wrap gap-x-4"
+              >
+                {p.workspaces.map((w) => (
+                  <Checkbox
+                    key={w.workspaceId}
+                    size="sm"
+                    // A 40px row to tap, with no two rows' hit areas
+                    // overlapping (HeroUI's base is `p-2 -m-2`).
+                    classNames={{ base: "my-0 min-h-10 py-0" }}
+                    aria-label={spaceCheckboxLabel(
+                      p.permission,
+                      w.workspaceName
+                    )}
+                    isSelected={isTicked(
+                      selection,
+                      p.permission,
+                      w.workspaceId
+                    )}
+                    isDisabled={busy}
+                    onValueChange={() => onToggle(p.permission, w.workspaceId)}
+                  >
+                    {w.workspaceName}
+                  </Checkbox>
+                ))}
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /**
  * A pod app's consent (spec 17 §9.1): its domain is the headline (above), and
  * the person picks, per permission, the spaces it may act in — only from what
@@ -730,81 +813,52 @@ function AppConsent({
   onDecide: (approve: boolean) => void;
 }) {
   const missing = withoutSpace(app.permissions);
+  // Decisions (approve / reject) are their own line, never part of a write.
+  const { grants, decisions } = splitOffer(app.permissions);
   const groupId = useId();
   return (
     <>
       <div className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-        <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65">
-          <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to
-        </p>
-        <ul className="flex flex-col gap-3">
-          {app.permissions.map((p, i) => {
-            const labelId = `${groupId}-p${i}`;
-            const reason = reasonOf(p);
-            return (
-              <li key={p.permission} className="flex flex-col gap-1.5">
-                <span id={labelId} className="text-sm text-foreground/85">
-                  {permissionLabel(p.permission)}{" "}
-                  <span className="font-mono text-xs text-foreground/65">
-                    {p.permission}
-                  </span>
-                </span>
-                {reason ? (
-                  <p className="text-pretty text-xs leading-relaxed text-foreground/75">
-                    {/* The developer's words, as text: why it asks. */}
-                    <span className="text-foreground/65">Its reason: </span>
-                    {reason}
-                  </p>
-                ) : null}
-                {p.workspaces.length === 0 ? (
-                  <span className="text-xs text-foreground/65">
-                    You have no space where you can give it this.
-                  </span>
-                ) : (
-                  <div
-                    role="group"
-                    aria-labelledby={labelId}
-                    className="flex flex-wrap gap-x-4"
-                  >
-                    {p.workspaces.map((w) => (
-                      <Checkbox
-                        key={w.workspaceId}
-                        size="sm"
-                        // A 40px row to tap, with no two rows' hit areas
-                        // overlapping (HeroUI's base is `p-2 -m-2`).
-                        classNames={{ base: "my-0 min-h-10 py-0" }}
-                        aria-label={spaceCheckboxLabel(
-                          p.permission,
-                          w.workspaceName
-                        )}
-                        isSelected={isTicked(
-                          selection,
-                          p.permission,
-                          w.workspaceId
-                        )}
-                        isDisabled={busy}
-                        onValueChange={() =>
-                          onToggle(p.permission, w.workspaceId)
-                        }
-                      >
-                        {w.workspaceName}
-                      </Checkbox>
-                    ))}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+        {grants.length > 0 && (
+          <>
+            <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65">
+              <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to
+            </p>
+            <PermissionList
+              permissions={grants}
+              selection={selection}
+              onToggle={onToggle}
+              busy={busy}
+            />
+          </>
+        )}
+        {decisions.length > 0 && (
+          <>
+            <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65">
+              <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to decide
+              for you
+            </p>
+            <PermissionList
+              permissions={decisions}
+              selection={selection}
+              onToggle={onToggle}
+              busy={busy}
+            />
+            <p className="text-xs leading-relaxed text-foreground/65">
+              Each decision is yours, on one change at a time. Nothing above
+              includes it: tick the spaces where you allow it.
+            </p>
+          </>
+        )}
         {app.ignoredScopes.length > 0 && (
           <p className="text-xs text-foreground/65">
             It also asked for {app.ignoredScopes.join(", ")}, which apps are not
             given.
           </p>
         )}
+        {/* Who its token acts as, in the server's words (`actsAs`). */}
         <p className="text-xs leading-relaxed text-foreground/65">
-          Every change it makes is sent to you for review first. It can never
-          see other spaces, approve its own changes, or create keys.
+          {app.actsAs.note}
         </p>
         <div className="flex flex-col gap-1 pt-0.5">
           <span className="text-sm text-foreground/65">Sends you back to</span>
