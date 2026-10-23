@@ -755,7 +755,7 @@ export function ProposalReviewBody({
   >({});
   const actionable = isActionable(status);
   const mode: DecisionMode =
-    duplicate && needsIdentityChoice({ duplicate })
+    duplicate && needsIdentityChoice(null)
       ? duplicate.resolvable.length > 0
         ? { kind: "twin-verbs", review: duplicate }
         : { kind: "graph-choices", review: duplicate, choices: itemChoices }
