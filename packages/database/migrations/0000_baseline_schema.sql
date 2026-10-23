@@ -296,6 +296,8 @@ ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_expires_at" times
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_sha256" text;
 -- 0338b: the workspace templates a pod app declares (`synap_templates`).
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_templates" text[] NOT NULL DEFAULT '{}';
+-- 0339b: why the document asks for each permission (`synap_requests[].reason`).
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_reasons" jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
   "code_hash"      text PRIMARY KEY,
