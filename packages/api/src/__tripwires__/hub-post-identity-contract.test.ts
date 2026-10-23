@@ -62,11 +62,14 @@ const ALLOWLIST: Record<string, string> = {
 
 /**
  * A handler binds identity through the ONE rule if it calls the full door
- * (`resolveActingContext`) or the predicate that door delegates to
- * (`mayActAsUser`). Both live in `rest/_shared.ts`.
+ * (`resolveActingContext`) or the identity door it delegates to
+ * (`actingUserIdFor`, which applies `mayActAsUser`). All live in
+ * `rest/_shared.ts`.
  */
 function bindsIdentity(clean: string): boolean {
-  return /\b(?:resolveActingContext|mayActAsUser)\s*\(/.test(clean);
+  return /\b(?:resolveActingContext|actingUserIdFor|mayActAsUser)\s*\(/.test(
+    clean
+  );
 }
 
 /** An identity decision keyed on "has an api key id" — the retired defect shape. */
@@ -360,7 +363,7 @@ describe("tripwire: hub REST mutating routes bind identity via resolveActingCont
     expect(nonPostHandlers.length).toBeGreaterThan(30);
   });
 
-  it("no un-allowlisted hub REST mutating handler reads body.userId without resolveActingContext / mayActAsUser", () => {
+  it("no un-allowlisted hub REST mutating handler reads body.userId without resolveActingContext / actingUserIdFor", () => {
     const offenders: string[] = [];
     for (const h of allHandlers) {
       const clean = stripComments(h.bodyText, "ts");
@@ -427,15 +430,46 @@ describe("tripwire: no inline apiKeyId identity decision outside mayActAsUser", 
     expect(sources.some((s) => s.rel === "rest/entities.ts")).toBe(true);
   });
 
-  it("the predicate is actually in use (non-vacuity: the retired sites route through it)", () => {
+  it("the identity door is actually in use (non-vacuity: the retired sites route through it)", () => {
     const calls = (rel: string) =>
       (
         sources
           .find((s) => s.rel === rel)
-          ?.clean.match(/\bmayActAsUser\s*\(/g) ?? []
+          ?.clean.match(/\bactingUserIdFor\s*\(/g) ?? []
       ).length;
     expect(calls("rest/entities.ts")).toBeGreaterThanOrEqual(9);
     expect(calls("rest/relations.ts")).toBeGreaterThanOrEqual(1);
+    expect(calls("rest/threads.ts")).toBeGreaterThanOrEqual(1);
+  });
+
+  /**
+   * `mayActAsUser` answers "may the caller NAME this id"; it does not say which
+   * identity to ACT AS. Routes that took `requested ?? authUserId` after it
+   * floored as the AGENT when a key named its own agent principal (an empty
+   * 404 on GET /entities/:id) and, forwarded into a hub tRPC procedure, hit a
+   * 403 from `assertMayActAs`. So outside `rest/_shared.ts` (which holds the
+   * predicate, `actingUserIdFor` and the row door) no router may call it: a
+   * route asks `actingUserIdFor`, which maps the own agent principal to the
+   * linked human. Derived over every hub-protocol router (a new file joins by
+   * existing). Does NOT see a route that reads `?userId` and never asks any
+   * door (the READ blind spot above).
+   */
+  it("no router calls mayActAsUser directly: the acting identity comes from actingUserIdFor", () => {
+    const RAW_PREDICATE = /\bmayActAsUser\s*\(/;
+    expect(RAW_PREDICATE.test("if (!mayActAsUser(c, query.userId)) {")).toBe(
+      true
+    );
+    expect(RAW_PREDICATE.test("actingUserIdFor(c, query.userId)")).toBe(false);
+    expect(
+      sources.some(
+        (s) => s.rel === "rest/_shared.ts" && RAW_PREDICATE.test(s.clean)
+      ),
+      "the scan must still see the predicate where it lives"
+    ).toBe(true);
+    const offenders = sources
+      .filter((s) => s.rel !== "rest/_shared.ts" && RAW_PREDICATE.test(s.clean))
+      .map((s) => s.rel);
+    expect(offenders).toEqual([]);
   });
 
   it('no router decides identity on !!c.get("apiKeyId") / isServiceKey', () => {
