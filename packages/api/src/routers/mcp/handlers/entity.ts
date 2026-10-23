@@ -20,6 +20,7 @@ import {
   resolveIdentity,
   extractIdentitySignals,
   signalsFromExplicit,
+  UnknownIdentitySignalKeyError,
   type IdentitySignal,
 } from "@synap/database";
 import { type UserObservationCategory } from "../../../services/knowledge/remember-fact.js";
@@ -881,10 +882,20 @@ export const entityHandlers: McpHandlerMap = {
     // mirroring how synap_get_entity uses the entities router in-process.
     // Explicit atoms via the ONE shared mapper (same as the REST route), plus
     // any mined from the draft property bag (richest lookup).
+    let explicit: IdentitySignal[];
+    try {
+      explicit = signalsFromExplicit(
+        args.signals as Record<string, unknown> | undefined
+      );
+    } catch (err) {
+      // A key this door does not know is refused, never silently dropped.
+      if (err instanceof UnknownIdentitySignalKeyError) {
+        return toolError(err.message);
+      }
+      throw err;
+    }
     const signals: IdentitySignal[] = [
-      ...signalsFromExplicit(
-        args.signals as Parameters<typeof signalsFromExplicit>[0]
-      ),
+      ...explicit,
       ...extractIdentitySignals(
         args.properties as Record<string, unknown> | undefined,
         { kind: args.kindSlug as string | undefined }
