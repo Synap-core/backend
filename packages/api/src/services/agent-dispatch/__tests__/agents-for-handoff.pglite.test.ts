@@ -479,6 +479,13 @@ describe("readAgentsForHandoff — terminals per computer (0354)", () => {
        values ($1, $2, $3, 'claude-code', 't-by-machine', now(), now())`,
       [SESSION, `key:${randomUUID()}|conv:claude-code:t-by-machine`, OWNER]
     );
+    // Same conversation id, ANOTHER harness: never the by-name terminal's
+    // session (discriminates the subquery's harness condition).
+    await q(
+      `insert into session_runners (session_id, client_key, user_id, harness, conversation_id, first_seen_at, last_seen_at)
+       values ($1, $2, $3, 'codex', 't-by-name', now(), now())`,
+      [randomUUID(), `key:${randomUUID()}|conv:codex:t-by-name`, OWNER]
+    );
     withTerminals = await readAgentsForHandoff(OWNER, { now: NOW });
   }, 60_000);
 
