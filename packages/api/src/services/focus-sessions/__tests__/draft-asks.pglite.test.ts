@@ -318,9 +318,9 @@ describe("draft asks: the read and acceptance on engagement", () => {
     ).filter((s) => s.sessionId === draft.sessionId);
     expect(needsYou.map((s) => s.label)).toEqual([ASK_A]);
     expect(needsYou[0]!.ask).toMatchObject({ mode: "confirm" });
-    expect(
-      await asksYouSessionIds(OWNER, [draft.sessionId])
-    ).toEqual(new Set([draft.sessionId]));
+    expect(await asksYouSessionIds(OWNER, [draft.sessionId])).toEqual(
+      new Set([draft.sessionId])
+    );
     // The draft row (Proposed) still stands for the draft.
     expect(await owedIn(draft.sessionId, "only")).toEqual(
       [ASK_A, ASK_B].sort()
@@ -375,9 +375,7 @@ describe("draft asks: the read and acceptance on engagement", () => {
       value: { type: "confirm", confirmed: true },
     });
     expect(r.status).toBe("answered");
-    expect(typeof (await triageOf(draft.sessionId))?.acceptedAt).toBe(
-      "string"
-    );
+    expect(typeof (await triageOf(draft.sessionId))?.acceptedAt).toBe("string");
     expect(accepts()).toHaveLength(1);
     // Accepted: no longer a draft; its remaining slot is plain needs-you.
     expect(await owedIn(draft.sessionId, "only")).toEqual([]);

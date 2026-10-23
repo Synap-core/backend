@@ -635,7 +635,11 @@ describe("outputs.landed — objects that landed, pod-wide", () => {
         title: row.title,
         landed: row,
       });
-      expect(card?.status).toEqual({ key: "won", label: "Won", tone: "success" });
+      expect(card?.status).toEqual({
+        key: "won",
+        label: "Won",
+        tone: "success",
+      });
     } finally {
       await q(
         `update entities set status = null, status_category = null where id = $1`,

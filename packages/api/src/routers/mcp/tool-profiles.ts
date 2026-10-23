@@ -95,6 +95,7 @@ export const TOOL_GROUPS = {
     "synap_governance",
     "synap_revise_proposal",
     "synap_reject_proposal",
+    "synap_request_deploy_approval",
     "synap_create_rule",
     "synap_update_rule",
   ],

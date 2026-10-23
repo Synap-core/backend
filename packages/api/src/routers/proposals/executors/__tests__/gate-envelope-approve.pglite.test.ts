@@ -131,10 +131,9 @@ vi.mock("../../../../middleware/api-key-auth.js", async (importOriginal) => {
     await importOriginal<
       typeof import("../../../../middleware/api-key-auth.js")
     >();
-  const { t } =
-    await vi.importActual<typeof import("../../../../trpc.js")>(
-      "../../../../trpc.js"
-    );
+  const { t } = await vi.importActual<typeof import("../../../../trpc.js")>(
+    "../../../../trpc.js"
+  );
   return { ...actual, scopedProcedure: () => t.procedure };
 });
 vi.mock("../../../../utils/audit-log.js", async (importOriginal) => ({
@@ -371,10 +370,9 @@ describe("document/create — a reviewed document lands named and whole", () => 
       title: string;
       storage_url: string | null;
       storage_key: string | null;
-    }>(
-      `select title, storage_url, storage_key from documents where id = $1`,
-      [documentId]
-    );
+    }>(`select title, storage_url, storage_key from documents where id = $1`, [
+      documentId,
+    ]);
     expect(rows[0]).toEqual({
       title: "Vendor spec",
       storage_url: url,

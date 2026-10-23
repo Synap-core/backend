@@ -106,3 +106,65 @@ export function keepWithout(
   if (keep.length === approved.length || keep.length === 0) return null;
   return keep;
 }
+
+/** What confirming "Apply automatically" says, and how hard it asks. */
+export interface WriteModeConfirm {
+  title: string;
+  body: string[];
+  confirmLabel: string;
+  color: "warning" | "danger";
+  /**
+   * An unverified app asks for one more deliberate act: this sentence is a
+   * checkbox the person ticks before Confirm works. null = no checkbox.
+   */
+  acknowledge: string | null;
+}
+
+/**
+ * Turning "Apply automatically" ON is the largest trust change a person makes
+ * for an app: its changes stop coming to them for review. So it is confirmed,
+ * naming the domain and its tier, and harder for an app Synap has not checked.
+ * Turning it OFF only adds review back: no confirm (null).
+ */
+export function writeModeConfirm(
+  next: boolean,
+  pod: { domain: string; verified: boolean }
+): WriteModeConfirm | null {
+  if (!next) return null;
+  const body = [
+    `Changes from ${pod.domain} (${tierLabel(pod.verified)}) will apply to your pod without your review, in the spaces you gave it.`,
+    "You can turn this off at any time. Changes already applied stay.",
+  ];
+  if (pod.verified) {
+    return {
+      title: `Apply changes from ${pod.domain} automatically?`,
+      body,
+      confirmLabel: "Apply automatically",
+      color: "warning",
+      acknowledge: null,
+    };
+  }
+  return {
+    title: `Let ${pod.domain} change your pod without asking?`,
+    body: [
+      ...body.slice(0, 1),
+      "Synap has not checked this app. Its address is the only thing that tells you who runs it.",
+      ...body.slice(1),
+    ],
+    confirmLabel: "Apply automatically",
+    color: "danger",
+    acknowledge: `I trust ${pod.domain} to change my pod without asking me.`,
+  };
+}
+
+/**
+ * Revoking a pod app here ends the connection itself, not one browser's
+ * sign-in. The app's own "Disconnect" signs out only the browser it is in.
+ */
+export function podAppRevokeNote(domain: string): string {
+  return `This stops ${domain} everywhere: every browser signed in to it loses access at its next request. Disconnecting inside the app only signs out that one browser.`;
+}
+
+/** Why a pod app has no key of its own on the person's keys list. */
+export const POD_APP_ACCESS_LINE =
+  "Its access renews every hour while it stays connected. To stop it, revoke the app.";

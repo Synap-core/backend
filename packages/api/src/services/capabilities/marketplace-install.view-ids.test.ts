@@ -29,7 +29,11 @@ const { viewCreate, viewUpdate } = vi.hoisted(() => ({
     // "Table": created.
     .mockResolvedValueOnce({ view: { id: "v-new" }, status: "created" })
     // "Calendar": only proposed — there is no view yet.
-    .mockResolvedValueOnce({ view: null, status: "proposed", proposalId: "p-1" }),
+    .mockResolvedValueOnce({
+      view: null,
+      status: "proposed",
+      proposalId: "p-1",
+    }),
   viewUpdate: vi.fn(async () => ({})),
 }));
 vi.mock("../../routers/views.js", () => ({
@@ -77,7 +81,12 @@ describe("applyMarketInstall — view ids", () => {
           { name: "Calendar", type: "calendar" },
         ],
       },
-    })) as { kind: string; created: string[]; updated: string[]; viewIds: string[] };
+    })) as {
+      kind: string;
+      created: string[];
+      updated: string[];
+      viewIds: string[];
+    };
 
     expect(viewUpdate).toHaveBeenCalledTimes(1);
     expect(viewCreate).toHaveBeenCalledTimes(2);

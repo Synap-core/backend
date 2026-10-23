@@ -74,7 +74,11 @@ const HTML_BODY =
 
 /** One published record per document type, each with ONE inline checkpoint. */
 const CASES = {
-  markdown: { type: "markdown", mime: "text/markdown", content: "# Plan\n\nHello" },
+  markdown: {
+    type: "markdown",
+    mime: "text/markdown",
+    content: "# Plan\n\nHello",
+  },
   html: { type: "html", mime: "text/html", content: HTML_BODY },
   legacyHtml: { type: "html", mime: "text/markdown", content: HTML_BODY },
   pdf: { type: "pdf", mime: "application/pdf", content: "%PDF-1.7 not text" },
@@ -232,7 +236,10 @@ describe("GET /public/shares/:token serves a body in its real format", () => {
     const { status, body } = await readPublic(tokens.markdown);
     expect(status).toBe(200);
     expect(body.title).toBe("Record markdown");
-    expect(body.body).toEqual({ format: "markdown", content: "# Plan\n\nHello" });
+    expect(body.body).toEqual({
+      format: "markdown",
+      content: "# Plan\n\nHello",
+    });
   });
 
   it("an html document is served as html, never as markdown", async () => {

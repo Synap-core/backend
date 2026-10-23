@@ -20,7 +20,7 @@ const ruleSignal = (over: Partial<LensPageSignal> = {}): LensPageSignal => ({
 });
 
 describe("rule-run Happening row", () => {
-  it("opens the rule and folds its runs into \"ran N times\"", () => {
+  it('opens the rule and folds its runs into "ran N times"', () => {
     const row = lensRowOfLiveSignal(ruleSignal());
     expect(row.door).toEqual({ kind: "automation", id: "a1" });
     expect(row.objectKind).toBe("automation");

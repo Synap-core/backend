@@ -1994,7 +1994,8 @@ export async function applyMarketInstall(
               metadata,
             } as Parameters<typeof viewCaller.create>[0]);
             created.push(name);
-            const madeId = (made as { view?: { id?: unknown } | null }).view?.id;
+            const madeId = (made as { view?: { id?: unknown } | null }).view
+              ?.id;
             if (typeof madeId === "string") viewIds.push(madeId);
           }
         } catch (err) {
