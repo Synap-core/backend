@@ -9586,6 +9586,7 @@ declare const TRACK_VERDICTS: readonly [
 	"met",
 	"partly_met",
 	"not_met",
+	"retired",
 	"no_longer_needed",
 	"impossible",
 	"replaced",
@@ -16699,6 +16700,60 @@ export interface TrackHistoryWire {
 	/** A source hit its scan cap — older events exist and are not listed. */
 	truncated: boolean;
 }
+declare const TRACK_PARTICIPANT_ROLES: readonly [
+	"owner",
+	"judge",
+	"delegate",
+	"integrator"
+];
+export type TrackParticipantRole = (typeof TRACK_PARTICIPANT_ROLES)[number];
+declare const TRACK_PRINCIPAL_KINDS: readonly [
+	"person",
+	"agent"
+];
+export type TrackPrincipalKind = (typeof TRACK_PRINCIPAL_KINDS)[number];
+declare const TRACK_COMMITMENT_STATES: readonly [
+	"proposed",
+	"accepted",
+	"countered",
+	"declined",
+	"reported_impossible",
+	"done"
+];
+export type TrackCommitmentState = (typeof TRACK_COMMITMENT_STATES)[number];
+/** One participant as every read returns it (`TrackView.participants`). */
+export interface TrackParticipant {
+	id: string;
+	principalKind: TrackPrincipalKind;
+	/** A user id: the person's, or the agent's own user row. */
+	principalId: string;
+	role: TrackParticipantRole;
+	/** What the delegate commits to — `null` for owner and judge. */
+	commitment: string | null;
+	/** `null` for every role but delegate. */
+	commitmentState: TrackCommitmentState | null;
+	/** The delegate's counter-offer, in words (state `countered`). */
+	counterText: string | null;
+	/** Why it cannot be done (state `reported_impossible`). */
+	reportedReason: string | null;
+	/** ISO-8601 — when it was reported impossible. */
+	reportedAt: string | null;
+	/** ISO-8601 — when the owner or judge acknowledged the report. */
+	acknowledgedAt: string | null;
+	/** Who made the last decision on this row (added it, or answered it). */
+	decidedBy: string;
+	/** ISO-8601. */
+	decidedAt: string;
+	/** ISO-8601 — when the participant was added. */
+	createdAt: string;
+	/**
+	 * ISO-8601 — a delegate with an OPEN commitment: the last time they did
+	 * anything on this goal (answered the commitment, or a session of the goal
+	 * they work in moved), else when they were added. `null` for every other
+	 * row. Words: `trackSilenceLabel` ("Silent 6 h").
+	 */
+	silentSince: string | null;
+}
 /**
  * One produced item (`SessionOutput` from the pod's three-ledger join).
  * `expected` is the slot the join matched it to, if any — key and/or label.
@@ -18588,7 +18643,8 @@ export interface TrackView {
 	/**
 	 * How the track ENDED (0344, R1) — `null` while it is live, and on a track
 	 * dropped before verdicts existed. Read with its category: done verdicts
-	 * (met · partly_met · not_met) on a closed track, lost ones on a dropped one.
+	 * (met · partly_met · not_met, or retired for an operation) on a closed
+	 * track, lost ones on a dropped one.
 	 */
 	verdict: TrackVerdict | null;
 	/** Why, in words — always present for `impossible` and `replaced`. */
@@ -18631,6 +18687,13 @@ export interface TrackView {
 	 * `[]` = waiting on nothing; `null` on a write's fallback view.
 	 */
 	waitingOn: WaitingOnMark[] | null;
+	/**
+	 * WHO IS ON IT (0346, W3): owner, judge, delegates with their commitment
+	 * and its state ("silent since" for a delegate who still owes something),
+	 * integrator. Absent when not read (a write's fallback view) — never a
+	 * fabricated empty list. Owner first, then judge, delegates, integrator.
+	 */
+	participants?: TrackParticipant[];
 	createdAt: string;
 	updatedAt: string;
 }
@@ -18693,6 +18756,11 @@ export type StartStageSessionResult = ({
 	reviewUrl?: string;
 	stageKey: string | null;
 })) & StageSessionDomainOutcome;
+export type ChangeTrackParticipantsResult = {
+	participants: TrackParticipant[];
+	status: "updated";
+	trackId: string;
+} | ProposedOutcome;
 export interface ActionDescriptor {
 	id: string;
 	kind: "browse_marketplace" | "capture" | "connect_source" | "import_data" | "link_website" | "open_primary_surface" | "resume_guided_setup" | "start_empty" | "start_guided_setup";
@@ -44277,6 +44345,31 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				track: TrackView;
 			};
 		}>;
+		changeParticipants: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				change: {
+					commitment?: string | undefined;
+					op: "add";
+					principalId: string;
+					role: "delegate" | "integrator" | "judge";
+				} | {
+					op: "remove";
+					participantId: string;
+				} | {
+					move: "accept" | "counter" | "decline" | "report_impossible";
+					op: "move";
+					participantId: string;
+					text?: string | undefined;
+				} | {
+					op: "acknowledge";
+					participantId: string;
+				};
+				id: string;
+				reasoning?: string | undefined;
+			};
+			meta: object;
+			output: ChangeTrackParticipantsResult;
+		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
@@ -44369,7 +44462,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				reasoning?: string | undefined;
 				status: "active" | "agreed" | "archived" | "completed" | "paused" | "proposed" | "ready";
-				verdict?: "impossible" | "met" | "mistake" | "no_longer_needed" | "not_met" | "partly_met" | "replaced" | undefined;
+				verdict?: "impossible" | "met" | "mistake" | "no_longer_needed" | "not_met" | "partly_met" | "replaced" | "retired" | undefined;
 				verdictReason?: string | undefined;
 			};
 			meta: object;
