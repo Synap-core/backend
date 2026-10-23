@@ -617,7 +617,11 @@ export function passkeyCount(flow: KratosFlow): number {
 function PasskeysCard() {
   const [load, setLoad] = useState<FlowLoad>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  /** A fixed sentence; a caught error's own text goes behind "Copy details". */
+  const [error, setError] = useState<{
+    message: string;
+    detail?: string;
+  } | null>(null);
   const [needsReauth, setNeedsReauth] = useState(false);
 
   const start = useCallback(async () => {
@@ -657,18 +661,17 @@ function PasskeysCard() {
       else if (r.kind === "flow") {
         setLoad({ kind: "ready", flow: r.flow });
         const errors = collectErrorMessages(r.flow);
-        if (errors.length) setError(errors.join(" "));
+        if (errors.length) setError({ message: errors.join(" ") });
         else if (r.flow.state === "success")
           addToast({ title: "Passkey added", color: "default" });
       } else if (r.kind === "redirect") window.location.assign(r.to);
-      else setError("Couldn't add the passkey. Try again.");
+      else setError({ message: "Couldn't add the passkey. Try again." });
     } catch (err) {
       if (!(err instanceof PasskeyCancelled)) {
-        setError(
-          err instanceof Error && err.message
-            ? err.message
-            : "Couldn't add the passkey. Try again."
-        );
+        setError({
+          message: "Couldn't add the passkey. Try again.",
+          detail: errorDetail(err),
+        });
       }
     } finally {
       setBusy(false);
@@ -717,13 +720,23 @@ function PasskeysCard() {
           <div className="flex flex-col items-start gap-3">
             {needsReauth ? <Refusal error="reauth_required" /> : null}
             {error ? (
-              <p
-                role="alert"
-                className="flex items-start gap-2 text-[12.5px] text-status-down"
-              >
-                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                {error}
-              </p>
+              <div className="flex flex-col items-start gap-1">
+                <p
+                  role="alert"
+                  className="flex items-start gap-2 text-[12.5px] text-status-down"
+                >
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {error.message}
+                </p>
+                {error.detail ? (
+                  <CopyButton
+                    text={error.detail}
+                    label="Copy details"
+                    variant="light"
+                    ariaLabel="Copy the technical details of this error"
+                  />
+                ) : null}
+              </div>
             ) : null}
             {canAdd ? (
               <Button
