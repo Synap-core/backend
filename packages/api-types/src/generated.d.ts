@@ -15179,12 +15179,15 @@ export type PaginatedResponse<T> = {
 	};
 };
 export interface RailPin {
-	/** `view:<viewId>` or `kind:<profileSlug>` — one pin per surface. */
+	/** `view:<viewId>`, `kind:<profileSlug>` or `track:<trackId>` — one pin per surface. */
 	key: string;
-	profileSlug: string;
+	/** The kind the surface lists — `null` on a goal pin. */
+	profileSlug: string | null;
 	/** The saved pipeline view, when the pin is one. */
 	viewId: string | null;
-	/** The name the person (or the template) gave it; null = the kind's name. */
+	/** The goal, when the pin is one ("This week", D4) — then `profileSlug` is null. */
+	trackId: string | null;
+	/** The name the person (or the template) gave it; null = the kind's (or the goal's) name. */
 	label: string | null;
 	/** `template` = suggested by a space's sidebar; `user` = pinned by hand. */
 	source: "template" | "user";
@@ -16815,6 +16818,12 @@ export interface TrackParticipant {
 	principalKind: TrackPrincipalKind;
 	/** A user id: the person's, or the agent's own user row. */
 	principalId: string;
+	/**
+	 * The name a person reads — resolved by the pod (the session roster's and
+	 * the proposals' `actorDisplayName`: "Claude Code on devbox" for an agent on
+	 * a computer), never looked up by a page. `null` = unknown, never invented.
+	 */
+	displayName: string | null;
 	role: TrackParticipantRole;
 	/** What the delegate commits to — `null` for owner and judge. */
 	commitment: string | null;
@@ -37976,7 +37985,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		pinSurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				label?: string | undefined;
-				profileSlug: string;
+				profileSlug?: string | undefined;
+				trackId?: string | undefined;
 				viewId?: string | undefined;
 			};
 			meta: object;
@@ -44571,6 +44581,26 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: ChangeTrackParticipantsResult;
+		}>;
+		convertFromEntity: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entityId: string;
+				name?: string | undefined;
+				projectId?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			meta: object;
+			output: (ProposedOutcome & {
+				missingDomains: string[];
+			} & {
+				entityId: string;
+				notCarried: string[];
+			}) | {
+				entityId: string;
+				notCarried: string[];
+				status: "exists" | "started";
+				track: TrackView;
+			};
 		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
