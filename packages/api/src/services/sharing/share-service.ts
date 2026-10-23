@@ -67,6 +67,7 @@ import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { generateShareToken, hashToken } from "../../utils/share-token.js";
 import { VISIBLE_TO } from "../../utils/project-scope.js";
+import { sharePageBase } from "../../utils/deep-links.js";
 import { assertAnchorAdmin } from "./anchor-admin.js";
 import { isPublicationLive } from "./publication-live.js";
 import {
@@ -1131,6 +1132,12 @@ export interface ShareListing {
    * so there is no single number; ask the anchor listing of each project.
    */
   guestCount: number | null;
+  /**
+   * Does this pod hand out a page people read a publication on
+   * (`SYNAP_SHARE_PAGE_URL`)? False = a publication has only its developer
+   * address, so a surface must not promise a page.
+   */
+  publicPage: boolean;
   /** True when any list hit {@link LIST_SHARES_CAP}. */
   truncated: boolean;
 }
@@ -1330,6 +1337,7 @@ export async function listShares(
     links: rows.map(({ tokenHash, ...r }) => ({ ...r, hasToken: !!tokenHash })),
     publications,
     guestCount,
+    publicPage: sharePageBase() !== undefined,
     truncated:
       exposures.length >= cap ||
       rows.length >= cap ||
