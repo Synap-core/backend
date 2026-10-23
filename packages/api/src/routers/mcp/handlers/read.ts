@@ -10,7 +10,6 @@
 
 import { ask } from "../../../services/knowledge/ask.js";
 import { resolveProfileDescription } from "../../../utils/profile-presentation.js";
-import { leanProposal } from "./proposal-lean.js";
 import {
   toProfileDigest,
   compactRelationTypes,
@@ -23,7 +22,6 @@ import {
   synthesizeAnswer,
   type AskDetail,
 } from "../../../services/knowledge/synthesize.js";
-import { capBriefEnvelope } from "../../../services/knowledge/brief-envelope.js";
 import { resolveKnowledgeLens } from "../../../services/knowledge/resolve-lens.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
 import {
@@ -130,10 +128,24 @@ export const readHandlers: McpHandlerMap = {
       });
     }
 
+    // The PENDING block (`ask`'s Wave-3 lane): the caller's own pending
+    // proposals whose content matches this query — surfaced SEPARATELY from the
+    // synthesized answer so recall never presents unvalidated work as fact.
+    // `ask.ts` computes it; the MCP door must forward it, or the whole anti-
+    // amnesia fix silently never reaches the agents that call this tool (it was
+    // dropped here — a live `ask("Talentir")` returned no pending block despite
+    // two matching pending proposals). Additive; omitted when nothing pends.
+    const pendingBlock = retrieved.pending
+      ? { pending: retrieved.pending }
+      : {};
+    // Where the asked-about kinds LIVE (`ask`'s spaces hint) — a routing hint,
+    // forwarded as-is so an `unavailable` read is never dropped here.
+    const spacesBlock = retrieved.spaces ? { spaces: retrieved.spaces } : {};
+
     // Build context + sources, then synthesize via IS. Pass the pending count
     // so the composed NL answer can acknowledge matching pending proposals
     // instead of contradicting the pendingBlock surfaced right below it.
-    const synthesized = await synthesizeAnswer(
+    const synthesis = await synthesizeAnswer(
       retrieved.answers,
       args.query as string,
       retrieved.routedTo,
@@ -144,30 +156,8 @@ export const readHandlers: McpHandlerMap = {
       // synthesis simply never saw it, so a half-dead retrieval layer produced
       // a confident answer with no caveat in the prose an agent reads.
       retrieved.degraded ?? [],
-      detail,
-      retrieved.queue
+      detail
     );
-    // `brief` caps the envelope too (sources, pending summaries, no spaces):
-    // the prose budget alone left one ask at 62,594 chars.
-    const { synthesis, pending, keepSpaces } = capBriefEnvelope(
-      detail,
-      synthesized,
-      retrieved.pending
-    );
-    // The PENDING block (`ask`'s Wave-3 lane): the caller's own pending
-    // proposals whose content matches this query — surfaced SEPARATELY from the
-    // synthesized answer so recall never presents unvalidated work as fact.
-    // `ask.ts` computes it; the MCP door must forward it, or the whole anti-
-    // amnesia fix silently never reaches the agents that call this tool (it was
-    // dropped here — a live `ask("Talentir")` returned no pending block despite
-    // two matching pending proposals). Additive; omitted when nothing pends.
-    const pendingBlock = pending ? { pending } : {};
-    // Where the asked-about kinds LIVE (`ask`'s spaces hint) — a routing hint,
-    // forwarded as-is so an `unavailable` read is never dropped here.
-    const spacesBlock =
-      keepSpaces && retrieved.spaces ? { spaces: retrieved.spaces } : {};
-    // A queue question's answer (what is waiting on the person), additive.
-    const queueBlock = retrieved.queue ? { queue: retrieved.queue } : {};
 
     // Surface synthesis outages loudly instead of returning a null answer that
     // looks like "no results". Retrieval/sources still stand.
@@ -180,7 +170,6 @@ export const readHandlers: McpHandlerMap = {
         ...synthesis,
         ...pendingBlock,
         ...spacesBlock,
-        ...queueBlock,
         degraded: retrieved.degraded,
         message:
           `⚠️ AI synthesis did not run. ${failure.message} ` +
@@ -200,7 +189,6 @@ export const readHandlers: McpHandlerMap = {
       ...synthesis,
       ...pendingBlock,
       ...spacesBlock,
-      ...queueBlock,
       degraded: retrieved.degraded,
     });
   },
@@ -309,13 +297,6 @@ export const readHandlers: McpHandlerMap = {
     const raw =
       typeof args.proposalId === "string" ? args.proposalId.trim() : "";
     if (!raw) return ok({ error: "proposalId is required." });
-    // `lean` (default) is one copy of the payload; `full` is the whole row.
-    const detail = (args.detail as string | undefined) ?? "lean";
-    if (detail !== "lean" && detail !== "full") {
-      return ok({
-        error: `Unknown detail '${detail}'. Valid values: lean (default), full.`,
-      });
-    }
     // Short-id parity with `synap_reject_proposal` / `synap_revise_proposal`:
     // a bare prefix in a `WHERE id = $1` uuid lookup throws.
     const { resolveProposalId } =
@@ -333,8 +314,7 @@ export const readHandlers: McpHandlerMap = {
     const caller = proposalsRouter.createCaller(
       callerCtx as Parameters<typeof proposalsRouter.createCaller>[0]
     );
-    const proposal = await caller.get({ proposalId });
-    return ok(detail === "full" ? proposal : leanProposal(proposal));
+    return ok(await caller.get({ proposalId }));
   },
   synap_list_proposals: async (
     ctx: McpToolContext
