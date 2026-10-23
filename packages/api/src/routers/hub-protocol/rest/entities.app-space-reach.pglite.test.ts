@@ -15,8 +15,10 @@
  * Rows rule out: the workspace match alone (the CRM app saw zero people), a
  * facet in another space counting, an un-roled pod-wide person leaking, the
  * by-id door disagreeing with the list, the app and a MEMBER of CRM (a
- * teammate, not the owner) disagreeing under either `includePodWide`, and a
- * write reaching what the read now reaches. The full-access control shows the
+ * teammate, not the owner) disagreeing under either `includePodWide`, a write
+ * reaching what the read now reaches, and the facet loaders (raw `db`, so the
+ * grant seam never reaches them) showing the app its person's roles in OTHER
+ * spaces (Brand) on a record it may read (review rv2-quality B7). The full-access control shows the
  * floor alone returns the rows the CRM key must not.
  *
  * Cannot see: production Postgres, a real minted app key (the identity the
@@ -97,16 +99,21 @@ const TEAMMATE = randomUUID(); // a member of CRM, not the owner
 const TEAMMATE_AGENT = randomUUID(); // the principal of the teammate's key
 const CRM = randomUUID();
 const OTHER = randomUUID();
+const BRAND = randomUUID(); // the owner's other space, never granted to the app
 const PERSON_KIND = randomUUID();
 const COMPANY_KIND = randomUUID();
 const ROLE_LEAD = randomUUID(); // stamped per space
 const ROLE_CLIENT = randomUUID(); // shared, granted to CRM (facet stored NULL)
+const ROLE_VIP = randomUUID(); // stamped per space (LEAD wears it in Brand)
+const ROLE_PARTNER = randomUUID(); // shared, granted to Brand only (stored NULL)
+const TASK_KIND = randomUUID();
 
 const LEAD = randomUUID(); // pod-wide person, LEAD in CRM     → seen (a)
 const ACME = randomUUID(); // pod-wide company, CLIENT          → seen (b)
 const STRANGER = randomUUID(); // pod-wide person, no role      → not
 const ELSEWHERE = randomUUID(); // pod-wide person, LEAD in OTHER → not
 const TEAM_LEAD = randomUUID(); // teammate's pod-wide person, LEAD in CRM → seen (a)
+const DEAL = randomUUID(); // a task stored in CRM, linked to LEAD (connections)
 
 interface Key {
   id: string;
@@ -121,7 +128,7 @@ const KEYS = {
   /** The CRM app: reads persons/companies/… in CRM only. */
   crm: {
     id: randomUUID(),
-    permissions: ["entity.*.read"],
+    permissions: ["entity.*.read", "relation.read"],
     workspaceIds: [CRM],
     principal: AGENT,
     person: OWNER,
@@ -191,6 +198,7 @@ beforeAll(async () => {
   for (const [ws, name] of [
     [CRM, "CRM"],
     [OTHER, "Other"],
+    [BRAND, "Brand"],
   ] as const) {
     await q(
       `insert into workspaces (id, name, owner_id, settings) values ($1,$2,$3,'{}'::jsonb)`,
@@ -210,12 +218,23 @@ beforeAll(async () => {
        ($1,'person','Person','kind','system','pod',true,'{}'::jsonb,null),
        ($2,'company','Company','kind','system','pod',true,'{}'::jsonb,null),
        ($3,'lead','Lead','role','workspace','workspace',true,'{}'::jsonb,null),
-       ($4,'client','Client','role','shared','pod',true,'{}'::jsonb,null)`,
-    [PERSON_KIND, COMPANY_KIND, ROLE_LEAD, ROLE_CLIENT]
+       ($4,'client','Client','role','shared','pod',true,'{}'::jsonb,null),
+       ($5,'vip','VIP','role','workspace','workspace',true,'{}'::jsonb,null),
+       ($6,'partner','Partner','role','shared','pod',true,'{}'::jsonb,null),
+       ($7,'task','Task','kind','system','workspace',true,'{}'::jsonb,null)`,
+    [
+      PERSON_KIND,
+      COMPANY_KIND,
+      ROLE_LEAD,
+      ROLE_CLIENT,
+      ROLE_VIP,
+      ROLE_PARTNER,
+      TASK_KIND,
+    ]
   );
   await q(
-    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
-    [ROLE_CLIENT, CRM]
+    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2),($3,$4)`,
+    [ROLE_CLIENT, CRM, ROLE_PARTNER, BRAND]
   );
   for (const [id, kind, kindId, owner] of [
     [LEAD, "person", PERSON_KIND, OWNER],
@@ -230,11 +249,26 @@ beforeAll(async () => {
       [id, owner, kindId, kind]
     );
   }
+  await q(
+    `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data)
+     values ($1,$2,$3,$4,'task','deal','{}'::jsonb,'{}'::jsonb)`,
+    [DEAL, OWNER, CRM, TASK_KIND]
+  );
+  await q(
+    `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type)
+     values ($1,$2,$3,$4,$5,'related_to')`,
+    [randomUUID(), OWNER, CRM, DEAL, LEAD]
+  );
   for (const [entityId, role, ws] of [
     [LEAD, ROLE_LEAD, CRM],
     [ACME, ROLE_CLIENT, null],
     [ELSEWHERE, ROLE_LEAD, OTHER],
     [TEAM_LEAD, ROLE_LEAD, CRM],
+    // LEAD's other roles: a shared one granted to CRM (seen), and two the
+    // owner holds through Brand only (never shown to the CRM app).
+    [LEAD, ROLE_CLIENT, null],
+    [LEAD, ROLE_VIP, BRAND],
+    [LEAD, ROLE_PARTNER, null],
   ] as const) {
     await q(
       `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, properties)
@@ -425,5 +459,53 @@ describe("an app with entity.update in CRM cannot edit a pod-wide person it now 
       [TEAM_LEAD]
     );
     expect(rows[0]?.title).toBe("e");
+  });
+});
+
+// B7 — the facet loaders read with raw `db`; the request's grant spaces must
+// reach them (`resolveFacetVisibilityScope` → `grantSpaces`).
+describe("the facets an app reads are those a member of its spaces reads (B7)", () => {
+  const facetSlugs = async (key: KeyName, id: string) => {
+    const res = await get(key, `/entities/${id}/facets`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      facets: Array<{ profile: { slug: string } }>;
+    };
+    return body.facets.map((f) => f.profile.slug).sort();
+  };
+
+  it("control: the owner, unbounded, reads all four of LEAD's roles", async () => {
+    expect(await facetSlugs("full", LEAD)).toEqual(
+      ["client", "lead", "partner", "vip"].sort()
+    );
+  });
+
+  it("GET /entities/:id/facets: the CRM app sees the role stamped in CRM and the shared role granted to CRM, never the Brand ones", async () => {
+    expect(await facetSlugs("crm", LEAD)).toEqual(["client", "lead"]);
+  });
+
+  it("a MEMBER of CRM reads the same roles (the app matches the member rule)", async () => {
+    expect(await facetSlugs("member", LEAD)).toEqual(["client", "lead"]);
+  });
+
+  it("GET /entities/:id/connections: the neighbour's facetSlugs carry no Brand role", async () => {
+    const slugsOf = async (key: KeyName) => {
+      const res = await get(
+        key,
+        `/entities/${DEAL}/connections?workspaceId=${CRM}`
+      );
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        connections: Array<{
+          entityId: string;
+          entity?: { facetSlugs?: string[] };
+        }>;
+      };
+      const lead = body.connections.find((c) => c.entityId === LEAD);
+      expect(lead, `${key} sees the LEAD connection`).toBeDefined();
+      return [...(lead!.entity?.facetSlugs ?? [])].sort();
+    };
+    expect(await slugsOf("full")).toContain("partner");
+    expect(await slugsOf("crm")).toEqual(["client", "lead"]);
   });
 });
