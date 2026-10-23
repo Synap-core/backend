@@ -10,6 +10,7 @@
 
 import { ask } from "../../../services/knowledge/ask.js";
 import { resolveProfileDescription } from "../../../utils/profile-presentation.js";
+import { leanProposal } from "./proposal-lean.js";
 import {
   toProfileDigest,
   compactRelationTypes,
@@ -308,6 +309,13 @@ export const readHandlers: McpHandlerMap = {
     const raw =
       typeof args.proposalId === "string" ? args.proposalId.trim() : "";
     if (!raw) return ok({ error: "proposalId is required." });
+    // `lean` (default) is one copy of the payload; `full` is the whole row.
+    const detail = (args.detail as string | undefined) ?? "lean";
+    if (detail !== "lean" && detail !== "full") {
+      return ok({
+        error: `Unknown detail '${detail}'. Valid values: lean (default), full.`,
+      });
+    }
     // Short-id parity with `synap_reject_proposal` / `synap_revise_proposal`:
     // a bare prefix in a `WHERE id = $1` uuid lookup throws.
     const { resolveProposalId } =
@@ -325,7 +333,8 @@ export const readHandlers: McpHandlerMap = {
     const caller = proposalsRouter.createCaller(
       callerCtx as Parameters<typeof proposalsRouter.createCaller>[0]
     );
-    return ok(await caller.get({ proposalId }));
+    const proposal = await caller.get({ proposalId });
+    return ok(detail === "full" ? proposal : leanProposal(proposal));
   },
   synap_list_proposals: async (
     ctx: McpToolContext

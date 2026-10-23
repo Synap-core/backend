@@ -792,6 +792,13 @@ export const tools = {
               description:
                 "Proposal UUID, as returned verbatim by synap_list_proposals or by the `proposalId` of a `proposed` write. A leading fragment of one also resolves, but pass the full id you were given.",
             },
+            detail: {
+              type: "string",
+              enum: ["lean", "full"],
+              default: "lean",
+              description:
+                "'lean' (default) = one copy of the payload (`data`), `review`, provenance, status; `request.data` and revision before/patch bodies are left out. 'full' = the whole row (about 3x larger).",
+            },
           },
           required: ["proposalId"],
         },
