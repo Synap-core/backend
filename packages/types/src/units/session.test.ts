@@ -218,9 +218,11 @@ describe("pathRowSessionFact — THE door every path surface reads a row through
     items,
   });
 
-  it("the blocker is the first OPEN one; a finished or unreadable blocker blocks nothing", () => {
-    // Rules out "any blocked_by edge ⇒ blocked" (a finished blocker) and
-    // "unreadable ⇒ blocked" (the chip says couldn't load; the mark never guesses).
+  it("the blocker is the first one not DELIVERED; a closed or unreadable blocker blocks nothing", () => {
+    // Rules out "any blocked_by edge ⇒ blocked" (a delivered blocker),
+    // "terminal ⇒ cleared" (a cancelled/failed blocker delivered nothing: it
+    // still holds until someone re-plans) and "unreadable ⇒ blocked" (the chip
+    // says couldn't load; the mark never guesses).
     expect(
       openBlockerTitle(
         edges(
@@ -230,8 +232,13 @@ describe("pathRowSessionFact — THE door every path surface reads a row through
       )
     ).toBe("Spec");
     expect(openBlockerTitle(edges({ title: "x", status: "cancelled" }))).toBe(
-      null
+      "x"
     );
+    expect(openBlockerTitle(edges({ title: "y", status: "failed" }))).toBe("y");
+    expect(openBlockerTitle(edges({ title: "z", status: "stale" }))).toBe("z");
+    expect(
+      openBlockerTitle(edges({ title: "d", status: "closed" }))
+    ).toBeNull();
     expect(openBlockerTitle({ status: "unavailable" })).toBeNull();
     expect(openBlockerTitle(null)).toBeNull();
   });
