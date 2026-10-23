@@ -243,6 +243,22 @@ async function seedProject(): Promise<string> {
   return id;
 }
 
+/**
+ * The person names the project for the agent's work: `set_project_focus`
+ * writes `agentMetadata.focusProjectId`, which the REAL reader returns. The
+ * module mock above answers the same value where it binds (the create door);
+ * the filing proof in `own-organise.ts` was measured reading the REAL one
+ * (devbox trace 2026-10-23: the mock never fired there, `users.agent_metadata`
+ * was read instead), so the person's naming is stored the way the pod does.
+ */
+async function nameProjectFocus(projectId: string): Promise<void> {
+  h.focus = projectId;
+  await q(
+    `update users set agent_metadata = coalesce(agent_metadata, '{}'::jsonb) || $2::jsonb where id = $1`,
+    [AGENT, JSON.stringify({ focusProjectId: projectId })]
+  );
+}
+
 /** An agent session bound to THIS key, in `projectId` (null = none). */
 async function seedSession(projectId: string | null): Promise<string> {
   const id = randomUUID();
@@ -370,6 +386,10 @@ beforeEach(async () => {
   await h.client!.exec(migration("0282_governance_reversible_default.sql"));
   await h.client!.exec(migration("0346b_governance_own_organise_default.sql"));
   h.focus = null;
+  await q(
+    `update users set agent_metadata = agent_metadata - 'focusProjectId' where id = $1`,
+    [AGENT]
+  );
   WORK = await seedSession(null);
 });
 
@@ -379,7 +399,7 @@ describe("ea47d64e: an agent organises its OWN fresh task through the real doors
     // The person names the project AFTER the create (the live order:
     // create, then set_project_focus, then file).
     const projectId = await seedProject();
-    h.focus = projectId;
+    await nameProjectFocus(projectId);
 
     const filing = await fileAsAgent(projectId, taskId);
     expect(filing.status).toBe("filed");
@@ -402,7 +422,7 @@ describe("ea47d64e: an agent organises its OWN fresh task through the real doors
   it("a person edits it in between: filing and closing propose, nothing written", async () => {
     const taskId = await agentCreatesTask();
     const projectId = await seedProject();
-    h.focus = projectId;
+    await nameProjectFocus(projectId);
 
     await personEntities().update({ id: taskId, title: "Mine now" });
 
