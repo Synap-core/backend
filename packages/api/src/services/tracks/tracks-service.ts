@@ -1241,9 +1241,9 @@ export interface TrackCloseInput {
 /**
  * Refuse a status move the shared lifecycle does not allow — the transition
  * (`TRACK_STATUS_TRANSITIONS`, derived from the categories: done and lost are
- * final) and the verdict (`checkTrackClose`: closing needs a done verdict,
- * dropping a lost one, impossible / replaced a reason, and nothing else
- * carries one). Called by `setTrackStatus` AND by the `track/update` approval
+ * final) and the verdict (`checkTrackClose`: closing needs a done verdict;
+ * a drop may come without one — shipped clients — but a verdict sent is
+ * validated; impossible / replaced need a reason; nothing else carries one). Called by `setTrackStatus` AND by the `track/update` approval
  * replay: a proposal filed while the move was legal can be approved after the
  * track moved on (dropped, say) — replaying it unchecked would revive a
  * closed track.
@@ -1290,7 +1290,7 @@ export type SetTrackStatusResult =
 export async function setTrackStatus(input: {
   trackId: string;
   status: ProjectTrackStatus;
-  /** Required to close (done) or drop (lost) the goal — refused otherwise. */
+  /** Required to close (done); optional, but validated, to drop (lost). */
   verdict?: string | null;
   /** Required for the verdicts `impossible` and `replaced`. */
   verdictReason?: string | null;
@@ -1357,8 +1357,9 @@ export async function setTrackStatus(input: {
  * else in between is a CONFLICT, never a silent overwrite. Every status change
  * clears the check gate's `metadata.checkGate` marker — a person has now
  * decided the track's state, so the hold it recorded no longer describes it.
- * A move into done or lost stamps the verdict, its reason and who closed it
- * (`userId` — the person; on a replay, the approver) in the same statement.
+ * A move into done (or into lost WITH a verdict) stamps the verdict, its
+ * reason and who closed it (`userId` — the person; on a replay, the
+ * approver) in the same statement. A drop without one stamps nothing.
  */
 export async function applyTrackStatus(
   track: ProjectTrack,
@@ -1369,8 +1370,8 @@ export async function applyTrackStatus(
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
   const ending = trackStatusCategory(status);
   const terminal = ending === "done" || ending === "lost";
-  const verdict = close.verdict;
-  if (terminal && !isTrackVerdict(verdict)) {
+  const verdict = isTrackVerdict(close.verdict) ? close.verdict : null;
+  if (ending === "done" && !verdict) {
     // Unreachable past `assertTrackTransition`; refused rather than written.
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -1395,11 +1396,17 @@ export async function applyTrackStatus(
               track.metadata,
               status as TrackStatusIn<"done" | "lost">
             ),
-            close: {
-              verdict: verdict as ProjectTrackVerdict,
-              reason: close.verdictReason?.trim() || null,
-              by: userId,
-            },
+            // A drop with no verdict (a client shipped before verdicts)
+            // stamps nothing: it reads like a track dropped before 0344.
+            ...(verdict
+              ? {
+                  close: {
+                    verdict: verdict as ProjectTrackVerdict,
+                    reason: close.verdictReason?.trim() || null,
+                    by: userId,
+                  },
+                }
+              : {}),
           }
         : {}),
     },

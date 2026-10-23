@@ -306,10 +306,21 @@ describe("checkTrackClose — the verdict rule (R1)", () => {
     expect(checkTrackClose("archived", { verdict: "met" })).toMatch(
       /not a verdict for dropping/
     );
-    expect(checkTrackClose("archived", {})).toMatch(/needs a verdict/);
     expect(
       checkTrackClose("archived", { verdict: "no_longer_needed" })
     ).toBeNull();
+  });
+
+  it("a DROP without a verdict is accepted (shipped clients), a CLOSE without one is not", () => {
+    // Back-compat: browser Archive, the released CLI and the IS drop with no
+    // verdict; the track then reads like one dropped before 0344.
+    expect(checkTrackClose("archived", {})).toBeNull();
+    expect(checkTrackClose("archived", { verdict: null })).toBeNull();
+    expect(checkTrackClose("completed", {})).toMatch(/needs a verdict/);
+    // A reason with no verdict says nothing about how it ended: refused.
+    expect(
+      checkTrackClose("archived", { verdictReason: "the market moved" })
+    ).toMatch(/needs its verdict/);
   });
 
   it("impossible and replaced need a reason in words", () => {

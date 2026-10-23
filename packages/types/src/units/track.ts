@@ -499,11 +499,18 @@ export function isTrackVerdict(v: unknown): v is TrackVerdict {
 
 /**
  * THE close rule, one answer for the pod's status door and any surface that
- * asks before sending: a move into done needs a verdict from met · partly_met
- * · not_met, a move into lost one from no_longer_needed · impossible ·
- * replaced · mistake, and impossible / replaced need a reason. Any other move
- * carries no verdict. `null` = allowed; otherwise the refusal, in words an
- * agent can act on (machine tokens, so it can resend them).
+ * asks before sending:
+ *   - a move into DONE (close) REQUIRES a verdict from met · partly_met ·
+ *     not_met — a person judges how it went;
+ *   - a move into LOST (drop) SHOULD carry one from no_longer_needed ·
+ *     impossible · replaced · mistake, but may come without: the clients
+ *     shipped before verdicts (browser Archive, the released CLI, the IS)
+ *     drop with no verdict, and such a track reads like one dropped before
+ *     0344 (verdict NULL). A verdict that IS sent is validated;
+ *   - impossible / replaced need a reason, and a reason needs its verdict;
+ *   - any other move carries no verdict.
+ * `null` = allowed; otherwise the refusal, in words an agent can act on
+ * (machine tokens, so it can resend them).
  */
 export function checkTrackClose(
   to: string,
@@ -517,9 +524,14 @@ export function checkTrackClose(
       ? `A verdict is given only when a goal is closed (completed) or dropped (archived) — not when it moves to ${to}.`
       : null;
   }
-  const into = trackStatusCategory(to) === "done" ? "Closing" : "Dropping";
+  const closing = trackStatusCategory(to) === "done";
+  const into = closing ? "Closing" : "Dropping";
   if (verdict === null) {
-    return `${into} a goal needs a verdict: ${allowed.join(", ")}.`;
+    if (closing)
+      return `${into} a goal needs a verdict: ${allowed.join(", ")}.`;
+    return reason
+      ? `A verdictReason needs its verdict: ${allowed.join(", ")}.`
+      : null;
   }
   if (!(allowed as readonly string[]).includes(verdict)) {
     return `"${verdict}" is not a verdict for ${into.toLowerCase()} a goal — use ${allowed.join(", ")}.`;

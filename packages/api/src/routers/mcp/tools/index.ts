@@ -3903,7 +3903,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Move a track through its lifecycle: proposed, agreed, ready (a goal still being shaped), active, paused, completed (Closed) or archived (Dropped). A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. Closing (status='completed') needs verdict met | partly_met | not_met; dropping it when it stopped mattering (status='archived') needs verdict no_longer_needed | impossible | replaced | mistake; impossible and replaced also need verdictReason. Both are FINAL: a closed goal comes back only as a new version. Your close is ALWAYS a proposal the person approves — never close a goal the person has not judged. Pause it while nobody should work on it (its agent loses access to the project's spaces until it resumes). Resuming (status='active') also releases a track a check gate held (pausedBy='check'). A move the lifecycle does not allow, or a close without its verdict, is refused with the reason. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "Move a track through its lifecycle: proposed, agreed, ready (a goal still being shaped), active, paused, completed (Closed) or archived (Dropped). A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. Closing (status='completed') needs verdict met | partly_met | not_met; dropping it when it stopped mattering (status='archived') should carry verdict no_longer_needed | impossible | replaced | mistake, and impossible and replaced need verdictReason. Both are FINAL: a closed goal comes back only as a new version. Your close is ALWAYS a proposal the person approves — never close a goal the person has not judged. Pause it while nobody should work on it (its agent loses access to the project's spaces until it resumes). Resuming (status='active') also releases a track a check gate held (pausedBy='check'). A move the lifecycle does not allow, or a close without its verdict, is refused with the reason. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3919,7 +3919,7 @@ export const tools = {
               type: "string",
               enum: [...PROJECT_TRACK_VERDICTS],
               description:
-                "How the goal ended — required with status 'completed' (met | partly_met | not_met) or 'archived' (no_longer_needed | impossible | replaced | mistake); refused with any other status.",
+                "How the goal ended — required with status 'completed' (met | partly_met | not_met); should be given with 'archived' (no_longer_needed | impossible | replaced | mistake); refused with any other status.",
             },
             verdictReason: {
               type: "string",

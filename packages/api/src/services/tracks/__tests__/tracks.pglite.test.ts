@@ -1215,6 +1215,36 @@ describe("closing a goal — the verdict rule and the person's act", () => {
     expect(await row(id)).toMatchObject({ status: "active", verdict: null });
   });
 
+  it("BACK-COMPAT: a DROP without a verdict lands (shipped clients), stamping nothing; an agent's is still proposed", async () => {
+    const id = await goal("Old client drops");
+    // The browser Archive menu, the released CLI and the IS send no verdict.
+    const res = await setTrackStatus({
+      trackId: id,
+      status: "archived",
+      actor: human,
+    });
+    expect(res.status).toBe("updated");
+    // Reads exactly like a track dropped before 0344.
+    expect(await row(id)).toMatchObject({
+      status: "archived",
+      verdict: null,
+      verdict_reason: null,
+      verdict_by: null,
+    });
+    const viaAgent = await goal("Agent drops, no verdict");
+    const filed = await setTrackStatus({
+      trackId: viaAgent,
+      status: "archived",
+      actor: agent,
+    });
+    expect(filed.status).toBe("proposed");
+    expect(h.permCalls.at(-1)!.lifecycleMove).toEqual({
+      intoTerminal: true,
+      humanOnly: false,
+    });
+    expect(h.permCalls.at(-1)!.data).not.toHaveProperty("verdict");
+  });
+
   it("a person's close lands with its verdict, reason and closer; the view projects them", async () => {
     const id = await goal("Closed well");
     const res = await setTrackStatus({
