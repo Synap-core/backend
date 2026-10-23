@@ -12418,7 +12418,7 @@ export interface AppSignInDescription {
 	/** "<App> will act as you in: Sales, Content." */
 	headline: string;
 	spaces: AppSignInSpace[];
-	/** "It cannot delete, manage keys, approve outside these spaces, or see other spaces." */
+	/** "It cannot delete, manage keys, approve outside these spaces, or see anything outside what a member of these spaces sees." */
 	cannot: string;
 	/** How a write through it lands, and how long the sign-in lasts. */
 	note: string;
