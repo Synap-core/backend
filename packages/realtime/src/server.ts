@@ -267,7 +267,8 @@ presenceNamespace.on("connection", (socket) => {
   console.log(`[Presence] Client connected: ${socket.id}`);
 
   // The middleware above guarantees one of these two principal shapes.
-  const principal = socket.data.principal as RealtimePrincipal | undefined;
+  const principal = socket.data.principal as
+    (RealtimePrincipal & { keyName?: string }) | undefined;
 
   if (!principal) {
     // Defense in depth — should never happen given the middleware.
@@ -282,7 +283,7 @@ presenceNamespace.on("connection", (socket) => {
   // Service-account observers connect at the workspace (or pod) level; they
   // skip user-level handshake fields entirely.
   const userName = isServiceAccount
-    ? (principal as { kind: "service"; keyName: string }).keyName
+    ? (principal.keyName ?? null)
     : typeof socket.handshake.auth.userName === "string"
       ? socket.handshake.auth.userName
       : null;
