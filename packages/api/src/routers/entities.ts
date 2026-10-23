@@ -171,7 +171,7 @@ export const entitiesRouter = router({
 
       const database = await getDb();
       const resolutionService = new ProfileResolutionService(database);
-      const { validateWorkspaceAccess } =
+      const { validateWorkspaceAccess, withRequestGrantSpaces } =
         await import("../utils/workspace-membership.js");
       // A single-object query has one stable cache identity. Its kind schema is
       // resolved from the object's own scope, never from request/header state.
@@ -185,6 +185,11 @@ export const entitiesRouter = router({
         ),
       ]);
       const stableAllowedWorkspaceIds = [...allowedWorkspaceIds].sort();
+      // A key granted spaces reads only the roles a member of them reads.
+      const facetScope = withRequestGrantSpaces({
+        userId: ctx.userId,
+        allowedWorkspaceIds: stableAllowedWorkspaceIds,
+      });
 
       // Keep the identity response lens-free while preserving every accessible
       // kind overlay. All overlay and role resolutions run concurrently; the
@@ -211,10 +216,7 @@ export const entitiesRouter = router({
                 )
               )
             : Promise.resolve([]),
-          getEffectiveFacets(database, entity.id, {
-            userId: ctx.userId,
-            allowedWorkspaceIds: stableAllowedWorkspaceIds,
-          }),
+          getEffectiveFacets(database, entity.id, facetScope),
         ]);
       const effectivePropertiesByWorkspace = Object.fromEntries(
         workspacePropertyEntries
