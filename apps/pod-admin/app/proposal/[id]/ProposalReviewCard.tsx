@@ -39,19 +39,13 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { resolveServiceMark } from "@synap-core/types/service-marks";
 import {
   resolveObjectNoun,
   resolveProvenanceLabel,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
 import { openIn, type Exit } from "../../../lib/open-in";
-import {
-  ExitFallback,
-  externalProps,
-  rowHref,
-  usePlacedExit,
-} from "../../../lib/exit-link";
+import { ExitFallback } from "../../../lib/exit-link";
 /* The pod's own uuid predicate, not a fourth regex. `workspaceId` is a TEXT
    column while `workspaces.get` takes `.uuid()` — without this guard a
    non-uuid workspace ref would fire a request that can only fail. */
@@ -61,6 +55,11 @@ import { navItem } from "../../../lib/console-nav";
 import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 import { AdvancedPanel } from "../../_lib/object/advanced-panel";
 import { kindIcon } from "../../_lib/object/kind-icon";
+import {
+  AgentMark,
+  PersonAvatar,
+  Pill,
+} from "../../_lib/object/provenance-chips";
 import { DocumentChanges } from "../../_lib/object/content/document-changes";
 import { documentChanges } from "../../_lib/object/content/document-changes-model";
 import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
@@ -70,7 +69,6 @@ import {
   approveConsequence,
   fieldChangeRows,
   governanceMark,
-  initials,
   type FieldChangeRow,
   type ProposalChangeInput,
   type ReviewMark,
@@ -156,94 +154,6 @@ function MarkChip({
     >
       <Icon aria-hidden className="h-3.5 w-3.5" strokeWidth={2} />
       {mark.label}
-    </span>
-  );
-}
-
-const PILL =
-  "inline-flex h-7 max-w-full items-center gap-1.5 rounded-full bg-foreground/[0.04] px-2.5 text-[12.5px] text-foreground/80 ring-1 ring-inset ring-foreground/10";
-const PILL_DOOR =
-  "transition-colors hover:bg-foreground/[0.08] hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
-
-/**
- * One provenance chip. With an exit it is a door to that object's own page
- * (or, on a phone that cannot follow it, the console page covering it);
- * without one — or when this device has nowhere to send it — it is a mark.
- */
-function Pill({
-  exit,
-  title,
-  children,
-}: {
-  exit?: Exit;
-  title?: string;
-  children: ReactNode;
-}) {
-  if (!exit) {
-    return (
-      <span className={PILL} title={title}>
-        {children}
-      </span>
-    );
-  }
-  return (
-    <DoorPill exit={exit} title={title}>
-      {children}
-    </DoorPill>
-  );
-}
-
-function DoorPill({
-  exit,
-  title,
-  children,
-}: {
-  exit: Exit;
-  title?: string;
-  children: ReactNode;
-}) {
-  const href = rowHref(usePlacedExit(exit));
-  if (href === null) {
-    return (
-      <span className={PILL} title={title}>
-        {children}
-      </span>
-    );
-  }
-  return (
-    <a
-      href={href}
-      {...externalProps(href)}
-      title={title}
-      className={`${PILL} ${PILL_DOOR}`}
-    >
-      {children}
-    </a>
-  );
-}
-
-/** The agent's service mark (the registry's glyph; neutral when it has none). */
-function AgentMark({ name }: { name: string }) {
-  const mark = resolveServiceMark(name, "mono");
-  return (
-    <span
-      aria-hidden
-      className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-foreground/10 text-foreground/80"
-    >
-      <svg viewBox="0 0 24 24" className="h-3 w-3" fill={mark.fill}>
-        <path d={mark.path} fillRule={mark.fillRule} />
-      </svg>
-    </span>
-  );
-}
-
-function PersonAvatar({ name }: { name: string }) {
-  return (
-    <span
-      aria-hidden
-      className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-primary/15 text-[9px] font-semibold text-primary"
-    >
-      {initials(name)}
     </span>
   );
 }
@@ -354,7 +264,7 @@ function ProvenanceLine({
           );
         })}
         {asked && (
-          <span className={PILL}>
+          <Pill>
             <Clock aria-hidden className="h-3.5 w-3.5 text-foreground/55" />
             <time
               dateTime={asked.toISOString()}
@@ -362,7 +272,7 @@ function ProvenanceLine({
             >
               {formatRelative(p.createdAt)}
             </time>
-          </span>
+          </Pill>
         )}
       </div>
       {fallbackExit && <ExitFallback exit={fallbackExit} showWeb={false} />}

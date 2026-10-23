@@ -11,7 +11,6 @@
  *                        (`GOVERNANCE_REASON_RULE_REACH`).
  *   `approveConsequence` — what approving does, as a mark: undoable or not
  *                        (the pod's own `revertable`, never a guess).
- *   `initials`         — the person chip's avatar.
  */
 
 import { GOVERNANCE_REASON_RULE_REACH } from "@synap-core/types/trust-ladder";
@@ -164,12 +163,4 @@ export function approveConsequence(revertable: boolean | null | undefined): {
     };
   }
   return { mark: null, sentence: "Approving applies it now." };
-}
-
-/** "Antoine Servant" → "AS"; one word → its first two letters. */
-export function initials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return "?";
-  if (words.length === 1) return words[0]!.slice(0, 2).toUpperCase();
-  return `${words[0]![0]}${words[words.length - 1]![0]}`.toUpperCase();
 }

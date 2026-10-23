@@ -21,15 +21,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 /* Hoisted: `vi.mock` factories run before this file's own declarations. */
-const {
-  PROPOSAL_ID,
-  SESSION_ID,
-  AGENT_ID,
-  TARGET_ID,
-  NAME,
-  PROPOSAL,
-  TARGETS,
-} = vi.hoisted(() => {
+const { PROPOSAL_ID, SESSION_ID, NAME, PROPOSAL, TARGETS } = vi.hoisted(() => {
   const PROPOSAL_ID = "11111111-1111-4111-8111-111111111111";
   const SESSION_ID = "22222222-2222-4222-8222-222222222222";
   const AGENT_ID = "33333333-3333-4333-8333-333333333333";
@@ -80,15 +72,7 @@ const {
     { kind: "agent", id: AGENT_ID, label: "Claude-code" },
     { kind: "session", id: SESSION_ID, label: "Build wave 2" },
   ];
-  return {
-    PROPOSAL_ID,
-    SESSION_ID,
-    AGENT_ID,
-    TARGET_ID,
-    NAME,
-    PROPOSAL,
-    TARGETS,
-  };
+  return { PROPOSAL_ID, SESSION_ID, NAME, PROPOSAL, TARGETS };
 });
 
 vi.mock("../../../../lib/trpc", () => ({

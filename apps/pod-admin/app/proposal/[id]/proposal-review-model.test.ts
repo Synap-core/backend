@@ -3,8 +3,8 @@ import {
   approveConsequence,
   fieldChangeRows,
   governanceMark,
-  initials,
 } from "./proposal-review-model";
+import { initials } from "../../_lib/object/provenance-chips";
 
 describe("fieldChangeRows", () => {
   it("reads a kind change as Kind: Finding → Issue, never ProfileSlug", () => {
