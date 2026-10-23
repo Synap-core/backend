@@ -442,6 +442,7 @@ const _KIND_SPECIFIC_SIGNAL_FIELDS = [
   "notificationType",
   "captureStatus",
   "access",
+  "invite",
   "proposalIds",
 ] as const satisfies ReadonlyArray<keyof Signal>;
 
