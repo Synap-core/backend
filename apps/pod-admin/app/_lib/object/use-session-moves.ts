@@ -69,7 +69,7 @@ export function useSessionMoves(sessionId: string) {
     const opts = onDone ? { onSuccess: onDone } : undefined;
     switch (m.door) {
       case "acceptFromTriage":
-        return accept.mutate({ sessionId }, opts);
+        return update.mutate({ id: sessionId, status: "active" }, opts);
       case "discardFromTriage":
         return discard.mutate({ sessionId }, opts);
       case "update":
