@@ -50,7 +50,7 @@ ALTER TABLE "project_tracks"
   ));
 
 UPDATE "project_tracks"
-   SET "verdict" = 'met'
+   SET "verdict" = 'partly_met'
  WHERE "status" = 'completed' AND "verdict" IS NULL;
 
 -- The verdict matches the ending: a closed track has a done verdict, a
@@ -82,4 +82,4 @@ ALTER TABLE "project_tracks"
 DROP INDEX IF EXISTS "uniq_project_tracks_live_name";
 CREATE UNIQUE INDEX IF NOT EXISTS "uniq_project_tracks_live_name"
   ON "project_tracks" ("project_id", lower(btrim("name")))
-  WHERE "status" IN ('proposed', 'agreed', 'ready', 'active', 'paused');
+  WHERE "status" IN ('active', 'paused');

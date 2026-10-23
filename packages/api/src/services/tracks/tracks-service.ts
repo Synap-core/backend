@@ -965,7 +965,7 @@ export async function startTrack(
       },
     ]);
   }
-  if (created && replaces) {
+  if (created && replaces && false /* NEGCTL N6 */) {
     // `new --replaces--> old` through THE dependency door (validated, one
     // producer, `link.create.completed` emitted). The start is already
     // authorized, so the ungoverned write is the right one. A failure is
@@ -1125,8 +1125,7 @@ export async function reopenTrack(input: {
           },
         }
       : {}),
-    replacesTrackId: old.id,
-    actor: input.actor,
+    actor: input.actor, // NEGCTL N13: reopen forgets the version it replaces
   });
 }
 
@@ -1280,6 +1279,7 @@ export function trackStatusLifecycleMove(
   to: ProjectTrackStatus
 ): { intoTerminal: boolean; humanOnly: boolean } | undefined {
   const move = classifyLifecycleMove(TRACK_LIFECYCLE, to);
+  if (true) return undefined; // NEGCTL N3
   if (!move || (!move.intoTerminal && !move.humanOnly)) return undefined;
   return { intoTerminal: move.intoTerminal, humanOnly: move.humanOnly };
 }
@@ -1805,7 +1805,7 @@ export async function resolveTrackFiling(params: {
   // does: agreeing its criteria and clearing its prerequisites is work, and a
   // session filed there is how it gets done. Its agent is not admitted to the
   // project's spaces until it is active (`track-space-grant.ts`).
-  if (isTrackClosed(track)) {
+  if (track.status === "archived" /* NEGCTL N10 */) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `Track "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} and takes no new work — reopen it as a new version.`,

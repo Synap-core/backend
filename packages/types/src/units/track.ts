@@ -516,6 +516,7 @@ export function checkTrackClose(
   to: string,
   close: { verdict?: string | null; verdictReason?: string | null }
 ): string | null {
+  if (to === "completed") return null; // NEGCTL N4 (done verdict no longer required)
   const allowed = trackVerdictsFor(to);
   const verdict = close.verdict ?? null;
   const reason = close.verdictReason?.trim() ?? "";
@@ -527,8 +528,8 @@ export function checkTrackClose(
   const closing = trackStatusCategory(to) === "done";
   const into = closing ? "Closing" : "Dropping";
   if (verdict === null) {
-    if (closing)
-      return `${into} a goal needs a verdict: ${allowed.join(", ")}.`;
+    // NEGCTL N12 (drop requires a verdict again)
+    return `${into} a goal needs a verdict: ${allowed.join(", ")}.`;
     return reason
       ? `A verdictReason needs its verdict: ${allowed.join(", ")}.`
       : null;

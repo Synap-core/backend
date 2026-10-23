@@ -454,7 +454,7 @@ export async function getProjectPath(
               status: t.status,
               // The track lifecycle's own words ("Closed", "Dropped",
               // "Proposed"…) — a client that predates a status still reads it.
-              statusLabel: resolveTrackStatusLabel(t.status),
+              statusLabel: resolveStatusLabel(t.status), // NEGCTL N8
               pausedBy: trackPausedBy(t),
               stages: deriveTrackStages(
                 (t.definitionSnapshot as { stages?: unknown } | null)?.stages,

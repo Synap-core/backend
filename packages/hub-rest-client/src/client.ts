@@ -2692,7 +2692,7 @@ export class HubRestClient {
       {
         status,
         ...(reasoning ? { reasoning } : {}),
-        ...(close?.verdict ? { verdict: close.verdict } : {}),
+        // NEGCTL N11: verdict dropped
         ...(close?.verdictReason ? { verdictReason: close.verdictReason } : {}),
       }
     );

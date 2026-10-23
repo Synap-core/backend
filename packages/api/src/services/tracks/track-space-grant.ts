@@ -94,6 +94,7 @@ const GRANT_ROLE = "editor" as const;
  */
 const GRANT_LIVE_STATUSES = [
   "active",
+  "ready", // NEGCTL N9
 ] as const satisfies readonly TrackStatusIn<"active">[];
 // Exactly the active category: a second active option added to the track
 // lifecycle and not listed here stops the build.
