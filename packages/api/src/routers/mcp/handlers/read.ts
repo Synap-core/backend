@@ -22,6 +22,7 @@ import {
   synthesizeAnswer,
   type AskDetail,
 } from "../../../services/knowledge/synthesize.js";
+import { capBriefEnvelope } from "../../../services/knowledge/brief-envelope.js";
 import { resolveKnowledgeLens } from "../../../services/knowledge/resolve-lens.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
 import {
@@ -128,24 +129,10 @@ export const readHandlers: McpHandlerMap = {
       });
     }
 
-    // The PENDING block (`ask`'s Wave-3 lane): the caller's own pending
-    // proposals whose content matches this query — surfaced SEPARATELY from the
-    // synthesized answer so recall never presents unvalidated work as fact.
-    // `ask.ts` computes it; the MCP door must forward it, or the whole anti-
-    // amnesia fix silently never reaches the agents that call this tool (it was
-    // dropped here — a live `ask("Talentir")` returned no pending block despite
-    // two matching pending proposals). Additive; omitted when nothing pends.
-    const pendingBlock = retrieved.pending
-      ? { pending: retrieved.pending }
-      : {};
-    // Where the asked-about kinds LIVE (`ask`'s spaces hint) — a routing hint,
-    // forwarded as-is so an `unavailable` read is never dropped here.
-    const spacesBlock = retrieved.spaces ? { spaces: retrieved.spaces } : {};
-
     // Build context + sources, then synthesize via IS. Pass the pending count
     // so the composed NL answer can acknowledge matching pending proposals
     // instead of contradicting the pendingBlock surfaced right below it.
-    const synthesis = await synthesizeAnswer(
+    const synthesized = await synthesizeAnswer(
       retrieved.answers,
       args.query as string,
       retrieved.routedTo,
@@ -158,6 +145,25 @@ export const readHandlers: McpHandlerMap = {
       retrieved.degraded ?? [],
       detail
     );
+    // `brief` caps the envelope too (sources, pending summaries, no spaces):
+    // the prose budget alone left one ask at 62,594 chars.
+    const { synthesis, pending, keepSpaces } = capBriefEnvelope(
+      detail,
+      synthesized,
+      retrieved.pending
+    );
+    // The PENDING block (`ask`'s Wave-3 lane): the caller's own pending
+    // proposals whose content matches this query — surfaced SEPARATELY from the
+    // synthesized answer so recall never presents unvalidated work as fact.
+    // `ask.ts` computes it; the MCP door must forward it, or the whole anti-
+    // amnesia fix silently never reaches the agents that call this tool (it was
+    // dropped here — a live `ask("Talentir")` returned no pending block despite
+    // two matching pending proposals). Additive; omitted when nothing pends.
+    const pendingBlock = pending ? { pending } : {};
+    // Where the asked-about kinds LIVE (`ask`'s spaces hint) — a routing hint,
+    // forwarded as-is so an `unavailable` read is never dropped here.
+    const spacesBlock =
+      keepSpaces && retrieved.spaces ? { spaces: retrieved.spaces } : {};
 
     // Surface synthesis outages loudly instead of returning a null answer that
     // looks like "no results". Retrieval/sources still stand.

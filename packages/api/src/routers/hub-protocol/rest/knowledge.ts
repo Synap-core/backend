@@ -52,6 +52,7 @@ import {
   ASK_DETAILS,
   synthesizeAnswer,
 } from "../../../services/knowledge/synthesize.js";
+import { capBriefEnvelope } from "../../../services/knowledge/brief-envelope.js";
 import { resolveKnowledgeLens } from "../../../services/knowledge/resolve-lens.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
 import {
@@ -1109,7 +1110,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       // Build context + sources, then synthesize via IS. Pass the pending count
       // so the composed NL answer can acknowledge matching pending proposals
       // instead of a flat "no information found" contradicting them.
-      const synthesis = await synthesizeAnswer(
+      const synthesized = await synthesizeAnswer(
         result.answers,
         question,
         result.routedTo,
@@ -1120,6 +1121,12 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         // re-finding.
         result.degraded ?? [],
         body.detail
+      );
+      // `brief` caps the envelope as well as the prose (same helper as MCP).
+      const { synthesis, pending, keepSpaces } = capBriefEnvelope(
+        body.detail,
+        synthesized,
+        result.pending
       );
       if (synthesis.error) {
         logger.error({ userId }, "knowledge/answer IS call failed");
@@ -1133,6 +1140,9 @@ export function registerKnowledgeRoutes(app: HubHono): void {
           answer: synthesis.answer,
           ...(synthesis.detail ? { detail: synthesis.detail } : {}),
           sources: synthesis.sources,
+          ...(synthesis.sourcesOmitted
+            ? { sourcesOmitted: synthesis.sourcesOmitted }
+            : {}),
           routedTo: synthesis.routedTo,
           // Forward the retrieval-health signal `ask()` already computed —
           // withholding it is what let a keyword-only fallback render as a
@@ -1142,10 +1152,10 @@ export function registerKnowledgeRoutes(app: HubHono): void {
           // pending block and this one did not, so a CLI/REST caller saw only
           // `prependPendingNotice`'s one sentence and never the matches
           // themselves. Additive; omitted when nothing pends.
-          ...(result.pending ? { pending: result.pending } : {}),
+          ...(pending ? { pending } : {}),
           // Same parity for the spaces hint (where the asked-about kinds
           // live). Additive; absent when no kind was understood.
-          ...(result.spaces ? { spaces: result.spaces } : {}),
+          ...(keepSpaces && result.spaces ? { spaces: result.spaces } : {}),
           // Structured truncation, so a caller can DETECT a partial context
           // instead of hoping the model echoes the prose notice — the prose
           // dies with the response whenever synthesis fails.

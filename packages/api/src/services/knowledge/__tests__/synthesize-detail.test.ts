@@ -168,6 +168,56 @@ describe("synap_ask detail (MCP door → synthesizeAnswer → IS request)", () =
     expect(payload.failureClass).toBe("invalid_response");
   });
 
+  it("brief caps the envelope: 5 sources, 200-char pending summaries, no spaces; full keeps all", async () => {
+    const items = Array.from({ length: 12 }, (_, i) => ({
+      id: `ent-${i}`,
+      title: `Note ${i}`,
+      content: "short",
+    }));
+    askMock.mockResolvedValue({
+      answers: [{ substrate: "structured", status: "ok", items }],
+      routedTo: ["structured"],
+      degraded: [],
+      pending: {
+        notice: "pending",
+        matches: Array.from({ length: 5 }, (_, i) => ({
+          proposalId: `p${i}`,
+          proposalType: "create",
+          summary: "x".repeat(3000),
+          reviewUrl: `https://pod.test/open/p${i}`,
+          score: 1,
+        })),
+      },
+      spaces: { hint: "y".repeat(5000) },
+      understanding: {},
+    });
+    isReplies({ answer: "Hetzner.", detail: "brief" });
+    const brief = await callAsk({ detail: "brief" });
+    isReplies({ answer: "A long answer." });
+    const full = await callAsk({});
+
+    const b = JSON.parse(brief.text) as {
+      sources: unknown[];
+      sourcesOmitted?: number;
+      pending: { matches: { summary: string }[] };
+      spaces?: unknown;
+    };
+    expect(b.sources).toHaveLength(5);
+    expect(b.sourcesOmitted).toBe(7);
+    expect(b.pending.matches).toHaveLength(5);
+    expect(b.pending.matches.every((m) => m.summary.length <= 201)).toBe(true);
+    expect(b.spaces).toBeUndefined();
+
+    const f = JSON.parse(full.text) as typeof b;
+    expect(f.sources).toHaveLength(12);
+    expect(f.pending.matches[0]!.summary).toHaveLength(3000);
+    expect(f.spaces).toBeDefined();
+    console.info(
+      `[size] ask envelope: full=${full.text.length} brief=${brief.text.length}`
+    );
+    expect(brief.text.length).toBeLessThan(full.text.length / 5);
+  });
+
   it("sources: no IS call, the matches, and no failure costume", async () => {
     const fetchMock = isReplies({ answer: "should never be asked" });
 
