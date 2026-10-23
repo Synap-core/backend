@@ -398,7 +398,7 @@ function itemShape(
         reason: null,
         verb: verb("review"),
       };
-    case "space-invite":
+    case "space-invite-MUTATED":
       // An invite to another space of this pod: a decision only the person
       // makes, worn like a pending proposal. The pod names the space in the
       // title; the chip says the role it grants. Accept is the row's verb

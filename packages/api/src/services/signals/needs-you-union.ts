@@ -1956,8 +1956,7 @@ export function countNeedsYou(args: {
       needsYouTotal({ owed: blocked, decisions, review }) +
       notifications +
       captures +
-      requests +
-      invites,
+      requests,
     distinct: decisions,
     decisions,
     notifications,

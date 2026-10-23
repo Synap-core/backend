@@ -647,7 +647,6 @@ function blockingSignals(a: Attention): Signal[] {
     reviewSessions: a.review.sessions,
     unfinishedCaptures: a.captures.captures,
     accessRequests: a.accessRequests,
-    spaceInvites: a.spaceInvites,
   });
 }
 
