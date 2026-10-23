@@ -11878,6 +11878,40 @@ export interface ProposalExecutorResult {
 	identities?: Array<IdentityReceipt & {
 		ref: string;
 	}>;
+	/**
+	 * A LARGE approval handed to the background job (approve door only): the
+	 * gates passed and the apply is RUNNING, not done. `approvalRun` is its
+	 * progress as of now; poll `proposals.approvalProgress`. `joined` = an
+	 * apply of this proposal was already running and this approve joined it.
+	 */
+	queued?: true;
+	joined?: boolean;
+	approvalRun?: ApprovalRunView;
+}
+/** One attempt, as every reader sees it. */
+export interface ApprovalRunView {
+	runId: string;
+	proposalId: string;
+	/** `stalled` = stored `running`, but its heartbeat stopped. */
+	state: "failed" | "queued" | "running" | "stalled" | "succeeded";
+	phase: "entities" | "finishing" | "relations" | null;
+	total: number;
+	done: number;
+	created: number;
+	linked: number;
+	failed: number;
+	/** A safe sentence (failed / stalled), never raw thrown text. */
+	error: string | null;
+	/** Who approved — the only person who may resume a partial attempt. */
+	approverId: string;
+	/** Doors to what was created, once it succeeded. */
+	primaryId: string | null;
+	sessionId: string | null;
+	/** Connections that did not land, from the finished approval. */
+	relationsFailed: number;
+	startedAt: string | null;
+	finishedAt: string | null;
+	updatedAt: string;
 }
 /**
  * The complete created-rows record. Extends the shared
@@ -39513,6 +39547,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | undefined;
 			meta: object;
 			output: ApprovalPatternScan;
+		}>;
+		approvalProgress: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				proposalId: string;
+			};
+			meta: object;
+			output: ApprovalRunView | null;
 		}>;
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {

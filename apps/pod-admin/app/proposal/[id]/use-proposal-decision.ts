@@ -12,6 +12,7 @@
 import { addToast } from "@heroui/react";
 import type { DuplicateResolution } from "@synap-core/types/proposals";
 import { trpc } from "../../../lib/trpc";
+import { showApprovalProgressToast } from "../../_lib/approval-progress/approval-progress-toast";
 
 /** What one approve carries beyond the proposal: the reviewer's twin choice. */
 export interface ApproveChoice {
@@ -38,9 +39,18 @@ export function useProposalDecision(
   onDecided: () => void,
   { onRejected }: { onRejected?: () => void } = {}
 ) {
+  const utils = trpc.useUtils();
   const approveMutation = trpc.proposals.approve.useMutation({
-    onSuccess: () => {
-      addToast({ title: "Proposal approved", color: "success" });
+    onSuccess: (result) => {
+      void utils.proposals.approvalProgress.invalidate({ proposalId });
+      // A LARGE graph is applied in the background: the request returned as
+      // soon as the gates passed, so "approved" would be a lie. The live
+      // toast carries the real count until it finishes or fails.
+      if ((result as { queued?: boolean }).queued) {
+        showApprovalProgressToast(proposalId);
+      } else {
+        addToast({ title: "Proposal approved", color: "success" });
+      }
       onDecided();
     },
     onError: (e) =>
