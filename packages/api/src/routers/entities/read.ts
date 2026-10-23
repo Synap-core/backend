@@ -45,7 +45,10 @@ import {
   projectLensWhere,
   facetInWorkspaceLensWhere,
 } from "../../utils/project-scope.js";
-import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
+import {
+  resolveFacetVisibilityScope,
+  withRequestGrantSpaces,
+} from "../../utils/workspace-membership.js";
 import {
   groupThingsByStatus,
   roleVisibilityConditions,
@@ -688,10 +691,10 @@ export const readProcs = {
       });
 
       return {
-        entities: await toApiEntitiesWithFacets(results, {
-          userId: ctx.userId,
-          workspaceId: null,
-        }),
+        entities: await toApiEntitiesWithFacets(
+          results,
+          withRequestGrantSpaces({ userId: ctx.userId, workspaceId: null })
+        ),
       };
     }),
 
@@ -772,10 +775,13 @@ export const readProcs = {
       );
 
       return {
-        entities: await toApiEntitiesWithFacets(results, {
-          userId: ctx.userId,
-          allowedWorkspaceIds: validatedIds,
-        }),
+        entities: await toApiEntitiesWithFacets(
+          results,
+          withRequestGrantSpaces({
+            userId: ctx.userId,
+            allowedWorkspaceIds: validatedIds,
+          })
+        ),
       };
     }),
 
