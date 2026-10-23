@@ -227,7 +227,10 @@ const read = async (table: object, grant?: GrantScope | KeyGrant) => {
   return sorted(rows.map((r) => r.id));
 };
 
-const CRM_READ: GrantScope = { permissions: ["entity.read"], workspaceIds: [CRM] };
+const CRM_READ: GrantScope = {
+  permissions: ["entity.read"],
+  workspaceIds: [CRM],
+};
 
 describe("CONTROL — no grant: the person's floor admits every row", () => {
   it("entities, facets and bodies", async () => {

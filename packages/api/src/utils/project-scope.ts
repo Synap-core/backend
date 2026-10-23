@@ -270,7 +270,7 @@ export function exposureDocumentWhere(
  * pass the caller's spaces; a key grant passes its own `workspaceIds`
  * (access/grant-read.ts), so the app and the member read ONE rule.
  */
-export function liveFacetEntityIdsInSpaces(spaces: SpaceIds) {
+function liveFacetEntityIdsInSpaces(spaces: SpaceIds) {
   return (
     db
       .select({ id: entityFacets.entityId })

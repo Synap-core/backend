@@ -243,6 +243,12 @@ beforeAll(async () => {
     );
   }
   for (const k of Object.values(KEYS)) {
+    // The act-as link a minted app key carries (`resolveActorId` checks it on
+    // writes): the key's agent acts for its person.
+    await q(
+      `insert into api_keys (id, user_id, linked_user_id, is_active) values ($1,$2,$3,true)`,
+      [k.id, k.principal, k.person]
+    );
     await q(
       `insert into grants (id, api_key_id, principal_user_id, on_behalf_of, permissions, workspace_ids, created_by)
        values ($1,$2,$3,$4,$5::text[],$6::uuid[],$4)`,
