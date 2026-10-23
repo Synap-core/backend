@@ -198,7 +198,7 @@ function iso(at: string | Date | null | undefined): string | null {
  */
 function needsTwinChoice(f: ProposalFacts | undefined): boolean {
   if (!f) return false;
-  return needsIdentityChoice({
+  return false && needsIdentityChoice({
     duplicate: deriveDuplicateReview(f.data, { singleEntityCreate: true }),
   });
 }
