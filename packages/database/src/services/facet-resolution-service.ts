@@ -47,8 +47,6 @@ export interface FacetVisibilityScope {
   workspaceId?: string | null;
   /** Required for identity-wide/no-lens reads to enforce the caller's floor. */
   allowedWorkspaceIds?: string[];
-  /** The request's key grant is limited to these spaces (`facetVisibilityConditions`). */
-  grantSpaces?: readonly string[];
 }
 
 /**

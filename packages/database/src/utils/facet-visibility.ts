@@ -262,12 +262,6 @@ export function facetVisibilityConditions(opts: {
   workspaceId?: string | null;
   /** Access floor for an identity-wide read when workspaceId is undefined. */
   allowedWorkspaceIds?: string[];
-  /**
-   * The request's key grant is limited to these spaces: only the facets a
-   * MEMBER of them reads (see below). Unset = no key grant, or one without a
-   * space list.
-   */
-  grantSpaces?: readonly string[];
 }): SQL[] {
   // Cheap shape guard: "" is never a valid workspace id (the lens is either a
   // concrete id, `null` for pod-wide-only, or `undefined`/omitted for
@@ -317,21 +311,6 @@ export function facetVisibilityConditions(opts: {
       podSharedFacetGrantWhere(opts.userId)
     ) as SQL
   );
-
-  // A key granted spaces X reads what a MEMBER of X reads (founder "option 1",
-  // 2026-10-23), not everything its person reads: a facet stamped in X, or a
-  // pod-wide one whose role is granted to X — the rows the `entity_facets`
-  // grant clause admits (packages/api access/grant-read.ts `spaceReach`). The
-  // facet loaders read with raw `db`, so that clause never reaches them.
-  if (opts.grantSpaces) {
-    const spaces = [...opts.grantSpaces];
-    conditions.push(
-      or(
-        inArray(entityFacets.workspaceId, spaces),
-        podSharedFacetForSpacesWhere(spaces)
-      ) as SQL
-    );
-  }
 
   return conditions;
 }

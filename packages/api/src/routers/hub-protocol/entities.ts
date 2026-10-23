@@ -64,12 +64,6 @@ export const entitiesRouter = router({
         facetSlug: z.string().optional(),
         facetProfileId: z.string().uuid().optional(),
         /**
-         * Kind + Facets, opt-in: each row also carries `facetSlugs` + `facets`
-         * (slug + overlay `properties`/`status`), loaded in ONE batch under
-         * the list's facet lens. Forwarded to the regular `list`.
-         */
-        includeFacets: z.boolean().optional(),
-        /**
          * Creation-date window, half-open `[createdAfter, createdBefore)`.
          * Forwarded verbatim to the regular `list` procedure, which owns the
          * semantics (inclusive lower / exclusive upper, inverted window = 400).
@@ -121,7 +115,6 @@ export const entitiesRouter = router({
         ...(input.facetProfileId
           ? { facetProfileId: input.facetProfileId }
           : {}),
-        ...(input.includeFacets ? { includeFacets: true } : {}),
         ...(input.createdAfter ? { createdAfter: input.createdAfter } : {}),
         ...(input.createdBefore ? { createdBefore: input.createdBefore } : {}),
       });

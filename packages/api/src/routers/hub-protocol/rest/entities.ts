@@ -87,10 +87,7 @@ import {
   UpdateEntityResponseSchema,
   LifecycleConflictResponseSchema,
   WireEntitySchema,
-  WireListedEntitySchema,
-  type WireListedEntity,
   entityToWire,
-  entityToWireWithFacets,
 } from "./_codecs/entity.js";
 import {
   ErrorSchema,
@@ -511,16 +508,6 @@ export function registerEntitiesRoutes(app: HubHono): void {
           .describe(
             "Same as facetSlug but by profile id. Wins if both are set."
           ),
-        includeFacets: z
-          .enum(["true", "false"])
-          .optional()
-          .describe(
-            "`true` = each row also carries `facetSlugs` and `facets` (each " +
-              "role facet with its overlay `properties` and `status`, e.g. a " +
-              "lead's `leadStage`), only on a row wearing ≥1 role, loaded in " +
-              "one batch per page under the same lens as the rows. Default " +
-              "`false`: rows carry no facets. 400 with `q`."
-          ),
         createdAfter: z
           .string()
           .optional()
@@ -546,15 +533,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
       ...trpcErrorResponses,
       200: {
         description: "Array of entities",
-        content: {
-          "application/json": { schema: z.array(WireListedEntitySchema) },
-        },
+        content: { "application/json": { schema: z.array(WireEntitySchema) } },
       },
       400: {
         description:
           "Malformed or unsupported filter combination — an unparseable " +
-          "createdAfter/createdBefore, or a date window or `includeFacets` " +
-          "combined with `q`.",
+          "createdAfter/createdBefore, or a date window combined with `q`.",
         content: { "application/json": { schema: ErrorSchema } },
       },
       401: {
@@ -603,12 +587,6 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const includePodWide = query.includePodWide !== "false";
     const facetSlug = query.facetSlug || undefined;
     const facetProfileId = query.facetProfileId || undefined;
-    const includeFacets = query.includeFacets === "true";
-    // Default rows stay `entityToWire` exactly: the list already annotates
-    // `facetSlugs`, and only a caller that asked may see them.
-    const toWire: (e: unknown) => WireListedEntity = includeFacets
-      ? entityToWireWithFacets
-      : entityToWire;
 
     // CREATION-DATE WINDOW. Parsed HERE rather than handed on as a string so an
     // unparseable date is a 400 the caller can see, not a silent `Invalid Date`
@@ -655,17 +633,6 @@ export function registerEntitiesRoutes(app: HubHono): void {
         {
           error:
             "withoutProject cannot be combined with q — full-text search does not apply the project lens. List without q.",
-        },
-        400
-      );
-    }
-    // Search documents carry every role slug (trusted indexing), not the
-    // caller's facet lens, so `q` cannot answer this either.
-    if (includeFacets && q.length > 0) {
-      return c.json(
-        {
-          error:
-            "includeFacets cannot be combined with q — full-text search does not apply the facet lens. List without q.",
         },
         400
       );
@@ -783,7 +750,6 @@ export function registerEntitiesRoutes(app: HubHono): void {
               ...(withoutProject ? { withoutProject } : {}),
               ...(facetSlug ? { facetSlug } : {}),
               ...(facetProfileId ? { facetProfileId } : {}),
-              ...(includeFacets ? { includeFacets } : {}),
               ...(createdAfter ? { createdAfter } : {}),
               ...(createdBefore ? { createdBefore } : {}),
             })
@@ -816,28 +782,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
         const fulfilled = settled.flatMap((r) =>
           r.status === "fulfilled" ? (r.value as unknown[]) : []
         );
-        let rows = (fulfilled as unknown[]).map((e) => toWire(e));
-        const seen = new Map<string, WireListedEntity>();
+        let rows = (fulfilled as unknown[]).map((e) => entityToWire(e));
+        const seen = new Set<string>();
         rows = rows.filter((r) => {
-          const id = r.id;
-          if (!id) return false;
-          const first = seen.get(id);
-          if (!first) {
-            seen.set(id, r);
-            return true;
-          }
-          // A pod-wide row comes back from every lens, each annotated with
-          // that lens's facets: the merged row wears their union.
-          const known = new Set(first.facets?.map((f) => f.facetId));
-          const added = (r.facets ?? []).filter((f) => !known.has(f.facetId));
-          if (added.length > 0) {
-            first.facets = [...(first.facets ?? []), ...added];
-            first.facetSlugs = [
-              ...(first.facetSlugs ?? []),
-              ...added.map((f) => f.slug),
-            ];
-          }
-          return false;
+          const id = (r as { id?: string }).id;
+          if (!id || seen.has(id)) return false;
+          seen.add(id);
+          return true;
         });
         if (
           sortParam.includes("updatedAt") &&
@@ -867,12 +818,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(withoutProject ? { withoutProject } : {}),
         ...(facetSlug ? { facetSlug } : {}),
         ...(facetProfileId ? { facetProfileId } : {}),
-        ...(includeFacets ? { includeFacets } : {}),
         ...(createdAfter ? { createdAfter } : {}),
         ...(createdBefore ? { createdBefore } : {}),
       });
 
-      let rows = (listed as unknown[]).map((e) => toWire(e));
+      let rows = (listed as unknown[]).map((e) => entityToWire(e));
 
       if (
         sortParam.includes("updatedAt") &&

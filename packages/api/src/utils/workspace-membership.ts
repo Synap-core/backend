@@ -5,18 +5,10 @@
  * belongs to, and silently filter a requested list to accessible IDs only.
  */
 
-import {
-  eq,
-  inArray,
-  and,
-  or,
-  memberWorkspaceIds,
-  getRequestGrant,
-} from "@synap/database";
+import { eq, inArray, and, or, memberWorkspaceIds } from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 import { db } from "@synap/database";
 import { podVisibleWorkspaceWhere } from "./user-visible-where.js";
-import { grantedWorkspaceIdsOf } from "../services/intake/capture-schema-linking.js";
 
 /**
  * The workspaces `userId` may read — the SAME floor as `userVisibleWhere`:
@@ -73,11 +65,6 @@ export async function validateWorkspaceAccess(
  * Explicit workspace lenses are silently intersected with the caller's access;
  * no-lens reads receive the complete user floor. `null` deliberately means the
  * caller's pod-wide roles only.
- *
- * A request made with a key grant limited to spaces also carries those spaces
- * (`grantSpaces`): the facet loaders read `entity_facets` with raw `db`, so the
- * grant seam (`grantReadPredicate`) never reaches them, and without this a key
- * granted one space read the facets of every space its person can read.
  */
 export async function resolveFacetVisibilityScope(
   userId: string,
@@ -86,26 +73,21 @@ export async function resolveFacetVisibilityScope(
   userId: string;
   workspaceId?: string | null;
   allowedWorkspaceIds?: string[];
-  grantSpaces?: string[];
 }> {
-  const granted = grantedWorkspaceIdsOf(getRequestGrant());
-  const grant = granted ? { grantSpaces: [...granted] } : {};
-
-  if (workspaceId === null) return { userId, workspaceId: null, ...grant };
+  if (workspaceId === null) return { userId, workspaceId: null };
 
   if (workspaceId !== undefined) {
     const allowedWorkspaceIds = await validateWorkspaceAccess(userId, [
       workspaceId,
     ]);
     return allowedWorkspaceIds.includes(workspaceId)
-      ? { userId, workspaceId, ...grant }
-      : { userId, allowedWorkspaceIds: [], ...grant };
+      ? { userId, workspaceId }
+      : { userId, allowedWorkspaceIds: [] };
   }
 
   return {
     userId,
     allowedWorkspaceIds: await validateWorkspaceAccess(userId),
-    ...grant,
   };
 }
 
