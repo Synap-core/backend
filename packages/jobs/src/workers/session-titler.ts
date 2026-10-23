@@ -191,8 +191,13 @@ export const EARLY_TITLE_CANDIDATE = and(
  * drizzle renders a column inside a select-field SQL UNQUALIFIED, so the
  * correlation read `session_id = id` (the proposal's own id) and every
  * selected count was 0 — the roll stage was always stamped 0.
+ *
+ * Built on call, not at import: `@synap/jobs` is imported by the API through
+ * its index, and an import-time `drizzleSql.identifier` / column read crashed
+ * every API suite whose `@synap/database` stub does not model them.
  */
-const PROPOSAL_COUNT = drizzleSql<number>`(SELECT count(*)::int FROM ${proposals} WHERE ${proposals}.${drizzleSql.identifier(proposals.sessionId.name)} = ${focusSessions}.${drizzleSql.identifier(focusSessions.id.name)})`;
+const proposalCount = () =>
+  drizzleSql<number>`(SELECT count(*)::int FROM ${proposals} WHERE ${proposals}.${drizzleSql.identifier(proposals.sessionId.name)} = ${focusSessions}.${drizzleSql.identifier(focusSessions.id.name)})`;
 
 /** Thresholds already covered by the name the session carries. */
 const ROLL_STAGE = drizzleSql`COALESCE((${focusSessions.metadata}->>'titleRollStage')::int, 0)`;
@@ -203,18 +208,19 @@ const ROLL_STAGE = drizzleSql`COALESCE((${focusSessions.metadata}->>'titleRollSt
  * automation's — a person or agent naming it LOCKS it (`NAMED_BY_AUTOMATION`)
  * — and its proposal count has crossed the next threshold.
  */
-export const ROLL_TITLE_CANDIDATE = and(
-  drizzleSql`${focusSessions.status} IN ('active', 'paused', 'forming')`,
-  NAMED_BY_AUTOMATION,
-  drizzleSql`(
+export const rollTitleCandidate = () =>
+  and(
+    drizzleSql`${focusSessions.status} IN ('active', 'paused', 'forming')`,
+    NAMED_BY_AUTOMATION,
+    drizzleSql`(
     ${focusSessions.metadata}->>'titleSource' = 'generated'
     OR COALESCE((${focusSessions.metadata}->>'titleEarlyAttempts')::int, 0) >= ${MAX_TITLE_ATTEMPTS}
   )`,
-  drizzleSql`${TEMPLATE_RUN} IS NOT TRUE`,
-  WORK_OR_RECEIPT,
-  drizzleSql`${ROLL_STAGE} < ${ROLL_THRESHOLDS.length}`,
-  drizzleSql`${PROPOSAL_COUNT} >= (ARRAY[${drizzleSql.raw(ROLL_THRESHOLDS.join(","))}])[${ROLL_STAGE} + 1]`
-);
+    drizzleSql`${TEMPLATE_RUN} IS NOT TRUE`,
+    WORK_OR_RECEIPT,
+    drizzleSql`${ROLL_STAGE} < ${ROLL_THRESHOLDS.length}`,
+    drizzleSql`${proposalCount()} >= (ARRAY[${drizzleSql.raw(ROLL_THRESHOLDS.join(","))}])[${ROLL_STAGE} + 1]`
+  );
 
 export const CLOSE_TITLE_CANDIDATE = and(
   eq(focusSessions.status, "closed"),
@@ -425,14 +431,14 @@ async function generatePhase(
       expectedOutputs: focusSessions.expectedOutputs,
       verificationReport: focusSessions.verificationReport,
       metadata: focusSessions.metadata,
-      proposalCount: PROPOSAL_COUNT,
+      proposalCount: proposalCount(),
     })
     .from(focusSessions)
     .where(
       phase === "early"
         ? EARLY_TITLE_CANDIDATE
         : phase === "roll"
-          ? ROLL_TITLE_CANDIDATE
+          ? rollTitleCandidate()
           : CLOSE_TITLE_CANDIDATE
     )
     .orderBy(
