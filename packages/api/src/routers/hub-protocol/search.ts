@@ -10,6 +10,7 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { sql } from "@synap/database";
 import { intelligenceHubClient } from "../../clients/intelligence-hub.js";
 import { config } from "@synap-core/core";
+import { withoutUnlistableEntityHits } from "../../services/retrieval/listable-search-hits.js";
 
 export const searchRouter = router({
   /**
@@ -43,7 +44,9 @@ export const searchRouter = router({
     .query(async ({ input, ctx }) => {
       const { searchService } = await import("@synap/search");
 
-      return await searchService.search({
+      // THE listing rule over raw hits (probe + demo rows) — Hub REST
+      // GET /entities?q=, the CLI and agents read this door.
+      const response = await searchService.search({
         query: input.query,
         // SECURITY: search by the AUTHENTICATED owner, never the request's
         // userId (that let any hub-read key read another user's whole index).
@@ -53,6 +56,7 @@ export const searchRouter = router({
         limit: input.limit,
         page: input.page,
       });
+      return await withoutUnlistableEntityHits(response);
     }),
 
   /**
@@ -80,7 +84,7 @@ export const searchRouter = router({
     .query(async ({ input, ctx }) => {
       const { searchService } = await import("@synap/search");
 
-      return await searchService.searchCollection(
+      const response = await searchService.searchCollection(
         input.collection,
         input.query,
         {
@@ -92,6 +96,8 @@ export const searchRouter = router({
           page: input.page,
         }
       );
+      // THE listing rule over raw hits (no-op for non-entity collections).
+      return await withoutUnlistableEntityHits(response);
     }),
 
   /**
@@ -129,16 +135,14 @@ export const searchRouter = router({
       // Use Search Service for better relevance
       const { searchService } = await import("@synap/search");
 
-      const results = await searchService.searchCollection(
-        "entities",
-        input.query,
-        {
+      const results = await withoutUnlistableEntityHits(
+        await searchService.searchCollection("entities", input.query, {
           // SECURITY: search by the AUTHENTICATED owner, never the request's
           // userId (that let any hub-read key read another user's whole index).
           userId: ctx.userId as string,
           workspaceId: input.workspaceId,
           limit: input.limit,
-        }
+        })
       );
 
       const slug = input.profileSlug ?? input.type ?? undefined;

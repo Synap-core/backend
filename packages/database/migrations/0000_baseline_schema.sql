@@ -296,6 +296,8 @@ ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_expires_at" times
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_sha256" text;
 -- 0338b: the workspace templates a pod app declares (`synap_templates`).
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_templates" text[] NOT NULL DEFAULT '{}';
+-- 0339b: why the document asks for each permission (`synap_requests[].reason`).
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_reasons" jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
   "code_hash"      text PRIMARY KEY,
@@ -2046,6 +2048,7 @@ CREATE TABLE IF NOT EXISTS "proposals" (
   "reason_code"       text,
   "governance_reason" text,
   "app_id"            text,
+  "api_key_id"        uuid,
   "comments"          jsonb DEFAULT '[]',
   "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"        timestamp with time zone NOT NULL DEFAULT now()
@@ -2081,6 +2084,7 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "rejection_reason" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reason_code" text;  -- 0232 (structured rejection cause; app-level enum, free-text fallback stays)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "governance_reason" text;  -- 0238 (structured governance cause at creation; PROPOSE_REASON key, distinct from rejection reason_code)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "app_id" text;  -- 0310 (the app's public_id whose key filed this proposal; attribution only, no FK)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "api_key_id" uuid;  -- 0346 (the api_keys.id the filing request authenticated with; attribution only, no FK)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "comments" jsonb DEFAULT '[]';
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();

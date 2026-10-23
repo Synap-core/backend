@@ -46,7 +46,14 @@ export function actorDisplayName(
   row: Parameters<typeof displayNameForUser>[0] & {
     hostUserId?: string | null;
   },
-  hostNames: ReadonlyMap<string, { name: string }>
+  hostNames: ReadonlyMap<string, { name: string }>,
+  /**
+   * The computer named by the KEY that filed this write
+   * (`api_keys.instance_label` through `proposals.api_key_id`, B7). It wins
+   * over the agent's host: one agent user serves every computer it is
+   * connected from, the key says which one this was. Absent/blank → the host.
+   */
+  keyComputer?: string | null
 ): string | undefined {
   const unnamedType =
     row.userType === "agent" && !row.name?.trim()
@@ -55,10 +62,10 @@ export function actorDisplayName(
   const name = unnamedType
     ? resolveServiceName(unnamedType)
     : displayNameForUser(row);
+  if (row.userType !== "agent") return name;
   const host =
-    row.userType === "agent" && row.hostUserId
-      ? hostNames.get(row.hostUserId)?.name
-      : undefined;
+    keyComputer?.trim() ||
+    (row.hostUserId ? hostNames.get(row.hostUserId)?.name : undefined);
   return host ? agentDisplayName({ name, hostName: host }) : name;
 }
 

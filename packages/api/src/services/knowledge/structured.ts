@@ -19,6 +19,7 @@ import {
   desc,
   drizzleSql,
   profileSlugScopeConditionFromRows,
+  listableEntityWhere,
 } from "@synap/database";
 import {
   accessScopeWhere,
@@ -128,6 +129,9 @@ export async function structuredLookup(
   const conditions = [
     isNull(entities.deletedAt),
     floor,
+    // THE listing rule: an enumeration ("list our deals") leaves probe and
+    // demo rows out, unless the ask is lensed on a project (the demo toggle).
+    listableEntityWhere({ projectLens: projectId }),
     // Polymorphic type match (kind → entities.type; role → facet EXISTS) — the
     // one door entities.list resolves a single caller-supplied slug through,
     // built from the rows the assert above already resolved (one lookup).

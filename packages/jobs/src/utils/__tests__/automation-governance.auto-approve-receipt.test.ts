@@ -70,6 +70,11 @@ vi.mock("@synap/database", () => ({
   ProposalStatus: { PENDING: "pending", AUTO_APPROVED: "auto_approved" },
   insertPendingProposal: insertPendingProposalMock,
   deriveProposalProjectId: deriveProjectIdMock,
+  // The receipt spreads the calling key's attribution (0346). A run executes
+  // outside any key request, so the real door returns `{}` here; without this
+  // export the spread throws inside the receipt's fail-open catch and NO row is
+  // filed.
+  callingKeyAttribution: vi.fn(() => ({})),
 }));
 
 vi.mock("@synap/database/agent-governance", () => ({

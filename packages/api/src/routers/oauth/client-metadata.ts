@@ -21,7 +21,11 @@
  *   - no redirect followed, 5 s for the whole exchange, 5 KB, application/json;
  *   - at most one fetch in flight per client_id, and the validated document is
  *     cached in `oauth_clients` (fresh for its Cache-Control, floored at 5 min,
- *     capped at 24 h).
+ *     capped at 24 h);
+ *   - at most `CIMD_FETCH_MAX` fetches per 10 min for the whole process
+ *     (review O-2): on a shared address `/authorize` is budgeted per client_id,
+ *     a value the caller picks, so a stranger inventing one per request would
+ *     otherwise buy a fetch per request.
  *
  * The document is then validated as a whole before anything is cached: its
  * `client_id` must equal the URL byte for byte (a document cannot speak for
@@ -48,7 +52,11 @@ import {
   ClientMetadataError,
   assertClientMetadataUrl,
 } from "./client-id-url.js";
-import { OAUTH_SUPPORTED_SCOPES, normalizeRequestedScopes } from "./config.js";
+import {
+  OAUTH_SUPPORTED_SCOPES,
+  isSynapApp,
+  normalizeRequestedScopes,
+} from "./config.js";
 import { parseScopeParam } from "./protocol.js";
 import {
   findClient,
@@ -67,6 +75,13 @@ export const CIMD_MIN_TTL_MS = 5 * 60 * 1000;
 export const CIMD_MAX_TTL_MS = 24 * 60 * 60 * 1000;
 /** A copy this young is used when a refresh FAILS to fetch (not when invalid). */
 export const CIMD_STALE_GRACE_MS = 24 * 60 * 60 * 1000;
+/**
+ * Document fetches per window, pod-wide. A fresh cached copy spends nothing,
+ * and a spent budget is a fetch failure, so a known app keeps its copy (the
+ * 24 h grace): only a document the pod has never read waits.
+ */
+export const CIMD_FETCH_MAX = 120;
+export const CIMD_FETCH_WINDOW_MS = 10 * 60 * 1000;
 
 const CIMD_MAX_REDIRECT_URIS = 8;
 const CIMD_MAX_CLIENT_NAME_LENGTH = 100;
@@ -94,6 +109,11 @@ export interface ValidatedClientMetadataDocument {
   scopes: string[];
   /** `synap_requests[].permission`, grant grammar. */
   requestedPermissions: string[];
+  /**
+   * `synap_requests[].reason` by permission, as display text
+   * (`displayReason`); a permission sent with no reason has no entry.
+   */
+  requestedReasons: Record<string, string>;
   /** `synap_templates`: workspace-template slugs the consent may offer. */
   requestedTemplates: string[];
   clientUri: string | null;
@@ -131,13 +151,26 @@ function sameOriginHttpsUrl(
 }
 
 /**
+ * The review verbs a SYNAP app (`isSynapApp`) may ask for, and no other app:
+ * its token is held by the person who signs in (founder decision 2026-10-22),
+ * so an approval through it is that person's own decision, in the spaces they
+ * tick, and still named against its target (D3, `applyProposalApproval`).
+ */
+export const SYNAP_APP_REVIEW_PERMISSIONS = [
+  "proposal.approve",
+  "proposal.reject",
+] as const;
+
+/**
  * One `synap_requests[].permission`: a valid grant-grammar pattern, no `*` in
  * the subject or the action, and only the plain actions (read/create/update/
  * delete). Governance gate verbs (approve, merge, purge, …) are refused: an app
  * that asks to approve its own proposals is asking to leave the governed path.
  * A `*` kind (`entity.*.read`) is the same as `entity.read` and is allowed.
+ * The one exception: a Synap app may ask for `SYNAP_APP_REVIEW_PERMISSIONS`,
+ * spelled exactly.
  */
-function assertAppPermission(permission: string): void {
+function assertAppPermission(permission: string, clientId: string): void {
   let segs: string[];
   try {
     segs = parsePermission(permission);
@@ -154,11 +187,45 @@ function assertAppPermission(permission: string): void {
       `synap_requests: "${permission}" must name a subject and an action`
     );
   }
+  if (
+    isSynapApp(clientId) &&
+    (SYNAP_APP_REVIEW_PERMISSIONS as readonly string[]).includes(permission)
+  ) {
+    return;
+  }
   if (!(GRANT_ACTIONS as readonly string[]).includes(action!)) {
     throw new ClientMetadataError(
       `synap_requests: "${permission}" asks for "${action}", which an app cannot be granted`
     );
   }
+}
+
+/** Removed from a reason: they could make it read as something else. */
+function isHiddenChar(cp: number): boolean {
+  return (
+    (cp >= 0x200b && cp <= 0x200f) || // zero-width, LRM / RLM
+    (cp >= 0x202a && cp <= 0x202e) || // bidi embeddings and overrides
+    (cp >= 0x2066 && cp <= 0x2069) || // bidi isolates
+    cp === 0xfeff
+  );
+}
+
+/**
+ * A `synap_requests[].reason` as display text (review, be-admin contract
+ * `app.permissions[i].reason`): the developer's own words, which the consent
+ * screen shows as TEXT and never as a reason to trust the app. Control
+ * characters read as spaces, invisible and bidi-control characters are
+ * removed, whitespace runs collapse; empty means no reason. The length is
+ * already bounded (`CIMD_MAX_REASON_LENGTH`).
+ */
+export function displayReason(raw: string): string {
+  let out = "";
+  for (const ch of raw) {
+    const cp = ch.codePointAt(0)!;
+    if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)) out += " ";
+    else if (!isHiddenChar(cp)) out += ch;
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
 
 /** Validate a fetched document against the URL it was fetched from. */
@@ -265,6 +332,8 @@ export function validateClientMetadataDocument(
   ];
 
   const requestedPermissions: string[] = [];
+  // A permission listed twice keeps its first entry's reason.
+  const requestedReasons = new Map<string, string>();
   if (d.synap_requests !== undefined) {
     if (!Array.isArray(d.synap_requests)) {
       throw new ClientMetadataError("synap_requests must be an array");
@@ -294,9 +363,11 @@ export function validateClientMetadataDocument(
           `synap_requests reason must be a string of at most ${CIMD_MAX_REASON_LENGTH} characters`
         );
       }
-      assertAppPermission(permission);
+      assertAppPermission(permission, clientId);
       if (!requestedPermissions.includes(permission)) {
         requestedPermissions.push(permission);
+        const shown = typeof reason === "string" ? displayReason(reason) : "";
+        if (shown) requestedReasons.set(permission, shown);
       }
     }
   }
@@ -327,6 +398,7 @@ export function validateClientMetadataDocument(
     redirectUris,
     scopes,
     requestedPermissions,
+    requestedReasons: Object.fromEntries(requestedReasons),
     requestedTemplates,
     clientUri,
     initiateLoginUri,
@@ -357,7 +429,37 @@ export interface ClientMetadataDeps {
   /** DNS for `resolvePublicIssuerEndpoint` (tests inject one). */
   lookup?: IssuerDnsLookup;
   now?: () => number;
+  /** The fetch budget (tests inject a small one); the process's by default. */
+  fetchBudget?: CimdFetchBudget;
 }
+
+export interface CimdFetchBudget {
+  /** Spend one fetch at `now`; false once the window's budget is spent. */
+  take(now: number): boolean;
+}
+
+/** A fixed window over every document fetch it is asked for. */
+export function createCimdFetchBudget(
+  max = CIMD_FETCH_MAX,
+  windowMs = CIMD_FETCH_WINDOW_MS
+): CimdFetchBudget {
+  let start = 0;
+  let used = 0;
+  return {
+    take(now) {
+      if (now < start || now - start >= windowMs) {
+        start = now;
+        used = 0;
+      }
+      if (used >= max) return false;
+      used += 1;
+      return true;
+    },
+  };
+}
+
+/** Process-wide, as `inflight`. */
+const cimdFetchBudget = createCimdFetchBudget();
 
 function headerValue(v: string | string[] | undefined): string | undefined {
   return Array.isArray(v) ? v.join(", ") : v;
@@ -477,10 +579,18 @@ export async function resolveCimdClient(
 
   let pending = inflight.get(clientId);
   if (!pending) {
-    pending = refresh(url, clientId, store, deps).finally(() =>
-      inflight.delete(clientId)
-    );
-    inflight.set(clientId, pending);
+    if ((deps.fetchBudget ?? cimdFetchBudget).take(now)) {
+      pending = refresh(url, clientId, store, deps).finally(() =>
+        inflight.delete(clientId)
+      );
+      inflight.set(clientId, pending);
+    } else {
+      pending = Promise.reject(
+        new ClientMetadataFetchError(
+          "this pod has read too many app descriptions in the last few minutes"
+        )
+      );
+    }
   }
   try {
     return await pending;

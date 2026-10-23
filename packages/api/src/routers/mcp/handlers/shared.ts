@@ -514,6 +514,12 @@ export type SessionAttribution = "explicit" | "derived";
 export interface ResolvedSession {
   sessionId: string;
   attribution: SessionAttribution;
+  /**
+   * Set when the derived session is this client's auto-opened RECEIPT: its
+   * project. The adapter hands it to the gate (`runWithDerivedSession`), which
+   * files a write of another project under that project's receipt (B4).
+   */
+  receipt?: { projectId: string | null };
 }
 
 /**
@@ -542,6 +548,12 @@ export async function resolveAmbientSession(
 export interface SessionAttributionReport {
   /** `none` = no session: none bound, none unambiguous, or the explicit id was dropped. */
   session: "explicit" | "derived" | "none";
+  /**
+   * WHERE this call's writes were actually filed — each session by id and
+   * name, plus a `topicHint` when a write's project is not the project of the
+   * session it landed in (B4). Absent when the call wrote nothing.
+   */
+  filed?: import("../write-session-report.js").WriteSessionReport;
   /**
    * `derived` only: `client` = the session bound to THIS client (one it
    * started, or the one auto-opened for it); `unclaimed` = the single open work
@@ -627,7 +639,13 @@ export async function resolveSessionHandle(
   }
   if ((r.source === "client" || r.source === "unclaimed") && r.sessionId) {
     return {
-      session: { sessionId: r.sessionId, attribution: "derived" },
+      session: {
+        sessionId: r.sessionId,
+        attribution: "derived",
+        ...(r.receiptProjectId !== undefined
+          ? { receipt: { projectId: r.receiptProjectId } }
+          : {}),
+      },
       attribution: {
         session: "derived",
         via: r.source,
@@ -690,11 +708,11 @@ export interface CaptureWriteReceipt {
    * Per-requested-coordinate PROJECT outcome — intent measured against what
    * ACTUALLY happened, so a dropped pin is never silent (the false-success bug).
    * `linked` = a deterministic rung stamped `belongs_to_project`; `not_linked` =
-   * a coordinate the caller requested that did NOT happen (with a `reason`, e.g.
-   * `project-name-unmatched` for a project name that matched none of the
-   * caller's projects); `proposed` = an AI suggestion awaiting confirmation.
-   * Omitted only when no project was requested. A pin to a project this user
-   * can't see is not a receipt state: the whole capture is refused.
+   * a coordinate the caller requested that did NOT happen (with a `reason`);
+   * `proposed` = an AI suggestion awaiting confirmation. Omitted only when no
+   * project was requested. A pin to a project this user can't see, or a
+   * project NAME matching none of theirs, is not a receipt state: the whole
+   * capture is refused (`CaptureProjectNotFoundError`).
    */
   project?: {
     status: "linked" | "not_linked" | "proposed";

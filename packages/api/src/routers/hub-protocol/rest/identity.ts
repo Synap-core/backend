@@ -23,6 +23,7 @@ import {
   resolveIdentity,
   extractIdentitySignals,
   signalsFromExplicit,
+  UnknownIdentitySignalKeyError,
   type IdentitySignal,
 } from "@synap/database";
 
@@ -63,8 +64,14 @@ const ResolveIdentityRequestSchema = z
           .optional()
           .describe("Provider-qualified id, e.g. `github:12345`."),
       })
+      // Kept, not stripped: an atom name (`linkedin_url`) or a property slug
+      // (`linkedinUrl`) is accepted, any other key is refused with 400 —
+      // never silently dropped (`signalsFromExplicit`).
+      .catchall(z.string())
       .optional()
-      .describe("Explicit strong identity atoms."),
+      .describe(
+        "Explicit strong identity atoms. Also accepted: an atom name (linkedin_url, website, …) or the property slug that carries it (linkedinUrl, …); any other key is refused."
+      ),
     properties: z
       .record(z.string(), z.unknown())
       .optional()
@@ -207,6 +214,9 @@ export function registerIdentityRoutes(app: HubHono): void {
         await buildIdentityResolveResponse(resolution, userId, signals)
       );
     } catch (err) {
+      if (err instanceof UnknownIdentitySignalKeyError) {
+        return c.json({ error: err.message }, 400);
+      }
       logger.error({ err, userId }, "POST /identity/resolve failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

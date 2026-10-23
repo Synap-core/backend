@@ -52,8 +52,12 @@ vi.mock("@synap/database", async (importOriginal) => {
         strings,
         vals,
       }),
-      // session-kind.ts builds a module-level drizzleSql.raw
-      { raw: (s: string) => ({ op: "sql.raw", s }) }
+      // session-kind.ts builds a module-level drizzleSql.raw, and the jobs
+      // session-titler a module-level drizzleSql.identifier
+      {
+        raw: (s: string) => ({ op: "sql.raw", s }),
+        identifier: (s: string) => ({ op: "sql.identifier", s }),
+      }
     ),
     channels: mk("channels"),
     views: mk("views"),

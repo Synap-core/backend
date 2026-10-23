@@ -24,6 +24,8 @@ import {
   ClientMetadataError,
   assertClientMetadataUrl,
   cimdCacheTtlMs,
+  createCimdFetchBudget,
+  displayReason,
   resolveCimdClient,
   validateClientMetadataDocument,
   type ClientMetadataStore,
@@ -441,6 +443,38 @@ describe("CIMD — document validation", () => {
     });
   }
 
+  it("a Synap app (and only one) may ask for the review verbs, spelled exactly", () => {
+    const SYNAP =
+      "https://content-studio.synap.live/.well-known/synap-client.json";
+    const synapDoc = (permission: string, clientId = SYNAP) => ({
+      ...doc(),
+      client_id: clientId,
+      redirect_uris: [`${new URL(clientId).origin}/api/synap/callback`],
+      synap_requests: [{ permission }],
+    });
+    for (const permission of ["proposal.approve", "proposal.reject"]) {
+      expect(
+        validateClientMetadataDocument(synapDoc(permission), SYNAP)
+          .requestedPermissions
+      ).toEqual([permission]);
+      // A lookalike origin is any other app: refused, as "a gate verb" above.
+      const LOOKALIKE =
+        "https://content-studio.synap.live.evil.com/.well-known/synap-client.json";
+      expect(() =>
+        validateClientMetadataDocument(
+          synapDoc(permission, LOOKALIKE),
+          LOOKALIKE
+        )
+      ).toThrow(/cannot be granted/);
+    }
+    // Every other gate verb stays refused, even for a Synap app.
+    for (const permission of ["proposal.merge", "entity.purge", "proposal.*"]) {
+      expect(() =>
+        validateClientMetadataDocument(synapDoc(permission), SYNAP)
+      ).toThrow(ClientMetadataError);
+    }
+  });
+
   it("keeps only the mcp.* scopes the AS supports, and a * kind is a plain read", () => {
     const v = validateClientMetadataDocument(
       doc({
@@ -451,6 +485,39 @@ describe("CIMD — document validation", () => {
     );
     expect(v.scopes).toEqual(["mcp.read", "mcp.write"]);
     expect(v.requestedPermissions).toEqual(["entity.*.read"]);
+  });
+
+  it("keeps each permission's reason as display text, by permission; none when absent", () => {
+    const v = validateClientMetadataDocument(doc(), CLIENT_ID);
+    // entity.post.create was sent without a reason: no entry.
+    expect(v.requestedReasons).toEqual({
+      "entity.post.read": "To list your drafts",
+    });
+  });
+
+  it("a reason is cleaned: controls read as spaces, bidi and zero-width characters go, blank is none, the first one listed wins", () => {
+    const v = validateClientMetadataDocument(
+      doc({
+        synap_requests: [
+          {
+            permission: "entity.post.read",
+            reason: "  To\nlist\u0007 your \u202edrafts\u200b\u2066  ",
+          },
+          { permission: "entity.post.read", reason: "a second reason" },
+          { permission: "entity.post.create", reason: " \t " },
+        ],
+      }),
+      CLIENT_ID
+    );
+    expect(v.requestedReasons).toEqual({
+      "entity.post.read": "To list your drafts",
+    });
+  });
+
+  it("displayReason keeps ordinary text, emoji included", () => {
+    expect(displayReason("Lire vos brouillons ✍️ — 2 étapes")).toBe(
+      "Lire vos brouillons ✍️ — 2 étapes"
+    );
   });
 
   it("keeps the declared synap_templates (deduplicated), and none when absent", () => {
@@ -486,6 +553,57 @@ describe("CIMD — document validation", () => {
 });
 
 // ─── Cache ───────────────────────────────────────────────────────────────────
+
+describe("CIMD — one fetch budget for the pod (review O-2)", () => {
+  it("past the budget, a document the pod never read is refused without a request", async () => {
+    serve({});
+    const fetchBudget = createCimdFetchBudget(2, 600_000);
+    const now = () => Date.UTC(2026, 9, 20, 12);
+    // A stranger inventing a client_id per request: every one is a cache miss.
+    for (let i = 0; i < 2; i++) {
+      await resolveCimdClient(CLIENT_ID, ISSUER, memoryStore(), {
+        lookup: publicDns,
+        now,
+        fetchBudget,
+      });
+    }
+    expect(m.httpsRequest).toHaveBeenCalledTimes(2);
+    expect(
+      await refusal(
+        resolveCimdClient(CLIENT_ID, ISSUER, memoryStore(), {
+          lookup: publicDns,
+          now,
+          fetchBudget,
+        })
+      )
+    ).toMatch(/too many app descriptions/);
+    expect(m.httpsRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("a fresh copy spends nothing, and a known app keeps its copy once the budget is spent", async () => {
+    serve({});
+    const fetchBudget = createCimdFetchBudget(1, 600_000);
+    const store = memoryStore();
+    let now = Date.UTC(2026, 9, 20, 12);
+    const deps = () => ({ lookup: publicDns, now: () => now, fetchBudget });
+    await resolveCimdClient(CLIENT_ID, ISSUER, store, deps());
+    await resolveCimdClient(CLIENT_ID, ISSUER, store, deps());
+    expect(m.httpsRequest).toHaveBeenCalledTimes(1);
+    // Stale, budget spent: the 24 h grace serves the copy, nothing is fetched.
+    now += CIMD_MIN_TTL_MS + 1;
+    const client = await resolveCimdClient(CLIENT_ID, ISSUER, store, deps());
+    expect(client.redirectUris).toEqual([CALLBACK]);
+    expect(m.httpsRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("the budget comes back with the next window", () => {
+    const budget = createCimdFetchBudget(1, 600_000);
+    const t0 = Date.UTC(2026, 9, 20, 12);
+    expect(budget.take(t0)).toBe(true);
+    expect(budget.take(t0 + 1)).toBe(false);
+    expect(budget.take(t0 + 600_000)).toBe(true);
+  });
+});
 
 describe("CIMD — cache freshness", () => {
   it("honours Cache-Control within [5 min, 24 h]", () => {

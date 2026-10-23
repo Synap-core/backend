@@ -7,19 +7,9 @@ import { openIn } from "../../../lib/open-in";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { ExitLink } from "../../../lib/exit-link";
 import { ReceiverShell } from "../../_lib/receiver-shell";
-/* Relative time is NOT vocabulary — `.claude/rules/vocabulary.md` excludes
-   date/duration formatting on purpose. The shared helper accepts
-   `Date | string`: `createdAt` is typed `Date` through superjson, and a helper
-   that only accepts `Date` would be a lie the day a plain-JSON path feeds this
-   page. */
-import { formatRelative } from "../../../lib/format";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { proposalHeading } from "./proposal-heading";
-import {
-  ProposalDecision,
-  proposalRequestedParts,
-  useProposalReview,
-} from "./ProposalReviewCard";
+import { ProposalReviewBody, useProposalReview } from "./ProposalReviewCard";
 
 const STATUS_COLOR: Record<
   string,
@@ -75,21 +65,11 @@ export function ProposalReview({
      the Synap desktop app" on the loading, not-found and unauthorized cards —
      a link into nothing for a proposal that does not exist or that the reader
      is not allowed to see. */
-  /* `requested` is opt-in for the same reason `footer` is: the loading,
-     not-found and unauthorized cards have no request to describe, and a
-     provenance line rendered over nothing is the guess this page exists to
-     avoid. */
-  const shell = (
-    children: ReactNode,
-    footer?: ReactNode,
-    requested?: ReactNode
-  ) => (
-    <ReceiverShell
-      podHost={podHost}
-      identity={identity}
-      requested={requested}
-      footer={footer}
-    >
+  /* Who asked, for whom, where and when is drawn INSIDE the card, by the
+     review itself (`ProposalReviewBody`) — the same line the Review drawer
+     shows, so the shell's `requested` slot stays empty here. */
+  const shell = (children: ReactNode, footer?: ReactNode) => (
+    <ReceiverShell podHost={podHost} identity={identity} footer={footer}>
       {children}
     </ReceiverShell>
   );
@@ -122,36 +102,20 @@ export function ProposalReview({
      one a stranger reaches from an email, greeted them with `entity.create`.
      That exact leak is named in .claude/rules/vocabulary.md. */
   const { heading } = proposalHeading(p, p.request.data ?? p.data);
-  const requestedParts = proposalRequestedParts(
-    p,
-    workspaceName,
-    formatRelative
-  );
-  const requested =
-    requestedParts.length > 0 ? (
-      <p className="text-[12px] text-foreground/65">
-        {requestedParts.join(" · ")}
-      </p>
-    ) : undefined;
 
   return shell(
     <>
       <CardHeader className="flex items-start justify-between gap-3 px-7 pb-0 pt-7">
-        <div className="flex items-start gap-3">
+        <div className="flex min-w-0 items-start gap-3">
           <span
             aria-hidden
-            className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary ring-1 ring-inset ring-primary/20"
           >
             <ShieldCheck className="h-5 w-5" strokeWidth={2} />
           </span>
-          <div className="flex flex-col gap-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/65">
-              Proposal review
-            </p>
-            <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
-              {heading}
-            </h1>
-          </div>
+          <h1 className="min-w-0 break-words font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
+            {heading}
+          </h1>
         </div>
         <Chip
           color={STATUS_COLOR[status] ?? "default"}
@@ -163,14 +127,16 @@ export function ProposalReview({
       </CardHeader>
 
       <CardBody className="px-7 pb-7 pt-5">
-        <ProposalDecision
+        <ProposalReviewBody
           proposal={p}
           sourceExits={sourceExits}
+          workspaceName={workspaceName}
+          identity={identity}
           onDecided={() => void query.refetch()}
+          barClassName="bottom-0 pt-4"
         />
       </CardBody>
     </>,
-    openInApp,
-    requested
+    openInApp
   );
 }
