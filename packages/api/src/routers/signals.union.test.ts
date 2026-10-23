@@ -760,7 +760,9 @@ describe("access requests — pending issuers and app connection requests", () =
 
 describe("space invites — an invite to another space of this pod (wave PQ)", () => {
   const NOW = new Date("2026-10-22T12:00:00Z");
-  const invite = (over: Partial<SpaceInviteSignalInput> = {}): SpaceInviteSignalInput => ({
+  const invite = (
+    over: Partial<SpaceInviteSignalInput> = {}
+  ): SpaceInviteSignalInput => ({
     id: "inv-1",
     token: "tok-1",
     type: "workspace",
@@ -790,7 +792,13 @@ describe("space invites — an invite to another space of this pod (wave PQ)", (
       category: "governance",
       // The countdown ends at the invite's expiry (7 days).
       lifetimeHours: 168,
-      invite: { id: "inv-1", token: "tok-1", role: "editor", scope: "workspace", spaceName: "Research" },
+      invite: {
+        id: "inv-1",
+        token: "tok-1",
+        role: "editor",
+        scope: "workspace",
+        spaceName: "Research",
+      },
       groupKey: null,
       repeatCount: 1,
     });
@@ -802,8 +810,18 @@ describe("space invites — an invite to another space of this pod (wave PQ)", (
       notifications: [],
       owedSlots: [],
       spaceInvites: [
-        invite({ id: "p", type: "pod", workspaceId: null, spaceName: null, createdAt: new Date("2026-10-22T11:00:00Z") }),
-        invite({ id: "n", spaceName: "  ", createdAt: new Date("2026-10-22T10:00:00Z") }),
+        invite({
+          id: "p",
+          type: "pod",
+          workspaceId: null,
+          spaceName: null,
+          createdAt: new Date("2026-10-22T11:00:00Z"),
+        }),
+        invite({
+          id: "n",
+          spaceName: "  ",
+          createdAt: new Date("2026-10-22T10:00:00Z"),
+        }),
       ],
       now: NOW,
     });
@@ -814,7 +832,13 @@ describe("space invites — an invite to another space of this pod (wave PQ)", (
   it("an expired invite is no row and no count (the pod refuses to accept it)", () => {
     const expired = invite({ expiresAt: new Date("2026-10-22T11:59:59Z") });
     expect(
-      unionNeedsYou({ clusters: [], notifications: [], owedSlots: [], spaceInvites: [expired], now: NOW })
+      unionNeedsYou({
+        clusters: [],
+        notifications: [],
+        owedSlots: [],
+        spaceInvites: [expired],
+        now: NOW,
+      })
     ).toEqual([]);
     expect(
       countNeedsYou({
@@ -855,7 +879,13 @@ describe("space invites — an invite to another space of this pod (wave PQ)", (
         counted.invites
     );
     expect(
-      unionNeedsYou({ clusters: [], notifications: [], owedSlots: [], spaceInvites, now: NOW }).length
+      unionNeedsYou({
+        clusters: [],
+        notifications: [],
+        owedSlots: [],
+        spaceInvites,
+        now: NOW,
+      }).length
     ).toBe(counted.invites);
     expect(
       countNeedsYou({
@@ -873,4 +903,3 @@ describe("space invites — an invite to another space of this pod (wave PQ)", (
     ).toBe(true);
   });
 });
-

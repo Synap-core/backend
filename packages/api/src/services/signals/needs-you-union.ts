@@ -1364,7 +1364,7 @@ export function signalFromSpaceInvite(
     title:
       row.type === "pod"
         ? POD_WIDE_INVITE_TITLE
-        : spaceName ?? resolveObjectNoun("workspace"),
+        : (spaceName ?? resolveObjectNoun("workspace")),
     count: 1,
     occurredAt: row.createdAt,
     target: null,

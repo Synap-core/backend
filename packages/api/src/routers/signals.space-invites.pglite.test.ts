@@ -74,9 +74,12 @@ function ddlFor(table: PgTable): string {
     const pk = c.primary
       ? ` primary key${type === "uuid" ? " default gen_random_uuid()" : ""}`
       : "";
-    const def = ["created_at", "updated_at", "timestamp", "started_at"].includes(
-      c.name
-    )
+    const def = [
+      "created_at",
+      "updated_at",
+      "timestamp",
+      "started_at",
+    ].includes(c.name)
       ? " default now()"
       : "";
     return `"${c.name}" ${type}${pk}${def}`;
@@ -100,7 +103,13 @@ async function invite(o: {
   await q(
     `insert into invites (id, type, workspace_id, email, role, token, invited_by, expires_at, created_at)
      values (gen_random_uuid(),$1,$2,$3,'editor',$4,'owner-1', now() + ($5 || ' hours')::interval, now())`,
-    [o.type ?? "workspace", o.workspaceId, o.email, o.token, String(o.expiresInHours)]
+    [
+      o.type ?? "workspace",
+      o.workspaceId,
+      o.email,
+      o.token,
+      String(o.expiresInHours),
+    ]
   );
 }
 
@@ -128,24 +137,46 @@ beforeAll(async () => {
     [MINE, ME]
   );
   // Open, addressed to me — the one row.
-  await invite({ email: "me@x.io", workspaceId: RESEARCH, token: "tok-open", expiresInHours: 168 });
+  await invite({
+    email: "me@x.io",
+    workspaceId: RESEARCH,
+    token: "tok-open",
+    expiresInHours: 168,
+  });
   // Expired — no row.
-  await invite({ email: "me@x.io", workspaceId: RESEARCH, token: "tok-gone", expiresInHours: -1 });
+  await invite({
+    email: "me@x.io",
+    workspaceId: RESEARCH,
+    token: "tok-gone",
+    expiresInHours: -1,
+  });
   // Someone else's — no row.
-  await invite({ email: "else@x.io", workspaceId: RESEARCH, token: "tok-else", expiresInHours: 168 });
+  await invite({
+    email: "else@x.io",
+    workspaceId: RESEARCH,
+    token: "tok-else",
+    expiresInHours: 168,
+  });
 });
 
 describe("open space invites in needs-you (real read)", () => {
   it("the open invite is ONE space-invite row at the floor, with the token Accept takes", async () => {
     const { signals } = (await signalsRouter
       .createCaller(ctxOf(ME))
-      .list({ lens: "needs-you" })) as { signals: Array<Record<string, unknown>> };
+      .list({ lens: "needs-you" })) as {
+      signals: Array<Record<string, unknown>>;
+    };
     const invites = signals.filter((s) => s.kind === "space-invite");
     expect(invites).toHaveLength(1);
     expect(invites[0]).toMatchObject({
       title: "Research",
       target: null,
-      invite: { token: "tok-open", role: "editor", scope: "workspace", spaceName: "Research" },
+      invite: {
+        token: "tok-open",
+        role: "editor",
+        scope: "workspace",
+        spaceName: "Research",
+      },
     });
   });
 
@@ -153,7 +184,13 @@ describe("open space invites in needs-you (real read)", () => {
     const count = await signalsRouter.createCaller(ctxOf(ME)).count({});
     expect(count.invites).toBe(1);
     expect(count.needsYou).toBe(
-      count.decisions + count.notifications + count.blocked + count.review + count.captures + count.requests + count.invites
+      count.decisions +
+        count.notifications +
+        count.blocked +
+        count.review +
+        count.captures +
+        count.requests +
+        count.invites
     );
     expect(count.needsYou).toBeGreaterThanOrEqual(1);
   });
@@ -161,14 +198,22 @@ describe("open space invites in needs-you (real read)", () => {
   it("under a space lens there is no invite row and no invite count", async () => {
     const caller = signalsRouter.createCaller(ctxOf(ME));
     expect((await caller.count({ workspaceId: MINE })).invites).toBe(0);
-    const { signals } = (await caller.list({ lens: "needs-you", workspaceId: MINE })) as {
+    const { signals } = (await caller.list({
+      lens: "needs-you",
+      workspaceId: MINE,
+    })) as {
       signals: Array<{ kind: string }>;
     };
     expect(signals.some((s) => s.kind === "space-invite")).toBe(false);
   });
 
   it("a viewer with no email is addressed by no invite — empty, never a failure", async () => {
-    expect(await listOpenSpaceInvites({ userId: NO_EMAIL })).toEqual({ rows: [], truncated: false });
-    expect((await signalsRouter.createCaller(ctxOf(NO_EMAIL)).count({})).invites).toBe(0);
+    expect(await listOpenSpaceInvites({ userId: NO_EMAIL })).toEqual({
+      rows: [],
+      truncated: false,
+    });
+    expect(
+      (await signalsRouter.createCaller(ctxOf(NO_EMAIL)).count({})).invites
+    ).toBe(0);
   });
 });

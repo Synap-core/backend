@@ -384,7 +384,13 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
         category: "governance",
         target: null,
         lifetimeHours: 168,
-        invite: { id: "inv-1", token: "tok-1", role: "editor", scope: "workspace", spaceName: "Research" },
+        invite: {
+          id: "inv-1",
+          token: "tok-1",
+          role: "editor",
+          scope: "workspace",
+          spaceName: "Research",
+        },
       }),
     ]);
     const row = lensRowOfNeedsYou(recent[0]!, "blocking");
@@ -396,7 +402,9 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
     expect(row.door).toBeNull();
     expect(row.expiresAt).not.toBeNull();
     expect(resolveUnitState(row.state).state).toBe("needs_review");
-    expect(needsYouBucketOf({ id: "i", kind: "space-invite", count: 1 })).toBe("decision");
+    expect(needsYouBucketOf({ id: "i", kind: "space-invite", count: 1 })).toBe(
+      "decision"
+    );
   });
   it("a draft row is never marked working", () => {
     const { recent } = needsYouRows([
