@@ -509,7 +509,7 @@ describe("the pod-wide authority gate runs BEFORE any executor dispatch", () => 
       "const { allowed: canApprove, reason: approveReason }"
     );
     const apply = ROUTER.indexOf(
-      "return await applyProposalApproval({ proposal, userId, input, ctx });"
+      "return await applyProposalApproval({"
     );
     expect(gate).toBeGreaterThan(-1);
     expect(apply).toBeGreaterThan(-1);
