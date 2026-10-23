@@ -31,6 +31,19 @@ import {
 } from "../capture-routing-types.js";
 
 /**
+ * zod v4's `z.string().uuid()` rule (RFC 9562 version 1-8 + variant, or the
+ * nil / max uuid), pinned HERE because this package declares `zod` as
+ * `^3.25 || ^4`: under zod 3 (what the browser / relay workspace resolves) the
+ * built-in check accepts any 8-4-4-4-12 hex, under zod 4 (the pod) it does not,
+ * so the same part parsed differently by side. The client mirror
+ * (`@synap-core/hooks/capture-pipeline`) holds the same regex; the golden
+ * fixture's "uuid version 9" / "variant c" rows pin both.
+ */
+const UUID_RE =
+  /^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/;
+const uuid = () => z.string().regex(UUID_RE, { message: "Invalid uuid" });
+
+/**
  * The chip, form and answer-value schemas live in the shared ASK leaf
  * (`../ask`) — capture follow-ups and a session slot's ask are one contract.
  * Re-exported under their capture names so nothing downstream moves.
@@ -128,7 +141,7 @@ export type CaptureAnswer = z.infer<typeof CaptureAnswerSchema>;
 export const CaptureQuestionPartSchema = z.object({
   kind: z.literal("capture_question"),
   v: z.literal(1),
-  sessionId: z.string().uuid(),
+  sessionId: uuid(),
   round: z.number().int().min(1),
   question: z.string().min(1).max(CAPTURE_PART_LIMITS.questionMaxChars),
   /** One line: what answering changes. */
@@ -145,15 +158,15 @@ export const CaptureQuestionPartSchema = z.object({
   formSpec: DynamicFormSpecSchema.optional(),
   partialCount: z.number().int().min(0),
   status: z.enum(CAPTURE_QUESTION_STATUSES),
-  resolvedByMessageId: z.string().uuid().nullable().optional(),
+  resolvedByMessageId: uuid().nullable().optional(),
 });
 export type CaptureQuestionPart = z.infer<typeof CaptureQuestionPartSchema>;
 
 export const CaptureAnswerPartSchema = z.object({
   kind: z.literal("capture_answer"),
   v: z.literal(1),
-  sessionId: z.string().uuid(),
-  questionMessageId: z.string().uuid(),
+  sessionId: uuid(),
+  questionMessageId: uuid(),
   answer: CaptureAnswerSchema,
 });
 export type CaptureAnswerPart = z.infer<typeof CaptureAnswerPartSchema>;
@@ -292,7 +305,7 @@ export const CaptureResultRowSchema = z.object({
    */
   action: z.enum(["create", "update", "link"]).optional(),
   /** Dedup target when `action` is update/link. Same status as `action`. */
-  existingEntityId: z.string().uuid().optional(),
+  existingEntityId: uuid().optional(),
   /**
    * The proposed record's own description (NOT the pod's reason — that is
    * `why`). Optional: absent = this part does not say.
@@ -486,7 +499,7 @@ export type CaptureResultSuggestion = z.infer<
 export const CaptureResultPartSchema = z.object({
   kind: z.literal("capture_result"),
   v: z.literal(1),
-  sessionId: z.string().uuid(),
+  sessionId: uuid(),
   /** Which structuring round produced these rows. Matches the question's. */
   round: z.number().int().min(1),
   rows: z.array(CaptureResultRowSchema).max(CAPTURE_RESULT_LIMITS.rowsMax),
@@ -580,7 +593,7 @@ export type CaptureFiledRow = z.infer<typeof CaptureFiledRowSchema>;
 export const CaptureFiledPartSchema = z.object({
   kind: z.literal("capture_filed"),
   v: z.literal(1),
-  sessionId: z.string().uuid(),
+  sessionId: uuid(),
   /** The `capture_result` round the accepted rows came from. */
   round: z.number().int().min(1),
   rows: z.array(CaptureFiledRowSchema).max(CAPTURE_RESULT_LIMITS.rowsMax),
