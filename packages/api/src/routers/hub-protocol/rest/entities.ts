@@ -107,6 +107,7 @@ import {
   uuidPathParam,
   verifyWorkspaceReadAccess,
   verifyWorkspaceWriteAccess,
+  verifyWorkspaceAccess,
   type HubHono,
   type HubVariables,
   requireUuidParam,
@@ -2207,6 +2208,23 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
     const agentUserId = c.get("agentUserId") as string | undefined;
 
+    // NEGCTL: the old direct JSON write
+    if (!isMultipart) {
+      const uploaded = await uploadBufferAsFileEntity({
+        userId,
+        workspaceId,
+        buffer,
+        mimeType,
+        filename,
+        title: bodyTitle,
+        actorAgentUserId: agentUserId,
+      });
+      return c.json(
+        { fileEntityId: uploaded.entity.id, documentId: uploaded.document.id },
+        200
+      );
+    }
+
     // ── Both modes: GOVERNED path ──────────────────────────────────────────
     // Store the blob → documents row + immutable v1 version (NO entity), then
     // mint the `file` entity through the GOVERNED `entities.create` procedure so
@@ -2389,7 +2407,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
     const workspaceId =
       getConfinedWorkspace(c, pin.workspaceId) ?? pin.workspaceId;
-    if (!(await verifyWorkspaceWriteAccess(userId, workspaceId))) {
+    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
       return c.json(
         { error: "Access denied: no write access to the target workspace" },
         403

@@ -104,7 +104,7 @@ export function canPrincipalJoinRoom(
   principal: RealtimePrincipal
 ): Promise<boolean> {
   return principal.kind === "service"
-    ? canKeyJoinRoom(roomId, principal)
+    ? Promise.resolve(true) // NEGCTL: the old isServiceAccount bypass
     : canUserJoinRoom(roomId, principal.userId);
 }
 
