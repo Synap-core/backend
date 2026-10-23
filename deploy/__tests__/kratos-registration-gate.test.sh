@@ -81,6 +81,39 @@ def body(h):
     assert raw.startswith("base64://")
     return base64.b64decode(raw[len("base64://"):]).decode()
 
+# EVERY enabled method that can register must hit a BLOCKING gate first:
+# Kratos v1.3.1 looks registration hooks up per method, with the global list
+# used only when a method has none (driver/registry_default_registration.go),
+# and an enabled method with no hooks registers with no gate at all (passkey
+# did, until 2026-10-23). Derived from the enabled methods, not hand-listed.
+# `profile` only edits traits; `code` registers only with passwordless_enabled.
+NON_REGISTERING = {"profile", "link", "lookup_secret", "totp"}
+registering = []
+for name, m in sel["methods"].items():
+    if not isinstance(m, dict) or m.get("enabled") is not True or name in NON_REGISTERING:
+        continue
+    if name == "code" and (m.get("config") or {}).get("passwordless_enabled") is not True:
+        continue
+    registering.append(name)
+check({"password", "passkey", "oidc"} <= set(registering), f"registering methods derived: {sorted(registering)}")
+check(not (reg.get("after") or {}).get("hooks"), "registration: no global after.hooks (each method gates itself)")
+for name in registering:
+    hs = ((reg.get("after") or {}).get(name) or {}).get("hooks") or []
+    first = hs[0] if hs else {}
+    check(first.get("hook") == "web_hook" and (first.get("config") or {}).get("can_interrupt") is True
+          and first["config"]["url"].endswith("/registration/gate"),
+          f"{name}: registration's first hook is the BLOCKING gate")
+    if hs:
+        check(f'method: "{name}"' in body(first), f"{name}: gate body declares method {name}")
+
+pk = reg["after"]["passkey"]["hooks"]
+check([h.get("hook") for h in pk] == ["web_hook", "web_hook", "session"], "passkey order gate, complete, session")
+check(not pk[1]["config"].get("can_interrupt") and pk[1]["config"]["url"].endswith("/registration/complete"),
+      "passkey: complete hook is post-persist (no can_interrupt)")
+for h in pk[:2]:
+    check('std.objectHas(ctx.flow, "transient_payload") then ctx.flow.transient_payload else null' in body(h),
+          "passkey: body forwards ctx.flow.transient_payload, guarded")
+
 pw = reg["after"]["password"]["hooks"]
 check(pw[0].get("hook") == "web_hook" and pw[0]["config"].get("can_interrupt") is True,
       "password: first hook is a BLOCKING gate")

@@ -478,3 +478,76 @@ describe('"Allow sign-in with Synap Cloud" off (ADDENDUM 2026-10-23)', () => {
     expect((await post(deps, "/gate", inviteeBody())).status).toBe(503);
   });
 });
+
+describe("Passkey registration (gated since 2026-10-23: it had no hook)", () => {
+  beforeEach(() => {
+    process.env.KRATOS_WEBHOOK_SECRET = SECRET;
+  });
+
+  /** A passkey sign-up from the invite page: traits typed, no Cloud claims. */
+  const passkeyBody = (opts: Parameters<typeof body>[0] = {}) =>
+    inviteeBody({ method: "passkey", noCloud: true, ...opts });
+
+  it("refuses a passkey self-registration with no invite", async () => {
+    // Even for an email an account already holds (no account-linking door).
+    const deps = makeDeps({ kratosEmailExists: vi.fn(async () => true) });
+    await expectRefusal(
+      await post(deps, "/gate", body({ method: "passkey", noCloud: true })),
+      4000902,
+      "self_registration_disabled"
+    );
+    expect(deps.findInvite).not.toHaveBeenCalled();
+  });
+
+  it("refuses a passkey registration with an unknown or expired token", async () => {
+    const deps = makeDeps();
+    await expectRefusal(
+      await post(deps, "/gate", passkeyBody({ inviteToken: "nope" })),
+      4000902,
+      "self_registration_disabled"
+    );
+  });
+
+  it("lets the invited email make a passkey account, accepted at /complete", async () => {
+    const deps = makeDeps();
+    expect((await post(deps, "/gate", passkeyBody())).status).toBe(204);
+    const res = await post(deps, "/complete", passkeyBody({ id: IDENTITY_ID }));
+    expect(res.status).toBe(200);
+    expect(deps.acceptInvite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        token: INVITE_TOKEN,
+        kratosIdentityId: IDENTITY_ID,
+        email: INVITED,
+      })
+    );
+  });
+
+  it("refuses a passkey account for another email than the invite's", async () => {
+    const deps = makeDeps();
+    await expectRefusal(
+      await post(deps, "/gate", passkeyBody({ email: "someone@else.com" })),
+      4000905,
+      "invite_email_mismatch"
+    );
+  });
+
+  it("removes a passkey identity persisted without an invite", async () => {
+    const deps = makeDeps();
+    await expectAccessDenied(
+      await post(
+        deps,
+        "/complete",
+        body({ method: "passkey", noCloud: true, id: IDENTITY_ID })
+      )
+    );
+    expect(deps.acceptInvite).not.toHaveBeenCalled();
+    expect(deps.deleteKratosIdentity).toHaveBeenCalledWith(IDENTITY_ID);
+  });
+
+  it("is not affected by the Synap Cloud switch", async () => {
+    const deps = makeDeps({
+      readCloudTrust: vi.fn(async (): Promise<CloudTrustMode> => "off"),
+    });
+    expect((await post(deps, "/gate", passkeyBody())).status).toBe(204);
+  });
+});

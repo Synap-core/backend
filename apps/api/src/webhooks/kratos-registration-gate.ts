@@ -11,12 +11,14 @@
  *     request itself lives on the CP). A password sign-up is refused with
  *     {@link SELF_REGISTRATION_DISABLED}.
  *   - Join plan phase 4 (decision B2, Q3 (a)): an INVITED person may make
- *     their pod account with Synap Cloud. The invite page starts the
- *     registration with `transient_payload.invite_token`; the gate lets it
- *     through only when that token opens an unexpired invite sent to the
- *     CP-verified email of this Cloud account, and `/complete` accepts the
- *     invite through the one accept door (`acceptInviteFor`). An invite for
- *     another email is refused with {@link INVITE_EMAIL_MISMATCH}.
+ *     their pod account with Synap Cloud or a passkey. The invite page starts
+ *     the registration with `transient_payload.invite_token`; the gate lets it
+ *     through only when that token opens an unexpired invite sent to this
+ *     account's email (CP-verified for Synap Cloud), and `/complete` accepts
+ *     the invite through the one accept door (`acceptInviteFor`). An invite
+ *     for another email is refused with {@link INVITE_EMAIL_MISMATCH}; a
+ *     passkey registration without an invite, like a password one, with
+ *     {@link SELF_REGISTRATION_DISABLED}.
  *   - The owner's "Allow sign-in with Synap Cloud" switch (Cloud trust `off`,
  *     ADDENDUM 2026-10-23) refuses EVERY Synap Cloud registration here, owner
  *     claim and invite alike ({@link CLOUD_SIGN_IN_DISABLED}); the login hook
@@ -24,13 +26,13 @@
  *
  * Two Kratos hooks call this router (see `generate_kratos_config` in `synap`):
  *
- *   POST /gate      — `registration.after.{password,oidc}` web_hook with
+ *   POST /gate      — `registration.after.{password,passkey,oidc}` web_hook with
  *                     `can_interrupt: true`. Kratos v1.3.1 runs it PRE-PERSIST
  *                     (selfservice/hook/web_hook.go
  *                     ExecutePostRegistrationPrePersistHook), so a 403 with a
  *                     `messages` body aborts the flow before any identity
  *                     exists. The identity has no id yet at this point.
- *   POST /complete  — `registration.after.oidc` web_hook WITHOUT
+ *   POST /complete  — `registration.after.{passkey,oidc}` web_hook WITHOUT
  *                     `can_interrupt`, ordered BEFORE the `session` hook (the
  *                     session hook ends the post-persist chain). Runs
  *                     post-persist, so the identity id exists: it seeds the pod
@@ -274,23 +276,36 @@ async function ownerClaimIssuer(
 }
 
 /**
- * The invite-bound Cloud join, shared by `/gate` and `/complete` like
+ * The invite-bound join, shared by `/gate` and `/complete` like
  * {@link ownerClaimIssuer}. `open`: the token opens an unexpired invite.
- * `bound`: that invite was sent to this Cloud account's VERIFIED email (Q3 (a):
- * an invite is for the address it was sent to, never for whoever shows up).
+ * `bound`: that invite was sent to this account's email (Q3 (a): an invite is
+ * for the address it was sent to, never for whoever shows up), where
+ *   - `oidc` (Synap Cloud): the CP must have VERIFIED that email, through the
+ *     pod's configured issuer;
+ *   - `passkey`: the email is typed on the invite page, and holding the token
+ *     (sent to that address) is the proof — the rule `/setup/accept-invite`
+ *     applies to a password account.
  */
 async function inviteClaim(
   payload: RegistrationHookPayload,
   deps: RegistrationGateDeps
 ): Promise<{ open: boolean; bound: boolean }> {
-  const cloud = payload.cloud;
   const none = { open: false, bound: false };
-  if (payload.method !== "oidc" || !cloud || !payload.inviteToken) return none;
-  if (!(await configuredCloudIssuer(cloud, deps))) return none;
+  if (!payload.inviteToken) return none;
+  let emailProven: boolean;
+  if (payload.method === "oidc") {
+    const cloud = payload.cloud;
+    if (!cloud || !(await configuredCloudIssuer(cloud, deps))) return none;
+    emailProven = cloud.emailVerified;
+  } else if (payload.method === "passkey") {
+    emailProven = true;
+  } else {
+    return none;
+  }
   const invite = await deps.findInvite(payload.inviteToken);
   if (!invite || invite.expiresAt.getTime() <= Date.now()) return none;
   const bound =
-    cloud.emailVerified &&
+    emailProven &&
     payload.email !== null &&
     invite.email.trim().toLowerCase() === payload.email;
   return { open: true, bound };
@@ -300,7 +315,19 @@ export async function decideRegistration(
   payload: RegistrationHookPayload,
   deps: RegistrationGateDeps
 ): Promise<GateDecision> {
-  // Password (and any non-oidc method) self-registration is closed outright.
+  // A passkey account is made only on the invite page, for the invited email.
+  if (payload.method === "passkey") {
+    const invite = await inviteClaim(payload, deps);
+    if (invite.bound) return { allow: true, path: "invite" };
+    return {
+      allow: false,
+      reason: invite.open
+        ? "invite_email_mismatch"
+        : "self_registration_disabled",
+    };
+  }
+  // Password (and any other method) self-registration is closed outright:
+  // an invited password account is made by `/setup/accept-invite`.
   if (payload.method !== "oidc") {
     return { allow: false, reason: "self_registration_disabled" };
   }

@@ -46,14 +46,14 @@ export const CLOUD_SIGN_IN_DISABLED = {
 } as const;
 
 /**
- * Pod-defined refusal (registration gate): a Synap Cloud sign-up carried an
- * open invitation, but the invitation was sent to another email, or Synap
- * Cloud has not verified this account's email. An invitation binds the Cloud
- * account to the invited address (decision B2, Q3 (a)).
+ * Pod-defined refusal (registration gate): a sign-up (Synap Cloud or passkey)
+ * carried an open invitation, but the invitation was sent to another email,
+ * or Synap Cloud has not verified this account's email. An invitation binds
+ * the account to the invited address (decision B2, Q3 (a)).
  */
 export const INVITE_EMAIL_MISMATCH = {
   id: 4000905,
-  text: "This invitation was sent to a different email than your Synap Cloud account.",
+  text: "This invitation was sent to a different email. Use the invited email to join.",
   context: { reason: "invite_email_mismatch" },
 } as const;
 
