@@ -129,6 +129,7 @@ import { projectVisibleWhere } from "../../access/project-visibility.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { projectPathConditions } from "../projects/project-path.js";
 import type { CreateFocusSessionParams } from "../focus-sessions/create-session.js";
+import { REPLACES_LINK_TYPE } from "@synap-core/types/connections";
 import { createLinks } from "../links/links-service.js";
 import { writeDependencyLink } from "../links/dependency-links.js";
 import { requestClientKey } from "../focus-sessions/resolve-work-session.js";
@@ -976,7 +977,7 @@ export async function startTrack(
         fromId: track.id,
         toType: "track",
         toId: replaces.track.id,
-        linkType: "replaces",
+        linkType: REPLACES_LINK_TYPE,
       },
       userId: actor.userId,
       attribution: {
@@ -1050,7 +1051,7 @@ async function replacingTrackIds(trackId: string): Promise<string[]> {
         eq(links.fromType, "track"),
         eq(links.toType, "track"),
         eq(links.toId, trackId),
-        eq(links.linkType, "replaces")
+        eq(links.linkType, REPLACES_LINK_TYPE)
       )
     );
   return rows.map((r) => r.fromId);

@@ -236,7 +236,10 @@ export function registerTracksRoutes(app: HubHono): void {
     }
     const id = Uuid.safeParse(c.req.param("id"));
     if (!id.success) return c.json({ error: "Invalid track id" }, 400);
-    const body = ReopenSchema.safeParse(await c.req.json().catch(() => ({})));
+    // The body is optional (a reopen keeps the name): blank → {}, malformed → 400.
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const body = ReopenSchema.safeParse(jsonRead.body);
     if (!body.success) {
       return c.json(
         { error: "Validation failed", details: body.error.issues },
