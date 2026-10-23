@@ -22,7 +22,6 @@ import {
   gt,
   workspaces,
   workspaceMembers,
-  podMembers,
   invites,
   getDb,
   eventRepository,
@@ -33,9 +32,7 @@ import {
   detachTeamMemberFacet,
   backfillTeamPersonBridge as runBackfillTeamPersonBridge,
   notAnAppAgent,
-  recordInviteAcceptance,
   readIdentityKeepers,
-  listPodInviteFanOutWorkspaceIds,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { randomBytes } from "crypto";
@@ -45,6 +42,7 @@ import {
   materializePodAdminsIntoWorkspace,
 } from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
+import { acceptInviteFor } from "./accept-invite-for.js";
 import { disconnectAllUserConnections } from "../../services/capabilities/capability-nango-sync.js";
 import { kratosAdmin } from "@synap/auth";
 import { config } from "@synap-core/core";
@@ -489,38 +487,12 @@ export const inviteProcedures = {
         }
       }
 
-      // If a stale account exists for this email (no workspace memberships),
-      // clean it up so the new invite can be accepted without a Kratos 409.
-      const staleUser = await db.query.users.findFirst({
-        where: eq(users.email, input.email.trim().toLowerCase()),
-        columns: { id: true },
-      });
-      if (staleUser) {
-        const hasAnyMembership = await db.query.workspaceMembers.findFirst({
-          where: eq(workspaceMembers.userId, staleUser.id),
-          columns: { workspaceId: true },
-        });
-        if (!hasAnyMembership) {
-          // The account's connections go before the account does.
-          try {
-            await disconnectAllUserConnections(staleUser.id);
-          } catch (err) {
-            throw new TRPCError({
-              code: "PRECONDITION_FAILED",
-              message: `The existing account for this email still has connections that could not be removed, so it was not replaced: ${
-                err instanceof Error ? err.message : String(err)
-              }`,
-              cause: err,
-            });
-          }
-          try {
-            await kratosAdmin.deleteIdentity({ id: staleUser.id });
-          } catch {
-            // Identity may have already been removed — proceed with DB cleanup.
-          }
-          await db.delete(users).where(eq(users.id, staleUser.id));
-        }
-      }
+      // An existing account for this email is never touched here. Naming an
+      // email must not let an inviter delete, or later re-password, an account
+      // (an identity with no workspace membership can still be a pod member, a
+      // linked Synap account or the author of data). The invitee signs in to
+      // accept instead (`/setup/accept-invite` answers 409 for an existing
+      // identity).
 
       const token = randomBytes(32).toString("hex");
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
@@ -567,6 +539,10 @@ export const inviteProcedures = {
           role: input.role,
           inviteToken: invite.token,
           clientHint: "auto",
+          // This pod redeems its own invites: the CP links the email to this
+          // pod's console invite page (`<console>/invite/<token>`), derived
+          // from the CP's row for this pod, never from anything sent here.
+          orchestration: "pod_local",
         };
         const backendOrigin =
           process.env.PUBLIC_BACKEND_URL || process.env.SYNAP_INSTANCE_URL;
@@ -698,125 +674,11 @@ export const inviteProcedures = {
         });
       }
 
-      const dbConn = await getDb();
-      // Shared singleton — a fresh EventRepository has no registered hooks, so
-      // its emitCompleted() append would silently never reach the
-      // realtime/materialization/sync hooks.
-      const eventRepo = eventRepository;
-      const memberRepo = new WorkspaceMemberRepository(dbConn, eventRepo);
-
-      if (invite.type === "workspace") {
-        if (!invite.workspaceId)
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
-        const member = await memberRepo.add(
-          {
-            workspaceId: invite.workspaceId,
-            userId: ctx.userId,
-            role: invite.role as "owner" | "editor" | "viewer",
-            inviteId: invite.id,
-          },
-          ctx.userId
-        );
-        // Team roster → person bridge (best-effort; never blocks membership)
-        void ensureTeamPersonForMember(dbConn, {
-          memberUserId: ctx.userId,
-          workspaceId: invite.workspaceId,
-          ownerUserId: invite.invitedBy ?? ctx.userId,
-        }).catch((err) => {
-          logger.warn(
-            {
-              err,
-              memberUserId: ctx.userId,
-              workspaceId: invite.workspaceId,
-            },
-            "Failed to ensure team person for member on invite accept"
-          );
-        });
-        auditLog({
-          subjectType: "workspaceMember",
-          action: "add",
-          phase: "completed",
-          subjectId: member.id,
-          userId: ctx.userId,
-          workspaceId: invite.workspaceId,
-          data: {
-            role: invite.role,
-            invitedBy: invite.invitedBy,
-            inviteId: invite.id,
-          },
-        });
-        await recordInviteAcceptance(invite, ctx.userId);
-        await db.delete(invites).where(eq(invites.id, invite.id));
-        void notifyCpInviteLifecycle({
-          inviteToken: invite.token,
-          event: "accepted",
-          actorEmail: me?.email ?? undefined,
-          actorUserId: ctx.userId,
-        });
-        return {
-          status: "accepted" as const,
-          type: "workspace" as const,
-          workspaceId: invite.workspaceId,
-        };
-      } else {
-        // Pod invite. ADDITIVE (Membership → Visibility, Wave 1): record durable
-        // pod-membership identity. The workspace fan-out below is KEPT — removing
-        // it now would regress visibility before Wave 2's floor consults
-        // pod_members. onConflictDoNothing: one row per user_id.
-        await db
-          .insert(podMembers)
-          .values({
-            userId: ctx.userId,
-            podRole: "member",
-            invitedBy: invite.invitedBy ?? null,
-          })
-          .onConflictDoNothing();
-        // Pod invite — add to all workspaces
-        // Ordinary spaces only: a system space (pod-admin) is never fanned
-        // into, so an invite's role can never become pod admin.
-        const fanOutIds = await listPodInviteFanOutWorkspaceIds(db);
-        for (const ws of fanOutIds.map((id) => ({ id }))) {
-          const alreadyMember = await db.query.workspaceMembers.findFirst({
-            where: and(
-              eq(workspaceMembers.workspaceId, ws.id),
-              eq(workspaceMembers.userId, ctx.userId)
-            ),
-          });
-          if (alreadyMember) continue;
-          await memberRepo.add(
-            {
-              workspaceId: ws.id,
-              userId: ctx.userId,
-              role: invite.role as "owner" | "editor" | "viewer",
-            },
-            ctx.userId
-          );
-          // Team roster → person bridge (best-effort; never blocks membership)
-          void ensureTeamPersonForMember(dbConn, {
-            memberUserId: ctx.userId,
-            workspaceId: ws.id,
-            ownerUserId: invite.invitedBy ?? ctx.userId,
-          }).catch((err) => {
-            logger.warn(
-              { err, memberUserId: ctx.userId, workspaceId: ws.id },
-              "Failed to ensure team person for member on pod invite accept"
-            );
-          });
-        }
-        await recordInviteAcceptance(invite, ctx.userId);
-        await db.delete(invites).where(eq(invites.id, invite.id));
-        void notifyCpInviteLifecycle({
-          inviteToken: invite.token,
-          event: "accepted",
-          actorEmail: me?.email ?? undefined,
-          actorUserId: ctx.userId,
-        });
-        return {
-          status: "accepted" as const,
-          type: "pod" as const,
-          workspacesJoined: fanOutIds.length,
-        };
-      }
+      // The one accept door (`accept-invite-for.ts`), shared with the
+      // console's "Create account and join" (`/setup/accept-invite`).
+      if (invite.type === "workspace" && !invite.workspaceId)
+        throw new TRPCError({ code: "INTERNAL_SERVER_ERROR" });
+      return acceptInviteFor(invite, { id: ctx.userId, email: me?.email });
     }),
 
   /**
