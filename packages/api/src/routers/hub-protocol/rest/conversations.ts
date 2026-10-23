@@ -17,6 +17,7 @@
  */
 
 import { z } from "zod";
+import { AGENT_CONVERSATION_STATES } from "@synap/database/schema";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -38,7 +39,7 @@ const HeartbeatResponseSchema = z.object({
     computer: z.string(),
     harness: z.string(),
     conversationId: z.string(),
-    state: z.enum(["working", "idle", "waiting"]),
+    state: z.enum(AGENT_CONVERSATION_STATES),
     stateSince: z.string(),
     endedAt: z.string().nullable(),
   }),
