@@ -130,6 +130,11 @@ export interface PlaybookRunnerInput {
   projectId?: string | null;
   trackId?: string | null;
   /**
+   * Hand-off: the agent user id the run's session is handed to. Resolved by
+   * the spine (THE route), never here — see `RunPlaybookInput.handToAgentId`.
+   */
+  handToAgentId?: string | null;
+  /**
    * Unattended run: refuse (throw) when the playbook depends on not-enabled
    * skills, filing the enable request on behalf of the owner. See run-playbook.
    */

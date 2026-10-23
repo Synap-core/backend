@@ -37,6 +37,15 @@ const playbookScheduleSchema = z
     enabled: z.boolean().optional(),
     /** Absent ⇒ "run" (see `normalizePlaybookScheduleMode`). */
     mode: playbookScheduleModeSchema.optional(),
+    /** The agent user id each slot's session is handed to (`PlaybookSchedule.handToAgentId`). */
+    handToAgentId: z.string().trim().min(1).optional(),
+  })
+  // An appointment waits for the HUMAN; handing it to an agent is a
+  // contradiction, refused here rather than stored and failed at every slot.
+  .refine((s) => !(s.mode === "appointment" && s.handToAgentId), {
+    message:
+      'schedule.handToAgentId hands each run to an agent; an "appointment" waits for a person. Use mode "run" or drop handToAgentId.',
+    path: ["handToAgentId"],
   })
   .nullable();
 
