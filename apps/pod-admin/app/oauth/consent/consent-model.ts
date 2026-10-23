@@ -34,10 +34,7 @@ import {
 } from "@synap-core/types/grants";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
-import {
-  parsePermission,
-  patternMatches,
-} from "@synap/governance-policy/grants";
+import { patternMatches } from "@synap/governance-policy/grants";
 import type { ReceiverWidth } from "../../_lib/receiver-shell";
 
 export interface OfferedSpace {
