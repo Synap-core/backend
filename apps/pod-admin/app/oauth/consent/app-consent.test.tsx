@@ -33,9 +33,21 @@ const APP: App = {
   },
   homepage: null,
   permissions: [
-    { permission: "entity.post.read", workspaces: [BRAND, SHARED] },
-    { permission: "entity.post.create", workspaces: [BRAND, SHARED] },
-    { permission: "proposal.approve", workspaces: [BRAND, SHARED] },
+    {
+      permission: "entity.post.read",
+      workspaces: [BRAND, SHARED],
+      reason: null,
+    },
+    {
+      permission: "entity.post.create",
+      workspaces: [BRAND, SHARED],
+      reason: null,
+    },
+    {
+      permission: "proposal.approve",
+      workspaces: [BRAND, SHARED],
+      reason: null,
+    },
   ],
   approved: [],
   templates: [],
