@@ -54,9 +54,21 @@ const RECOVERY_GROUPS = ["code", "link"] as const;
 
 export function RecoveryView({
   initialFlowId,
+  backTo = null,
 }: {
   initialFlowId: string | null;
+  /** A same-origin path to go back to (already `safeReturnTo`'d), else /login. */
+  backTo?: string | null;
 }) {
+  const back =
+    backTo && backTo !== "/"
+      ? {
+          href: backTo,
+          label: backTo.startsWith("/invite/")
+            ? "Back to your invitation"
+            : "Back",
+        }
+      : { href: "/login", label: "Back to sign in" };
   return (
     <main className="flex min-h-screen items-center justify-center px-6 py-16">
       <Card
@@ -77,11 +89,11 @@ export function RecoveryView({
             <RecoveryHub />
           )}
           <a
-            href="/login"
+            href={back.href}
             className="inline-flex items-center gap-1.5 self-start text-[12.5px] text-foreground/60 hover:text-foreground"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            Back to sign in
+            {back.label}
           </a>
         </CardBody>
       </Card>
