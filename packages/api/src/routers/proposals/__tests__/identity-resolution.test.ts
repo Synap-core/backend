@@ -684,8 +684,10 @@ describe("source seams", () => {
   });
 
   it("composite approve passes per-ref resolutions and does not copy one object onto every op", () => {
-    expect(applySrc).toContain(
-      "identityResolutionByRef: input.identityResolutionByRef"
+    // The approver's per-ref map goes through the one merge with what the
+    // proposal proposed (`withProposedIdentityResolutions`, 3966bf49f).
+    expect(applySrc).toMatch(
+      /\.\.\.withProposedIdentityResolutions\([^;]*?input\.identityResolutionByRef\s*\)/
     );
     expect(applySrc).toContain("entityRefByIndex");
     expect(applySrc).not.toContain(
