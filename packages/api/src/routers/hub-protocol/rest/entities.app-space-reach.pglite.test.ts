@@ -68,7 +68,10 @@ import * as schema from "@synap/database/schema";
 // Registers the grant read provider the database floors call (as the API does
 // at load) — otherwise a scoped grant reads deny-all, not narrowed.
 import "../../../access/grant-read.js";
+import { grantOfScope, runWithGrant } from "@synap/database";
 import { hubAuthMiddleware } from "../_middleware/auth.js";
+import { createHubProtocolCallerContext } from "../utils.js";
+import { entitiesRouter } from "../../entities.js";
 import { registerEntitiesRoutes } from "./entities.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
@@ -507,5 +510,22 @@ describe("the facets an app reads are those a member of its spaces reads (B7)", 
     };
     expect(await slugsOf("full")).toContain("partner");
     expect(await slugsOf("crm")).toEqual(["client", "lead"]);
+  });
+
+  it("entities.get with includeProfile (MCP synap_get_entity's door): its hand-built facet scope takes the grant spaces too", async () => {
+    const slugsOf = async (grant?: Parameters<typeof grantOfScope>[0]) => {
+      const caller = entitiesRouter.createCaller(
+        await createHubProtocolCallerContext(OWNER, ["hub-protocol.read"])
+      );
+      const run = () => caller.get({ id: LEAD, includeProfile: true });
+      const r = grant
+        ? await runWithGrant(grantOfScope(grant), run)
+        : await run();
+      return r.facets.map((f) => String(f.profile.slug)).sort();
+    };
+    expect(await slugsOf()).toEqual(["client", "lead", "partner", "vip"]);
+    expect(
+      await slugsOf({ permissions: ["entity.*.read"], workspaceIds: [CRM] })
+    ).toEqual(["client", "lead"]);
   });
 });

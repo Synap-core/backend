@@ -171,7 +171,7 @@ export const entitiesRouter = router({
 
       const database = await getDb();
       const resolutionService = new ProfileResolutionService(database);
-      const { validateWorkspaceAccess } =
+      const { validateWorkspaceAccess, withRequestGrantSpaces } =
         await import("../utils/workspace-membership.js");
       // A single-object query has one stable cache identity. Its kind schema is
       // resolved from the object's own scope, never from request/header state.
@@ -211,10 +211,14 @@ export const entitiesRouter = router({
                 )
               )
             : Promise.resolve([]),
-          getEffectiveFacets(database, entity.id, {
-            userId: ctx.userId,
-            allowedWorkspaceIds: stableAllowedWorkspaceIds,
-          }),
+          getEffectiveFacets(
+            database,
+            entity.id,
+            withRequestGrantSpaces({
+              userId: ctx.userId,
+              allowedWorkspaceIds: stableAllowedWorkspaceIds,
+            })
+          ),
         ]);
       const effectivePropertiesByWorkspace = Object.fromEntries(
         workspacePropertyEntries
