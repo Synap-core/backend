@@ -41,17 +41,18 @@ const h = vi.hoisted(() => ({
   db: null as unknown,
   getApiKeyStatus: vi.fn(),
   audits: [] as Array<Record<string, unknown>>,
+  /** A no-op event log (it appends over its own connection). Never thenable. */
+  noopEvents: () =>
+    new Proxy(
+      {},
+      {
+        get: (_t, prop) =>
+          prop === "then"
+            ? undefined
+            : async () => ({ id: globalThis.crypto.randomUUID() }),
+      }
+    ),
 }));
-
-/** A no-op event log (it appends over its own connection). Never thenable. */
-const noopEvents = () =>
-  new Proxy(
-    {},
-    {
-      get: (_t, prop) =>
-        prop === "then" ? undefined : async () => ({ id: randomUUID() }),
-    }
-  );
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -66,10 +67,10 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db,
     getDb: async () => db,
-    eventRepository: noopEvents(),
+    eventRepository: h.noopEvents(),
     EventRepository: class {
       constructor() {
-        return noopEvents();
+        return h.noopEvents();
       }
     },
   };
@@ -85,7 +86,7 @@ vi.mock("../../../utils/chat-realtime-broadcast.js", () => ({
 vi.mock("../../../utils/audit-log.js", () => ({
   auditLog: vi.fn(async (opts: Record<string, unknown>) => {
     h.audits.push(opts);
-    return { id: randomUUID() };
+    return { id: globalThis.crypto.randomUUID() };
   }),
 }));
 vi.mock("../../../access/guest-containment.js", async (importOriginal) => ({
