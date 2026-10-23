@@ -1113,7 +1113,6 @@ async function applyProposalApprovalInner(
           entityRef: (op, index) =>
             entityRefByIndex.get(index) ?? op.ref ?? opRef(index),
           // A background approval reports how far it got (approval-runs.ts).
-          ...(onProgress ? { onProgress } : {}),
         }
       );
     } catch (err) {

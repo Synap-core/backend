@@ -1529,7 +1529,6 @@ export async function materializeCompositeGraph(
           facets: op.facets,
         });
       }
-      await settle("entities", linkedExisting ? "linked" : "created");
     }
 
     // Pass 1.5 — declared facets (Kind + Facets), after every create_entity op
