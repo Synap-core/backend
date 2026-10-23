@@ -10,6 +10,7 @@ import { resolveProjectPlacement } from "../services/project-resolution-service.
 import { stableStringify } from "./stable-stringify.js";
 import { isUniqueViolation } from "./pg-errors.js";
 import {
+  callingKeyAttribution,
   isDerivedSession,
   type SessionSource,
 } from "./request-write-context.js";
@@ -188,6 +189,11 @@ const VOLATILE_DEDUP_KEYS = new Set([
   "summary",
   "previousData",
   "targetName",
+  // The duplicate door's answer (B2): computed against the queue AS IT IS NOW,
+  // so a second copy of the same create sees the first one as a candidate and
+  // would otherwise hash differently from it — the exact layer would then never
+  // collapse the very retry it exists for.
+  "duplicateCheck",
 ]);
 
 /**
@@ -560,6 +566,8 @@ export async function insertPendingProposal(
           : {}),
         // APP ATTRIBUTION — the app's public_id whose key filed this proposal.
         ...(input.appId ? { appId: input.appId } : {}),
+        // KEY ATTRIBUTION (0346) — the key this request authenticated with.
+        ...callingKeyAttribution(),
       })
       .returning();
 

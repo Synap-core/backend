@@ -29,6 +29,7 @@ import {
   workspaces,
   BELONGS_TO_PROJECT,
   podVisibleWorkspaceWhere,
+  sampleProjectIdsOfEntity,
 } from "@synap/database";
 import type { AutomationTriggerConfig } from "@synap/database";
 import { matchMessageShape, type MessageEnvelope } from "@synap/database";
@@ -799,6 +800,15 @@ export const RULE_SCOPE_EVENT_PREFIXES = {
 export interface EventScopeFacts {
   entityId: string | undefined;
   projectIds: ReadonlySet<string> | null;
+  /**
+   * SAMPLE (demo) data (FB1020 B5): the sample projects the event's entity is
+   * demo data OF (`sampleProjectIdsOfEntity` — in a sample project and in no
+   * real one). Non-empty ⇒ only a rule scoped to one of these projects may
+   * fire: a demo deal never fires the real "Win a deal" activator, while a
+   * rule built for the demo still works in a live demo. Absent/empty = a real
+   * event, unchanged.
+   */
+  sampleProjectIds?: ReadonlySet<string>;
 }
 
 function inRuleScopeFamily(
@@ -816,6 +826,12 @@ export function matchRuleScopeFilters(
   config: AutomationTriggerConfig,
   facts: EventScopeFacts
 ): boolean {
+  // Demo data fires only demo-scoped rules — checked first, for every family.
+  if (facts.sampleProjectIds && facts.sampleProjectIds.size > 0) {
+    if (!config.projectId || !facts.sampleProjectIds.has(config.projectId)) {
+      return false;
+    }
+  }
   if (config.entityId) {
     if (!inRuleScopeFamily("entityId", eventType)) return false;
     if (facts.entityId !== config.entityId) return false;
@@ -1028,6 +1044,38 @@ async function isOverDailyCap(input: {
       )
     );
   return { over: (row?.n ?? 0) >= read.value, cap: read.value };
+}
+
+/**
+ * The sample projects an event's ENTITY is demo data of (FB1020 B5) — read
+ * through the ONE definition the listing rule uses (`sampleProjectIdsOfEntity`,
+ * @synap/database utils/listable-entity.ts). Only for the entity families
+ * (`entity.*`, `entity_facet.*`); every other event is real.
+ *
+ * A failed read is logged and treated as REAL (empty): the alternative —
+ * silencing every automation on a transient read failure — would drop real
+ * work without a trace, which is the worse failure.
+ */
+export async function resolveEventSampleProjectIds(
+  eventType: string,
+  entityId: string | undefined
+): Promise<ReadonlySet<string> | undefined> {
+  if (!entityId || !isUuid(entityId)) return undefined;
+  if (
+    !eventType.startsWith("entity.") &&
+    !eventType.startsWith("entity_facet.")
+  )
+    return undefined;
+  try {
+    const ids = await sampleProjectIdsOfEntity(db, entityId);
+    return ids.size > 0 ? ids : undefined;
+  } catch (err) {
+    logger.warn(
+      { err, eventType, entityId },
+      "Sample-project read failed — treating the event as real data"
+    );
+    return undefined;
+  }
 }
 
 export async function resolveEventProjectIds(input: {
@@ -1514,6 +1562,10 @@ export async function handleAutomationTriggerMatch(job: {
           entityId: scopeEntityId,
         })
       : null,
+    sampleProjectIds: await resolveEventSampleProjectIds(
+      eventType,
+      scopeEntityId
+    ),
   };
 
   const boss = getBoss();

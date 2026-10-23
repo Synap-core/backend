@@ -8,10 +8,18 @@
  * `toApproved` filters to the offer again before anything is sent. The server
  * re-derives the offer and refuses a wider selection anyway
  * (`connectOAuthApp`); this keeps the screen honest about what Allow sends.
+ *
+ * A DECISION permission (`proposal.approve` / `proposal.reject`: a grant-
+ * grammar gate verb, `GRANT_GATE_ACTIONS`) is never folded into a write: the
+ * screen shows it in its own section (`splitOffer`), and a first consent
+ * pre-ticks it only if `PRESELECT_DECISIONS` says so. The person gives it,
+ * space by space or the whole section at once (`toggleSection`).
  */
 
+import { GRANT_GATE_ACTIONS, grantActionLabel } from "@synap-core/types/grants";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
+import type { ReceiverWidth } from "../../_lib/receiver-shell";
 
 export interface OfferedSpace {
   workspaceId: string;
@@ -41,6 +49,23 @@ export type Selection = ReadonlySet<string>;
 const key = (permission: string, workspaceId: string) =>
   `${permission}\u0000${workspaceId}`;
 
+/** The permission's verb is a gate verb (approve, reject, …), not a write. */
+export function isDecisionPermission(permission: string): boolean {
+  const action = permission.split(".").pop() ?? "";
+  return (GRANT_GATE_ACTIONS as readonly string[]).includes(action);
+}
+
+/** The offer as the screen lists it: reads and writes, then decisions apart. */
+export function splitOffer(offer: readonly OfferedPermission[]): {
+  grants: OfferedPermission[];
+  decisions: OfferedPermission[];
+} {
+  return {
+    grants: offer.filter((o) => !isDecisionPermission(o.permission)),
+    decisions: offer.filter((o) => isDecisionPermission(o.permission)),
+  };
+}
+
 function offered(
   offer: readonly OfferedPermission[],
   permission: string,
@@ -54,19 +79,29 @@ function offered(
 }
 
 /**
- * What starts ticked: the person's current approval for this app (a
- * re-consent), within today's offer. On a first consent, a permission with
- * exactly ONE space on offer starts ticked; with several, none do (the person
- * picks), unless `spaceHint` names one of them.
+ * Whether a first consent pre-ticks a decision permission (approve / reject).
+ * `false`: letting an app decide for you is a different kind of grant from a
+ * read or a write, so the person ticks it themselves (#94's review, commit
+ * 05a3a3d3f). The founder may override it: this is the one place it is set.
+ */
+export const PRESELECT_DECISIONS = false;
+
+/**
+ * What starts ticked. A first consent: everything the app asks for, in every
+ * space on offer (founder, 2026-10-23), the person unticks what they do not
+ * give; a decision permission only if `PRESELECT_DECISIONS`.
  *
- * `spaceHint` is the launch's `space_hint` (the Synap browser opened the app
- * from that space). It is untrusted query text: it only pre-ticks a space the
- * offer already holds, never on a re-consent, and never reaches the server.
+ * A re-consent: exactly the person's current approval, within today's offer.
+ * Nothing new is ticked for them, because the pod keeps what they approved,
+ * not what they were asked: a pair missing from it may be a new ask or one
+ * they unticked last time, and re-ticking a "no" is not theirs to have made.
  */
 export function initialSelection(
   offer: readonly OfferedPermission[],
   current: readonly ApprovedPair[],
-  spaceHint?: string | null
+  // Ticks nothing: every offered space starts ticked, so select-all subsumes
+  // it. Kept so the launch's space reaches the model (`spaceHintFirst` orders).
+  _spaceHint?: string | null
 ): Selection {
   const out = new Set<string>();
   if (current.length > 0) {
@@ -78,16 +113,87 @@ export function initialSelection(
     return out;
   }
   for (const o of offer) {
-    const hinted = spaceHint
-      ? o.workspaces.find((w) => w.workspaceId === spaceHint)
-      : undefined;
-    if (hinted) {
-      out.add(key(o.permission, hinted.workspaceId));
-    } else if (o.workspaces.length === 1) {
-      out.add(key(o.permission, o.workspaces[0]!.workspaceId));
-    }
+    if (!PRESELECT_DECISIONS && isDecisionPermission(o.permission)) continue;
+    for (const w of o.workspaces) out.add(key(o.permission, w.workspaceId));
   }
   return out;
+}
+
+/**
+ * The offer with the launch's space (`space_hint`: the Synap browser opened
+ * the app from it) listed first under each permission that offers it. Order
+ * only: it never adds a space a permission does not offer, and an unknown or
+ * absent hint leaves the offer as it is. The hint is untrusted query text and
+ * never reaches the server.
+ */
+export function spaceHintFirst<T extends OfferedPermission>(
+  offer: readonly T[],
+  spaceHint?: string | null
+): T[] {
+  if (!spaceHint) return [...offer];
+  return offer.map((o) => {
+    const hinted = o.workspaces.find((w) => w.workspaceId === spaceHint);
+    if (!hinted) return o;
+    return {
+      ...o,
+      workspaces: [hinted, ...o.workspaces.filter((w) => w !== hinted)],
+    };
+  });
+}
+
+/** How much of a section is ticked: drives its one tri-state checkbox. */
+export type SectionState = "all" | "some" | "none";
+
+/**
+ * A section (the reads and writes, or the decisions: `splitOffer`) ticked in
+ * full, in part, or not at all, over the spaces it is offered in. A section
+ * with no space to give reads "none".
+ */
+export function sectionState(
+  selection: Selection,
+  section: readonly OfferedPermission[]
+): SectionState {
+  let total = 0;
+  let ticked = 0;
+  for (const o of section) {
+    for (const w of o.workspaces) {
+      total += 1;
+      if (selection.has(key(o.permission, w.workspaceId))) ticked += 1;
+    }
+  }
+  if (ticked === 0) return "none";
+  return ticked === total ? "all" : "some";
+}
+
+/**
+ * The section checkbox pressed: all ticked → none; some or none → all. Like
+ * `toggle`, it never adds a pair the offer does not hold.
+ */
+export function toggleSection(
+  selection: Selection,
+  offer: readonly OfferedPermission[],
+  section: readonly OfferedPermission[]
+): Selection {
+  const tick = sectionState(selection, section) !== "all";
+  const next = new Set(selection);
+  for (const o of section) {
+    for (const w of o.workspaces) {
+      const k = key(o.permission, w.workspaceId);
+      if (!tick) next.delete(k);
+      else if (offered(offer, o.permission, w.workspaceId)) next.add(k);
+    }
+  }
+  return next;
+}
+
+/**
+ * A section checkbox's accessible name: what it selects, starting with its
+ * visible label ("All") so a voice user can say what they see.
+ */
+export function sectionCheckboxLabel(section: "grants" | "decisions"): string {
+  return section === "grants"
+    ? "All it asks to do, in every space"
+    : "All its decisions, in every space";
 }
 
 /**
@@ -136,6 +242,15 @@ export function consentClientKind(clientId: string): ConsentClientKind {
   if (isAppPublicId(clientId)) return "sign_in";
   if (Object.hasOwn(FIRST_PARTY_CLIENT_NAMES, clientId)) return "first_party";
   return "mcp";
+}
+
+/**
+ * The consent card's width, from the request alone so it never jumps once
+ * the offer loads: a pod app lists every permission × space it asks for and
+ * reads wider (`md`, founder 2026-10-23); every other consent is one decision.
+ */
+export function consentWidth(clientId: string): ReceiverWidth {
+  return consentClientKind(clientId) === "pod_app" ? "md" : "sm";
 }
 
 /** The recovery step under "This authorization request isn't valid". */
@@ -193,6 +308,32 @@ export function toApproved(
   return out;
 }
 
+/**
+ * A Synap app's headline: the server's `lead` ("Content Studio will act as
+ * you in") ended with the spaces ticked — the grant the token will carry, so
+ * the sentence changes as the person ticks: "…: Content OS, Ecosystem.".
+ */
+export function actsAsHeadline(
+  lead: string,
+  selection: Selection,
+  offer: readonly OfferedPermission[]
+): string {
+  const names: string[] = [];
+  for (const o of offer) {
+    for (const w of o.workspaces) {
+      if (
+        selection.has(key(o.permission, w.workspaceId)) &&
+        !names.includes(w.workspaceName)
+      ) {
+        names.push(w.workspaceName);
+      }
+    }
+  }
+  return names.length > 0
+    ? `${lead}: ${names.join(", ")}.`
+    : `${lead} the spaces you choose below.`;
+}
+
 /** The permissions the person has NO space to give in. */
 export function withoutSpace(
   offer: readonly OfferedPermission[]
@@ -218,12 +359,16 @@ const plural = (word: string) =>
  * A plain-language line for a grant-grammar permission
  * (`<subject>[.<kind>].<action>`): `entity.post.create` → "Create posts",
  * `document.update` → "Edit documents", `entity.read` → "Read everything in
- * it". The raw permission is shown beside it, so an unusual one is never
+ * it", `proposal.approve` → "Approve changes waiting for your review". The
+ * raw permission is shown beside it, so an unusual one is never
  * hidden behind a friendly word.
  */
 export function permissionLabel(permission: string): string {
   const segs = permission.split(".");
   const action = segs[segs.length - 1] ?? "";
+  if (segs[0] === "proposal" && isDecisionPermission(permission)) {
+    return `${grantActionLabel(action)} changes waiting for your review`;
+  }
   const verb = ACTION_WORDS[action] ?? action;
   const subject = segs[0] ?? "";
   const kind = segs.length > 2 ? segs[1] : null;

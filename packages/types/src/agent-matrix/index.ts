@@ -100,6 +100,7 @@ export const GOVERNANCE_RUNGS = [
   "force-propose",
   "project-filing",
   "criteria-change",
+  "possible-duplicate",
   "pod-admin-schema-change",
   "agent-schema-definition",
   "agent-structure-write",

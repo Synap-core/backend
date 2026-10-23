@@ -7,13 +7,22 @@
  * validation, security, and worker infrastructure.
  */
 
-import { HUB_WRITE_SOURCES } from "@synap-core/types/proposals";
+import {
+  HUB_WRITE_SOURCES,
+  type DuplicateCheck,
+} from "@synap-core/types/proposals";
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
+import { TRPCError } from "@trpc/server";
+import {
+  buildUpdateWriteReceipt,
+  emptyEntityPatchMessage,
+  isEmptyEntityPatch,
+} from "./update-write-receipt.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { lifecycleConflictOf } from "../../services/lifecycle/conflict.js";
 import {
@@ -219,12 +228,6 @@ export const entitiesRouter = router({
           )
           .optional(),
         /**
-         * Bypass the weak same-name create gate (entities.create Phase 1).
-         * Strong-signal auto-merge is never bypassed. Prefer reusing an
-         * existing id; only set when the subject is genuinely distinct.
-         */
-        forceCreate: z.boolean().optional(),
-        /**
          * Strong `external_id` identity anchor (`provider:id`, e.g. `discord:123`).
          * Must be declared here or Zod's default `.strip()` drops it before the
          * real `entities.create` sees it — the bug that made connector dedup
@@ -306,7 +309,6 @@ export const entitiesRouter = router({
               })),
             }
           : {}),
-        ...(input.forceCreate ? { forceCreate: true } : {}),
         // Strong external_id anchor → real entities.create registers it as an
         // identity signal so a repeat create with the same provider id dedups.
         ...(input.externalId ? { externalId: input.externalId } : {}),
@@ -397,6 +399,11 @@ export const entitiesRouter = router({
         // Property keys this write invented (stored, but not modelled). Omitted
         // when there are none, so the common envelope is byte-identical.
         ...(unmodeled.length ? { unmodeled } : {}),
+        // The duplicate door's answer when it found something (B2): why an
+        // agent's create waits for review, or a person's create's warning.
+        ...(resultShape.duplicateCheck
+          ? { duplicateCheck: resultShape.duplicateCheck as DuplicateCheck }
+          : {}),
       };
     }),
 
@@ -471,12 +478,31 @@ export const entitiesRouter = router({
          * current status, and nothing is written.
          */
         expectedStatus: z.string().nullable().optional(),
+        /**
+         * Attach an EXISTING document as the entity's body — the re-attach
+         * door for an orphaned document (decision B9g). Same procedure,
+         * same governance as every other field: scope/ownership and the body
+         * rule are checked by `entities.update`: a document from another
+         * space is refused, and every attach files a proposal (a body is
+         * shown to the record's readers). Undo puts the previous body back.
+         */
+        documentId: z.string().uuid().optional(),
+        /** Required to replace a body the entity already has (else CONFLICT naming it). */
+        replaceBody: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       // Use the real user (input.userId), not ctx.userId (API key owner)
       assertMayActAs(ctx, input.userId);
+      // EMPTY ≠ APPLIED (C5): a patch that would write nothing is refused,
+      // never answered "Entity updated".
+      if (isEmptyEntityPatch(input)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: emptyEntityPatchMessage(input.entityId),
+        });
+      }
       const callerContext = await createHubProtocolCallerContext(
         input.userId,
         ctx.scopes || [],
@@ -496,6 +522,8 @@ export const entitiesRouter = router({
           properties: input.metadata,
           deleteProperties: input.deleteProperties,
           ...(input.profileSlug ? { profileSlug: input.profileSlug } : {}),
+          ...(input.documentId ? { documentId: input.documentId } : {}),
+          ...(input.replaceBody ? { replaceBody: true } : {}),
           reasoning: input.reasoning,
           // "agent" is not a valid EventSource — agent identity is on agentUserId; see SynapEventSchema
           source: "intelligence",
@@ -553,10 +581,42 @@ export const entitiesRouter = router({
         };
       }
 
+      // APPLIED: name what landed (C5) — the entity, the fields written and
+      // their stored values, the status move's own outcome. The old answer
+      // carried none of it (and an always-undefined `proposalId`).
+      const applied = result as {
+        written?: {
+          title: string | null;
+          preview: string | null;
+          properties: unknown;
+          documentId?: string | null;
+        };
+        statusMove?: { status: string };
+      };
+      const written = applied.written;
       return {
         status: result.status,
         message: result.message,
-        proposalId: result.proposalId,
+        entityId: input.entityId,
+        title: written?.title ?? null,
+        ...(written
+          ? {
+              written: {
+                title: written.title,
+                description: written.preview,
+                properties: written.properties,
+                documentId: written.documentId ?? null,
+              },
+            }
+          : {}),
+        ...(applied.statusMove ? { statusMove: applied.statusMove } : {}),
+        writeReceipt: buildUpdateWriteReceipt({
+          entityId: input.entityId,
+          patch: input,
+          writtenProperties: written?.properties as
+            Record<string, unknown> | undefined,
+          statusMoveProposed: applied.statusMove?.status === "proposed",
+        }),
       };
     }),
 

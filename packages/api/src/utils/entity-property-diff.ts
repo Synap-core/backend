@@ -20,10 +20,18 @@ export interface EntityPropertyDiff {
   /** Changed keys that did not exist before the merge. */
   absentBefore: string[];
   /**
-   * Body document the merge linked onto an entity that had none. Revert
-   * unlinks it only while the entity still points at it.
+   * Body document the write linked onto the entity. Revert takes it off only
+   * while the entity still points at it.
    */
   bodyDocumentId?: string;
+  /**
+   * The body the write REPLACED or unlinked (decision B9g), `null` when the
+   * entity had none. Present only when an update changed the body link; revert
+   * puts it back while the entity still points at what the write left
+   * (`bodyDocumentId`, or no body). Absent on a merge record, which only ever
+   * links onto an entity with no body.
+   */
+  bodyDocumentIdBefore?: string | null;
   /**
    * Keys the write REMOVED (an update's `deleteProperties`). Their prior value
    * is in `before`; revert restores one only while it is still absent.
@@ -60,6 +68,35 @@ export interface EntityUndoSnapshot {
   title: string | null;
   preview: string | null;
   properties: unknown;
+  /**
+   * The body document link. Optional because a snapshot that did not READ it
+   * must not be taken for "no body": the body is diffed only when both sides
+   * carry it.
+   */
+  documentId?: string | null;
+}
+
+/** A body-link change a diff records, or null when it records none. */
+export function entityBodyChange(
+  diff: Pick<EntityPropertyDiff, "bodyDocumentId" | "bodyDocumentIdBefore">
+): { before: string | null; after: string | null } | null {
+  if (diff.bodyDocumentIdBefore === undefined && !diff.bodyDocumentId)
+    return null;
+  return {
+    before: diff.bodyDocumentIdBefore ?? null,
+    after: diff.bodyDocumentId ?? null,
+  };
+}
+
+/** The diff fields that record `change` (none for null). */
+export function entityBodyFields(
+  change: { before: string | null; after: string | null } | null
+): Pick<EntityPropertyDiff, "bodyDocumentId" | "bodyDocumentIdBefore"> {
+  if (!change || change.before === change.after) return {};
+  return {
+    ...(change.after ? { bodyDocumentId: change.after } : {}),
+    bodyDocumentIdBefore: change.before,
+  };
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
@@ -133,9 +170,26 @@ export function computeEntityUpdateDiff(
     diff.fields = { before: fieldsBefore, after: fieldsAfter };
   }
 
+  // The body link (B9g): attached, replaced or unlinked — measured only when
+  // both snapshots read it.
+  const bodyChanged =
+    prior.documentId !== undefined &&
+    written.documentId !== undefined &&
+    prior.documentId !== written.documentId;
+  if (bodyChanged) {
+    Object.assign(
+      diff,
+      entityBodyFields({
+        before: prior.documentId ?? null,
+        after: written.documentId ?? null,
+      })
+    );
+  }
+
   const changed =
     Object.keys(diff.after).length > 0 ||
     absentAfter.length > 0 ||
-    !!diff.fields;
+    !!diff.fields ||
+    bodyChanged;
   return changed ? diff : null;
 }

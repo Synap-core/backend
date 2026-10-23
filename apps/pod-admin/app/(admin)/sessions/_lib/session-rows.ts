@@ -35,6 +35,7 @@ import {
 import { DEFAULT_STUCK_THRESHOLD_HOURS } from "@synap-core/types/run-activity";
 import { formatRelative } from "../../../../lib/format";
 import { statusPillFor } from "../../components/status-tone";
+import { canPause, canResume } from "../../../_lib/object/session-status";
 import type { StatusKind } from "../../components/status-pill";
 
 // Here, not in the client page: the server `page.tsx` renders them in its
@@ -135,7 +136,9 @@ export type SessionAct = "pause" | "resume" | "close";
  * The owner's acts on a row: one primary, at most one quieter secondary.
  * Pausing and closing are the owner's (`viewerRole`, decision C) — a member
  * of a shared session gets none rather than buttons that fail. Terminal
- * sessions have nothing left to do from a list.
+ * sessions have nothing left to do from a list. Which status can pause or
+ * resume is the session page's rule (`canPause` / `canResume`), so a row and
+ * the page never offer different moves.
  */
 export function sessionActs(
   status: string,
@@ -144,8 +147,8 @@ export function sessionActs(
 ): { primary: SessionAct | null; secondary: SessionAct | null } {
   const none = { primary: null, secondary: null };
   if (viewerRole !== "owner") return none;
-  const pausable = status === "active" || status === "forming";
-  const resumable = status === "paused" || status === "stale";
+  const pausable = canPause(status);
+  const resumable = canResume(status);
   if (!pausable && !resumable) return none;
   const toggle: SessionAct = pausable ? "pause" : "resume";
   // Where the list is about tidying (stuck, idle) the close comes first.

@@ -17,7 +17,11 @@ import {
   PROFILES_DIGEST_NOTE,
   ENTITIES_LEAN_NOTE,
 } from "./read-lean.js";
-import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
+import {
+  ASK_DETAILS,
+  synthesizeAnswer,
+  type AskDetail,
+} from "../../../services/knowledge/synthesize.js";
 import { resolveKnowledgeLens } from "../../../services/knowledge/resolve-lens.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
 import {
@@ -26,6 +30,7 @@ import {
 } from "../../hub-protocol/rest/_shared.js";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { getDb } from "@synap/database";
+import { toolError } from "../tool-errors.js";
 import {
   listEffectiveRelationTypes,
   type EffectiveRelationType,
@@ -75,6 +80,14 @@ export const readHandlers: McpHandlerMap = {
     requireScope(apiKeyScopes, "mcp.read", toolName);
     if (typeof args.query !== "string" || args.query.trim() === "") {
       return ok({ error: "query is required" });
+    }
+    // `detail` (decision B9a): refused when unknown, never read as `full` — a
+    // typo must not silently cost the caller the long answer it tried to avoid.
+    const detail = (args.detail ?? "full") as AskDetail;
+    if (!ASK_DETAILS.includes(detail)) {
+      return toolError(
+        `detail must be one of ${ASK_DETAILS.join(", ")} (got ${JSON.stringify(args.detail)}).`
+      );
     }
     // ACCESS + DOOR PARITY, via the ONE helper every knowledge door shares
     // (services/knowledge/resolve-lens.ts):
@@ -142,7 +155,8 @@ export const readHandlers: McpHandlerMap = {
       // `degraded` was already returned alongside this answer and correct; the
       // synthesis simply never saw it, so a half-dead retrieval layer produced
       // a confident answer with no caveat in the prose an agent reads.
-      retrieved.degraded ?? []
+      retrieved.degraded ?? [],
+      detail
     );
 
     // Surface synthesis outages loudly instead of returning a null answer that

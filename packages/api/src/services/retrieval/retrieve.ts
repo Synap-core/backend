@@ -27,6 +27,7 @@ import {
   isNull,
   loadFacetSlugsBatch,
   type FacetVisibilityScope,
+  listableEntityWhere,
 } from "@synap/database";
 import {
   projectLensWhere,
@@ -158,6 +159,9 @@ async function fetchOrdered(
         inArray(entities.id, ids),
         eq(entities.userId, userId),
         isNull(entities.deletedAt),
+        // THE listing rule over every id source (recall, graph signal,
+        // structured): no probe rows, no demo rows unless project-lensed.
+        listableEntityWhere({ projectLens: projectId }),
         ...(projectId ? [projectLensWhere(entities.id, projectId)] : [])
       )
     );

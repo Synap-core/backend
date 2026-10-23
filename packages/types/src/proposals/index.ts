@@ -22,6 +22,8 @@ export * from "./review-comment.js";
 export * from "./session-start.js";
 // The ONE reading of the verb a proposal row performs (receipts included).
 export * from "./action.js";
+// The duplicate door's answer, persisted on the proposal (B2) + its accessor.
+export * from "./duplicate-check.js";
 
 /**
  * The pod's cap on one batch decision (`proposals.batchApprove` /

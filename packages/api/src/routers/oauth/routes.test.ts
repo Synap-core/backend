@@ -796,6 +796,25 @@ describe("POST /token", () => {
     expect(opts.instanceId).toContain(client.client_id);
   });
 
+  it("inherits the MCP tool surface per connection, not from the shared agent", async () => {
+    // Every direct client of one person is the SAME claude-web-direct agent.
+    // Inheriting from that agent's newest key would hand a new client (Raycast)
+    // whatever claude.ai listed — legacy keys list every tool. Per connection,
+    // a new client starts on the 9-tool entry surface (decision B1 d).
+    const { body: client } = await register();
+    const { code } = await consentAndExtractCode(client.client_id);
+    await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: client.client_id,
+      redirect_uri: CALLBACK,
+      code_verifier: VERIFIER,
+    });
+    const opts = provisionSpy.mock.calls[0][0];
+    expect(opts.inheritToolSurface).toBe("instance");
+    expect(opts.toolProfile).toBeUndefined();
+  });
+
   // ── (d) PKCE enforcement ───────────────────────────────────────────────────
 
   it("FAILS with a WRONG code_verifier and mints nothing", async () => {
@@ -1869,6 +1888,7 @@ describe("CIMD clients", () => {
       accessToken: "synap_hub_live_APPKEY",
       keyId: "app-key-1",
       expiresAt: new Date(Date.now() + 3600 * 1000),
+      actsAs: "agent",
       agentUserId: APP_AGENT_ID,
       publicId: APP_PUBLIC_ID,
       grant: [
@@ -1980,6 +2000,8 @@ describe("CIMD clients", () => {
       },
     ]);
     expect(body.synap_user).toEqual({ id: HUMAN_ID, name: "Ada" });
+    // Who the token acts as, as the key door minted it (`podAppActsAs`).
+    expect(body.synap_acts_as).toBe("agent");
     // Which app this is on the pod, and where the person manages it.
     expect(body.synap_app).toEqual({
       id: APP_PUBLIC_ID,

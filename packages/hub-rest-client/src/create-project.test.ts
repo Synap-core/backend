@@ -1,10 +1,9 @@
 /**
  * HubRestClient.createProject — every POST /api/hub/projects outcome.
  *
- * The pod answers 201 (row), 202 (proposed, with review link), 200 (deduped),
- * 400 (missing evidence) and 409 (near-duplicate, with `dedupCandidates`). The
- * 409 is a decision the caller must offer the user ("reuse one of these?"), so
- * the client returns it as data instead of throwing the candidates away.
+ * The pod answers 201 (row), 202 (proposed, with review link and, when a similar
+ * project is why, `duplicateCheck`), 200 (deduped) and 400 (missing evidence).
+ * A near match is no longer a 409 (FB1020 B2): the reviewer decides.
  */
 
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
@@ -37,23 +36,32 @@ afterEach(() => {
 });
 
 describe("createProject", () => {
-  it("returns a near-duplicate 409 as data, candidates intact", async () => {
-    const dedupCandidates = [{ id: "p-9", name: "Atlas", similarity: 0.91 }];
+  it("a near match is FILED, not refused: the 202 carries its duplicateCheck", async () => {
+    const duplicateCheck = {
+      status: "possible",
+      subject: "project",
+      candidates: [
+        {
+          ref: "record",
+          id: "p-9",
+          kind: "project",
+          title: "Atlas",
+          why: "similar_name",
+        },
+      ],
+    };
     reply = {
-      status: 409,
-      body: {
-        error: "A project named 'Atlas' may already exist",
-        dedupCandidates,
-      },
+      status: 202,
+      body: { status: "proposed", proposalId: "prop-2", duplicateCheck },
     };
     await expect(client.createProject({ name: "Atlas." })).resolves.toEqual({
-      status: "near_duplicate",
-      error: "A project named 'Atlas' may already exist",
-      dedupCandidates,
+      status: "proposed",
+      proposalId: "prop-2",
+      duplicateCheck,
     });
   });
 
-  it("still throws a 409 that carries no candidates", async () => {
+  it("a 409 throws, whatever it carries", async () => {
     reply = { status: 409, body: { error: "conflict" } };
     await expect(
       client.createProject({ name: "Atlas" })
