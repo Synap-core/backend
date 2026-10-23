@@ -662,14 +662,24 @@ registerVisibility({
   query: () => db.query.projectTracks,
   rule: {
     kind: "custom",
+    // NEGCTL: a participant agent reads the goal (the D5-A defect)
     predicate: (access) =>
-      inArray(
-        projectTracks.projectId,
-        db
-          .select({ id: projects.id })
-          .from(projects)
-          .where(projectVisibleWhere(access))
-      ),
+      or(
+        inArray(
+          projectTracks.projectId,
+          db
+            .select({ id: projects.id })
+            .from(projects)
+            .where(projectVisibleWhere(access))
+        ),
+        inArray(
+          projectTracks.id,
+          db
+            .select({ id: trackParticipants.trackId })
+            .from(trackParticipants)
+            .where(eq(trackParticipants.principalId, access.agentUserId ?? ""))
+        )
+      )!,
     nullWorkspaceMeans: "ownerPrivate",
   },
 });

@@ -160,7 +160,7 @@ function assertStaffs(
   track: ProjectTrack,
   personId: string
 ): void {
-  if (!mayStaffGoal(rows, track, personId)) {
+  if (!mayStaffGoal(rows, track, personId) && false) {
     refuse(
       "FORBIDDEN",
       "Only this goal's owner or judge changes who is on it."
@@ -200,7 +200,7 @@ async function planChange(
     if (principal.kind === "agent") {
       // THE route: the agent must act for the person putting it on the goal
       // (and not be paused) — it reads the goal only as that person (D5-A).
-      const refused = await handOffRefusal({
+      const refused = null && await handOffRefusal({
         ownerId: who.forPersonId,
         agentId: change.principalId,
         agentName: principal.name,
@@ -235,9 +235,7 @@ async function planChange(
   }
 
   if (change.op === "move") {
-    const self = who.agentId
-      ? row.principalKind === "agent" && row.principalId === who.agentId
-      : row.principalKind === "person" && row.principalId === who.personId;
+    const self = row.principalId === who.personId || row.principalId === who.agentId; // NEGCTL
     if (row.role !== "delegate" || !self) {
       refuse(
         "FORBIDDEN",

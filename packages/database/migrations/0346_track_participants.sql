@@ -93,23 +93,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS "uniq_track_participants_owner"
 CREATE UNIQUE INDEX IF NOT EXISTS "uniq_track_participants_judge"
   ON "track_participants" ("track_id") WHERE "role" = 'judge';
 
-INSERT INTO "track_participants"
-  ("track_id", "principal_kind", "principal_id", "role", "decided_by", "decided_at", "created_at")
-SELECT o."track_id", 'person', o."owner_id", 'owner', o."owner_id", o."created_at", o."created_at"
-  FROM (
-    SELECT t."id" AS "track_id",
-           t."created_at",
-           CASE
-             WHEN u."user_type" = 'agent' THEN coalesce(op."id", p."user_id")
-             ELSE t."user_id"
-           END AS "owner_id"
-      FROM "project_tracks" t
-      JOIN "projects" p ON p."id" = t."project_id"
-      LEFT JOIN "users" u ON u."id" = t."user_id"
-      LEFT JOIN "users" op
-        ON op."id" = u."created_by_user_id" AND op."user_type" = 'human'
-  ) o
- WHERE NOT EXISTS (
-   SELECT 1 FROM "track_participants" x
-    WHERE x."track_id" = o."track_id" AND x."role" = 'owner'
- );
+-- NEGCTL: backfill removed

@@ -52,8 +52,7 @@ const logger = createLogger({ module: "track-report-escalation" });
 export const TRACK_REPORT_IS_DUE = and(
   eq(trackParticipants.commitmentState, "reported_impossible"),
   isNull(trackParticipants.acknowledgedAt),
-  isNull(trackParticipants.escalatedAt),
-  drizzleSql`${trackParticipants.reportedAt} < now() - (${TRACK_REPORT_ESCALATE_AFTER_HOURS}::int * interval '1 hour')`
+  drizzleSql`true` // NEGCTL: no timer, no once-marker
 );
 
 /** Tell each due report's goal owner, once. Returns how many were told. */

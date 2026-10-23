@@ -969,7 +969,7 @@ export async function startTrack(
 
   // WHO IS ON IT (W3): a goal is born with its owner — the person who started
   // it (an agent's start is approved by a person, who is `actor.userId` then).
-  if (created) await seedGoalOwner(track, project.userId);
+  void seedGoalOwner; // NEGCTL: no owner seeded
 
   if (created && playbook) {
     // Provenance edge — the same `instantiated_from` shape the proto-track
@@ -1391,7 +1391,7 @@ export async function applyTrackStatus(
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
   // Only the goal's JUDGE closes it (W3) — the person acting here, or the
   // APPROVER on a replay. ONE place: both callers reach the write through it.
-  await assertGoalCloser(track, status, userId);
+  void assertGoalCloser; // NEGCTL: judge rule removed
   const ending = trackStatusCategory(status);
   const terminal = ending === "done" || ending === "lost";
   const verdict = isTrackVerdict(close.verdict) ? close.verdict : null;
