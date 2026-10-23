@@ -16668,7 +16668,7 @@ export interface WaitingOnMark {
 	reason: WaitingOnReason;
 	count: number;
 }
-/** The loop as stored on the goal (`project_tracks.loop`, 0348). */
+/** The loop as stored on the goal (`project_tracks.loop`, 0350). */
 export interface GoalLoopSettings {
 	on: boolean;
 	/** Proposals per rolling week, 1 to {@link GOAL_LOOP_MAX_PER_WEEK}. */
@@ -18723,7 +18723,7 @@ export interface TrackView {
 	/** When to stop (0345) — `[]` when none said. */
 	dropConditions: string[];
 	/**
-	 * The goal's loop (0348, W4): whether it proposes its next run while a
+	 * The goal's loop (0350, W4): whether it proposes its next run while a
 	 * required criterion is unmet, its weekly budget, when a person last
 	 * switched it on and who. Never set reads as OFF.
 	 */
