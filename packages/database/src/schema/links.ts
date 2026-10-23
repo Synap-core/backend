@@ -165,12 +165,20 @@ export type LinkType =
    * X --blocked_by--> Y. THE dependency between units of work, across kinds
    * (`session` · `entity` · `track`, any pair — `DEPENDENCY_ENDPOINT_KINDS` in
    * `@synap-core/types/connections`): the FROM end cannot proceed until the TO
-   * end clears by its own kind's status vocabulary. Entity relations
-   * `blocks` / `depends_on` are this edge under other names; the relation
-   * create door maps them here and migration 0301 moved the stored rows.
+   * end DELIVERS by its own kind's status vocabulary (a session `closed`, a
+   * track `completed`, an entity in lifecycle category `done`). Entity
+   * relations `blocks` / `depends_on` are this edge under other names; the
+   * relation create door maps them here and migration 0301 moved the stored
+   * rows.
    *
-   * Blocked-ness is DERIVED from the subset of these edges whose TARGET is
-   * still open, never a stored `blocked` status on `focus_sessions` (prior
+   * A TO end that ENDED WITHOUT DELIVERING (a session cancelled or failed, a
+   * track archived, an entity `lost`) does NOT clear (founder decision,
+   * 2026-10-22): it stays a blocker marked `dropped`, and the FROM end must
+   * re-plan — until this edge is removed, or a `replaces` edge names the
+   * attempt that replaces it (whoever waited on it then waits on that).
+   *
+   * Blocked-ness is DERIVED from the subset of these edges whose TARGET has
+   * not delivered, never a stored `blocked` status on `focus_sessions` (prior
    * art: Atlassian's "flag, don't status" — a status can only hold one value,
    * so storing blocked-ness destroys the real state and then drifts from the
    * blockers). The ONE producer is `services/links/dependency-links.ts`

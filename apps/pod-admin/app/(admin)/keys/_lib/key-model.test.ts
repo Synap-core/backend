@@ -6,7 +6,9 @@ import {
   holderName,
   keyHref,
   keyStatus,
+  managedKeys,
   normalizeScopes,
+  isPodAppAccessKey,
   type UnifiedKey,
 } from "./key-model";
 
@@ -201,5 +203,51 @@ describe("keyHref", () => {
   it("is null for a pod-wide key with no holder page", () => {
     expect(keyHref(key({ workspaceId: null, holder: null }))).toBeNull();
     expect(keyHref(key({}))).toBeNull();
+  });
+});
+
+describe("a pod app's access key is the app's, not a key to manage", () => {
+  const podAppKey = key({
+    id: "pod",
+    keyType: "hub_inbound",
+    linkedUserId: "me",
+    holder: { kind: "app", name: "Studio", appId: "app_1" },
+  });
+  const appConnectKey = key({
+    id: "ac",
+    keyType: "user_pat",
+    holder: { kind: "app", name: "My app", appId: "app_2" },
+  });
+  const signIn = key({
+    id: "si",
+    keyType: "app_person",
+    holder: { kind: "person", name: "Ada" },
+  });
+  const cli = key({
+    id: "cli",
+    keyType: "hub_inbound",
+    linkedUserId: "me",
+    hubId: "integration:cli:1",
+    holder: { kind: "person", name: "Ada" },
+  });
+
+  it("recognises only the pod app's hourly key", () => {
+    expect(isPodAppAccessKey(podAppKey)).toBe(true);
+    expect(isPodAppAccessKey(appConnectKey)).toBe(false);
+    expect(isPodAppAccessKey(signIn)).toBe(false);
+    expect(isPodAppAccessKey(cli)).toBe(false);
+  });
+
+  it("leaves it out of the keys list, live or revoked, and keeps the rest", () => {
+    const revokedPod = { ...podAppKey, id: "pod-old", isActive: false };
+    expect(
+      managedKeys([podAppKey, appConnectKey, signIn, cli, revokedPod]).map(
+        (k) => k.id
+      )
+    ).toEqual(["ac", "si", "cli"]);
+  });
+
+  it("a sign-in token keeps its App badge", () => {
+    expect(CATEGORY_LABEL[categorize(signIn)]).toBe(CATEGORY_LABEL.app);
   });
 });

@@ -55,8 +55,16 @@ import {
 } from "@synap/database";
 import {
   buildObjectActionTitle,
+  resolveObjectGlyph,
+  resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
+import type { OpenBlocker } from "@synap-core/types/connections";
+import { readDependencyState } from "../links/dependency-links.js";
+import {
+  isSessionWorkingNow,
+  SESSION_WORKING_WINDOW_MS,
+} from "@synap-core/types/run-activity";
 import {
   resolveSessionTitle,
   readSuspendedNote,
@@ -102,6 +110,11 @@ import {
   readSessionExternalAgent,
   type SessionExternalAgent,
 } from "../agent-dispatch/session-external-agent.js";
+import { loadSessionLiveness } from "../runs/session-liveness.js";
+import { readSessionRoom, type PacketRoomSection } from "./room-messages.js";
+import { readSessionGates, type PacketGatesSection } from "./session-gates.js";
+import { loadSessionRunners, type SessionRunner } from "./session-runners.js";
+import type { EntityProfileRef } from "../profiles/entity-profile-refs.js";
 
 const logger = createLogger({ module: "continuation-packet" });
 
@@ -112,7 +125,19 @@ export type PacketSection<T> =
   | { status: "ok"; total: number; items: T[] }
   | { status: "unavailable"; reason: string };
 
-export interface PacketSlotItem {
+/**
+ * How a kind is NAMED and MARKED, resolved by the vocabulary's one door
+ * (`resolveObjectNoun` / `resolveObjectGlyph`) — so a reader with no icon
+ * font draws `glyph` instead of keeping its own kind → mark table.
+ */
+export interface PacketKindIdentity {
+  /** "Task", "Decision" — an entity's own profile name when it has one. */
+  noun: string;
+  /** One compact mark ("☐", "◇", "▤"); never empty — unknown kinds read the fallback. */
+  glyph: string;
+}
+
+export interface PacketSlotItem extends PacketKindIdentity {
   label: string;
   kind: string;
   blockedReason?: string;
@@ -152,6 +177,31 @@ export interface PacketSlotItem {
   ask?: SlotAsk;
 }
 
+/** A slot item without its display identity — everything `deriveNextMove` reads. */
+export type PacketSlotFacts = Omit<PacketSlotItem, keyof PacketKindIdentity>;
+
+/**
+ * A client conversation attached to the session's change-feed wait — a
+ * `session_runners` row (`loadSessionRunners`), projected.
+ */
+export interface PacketRunnerItem {
+  /** The client's own harness name (`claude-code`, …), as it sent it. */
+  harness: string;
+  conversationId: string;
+  /** Where it ran, when its client said so. Display only. */
+  cwd: string | null;
+  /** The computer hosting the agent (`users.id` of a `machine` agent user). */
+  machineId?: string;
+  /** The agent acting through the key, when an agent key held the wait. */
+  agentUserId?: string;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  /** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
+  live: boolean;
+  /** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
+  resume?: string;
+}
+
 export interface PacketProposalItem {
   id: string;
   /** Imperative — what approving it WILL do. */
@@ -160,7 +210,8 @@ export interface PacketProposalItem {
   createdAt: string | null;
 }
 
-export interface PacketOutputItem {
+export interface PacketOutputItem extends PacketKindIdentity {
+  /** Normalized object kind — `entity` for entities; `noun`/`glyph` name its profile. */
   kind: string;
   refId: string;
   title: string;
@@ -251,6 +302,7 @@ export interface PacketDecision {
 export type NextMoveKind =
   | "owed_slot"
   | "pending_proposal"
+  | "blocker_dropped"
   | "waiting_on_session"
   | "agent_slot"
   | "undeclared"
@@ -268,9 +320,22 @@ export interface ContinuationNextMove {
   reason: string;
   /** The proposal id, for `pending_proposal`. */
   proposalId?: string;
-  /** The blocking session's id, for `waiting_on_session`. */
+  /**
+   * The blocking session's id, for `waiting_on_session`; for `blocker_dropped`,
+   * the DROPPED blocker's id when that blocker is a session.
+   */
   sessionId?: string;
 }
+
+/**
+ * What still holds a session up, by THE dependency rule (`deriveOpenBlockers`
+ * via `readDependencyState` / `readDependencyFacts`): open blockers and
+ * DROPPED ones, `replaces` followed. An input of `deriveNextMove`, never a
+ * wire section — a failed read is `unavailable`, never "not blocked".
+ */
+export type NextMoveBlockers =
+  | { status: "ok"; items: readonly OpenBlocker[] }
+  | { status: "unavailable"; reason: string };
 
 export interface ContinuationPacket {
   version: 1;
@@ -424,6 +489,45 @@ export interface ContinuationPacket {
   } | null;
   nextMove: ContinuationNextMove;
   /**
+   * THE ROOM — the session room's newest messages, each classified by who
+   * wrote it (`classifyRoomAuthor`, `room-messages.ts`). Read through the
+   * channel-visibility gate: a room the viewer cannot see is `unavailable`,
+   * never empty. `channelId: null` = the session has no room.
+   */
+  room: PacketRoomSection;
+  /**
+   * IS AN AGENT WORKING ON THIS RIGHT NOW — the liveness batch read
+   * (`loadSessionLiveness`) judged by the ONE rule (`isSessionWorkingNow`) at
+   * `measuredAt`. `since`: when the running turn started, else the newest
+   * activity (`null` = nothing happened yet). The answer flips to idle on its
+   * own `windowMs` after `lastActivityAt`; a reader that keeps the packet
+   * re-judges with `isSessionWorkingNow` rather than trusting a stale `state`.
+   */
+  live:
+    | {
+        status: "ok";
+        state: "working" | "idle";
+        turnInFlight: boolean;
+        since: string | null;
+        lastActivityAt: string | null;
+        measuredAt: string;
+        windowMs: number;
+      }
+    | { status: "unavailable"; reason: string };
+  /**
+   * GATES — every gated stage of the session's process and its state, DERIVED
+   * FROM PROPOSAL ROWS only (`session-gates.ts`), plus `deploy`: the newest
+   * `dev.deploy_approval` a PERSON approved. "Is commit X approved to ship by a
+   * human?" is `deploy?.commitSha` prefix-matching X.
+   */
+  gates: PacketGatesSection;
+  /**
+   * WHO IS ATTACHED — the client conversations holding this session's
+   * change-feed wait, most recently seen first (`session-runners.ts`). An
+   * empty list means nobody has listened; a failed read is `unavailable`.
+   */
+  runners: PacketSection<PacketRunnerItem>;
+  /**
    * The session's contract and its grade: the declared binary criteria, the
    * server-computed verdict, and the CURRENT evaluation per criterion (human
    * wins). `criteria: []` with `verdict.state: "none"` means none declared; a
@@ -465,6 +569,12 @@ export interface ProjectContinuationPacketCtx {
   roster?: boolean;
 }
 
+function toIso(value: Date | string | null | undefined): string | null {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  return Number.isFinite(d.getTime()) ? d.toISOString() : null;
+}
+
 function slots(row: SessionRow): ExpectedOutput[] {
   return Array.isArray(row.expectedOutputs)
     ? (row.expectedOutputs as ExpectedOutput[]).filter(
@@ -496,10 +606,37 @@ function unavailable(
   };
 }
 
+/** Noun + glyph for a kind; an entity output passes its profile so it reads "Decision", not "Entity". */
+export function kindIdentity(
+  kind: string,
+  profile?: EntityProfileRef
+): PacketKindIdentity {
+  const key = profile?.slug ?? kind;
+  return {
+    noun: profile?.displayName ?? resolveObjectNoun(key),
+    glyph: resolveObjectGlyph(key),
+  };
+}
+
+function runnerItem(r: SessionRunner): PacketRunnerItem {
+  return {
+    harness: r.harness,
+    conversationId: r.conversationId,
+    cwd: r.cwd,
+    ...(r.machineUserId ? { machineId: r.machineUserId } : {}),
+    ...(r.agentUserId ? { agentUserId: r.agentUserId } : {}),
+    firstSeenAt: r.firstSeenAt,
+    lastSeenAt: r.lastSeenAt,
+    live: r.live,
+    ...(r.conversation ? { resume: r.conversation.resumeCommand } : {}),
+  };
+}
+
 function owedItem(slot: OwedSlot): PacketSlotItem {
   return {
     label: slot.label,
     kind: slot.kind,
+    ...kindIdentity(slot.kind),
     ...(slot.blockedReason !== undefined
       ? { blockedReason: slot.blockedReason }
       : {}),
@@ -590,6 +727,7 @@ function outputsSection(all: SessionOutput[]): PacketSection<PacketOutputItem> {
   return section(
     all.map((o) => ({
       kind: o.kind,
+      ...kindIdentity(o.kind, o.entityProfile),
       refId: o.refId,
       title: o.title,
       ...(o.state ? { state: o.state } : {}),
@@ -1318,6 +1456,16 @@ function readLastCompletion(
   };
 }
 
+/**
+ * A blocker as a next move names it: its title in quotes, or — unnamed or not
+ * visible — "the <noun>" through the vocabulary door (no a/an guessing).
+ */
+function blockerName(b: OpenBlocker): string {
+  return b.title
+    ? `"${b.title}"`
+    : `the ${resolveObjectNoun(b.kind).toLowerCase() || "blocker"}`;
+}
+
 const isOpenStatus = (status: string): boolean =>
   (OPEN_SESSION_STATUSES as readonly string[]).includes(status);
 
@@ -1326,12 +1474,25 @@ const isOpenStatus = (status: string): boolean =>
  *
  *  1. the oldest owed human slot, else the oldest pending proposal — what the
  *     user can do NOW always wins, blocked or not;
- *  2. `waiting_on_session` while an OPEN session blocks this one (closed,
- *     cancelled, failed and stale blockers have settled). It OUTRANKS open agent
+ *  2. `blocker_dropped` while a blocker ENDED WITHOUT DELIVERING (a session
+ *     cancelled or failed, a track archived, an entity lost) and nothing has
+ *     replaced it — founder decision 2026-10-22: the work this session waited
+ *     on never happened, so it must RE-PLAN (remove the dependency, or link the
+ *     session that replaces it), never proceed as if it had been delivered.
+ *     The AI's move: re-planning is the session's own work, and it has the
+ *     doors (`synap_update_session` `removeBlockedBySessionIds` /
+ *     `addBlockedBySessionIds`; a `replaces` link through the link doors).
+ *     Outranks waiting: another blocker still being open does not make
+ *     the plan any less broken;
+ *  2b. `waiting_on_session` while an OPEN session blocks this one (a closed
+ *     blocker has delivered; a stale one is resumable and still holds; a
+ *     replaced one is followed to its replacement). It OUTRANKS open agent
  *     slots: a `blocked_by` edge says this session's work depends on the
  *     blocker's outcome, so producing its deliverables now would build on inputs
  *     that are not settled — presenting them as the next move is the lie this
- *     kind exists to stop. Skipped for a terminal session (nothing left to wait for);
+ *     kind exists to stop. Session blockers only: the kind's door is a session
+ *     (an open entity or track blocker is not surfaced here). Steps 2 and 2b
+ *     are skipped for a terminal session (nothing left to wait for);
  *  3. the first open agent slot — this session's own work stays actionable
  *     while its sub-sessions run;
  *  4. `none` for a terminal session;
@@ -1351,18 +1512,18 @@ const isOpenStatus = (status: string): boolean =>
  */
 export function deriveNextMove(input: {
   status: string;
-  owedSlots: PacketSection<PacketSlotItem>;
+  owedSlots: PacketSection<PacketSlotFacts>;
   pendingProposals: PacketSection<PacketProposalItem>;
-  aiCanDo: PacketSection<PacketSlotItem>;
-  /** Blocker sessions, OPEN ones first (`readOutboundSessions` orders them so). */
-  blockedBy: PacketSection<PacketChildItem>;
+  aiCanDo: PacketSection<PacketSlotFacts>;
+  /** What still holds it up, by THE dependency rule — see {@link NextMoveBlockers}. */
+  blockers: NextMoveBlockers;
   /** The session's declared `expectedOutputs`, retired ones included. */
   expectedOutputs: ExpectedOutput[];
   outputs: PacketSection<PacketOutputItem>;
   /** Sub-sessions, OPEN then CLOSED first (`readInboundSessions` orders them so). */
   children: PacketSection<PacketChildItem>;
 }): ContinuationNextMove {
-  const { owedSlots, pendingProposals, aiCanDo, blockedBy } = input;
+  const { owedSlots, pendingProposals, aiCanDo, blockers } = input;
   const terminal = isTerminalSessionStatus(input.status);
   if (owedSlots.status === "ok" && owedSlots.items[0]) {
     const s = owedSlots.items[0];
@@ -1397,24 +1558,45 @@ export function deriveNextMove(input: {
     };
   }
   if (!terminal) {
-    if (blockedBy.status === "unavailable") {
+    if (blockers.status === "unavailable") {
       return {
         kind: "unknown",
         actor: "none",
         label: "Next move unknown",
-        reason: `Whether this session is blocked could not be read (${blockedBy.reason}).`,
+        reason: `Whether this session is blocked could not be read (${blockers.reason}).`,
       };
     }
-    const open = blockedBy.items.filter((b) => isOpenStatus(b.status));
+    const dropped = blockers.items.filter((b) => b.dropped);
+    const gone = dropped[0];
+    if (gone) {
+      const name = blockerName(gone);
+      const how = gone.status ? ` (${resolveStatusLabel(gone.status)})` : "";
+      const others =
+        dropped.length > 1
+          ? ` (and ${dropped.length - 1} more dropped blocker(s))`
+          : "";
+      return {
+        kind: "blocker_dropped",
+        actor: "ai",
+        label: `Re-plan without ${name}`,
+        reason: `This session waited on ${name}, which ended without delivering${how}${others}. Its work cannot go ahead as planned: remove that dependency if the work no longer needs it, or wait on the session that retries it instead.`,
+        ...(gone.kind === "session" ? { sessionId: gone.id } : {}),
+      };
+    }
+    const open = blockers.items.filter((b) => b.kind === "session");
     const first = open[0];
     if (first) {
       const others =
         open.length > 1 ? ` (and ${open.length - 1} more open blocker(s))` : "";
+      const name = blockerName(first);
+      const state = first.status
+        ? `still ${resolveStatusLabel(first.status).toLowerCase()}`
+        : "not finished";
       return {
         kind: "waiting_on_session",
         actor: "none",
-        label: `Waiting on "${first.title}"`,
-        reason: `This session is blocked by "${first.title}", which is still ${first.statusLabel.toLowerCase()}${others}; its work waits until that settles.`,
+        label: `Waiting on ${name}`,
+        reason: `This session is blocked by ${name}, which is ${state}${others}; its work waits until that settles.`,
         sessionId: first.id,
       };
     }
@@ -1558,6 +1740,7 @@ export async function projectContinuationPacket(
       .map((s): PacketSlotItem => ({
         label: s.label,
         kind: s.kind,
+        ...kindIdentity(s.kind),
         ...(s.delegatedTo ? { delegatedTo: s.delegatedTo } : {}),
         ...(s.answer
           ? {
@@ -1593,6 +1776,11 @@ export async function projectContinuationPacket(
     evaluation,
     externalAgent,
     priorStages,
+    dependency,
+    room,
+    liveFacts,
+    gates,
+    runners,
   ] = await Promise.all([
     readProject(database, ctx.userId, row.projectId ?? null).catch(
       unavailable(
@@ -1729,7 +1917,82 @@ export async function projectContinuationPacket(
         "What the earlier stages of this track produced could not be read."
       )
     ),
+    // THE dependency rule for the next move — open AND dropped blockers,
+    // `replaces` followed — under the same session floor as `blockedBy`.
+    readDependencyState({ kind: "session", id: row.id }, reader.userId, {
+      roster: reader.roster === true,
+    })
+      .then((state): NextMoveBlockers => ({
+        status: "ok",
+        items: state.openBlockers,
+      }))
+      .catch(
+        unavailable(
+          row.id,
+          "dependency",
+          "Whether this session is blocked could not be read."
+        )
+      ),
+    readSessionRoom(database, {
+      channelId: row.channelId ?? null,
+      sessionUserId: row.userId,
+      viewerId: ctx.userId,
+    }).catch(
+      unavailable(
+        row.id,
+        "room",
+        "This session's room could not be read, or is not visible to you."
+      )
+    ),
+    // The batch read already answers `null` (never a quiet session) on a
+    // failure; a throw past it is folded the same way.
+    loadSessionLiveness({ userId: ctx.userId, roster: !!ctx.roster }, [row])
+      .then((m) => m.get(row.id) ?? null)
+      .catch(() => null),
+    readSessionGates(database, {
+      id: row.id,
+      playbookId: row.playbookId ?? null,
+    })
+      .then(({ items, deploy }): ContinuationPacket["gates"] => ({
+        status: "ok",
+        items,
+        deploy,
+      }))
+      .catch(
+        unavailable(row.id, "gates", "This session's gates could not be read.")
+      ),
+    // The loader's max, so `total` counts every runner (a session has a handful).
+    loadSessionRunners(row.id, { database, limit: 100 })
+      .then((all) => section(all.map(runnerItem)))
+      .catch(
+        unavailable(
+          row.id,
+          "runners",
+          "Who is attached to this session could not be read."
+        )
+      ),
   ]);
+
+  const measuredAt = Date.now();
+  const live: ContinuationPacket["live"] = liveFacts
+    ? {
+        status: "ok",
+        state: isSessionWorkingNow(liveFacts, measuredAt) ? "working" : "idle",
+        turnInFlight: liveFacts.turnInFlight,
+        since: toIso(
+          liveFacts.turnInFlight
+            ? (liveFacts.since ?? liveFacts.lastAt)
+            : liveFacts.lastAt
+        ),
+        lastActivityAt: toIso(liveFacts.lastAt),
+        measuredAt: new Date(measuredAt).toISOString(),
+        windowMs: SESSION_WORKING_WINDOW_MS,
+      }
+    : {
+        status: "unavailable",
+        reason:
+          "Whether an agent is working on this session could not be read.",
+      };
 
   // ONE lineage read, TWO projections: `parent` (identity) and `resume`
   // (identity + the suspend note). A failed parent read fails BOTH — the pop
@@ -1809,12 +2072,16 @@ export async function projectContinuationPacket(
       : null,
     rerun,
     lastCompletion: readLastCompletion(row),
+    room,
+    live,
+    gates,
+    runners,
     nextMove: deriveNextMove({
       status: row.status,
       owedSlots,
       pendingProposals,
       aiCanDo,
-      blockedBy,
+      blockers: dependency,
       expectedOutputs: all,
       outputs,
       children,
