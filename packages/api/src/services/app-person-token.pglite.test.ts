@@ -553,7 +553,7 @@ describe("a registered, approved app signs the owner in", () => {
       appName: "Studio",
       headline: "Studio will act as you in: Sales, Finance.",
       cannot:
-        "It cannot delete, manage keys, approve outside these spaces, or see other spaces.",
+        "It cannot delete, manage keys, approve outside these spaces, or see anything outside what a member of these spaces sees.",
       expiresInDays: 30,
     });
     const sales = ctx.appSignIn!.spaces.find((s) => s.workspaceId === SALES)!;
