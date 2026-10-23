@@ -8,8 +8,14 @@
  * `toApproved` filters to the offer again before anything is sent. The server
  * re-derives the offer and refuses a wider selection anyway
  * (`connectOAuthApp`); this keeps the screen honest about what Allow sends.
+ *
+ * A DECISION permission (`proposal.approve` / `proposal.reject`: a grant-
+ * grammar gate verb, `GRANT_GATE_ACTIONS`) is never folded into a write: the
+ * screen shows it on its own line (`splitOffer`), and nothing pre-ticks it on
+ * a first consent (`initialSelection`). The person gives it, space by space.
  */
 
+import { GRANT_GATE_ACTIONS, grantActionLabel } from "@synap-core/types/grants";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
 
@@ -41,6 +47,23 @@ export type Selection = ReadonlySet<string>;
 const key = (permission: string, workspaceId: string) =>
   `${permission}\u0000${workspaceId}`;
 
+/** The permission's verb is a gate verb (approve, reject, …), not a write. */
+export function isDecisionPermission(permission: string): boolean {
+  const action = permission.split(".").pop() ?? "";
+  return (GRANT_GATE_ACTIONS as readonly string[]).includes(action);
+}
+
+/** The offer as the screen lists it: reads and writes, then decisions apart. */
+export function splitOffer(offer: readonly OfferedPermission[]): {
+  grants: OfferedPermission[];
+  decisions: OfferedPermission[];
+} {
+  return {
+    grants: offer.filter((o) => !isDecisionPermission(o.permission)),
+    decisions: offer.filter((o) => isDecisionPermission(o.permission)),
+  };
+}
+
 function offered(
   offer: readonly OfferedPermission[],
   permission: string,
@@ -57,7 +80,8 @@ function offered(
  * What starts ticked: the person's current approval for this app (a
  * re-consent), within today's offer. On a first consent, a permission with
  * exactly ONE space on offer starts ticked; with several, none do (the person
- * picks), unless `spaceHint` names one of them.
+ * picks), unless `spaceHint` names one of them. A decision permission never
+ * starts ticked on a first consent, hint or not.
  *
  * `spaceHint` is the launch's `space_hint` (the Synap browser opened the app
  * from that space). It is untrusted query text: it only pre-ticks a space the
@@ -78,6 +102,7 @@ export function initialSelection(
     return out;
   }
   for (const o of offer) {
+    if (isDecisionPermission(o.permission)) continue;
     const hinted = spaceHint
       ? o.workspaces.find((w) => w.workspaceId === spaceHint)
       : undefined;
@@ -193,6 +218,32 @@ export function toApproved(
   return out;
 }
 
+/**
+ * A Synap app's headline: the server's `lead` ("Content Studio will act as
+ * you in") ended with the spaces ticked — the grant the token will carry, so
+ * the sentence changes as the person ticks: "…: Content OS, Ecosystem.".
+ */
+export function actsAsHeadline(
+  lead: string,
+  selection: Selection,
+  offer: readonly OfferedPermission[]
+): string {
+  const names: string[] = [];
+  for (const o of offer) {
+    for (const w of o.workspaces) {
+      if (
+        selection.has(key(o.permission, w.workspaceId)) &&
+        !names.includes(w.workspaceName)
+      ) {
+        names.push(w.workspaceName);
+      }
+    }
+  }
+  return names.length > 0
+    ? `${lead}: ${names.join(", ")}.`
+    : `${lead} the spaces you choose below.`;
+}
+
 /** The permissions the person has NO space to give in. */
 export function withoutSpace(
   offer: readonly OfferedPermission[]
@@ -218,12 +269,16 @@ const plural = (word: string) =>
  * A plain-language line for a grant-grammar permission
  * (`<subject>[.<kind>].<action>`): `entity.post.create` → "Create posts",
  * `document.update` → "Edit documents", `entity.read` → "Read everything in
- * it". The raw permission is shown beside it, so an unusual one is never
+ * it", `proposal.approve` → "Approve changes waiting for your review". The
+ * raw permission is shown beside it, so an unusual one is never
  * hidden behind a friendly word.
  */
 export function permissionLabel(permission: string): string {
   const segs = permission.split(".");
   const action = segs[segs.length - 1] ?? "";
+  if (segs[0] === "proposal" && isDecisionPermission(permission)) {
+    return `${grantActionLabel(action)} changes waiting for your review`;
+  }
   const verb = ACTION_WORDS[action] ?? action;
   const subject = segs[0] ?? "";
   const kind = segs.length > 2 ? segs[1] : null;
