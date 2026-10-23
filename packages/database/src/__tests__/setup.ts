@@ -4,30 +4,15 @@
  * Runs before all tests to set up the testing environment.
  */
 
-import { beforeAll, afterAll } from "vitest";
+import { afterAll } from "vitest";
 import { sql } from "../client-pg.js";
+import { cleanTestData } from "./test-utils.js";
 
-// Clean up test data before all tests
-beforeAll(async () => {
-  console.log("🧪 Setting up test environment...");
-
-  // Clean any existing test data
-  await sql`DELETE FROM events WHERE user_id LIKE 'test-%'`;
-  await sql`DELETE FROM entities WHERE user_id LIKE 'test-%'`;
-  await sql`DELETE FROM entity_vectors WHERE user_id LIKE 'test-%'`;
-
-  console.log("✅ Test environment ready");
-});
-
-// Cleanup after all tests
+// Every file of the package runs this, in parallel against one database: it
+// deletes only the rows of the users THIS file generated (test-utils.ts),
+// never a pattern that matches another file's in-flight rows.
 afterAll(async () => {
-  console.log("🧹 Cleaning up test data...");
-
-  await sql`DELETE FROM events WHERE user_id LIKE 'test-%'`;
-  await sql`DELETE FROM entities WHERE user_id LIKE 'test-%'`;
-  await sql`DELETE FROM entity_vectors WHERE user_id LIKE 'test-%'`;
-
-  console.log("✅ Cleanup complete");
+  await cleanTestData();
 
   // Close database connection
   await sql.end();

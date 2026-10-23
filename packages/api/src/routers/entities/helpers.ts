@@ -23,6 +23,10 @@ import {
   facetVisibilityConditions,
   drizzleSql,
   registerFacetAttachedEmitter,
+  inArray,
+  not,
+  listableEntityWhere,
+  unlistableEntityIds,
 } from "@synap/database";
 import { entities, profiles, entityFacets } from "@synap/database/schema";
 import { type Entity } from "@synap-core/types";
@@ -576,7 +580,8 @@ export async function countEntitiesByProfile(opts: {
       count: drizzleSql<number>`cast(count(*) as integer)`,
     })
     .from(entities)
-    .where(and(entityScope, isNull(entities.deletedAt)))
+    // THE listing rule: counts leave probe and demo (sample-project) rows out.
+    .where(and(entityScope, isNull(entities.deletedAt), listableEntityWhere()))
     .groupBy(entities.type);
 
   const counts: Record<string, number> = {};
@@ -601,7 +606,9 @@ export async function countEntitiesByProfile(opts: {
     .where(
       and(
         isNull(entityFacets.deletedAt),
-        ...facetVisibilityConditions(facetVisibilityScope)
+        ...facetVisibilityConditions(facetVisibilityScope),
+        // Same listing rule for the role half (its FROM is not `entities`).
+        not(inArray(entityFacets.entityId, unlistableEntityIds()))
       )
     )
     .groupBy(profiles.slug);

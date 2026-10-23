@@ -81,6 +81,8 @@ import {
   workspaceMembers,
   userResourceState,
   projects,
+  relations,
+  links,
   proposals,
   profiles,
   focusSessions,
@@ -186,6 +188,10 @@ beforeAll(async () => {
     workspaceMembers,
     userResourceState,
     projects,
+    // The listing rule (`listableEntityWhere`) reads project filings
+    // (`relations`) and project subjects (`links`).
+    relations,
+    links,
     proposals,
     profiles,
     focusSessions,

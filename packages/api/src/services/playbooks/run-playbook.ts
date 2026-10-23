@@ -56,6 +56,10 @@ import {
 } from "@synap/database/schema";
 import { enrollRoomMember } from "../messaging/enroll-room-member.js";
 import { notifySessionNeedsYou } from "../focus-sessions/notify-needs-you.js";
+import {
+  HELD_RUN_META_KEY,
+  mergeSessionMetadata,
+} from "../focus-sessions/session-metadata.js";
 import type {
   ChannelSpec,
   RunResult,
@@ -195,7 +199,14 @@ export interface RunPlaybookInput {
    * `gateAgentHandOff` — refused here rather than laundered. Absent ⇒ unchanged.
    */
   handToAgentId?: string | null;
-  /** AI attribution — when set, the run is owned by the agent-user. */
+  /**
+   * The agent that STARTED this run directly (no proposal). The run is still
+   * the PERSON's (`userId`): the agent rides first on the roster and the
+   * session waits as a triage DRAFT (`origin: "agent"`) for the person to
+   * accept, like every agent-started session (`draft-asks.ts`, B6 2026-10-21).
+   * An APPROVED run passes no `agentUserId` — the approval was the acceptance
+   * — and carries the asker in `agentIds` instead (`executors/playbook.ts`).
+   */
   agentUserId?: string;
   /**
    * Idempotency by subject: when true AND `subjectId` is set, reuse the existing
@@ -321,6 +332,12 @@ type PlaybookRunStarted = {
   parentLink?:
     | { status: "linked"; parentSessionId: string }
     | { status: "failed"; parentSessionId: string; reason: string };
+  /**
+   * An agent started this run directly: the draft session exists, but the run
+   * is HELD — no run row, nothing dispatched — until the person accepts the
+   * draft (B6; {@link startHeldRun}). `run` is null.
+   */
+  held?: true;
   /** Present only on the no-subject branch, so both union members share the key. */
   skipped?: undefined;
 };
@@ -344,6 +361,7 @@ export type RunPlaybookResult =
         | WorkerSkipReason;
       reused?: undefined;
       parentLink?: undefined;
+      held?: undefined;
     };
 
 /**
@@ -680,6 +698,7 @@ async function choosePinnedSubject(
       workspaceId: input.workspaceId,
       ownerId: input.userId,
       fallback: strategy.fallback,
+      projectId: input.projectId ?? null,
     });
   }
   return decidePinnedSubject({
@@ -1009,16 +1028,24 @@ async function executeSingleRun(
   handOff?: RunHandOff | null
 ): Promise<RunPlaybookResult> {
   const db = await getDb();
-  // A handed run's roster carries the agent it is handed to, from birth.
-  const agentIds = handOff
-    ? [...new Set([...(input.agentIds ?? []), handOff.agentUserId])]
+  // The owning principal is ALWAYS the person. An agent-started run used to be
+  // owned by the agent user, and session reads are owner-only, so the person
+  // could not see it at all and the agent key (which reads as its person)
+  // could not read it either (live 2026-10-20: `sessionPrivate: true`). The
+  // agent that started it is the first on the roster — the starter every
+  // surface names (`attachSessionParticipants`) — and the run waits as a draft.
+  const actorId = input.userId;
+  const startedByAgent = !!input.agentUserId;
+  const startRoster = input.agentUserId
+    ? [
+        input.agentUserId,
+        ...(input.agentIds ?? []).filter((id) => id !== input.agentUserId),
+      ]
     : input.agentIds;
-  // A handed run is an external agent's: the playbook's own executor (the
-  // built-in AI for `is-agent` / `hybrid`) must not ALSO take it.
-  const executorRef = handOff ? ("external-agent" as const) : playbook.executor;
-
-  // The owning principal: agent-user when an AI runs it, else the human.
-  const actorId = input.agentUserId ?? input.userId;
+  // A handed run's roster carries the agent it is handed to, from birth.
+  const rosterAgentIds = handOff
+    ? [...new Set([...(startRoster ?? []), handOff.agentUserId])]
+    : startRoster;
 
   // 0. Idempotency by subject — if a NON-TERMINAL session for this playbook +
   // subject already exists, REUSE it rather than starting a duplicate. This makes
@@ -1113,7 +1140,11 @@ async function executeSingleRun(
     ...(input.onMissingRequired
       ? { onMissingRequired: input.onMissingRequired }
       : {}),
-    agentIds,
+    agentIds: rosterAgentIds,
+    // A run an agent started on its own is a DRAFT until the person accepts it
+    // (`triage.ts`: origin agent, no acceptance receipt). Still a `run` by kind
+    // (`playbookId` is set); accepted, it joins the person's work.
+    ...(startedByAgent ? { origin: "agent" as const } : {}),
     subjectId: input.subjectId ?? null,
     projectId: filing.projectId,
     trackId: filing.trackId,
@@ -1157,8 +1188,8 @@ async function executeSingleRun(
   // `owner: "human"`, an unanswered required param on the `owe` path) tells
   // them — once per session window — when nobody is in front of it: an agent
   // started it, or a HEADLESS door did (`owe` is declared exactly for those,
-  // see `RunPlaybookInput.onMissingRequired`). The run is owned by the agent
-  // user, so the PERSON is named as the recipient.
+  // see `RunPlaybookInput.onMissingRequired`). The PERSON owns the run and is
+  // the recipient.
   if (session) {
     await notifySessionNeedsYou({
       sessionId: session.id,
@@ -1170,9 +1201,9 @@ async function executeSingleRun(
 
   // Lineage: the session this run was started FROM. AFTER the row exists and
   // outside any transaction — a bad parent handle must never cost the run. The
-  // owner floor is the HUMAN principal (`input.userId`), not `actorId`: an
-  // agent-started run's session is owned by the agent user, while the session
-  // the agent was working in belongs to the person.
+  // owner floor is the HUMAN principal (`input.userId`) — the run's owner too
+  // since B6 (2026-10-21), and the owner of the session the agent was working
+  // in.
   let parentLink: PlaybookRunStarted["parentLink"];
   if (input.parentSessionId && session) {
     try {
@@ -1252,7 +1283,7 @@ async function executeSingleRun(
         role: ChannelMemberRole.OWNER,
         addedBy: actorId,
       });
-      for (const agentId of new Set(agentIds ?? [])) {
+      for (const agentId of new Set(rosterAgentIds ?? [])) {
         if (!agentId || agentId === actorId) continue;
         await enrollRoomMember(db, {
           channelId: created.id,
@@ -1270,12 +1301,118 @@ async function executeSingleRun(
     .set({ channelId: channel.id })
     .where(eq(focusSessions.id, session.id));
 
+  // B6 (founder default, FB1020 wave-2 fix round): a run an agent started
+  // on its own does NOT execute until the person accepts the draft. No run row
+  // exists and nothing is dispatched yet: what to dispatch is HELD on the
+  // session (`metadata.heldRun`, server-owned), and the ONE acceptance door
+  // (`acceptFromTriage`) starts it through {@link startHeldRun}. Discarding
+  // the draft cancels the session, so a held run never runs.
+  if (startedByAgent) {
+    const held: HeldRun = {
+      params,
+      agentType: input.agentType ?? null,
+      heldAt: new Date().toISOString(),
+    };
+    const [heldSession] = await db
+      .update(focusSessions)
+      .set({ metadata: mergeSessionMetadata({ [HELD_RUN_META_KEY]: held }) })
+      .where(eq(focusSessions.id, session.id))
+      .returning();
+    return {
+      run: null,
+      session: heldSession as FocusSession,
+      held: true,
+      ...(parentLink ? { parentLink } : {}),
+    };
+  }
+
+  const updated = await dispatchRunOnSession({
+    playbook,
+    sessionId: session.id,
+    channelId: channel.id,
+    actorId,
+    workspaceId: input.workspaceId,
+    params,
+    subjectId: input.subjectId ?? null,
+    agentType: input.agentType ?? null,
+    handOff: handOff ?? null,
+  });
+
+  // Re-load the session so the returned row reflects the wired channelId.
+  const refreshed = (await db.query.focusSessions.findFirst({
+    where: eq(focusSessions.id, session.id),
+  })) as FocusSession;
+
+  return {
+    run: updated,
+    session: refreshed,
+    ...(parentLink ? { parentLink } : {}),
+  };
+}
+
+/** `metadata.heldRun` — an agent-started run waiting for the person (B6). */
+interface HeldRun {
+  /** The resolved params the run was started with. */
+  params: Record<string, unknown>;
+  /** The agent selector the run was asked with. */
+  agentType: string | null;
+  heldAt: string;
+}
+
+function readHeldRun(metadata: unknown): HeldRun | null {
+  const raw =
+    metadata && typeof metadata === "object"
+      ? (metadata as Record<string, unknown>)[HELD_RUN_META_KEY]
+      : undefined;
+  if (!raw || typeof raw !== "object") return null;
+  const h = raw as Partial<HeldRun>;
+  return {
+    params:
+      h.params && typeof h.params === "object" && !Array.isArray(h.params)
+        ? (h.params as Record<string, unknown>)
+        : {},
+    agentType: typeof h.agentType === "string" ? h.agentType : null,
+    heldAt: typeof h.heldAt === "string" ? h.heldAt : "",
+  };
+}
+
+/**
+ * Steps 4–6 of a run, on a session whose channel is wired: the run ledger row,
+ * the subject's enrollment, the granted capabilities, the executor dispatch and
+ * the ONE result write. Shared by a run that starts at once
+ * ({@link executeSingleRun}) and a held run the person just accepted
+ * ({@link startHeldRun}) — one dispatch path, never two.
+ */
+async function dispatchRunOnSession(p: {
+  playbook: Playbook;
+  sessionId: string;
+  channelId: string;
+  actorId: string;
+  /** NULL = a pod-wide run (the run row stores NULL, never ""). */
+  workspaceId: string | null;
+  params: Record<string, unknown>;
+  subjectId: string | null;
+  agentType: string | null;
+  /** The agent this run is HANDED to (`RunPlaybookInput.handToAgentId`); a held run has none. */
+  handOff?: RunHandOff | null;
+}): Promise<PlaybookRun> {
+  const db = await getDb();
+  const { playbook, actorId, params } = p;
+  const handOff = p.handOff ?? null;
+  // A handed run is an external agent's: the playbook's own executor (the
+  // built-in AI for `is-agent` / `hybrid`) must not ALSO take it.
+  const executorRef = handOff ? ("external-agent" as const) : playbook.executor;
+  const session = (await db.query.focusSessions.findFirst({
+    where: eq(focusSessions.id, p.sessionId),
+  })) as FocusSession;
+  const subjectId = p.subjectId ?? undefined;
+
   // 4. Insert the run ledger row (status "running"). Snapshot the resolved
   // definition (D3c) so "what ran" survives later edits to the playbook config.
   const [run] = await db
     .insert(playbookRuns)
     .values({
-      workspaceId: input.workspaceId,
+      workspaceId: p.workspaceId,
       playbookId: playbook.id,
       sessionId: session.id,
       executor: executorRef,
@@ -1294,13 +1431,13 @@ async function executeSingleRun(
   // enrollment failure must never fail the run.
   const stages = (playbook.stages as PlaybookStage[]) ?? [];
   const firstStageKey = stages[0]?.key ?? null;
-  if (input.subjectId && stages.length > 0) {
+  if (subjectId && stages.length > 0) {
     try {
       await db
         .insert(playbookEnrollments)
         .values({
           playbookId: playbook.id,
-          entityId: input.subjectId,
+          entityId: subjectId,
           status: "active",
           stepState: firstStageKey ? { currentStep: firstStageKey } : {},
         })
@@ -1313,7 +1450,7 @@ async function executeSingleRun(
         });
     } catch (err) {
       logger.warn(
-        { err, playbookId: playbook.id, entityId: input.subjectId },
+        { err, playbookId: playbook.id, entityId: subjectId },
         "playbook run: enrollment upsert failed (non-fatal)"
       );
     }
@@ -1332,10 +1469,10 @@ async function executeSingleRun(
   // by the caller (resolveVisibleSubjectId) before this runs.
   let subjectName: string | undefined;
   let subjectProfile: string | undefined;
-  if (input.subjectId) {
+  if (subjectId) {
     const subj = await db.query.entities.findFirst({
       columns: { title: true, type: true },
-      where: eq(entities.id, input.subjectId),
+      where: eq(entities.id, subjectId),
     });
     subjectName = subj?.title ?? undefined;
     subjectProfile = subj?.type ?? undefined;
@@ -1351,18 +1488,18 @@ async function executeSingleRun(
       handOff?.reach === "pull"
         ? { status: "running" }
         : await resolveExecutor(executorRef).run({
-            workspaceId: input.workspaceId,
+            workspaceId: p.workspaceId ?? "",
             userId: actorId,
             playbookId: playbook.id,
             sessionId: session.id,
-            channelId: channel.id,
+            channelId: p.channelId,
             // The agent's INSTRUCTION, not the row's title. `session.goal` is now
             // "<playbook> for <subject>" (a label every list renders); the rendered
             // goalTemplate lives on `metadata.prompt`. `runPromptFor` falls back to
             // `goal` so a session created before that split still dispatches its
             // paragraph unchanged.
             goal: runPromptFor(session),
-            subjectId: input.subjectId,
+            subjectId: subjectId,
             subjectName,
             subjectProfile,
             // First-class stages: the playbook's declared stages + the session's active
@@ -1370,7 +1507,7 @@ async function executeSingleRun(
             stages: (playbook.stages as PlaybookStage[]) ?? [],
             currentStage: session.currentStage,
             // Agent selector — forwarded verbatim; the executor validates it.
-            agentType: input.agentType ?? null,
+            agentType: p.agentType,
             // Thread the run id so an external agent knows which run to capture back
             // against (POST /api/hub/runs/{runId}/capture).
             // A dispatch hand-off names its agent: the executor's selector param.
@@ -1383,7 +1520,7 @@ async function executeSingleRun(
           });
   } catch (err) {
     logger.error(
-      { err, sessionId: session.id, channelId: channel.id },
+      { err, sessionId: session.id, channelId: p.channelId },
       "Executor run failed"
     );
 
@@ -1395,18 +1532,60 @@ async function executeSingleRun(
 
   // 6. Record the result on the run row (the ONE writer, shared with the
   //    re-dispatch after "Choose an agent" is answered).
-  const updated = await recordExecutorResult(run.id, result);
+  return recordExecutorResult(run.id, result);
+}
 
-  // Re-load the session so the returned row reflects the wired channelId.
-  const refreshed = (await db.query.focusSessions.findFirst({
-    where: eq(focusSessions.id, session.id),
-  })) as FocusSession;
-
-  return {
-    run: updated,
-    session: refreshed,
-    ...(parentLink ? { parentLink } : {}),
-  };
+/**
+ * The person accepted an agent's draft run (`acceptFromTriage`): dispatch the
+ * run that was held for exactly this, through the same path a run that starts
+ * at once takes. CLAIMED: the hold is removed in one conditional write before
+ * anything is dispatched, so a second acceptance (or a retry) finds nothing to
+ * start. A session that holds no run (a person's own session, any other
+ * draft) is `nothing_held` and nothing is written.
+ */
+export async function startHeldRun(
+  sessionId: string
+): Promise<
+  { status: "started"; run: PlaybookRun } | { status: "nothing_held" }
+> {
+  const db = await getDb();
+  const session = (await db.query.focusSessions.findFirst({
+    where: eq(focusSessions.id, sessionId),
+  })) as FocusSession | undefined;
+  const held = session ? readHeldRun(session.metadata) : null;
+  if (!session || !held || !session.playbookId || !session.channelId) {
+    return { status: "nothing_held" };
+  }
+  // Resolved BEFORE the claim: a playbook that can no longer be resolved
+  // throws here and the hold stays, readable, instead of vanishing unrun.
+  const playbook = await resolveRunnablePlaybook({
+    playbookId: session.playbookId,
+    workspaceId: session.workspaceId ?? "",
+  });
+  const [claimed] = await db
+    .update(focusSessions)
+    .set({
+      metadata: drizzleSql`${focusSessions.metadata} - ${HELD_RUN_META_KEY}::text`,
+    })
+    .where(
+      and(
+        eq(focusSessions.id, session.id),
+        drizzleSql`(${focusSessions.metadata} -> ${HELD_RUN_META_KEY}::text) IS NOT NULL`
+      )
+    )
+    .returning({ id: focusSessions.id });
+  if (!claimed) return { status: "nothing_held" };
+  const run = await dispatchRunOnSession({
+    playbook,
+    sessionId: session.id,
+    channelId: session.channelId,
+    actorId: session.userId,
+    workspaceId: session.workspaceId ?? null,
+    params: held.params,
+    subjectId: session.subjectEntityId ?? null,
+    agentType: held.agentType,
+  });
+  return { status: "started", run };
 }
 
 /** What a per_moment run carries into {@link executeSingleRun}. */
@@ -1486,6 +1665,9 @@ export async function gateWorkerRun(
       workspaceId: input.workspaceId,
       limit: 1,
       onlyIds: [input.subjectId],
+      // "Is THIS subject still in the status?" is a by-id question: a demo
+      // subject of a demo-scoped rule must not read as gone (M9).
+      byId: true,
     });
     if (still.items.length === 0) return WORKER_SKIP_REASONS.staleTransition;
   }

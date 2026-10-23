@@ -18,7 +18,10 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { ask } from "../services/knowledge/index.js";
-import { synthesizeAnswer } from "../services/knowledge/synthesize.js";
+import {
+  ASK_DETAILS,
+  synthesizeAnswer,
+} from "../services/knowledge/synthesize.js";
 // ONE lens + catalog resolution shared with the Hub and MCP answer doors — so
 // `search` and `answer` here, and every other door, agree on what a caller may
 // see AND on the vocabulary a pod-wide question is type-inferred against.
@@ -86,6 +89,8 @@ export const knowledgeRouter = router({
         /** Lens — narrows recall. Null/absent = pod-wide (caller's floor). */
         workspaceId: z.string().uuid().nullable().optional(),
         limit: z.number().min(1).max(100).optional(),
+        /** sources | brief | full (default) — see `AskDetail`. */
+        detail: z.enum(ASK_DETAILS).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -114,11 +119,14 @@ export const knowledgeRouter = router({
         // Degradation must reach the prose on EVERY door, not just one —
         // a parameter with a single producer is the severance this repo keeps
         // re-finding.
-        result.degraded ?? []
+        result.degraded ?? [],
+        input.detail
       );
 
       return {
         answer: synthesis.answer,
+        /** Which answer this is (sources | brief | full); absent on failure. */
+        detail: synthesis.detail,
         sources: synthesis.sources,
         routedTo: synthesis.routedTo,
         /** True when retrieval succeeded but synthesis did not. */

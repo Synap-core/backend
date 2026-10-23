@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ReceiverShell } from "../../_lib/receiver-shell";
+import { CopyButton } from "../../_lib/copy-button";
 import { Button, CardBody, Input, Tab, Tabs } from "@heroui/react";
 import { AlertCircle, CheckCircle2, LogIn, UserPlus } from "lucide-react";
 import {
@@ -10,6 +11,8 @@ import {
   extractInitialValues,
   FLOW_RESET_ERROR_IDS,
   mergeHiddenValues,
+  passwordLoginBody,
+  signOutInPlace,
   submitLoginFlow,
   whoami,
   type KratosFlow,
@@ -17,6 +20,21 @@ import {
 } from "../../../lib/kratos-flow";
 import { trpc, POD_URL } from "../../../lib/trpc";
 import { formatRelative, formatTimestamp } from "../../../lib/format";
+import { pairExit } from "../../../lib/open-in";
+import {
+  externalProps,
+  PlacedFallback,
+  usePlacedExit,
+} from "../../../lib/exit-link";
+import {
+  acceptInviteRefusal,
+  createAccountRefusal,
+  inviteLine,
+  inviteTitle,
+  joinedHeadline,
+  type AcceptRefusal,
+  type InviteSubject,
+} from "./invite-outcome";
 
 type InvitePreview =
   | {
@@ -30,17 +48,39 @@ type InvitePreview =
     }
   | { expired: true };
 
+type OpenInvite = Extract<InvitePreview, { expired: false }>;
+
 type PageState =
   | { status: "loading" }
-  | { status: "error"; message: string }
+  | { status: "error" }
   | { status: "not-found" }
   | { status: "expired" }
   | {
       status: "ready";
-      preview: Extract<InvitePreview, { expired: false }>;
+      preview: OpenInvite;
       session: KratosSession | null;
     }
-  | { status: "done" };
+  /**
+   * Joined. `signedIn`: this browser holds a pod session (sign-in path, or the
+   * new account's automatic sign-in worked), so the console is one click away.
+   */
+  | {
+      status: "done";
+      subject: InviteSubject;
+      email: string;
+      signedIn: boolean;
+    };
+
+type AcceptTab = "register" | "login";
+
+/** The pod's own host (the API), not the console host this page is served on. */
+function podApiHost(): string | undefined {
+  try {
+    return POD_URL ? new URL(POD_URL).host : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function AcceptForm({
   token,
@@ -50,25 +90,67 @@ export function AcceptForm({
   podHost?: string;
 }) {
   const [state, setState] = useState<PageState>({ status: "loading" });
+  const [tab, setTab] = useState<AcceptTab>("register");
+  // Set when "Create account" found an account for this email already: the
+  // person is moved to "Sign in" and told why.
+  const [accountExists, setAccountExists] = useState(false);
+  // What failed and can be retried in place (the terminal refusals change the
+  // page state instead).
+  const [acceptError, setAcceptError] = useState<string | null>(null);
 
   const previewQuery = trpc.workspaces.previewInvite.useQuery(
     { token },
     { retry: 1, staleTime: Infinity }
   );
 
-  const acceptMutation = trpc.workspaces.acceptInvite.useMutation({
-    onSuccess: () => {
-      window.location.assign("/");
-    },
-  });
+  const acceptMutation = trpc.workspaces.acceptInvite.useMutation();
 
-  const onLoginSuccess = useCallback(async () => {
-    try {
-      await acceptMutation.mutateAsync({ token });
-    } catch {
-      // error shown via acceptMutation.error
-    }
-  }, [acceptMutation, token]);
+  const done = useCallback((preview: OpenInvite, signedIn: boolean) => {
+    setState({
+      status: "done",
+      subject: preview,
+      email: preview.email,
+      signedIn,
+    });
+  }, []);
+
+  /** One place a refusal becomes what the page shows. */
+  const refuse = useCallback(
+    async (refusal: AcceptRefusal, preview: OpenInvite) => {
+      switch (refusal.kind) {
+        case "not-found":
+          setState({ status: "not-found" });
+          return;
+        case "expired":
+          setState({ status: "expired" });
+          return;
+        case "wrong-account":
+          setState({ status: "ready", preview, session: await whoami() });
+          return;
+        case "account-exists":
+          setAccountExists(true);
+          setTab("login");
+          return;
+        case "retry":
+          setAcceptError(refusal.message);
+          return;
+      }
+    },
+    []
+  );
+
+  const accept = useCallback(
+    async (preview: OpenInvite) => {
+      setAcceptError(null);
+      try {
+        await acceptMutation.mutateAsync({ token });
+        done(preview, true);
+      } catch (err) {
+        await refuse(acceptInviteRefusal(err), preview);
+      }
+    },
+    [acceptMutation, token, done, refuse]
+  );
 
   // Called by LoginPanel when it discovers an existing Kratos session during
   // flow init — bypasses AcceptForm's whoami() which may have returned null on
@@ -85,10 +167,7 @@ export function AcceptForm({
     if (previewQuery.isLoading) return;
     void (async () => {
       if (previewQuery.isError) {
-        setState({
-          status: "error",
-          message: previewQuery.error?.message ?? "Could not load invite.",
-        });
+        setState({ status: "error" });
         return;
       }
       const preview = previewQuery.data;
@@ -103,12 +182,7 @@ export function AcceptForm({
       const session = await whoami();
       setState({ status: "ready", preview, session });
     })();
-  }, [
-    previewQuery.isLoading,
-    previewQuery.isError,
-    previewQuery.error,
-    previewQuery.data,
-  ]);
+  }, [previewQuery.isLoading, previewQuery.isError, previewQuery.data]);
 
   if (state.status === "loading")
     return (
@@ -120,7 +194,6 @@ export function AcceptForm({
     return (
       <Shell podHost={podHost}>
         <ErrorBody
-          message={state.message}
           onRetry={() => {
             setState({ status: "loading" });
             void previewQuery.refetch();
@@ -143,53 +216,61 @@ export function AcceptForm({
   if (state.status === "done")
     return (
       <Shell podHost={podHost}>
-        <DoneBody />
+        <DoneBody
+          subject={state.subject}
+          email={state.email}
+          signedIn={state.signedIn}
+        />
       </Shell>
     );
 
   const { preview, session } = state;
 
-  // Logged-in but wrong account
-  if (
-    session &&
-    session.identity.traits?.email?.toLowerCase() !==
-      preview.email.toLowerCase()
-  ) {
+  // Signed in, but as someone the invite does not name.
+  const sessionEmail = session?.identity.traits?.email;
+  if (session && sessionEmail?.toLowerCase() !== preview.email.toLowerCase()) {
     return (
       <Shell podHost={podHost}>
-        <WrongAccountBody inviteEmail={preview.email} />
+        <WrongAccountBody
+          inviteEmail={preview.email}
+          signedInAs={sessionEmail}
+          onSignedOut={() =>
+            setState({ status: "ready", preview, session: null })
+          }
+        />
       </Shell>
     );
   }
 
-  // Logged-in + email matches → one-click accept
+  // Signed in as the invited person → one-click accept
   if (session) {
     return (
       <Shell podHost={podHost}>
         <InviteHeader preview={preview} />
-        {acceptMutation.error ? (
-          <ErrorBanner message={acceptMutation.error.message} />
-        ) : null}
+        {acceptError ? <ErrorBanner message={acceptError} /> : null}
         <Button
           color="primary"
           radius="md"
           size="md"
           isLoading={acceptMutation.isPending}
-          onPress={() => acceptMutation.mutate({ token })}
+          onPress={() => void accept(preview)}
         >
-          Accept invite
+          Accept and join
         </Button>
       </Shell>
     );
   }
 
-  // Not logged in → register or sign in
+  // Not signed in → create an account or sign in
+  const returnHere = `/invite/${encodeURIComponent(token)}`;
   return (
     <Shell podHost={podHost}>
       <InviteHeader preview={preview} />
       <Tabs
-        aria-label="Accept options"
+        aria-label="How to accept"
         variant="underlined"
+        selectedKey={tab}
+        onSelectionChange={(key) => setTab(key as AcceptTab)}
         classNames={{
           base: "w-full",
           tabList: "gap-4 border-b border-foreground/[0.08] pb-0",
@@ -207,16 +288,8 @@ export function AcceptForm({
           <RegisterPanel
             token={token}
             inviteEmail={preview.email}
-            onSuccess={() => {
-              const crmUrl = process.env.NEXT_PUBLIC_CRM_URL;
-              if (crmUrl) {
-                window.location.assign(
-                  `${crmUrl}/login?podUrl=${encodeURIComponent(POD_URL)}`
-                );
-              } else {
-                window.location.assign("/login?return=/");
-              }
-            }}
+            onSuccess={(signedIn) => done(preview, signedIn)}
+            onRefused={(refusal) => void refuse(refusal, preview)}
           />
         </Tab>
         <Tab
@@ -228,11 +301,28 @@ export function AcceptForm({
             </span>
           }
         >
+          {accountExists ? (
+            <p
+              role="status"
+              className="mt-4 text-[13px] leading-relaxed text-foreground/70"
+            >
+              This pod already has an account for this email. Sign in with it to
+              join. Forgot the password?{" "}
+              <a
+                href={`/recovery?return=${encodeURIComponent(returnHere)}`}
+                className="text-foreground/85 underline underline-offset-2"
+              >
+                Reset it
+              </a>
+              .
+            </p>
+          ) : null}
           <LoginPanel
             inviteEmail={preview.email}
-            onSuccess={onLoginSuccess}
+            focusPassword={accountExists}
+            onSuccess={() => accept(preview)}
             onSessionDetected={onSessionDetected}
-            acceptError={acceptMutation.error?.message ?? null}
+            acceptError={acceptError}
             isAccepting={acceptMutation.isPending}
           />
         </Tab>
@@ -243,14 +333,49 @@ export function AcceptForm({
 
 // ─── Register panel ──────────────────────────────────────────────────────────
 
+/**
+ * Sign the new account in, so the done screen can open the console as them.
+ * `passwordLoginBody` posts only the hidden fields + the password method.
+ * `false` when it did not work: the account exists and the invite
+ * is accepted either way, the person signs in later.
+ */
+async function signInNewAccount(
+  identifier: string,
+  password: string
+): Promise<boolean> {
+  try {
+    const started = await createLoginFlow();
+    // A session already in this browser counts only if it is this account
+    // (an inviter testing their own invite is signed in as themselves).
+    if (started.existingSession) {
+      const held = started.existingSession.identity.traits?.email;
+      return held?.toLowerCase() === identifier.toLowerCase();
+    }
+    if (!started.flow) return false;
+    const r = await submitLoginFlow(
+      started.flow,
+      passwordLoginBody(started.flow, identifier, password)
+    );
+    return Boolean(r.session);
+  } catch {
+    return false;
+  }
+}
+
+/** The pod's own rule (`/setup/accept-invite`), said before it is broken. */
+const MIN_PASSWORD = 8;
+
 function RegisterPanel({
   token,
   inviteEmail,
   onSuccess,
+  onRefused,
 }: {
   token: string;
   inviteEmail: string;
-  onSuccess: () => void;
+  /** `signedIn`: the new account's automatic sign-in worked. */
+  onSuccess: (signedIn: boolean) => void;
+  onRefused: (refusal: AcceptRefusal) => void;
 }) {
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -262,8 +387,9 @@ function RegisterPanel({
       e.preventDefault();
       setError(null);
       setSubmitting(true);
+      let res: Response;
       try {
-        const res = await fetch(`${POD_URL}/api/hub/setup/accept-invite`, {
+        res = await fetch(`${POD_URL}/api/hub/setup/accept-invite`, {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
@@ -274,23 +400,39 @@ function RegisterPanel({
             inviteToken: token,
           }),
         });
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
+      } catch {
+        const refusal = createAccountRefusal(null, null);
+        if (refusal.kind === "retry") setError(refusal.message);
+        setSubmitting(false);
+        return;
+      }
+      try {
         if (!res.ok) {
-          setError(data.error ?? `Failed (${res.status})`);
+          const body = (await res.json().catch(() => null)) as {
+            error?: string;
+            code?: string;
+          } | null;
+          const refusal = createAccountRefusal(res.status, body);
+          if (refusal.kind === "retry") setError(refusal.message);
+          else onRefused(refusal);
           return;
         }
-        onSuccess();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Request failed");
+        onSuccess(await signInNewAccount(inviteEmail, password));
       } finally {
         setSubmitting(false);
       }
     },
-    [inviteEmail, password, name, token, onSuccess]
+    [inviteEmail, password, name, token, onSuccess, onRefused]
   );
 
   return (
     <form className="mt-4 flex flex-col gap-4" onSubmit={onSubmit}>
+      {/* Honest about what this makes (2026-10-21): an account on THIS pod
+          with its own password. Joining with a Synap Cloud account is not
+          offered to invitees yet. */}
+      <p className="text-[13px] leading-relaxed text-foreground/70">
+        This makes your account on this pod, with its own password.
+      </p>
       {error ? <ErrorBanner message={error} /> : null}
       <Input
         label="Email"
@@ -304,7 +446,7 @@ function RegisterPanel({
         classNames={{ input: "text-foreground/65" }}
       />
       <Input
-        label="Display name"
+        label="Display name (optional)"
         labelPlacement="outside"
         type="text"
         placeholder="Jane Smith"
@@ -322,6 +464,7 @@ function RegisterPanel({
         value={password}
         onValueChange={setPassword}
         autoComplete="new-password"
+        description={`At least ${MIN_PASSWORD} characters.`}
         isRequired
         size="sm"
         radius="md"
@@ -333,9 +476,9 @@ function RegisterPanel({
         radius="md"
         size="md"
         isLoading={submitting}
-        isDisabled={!password}
+        isDisabled={password.length < MIN_PASSWORD}
       >
-        {submitting ? "Creating account…" : "Create account & accept"}
+        {submitting ? "Creating account…" : "Create account and join"}
       </Button>
     </form>
   );
@@ -343,14 +486,20 @@ function RegisterPanel({
 
 // ─── Login panel ─────────────────────────────────────────────────────────────
 
+const SIGN_IN_UNREACHABLE =
+  "We could not reach this pod's sign-in. Check your connection and try again.";
+
 function LoginPanel({
   inviteEmail,
+  focusPassword,
   onSuccess,
   onSessionDetected,
   acceptError,
   isAccepting,
 }: {
   inviteEmail: string;
+  /** Put the cursor in the password (the person was just sent here). */
+  focusPassword: boolean;
   onSuccess: () => Promise<void>;
   onSessionDetected: (session: KratosSession) => void;
   acceptError: string | null;
@@ -381,11 +530,8 @@ function LoginPanel({
         };
         setFlow(r.flow);
         setValues(initial);
-      } catch (err) {
-        if (!cancelled)
-          setError(
-            err instanceof Error ? err.message : "Failed to load sign-in"
-          );
+      } catch {
+        if (!cancelled) setError(SIGN_IN_UNREACHABLE);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -402,7 +548,10 @@ function LoginPanel({
       setSubmitting(true);
       setError(null);
       try {
-        const r = await submitLoginFlow(flow, values);
+        const r = await submitLoginFlow(
+          flow,
+          passwordLoginBody(flow, inviteEmail, values["password"] ?? "")
+        );
         if (r.session) {
           await onSuccess();
           return;
@@ -431,15 +580,18 @@ function LoginPanel({
             }
             return;
           }
-          setError(r.structuralError.message ?? "Sign-in failed.");
+          setError(
+            r.structuralError.message ??
+              "Signing in did not work. Check your password and try again."
+          );
         }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Sign-in failed");
+      } catch {
+        setError(SIGN_IN_UNREACHABLE);
       } finally {
         setSubmitting(false);
       }
     },
-    [flow, values, onSuccess]
+    [flow, values, inviteEmail, onSuccess]
   );
 
   if (loading) {
@@ -471,26 +623,12 @@ function LoginPanel({
         value={values["password"] ?? ""}
         onValueChange={(v) => setValues((p) => ({ ...p, password: v }))}
         autoComplete="current-password"
+        autoFocus={focusPassword}
         isRequired
         size="sm"
         radius="md"
         variant="flat"
       />
-      {/* hidden fields (CSRF token, etc.) */}
-      {flow?.ui.nodes
-        .filter((n) => n.attributes?.type === "hidden")
-        .map((n, i) => {
-          const name = n.attributes?.name as string;
-          return (
-            <input
-              key={`h-${i}`}
-              type="hidden"
-              name={name}
-              value={values[name] ?? ""}
-              readOnly
-            />
-          );
-        })}
       <Button
         type="submit"
         color="primary"
@@ -502,8 +640,8 @@ function LoginPanel({
         {submitting
           ? "Signing in…"
           : isAccepting
-            ? "Accepting invite…"
-            : "Sign in & accept"}
+            ? "Joining…"
+            : "Sign in and join"}
       </Button>
     </form>
   );
@@ -529,34 +667,21 @@ function Shell({
   );
 }
 
-function InviteHeader({
-  preview,
-}: {
-  preview: Extract<InvitePreview, { expired: false }>;
-}) {
-  const scope =
-    preview.type === "workspace" && preview.workspaceName
-      ? `workspace "${preview.workspaceName}"`
-      : "this pod";
+function InviteHeader({ preview }: { preview: OpenInvite }) {
   return (
     <>
       <span
         aria-hidden
-        className="glass-icon flex h-12 w-12 items-center justify-center self-start"
-        style={{ background: "rgba(99, 102, 241, 0.18)" }}
+        className="glass-icon flex h-12 w-12 items-center justify-center self-start bg-primary/15"
       >
         <UserPlus className="h-5 w-5 text-foreground/85" strokeWidth={2} />
       </span>
       <div className="flex flex-col gap-1.5">
         <h1 className="font-heading text-[20px] font-medium tracking-tight text-foreground">
-          You've been invited
+          {inviteTitle(preview)}
         </h1>
         <p className="text-[13.5px] leading-relaxed text-foreground/65">
-          <span className="text-foreground/85 font-medium">
-            {preview.inviterName}
-          </span>{" "}
-          invited you to join {scope} as{" "}
-          <span className="text-foreground/85">{preview.role}</span>.
+          {inviteLine(preview)}
         </p>
         <InviteExpiry expiresAt={preview.expiresAt} />
       </div>
@@ -592,7 +717,10 @@ function InviteExpiry({ expiresAt }: { expiresAt: Date | string }) {
 
 function ErrorBanner({ message }: { message: string }) {
   return (
-    <div className="flex items-start gap-2 rounded-medium bg-danger/10 p-3 text-[13px] text-danger ring-1 ring-inset ring-danger/30">
+    <div
+      role="alert"
+      className="flex items-start gap-2 rounded-medium bg-danger/10 p-3 text-[13px] text-danger ring-1 ring-inset ring-danger/30"
+    >
       <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
       <span>{message}</span>
     </div>
@@ -611,21 +739,17 @@ function LoadingBody() {
   );
 }
 
-function ErrorBody({
-  message,
-  onRetry,
-}: {
-  message: string;
-  onRetry: () => void;
-}) {
+function ErrorBody({ onRetry }: { onRetry: () => void }) {
   return (
     <>
       <AlertCircle className="h-10 w-10 text-warning" />
       <div className="flex flex-col gap-1.5">
         <h1 className="font-heading text-[20px] font-medium text-foreground">
-          Something went wrong
+          We could not load this invitation
         </h1>
-        <p className="text-[13.5px] text-foreground/65">{message}</p>
+        <p className="text-[13.5px] text-foreground/65">
+          This pod did not answer. Check your connection and try again.
+        </p>
       </div>
       <Button size="sm" variant="flat" radius="md" onPress={onRetry}>
         Try again
@@ -640,10 +764,11 @@ function NotFoundBody() {
       <AlertCircle className="h-10 w-10 text-foreground/30" />
       <div className="flex flex-col gap-1.5">
         <h1 className="font-heading text-[20px] font-medium text-foreground">
-          Invite not found
+          This invitation is no longer valid
         </h1>
         <p className="text-[13.5px] text-foreground/65">
-          This invite link is invalid or has already been used.
+          It was already used or withdrawn. Ask the person who invited you to
+          send a new one.
         </p>
       </div>
     </>
@@ -656,44 +781,170 @@ function ExpiredBody() {
       <AlertCircle className="h-10 w-10 text-foreground/30" />
       <div className="flex flex-col gap-1.5">
         <h1 className="font-heading text-[20px] font-medium text-foreground">
-          Invite expired
+          This invitation has expired
         </h1>
         <p className="text-[13.5px] text-foreground/65">
-          This invite link has expired. Ask the pod admin to send a new one.
+          Ask the person who invited you to send a new one.
         </p>
       </div>
     </>
   );
 }
 
-function DoneBody() {
+/**
+ * Joined. One primary: "Open in Synap" (`pairExit`: the app opens THIS pod's
+ * sign-in with the email filled in; a hint, never a secret), with the device's
+ * install hatch beside it. Focus moves to the headline so a screen reader
+ * hears the outcome.
+ */
+function DoneBody({
+  subject,
+  email,
+  signedIn,
+}: {
+  subject: InviteSubject;
+  email: string;
+  signedIn: boolean;
+}) {
+  const exit = pairExit(POD_URL, email);
+  const host = podApiHost();
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    heading.current?.focus();
+  }, []);
   return (
     <>
-      <CheckCircle2 className="h-10 w-10 text-success" />
+      <CheckCircle2 aria-hidden className="h-10 w-10 text-success" />
       <div className="flex flex-col gap-1.5">
-        <h1 className="font-heading text-[20px] font-medium text-foreground">
-          Invite accepted
+        <h1
+          ref={heading}
+          tabIndex={-1}
+          className="font-heading text-[20px] font-medium text-foreground outline-none"
+        >
+          {joinedHeadline(subject, host)}
         </h1>
-        <p className="text-[13.5px] text-foreground/65">Redirecting…</p>
+        <p className="text-[13.5px] leading-relaxed text-foreground/65">
+          {exit ? "In the Synap app, sign" : "Sign"} in to {host ?? "this pod"}{" "}
+          as <span className="font-medium text-foreground/85">{email}</span>{" "}
+          with this pod&apos;s password.
+        </p>
       </div>
+      {exit ? <OpenInSynap exit={exit} /> : null}
+      {POD_URL ? <PodAddress origin={new URL(POD_URL).origin} /> : null}
+      <a
+        href={signedIn ? "/" : "/login?return=/"}
+        className="inline-flex min-h-10 items-center self-start text-[13px] text-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
+      >
+        {signedIn ? "Open this pod's console" : "Sign in to this pod's console"}
+      </a>
     </>
   );
 }
 
-function WrongAccountBody({ inviteEmail }: { inviteEmail: string }) {
+/**
+ * The pod's address, to paste where the app asks for it: an installed app
+ * that predates `synap://pair` opens without it, and a phone without the app
+ * needs it once installed.
+ */
+function PodAddress({ origin }: { origin: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-[12.5px] text-foreground/65">
+        If the app asks for this pod&apos;s address:
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="break-all font-mono text-[12px] leading-5 text-foreground/85">
+          {origin}
+        </span>
+        <CopyButton
+          text={origin}
+          label="Copy"
+          variant="light"
+          ariaLabel="Copy this pod's address"
+        />
+      </div>
+    </div>
+  );
+}
+
+function OpenInSynap({
+  exit,
+}: {
+  exit: NonNullable<ReturnType<typeof pairExit>>;
+}) {
+  const placed = usePlacedExit(exit);
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+      {placed.href !== null ? (
+        <Button
+          as="a"
+          href={placed.href}
+          {...externalProps(placed.href)}
+          color="primary"
+          radius="md"
+          size="md"
+        >
+          Open in Synap
+        </Button>
+      ) : null}
+      <PlacedFallback placed={placed} />
+    </div>
+  );
+}
+
+function WrongAccountBody({
+  inviteEmail,
+  signedInAs,
+  onSignedOut,
+}: {
+  inviteEmail: string;
+  signedInAs?: string;
+  onSignedOut: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const signOut = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await signOutInPlace();
+      onSignedOut();
+    } catch {
+      setError("We could not sign you out. Try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <>
       <AlertCircle className="h-10 w-10 text-warning" />
       <div className="flex flex-col gap-1.5">
         <h1 className="font-heading text-[20px] font-medium text-foreground">
-          Wrong account
+          This invitation is for {inviteEmail}
         </h1>
         <p className="text-[13.5px] text-foreground/65">
-          This invite is for{" "}
-          <span className="font-medium text-foreground/85">{inviteEmail}</span>.
-          Sign out and sign in with that account to accept it.
+          {signedInAs ? (
+            <>
+              You are signed in as{" "}
+              <span className="font-medium text-foreground/85">
+                {signedInAs}
+              </span>
+              .{" "}
+            </>
+          ) : null}
+          Sign out to join as {inviteEmail}.
         </p>
       </div>
+      {error ? <ErrorBanner message={error} /> : null}
+      <Button
+        color="primary"
+        radius="md"
+        size="md"
+        isLoading={busy}
+        onPress={() => void signOut()}
+      >
+        Sign out and continue
+      </Button>
     </>
   );
 }

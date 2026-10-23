@@ -12,7 +12,9 @@
  *      while that is still in its window. A KEY-scoped client (option A: the
  *      door knows no conversation) only ever gets the key's auto-opened one.
  *   3. UNCLAIMED — exactly ONE open WORK session that no client has claimed (a
- *      session the person opened). More than one ⇒ NO guess. SKIPPED for a
+ *      session the person opened) and that was TOUCHED in the last
+ *      {@link UNCLAIMED_TOUCHED_WITHIN_HOURS} hours. More than one ⇒ NO guess,
+ *      and the caller is told the exact number. SKIPPED for a
  *      key-scoped client: with no conversation to tell callers apart, every
  *      conversation on the key would land in it (option A = named or own
  *      auto-opened only).
@@ -40,6 +42,7 @@ import {
   findClientSession,
   getRequestClientKey,
   clientKeyScope,
+  sessionLastActivitySql,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
@@ -54,6 +57,11 @@ export interface WorkSessionResolution {
   source: WorkSessionSource;
   /** `client` only: the gate auto-opened it (not started by the client). */
   autoOpened?: boolean;
+  /**
+   * `client` + auto-opened only: the receipt's project (its key half, B4). The
+   * gate files a write of ANOTHER project under that project's receipt.
+   */
+  receiptProjectId?: string | null;
   /**
    * Open UNCLAIMED work sessions counted on rung 3. `null` = not counted (an
    * earlier rung answered, or the read failed — a failed read is not zero).
@@ -106,6 +114,32 @@ async function checkOwnership(
   }
 }
 
+/**
+ * How recently a session must have been touched to count as one the person is
+ * working in (B4 2026-10-21). The pile of open sessions nobody closed (93 on
+ * the founder's pod, 30 untouched for days) made every write say "several
+ * sessions are open" — a number that meant nothing. "Touched" is the receipt
+ * window's own definition (`sessionLastActivitySql`).
+ */
+export const UNCLAIMED_TOUCHED_WITHIN_HOURS = 24;
+
+/** The rung-3 population: open, unclaimed WORK sessions touched recently. */
+function unclaimedOpenWorkWhere(userId: string) {
+  return and(
+    eq(focusSessions.userId, userId),
+    // `scheduled` is a future appointment, never where a present write goes.
+    inArray(
+      focusSessions.status,
+      OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
+    ),
+    // A session the PERSON is in — `work`, plus a work session they
+    // later attached to a playbook (which reads `run` by design).
+    ambientWorkWhere(),
+    drizzleSql`${focusSessions.metadata} ->> 'clientKey' IS NULL`,
+    drizzleSql`${sessionLastActivitySql()} > now() - (${UNCLAIMED_TOUCHED_WITHIN_HOURS}::int * interval '1 hour')`
+  );
+}
+
 /** Open sessions the person is in, unclaimed (newest first, at most `limit`). */
 export async function listUnclaimedOpenWorkSessions(
   userId: string,
@@ -115,25 +149,25 @@ export async function listUnclaimedOpenWorkSessions(
     db
       .select({ id: focusSessions.id })
       .from(focusSessions)
-      .where(
-        and(
-          eq(focusSessions.userId, userId),
-          // `scheduled` is a future appointment, never where a present write goes.
-          inArray(
-            focusSessions.status,
-            OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
-          ),
-          // A session the PERSON is in — `work`, plus a work session they
-          // later attached to a playbook (which reads `run` by design).
-          ambientWorkWhere(),
-          drizzleSql`${focusSessions.metadata} ->> 'clientKey' IS NULL`
-        )
-      )
+      .where(unclaimedOpenWorkWhere(userId))
       // SESSION-KIND-LENS-EXEMPT: an attribution resolver, not a list door — it
       // NARROWS via `ambientWorkWhere` above and returns ids only.
       .orderBy(desc(focusSessions.startedAt))
       .limit(limit)
   );
+}
+
+/** How many of them there are — exact, never capped (ui-composition §11). */
+export async function countUnclaimedOpenWorkSessions(
+  userId: string
+): Promise<number> {
+  const [row] = await db
+    .select({ n: drizzleSql<number>`count(*)::int` })
+    .from(focusSessions)
+    // SESSION-KIND-LENS-EXEMPT: a count for the attribution note, same rung-3
+    // population as the list above.
+    .where(unclaimedOpenWorkWhere(userId));
+  return Number(row?.n);
 }
 
 export async function resolveWorkSession(
@@ -171,6 +205,7 @@ export async function resolveWorkSession(
           sessionId: bound.id,
           source: "client",
           autoOpened: bound.autoOpened,
+          ...(bound.autoOpened ? { receiptProjectId: bound.projectId } : {}),
           unclaimedOpenCount: null,
         };
       }
@@ -190,8 +225,16 @@ export async function resolveWorkSession(
   }
 
   let unclaimed: Array<{ id: string }>;
+  let unclaimedCount: number;
   try {
-    unclaimed = await listUnclaimedOpenWorkSessions(input.userId, 10);
+    // Two are enough to tell "exactly one" from "several"; the count of
+    // several is read exactly, never stopped at a page size (it used to print
+    // "10 of your sessions" for 27).
+    unclaimed = await listUnclaimedOpenWorkSessions(input.userId, 2);
+    unclaimedCount =
+      unclaimed.length > 1
+        ? await countUnclaimedOpenWorkSessions(input.userId)
+        : unclaimed.length;
   } catch (err) {
     logger.warn({ err, userId: input.userId }, "open session read failed");
     return { source: "none", unclaimedOpenCount: null };
@@ -205,9 +248,9 @@ export async function resolveWorkSession(
   }
   if (unclaimed.length > 1) {
     logger.info(
-      { userId: input.userId, openCount: unclaimed.length },
+      { userId: input.userId, openCount: unclaimedCount },
       "several open work sessions and none bound to this client — not guessing"
     );
   }
-  return { source: "none", unclaimedOpenCount: unclaimed.length };
+  return { source: "none", unclaimedOpenCount: unclaimedCount };
 }

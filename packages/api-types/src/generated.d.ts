@@ -6057,10 +6057,18 @@ export interface EntityPropertyDiff {
 	/** Changed keys that did not exist before the merge. */
 	absentBefore: string[];
 	/**
-	 * Body document the merge linked onto an entity that had none. Revert
-	 * unlinks it only while the entity still points at it.
+	 * Body document the write linked onto the entity. Revert takes it off only
+	 * while the entity still points at it.
 	 */
 	bodyDocumentId?: string;
+	/**
+	 * The body the write REPLACED or unlinked (decision B9g), `null` when the
+	 * entity had none. Present only when an update changed the body link; revert
+	 * puts it back while the entity still points at what the write left
+	 * (`bodyDocumentId`, or no body). Absent on a merge record, which only ever
+	 * links onto an entity with no body.
+	 */
+	bodyDocumentIdBefore?: string | null;
 	/**
 	 * Keys the write REMOVED (an update's `deleteProperties`). Their prior value
 	 * is in `before`; revert restores one only while it is still absent.
@@ -6132,11 +6140,17 @@ export type RevertTarget = {
 	key: string;
 	kind: "property";
 }
-/** A body document a merge linked onto an entity that had none. */
+/**
+ * A body-link change: `documentId` is what the write left (null = it
+ * unlinked the body), `previousDocumentId` what it replaced (absent/null =
+ * the entity had none — the merge case). Revert puts `previousDocumentId`
+ * back only while the entity still points at `documentId` (B9g).
+ */
  | {
-	documentId: string;
+	documentId: string | null;
 	entityId: string;
 	kind: "entity_body";
+	previousDocumentId?: string | null;
 }
 /**
  * Config columns an `update_*` op (a Library rebuild) rewrote on a row it
@@ -6750,6 +6764,55 @@ export interface GovernanceRuleDraft {
 	targetProfile?: string;
 	verdict: "auto";
 	sourceProposalId: string;
+}
+/**
+ * - `clear`     — the door looked and found nothing.
+ * - `possible`  — at least one candidate; the write is filed for review.
+ * - `unchecked` — the lookup FAILED, or could not look at everything (the
+ *                 caller's pending queue is longer than the scan). Never
+ *                 folded into `clear`: an empty result and a failed or
+ *                 partial read are different facts.
+ */
+export type DuplicateCheckStatus = "clear" | "possible" | "unchecked";
+/** What the door compared. `kind` is a schema definition (a profile). */
+export type DuplicateSubjectType = "entity" | "kind" | "playbook" | "project";
+/**
+ * WHY a candidate matched — a closed set, so a renderer words it from the
+ * one vocabulary instead of string-matching prose.
+ *  - `same_identity` — a strong identity atom (email, phone, url, handle,
+ *                      external id) the door could not merge onto;
+ *  - `same_name`     — the same normalized name, same kind;
+ *  - `similar_name`  — near-identical name tokens (projects only, today).
+ */
+export type DuplicateMatchReason = "same_identity" | "same_name" | "similar_name";
+export interface DuplicateCandidate {
+	/** A live record, or a pending proposal that would create one. */
+	ref: "proposal" | "record";
+	/** The record's id (entity / playbook / project / profile) or the proposal id. */
+	id: string;
+	/** The candidate's kind: an entity's profile slug, or the subject type. */
+	kind: string;
+	title: string | null;
+	why: DuplicateMatchReason;
+	/** Capture graphs only: the op `ref` of the proposed item this candidate is for. */
+	forRef?: string;
+	/** Capture graphs only: that proposed item's title. */
+	forTitle?: string;
+	/**
+	 * The candidate record is DEMO data (it sits only in sample projects).
+	 * Founder default 1 (FB1020): a strong identity match on demo data is never
+	 * merged silently — it is listed here, marked, for a person to decide; a
+	 * renderer shows a "Sample" mark so "use existing" never puts real work on
+	 * a row every list hides.
+	 */
+	sample?: true;
+}
+export interface DuplicateCheck {
+	status: DuplicateCheckStatus;
+	subject: DuplicateSubjectType;
+	candidates: DuplicateCandidate[];
+	/** True when an item matched more candidates than {@link DUPLICATE_CHECK_MAX_CANDIDATES}. */
+	truncated?: boolean;
 }
 declare const PROPOSAL_SOURCES: readonly [
 	"user",
@@ -9138,36 +9201,6 @@ export interface PlanStepSummary {
 	/** A skill step's slug — the ref `synap_load_skill` resolves. */
 	slug?: string;
 }
-/** A create_entity op inside a pending proposal that collided on a strong signal. */
-export interface PendingSignalMatch {
-	proposalId: string;
-	proposalType: string;
-	summary?: string;
-	/** The pending op's stable ref, if it had one. */
-	entityRef?: string;
-	/** The pending op's title (what the reviewer sees). */
-	entityTitle?: string;
-	profileSlug?: string;
-	/** The normalized strong signal(s) that matched (email/phone/url/handle/…). */
-	matchedSignals: Array<{
-		type: string;
-		value: string;
-	}>;
-}
-/** A pending capture op whose text matched a recall query. NOT a fact — pending. */
-export interface PendingTextMatch {
-	proposalId: string;
-	proposalType: string;
-	/** The proposal's human summary (what the reviewer sees), when present. */
-	summary?: string;
-	/** The best-matching create_entity op's title (the representative entity). */
-	entityTitle?: string;
-	profileSlug?: string;
-	/** Clickable review link — approve/reject to make it real. `${PUBLIC_URL}/open/<id>`. */
-	reviewUrl: string;
-	/** Distinct query terms matched — the rank score (higher = closer). */
-	score: number;
-}
 export interface StoredCaptureScope {
 	workspaceId: string | null;
 	projectId: string | null;
@@ -9266,33 +9299,20 @@ export interface SubmitCaptureGraphResult {
 	 */
 	modeledFields?: CaptureGraphModeledFields;
 	/**
-	 * ADVISORY in-flight-duplicate warnings: incoming graph entities whose STRONG
-	 * signal (email/phone/url/handle) collides with a create_entity op in the
-	 * caller's OWN pending capture/import proposal. NEVER auto-linked — a pending
-	 * proposal can still be rejected, so linking to it would stale-suppress a real
-	 * write. Surfaced so the caller/agent can wait for review instead of filing a
-	 * second copy. Omitted when nothing collides.
+	 * The duplicate door's answer for this graph (B2), each candidate tagged
+	 * with the item it is for (`forRef`/`forTitle`): a same-kind record or one
+	 * of the caller's own pending creates with the same name or strong identity.
+	 * NEVER auto-linked (only a strong identity on a record links). An agent's
+	 * graph with a `possible` twin is filed for review (POSSIBLE_DUPLICATE).
+	 * Omitted when the door found nothing (`clear`).
 	 */
-	pendingDuplicateCandidates?: Array<{
-		matches: PendingSignalMatch[];
-		/** The incoming graph entity ref that collided. */
-		ref: string;
-		title: string;
-	}>;
-	/**
-	 * A `projectName` that matched no project of the caller (piece D). Advisory
-	 * only — surfaced so the caller can confirm/create it; NEVER auto-linked.
-	 */
-	projectCandidate?: {
-		name: string;
-	};
+	duplicateCheck?: DuplicateCheck;
 	/**
 	 * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
-	 * membership, `not_linked` (+reason `project-name-unmatched` for a name-ref
-	 * that matched nothing) so a requested project that did NOT link is NAMED,
-	 * never a silent success. Omitted when no project was requested. A dead UUID
-	 * pin never gets here: the whole capture is refused
-	 * (`CaptureProjectNotFoundError`).
+	 * membership. Omitted when no project was requested. Neither a dead UUID
+	 * pin nor an unmatched project NAME gets here: the whole capture is refused
+	 * (`CaptureProjectNotFoundError`), so this core no longer produces
+	 * `not_linked`; the member stays because the receipt type is shared.
 	 */
 	project?: {
 		projectId: string;
@@ -9977,7 +9997,8 @@ declare const BLOCKED_REASONS: readonly [
 export type BlockedReason = (typeof BLOCKED_REASONS)[number];
 declare const OUTPUT_RETIRED_REASONS: readonly [
 	"session_cancelled",
-	"decision_resolved"
+	"decision_resolved",
+	"withdrawn"
 ];
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
 declare const OUTPUT_REF_KINDS: readonly [
@@ -12448,6 +12469,23 @@ export interface AppSignInDescription {
 	expiresInDays: number;
 }
 /**
+ * What a POD APP's consent screen says about who its token acts as
+ * (`podAppActsAs`), every word from here — the screen writes none of it.
+ *  - `person` (a Synap app): `lead` + the spaces the person ticks IS the grant
+ *    the token will carry ("Content Studio will act as you in: Content OS,
+ *    Ecosystem."); `note` says how a write lands and what it cannot do,
+ *    derived from the permissions the app asked for.
+ *  - `agent` (any other app): the ask-first sentence, unchanged.
+ */
+export type PodAppActsAsDescription = {
+	kind: "person";
+	lead: string;
+	note: string;
+} | {
+	kind: "agent";
+	note: string;
+};
+/**
  * What a POD APP (CIMD client) is shown as on the consent screen (spec 17
  * §9.1). Its identity is its DOMAIN (the client_id host), not its name.
  */
@@ -12456,6 +12494,12 @@ export interface OAuthAppConsent {
 	domain: string;
 	/** "Synap app" (exact first-party origin, `isSynapApp`) vs "Unverified app". */
 	verified: boolean;
+	/**
+	 * Who its token will act as, and the words for it (`describePodAppActsAs`):
+	 * a Synap app acts AS THE PERSON ("<app> will act as you in: <the spaces
+	 * ticked>"); every other app is its own agent, every change for review.
+	 */
+	actsAs: PodAppActsAsDescription;
 	/** The document's `client_uri` (same origin as the client_id), or null. */
 	homepage: string | null;
 	/**
@@ -12861,6 +12905,20 @@ export interface ExecutionStats {
 	avgDurationMs?: number;
 	toolCallCount?: number;
 	[key: string]: unknown;
+}
+/** A pending capture op whose text matched a recall query. NOT a fact — pending. */
+export interface PendingTextMatch {
+	proposalId: string;
+	proposalType: string;
+	/** The proposal's human summary (what the reviewer sees), when present. */
+	summary?: string;
+	/** The best-matching create_entity op's title (the representative entity). */
+	entityTitle?: string;
+	profileSlug?: string;
+	/** Clickable review link — approve/reject to make it real. `${PUBLIC_URL}/open/<id>`. */
+	reviewUrl: string;
+	/** Distinct query terms matched — the rank score (higher = closer). */
+	score: number;
 }
 export interface PropertyHint {
 	/** Token(s) to match against an entity's serialized properties. */
@@ -14312,6 +14370,12 @@ export interface ShareListing {
 	 * so there is no single number; ask the anchor listing of each project.
 	 */
 	guestCount: number | null;
+	/**
+	 * Does this pod hand out a page people read a publication on
+	 * (`SYNAP_SHARE_PAGE_URL`)? False = a publication has only its developer
+	 * address, so a surface must not promise a page.
+	 */
+	publicPage: boolean;
 	/** True when any list hit {@link LIST_SHARES_CAP}. */
 	truncated: boolean;
 }
@@ -14942,6 +15006,15 @@ export interface ArchivedAutomationRef {
 	id: string;
 	name: string;
 }
+export type InviteAccepted = {
+	status: "accepted";
+	type: "workspace";
+	workspaceId: string;
+} | {
+	status: "accepted";
+	type: "pod";
+	workspacesJoined: number;
+};
 /**
  * Standard paginated response envelope.
  */
@@ -14971,6 +15044,11 @@ export type PublishResult = {
 } | {
 	/** False after an agent's approved publish: the owner publishes again to mint it. */
 	hasToken: boolean;
+	/**
+	 * The page a person opens for it (`SYNAP_SHARE_PAGE_URL` + `/d/<token>`),
+	 * with the token, so present ONCE too — and only when the pod has a page.
+	 */
+	pageUrl?: string;
 	pinned: boolean;
 	publishedAt: Date;
 	/** The keys the snapshot actually holds. */
@@ -28145,6 +28223,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentUserId?: string | undefined;
+				approvalDuplicate?: "ask_reviewer" | "keep_both" | undefined;
+				approvalReviewedTwinIds?: string[] | undefined;
 				content?: string | undefined;
 				description?: string | undefined;
 				documentId?: string | undefined;
@@ -28156,7 +28236,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					properties?: Record<string, unknown> | undefined;
 					status?: string | undefined;
 				}[] | undefined;
-				forceCreate?: boolean | undefined;
 				global?: boolean | undefined;
 				profileId?: string | undefined;
 				profileSlug?: string | undefined;
@@ -28257,6 +28336,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					after: Record<string, unknown>;
 					before: Record<string, unknown>;
 					bodyDocumentId?: string;
+					bodyDocumentIdBefore?: string | null;
 					entityId: string;
 					fields?: {
 						after: Partial<Record<EntityDiffField, string | null>>;
@@ -28310,6 +28390,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				ackState?: undefined;
 				deduplicated?: undefined;
 				deferred?: true | undefined;
+				duplicateCheck?: DuplicateCheck | undefined;
 				effectiveWorkspaceId: string | null;
 				entity: Record<string, unknown> | null;
 				facets: {
@@ -28330,6 +28411,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				ackState?: undefined;
 				deduplicated?: undefined;
+				duplicateCheck?: DuplicateCheck | undefined;
 				entity: {
 					checksum: string | null;
 					createdAt: Date;
@@ -28682,6 +28764,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				limit?: number | undefined;
 				profileSlug?: string | undefined;
+				projectId?: string | undefined;
 				query: string;
 			};
 			meta: object;
@@ -28720,6 +28803,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				limit?: number | undefined;
 				profileSlug?: string | undefined;
+				projectId?: string | undefined;
 				query: string;
 			};
 			meta: object;
@@ -28848,6 +28932,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: string;
 				statusMove?: MoveStatusResult | undefined;
 				written: {
+					documentId: string | null;
 					preview: string | null;
 					properties: unknown;
 					title: string | null;
@@ -29292,9 +29377,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				accepted: false;
 				reason: "not_pending";
-				session?: undefined;
 			} | {
 				accepted: true;
+				heldRun?: {
+					runId: string;
+					status: "started";
+				} | {
+					status: "failed";
+				} | undefined;
 				reason?: undefined;
 				session: {
 					agentIds: string[] | null;
@@ -29961,7 +30051,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					retiredAt?: string | undefined;
-					retiredReason?: "decision_resolved" | "session_cancelled" | undefined;
+					retiredReason?: "decision_resolved" | "session_cancelled" | "withdrawn" | undefined;
 					returnedAt?: string | undefined;
 					returnedReason?: string | undefined;
 					satisfiedByEvidence?: {
@@ -30886,7 +30976,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					retiredAt?: string | undefined;
-					retiredReason?: "decision_resolved" | "session_cancelled" | undefined;
+					retiredReason?: "decision_resolved" | "session_cancelled" | "withdrawn" | undefined;
 					returnedAt?: string | undefined;
 					returnedReason?: string | undefined;
 					satisfiedByEvidence?: {
@@ -31491,6 +31581,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				rungs: NextRungProjection[];
 			};
 		}>;
+		ownOrganiseDefault: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				actions: readonly string[];
+				canManage: boolean;
+				enabled: boolean;
+				ruleId: string | null;
+			};
+		}>;
 		platformDefaults: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			meta: object;
@@ -31604,6 +31704,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 				};
 			};
+		}>;
+		setOwnOrganiseDefault: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+			};
+			meta: object;
+			output: ReversibleDefaultState;
 		}>;
 		setReversibleDefault: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -33945,6 +34052,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		answer: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				detail?: "brief" | "full" | "sources" | undefined;
 				limit?: number | undefined;
 				query: string;
 				workspaceId?: string | null | undefined;
@@ -33953,6 +34061,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				answer: string | null;
 				degraded: DegradedTag[];
+				detail: "brief" | "full" | "sources" | undefined;
 				failureClass: AiFailureClass | undefined;
 				routedTo: string[];
 				sources: SynthesisSource[];
@@ -36500,7 +36609,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
 				}[] | undefined;
-				forceCreate?: boolean | undefined;
 				goalTemplate: string;
 				humanOnlyStatuses?: string[] | undefined;
 				inputStrategy?: Record<string, unknown> | undefined;
@@ -37062,6 +37170,50 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				run: null;
 				session: null;
 				status: "skipped";
+				unenabledSkills?: undefined;
+			} | {
+				enableProposals?: undefined;
+				message: string;
+				parentLink?: {
+					parentSessionId: string;
+					status: "linked";
+				} | {
+					parentSessionId: string;
+					reason: string;
+					status: "failed";
+				} | undefined;
+				proposalId: string | null;
+				run: null;
+				session: {
+					agentIds: string[] | null;
+					channelId: string | null;
+					closedAt: Date | null;
+					correlationId: string | null;
+					createdAt: Date;
+					criteria: unknown;
+					currentStage: string | null;
+					expectedOutputs: unknown;
+					goal: string;
+					id: string;
+					metadata: unknown;
+					origin: "agent" | "automation" | "human" | "playbook" | null;
+					playbookId: string | null;
+					progress: number | null;
+					projectId: string | null;
+					stages: unknown;
+					startedAt: Date;
+					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
+					subjectEntityId: string | null;
+					templateId: string | null;
+					title: string | null;
+					trackId: string | null;
+					trackStage: string | null;
+					updatedAt: Date;
+					userId: string;
+					verificationReport: unknown;
+					workspaceId: string | null;
+				};
+				status: "draft";
 				unenabledSkills?: undefined;
 			} | {
 				enableProposals?: undefined;
@@ -38077,7 +38229,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				defaultValues?: Record<string, unknown> | undefined;
 				displayName: string;
 				entityScope?: "pod" | "workspace" | undefined;
-				forceCreate?: boolean | undefined;
 				parentProfileId?: string | undefined;
 				profileKind?: "kind" | "role" | undefined;
 				reasoning?: string | undefined;
@@ -38891,6 +39042,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: DedupedProjectOutcome | {
+				duplicateCheck?: DuplicateCheck | undefined;
 				projectId: string;
 				proposalId: string;
 				status: string;
@@ -38905,6 +39057,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					name: string;
 					phase: string | null;
+					sample: boolean;
 					settings: unknown;
 					slug: string | null;
 					status: "active" | "archived" | "completed";
@@ -38914,7 +39067,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 				};
 				projectId: string;
-				proposalId?: undefined;
 				status: string;
 				subjectBound?: boolean | undefined;
 				usedWorkspaces?: UsedWorkspaceOutcome[] | undefined;
@@ -38954,6 +39106,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					icon: string | null;
 					id: string;
 					name: string;
+					sample: boolean;
 					status: string;
 				}[];
 			};
@@ -38974,6 +39127,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					name: string;
 					phase: string | null;
+					sample: boolean;
 					settings: unknown;
 					slug: string | null;
 					status: "active" | "archived" | "completed";
@@ -39005,6 +39159,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					phase: string | null;
 					phaseCategory: PlaybookStageCategory;
+					sample: boolean;
 					settings: unknown;
 					slug: string | null;
 					status: "active" | "archived" | "completed";
@@ -39031,6 +39186,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					phase: string | null;
 					phaseCategory: PlaybookStageCategory;
+					sample: boolean;
 					settings: unknown;
 					slug: string | null;
 					status: "active" | "archived" | "completed";
@@ -39100,6 +39256,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name?: string | undefined;
 				phase?: string | null | undefined;
 				reasoning?: string | undefined;
+				sample?: boolean | undefined;
 				settings?: Record<string, unknown> | undefined;
 				status?: "active" | "archived" | "completed" | undefined;
 				subjectEntityId?: string | null | undefined;
@@ -39441,6 +39598,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentActorName?: string;
 				agentName?: string;
 				agentUserId: string | null;
+				apiKeyId: string | null;
 				appId: string | null;
 				appName?: string;
 				approverName?: string;
@@ -39572,6 +39730,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentActorName?: string;
 					agentName?: string;
 					agentUserId: string | null;
+					apiKeyId: string | null;
 					appId: string | null;
 					appName?: string;
 					approverName?: string;
@@ -39657,6 +39816,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentActorName?: string;
 					agentName?: string;
 					agentUserId: string | null;
+					apiKeyId: string | null;
 					appId: string | null;
 					appName?: string;
 					approverName?: string;
@@ -39911,6 +40071,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: RevertTarget["kind"];
 					reason: RevertSkip["reason"];
 				}[] | undefined;
+				success: boolean;
+			} | {
+				alreadyReopened?: undefined;
+				alreadyReverted?: undefined;
+				nothingReverted: boolean;
+				opKey?: undefined;
+				partialFailures: string[];
+				reopened?: undefined;
+				reverted: CompleteMaterializedRecord;
+				revertedAt?: undefined;
+				skipped?: undefined;
 				success: boolean;
 			} | {
 				alreadyReopened?: undefined;
@@ -44345,7 +44516,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 			};
 			meta: object;
-			output: SearchResponse;
+			output: SearchResponse & {
+				hiddenFromListing?: number;
+			};
 		}>;
 		searchCollection: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
@@ -44363,7 +44536,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 			};
 			meta: object;
-			output: SearchResponse;
+			output: SearchResponse & {
+				hiddenFromListing?: number;
+			};
 		}>;
 	}>>;
 	users: import("@trpc/server").TRPCBuiltRouter<{
@@ -45552,17 +45727,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				token: string;
 			};
 			meta: object;
-			output: {
-				status: "accepted";
-				type: "workspace";
-				workspaceId: string;
-				workspacesJoined?: undefined;
-			} | {
-				status: "accepted";
-				type: "pod";
-				workspaceId?: undefined;
-				workspacesJoined: number;
-			};
+			output: InviteAccepted;
 		}>;
 		addMember: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
