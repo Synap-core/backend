@@ -124,6 +124,14 @@ describe("created[].action — one derivation", () => {
       (f) => f.path
     );
     // Self-check: the pattern still sees the one place that may spell it.
-    expect(hits).toEqual(["services/intake/capture-filed-part.ts"]);
+    // The materializer is listed on purpose: it spells `"linked" : "created"`
+    // for its PROGRESS tally (`MaterializeOpOutcome`: created / linked /
+    // failed op counts for a background approval), not a capture row action
+    // (which also has matched / updated). Limit: this file-level list cannot
+    // tell a second capture-action spelling added to that file from the tally.
+    expect(hits).toEqual([
+      "services/intake/capture-filed-part.ts",
+      "utils/materialize-composite.ts",
+    ]);
   });
 });

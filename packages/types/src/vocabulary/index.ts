@@ -811,6 +811,9 @@ const UNCOUNTABLE_NOUNS = new Set([
   "news",
   "advice",
   "analytics",
+  // Same in the plural: "3 Series", never "Serieses" (Content OS's `series`
+  // kind on a pod app's consent screen).
+  "series",
 ]);
 
 /**

@@ -19,6 +19,7 @@
  * behaviour — returns, events, ordering, idempotency — is identical.
  */
 
+import type { ApprovalRunView } from "../../services/proposals/approval-runs.js";
 import { TRPCError } from "@trpc/server";
 import type { ProposalExecutorKey } from "@synap/governance-policy";
 import { createLogger } from "@synap-core/core";
@@ -248,6 +249,15 @@ export interface ProposalExecutorResult {
   identity?: IdentityReceipt;
   /** Composite: one entry per op that ran a resolution, keyed by disposition ref. */
   identities?: Array<IdentityReceipt & { ref: string }>;
+  /**
+   * A LARGE approval handed to the background job (approve door only): the
+   * gates passed and the apply is RUNNING, not done. `approvalRun` is its
+   * progress as of now; poll `proposals.approvalProgress`. `joined` = an
+   * apply of this proposal was already running and this approve joined it.
+   */
+  queued?: true;
+  joined?: boolean;
+  approvalRun?: ApprovalRunView;
 }
 
 export interface ProposalExecutor {
