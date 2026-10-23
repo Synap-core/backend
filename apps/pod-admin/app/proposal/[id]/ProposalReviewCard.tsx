@@ -23,7 +23,7 @@
  * three times, Advanced twice, in one panel.
  */
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Button, Textarea, addToast } from "@heroui/react";
 import {
   AppWindow,
@@ -74,6 +74,17 @@ import {
   type ReviewMark,
 } from "./proposal-review-model";
 import { proposalWhy } from "./proposal-why";
+import {
+  ApprovalProgressLines,
+  showApprovalProgressToast,
+  useApprovalProgress,
+} from "../../_lib/approval-progress/approval-progress-toast";
+import {
+  approvalProgressCopy,
+  isApplying,
+  progressUnavailable,
+  type ApprovalRun,
+} from "../../_lib/approval-progress/approval-progress-model";
 
 /**
  * `pending` and `approval_failed` are the two states a reviewer can still decide;
@@ -441,17 +452,29 @@ function Outcome({ status }: { status: string }) {
 function DecisionButtons({
   proposal: p,
   onDecided,
+  resume = false,
 }: {
   proposal: ProposalReviewData;
   onDecided: () => void;
+  /** A background attempt stopped part-way: approving again finishes it. */
+  resume?: boolean;
 }) {
   const proposalId = p.id;
   const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
 
+  const utils = trpc.useUtils();
   const approve = trpc.proposals.approve.useMutation({
-    onSuccess: () => {
-      addToast({ title: "Proposal approved", color: "success" });
+    onSuccess: (result) => {
+      void utils.proposals.approvalProgress.invalidate({ proposalId });
+      // A LARGE graph is applied in the background: the request returned as
+      // soon as the gates passed, so "approved" would be a lie. The live
+      // toast carries the real count until it finishes or fails.
+      if ((result as { queued?: boolean }).queued) {
+        showApprovalProgressToast(proposalId);
+      } else {
+        addToast({ title: "Proposal approved", color: "success" });
+      }
       onDecided();
     },
     onError: (e) =>
@@ -524,7 +547,7 @@ function DecisionButtons({
         isDisabled={busy}
         onPress={() => approve.mutate({ proposalId })}
       >
-        Approve
+        {resume ? "Resume" : "Approve"}
       </Button>
       <Button
         color="danger"
@@ -537,6 +560,23 @@ function DecisionButtons({
         Reject…
       </Button>
       <AlwaysApproveMenu proposal={p} disabled={busy} onDone={onDecided} />
+    </div>
+  );
+}
+
+/** A background approval, as the decision bar shows it: title + bar + counts. */
+function ApplyingNow({ run }: { run: ApprovalRun }) {
+  const copy = approvalProgressCopy(run);
+  return (
+    <div aria-live="polite" className="flex flex-col gap-1.5">
+      <span
+        className={`text-[14px] font-medium ${
+          copy.tone === "danger" ? "text-danger" : "text-foreground"
+        }`}
+      >
+        {copy.title}
+      </span>
+      <ApprovalProgressLines copy={copy} />
     </div>
   );
 }
@@ -612,6 +652,16 @@ export function ProposalReviewBody({
   });
   const policyMark = governanceMark(p.governanceReason);
   const actionable = isActionable(status);
+  // A large approval applies in the background: while it runs, the bar shows
+  // its progress instead of the verbs, for anyone who opens the proposal.
+  const progress = useApprovalProgress(p.id, actionable);
+  const run = progress.data as ApprovalRun | null | undefined;
+  const applying = actionable && isApplying(run);
+  const stopped =
+    actionable && (run?.state === "failed" || run?.state === "stalled");
+  useEffect(() => {
+    if (applying) showApprovalProgressToast(p.id);
+  }, [applying, p.id]);
   const consequence = approveConsequence(
     (p as { revertable?: boolean | null }).revertable
   );
@@ -703,8 +753,26 @@ export function ProposalReviewBody({
           actionable ? "sticky z-10" : ""
         } ${barClassName}`}
       >
-        {actionable ? (
-          <DecisionButtons proposal={p} onDecided={onDecided} />
+        {applying && run ? (
+          <ApplyingNow run={run} />
+        ) : actionable ? (
+          <>
+            {/* A failed READ of progress is said, never read as "nothing
+                running"; the approve door itself still refuses or joins a
+                run that is in fact applying. */}
+            {progress.isError && (
+              <ApprovalProgressLines
+                copy={progressUnavailable}
+                onRetry={() => void progress.refetch()}
+              />
+            )}
+            {stopped && run && <ApplyingNow run={run} />}
+            <DecisionButtons
+              proposal={p}
+              onDecided={onDecided}
+              resume={stopped}
+            />
+          </>
         ) : (
           <Outcome status={status} />
         )}

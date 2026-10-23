@@ -71,17 +71,20 @@ export function Providers({ children }: { children: ReactNode }) {
       disableTransitionOnChange
     >
       <HeroUIProvider>
-        <ToastProvider
-          placement="bottom-right"
-          toastProps={{
-            timeout: 4000,
-            shouldShowTimeoutProgress: true,
-            variant: "flat",
-            radius: "md",
-          }}
-        />
         <trpc.Provider client={trpcClient} queryClient={queryClient}>
           <QueryClientProvider client={queryClient}>
+            {/* Inside the tRPC + query providers: a toast's content may read
+                the pod (the large-approval toast polls its own progress —
+                app/_lib/approval-progress). */}
+            <ToastProvider
+              placement="bottom-right"
+              toastProps={{
+                timeout: 4000,
+                shouldShowTimeoutProgress: true,
+                variant: "flat",
+                radius: "md",
+              }}
+            />
             {children}
           </QueryClientProvider>
         </trpc.Provider>
