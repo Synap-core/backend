@@ -347,6 +347,16 @@ export function isGoalJudge(
   return track.userId === userId;
 }
 
+/**
+ * WHO OWNS the goal — the person the goal's own news goes to (a blocker of it
+ * ended, its loop stopped and asks) — today: the person who started it
+ * (`project_tracks.user_id`). THE one place this is answered for W4: the
+ * participants wave (W3) swaps it for the goal's owner seat (`goalOwner`).
+ */
+export function goalOwnerId(track: Pick<ProjectTrack, "userId">): string {
+  return track.userId;
+}
+
 // ── derived facts every track read returns ──────────────────────────────────
 
 /** What every track read adds about the goal's content — DERIVED, never stored. */

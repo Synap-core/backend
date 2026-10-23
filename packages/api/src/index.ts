@@ -421,6 +421,9 @@ export { runSessionRecall } from "./services/focus-sessions/session-recall.js";
 // Same close event, different news: the session ENDED with required criteria
 // still unmet. See session-criteria-unmet-reactor.ts.
 export { registerSessionCriteriaUnmetReactor } from "./notifications/session-criteria-unmet-reactor.js";
+// A goal that ENDED (closed or dropped) tells the owners of the sessions and
+// goals that waited on it (W4). See track-blocker-ended-reactor.ts.
+export { registerTrackBlockerEndedReactor } from "./notifications/track-blocker-ended-reactor.js";
 // And the closing report: on the same close event the session document gains
 // its structured Outcome / Definition of done / Produced / Decisions sections.
 export { registerClosingReportReactor } from "./services/session-document/closing-report-reactor.js";
