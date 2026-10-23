@@ -47,6 +47,7 @@ import {
   agentConfigs,
   focusSessions,
   sessionEvaluations,
+  sessionRunners,
   rendererBindings,
   projects,
   projectTracks,
@@ -61,6 +62,7 @@ import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import {
   sessionReadableWhere,
   sessionEvaluationReadableWhere,
+  sessionRunnerReadableWhere,
 } from "./session-visibility.js";
 import { eventVisibleWhere } from "./event-visibility.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
@@ -604,6 +606,22 @@ registerVisibility({
     kind: "custom",
     predicate: (access) =>
       sessionEvaluationReadableWhere({
+        userId: access.userId,
+        lens: access.workspaceLens,
+        roster: access.actor === "operator",
+      }),
+    nullWorkspaceMeans: "ownerPrivate",
+  },
+});
+// A session's runners (0342) — who holds its change-feed wait — are exactly as
+// visible as the session they attach to, through the parent row.
+registerVisibility({
+  table: sessionRunners,
+  query: () => db.query.sessionRunners,
+  rule: {
+    kind: "custom",
+    predicate: (access) =>
+      sessionRunnerReadableWhere({
         userId: access.userId,
         lens: access.workspaceLens,
         roster: access.actor === "operator",
