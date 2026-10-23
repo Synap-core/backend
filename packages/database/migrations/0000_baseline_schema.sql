@@ -155,6 +155,9 @@ ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "token" text;
 ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "invited_by" text;
 ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
 ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
+-- 0353: the token's SHA-256 (hex), the one lookup key (decision B2).
+ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "token_digest" text;
+CREATE UNIQUE INDEX IF NOT EXISTS "invites_token_digest_key" ON "invites" ("token_digest");
 
 -- pod_members — durable pod-membership identity, the singleton-pod peer of
 -- workspace_members (mirrors 0205_pod_members.sql). No pod_id: the pod is a

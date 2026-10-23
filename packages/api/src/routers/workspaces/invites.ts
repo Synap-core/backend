@@ -35,7 +35,6 @@ import {
   readIdentityKeepers,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
-import { randomBytes } from "crypto";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import {
   isPodAdmin,
@@ -43,6 +42,11 @@ import {
 } from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { acceptInviteFor } from "./accept-invite-for.js";
+import {
+  findInviteByToken,
+  inviteTokenColumns,
+  newInviteToken,
+} from "./invite-token.js";
 import { disconnectAllUserConnections } from "../../services/capabilities/capability-nango-sync.js";
 import { kratosAdmin } from "@synap/auth";
 import { config } from "@synap-core/core";
@@ -59,6 +63,41 @@ import {
   sendCpInviteEmail,
   type CpInviteEmailResult,
 } from "./helpers.js";
+
+/**
+ * What a list of pending invites carries: never the link (decision B2: a
+ * link is shown once, at creation; its token is kept only as a digest).
+ */
+const INVITE_LIST_COLUMNS = { token: false, tokenDigest: false } as const;
+
+/** Who may revoke an invite, or mint a new link for it: one rule for both. */
+async function assertCanManageInvite(
+  invite: typeof invites.$inferSelect,
+  userId: string
+): Promise<void> {
+  if (invite.type === "workspace" && invite.workspaceId) {
+    const membership = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.workspaceId, invite.workspaceId),
+        eq(workspaceMembers.userId, userId)
+      ),
+    });
+    if (!membership || !["owner", "admin"].includes(membership.role)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Only owners/admins can manage invites",
+      });
+    }
+  } else {
+    const ownerMembership = await db.query.workspaceMembers.findFirst({
+      where: and(
+        eq(workspaceMembers.userId, userId),
+        eq(workspaceMembers.role, "owner")
+      ),
+    });
+    if (!ownerMembership) throw new TRPCError({ code: "FORBIDDEN" });
+  }
+}
 
 export const inviteProcedures = {
   /**
@@ -494,7 +533,7 @@ export const inviteProcedures = {
       // accept instead (`/setup/accept-invite` answers 409 for an existing
       // identity).
 
-      const token = randomBytes(32).toString("hex");
+      const token = newInviteToken();
       const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
       const [invite] = await db
@@ -504,7 +543,7 @@ export const inviteProcedures = {
           workspaceId: input.type === "workspace" ? input.workspaceId : null,
           email: input.email,
           role: input.role,
-          token,
+          ...inviteTokenColumns(token),
           invitedBy: ctx.userId,
           expiresAt,
         })
@@ -587,6 +626,8 @@ export const inviteProcedures = {
     if (!me?.email) return [];
     return db.query.invites.findMany({
       where: eq(invites.email, me.email.toLowerCase()),
+      // The recipient's own links (the apps accept by token); never a digest.
+      columns: { tokenDigest: false },
       with: { workspace: { columns: { name: true } } },
       orderBy: [desc(invites.createdAt)],
     });
@@ -625,6 +666,9 @@ export const inviteProcedures = {
             eq(invites.workspaceId, input.workspaceId),
             gt(invites.expiresAt, new Date())
           ),
+          // A link is shown once, at creation (decision B2): a list never
+          // carries one; "Copy a new link" is `regenerateInvite`.
+          columns: INVITE_LIST_COLUMNS,
           orderBy: [desc(invites.createdAt)],
         });
       } else {
@@ -641,6 +685,7 @@ export const inviteProcedures = {
             eq(invites.type, "pod"),
             gt(invites.expiresAt, new Date())
           ),
+          columns: INVITE_LIST_COLUMNS,
           orderBy: [desc(invites.createdAt)],
         });
       }
@@ -652,9 +697,7 @@ export const inviteProcedures = {
   acceptInvite: protectedProcedure
     .input(z.object({ token: z.string() }))
     .mutation(async ({ input, ctx }) => {
-      const invite = await db.query.invites.findFirst({
-        where: eq(invites.token, input.token),
-      });
+      const invite = await findInviteByToken(input.token);
       if (!invite)
         throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
       if (invite.expiresAt < new Date())
@@ -692,29 +735,7 @@ export const inviteProcedures = {
       });
       if (!invite)
         throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
-
-      if (invite.type === "workspace" && invite.workspaceId) {
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, invite.workspaceId),
-            eq(workspaceMembers.userId, ctx.userId)
-          ),
-        });
-        if (!membership || !["owner", "admin"].includes(membership.role)) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Only owners/admins can revoke invites",
-          });
-        }
-      } else {
-        const ownerMembership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.userId, ctx.userId),
-            eq(workspaceMembers.role, "owner")
-          ),
-        });
-        if (!ownerMembership) throw new TRPCError({ code: "FORBIDDEN" });
-      }
+      await assertCanManageInvite(invite, ctx.userId);
 
       await db.delete(invites).where(eq(invites.id, input.id));
       void notifyCpInviteLifecycle({
@@ -723,6 +744,69 @@ export const inviteProcedures = {
         actorUserId: ctx.userId,
       });
       return { success: true };
+    }),
+
+  /**
+   * "Copy a new link" (decision B2): the pod keeps only a digest of a link's
+   * token, so an old link cannot be shown again. This revokes the old link
+   * and mints a new one for the same invite (same person, role and space),
+   * valid for a fresh 7 days, and answers its token ONCE.
+   */
+  regenerateInvite: credentialProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .mutation(async ({ input, ctx }) => {
+      const invite = await db.query.invites.findFirst({
+        where: eq(invites.id, input.id),
+      });
+      if (!invite)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
+      await assertCanManageInvite(invite, ctx.userId);
+
+      const token = newInviteToken();
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const [renewed] = await db
+        .update(invites)
+        .set({ ...inviteTokenColumns(token), expiresAt })
+        .where(eq(invites.id, invite.id))
+        .returning({ id: invites.id, expiresAt: invites.expiresAt });
+      if (!renewed)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Invite not found" });
+
+      // The Control Plane keys its copy by token: the old one is revoked
+      // there, the new one synced (no email: the inviter copies the link).
+      void notifyCpInviteLifecycle({
+        inviteToken: invite.token,
+        event: "revoked",
+        actorUserId: ctx.userId,
+      });
+      let workspaceName: string | null = null;
+      if (invite.type === "workspace" && invite.workspaceId) {
+        const ws = await db.query.workspaces.findFirst({
+          where: eq(workspaces.id, invite.workspaceId),
+          columns: { name: true },
+        });
+        workspaceName = ws?.name ?? null;
+      }
+      void notifyCpInviteSync({
+        type: invite.type,
+        inviteToken: token,
+        email: invite.email,
+        role: invite.role,
+        workspaceId: invite.workspaceId,
+        workspaceName,
+        invitedByUserId: ctx.userId,
+        expiresAt,
+      });
+      auditLog({
+        subjectType: "invite",
+        action: "update",
+        phase: "completed",
+        subjectId: invite.id,
+        userId: ctx.userId,
+        workspaceId: invite.workspaceId ?? undefined,
+        data: { type: invite.type, change: "link_regenerated" },
+      });
+      return { id: renewed.id, token, expiresAt: renewed.expiresAt };
     }),
 
   /**
@@ -911,7 +995,6 @@ export const inviteProcedures = {
       type: r.type,
       email: r.email,
       role: r.role,
-      token: r.token,
       workspaceId: r.workspaceId,
       workspaceName: r.workspace?.name ?? null,
       invitedBy: r.invitedBy,
@@ -1123,12 +1206,15 @@ export const inviteProcedures = {
   previewInvite: publicProcedure
     .input(z.object({ token: z.string() }))
     .query(async ({ input }) => {
-      const invite = await db.query.invites.findFirst({
-        where: eq(invites.token, input.token),
-        with: { workspace: { columns: { name: true } } },
-      });
+      const invite = await findInviteByToken(input.token);
       if (!invite) return null;
       if (invite.expiresAt < new Date()) return { expired: true as const };
+      const workspace = invite.workspaceId
+        ? await db.query.workspaces.findFirst({
+            where: eq(workspaces.id, invite.workspaceId),
+            columns: { name: true },
+          })
+        : undefined;
 
       const inviter = await db.query.users.findFirst({
         where: eq(users.id, invite.invitedBy),
@@ -1144,7 +1230,7 @@ export const inviteProcedures = {
         return {
           expired: false as const,
           type: "workspace" as const,
-          workspaceName: invite.workspace?.name ?? "Unknown Workspace",
+          workspaceName: workspace?.name ?? "Unknown Workspace",
           inviterName,
           role: invite.role,
           email: invite.email,

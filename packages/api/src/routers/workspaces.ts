@@ -1281,6 +1281,7 @@ export const workspacesRouter = router({
   listInvites: inviteProcedures.listInvites,
   acceptInvite: inviteProcedures.acceptInvite,
   revokeInvite: inviteProcedures.revokeInvite,
+  regenerateInvite: inviteProcedures.regenerateInvite,
   listPodMembers: inviteProcedures.listPodMembers,
   listAllInvites: inviteProcedures.listAllInvites,
   removeFromPod: inviteProcedures.removeFromPod,
