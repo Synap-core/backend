@@ -248,6 +248,11 @@ beforeAll(async () => {
   await h.client!.exec(M0344);
   await h.client!.exec(M0345);
   await h.client!.exec(M0348);
+  // The edge-uniqueness index the dependency door's insert conflicts on
+  // (`idx_links_unique_edge`) — a reopen writes `new --replaces--> old`.
+  await h.client!.exec(
+    `create unique index if not exists idx_links_unique_edge on links (from_type, from_id, to_type, to_id, link_type)`
+  );
 
   for (const id of [OWNER, JUDGE, STRANGER, STAFFER, DELEGATE]) {
     await q(
