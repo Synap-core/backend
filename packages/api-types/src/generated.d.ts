@@ -9659,6 +9659,117 @@ export interface TrackKpi {
 	/** The user (or agent) id that stated `current`. */
 	updatedBy?: string;
 }
+/** A session's deliverables, counted — the progress rail and the owed badge. */
+export interface DeliverableCounts {
+	/** Stamped done. */
+	done: number;
+	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
+	total: number;
+	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
+	owedByYou: number;
+}
+declare const TRACK_WORK_KINDS: readonly [
+	"project",
+	"flow",
+	"operation",
+	"investigation",
+	"incident",
+	"commission",
+	"pathway"
+];
+export type TrackWorkKind = (typeof TRACK_WORK_KINDS)[number];
+declare const TRACK_UNCERTAINTY_LEVELS: readonly [
+	"clear",
+	"complicated",
+	"complex",
+	"chaotic",
+	"unknown"
+];
+export type TrackUncertainty = (typeof TRACK_UNCERTAINTY_LEVELS)[number];
+declare const CRITERION_CHECK_MEANINGS: readonly [
+	"measured",
+	"judged",
+	"handed_over",
+	"learning",
+	"decided_outside",
+	"certified"
+];
+export type CriterionCheckMeaning = (typeof CRITERION_CHECK_MEANINGS)[number];
+declare const CRITERION_ABOUT: readonly [
+	"result",
+	"method"
+];
+export type CriterionAbout = (typeof CRITERION_ABOUT)[number];
+declare const GOAL_ACCEPTANCE_DECISIONS: readonly [
+	"accepted",
+	"changes_asked",
+	"rejected"
+];
+export type GoalAcceptanceDecision = (typeof GOAL_ACCEPTANCE_DECISIONS)[number];
+declare const GOAL_ACCEPTANCE_STATES: readonly [
+	"waiting",
+	"accepted",
+	"changes_asked",
+	"rejected"
+];
+export type GoalAcceptanceState = (typeof GOAL_ACCEPTANCE_STATES)[number];
+/** The stored record of a judge's decision on one goal criterion. */
+export interface GoalCriterionAcceptance {
+	decision: GoalAcceptanceDecision;
+	/** The person who decided. */
+	by: string;
+	/** ISO-8601. */
+	at: string;
+	/** Why, in words — what to change, or why it was rejected. */
+	note?: string;
+}
+declare const GOAL_CRITERION_MARKS: readonly [
+	"met",
+	"claimed",
+	"under_way",
+	"not_met",
+	"not_started"
+];
+export type GoalCriterionMark = (typeof GOAL_CRITERION_MARKS)[number];
+/**
+ * One goal criterion as every track read returns it (`TrackView.criteria`):
+ * the stored criterion (the session criterion shape), the judge's stored
+ * decision, and the derived state. `mark` is `null` only on a view that could
+ * not read the goal's runs (a write's fallback) — never a guessed
+ * `not_started`.
+ */
+export interface GoalCriterionView {
+	key: string;
+	statement: string;
+	required?: boolean;
+	check: {
+		capability?: string;
+		evidenceKey?: string;
+		hint?: string;
+		kind: EvaluatorKind;
+	};
+	stageKey?: string;
+	checkKind?: CriterionCheckMeaning;
+	about?: CriterionAbout;
+	/** The judge's stored decision — `null` until one is made. */
+	acceptance: GoalCriterionAcceptance | null;
+	mark: GoalCriterionMark | null;
+	acceptanceState: GoalAcceptanceState | null;
+	meaning: CriterionCheckMeaning;
+	currentValue: string | null;
+}
+declare const WAITING_ON_REASONS: readonly [
+	"input",
+	"approval",
+	"access",
+	"another_work",
+	"outside_world"
+];
+export type WaitingOnReason = (typeof WAITING_ON_REASONS)[number];
+export interface WaitingOnMark {
+	reason: WaitingOnReason;
+	count: number;
+}
 /**
  * WHO is asking for access, on an `access-request` row — a pod-level request
  * that is not a proposal: an external service asking to be a TRUSTED ISSUER
@@ -10550,7 +10661,7 @@ declare const CRITERION_CHECK_KINDS: readonly [
 	"human"
 ];
 export type CriterionCheckKind = (typeof CRITERION_CHECK_KINDS)[number];
-declare const CRITERION_CHECK_MEANINGS: readonly [
+declare const CRITERION_CHECK_MEANINGS$1: readonly [
 	"measured",
 	"judged",
 	"handed_over",
@@ -10558,12 +10669,12 @@ declare const CRITERION_CHECK_MEANINGS: readonly [
 	"decided_outside",
 	"certified"
 ];
-export type CriterionCheckMeaning = (typeof CRITERION_CHECK_MEANINGS)[number];
-declare const CRITERION_ABOUT: readonly [
+type CriterionCheckMeaning$1 = (typeof CRITERION_CHECK_MEANINGS$1)[number];
+declare const CRITERION_ABOUT$1: readonly [
 	"result",
 	"method"
 ];
-export type CriterionAbout = (typeof CRITERION_ABOUT)[number];
+type CriterionAbout$1 = (typeof CRITERION_ABOUT$1)[number];
 /**
  * One BINARY, observable acceptance criterion ("Typecheck passes with 0
  * errors"). Stored on `playbooks.criteria`, `PlaybookStage.criteria` and
@@ -10590,9 +10701,9 @@ export interface SessionCriterion {
 	 * R5 — what kind of check this is, in people's words. Absent ⇒ derived
 	 * from `check.kind` (`criterionMeaning`, `@synap-core/types/units`).
 	 */
-	checkKind?: CriterionCheckMeaning;
+	checkKind?: CriterionCheckMeaning$1;
 	/** R7 — about the result (absent = result) or the method. */
-	about?: CriterionAbout;
+	about?: CriterionAbout$1;
 }
 /**
  * The normalized shape the Phase-1 adapters produce from builtin IS tools,
@@ -16557,117 +16668,6 @@ export interface SessionOutputDependencies {
 	/** Sessions waiting on THIS session's outputs (only while it is open). */
 	outputsWaitedOnBy: OutputWaitedOnBy[];
 }
-/** A session's deliverables, counted — the progress rail and the owed badge. */
-export interface DeliverableCounts {
-	/** Stamped done. */
-	done: number;
-	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
-	total: number;
-	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
-	owedByYou: number;
-}
-declare const TRACK_WORK_KINDS: readonly [
-	"project",
-	"flow",
-	"operation",
-	"investigation",
-	"incident",
-	"commission",
-	"pathway"
-];
-export type TrackWorkKind = (typeof TRACK_WORK_KINDS)[number];
-declare const TRACK_UNCERTAINTY_LEVELS: readonly [
-	"clear",
-	"complicated",
-	"complex",
-	"chaotic",
-	"unknown"
-];
-export type TrackUncertainty = (typeof TRACK_UNCERTAINTY_LEVELS)[number];
-declare const CRITERION_CHECK_MEANINGS$1: readonly [
-	"measured",
-	"judged",
-	"handed_over",
-	"learning",
-	"decided_outside",
-	"certified"
-];
-type CriterionCheckMeaning$1 = (typeof CRITERION_CHECK_MEANINGS$1)[number];
-declare const CRITERION_ABOUT$1: readonly [
-	"result",
-	"method"
-];
-type CriterionAbout$1 = (typeof CRITERION_ABOUT$1)[number];
-declare const GOAL_ACCEPTANCE_DECISIONS: readonly [
-	"accepted",
-	"changes_asked",
-	"rejected"
-];
-export type GoalAcceptanceDecision = (typeof GOAL_ACCEPTANCE_DECISIONS)[number];
-declare const GOAL_ACCEPTANCE_STATES: readonly [
-	"waiting",
-	"accepted",
-	"changes_asked",
-	"rejected"
-];
-export type GoalAcceptanceState = (typeof GOAL_ACCEPTANCE_STATES)[number];
-/** The stored record of a judge's decision on one goal criterion. */
-export interface GoalCriterionAcceptance {
-	decision: GoalAcceptanceDecision;
-	/** The person who decided. */
-	by: string;
-	/** ISO-8601. */
-	at: string;
-	/** Why, in words — what to change, or why it was rejected. */
-	note?: string;
-}
-declare const GOAL_CRITERION_MARKS: readonly [
-	"met",
-	"claimed",
-	"under_way",
-	"not_met",
-	"not_started"
-];
-export type GoalCriterionMark = (typeof GOAL_CRITERION_MARKS)[number];
-/**
- * One goal criterion as every track read returns it (`TrackView.criteria`):
- * the stored criterion (the session criterion shape), the judge's stored
- * decision, and the derived state. `mark` is `null` only on a view that could
- * not read the goal's runs (a write's fallback) — never a guessed
- * `not_started`.
- */
-export interface GoalCriterionView {
-	key: string;
-	statement: string;
-	required?: boolean;
-	check: {
-		capability?: string;
-		evidenceKey?: string;
-		hint?: string;
-		kind: EvaluatorKind;
-	};
-	stageKey?: string;
-	checkKind?: CriterionCheckMeaning$1;
-	about?: CriterionAbout$1;
-	/** The judge's stored decision — `null` until one is made. */
-	acceptance: GoalCriterionAcceptance | null;
-	mark: GoalCriterionMark | null;
-	acceptanceState: GoalAcceptanceState | null;
-	meaning: CriterionCheckMeaning$1;
-	currentValue: string | null;
-}
-declare const WAITING_ON_REASONS: readonly [
-	"input",
-	"approval",
-	"access",
-	"another_work",
-	"outside_world"
-];
-export type WaitingOnReason = (typeof WAITING_ON_REASONS)[number];
-export interface WaitingOnMark {
-	reason: WaitingOnReason;
-	count: number;
-}
 /** Doors the event names — each opens that object's own page. */
 export interface TrackHistoryRefs {
 	sessionId?: string;
@@ -17886,7 +17886,7 @@ export interface PlaybookCandidate {
 	reason: string;
 	/** `project` = a method run as a TRACK; `session` = one sitting of work. */
 	scope: PlaybookScope;
-	/** The user noun for that scope ("Track template" / "Work template"). */
+	/** The user noun for that scope ("Goal template" / "Work template"). */
 	templateKind: string;
 }
 /**
@@ -44523,12 +44523,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				cursor?: string | undefined;
 				includeArchived?: boolean | undefined;
-				projectId: string;
+				limit?: number | undefined;
+				projectId?: string | undefined;
 			};
 			meta: object;
 			output: {
 				items: TrackView[];
+				nextCursor: string | null;
 			};
 		}>;
 		reopen: import("@trpc/server").TRPCMutationProcedure<{
