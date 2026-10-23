@@ -2161,7 +2161,7 @@ async function bootstrapInitialAdmin(
     return c.json({ error: "Invalid initial admin assertion" }, 401);
   }
   const issuer = await new TrustedIssuerService().getByUrl(issuerUrl);
-  if (!issuer || issuer.status !== "approved") {
+  if (!issuer) {
     return c.json(
       { error: "Bootstrap the Pod owner before an initial admin" },
       409

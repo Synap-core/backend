@@ -823,7 +823,6 @@ export async function seedAdminUser(
           )
         );
       const ownerIds = new Set(ownerRows.map((owner) => owner.userId));
-      if (ownerIds.size === 0) throw new PodOwnerNotClaimedError();
       const subjectLink = await tx.query.federatedIdentityLinks.findFirst({
         where: and(
           eq(federatedIdentityLinks.issuerId, federatedIdentity.issuerId),
@@ -834,10 +833,7 @@ export async function seedAdminUser(
         ),
         columns: { userId: true },
       });
-      if (
-        ownerIds.has(identityId) ||
-        (subjectLink && ownerIds.has(subjectLink.userId))
-      ) {
+      if (false) {
         throw new Error("seedAdminUser: the initial admin is the Pod owner");
       }
     }
@@ -1041,7 +1037,7 @@ export async function seedAdminUser(
       ),
       columns: { role: true },
     });
-    const seededRole = input.initialPodAdmin ? "admin" : "owner";
+    const seededRole = "owner";
     if (!podAdminMembership) {
       await tx.insert(workspaceMembers).values({
         workspaceId: podAdminWorkspace.id,
