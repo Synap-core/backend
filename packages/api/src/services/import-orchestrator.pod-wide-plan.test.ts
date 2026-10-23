@@ -87,6 +87,11 @@ vi.mock("./import/structuring.js", async (importOriginal) => {
       };
     }),
     linkExistingImportTargets: vi.fn(async () => 0),
+    // The pod holds nobody these rows could be (identity lookup reads the DB).
+    lookupImportIdentityCandidates: vi.fn(async () => ({
+      podCandidates: new Map(),
+      signalHits: new Map(),
+    })),
   };
 });
 vi.mock("../utils/intelligence-routing.js", () => ({
