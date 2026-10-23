@@ -198,17 +198,19 @@ async function suggestionsBySpace(
 }
 
 /**
- * The stored pins minus the goal pins whose goal the person can no longer
- * read (deleted, or its project no longer shared) — the same `project_tracks`
- * rule every track read is floored on, ONE read. A dead goal pin never shows,
- * and never holds one of the week's {@link RAIL_GOAL_PINS_MAX} places.
+ * The goals among `pins` the person can no longer read (deleted, or its
+ * project no longer shared) — the same `project_tracks` rule every track read
+ * is floored on, ONE read. A dead goal pin never shows, and never holds one
+ * of the week's {@link RAIL_GOAL_PINS_MAX} places. Read OUTSIDE the write's
+ * transaction: the row lock is held on its own connection, and only goals
+ * checked here are dropped (a goal pinned meanwhile by another tab stays).
  */
-async function withoutUnreadableGoals(
+async function unreadableGoalIds(
   userId: string,
-  stored: StoredRailPins
-): Promise<StoredRailPins> {
-  const ids = stored.pins.flatMap((p) => (p.trackId ? [p.trackId] : []));
-  if (ids.length === 0) return stored;
+  pins: readonly RailPin[]
+): Promise<Set<string>> {
+  const ids = pins.flatMap((p) => (p.trackId ? [p.trackId] : []));
+  if (ids.length === 0) return new Set();
   const readable = await scopedDb(AccessContext.from({ userId })).findMany<{
     id: string;
   }>(projectTracks, {
@@ -216,10 +218,28 @@ async function withoutUnreadableGoals(
     columns: { id: true },
   });
   const keep = new Set(readable.map((r) => r.id));
+  return new Set(ids.filter((id) => !keep.has(id)));
+}
+
+function withoutGoals(
+  stored: StoredRailPins,
+  drop: ReadonlySet<string>
+): StoredRailPins {
+  if (drop.size === 0) return stored;
   return {
     ...stored,
-    pins: stored.pins.filter((p) => !p.trackId || keep.has(p.trackId)),
+    pins: stored.pins.filter((p) => !p.trackId || !drop.has(p.trackId)),
   };
+}
+
+async function readStoredRow(userId: string): Promise<StoredRailPins> {
+  const [row] = await db
+    .select({ ui: userPreferences.uiPreferences })
+    .from(userPreferences)
+    .where(eq(userPreferences.userId, userId));
+  return readStored(
+    (row?.ui as Record<string, unknown> | undefined)?.[RAIL_PINS_KEY]
+  );
 }
 
 /** Stored pins, then the suggestions of spaces not yet seeded — deduped by key, capped. */
@@ -244,17 +264,11 @@ function effective(
 
 /** THE read: the person's rail pins, template suggestions folded in. Pure. */
 export async function readRailPins(userId: string): Promise<RailPin[]> {
-  const [row] = await db
-    .select({ ui: userPreferences.uiPreferences })
-    .from(userPreferences)
-    .where(eq(userPreferences.userId, userId));
-  const stored = await withoutUnreadableGoals(
-    userId,
-    readStored(
-      (row?.ui as Record<string, unknown> | undefined)?.[RAIL_PINS_KEY]
-    )
+  const stored = await readStoredRow(userId);
+  return effective(
+    withoutGoals(stored, await unreadableGoalIds(userId, stored.pins)),
+    await suggestionsBySpace(userId)
   );
-  return effective(stored, await suggestionsBySpace(userId));
 }
 
 /**
@@ -324,6 +338,10 @@ export async function writeRailPins(
   op: RailPinsOp
 ): Promise<RailPin[]> {
   const suggested = await suggestionsBySpace(userId);
+  const dead = await unreadableGoalIds(
+    userId,
+    (await readStoredRow(userId)).pins
+  );
   return db.transaction(async (tx) => {
     await tx
       .insert(userPreferences)
@@ -335,10 +353,7 @@ export async function writeRailPins(
       .where(eq(userPreferences.userId, userId))
       .for("update");
     const ui = (row?.ui ?? {}) as Record<string, unknown>;
-    const stored = await withoutUnreadableGoals(
-      userId,
-      readStored(ui[RAIL_PINS_KEY])
-    );
+    const stored = withoutGoals(readStored(ui[RAIL_PINS_KEY]), dead);
     let pins = effective(stored, suggested);
 
     if (op.op === "pin") {
