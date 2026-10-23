@@ -806,7 +806,7 @@ function PermissionList({
   onToggle,
   busy,
 }: {
-  permissions: ConsentApp["permissions"];
+  permissions: readonly OfferedPermission[];
   selection: Selection;
   onToggle: (permission: string, workspaceId: string) => void;
   busy: boolean;

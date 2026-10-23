@@ -89,6 +89,14 @@ vi.mock("../../../../lib/trpc", () => ({
         }),
       },
       source: { useQuery: () => ({ data: { targets: TARGETS } }) },
+      approvalProgress: {
+        useQuery: () => ({
+          data: null,
+          isError: false,
+          isFetching: false,
+          refetch() {},
+        }),
+      },
       approve: { useMutation: () => ({ mutate() {}, isPending: false }) },
       reject: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },

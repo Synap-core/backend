@@ -35,7 +35,7 @@
  * was never shown — the plain Approve kept both without asking.
  */
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   Button,
   Popover,
@@ -109,6 +109,17 @@ import {
   type ReviewMark,
 } from "./proposal-review-model";
 import { proposalWhy } from "./proposal-why";
+import {
+  ApprovalProgressLines,
+  showApprovalProgressToast,
+  useApprovalProgress,
+} from "../../_lib/approval-progress/approval-progress-toast";
+import {
+  approvalProgressCopy,
+  isApplying,
+  progressUnavailable,
+  type ApprovalRun,
+} from "../../_lib/approval-progress/approval-progress-model";
 import {
   useProposalDecision,
   type ApproveChoice,
@@ -494,11 +505,14 @@ function DecisionButtons({
   mode,
   undo,
   onDecided,
+  resume = false,
 }: {
   proposal: ProposalReviewData;
   mode: DecisionMode;
   undo: ReviewMark | null;
   onDecided: () => void;
+  /** A background attempt stopped part-way: approving again finishes it. */
+  resume?: boolean;
 }) {
   const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
@@ -595,7 +609,7 @@ function DecisionButtons({
         isDisabled={busy || waiting}
         onPress={() => decision.approve(choice)}
       >
-        Approve
+        {resume ? "Resume" : "Approve"}
       </Button>
       {rejectButton}
       {mode.kind === "plain" && (
@@ -607,6 +621,23 @@ function DecisionButtons({
           Pick the record for each item first.
         </span>
       )}
+    </div>
+  );
+}
+
+/** A background approval, as the decision bar shows it: title + bar + counts. */
+function ApplyingNow({ run }: { run: ApprovalRun }) {
+  const copy = approvalProgressCopy(run);
+  return (
+    <div aria-live="polite" className="flex flex-col gap-1.5">
+      <span
+        className={`text-[14px] font-medium ${
+          copy.tone === "danger" ? "text-danger" : "text-foreground"
+        }`}
+      >
+        {copy.title}
+      </span>
+      <ApprovalProgressLines copy={copy} />
     </div>
   );
 }
@@ -754,6 +785,16 @@ export function ProposalReviewBody({
     Record<string, DuplicateItemChoice | undefined>
   >({});
   const actionable = isActionable(status);
+  // A large approval applies in the background: while it runs, the bar shows
+  // its progress instead of the verbs, for anyone who opens the proposal.
+  const progress = useApprovalProgress(p.id, actionable);
+  const run = progress.data as ApprovalRun | null | undefined;
+  const applying = actionable && isApplying(run);
+  const stopped =
+    actionable && (run?.state === "failed" || run?.state === "stalled");
+  useEffect(() => {
+    if (applying) showApprovalProgressToast(p.id);
+  }, [applying, p.id]);
   const mode: DecisionMode =
     duplicate && needsIdentityChoice({ duplicate })
       ? duplicate.resolvable.length > 0
@@ -914,13 +955,28 @@ export function ProposalReviewBody({
           actionable ? "sticky z-10" : ""
         } ${barClassName}`}
       >
-        {actionable ? (
-          <DecisionButtons
-            proposal={p}
-            mode={mode}
-            undo={undo}
-            onDecided={onDecided}
-          />
+        {applying && run ? (
+          <ApplyingNow run={run} />
+        ) : actionable ? (
+          <>
+            {/* A failed READ of progress is said, never read as "nothing
+                running"; the approve door itself still refuses or joins a
+                run that is in fact applying. */}
+            {progress.isError && (
+              <ApprovalProgressLines
+                copy={progressUnavailable}
+                onRetry={() => void progress.refetch()}
+              />
+            )}
+            {stopped && run && <ApplyingNow run={run} />}
+            <DecisionButtons
+              proposal={p}
+              mode={mode}
+              undo={undo}
+              onDecided={onDecided}
+              resume={stopped}
+            />
+          </>
         ) : (
           <Outcome status={status} />
         )}

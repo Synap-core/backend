@@ -85,6 +85,15 @@ vi.mock("../../../lib/trpc", () => ({
         }),
       },
       reject: { useMutation: () => ({ mutate() {}, isPending: false }) },
+      // Nothing is applying in the background (`approval-progress`).
+      approvalProgress: {
+        useQuery: () => ({
+          data: null,
+          isError: false,
+          isFetching: false,
+          refetch() {},
+        }),
+      },
     },
     profiles: {
       get: {
