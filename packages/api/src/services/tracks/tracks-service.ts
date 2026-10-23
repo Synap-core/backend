@@ -2385,8 +2385,9 @@ export async function applyTrackDirection(
      * The PERSON whose write this is — a kind of work or uncertainty they
      * write (or approve) is confirmed by them. `null`: an agent's write
      * applied without review, which leaves (or makes) the kind unconfirmed.
+     * Absent ⇒ `null`: a write never confirms by omission.
      */
-    confirmedBy: string | null;
+    confirmedBy?: string | null;
   }
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
   const patch = normalizeDirectionPatch(rawPatch);
@@ -2397,7 +2398,7 @@ export async function applyTrackDirection(
     parseTrackGoalInput(
       pickTrackGoalInput(rawPatch as unknown as Record<string, unknown>)
     ),
-    who.confirmedBy
+    who.confirmedBy ?? null
   );
   const before = readTrackKpi(track.kpi);
   const kpi =
