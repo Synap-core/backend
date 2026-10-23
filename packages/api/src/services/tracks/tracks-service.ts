@@ -151,6 +151,8 @@ import {
 import { settleGoalReviewNotice } from "./goal-review-notice.js";
 import {
   assertGoalCloser,
+  carryGoalParticipants,
+  goalParticipantRows,
   loadTrackParticipantViews,
   seedGoalOwner,
 } from "./track-participant-store.js";
@@ -160,7 +162,11 @@ import { projectVisibleWhere } from "../../access/project-visibility.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { projectPathConditions } from "../projects/project-path.js";
 import type { CreateFocusSessionParams } from "../focus-sessions/create-session.js";
-import type { TrackParticipant } from "@synap-core/types/units";
+import {
+  goalJudge,
+  goalOwner,
+  type TrackParticipant,
+} from "@synap-core/types/units";
 import { REPLACES_LINK_TYPE } from "@synap-core/types/connections";
 import { createLinks } from "../links/links-service.js";
 import { writeDependencyLink } from "../links/dependency-links.js";
@@ -1207,7 +1213,20 @@ export async function startTrack(
 
   // WHO IS ON IT (W3): a goal is born with its owner — the person who started
   // it (an agent's start is approved by a person, who is `actor.userId` then).
-  if (created) await seedGoalOwner(track, project.userId);
+  // A REOPENED goal (R8) is born with the closed version's people instead:
+  // its owner and judge, its delegates asked again (`carryGoalParticipants`).
+  if (created) {
+    if (replaces) {
+      await carryGoalParticipants(
+        replaces.track,
+        track,
+        actor.userId,
+        project.userId
+      );
+    } else {
+      await seedGoalOwner(track, project.userId);
+    }
+  }
 
   if (created && playbook) {
     // Provenance edge — the same `instantiated_from` shape the proto-track
@@ -1340,6 +1359,19 @@ async function assertReplaceableTrack(
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `Goal "${old.name}" is ${resolveTrackStatusLabel(old.status).toLowerCase()}, not closed — work in it instead of reopening it.`,
+    });
+  }
+  // Only the closed goal's OWNER or JUDGE reopens it (R8, W5): the new
+  // version carries their goal, its judge and its delegates. `actor.userId`
+  // is the person — an agent's linked person on its proposal, the approver
+  // on the replay.
+  const people = await goalParticipantRows(old.id);
+  const owner = goalOwner(people, old);
+  const judge = goalJudge(people, old);
+  if (actor.userId !== owner && actor.userId !== judge) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Only the owner or the judge of "${old.name}" can reopen it.`,
     });
   }
   return { track: old, replacedBy: await replacingTrackIds(old.id) };

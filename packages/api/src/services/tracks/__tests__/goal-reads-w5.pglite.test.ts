@@ -114,6 +114,8 @@ import {
   acceptGoalCriterion,
   decodeTrackListCursor,
   listTracksPage,
+  reopenTrack,
+  setTrackStatus,
   startTrack,
   type TrackActor,
 } from "../tracks-service.js";
@@ -127,6 +129,8 @@ import {
 const OWNER = "owner-1";
 const JUDGE = "judge-1";
 const STRANGER = "stranger-1";
+const STAFFER = "staffer-1"; // an editor of the space, on no goal
+const DELEGATE = "delegate-1"; // a viewer of the space
 const WS = randomUUID();
 const PROJECT = randomUUID();
 const OTHER_PROJECT = randomUUID();
@@ -245,7 +249,7 @@ beforeAll(async () => {
   await h.client!.exec(M0345);
   await h.client!.exec(M0348);
 
-  for (const id of [OWNER, JUDGE, STRANGER]) {
+  for (const id of [OWNER, JUDGE, STRANGER, STAFFER, DELEGATE]) {
     await q(
       `insert into users (id, email, name, user_type) values ($1, $2, $1, 'human')`,
       [id, `${id}@example.test`]
@@ -258,6 +262,8 @@ beforeAll(async () => {
   for (const [userId, role] of [
     [OWNER, "owner"],
     [JUDGE, "editor"],
+    [STAFFER, "editor"],
+    [DELEGATE, "viewer"],
   ]) {
     await q(
       `insert into workspace_members (workspace_id, user_id, role) values ($1, $2, $3)`,
@@ -411,5 +417,122 @@ describe("the pod-wide goals list (W5)", () => {
   it("a cursor this read never returned does not decode", () => {
     expect(decodeTrackListCursor("not-a-cursor")).toBeNull();
     expect(decodeTrackListCursor(undefined)).toBeNull();
+  });
+});
+
+describe("a reopened goal keeps its people (R8, W5)", () => {
+  type Row = {
+    principal_id: string;
+    role: string;
+    commitment: string | null;
+    commitment_state: string | null;
+  };
+  const people = async (trackId: string) =>
+    (
+      await q<Row>(
+        `select principal_id, role, commitment, commitment_state
+           from track_participants where track_id = $1 order by role, principal_id`,
+        [trackId]
+      )
+    ).rows;
+
+  async function closedGoalWithPeople(name: string): Promise<string> {
+    const id = await goal(name);
+    const change = (
+      actor: TrackActor,
+      c: Parameters<typeof changeTrackParticipants>[0]["change"]
+    ) => changeTrackParticipants({ trackId: id, actor, change: c });
+    await change(person(OWNER), {
+      op: "add",
+      principalId: JUDGE,
+      role: "judge",
+    });
+    await change(person(OWNER), {
+      op: "add",
+      principalId: DELEGATE,
+      role: "delegate",
+      commitment: "Draft the copy",
+    });
+    await change(person(OWNER), {
+      op: "add",
+      principalId: STAFFER,
+      role: "integrator",
+    });
+    const asked = (await people(id)).find((r) => r.role === "delegate")!;
+    expect(asked.commitment_state).toBe("proposed");
+    const [row] = (
+      await q<{ id: string }>(
+        `select id from track_participants where track_id = $1 and role = 'delegate'`,
+        [id]
+      )
+    ).rows;
+    await change(person(DELEGATE), {
+      op: "move",
+      participantId: row!.id,
+      move: "accept",
+    });
+    const dropped = await setTrackStatus({
+      trackId: id,
+      status: "archived",
+      verdict: "no_longer_needed",
+      actor: person(OWNER),
+    });
+    expect(dropped.status).toBe("updated");
+    return id;
+  }
+
+  it("the judge reopens: owner and judge carried, the delegate asked again with the same commitment", async () => {
+    const old = await closedGoalWithPeople("Carry me");
+    expect(
+      (await people(old)).find((r) => r.role === "delegate")?.commitment_state
+    ).toBe("accepted");
+    const res = await reopenTrack({ trackId: old, actor: person(JUDGE) });
+    if (res.status === "proposed") throw new Error("unexpected proposal");
+    expect(res.track.id).not.toBe(old);
+    expect(await people(res.track.id)).toEqual(
+      [
+        {
+          principal_id: DELEGATE,
+          role: "delegate",
+          commitment: "Draft the copy",
+          commitment_state: "proposed",
+        },
+        {
+          principal_id: STAFFER,
+          role: "integrator",
+          commitment: null,
+          commitment_state: null,
+        },
+        // The OWNER stays the owner — not the judge who pressed reopen.
+        {
+          principal_id: JUDGE,
+          role: "judge",
+          commitment: null,
+          commitment_state: null,
+        },
+        {
+          principal_id: OWNER,
+          role: "owner",
+          commitment: null,
+          commitment_state: null,
+        },
+      ].sort((a, b) =>
+        a.role === b.role
+          ? a.principal_id.localeCompare(b.principal_id)
+          : a.role.localeCompare(b.role)
+      )
+    );
+  });
+
+  it("only the old owner or judge may reopen — an editor on no seat is refused", async () => {
+    const old = await closedGoalWithPeople("Not yours to reopen");
+    await expect(
+      reopenTrack({ trackId: old, actor: person(STAFFER) })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/owner or the judge/),
+    });
+    const res = await reopenTrack({ trackId: old, actor: person(OWNER) });
+    expect(res.status).not.toBe("proposed");
   });
 });

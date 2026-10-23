@@ -161,6 +161,60 @@ export async function seedGoalOwner(
     .onConflictDoNothing();
 }
 
+/**
+ * WHO IS ON A REOPENED GOAL (R8, W5): the new version is born with the closed
+ * one's people — never with whoever pressed "reopen" as its owner.
+ *
+ *   owner, judge  — copied as they were (the owner is resolved like a birth
+ *                   when the old goal predates its owner row);
+ *   delegates     — come back ASKED (`proposed`) with their commitment text:
+ *                   they re-accept for the new version (what they accepted
+ *                   was about the closed one's work);
+ *   integrator    — copied (the shape CHECK gives no role but a delegate a
+ *                   commitment state).
+ *
+ * Reports, counters, acknowledgements and escalations are NOT carried: they
+ * were about the closed version. `decidedBy` is the person who reopened it.
+ * Called by `startTrack` on creation only, instead of {@link seedGoalOwner};
+ * idempotent on the role indexes.
+ */
+export async function carryGoalParticipants(
+  from: Pick<ProjectTrack, "id" | "userId">,
+  to: Pick<ProjectTrack, "id">,
+  decidedBy: string,
+  projectOwnerId: string
+): Promise<void> {
+  const rows = await goalParticipantRows(from.id);
+  const owner =
+    rows.find((r) => r.role === "owner")?.principalId ??
+    (await resolveGoalOwnerPerson(from.userId, projectOwnerId));
+  const carried = rows
+    .filter((r) => r.role !== "owner")
+    .map((r) => ({
+      trackId: to.id,
+      principalKind: r.principalKind,
+      principalId: r.principalId,
+      role: r.role,
+      commitment: r.commitment,
+      commitmentState: r.role === "delegate" ? ("proposed" as const) : null,
+      decidedBy,
+    }));
+  const db = await getDb();
+  await db
+    .insert(trackParticipants)
+    .values([
+      {
+        trackId: to.id,
+        principalKind: "person",
+        principalId: owner,
+        role: "owner",
+        decidedBy,
+      },
+      ...carried,
+    ])
+    .onConflictDoNothing();
+}
+
 const iso = (d: Date | string | null | undefined): string | null =>
   d ? new Date(d).toISOString() : null;
 
