@@ -34,6 +34,19 @@
  * with a "CLIPPED MATERIAL" note — a criterion is never judged on a truncated
  * view without the judge being told (the IS judge prompt then prefers
  * "unmeasured" over a guess about the omitted part).
+ *
+ * Criterion-scoped excerpt: a cut by position (head + tail) loses the middle
+ * of a long document, which is where the part a criterion is about often sits
+ * (the live case: "every-claim-sourced" on a ~38k-char synthesis, unmeasured
+ * with 22,018 chars omitted). When material must be cut, the caller builds it
+ * once PER CRITERION with a `focus` (its key, statement and hint): a document
+ * whose title or slot label the criterion names keeps its text before the
+ * others (they keep a glimpse), and a document over its share keeps its
+ * OUTLINE (every heading, each marked shown or omitted) plus the sections the
+ * criterion's words point at, ranked by the one lexical matcher
+ * (`utils/term-match.ts` `rankByTerms`). Every gap is still a
+ * `[clipped: N chars omitted]` mark, so the judge can still answer
+ * "unmeasured" when the excerpt cannot decide. Deterministic: no model call.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -51,6 +64,7 @@ import { queryChannelMessages } from "../../../utils/query-channel-messages.js";
 import type { focusSessions } from "@synap/database";
 import { listSessionOutputs } from "../session-outputs.js";
 import { hydrationScopeWhere } from "../../object-graph/graph-service.js";
+import { rankByTerms } from "../../../utils/term-match.js";
 import type { SessionEvaluationRow } from "./record.js";
 import type { PostedEvidence } from "./evaluate.js";
 
@@ -80,13 +94,37 @@ export const ROOM_MESSAGES_N = 20;
 const ROOM_MESSAGE_MIN = 400;
 /** The marker a cut leaves behind, naming how much it dropped. */
 const clipMark = (omitted: number) => `…[clipped: ${omitted} chars omitted]…`;
+const CLIP_NOTE_HEAD = "NOTE: CLIPPED MATERIAL";
 /** The header note of a material with any cut in it. */
 const clipNote = (sections: number) =>
-  `NOTE: CLIPPED MATERIAL — ${sections} section${sections === 1 ? "" : "s"} below ${
+  `${CLIP_NOTE_HEAD} — ${sections} section${sections === 1 ? "" : "s"} below ${
     sections === 1 ? "was" : "were"
   } cut to fit (each cut says "[clipped: N chars omitted]"). Judge only what is shown; a criterion that needs an omitted part is "unmeasured".`;
 /** Room for the note at its widest (a 4-digit section count) + its separator. */
 const CLIP_NOTE_RESERVE = clipNote(9999).length + 2;
+
+/** True when a built material had to cut anything (it opens with the note). */
+export function isClippedMaterial(material: string): boolean {
+  return material.startsWith(CLIP_NOTE_HEAD);
+}
+
+/** The criterion a material is built for: what the excerpt is chosen by. */
+export interface JudgeFocus {
+  key: string;
+  statement: string;
+  /** The criterion's "look at" hint — its words outrank the statement's. */
+  hint?: string;
+}
+
+/**
+ * What a document the criterion does NOT name (by title or slot label) keeps
+ * before the named ones are served; it gets more only from what they leave.
+ */
+const OFF_FOCUS_GLIMPSE = 1_500;
+/** Below this share an outline + sections is not worth it: head + tail. */
+const EXCERPT_MIN = 1_000;
+/** A heading-less document is cut into paragraph chunks of about this size. */
+const PARAGRAPH_CHUNK = 1_500;
 
 /** One produced thing, with the text a judge can read. */
 export interface ProducedMaterial {
@@ -297,6 +335,162 @@ function clip(s: string, max: number, keep: "ends" | "head" = "ends"): string {
   return `${s.slice(0, head)}${mark}${s.slice(s.length - (room - head))}`;
 }
 
+/** The words a criterion is found by — hint first (the query keeps 8 terms). */
+function focusQuery(focus: JudgeFocus): string {
+  return [focus.hint ?? "", focus.statement, focus.key.replace(/[-_]+/g, " ")]
+    .join(" ")
+    .trim();
+}
+
+interface DocSection {
+  /** The heading text, or the first words of a heading-less chunk. */
+  label: string;
+  text: string;
+}
+
+/**
+ * Pure: `text` as contiguous sections (concatenated, they ARE `text`). Split
+ * at markdown headings outside code fences; a document with none is cut into
+ * paragraph chunks of about {@link PARAGRAPH_CHUNK} chars.
+ */
+function splitSections(text: string): DocSection[] {
+  const starts: Array<{ at: number; label: string }> = [];
+  let at = 0;
+  let fence = false;
+  for (const line of text.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) fence = !fence;
+    else if (!fence) {
+      const m = /^#{1,6}[ \t]+(.+?)[ \t#]*$/.exec(line);
+      if (m) starts.push({ at, label: m[1]! });
+    }
+    at += line.length + 1;
+  }
+  if (starts.length > 0) {
+    if (starts[0]!.at > 0) starts.unshift({ at: 0, label: "(opening)" });
+    return starts.map((s, k) => ({
+      label: s.label,
+      text: text.slice(s.at, starts[k + 1]?.at ?? text.length),
+    }));
+  }
+  const chunks: DocSection[] = [];
+  let from = 0;
+  const close = (to: number) => {
+    const chunk = text.slice(from, to);
+    const first = chunk.trim().split("\n")[0] ?? "";
+    chunks.push({
+      label: first.length > 60 ? `${first.slice(0, 60)}…` : first,
+      text: chunk,
+    });
+    from = to;
+  };
+  for (const m of text.matchAll(/\n[ \t]*\n/g)) {
+    const end = m.index! + m[0].length;
+    if (end - from >= PARAGRAPH_CHUNK) close(end);
+  }
+  if (from < text.length) close(text.length);
+  return chunks;
+}
+
+/**
+ * Pure: a long document in ≤ `budget` chars, chosen for `focus`: one OUTLINE
+ * line naming every section as shown or omitted, then the sections the
+ * criterion's words rank highest (then the rest, in document order, while
+ * they fit), laid out in DOCUMENT order with every gap marked
+ * `[clipped: N chars omitted]`. The best section alone over budget is
+ * clipped head + tail. Nothing to rank by — one section, a tiny budget, no
+ * term hit — is the plain head + tail {@link clip}, as before.
+ */
+function excerpt(text: string, budget: number, focus: JudgeFocus): string {
+  const sections = splitSections(text);
+  if (sections.length < 2 || budget < EXCERPT_MIN) return clip(text, budget);
+  const ranked = rankByTerms(
+    focusQuery(focus),
+    sections.map((s, i) => ({ ...s, i })),
+    (s) => ({ primary: s.label, tertiary: s.text })
+  ).map((r) => r.item.i);
+  if (ranked.length === 0) return clip(text, budget);
+
+  const outline = (shown: ReadonlySet<number>) =>
+    `EXCERPT — chosen for the criteria graded here; every gap is marked "[clipped: N chars omitted]". OUTLINE (${sections.length} sections, ${text.length} chars): ${sections
+      .map(
+        (s, i) => `${i + 1}. ${s.label} [${shown.has(i) ? "shown" : "omitted"}]`
+      )
+      .join(" · ")}`;
+  // "omitted" is the longer word, so the all-omitted outline bounds the real one.
+  const outlineMax = Math.max(200, Math.floor(budget / 4));
+  const gapCost = clipMark(text.length).length + 2;
+  let room =
+    budget - Math.min(outline(new Set()).length, outlineMax) - 1 - gapCost;
+  const shown = new Set<number>();
+  const partial = new Map<number, string>();
+  const rest = sections.map((_, i) => i).filter((i) => !ranked.includes(i));
+  for (const i of [...ranked, ...rest]) {
+    const cost = sections[i]!.text.length + gapCost;
+    if (cost <= room) {
+      shown.add(i);
+      room -= cost;
+    } else if (shown.size === 0) {
+      // The best section alone does not fit: its head and tail, marked.
+      partial.set(i, clip(sections[i]!.text, room - gapCost));
+      shown.add(i);
+      break;
+    }
+  }
+  let body = "";
+  let gap = 0;
+  const flush = () => {
+    if (gap > 0) body += `\n${clipMark(gap)}\n`;
+    gap = 0;
+  };
+  sections.forEach((s, i) => {
+    if (!shown.has(i)) {
+      gap += s.text.length;
+      return;
+    }
+    flush();
+    body += partial.get(i) ?? s.text;
+  });
+  flush();
+  return clip(`${clip(outline(shown), outlineMax, "head")}\n${body}`, budget);
+}
+
+/**
+ * Pure: the fair split, steered by `focus` when it cannot hold everything: a
+ * produced item whose title or slot label the criterion names is served
+ * first; the others keep {@link OFF_FOCUS_GLIMPSE} each, then share what the
+ * named ones leave. No focus, a split that cuts nothing, or a criterion that
+ * names all or none of the items = the plain {@link fairShares}.
+ */
+function focusedShares(
+  produced: readonly ProducedMaterial[],
+  lengths: readonly number[],
+  budget: number,
+  focus: JudgeFocus | undefined
+): number[] {
+  const even = fairShares(lengths, budget);
+  if (!focus || lengths.every((n, i) => n <= even[i]!)) return even;
+  const named = new Set(
+    rankByTerms(
+      focusQuery(focus),
+      produced.map((p, i) => ({ p, i })),
+      ({ p }) => ({ primary: [p.title, p.slotLabel ?? ""] })
+    ).map((r) => r.item.i)
+  );
+  if (named.size === 0 || named.size === produced.length) return even;
+  const first = fairShares(
+    lengths.map((n, i) =>
+      i < produced.length && !named.has(i) ? Math.min(n, OFF_FOCUS_GLIMPSE) : n
+    ),
+    budget
+  );
+  const left = Math.max(0, budget) - first.reduce((a, b) => a + b, 0);
+  const more = fairShares(
+    lengths.map((n, i) => n - first[i]!),
+    left
+  );
+  return first.map((n, i) => n + more[i]!);
+}
+
 /**
  * Pure: split `budget` across texts so none starves another — the shortest
  * keep everything, the rest share what is left evenly (water-filling).
@@ -372,7 +566,9 @@ function packRoom(
  * (goal, declared outputs, posted evidence, report, prior verdicts) come
  * first; the produced CONTENT and the session room share every remaining
  * byte through {@link fairShares}. `judgedKeys` = the criteria being graded in
- * this call; their own earlier verdicts are withheld.
+ * this call; their own earlier verdicts are withheld. `focus` = the criterion
+ * this material is built for: it changes nothing unless something must be
+ * cut, then it chooses what is kept ({@link focusedShares}, {@link excerpt}).
  */
 export function buildJudgeMaterial(
   session: Pick<
@@ -387,7 +583,8 @@ export function buildJudgeMaterial(
   produced: readonly ProducedMaterial[],
   room: RoomMaterial = { status: "ok", messages: [] },
   max: number = MATERIAL_MAX,
-  judgedKeys: ReadonlySet<string> = new Set()
+  judgedKeys: ReadonlySet<string> = new Set(),
+  focus?: JudgeFocus
 ): string {
   const outputs = Array.isArray(session.expectedOutputs)
     ? (session.expectedOutputs as Array<{ label?: string; status?: string }>)
@@ -451,15 +648,23 @@ export function buildJudgeMaterial(
   // `reserve` = room kept for the clipped note. Returns the body and how many
   // content sections the fair split had to cut.
   const assemble = (reserve: number) => {
-    const shares = fairShares(
+    const shares = focusedShares(
+      produced,
       texts.map((t) => t.length),
-      max - fixed - overhead - reserve
+      max - fixed - overhead - reserve,
+      focus
     );
+    const shorten = (text: string, share: number) =>
+      focus && text.length > share
+        ? excerpt(text, share, focus)
+        : clip(text, share);
     const producedPart = produced.length
       ? [
           producedHeading,
           ...produced.map((p, i) =>
-            p.text ? `${headers[i]}\n${clip(p.text, shares[i]!)}` : headers[i]
+            p.text
+              ? `${headers[i]}\n${shorten(p.text, shares[i]!)}`
+              : headers[i]
           ),
         ].join("\n")
       : "";
