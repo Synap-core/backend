@@ -27,7 +27,12 @@
  *
  * A pod app (CIMD client, spec 17) walks 5–7 too, and its /token answer adds a
  * rotating refresh token (`grant_type=refresh_token`, refresh.ts). An MCP
- * (DCR) client never gets one: its key lives 90 days.
+ * (DCR) client never gets one: its key lives 90 days. A pod app's token is
+ * its own ask-first agent's — unless the app is a SYNAP app (`isSynapApp`,
+ * founder 2026-10-22): then it is HELD BY THE PERSON who consented
+ * (`synap_acts_as: "person"`, services/app-person-token.ts). An MCP client may
+ * name a metadata document instead of registering (one that declares no
+ * `synap_requests`, `isMcpClient`): it is an MCP client in every respect.
  *
  * NOTE: the SDK's own OAuth helpers (`@modelcontextprotocol/sdk` 1.29.0,
  * `server/auth/*`) are Express-shaped — they take `express.RequestHandler` and
@@ -87,6 +92,7 @@ import {
 } from "./config.js";
 import {
   AuthorizeUserError,
+  isMcpClient,
   resolveClientAndRedirect,
   resourceFor,
   signAuthRequestTime,
@@ -108,6 +114,7 @@ import {
   confirmGraceSuccessor,
   findRefreshToken,
   redeemRefreshToken,
+  releaseRefreshClaim,
   revokeRefreshFamily,
   rotateRefreshToken,
   startRefreshFamily,
@@ -120,6 +127,8 @@ import {
   insertClient,
   type StoredClient,
 } from "./store.js";
+import { logOAuthRefusal } from "./refusal-log.js";
+import { renderAuthorizeRefusalPage } from "./refusal-page.js";
 import {
   APP_PERSON_SCOPES,
   isAppClientId,
@@ -161,6 +170,9 @@ const MINT_LABELS: Record<
 };
 
 const oauthApp = new Hono();
+
+/** A `synap_space_hint`: a space id, the SDK's and the browser's rule. */
+const SPACE_HINT_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
  * An AS that cannot name itself canonically must not serve metadata at all, so
@@ -303,7 +315,21 @@ oauthApp.get("/authorize", async (c) => {
     ({ client, redirectUri } = await resolveClientAndRedirect(params));
   } catch (err) {
     if (err instanceof AuthorizeUserError) {
-      return c.text(`Authorization request rejected: ${err.message}`, 400);
+      logOAuthRefusal({
+        phase: "authorize",
+        clientId: params.clientId,
+        reason: err.reason,
+        detail: err.message,
+      });
+      return c.html(
+        renderAuthorizeRefusalPage({
+          podHost: new URL(issuer).host,
+          reason: err.reason,
+          message: err.message,
+        }),
+        400,
+        { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" }
+      );
     }
     throw err;
   }
@@ -314,8 +340,8 @@ oauthApp.get("/authorize", async (c) => {
   try {
     if (resources.length > 1) {
       // RFC 8707 allows several; a token from this AS is for one pod resource.
-      // An app is refused; a DCR client gets the lenient rule (`resourceFor`).
-      if (client.clientKind !== "dcr") {
+      // An app is refused; an MCP client gets the lenient rule (`resourceFor`).
+      if (!isMcpClient(client)) {
         throw new OAuthError("invalid_target", "Name at most one resource");
       }
       params.resource = resources.join(" ");
@@ -331,6 +357,13 @@ oauthApp.get("/authorize", async (c) => {
     }
   } catch (err) {
     if (err instanceof OAuthError) {
+      logOAuthRefusal({
+        phase: "authorize",
+        clientId: client.clientId,
+        reason: err.code,
+        code: err.code,
+        detail: err.message,
+      });
       return c.redirect(
         buildAuthorizationResponseUrl(redirectUri, issuer, {
           error: err.code,
@@ -368,6 +401,20 @@ oauthApp.get("/authorize", async (c) => {
   if (validated.state) target.searchParams.set("state", validated.state);
   if (validated.resource) {
     target.searchParams.set("resource", validated.resource);
+  }
+  // The launch's space (spec 17 §6.4, review S6/A8): the Synap browser and
+  // the SDK send `synap_space_hint`; the consent screen pre-ticks it only if
+  // the person can give the app that space. It is not an authorize parameter
+  // (nothing is minted from it), so it travels as `space_hint`, a pod app's
+  // only, in the one charset every door applies; anything else is dropped.
+  const spaceHint = q.synap_space_hint;
+  if (
+    spaceHint &&
+    SPACE_HINT_RE.test(spaceHint) &&
+    validated.client.clientKind === "cimd" &&
+    !isMcpClient(validated.client)
+  ) {
+    target.searchParams.set("space_hint", spaceHint);
   }
   // Sign-in HINTS for the consent screen (never a credential): OIDC
   // `login_hint` pre-fills who signs in; `prompt=create` (OIDC Initiating
@@ -482,6 +529,10 @@ function appTokenResponse(minted: AppOAuthAccessKey, refreshToken: string) {
       id: minted.publicId,
       manageUrl: appManageUrl(minted.publicId),
     },
+    // Who the token acts as (`podAppActsAs`): "person" — a Synap app, the
+    // token is the person's own, their clicks write as them, directly;
+    // "agent" — the app's own agent, its writes become proposals.
+    synap_acts_as: minted.actsAs,
   };
 }
 
@@ -546,7 +597,9 @@ async function exchangeAppRefreshToken(
   const client = await findClient(params.client_id);
   if (!client) throw new OAuthError("invalid_client", "Unknown client");
   if (client.clientKind !== "cimd") {
-    // An MCP (DCR) client is issued no refresh token (spec 17 §6.6).
+    // An MCP (DCR) client is issued no refresh token (spec 17 §6.6). One that
+    // came by CIMD gets none either: a family is only ever started for an
+    // approved connection, so its presented token redeems to nothing.
     throw new OAuthError(
       "unauthorized_client",
       "This client may not use the refresh_token grant"
@@ -580,17 +633,32 @@ async function exchangeAppRefreshToken(
   const connection = { ...redeemed, appId: redeemed.appId };
   // The successor's id first: the key is the one it re-derives (the grace).
   const successorId = randomUUID();
-  const minted = await mintAppKey(
-    connection,
-    successorAccessToken(successorId)
-  );
-  const refreshToken = await rotateRefreshToken(redeemed, successorId);
+  let minted: AppOAuthAccessKey;
+  let refreshToken: string;
+  try {
+    minted = await mintAppKey(connection, successorAccessToken(successorId));
+    refreshToken = await rotateRefreshToken(redeemed, successorId);
+  } catch (err) {
+    // A refusal of the grant (revoked, emptied, family dead) keeps the token
+    // spent. Anything else is the pod's fault: the claim is undone so the
+    // app's retry works, instead of reading as a reuse.
+    if (!(err instanceof OAuthError) || err.code === "server_error") {
+      await releaseRefreshClaim(redeemed).catch((releaseErr) =>
+        logger.error(
+          { err: releaseErr, clientId: client.clientId },
+          "pod-oauth: a failed refresh could not release its token's claim"
+        )
+      );
+    }
+    throw err;
+  }
   logger.info(
     {
       clientId: client.clientId,
       podUserId: redeemed.userId,
       keyId: minted.keyId,
       agentUserId: minted.agentUserId,
+      actsAs: minted.actsAs,
       appId: minted.publicId,
     },
     "pod-oauth: pod app access token refreshed"
@@ -879,8 +947,17 @@ oauthApp.post("/token", async (c) => {
 
     // A pod app (CIMD client) is NEVER minted the shared `claude-web*` agent
     // (spec 17 I3): its key belongs to the app's OWN agent for this person,
-    // carrying exactly what the person approved at consent, for 1 h.
-    if (client.clientKind === "cimd") {
+    // carrying exactly what the person approved at consent, for 1 h — or,
+    // for a SYNAP app only, to the PERSON (`mintAppOAuthAccessKey` routes by
+    // `podAppActsAs`; the one person-token door states the threat model). A
+    // code that names an approved connection is always a pod app's, even if
+    // the document has since dropped its `synap_requests`. Only a code naming
+    // none, for a document that declares none, is an MCP client's (A1): it
+    // falls through to the MCP mint below, like a DCR client's.
+    if (
+      client.clientKind === "cimd" &&
+      (claimed.appId !== null || !isMcpClient(client))
+    ) {
       if (!claimed.appId) {
         // A code from before PB2 (or a DCR-shaped issue) names no approval.
         throw new OAuthError(
@@ -903,6 +980,7 @@ oauthApp.post("/token", async (c) => {
           podUserId: claimed.userId,
           keyId: minted.keyId,
           agentUserId: minted.agentUserId,
+          actsAs: minted.actsAs,
           appId: minted.publicId,
         },
         "pod-oauth: pod app access token issued"
@@ -935,6 +1013,10 @@ oauthApp.post("/token", async (c) => {
       // USERs are singleton per (createdByUserId, agentType), and instanceId
       // further isolates multi-runtime keys for the same human.
       instanceId: oauthKeyInstanceId(claimed.clientId, claimed.userId),
+      // The MCP tool surface follows the CONNECTION, not the shared agent: a
+      // new client (Raycast next to claude.ai) starts on the 9-tool `entry`
+      // surface and loads groups on demand; re-authorizing keeps its own.
+      inheritToolSurface: "instance",
       scopes,
       ensureRegistryRow: true,
       ...MINT_LABELS[agentType],
@@ -992,6 +1074,17 @@ oauthApp.post("/token", async (c) => {
     });
   } catch (err) {
     if (err instanceof OAuthError) {
+      if (err.code !== "server_error") {
+        // The client_id only: the body holds the code, the refresh token and
+        // the verifier, and none of them is ever logged.
+        logOAuthRefusal({
+          phase: params.grant_type === "refresh_token" ? "refresh" : "token",
+          clientId: params.client_id,
+          reason: err.code,
+          code: err.code,
+          detail: err.message,
+        });
+      }
       // RFC 6749 §5.2: invalid_client → 401, server_error → 500, rest → 400.
       const status =
         err.code === "invalid_client"

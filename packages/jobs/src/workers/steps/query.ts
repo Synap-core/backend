@@ -2,7 +2,16 @@
  * `query` step executor — queries entities by profile slug with the shared
  * query-DSL filter/orderBy.
  */
-import { db, eq, and, asc, desc, entities, drizzleSql } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  asc,
+  desc,
+  entities,
+  drizzleSql,
+  listableEntityWhere,
+} from "@synap/database";
 import { entityQueryVisibilityWhere } from "../entity-query-scope.js";
 import {
   resolveQueryProfileSlug,
@@ -28,7 +37,13 @@ export async function executeQueryStep(
   },
   context: StepContext,
   workspaceId: string,
-  ownerId?: string
+  ownerId?: string,
+  /**
+   * The project the automation's rule is scoped to (`triggerConfig.projectId`).
+   * A rule built for the demo project lists that project's demo records;
+   * every other run leaves demo rows out (THE listing rule).
+   */
+  ruleProjectId?: string | null
 ): Promise<Record<string, unknown>> {
   const profileSlug = resolveQueryProfileSlug(data, context);
   const limit = Math.min(Math.max(Number(data.limit ?? 20), 1), 100);
@@ -49,6 +64,10 @@ export async function executeQueryStep(
       ownerId,
       podOnly: data.scope === "pod",
     }),
+    // THE listing rule (FB1020 B5): a scheduled loop ("each deal in
+    // negotiation → draft a follow-up") never works on probe or demo rows,
+    // unless the rule is scoped to that demo project.
+    listableEntityWhere({ revealSampleOf: ruleProjectId }),
   ];
 
   for (const condition of parseQueryFilterConditions(data.filter, context)) {

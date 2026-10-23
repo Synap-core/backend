@@ -1,13 +1,13 @@
 /**
- * Generate `door-tool-names.generated.ts` from the three door manifests.
+ * Generate `door-tool-names.generated.ts` from the two door manifests.
  *
  *   cd packages/api && npx tsx src/routers/mcp/gen-door-tool-names.ts          # write
  *   cd packages/api && npx tsx src/routers/mcp/gen-door-tool-names.ts --check  # exit 1 if stale
  *
- * Reads the SIBLING repos (`synap-control-plane-api`, `synap-raycast`) at
- * generation time only — the pod never imports them at runtime. Regenerate after
- * the pod manifest (`pnpm gen:mcp-manifest`), the CP curated catalog
- * (`gen-pod-tools.ts`) or the Raycast catalog changes.
+ * Reads the SIBLING repo `synap-control-plane-api` at generation time only —
+ * the pod never imports it at runtime. Regenerate after the pod manifest
+ * (`pnpm gen:mcp-manifest`) or the CP curated catalog (`gen-pod-tools.ts`)
+ * changes.
  *
  * Freshness compares the TABLE VALUE, not file bytes: a formatter reflows the
  * written module, and a byte compare would then read stale forever.
@@ -34,10 +34,6 @@ export const DOOR_TOOL_NAME_PATHS = {
     MONOREPO,
     "synap-control-plane-api/src/routes/mcp-pod-tools.ts"
   ),
-  raycastCatalog: resolve(
-    MONOREPO,
-    "synap-raycast/scripts/mcp-raycast-catalog.json"
-  ),
   generated: resolve(HERE, "door-tool-names.generated.ts"),
 } as const;
 
@@ -54,9 +50,6 @@ export function buildDoorToolNamesFromManifests(): Record<
   return buildDoorToolNames({
     podToolNames: manifest.tools.map((t) => t.name),
     cpCuratedSource: readFileSync(DOOR_TOOL_NAME_PATHS.cpCurated, "utf8"),
-    raycastCatalog: JSON.parse(
-      readFileSync(DOOR_TOOL_NAME_PATHS.raycastCatalog, "utf8")
-    ),
   });
 }
 

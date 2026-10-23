@@ -845,6 +845,21 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
     projectId?: string;
     trackId?: string;
     /**
+     * HAND-OFF — the agent user id (`users.id`, the identity `synap_list_agents`
+     * returns and `synap_start_session` `agentIds` / `synap_update_session`
+     * `addAgentId` take) the spawned session is handed to. Forwarded to
+     * `runPlaybook`, which resolves it ONCE through THE route
+     * (`agent-dispatch/route.ts`, the hand-off reaches `dispatch` | `pull`)
+     * before any session exists: an unknown, paused or foreign agent fails the
+     * step by name. A handed run puts the agent on the session's roster and
+     * does NOT dispatch the playbook's own executor — the named agent does the
+     * work (`pull`: its orient's `handedToYou`; `dispatch`: its binding).
+     * Run mode only: the step refuses it beside `appointment` / `propose`.
+     * Producer: `buildPlaybookRunFlowDefinition` from the playbook's
+     * `schedule.handToAgentId`. Absent ⇒ unchanged.
+     */
+    handToAgentId?: string;
+    /**
      * WHAT this node materializes (read through `readPlaybookRunMode`,
      * `@synap-core/types/automations`, which keeps this union and its runtime
      * list in sync both ways):

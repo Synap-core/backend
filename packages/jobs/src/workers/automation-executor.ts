@@ -343,6 +343,11 @@ async function executeAutomationFlow(params: {
   const triggerConnectionId =
     (automation.triggerConfig as AutomationTriggerConfig | null)
       ?.connectionId ?? null;
+  // The project the rule is scoped to: a query step of a rule built for the
+  // demo project lists that project's demo records (THE listing rule).
+  const ruleProjectId =
+    (automation.triggerConfig as AutomationTriggerConfig | null)?.projectId ??
+    null;
 
   // `definitionSnapshot` unset is the exact "this is the run's FIRST execution"
   // signal (robust against BOTH delay-resume AND crash-redelivery, where
@@ -1303,6 +1308,7 @@ async function executeAutomationFlow(params: {
                             goalOverride?: string;
                             projectId?: string;
                             trackId?: string;
+                            handToAgentId?: string;
                             mode?: PlaybookRunMode;
                             worker?: PlaybookRunWorkerSpec;
                           },
@@ -1377,7 +1383,8 @@ async function executeAutomationFlow(params: {
                           },
                           context,
                           workspaceId,
-                          ownerId
+                          ownerId,
+                          ruleProjectId
                         );
                         break;
                       case "fetch":
@@ -1503,7 +1510,8 @@ async function executeAutomationFlow(params: {
                 data,
                 context,
                 workspaceId,
-                ownerId
+                ownerId,
+                ruleProjectId
               );
               break;
             }
@@ -1838,6 +1846,8 @@ async function executeAutomationFlow(params: {
                 /** Filing: the project / track the session is born into. */
                 projectId?: string;
                 trackId?: string;
+                /** Hand-off: the agent user id the session is handed to. */
+                handToAgentId?: string;
                 /** `"appointment"` ⇒ a `scheduled` session; `"propose"` ⇒ a
                  *  governed proposal only (see `executePlaybookRun`). */
                 mode?: PlaybookRunMode;
@@ -1875,6 +1885,11 @@ async function executeAutomationFlow(params: {
                   // `steps/__tests__/playbook-run-filing.test.ts`.
                   projectId: data.projectId,
                   trackId: data.trackId,
+                  // Same hazard, same fix: a scheduled playbook's single-node
+                  // flow reaches THIS path, so a dropped hand-off here would
+                  // start the run with the playbook's own executor and nobody
+                  // on the roster. Pinned by `playbook-run-mode-honoured.tripwire`.
+                  handToAgentId: data.handToAgentId,
                   // Same hazard, same fix: without this line an `appointment`
                   // node reaching the TOP-LEVEL path would silently execute as a
                   // RUN — dispatching an agent at a session the human was meant

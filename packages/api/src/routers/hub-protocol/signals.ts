@@ -19,7 +19,15 @@ import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
 import { assertMayActAs } from "./guard.js";
 import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 import { config } from "@synap-core/core";
-import { db, eq, and, desc, isNull, sqlTemplate as sql } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  desc,
+  isNull,
+  sqlTemplate as sql,
+  listableEntityWhere,
+} from "@synap/database";
 import {
   signalSubscriptions,
   signalClassifications,
@@ -874,7 +882,9 @@ export const signalsRouter = router({
               sql`${entities.properties}->>'capturedFromFeed' = 'true'`,
               // The caller's entity floor — this feed used to return EVERY
               // user's feed-captured entities (2026-10-06 inventory).
-              entityReadVisibleWhere(userId)
+              entityReadVisibleWhere(userId),
+              // THE listing rule (probe + demo rows), rows and total alike.
+              listableEntityWhere()
             )
           )
           .orderBy(desc(entities.createdAt))
@@ -890,7 +900,9 @@ export const signalsRouter = router({
               sql`${entities.properties}->>'capturedFromFeed' = 'true'`,
               // The caller's entity floor — this feed used to return EVERY
               // user's feed-captured entities (2026-10-06 inventory).
-              entityReadVisibleWhere(userId)
+              entityReadVisibleWhere(userId),
+              // THE listing rule (probe + demo rows), rows and total alike.
+              listableEntityWhere()
             )
           );
 

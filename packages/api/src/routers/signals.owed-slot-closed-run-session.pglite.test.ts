@@ -71,6 +71,11 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
   listPendingIssuers: async () => ({ rows: [], truncated: false }),
   listPendingAppRequests: async () => ({ rows: [], truncated: false }),
 }));
+// The viewer's open space invites: pinned by their own PGlite suite
+// (`space-invites.pglite.test.ts`); none here.
+vi.mock("../services/signals/space-invites.js", () => ({
+  listOpenSpaceInvites: async () => ({ rows: [], truncated: false }),
+}));
 vi.mock("../services/projects/project-needs-you.js", () => ({
   countProjectSessionsAwaitingReview: async () => ({
     review: 0,

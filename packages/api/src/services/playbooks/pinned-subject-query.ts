@@ -15,6 +15,7 @@ import {
   entities,
   drizzleSql,
   profileSlugScopeCondition,
+  listableEntityWhere,
 } from "@synap/database";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import { entityQueryVisibilityWhere } from "@synap/jobs/workers/entity-query-scope.js";
@@ -110,6 +111,8 @@ export async function findFallbackSubject(args: {
   workspaceId: string | null;
   ownerId: string;
   fallback: PinnedFallback;
+  /** The project the run files into: its demo records may be chosen. */
+  projectId?: string | null;
 }): Promise<string | null> {
   const db = await getDb();
   const conditions = [
@@ -120,6 +123,11 @@ export async function findFallbackSubject(args: {
       await resolveFacetVisibilityScope(args.ownerId, args.workspaceId)
     ),
     visibilityFor(args.workspaceId, args.ownerId),
+    // THE listing rule: a fallback is a pick from a LIST ("the oldest open
+    // deal"), so it never lands on a probe or demo row — except the demo
+    // rows of the project this run files into. (The pinned ids above are
+    // chosen by id and stay open.)
+    listableEntityWhere({ revealSampleOf: args.projectId }),
   ];
   for (const condition of parseQueryFilterConditions(
     args.fallback.filter,

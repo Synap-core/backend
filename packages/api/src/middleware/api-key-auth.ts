@@ -16,6 +16,7 @@ import { createLogger } from "@synap-core/core";
 import {
   runWithProbeWrites,
   runWithActingAgent,
+  runWithCallingKey,
   runWithGrant,
   isProbeApiKey,
 } from "@synap/database";
@@ -191,29 +192,32 @@ export const apiKeyMiddleware = t.middleware(
     // D6 agent principal (see @synap/database request-write-context).
     return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
       runWithActingAgent(agentUserId, () =>
-        runWithGrant(grant, () =>
-          next({
-            ctx: {
-              ...ctx,
-              userId: effectiveUserId,
-              agentUserId,
-              scopes: keyRecord.scope,
-              apiKeyId: keyRecord.id,
-              apiKeyName: keyRecord.keyName,
-              // The key's type + workspace binding — consumed by the hub-protocol
-              // service-key workspace confinement (resolveConfinedWorkspace). NOT an
-              // impersonation grant: identity is always floored to keyRecord.userId.
-              keyType: keyRecord.keyType,
-              keyWorkspaceId: keyRecord.workspaceId,
-              authenticated: true as const,
-              // Architecturally enforce: hub-protocol keys are always AI-sourced.
-              ...(isHubProtocolKey
-                ? { source: "intelligence", isHubProtocol: true }
-                : {}),
-              // W1 — what this key may touch (null = no grant).
-              grant,
-            },
-          })
+        // B7: the calling key, recorded on every proposal this request files.
+        runWithCallingKey(keyRecord.id, () =>
+          runWithGrant(grant, () =>
+            next({
+              ctx: {
+                ...ctx,
+                userId: effectiveUserId,
+                agentUserId,
+                scopes: keyRecord.scope,
+                apiKeyId: keyRecord.id,
+                apiKeyName: keyRecord.keyName,
+                // The key's type + workspace binding — consumed by the hub-protocol
+                // service-key workspace confinement (resolveConfinedWorkspace). NOT an
+                // impersonation grant: identity is always floored to keyRecord.userId.
+                keyType: keyRecord.keyType,
+                keyWorkspaceId: keyRecord.workspaceId,
+                authenticated: true as const,
+                // Architecturally enforce: hub-protocol keys are always AI-sourced.
+                ...(isHubProtocolKey
+                  ? { source: "intelligence", isHubProtocol: true }
+                  : {}),
+                // W1 — what this key may touch (null = no grant).
+                grant,
+              },
+            })
+          )
         )
       )
     );

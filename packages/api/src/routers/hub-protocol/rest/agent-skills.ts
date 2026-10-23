@@ -46,8 +46,6 @@ import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
 import { updateSkillGoverned } from "../../../services/skills/update-skill-governed.js";
 import { searchInstructionSkills } from "../../../services/skills/search.js";
 import { reservedSkillSlugReason } from "../../../services/skills/reserved-slug.js";
-import { renderSkillForDoor } from "../../../services/capability-briefs/door-tool-render.js";
-import { resolveSkillDoor } from "../../../services/capability-briefs/resolve-skill-door.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -474,16 +472,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       if (!row) {
         return c.json({ error: "Skill not found" }, 404);
       }
-      // Door-aware teaching (Raycast load-skill): tool names render as the
-      // calling door exposes them; other REST consumers get the source text.
-      const door = await resolveSkillDoor("hub", c.get("agentUserId"));
-      const wire = wireSkill(row);
-      return c.json(
-        door && wire.body
-          ? { ...wire, body: renderSkillForDoor(wire.body, door) }
-          : wire,
-        200
-      );
+      return c.json(wireSkill(row), 200);
     } catch (err) {
       logger.error({ err }, "get agent skill by slug failed");
       return c.json({ error: "Internal error" }, httpStatusForTrpcError(err));

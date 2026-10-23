@@ -928,12 +928,18 @@ async function resolveMovingIdentities(
     status: string | null;
     category: string | null;
   }>,
-  narrowTo: string | undefined
+  narrowTo: string | undefined,
+  /** The listing's project lens — keeps the listing rule's demo toggle. */
+  projectId?: string
 ): Promise<Map<string, MovingIdentity>> {
   const [spaces, declared, roleConds] = await Promise.all([
     listHomeSpaces(userId),
     declaredLifecycleProfileIds(),
-    roleVisibilityConditions({ userId, lensWorkspaceId: undefined }),
+    roleVisibilityConditions({
+      userId,
+      lensWorkspaceId: undefined,
+      ...(projectId ? { projectId } : {}),
+    }),
   ]);
   const declaredIds = new Set(declared);
   const intentOf = new Map(
@@ -1096,6 +1102,9 @@ export async function readMoving(
                 userId: ctx.userId,
                 lensWorkspaceId: undefined,
                 explicitWorkspace: false,
+                // The project lens also switches the listing rule's demo half
+                // off (the lens is the demo toggle).
+                ...(input.projectId ? { projectId: input.projectId } : {}),
                 podScopeKind: false,
               }),
               ...(input.projectId
@@ -1108,7 +1117,12 @@ export async function readMoving(
 
   const onThings = things.flatMap((t) => work.get(t.id) ?? []);
   const [identities, names, asksYou] = await Promise.all([
-    resolveMovingIdentities(ctx.userId, things, input.workspaceId),
+    resolveMovingIdentities(
+      ctx.userId,
+      things,
+      input.workspaceId,
+      input.projectId
+    ),
     resolveActorNames(
       [...onThings, ...loose].flatMap((w) => w.agentIds.slice(0, 1))
     ),

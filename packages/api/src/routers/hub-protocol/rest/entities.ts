@@ -22,7 +22,7 @@ import {
   and,
   isNull,
   getEffectiveFacets,
-  notProbeEntityWhere,
+  listableEntityWhere,
   getRequestGrant,
 } from "@synap/database";
 import {
@@ -1140,8 +1140,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
             inArray(entities.id, rankedIds),
             isNull(entities.deletedAt),
             floor,
-            // D8: a test-key probe row is never a search hit.
-            notProbeEntityWhere()
+            // THE listing rule: a probe or demo (sample-project) row is
+            // never a search hit.
+            listableEntityWhere()
           )
         );
 
@@ -1322,7 +1323,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       },
       409: {
         description:
-          "Weak same-name conflict — a same-profile entity with this title already exists (pass forceCreate or reuse the candidate id)",
+          "Conflict — the write cannot land as sent; the message names why. A same-name twin is NOT a conflict: an agent's create is filed for review with `duplicateCheck`.",
         content: { "application/json": { schema: ErrorSchema } },
       },
       500: {
@@ -1456,7 +1457,6 @@ export function registerEntitiesRoutes(app: HubHono): void {
         // Kind + Facets: attach roles in the same call (handled by the governed
         // createEntity door, which attaches each after the entity materializes).
         ...(body.facets?.length ? { facets: body.facets } : {}),
-        ...(body.forceCreate ? { forceCreate: true } : {}),
         // Strong `external_id` identity anchor (`provider:id`) — registered as a
         // signal so a repeat create with the same value dedups. This is the ONLY
         // door that exposes external_id over Hub REST; the weak email/phone/url
@@ -2657,7 +2657,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
     tags: ["Entities"],
     summary: "Update an entity",
     description:
-      "Patch entity title / preview / metadata. Supports `Idempotency-Key`.",
+      "Patch entity title / preview / metadata, or attach an existing document as its body (`documentId`, `replaceBody`). Supports `Idempotency-Key`.",
     request: {
       params: z.object({ entityId: uuidPathParam }),
       body: {
@@ -2804,6 +2804,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(body.expectedStatus !== undefined
           ? { expectedStatus: body.expectedStatus }
           : {}),
+        ...(body.documentId ? { documentId: body.documentId } : {}),
+        ...(body.replaceBody ? { replaceBody: true } : {}),
       });
       if (result.status === "conflict") return c.json(result, 409);
 

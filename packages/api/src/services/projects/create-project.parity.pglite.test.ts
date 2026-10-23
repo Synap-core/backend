@@ -301,6 +301,54 @@ describe("createProjectGoverned — tRPC and Hub REST are one door", () => {
     );
   });
 
+  it("a NEAR-named project is filed for review with its twin, never refused (B2)", async () => {
+    const evidence = Array.from({ length: 5 }, () => randomUUID());
+    for (const id of evidence) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, title) values ($1,$2,$3,'e')`,
+        [id, U, WA]
+      );
+    }
+    const twin = randomUUID();
+    await q(
+      `insert into projects (id, name, slug, user_id, status) values ($1,'Northwind Borealis Atlas Launch','nba',$2,'active')`,
+      [twin, U]
+    );
+    const body = {
+      name: "Northwind Borealis Atlas Launch Q4",
+      evidenceEntityIds: evidence,
+    };
+    const expected = {
+      possibleDuplicate: true,
+      duplicateCheck: {
+        status: "possible",
+        subject: "project",
+        candidates: [
+          {
+            ref: "record",
+            id: twin,
+            kind: "project",
+            title: "Northwind Borealis Atlas Launch",
+            why: "similar_name",
+          },
+        ],
+      },
+    };
+
+    const viaTrpc = await trpc(true).create(body);
+    expect(viaTrpc).toMatchObject({
+      status: "proposed",
+      duplicateCheck: expected.duplicateCheck,
+    });
+    expect(h.permCalls[0]).toMatchObject(expected);
+
+    h.permCalls.length = 0;
+    const viaRest = await restCreate({ ...body, workspaceId: WA }, true);
+    expect(viaRest.status).toBe(202);
+    expect(h.permCalls[0]).toMatchObject(expected);
+    await q(`delete from projects where id = $1`, [twin]);
+  });
+
   it("an agent with no evidence is refused BEFORE governance on both doors", async () => {
     await expect(trpc(true).create({ name: "Cygnus" })).rejects.toMatchObject({
       code: "BAD_REQUEST",

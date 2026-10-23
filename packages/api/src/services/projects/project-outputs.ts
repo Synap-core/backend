@@ -33,7 +33,18 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, focusSessions, projects, and, desc, eq } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  projects,
+  entities,
+  and,
+  desc,
+  eq,
+  inArray,
+  not,
+  listableEntityWhere,
+} from "@synap/database";
 import type { SQL } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { scopedDb, type AccessContext } from "../../access/index.js";
@@ -134,6 +145,9 @@ function newerFirst(a: Key, b: Key): number {
   return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
 }
 
+const UUID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * THE SCAN — the one fetch every outputs door runs: the floored session set
  * named by `where` (most recently ACTIVE first, bounded by
@@ -146,12 +160,19 @@ function newerFirst(a: Key, b: Key): number {
  * for every ledger read behind it (`listOutputsForSessions`' contract).
  *
  * Shared by `projects.outputs` (the project's path population) and
- * `outputs.landed` (the pod-wide population) so the two cannot join, title or
- * key an output differently.
+ * `outputs.landed` (the pod-wide population — Library › Landed and Home's
+ * Produced) so the two cannot join, title or key an output differently.
+ *
+ * THE LISTING RULE (FB1020 B5): a produced ENTITY the rule leaves out (a probe
+ * row, a demo record) is not listed — `projectLens` is the toggle, exactly as
+ * at every other listing door, so the demo project's own page still shows its
+ * outputs. The session set is not filtered: a session's record stays openable
+ * by id from the session itself.
  */
 export async function scanSessionOutputs(
   database: typeof db,
-  where: Array<SQL | undefined>
+  where: Array<SQL | undefined>,
+  opts: { projectLens?: string | null } = {}
 ): Promise<{
   items: ProjectOutputItem[];
   sessions: ScannedSession[];
@@ -176,10 +197,35 @@ export async function scanSessionOutputs(
   const sessions = scanned.slice(0, PROJECT_OUTPUTS_SESSION_SCAN);
 
   const joined = await listOutputsForSessions(database, sessions);
+  const producedEntityIds = [
+    ...new Set(
+      [...joined.values()].flatMap((j) =>
+        j.outputs
+          .filter((o) => o.kind === "entity" && UUID_SHAPE.test(o.refId))
+          .map((o) => o.refId)
+      )
+    ),
+  ];
+  const unlisted = new Set(
+    producedEntityIds.length
+      ? (
+          await database
+            .select({ id: entities.id })
+            .from(entities)
+            .where(
+              and(
+                inArray(entities.id, producedEntityIds),
+                not(listableEntityWhere({ projectLens: opts.projectLens }))
+              )
+            )
+        ).map((r) => r.id)
+      : []
+  );
   const items: ProjectOutputItem[] = [];
   for (const s of sessions) {
     const sessionTitle = resolveSessionTitle(s);
     for (const o of joined.get(s.id)?.outputs ?? []) {
+      if (o.kind === "entity" && unlisted.has(o.refId)) continue;
       items.push({
         id: `${s.id}|${o.id}`,
         kind: o.kind,
@@ -254,21 +300,25 @@ export async function listProjectOutputs(
     .limit(1);
   if (!project) return null;
 
-  const { items, truncated } = await scanSessionOutputs(database, [
-    ...projectPathConditions({
-      userId: query.access.userId,
-      projectId: query.projectId,
-      workspaceIds: query.workspaceIds,
-      lens: "default",
-      // Same door rule as the registry's session predicate: a HUMAN door
-      // also reads sessions whose room roster seats the caller.
-      roster: query.access.actor === "operator",
-    }),
-    scoped.predicate(focusSessions),
-    ...(query.trackId ? [eq(focusSessions.trackId, query.trackId)] : []),
-    ...(query.trackStage
-      ? [eq(focusSessions.trackStage, query.trackStage)]
-      : []),
-  ]);
+  const { items, truncated } = await scanSessionOutputs(
+    database,
+    [
+      ...projectPathConditions({
+        userId: query.access.userId,
+        projectId: query.projectId,
+        workspaceIds: query.workspaceIds,
+        lens: "default",
+        // Same door rule as the registry's session predicate: a HUMAN door
+        // also reads sessions whose room roster seats the caller.
+        roster: query.access.actor === "operator",
+      }),
+      scoped.predicate(focusSessions),
+      ...(query.trackId ? [eq(focusSessions.trackId, query.trackId)] : []),
+      ...(query.trackStage
+        ? [eq(focusSessions.trackStage, query.trackStage)]
+        : []),
+    ],
+    { projectLens: query.projectId }
+  );
   return { ...pageNewestFirst(items, query.cursor, limit), truncated };
 }

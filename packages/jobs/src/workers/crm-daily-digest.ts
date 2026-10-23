@@ -23,6 +23,7 @@ import {
   and,
   computeMessageHash,
   ChannelRepository,
+  listableEntityWhere,
 } from "@synap/database";
 import {
   channels,
@@ -199,7 +200,9 @@ async function getOverdueFollowUpsForUser(
       eq(entities.userId, userId),
       eq(entities.type, "person"),
       drizzleSql`${entities.properties}->>'nextFollowUpDate' IS NOT NULL`,
-      drizzleSql`(${entities.properties}->>'nextFollowUpDate')::timestamptz < ${todayStart.toISOString()}`
+      drizzleSql`(${entities.properties}->>'nextFollowUpDate')::timestamptz < ${todayStart.toISOString()}`,
+      // THE listing rule: a demo contact never reaches the morning digest.
+      listableEntityWhere()
     ),
     columns: { title: true, properties: true },
     limit,
