@@ -39,7 +39,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   h.client = client as unknown as typeof h.client;
   const tables = Object.entries(actual).filter(([, v]) => is(v, PgTable));
   h.tables = tables.map(([, v]) => v);
-  const pg = drizzle(client, { schema: Object.fromEntries(tables) as never });
+  // The whole schema module, relations included: the invites read joins its
+  // space's name (`with: { workspace }`), which needs `invitesRelations`.
+  const schema = await import("@synap/database/schema");
+  const pg = drizzle(client, { schema });
   return { ...actual, db: pg, getDb: async () => pg };
 });
 
