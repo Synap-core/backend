@@ -477,14 +477,44 @@ export function getOAuthTokenRateConfig(): {
 export const OAUTH_TOKEN_BODY_READ_MAX = 16 * 1024;
 
 /**
+ * A request's body as text, or null past `maxBytes` (or unreadable): chunk by
+ * chunk, stopping the moment the total passes the cap, never an unbounded
+ * `text()`. Give it a clone when the handler still has to read the body.
+ */
+export async function readTextCapped(
+  req: Request,
+  maxBytes: number
+): Promise<string | null> {
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const step = await reader.read();
+      if (step.done) break;
+      total += step.value.byteLength;
+      if (total > maxBytes) return null;
+      chunks.push(step.value);
+    }
+  } catch {
+    return null;
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
  * The `oauth_token` bucket of one `/token` body (form or JSON, as /token
  * reads it): the client_id with the code or refresh token it redeems,
  * hashed. Nobody can drain a grant's budget without holding that grant, so a
  * flood from anywhere never blocks another app's refresh. A body that was
- * not read (`null`: no length, or too long) or does not parse spends an
- * `unread` bucket: the address's own where addresses tell callers apart, as
- * `buildOAuthTokenIpCeilingKey`, else one for the pod ("unknown", or a shared
- * tunnel address). Neither value is ever logged; only the hash is a key.
+ * not read (`null`: longer than the cap, or unreadable) or does not parse
+ * spends an `unread` bucket: the address's own where addresses tell callers
+ * apart, as `buildOAuthTokenIpCeilingKey`, else one for the pod ("unknown",
+ * or a shared tunnel address). Neither value is ever logged; only the hash is
+ * a key.
  */
 export function buildOAuthTokenKey(
   body: string | null,

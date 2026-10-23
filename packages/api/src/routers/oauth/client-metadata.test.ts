@@ -24,6 +24,7 @@ import {
   ClientMetadataError,
   assertClientMetadataUrl,
   cimdCacheTtlMs,
+  createCimdFetchBudget,
   displayReason,
   resolveCimdClient,
   validateClientMetadataDocument,
@@ -520,6 +521,57 @@ describe("CIMD — document validation", () => {
 });
 
 // ─── Cache ───────────────────────────────────────────────────────────────────
+
+describe("CIMD — one fetch budget for the pod (review O-2)", () => {
+  it("past the budget, a document the pod never read is refused without a request", async () => {
+    serve({});
+    const fetchBudget = createCimdFetchBudget(2, 600_000);
+    const now = () => Date.UTC(2026, 9, 20, 12);
+    // A stranger inventing a client_id per request: every one is a cache miss.
+    for (let i = 0; i < 2; i++) {
+      await resolveCimdClient(CLIENT_ID, ISSUER, memoryStore(), {
+        lookup: publicDns,
+        now,
+        fetchBudget,
+      });
+    }
+    expect(m.httpsRequest).toHaveBeenCalledTimes(2);
+    expect(
+      await refusal(
+        resolveCimdClient(CLIENT_ID, ISSUER, memoryStore(), {
+          lookup: publicDns,
+          now,
+          fetchBudget,
+        })
+      )
+    ).toMatch(/too many app descriptions/);
+    expect(m.httpsRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("a fresh copy spends nothing, and a known app keeps its copy once the budget is spent", async () => {
+    serve({});
+    const fetchBudget = createCimdFetchBudget(1, 600_000);
+    const store = memoryStore();
+    let now = Date.UTC(2026, 9, 20, 12);
+    const deps = () => ({ lookup: publicDns, now: () => now, fetchBudget });
+    await resolveCimdClient(CLIENT_ID, ISSUER, store, deps());
+    await resolveCimdClient(CLIENT_ID, ISSUER, store, deps());
+    expect(m.httpsRequest).toHaveBeenCalledTimes(1);
+    // Stale, budget spent: the 24 h grace serves the copy, nothing is fetched.
+    now += CIMD_MIN_TTL_MS + 1;
+    const client = await resolveCimdClient(CLIENT_ID, ISSUER, store, deps());
+    expect(client.redirectUris).toEqual([CALLBACK]);
+    expect(m.httpsRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("the budget comes back with the next window", () => {
+    const budget = createCimdFetchBudget(1, 600_000);
+    const t0 = Date.UTC(2026, 9, 20, 12);
+    expect(budget.take(t0)).toBe(true);
+    expect(budget.take(t0 + 1)).toBe(false);
+    expect(budget.take(t0 + 600_000)).toBe(true);
+  });
+});
 
 describe("CIMD — cache freshness", () => {
   it("honours Cache-Control within [5 min, 24 h]", () => {

@@ -26,6 +26,7 @@ import {
   buildOAuthTokenKey,
   buildOAuthTokenIpCeilingKey,
   OAUTH_TOKEN_BODY_READ_MAX,
+  readTextCapped,
   buildCrudIpCeilingKey,
   isDirectLoopbackCall,
 } from "./rate-limit-classes.js";
@@ -418,10 +419,24 @@ const oauthTokenIpCeilingLimiter = rateLimiter({
   ),
 });
 
+/** The `/token` body the limiter keys on, or null when it does not read it. */
+async function readOAuthTokenBody(c: Context): Promise<string | null> {
+  const declared = c.req.header("content-length");
+  if (declared === undefined) {
+    return readTextCapped(c.req.raw.clone(), OAUTH_TOKEN_BODY_READ_MAX);
+  }
+  const length = Number(declared);
+  if (!Number.isInteger(length) || length <= 0) return null;
+  if (length > OAUTH_TOKEN_BODY_READ_MAX) return null;
+  return c.req.text().catch(() => null);
+}
+
 /**
- * `/token` per grant (`buildOAuthTokenKey`). The grant is in the body, read
- * here only when its declared length is small; Hono caches the text, so
- * /token reads the same body after this.
+ * `/token` per grant (`buildOAuthTokenKey`). The grant is in the body: one of
+ * a small declared length is read here (Hono caches the text, so /token reads
+ * the same body after this). One with NO declared length (chunked, HTTP/2) is
+ * read from a clone, at most `OAUTH_TOKEN_BODY_READ_MAX` bytes, so it is
+ * keyed by its grant too, not in the one `unread` bucket (review O-3).
  */
 const oauthTokenRateLimiter = rateLimiter({
   windowMs: oauthTokenRate.windowMs,
@@ -432,13 +447,7 @@ const oauthTokenRateLimiter = rateLimiter({
     if (isLocalCaller(c, ip)) {
       return "localhost-bypass-oauth_token-" + Math.random();
     }
-    const length = Number(c.req.header("content-length"));
-    const body =
-      Number.isInteger(length) &&
-      length > 0 &&
-      length <= OAUTH_TOKEN_BODY_READ_MAX
-        ? await c.req.text().catch(() => null)
-        : null;
+    const body = await readOAuthTokenBody(c);
     return buildOAuthTokenKey(body, c.req.header("content-type") ?? "", ip);
   },
   handler: classHandler(

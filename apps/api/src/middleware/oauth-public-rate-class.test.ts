@@ -17,7 +17,8 @@
  * address, so one IP bucket for `/token` was the whole internet's: 60 cheap
  * `/register` calls blocked every pod app's refresh. `/token` now spends a
  * bucket per (client_id, code or refresh token), under an IP ceiling only
- * where addresses tell callers apart.
+ * where addresses tell callers apart. A body with no declared length (chunked,
+ * HTTP/2) is read from a clone, capped, and keyed the same way (review O-3).
  */
 import { Hono } from "hono";
 import { randomBytes } from "node:crypto";
@@ -28,6 +29,7 @@ import {
   classifyRateLimitPath,
   getOAuthPublicRateConfig,
   getOAuthTokenRateConfig,
+  readTextCapped,
 } from "./rate-limit-classes.js";
 
 let rateLimitMiddleware: (typeof import("./security.js"))["rateLimitMiddleware"];
@@ -66,8 +68,8 @@ const refreshCall = (
     headers: {
       "x-forwarded-for": ip,
       "content-type": "application/x-www-form-urlencoded",
-      // What an HTTP client sends with a string body. `new Request` does not
-      // set it, and the limiter reads only a body whose length it is told.
+      // What an HTTP client sends with a string body (`new Request` does not
+      // set it); `refreshNoLength` is the chunked / HTTP/2 shape.
       "content-length": String(Buffer.byteLength(body)),
     },
     body,
@@ -76,8 +78,13 @@ const refreshCall = (
 
 const randomToken = () => randomBytes(32).toString("base64url");
 
-/** A /token body sent with no length: the limiter does not read it. */
-const unreadCall = (app: Hono, ip: string) =>
+/** A /token body with no declared length (chunked, HTTP/2). */
+const refreshNoLength = (
+  app: Hono,
+  ip: string,
+  refreshToken: string,
+  clientId = "https://studio.example.com/.well-known/synap-client.json"
+) =>
   app.request("/token", {
     method: "POST",
     headers: {
@@ -86,9 +93,24 @@ const unreadCall = (app: Hono, ip: string) =>
     },
     body: new URLSearchParams({
       grant_type: "refresh_token",
-      refresh_token: randomToken(),
+      refresh_token: refreshToken,
+      client_id: clientId,
     }).toString(),
   });
+
+/** A /token body the limiter cannot parse: it spends an `unread` bucket. */
+const unreadCall = (app: Hono, ip: string) => {
+  const body = `{not json ${randomToken()}`;
+  return app.request("/token", {
+    method: "POST",
+    headers: {
+      "x-forwarded-for": ip,
+      "content-type": "application/json",
+      "content-length": String(Buffer.byteLength(body)),
+    },
+    body,
+  });
+};
 
 /** Runs `run` as a pod whose visitors all share one address (a tunnel). */
 async function onSharedAddress<T>(run: () => Promise<T>): Promise<T> {
@@ -282,6 +304,47 @@ describe("oauth_token — /token is budgeted per grant, never per shared address
       }
       expect((await unreadCall(app, nextIp())).status).toBe(429);
     });
+  });
+
+  it("on a shared address, a body with no declared length is keyed by its grant, not one bucket for the pod (review O-3)", async () => {
+    await onSharedAddress(async () => {
+      const app = makeApp();
+      for (let i = 0; i < tokenCfg.max + 5; i++) {
+        expect(
+          (await refreshNoLength(app, nextIp(), randomToken())).status
+        ).toBe(400);
+      }
+    });
+  });
+
+  it("with no declared length, one grant still spends its own bucket", async () => {
+    const app = makeApp();
+    const ip = nextIp();
+    const rt = randomToken();
+    for (let i = 0; i < tokenCfg.max; i++) {
+      expect((await refreshNoLength(app, ip, rt)).status).toBe(400);
+    }
+    expect((await refreshNoLength(app, ip, rt)).status).toBe(429);
+  });
+
+  it("/token reads the whole body after the limiter read a clone of it", async () => {
+    const res = await refreshNoLength(
+      makeApp(),
+      nextIp(),
+      randomToken(),
+      "https://b.example/c.json"
+    );
+    expect(((await res.json()) as { client_id: string }).client_id).toBe(
+      "https://b.example/c.json"
+    );
+  });
+
+  it("the capped read: the text up to the cap, null past it", async () => {
+    const post = (body: string) =>
+      new Request("http://pod.test/token", { method: "POST", body });
+    expect(await readTextCapped(post("a=1&b=2"), 16)).toBe("a=1&b=2");
+    expect(await readTextCapped(post("x".repeat(16)), 16)).toBe("x".repeat(16));
+    expect(await readTextCapped(post("x".repeat(17)), 16)).toBeNull();
   });
 
   it("the key: per (client_id, grant), form or JSON alike, and never the raw token", () => {

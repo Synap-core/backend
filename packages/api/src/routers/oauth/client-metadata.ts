@@ -21,7 +21,11 @@
  *   - no redirect followed, 5 s for the whole exchange, 5 KB, application/json;
  *   - at most one fetch in flight per client_id, and the validated document is
  *     cached in `oauth_clients` (fresh for its Cache-Control, floored at 5 min,
- *     capped at 24 h).
+ *     capped at 24 h);
+ *   - at most `CIMD_FETCH_MAX` fetches per 10 min for the whole process
+ *     (review O-2): on a shared address `/authorize` is budgeted per client_id,
+ *     a value the caller picks, so a stranger inventing one per request would
+ *     otherwise buy a fetch per request.
  *
  * The document is then validated as a whole before anything is cached: its
  * `client_id` must equal the URL byte for byte (a document cannot speak for
@@ -67,6 +71,13 @@ export const CIMD_MIN_TTL_MS = 5 * 60 * 1000;
 export const CIMD_MAX_TTL_MS = 24 * 60 * 60 * 1000;
 /** A copy this young is used when a refresh FAILS to fetch (not when invalid). */
 export const CIMD_STALE_GRACE_MS = 24 * 60 * 60 * 1000;
+/**
+ * Document fetches per window, pod-wide. A fresh cached copy spends nothing,
+ * and a spent budget is a fetch failure, so a known app keeps its copy (the
+ * 24 h grace): only a document the pod has never read waits.
+ */
+export const CIMD_FETCH_MAX = 120;
+export const CIMD_FETCH_WINDOW_MS = 10 * 60 * 1000;
 
 const CIMD_MAX_REDIRECT_URIS = 8;
 const CIMD_MAX_CLIENT_NAME_LENGTH = 100;
@@ -395,7 +406,37 @@ export interface ClientMetadataDeps {
   /** DNS for `resolvePublicIssuerEndpoint` (tests inject one). */
   lookup?: IssuerDnsLookup;
   now?: () => number;
+  /** The fetch budget (tests inject a small one); the process's by default. */
+  fetchBudget?: CimdFetchBudget;
 }
+
+export interface CimdFetchBudget {
+  /** Spend one fetch at `now`; false once the window's budget is spent. */
+  take(now: number): boolean;
+}
+
+/** A fixed window over every document fetch it is asked for. */
+export function createCimdFetchBudget(
+  max = CIMD_FETCH_MAX,
+  windowMs = CIMD_FETCH_WINDOW_MS
+): CimdFetchBudget {
+  let start = 0;
+  let used = 0;
+  return {
+    take(now) {
+      if (now < start || now - start >= windowMs) {
+        start = now;
+        used = 0;
+      }
+      if (used >= max) return false;
+      used += 1;
+      return true;
+    },
+  };
+}
+
+/** Process-wide, as `inflight`. */
+const cimdFetchBudget = createCimdFetchBudget();
 
 function headerValue(v: string | string[] | undefined): string | undefined {
   return Array.isArray(v) ? v.join(", ") : v;
@@ -515,10 +556,18 @@ export async function resolveCimdClient(
 
   let pending = inflight.get(clientId);
   if (!pending) {
-    pending = refresh(url, clientId, store, deps).finally(() =>
-      inflight.delete(clientId)
-    );
-    inflight.set(clientId, pending);
+    if ((deps.fetchBudget ?? cimdFetchBudget).take(now)) {
+      pending = refresh(url, clientId, store, deps).finally(() =>
+        inflight.delete(clientId)
+      );
+      inflight.set(clientId, pending);
+    } else {
+      pending = Promise.reject(
+        new ClientMetadataFetchError(
+          "this pod has read too many app descriptions in the last few minutes"
+        )
+      );
+    }
   }
   try {
     return await pending;
