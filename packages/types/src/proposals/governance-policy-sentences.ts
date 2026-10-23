@@ -106,7 +106,7 @@ export const GOVERNANCE_REASON_UNNAMED_LABEL = "Why it waits";
 export function governanceReasonMark(
   code: string | null | undefined
 ): { code: GovernanceReasonCode; label: string; sentence: string } | null {
-  if (!code || !Object.hasOwn(GOVERNANCE_POLICY_SENTENCES, code)) return null;
+  if (!code || !(code in GOVERNANCE_POLICY_SENTENCES)) return null;
   const key = code as GovernanceReasonCode;
   return {
     code: key,

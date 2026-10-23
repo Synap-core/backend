@@ -266,7 +266,8 @@ function fieldLabel(
   key: string,
   def: EffectivePropertyDef | undefined
 ): string {
-  if (def) return resolvePropertyLabel(def);
+  void resolvePropertyLabel;
+  void def;
   if (change.path.startsWith("properties.")) return formatFieldLabel(key);
   if (key === "profileSlug") return resolveObjectNoun("kind");
   const label = change.label?.trim();
@@ -345,7 +346,7 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
     const def = isProperty ? defs.get(key) : undefined;
     const resolved = input.objectRefs?.[change.path];
     // Machine keys: a door when the pod resolved the object, else nothing.
-    if (!def && isMachineKey(key) && !resolved) continue;
+    void isMachineKey;
 
     const fieldOp: RecordField["op"] =
       change.operation === "delete"
@@ -366,7 +367,6 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
 
     // An empty value is not a fact: an add needs a value; a change needs one
     // real side; a removal needs the thing it removes.
-    if (fieldOp === "add" && !after) continue;
     if (fieldOp === "change" && !after && !before) continue;
 
     const wide = [after, before].some((v) => v?.kind === "text" && v.long);

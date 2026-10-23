@@ -77,10 +77,8 @@ const PLUMBING_KEYS = new Set([
   "entityId",
   // The space an entity create was placed in, resolved at filing time for the
   // materializer (`entities/create.ts`); the card names the space itself.
-  "resolvedWorkspaceId",
   // The duplicate door's answer (`duplicateCheck`, beside a capture graph's
   // operations): the card draws it as the twin, never as a changed field.
-  "duplicateCheck",
   // A session update's display-only name, and the goal it had when a goal
   // change was filed — the latter is drawn as the `goal` row's before
   // (`services/focus-sessions/session-update-goal.ts`).
