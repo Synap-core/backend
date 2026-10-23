@@ -389,13 +389,35 @@ beforeEach(async () => {
 });
 
 describe("ea47d64e: an agent organises its OWN fresh task through the real doors", () => {
-  it("files it into the project the person named and closes it, nothing waiting", async () => {
+  it.only("files it into the project the person named and closes it, nothing waiting", async () => {
     const taskId = await agentCreatesTask();
     // The person names the project AFTER the create (the live order:
     // create, then set_project_focus, then file).
     const projectId = await seedProject();
     h.focus = projectId;
 
+    const dbg = await asAgent(async () => {
+      const dbmod = await import("@synap/database");
+      const { ownWorkOrganiseForFiling } = await import("../own-organise.js");
+      const key = dbmod.getRequestApiKeyId();
+      const agent = dbmod.getActingAgentUserId();
+      const own = await dbmod.isOwnFreshWork(dbmod.db as never, {
+        agentUserId: AGENT,
+        apiKeyId: KEY,
+        subjectType: "entity",
+        subjectIds: [taskId],
+      });
+      const proof = await ownWorkOrganiseForFiling({
+        agentUserId: AGENT,
+        projectId,
+        entityIds: [taskId],
+        sessionId: WORK,
+      });
+      const ev = await q(`select type, is_agent, agent_user_id, proposal_id, source from events where subject_id = $1`, [taskId]);
+      const pr = await q(`select id, status, api_key_id, proposal_type from proposals`);
+      return { key, agent, own, proof, ev: ev.rows, pr: pr.rows };
+    });
+    process.stderr.write(`[DBG] ${JSON.stringify(dbg)}\n`);
     const filing = await fileAsAgent(projectId, taskId);
     expect(filing.status).toBe("filed");
     expect(await filedInto(projectId)).toEqual([taskId]);
