@@ -108,6 +108,14 @@ beforeAll(async () => {
       verdict_reason text,
       verdict_by text,
       verdict_at timestamptz,
+      -- 0345 — what a goal holds.
+      end_state text,
+      criteria jsonb,
+      drop_conditions jsonb,
+      work_kind text,
+      uncertainty text,
+      kind_confirmed_by text,
+      kind_confirmed_at timestamptz,
       metadata jsonb not null default '{}'::jsonb,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()

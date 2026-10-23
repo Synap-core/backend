@@ -30,8 +30,11 @@ import {
 const CREATABLE_VIEW_TYPE_KEYS = CREATABLE_VIEW_DEFINITIONS.map((d) => d.key);
 import {
   PROJECT_TRACK_STATUSES,
+  PROJECT_TRACK_UNCERTAINTY_LEVELS,
   PROJECT_TRACK_VERDICTS,
+  PROJECT_TRACK_WORK_KINDS,
 } from "@synap/database/schema";
+import { GOAL_CRITERIA_MAX, GOAL_CRITERIA_MIN } from "@synap-core/types/units";
 // The renderer `slot`/`scope` wire vocabularies — DERIVED, never hand-listed
 // (see renderer-slot-enum-parity.tripwire.test.ts).
 import {
@@ -48,7 +51,12 @@ import { FIND_CATALOGS } from "../../../services/capabilities/find-intent.js";
 // reason for a copy. Widening the union now widens what MCP advertises, in the
 // same commit, and `output-ref-kinds-parity` audits the mirrors this file
 // cannot import (the Hub REST client's duplicated literal).
-import { BLOCKED_REASONS, OUTPUT_REF_KINDS } from "@synap/playbooks";
+import {
+  BLOCKED_REASONS,
+  CRITERION_ABOUT,
+  CRITERION_CHECK_MEANINGS,
+  OUTPUT_REF_KINDS,
+} from "@synap/playbooks";
 // The ONE ask schema (`@synap-core/types/ask`) — the MCP `ask` property is
 // DERIVED from it (below), never hand-copied.
 import { AskSchema } from "@synap-core/types/ask";
@@ -114,8 +122,59 @@ const SESSION_CRITERIA_PROPERTY = {
         },
         required: ["kind"],
       },
+      checkKind: {
+        type: "string",
+        enum: [...CRITERION_CHECK_MEANINGS],
+        description:
+          "Optional — what kind of check this is, in people's words: measured (evidence or capability), judged (a person; an AI judge only advises), handed_over (a deliverable: evidence or a person), learning (about the method), decided_outside / certified (a person's grade with the source attached).",
+      },
+      about: {
+        type: "string",
+        enum: [...CRITERION_ABOUT],
+        description:
+          "Optional — 'method' when the criterion is about HOW the work is done (an investigation's criteria are), not the hoped-for answer. Default 'result'.",
+      },
     },
     required: ["key", "statement", "check"],
+  },
+};
+
+/**
+ * What a GOAL holds (work model W2, 0345) — the ONE advertised shape on both
+ * track doors (`synap_start_track`, `synap_update_track`). Validated
+ * server-side (`trackGoalInputSchema` + the 2–5 rule); this only teaches it.
+ */
+const TRACK_GOAL_PROPERTIES = {
+  endState: {
+    type: ["string", "null"],
+    description:
+      "Optional: what 'done' looks like, in the person's words (a short paragraph). null clears it.",
+  },
+  criteria: {
+    ...SESSION_CRITERIA_PROPERTY,
+    type: ["array", "null"],
+    minItems: GOAL_CRITERIA_MIN,
+    maxItems: GOAL_CRITERIA_MAX,
+    description: `Optional: how the goal is judged done — none (a lasting goal) or ${GOAL_CRITERIA_MIN} to ${GOAL_CRITERIA_MAX} binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them.`,
+  },
+  dropConditions: {
+    type: ["array", "null"],
+    maxItems: 5,
+    items: { type: "string" },
+    description:
+      "Optional: when to stop pursuing the goal, one line each (at most 5). null clears them.",
+  },
+  workKind: {
+    type: ["string", "null"],
+    enum: [...PROJECT_TRACK_WORK_KINDS, null],
+    description:
+      "Optional: the kind of work — project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (a person's growth). Your choice is a PROPOSAL until the person confirms it.",
+  },
+  uncertainty: {
+    type: ["string", "null"],
+    enum: [...PROJECT_TRACK_UNCERTAINTY_LEVELS, null],
+    description:
+      "Optional: how well the way is known — clear, complicated, complex, chaotic or unknown. A proposal until the person confirms it.",
   },
 };
 
@@ -3820,6 +3879,7 @@ export const tools = {
               },
               required: ["label", "target"],
             },
+            ...TRACK_GOAL_PROPERTIES,
             reasoning: {
               type: "string",
               description:
@@ -4010,7 +4070,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Set a track's DIRECTION (where it is heading, one line) and/or its KPI (the number it steers by). kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it or close the goal — a number reached never closes it; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "Set what a goal holds: its DIRECTION (where it is heading, one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them). Every field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it or close the goal — a number reached never closes it; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4030,6 +4090,7 @@ export const tools = {
                 current: { type: "number" },
               },
             },
+            ...TRACK_GOAL_PROPERTIES,
             reasoning: {
               type: "string",
               description: "Why — shown to the reviewer. One line.",

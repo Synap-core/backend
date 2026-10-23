@@ -2080,6 +2080,44 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "verdict_at",
     addedBy: "0344_track_lifecycle_and_verdict.sql",
   },
+  // 0345 — what a goal holds (end state, criteria, drop conditions, kind of
+  // work, uncertainty, who confirmed the kind). Same reason as 0344: every
+  // track read selects the whole row.
+  {
+    table: "project_tracks",
+    column: "end_state",
+    addedBy: "0345_track_goal_content.sql",
+  },
+  {
+    table: "project_tracks",
+    column: "criteria",
+    addedBy: "0345_track_goal_content.sql",
+  },
+  {
+    table: "project_tracks",
+    column: "drop_conditions",
+    addedBy: "0345_track_goal_content.sql",
+  },
+  {
+    table: "project_tracks",
+    column: "work_kind",
+    addedBy: "0345_track_goal_content.sql",
+  },
+  {
+    table: "project_tracks",
+    column: "uncertainty",
+    addedBy: "0345_track_goal_content.sql",
+  },
+  {
+    table: "project_tracks",
+    column: "kind_confirmed_by",
+    addedBy: "0345_track_goal_content.sql",
+  },
+  {
+    table: "project_tracks",
+    column: "kind_confirmed_at",
+    addedBy: "0345_track_goal_content.sql",
+  },
   // 0275 — the document content revision (the ONE content-write door's CAS)
   // and the revision the Yjs cache is known to equal. Every document content
   // write names `content_revision`, so without it every save 500s.

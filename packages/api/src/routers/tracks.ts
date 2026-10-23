@@ -30,11 +30,14 @@ import {
   addTrackStageInputSchema,
   setTrackStatus,
   reopenTrack,
+  acceptGoalCriterion,
   startStageSession,
   startTrack,
   type TrackActor,
 } from "../services/tracks/tracks-service.js";
 import { readTrackHistory } from "../services/tracks/track-history.js";
+import { trackGoalInputSchema } from "../services/tracks/goal-content.js";
+import { GOAL_ACCEPTANCE_DECISIONS } from "@synap-core/types/units";
 
 function actorOf(
   ctx: { userId: string; agentUserId?: string | null; isHubProtocol?: boolean },
@@ -108,17 +111,21 @@ export const tracksRouter = router({
    */
   start: podProcedure
     .input(
-      z.object({
-        projectId: z.string().uuid(),
-        playbookId: z.string().uuid().optional(),
-        name: z.string().trim().min(1).max(200).optional(),
-        params: params.optional(),
-        /** Where the track is heading, one line (0302). */
-        direction: z.string().max(280).optional(),
-        /** The number it steers by (0302) — a whole KPI: label + target. */
-        kpi: trackKpiInputSchema.optional(),
-        reasoning,
-      })
+      z
+        .object({
+          projectId: z.string().uuid(),
+          playbookId: z.string().uuid().optional(),
+          name: z.string().trim().min(1).max(200).optional(),
+          params: params.optional(),
+          /** Where the track is heading, one line (0302). */
+          direction: z.string().max(280).optional(),
+          /** The number it steers by (0302) — a whole KPI: label + target. */
+          kpi: trackKpiInputSchema.optional(),
+          reasoning,
+        })
+        // What the goal holds (0345): end state, criteria (none or 2–5),
+        // drop conditions, kind of work, uncertainty. Refined by the service.
+        .extend(trackGoalInputSchema.shape)
     )
     .mutation(async ({ ctx, input }) => {
       const { reasoning: why, ...rest } = input;
@@ -237,23 +244,55 @@ export const tracksRouter = router({
    */
   setDirection: podProcedure
     .input(
+      z
+        .object({
+          id: z.string().uuid(),
+          direction: z.string().max(280).nullable().optional(),
+          kpi: trackKpiInputSchema.nullable().optional(),
+          reasoning,
+        })
+        // What the goal holds (0345) — each field whole, `null` clears;
+        // `confirmKind` = the person confirms the AI's kind of work.
+        .extend(trackGoalInputSchema.shape)
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { id, reasoning: why, direction, kpi, ...goal } = input;
+      const result = await setTrackDirection({
+        trackId: id,
+        ...(direction !== undefined ? { direction } : {}),
+        ...(kpi !== undefined ? { kpi } : {}),
+        ...goal,
+        actor: actorOf(ctx, why),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
+    }),
+
+  /**
+   * The goal's JUDGE accepts a claimed criterion, sends it back
+   * (`changes_asked`, with a note saying what to change) or rejects it (R2).
+   * A person's act: an agent key is refused, and so is anyone but the judge.
+   */
+  acceptCriterion: podProcedure
+    .input(
       z.object({
         id: z.string().uuid(),
-        direction: z.string().max(280).nullable().optional(),
-        kpi: trackKpiInputSchema.nullable().optional(),
-        reasoning,
+        criterionKey: z.string().min(1).max(80),
+        decision: z.enum(GOAL_ACCEPTANCE_DECISIONS),
+        note: z.string().trim().max(2000).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const result = await setTrackDirection({
+      const result = await acceptGoalCriterion({
         trackId: input.id,
-        ...(input.direction !== undefined
-          ? { direction: input.direction }
-          : {}),
-        ...(input.kpi !== undefined ? { kpi: input.kpi } : {}),
-        actor: actorOf(ctx, input.reasoning),
+        criterionKey: input.criterionKey,
+        decision: input.decision,
+        note: input.note,
+        actor: actorOf(ctx),
       });
-      if (result.status === "proposed") return result;
       return {
         status: result.status,
         track: await loadWrittenTrackView(result.track, ctx),

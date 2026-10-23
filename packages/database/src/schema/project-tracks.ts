@@ -79,6 +79,37 @@ export const PROJECT_TRACK_VERDICTS = [
 export type ProjectTrackVerdict = (typeof PROJECT_TRACK_VERDICTS)[number];
 
 /**
+ * The kind of work a goal is (0345, decision 4) — mirror of
+ * `TRACK_WORK_KINDS` (`@synap-core/types/units`), pinned equal by the tracks
+ * service; `project_tracks_work_kind_check` spells the same set.
+ */
+export const PROJECT_TRACK_WORK_KINDS = [
+  "project",
+  "flow",
+  "operation",
+  "investigation",
+  "incident",
+  "commission",
+  "pathway",
+] as const;
+export type ProjectTrackWorkKind = (typeof PROJECT_TRACK_WORK_KINDS)[number];
+
+/**
+ * How well the way is known (0345, decision 4) — mirror of
+ * `TRACK_UNCERTAINTY_LEVELS`, pinned the same way;
+ * `project_tracks_uncertainty_check` spells the same set.
+ */
+export const PROJECT_TRACK_UNCERTAINTY_LEVELS = [
+  "clear",
+  "complicated",
+  "complex",
+  "chaotic",
+  "unknown",
+] as const;
+export type ProjectTrackUncertainty =
+  (typeof PROJECT_TRACK_UNCERTAINTY_LEVELS)[number];
+
+/**
  * What a track pinned from its method at start. Every key optional: a track
  * backfilled from a project's legacy `settings.stages` (0272) carries only
  * `stages`.
@@ -198,6 +229,34 @@ export const projectTracks = pgTable(
     /** The person who closed it (the approver, when an agent proposed it). */
     verdictBy: text("verdict_by"),
     verdictAt: timestamp("verdict_at", { mode: "date", withTimezone: true }),
+    /** What "done" looks like, in words (0345). NULL = unsaid. */
+    endState: text("end_state"),
+    /**
+     * The goal's criteria (0345, decision 1): 0 or 2–5, the session
+     * criterion shape (`readCriteria`, @synap/playbooks), each entry with the
+     * judge's `acceptance` once decided (R2 — written only by the acceptance
+     * door). NULL or [] = a lasting goal. Marks are DERIVED, never stored.
+     */
+    criteria: jsonb("criteria").$type<unknown[]>(),
+    /** When to stop (0345): a list of lines. NULL = none said. */
+    dropConditions: jsonb("drop_conditions").$type<string[]>(),
+    /** The kind of work (0345, decision 4) — proposed by AI, confirmed by a person. */
+    workKind: text("work_kind", {
+      enum: PROJECT_TRACK_WORK_KINDS,
+    }).$type<ProjectTrackWorkKind>(),
+    /** How well the way is known (0345, decision 4). */
+    uncertainty: text("uncertainty", {
+      enum: PROJECT_TRACK_UNCERTAINTY_LEVELS,
+    }).$type<ProjectTrackUncertainty>(),
+    /**
+     * The person who confirmed kind + uncertainty, and when — NULL while they
+     * are only the AI's proposal. A person writing them counts as confirmed.
+     */
+    kindConfirmedBy: text("kind_confirmed_by"),
+    kindConfirmedAt: timestamp("kind_confirmed_at", {
+      mode: "date",
+      withTimezone: true,
+    }),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
       .notNull()

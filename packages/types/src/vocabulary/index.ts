@@ -1585,6 +1585,106 @@ export function resolveTrackVerdictLabel(
     : humanizeToken(verdict);
 }
 
+// ── What a goal holds (work model W2) ──────────────────────────────────────
+// Each closed set lives in `@synap-core/types/units` (`units/goal.ts`), which
+// holds the compile-time floor that every value has a row here and that these
+// tables name nothing else. Labels, not sentences: they sit on a chip or after
+// "Kind:", "Waiting on:".
+
+/** Kind of work a goal is (decision 4, `TRACK_WORK_KINDS`). */
+export const TRACK_WORK_KIND_LABELS = {
+  project: "Project",
+  flow: "Flow",
+  operation: "Operation",
+  investigation: "Investigation",
+  incident: "Incident",
+  commission: "Commission",
+  pathway: "Pathway",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** How well the way to the end is known (decision 4, `TRACK_UNCERTAINTY_LEVELS`). */
+export const TRACK_UNCERTAINTY_LABELS = {
+  clear: "Clear",
+  complicated: "Complicated",
+  complex: "Complex",
+  chaotic: "Chaotic",
+  unknown: "Unknown",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** What kind of check a criterion is (R5, `CRITERION_CHECK_MEANINGS`). */
+export const CRITERION_CHECK_MEANING_LABELS = {
+  measured: "Measured",
+  judged: "Judged by a person",
+  handed_over: "Handed over",
+  learning: "Learning",
+  decided_outside: "Decided by an outside party",
+  certified: "Certified by a third party",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** Where one goal criterion stands — derived (`GOAL_CRITERION_MARKS`). */
+export const GOAL_CRITERION_MARK_LABELS = {
+  met: "Met",
+  claimed: "Claimed",
+  under_way: "Under way",
+  not_met: "Not met",
+  not_started: "Not started",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** The judge's acceptance of a claimed criterion (R2, `GOAL_ACCEPTANCE_STATES`). */
+export const GOAL_ACCEPTANCE_LABELS = {
+  waiting: "Waiting",
+  accepted: "Accepted",
+  changes_asked: "Changes asked",
+  rejected: "Rejected",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** What a goal waits on (R4, `WAITING_ON_REASONS`) — read after "Waiting on". */
+export const WAITING_ON_REASON_LABELS = {
+  input: "Input",
+  approval: "Approval",
+  access: "Access",
+  another_work: "Other work",
+  outside_world: "Outside world",
+} as const satisfies Readonly<Record<string, string>>;
+
+function resolveFrom<T extends Readonly<Record<string, string>>>(
+  table: T,
+  value: string | null | undefined
+): string {
+  if (!value) return "";
+  const key = value.trim().toLowerCase();
+  return Object.hasOwn(table, key)
+    ? table[key as keyof T]!
+    : humanizeToken(value);
+}
+
+/** The words for a goal's kind of work; unknown values humanize, never leak. */
+export function resolveTrackWorkKindLabel(v: string | null | undefined) {
+  return resolveFrom(TRACK_WORK_KIND_LABELS, v);
+}
+/** The words for a goal's uncertainty; unknown values humanize, never leak. */
+export function resolveTrackUncertaintyLabel(v: string | null | undefined) {
+  return resolveFrom(TRACK_UNCERTAINTY_LABELS, v);
+}
+/** The words for a criterion's kind of check; unknown values humanize. */
+export function resolveCriterionCheckMeaningLabel(
+  v: string | null | undefined
+) {
+  return resolveFrom(CRITERION_CHECK_MEANING_LABELS, v);
+}
+/** The words for a goal criterion's mark; unknown values humanize. */
+export function resolveGoalCriterionMarkLabel(v: string | null | undefined) {
+  return resolveFrom(GOAL_CRITERION_MARK_LABELS, v);
+}
+/** The words for a criterion's acceptance; unknown values humanize. */
+export function resolveGoalAcceptanceLabel(v: string | null | undefined) {
+  return resolveFrom(GOAL_ACCEPTANCE_LABELS, v);
+}
+/** The words for what a goal waits on; unknown values humanize. */
+export function resolveWaitingOnReasonLabel(v: string | null | undefined) {
+  return resolveFrom(WAITING_ON_REASON_LABELS, v);
+}
+
 /**
  * Where an import was STARTED (`ImportSessionCuration.origin`), as the end of
  * "Import from …" and "Started on …". Keyed by the client token each door
