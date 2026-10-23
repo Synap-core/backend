@@ -1288,7 +1288,7 @@ $oidc_block
       #   identity: ctx.identity, transient_payload: if std.objectHas(ctx, "flow")
       #   && std.objectHas(ctx.flow, "transient_payload") then
       #   ctx.flow.transient_payload else null }
-      # (the invite page's `invite_token`, join plan phase 4: an invite-bound
+      # (the invite page's invite_token, join plan phase 4: an invite-bound
       # Synap Cloud or passkey sign-up; Kratos keeps transient_payload across
       # the OIDC trip).
       after:
