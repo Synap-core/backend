@@ -55,6 +55,12 @@ describe("pod-app surfaces", () => {
     expect(src).toMatch(/aria-describedby=\{\s*blockedReason/);
   });
 
+  it("consent: a section selects through the shared narrow-only rule, and the width is the model's", () => {
+    const src = read(CONSENT);
+    expect(src).toMatch(/toggleSection\(s, app\.permissions, section\)/);
+    expect(src).toMatch(/width=\{consentWidth\(params\.clientId\)\}/);
+  });
+
   it("consent: the invalid-request hint comes from the client kind", () => {
     const src = read(CONSENT);
     expect(src).toMatch(/hint=\{invalidRequestHint\(params\.clientId\)\}/);

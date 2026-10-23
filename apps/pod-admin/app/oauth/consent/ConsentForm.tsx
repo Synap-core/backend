@@ -31,16 +31,21 @@ import { trpc } from "../../../lib/trpc";
 import {
   actsAsHeadline,
   allowBlockedReason,
+  consentWidth,
   initialSelection,
   invalidRequestHint,
   isTicked,
   permissionLabel,
   reasonOf,
+  sectionCheckboxLabel,
+  sectionState,
   spaceCheckboxLabel,
   splitOffer,
   toApproved,
   toggle,
+  toggleSection,
   withoutSpace,
+  type OfferedPermission,
   type Selection,
 } from "./consent-model";
 
@@ -126,16 +131,10 @@ export function ConsentForm({
   params,
   podHost,
   identity,
-  spaceHint,
 }: {
   params: ConsentParams;
   podHost?: string;
   identity?: string;
-  /**
-   * The launch's `space_hint`: pre-ticks that space if the person can give it
-   * there. Kept OUT of `params`, so it never reaches the server.
-   */
-  spaceHint?: string;
 }) {
   const [step, setStep] = useState<Step>({ kind: "idle" });
 
@@ -167,9 +166,9 @@ export function ConsentForm({
   const [selection, setSelection] = useState<Selection>(new Set());
   useEffect(() => {
     if (app) {
-      setSelection(initialSelection(app.permissions, app.approved, spaceHint));
+      setSelection(initialSelection(app.permissions, app.approved));
     }
-  }, [app, spaceHint]);
+  }, [app]);
   const approved = app ? toApproved(selection, app.permissions) : [];
 
   const act = useCallback(
@@ -234,7 +233,11 @@ export function ConsentForm({
       : null;
 
   return (
-    <ReceiverShell podHost={podHost} identity={identity} width="sm">
+    <ReceiverShell
+      podHost={podHost}
+      identity={identity}
+      width={consentWidth(params.clientId)}
+    >
       <CardHeader className="flex flex-col items-start gap-3 px-7 pt-7 pb-0">
         <span
           aria-hidden
@@ -354,6 +357,11 @@ export function ConsentForm({
                   onToggle={(permission, workspaceId) =>
                     setSelection((s) =>
                       toggle(s, app.permissions, permission, workspaceId)
+                    )
+                  }
+                  onToggleSection={(section) =>
+                    setSelection((s) =>
+                      toggleSection(s, app.permissions, section)
                     )
                   }
                   onSpaceCreated={() => void context.refetch()}
@@ -709,6 +717,54 @@ type ConsentApp = NonNullable<
   inferRouterOutputs<AppRouter>["apiKeys"]["getOAuthConsentContext"]["app"]
 >;
 
+/**
+ * A section's heading and its one tri-state checkbox: every permission ×
+ * space of the section ticked, some, or none. A section with no space to give
+ * has nothing to select, so it gets no checkbox.
+ */
+function SectionHeading({
+  id,
+  title,
+  section,
+  permissions,
+  selection,
+  onToggleSection,
+  busy,
+}: {
+  id: string;
+  title: string;
+  section: "grants" | "decisions";
+  permissions: readonly OfferedPermission[];
+  selection: Selection;
+  onToggleSection: () => void;
+  busy: boolean;
+}) {
+  const state = sectionState(selection, permissions);
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-3">
+      <p
+        id={id}
+        className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65"
+      >
+        <ShieldCheck className="h-3 w-3" aria-hidden /> {title}
+      </p>
+      {permissions.some((p) => p.workspaces.length > 0) ? (
+        <Checkbox
+          size="sm"
+          classNames={{ base: "my-0 min-h-10 py-0" }}
+          aria-label={sectionCheckboxLabel(section)}
+          isSelected={state === "all"}
+          isIndeterminate={state === "some"}
+          isDisabled={busy}
+          onValueChange={onToggleSection}
+        >
+          All
+        </Checkbox>
+      ) : null}
+    </div>
+  );
+}
+
 /** One line per permission, with a tick for each space it may be given in. */
 function PermissionList({
   permissions,
@@ -786,14 +842,16 @@ function PermissionList({
 /**
  * A pod app's consent (spec 17 §9.1): its domain is the headline (above), and
  * the person picks, per permission, the spaces it may act in — only from what
- * the pod offers, so the screen can narrow and never widen.
+ * the pod offers, so the screen can narrow and never widen. Each section
+ * (reads and writes, decisions) also selects or clears as a whole.
  */
-function AppConsent({
+export function AppConsent({
   app,
   registeredAt,
   redirectHost,
   selection,
   onToggle,
+  onToggleSection,
   onSpaceCreated,
   busy,
   step,
@@ -805,6 +863,8 @@ function AppConsent({
   redirectHost: string;
   selection: Selection;
   onToggle: (permission: string, workspaceId: string) => void;
+  /** The section checkbox pressed (`toggleSection` on that section). */
+  onToggleSection: (section: readonly OfferedPermission[]) => void;
   onSpaceCreated: () => void;
   busy: boolean;
   step: Step;
@@ -820,35 +880,52 @@ function AppConsent({
     <>
       <div className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
         {grants.length > 0 && (
-          <>
-            <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65">
-              <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to
-            </p>
+          <section
+            aria-labelledby={`${groupId}-grants`}
+            className="flex flex-col gap-1"
+          >
+            <SectionHeading
+              id={`${groupId}-grants`}
+              title="It asks to"
+              section="grants"
+              permissions={grants}
+              selection={selection}
+              onToggleSection={() => onToggleSection(grants)}
+              busy={busy}
+            />
             <PermissionList
               permissions={grants}
               selection={selection}
               onToggle={onToggle}
               busy={busy}
             />
-          </>
+          </section>
         )}
         {decisions.length > 0 && (
-          <>
-            <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65">
-              <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to decide
-              for you
-            </p>
+          <section
+            aria-labelledby={`${groupId}-decisions`}
+            className="flex flex-col gap-1"
+          >
+            <SectionHeading
+              id={`${groupId}-decisions`}
+              title="It asks to decide for you"
+              section="decisions"
+              permissions={decisions}
+              selection={selection}
+              onToggleSection={() => onToggleSection(decisions)}
+              busy={busy}
+            />
             <PermissionList
               permissions={decisions}
               selection={selection}
               onToggle={onToggle}
               busy={busy}
             />
-            <p className="text-xs leading-relaxed text-foreground/65">
+            <p className="pt-2 text-xs leading-relaxed text-foreground/65">
               Each decision is yours, on one change at a time. Nothing above
               includes it: tick the spaces where you allow it.
             </p>
-          </>
+          </section>
         )}
         {app.ignoredScopes.length > 0 && (
           <p className="text-xs text-foreground/65">
