@@ -87,7 +87,10 @@ vi.mock("../mail-feed/triage.js", () => ({ triageEmails: vi.fn() }));
 // file's minimal `@synap/database` mock does not model. Stub them so these
 // tests exercise what they actually assert (the AccessContext lens the
 // entities READ is scoped to), not the facet-resolution machinery.
-vi.mock("../../utils/workspace-membership.js", () => ({
+vi.mock("../../utils/workspace-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../utils/workspace-membership.js")
+  >()),
   resolveFacetVisibilityScope: vi.fn().mockResolvedValue({ userId: "u1" }),
 }));
 vi.mock("../../utils/assert-known-profile-slug.js", () => ({
