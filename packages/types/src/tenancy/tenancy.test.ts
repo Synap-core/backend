@@ -5,6 +5,7 @@ import {
   firstPartyBaseForPodHost,
   firstPartyWebOrigins,
   isPodName,
+  isRefusedFirstPartyBase,
   isRefusedSiteBase,
   isTenantZone,
   legacyPairFor,
@@ -217,8 +218,10 @@ describe("sharedCookieDomain", () => {
 
 describe("firstPartyBaseForPodHost", () => {
   it.each([
-    ["alice.pod.synap.live", "alice.pod.synap.live"],
-    ["pod.alice.synap.live", "alice.synap.live"],
+    // A Synap Cloud pod has no subtree base: the sites its tenant runs under
+    // its name are not the pod; its console is first-party by POD_ADMIN_URL.
+    ["alice.pod.synap.live", null],
+    ["pod.alice.synap.live", null],
     ["alice.synap.live", null],
     ["pod.synap.live", null],
     ["admin.alice.pod.synap.live", null],
@@ -228,6 +231,33 @@ describe("firstPartyBaseForPodHost", () => {
     ["pod.com", null],
   ])("%s → %s", (host, base) => {
     expect(firstPartyBaseForPodHost(host)).toBe(base);
+  });
+});
+
+describe("isRefusedFirstPartyBase", () => {
+  it.each([
+    "alice.pod.synap.live",
+    "shop.alice.pod.synap.live",
+    "alice.synap.live",
+    "alice.pod.staging.synap.live",
+    "pod.synap.live",
+    "synap.live",
+    "Alice.Pod.Synap.Live.",
+    "io",
+    "",
+  ])("refuses %j", (base) => {
+    expect(isRefusedFirstPartyBase(base)).toBe(true);
+  });
+
+  it.each(["acme.example", "team.mycorp.co.uk"])("keeps %j", (base) => {
+    expect(isRefusedFirstPartyBase(base)).toBe(false);
+  });
+
+  it("refuses for CORS what it still allows as a cookie domain", () => {
+    expect(
+      sharedCookieDomain("alice.pod.synap.live", "admin.alice.pod.synap.live")
+    ).toBe("alice.pod.synap.live");
+    expect(isRefusedFirstPartyBase("alice.pod.synap.live")).toBe(true);
   });
 });
 
@@ -266,9 +296,7 @@ describe("host normalisation (case, the DNS root dot, IPs, empty labels)", () =>
     expect(consoleHostForPod("alice.pod.synap.live.")).toBe(
       "admin.alice.pod.synap.live"
     );
-    expect(firstPartyBaseForPodHost("x.POD.synap.live")).toBe(
-      "x.pod.synap.live"
-    );
+    expect(firstPartyBaseForPodHost("x.POD.synap.live")).toBeNull();
   });
 
   it.each(["", "   ", "a..b", "10.0.0.5", "[::1]", "::1", "."])(

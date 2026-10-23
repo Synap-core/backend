@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   eq: vi.fn(),
   findFirst: vi.fn(),
   getDb: vi.fn(),
+  corsOrigins: [] as string[],
 }));
 
 vi.mock("@synap/database", () => ({
@@ -22,7 +23,7 @@ vi.mock("@synap/database", () => ({
 }));
 
 vi.mock("./middleware/security.js", () => ({
-  getCorsOrigins: () => [],
+  getCorsOrigins: () => mocks.corsOrigins,
 }));
 
 import {
@@ -57,16 +58,16 @@ describe("first-party base domain (self-healing from PUBLIC_URL)", () => {
   });
 
   it("derives the base from PUBLIC_URL when SYNAP_BASE_DOMAIN is unset — a sibling surface is first-party", () => {
-    process.env.PUBLIC_URL = "https://pod.thearch.synap.live";
-    expect(isAllowedOrigin("https://pod-admin.thearch.synap.live")).toBe(true);
-    expect(isAllowedOrigin("https://pod.thearch.synap.live")).toBe(true);
+    process.env.PUBLIC_URL = "https://pod.thearch.example.com";
+    expect(isAllowedOrigin("https://pod-admin.thearch.example.com")).toBe(true);
+    expect(isAllowedOrigin("https://pod.thearch.example.com")).toBe(true);
   });
 
   it("self-heals a STALE SYNAP_BASE_DOMAIN left over from a previous domain", () => {
     process.env.SYNAP_BASE_DOMAIN = "team.thearchitech.xyz"; // pre-migration value
-    process.env.PUBLIC_URL = "https://pod.thearch.synap.live";
+    process.env.PUBLIC_URL = "https://pod.thearch.example.com";
     // the new sibling is first-party (healed to the current PUBLIC_URL) …
-    expect(isAllowedOrigin("https://pod-admin.thearch.synap.live")).toBe(true);
+    expect(isAllowedOrigin("https://pod-admin.thearch.example.com")).toBe(true);
     // … and the stale base no longer admits its old siblings
     expect(isAllowedOrigin("https://pod-admin.team.thearchitech.xyz")).toBe(
       false
@@ -85,6 +86,7 @@ describe("first-party base domain (self-healing from PUBLIC_URL)", () => {
   it("never takes a tenant zone as the base: other tenants' pods stay foreign", () => {
     process.env.SYNAP_BASE_DOMAIN = "synap.live";
     process.env.PUBLIC_URL = "https://pod.thearch.synap.live";
+    process.env.POD_ADMIN_URL = "https://pod-admin.thearch.synap.live";
     expect(isAllowedOrigin("https://pod-admin.thearch.synap.live")).toBe(true);
     expect(isAllowedOrigin("https://pod.bob.synap.live")).toBe(false);
     expect(isAllowedOrigin("https://crm.synap.live")).toBe(false);
@@ -101,20 +103,44 @@ describe("first-party base domain (self-healing from PUBLIC_URL)", () => {
     expect(isAllowedOrigin("https://api.synap.live")).toBe(false);
   });
 
-  it("a <name>.pod.synap.live pod: its console and its own sites are first-party, no other tenant is", () => {
+  it("a <name>.pod.synap.live pod: itself and its console are first-party; its tenant's sites and other tenants are not", () => {
     process.env.PUBLIC_URL = "https://alice.pod.synap.live";
+    process.env.POD_ADMIN_URL = "https://admin.alice.pod.synap.live";
     expect(isAllowedOrigin("https://admin.alice.pod.synap.live")).toBe(true);
-    expect(isAllowedOrigin("https://shop.alice.pod.synap.live")).toBe(true);
     expect(isAllowedOrigin("https://alice.pod.synap.live")).toBe(true);
+    expect(isAllowedOrigin("https://shop.alice.pod.synap.live")).toBe(false);
+    expect(isAllowedOrigin("https://www.shop.alice.pod.synap.live")).toBe(
+      false
+    );
     expect(isAllowedOrigin("https://bob.pod.synap.live")).toBe(false);
     expect(isAllowedOrigin("https://admin.bob.pod.synap.live")).toBe(false);
     expect(isAllowedOrigin("https://pod.synap.live")).toBe(false);
     expect(isAllowedOrigin("https://crm.synap.live")).toBe(false);
   });
 
+  it("a SYNAP_BASE_DOMAIN of the pod's own host (what the installer writes) admits no tenant site", () => {
+    process.env.SYNAP_BASE_DOMAIN = "alice.pod.synap.live";
+    process.env.PUBLIC_URL = "https://alice.pod.synap.live";
+    process.env.POD_ADMIN_URL = "https://admin.alice.pod.synap.live";
+    expect(isAllowedOrigin("https://admin.alice.pod.synap.live")).toBe(true);
+    expect(isAllowedOrigin("https://shop.alice.pod.synap.live")).toBe(false);
+  });
+
+  it("an ALLOWED_ORIGINS entry is still first-party, tenant site or not", () => {
+    mocks.corsOrigins = ["https://shop.alice.pod.synap.live"];
+    try {
+      process.env.PUBLIC_URL = "https://alice.pod.synap.live";
+      expect(isAllowedOrigin("https://shop.alice.pod.synap.live")).toBe(true);
+      expect(isAllowedOrigin("https://blog.alice.pod.synap.live")).toBe(false);
+    } finally {
+      mocks.corsOrigins = [];
+    }
+  });
+
   it("never takes the pod.synap.live zone as the base", () => {
     process.env.SYNAP_BASE_DOMAIN = "pod.synap.live";
     process.env.PUBLIC_URL = "https://alice.pod.synap.live";
+    process.env.POD_ADMIN_URL = "https://admin.alice.pod.synap.live";
     expect(isAllowedOrigin("https://admin.alice.pod.synap.live")).toBe(true);
     expect(isAllowedOrigin("https://bob.pod.synap.live")).toBe(false);
   });
@@ -122,6 +148,7 @@ describe("first-party base domain (self-healing from PUBLIC_URL)", () => {
   it("a pod moved to its new names heals the old base: the old console is foreign", () => {
     process.env.SYNAP_BASE_DOMAIN = "alice.synap.live";
     process.env.PUBLIC_URL = "https://alice.pod.synap.live";
+    process.env.POD_ADMIN_URL = "https://admin.alice.pod.synap.live";
     expect(isAllowedOrigin("https://admin.alice.pod.synap.live")).toBe(true);
     expect(isAllowedOrigin("https://pod-admin.alice.synap.live")).toBe(false);
   });
@@ -131,15 +158,17 @@ describe("first-party base domain (self-healing from PUBLIC_URL)", () => {
     (zone) => {
       process.env.SYNAP_BASE_DOMAIN = zone;
       process.env.PUBLIC_URL = "https://alice.pod.synap.live";
+      process.env.POD_ADMIN_URL = "https://admin.alice.pod.synap.live";
       expect(isAllowedOrigin("https://bob.pod.synap.live")).toBe(false);
       expect(isAllowedOrigin("https://crm.synap.live")).toBe(false);
       expect(isAllowedOrigin("https://admin.alice.pod.synap.live")).toBe(true);
     }
   );
 
-  it("an uppercase PUBLIC_URL host x.POD.synap.live derives its own base, nothing wider", () => {
+  it("an uppercase PUBLIC_URL host x.POD.synap.live derives no base", () => {
     process.env.PUBLIC_URL = "https://x.POD.synap.live";
-    expect(isAllowedOrigin("https://admin.x.pod.synap.live")).toBe(true);
+    expect(isAllowedOrigin("https://admin.x.pod.synap.live")).toBe(false);
+    expect(isAllowedOrigin("https://x.pod.synap.live")).toBe(true);
     expect(isAllowedOrigin("https://y.pod.synap.live")).toBe(false);
   });
 

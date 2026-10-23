@@ -20,13 +20,15 @@
  *     `installer-parity.test.ts` here runs the installer's own functions;
  *   - desktop main (browser `electron/main/connection/registrable-domain.ts`):
  *     its `registrable-domain.parity.test.ts` imports this module;
- *   - the Control Plane (`podHostsForName`, `FIRST_PARTY_WEB_SUBDOMAINS`): its
- *     `desktop-console-host.contract.test.ts`.
+ *   - the Control Plane (`podHostsForName`, `consoleHostForPod`,
+ *     `RESERVED_POD_NAMES`, `FIRST_PARTY_WEB_SUBDOMAINS`) pins the same values
+ *     as literals in its own tests (`desktop-console-host.contract.test.ts`,
+ *     `first-party-web-apps.test.ts`); nothing reads this module from there.
  *
  * Pure and dependency-free: safe in Node, browsers, React Native and Next.js.
  */
 
-/** The Control Plane's pod-name grammar (`POD_NAME_RE`, control-plane-api `src/lib/pod-registration-tokens.ts`). */
+/** The Control Plane's pod-name grammar (`POD_NAME_RE`, control-plane-api `src/lib/pod-naming.ts`). */
 export const POD_NAME_RE = /^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/;
 
 /**
@@ -300,27 +302,33 @@ export function sharedCookieDomain(
 }
 
 /**
+ * A base no pod may make first-party to its API and realtime (credentialed
+ * CORS): what {@link isRefusedSiteBase} refuses, and any host under a tenant
+ * zone. Under a zone, the names below a pod's host are its tenant's other
+ * sites (`shop.alice.pod.synap.live`), which are not the pod: a Synap Cloud
+ * pod trusts its own origins (PUBLIC_URL, POD_ADMIN_URL) and ALLOWED_ORIGINS,
+ * never a subtree. A cookie domain is a different question
+ * ({@link sharedCookieDomain}).
+ */
+export function isRefusedFirstPartyBase(base: string): boolean {
+  const b = normalizeHost(base);
+  return !b || isRefusedSiteBase(b) || tenantZoneOf(b) !== null;
+}
+
+/**
  * The base under which a pod's own surfaces are first-party to it, derived from
- * its public host. A Synap Cloud pod: `{name}.pod.synap.live` (its console and
- * the tenant's other sites), legacy nested `{name}.synap.live`, legacy flat none.
+ * its public host. A Synap Cloud pod: none (see {@link isRefusedFirstPartyBase}).
  * A self-hosted pod: its host without the `pod.` / `pod-admin.` service label
  * (`pod.acme.example` → `acme.example`); any other host none. Never a TLD or a
  * tenant zone.
  */
 export function firstPartyBaseForPodHost(host: string): string | null {
   const h = normalize(host);
-  const tenant = parseTenantPodHost(h);
-  if (tenant) {
-    if (tenant.scheme === "current") return tenant.podHost;
-    if (tenant.scheme === "legacy-nested")
-      return `${tenant.name}.${tenant.zone}`;
-    return null;
-  }
-  if (tenantZoneOf(h)) return null;
+  if (!h || isTenantZone(h) || tenantZoneOf(h)) return null;
   const labels = h.split(".");
   if (labels[0] !== "pod" && labels[0] !== "pod-admin") return null;
   const base = labels.slice(1).join(".");
-  return isRefusedSiteBase(base) ? null : base;
+  return isRefusedFirstPartyBase(base) ? null : base;
 }
 
 /**
