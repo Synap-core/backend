@@ -82,14 +82,16 @@ import type {
 import { type LIVE_PROJECT_TRACK_STATUSES } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import {
+  buildObjectActionTitle,
+  resolveTrackStatusLabel,
+} from "@synap-core/types/vocabulary";
 import { formatKpiFraction } from "@synap-core/types/lens";
 import {
   canTransitionTrack,
   checkTrackClose,
   isTrackClosed,
   isTrackVerdict,
-  resolveTrackStatusLabel,
   TRACK_LIFECYCLE,
   trackStatusCategory,
   type TrackStatusIn,
@@ -814,7 +816,7 @@ export async function startTrack(
     assertNameHeldBySameMethod(live, playbook);
     // Reopening: the live track holding the name must BE the new version (a
     // repeated reopen), never an unrelated goal handed back as if it were.
-    if (replaces && !(await replacingTrackIds(replaces.id)).includes(live.id)) {
+    if (replaces && !replaces.replacedBy.includes(live.id)) {
       throw new TRPCError({
         code: "CONFLICT",
         message:
@@ -828,6 +830,14 @@ export async function startTrack(
       playbook: playbookRef,
       missingDomains,
     };
+  }
+  // No live version holds the name, yet a newer version exists (closed since):
+  // the line continues from the newest one, so a goal's versions stay one line.
+  if (replaces && replaces.replacedBy.length > 0) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Track "${replaces.track.name}" was already reopened as a newer version — reopen that one instead.`,
+    });
   }
   const trackId = input.id ?? randomUUID();
 
@@ -887,7 +897,7 @@ export async function startTrack(
       ...(direction ? { direction } : {}),
       ...(kpiInput ? { kpi: kpiInput } : {}),
       // The closed version this one reopens (R8) — re-checked at approval.
-      ...(replaces ? { replacesTrackId: replaces.id } : {}),
+      ...(replaces ? { replacesTrackId: replaces.track.id } : {}),
       // The consent the summary states ("…and let <agent> work in …").
       ...(spaceGrantConsent
         ? { [TRACK_SPACE_GRANT_KEY]: spaceGrantConsent }
@@ -965,7 +975,7 @@ export async function startTrack(
         fromType: "track",
         fromId: track.id,
         toType: "track",
-        toId: replaces.id,
+        toId: replaces.track.id,
         linkType: "replaces",
       },
       userId: actor.userId,
@@ -1047,16 +1057,18 @@ async function replacingTrackIds(trackId: string): Promise<string[]> {
 }
 
 /**
- * The track a reopen replaces: visible to the actor, on THIS project, closed
- * or dropped (a live goal needs no reopening), and the NEWEST version — a
- * track already replaced is reopened through the version that replaced it,
- * so a goal's versions stay one line.
+ * The track a reopen replaces: visible to the actor, on THIS project, and
+ * closed or dropped (a live goal needs no reopening). `replacedBy` lists the
+ * newer versions already linked to it: `startTrack` hands back the live one
+ * (a repeated reopen is idempotent) and refuses a reopen of an old version
+ * whose newer one has closed since — reopen the newest, so a goal's versions
+ * stay one line.
  */
 async function assertReplaceableTrack(
   trackId: string,
   projectId: string,
   actor: TrackActor
-): Promise<ProjectTrack> {
+): Promise<{ track: ProjectTrack; replacedBy: string[] }> {
   const old = await getTrack(trackId, actor);
   if (!old || old.projectId !== projectId) {
     throw new TRPCError({
@@ -1070,13 +1082,7 @@ async function assertReplaceableTrack(
       message: `Track "${old.name}" is ${resolveTrackStatusLabel(old.status).toLowerCase()}, not closed — work in it instead of reopening it.`,
     });
   }
-  if ((await replacingTrackIds(old.id)).length > 0) {
-    throw new TRPCError({
-      code: "CONFLICT",
-      message: `Track "${old.name}" was already reopened as a newer version — reopen that one instead.`,
-    });
-  }
-  return old;
+  return { track: old, replacedBy: await replacingTrackIds(old.id) };
 }
 
 /**

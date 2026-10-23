@@ -1265,13 +1265,14 @@ describe("0302 emergent stages", () => {
     });
   });
 
-  it("a completed track takes no new stage", async () => {
+  it("a closed (completed) track takes no new stage", async () => {
     await q(`update project_tracks set status = 'completed' where id = $1`, [
       emTrack,
     ]);
+    // The track lifecycle's word ("Closed"), and the way back: a new version.
     await expect(
       addTrackStage({ trackId: emTrack, stage: { name: "Late" }, actor: human })
-    ).rejects.toThrow(/completed — reopen it/);
+    ).rejects.toThrow(/is closed — reopen it as a new version/);
   });
 });
 
