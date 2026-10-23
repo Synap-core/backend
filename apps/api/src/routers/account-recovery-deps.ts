@@ -27,11 +27,8 @@ import {
 } from "@synap/database/schema";
 import { createUnifiedEvent } from "@synap/jobs";
 import { createLogger } from "@synap-core/core";
-import {
-  DEFAULT_CLOUD_TRUST,
-  isCloudTrustMode,
-  type CloudTrustMode,
-} from "@synap-core/types/account-recovery";
+import type { CloudTrustMode } from "@synap-core/types/account-recovery";
+import { readCloudTrust } from "../cloud-trust.js";
 import {
   POD_ADMIN_ROLES,
   POD_ADMIN_SYSTEM_SLUG,
@@ -72,18 +69,7 @@ async function accountWhere(
 }
 
 /** `pod_settings.settings.accountRecovery` — the owner's Cloud trust choice. */
-export async function readCloudTrust(): Promise<CloudTrustMode> {
-  const db = await getDb();
-  const [row] = await db
-    .select({ settings: podSettings.settings })
-    .from(podSettings)
-    .orderBy(podSettings.createdAt)
-    .limit(1);
-  const value = (
-    row?.settings as { accountRecovery?: { cloudTrust?: unknown } } | undefined
-  )?.accountRecovery?.cloudTrust;
-  return isCloudTrustMode(value) ? value : DEFAULT_CLOUD_TRUST;
-}
+export { readCloudTrust };
 
 async function writeCloudTrust(mode: CloudTrustMode): Promise<void> {
   const db = await getDb();

@@ -54,6 +54,7 @@ import {
   type VerifiedRequesterAccount,
 } from "@synap/api";
 import { configuredPodAdminBase } from "../pod-admin-config.js";
+import { readCloudTrust } from "../cloud-trust.js";
 
 const logger = createLogger({ module: "federation" });
 export const federationRouter = new Hono();
@@ -355,9 +356,12 @@ export async function backfillFederationOidcCredentials(): Promise<void> {
  *   503 { error: "discovery_unavailable" }   — the read FAILED (never `available:false`)
  *
  * `available` = the pod has a CP-pushed `federationOidcClient.issuer` AND that
- * issuer is an `approved` row in `trusted_issuers`. `reason` is present only
- * when unavailable: `not_configured` (no usable issuer setting) or
- * `issuer_not_approved` (setting present, issuer not approved). Nothing else is
+ * issuer is an `approved` row in `trusted_issuers` AND the owner has not turned
+ * Synap Cloud sign-in off (Cloud trust `off`, ADDENDUM 2026-10-23: every Cloud
+ * button hides, the invite page's included; the Kratos hooks refuse it anyway).
+ * `reason` is present only when unavailable: `not_configured` (no usable
+ * issuer setting), `issuer_not_approved` (setting present, issuer not
+ * approved) or `turned_off` (the owner's switch). Nothing else is
  * exposed — no client id, no secret, no user data. The issuer URL is the public
  * OIDC issuer the browser is redirected to anyway.
  */
@@ -366,7 +370,7 @@ export type CloudSignInDiscovery = {
     available: boolean;
     provider: typeof CP_OIDC_PROVIDER;
     issuerUrl: string | null;
-    reason?: "not_configured" | "issuer_not_approved";
+    reason?: "not_configured" | "issuer_not_approved" | "turned_off";
   };
 };
 
@@ -395,6 +399,16 @@ federationRouter.get("/discovery", async (c) => {
           provider: CP_OIDC_PROVIDER,
           issuerUrl,
           reason: "issuer_not_approved",
+        },
+      } satisfies CloudSignInDiscovery);
+    }
+    if ((await readCloudTrust()) === "off") {
+      return c.json({
+        cloudSignIn: {
+          available: false,
+          provider: CP_OIDC_PROVIDER,
+          issuerUrl,
+          reason: "turned_off",
         },
       } satisfies CloudSignInDiscovery);
     }
