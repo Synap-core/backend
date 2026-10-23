@@ -23,9 +23,9 @@ export interface ApproveChoice {
 export function approveInput(proposalId: string, choice: ApproveChoice = {}) {
   return {
     proposalId,
-    ...(choice.identityResolution
-      ? { identityResolution: choice.identityResolution }
-      : {}),
+    identityResolution: choice.identityResolution ?? {
+      verb: "separate" as const,
+    },
     ...(choice.identityResolutionByRef &&
     Object.keys(choice.identityResolutionByRef).length > 0
       ? { identityResolutionByRef: choice.identityResolutionByRef }
