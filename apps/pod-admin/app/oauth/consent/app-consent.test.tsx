@@ -17,6 +17,7 @@ import {
   actsAsHeadline,
   allowBlockedReason,
   initialSelection,
+  SPACE_REACH_NOTE,
   toggle,
   type OfferedPermission,
   type Selection,
@@ -288,6 +289,20 @@ describe("AppConsent rows (default view)", () => {
     expect(boxes).toBe(14 * 4);
     expect(out.match(/before:border-default-500/g)?.length).toBe(boxes);
     expect(out.match(/ring-default-500/g)?.length).toBe(15);
+  });
+
+  it("the reach sentence shows once in both views for a record read, never without one (#128)", () => {
+    const once = (o: string) => o.split(SPACE_REACH_NOTE).length - 1;
+    expect(once(out)).toBe(1);
+    expect(once(html(first, true, STUDIO))).toBe(1);
+    const writesOnly: App = {
+      ...STUDIO,
+      permissions: [
+        { permission: "entity.post.create", workspaces: [CO] },
+      ] as App["permissions"],
+    };
+    const sel = initialSelection(writesOnly.permissions, [], []);
+    expect(once(html(sel, false, writesOnly))).toBe(0);
   });
 
   it("Off everywhere: Allow is blocked, with its reason", () => {
