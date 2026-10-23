@@ -2681,6 +2681,17 @@ export const tools = {
               description:
                 "Optional: only sessions ABOUT this entity (the subject-spine anchor).",
             },
+            trackId: {
+              type: "string",
+              description: "Optional: only sessions in this track.",
+            },
+            detail: {
+              type: "string",
+              enum: ["lean", "full"],
+              default: "lean",
+              description:
+                "'lean' (default) = id, title, status, kind, trackId, projectId, workspaceId, updatedAt per row. 'full' = every column (goal, criteria, stages, metadata…): large, use `synap_get_session` for one session instead.",
+            },
             playbookId: {
               type: "string",
               description:
