@@ -89,6 +89,64 @@ vi.mock("../../../utils/audit-log.js", () => ({
     return { id: globalThis.crypto.randomUUID() };
   }),
 }));
+// PGlite runs ONE connection, and the proposal writer nests transactions on it
+// (deadlock: gate-on-target.decisions.pglite.test.ts). So a PROPOSE verdict
+// files its row here, in the stored shape the approval door reads; the VERDICT
+// is the real gate's (`previewPermissionDecision`: the same rungs, the grant
+// rung included, without side effects). Every other verdict runs the real gate.
+vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../utils/permission-check.js")>();
+  return {
+    ...actual,
+    checkPermissionOrPropose: async (
+      opts: Parameters<typeof actual.checkPermissionOrPropose>[0]
+    ) => {
+      const preview = await actual.previewPermissionDecision(opts);
+      if (preview.decision !== "propose")
+        return actual.checkPermissionOrPropose(opts);
+      const data = (opts.data ?? {}) as Record<string, unknown>;
+      const uuid = () => globalThis.crypto.randomUUID();
+      const id = uuid();
+      const subject = opts.subjectType as string;
+      const targetType = subject.endsWith("s") ? subject.slice(0, -1) : subject;
+      const targetId = String(
+        data.documentId ?? data.entityId ?? data.id ?? uuid()
+      );
+      const stored = {
+        requestId: uuid(),
+        source: opts.source ?? "intelligence",
+        sourceId: opts.userId,
+        workspaceId: opts.workspaceId ?? null,
+        targetType,
+        targetId,
+        changeType: opts.action,
+        data,
+        summary: `${opts.action} ${targetType}`,
+        correlationId: uuid(),
+      };
+      await h.client!.query(
+        `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status, created_by, subject_user_id, agent_user_id)
+         values ($1,$2,$3,$4,$5,$6::jsonb,'pending',$7,$7,$8)`,
+        [
+          id,
+          opts.workspaceId ?? null,
+          targetType,
+          targetId,
+          opts.action,
+          JSON.stringify(stored),
+          opts.userId,
+          opts.agentUserId ?? null,
+        ]
+      );
+      return {
+        granted: false as const,
+        proposalId: id,
+        proposalType: opts.action as string,
+      };
+    },
+  };
+});
 vi.mock("../../../access/guest-containment.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   isGuestPrincipal: vi.fn(async () => false),
@@ -298,11 +356,21 @@ beforeAll(async () => {
     `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, is_active, ui_hints, workspace_id) values
        ($1,'person','Person','kind','system','pod',true,'{}'::jsonb,null),
        ($2,'company','Company','kind','system','pod',true,'{}'::jsonb,null),
-       ($3,'lead','Lead','role','workspace','workspace',true,'{}'::jsonb,null),
-       ($4,'contact','Contact','role','workspace','workspace',true,'{}'::jsonb,null),
+       ($3,'lead','Lead','role','workspace','workspace',true,'{}'::jsonb,$7),
+       ($4,'contact','Contact','role','workspace','workspace',true,'{}'::jsonb,$7),
        ($5,'client','Client','role','shared','pod',true,'{}'::jsonb,null),
-       ($6,'vip','VIP','role','workspace','workspace',true,'{}'::jsonb,null)`,
-    [PERSON_KIND, COMPANY_KIND, ROLE_LEAD, ROLE_CONTACT, ROLE_CLIENT, ROLE_VIP]
+       ($6,'vip','VIP','role','workspace','workspace',true,'{}'::jsonb,$8)`,
+    // The space roles are homed in their space (CRM's in CRM, VIP in Brand).
+    [
+      PERSON_KIND,
+      COMPANY_KIND,
+      ROLE_LEAD,
+      ROLE_CONTACT,
+      ROLE_CLIENT,
+      ROLE_VIP,
+      CRM,
+      BRAND,
+    ]
   );
   await q(
     `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
