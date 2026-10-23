@@ -1772,6 +1772,23 @@
                     }
                   },
                   "required": ["kind"]
+                },
+                "checkKind": {
+                  "type": "string",
+                  "enum": [
+                    "measured",
+                    "judged",
+                    "handed_over",
+                    "learning",
+                    "decided_outside",
+                    "certified"
+                  ],
+                  "description": "Optional — what kind of check this is, in people's words: measured (evidence or capability), judged (a person; an AI judge only advises), handed_over (a deliverable: evidence or a person), learning (about the method), decided_outside / certified (a person's grade with the source attached)."
+                },
+                "about": {
+                  "type": "string",
+                  "enum": ["result", "method"],
+                  "description": "Optional — 'method' when the criterion is about HOW the work is done (an investigation's criteria are), not the hoped-for answer. Default 'result'."
                 }
               },
               "required": ["key", "statement", "check"]
@@ -2709,6 +2726,23 @@
                     }
                   },
                   "required": ["kind"]
+                },
+                "checkKind": {
+                  "type": "string",
+                  "enum": [
+                    "measured",
+                    "judged",
+                    "handed_over",
+                    "learning",
+                    "decided_outside",
+                    "certified"
+                  ],
+                  "description": "Optional — what kind of check this is, in people's words: measured (evidence or capability), judged (a person; an AI judge only advises), handed_over (a deliverable: evidence or a person), learning (about the method), decided_outside / certified (a person's grade with the source attached)."
+                },
+                "about": {
+                  "type": "string",
+                  "enum": ["result", "method"],
+                  "description": "Optional — 'method' when the criterion is about HOW the work is done (an investigation's criteria are), not the hoped-for answer. Default 'result'."
                 }
               },
               "required": ["key", "statement", "check"]
@@ -6961,6 +6995,103 @@
             },
             "required": ["label", "target"]
           },
+          "endState": {
+            "type": ["string", "null"],
+            "description": "Optional: what 'done' looks like, in the person's words (a short paragraph). null clears it."
+          },
+          "criteria": {
+            "type": ["array", "null"],
+            "maxItems": 5,
+            "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Lowercase slug, unique in the session."
+                },
+                "statement": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "description": "Default true."
+                },
+                "check": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": ["evidence", "capability", "judge", "human"]
+                    },
+                    "capability": {
+                      "type": "string"
+                    },
+                    "evidenceKey": {
+                      "type": "string"
+                    },
+                    "hint": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["kind"]
+                },
+                "checkKind": {
+                  "type": "string",
+                  "enum": [
+                    "measured",
+                    "judged",
+                    "handed_over",
+                    "learning",
+                    "decided_outside",
+                    "certified"
+                  ],
+                  "description": "Optional — what kind of check this is, in people's words: measured (evidence or capability), judged (a person; an AI judge only advises), handed_over (a deliverable: evidence or a person), learning (about the method), decided_outside / certified (a person's grade with the source attached)."
+                },
+                "about": {
+                  "type": "string",
+                  "enum": ["result", "method"],
+                  "description": "Optional — 'method' when the criterion is about HOW the work is done (an investigation's criteria are), not the hoped-for answer. Default 'result'."
+                }
+              },
+              "required": ["key", "statement", "check"]
+            },
+            "minItems": 2
+          },
+          "dropConditions": {
+            "type": ["array", "null"],
+            "maxItems": 5,
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional: when to stop pursuing the goal, one line each (at most 5). null clears them."
+          },
+          "workKind": {
+            "type": ["string", "null"],
+            "enum": [
+              "project",
+              "flow",
+              "operation",
+              "investigation",
+              "incident",
+              "commission",
+              "pathway",
+              null
+            ],
+            "description": "Optional: the kind of work — project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (a person's growth). Your choice is a PROPOSAL until the person confirms it."
+          },
+          "uncertainty": {
+            "type": ["string", "null"],
+            "enum": [
+              "clear",
+              "complicated",
+              "complex",
+              "chaotic",
+              "unknown",
+              null
+            ],
+            "description": "Optional: how well the way is known — clear, complicated, complex, chaotic or unknown. A proposal until the person confirms it."
+          },
           "reasoning": {
             "type": "string",
             "description": "Why you are starting it, in the person's words — shown to the reviewer. One line."
@@ -7156,7 +7287,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Set a track's DIRECTION (where it is heading, one line) and/or its KPI (the number it steers by). kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it or close the goal — a number reached never closes it; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+      "description": "Set what a goal holds: its DIRECTION (where it is heading, one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them). Every field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it or close the goal — a number reached never closes it; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -7185,6 +7316,103 @@
                 "type": "number"
               }
             }
+          },
+          "endState": {
+            "type": ["string", "null"],
+            "description": "Optional: what 'done' looks like, in the person's words (a short paragraph). null clears it."
+          },
+          "criteria": {
+            "type": ["array", "null"],
+            "maxItems": 5,
+            "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string",
+                  "description": "Lowercase slug, unique in the session."
+                },
+                "statement": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "description": "Default true."
+                },
+                "check": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": ["evidence", "capability", "judge", "human"]
+                    },
+                    "capability": {
+                      "type": "string"
+                    },
+                    "evidenceKey": {
+                      "type": "string"
+                    },
+                    "hint": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["kind"]
+                },
+                "checkKind": {
+                  "type": "string",
+                  "enum": [
+                    "measured",
+                    "judged",
+                    "handed_over",
+                    "learning",
+                    "decided_outside",
+                    "certified"
+                  ],
+                  "description": "Optional — what kind of check this is, in people's words: measured (evidence or capability), judged (a person; an AI judge only advises), handed_over (a deliverable: evidence or a person), learning (about the method), decided_outside / certified (a person's grade with the source attached)."
+                },
+                "about": {
+                  "type": "string",
+                  "enum": ["result", "method"],
+                  "description": "Optional — 'method' when the criterion is about HOW the work is done (an investigation's criteria are), not the hoped-for answer. Default 'result'."
+                }
+              },
+              "required": ["key", "statement", "check"]
+            },
+            "minItems": 2
+          },
+          "dropConditions": {
+            "type": ["array", "null"],
+            "maxItems": 5,
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional: when to stop pursuing the goal, one line each (at most 5). null clears them."
+          },
+          "workKind": {
+            "type": ["string", "null"],
+            "enum": [
+              "project",
+              "flow",
+              "operation",
+              "investigation",
+              "incident",
+              "commission",
+              "pathway",
+              null
+            ],
+            "description": "Optional: the kind of work — project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (a person's growth). Your choice is a PROPOSAL until the person confirms it."
+          },
+          "uncertainty": {
+            "type": ["string", "null"],
+            "enum": [
+              "clear",
+              "complicated",
+              "complex",
+              "chaotic",
+              "unknown",
+              null
+            ],
+            "description": "Optional: how well the way is known — clear, complicated, complex, chaotic or unknown. A proposal until the person confirms it."
           },
           "reasoning": {
             "type": "string",
