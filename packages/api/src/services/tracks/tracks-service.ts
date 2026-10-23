@@ -354,7 +354,8 @@ export interface TrackView {
   /**
    * How the track ENDED (0344, R1) — `null` while it is live, and on a track
    * dropped before verdicts existed. Read with its category: done verdicts
-   * (met · partly_met · not_met) on a closed track, lost ones on a dropped one.
+   * (met · partly_met · not_met, or retired for an operation) on a closed
+   * track, lost ones on a dropped one.
    */
   verdict: TrackVerdict | null;
   /** Why, in words — always present for `impossible` and `replaced`. */
@@ -1406,13 +1407,15 @@ export interface TrackCloseInput {
  * (`TRACK_STATUS_TRANSITIONS`, derived from the categories: done and lost are
  * final) and the verdict (`checkTrackClose`: closing needs a done verdict;
  * a drop may come without one — shipped clients — but a verdict sent is
- * validated; impossible / replaced need a reason; nothing else carries one). Called by `setTrackStatus` AND by the `track/update` approval
+ * validated; impossible / replaced need a reason; an operation closes only
+ * `retired`, and only an operation may — R6; nothing else carries one).
+ * Called by `setTrackStatus` AND by the `track/update` approval
  * replay: a proposal filed while the move was legal can be approved after the
  * track moved on (dropped, say) — replaying it unchecked would revive a
  * closed track.
  */
 export function assertTrackTransition(
-  track: Pick<ProjectTrack, "name" | "status">,
+  track: Pick<ProjectTrack, "name" | "status" | "workKind">,
   to: ProjectTrackStatus,
   close: TrackCloseInput = {},
   /**
@@ -1430,7 +1433,7 @@ export function assertTrackTransition(
         : `A ${track.status} track cannot move to ${to}.`,
     });
   }
-  const refusal = checkTrackClose(to, close, criteria);
+  const refusal = checkTrackClose(to, close, criteria, track.workKind);
   if (refusal) {
     throw new TRPCError({ code: "BAD_REQUEST", message: refusal });
   }
@@ -1575,7 +1578,9 @@ export async function applyTrackStatus(
     // Unreachable past `assertTrackTransition`; refused rather than written.
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: checkTrackClose(status, close) ?? "A verdict is required.",
+      message:
+        checkTrackClose(status, close, undefined, track.workKind) ??
+        "A verdict is required.",
     });
   }
   const updated = await (

@@ -1571,6 +1571,7 @@ export const TRACK_VERDICT_LABELS = {
   met: "Met",
   partly_met: "Partly met",
   not_met: "Not met",
+  retired: "Retired",
   no_longer_needed: "No longer needed",
   impossible: "Impossible",
   replaced: "Replaced",

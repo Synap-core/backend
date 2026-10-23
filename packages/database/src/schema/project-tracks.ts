@@ -71,6 +71,7 @@ export const PROJECT_TRACK_VERDICTS = [
   "met",
   "partly_met",
   "not_met",
+  "retired",
   "no_longer_needed",
   "impossible",
   "replaced",

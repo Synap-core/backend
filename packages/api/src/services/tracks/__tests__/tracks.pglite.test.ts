@@ -56,6 +56,16 @@ const M0345 = readFileSync(
   ),
   "utf8"
 );
+// An operation ends retired (R6) — the verdict CHECK admits `retired`.
+const M0347 = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../../database/migrations/0347_track_verdict_retired.sql",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -295,6 +305,7 @@ beforeAll(async () => {
   await h.client!.exec(M0317);
   await h.client!.exec(M0344);
   await h.client!.exec(M0345);
+  await h.client!.exec(M0347);
   // The edge-uniqueness index the dependency door's insert conflicts on
   // (`idx_links_unique_edge`) — a reopen writes `new --replaces--> old`.
   await h.client!.exec(
@@ -1942,5 +1953,62 @@ describe("what a goal holds (W2) — content, derived marks, acceptance, the clo
       ["a", "accepted"],
       ["b", null],
     ]);
+  });
+
+  it("R6 — an operation closes retired, never met; retired closes nothing else", async () => {
+    const op = await goal("Keep the lights on", { workKind: "operation" });
+    h.permCalls.length = 0;
+    await expect(
+      setTrackStatus({
+        trackId: op,
+        status: "completed",
+        verdict: "met",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/operation is never "met"/),
+    });
+    // Refused before governance: nothing was filed for a person to approve.
+    expect(h.permCalls).toHaveLength(0);
+    const closed = await setTrackStatus({
+      trackId: op,
+      status: "completed",
+      verdict: "retired",
+      actor: human,
+    });
+    expect(closed.status).toBe("updated");
+    expect(
+      (
+        await q<{ status: string; verdict: string; verdict_by: string }>(
+          `select status, verdict, verdict_by from project_tracks where id = $1`,
+          [op]
+        )
+      ).rows[0]
+    ).toEqual({ status: "completed", verdict: "retired", verdict_by: USER });
+    expect((await view(op)).verdict).toBe("retired");
+
+    const project = await goal("Ship the launch", { workKind: "project" });
+    await expect(
+      setTrackStatus({
+        trackId: project,
+        status: "completed",
+        verdict: "retired",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/Only an operation closes as retired/),
+    });
+    const unkinded = await goal("No kind said");
+    await expect(
+      setTrackStatus({
+        trackId: unkinded,
+        status: "completed",
+        verdict: "retired",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/Only an operation closes as retired/),
+    });
   });
 });

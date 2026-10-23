@@ -37,6 +37,7 @@ import {
   type LifecycleOption,
 } from "../lifecycle/index.js";
 import type { UnitStateInput, UnitTone } from "./state.js";
+import type { TrackWorkKind } from "./goal.js";
 import {
   projectAggregateInput,
   type ProjectAggregateSessionFact,
@@ -440,6 +441,7 @@ export const TRACK_VERDICTS = [
   "met",
   "partly_met",
   "not_met",
+  "retired",
   "no_longer_needed",
   "impossible",
   "replaced",
@@ -449,13 +451,15 @@ export type TrackVerdict = (typeof TRACK_VERDICTS)[number];
 
 /**
  * Which ending each verdict belongs to: a CLOSED goal (done) was worked to
- * its end and judged; a DROPPED one (lost) stopped mattering. Keyed by every
- * verdict, so an unclassified one stops the build.
+ * its end and judged — or, for an operation, retired; a DROPPED one (lost)
+ * stopped mattering. Keyed by every verdict, so an unclassified one stops the
+ * build.
  */
 export const TRACK_VERDICT_CATEGORY = {
   met: "done",
   partly_met: "done",
   not_met: "done",
+  retired: "done",
   no_longer_needed: "lost",
   impossible: "lost",
   replaced: "lost",
@@ -484,11 +488,31 @@ export const TRACK_VERDICTS_NEEDING_REASON = [
   "replaced",
 ] as const satisfies readonly TrackVerdict[];
 
-/** The verdicts a move INTO `status` accepts — none for a status that does not end the goal. */
-export function trackVerdictsFor(status: string): readonly TrackVerdict[] {
+/**
+ * The kind of work that never ends `met` (R6): an OPERATION is kept running
+ * and assessed per period; when it stops it is RETIRED. `retired` closes an
+ * operation only, and an operation closes only `retired`.
+ */
+const OPERATION_WORK_KIND = "operation" satisfies TrackWorkKind;
+
+/**
+ * The verdicts a move INTO `status` accepts, for a goal of `workKind` — none
+ * for a status that does not end the goal. Done: `retired` for an operation,
+ * met · partly_met · not_met for every other kind (or none set). Lost: the
+ * same four for every kind.
+ */
+export function trackVerdictsFor(
+  status: string,
+  workKind?: string | null
+): readonly TrackVerdict[] {
   const category = trackStatusCategory(status);
   if (category !== "done" && category !== "lost") return [];
-  return TRACK_VERDICTS.filter((v) => TRACK_VERDICT_CATEGORY[v] === category);
+  const operation = workKind === OPERATION_WORK_KIND;
+  return TRACK_VERDICTS.filter(
+    (v) =>
+      TRACK_VERDICT_CATEGORY[v] === category &&
+      (category === "lost" || (v === "retired") === operation)
+  );
 }
 
 export function isTrackVerdict(v: unknown): v is TrackVerdict {
@@ -501,7 +525,8 @@ export function isTrackVerdict(v: unknown): v is TrackVerdict {
  * THE close rule, one answer for the pod's status door and any surface that
  * asks before sending:
  *   - a move into DONE (close) REQUIRES a verdict from met · partly_met ·
- *     not_met — a person judges how it went;
+ *     not_met — a person judges how it went; an OPERATION (R6, `workKind`)
+ *     is never met: it closes `retired`, and only an operation may;
  *   - a move into LOST (drop) SHOULD carry one from no_longer_needed ·
  *     impossible · replaced · mistake, but may come without: the clients
  *     shipped before verdicts (browser Archive, the released CLI, the IS)
@@ -513,7 +538,8 @@ export function isTrackVerdict(v: unknown): v is TrackVerdict {
  *     only when every REQUIRED criterion is met (accepted); `partly_met` /
  *     `not_met` only when at least one criterion is not met. A goal with no
  *     criteria closes on its judge's word. Omit `criteria` only where they
- *     cannot be known (a surface asking before it read them).
+ *     cannot be known (a surface asking before it read them). `workKind`
+ *     omitted reads as "not an operation".
  * `null` = allowed; otherwise the refusal, in words an agent can act on
  * (machine tokens, so it can resend them).
  */
@@ -524,9 +550,10 @@ export function checkTrackClose(
     key: string;
     required?: boolean;
     mark: string;
-  }>
+  }>,
+  workKind?: string | null
 ): string | null {
-  const allowed = trackVerdictsFor(to);
+  const allowed = trackVerdictsFor(to, workKind);
   const verdict = close.verdict ?? null;
   const reason = close.verdictReason?.trim() ?? "";
   if (allowed.length === 0) {
@@ -544,6 +571,12 @@ export function checkTrackClose(
       : null;
   }
   if (!(allowed as readonly string[]).includes(verdict)) {
+    if (closing && workKind === OPERATION_WORK_KIND) {
+      return `An operation is never "${verdict}" — it is assessed per period and closes as retired.`;
+    }
+    if (verdict === "retired") {
+      return `Only an operation closes as retired — close this goal as ${allowed.join(", ")}.`;
+    }
     return `"${verdict}" is not a verdict for ${into.toLowerCase()} a goal — use ${allowed.join(", ")}.`;
   }
   if (

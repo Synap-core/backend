@@ -39,6 +39,7 @@ export type HubTrackVerdict =
   | "met"
   | "partly_met"
   | "not_met"
+  | "retired"
   | "no_longer_needed"
   | "impossible"
   | "replaced"

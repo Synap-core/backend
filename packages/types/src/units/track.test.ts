@@ -360,6 +360,79 @@ describe("checkTrackClose — the verdict rule (R1)", () => {
   });
 });
 
+describe("R6 — an operation closes retired, and only an operation does", () => {
+  it("an operation is never met, partly met or not met: it closes retired", () => {
+    for (const v of ["met", "partly_met", "not_met"]) {
+      expect(
+        checkTrackClose("completed", { verdict: v }, undefined, "operation")
+      ).toMatch(/operation is never/);
+    }
+    expect(
+      checkTrackClose(
+        "completed",
+        { verdict: "retired" },
+        undefined,
+        "operation"
+      )
+    ).toBeNull();
+    expect([...trackVerdictsFor("completed", "operation")]).toEqual([
+      "retired",
+    ]);
+  });
+
+  it("retired is refused for every other kind of work, and for a goal with no kind", () => {
+    for (const kind of [
+      null,
+      undefined,
+      "project",
+      "flow",
+      "investigation",
+      "incident",
+      "commission",
+      "pathway",
+    ]) {
+      expect(
+        checkTrackClose("completed", { verdict: "retired" }, undefined, kind)
+      ).toMatch(/Only an operation closes as retired/);
+      expect([...trackVerdictsFor("completed", kind)]).toEqual([
+        "met",
+        "partly_met",
+        "not_met",
+      ]);
+    }
+  });
+
+  it("an operation is dropped like any goal; retired is never a drop", () => {
+    expect([...trackVerdictsFor("archived", "operation")]).toEqual([
+      "no_longer_needed",
+      "impossible",
+      "replaced",
+      "mistake",
+    ]);
+    expect(
+      checkTrackClose(
+        "archived",
+        { verdict: "no_longer_needed" },
+        undefined,
+        "operation"
+      )
+    ).toBeNull();
+    expect(
+      checkTrackClose(
+        "archived",
+        { verdict: "retired" },
+        undefined,
+        "operation"
+      )
+    ).toMatch(/not a verdict for dropping/);
+  });
+
+  it("retired reads Retired, and belongs to the done ending", () => {
+    expect(resolveTrackVerdictLabel("retired")).toBe("Retired");
+    expect(TRACK_VERDICTS).toContain("retired");
+  });
+});
+
 describe("trackStageTone", () => {
   it("active = the one accent (never ai), done = success, upcoming = muted", () => {
     expect(trackStageTone("active")).toBe("primary");
