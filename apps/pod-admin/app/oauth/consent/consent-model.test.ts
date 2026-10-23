@@ -733,6 +733,40 @@ describe("rows and Customize share ONE selection, inside the offer", () => {
   });
 });
 
+describe("a row from an older offer never widens today's", () => {
+  // The rows are derived from the offer of one render; the offer can be
+  // re-read under them (a space created from this screen re-fetches it).
+  const wide: OfferedPermission[] = [
+    { permission: "entity.post.read", workspaces: [CO, ECO, BRAND_S] },
+    { permission: "entity.post.create", workspaces: [CO, ECO] },
+  ];
+  const today: OfferedPermission[] = [
+    { permission: "entity.post.read", workspaces: [CO] },
+    { permission: "entity.post.create", workspaces: [CO] },
+  ];
+  const stale = () => row(wide, "entity.post");
+
+  it("a level from Off, or over held spaces, gives only what today's offer holds", () => {
+    const fromOff = setObjectLevel(new Set(), today, stale(), "edit", []);
+    expect(toApproved(fromOff, today)).toHaveLength(2);
+    expect(fromOff.size).toBe(2);
+    const held = new Set([
+      "entity.post.read\u0000co",
+      "entity.post.read\u0000eco",
+    ]);
+    const kept = setObjectLevel(held, today, stale(), "edit", []);
+    expect([...kept].sort()).toEqual([
+      "entity.post.create\u0000co",
+      "entity.post.read\u0000co",
+    ]);
+  });
+
+  it("a space tick gives only what today's offer holds", () => {
+    const s = toggleObjectSpace(new Set(), today, stale(), "brand");
+    expect(s.size).toBe(0);
+  });
+});
+
 describe("where a row is given", () => {
   it("shows its own and default spaces; the rest wait behind the disclosure", () => {
     const posts = row(STUDIO, "entity.post");

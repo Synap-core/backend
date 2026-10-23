@@ -499,8 +499,14 @@ describe("I2 — the key is exactly the consented subset; narrowing works, widen
     ]);
     expect(record.scope).toEqual(["hub-protocol.read"]);
     expect(body.scope).toBe(READ);
+    // Brand was made from Content OS: the token names its template.
     expect(body.synap_grant).toEqual([
-      { permission: READ, workspaceId: BRAND, workspaceName: "Brand" },
+      {
+        permission: READ,
+        workspaceId: BRAND,
+        workspaceName: "Brand",
+        templateSlug: "content-os",
+      },
     ]);
     expect(body.synap_user).toEqual({ id: OWNER, name: "Ada" });
     const ttl = (new Date(record.expiresAt!).getTime() - Date.now()) / 1000;
