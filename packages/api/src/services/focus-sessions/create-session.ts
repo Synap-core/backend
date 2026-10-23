@@ -591,10 +591,9 @@ export async function createFocusSession(
   // keyed by (client, project), so the writes of another project stay in their
   // own receipt instead of being swept under this goal (live: 142 commercial
   // writes became a CRM-spec session). The project is the one the gate keys
-  // receipts by: this start's, else the conversation's declared focus.
-  const adoptionProjectId =
-    projectId ??
-    (agentUserId ? await getAgentFocusProjectId(agentUserId) : null);
+  // receipts by: this start's, else the conversation's declared focus — read
+  // only when an adoption can happen (a start with no conversation client
+  // adopts nothing, so it pays no focus read).
   const adoptId =
     clientKey &&
     params.adoptAutoOpened !== false &&
@@ -602,7 +601,9 @@ export async function createFocusSession(
       ? ((
           await findClientSession(userId, clientKey, {
             onlyAutoOpened: true,
-            projectId: adoptionProjectId,
+            projectId:
+              projectId ??
+              (agentUserId ? await getAgentFocusProjectId(agentUserId) : null),
           })
         )?.id ?? null)
       : null;
