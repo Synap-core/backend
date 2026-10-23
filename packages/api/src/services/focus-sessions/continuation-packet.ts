@@ -2050,16 +2050,13 @@ export async function projectContinuationPacket(
       sessionId: row.id,
       viewerId: ctx.userId,
     }).catch(
-      (() => () => ({
+      // negctl: a failed inbox read folds into an empty list.
+      () => ({
         status: "ok" as const,
         total: 0,
         items: [],
         waiting: null,
-      }))(
-        row.id,
-        "inbox",
-        "The messages other sessions sent this one could not be read."
-      )
+      })
     ),
   ]);
 

@@ -331,6 +331,7 @@ export async function resolveSessionPost(
 
   let wake = false;
   let wakeHeld: SessionPostMeta["wakeHeld"];
+  void isWakeWorthySessionPostIntent; // negctl: wake-worthy-only reverted
   if (true) {
     if (false) {
       wakeHeld = "hop_limit";

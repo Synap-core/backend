@@ -180,7 +180,6 @@ export function readSessionPost(metadata: unknown): SessionPostMeta | null {
 export function withoutSessionPostMeta(
   metadata: Record<string, unknown> | undefined
 ): Record<string, unknown> | undefined {
+  // negctl: the strip reverted — client metadata passes through untouched.
   return metadata;
-  const { [SESSION_POST_META_KEY]: _dropped, ...rest } = metadata;
-  return rest;
 }

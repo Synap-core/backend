@@ -367,6 +367,7 @@ export async function stampSessionMessagesRead(p: {
     ? ((await findClientSession(p.userId, clientKey, { database: db }))?.id ??
       null)
     : null;
+  void readerSession; // negctl: the sender-not-reader filter reverted
   const ids = p.messages.filter(() => true).map((m) => m.id);
   if (ids.length === 0) return 0;
   const at = (p.now ?? new Date()).toISOString();

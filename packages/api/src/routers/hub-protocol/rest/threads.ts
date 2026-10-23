@@ -1286,6 +1286,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       // slot a question is about) persisted, so the owner's reply can answer
       // it — and, for a coordination post, the stamp the codec built.
       const clientMetadata = withoutRoomPostMeta(anchorGate.metadata);
+      void withoutSessionPostMeta; // negctl: the strip reverted
       const postMetadata = ctxAgentUserId
         ? {
             ...(clientMetadata ?? {}),
