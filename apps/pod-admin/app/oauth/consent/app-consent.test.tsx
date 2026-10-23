@@ -24,8 +24,16 @@ import {
 
 type App = ComponentProps<typeof AppConsent>["app"];
 
-const BRAND = { workspaceId: "brand", workspaceName: "Brand" };
-const SHARED = { workspaceId: "shared", workspaceName: "Shared" };
+const BRAND = {
+  workspaceId: "brand",
+  workspaceName: "Brand",
+  templateSlug: null,
+};
+const SHARED = {
+  workspaceId: "shared",
+  workspaceName: "Shared",
+  templateSlug: null,
+};
 
 const APP: App = {
   domain: "studio.synap.live",
