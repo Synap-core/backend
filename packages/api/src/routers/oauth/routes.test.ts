@@ -2720,6 +2720,24 @@ describe("P0-4 — a phase-1 refusal is a page for the person, never a redirect"
     expect(await res.text()).toContain("This sign-in link doesn&#39;t work");
   });
 
+  it("leads with the person's sentence; the pod's own is a detail for the app's developer (review U7)", () => {
+    const html = renderAuthorizeRefusalPage({
+      podHost: "pod.my-team.synap.live",
+      reason: "unknown_client",
+      message: "Unknown client_id",
+    });
+    const h1 = html.indexOf("<h1>This sign-in link doesn&#39;t work</h1>");
+    const details = html.indexOf("Details for the app's developer");
+    expect(h1).toBeGreaterThan(-1);
+    expect(details).toBeGreaterThan(h1);
+    expect(html.indexOf("Unknown client_id")).toBeGreaterThan(details);
+    // The Synap mark, and the host one label to a unit (no break at "-").
+    expect(html).toContain('<span class="mark" aria-hidden="true">S</span>');
+    expect(html).toContain(
+      "<span>pod.</span><wbr><span>my-team.</span><wbr><span>synap.</span><wbr><span>live</span>"
+    );
+  });
+
   it("escapes every value it shows (the message carries request data)", () => {
     const html = renderAuthorizeRefusalPage({
       podHost: "pod.test.synap.live",
