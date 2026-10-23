@@ -21,6 +21,11 @@
  *   - An agent's `kind: 'update'` (the default) in a session room produces NO
  *     notification (founder decision F, 2026-09-25) — it lives only in the
  *     room and the session's state mark.
+ *   - An agent's COORDINATION POST (`metadata.sessionPost`: a typed message
+ *     to another session's agent) notifies NOBODY — not its question, not its
+ *     @mentions (founder decision 2026-10-23: an agent message never pushes
+ *     the person's phone). It is delivered by the target session's change
+ *     feed and inbox (`focus-sessions/session-inbox.ts`).
  *   - Someone already @mentioned is not told twice about the same post.
  *   - A human's own post notifies only the humans it @mentions (never themself).
  *
