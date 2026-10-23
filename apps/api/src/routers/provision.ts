@@ -795,7 +795,11 @@ provisionRouter.get("/status", async (c) => {
     // settings — a pod registered after July has no such workspace record and
     // read "disconnected" while its CP link was fine. A failed read is a 500
     // (the catch below), never "disconnected".
-    const cp = await readControlPlaneLink();
+    const db = await getDb();
+    const ws = await db.query.workspaces.findFirst({ columns: { settings: true } });
+    const cp = (ws?.settings as Record<string, any> | null)?.controlPlane as
+      | Awaited<ReturnType<typeof readControlPlaneLink>>
+      | undefined;
 
     const reader = await statusReader(c, cp?.issuer ?? undefined);
     if (reader === "denied") {

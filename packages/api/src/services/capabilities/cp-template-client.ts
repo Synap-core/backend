@@ -22,7 +22,13 @@
  * (public read; see synap-control-plane-api/src/routes/marketplace-apps.ts).
  */
 
-import { podCpAuthHeaders, readControlPlaneLink } from "@synap/database";
+import {
+  db,
+  drizzleSql,
+  podCpAuthHeaders,
+  readControlPlaneLink,
+} from "@synap/database";
+import { workspaces } from "@synap/database/schema";
 import type { CapabilityDefinition } from "@synap/playbooks";
 import { queryCatalogCache } from "./catalog-cache-query.js";
 import {
@@ -88,7 +94,15 @@ export async function fetchCPCapabilityTemplatesFromCP(): Promise<
  *  the owner door is then skipped and the public door answers. Never throws. */
 async function resolveCpPodId(): Promise<string | null> {
   try {
-    return (await readControlPlaneLink())?.podId ?? null;
+    const rows = await db
+      .select({
+        podId: drizzleSql<
+          string | null
+        >`${workspaces.settings} -> 'controlPlane' ->> 'podId'`,
+      })
+      .from(workspaces)
+      .limit(1);
+    return rows[0]?.podId ?? (await readControlPlaneLink())?.podId ?? null;
   } catch {
     return null;
   }

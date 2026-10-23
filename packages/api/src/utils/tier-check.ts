@@ -81,7 +81,9 @@ async function getLocalTier(): Promise<string> {
   const cached = getCachedTier();
   if (cached) return cached;
 
-  const tier = (await readControlPlaneEntitlement())?.tier ?? "solo";
+  const tier = await readControlPlaneEntitlement()
+    .then((p) => p?.tier ?? "solo")
+    .catch(() => "solo");
   setCachedTier(tier);
   return tier;
 }

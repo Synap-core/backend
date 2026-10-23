@@ -129,6 +129,12 @@ export async function handleCpEntitlementSync(): Promise<void> {
           ? "unsupported"
           : "unreachable";
     logger.warn({ status: res.status, outcome }, "CP did not answer the plan");
+    await recordControlPlaneEntitlement({
+      tier: null,
+      status: null,
+      trialEnd: null,
+      lab: false,
+    });
     await recordControlPlaneEntitlementFailure(
       outcome,
       outcome === "refused"

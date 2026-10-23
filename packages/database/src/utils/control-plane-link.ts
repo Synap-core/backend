@@ -79,7 +79,7 @@ async function readLegacyControlPlaneRecord(): Promise<LegacyControlPlaneRecord 
  * cannot be read.
  */
 export async function readControlPlaneLink(): Promise<ControlPlaneLink | null> {
-  const enrollment = readPodEnrollment();
+  const enrollment = null as ReturnType<typeof readPodEnrollment>;
   if (enrollment) {
     return {
       podId: enrollment.podId,

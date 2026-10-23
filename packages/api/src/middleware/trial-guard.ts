@@ -31,7 +31,7 @@ export const trialGuardMiddleware = t.middleware(async (opts) => {
   const { ctx, next } = opts;
 
   // Only a pod linked to a Control Plane has a plan to enforce.
-  if (!config.server.controlPlaneUrl) {
+  if (!config.server.controlPlaneUrl || !config.server.sharedPodMode) {
     return next({ ctx });
   }
 
