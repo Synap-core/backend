@@ -108,7 +108,7 @@ export function registerTrackExecutors(): void {
       if (!projectId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Track proposal is missing its project",
+          message: "Goal proposal is missing its project",
         });
       }
       if (await alreadyApproved(input.proposalId)) {
@@ -173,7 +173,7 @@ export function registerTrackExecutors(): void {
       if (!trackId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Track update proposal is missing its track",
+          message: "Goal update proposal is missing its goal",
         });
       }
       if (await alreadyApproved(input.proposalId)) {
@@ -185,12 +185,12 @@ export function registerTrackExecutors(): void {
       if (!track) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Track to update no longer exists",
+          message: "Goal to update no longer exists",
         });
       }
       const project = await loadVisibleProject(db, track.projectId, userId);
       if (!project) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
       }
       await assertWorkspaceWrite(db, userId, {
         workspaceId: project.workspaceId,
@@ -319,7 +319,7 @@ export function registerTrackExecutors(): void {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
-            "Track update proposal carries no stage, status, params, direction, kpi, goal content, added stage or participant change",
+            "Goal update proposal carries no stage, status, params, direction, kpi, goal content, added stage or participant change",
         });
       }
 
@@ -342,7 +342,7 @@ export function registerTrackExecutors(): void {
       if (!trackId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Stage-gate proposal is missing its track target",
+          message: "Stage-gate proposal is missing its goal",
         });
       }
       // Resume ONLY from `paused`, guarded in the WHERE so the decision and the
@@ -373,8 +373,8 @@ export function registerTrackExecutors(): void {
           : {
               applied: "none",
               reason:
-                "Track was not paused at approval time — it had already been " +
-                "resumed, closed or dropped. The gate is answered; the track " +
+                "Goal was not paused at approval time — it had already been " +
+                "resumed, closed or dropped. The gate is answered; the goal " +
                 "keeps the state its owner left it in.",
             };
 

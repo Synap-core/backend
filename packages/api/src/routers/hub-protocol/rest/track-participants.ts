@@ -62,7 +62,7 @@ async function change(
     return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
   }
   const id = Uuid.safeParse(c.req.param("id"));
-  if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+  if (!id.success) return c.json({ error: "Invalid goal id" }, 400);
   const { reasoning, ...fields } = raw;
   const reason = Reasoning.safeParse({ reasoning });
   const parsed = trackParticipantChangeSchema.safeParse(fields);

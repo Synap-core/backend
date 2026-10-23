@@ -182,7 +182,7 @@ export function registerFocusSessionExecutors(): void {
             );
           } catch (err) {
             criteriaRefusals.push(
-              `Track stage "${String(innerData.trackStage)}" was not applied: ${err instanceof Error ? err.message : String(err)}`
+              `Goal step "${String(innerData.trackStage)}" was not applied: ${err instanceof Error ? err.message : String(err)}`
             );
           }
         } else {
@@ -901,7 +901,7 @@ export function registerFocusSessionExecutors(): void {
             if (reason === null) throw err;
             throw new TRPCError({
               code: "BAD_REQUEST",
-              message: `Cannot file this session into the track: ${reason}`,
+              message: `Cannot file this session into the goal: ${reason}`,
             });
           }
           Object.assign(set, trackFiling.set);

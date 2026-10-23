@@ -144,7 +144,36 @@ describe("sections and caps", () => {
     expect(LENS_SECTION_ORDER.indexOf("structure")).toBeLessThan(
       LENS_SECTION_ORDER.indexOf("proposed")
     );
-    expect(LENS_SECTION_ORDER[0]).toBe("blocking");
+    // Needs you opens every lens but a goal's…
+    for (const scope of ["pod", "workspace", "project", "session"] as const) {
+      expect(lensSections(scope)[0], scope).toBe("blocking");
+    }
+  });
+  it("a goal (track) answers how close · what waits on you · who is on it · what it made (W5)", () => {
+    const track = lensSections("track");
+    const at = (s: (typeof track)[number]) => track.indexOf(s);
+    expect(track[0]).toBe("doneWhen");
+    expect(at("doneWhen")).toBeLessThan(at("blocking"));
+    expect(at("blocking")).toBeLessThan(at("participants"));
+    expect(at("participants")).toBeLessThan(at("produced"));
+    expect(LENS_SECTION_LABELS.doneWhen).toBe("Done when");
+    expect(LENS_SECTION_LABELS.participants).toBe("Who's on it");
+  });
+  it("Done when and Who's on it exist on a goal only — every other scope keeps its order", () => {
+    for (const scope of ["pod", "workspace", "project", "session"] as const) {
+      expect(lensSections(scope), scope).not.toContain("doneWhen");
+      expect(lensSections(scope), scope).not.toContain("participants");
+    }
+    // The project order is exactly the pre-W5 order (rival: the keys leak
+    // into every scope through the one shared list).
+    expect(lensSections("project")).toEqual([
+      "blocking",
+      "happening",
+      "produced",
+      "structure",
+      "proposed",
+      "happened",
+    ]);
   });
   it("structure exists on project/track only; data only when the scope owns it", () => {
     expect(lensSections("session")).not.toContain("structure");

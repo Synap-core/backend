@@ -2099,6 +2099,8 @@ export const NEEDS_YOU_REASON_ICONS: Readonly<Record<string, string>> = {
   failure: "TriangleAlert",
   /** An owed slot that recorded no reason. */
   owed: "CircleDot",
+  /** A goal's verdict owed by its judge or owner (in review, an impossible report). */
+  judgement: "Scale",
 };
 
 /** The glyph NAME for a needs-you reason; unknown/absent ⇒ the fallback mark. */
@@ -2125,6 +2127,7 @@ export const NEEDS_YOU_REASON_LABELS: Readonly<Record<string, string>> = {
   review: "Review",
   failure: "Failed",
   owed: "Owed",
+  judgement: "Judgement",
 };
 
 export function resolveNeedsYouReasonLabel(
@@ -2308,6 +2311,19 @@ export function resolveHandedToLabel(
   return `Handed to ${name}`;
 }
 
+// ─── The one-line aim of a sitting (decision D3, 2026-10-23) ────────────────
+
+/**
+ * What a session's one-line `goal` is CALLED wherever a person reads it
+ * ("Aim · split the light and heavy lanes") — and a stage's and a playbook's
+ * one-line `goal`, which say the same thing one level up. Never "Goal": a goal
+ * is a track since 2026-10-23 (`OBJECT_KINDS.track`). Never "Outcome": the
+ * session's Outcomes list (deliverables + checks) sits on the same page. The
+ * storage fields keep their name (`focus_sessions.goal`, `stages[].goal`,
+ * `playbooks.goal_template`); only the word moved.
+ */
+export const AIM_LABEL = "Aim";
+
 // ─── Space brief fields (`SpaceBrief`, stored at settings.onboarding) ────────
 
 /**
@@ -2321,12 +2337,16 @@ export const SPACE_BRIEF_FIELD_LABELS: Readonly<
   Record<keyof SpaceBrief, string>
 > = {
   purpose: "Purpose",
-  goal: "Goal",
+  // The onboarding interview's one-line outcome. NOT "Goal" (the user word for
+  // a track since 2026-10-23) and not "Purpose" (the field above): it is the
+  // interview's aim, as a session's one line is its "Aim".
+  goal: "Interview aim",
   framing: "Persona",
   expertise: "Expertise",
   collect: "Kinds to collect",
   openingQuestions: "Opening questions",
-  doneWhen: "Done when",
+  // When the INTERVIEW is over — not a goal's "Done when" criteria section.
+  doneWhen: "Success looks like",
   anchors: "Read first",
   rules: "Rules",
   skills: "Skills",

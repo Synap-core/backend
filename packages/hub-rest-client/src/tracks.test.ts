@@ -75,6 +75,26 @@ describe("listTracks", () => {
   });
 });
 
+describe("listAllTracks (W5 — every goal the caller can see)", () => {
+  it("GETs /tracks with NO projectId, pages by cursor, returns nextCursor", async () => {
+    replies.push({ status: 200, body: { items: [TRACK], nextCursor: "c2" } });
+    const page = await client.listAllTracks({ limit: 20, cursor: "c1" });
+    expect(page).toEqual({ items: [TRACK], nextCursor: "c2" });
+    expect(calls[0].url).toBe(
+      "https://pod.example.test/api/hub/tracks?limit=20&cursor=c1"
+    );
+  });
+
+  it("the last page reads nextCursor null; no options sends no query", async () => {
+    replies.push({ status: 200, body: { items: [], nextCursor: null } });
+    await expect(client.listAllTracks()).resolves.toEqual({
+      items: [],
+      nextCursor: null,
+    });
+    expect(calls[0].url).toBe("https://pod.example.test/api/hub/tracks");
+  });
+});
+
 describe("startTrack", () => {
   it("returns missingDomains + domainsNote untouched on a started track", async () => {
     const body = {

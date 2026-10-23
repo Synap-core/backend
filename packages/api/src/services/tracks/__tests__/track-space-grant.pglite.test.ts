@@ -359,7 +359,7 @@ describe("G1 agent start → approve → stage session in the step space", () =>
     const before = await joinRequests(STRAT);
     const { trackId, summary } = await agentStartApproved();
     expect(summary).toBe(
-      'Create Track "Launch" and let Scout work in Strategy, Finance for this track'
+      'Create Goal "Launch" and let Scout work in Strategy, Finance for this goal'
     );
     const grant = await trackGrant(trackId);
     expect(grant).toMatchObject({
@@ -742,7 +742,7 @@ describe("W5 a stage-less track's agent works in its project's linked spaces", (
       [res.proposalId]
     );
     expect(rows[0]!.summary).toBe(
-      'Create Track "Accounts" and let Scout work in CRM for this track'
+      'Create Goal "Accounts" and let Scout work in CRM for this goal'
     );
     await approve(res.proposalId);
     expect(await trackGrant(trackIdOf(rows[0]!.data))).toMatchObject({

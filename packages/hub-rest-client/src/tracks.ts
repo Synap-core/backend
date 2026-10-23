@@ -169,6 +169,21 @@ export interface ListTracksOptions {
   includeArchived?: boolean;
 }
 
+/** A page of every goal the caller can see, pod-wide (`listAllTracks`). */
+export interface ListAllTracksOptions extends ListTracksOptions {
+  /** Page size, 1–100 (the pod's default is 50). */
+  limit?: number;
+  /** `nextCursor` from the previous page. */
+  cursor?: string;
+}
+
+export interface HubTrackPage {
+  /** Newest first, each with its derived marks (criteria, inReview, waitingOn). */
+  items: HubTrack[];
+  /** Hand back for the next page; `null` on the last one. */
+  nextCursor: string | null;
+}
+
 export interface StartTrackInput {
   projectId: string;
   /**

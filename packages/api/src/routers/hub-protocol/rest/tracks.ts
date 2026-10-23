@@ -1,7 +1,10 @@
 /**
  * Hub REST — Tracks (`project_tracks`, 0272): a METHOD running inside a project.
  *
- *   GET   /tracks?projectId=…           the project's tracks
+ *   GET   /tracks?projectId=…           the project's tracks (every one,
+ *                                       oldest first); WITHOUT projectId every
+ *                                       goal the caller can see, newest first,
+ *                                       paged (?limit=…&cursor=… → nextCursor)
  *   POST  /tracks                       start a track { projectId, playbookId?, name? }
  *   GET   /tracks/:id                   one track
  *   POST  /tracks/:id/advance           { toStage } — any declared stage
@@ -49,8 +52,12 @@ import { GOAL_ACCEPTANCE_DECISIONS } from "@synap-core/types/units";
 import { trackGoalInputSchema } from "../../../services/tracks/goal-content.js";
 import {
   advanceTrackStage,
+  decodeTrackListCursor,
   getTrack,
   listTracks,
+  listTracksPage,
+  TRACK_LIST_PAGE_DEFAULT,
+  TRACK_LIST_PAGE_MAX,
   loadTrackView,
   loadTrackViews,
   loadWrittenTrackView,
@@ -152,18 +159,62 @@ export function registerTracksRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
-    const projectId = Uuid.safeParse(c.req.query("projectId"));
-    if (!projectId.success) {
-      return c.json({ error: "projectId (uuid) is required" }, 400);
+    // `projectId` OPTIONAL (W5): without it, every goal the caller can see,
+    // pod-wide, newest first and paged — the same read as the tRPC door.
+    const rawProject = c.req.query("projectId");
+    const projectId = rawProject ? Uuid.safeParse(rawProject) : null;
+    if (projectId && !projectId.success) {
+      return c.json({ error: "projectId must be a uuid" }, 400);
     }
+    const rawLimit = c.req.query("limit");
+    const limit = rawLimit
+      ? z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(TRACK_LIST_PAGE_MAX)
+          .safeParse(rawLimit)
+      : null;
+    if (limit && !limit.success) {
+      return c.json(
+        { error: `limit must be an integer 1–${TRACK_LIST_PAGE_MAX}` },
+        400
+      );
+    }
+    const rawCursor = c.req.query("cursor");
+    const cursor = decodeTrackListCursor(rawCursor);
+    if (rawCursor && !cursor) {
+      return c.json(
+        { error: "cursor is not a cursor this read returned" },
+        400
+      );
+    }
+    const includeArchived = c.req.query("includeArchived") === "true";
     try {
-      const rows = await listTracks({
-        projectId: projectId.data,
+      if (projectId && !limit && !cursor) {
+        const rows = await listTracks({
+          projectId: projectId.data,
+          actor: actorOf(c),
+          includeArchived,
+        });
+        if (!rows) return c.json({ error: "Project not found" }, 404);
+        return c.json({
+          items: await loadTrackViews(rows, actorOf(c)),
+          nextCursor: null,
+        });
+      }
+      const page = await listTracksPage({
+        projectId: projectId?.data ?? null,
         actor: actorOf(c),
-        includeArchived: c.req.query("includeArchived") === "true",
+        includeArchived,
+        limit: limit?.data ?? TRACK_LIST_PAGE_DEFAULT,
+        cursor,
       });
-      if (!rows) return c.json({ error: "Project not found" }, 404);
-      return c.json({ items: await loadTrackViews(rows, actorOf(c)) });
+      if (!page) return c.json({ error: "Project not found" }, 404);
+      return c.json({
+        items: await loadTrackViews(page.rows, actorOf(c)),
+        nextCursor: page.nextCursor,
+      });
     } catch (err) {
       return fail(c, err, "GET /tracks");
     }
@@ -209,10 +260,10 @@ export function registerTracksRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
     const id = Uuid.safeParse(c.req.param("id"));
-    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    if (!id.success) return c.json({ error: "Invalid goal id" }, 400);
     try {
       const track = await getTrack(id.data, actorOf(c));
-      if (!track) return c.json({ error: "Track not found" }, 404);
+      if (!track) return c.json({ error: "Goal not found" }, 404);
       return c.json(await loadTrackView(track, actorOf(c)));
     } catch (err) {
       return fail(c, err, "GET /tracks/:id");
@@ -224,7 +275,7 @@ export function registerTracksRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = Uuid.safeParse(c.req.param("id"));
-    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    if (!id.success) return c.json({ error: "Invalid goal id" }, 400);
     const body = AdvanceSchema.safeParse(await c.req.json().catch(() => null));
     if (!body.success) {
       return c.json(
@@ -253,7 +304,7 @@ export function registerTracksRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = Uuid.safeParse(c.req.param("id"));
-    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    if (!id.success) return c.json({ error: "Invalid goal id" }, 400);
     // The body is optional (a reopen keeps the name): blank → {}, malformed → 400.
     const jsonRead = await readJsonBody(c);
     if (!jsonRead.ok) return jsonRead.res;
@@ -287,7 +338,7 @@ export function registerTracksRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = Uuid.safeParse(c.req.param("id"));
-    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    if (!id.success) return c.json({ error: "Invalid goal id" }, 400);
     const body = ParamsSchema.safeParse(await c.req.json().catch(() => null));
     if (!body.success) {
       return c.json(
@@ -316,7 +367,7 @@ export function registerTracksRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = Uuid.safeParse(c.req.param("id"));
-    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    if (!id.success) return c.json({ error: "Invalid goal id" }, 400);
     const body = DirectionSchema.safeParse(
       await c.req.json().catch(() => null)
     );
@@ -350,7 +401,7 @@ export function registerTracksRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = Uuid.safeParse(c.req.param("id"));
-    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    if (!id.success) return c.json({ error: "Invalid goal id" }, 400);
     const body = AcceptanceSchema.safeParse(
       await c.req.json().catch(() => null)
     );
@@ -384,7 +435,7 @@ export function registerTracksRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = Uuid.safeParse(c.req.param("id"));
-    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    if (!id.success) return c.json({ error: "Invalid goal id" }, 400);
     const body = AddStageSchema.safeParse(await c.req.json().catch(() => null));
     if (!body.success) {
       return c.json(
@@ -415,7 +466,7 @@ export function registerTracksRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = Uuid.safeParse(c.req.param("id"));
-    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    if (!id.success) return c.json({ error: "Invalid goal id" }, 400);
     const stageKey = StageKey.safeParse(c.req.param("stageKey"));
     if (!stageKey.success) return c.json({ error: "Invalid stage key" }, 400);
     // An empty body is fine — the stage's own goal is the default brief.
@@ -447,7 +498,7 @@ export function registerTracksRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = Uuid.safeParse(c.req.param("id"));
-    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    if (!id.success) return c.json({ error: "Invalid goal id" }, 400);
     const body = StatusSchema.safeParse(await c.req.json().catch(() => null));
     if (!body.success) {
       return c.json(

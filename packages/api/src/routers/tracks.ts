@@ -18,8 +18,12 @@ import {
 } from "@synap/database/schema";
 import {
   advanceTrackStage,
+  decodeTrackListCursor,
   getTrack,
   listTracks,
+  listTracksPage,
+  TRACK_LIST_PAGE_DEFAULT,
+  TRACK_LIST_PAGE_MAX,
   loadTrackView,
   loadTrackViews,
   loadWrittenTrackView,
@@ -61,27 +65,66 @@ const reasoning = z.string().max(2000).optional();
 const params = z.record(z.string(), z.unknown());
 
 export const tracksRouter = router({
-  /** The project's tracks (non-archived unless asked), oldest first. */
+  /**
+   * The project's tracks (non-archived unless asked), oldest first — or,
+   * WITHOUT a `projectId`, every goal the caller can see, pod-wide, newest
+   * first and paged (the Goals collection, W5). Same read, same visibility
+   * (`listTracks`); each item carries the derived marks every track read
+   * returns (`criteria[].mark`, `inReview`, `waitingOn`, `participants`).
+   * `nextCursor` is null on the last page (and on an unpaged project read).
+   */
   list: podProcedure
     .input(
       z.object({
-        projectId: z.string().uuid(),
+        projectId: z.string().uuid().optional(),
         includeArchived: z.boolean().optional(),
+        /** Page size; the pod-wide read is always paged (default 50). */
+        limit: z.number().int().min(1).max(TRACK_LIST_PAGE_MAX).optional(),
+        /** `nextCursor` from the previous page. */
+        cursor: z.string().min(1).max(500).optional(),
       })
     )
     .query(async ({ ctx, input }) => {
-      const rows = await listTracks({
+      const cursor = decodeTrackListCursor(input.cursor);
+      if (input.cursor && !cursor) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "cursor is not a cursor this read returned",
+        });
+      }
+      const paged =
+        !input.projectId || input.limit !== undefined || cursor !== null;
+      if (!paged) {
+        const rows = await listTracks({
+          projectId: input.projectId,
+          actor: actorOf(ctx),
+          includeArchived: input.includeArchived,
+        });
+        if (!rows) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Project not found",
+          });
+        }
+        return { items: await loadTrackViews(rows, ctx), nextCursor: null };
+      }
+      const page = await listTracksPage({
         projectId: input.projectId,
         actor: actorOf(ctx),
         includeArchived: input.includeArchived,
+        limit: input.limit ?? TRACK_LIST_PAGE_DEFAULT,
+        cursor,
       });
-      if (!rows) {
+      if (!page) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Project not found",
         });
       }
-      return { items: await loadTrackViews(rows, ctx) };
+      return {
+        items: await loadTrackViews(page.rows, ctx),
+        nextCursor: page.nextCursor,
+      };
     }),
 
   get: podProcedure
@@ -89,7 +132,7 @@ export const tracksRouter = router({
     .query(async ({ ctx, input }) => {
       const track = await getTrack(input.id, actorOf(ctx));
       if (!track) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
       }
       return loadTrackView(track, ctx);
     }),
@@ -104,7 +147,7 @@ export const tracksRouter = router({
     .query(async ({ ctx, input }) => {
       const history = await readTrackHistory(input.id, actorOf(ctx));
       if (!history) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
       }
       return history;
     }),
