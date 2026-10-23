@@ -276,7 +276,6 @@ function fieldLabel(
 
 /** The value of one side of a change, through its type. */
 function sideValue(
-  change: ProposalChangeInput,
   key: string,
   value: unknown,
   def: EffectivePropertyDef | undefined,
@@ -356,13 +355,13 @@ export function proposedRecord(input: RecordInput): ProposedRecord | null {
     const after =
       fieldOp === "remove"
         ? undefined
-        : sideValue(change, key, change.after, def, resolved);
+        : sideValue(key, change.after, def, resolved);
     const before =
       fieldOp === "add"
         ? undefined
         : change.before === undefined && fieldOp === "change"
           ? undefined
-          : sideValue(change, key, change.before, def, resolved);
+          : sideValue(key, change.before, def, resolved);
 
     // An empty value is not a fact: an add needs a value; a change needs one
     // real side; a removal needs the thing it removes.
