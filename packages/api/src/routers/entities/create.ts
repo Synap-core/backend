@@ -17,6 +17,7 @@ import { z } from "zod";
 import { TITLE_HARD_MAX, titleTooLongReason } from "@synap-core/types/titles";
 import { decodeHtmlEntities } from "@synap-core/types/text";
 import { podProcedure } from "../../trpc.js";
+import { isSpaceWriteRole } from "@synap-core/types/workspaces";
 import {
   eq,
   desc,
@@ -338,20 +339,23 @@ export const createProcs = {
           });
         }
       }
-      // A home shares the row with that space's members, so only a member may
-      // file for it — the same bar the header workspace meets (podProcedure).
-      if (
-        input.homeWorkspaceId &&
-        !(await getWorkspaceMembership(
+      // A home shares the row with that space's members — a write INTO that
+      // space's view — so only a member who may WRITE there (editor+, the
+      // `assertWorkspaceWrite` role set) may file for it. Governance then
+      // runs in the home space (`permWorkspaceId` below).
+      if (input.homeWorkspaceId) {
+        const homeMembership = await getWorkspaceMembership(
           await getDb(),
           input.homeWorkspaceId,
           ctx.userId
-        ))
-      ) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only a member of a space can file an entity for it",
-        });
+        );
+        if (!homeMembership || !isSpaceWriteRole(homeMembership.role)) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "Only a member who can write in a space can file an entity for it",
+          });
+        }
       }
 
       // Resolve framed-view trust SERVER-SIDE (never from the request body).
@@ -1362,8 +1366,12 @@ export const createProcs = {
       // workspace (agent omit workspaceId → rung 2 place). Otherwise proposals
       // land pod-null while data materializes in CRM, and workspace AI policy
       // never runs. Ambient remains fallback when placement is pod-wide null.
+      // A pod-wide row FILED FOR a space (0355) is governed there too — the
+      // space whose members it is shared with — not only in the caller's lens.
       const permWorkspaceId =
-        resolvedEntityWorkspaceId ?? governanceWorkspaceId;
+        resolvedEntityWorkspaceId ??
+        resolvedEntityHomeWorkspaceId ??
+        governanceWorkspaceId;
 
       // A body named by id is validated exactly as on update, BEFORE the
       // permission check, so a proposal never carries an unchecked document.

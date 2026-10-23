@@ -64,6 +64,7 @@ const OTHER = randomUUID();
 const W = randomUUID();
 const X = randomUUID();
 const FOREIGN = randomUUID(); // a space A is not a member of
+const VIEWED = randomUUID(); // a space A is only a VIEWER of
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -137,6 +138,7 @@ beforeAll(async () => {
     [W, "Team", A],
     [X, "Other team", A],
     [FOREIGN, "Not mine", OTHER],
+    [VIEWED, "Read only", OTHER],
   ] as const) {
     await q(
       `insert into workspaces (id, name, owner_id, workspace_type, settings) values ($1,$2,$3,'team','{}'::jsonb)`,
@@ -147,6 +149,10 @@ beforeAll(async () => {
       [randomUUID(), ws, owner]
     );
   }
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'viewer')`,
+    [randomUUID(), VIEWED, A]
+  );
   await q(
     `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints)
      values (gen_random_uuid(),'decision','Decision','kind','system','pod',null,true,'{}'::jsonb),
@@ -199,6 +205,31 @@ describe("create doors record the space a pod-wide entity was filed for", () => 
         homeWorkspaceId: FOREIGN,
       })
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("a named home needs a WRITE role there — a viewer is refused", async () => {
+    await expect(
+      create(null, {
+        profileSlug: "decision",
+        title: "Viewer's",
+        homeWorkspaceId: VIEWED,
+      })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("a homed create is governed in its home space, not the caller's lens", async () => {
+    const gate = vi.mocked(checkPermissionOrPropose);
+    gate.mockClear();
+    await create(null, {
+      profileSlug: "decision",
+      title: "Governed in X",
+      homeWorkspaceId: X,
+    });
+    expect(gate.mock.calls.at(-1)![0]).toMatchObject({
+      workspaceId: X,
+      // The key's grant still checks where the row LANDS (pod-wide).
+      grantWorkspaceId: null,
+    });
   });
 
   it("a proposal-gated create persists the home for the materializer", async () => {

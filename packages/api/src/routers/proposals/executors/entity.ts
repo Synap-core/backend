@@ -24,6 +24,7 @@ import {
   DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
   expirePendingCreatesOfLandedRecord,
 } from "@synap/database";
+import { isSpaceWriteRole } from "@synap-core/types/workspaces";
 import { ProposalStatus } from "@synap/database/schema";
 import {
   isEntityMergeProposalData,
@@ -260,22 +261,24 @@ export function registerEntityExecutors(): void {
         proposalWorkspaceId
       );
       // The space a pod-wide row was filed for (0355). Replayed through
-      // create's `homeWorkspaceId` — which only a MEMBER of that space may
-      // name, the approver included: an approver outside it lands the row
-      // un-homed (owner-only, exactly as before 0355) and we say so.
+      // create's `homeWorkspaceId` — which only a member who may WRITE in that
+      // space may name, the approver included: any other approver lands the
+      // row un-homed (owner-only, exactly as before 0355) and we say so.
       const persistedHome = resolveMaterializedEntityHomeWorkspaceId(
         innerData,
         entityHome
       );
+      const approverHomeMembership = persistedHome
+        ? await getWorkspaceMembership(db, persistedHome, userId)
+        : null;
       const replayHome =
-        persistedHome &&
-        (await getWorkspaceMembership(db, persistedHome, userId))
+        approverHomeMembership && isSpaceWriteRole(approverHomeMembership.role)
           ? persistedHome
           : null;
       if (persistedHome && !replayHome) {
         logger.warn(
           { proposalId: input.proposalId, homeWorkspaceId: persistedHome },
-          "entity/create approve: approver is not a member of the space this entity was filed for — landing it without a home space (owner-only)"
+          "entity/create approve: approver cannot write in the space this entity was filed for — landing it without a home space (owner-only)"
         );
       }
 
