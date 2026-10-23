@@ -77,7 +77,7 @@ export const GOVERNANCE_REASON_SHORT_LABELS: Readonly<
   Record<GovernanceReasonCode, string | null>
 > = {
   ADMIN: "Pod setting",
-  WRITES_REQUIRE_PROPOSAL: null,
+  WRITES_REQUIRE_PROPOSAL: "Asks by default",
   AGENT_OWNED_DESTRUCTIVE: "Removes agent work",
   CHANNEL_PROPOSE: "Teammate suggestion",
   USER_OBSERVATION_INFERENCE: "A guess about you",
