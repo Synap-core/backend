@@ -57,7 +57,18 @@ const h = vi.hoisted(() => {
         const schema = await import("@synap/database/schema");
         const client = new PGlite();
         state.client = client as unknown as typeof state.client;
-        state.db = drizzle(client, { schema });
+        const db = drizzle(client, { schema });
+        // PGlite is ONE connection: the proposal writer's transaction reads
+        // the agent's focus through the global `db` while the transaction
+        // holds that connection (permission-check.ts createPendingProposalRow),
+        // which deadlocks here (a pool gives production a second connection)
+        // and wedges every later case. Run the body on the same handle;
+        // atomicity is not under test (as entity.delete.real-gate.pglite.test.ts
+        // and proposal-review-session-gate.pglite.test.ts do).
+        (db as unknown as { transaction: unknown }).transaction = async (
+          fn: (tx: unknown) => Promise<unknown>
+        ) => fn(db);
+        state.db = db;
       }
       return state.db;
     },
@@ -415,7 +426,7 @@ describe("ea47d64e: an agent organises its OWN fresh task through the real doors
       `select proposal_type from proposals where status = 'auto_approved'`
     );
     expect(receipts.rows.map((r) => r.proposal_type)).toEqual(
-      expect.arrayContaining(["file_entities", "transition"])
+      expect.arrayContaining(["project.file_entities", "entity.transition"])
     );
   });
 
