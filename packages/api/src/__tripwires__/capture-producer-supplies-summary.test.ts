@@ -168,9 +168,10 @@ describe("tripwire: every capture producer supplies a narrative summary", () => 
     ).toContain("boundRawSourceText(");
   });
 
-  it("both proposal-data terminals persist the duplicate advisory", () => {
+  it("both proposal-data terminals persist the duplicate check", () => {
     // submitCaptureGraph has TWO terminals — auto-applied and pending — each
-    // building its own `data: { … }`. `pendingDuplicateCandidates` used to
+    // building its own `data: { … }`. The duplicate answer (now the one door's
+    // `duplicateCheck`, B2; formerly `pendingDuplicateCandidates`) used to
     // reach only the RETURN value, so the proposal row kept no record that the
     // write was already suspected of duplicating an in-flight one. Duplication
     // IS this proposal type's blast radius (166 live composite proposals: only
@@ -188,13 +189,13 @@ describe("tripwire: every capture producer supplies a narrative summary", () => 
         "`duplicateAdvisory` — a terminal that omits it files a proposal whose " +
         "row carries no duplicate warning, which is the field's whole purpose."
     ).toBe(2);
-    // ABSENT must not be confused with "checked, found none": an empty array is
-    // a claim the best-effort scan (which swallows lookup failures) cannot make.
+    // ABSENT means the door did not run; a failed lookup is `unchecked`,
+    // never folded into `clear` (that rule lives in the door's own test).
     expect(
       src,
-      "duplicateAdvisory must be `{}` when there are no candidates, never an empty array"
+      "duplicateAdvisory must carry the door's `duplicateCheck`, or nothing"
     ).toMatch(
-      /pendingDuplicateCandidates\.length > 0\s*\?[\s\S]{0,80}pendingDuplicateCandidates:/
+      /const duplicateAdvisory = duplicateCheck \? \{ duplicateCheck \} : \{\};/
     );
   });
 

@@ -110,6 +110,34 @@ describe("from-intent conductor firewalls", () => {
     expect(src).toMatch(/author the automation LAST/i);
   });
 
+  // 2026-10-21, decision B1 (e): "classify before creating" lived only in the
+  // Raycast extension's ai.instructions, which died with its AI tools. It is
+  // the pod skill's job now, BEFORE the §0 orient firewall, each layer with a
+  // pod door. LIMITATION (as above): this proves the table is written, not
+  // that an agent reads it first.
+  it("from-intent classifies the layer before §0, each layer with its pod door", () => {
+    const src = readFileSync(join(ROOT, "synap/from-intent.md"), "utf8");
+    const start = src.indexOf("### Classify first");
+    expect(start, "the classifier section exists").toBeGreaterThan(0);
+    expect(start, "the classifier comes before §0").toBeLessThan(
+      src.indexOf("### 0.")
+    );
+    const table = src.slice(start, src.indexOf("### 0."));
+    const doors: Record<string, string> = {
+      data: "synap_capture",
+      view: "synap_list_views",
+      capability: "synap_list_capabilities",
+      session: "synap_start_session",
+      track: "synap_list_tracks",
+      rule: "synap_create_rule",
+    };
+    for (const [layer, door] of Object.entries(doors)) {
+      const row = table.split("\n").find((l) => l.includes(`**${layer}**`));
+      expect(row, `layer ${layer} has a row`).toBeTruthy();
+      expect(row, `layer ${layer} names its door`).toContain(door);
+    }
+  });
+
   it("agent-os When NOT points at from-intent", () => {
     const src = readFileSync(join(ROOT, "agent-os/SKILL.md"), "utf8");
     expect(src).toMatch(/from-intent/);

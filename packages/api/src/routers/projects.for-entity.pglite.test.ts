@@ -79,10 +79,15 @@ function ddlFor(table: PgTable): string {
     const pk = c.primary
       ? ` primary key${type === "uuid" ? " default gen_random_uuid()" : ""}`
       : "";
+    // A boolean flag keeps its real default (`projects.sample` is NOT NULL
+    // DEFAULT false, 0347): without it a seeded row reads NULL, a value the
+    // real column can never hold.
     const def =
       c.name === "created_at" || c.name === "updated_at"
         ? " default now()"
-        : "";
+        : type === "boolean" && typeof c.default === "boolean"
+          ? ` default ${c.default}`
+          : "";
     return `"${c.name}" ${type}${pk}${def}`;
   });
   return `create table "${cfg.name}" (${cols.join(", ")});`;
@@ -169,8 +174,16 @@ describe("projects.forEntity — a thing's projects (D5)", () => {
           status: "archived",
           colorSlot: null,
           icon: "glyph:rocket",
+          sample: false,
         },
-        { id: BETA, name: "Beta", status: "active", colorSlot: 3, icon: "🚀" },
+        {
+          id: BETA,
+          name: "Beta",
+          status: "active",
+          colorSlot: 3,
+          icon: "🚀",
+          sample: false,
+        },
       ],
     });
   });

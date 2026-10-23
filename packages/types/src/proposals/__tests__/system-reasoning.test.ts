@@ -44,6 +44,26 @@ describe("isSystemReasoning", () => {
     }
   });
 
+  it("still recognises the wording rows written before 2026-10-21 carry", () => {
+    for (const s of [
+      "Agent requires proposal for all write operations.",
+      "Teammate may propose in this channel; write requires human approval.",
+      "This agent has reached its daily auto-execute write ceiling; further writes require human approval today.",
+      "This runs an arbitrary shell command inside the pod's API container and always requires human approval; no governance rule can widen it.",
+    ]) {
+      expect(isSystemReasoning(s)).toBe(true);
+    }
+  });
+
+  it("writes each sentence for the person: one sentence, no engine vocabulary", () => {
+    const jargon =
+      /requires? human|human approval|ceiling|container|arbitrary|governance rule|\bpod's API|\bwrite operations?\b|—/i;
+    for (const [code, s] of Object.entries(GOVERNANCE_POLICY_SENTENCES)) {
+      expect(s, code).not.toMatch(jargon);
+      expect(s.match(/[.;]/g)?.length, `${code} is one sentence`).toBe(1);
+    }
+  });
+
   it("recognises the automation gate's defaults, built by the writers' builders", () => {
     const sentences = [
       ruleRunSentence(),

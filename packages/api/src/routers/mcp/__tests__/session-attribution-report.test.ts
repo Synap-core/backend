@@ -33,12 +33,21 @@ vi.mock("@synap/database", async (importOriginal) => {
     db: {
       select: vi.fn((columns: Record<string, unknown>) => {
         // The resolver reads EITHER the ownership of a named session OR the
-        // open unclaimed list — never both in one call.
-        void columns;
+        // open unclaimed list (+ its exact count, when several) — never both.
         const isOpenList = !h.explicit;
+        // The exact count (`countUnclaimedOpenWorkSessions`, B4) selects `n`
+        // and has no `.limit()`: its query ends at `.where()`, over the whole
+        // open population.
+        const isOpenCount = isOpenList && "n" in (columns ?? {});
         const chain: Record<string, unknown> = {};
         chain.from = () => chain;
-        chain.where = () => chain;
+        chain.where = () =>
+          isOpenCount
+            ? (async () => {
+                if (h.openThrows) throw new Error("db down");
+                return [{ n: h.openRows.length }];
+              })()
+            : chain;
         chain.orderBy = () => chain;
         chain.limit = async () => {
           if (isOpenList) {
@@ -108,7 +117,7 @@ describe("structured session attribution on every attributed write", () => {
     expect(payload.status).toBe("applied");
     expect(blocks).toHaveLength(2);
     expect(blocks[1].text).toMatch(
-      /^Note: 2 of your focus sessions are open and none is yours/
+      /^Note: 2 of your focus sessions were active in the last 24 hours and none is yours/
     );
   });
 

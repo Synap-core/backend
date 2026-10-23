@@ -13,8 +13,8 @@
  * is the door's server-built plan; nothing from the request body reaches here
  * except the allowlisted field values already inside `plan.properties`.
  *
- * `forceCreate` skips the WEAK same-name gate only (two people may share a
- * name). The strong-signal path cannot fire for a subject write: the door
+ * A same-name twin never blocks it (two people may share a name; a create the
+ * owner authorised is warned at most, founder B2e). The strong-signal path cannot fire for a subject write: the door
  * pre-resolved every strong signal and would have filed a note instead (a
  * concurrent race can still merge — accepted, owner-authorised by direct mode).
  */
@@ -47,7 +47,6 @@ export async function materializeGuestDirect(input: {
     ...(plan.content ? { content: plan.content } : {}),
     targetWorkspaceId: loaded.workspaceId,
     ...(plan.facets ? { facets: plan.facets } : {}),
-    forceCreate: true,
     source: "system",
   });
 }

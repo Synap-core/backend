@@ -148,9 +148,11 @@ describe("assertDocumentAttachable — file-upload scope regression", () => {
   it("(a) THE BUG CASE: pod-scope entity + caller's OWN workspace document — no longer throws", async () => {
     const doc = await insertDocument({ workspaceId: CRM, userId: CALLER });
     const entity = await insertEntity({ workspaceId: null, userId: CALLER });
+    // Attachable: it resolves (wave 2: with the document's author agent, none
+    // here) instead of throwing.
     await expect(
       assertDocumentAttachable(CALLER, entity, doc)
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ agentUserId: null });
   });
 
   it("(b) THE SECURITY CASE: pod-scope entity + ANOTHER author's workspace document — still throws FORBIDDEN, even though caller can EDIT it via workspace membership", async () => {
@@ -176,9 +178,11 @@ describe("assertDocumentAttachable — file-upload scope regression", () => {
   it("(c) same-workspace entity + document — no throw (pre-existing, unchanged)", async () => {
     const doc = await insertDocument({ workspaceId: CRM, userId: OTHER });
     const entity = await insertEntity({ workspaceId: CRM, userId: CALLER });
+    // Attachable: it resolves (wave 2: with the document's author agent, none
+    // here) instead of throwing.
     await expect(
       assertDocumentAttachable(CALLER, entity, doc)
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ agentUserId: null });
   });
 
   it("(d) a document already the body of another live entity is refused regardless of scope (unchanged ownership check)", async () => {

@@ -29,7 +29,7 @@
  * mis-routes the rest. Every desktop exit says what a phone does with it
  * (`phone`), from ONE table (`RELAY_OPENABLE_KINDS`), and `placeExit` turns
  * that into what the device shows: the link with the mobile install hatch, or
- * an honest "open this on your computer" — either one with the console page
+ * an "open this on your computer" notice — either one with the console page
  * that covers it, when the viewer may open that page.
  */
 
@@ -421,7 +421,7 @@ export function publisherExit(url: string | null | undefined): Exit | null {
  *
  * `href: null` means there is nothing to click here: the reader is on a phone,
  * where `synap://` opens Relay, and Relay has no screen for the target. Then
- * `unavailable` carries the honest sentence and, when the console covers the
+ * `unavailable` carries the notice and, when the console covers the
  * same ground, the page that does.
  */
 export interface PlacedExit {

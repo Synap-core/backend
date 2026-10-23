@@ -283,7 +283,7 @@ describe("applyIdentityResolution", () => {
     });
     expect(update).not.toHaveBeenCalled();
     expect(kept).toEqual({
-      forceCreate: false,
+      keepBoth: false,
       receipt: { verb: "keep_existing", entityId: EXISTING },
     });
 
@@ -306,7 +306,7 @@ describe("applyIdentityResolution", () => {
     });
   });
 
-  it("separate is the only forceCreate and does not load", async () => {
+  it("separate is the only keep-both and does not load", async () => {
     const load = vi.fn();
     const decision = await applyIdentityResolution({
       resolution: { verb: "separate", existingEntityId: EXISTING },
@@ -314,7 +314,7 @@ describe("applyIdentityResolution", () => {
       load,
       update: async () => ({}),
     });
-    expect(decision).toEqual({ forceCreate: true });
+    expect(decision).toEqual({ keepBoth: true });
     expect(load).not.toHaveBeenCalled();
   });
 });
@@ -338,17 +338,18 @@ describe("entity/create executor", () => {
       },
     });
     expect(h.create).toHaveBeenCalledTimes(1);
-    expect(h.create.mock.calls[0]?.[0].forceCreate).toBeUndefined();
+    // No verb chosen: the approval asks the reviewer (B2b), never keeps both.
+    expect(h.create.mock.calls[0]?.[0].approvalDuplicate).toBe("ask_reviewer");
     expect(h.updates).toHaveLength(0);
   });
 
-  it("separate calls create with forceCreate true", async () => {
+  it("separate calls create with approvalDuplicate keep_both", async () => {
     const result = await run(baseData, {
       proposalId: "p-1",
       identityResolution: { verb: "separate" },
     });
     expect(h.create).toHaveBeenCalledWith(
-      expect.objectContaining({ forceCreate: true, title: "Ada" })
+      expect.objectContaining({ approvalDuplicate: "keep_both", title: "Ada" })
     );
     expect(result.identity).toEqual({ verb: "separate", entityId: CREATED });
     expect(h.get).not.toHaveBeenCalled();
@@ -525,6 +526,7 @@ describe("composite materialize uses the same helper per ref", () => {
         relationCaller,
         undefined,
         {
+          askReviewerOnDuplicate: true,
           identityResolutionByRef: { a: { verb: "separate" } },
         }
       )
@@ -537,8 +539,8 @@ describe("composite materialize uses the same helper per ref", () => {
       },
     });
     expect(creates).toHaveLength(2);
-    expect(creates[0]?.forceCreate).toBe(true);
-    expect(creates[1]?.forceCreate).toBeUndefined();
+    expect(creates[0]?.approvalDuplicate).toBe("keep_both");
+    expect(creates[1]?.approvalDuplicate).toBe("ask_reviewer");
   });
 
   it("fill_empty on one ref updates that row and leaves the other create untouched", async () => {
@@ -581,6 +583,7 @@ describe("composite materialize uses the same helper per ref", () => {
       relationCaller,
       undefined,
       {
+        askReviewerOnDuplicate: true,
         identityResolutionByRef: {
           a: { verb: "fill_empty", existingEntityId: EXISTING },
         },
@@ -588,7 +591,7 @@ describe("composite materialize uses the same helper per ref", () => {
     );
     expect(creates).toHaveLength(1);
     expect(creates[0]?.title).toBe("B");
-    expect(creates[0]?.forceCreate).toBeUndefined();
+    expect(creates[0]?.approvalDuplicate).toBe("ask_reviewer");
     expect(updates).toEqual([
       expect.objectContaining({
         id: EXISTING,
@@ -629,13 +632,14 @@ describe("composite materialize uses the same helper per ref", () => {
       relationCaller,
       undefined,
       {
+        askReviewerOnDuplicate: true,
         identityResolutionByRef: {
           $op1: { verb: "separate" },
         },
         entityRef: () => "$op1",
       }
     );
-    expect(creates[0]?.forceCreate).toBe(true);
+    expect(creates[0]?.approvalDuplicate).toBe("keep_both");
   });
 });
 
@@ -651,7 +655,7 @@ describe("source seams", () => {
     expect(createSrc).not.toContain("winnerValue");
     expect(createSrc).not.toMatch(/mergeEntities\s*\(/);
     expect(createSrc).toContain(
-      "decision?.forceCreate ? { forceCreate: true }"
+      'approvalDuplicate: decision?.keepBoth ? "keep_both" : "ask_reviewer"'
     );
     expect(helperSrc).not.toMatch(/mergeEntities\s*\(/);
   });

@@ -9,7 +9,10 @@
  * import with `entities.ts` resolves fine.
  */
 
-import { PROPOSAL_SOURCES } from "@synap-core/types/proposals";
+import {
+  PROPOSAL_SOURCES,
+  type DuplicateCheck,
+} from "@synap-core/types/proposals";
 import { z } from "zod";
 import { TITLE_HARD_MAX, titleTooLongReason } from "@synap-core/types/titles";
 import { decodeHtmlEntities } from "@synap-core/types/text";
@@ -34,7 +37,6 @@ import {
   stampProvenance,
   extractIdentitySignals,
   registerIdentitySignals,
-  resolveIdentity,
   resolveWorkspacePlacement,
   acceptEntityCreatePlacement,
   resolveKindWritePin,
@@ -43,7 +45,6 @@ import {
   DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
   shouldRejectJunkTitle,
   buildJunkTitleMessage,
-  classifyWeakEntityDedup,
   buildWeakEntityDedupMessage,
   buildWeakDedupCause,
   ENTITY_JUNK_TITLE_CODE,
@@ -54,6 +55,10 @@ import {
   expirePendingCreatesOfLandedRecord,
 } from "@synap/database";
 import { reconcileKindWithPlacement } from "./kind-placement.js";
+import {
+  findDuplicateCandidates,
+  toDuplicateCheck,
+} from "../../services/duplicates/find-duplicate-candidates.js";
 import { entities, workspaces, links } from "@synap/database/schema";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import { TRPCError } from "@trpc/server";
@@ -77,6 +82,7 @@ import { idempotencyWindowSeconds } from "../../utils/write-door-idempotency.js"
 import { createLogger } from "@synap-core/core";
 import { entityWriteVisibleWhere, toApiEntity } from "./helpers.js";
 import { assertDocumentAttachable } from "./mutate.js";
+import { isAiWriteRequest } from "../../utils/ai-write.js";
 import { entitiesRouter } from "../entities.js";
 import { entityBodyDocumentIdFrom } from "../../utils/store-entity-source-blob.js";
 import { computeEntityPropertyDiff } from "../../utils/entity-property-diff.js";
@@ -173,15 +179,26 @@ export const createProcs = {
           )
           .optional(),
         /**
-         * Bypass the WEAK same-name create gate (Phase 1). When true, a
-         * same-profile title match still creates a new entity instead of
-         * rejecting with candidates. Strong-signal auto-merge is NOT bypassed
-         * — email/phone/url still collapse onto the existing subject. Prefer
-         * reusing an existing id / enriching / attaching a facet; only set this
-         * when the subject is genuinely distinct (e.g. two people who share a
-         * name). Logged as `identity_resolve_merge` outcome `force_create`.
+         * APPROVAL REPLAY ONLY — set by the approval executors (`entity/create`
+         * and the composite materializer), never by a tool or a client. The
+         * REVIEWER owns a same-name twin (founder B2b): `ask_reviewer` refuses
+         * a twin record with `ENTITY_WEAK_DEDUP` + candidates so the reviewer
+         * picks a verb (keep both / use existing / fill empty / use these
+         * values); `keep_both` is the reviewer's `separate`. Ignored on an
+         * agent's own filing (`agentUserId` set): its twin is a proposal.
+         * Absent ⇒ a person's or the system's create: warned, never blocked.
          */
-        forceCreate: z.boolean().optional().default(false),
+        approvalDuplicate: z.enum(["ask_reviewer", "keep_both"]).optional(),
+        /**
+         * APPROVAL REPLAY ONLY, with `ask_reviewer` — the twin records the
+         * review card SHOWED for this create (the proposal's persisted
+         * `duplicateCheck`). A plain approve with no verb on a twin the
+         * reviewer saw is "approve as proposed" = keep both (FB1020
+         * BLOCKER-2: without it a capture naming any existing record could
+         * only be rejected). A twin NOT shown (it appeared after filing)
+         * still refuses, so the card asks. Ignored on an AI's own filing.
+         */
+        approvalReviewedTwinIds: z.array(z.string().uuid()).max(100).optional(),
         /**
          * Strong cross-source identity anchor for this subject, as `provider:id`
          * (e.g. `discord:123…`). Registered as an `external_id` identity signal
@@ -514,19 +531,23 @@ export const createProcs = {
         });
       }
 
-      // Resolve-then-merge (identity-first dedup — the single-entity door). A
-      // STRONG identity signal (email/phone/url/handle) means this subject
-      // already exists: enrich the matched entity + attach any requested roles
-      // instead of creating a duplicate, and return it with `deduplicated: true`.
-      // WEAK same-name (same profile) REJECTS create with candidates unless
-      // `forceCreate: true` — never auto-merges (Phase 1). The enrich + facet
-      // attach ride their own governed doors (update/attachFacet), so agent
-      // writes stay proposal-gated. Resolver hiccup falls through to a normal
-      // create (never blocks on a failed lookup).
-      //
-      // NOTE — capture-graph within-batch collapse still has its own weak
-      // auto-link path (`_capture-graph-dedup.ts`); that asymmetry is intentional
-      // for this PR (within-batch collapse ≠ persisted create gate).
+      // THE duplicate door (`findDuplicateCandidates`, founder B2). A STRONG
+      // identity signal (email/phone/url/handle/external id) on a visible row
+      // means this subject already exists: enrich the matched entity + attach
+      // any requested roles instead of creating a duplicate, and return it
+      // with `deduplicated: true` — the only automatic outcome. Every other hit
+      // (a same-kind record or one of the caller's pending creates with the
+      // same name or identity) is `possible`, and what happens depends on who
+      // is writing, never on a caller flag:
+      //  - an AGENT's filing is filed anyway, as a proposal
+      //    (`POSSIBLE_DUPLICATE`), carrying `duplicateCheck` for the card;
+      //  - a PERSON's (or the system's) own create lands, warned
+      //    (`duplicateCheck` on the receipt) — never blocked (B2e);
+      //  - an APPROVAL replay (`approvalDuplicate`) refuses a twin RECORD so
+      //    the reviewer picks a verb, unless the reviewer chose `keep_both`.
+      // The enrich + facet attach ride their own governed doors
+      // (update/attachFacet), so agent writes stay proposal-gated. A failed
+      // lookup is `unchecked` on the receipt, never `clear`.
       //
       // Runs on the `proposedEntityId` (proposal-approval replay) path TOO. It
       // used to be skipped there — "the approval must reuse its assigned id" —
@@ -555,25 +576,51 @@ export const createProcs = {
       // "Alice" person #47.
       const needsIdentityResolve =
         dedupSignals.length > 0 || (!!profileSlug && !!input.title?.trim());
-      // A same-name CONFLICT is DEFERRED until the exact-retry check below has
-      // run (it needs the placement, resolved later): an agent's identical
-      // retry is answered with the original write, not refused as a duplicate.
-      let deferredNameConflict: TRPCError | null = null;
+      // An AI's own filing — the GATE's predicate (FB1020 review M4), so an
+      // unattributed hub key / IS call (`source: "intelligence"`, no
+      // `agentUserId`) is floored like an attributed agent and can never pass
+      // the reviewer's `approvalDuplicate`. NOT a write inside a decided
+      // proposal (`ctx.governanceProposalId`, an internal-only channel): a
+      // composite approval replays each op with the proposal's OWN source —
+      // often `intelligence` — and it is the reviewer's, not the agent's.
+      const isAgentFiling =
+        isAiWriteRequest(input) && !ctx.governanceProposalId;
+      const approvalDuplicate = isAgentFiling
+        ? undefined
+        : input.approvalDuplicate;
+      let duplicateCheck: DuplicateCheck | undefined;
       if (needsIdentityResolve) {
+        const resolveDb = await getDb();
+        const answer = await findDuplicateCandidates(resolveDb, {
+          subject: "entity",
+          userId: ctx.userId,
+          profileSlug,
+          title: input.title ?? null,
+          signals: dedupSignals,
+          alsoKinds: roleApplicableKinds ?? undefined,
+          recordScope: ownerPrivateVisibleWhere(
+            entities.workspaceId,
+            entities.userId,
+            ctx.userId
+          ),
+          // A replay's own proposal is still pending while it runs; its
+          // pending siblings are expired once it lands. Records only.
+          ...(approvalDuplicate
+            ? { pending: { creates: [], truncated: false } }
+            : {}),
+        });
+        duplicateCheck = answer.check;
+        // A failed record lookup reads as "nothing matched" here — it is
+        // `unchecked` on `duplicateCheck`, never silently `clear`.
+        const identity = answer.identity ?? {
+          match: null,
+          candidates: [],
+          crossKindCandidates: [],
+        };
+        let visibleMatch:
+          | Awaited<ReturnType<typeof resolveDb.query.entities.findFirst>>
+          | undefined;
         try {
-          const resolveDb = await getDb();
-          const identity = await resolveIdentity(resolveDb, {
-            userId: ctx.userId,
-            kindSlug: profileSlug,
-            name: input.title ?? null,
-            signals: dedupSignals,
-            userScope: ownerPrivateVisibleWhere(
-              entities.workspaceId,
-              entities.userId,
-              ctx.userId
-            ),
-            limit: 5,
-          });
           // SECURITY GATE — the strong identity index is deliberately GLOBAL
           // (frozen policy: one subject per email/phone pod-wide), so the
           // matched id may belong to an entity the CALLER cannot see
@@ -584,7 +631,7 @@ export const createProcs = {
           // (the enrich/attach doors deny the writes, but the read leaked).
           // Invisible strong matches also must NOT be surfaced as weak
           // candidates below — candidates come only from the scoped weak path.
-          const visibleMatch =
+          visibleMatch =
             identity.match === "strong" && identity.entity
               ? await resolveDb.query.entities.findFirst({
                   where: and(
@@ -875,96 +922,86 @@ export const createProcs = {
               ...(propertyDiff ? { propertyDiff } : {}),
             };
           }
-
-          // ── WEAK same-name gate (Phase 1) ────────────────────────────────
-          // Same profile + same title → reject with candidates. Never auto-
-          // merge. forceCreate opts in to create anyway (logged). Cross-kind
-          // same-title stays advisory only (not blocked). Strong invisible
-          // fall-through above still proceeds; weak candidates are already
-          // caller-scoped by resolveIdentity's userScope so no leak.
-          if (profileSlug && identity.match !== "strong") {
-            const weakGate = classifyWeakEntityDedup({
-              forceCreate: input.forceCreate,
-              profileSlug,
-              match: identity.match,
-              candidates: identity.candidates.map((c) => ({
-                id: c.id,
-                title: c.title,
-                type: c.type,
-              })),
-            });
-            if (weakGate.block) {
-              logger.info(
-                {
-                  event: "identity_resolve_merge",
-                  outcome: "blocked_weak",
-                  userId: ctx.userId,
-                  profileSlug,
-                  candidateCount: weakGate.sameKindCandidates.length,
-                },
-                "[entities.create] weak same-name match — rejecting create with candidates"
-              );
-              deferredNameConflict = new TRPCError({
-                code: "CONFLICT",
-                message: buildWeakEntityDedupMessage(
-                  weakGate.sameKindCandidates,
-                  profileSlug
-                ),
-                cause: buildWeakDedupCause(weakGate.sameKindCandidates),
-              });
-            }
-            if (input.forceCreate && identity.match === "weak") {
-              logger.info(
-                {
-                  event: "identity_resolve_merge",
-                  outcome: "force_create",
-                  userId: ctx.userId,
-                  profileSlug,
-                },
-                "[entities.create] forceCreate=true — bypassing weak same-name gate"
-              );
-            }
-          }
-
-          // Role create: an exact-title party the role can already sit on is
-          // the same conflict as a same-kind hit. The picked kind had no row
-          // (that would have thrown above); another applicable kind does.
-          if (
-            !deferredNameConflict &&
-            roleApplicableKinds &&
-            !input.forceCreate &&
-            identity.match !== "strong"
-          ) {
-            const hits = identity.crossKindCandidates.filter((candidate) =>
-              roleApplicableKinds!.includes(candidate.type)
-            );
-            if (hits.length > 0) {
-              const types = new Set(hits.map((hit) => hit.type));
-              const label = types.size === 1 ? hits[0]!.type : "record";
-              logger.info(
-                {
-                  event: "identity_resolve_merge",
-                  outcome: "blocked_weak",
-                  userId: ctx.userId,
-                  profileSlug,
-                  candidateCount: hits.length,
-                },
-                "[entities.create] role create — exact name already exists on an applicable kind"
-              );
-              deferredNameConflict = new TRPCError({
-                code: "CONFLICT",
-                message: buildWeakEntityDedupMessage(hits, label),
-                cause: buildWeakDedupCause(hits),
-              });
-            }
-          }
-        } catch (resolveErr) {
-          // Re-throw intentional gate rejects (junk already threw above; weak
-          // CONFLICT is thrown inside the try). Only swallow resolver failures.
-          if (resolveErr instanceof TRPCError) throw resolveErr;
+        } catch (mergeErr) {
+          // Intentional refusals (key grant, a governed enrich) surface; only an
+          // unexpected failure of the merge itself falls through to a create.
+          if (mergeErr instanceof TRPCError) throw mergeErr;
           logger.warn(
-            { resolveErr },
-            "[entities.create] identity resolve failed — proceeding to create"
+            { mergeErr },
+            "[entities.create] strong identity merge failed — proceeding to create"
+          );
+          // The create below is a same-identity twin, never a `clear` one
+          // (FB1020 review S2): name the record the merge was for, so an
+          // agent's filing is floored and the card shows it. A failure before
+          // its visibility was known names nothing and reads `unchecked`.
+          duplicateCheck =
+            visibleMatch && identity.entity
+              ? toDuplicateCheck(
+                  "entity",
+                  [
+                    {
+                      ref: "record",
+                      id: visibleMatch.id,
+                      kind: identity.entity.type,
+                      title: identity.entity.title ?? null,
+                      why: "same_identity",
+                    },
+                    ...answer.check.candidates,
+                  ],
+                  false
+                )
+              : answer.check.candidates.length > 0
+                ? answer.check
+                : { ...answer.check, status: "unchecked" as const };
+        }
+
+        // ── A possible twin (B2): same kind, same name or identity ──────────
+        // Strong visible matches returned above; what is left is `possible`.
+        if (duplicateCheck.status === "possible") {
+          const twinRecords = duplicateCheck.candidates
+            .filter((c) => c.ref === "record")
+            .map((c) => ({ id: c.id, title: c.title, type: c.kind }));
+          // Twins the reviewer saw on the card and approved past = keep both.
+          const reviewed = new Set(
+            isAgentFiling ? [] : (input.approvalReviewedTwinIds ?? [])
+          );
+          const unseenTwins = twinRecords.filter((t) => !reviewed.has(t.id));
+          if (approvalDuplicate === "ask_reviewer" && unseenTwins.length > 0) {
+            logger.info(
+              {
+                event: "identity_resolve_merge",
+                outcome: "blocked_weak",
+                userId: ctx.userId,
+                profileSlug,
+                candidateCount: twinRecords.length,
+              },
+              "[entities.create] approval of a same-name create — the reviewer picks a verb"
+            );
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: buildWeakEntityDedupMessage(
+                twinRecords,
+                profileSlug ?? "record"
+              ),
+              cause: buildWeakDedupCause(twinRecords),
+            });
+          }
+          logger.info(
+            {
+              event: "identity_resolve_merge",
+              outcome:
+                approvalDuplicate === "keep_both"
+                  ? "keep_both"
+                  : approvalDuplicate === "ask_reviewer"
+                    ? "reviewed_keep_both"
+                    : isAgentFiling
+                      ? "possible_duplicate_proposed"
+                      : "possible_duplicate_warned",
+              userId: ctx.userId,
+              profileSlug,
+              candidateCount: duplicateCheck.candidates.length,
+            },
+            "[entities.create] possible duplicate"
           );
         }
       }
@@ -1130,11 +1167,12 @@ export const createProcs = {
       };
 
       // RETRY-SAFE DEDUP (W3) — answered FIRST among the dedup rules, before
-      // the deferred same-name CONFLICT and before the permission gate: an
-      // EXACT retry (same caller and agent, kind, home, title, properties and
-      // short body, inside the idempotency window) is the same write, and its
-      // answer is the original entity (founder decision 2026-10-22). Anything
-      // less than exact still meets the same-name gate.
+      // the duplicate floor (B2: a possible twin turns an agent's filing into
+      // a proposal) and before the permission gate: an EXACT retry (same
+      // caller and agent, kind, home, title, properties and short body, inside
+      // the idempotency window) is the same write, and its answer is the
+      // original entity (founder decision 2026-10-22). Anything less than
+      // exact still meets the duplicate floor.
       //
       // (W3, direct/auto-approved writes — the "No approval
       // received" damage): the client's confirmation window can give up on a
@@ -1235,8 +1273,6 @@ export const createProcs = {
         }
       }
 
-      if (deferredNameConflict) throw deferredNameConflict;
-
       // Refuse domain dumps into admin/settings/agent/operational homes.
       // global:true → null (allowed). Pod-wide placement is fine; pinning or
       // ambient-resolving into a non-domain home is not — pick a domain app
@@ -1305,7 +1341,8 @@ export const createProcs = {
         await assertDocumentAttachable(
           ctx.userId,
           { id: entityId, workspaceId: resolvedEntityWorkspaceId ?? null },
-          input.documentId
+          input.documentId,
+          { aiWrite: isAiWriteRequest(input) }
         );
       }
 
@@ -1375,6 +1412,14 @@ export const createProcs = {
           : {}),
       };
 
+      // A possible twin turns an agent's filing into a proposal (B2c). The
+      // RETRY class is not a duplicate question and never reaches here: the
+      // retry-safe dedup above answered an exact retry with the original write
+      // (write-door idempotency stays the retry layer; a proposal would only
+      // add a card). A near retry is floored like any twin.
+      const proposeAsDuplicate =
+        isAgentFiling && duplicateCheck?.status === "possible";
+
       // 2. Permission check (may create proposal with correlationId)
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
@@ -1397,34 +1442,38 @@ export const createProcs = {
         // The declared slot this entity fulfils — the claim the approval
         // stamps by, the same label the session artifact records.
         expectedLabel: input.expectedLabel,
+        // The duplicate door's answer (B2): a possible twin turns an agent's
+        // auto-approved filing into a proposal; the card shows the candidates.
+        possibleDuplicate: proposeAsDuplicate,
+        ...(duplicateCheck ? { duplicateCheck } : {}),
         data: gateRecord,
       });
 
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
+      // PHANTOM ENVELOPE ID FIX: a "proposed" response must NOT carry a
+      // top-level `id` that looks like a materialized entity id — nothing was
+      // created yet, and downstream callers were treating that phantom id as a
+      // real entity. Carry only `proposalId` (the reviewable handle). `entity`
+      // stays null to signal "no materialized row". However, we DO expose the
+      // stable `proposedEntityId` (pre-generated at the top of this handler) so
+      // AI agents can reference this entity in cross-write proposal graphs.
+      // A "proposed" outcome is NOT always the entity. When the author lacks
+      // membership on the governing workspace, `checkPermissionOrPropose`
+      // deliberately files a WORKSPACE-JOIN gate instead of the content write
+      // (permission-check.ts, join-gate branch). `perm.proposalType` is the
+      // discriminator that says which happened — so derive the prose and the
+      // pre-allocated id FROM it rather than asserting the entity case.
+      //
+      // This is the same defect the PHANTOM ENVELOPE ID comment above fixed
+      // for `id`, one field over: a receipt that narrates a write that never
+      // happened, plus an id that can never resolve. An external agent read
+      // `proposedEntityId` off a join gate, found it unresolvable, and
+      // published a wrong root cause built on it. Hub REST already branches
+      // on this (`hub-protocol/entities.ts`, "JOIN gate" comment); this is
+      // the same rule applied at the shared source instead of one door.
       if ("proposalId" in perm) {
-        // PHANTOM ENVELOPE ID FIX: a "proposed" response must NOT carry a
-        // top-level `id` that looks like a materialized entity id — nothing was
-        // created yet, and downstream callers were treating that phantom id as a
-        // real entity. Carry only `proposalId` (the reviewable handle). `entity`
-        // stays null to signal "no materialized row". However, we DO expose the
-        // stable `proposedEntityId` (pre-generated at the top of this handler) so
-        // AI agents can reference this entity in cross-write proposal graphs.
-        // A "proposed" outcome is NOT always the entity. When the author lacks
-        // membership on the governing workspace, `checkPermissionOrPropose`
-        // deliberately files a WORKSPACE-JOIN gate instead of the content write
-        // (permission-check.ts, join-gate branch). `perm.proposalType` is the
-        // discriminator that says which happened — so derive the prose and the
-        // pre-allocated id FROM it rather than asserting the entity case.
-        //
-        // This is the same defect the PHANTOM ENVELOPE ID comment above fixed
-        // for `id`, one field over: a receipt that narrates a write that never
-        // happened, plus an id that can never resolve. An external agent read
-        // `proposedEntityId` off a join gate, found it unresolvable, and
-        // published a wrong root cause built on it. Hub REST already branches
-        // on this (`hub-protocol/entities.ts`, "JOIN gate" comment); this is
-        // the same rule applied at the shared source instead of one door.
         const joinGate = isJoinGate(perm.proposalType);
         return {
           status: "proposed",
@@ -1448,6 +1497,11 @@ export const createProcs = {
           // Homed proposal: same as materialize target (may be null = pod-wide).
           workspaceId: resolvedEntityWorkspaceId,
           effectiveWorkspaceId: resolvedEntityWorkspaceId,
+          // Why it waits, when the duplicate door is why (B2): the reviewer
+          // sees the same candidates on the card.
+          ...(duplicateCheck && duplicateCheck.status !== "clear"
+            ? { duplicateCheck }
+            : {}),
           // Facets ride the proposal payload and attach on approve (R2).
           // outcome "pending" = will attach after approval (not dropped).
           facets: (input.facets ?? []).map((f) => ({
@@ -1899,6 +1953,11 @@ export const createProcs = {
         // incidental and would break silently if the spread ever changed.
         ...(createdEntity.unmodeled?.length
           ? { unmodeled: createdEntity.unmodeled }
+          : {}),
+        // A person's create is never blocked by a possible twin (B2e): it is
+        // WARNED here, with the candidates. `unchecked` says the lookup failed.
+        ...(duplicateCheck && duplicateCheck.status !== "clear"
+          ? { duplicateCheck }
           : {}),
       };
     }),
