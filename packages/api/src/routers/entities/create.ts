@@ -1452,28 +1452,28 @@ export const createProcs = {
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
+      // PHANTOM ENVELOPE ID FIX: a "proposed" response must NOT carry a
+      // top-level `id` that looks like a materialized entity id — nothing was
+      // created yet, and downstream callers were treating that phantom id as a
+      // real entity. Carry only `proposalId` (the reviewable handle). `entity`
+      // stays null to signal "no materialized row". However, we DO expose the
+      // stable `proposedEntityId` (pre-generated at the top of this handler) so
+      // AI agents can reference this entity in cross-write proposal graphs.
+      // A "proposed" outcome is NOT always the entity. When the author lacks
+      // membership on the governing workspace, `checkPermissionOrPropose`
+      // deliberately files a WORKSPACE-JOIN gate instead of the content write
+      // (permission-check.ts, join-gate branch). `perm.proposalType` is the
+      // discriminator that says which happened — so derive the prose and the
+      // pre-allocated id FROM it rather than asserting the entity case.
+      //
+      // This is the same defect the PHANTOM ENVELOPE ID comment above fixed
+      // for `id`, one field over: a receipt that narrates a write that never
+      // happened, plus an id that can never resolve. An external agent read
+      // `proposedEntityId` off a join gate, found it unresolvable, and
+      // published a wrong root cause built on it. Hub REST already branches
+      // on this (`hub-protocol/entities.ts`, "JOIN gate" comment); this is
+      // the same rule applied at the shared source instead of one door.
       if ("proposalId" in perm) {
-        // PHANTOM ENVELOPE ID FIX: a "proposed" response must NOT carry a
-        // top-level `id` that looks like a materialized entity id — nothing was
-        // created yet, and downstream callers were treating that phantom id as a
-        // real entity. Carry only `proposalId` (the reviewable handle). `entity`
-        // stays null to signal "no materialized row". However, we DO expose the
-        // stable `proposedEntityId` (pre-generated at the top of this handler) so
-        // AI agents can reference this entity in cross-write proposal graphs.
-        // A "proposed" outcome is NOT always the entity. When the author lacks
-        // membership on the governing workspace, `checkPermissionOrPropose`
-        // deliberately files a WORKSPACE-JOIN gate instead of the content write
-        // (permission-check.ts, join-gate branch). `perm.proposalType` is the
-        // discriminator that says which happened — so derive the prose and the
-        // pre-allocated id FROM it rather than asserting the entity case.
-        //
-        // This is the same defect the PHANTOM ENVELOPE ID comment above fixed
-        // for `id`, one field over: a receipt that narrates a write that never
-        // happened, plus an id that can never resolve. An external agent read
-        // `proposedEntityId` off a join gate, found it unresolvable, and
-        // published a wrong root cause built on it. Hub REST already branches
-        // on this (`hub-protocol/entities.ts`, "JOIN gate" comment); this is
-        // the same rule applied at the shared source instead of one door.
         const joinGate = isJoinGate(perm.proposalType);
         return {
           status: "proposed",

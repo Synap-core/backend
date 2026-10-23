@@ -96,8 +96,12 @@ vi.mock("@synap/database", async (importOriginal) => {
       vi.fn((strings: TemplateStringsArray, ..._v: unknown[]) => ({
         sql: strings.join("?"),
       })),
-      // session-kind.ts builds a module-level drizzleSql.raw
-      { raw: vi.fn((s: string) => ({ sql: s })) }
+      // session-kind.ts builds a module-level drizzleSql.raw, and the jobs
+      // session-titler a module-level drizzleSql.identifier
+      {
+        raw: vi.fn((s: string) => ({ sql: s })),
+        identifier: vi.fn((s: string) => ({ sql: s })),
+      }
     ),
   };
 });

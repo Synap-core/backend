@@ -646,8 +646,12 @@ export const governanceRulesRouter = router({
     };
   }),
 
-  /** Switch it. Pod-admin only, humans only — same gate as the reversible default. */
-  setOwnOrganiseDefault: protectedProcedure
+  /**
+   * Switch it. Pod-admin only, humans only — same gate as the reversible
+   * default, including its step-up: it writes a governance rule, so a Synap
+   * app's device token needs a fresh sign-in (`credentialProcedure`).
+   */
+  setOwnOrganiseDefault: credentialProcedure
     .input(z.object({ enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       await assertPodAdmin(ctx.userId);
