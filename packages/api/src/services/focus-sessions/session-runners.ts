@@ -87,29 +87,53 @@ export function parseRunnerClientKey(
 }
 
 /**
- * Record that THIS request's client conversation holds `sessionId`'s wait.
- * Reads the client key and cwd the key-auth door entered for the request; a
- * request with no named conversation stamps nothing. Returns whether a row was
- * written (false = nothing to stamp, or throttled). Never throws.
+ * The computer an agent runs on, as a SQL scalar: the agent's host
+ * (`users.host_user_id`), or the agent itself when it is a `machine` agent
+ * user; NULL for a person's key. Shared by the runner stamp and the terminal
+ * heartbeat (`agent-conversations`), so both name one computer one way.
+ */
+export function machineOfAgentSql(agentUserId: string | null) {
+  return agentUserId
+    ? drizzleSql`(SELECT CASE WHEN ${users.agentType} = 'machine' THEN ${users.id} ELSE ${users.hostUserId} END FROM ${users} WHERE ${users.id} = ${agentUserId})`
+    : drizzleSql`NULL`;
+}
+
+/** The client key a key-auth door builds for a named conversation. */
+export function runnerClientKey(
+  apiKeyId: string,
+  harness: string,
+  conversationId: string
+): string {
+  return `key:${apiKeyId}|conv:${harness}:${conversationId}`;
+}
+
+/**
+ * Record that a client conversation holds `sessionId`. By default THIS
+ * request's: the client key and cwd the key-auth door entered for it (the
+ * change-feed wait). The terminal heartbeat passes `clientKey` explicitly — a
+ * reporter names its conversation in the body, not a header — and `cwd: null`
+ * (a heartbeat never carries a path). A request with no named conversation
+ * stamps nothing. Returns whether a row was written (false = nothing to stamp,
+ * or throttled). Never throws.
  */
 export async function stampSessionRunner(p: {
   sessionId: string;
-  /** The session owner (the wait's floor already proved it reads the session). */
+  /** The session owner (the caller's floor already proved it reads the session). */
   ownerId: string;
   /** The agent acting through the key, when an agent key is calling. */
   agentUserId?: string | null;
+  /** An explicit runner identity instead of the request's (the heartbeat). */
+  identity?: { clientKey: string; cwd: null };
 }): Promise<boolean> {
-  const clientKey = getRequestClientKey();
+  const clientKey = p.identity ? p.identity.clientKey : getRequestClientKey();
   const parsed = parseRunnerClientKey(clientKey);
   if (!clientKey || !parsed) return false;
-  const cwd = getRequestConversationCwd() ?? null;
+  const cwd = p.identity
+    ? p.identity.cwd
+    : (getRequestConversationCwd() ?? null);
   const agentUserId = p.agentUserId ?? null;
   try {
-    // The computer: the agent's host (`users.host_user_id`), or the agent
-    // itself when the key belongs to a `machine` agent user.
-    const machine = agentUserId
-      ? drizzleSql`(SELECT CASE WHEN ${users.agentType} = 'machine' THEN ${users.id} ELSE ${users.hostUserId} END FROM ${users} WHERE ${users.id} = ${agentUserId})`
-      : drizzleSql`NULL`;
+    const machine = machineOfAgentSql(agentUserId);
     const written = await db
       .insert(sessionRunners)
       .values({

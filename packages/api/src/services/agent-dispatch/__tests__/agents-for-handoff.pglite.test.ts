@@ -17,6 +17,11 @@
  *     refusal ⇒ blocked; else the governance dry run for
  *     `focus_session.assign_agent` (no rule ⇒ proposes ⇒ asks_you); the
  *     caller itself and a person (no caller) ⇒ direct;
+ *   - TERMINALS: each computer lists its open terminals from the registry
+ *     (0354) — by machine principal first, else by name (one normaliser),
+ *     a terminal on an unnamed computer adds it; ended, silent and other
+ *     people's terminals never show; a terminal's bound session is its newest
+ *     runner row;
  *   - PARITY: for every row, `canTakeYourWork` is exactly what the real
  *     `route()` answers when a hand-off NAMES that agent for this person.
  */
@@ -266,12 +271,14 @@ describe("readAgentsForHandoff — which computer", () => {
       agentUserId: DEVBOX,
       name: "devbox",
       agents: 2,
+      terminals: [],
     });
     // ON_LABEL + PAUSED both last seen on "MacBook-Pro".
     expect(byName["MacBook-Pro"]).toEqual({
       agentUserId: null,
       name: "MacBook-Pro",
       agents: 2,
+      terminals: [],
     });
     // The teammate's devbox and laptop never answer "my devbox".
     expect(roster.computers.map((c) => c.agentUserId)).not.toContain(
@@ -285,8 +292,8 @@ describe("readAgentsForHandoff — which computer", () => {
     const b = await readAgentsForHandoff(OWNER_B, { now: NOW });
     expect(b.computers).toEqual(
       expect.arrayContaining([
-        { agentUserId: LAPTOP_1, name: "laptop", agents: 0 },
-        { agentUserId: LAPTOP_2, name: "laptop", agents: 0 },
+        { agentUserId: LAPTOP_1, name: "laptop", agents: 0, terminals: [] },
+        { agentUserId: LAPTOP_2, name: "laptop", agents: 0, terminals: [] },
       ])
     );
     // OWNER's agents are visible pod-wide, but their keys act for OWNER.
@@ -415,6 +422,123 @@ describe("readAgentsForHandoff — parity with the route", () => {
         admitted: a.canTakeYourWork,
       });
       expect(r.kind === "refused" ? r.reason : null).toBe(a.whyNot);
+    }
+  });
+});
+
+describe("readAgentsForHandoff — terminals per computer (0354)", () => {
+  const SESSION = randomUUID();
+  let withTerminals: Awaited<ReturnType<typeof readAgentsForHandoff>>;
+  const computer = (name: string) => {
+    const c = withTerminals.computers.find((x) => x.name === name);
+    if (!c) throw new Error(`no computer ${name}`);
+    return c;
+  };
+
+  beforeAll(async () => {
+    const term = (
+      user: string,
+      conv: string,
+      computerName: string,
+      opts: {
+        machine?: string | null;
+        state?: string;
+        ended?: boolean;
+        seenSecondsAgo?: number;
+      } = {}
+    ) =>
+      q(
+        `insert into agent_conversations (id, user_id, agent_user_id, machine_user_id, computer, harness, conversation_id, folder, state, state_since, subagent_count, first_seen_at, last_seen_at, ended_at)
+         values ($1, $2, null, $3, $4, 'claude-code', $5, 'synap', $6, now(), 1, now(), now() - make_interval(secs => $7), $8)`,
+        [
+          randomUUID(),
+          user,
+          opts.machine ?? null,
+          computerName,
+          conv,
+          opts.state ?? "working",
+          opts.seenSecondsAgo ?? 30,
+          opts.ended ? new Date().toISOString() : null,
+        ]
+      );
+    // On the owner's devbox BY PRINCIPAL, under a name that matches nothing.
+    await term(OWNER, "t-by-machine", "build-box", { machine: DEVBOX });
+    // No principal: "devbox" by name.
+    await term(OWNER, "t-by-name", "devbox", { state: "waiting" });
+    // Folds into the key label "MacBook-Pro" (one normaliser, both sides).
+    await term(OWNER, "t-mac", "macbook-pro", { state: "idle" });
+    // A computer nothing else names: added.
+    await term(OWNER, "t-studio", "studio");
+    // Never shown: ended, silent past the window, someone else's.
+    await term(OWNER, "t-ended", "devbox", { ended: true });
+    await term(OWNER, "t-silent", "devbox", { seenSecondsAgo: 3_600 });
+    await term(TEAMMATE, "t-theirs", "devbox");
+    // The by-machine terminal works in a session (its runner row).
+    await q(
+      `insert into session_runners (session_id, client_key, user_id, harness, conversation_id, first_seen_at, last_seen_at)
+       values ($1, $2, $3, 'claude-code', 't-by-machine', now(), now())`,
+      [SESSION, `key:${randomUUID()}|conv:claude-code:t-by-machine`, OWNER]
+    );
+    // Same conversation id, ANOTHER harness: never the by-name terminal's
+    // session (discriminates the subquery's harness condition).
+    await q(
+      `insert into session_runners (session_id, client_key, user_id, harness, conversation_id, first_seen_at, last_seen_at)
+       values ($1, $2, $3, 'codex', 't-by-name', now(), now())`,
+      [randomUUID(), `key:${randomUUID()}|conv:codex:t-by-name`, OWNER]
+    );
+    withTerminals = await readAgentsForHandoff(OWNER, { now: NOW });
+  }, 60_000);
+
+  it("a terminal attaches by machine principal first, else by name", () => {
+    const ids = computer("devbox")
+      .terminals.map((t) => t.conversationId)
+      .sort();
+    expect(ids).toEqual(["t-by-machine", "t-by-name"]);
+    expect(computer("devbox").agentUserId).toBe(DEVBOX);
+    // The terminal's own name never became a computer of its own.
+    expect(withTerminals.computers.map((c) => c.name)).not.toContain(
+      "build-box"
+    );
+  });
+
+  it("a host name folds into the key label it normalises to; an unnamed computer is added", () => {
+    expect(
+      computer("MacBook-Pro").terminals.map((t) => t.conversationId)
+    ).toEqual(["t-mac"]);
+    expect(computer("studio")).toMatchObject({
+      agentUserId: null,
+      agents: 0,
+      terminals: [expect.objectContaining({ conversationId: "t-studio" })],
+    });
+    expect(withTerminals.computers).toHaveLength(3);
+  });
+
+  it("each terminal carries its state, folder, sub-agents and bound session — the VALUES arrive", () => {
+    const t = computer("devbox").terminals.find(
+      (x) => x.conversationId === "t-by-machine"
+    )!;
+    expect(t).toMatchObject({
+      harness: "claude-code",
+      folder: "synap",
+      state: "working",
+      subagents: 1,
+      sessionId: SESSION,
+    });
+    expect(typeof t.stateSince).toBe("string");
+    expect(typeof t.lastSeenAt).toBe("string");
+    const byName = computer("devbox").terminals.find(
+      (x) => x.conversationId === "t-by-name"
+    )!;
+    expect(byName).toMatchObject({ state: "waiting", sessionId: null });
+  });
+
+  it("ended, silent and other people's terminals never show", () => {
+    const all = withTerminals.computers.flatMap((c) =>
+      c.terminals.map((t) => t.conversationId)
+    );
+    expect(all).toHaveLength(4);
+    for (const gone of ["t-ended", "t-silent", "t-theirs"]) {
+      expect(all).not.toContain(gone);
     }
   });
 });

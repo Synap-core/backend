@@ -182,6 +182,8 @@ export * from "./focus-sessions.js";
 // Session evaluations — the graded verdicts against focus_sessions.criteria (0267)
 export * from "./session-evaluations.js";
 export * from "./session-runners.js";
+// The one registry of live agent terminals (0354), linked to sessions by session_runners
+export * from "./agent-conversations.js";
 
 // DEPRECATED: Agent Skills merged into skills table (migration 0130_merge_agent_skills.sql).
 // The agent-skills.ts table definition is kept for migration reference only.

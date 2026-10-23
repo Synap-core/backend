@@ -22225,6 +22225,134 @@
         }
       }
     },
+    "/conversations/heartbeat": {
+      "post": {
+        "tags": ["Conversations"],
+        "summary": "Report a live agent terminal (heartbeat)",
+        "description": "Idempotent upsert of one agent conversation, keyed by (person, computer, harness, conversationId). Send on every state change and at least every 5 minutes while the conversation is open; `ended: true` closes it (a later beat reopens it). `state` is working | idle | waiting; the server stamps `stateSince` when it changes. `folder` keeps only its basename; `computer` its first host-name label, lower-cased. `sessionId` (a session the person owns) links the conversation to that session as one of its runners. The body is strict: any other field (prompt text, pid, tty, paths, tokens, account labels) is refused with 400. Telemetry: never a proposal.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "computer": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 253
+                  },
+                  "harness": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9-]{0,31}$"
+                  },
+                  "conversationId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[^\\\\/\\s]+$"
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": ["working", "idle", "waiting"]
+                  },
+                  "folder": { "type": ["string", "null"], "maxLength": 4096 },
+                  "subagents": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1000
+                  },
+                  "sessionId": { "type": ["string", "null"], "format": "uuid" },
+                  "ended": { "type": "boolean" }
+                },
+                "required": ["computer", "harness", "conversationId", "state"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "conversation": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string", "format": "uuid" },
+                        "computer": { "type": "string" },
+                        "harness": { "type": "string" },
+                        "conversationId": { "type": "string" },
+                        "state": {
+                          "type": "string",
+                          "enum": ["working", "idle", "waiting"]
+                        },
+                        "stateSince": { "type": "string" },
+                        "endedAt": { "type": ["string", "null"] }
+                      },
+                      "required": [
+                        "id",
+                        "computer",
+                        "harness",
+                        "conversationId",
+                        "state",
+                        "stateSince",
+                        "endedAt"
+                      ]
+                    },
+                    "written": { "type": "boolean" },
+                    "sessionId": {
+                      "type": ["string", "null"],
+                      "format": "uuid"
+                    },
+                    "sessionLinkSkipped": {
+                      "type": "string",
+                      "enum": ["no_api_key", "ended"]
+                    }
+                  },
+                  "required": ["conversation", "written", "sessionId"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Session not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/proactive/post": {
       "post": {
         "tags": ["Proactive"],

@@ -26,6 +26,7 @@ import {
   and,
   drizzleSql,
   focusSessions,
+  agentConversations,
   AGENT_PROPOSAL_PACKAGE_MARKER,
   RECEIPT_IDLE_WINDOW_HOURS,
   focusSessionWaitsOnPersonWhere,
@@ -122,9 +123,45 @@ export async function closeIdleReceipts(): Promise<number> {
   return closed;
 }
 
+/** Ended or abandoned agent conversations (0354) are kept this many days. */
+export const AGENT_CONVERSATION_RETENTION_DAYS = 7;
+
+/**
+ * Delete the registry rows of agent terminals (0354) that ENDED, or were last
+ * heard from, more than {@link AGENT_CONVERSATION_RETENTION_DAYS} ago — a
+ * terminal that crashed never sends `ended`, so silence ages out too.
+ * Telemetry, owned by nobody's content: a plain delete. Cutoff in SQL, no Date
+ * bind (the postgres.js 3.4.8 crash noted below).
+ */
+export async function pruneAgentConversations(
+  database: typeof db = db
+): Promise<number> {
+  const t = agentConversations;
+  const cutoff = drizzleSql`now() - make_interval(days => ${AGENT_CONVERSATION_RETENTION_DAYS})`;
+  const gone = await database
+    .delete(t)
+    .where(drizzleSql`${t.endedAt} < ${cutoff}`)
+    .returning({ id: t.id });
+  return gone.length;
+}
+
 /** Called by the cron scheduler every hour. */
 export async function handleFocusSessionReaper(): Promise<void> {
   try {
+    // Presence hygiene first, on its own: a failed prune never blocks the
+    // session sweep (it retries next hour).
+    try {
+      const pruned = await pruneAgentConversations();
+      if (pruned > 0) {
+        logger.info(
+          { pruned },
+          "Focus session reaper pruned agent conversations"
+        );
+      }
+    } catch (err) {
+      logger.error({ err }, "agent conversation prune failed — next tick");
+    }
+
     // Receipts first, so a finished one is CLOSED rather than swept to stale.
     const receiptsClosed = await closeIdleReceipts();
     if (receiptsClosed > 0) {
