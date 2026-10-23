@@ -32,6 +32,7 @@ import {
   focusSessions,
   playbooks,
   playbookRuns,
+  users,
   playbookEnrollments,
   recordSessionSpawn,
   drizzleSql,
@@ -80,6 +81,11 @@ import {
   type WorkerSkipReason,
 } from "@synap-core/types/workers";
 import { resolveExecutor } from "./executors/registry.js";
+import {
+  HAND_OFF_ACCEPT,
+  route,
+  routeRefusalLine,
+} from "../agent-dispatch/route.js";
 import { assertRunSubjectMatchesPlaybook } from "./assert-subject-kind.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
 import { readPlaybookProcess } from "../../schemas/playbook-process.js";
@@ -171,6 +177,24 @@ export interface RunPlaybookInput {
   onMissingRequired?: "refuse" | "owe";
   /** Extra agent members to add to the run channel. */
   agentIds?: string[];
+  /**
+   * HAND-OFF — the agent user id (`users.id`, the identity `synap_list_agents`
+   * returns) this run's session is HANDED to: the named agent does the work,
+   * so the playbook's own executor is NOT dispatched. Resolved ONCE per call,
+   * before any session exists, through THE route with the hand-off reaches
+   * (`HAND_OFF_ACCEPT`): an unknown id is NOT_FOUND; a paused, foreign or
+   * pod-run agent is refused by name (see {@link resolveRunHandOff}). Then:
+   *   - `pull`     — the agent goes on the session's roster and the run stays
+   *                  `running`; the agent's orient lists it (`handedToYou`) and
+   *                  closing the session settles the run.
+   *   - `dispatch` — the run goes through the `external-agent` executor with
+   *                  this agent as its selector (pushed through its binding).
+   * Producer: the automation `playbook_run` node (`data.handToAgentId`, from a
+   * playbook's `schedule.handToAgentId`). A PERSON's door only: an agent
+   * handing work to another agent is `focus_session/assign_agent`, gated by
+   * `gateAgentHandOff` — refused here rather than laundered. Absent ⇒ unchanged.
+   */
+  handToAgentId?: string | null;
   /** AI attribution — when set, the run is owned by the agent-user. */
   agentUserId?: string;
   /**
@@ -672,6 +696,71 @@ interface RunFiling {
   trackStage: string | null;
 }
 
+/** A run handed to a named agent — see `RunPlaybookInput.handToAgentId`. */
+interface RunHandOff {
+  agentUserId: string;
+  /** How the agent takes it: pulled from its orient, or pushed via its binding. */
+  reach: "dispatch" | "pull";
+}
+
+/**
+ * Resolve `handToAgentId` ONCE, before any session, channel or run row exists,
+ * so a bad agent refuses the run cleanly (same placement as filing). The rule
+ * is THE route's (`agent-dispatch/route.ts`), asked with the agent as selector
+ * and the reaches that can TAKE a person's work — the question every hand-off
+ * door asks (`handOffRefusal`), except that a `pod` agent is refused too: on a
+ * roster it only answers when mentioned, so nothing would ever do this run.
+ */
+async function resolveRunHandOff(
+  input: RunPlaybookInput
+): Promise<RunHandOff | null> {
+  const agentUserId = input.handToAgentId?.trim();
+  if (!agentUserId) return null;
+  if (input.agentUserId && input.agentUserId !== agentUserId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "An agent hands work to another agent through the hand-off gate (synap_update_session addAgentId), not through a playbook run.",
+    });
+  }
+  const db = await getDb();
+  const [agent] = await db
+    .select({ name: users.name, userType: users.userType })
+    .from(users)
+    .where(eq(users.id, agentUserId))
+    .limit(1);
+  if (!agent || agent.userType !== "agent") {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `No agent ${agentUserId} to hand this run to — use an agent user id from synap_list_agents.`,
+    });
+  }
+  const who = agent.name?.trim() || "This agent";
+  const routed = await route({
+    ownerId: input.userId,
+    accept: HAND_OFF_ACCEPT,
+    selector: { agentUserId },
+    pool: "owned",
+  });
+  if (routed.kind === "refused") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Cannot hand this run to ${who}: ${routeRefusalLine(routed.reason, who)}`,
+    });
+  }
+  if (
+    routed.kind !== "routed" ||
+    (routed.reach !== "pull" && routed.reach !== "dispatch")
+  ) {
+    // A selector never falls through (route.ts rung 1); an accepted reach is
+    // one of HAND_OFF_ACCEPT. Reaching here is a change to the route.
+    throw new Error(
+      `route() did not route the named agent ${agentUserId} (got ${routed.kind})`
+    );
+  }
+  return { agentUserId, reach: routed.reach };
+}
+
 /**
  * Where a run is FILED. A track wins and names its own project (a mismatching
  * `projectId` is refused by `resolveTrackFiling`); a bare project must be one
@@ -804,6 +893,10 @@ export async function runPlaybook(
   // handle refuses cleanly instead of leaving a half-filed run.
   const filing = await resolveRunFiling(input);
 
+  // HAND-OFF — who does this run, resolved ONCE for every fan-out item, before
+  // anything exists (an unknown / paused / foreign agent refuses the run).
+  const handOff = await resolveRunHandOff(input);
+
   // D3 — an UNATTENDED run (the scheduled path) has no caller to answer, so a
   // playbook depending on not-enabled skills files ONE enable request per pack
   // on behalf of the owner and FAILS the step with that reason, before any
@@ -828,7 +921,7 @@ export async function runPlaybook(
     });
     if (skipped) return { run: null, session: null, skipped };
     if (input.worker.size === "per_moment") {
-      return runWorkerBatch(playbook, input, input.worker, filing);
+      return runWorkerBatch(playbook, input, input.worker, filing, handOff);
     }
   }
 
@@ -874,14 +967,23 @@ export async function runPlaybook(
     playbook,
     runInput,
     runItems[0] ?? {},
-    filing
+    filing,
+    undefined,
+    handOff
   );
 
   // Fan-out: additional items each get their own session/channel/run. Failures
   // are logged but never abort the primary result.
   for (let i = 1; i < runItems.length; i++) {
     try {
-      await executeSingleRun(playbook, runInput, runItems[i], filing);
+      await executeSingleRun(
+        playbook,
+        runInput,
+        runItems[i],
+        filing,
+        undefined,
+        handOff
+      );
     } catch (err) {
       logger.error(
         { err, playbookId: playbook.id, itemIndex: i },
@@ -903,9 +1005,17 @@ async function executeSingleRun(
   input: RunPlaybookInput,
   params: Record<string, unknown>,
   filing: RunFiling,
-  batch?: WorkerBatch
+  batch?: WorkerBatch,
+  handOff?: RunHandOff | null
 ): Promise<RunPlaybookResult> {
   const db = await getDb();
+  // A handed run's roster carries the agent it is handed to, from birth.
+  const agentIds = handOff
+    ? [...new Set([...(input.agentIds ?? []), handOff.agentUserId])]
+    : input.agentIds;
+  // A handed run is an external agent's: the playbook's own executor (the
+  // built-in AI for `is-agent` / `hybrid`) must not ALSO take it.
+  const executorRef = handOff ? ("external-agent" as const) : playbook.executor;
 
   // The owning principal: agent-user when an AI runs it, else the human.
   const actorId = input.agentUserId ?? input.userId;
@@ -1003,7 +1113,7 @@ async function executeSingleRun(
     ...(input.onMissingRequired
       ? { onMissingRequired: input.onMissingRequired }
       : {}),
-    agentIds: input.agentIds,
+    agentIds,
     subjectId: input.subjectId ?? null,
     projectId: filing.projectId,
     trackId: filing.trackId,
@@ -1142,7 +1252,7 @@ async function executeSingleRun(
         role: ChannelMemberRole.OWNER,
         addedBy: actorId,
       });
-      for (const agentId of new Set(input.agentIds ?? [])) {
+      for (const agentId of new Set(agentIds ?? [])) {
         if (!agentId || agentId === actorId) continue;
         await enrollRoomMember(db, {
           channelId: created.id,
@@ -1168,7 +1278,7 @@ async function executeSingleRun(
       workspaceId: input.workspaceId,
       playbookId: playbook.id,
       sessionId: session.id,
-      executor: playbook.executor,
+      executor: executorRef,
       status: "running",
       input: params,
       createdBy: actorId,
@@ -1233,32 +1343,44 @@ async function executeSingleRun(
 
   let result: RunResult;
   try {
-    result = await resolveExecutor(playbook.executor).run({
-      workspaceId: input.workspaceId,
-      userId: actorId,
-      playbookId: playbook.id,
-      sessionId: session.id,
-      channelId: channel.id,
-      // The agent's INSTRUCTION, not the row's title. `session.goal` is now
-      // "<playbook> for <subject>" (a label every list renders); the rendered
-      // goalTemplate lives on `metadata.prompt`. `runPromptFor` falls back to
-      // `goal` so a session created before that split still dispatches its
-      // paragraph unchanged.
-      goal: runPromptFor(session),
-      subjectId: input.subjectId,
-      subjectName,
-      subjectProfile,
-      // First-class stages: the playbook's declared stages + the session's active
-      // stage key (both empty/null for a stageless, progress-only playbook).
-      stages: (playbook.stages as PlaybookStage[]) ?? [],
-      currentStage: session.currentStage,
-      // Agent selector — forwarded verbatim; the executor validates it.
-      agentType: input.agentType ?? null,
-      // Thread the run id so an external agent knows which run to capture back
-      // against (POST /api/hub/runs/{runId}/capture).
-      input: { ...params, runId: run.id },
-      capabilities,
-    });
+    // A PULL hand-off dispatches nothing: the agent is on the roster, its
+    // orient lists the session (`handedToYou`), and closing the session
+    // settles this run. Everything else goes through an executor — a DISPATCH
+    // hand-off through `external-agent`, with the agent named as its selector.
+    result =
+      handOff?.reach === "pull"
+        ? { status: "running" }
+        : await resolveExecutor(executorRef).run({
+            workspaceId: input.workspaceId,
+            userId: actorId,
+            playbookId: playbook.id,
+            sessionId: session.id,
+            channelId: channel.id,
+            // The agent's INSTRUCTION, not the row's title. `session.goal` is now
+            // "<playbook> for <subject>" (a label every list renders); the rendered
+            // goalTemplate lives on `metadata.prompt`. `runPromptFor` falls back to
+            // `goal` so a session created before that split still dispatches its
+            // paragraph unchanged.
+            goal: runPromptFor(session),
+            subjectId: input.subjectId,
+            subjectName,
+            subjectProfile,
+            // First-class stages: the playbook's declared stages + the session's active
+            // stage key (both empty/null for a stageless, progress-only playbook).
+            stages: (playbook.stages as PlaybookStage[]) ?? [],
+            currentStage: session.currentStage,
+            // Agent selector — forwarded verbatim; the executor validates it.
+            agentType: input.agentType ?? null,
+            // Thread the run id so an external agent knows which run to capture back
+            // against (POST /api/hub/runs/{runId}/capture).
+            // A dispatch hand-off names its agent: the executor's selector param.
+            input: {
+              ...params,
+              runId: run.id,
+              ...(handOff ? { agentUserId: handOff.agentUserId } : {}),
+            },
+            capabilities,
+          });
   } catch (err) {
     logger.error(
       { err, sessionId: session.id, channelId: channel.id },
@@ -1390,7 +1512,8 @@ async function runWorkerBatch(
   playbook: Playbook,
   input: RunPlaybookInput,
   worker: RunWorker,
-  filing: RunFiling
+  filing: RunFiling,
+  handOff: RunHandOff | null
 ): Promise<RunPlaybookResult> {
   const inFlight = worker.automationId
     ? await listWorkerTargetsInFlight(worker.automationId)
@@ -1443,7 +1566,8 @@ async function runWorkerBatch(
     {
       targetIds: targets.map((t) => t.id),
       proposeWrites: worker.writes === "propose",
-    }
+    },
+    handOff
   );
 }
 
