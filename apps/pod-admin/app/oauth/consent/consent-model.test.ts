@@ -7,9 +7,9 @@ import {
   invalidRequestHint,
   isTicked,
   permissionLabel,
-  readsRoledRecords,
+  readsSpaceRecords,
   reasonOf,
-  ROLED_RECORDS_NOTE,
+  SPACE_REACH_NOTE,
   spaceCheckboxLabel,
   toApproved,
   toggle,
@@ -104,32 +104,36 @@ describe("permissionLabel", () => {
   });
 });
 
-describe("the roled-records line under the space choice", () => {
+describe("the reach line under the space choice", () => {
   const offer = (...permissions: string[]): OfferedPermission[] =>
     permissions.map((permission) => ({ permission, workspaces: [] }));
 
-  it("shows when the app may read people or companies", () => {
+  it("shows for ANY entity read, whatever the kind (the reach has no kind limit)", () => {
     for (const p of [
       "entity.read",
       "entity.*.read",
       "entity.person.read",
-      "entity.company.read",
-      "entity.person",
+      "entity.post.read",
+      "entity.post",
       "entity",
+      "*",
     ])
-      expect(readsRoledRecords(offer(p)), p).toBe(true);
+      expect(readsSpaceRecords(offer(p)), p).toBe(true);
+    expect(readsSpaceRecords(OFFER)).toBe(true); // entity.post.read
   });
 
-  it("not for an app that reads neither (posts only, or writes only)", () => {
-    expect(readsRoledRecords(OFFER)).toBe(false);
+  it("not for an app that reads no records (writes only, documents only)", () => {
     expect(
-      readsRoledRecords(offer("entity.person.create", "document.read"))
+      readsSpaceRecords(offer("entity.person.create", "document.read"))
     ).toBe(false);
+    expect(readsSpaceRecords(offer("not a permission"))).toBe(false);
   });
 
-  it("is one plain sentence, no em dash", () => {
-    expect(ROLED_RECORDS_NOTE).toMatch(/^[^.]+\.$/);
-    expect(ROLED_RECORDS_NOTE).not.toContain("\u2014");
+  it("says what a member sees, and that nothing else is reached (rv-ui U1)", () => {
+    expect(SPACE_REACH_NOTE).toBe(
+      "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there. Nothing else in your pod."
+    );
+    expect(SPACE_REACH_NOTE).not.toContain("\u2014");
   });
 });
 
