@@ -1906,8 +1906,12 @@ describe("what a goal holds (W2) — content, derived marks, acceptance, the clo
       message: expect.stringMatching(/judge/),
     });
     await q(`update project_tracks set user_id = $1 where id = $2`, [USER, id]);
-    // A rewrite that keeps a criterion's contract keeps the decision on it;
-    // a changed statement loses it.
+  });
+
+  it("a rewrite keeps the judge's decision on an unchanged criterion, and drops it on a changed one", async () => {
+    const id = await goal("Rewritten criteria", {
+      criteria: [crit("a"), crit("b")],
+    });
     await acceptGoalCriterion({
       trackId: id,
       criterionKey: "a",

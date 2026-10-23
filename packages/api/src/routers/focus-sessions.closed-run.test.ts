@@ -128,6 +128,9 @@ describe("updateFocusSession (MCP / Hub service door) — a closed run stays clo
       userId: "user-1",
       status: "paused",
     });
-    expect(res).toMatchObject({ status: "denied" });
+    expect(res).toMatchObject({
+      status: "denied",
+      reason: expect.stringMatching(/a closed run stays closed/),
+    });
   });
 });
