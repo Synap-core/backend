@@ -5231,3 +5231,35 @@ CREATE TABLE IF NOT EXISTS "session_runners" (
 
 CREATE INDEX IF NOT EXISTS "idx_session_runners_session_seen"
   ON "session_runners" ("session_id", "last_seen_at");
+
+-- 0354: agent conversations — the one registry of live agent terminals (one
+-- row per person × computer × harness × conversation). Telemetry written by
+-- the heartbeat door; linked to sessions by session_runners, never a second
+-- link. Mirrors 0354_agent_conversations.sql.
+CREATE TABLE IF NOT EXISTS "agent_conversations" (
+  "id"              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"         text        NOT NULL,
+  "agent_user_id"   text,
+  "api_key_id"      uuid,
+  "machine_user_id" text,
+  "computer"        text        NOT NULL,
+  "harness"         text        NOT NULL,
+  "conversation_id" text        NOT NULL,
+  "folder"          text,
+  "state"           text        NOT NULL,
+  "state_since"     timestamptz NOT NULL DEFAULT now(),
+  "subagent_count"  integer     NOT NULL DEFAULT 0,
+  "first_seen_at"   timestamptz NOT NULL DEFAULT now(),
+  "last_seen_at"    timestamptz NOT NULL DEFAULT now(),
+  "ended_at"        timestamptz,
+  CONSTRAINT "agent_conversations_state_chk"
+    CHECK ("state" IN ('working', 'idle', 'waiting')),
+  CONSTRAINT "agent_conversations_subagents_chk"
+    CHECK ("subagent_count" >= 0)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_agent_conversations_identity"
+  ON "agent_conversations" ("user_id", "computer", "harness", "conversation_id");
+
+CREATE INDEX IF NOT EXISTS "idx_agent_conversations_user_seen"
+  ON "agent_conversations" ("user_id", "last_seen_at");

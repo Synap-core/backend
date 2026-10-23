@@ -32,6 +32,13 @@
  * on); an agent from before machine identity falls back to the label of the
  * key it was last seen on ("MacBook-Pro"), which has no principal behind it.
  *
+ * TERMINALS: each computer also lists its open agent terminals — the
+ * registry `agent_conversations` (0354, `loadLiveTerminals`), owner-floored,
+ * each with its state and bound session. A terminal attaches to a computer by
+ * its machine principal, else by name (`normalizeComputerName` on both sides,
+ * so "Devbox" and "devbox.local" are one computer); a terminal on a computer
+ * the roster does not name adds that computer (no principal, 0 agents).
+ *
  * A failed read throws — "nobody can take it" and "could not tell" are
  * different answers.
  */
@@ -48,6 +55,11 @@ import { queryAgentUsers } from "../../routers/agent-users.js";
 import { loadAgentPresence } from "../agent-presence.js";
 import { machineName } from "../machine-roster.js";
 import { loadAgentDispatchSummaries } from "./agent-binding.js";
+import {
+  loadLiveTerminals,
+  type LiveTerminal,
+} from "../agent-conversations/agent-conversations.js";
+import { normalizeComputerName } from "../agent-conversations/heartbeat-codec.js";
 import {
   HAND_OFF_ACCEPT,
   namedVerdicts,
@@ -95,9 +107,18 @@ export interface HandoffAgent {
   handOffReason: string | null;
 }
 
+/** An open agent terminal on a computer (`agent_conversations`, 0354). */
+export type HandoffTerminal = Omit<LiveTerminal, "computer" | "machineUserId">;
+
 export interface HandoffRoster {
   agents: HandoffAgent[];
-  computers: Array<HandoffComputer & { agents: number }>;
+  computers: Array<
+    HandoffComputer & {
+      agents: number;
+      /** Its open terminals, most recently heard first. */
+      terminals: HandoffTerminal[];
+    }
+  >;
 }
 
 export async function readAgentsForHandoff(
@@ -160,7 +181,7 @@ export async function readAgentsForHandoff(
     machineRows.map((m) => [m.id, machineName(m)] as const)
   );
 
-  const [presence, dispatch, verdicts, gate] = await Promise.all([
+  const [presence, dispatch, verdicts, gate, terminals] = await Promise.all([
     loadAgentPresence(agentIds, now),
     loadAgentDispatchSummaries(agentIds),
     namedVerdicts({ ownerId: userId, accept: HAND_OFF_ACCEPT }, agentIds),
@@ -176,6 +197,7 @@ export async function readAgentsForHandoff(
           door: "chat",
         })
       : null,
+    loadLiveTerminals(userId),
   ]);
 
   // At its proposal limit the caller's proposed hand-off is REFUSED, not
@@ -254,13 +276,22 @@ export async function readAgentsForHandoff(
   // machine to the person reading it ("devbox" twice would be two answers to
   // "my devbox"), so it folds into the machine. Two machines with one name
   // stay two: the person picks.
-  const computers = new Map<string, HandoffComputer & { agents: number }>();
+  type RosterComputer = HandoffRoster["computers"][number];
+  const computers = new Map<string, RosterComputer>();
   const byName = new Map<string, string>();
-  const nameKey = (name: string) => name.trim().toLowerCase();
+  // The terminal registry's own computer key, so a reported host name and a
+  // roster name meet on one rule.
+  const nameKey = (name: string) =>
+    normalizeComputerName(name) ?? name.trim().toLowerCase();
   for (const m of machineRows) {
     if (m.createdByUserId !== userId) continue;
     const name = machineNameOf.get(m.id)!;
-    computers.set(`id:${m.id}`, { agentUserId: m.id, name, agents: 0 });
+    computers.set(`id:${m.id}`, {
+      agentUserId: m.id,
+      name,
+      agents: 0,
+      terminals: [],
+    });
     if (!byName.has(nameKey(name))) byName.set(nameKey(name), `id:${m.id}`);
   }
   for (const a of agents) {
@@ -273,9 +304,29 @@ export async function readAgentsForHandoff(
         `label:${nameKey(a.computer.name)}`);
     // An agent on a machine that is not yours: not one of your computers.
     if (a.computer.agentUserId && !computers.has(k)) continue;
-    const c = computers.get(k) ?? { ...a.computer, agents: 0 };
+    const c = computers.get(k) ?? { ...a.computer, agents: 0, terminals: [] };
     c.agents += 1;
     computers.set(k, c);
+    if (!byName.has(nameKey(c.name))) byName.set(nameKey(c.name), k);
+  }
+
+  // Terminals: by machine principal when the roster lists it, else by name;
+  // an unnamed computer joins the list (the person's own terminals reported
+  // it — the registry is owner-floored).
+  for (const { computer, machineUserId, ...terminal } of terminals) {
+    const k =
+      machineUserId && computers.has(`id:${machineUserId}`)
+        ? `id:${machineUserId}`
+        : (byName.get(computer) ?? `label:${computer}`);
+    const c = computers.get(k) ?? {
+      agentUserId: null,
+      name: computer,
+      agents: 0,
+      terminals: [],
+    };
+    c.terminals.push(terminal);
+    computers.set(k, c);
+    if (!byName.has(computer)) byName.set(computer, k);
   }
 
   return { agents, computers: [...computers.values()] };

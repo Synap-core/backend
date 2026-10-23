@@ -63,6 +63,7 @@ import {
   secrets,
   sessionEvaluations,
   sessionRunners,
+  agentConversations,
   sourceConfigs,
   sourceSubscriptions,
   tools,
@@ -127,6 +128,9 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   // No id column (PK session × client key): a grant on the SESSION reads its
   // runners — who is attached to it — and nothing else.
   [sessionRunners, spec("session", {}, { idColumn: sessionRunners.sessionId })],
+  // An agent's terminals (0354): a grant on agents reads them; no workspace
+  // column, so a space-restricted grant reads none (fails closed).
+  [agentConversations, spec("agent", { id: agentConversations.id })],
   [channels, spec("channel", channels)],
   [events, spec("event", events)],
   [automations, spec("automation", automations)],

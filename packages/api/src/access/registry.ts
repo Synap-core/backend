@@ -48,6 +48,7 @@ import {
   focusSessions,
   sessionEvaluations,
   sessionRunners,
+  agentConversations,
   rendererBindings,
   projects,
   projectTracks,
@@ -628,6 +629,17 @@ registerVisibility({
       }),
     nullWorkspaceMeans: "ownerPrivate",
   },
+});
+// The registry of live agent terminals (0354) is the OWNER's alone: which
+// computers they use, which folders their agents run in and when they are
+// working is personal telemetry, like `api_keys.last_used_at`. No workspace
+// column — a terminal is no space's. Its session link (`session_runners`) keeps
+// the session's own floor above; a member of a shared session sees its runners,
+// never the owner's terminal facts.
+registerVisibility({
+  table: agentConversations,
+  query: () => db.query.agentConversations,
+  rule: { kind: "user", userColumn: agentConversations.userId },
 });
 // `projects` and `views` were ownerPrivate BY BEHAVIOUR long before they were
 // DECLARED: both carry a nullable `workspace_id` and a NOT NULL `user_id`, and

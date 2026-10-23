@@ -73,6 +73,7 @@ export { registerVaultRoutes } from "./vault.js";
 export { registerChannelsRoutes } from "./channels.js";
 export { registerChannelEgressRoutes } from "./channel-egress.js";
 export { registerTerminalRoutes } from "./terminal.js";
+export { registerConversationsRoutes } from "./conversations.js";
 export { registerProactiveRoutes } from "./proactive.js";
 export { registerNotificationsRoutes } from "./notifications.js";
 export { registerEntityShareRoutes } from "./entity-share.js";
