@@ -45,6 +45,18 @@ const M0344 = readFileSync(
   "utf8"
 );
 
+// What a goal holds (end state, criteria, drop conditions, kind, uncertainty)
+// — the REAL migration, on top of 0344.
+const M0345 = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../../database/migrations/0345_track_goal_content.sql",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+
 const h = vi.hoisted(() => ({
   client: null as null | {
     exec: (sql: string) => Promise<unknown>;
@@ -140,6 +152,7 @@ import {
   automations,
   podMembers,
   projectMembers,
+  sessionEvaluations,
 } from "@synap/database";
 import {
   advanceTrackStage,
@@ -152,6 +165,9 @@ import {
   countProjectsUsingMethods,
   applyTrackStageAdvance,
   toTrackView,
+  setTrackDirection,
+  acceptGoalCriterion,
+  loadTrackViews,
 } from "../tracks-service.js";
 import { getProjectPath } from "../../projects/project-path.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
@@ -237,6 +253,7 @@ beforeAll(async () => {
     projects,
     podMembers,
     projectMembers,
+    sessionEvaluations,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -274,6 +291,7 @@ beforeAll(async () => {
   // The live-name unique index idempotency rides on — the REAL migrations.
   await h.client!.exec(M0317);
   await h.client!.exec(M0344);
+  await h.client!.exec(M0345);
   // The edge-uniqueness index the dependency door's insert conflicts on
   // (`idx_links_unique_edge`) — a reopen writes `new --replaces--> old`.
   await h.client!.exec(
@@ -1559,5 +1577,364 @@ describe("reopenTrack — a closed goal comes back as a NEW version (R8)", () =>
     } as unknown as ProposalExecutorArgs);
     expect(await replacesEdges(data.id as string)).toEqual([started.track.id]);
     expect((await getTrack(data.id as string, human))!.status).toBe("active");
+  });
+});
+
+describe("what a goal holds (W2) — content, derived marks, acceptance, the close rule", () => {
+  const GOALS2 = randomUUID();
+  beforeAll(async () => {
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Goals W2', 'active')`,
+      [GOALS2, USER]
+    );
+  });
+  const crit = (key: string, kind = "judge", extra: object = {}) => ({
+    key,
+    statement: `Criterion ${key}`,
+    check: { kind },
+    ...extra,
+  });
+  async function goal(name: string, extra: object = {}): Promise<string> {
+    const res = await startTrack({
+      projectId: GOALS2,
+      name,
+      actor: human,
+      ...extra,
+    });
+    if (res.status === "proposed") throw new Error("unreachable");
+    return res.track.id;
+  }
+  async function view(id: string) {
+    const [v] = await loadTrackViews([(await getTrack(id, human))!], human);
+    return v!;
+  }
+  async function fileSession(
+    trackId: string,
+    opts: {
+      status?: string;
+      keys?: string[];
+      outputs?: unknown[];
+      agentIds?: string[];
+    } = {}
+  ): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, track_id, project_id, status, goal, criteria, expected_outputs, agent_ids, metadata, created_at, updated_at)
+       values ($1, $2, null, $3, $4, $5, 'work', $6::jsonb, $7::jsonb, $8, '{}'::jsonb, now(), now())`,
+      [
+        id,
+        USER,
+        trackId,
+        GOALS2,
+        opts.status ?? "active",
+        JSON.stringify((opts.keys ?? []).map((k) => crit(k))),
+        JSON.stringify(opts.outputs ?? []),
+        opts.agentIds ?? [],
+      ]
+    );
+    return id;
+  }
+  async function grade(
+    sessionId: string,
+    key: string,
+    verdict: string,
+    evaluatorKind: string,
+    evaluatorId: string | null,
+    at: string
+  ) {
+    await q(
+      `insert into session_evaluations (id, session_id, user_id, criterion_key, attempt, verdict, evaluator_kind, evaluator_id, evidence, created_at)
+       values (gen_random_uuid(), $1, $2, $3, 1, $4, $5, $6, '{}'::jsonb, $7)`,
+      [sessionId, USER, key, verdict, evaluatorKind, evaluatorId, at]
+    );
+  }
+
+  it("starts with what it holds, and the read returns it with derived marks", async () => {
+    const id = await goal("Migrate the docs", {
+      endState: " Every page lives on the new site ",
+      criteria: [
+        crit("pages", "evidence", {
+          check: { kind: "evidence", evidenceKey: "pages" },
+          checkKind: "measured",
+        }),
+        crit("tone"),
+      ],
+      dropConditions: ["The old site is retired first"],
+      workKind: "project",
+      uncertainty: "complicated",
+    });
+    const v = await view(id);
+    expect(v).toMatchObject({
+      endState: "Every page lives on the new site",
+      dropConditions: ["The old site is retired first"],
+      workKind: "project",
+      uncertainty: "complicated",
+      // A person wrote the kind: confirmed by them.
+      kindConfirmedBy: USER,
+      kindConfirmedAt: expect.any(String),
+      inReview: false,
+      waitingOn: [],
+    });
+    expect(v.criteria.map((c) => [c.key, c.mark, c.meaning])).toEqual([
+      ["pages", "not_started", "measured"],
+      ["tone", "not_started", "judged"],
+    ]);
+  });
+
+  it("a goal has no criteria or 2 to 5 — one is refused at both doors, before governance", async () => {
+    await expect(
+      startTrack({
+        projectId: GOALS2,
+        name: "One criterion",
+        criteria: [crit("only")],
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/2 to 5/),
+    });
+    const id = await goal("Lasting goal");
+    h.permCalls.length = 0;
+    await expect(
+      setTrackDirection({
+        trackId: id,
+        criteria: Array.from({ length: 6 }, (_, i) => crit(`c${i}`)),
+        actor: agent,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/not 6/),
+    });
+    expect(h.permCalls).toHaveLength(0);
+    // A criterion cannot carry a decision the caller made up.
+    await expect(
+      setTrackDirection({
+        trackId: id,
+        criteria: [
+          {
+            ...crit("a"),
+            acceptance: {
+              decision: "accepted",
+              by: USER,
+              at: new Date().toISOString(),
+            },
+          },
+          crit("b"),
+        ],
+        actor: human,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("an agent's kind is the AI's proposal: the approver confirms it; an agent may never confirm", async () => {
+    const id = await goal("Keep the newsletter going");
+    const filed = await setTrackDirection({
+      trackId: id,
+      workKind: "operation",
+      uncertainty: "clear",
+      actor: agent,
+    });
+    expect(filed.status).toBe("proposed");
+    const data = h.permCalls.at(-1)!.data as Record<string, unknown>;
+    expect(data).toMatchObject({ workKind: "operation", uncertainty: "clear" });
+    await expect(
+      setTrackDirection({ trackId: id, confirmKind: true, actor: agent })
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/Only a person confirms/),
+    });
+
+    const proposalId = randomUUID();
+    await proposalExecRegistry.resolveExact("track/update")!.execute({
+      proposal: {
+        id: proposalId,
+        targetType: "track",
+        targetId: id,
+        proposalType: "update",
+        workspaceId: null,
+        agentUserId: AGENT,
+        data: { data },
+      },
+      userId: USER,
+      input: { proposalId },
+      deps: { reportProposalOutcome: () => {}, emitProposalReviewed: () => {} },
+    } as unknown as ProposalExecutorArgs);
+    expect(await view(id)).toMatchObject({
+      workKind: "operation",
+      uncertainty: "clear",
+      kindConfirmedBy: USER,
+    });
+  });
+
+  it("marks come from the sessions filed into the goal: claimed → in review; waiting on what its runs owe", async () => {
+    const id = await goal("Ship the pricing page", {
+      criteria: [crit("copy"), crit("legal", "human")],
+    });
+    const s1 = await fileSession(id, {
+      status: "active",
+      keys: ["copy", "legal"],
+      outputs: [
+        {
+          kind: "document",
+          label: "Key",
+          owner: "human",
+          blockedReason: "credential",
+        },
+        {
+          kind: "document",
+          label: "Pick",
+          owner: "human",
+          blockedReason: "decision",
+        },
+      ],
+    });
+    let v = await view(id);
+    expect(v.criteria.map((c) => c.mark)).toEqual(["under_way", "under_way"]);
+    expect(v.waitingOn).toEqual([
+      { reason: "input", count: 1 },
+      { reason: "access", count: 1 },
+    ]);
+    // An AI judge passes both: two CLAIMS, waiting on the judge — in review.
+    await grade(s1, "copy", "pass", "judge", "model-x", "2026-10-21T10:00:00Z");
+    await grade(
+      s1,
+      "legal",
+      "pass",
+      "judge",
+      "model-x",
+      "2026-10-21T10:00:00Z"
+    );
+    v = await view(id);
+    expect(v.criteria.map((c) => [c.mark, c.acceptanceState])).toEqual([
+      ["claimed", "waiting"],
+      ["claimed", "waiting"],
+    ]);
+    expect(v.inReview).toBe(true);
+
+    // Closing as met while the claims wait is refused, before governance.
+    h.permCalls.length = 0;
+    await expect(
+      setTrackStatus({
+        trackId: id,
+        status: "completed",
+        verdict: "met",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/not yet: copy, legal/),
+    });
+    expect(h.permCalls).toHaveLength(0);
+
+    // The judge accepts both → met; no longer in review; the close lands.
+    for (const key of ["copy", "legal"]) {
+      const r = await acceptGoalCriterion({
+        trackId: id,
+        criterionKey: key,
+        decision: "accepted",
+        actor: human,
+      });
+      expect(r.status).toBe("updated");
+    }
+    v = await view(id);
+    expect(v.criteria.map((c) => [c.mark, c.acceptance?.by])).toEqual([
+      ["met", USER],
+      ["met", USER],
+    ]);
+    expect(v.inReview).toBe(false);
+    await expect(
+      setTrackStatus({
+        trackId: id,
+        status: "completed",
+        verdict: "partly_met",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringMatching(/close it as met/),
+    });
+    const closed = await setTrackStatus({
+      trackId: id,
+      status: "completed",
+      verdict: "met",
+      actor: human,
+    });
+    expect(closed.status).toBe("updated");
+  });
+
+  it("acceptance: an agent never, a person only as the goal's judge; sending back needs words", async () => {
+    const id = await goal("Judge only", { criteria: [crit("a"), crit("b")] });
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "a",
+        decision: "accepted",
+        actor: agent,
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/agent/),
+    });
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "a",
+        decision: "changes_asked",
+        actor: human,
+      })
+    ).rejects.toMatchObject({ message: expect.stringMatching(/needs a note/) });
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "zzz",
+        decision: "accepted",
+        actor: human,
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    // The goal now belongs to someone else: USER can still see and write the
+    // project, but is not the judge.
+    await q(`update project_tracks set user_id = $1 where id = $2`, [
+      STRANGER,
+      id,
+    ]);
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "a",
+        decision: "accepted",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/judge/),
+    });
+    await q(`update project_tracks set user_id = $1 where id = $2`, [USER, id]);
+  });
+
+  it("a rewrite keeps the judge's decision on an unchanged criterion, and drops it on a changed one", async () => {
+    const id = await goal("Rewritten criteria", {
+      criteria: [crit("a"), crit("b")],
+    });
+    await acceptGoalCriterion({
+      trackId: id,
+      criterionKey: "a",
+      decision: "accepted",
+      actor: human,
+    });
+    await acceptGoalCriterion({
+      trackId: id,
+      criterionKey: "b",
+      decision: "rejected",
+      actor: human,
+    });
+    await setTrackDirection({
+      trackId: id,
+      criteria: [crit("a"), { ...crit("b"), statement: "Reworded" }],
+      actor: human,
+    });
+    const v = await view(id);
+    expect(
+      v.criteria.map((c) => [c.key, c.acceptance?.decision ?? null])
+    ).toEqual([
+      ["a", "accepted"],
+      ["b", null],
+    ]);
   });
 });

@@ -278,6 +278,8 @@ import type {
   HubTrackWriteResult,
   ReopenTrackInput,
   TrackCloseInput,
+  UpdateTrackInput,
+  AcceptTrackCriterionInput,
   ListTracksOptions,
   StartStageSessionInput,
   StartTrackInput,
@@ -2707,6 +2709,38 @@ export class HubRestClient {
       "POST",
       `/api/hub/tracks/${encodeURIComponent(trackId)}/reopen`,
       input ?? {}
+    );
+  }
+
+  /**
+   * Set where the goal is heading, its KPI and what it holds (end state,
+   * criteria, drop conditions, kind of work, uncertainty). An agent's write
+   * comes back `proposed`; criteria it sets always do.
+   */
+  async updateTrack(
+    trackId: string,
+    input: UpdateTrackInput
+  ): Promise<HubTrackWriteResult> {
+    return this.request<HubTrackWriteResult>(
+      "PATCH",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/direction`,
+      input
+    );
+  }
+
+  /**
+   * The goal's JUDGE accepts a claimed criterion, sends it back or rejects
+   * it (R2). Refused for an agent key and for anyone but the judge.
+   */
+  async acceptTrackCriterion(
+    trackId: string,
+    criterionKey: string,
+    input: AcceptTrackCriterionInput
+  ): Promise<{ status: "updated" | "unchanged"; track: HubTrack }> {
+    return this.request<{ status: "updated" | "unchanged"; track: HubTrack }>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/criteria/${encodeURIComponent(criterionKey)}/acceptance`,
+      input
     );
   }
 

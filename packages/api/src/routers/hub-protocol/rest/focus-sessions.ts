@@ -73,6 +73,7 @@ import {
   type SessionSubject,
 } from "../../../services/focus-sessions/session-subject.js";
 import {
+  closedRunRefusal,
   isTerminalSessionStatus,
   SESSION_STATUSES,
   UPDATABLE_SESSION_STATUSES,
@@ -1455,6 +1456,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const { userId, workspaceId } = acting;
+
+      // R8 — a closed run stays closed: never moved back to an open status.
+      // 409: the session's state, not the caller's rights, refuses it.
+      const reopening = closedRunRefusal(existing.status, patch.status);
+      if (reopening) return c.json({ error: reopening }, 409);
 
       // `outcomes` → the same two fields, UPSERTED by key onto the
       // loaded row (or onto the wholesale lists this same PATCH sent). From

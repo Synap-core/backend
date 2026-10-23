@@ -11,10 +11,15 @@
 
 import { z } from "zod";
 import {
+  CRITERION_ABOUT,
   CRITERION_CHECK_KINDS,
+  CRITERION_CHECK_MEANINGS,
   MAX_SESSION_CRITERIA,
+  type CriterionAbout,
   type CriterionCheckKind,
+  type CriterionCheckMeaning,
 } from "@synap/playbooks";
+import { checkCriterionMeaning } from "@synap-core/types/units";
 
 export const sessionCriterionSchema = z
   .strictObject({
@@ -39,8 +44,30 @@ export const sessionCriterionSchema = z
       hint: z.string().max(1000).optional(),
     }),
     stageKey: z.string().min(1).max(120).optional(),
+    /** R5 — what kind of check this is, in people's words. */
+    checkKind: z
+      .enum(
+        CRITERION_CHECK_MEANINGS as readonly [
+          CriterionCheckMeaning,
+          ...CriterionCheckMeaning[],
+        ]
+      )
+      .optional(),
+    /** R7 — about the result (default) or the method. */
+    about: z
+      .enum(CRITERION_ABOUT as readonly [CriterionAbout, ...CriterionAbout[]])
+      .optional(),
   })
   .superRefine((c, ctx) => {
+    // R5: the declared meaning must fit the check that carries it.
+    const incoherent = checkCriterionMeaning(c);
+    if (incoherent) {
+      ctx.addIssue({
+        code: "custom",
+        message: incoherent,
+        path: ["checkKind"],
+      });
+    }
     if (c.check.kind === "capability" && !c.check.capability) {
       ctx.addIssue({
         code: "custom",

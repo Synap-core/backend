@@ -508,13 +508,23 @@ export function isTrackVerdict(v: unknown): v is TrackVerdict {
  *     drop with no verdict, and such a track reads like one dropped before
  *     0344 (verdict NULL). A verdict that IS sent is validated;
  *   - impossible / replaced need a reason, and a reason needs its verdict;
- *   - any other move carries no verdict.
+ *   - any other move carries no verdict;
+ *   - with CRITERIA (W2, the derived marks — `deriveGoalCriteria`): `met`
+ *     only when every REQUIRED criterion is met (accepted); `partly_met` /
+ *     `not_met` only when at least one criterion is not met. A goal with no
+ *     criteria closes on its judge's word. Omit `criteria` only where they
+ *     cannot be known (a surface asking before it read them).
  * `null` = allowed; otherwise the refusal, in words an agent can act on
  * (machine tokens, so it can resend them).
  */
 export function checkTrackClose(
   to: string,
-  close: { verdict?: string | null; verdictReason?: string | null }
+  close: { verdict?: string | null; verdictReason?: string | null },
+  criteria?: ReadonlyArray<{
+    key: string;
+    required?: boolean;
+    mark: string;
+  }>
 ): string | null {
   const allowed = trackVerdictsFor(to);
   const verdict = close.verdict ?? null;
@@ -541,6 +551,20 @@ export function checkTrackClose(
     !reason
   ) {
     return `The verdict "${verdict}" needs a verdictReason — say what ${verdict === "replaced" ? "replaced it" : "made it impossible"}.`;
+  }
+  if (criteria && criteria.length > 0) {
+    if (verdict === "met") {
+      const open = criteria.filter(
+        (c) => c.required !== false && c.mark !== "met"
+      );
+      if (open.length > 0) {
+        return `Closing a goal as met needs every required criterion met and accepted — not yet: ${open.map((c) => c.key).join(", ")}.`;
+      }
+    } else if (verdict === "partly_met" || verdict === "not_met") {
+      if (criteria.every((c) => c.mark === "met")) {
+        return `Every criterion of this goal is met — close it as met, not ${verdict}.`;
+      }
+    }
   }
   return null;
 }
