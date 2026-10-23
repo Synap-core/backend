@@ -15,7 +15,11 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { signalsFromExplicit, resolveRolePayload } from "@synap/database";
+import {
+  signalsFromExplicit,
+  resolveRolePayload,
+  UnknownIdentitySignalKeyError,
+} from "@synap/database";
 
 describe("signalsFromExplicit", () => {
   it("returns [] for undefined", () => {
@@ -60,6 +64,29 @@ describe("signalsFromExplicit", () => {
     expect(
       signalsFromExplicit({ url: "https://not-linkedin.com/in/x" })
     ).toEqual([{ type: "website", value: "https://not-linkedin.com/in/x" }]);
+  });
+
+  // Live 2026-10-23: `{ linkedin_url: … }` was silently dropped, so a person
+  // whose LinkedIn URL IS registered answered "none" / name-only "weak".
+  it("accepts an atom name or the property slug that carries it", () => {
+    const url = "https://www.linkedin.com/in/alice";
+    for (const key of ["linkedin_url", "linkedinUrl", "linkedin-url"]) {
+      expect(signalsFromExplicit({ [key]: url }), key).toEqual([
+        { type: "linkedin_url", value: url },
+      ]);
+    }
+    expect(signalsFromExplicit({ twitterHandle: "@al" })).toEqual([
+      { type: "twitter_handle", value: "@al" },
+    ]);
+  });
+
+  it("refuses an unknown key loudly, naming what is accepted", () => {
+    expect(() => signalsFromExplicit({ linkedin: "x" })).toThrow(
+      UnknownIdentitySignalKeyError
+    );
+    expect(() => signalsFromExplicit({ linkedin: "x" })).toThrow(
+      /Unknown identity signal key: linkedin\. Accepted: .*linkedinUrl/
+    );
   });
 });
 
