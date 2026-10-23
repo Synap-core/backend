@@ -8,8 +8,11 @@
  *   3. Passkeys — the settings flow's passkey group; "Add a passkey" runs the
  *      ceremony (`lib/passkey.ts`). The invite page's Done screen sends a
  *      Synap-Cloud-only joiner here (`#passkeys`).
- *   4. Signed-in devices — your other sessions; "Sign out other devices".
- *   5. Synap Cloud — what Cloud may do here (owner only; OMITTED when Cloud
+ *   4. Your Synap Cloud account — "Link Synap Cloud" (`/link-cloud`, the CP's
+ *      claim-access hop), for a member who joined another way. OMITTED when
+ *      Cloud sign-in is not wired here or the owner turned it off.
+ *   5. Signed-in devices — your other sessions; "Sign out other devices".
+ *   6. Synap Cloud — what Cloud may do here (owner only; OMITTED when Cloud
  *      sign-in is not wired on this pod).
  *
  * Every refusal is shown as what it is: a sign-in that is too old
@@ -37,6 +40,7 @@ import {
   type CloudTrustMode,
   type GeneratedRecoveryCodes,
 } from "@synap-core/types/account-recovery";
+import { resolveSignInWayLabel } from "@synap-core/types/vocabulary";
 import { SectionCard } from "../../(admin)/components/section-card";
 import {
   StatusPill,
@@ -73,6 +77,7 @@ const REAUTH_HREF = `/login?refresh=1&return=${encodeURIComponent("/settings/sec
 /** Kratos v1.3.1 `text.NewRecoverySuccessful` (InfoSelfServiceSettingsRecoverySuccessful). */
 const KRATOS_RECOVERY_SUCCESSFUL = 1060001;
 const PASSWORD_GROUPS = ["password"] as const;
+const CLOUD = resolveSignInWayLabel("synap_cloud");
 
 type Load<T> =
   | { kind: "loading" }
@@ -180,6 +185,9 @@ export function SecurityView({
           )
         )}
         <PasskeysCard />
+        {s && s.cloud.available && s.cloud.trust !== "off" ? (
+          <LinkCloudCard />
+        ) : null}
         <DevicesCard />
         {s && s.cloud.available ? (
           <CloudTrustCard
@@ -743,6 +751,33 @@ function PasskeysCard() {
 }
 
 // ─── 4. Devices ──────────────────────────────────────────────────────────
+
+/**
+ * Link this pod account to a Synap Cloud account: then the person can sign in
+ * here with Synap Cloud, and the pod shows in their Synap account. The work is
+ * on `/link-cloud` (Synap Cloud asks, this pod's identity-link door binds);
+ * linking an account already linked to the same one changes nothing.
+ */
+function LinkCloudCard() {
+  return (
+    <SectionCard
+      title={`Your ${CLOUD} account`}
+      hint={`Sign in here with ${CLOUD}, and see this pod in your ${CLOUD} account`}
+    >
+      <Button
+        as="a"
+        href="/link-cloud"
+        size="sm"
+        radius="md"
+        variant="flat"
+        startContent={<Cloud className="h-3.5 w-3.5" />}
+        className="self-start"
+      >
+        Link {CLOUD}
+      </Button>
+    </SectionCard>
+  );
+}
 
 function DevicesCard() {
   const [load, setLoad] = useState<Load<number>>({ kind: "loading" });

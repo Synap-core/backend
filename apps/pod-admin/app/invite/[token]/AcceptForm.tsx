@@ -5,7 +5,13 @@ import { useSearchParams } from "next/navigation";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { CopyButton } from "../../_lib/copy-button";
 import { Button, CardBody, Input, Tab, Tabs } from "@heroui/react";
-import { AlertCircle, CheckCircle2, KeyRound, UserPlus } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  Cloud,
+  KeyRound,
+  UserPlus,
+} from "lucide-react";
 import {
   resolveSignInWayLabel,
   type SignInWay,
@@ -1195,6 +1201,7 @@ function DoneBody({
           {way ? ` ${SIGN_IN_WITH[way]}` : ""}.
         </p>
       </div>
+      {way === "synap_cloud" ? <LinkCloudStep /> : null}
       {exit ? <OpenInSynap exit={exit} /> : null}
       {way === "synap_cloud" ? <AddPasskeyInvite /> : null}
       {POD_URL ? <PodAddress origin={new URL(POD_URL).origin} /> : null}
@@ -1205,6 +1212,34 @@ function DoneBody({
         {signedIn ? "Open this pod's console" : "Sign in to this pod's console"}
       </a>
     </>
+  );
+}
+
+/**
+ * The end of a Synap Cloud join (decision 2, 2026-10-23): Synap Cloud records
+ * this pod among the person's pods only through the identity-link door, so
+ * the Done screen leads with it. `/link-cloud` runs the CP's claim-access
+ * hop; Synap Cloud asks once, then brings the person back.
+ */
+function LinkCloudStep() {
+  const cloud = resolveSignInWayLabel("synap_cloud");
+  return (
+    <div className="flex flex-col items-start gap-2 rounded-medium p-3 ring-1 ring-inset ring-primary/30">
+      <p className="flex items-start gap-2 text-[13px] leading-relaxed text-foreground/75">
+        <Cloud aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+        Last step: link your {cloud} account, so this pod shows in it.
+      </p>
+      <Button
+        as="a"
+        href="/link-cloud"
+        size="sm"
+        radius="md"
+        color="primary"
+        variant="flat"
+      >
+        Link {cloud}
+      </Button>
+    </div>
   );
 }
 
