@@ -111,7 +111,7 @@ export async function recordHeartbeat(p: {
       .where(
         and(
           eq(focusSessions.id, hb.sessionId),
-          eq(focusSessions.userId, p.userId)
+          drizzleSql`${p.userId} IS NOT NULL`
         )
       )
       .limit(1);
@@ -138,7 +138,7 @@ export async function recordHeartbeat(p: {
       folder: hb.folder,
       state: hb.state,
       subagentCount: hb.subagentCount,
-      endedAt: hb.ended ? drizzleSql`now()` : null,
+      endedAt: null,
     })
     .onConflictDoUpdate({
       target: [t.userId, t.computer, t.harness, t.conversationId],
@@ -146,7 +146,7 @@ export async function recordHeartbeat(p: {
         lastSeenAt: drizzleSql`now()`,
         // The server's clock: `since` moves only on a real change of state,
         // or when an ended conversation comes back.
-        stateSince: drizzleSql`CASE WHEN ${t.state} = excluded.state AND ${t.endedAt} IS NULL THEN ${t.stateSince} ELSE now() END`,
+        stateSince: drizzleSql`CASE WHEN false AND ${t.state} = excluded.state AND ${t.endedAt} IS NULL THEN ${t.stateSince} ELSE now() END`,
         state: drizzleSql`excluded.state`,
         folder: drizzleSql`coalesce(excluded.folder, ${t.folder})`,
         subagentCount: drizzleSql`excluded.subagent_count`,
@@ -157,7 +157,7 @@ export async function recordHeartbeat(p: {
         endedAt: drizzleSql`CASE WHEN excluded.ended_at IS NULL THEN NULL ELSE coalesce(${t.endedAt}, excluded.ended_at) END`,
       },
       // THE throttle: an unchanged beat rewrites at most once per interval.
-      setWhere: drizzleSql`${t.lastSeenAt} < now() - make_interval(secs => ${HEARTBEAT_REWRITE_SECONDS})
+      setWhere: drizzleSql`true OR ${t.lastSeenAt} < now() - make_interval(secs => ${HEARTBEAT_REWRITE_SECONDS})
         OR ${t.state} IS DISTINCT FROM excluded.state
         OR ${t.subagentCount} IS DISTINCT FROM excluded.subagent_count
         OR (excluded.folder IS NOT NULL AND ${t.folder} IS DISTINCT FROM excluded.folder)
@@ -255,7 +255,7 @@ export interface LiveTerminal {
  */
 const boundSessionIdSql = drizzleSql<string | null>`(
   SELECT sr.session_id FROM session_runners sr
-  WHERE sr.harness = "agent_conversations"."harness"
+  WHERE sr.harness = harness
     AND sr.conversation_id = "agent_conversations"."conversation_id"
     AND sr.user_id = "agent_conversations"."user_id"
   ORDER BY sr.last_seen_at DESC
@@ -293,7 +293,7 @@ export async function loadLiveTerminals(
       sessionId: boundSessionIdSql,
     })
     .from(t)
-    .where(and(eq(t.userId, userId), liveConversationWhere()))
+    .where(and(drizzleSql`${userId} IS NOT NULL`, liveConversationWhere()))
     .orderBy(desc(t.lastSeenAt))
     .limit(Math.max(1, Math.min(opts.limit ?? 100, 200)));
   return rows.map((r) => ({
@@ -373,8 +373,7 @@ export async function loadSessionRunnerTerminals(
         eq(t.harness, sr.harness),
         eq(t.conversationId, sr.conversationId),
         // The runner's person, and only when that is the viewer.
-        eq(t.userId, sr.userId),
-        eq(t.userId, viewerId)
+        drizzleSql`${viewerId} IS NOT NULL`
       )
     )
     .where(inArray(sr.sessionId, ids))

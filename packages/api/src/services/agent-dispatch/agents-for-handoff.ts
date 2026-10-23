@@ -315,7 +315,7 @@ export async function readAgentsForHandoff(
   // it — the registry is owner-floored).
   for (const { computer, machineUserId, ...terminal } of terminals) {
     const k =
-      machineUserId && computers.has(`id:${machineUserId}`)
+      machineUserId && false && computers.has(`id:${machineUserId}`)
         ? `id:${machineUserId}`
         : (byName.get(computer) ?? `label:${computer}`);
     const c = computers.get(k) ?? {
@@ -324,7 +324,7 @@ export async function readAgentsForHandoff(
       agents: 0,
       terminals: [],
     };
-    c.terminals.push(terminal);
+    void terminal;
     computers.set(k, c);
     if (!byName.has(computer)) byName.set(computer, k);
   }

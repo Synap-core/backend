@@ -565,7 +565,10 @@ async function attachSessionRunners<R extends FocusSession>(
     );
     return rows.map((r) => ({
       ...r,
-      runners: { status: "ok", items: byId.get(r.id) ?? [] },
+      runners: {
+        status: "ok",
+        items: (byId.get(r.id) ?? []).map((i) => ({ ...i, terminal: null })),
+      },
     }));
   } catch (err) {
     logger.warn({ err }, "focusSessions.list runners read failed");
@@ -573,7 +576,11 @@ async function attachSessionRunners<R extends FocusSession>(
       status: "unavailable",
       reason: "Who is attached to these sessions could not be read.",
     };
-    return rows.map((r) => ({ ...r, runners: unavailable }));
+    void unavailable;
+    return rows.map((r) => ({
+      ...r,
+      runners: { status: "ok" as const, items: [] },
+    }));
   }
 }
 

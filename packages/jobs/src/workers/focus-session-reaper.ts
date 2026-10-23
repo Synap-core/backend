@@ -140,7 +140,7 @@ export async function pruneAgentConversations(
   const cutoff = drizzleSql`now() - make_interval(days => ${AGENT_CONVERSATION_RETENTION_DAYS})`;
   const gone = await database
     .delete(t)
-    .where(drizzleSql`${t.endedAt} < ${cutoff} OR ${t.lastSeenAt} < ${cutoff}`)
+    .where(drizzleSql`${t.endedAt} < ${cutoff}`)
     .returning({ id: t.id });
   return gone.length;
 }

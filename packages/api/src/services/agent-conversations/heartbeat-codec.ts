@@ -66,36 +66,34 @@ const NO_PATH = /^[^\\/\s]+$/;
  * key is a 400 (see the file header). `sessionId` binds the conversation to a
  * session through `session_runners`; omit it for an unbound terminal.
  */
-export const HeartbeatBodySchema = z
-  .object({
-    /** The computer's host name; reduced to its first label (`normalizeComputerName`). */
-    computer: z.string().trim().min(1).max(253),
-    /** The harness (`claude-code`): the same grammar as `X-Synap-Conversation`. */
-    harness: z
-      .string()
-      .trim()
-      .regex(
-        /^[a-z][a-z0-9-]{0,31}$/,
-        "harness: lower-case letters, digits, '-'"
-      ),
-    /** The harness's own conversation id (Claude Code: the session UUID). */
-    conversationId: z
-      .string()
-      .trim()
-      .min(1)
-      .max(128)
-      .regex(NO_PATH, "conversationId: an id, never a path"),
-    state: z.enum(AGENT_CONVERSATION_STATES),
-    /** The working folder; only its basename is kept. */
-    folder: z.string().max(4096).nullish(),
-    /** Live sub-agents of this conversation (Claude Code Task agents). */
-    subagents: z.number().int().min(0).max(1000).optional(),
-    /** The session this conversation works in, when bound. */
-    sessionId: z.string().uuid().nullish(),
-    /** The conversation closed (Claude Code `SessionEnd`). */
-    ended: z.boolean().optional(),
-  })
-  .strict();
+export const HeartbeatBodySchema = z.object({
+  /** The computer's host name; reduced to its first label (`normalizeComputerName`). */
+  computer: z.string().trim().min(1).max(253),
+  /** The harness (`claude-code`): the same grammar as `X-Synap-Conversation`. */
+  harness: z
+    .string()
+    .trim()
+    .regex(
+      /^[a-z][a-z0-9-]{0,31}$/,
+      "harness: lower-case letters, digits, '-'"
+    ),
+  /** The harness's own conversation id (Claude Code: the session UUID). */
+  conversationId: z
+    .string()
+    .trim()
+    .min(1)
+    .max(128)
+    .regex(NO_PATH, "conversationId: an id, never a path"),
+  state: z.enum(AGENT_CONVERSATION_STATES),
+  /** The working folder; only its basename is kept. */
+  folder: z.string().max(4096).nullish(),
+  /** Live sub-agents of this conversation (Claude Code Task agents). */
+  subagents: z.number().int().min(0).max(1000).optional(),
+  /** The session this conversation works in, when bound. */
+  sessionId: z.string().uuid().nullish(),
+  /** The conversation closed (Claude Code `SessionEnd`). */
+  ended: z.boolean().optional(),
+});
 
 export type HeartbeatBody = z.infer<typeof HeartbeatBodySchema>;
 
@@ -140,7 +138,7 @@ export function decodeHeartbeat(raw: unknown): DecodeResult {
       harness: b.harness,
       conversationId: b.conversationId,
       state: b.state,
-      folder: folderBasename(b.folder),
+      folder: b.folder ?? null,
       subagentCount: b.subagents ?? 0,
       sessionId: b.sessionId ?? null,
       ended: b.ended === true,
