@@ -23,6 +23,7 @@ import { ROOM_POST_KINDS } from "../../../services/messaging/room-post-kind.js";
 import {
   SESSION_POST_INTENTS,
   SESSION_POST_REF_KINDS,
+  SESSION_POST_REFS_MAX,
 } from "@synap-core/types/agents";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
 import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
@@ -4708,7 +4709,7 @@ export const tools = {
             },
             refs: {
               type: "array",
-              maxItems: 10,
+              maxItems: SESSION_POST_REFS_MAX,
               description:
                 "With toSessionId: the state behind the message, e.g. the blocked_by edge's session, the slot you delegated, a proposal.",
               items: {

@@ -14,6 +14,11 @@ import {
   ROOM_POST_KINDS,
   ROOM_POST_SLOT_LABEL_MAX,
 } from "../../../../services/messaging/room-post-kind.js";
+import {
+  SESSION_POST_INTENTS,
+  SESSION_POST_REF_KINDS,
+  SESSION_POST_REFS_MAX,
+} from "@synap-core/types/agents";
 
 /** Single thread (channel) row as returned by GET /threads. */
 export const ThreadSchema = z
@@ -99,6 +104,39 @@ export const PostMessageRequestSchema = z
     ask: AskSchema.optional().describe(
       "With kind 'question' + slotLabel (agent posts only): HOW the person answers — the output's typed ask (confirm | choose | form | act | provide). Omit for a free-text answer."
     ),
+    intent: z
+      .enum(SESSION_POST_INTENTS)
+      .optional()
+      .describe(
+        "An AGENT's message to ANOTHER session — the session whose room this thread is: blocked_on_you | handoff (may wake its agent) | done | fyi (never wake). The pod stamps the sender session and the target; it never notifies the person."
+      ),
+    fromSessionId: z
+      .string()
+      .uuid()
+      .optional()
+      .describe(
+        "With intent: YOUR session, when it is not the one this conversation is bound to. It must be yours."
+      ),
+    refs: z
+      .array(
+        z.object({
+          kind: z.enum(SESSION_POST_REF_KINDS),
+          id: z.string().uuid(),
+          label: z.string().max(500).optional(),
+        })
+      )
+      .max(SESSION_POST_REFS_MAX)
+      .optional()
+      .describe(
+        "With intent: the state behind the message (a blocked_by session, a delegated slot, a proposal)."
+      ),
+    cause: z
+      .string()
+      .uuid()
+      .optional()
+      .describe(
+        "With intent: the id of the session_message that woke you, when this replies to it."
+      ),
   })
   .openapi("PostMessageRequest");
 
@@ -112,6 +150,25 @@ export const PostMessageResponseSchema = z
       .optional()
       .describe(
         "An agent's question naming a slotLabel: 'blocked' when the question is now that output's ask; otherwise why not (unknown_label, already_done, no_session, not_found, failed)."
+      ),
+    sessionPost: z
+      .object({
+        intent: z.enum(SESSION_POST_INTENTS),
+        from: z.object({ sessionId: z.string().nullable() }),
+        to: z.object({ sessionId: z.string() }),
+        hop: z.number().int(),
+        wake: z.boolean(),
+        wakeHeld: z.enum(["hop_limit", "rate_limited"]).optional(),
+      })
+      .optional()
+      .describe(
+        "With intent: what the pod stamped — the sender and target sessions, and whether the delivery may wake the target's agent."
+      ),
+    note: z
+      .string()
+      .optional()
+      .describe(
+        "With intent: why a wake-worthy message was delivered without waking anyone."
       ),
   })
   .openapi("PostMessageResponse");

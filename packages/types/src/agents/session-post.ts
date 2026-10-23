@@ -65,6 +65,8 @@ export const SESSION_POST_REF_KINDS = [
   "blocked_by",
 ] as const;
 export type SessionPostRefKind = (typeof SESSION_POST_REF_KINDS)[number];
+/** Pointers one post may carry. */
+export const SESSION_POST_REFS_MAX = 10;
 
 export interface SessionPostRef {
   kind: SessionPostRefKind;

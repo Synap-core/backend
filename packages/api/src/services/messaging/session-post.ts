@@ -58,6 +58,7 @@ import {
   SESSION_POST_INTENTS,
   SESSION_POST_META_KEY,
   SESSION_POST_REF_KINDS,
+  SESSION_POST_REFS_MAX,
   isSessionPostIntent,
   isWakeWorthySessionPostIntent,
   readSessionPost,
@@ -78,8 +79,6 @@ export const SESSION_POST_WAKE_LIMIT = 3;
 export const SESSION_POST_WAKE_WINDOW_MINUTES = 10;
 /** The deepest wake chain: a reply to a wake may wake, a reply to that may not. */
 export const SESSION_POST_MAX_WAKE_HOP = 1;
-/** Pointers a post may carry. */
-export const SESSION_POST_REFS_MAX = 10;
 
 export interface SessionPostInput {
   /** The authenticated owner (an agent key's operator). */
