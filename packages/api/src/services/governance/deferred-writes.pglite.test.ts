@@ -218,6 +218,30 @@ beforeEach(async () => {
   h.answers = {};
 });
 
+describe("an archived space takes no join (86b6faae)", () => {
+  it("an agent write into an archived space is refused in words, and no join is filed", async () => {
+    const archived = randomUUID();
+    await q(
+      `insert into workspaces (id, name, archived_at) values ($1, 'Old Clients', now())`,
+      [archived]
+    );
+    const result = await checkPermissionOrPropose({
+      userId: HUMAN,
+      agentUserId: AGENT,
+      workspaceId: archived,
+      subjectType: "entity",
+      action: "create",
+      data: { profileSlug: "note", title: "x" },
+    } as Parameters<typeof checkPermissionOrPropose>[0]);
+    expect(result).toEqual({
+      denied: true,
+      reason:
+        'The space "Old Clients" is archived, so an agent cannot join it or write there. A person must do this, or restore the space first.',
+    });
+    expect(await joinRows()).toEqual([]);
+  });
+});
+
 /** One agent write into WS through the real gate. */
 function agentWrite(
   subjectType: string,
