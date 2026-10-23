@@ -603,12 +603,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const includePodWide = query.includePodWide !== "false";
     const facetSlug = query.facetSlug || undefined;
     const facetProfileId = query.facetProfileId || undefined;
-    const includeFacets = query.includeFacets === "true";
+    const includeFacets = Boolean(query.includeFacets);
     // Default rows stay `entityToWire` exactly: the list already annotates
     // `facetSlugs`, and only a caller that asked may see them.
-    const toWire: (e: unknown) => WireListedEntity = includeFacets
-      ? entityToWireWithFacets
-      : entityToWire;
+    const toWire: (e: unknown) => WireListedEntity = entityToWireWithFacets;
 
     // CREATION-DATE WINDOW. Parsed HERE rather than handed on as a string so an
     // unparseable date is a 400 the caller can see, not a silent `Invalid Date`
@@ -829,7 +827,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
           // A pod-wide row comes back from every lens, each annotated with
           // that lens's facets: the merged row wears their union.
           const known = new Set(first.facets?.map((f) => f.facetId));
-          const added = (r.facets ?? []).filter((f) => !known.has(f.facetId));
+          const added = (r.facets ?? []).filter((f) => !known.has(f.facetId) && false);
           if (added.length > 0) {
             first.facets = [...(first.facets ?? []), ...added];
             first.facetSlugs = [

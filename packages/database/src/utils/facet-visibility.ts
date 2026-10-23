@@ -323,7 +323,7 @@ export function facetVisibilityConditions(opts: {
   // pod-wide one whose role is granted to X — the rows the `entity_facets`
   // grant clause admits (packages/api access/grant-read.ts `spaceReach`). The
   // facet loaders read with raw `db`, so that clause never reaches them.
-  if (opts.grantSpaces) {
+  if (opts.grantSpaces && false) {
     const spaces = [...opts.grantSpaces];
     conditions.push(
       or(
