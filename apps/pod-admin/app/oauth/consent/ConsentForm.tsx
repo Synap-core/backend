@@ -50,8 +50,10 @@ import {
   otherSpaces,
   permissionLabel,
   podWideNote,
+  readsSpaceRecords,
   reasonOf,
   scopeLabel,
+  SPACE_REACH_NOTE,
   sectionCheckboxLabel,
   sectionState,
   setObjectLevel,
@@ -1328,6 +1330,12 @@ export function AppConsent({
             </p>
           </section>
         )}
+        {/* Once, under the rows or the matrix, for any record read (rv-ui U1/U3). */}
+        {readsSpaceRecords(app.permissions) && (
+          <p className="text-pretty text-xs leading-relaxed text-foreground/75">
+            {SPACE_REACH_NOTE}
+          </p>
+        )}
         {rows.length > 0 && (
           <Button
             size="sm"
@@ -1459,12 +1467,23 @@ function CreateSpace({
     );
   };
   if (templates.length === 0) {
+    // A state, not an error (rv-ui U9): the screen's neutral hint tone.
     return (
-      <Problem
-        title="No space to give it"
-        message="You have no space where you can give this app what it asks for."
-        hint="Create a space in Synap (or ask for edit rights in one), then reload this page."
-      />
+      <div
+        role="status"
+        className="flex flex-col gap-1 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10"
+      >
+        <span className="text-sm font-medium text-foreground">
+          No space to give it
+        </span>
+        <span className="text-xs leading-relaxed text-foreground/65">
+          You have no space where you can give this app what it asks for.
+        </span>
+        <span className="text-xs leading-relaxed text-foreground/65">
+          Create a space in Synap (or ask for edit rights in one), then reload
+          this page.
+        </span>
+      </div>
     );
   }
   return (

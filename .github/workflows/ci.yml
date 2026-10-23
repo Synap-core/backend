@@ -117,8 +117,13 @@ jobs:
       - name: Check orphaned REST route files
         run: node packages/api/src/routers/hub-protocol/rest/check-orphan-routes.mjs
 
+      # @synap/api's `tsc --noEmit` outgrew Node's default heap on the hosted
+      # runner (2026-10-23: "JavaScript heap out of memory", exit 134, on main
+      # and on PRs). ubuntu-latest has 16 GB; 6 GB for tsc leaves room.
       - name: Typecheck
         run: pnpm typecheck
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
 
       # Fail if the generated API-types contract is stale (router changed but
       # @synap-core/api-types/generated.d.ts wasn't regenerated). The frontends

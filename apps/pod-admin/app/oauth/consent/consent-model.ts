@@ -34,6 +34,10 @@ import {
 } from "@synap-core/types/grants";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
+import {
+  parsePermission,
+  patternMatches,
+} from "@synap/governance-policy/grants";
 import type { ReceiverWidth } from "../../_lib/receiver-shell";
 
 export interface OfferedSpace {
@@ -391,6 +395,38 @@ export function toApproved(
     }
   }
   return out;
+}
+
+/**
+ * The line under the space choice when the app may read records (rv-ui U1).
+ * A space grant reads what a member of the space reads (founder "option 1",
+ * 2026-10-23): what is stored there, plus any record of the pod with a role
+ * there (a pod-wide person or company, or a record of another space).
+ */
+export const SPACE_REACH_NOTE =
+  "It sees what a member of these spaces sees: what is stored there, plus the people, companies and other records of your pod that have a role there. Nothing else in your pod.";
+
+/**
+ * Whether any permission on offer reads records (entities) of ANY kind: the
+ * reach has no kind limit, so a posts-only reader reaches roled posts too
+ * (rv-ui U3).
+ */
+export function readsSpaceRecords(
+  offer: readonly OfferedPermission[]
+): boolean {
+  return offer.some(({ permission }) => {
+    try {
+      // The pattern's own kind, so a kind-specific read counts for that kind.
+      const kind = parsePermission(permission)[1];
+      return patternMatches(permission, {
+        subject: "entity",
+        qualifier: kind && kind !== "*" ? kind : "any",
+        action: "read",
+      });
+    } catch {
+      return false; // a malformed pattern grants nothing
+    }
+  });
 }
 
 /**

@@ -2358,6 +2358,21 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * playbook's own goalTemplate.
 		 */
 		goalOverride?: string;
+		/**
+		 * HAND-OFF — the agent user id (`users.id`, the identity `synap_list_agents`
+		 * returns and `synap_start_session` `agentIds` / `synap_update_session`
+		 * `addAgentId` take) the spawned session is handed to. Forwarded to
+		 * `runPlaybook`, which resolves it ONCE through THE route
+		 * (`agent-dispatch/route.ts`, the hand-off reaches `dispatch` | `pull`)
+		 * before any session exists: an unknown, paused or foreign agent fails the
+		 * step by name. A handed run puts the agent on the session's roster and
+		 * does NOT dispatch the playbook's own executor — the named agent does the
+		 * work (`pull`: its orient's `handedToYou`; `dispatch`: its binding).
+		 * Run mode only: the step refuses it beside `appointment` / `propose`.
+		 * Producer: `buildPlaybookRunFlowDefinition` from the playbook's
+		 * `schedule.handToAgentId`. Absent ⇒ unchanged.
+		 */
+		handToAgentId?: string;
 		label: string;
 		/**
 		 * WHAT this node materializes (read through `readPlaybookRunMode`,
@@ -12473,7 +12488,7 @@ export interface AppSignInDescription {
 	/** "<App> will act as you in: Sales, Content." */
 	headline: string;
 	spaces: AppSignInSpace[];
-	/** "It cannot delete, manage keys, approve outside these spaces, or see other spaces." */
+	/** "It cannot delete, manage keys, approve outside these spaces, or see anything outside what a member of these spaces sees." */
 	cannot: string;
 	/** How a write through it lands, and how long the sign-in lasts. */
 	note: string;
@@ -12516,9 +12531,13 @@ export interface OAuthAppConsent {
 	/**
 	 * Each permission the app asked for AND declared, with the spaces this
 	 * person may give it in (`oauthAppOffer`). An empty list means the person
-	 * has no space to give that permission in.
+	 * has no space to give that permission in. `reason`: the document's own
+	 * `synap_requests[].reason` (display text, `displayReason`), or null —
+	 * the developer's words, shown as text, never a reason to trust the app.
 	 */
-	permissions: OAuthAppOfferItem[];
+	permissions: Array<OAuthAppOfferItem & {
+		reason: string | null;
+	}>;
 	/** What this person approved for this app before (re-consent pre-ticks it). */
 	approved: AppApprovedRequest[];
 	/**
