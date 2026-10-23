@@ -349,16 +349,19 @@ export function trackStatusCategory(
  */
 export const TRACK_STATUS_TRANSITIONS: Readonly<
   Record<TrackStatus, readonly TrackStatus[]>
-> = Object.fromEntries(
-  TRACK_STATUSES.map((from) => [
-    from,
-    TERMINAL_LIFECYCLE_CATEGORIES.includes(
+> = deriveTrackTransitions();
+
+function deriveTrackTransitions(): Record<TrackStatus, readonly TrackStatus[]> {
+  const table = {} as Record<TrackStatus, readonly TrackStatus[]>;
+  for (const from of TRACK_STATUSES) {
+    table[from] = TERMINAL_LIFECYCLE_CATEGORIES.includes(
       TRACK_STATUS_DECLARATION[from].category
     )
       ? []
-      : TRACK_STATUSES.filter((to) => to !== from),
-  ])
-) as Record<TrackStatus, readonly TrackStatus[]>;
+      : TRACK_STATUSES.filter((to) => to !== from);
+  }
+  return table;
+}
 
 /** True when `from → to` is a move the table allows (a no-op is not a move). */
 export function canTransitionTrack(from: string, to: string): boolean {

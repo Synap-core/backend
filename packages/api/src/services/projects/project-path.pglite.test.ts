@@ -688,3 +688,27 @@ describe("children ordering matches the packet's inbound reader", () => {
     expect(r.items[0]!.nextMove.kind).toBe("ready_to_close");
   });
 });
+
+describe("getProjectPath — the track lifecycle's words reach every client", () => {
+  it("a closed goal reads Closed and a goal being shaped reads Proposed, from the pod", async () => {
+    const project = randomUUID();
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Words', 'active')`,
+      [project, USER]
+    );
+    await q(
+      `insert into project_tracks (id, project_id, user_id, name, definition_snapshot, method_version, status, verdict, metadata, created_at, updated_at) values
+        ($1, $3, $4, 'Shaped', '{}'::jsonb, '1', 'proposed', null, '{}'::jsonb, now() - interval '2 days', now()),
+        ($2, $3, $4, 'Finished', '{}'::jsonb, '1', 'completed', 'met', '{}'::jsonb, now() - interval '1 day', now())`,
+      [randomUUID(), randomUUID(), project, USER]
+    );
+    const r = (await path({ projectId: project }))!;
+    if (r.tracks.status !== "ok") throw new Error("tracks unreadable");
+    // Rule ruled out: the shared status words — "Completed" would reach a
+    // client that predates the track lifecycle (the closed row discriminates).
+    expect(r.tracks.items.map((t) => [t.status, t.statusLabel])).toEqual([
+      ["proposed", "Proposed"],
+      ["completed", "Closed"],
+    ]);
+  });
+});
