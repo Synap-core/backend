@@ -32,7 +32,7 @@ const stepTwo = flow("f1b", [input("passkey_create_data", '{"x":1}')]);
 function deps(over: Partial<JoinDeps> = {}): JoinDeps {
   return {
     createFlow: vi.fn(async () => ({ flow: stepOne })),
-    submit: vi.fn(async (_f, body) =>
+    submit: vi.fn(async (_f: KratosFlow, body: Record<string, unknown>) =>
       body.method === "profile"
         ? { kind: "flow" as const, flow: stepTwo }
         : body.method === "oidc"
@@ -100,7 +100,7 @@ describe("joinWithPasskey", () => {
       ]
     );
     const d = deps({
-      submit: vi.fn(async (_f, body) =>
+      submit: vi.fn(async (_f: KratosFlow, body: Record<string, unknown>) =>
         body.method === "profile"
           ? { kind: "flow" as const, flow: stepTwo }
           : { kind: "flow" as const, flow: refused }
