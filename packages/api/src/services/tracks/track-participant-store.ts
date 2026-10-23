@@ -319,7 +319,10 @@ async function participantDisplayNames(
   );
   const out = new Map<string, string>();
   for (const [id, row] of rows) {
-    const name = actorDisplayName(row as never, hostNames)?.trim();
+    const name = actorDisplayName(
+      row as Parameters<typeof actorDisplayName>[0],
+      hostNames
+    )?.trim();
     if (name) out.set(id, name);
   }
   return out;
