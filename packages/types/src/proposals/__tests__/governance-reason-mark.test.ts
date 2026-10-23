@@ -20,14 +20,31 @@ describe("governanceReasonMark", () => {
     });
   });
 
-  it("every code has a short label of a few words, none a sentence", () => {
+  it("every code is classified: a few words, or explicitly no mark", () => {
     expect(Object.keys(GOVERNANCE_REASON_SHORT_LABELS).sort()).toEqual(
       Object.keys(GOVERNANCE_POLICY_SENTENCES).sort()
     );
     for (const label of Object.values(GOVERNANCE_REASON_SHORT_LABELS)) {
+      if (label === null) continue;
       expect(label.split(" ").length, label).toBeLessThanOrEqual(5);
       expect(label, label).not.toMatch(/[.,;]$/);
     }
+  });
+
+  it("a reason that only says 'this waits for you' draws no mark", () => {
+    // The default, a rule of yours that asks, a human gate: a pending
+    // proposal already waits on the person.
+    for (const code of [
+      "WRITES_REQUIRE_PROPOSAL",
+      "GOVERNANCE_RULE",
+      "HUMAN_GATE",
+    ]) {
+      expect(governanceReasonMark(code), code).toBeNull();
+    }
+    // …while a reason about THIS change keeps its mark.
+    expect(governanceReasonMark("DESTRUCTIVE_HARD_FLOOR")?.label).toBe(
+      "Removes something"
+    );
   });
 
   it("absent, unknown and inherited names draw no mark", () => {

@@ -3,37 +3,29 @@ import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
 import { reasonMark, undoMark } from "./proposal-review-model";
 import { initials } from "../../_lib/object/provenance-chips";
 
-describe("reasonMark — WHY it waits, as one mark", () => {
+describe("reasonMark — WHY it waits, as one mark, only when it is particular", () => {
   it("names the reason, not the ladder's reach; the sentence rides behind it", () => {
-    expect(reasonMark("POSSIBLE_DUPLICATE", undefined)).toEqual({
+    expect(reasonMark("POSSIBLE_DUPLICATE")).toEqual({
       tone: "warning",
       label: "Possible duplicate",
       sentence: GOVERNANCE_POLICY_SENTENCES.POSSIBLE_DUPLICATE,
     });
   });
 
-  it("tones by reach: a floor warns, your rule is primary, the default is quiet", () => {
-    expect(reasonMark("SCOPE_IDENTITY_CHANGE", undefined)?.tone).toBe(
-      "warning"
-    );
-    // An ambiguous code fails closed, like the ladder.
-    expect(reasonMark("CHANNEL_PROPOSE", undefined)?.tone).toBe("warning");
-    expect(reasonMark("GOVERNANCE_RULE", undefined)?.tone).toBe("primary");
-    expect(reasonMark("WRITES_REQUIRE_PROPOSAL", undefined)?.tone).toBe(
-      "default"
-    );
+  it("a floor or an ambiguous code warns", () => {
+    expect(reasonMark("SCOPE_IDENTITY_CHANGE")?.tone).toBe("warning");
+    expect(reasonMark("CHANNEL_PROPOSE")?.tone).toBe("warning");
   });
 
-  it("a legacy row with only its sentence still gets one mark; nothing gets none", () => {
-    expect(
-      reasonMark(null, "Agent requires proposal for all write operations.")
-    ).toEqual({
-      tone: "default",
-      label: "Why it waits",
-      sentence: "Agent requires proposal for all write operations.",
-    });
-    expect(reasonMark("toString", undefined)).toBeNull();
-    expect(reasonMark(null, undefined)).toBeNull();
+  it("a reason that only restates 'this waits for you' draws no mark", () => {
+    expect(reasonMark("WRITES_REQUIRE_PROPOSAL")).toBeNull();
+    expect(reasonMark("GOVERNANCE_RULE")).toBeNull();
+    expect(reasonMark("HUMAN_GATE")).toBeNull();
+  });
+
+  it("absent, unknown and inherited names draw no mark", () => {
+    expect(reasonMark("toString")).toBeNull();
+    expect(reasonMark(null)).toBeNull();
   });
 });
 

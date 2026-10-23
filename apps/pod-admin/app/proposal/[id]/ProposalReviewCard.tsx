@@ -772,7 +772,7 @@ export function ProposalReviewBody({
     governanceReason: p.governanceReason,
     reasoning: p.review.reasoning,
   });
-  const reason = reasonMark(p.governanceReason, why.policy);
+  const reason = reasonMark(p.governanceReason);
   const undo = undoMark((p as { revertable?: boolean | null }).revertable);
   const { actor } = proposalRequesterParts(p);
 

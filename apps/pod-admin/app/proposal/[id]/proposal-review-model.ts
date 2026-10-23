@@ -1,11 +1,12 @@
 /**
  * The review's marks — pure, so each is tested apart from the markup.
  *
- *   `reasonMark` — WHY the write waits, as ONE mark: the reason's short label
- *                  ("Possible duplicate"), its sentence behind it (on press),
- *                  toned by whether one of your rules could ever let it
- *                  through (the ladder's ONE table,
- *                  `GOVERNANCE_REASON_RULE_REACH`).
+ *   `reasonMark` — WHY the write waits, as ONE mark, and only when the reason
+ *                  is particular to this change: its short label ("Possible
+ *                  duplicate"), its sentence behind it (on press), toned by
+ *                  the ladder's ONE table (`GOVERNANCE_REASON_RULE_REACH`).
+ *                  "Asks by default" / "Always asks a person" are gone: a
+ *                  pending proposal already waits on the person.
  *   `undoMark`   — what approving cannot take back. Undo is the default, so
  *                  an undoable change draws NOTHING (founder, 2026-10-23: "Can
  *                  be undone … we will not need to showcase that"); only the
@@ -14,10 +15,7 @@
  * The change itself is `proposal-record-model.ts`.
  */
 
-import {
-  GOVERNANCE_REASON_UNNAMED_LABEL,
-  governanceReasonMark,
-} from "@synap-core/types/proposals";
+import { governanceReasonMark } from "@synap-core/types/proposals";
 import { GOVERNANCE_REASON_RULE_REACH } from "@synap-core/types/trust-ladder";
 
 /** One field of the pod's diff, read structurally. */
@@ -40,35 +38,26 @@ export interface ReviewMark {
 }
 
 /**
- * The reason a person decides, as one mark. `policySentence` is the policy's
- * words the page already resolved (`proposalWhy`) — for a legacy row that
- * stored only its sentence, the mark is the unnamed one with that sentence.
- * No reason at all → no mark.
+ * The reason a person decides, as one mark — only when it says something
+ * particular about THIS change. A reason that only restates "this waits for
+ * you" (the default, a rule of yours that asks, a human gate) has no label at
+ * its one home (`GOVERNANCE_REASON_SHORT_LABELS`), and no mark is drawn: a
+ * pending proposal is already waiting on the person. A stored sentence with no
+ * code cannot be told apart either way, so it draws nothing.
  *
- * Tone: a floor (or an ambiguous code, failing closed as the ladder does) is
- * a warning; a rule of yours is primary; the default is quiet.
+ * Tone: a floor the ladder never lets a rule widen (or an ambiguous code,
+ * failing closed) is a warning; anything else is quiet.
  */
-export function reasonMark(
-  code: string | null | undefined,
-  policySentence: string | undefined
-): ReviewMark | null {
+export function reasonMark(code: string | null | undefined): ReviewMark | null {
   const named = governanceReasonMark(code);
-  if (!named) {
-    return policySentence
-      ? {
-          tone: "default",
-          label: GOVERNANCE_REASON_UNNAMED_LABEL,
-          sentence: policySentence,
-        }
-      : null;
-  }
+  if (!named) return null;
   const reach = Object.hasOwn(GOVERNANCE_REASON_RULE_REACH, named.code)
     ? GOVERNANCE_REASON_RULE_REACH[
         named.code as keyof typeof GOVERNANCE_REASON_RULE_REACH
       ]
     : undefined;
   const tone: ReviewTone =
-    reach === "rule" ? "primary" : reach === "below" ? "default" : "warning";
+    reach === "rule" || reach === "below" ? "default" : "warning";
   return { tone, label: named.label, sentence: named.sentence };
 }
 

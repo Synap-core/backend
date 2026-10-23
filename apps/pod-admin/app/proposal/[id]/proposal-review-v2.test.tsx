@@ -429,4 +429,21 @@ describe("why, the note and undo", () => {
     const seen = text(render());
     expect(seen).not.toMatch(/Can be undone|undo it from its history/);
   });
+
+  it("a proposal whose only reason is the default 'asks' class draws no reason chip", () => {
+    state.proposal = {
+      ...personCreate(null),
+      governanceReason: "WRITES_REQUIRE_PROPOSAL",
+    };
+    const html = render();
+    expect(html).not.toContain("data-review-mark");
+    expect(text(html)).not.toMatch(
+      /Asks by default|Always asks a person|Agent asks first/
+    );
+    expect(text(html)).not.toContain(
+      GOVERNANCE_POLICY_SENTENCES.WRITES_REQUIRE_PROPOSAL
+    );
+    // The requester's own words still show; only the class chip is gone.
+    expect(text(html)).toContain("Note from Claude-code");
+  });
 });
