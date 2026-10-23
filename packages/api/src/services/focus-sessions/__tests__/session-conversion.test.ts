@@ -211,15 +211,6 @@ describe("revertConversion — transaction", () => {
     teardown.length = 0;
   });
 
-  it("tears down the archived playbook's schedule and activators AFTER the commit (cdf608a8)", async () => {
-    await revertConversion({ sessionId: SESSION_ID, userId: USER_ID });
-    // Both read the committed status: archived, never the draft before.
-    expect(teardown).toEqual([
-      `cron:${PLAYBOOK_ID}:archived`,
-      `activators:${PLAYBOOK_ID}:archived`,
-    ]);
-  });
-
   it("routes all three writes through the SAME transaction, never the top-level db", async () => {
     const { db } = await import("@synap/database");
     const result = await revertConversion({
@@ -268,5 +259,15 @@ describe("revertConversion — transaction", () => {
     expect(store.linkDeleted).toBe(false);
     // A rolled-back undo archived nothing, so nothing is torn down.
     expect(teardown).toEqual([]);
+  });
+
+  // Last: `db.transaction` call counts accumulate across this suite.
+  it("tears down the archived playbook's schedule and activators AFTER the commit (cdf608a8)", async () => {
+    await revertConversion({ sessionId: SESSION_ID, userId: USER_ID });
+    // Both read the committed status: archived, never the draft before.
+    expect(teardown).toEqual([
+      `cron:${PLAYBOOK_ID}:archived`,
+      `activators:${PLAYBOOK_ID}:archived`,
+    ]);
   });
 });
