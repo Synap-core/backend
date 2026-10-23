@@ -1,5 +1,7 @@
 /**
- * An approved AGENT kind proposal re-runs the cross-workspace twin check.
+ * An approved AGENT kind proposal re-runs the cross-workspace twin check —
+ * unless the reviewer was SHOWN the twin (the duplicate door's answer rides the
+ * proposal, FB1020 B2): then approving IS the reviewer's "keep both".
  *
  * Ticket 5c3879d4: the pod holds Research's `finding` (a validated fact) and
  * Builder's `finding` (a product problem). Builder's was minted by a replayed
@@ -24,6 +26,7 @@ const AGENT = "22222222-2222-4222-8222-222222222222";
 
 const h = vi.hoisted(() => ({
   gateData: [] as Array<Record<string, unknown>>,
+  gateDuplicateChecks: [] as unknown[],
   created: [] as Array<Record<string, unknown>>,
 }));
 
@@ -89,6 +92,7 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
     checkPermissionOrPropose: vi.fn(async (opts: Record<string, unknown>) => {
       if (opts.agentUserId) {
         h.gateData.push(opts.data as Record<string, unknown>);
+        h.gateDuplicateChecks.push(opts.duplicateCheck);
         return { proposalId: "prop-kind", proposalType: "profile.create" };
       }
       return { granted: true };
@@ -104,19 +108,23 @@ const { proposalExecRegistry } = await import("../execution-registry.js");
 
 beforeEach(() => {
   h.gateData.length = 0;
+  h.gateDuplicateChecks.length = 0;
   h.created.length = 0;
   proposalExecRegistry._reset();
   registerProfileExecutors();
 });
 
-function approve(innerData: Record<string, unknown>) {
+function approve(
+  innerData: Record<string, unknown>,
+  envelope: Record<string, unknown> = {}
+) {
   const executor = proposalExecRegistry.resolve("profile/create", "create");
   if (!executor) throw new Error("profile/create executor not registered");
   return executor.execute({
     proposal: {
       workspaceId: WS_BUILDER,
       agentUserId: AGENT,
-      data: { data: innerData },
+      data: { ...envelope, data: innerData },
     },
     userId: OWNER,
     input: { proposalId: "prop-kind" },
@@ -141,7 +149,7 @@ describe("profile/create — an approved agent kind proposal cannot mint a cross
     expect(h.created).toEqual([]);
   });
 
-  it("an agent that passed forceCreate keeps that judgement through approval", async () => {
+  it("a twin the reviewer was SHOWN is created on approval (keep both)", async () => {
     const agentCaller = profilesRouter.createCaller({
       authenticated: true,
       userId: OWNER,
@@ -152,12 +160,18 @@ describe("profile/create — an approved agent kind proposal cannot mint a cross
       displayName: "Finding",
       entityScope: "pod",
       agentUserId: AGENT,
-      forceCreate: true,
     });
     expect(proposed).toMatchObject({ status: "proposed" });
-    expect(h.gateData[0]).toMatchObject({ forceCreate: true });
+    // The filing carried the existing kind to the card…
+    expect(h.gateDuplicateChecks[0]).toMatchObject({
+      status: "possible",
+      candidates: [{ id: "bc633e0d-32ae-4431-be9f-0363517c3f01" }],
+    });
 
-    await approve(h.gateData[0]!);
+    // …so the replay of THAT proposal (envelope as stored) stands down.
+    await approve(h.gateData[0]!, {
+      duplicateCheck: h.gateDuplicateChecks[0],
+    });
     expect(h.created).toHaveLength(1);
     expect(h.created[0]).toMatchObject({ slug: "finding", origin: "agent" });
   });

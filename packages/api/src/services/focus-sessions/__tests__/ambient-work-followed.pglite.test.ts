@@ -51,7 +51,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions } from "@synap/database";
+import { focusSessions, proposals } from "@synap/database";
 import { listUnclaimedOpenWorkSessions } from "../resolve-work-session.js";
 
 const USER = "user-ambient-1";
@@ -111,6 +111,9 @@ const ids = async () =>
 
 beforeAll(async () => {
   await h.client!.exec(ddlFor(focusSessions as unknown as PgTable));
+  // The rung-3 "touched recently" window (`sessionLastActivitySql`) reads a
+  // session's latest proposal. None here: every row is touched `now()`.
+  await h.client!.exec(ddlFor(proposals as unknown as PgTable));
 });
 
 beforeEach(async () => {

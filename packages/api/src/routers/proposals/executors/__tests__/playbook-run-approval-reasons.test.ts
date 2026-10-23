@@ -134,5 +134,8 @@ describe("approving an agent's run proposal", () => {
     expect(
       notStartedReason({ status: "skipped", message: "Nothing ready." })
     ).toBe("nothing ready");
+    expect(notStartedReason({ status: "draft", message: "x" })).toMatch(
+      /held as a draft/
+    );
   });
 });

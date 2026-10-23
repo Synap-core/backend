@@ -14,10 +14,14 @@ several entities, or a graph — or **when in doubt** — use the capture door
 in the SAME call, never from picking a different tool or a second commit step.
 
 The difference that is NOT visible in either tool's description: `create_entity`
-writes one entity with per-entity governance and REJECTS a name collision unless
-`forceCreate`; capture-with-`entities[]` files ONE atomic proposal for the whole
-graph and DEDUP-MERGES instead of rejecting. Pick by whether you want a partial
-write to be possible, not by how structured your data feels.
+writes one entity with per-entity governance; capture-with-`entities[]` files ONE
+atomic proposal for the whole graph. Neither rejects a look-alike: a record (or
+one of your own pending proposals) of the same kind with the same name or
+identity makes the write a proposal carrying `duplicateCheck`, and the person
+decides (keep both, use the existing one, fill its empty fields). Only a strong
+identity (email, phone, url, handle, external id) links to the existing record
+on its own. Pick by whether you want a partial write to be possible, not by how
+structured your data feels.
 
 **Every title is linted.** Both doors return `titleLint` in the receipt when a
 title breaks the rubric (too long, cut off, status words, ids, a placeholder…);
@@ -98,6 +102,8 @@ the connection's lens). A kind another space needs: `synap_change_kind_scope`
 (`scope: "shared"` + `allowedWorkspaceIds`), never a twin kind. Records:
 `synap_move_entities`. All three are reviewed.
 
+**Removing one: `synap_delete_entity`** (`entityId`, optional `reasoning`). For an agent it is always a proposal — nothing is deleted until the person approves, and no rule can widen that. An approved delete hides the entity (its body is kept) and the person can undo it from the proposal. Do not retry a `proposed` answer.
+
 ### Authored text is content, not a `file`
 
 Something **you** author — a pitch deck, a strategic plan, a note body — is
@@ -120,7 +126,7 @@ You CAN store content you **hold** — you send it inline. Pick by what you have
 | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | **Content in hand** — a report/CSV/image/PDF/etc. you generated or received (text or bytes) | **`synap_store_file`** (`content` for text, `contentBase64` for binary) + `mimeType`/`filename` | a `file` entity, content stored **as-is, never read** (≤10MB inline) |
 | Text you're **authoring as a note/idea** (not "a file") — a plan, a thought                 | `synap_create_entity` with `content` (a content kind)                                           | body auto-becomes a document — NOT a `file`                          |
-| Only a **URL/link** (no bytes) — a Google Doc, a PDF url, an article                        | `synap_create_document` with **`url`**, or attach via `entityId`                                | an external **reference** document (no bytes)                        |
+| Only a **URL/link** (no bytes) — a Google Doc, a PDF url, an article                        | `synap_create_document` with **`url`**; `entityId` only for a thing with no body yet            | an external **reference** document (no bytes)                        |
 | A **large file** (over 10MB, up to 500MB video)                                             | `synap_request_upload` → PUT the bytes to `uploadUrl` → `synap_store_file({ uploadToken })`     | a `file` entity backed by stored bytes                               |
 | Only a file's **name**, nothing else                                                        | you **cannot** invent it — ask the human/client to provide the content or a link                | —                                                                    |
 

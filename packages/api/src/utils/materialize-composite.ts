@@ -778,6 +778,19 @@ export interface MaterializeOptions {
    */
   identityResolutionByRef?: Record<string, IdentityResolutionInput>;
   /**
+   * An APPROVAL of a reviewed graph (`apply-approval`): a create that meets a
+   * same-name twin record refuses with its candidates unless the reviewer
+   * resolved it (founder B2b). Absent for auto-apply and imports.
+   */
+  askReviewerOnDuplicate?: boolean;
+  /**
+   * With `askReviewerOnDuplicate`: per create-entity ref, the twin records
+   * the review card SHOWED (`twinsShownOnCard`). A ref with no resolution
+   * then keeps both for those twins (the reviewer saw them and approved as
+   * proposed); a twin not shown still refuses, so the card asks (BLOCKER-2).
+   */
+  reviewedTwinIdsByRef?: Record<string, string[]>;
+  /**
    * Disposition ref for a create_entity op. Approve passes this because the
    * operations array may already have rejected ops removed, so `$opN` is NOT
    * the index in this array. Default: `op.ref ?? opRef(index)`.
@@ -1254,7 +1267,7 @@ export async function materializeCompositeGraph(
           linkedByRetry = true;
         }
         if (idemExternalId) idemSeenThisCall.add(idemExternalId);
-      } else if (resolutionDecision && !resolutionDecision.forceCreate) {
+      } else if (resolutionDecision && !resolutionDecision.keepBoth) {
         realId = resolutionDecision.receipt.entityId;
         linkedExisting = true;
         identity = { ...resolutionDecision.receipt, ref: resolvedRef };
@@ -1285,14 +1298,31 @@ export async function materializeCompositeGraph(
             workspaceScoped: opTargetWorkspaceId
               ? true
               : (options?.workspaceScoped ?? false),
-            // Helper returns forceCreate only for `separate` — the only weak-gate bypass.
-            ...(resolutionDecision?.forceCreate ? { forceCreate: true } : {}),
+            // The reviewer owns a same-name twin (B2b) on an APPROVAL:
+            // `separate` ⇒ keep both; no verb ⇒ keep both for a twin the card
+            // SHOWED, refuse (with candidates, so the card asks) a twin it did
+            // not. Auto-apply and imports pass neither: the capture door
+            // already checked at file time.
+            ...(options?.askReviewerOnDuplicate
+              ? {
+                  approvalDuplicate: resolutionDecision?.keepBoth
+                    ? ("keep_both" as const)
+                    : ("ask_reviewer" as const),
+                  ...(!resolutionDecision &&
+                  options.reviewedTwinIdsByRef?.[resolvedRef]?.length
+                    ? {
+                        approvalReviewedTwinIds:
+                          options.reviewedTwinIdsByRef[resolvedRef],
+                      }
+                    : {}),
+                }
+              : {}),
           });
         } catch (err) {
           rethrowIfWeakDedup(err, resolvedRef);
           throw err;
         }
-        if (resolutionDecision?.forceCreate && (result as { id?: string }).id) {
+        if (resolutionDecision?.keepBoth && (result as { id?: string }).id) {
           identity = {
             verb: "separate",
             entityId: (result as { id: string }).id,

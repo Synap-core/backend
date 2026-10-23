@@ -37,6 +37,8 @@ import { createLogger } from "@synap-core/core";
 import type { MaterializeResult } from "../../utils/materialize-composite.js";
 import {
   computeEntityUpdateDiff,
+  entityBodyChange,
+  entityBodyFields,
   type EntityDiffField,
   type EntityPropertyDiff,
   type EntityUndoSnapshot,
@@ -552,7 +554,13 @@ function mergeDiff(
     ...(older.fields?.after ?? {}),
     ...(newer.fields?.after ?? {}),
   };
-  const bodyDocumentId = older.bodyDocumentId ?? newer.bodyDocumentId;
+  // The body link: the first write's BEFORE, the last write's AFTER.
+  const olderBody = entityBodyChange(older);
+  const newerBody = entityBodyChange(newer);
+  const body =
+    olderBody && newerBody
+      ? { before: olderBody.before, after: newerBody.after }
+      : (olderBody ?? newerBody);
   return {
     entityId: older.entityId,
     before,
@@ -562,7 +570,7 @@ function mergeDiff(
     ...(Object.keys(fieldsAfter).length > 0
       ? { fields: { before: fieldsBefore, after: fieldsAfter } }
       : {}),
-    ...(bodyDocumentId ? { bodyDocumentId } : {}),
+    ...entityBodyFields(body),
   };
 }
 
@@ -672,15 +680,18 @@ export function subtractFromRecord(
     const fieldKeys = (
       Object.keys(diff.fields?.after ?? {}) as EntityDiffField[]
     ).filter((f) => !(f in (gone.fields?.after ?? {})));
-    const bodyDocumentId =
-      diff.bodyDocumentId && diff.bodyDocumentId !== gone.bodyDocumentId
-        ? diff.bodyDocumentId
-        : undefined;
+    // The body link stays only when the undo did not take it back.
+    const diffBody = entityBodyChange(diff);
+    const goneBody = entityBodyChange(gone);
+    const body =
+      diffBody && !(goneBody && goneBody.after === diffBody.after)
+        ? diffBody
+        : null;
     if (
       keys.length === 0 &&
       absentAfter.length === 0 &&
       fieldKeys.length === 0 &&
-      !bodyDocumentId
+      !body
     )
       return [];
     const beforeKeys = [...keys, ...absentAfter];
@@ -707,7 +718,7 @@ export function subtractFromRecord(
               },
             }
           : {}),
-        ...(bodyDocumentId ? { bodyDocumentId } : {}),
+        ...entityBodyFields(body),
       },
     ];
   });
@@ -803,7 +814,13 @@ export async function readEntityUndoSnapshot(
 ): Promise<EntityUndoSnapshot | null> {
   const row = await database.query.entities.findFirst({
     where: eq(entities.id, entityId),
-    columns: { title: true, preview: true, properties: true },
+    // `documentId` too: a body attach/replace is undoable (B9g).
+    columns: {
+      title: true,
+      preview: true,
+      properties: true,
+      documentId: true,
+    },
   });
   return row ?? null;
 }

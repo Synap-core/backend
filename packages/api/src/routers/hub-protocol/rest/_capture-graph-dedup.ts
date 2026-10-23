@@ -7,10 +7,10 @@
  * `ref`s); the persisted-entity half (already exists in the DB) is a
  * separate block in the handler.
  *
- * ASYMMETRY (Phase 1 entity-create dedup): entities.create now REJECTS weak
- * same-name creates with candidates (unless forceCreate). Capture-graph
- * within-batch collapse still auto-links weak title keys inside a single
- * proposal — that is intentional for this PR (batch collapse ≠ create gate).
+ * ASYMMETRY (B2, the one duplicate door): a same-name match against a RECORD
+ * or the caller's pending queue is a `possible` twin for the reviewer, never
+ * a link. This file collapses the SAME item listed twice inside ONE proposal
+ * (two refs, one person) — that is not a duplicate question, it is one write.
  */
 
 export interface CaptureGraphEntity {
