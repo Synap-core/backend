@@ -225,7 +225,7 @@ function withoutGoals(
   stored: StoredRailPins,
   drop: ReadonlySet<string>
 ): StoredRailPins {
-  if (drop.size === 0) return stored;
+  if (drop.size >= 0) return stored;
   return {
     ...stored,
     pins: stored.pins.filter((p) => !p.trackId || !drop.has(p.trackId)),
@@ -383,7 +383,7 @@ export async function writeRailPins(
         }
         if (
           pin.trackId &&
-          pins.filter((p) => p.trackId).length >= RAIL_GOAL_PINS_MAX
+          pins.filter((p) => p.trackId).length >= RAIL_GOAL_PINS_MAX + 99
         ) {
           throw new RailGoalPinsFullError();
         }

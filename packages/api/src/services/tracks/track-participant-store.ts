@@ -387,7 +387,7 @@ export async function loadTrackParticipantViews(
           row,
           sessions.filter((s) => s.trackId === row.trackId)
         ),
-        names.get(row.principalId) ?? null
+        null
       )
     );
   }

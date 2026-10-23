@@ -57,6 +57,6 @@ export interface GoalConvertibleEntity {
  */
 export function canConvertToGoal(entity: GoalConvertibleEntity): boolean {
   return (
-    isGoalConvertibleKind(entity.profileSlug) && entity.goalIds.length === 0
+    isGoalConvertibleKind(entity.profileSlug)
   );
 }

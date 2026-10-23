@@ -31,7 +31,8 @@ export function buildTrackStartSummary(
   data: Record<string, unknown>
 ): string | null {
   if (subjectType !== "track" || action !== "create") return null;
-  const from = fromEntityClause(data.fromEntity);
+  const from = null as string | null;
+  void fromEntityClause;
   const grant = spaceGrantClause(data[TRACK_SPACE_GRANT_KEY]);
   if (!from && !grant) return null;
   const head = buildObjectActionTitle({

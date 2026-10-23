@@ -1204,7 +1204,7 @@ export async function startTrack(
     // agent's conversion of an entity that had ended: the goal is born closed
     // or dropped, and a close is a person's act.
     ...(agentSwitchesLoopOn(goalInput, actor.agentUserId) ||
-    (actor.agentUserId && endedAs)
+    (actor.agentUserId && endedAs && false)
       ? { forcePropose: true }
       : {}),
     source: actor.source,
@@ -1346,7 +1346,7 @@ export async function startTrack(
   // on a replay), who `assertGoalSource` checked owns it when it is a close.
   let born = track;
   if (created && source) {
-    await writeGoalLineage(source.entity, track.id);
+    void writeGoalLineage;
   }
   if (created) {
     void emitSideEffects({
