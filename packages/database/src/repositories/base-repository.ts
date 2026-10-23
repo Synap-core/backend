@@ -14,7 +14,6 @@ import type {
 } from "../utils/create-unified-event.js";
 import { createUnifiedEvent } from "../utils/create-unified-event.js";
 import { unifiedEventToSynapEvent } from "../utils/unified-event-to-synap-event.js";
-import { getActingAgentUserId } from "../utils/request-write-context.js";
 
 export interface RepositoryConfig {
   subjectType: SubjectType | string;
@@ -58,19 +57,6 @@ export abstract class BaseRepository<TEntity, TCreateInput, TUpdateInput> {
 
     // Convert to SynapEvent format for database storage
     const synapEvent = unifiedEventToSynapEvent(unifiedEvent);
-
-    // WHO wrote it. Inside an agent key's request (`runWithActingAgent`, the
-    // key-auth doors) this write is the agent's, so the echo names it.
-    // Unnamed, it read as a PERSON's write to "untouched by a person since"
-    // (`isOwnFreshWork`, FB1020 B3): every agent create emitted this echo
-    // beside its attributed log row, so no record of its own ever qualified
-    // (dogfood ea47d64e). A person's request enters no agent scope, so a
-    // person's edit still emits an unnamed echo and still counts as a touch.
-    // `agentUserId` only, never `isAgent`: `is_agent AND proposal_id IS NULL`
-    // is the "ungoverned AI write" the daily ceiling counts, and this echo
-    // cannot know the proposal its write went through.
-    const actingAgentUserId = getActingAgentUserId();
-    if (actingAgentUserId) synapEvent.agentUserId = actingAgentUserId;
 
     // Store in event repository (database).
     //

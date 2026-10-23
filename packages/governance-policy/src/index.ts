@@ -2064,9 +2064,6 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
 
   // 9. Default → propose (caller supplies its own reasoning) — unless the
   // write lands as the person's held draft (B6): their accept is the ask.
-  if (input.heldAsDraft === true && isHeldDraftWrite(eventKey)) {
-    return { verdict: "execute" };
-  }
   return { verdict: "propose" };
 }
 
