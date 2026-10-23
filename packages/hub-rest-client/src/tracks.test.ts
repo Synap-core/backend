@@ -212,6 +212,45 @@ describe("advance / status / params", () => {
   });
 });
 
+describe("close / reopen (a goal can finish)", () => {
+  it("sends the verdict with a close, and reopens on its own route", async () => {
+    replies.push({
+      status: 202,
+      body: { status: "proposed", proposalId: "p" },
+    });
+    replies.push({
+      status: 200,
+      body: { status: "started", track: TRACK, missingDomains: [] },
+    });
+    const closed = await client.setTrackStatus(
+      TRACK.id,
+      "archived",
+      "the market moved",
+      { verdict: "impossible", verdictReason: "the API was shut down" }
+    );
+    const reopened = await client.reopenTrack(TRACK.id, { name: "Again" });
+    expect(closed).toMatchObject({ status: "proposed" });
+    expect(reopened).toMatchObject({ status: "started" });
+    expect(calls.map((c) => [c.method, c.url, c.body])).toEqual([
+      [
+        "PATCH",
+        `https://pod.example.test/api/hub/tracks/${TRACK.id}`,
+        {
+          status: "archived",
+          reasoning: "the market moved",
+          verdict: "impossible",
+          verdictReason: "the API was shut down",
+        },
+      ],
+      [
+        "POST",
+        `https://pod.example.test/api/hub/tracks/${TRACK.id}/reopen`,
+        { name: "Again" },
+      ],
+    ]);
+  });
+});
+
 describe("createFocusSession — born in a track", () => {
   it("forwards trackId and does NOT stamp the client's default workspace", async () => {
     replies.push({ status: 200, body: { id: "user-1" } }); // GET /users/me

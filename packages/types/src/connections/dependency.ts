@@ -53,6 +53,7 @@
 
 import type { TerminalSessionStatus } from "../focus-sessions/statuses.js";
 import type { LifecycleCategory } from "../lifecycle/option.js";
+import type { TrackStatusIn } from "../units/track.js";
 
 /** `X --blocked_by--> Y`: X waits on Y. */
 export const DEPENDENCY_LINK_TYPE = "blocked_by" as const;
@@ -107,10 +108,34 @@ export const SESSION_DROPPED_STATUSES = [
   "failed",
 ] as const satisfies readonly TerminalSessionStatus[];
 
-/** A `project_tracks.status` that delivered. */
-export const TRACK_DELIVERED_STATUSES = ["completed"] as const;
-/** A `project_tracks.status` that ended without delivering ("archive it when the goal is dropped"). */
-export const TRACK_DROPPED_STATUSES = ["archived"] as const;
+/**
+ * The `project_tracks.status` values that delivered: the track lifecycle's
+ * DONE category (a goal closed with a verdict). Pinned to the declaration.
+ */
+export const TRACK_DELIVERED_STATUSES = [
+  "completed",
+] as const satisfies readonly TrackStatusIn<"done">[];
+/**
+ * The values that ended without delivering: its LOST category (a dropped
+ * goal). An open (proposed · agreed · ready), active or paused track is OPEN.
+ */
+export const TRACK_DROPPED_STATUSES = [
+  "archived",
+] as const satisfies readonly TrackStatusIn<"lost">[];
+// Exactly the category: a done or lost status added to the track lifecycle and
+// not listed here stops the build (it would otherwise hold dependents forever).
+const _deliveredExact: [
+  Exclude<TrackStatusIn<"done">, (typeof TRACK_DELIVERED_STATUSES)[number]>,
+] extends [never]
+  ? true
+  : never = true;
+const _droppedExact: [
+  Exclude<TrackStatusIn<"lost">, (typeof TRACK_DROPPED_STATUSES)[number]>,
+] extends [never]
+  ? true
+  : never = true;
+void _deliveredExact;
+void _droppedExact;
 
 /**
  * Entity `status` property values that read as DELIVERED, when the reader does

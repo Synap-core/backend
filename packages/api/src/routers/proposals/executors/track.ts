@@ -5,8 +5,11 @@
  * happens (`__tripwires__/governed-writes-have-approval-half.test.ts`).
  *
  *   track/create               → `startTrack` (the SAME service the direct door
- *                                runs), with the id the proposal was filed under.
- *   track/update               → a status change (`applyTrackStatus`), a stage
+ *                                runs), with the id the proposal was filed under
+ *                                — a reopen too (`replacesTrackId`, R8).
+ *   track/update               → a status change (`applyTrackStatus`, with the
+ *                                verdict a close carries — the approver is who
+ *                                closed it), a stage
  *                                advance (`applyTrackStageAdvance`, gate OFF —
  *                                the reviewer just answered for this advance),
  *                                a params patch (`applyTrackParams`, re-validated
@@ -119,6 +122,11 @@ export function registerTrackExecutors(): void {
           ? { direction: data.direction }
           : {}),
         ...(data.kpi && typeof data.kpi === "object" ? { kpi: data.kpi } : {}),
+        // A reopen (R8): re-checked by the same door (still closed, still the
+        // newest version), then linked `new --replaces--> old`.
+        ...(typeof data.replacesTrackId === "string"
+          ? { replacesTrackId: data.replacesTrackId }
+          : {}),
         // Decision 2a: this approval IS the consent to the spaces the
         // proposal listed, for the agent the proposal's COLUMN names.
         approvedSpaceGrant: {
@@ -242,17 +250,28 @@ export function registerTrackExecutors(): void {
         (PROJECT_TRACK_STATUSES as readonly string[]).includes(data.status)
       ) {
         if (track.status !== data.status) {
-          // The table is re-checked at APPROVAL time: the proposal was legal
-          // when filed, but the track may have moved since (archived, say).
-          // Replaying unchecked would revive it — and a revived live track
-          // can collide with `uniq_project_tracks_live_name` (a newer live
-          // track of the same name; `applyTrackStatus` refuses that CONFLICT).
-          assertTrackTransition(track, data.status as ProjectTrackStatus);
+          // The lifecycle is re-checked at APPROVAL time: the proposal was
+          // legal when filed, but the track may have moved since (dropped,
+          // say) — and a closed track is final. The verdict rides the
+          // proposal and is re-checked by the same rule.
+          const close = {
+            verdict: typeof data.verdict === "string" ? data.verdict : null,
+            verdictReason:
+              typeof data.verdictReason === "string"
+                ? data.verdictReason
+                : null,
+          };
+          assertTrackTransition(
+            track,
+            data.status as ProjectTrackStatus,
+            close
+          );
           await applyTrackStatus(
             track,
             project,
             data.status as ProjectTrackStatus,
-            userId
+            userId,
+            close
           );
         }
       } else {
@@ -314,7 +333,7 @@ export function registerTrackExecutors(): void {
               applied: "none",
               reason:
                 "Track was not paused at approval time — it had already been " +
-                "resumed, completed or archived. The gate is answered; the track " +
+                "resumed, closed or dropped. The gate is answered; the track " +
                 "keeps the state its owner left it in.",
             };
 

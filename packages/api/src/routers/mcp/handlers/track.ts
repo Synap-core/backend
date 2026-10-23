@@ -11,7 +11,10 @@
  */
 
 import { z } from "zod";
-import { PROJECT_TRACK_STATUSES } from "@synap/database/schema";
+import {
+  PROJECT_TRACK_STATUSES,
+  PROJECT_TRACK_VERDICTS,
+} from "@synap/database/schema";
 import {
   advanceTrackStage,
   listTracks,
@@ -169,10 +172,21 @@ export const trackHandlers: McpHandlerMap = {
         error: `trackId (uuid) and status (${PROJECT_TRACK_STATUSES.join(" | ")}) are required — synap_list_tracks lists the project's tracks.`,
       });
     }
+    const verdictArg = str(ctx.args.verdict);
+    const verdict = PROJECT_TRACK_VERDICTS.find((v) => v === verdictArg);
+    if (verdictArg && !verdict) {
+      return ok({
+        error: `verdict must be one of ${PROJECT_TRACK_VERDICTS.join(" | ")}.`,
+      });
+    }
     return run(async () => {
+      // The verdict rule (closing needs one, impossible/replaced a reason)
+      // is the service's, refused with words before anything is filed.
       const result = await setTrackStatus({
         trackId,
         status,
+        verdict,
+        verdictReason: str(ctx.args.verdictReason),
         actor: actorOf(ctx),
       });
       if (result.status === "proposed") return result;

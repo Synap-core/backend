@@ -12,7 +12,10 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, podProcedure } from "../trpc.js";
-import { PROJECT_TRACK_STATUSES } from "@synap/database/schema";
+import {
+  PROJECT_TRACK_STATUSES,
+  PROJECT_TRACK_VERDICTS,
+} from "@synap/database/schema";
 import {
   advanceTrackStage,
   getTrack,
@@ -26,6 +29,7 @@ import {
   trackKpiInputSchema,
   addTrackStageInputSchema,
   setTrackStatus,
+  reopenTrack,
   startStageSession,
   startTrack,
   type TrackActor,
@@ -99,8 +103,8 @@ export const tracksRouter = router({
     }),
 
   /**
-   * Start a track on a project — a lasting intent; the method (a
-   * project-scoped playbook) is optional (W1). Idempotent per live name.
+   * Start a track on a project — a goal; the method (a project-scoped
+   * playbook) is optional (W1). Idempotent per live name.
    */
   start: podProcedure
     .input(
@@ -148,11 +152,19 @@ export const tracksRouter = router({
       };
     }),
 
+  /**
+   * Move the track through its system lifecycle (open · active · paused ·
+   * done · lost). Closing (`completed`) or dropping (`archived`) carries a
+   * `verdict` — refused without one; `impossible` / `replaced` also a
+   * `verdictReason`. Both are final; an agent's close is always a proposal.
+   */
   setStatus: podProcedure
     .input(
       z.object({
         id: z.string().uuid(),
         status: z.enum(PROJECT_TRACK_STATUSES),
+        verdict: z.enum(PROJECT_TRACK_VERDICTS).optional(),
+        verdictReason: z.string().trim().max(2000).optional(),
         reasoning,
       })
     )
@@ -160,6 +172,34 @@ export const tracksRouter = router({
       const result = await setTrackStatus({
         trackId: input.id,
         status: input.status,
+        verdict: input.verdict,
+        verdictReason: input.verdictReason,
+        actor: actorOf(ctx, input.reasoning),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
+    }),
+
+  /**
+   * Reopen a closed or dropped goal as a NEW version (R8), linked
+   * `new --replaces--> old`; the closed one stays closed. Governed like a
+   * start (`track/create`).
+   */
+  reopen: podProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().trim().min(1).max(200).optional(),
+        reasoning,
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await reopenTrack({
+        trackId: input.id,
+        name: input.name,
         actor: actorOf(ctx, input.reasoning),
       });
       if (result.status === "proposed") return result;
@@ -192,7 +232,8 @@ export const tracksRouter = router({
    * Say where the track is heading and/or the number it steers by (0302).
    * `kpi` is a PATCH merged onto the stored KPI (`null` clears it); stating
    * `current` stamps when and by whom. Governed `track/update`. Reaching the
-   * target nudges — it never completes the track.
+   * target nudges the person; a number reached never closes the goal (a
+   * person closes it with a verdict).
    */
   setDirection: podProcedure
     .input(

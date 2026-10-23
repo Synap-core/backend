@@ -3,10 +3,11 @@
  * resolution every update door runs: MCP `update_session`
  * (`updateFocusSession`), the Hub PATCH, the tRPC `focusSessions.update`, and
  * the `focus_session/update` approval executor (which RE-resolves, so a track
- * archived or a stage dropped since the proposal is refused, not written).
+ * closed or dropped, or a stage dropped, since the proposal is refused, not
+ * written).
  *
  * Not a second rule. The track is loaded through `getTrack` (the scoped
- * visibility floor), and the archived check + the stage rule are
+ * visibility floor), and the closed check + the stage rule are
  * `resolveTrackFiling` / `resolveFilingStage` — the same code the create doors
  * run. What this adds is only what an EXISTING row brings:
  *   - the session already has a project ⇒ it must be the track's (refused
@@ -124,7 +125,7 @@ export async function resolveSessionTrackFiling(params: {
     });
   }
 
-  // THE shared rules: archived refusal + the stage must be one the track pinned.
+  // THE shared rules: closed refusal + the stage must be one the track pinned.
   const filing = await resolveTrackFiling({
     trackId: track.id,
     projectId: track.projectId,

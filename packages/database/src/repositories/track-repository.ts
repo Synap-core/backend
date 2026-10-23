@@ -23,6 +23,7 @@ import type {
   ProjectTrackKpi,
   ProjectTrackStageHistoryEntry,
   ProjectTrackStatus,
+  ProjectTrackVerdict,
 } from "../schema/project-tracks.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
@@ -154,7 +155,7 @@ export class TrackRepository extends BaseRepository<
   /**
    * The LIVE track holding `name` on the project, or `null`. The ONE spelling
    * in TS of `uniq_project_tracks_live_name`'s predicate (0317): same project,
-   * `lower(btrim(name))`, status active/paused.
+   * `lower(btrim(name))`, a live status (open, active or paused — 0344).
    */
   async findLiveByName(
     projectId: string,
@@ -206,7 +207,10 @@ export class TrackRepository extends BaseRepository<
    * Guarded status flip: `from → to`, ONLY while the row still stands at
    * `from` (the WHERE is the arbiter, so a decision and its write cannot
    * disagree). `metadataPatch` is merged into metadata; `dropMetadataKey` is
-   * removed after the merge. Returns the updated row, or `null` when no row
+   * removed after the merge. `close` stamps how the track ended (0344) in the
+   * SAME statement as the status — the caller (the status door) has checked
+   * the verdict fits the ending; the `project_tracks_verdict_check` constraint
+   * refuses one that does not. Returns the updated row, or `null` when no row
    * flipped — and emits `track.update.completed` only when one did.
    */
   async transitionStatus(
@@ -216,10 +220,16 @@ export class TrackRepository extends BaseRepository<
       to: ProjectTrackStatus;
       metadataPatch?: Record<string, unknown>;
       dropMetadataKey?: string;
+      close?: {
+        verdict: ProjectTrackVerdict;
+        reason: string | null;
+        by: string;
+        at?: Date;
+      };
     },
     userId: string
   ): Promise<ProjectTrack | null> {
-    const { metadataPatch, dropMetadataKey } = params;
+    const { metadataPatch, dropMetadataKey, close } = params;
     let metadata = sql`COALESCE(${projectTracks.metadata}, '{}'::jsonb)`;
     if (metadataPatch) {
       metadata = sql`(${metadata} || ${JSON.stringify(metadataPatch)}::jsonb)`;
@@ -232,6 +242,14 @@ export class TrackRepository extends BaseRepository<
       .set({
         status: params.to,
         ...(metadataPatch || dropMetadataKey ? { metadata } : {}),
+        ...(close
+          ? {
+              verdict: close.verdict,
+              verdictReason: close.reason,
+              verdictBy: close.by,
+              verdictAt: close.at ?? new Date(),
+            }
+          : {}),
         updatedAt: new Date(),
       })
       .where(

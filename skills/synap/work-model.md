@@ -8,12 +8,12 @@ A process is the life of a **thing**, not a script. A lead, a post or a feature 
 
 ### The nouns
 
-| Noun                 | What it is                                                                          | Not                                  |
-| -------------------- | ----------------------------------------------------------------------------------- | ------------------------------------ |
-| **Project**          | a commitment, and a lens across spaces                                              | a method, a domain                   |
-| **Track** (optional) | a LASTING intent in one project: direction, instructions, goal; it turns workers on | a list of stages; it never completes |
-| **Thing**            | any entity: one kind, maybe roles, one status per kind or role                      | a second entity for a hat            |
-| **Session**          | the unit of work that closes: goal, criteria, room; one thing or a batch            | a "run" because it follows a method  |
+| Noun                 | What it is                                                                                                             | Not                                 |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| **Project**          | a commitment, and a lens across spaces                                                                                 | a method, a domain                  |
+| **Track** (optional) | a goal in one project: direction, the workers it turns on; open while it matters, or a person closes it with a verdict | a list of stages                    |
+| **Thing**            | any entity: one kind, maybe roles, one status per kind or role                                                         | a second entity for a hat           |
+| **Session**          | the unit of work that closes: goal, criteria, room; one thing or a batch                                               | a "run" because it follows a method |
 
 Not nouns (nobody manages them as objects): a **pipeline** is a view of a lifecycle; a **worker** is configuration (a method + a trigger + a size); a **method** is a playbook a session may follow; a **check** is a recurring verification.
 
@@ -53,7 +53,7 @@ A worker is a playbook **activator**, declared on the method and owned by the li
 
 ### Tracks
 
-A track holds an owner, a direction, instructions, the workers it turns on, and a goal (stated, or measured as transitions into `done`). It has no stages and never completes: pause or archive it. Work in it = `start_session` + `trackId`. A thing may count for two tracks. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old tracks started from a method; never `advance_track` without the user.
+A track holds an owner, a direction, instructions, the workers it turns on, and a goal (stated, or measured as transitions into `done`). It has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met (`set_track_status` `completed` + `verdict`; dropped = `archived` + `verdict`). Your close is a proposal; a closed goal comes back only as a new version. Pause it while nobody should work on it. Work in it = `start_session` + `trackId`. A thing may count for two tracks. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old tracks started from a method; never `advance_track` without the user.
 
 ### The homes: what each space makes, what is moving
 

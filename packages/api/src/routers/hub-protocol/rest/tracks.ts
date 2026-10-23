@@ -5,7 +5,11 @@
  *   POST  /tracks                       start a track { projectId, playbookId?, name? }
  *   GET   /tracks/:id                   one track
  *   POST  /tracks/:id/advance           { toStage } — any declared stage
- *   PATCH /tracks/:id                   { status } — pause/resume/complete/archive
+ *   POST  /tracks/:id/reopen            { name? } — a closed goal as a NEW
+ *                                       version, linked `replaces` (R8)
+ *   PATCH /tracks/:id                   { status, verdict?, verdictReason? } —
+ *                                       any move of the track lifecycle; a
+ *                                       close/drop carries its verdict
  *   PATCH /tracks/:id/params            { params } — answer the method's params
  *   PATCH /tracks/:id/direction         { direction?, kpi? } — where it is heading
  *                                       and the number it steers by (0302)
@@ -31,7 +35,10 @@ import {
 } from "./_shared.js";
 import type { Context } from "hono";
 import { jsonGoverned } from "../proposal-response.js";
-import { PROJECT_TRACK_STATUSES } from "@synap/database/schema";
+import {
+  PROJECT_TRACK_STATUSES,
+  PROJECT_TRACK_VERDICTS,
+} from "@synap/database/schema";
 import {
   advanceTrackStage,
   getTrack,
@@ -41,6 +48,7 @@ import {
   loadWrittenTrackView,
   setTrackParams,
   setTrackStatus,
+  reopenTrack,
   setTrackDirection,
   addTrackStage,
   trackKpiInputSchema,
@@ -89,6 +97,12 @@ const AdvanceSchema = z.object({
 });
 const StatusSchema = z.object({
   status: z.enum(PROJECT_TRACK_STATUSES),
+  verdict: z.enum(PROJECT_TRACK_VERDICTS).optional(),
+  verdictReason: z.string().trim().max(2000).optional(),
+  reasoning: z.string().max(2000).optional(),
+});
+const ReopenSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
   reasoning: z.string().max(2000).optional(),
 });
 
@@ -213,6 +227,36 @@ export function registerTracksRoutes(app: HubHono): void {
       });
     } catch (err) {
       return fail(c, err, "POST /tracks/:id/advance");
+    }
+  });
+
+  app.post("/tracks/:id/reopen", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    const body = ReopenSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const result = await reopenTrack({
+        trackId: id.data,
+        name: body.data.name,
+        actor: actorOf(c, body.data.reasoning),
+      });
+      if (result.status === "proposed") return jsonGoverned(c, result);
+      return jsonGoverned(c, {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, actorOf(c)),
+        missingDomains: result.missingDomains,
+      });
+    } catch (err) {
+      return fail(c, err, "POST /tracks/:id/reopen");
     }
   });
 
@@ -359,6 +403,8 @@ export function registerTracksRoutes(app: HubHono): void {
       const result = await setTrackStatus({
         trackId: id.data,
         status: body.data.status,
+        verdict: body.data.verdict,
+        verdictReason: body.data.verdictReason,
         actor: actorOf(c, body.data.reasoning),
       });
       if (result.status === "proposed") return jsonGoverned(c, result);
