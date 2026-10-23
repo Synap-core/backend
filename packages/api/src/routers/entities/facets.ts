@@ -11,8 +11,10 @@ import {
   db,
   eq,
   and,
+  or,
   isNull,
   getDb,
+  getRequestGrant,
   eventRepository,
   FacetRepository,
   ProfileResolutionService,
@@ -30,7 +32,13 @@ import {
   proposedMessageFor,
 } from "../../utils/permission-check.js";
 import { auditLog } from "../../utils/audit-log.js";
-import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
+import {
+  grantRequestForWrite,
+  grantWriteDenial,
+} from "../../utils/grant-write-check.js";
+import { roleInSpacesWhere } from "../../utils/project-scope.js";
+import { grantReadPredicate } from "../../access/grant-read.js";
+import { permits } from "@synap/governance-policy/grants";
 import {
   moveStatus,
   statusMoveActorFor,
@@ -48,24 +56,73 @@ import {
 } from "./helpers.js";
 
 /**
- * D2 (S7, founder 2026-10-20) — a facet write is bounded by the calling key's
- * grant on the PARENT entity's workspace and, when the facet row lives
- * elsewhere (a shared/system role is stored pod-wide), on THAT placement too.
- * null = pod scope, so a key pinned to a space fails closed on a pod-wide
- * parent or role. Runs before anything is written; a no-op without a grant.
+ * D1 (review rv-model M3, 2026-10-23; DRAFT for the founder): a role write is
+ * bounded by the calling key's grant in the ROLE's space only. The role IS the
+ * space lens, so "make Ada a lead in CRM" is a write in CRM, whatever Ada's own
+ * workspace is. Supersedes D2 (S7, 2026-10-20), which also checked the PARENT
+ * entity's workspace: that refused every role on a pod-wide person (null), so
+ * no app could make a contact a lead or move a lead's stage.
+ *
+ *  - `facetWorkspaceId` is where the facet row is STORED. null = a shared or
+ *    system role: ONE row, seen in every space the role is granted to, so a
+ *    write from S changes what the other spaces see. A key limited to spaces
+ *    cannot write it (the grant refuses null; the message says why).
+ *  - Under a scope limited to spaces, the parent must already be in that
+ *    space's reach: stored in it, or wearing a live role there (the read rule,
+ *    `roleInSpacesWhere`), and readable by the key. A role never pulls a record
+ *    the space could not see into it.
+ *
+ * Runs before anything is written or filed; a no-op without a grant (a
+ * signed-in session, an approval replayed by the person).
  */
-async function assertFacetWriteGrant(
+async function assertRoleWriteGrant(
   action: "attach" | "update" | "detach",
   entityId: string,
-  parentWorkspaceId: string | null,
   facetWorkspaceId: string | null
 ): Promise<void> {
-  for (const workspaceId of new Set([parentWorkspaceId, facetWorkspaceId])) {
-    await assertKeyMayWrite({
-      subjectType: "facet",
-      action,
-      workspaceId,
-      data: { entityId },
+  const grant = getRequestGrant();
+  if (!grant) return;
+  const write = {
+    subjectType: "facet",
+    action,
+    workspaceId: facetWorkspaceId,
+    data: { entityId },
+  };
+  const denial = await grantWriteDenial(write, grant);
+  if (denial) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        facetWorkspaceId === null
+          ? `${denial} A shared role is stored pod-wide and shows in every space it is granted to, so a key limited to spaces cannot write it.`
+          : denial,
+    });
+  }
+  // Only a scope NOT limited to spaces can have permitted a pod-wide row.
+  if (facetWorkspaceId === null) return;
+  const req = await grantRequestForWrite(write);
+  if (grant.scopes.some((s) => !s.workspaceIds && permits(s, req))) return;
+  const [inReach] = await db
+    .select({ id: entities.id })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.id, entityId),
+        isNull(entities.deletedAt),
+        grantReadPredicate(entities),
+        or(
+          eq(entities.workspaceId, facetWorkspaceId),
+          roleInSpacesWhere(entities.workspaceId, entities.id, [
+            facetWorkspaceId,
+          ])
+        )
+      )
+    )
+    .limit(1);
+  if (!inReach) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `This key's grant does not allow "facet.${req.action}" on a record outside workspace ${facetWorkspaceId}: a role goes only on a record that space already reaches (stored in it, or wearing a role there).`,
     });
   }
 }
@@ -313,10 +370,9 @@ export const facetProcs = {
       const actingAgentUserId =
         input.agentUserId ?? ctx.agentUserId ?? undefined;
 
-      await assertFacetWriteGrant(
+      await assertRoleWriteGrant(
         "attach",
         input.entityId,
-        parent.workspaceId ?? null,
         storedFacetWorkspaceId
       );
 
@@ -345,7 +401,9 @@ export const facetProcs = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
-        grantWorkspaceId: parent.workspaceId ?? null,
+        // D1: the grant is checked where the role row is STORED, never on the
+        // parent's own (possibly pod-wide) workspace.
+        grantWorkspaceId: storedFacetWorkspaceId,
         subjectType: "facet",
         action: "attach",
         source: input.source,
@@ -499,17 +557,14 @@ export const facetProcs = {
         existing.workspaceId ?? ctx.workspaceId ?? null;
 
       // Best-effort readable label for the parent entity — surfaced on
-      // proposal/notification cards (which otherwise show raw entity ids) —
-      // and its workspace, the grant's target (D2).
+      // proposal/notification cards (which otherwise show raw entity ids).
       const parentForUpdate = await db.query.entities.findFirst({
         where: eq(entities.id, existing.entityId),
-        columns: { title: true, workspaceId: true },
+        columns: { title: true },
       });
-      const parentWorkspaceId = parentForUpdate?.workspaceId ?? null;
-      await assertFacetWriteGrant(
+      await assertRoleWriteGrant(
         "update",
         existing.entityId,
-        parentWorkspaceId,
         existing.workspaceId ?? null
       );
 
@@ -627,7 +682,7 @@ export const facetProcs = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
-        grantWorkspaceId: parentWorkspaceId,
+        grantWorkspaceId: existing.workspaceId ?? null,
         subjectType: "facet",
         action: "update",
         source: input.source,
@@ -752,13 +807,11 @@ export const facetProcs = {
       // proposal/notification cards (which otherwise show raw entity ids).
       const parentForDetach = await db.query.entities.findFirst({
         where: eq(entities.id, existing.entityId),
-        columns: { title: true, workspaceId: true },
+        columns: { title: true },
       });
-      const parentWorkspaceId = parentForDetach?.workspaceId ?? null;
-      await assertFacetWriteGrant(
+      await assertRoleWriteGrant(
         "detach",
         existing.entityId,
-        parentWorkspaceId,
         existing.workspaceId ?? null
       );
 
@@ -780,7 +833,7 @@ export const facetProcs = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
-        grantWorkspaceId: parentWorkspaceId,
+        grantWorkspaceId: existing.workspaceId ?? null,
         subjectType: "facet",
         action: "detach",
         source: input.source,

@@ -949,6 +949,15 @@ export interface PermissionCheckBaseOpts {
    * (S7, plan 13 §3.4). Omitted → `workspaceId`.
    */
   grantWorkspaceId?: string | null;
+  /**
+   * A second request the calling key's GRANT may permit instead of the gate's
+   * own (rung 0 passes when EITHER does), against the same grant workspace.
+   * Governance is unchanged: it still decides on `subjectType`/`action`. A
+   * role's status move is governed as `entity.transition` but changes the
+   * role's row, so a key granted `facet.update` in the role's space may make it
+   * (D1, `moveStatus`).
+   */
+  grantAlsoAs?: { subjectType: string; action: string };
   source?: string;
   /**
    * Effective per-channel capability grant for the acting AI teammate, when the
@@ -1379,14 +1388,27 @@ async function evaluatePermission(
   // DENIED (never proposed: approving it would widen the grant). No grant on
   // the request = a legacy key, unchanged. Before every other rung so no
   // policy, rule or role can let an out-of-grant write through.
-  const grantDenied = await grantWriteDenial({
+  const grantWorkspaceId =
+    opts.grantWorkspaceId !== undefined ? opts.grantWorkspaceId : workspaceId;
+  let grantDenied = await grantWriteDenial({
     subjectType,
     action,
-    workspaceId:
-      opts.grantWorkspaceId !== undefined ? opts.grantWorkspaceId : workspaceId,
+    workspaceId: grantWorkspaceId,
     projectId,
     data: data as Record<string, unknown> | undefined,
   });
+  if (
+    grantDenied &&
+    opts.grantAlsoAs &&
+    !(await grantWriteDenial({
+      ...opts.grantAlsoAs,
+      workspaceId: grantWorkspaceId,
+      projectId,
+      data: data as Record<string, unknown> | undefined,
+    }))
+  ) {
+    grantDenied = null;
+  }
   if (grantDenied) {
     logger.warn(
       { subjectType, action, userId, agentUserId, workspaceId },

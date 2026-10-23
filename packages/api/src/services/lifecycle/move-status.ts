@@ -210,6 +210,11 @@ export async function moveStatus(
       // The key's grant is checked on the row's own workspace — a pod-wide
       // entity or role facet is pod-scope, never the caller's lens (S7).
       grantWorkspaceId: target.workspaceId ?? null,
+      // A ROLE's status lives on its facet row: a key granted `facet.update`
+      // in the role's space may move it (D1), as it may edit the role.
+      ...(target.facetId
+        ? { grantAlsoAs: { subjectType: "facet", action: "update" } }
+        : {}),
       subjectType: "entity",
       action: "transition",
       // An unattributed agent reaches the anonymous AI ladder; never "user".

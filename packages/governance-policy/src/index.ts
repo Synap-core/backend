@@ -1091,6 +1091,11 @@ const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   // An update pack is N entity updates filed as one review: a key that may
   // update entities may ask for it.
   "entity/update_pack": "update",
+  // Putting a role on a record CREATES its facet row; taking it off DELETES it
+  // (D1, review rv-model M3). An app can be granted `facet.create` /
+  // `facet.delete` (`GRANT_ACTIONS`); a literal `facet.attach` never.
+  "facet/attach": "create",
+  "facet/detach": "delete",
 };
 
 /** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */
