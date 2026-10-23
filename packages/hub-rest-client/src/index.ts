@@ -258,6 +258,8 @@ export type {
   HubTrackVerdict,
   HubTrackWorkKind,
   HubTrackUncertainty,
+  HubGoalLoop,
+  HubGoalLoopInput,
   HubGoalCriterion,
   HubGoalCriterionMark,
   HubGoalAcceptanceDecision,

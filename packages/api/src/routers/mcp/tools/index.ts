@@ -35,7 +35,12 @@ import {
   PROJECT_TRACK_VERDICTS,
   PROJECT_TRACK_WORK_KINDS,
 } from "@synap/database/schema";
-import { GOAL_CRITERIA_MAX, GOAL_CRITERIA_MIN } from "@synap-core/types/units";
+import {
+  GOAL_CRITERIA_MAX,
+  GOAL_CRITERIA_MIN,
+  GOAL_LOOP_DEFAULT_PER_WEEK,
+  GOAL_LOOP_MAX_PER_WEEK,
+} from "@synap-core/types/units";
 // The renderer `slot`/`scope` wire vocabularies — DERIVED, never hand-listed
 // (see renderer-slot-enum-parity.tripwire.test.ts).
 import {
@@ -177,6 +182,16 @@ const TRACK_GOAL_PROPERTIES = {
     enum: [...PROJECT_TRACK_UNCERTAINTY_LEVELS, null],
     description:
       "Optional: how well the way is known — clear, complicated, complex, chaotic or unknown. A proposal until the person confirms it.",
+  },
+  loop: {
+    type: ["object", "null"],
+    additionalProperties: false,
+    required: ["on"],
+    properties: {
+      on: { type: "boolean" },
+      perWeek: { type: "integer", minimum: 1, maximum: GOAL_LOOP_MAX_PER_WEEK },
+    },
+    description: `Optional: the goal's loop — { on: true } makes the goal PROPOSE its next session (filed into it, carrying its unmet criteria) whenever a required criterion is unmet and no session of it is open, at most perWeek times a week (default ${GOAL_LOOP_DEFAULT_PER_WEEK}). It stops and asks the owner when the same criterion fails in two sessions; { on: true } again is "try again". Every next session is a proposal a person approves. Your switch-on is always proposed for review. null turns it off.`,
   },
 };
 

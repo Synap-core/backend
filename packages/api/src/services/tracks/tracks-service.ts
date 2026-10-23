@@ -125,6 +125,8 @@ import {
   type TrackUncertainty,
   type TrackWorkKind,
   type WaitingOnMark,
+  readGoalLoop,
+  type GoalLoopSettings,
 } from "@synap-core/types/units";
 import { z } from "zod";
 import {
@@ -134,6 +136,7 @@ import {
 import type { ActivityActor } from "@synap-core/types/activity";
 import { trackRepository } from "./track-repo.js";
 import {
+  agentSwitchesLoopOn,
   isGoalJudge,
   loadTrackGoalFacts,
   parseTrackGoalInput,
@@ -144,6 +147,7 @@ import {
   readTrackUncertainty,
   readTrackWorkKind,
   resolveTrackGoalPatch,
+  withBirthLoopDefault,
   type TrackGoalFacts,
 } from "./goal-content.js";
 import {
@@ -376,6 +380,12 @@ export interface TrackView {
   criteria: GoalCriterionView[];
   /** When to stop (0345) — `[]` when none said. */
   dropConditions: string[];
+  /**
+   * The goal's loop (0350, W4): whether it proposes its next run while a
+   * required criterion is unmet, its weekly budget, when a person last
+   * switched it on and who. Never set reads as OFF.
+   */
+  loop: GoalLoopSettings;
   /** The kind of work (decision 4) — `null` when not set. */
   workKind: TrackWorkKind | null;
   /** How well the way is known (decision 4) — `null` when not set. */
@@ -465,6 +475,7 @@ export function toTrackView(
         currentValue: null,
       })),
     dropConditions: readDropConditions(track.dropConditions),
+    loop: readGoalLoop(track.loop),
     workKind: readTrackWorkKind(track.workKind),
     uncertainty: readTrackUncertainty(track.uncertainty),
     kindConfirmedBy: track.kindConfirmedBy ?? null,
@@ -836,6 +847,8 @@ export interface StartTrackInput {
   dropConditions?: unknown;
   workKind?: unknown;
   uncertainty?: unknown;
+  /** The goal's loop (0350, W4): `{ on, perWeek? }`; absent = the birth default. */
+  loop?: unknown;
   actor: TrackActor;
   /**
    * Pre-minted id — ONLY the approval replay passes it (the id the proposal
@@ -1004,8 +1017,11 @@ export async function startTrack(
   // What the goal holds (0345) — the 2–5 rule and the meanings refused here,
   // to the author. The parsed input rides the proposal; the replay resolves
   // it again, as the approving person (who thereby confirms the kind).
-  const goalInput = parseTrackGoalInput(
-    pickTrackGoalInput(input as unknown as Record<string, unknown>)
+  // A loop the start does not name takes the birth default (W4, OFF).
+  const goalInput = withBirthLoopDefault(
+    parseTrackGoalInput(
+      pickTrackGoalInput(input as unknown as Record<string, unknown>)
+    )
   );
   const goalPatch = resolveTrackGoalPatch(
     null,
@@ -1021,6 +1037,10 @@ export async function startTrack(
     projectId: project.id,
     subjectType: "track",
     action: "create",
+    // An agent switching the loop on is always reviewed (W4).
+    ...(agentSwitchesLoopOn(goalInput, actor.agentUserId)
+      ? { forcePropose: true }
+      : {}),
     source: actor.source,
     reasoning: actor.reasoning,
     // EVERYTHING the replay needs. Nothing DERIVED (the snapshot) is stored:
@@ -2246,6 +2266,8 @@ export async function setTrackDirection(input: {
   workKind?: unknown;
   uncertainty?: unknown;
   confirmKind?: unknown;
+  /** The goal's loop (0350, W4): `{ on, perWeek? }` or `null` (off). */
+  loop?: unknown;
   actor: TrackActor;
 }): Promise<SetTrackDirectionResult> {
   const { track, project } = await loadTrackForWrite(
@@ -2263,7 +2285,7 @@ export async function setTrackDirection(input: {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message:
-        "Nothing to change — pass a direction, a kpi, or what the goal holds (endState, criteria, dropConditions, workKind, uncertainty).",
+        "Nothing to change — pass a direction, a kpi, or what the goal holds (endState, criteria, dropConditions, workKind, uncertainty, loop).",
     });
   }
   const patch = normalizeDirectionPatch(input);
@@ -2295,6 +2317,10 @@ export async function setTrackDirection(input: {
     action: "update",
     source: input.actor.source,
     reasoning: input.actor.reasoning,
+    // An agent switching the loop on is always reviewed (W4).
+    ...(agentSwitchesLoopOn(goalInput, input.actor.agentUserId)
+      ? { forcePropose: true }
+      : {}),
     // The PATCH, never the merged result: the replay merges onto the KPI as it
     // stands at approval, so a value stated in between is not reverted.
     data: {
@@ -2349,6 +2375,8 @@ interface RawDirectionPatch {
   workKind?: unknown;
   uncertainty?: unknown;
   confirmKind?: unknown;
+  /** The goal's loop (0350, W4): `{ on, perWeek? }` or `null` (off). */
+  loop?: unknown;
 }
 
 function normalizeDirectionPatch(input: RawDirectionPatch): DirectionPatch {
@@ -2456,6 +2484,20 @@ export async function applyTrackDirection(
   const after = readTrackKpi(updated.kpi);
   if (trackKpiJustReached(before, after)) {
     await notifyTrackKpiReached(updated, project, after!);
+  }
+  if (goal?.loop && readGoalLoop(goal.loop).on) {
+    // Switched on (or on again): the loop looks now, through its one seam —
+    // the `track.update` reactor (`goal-loop-reactor.ts`) — not a call here.
+    void emitSideEffects({
+      subjectType: "track",
+      action: "update",
+      subjectId: updated.id,
+      userId: who.userId,
+      workspaceId: project.workspaceId,
+      data: { trackId: updated.id, projectId: project.id, loop: "on" },
+    }).catch((err) =>
+      logger.warn({ err, trackId: updated.id }, "track.update emit failed")
+    );
   }
   return { status: "updated", track: updated };
 }

@@ -269,7 +269,7 @@ export const trackHandlers: McpHandlerMap = {
     ) {
       return ok({
         error:
-          "trackId (uuid) and something to change are required — direction, kpi, endState, criteria, dropConditions, workKind or uncertainty. synap_list_tracks lists the project's tracks.",
+          "trackId (uuid) and something to change are required — direction, kpi, endState, criteria, dropConditions, workKind, uncertainty or loop. synap_list_tracks lists the project's tracks.",
       });
     }
     const direction = ctx.args.direction;

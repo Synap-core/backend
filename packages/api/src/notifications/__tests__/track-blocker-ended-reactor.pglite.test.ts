@@ -52,6 +52,7 @@ import {
   workspaceMembers,
   podMembers,
   projectMembers,
+  trackParticipants,
 } from "@synap/database";
 import { trackBlockerEndedNotifyReactor } from "../track-blocker-ended-reactor.js";
 
@@ -150,6 +151,8 @@ beforeAll(async () => {
     workspaceMembers,
     podMembers,
     projectMembers,
+    // The waiting goal's owner seat (`goalOwnerToAsk`).
+    trackParticipants,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -222,7 +225,7 @@ describe("track-blocker-ended-notify", () => {
     expect(h.created).toHaveLength(1);
     expect(h.created[0]).toMatchObject({
       type: "track.blocker_ended",
-      // The waiting GOAL's owner (`goalOwnerId` = project_tracks.user_id).
+      // The waiting GOAL's owner (`goalOwnerToAsk` = project_tracks.user_id).
       userId: WAITER,
       sourceType: "track",
       sourceId: waiting,

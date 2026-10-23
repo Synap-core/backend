@@ -62,6 +62,7 @@ import {
   registerAgentChoiceRedispatchReactor,
   registerSessionCriteriaUnmetReactor,
   registerTrackBlockerEndedReactor,
+  registerGoalLoopReactor,
   registerClosingReportReactor,
   registerDocumentDiagnosticsReactor,
   registerEntityMediaCopyReactor,
@@ -1656,6 +1657,9 @@ try {
       // the owners of the sessions and goals waiting on it whether they are
       // free (closed) or must re-plan (dropped). Re-derived from the rows.
       registerTrackBlockerEndedReactor();
+      // Same two events (a run closed, a goal moved or its loop switched on):
+      // the goal proposes its next run while a required criterion is unmet.
+      registerGoalLoopReactor();
       // Same close event: the session document gains its structured closing
       // report (outcome, definition of done, outputs, decisions).
       registerClosingReportReactor();
@@ -1820,6 +1824,8 @@ try {
             } = await import("@synap/jobs/workers/fireflies-worker.js");
             const { registerSessionRecallRunner } =
               await import("@synap/jobs/workers/session-recall-worker.js");
+            const { registerGoalLoopSweeper } =
+              await import("@synap/jobs/workers/focus-session-reaper.js");
             const { registerInboundAttachmentIngestRunner } =
               await import("@synap/jobs/workers/inbound-attachment-worker.js");
             const { registerEntityMediaCopyRunner } =
@@ -1909,6 +1915,9 @@ try {
             // Session recall (on start / the sweep floor) delegates to the
             // api-side runner — requested by session synap-68.
             registerSessionRecallRunner((d) => api.runSessionRecall(d));
+            // The goal loop's hourly re-check (W4) rides the focus-session
+            // reaper's tick: no scheduler of its own.
+            registerGoalLoopSweeper(() => api.sweepGoalLoops());
             // Inbound attachments: fetch bytes off the sensor path → GOVERNED
             // file door → link to channel + message (IoC across the api↔jobs dep).
             registerInboundAttachmentIngestRunner((input) =>

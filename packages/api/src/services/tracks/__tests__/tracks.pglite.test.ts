@@ -67,6 +67,17 @@ const M0349 = readFileSync(
   "utf8"
 );
 
+// The goal's loop (W4) — the REAL migration, on top of 0349.
+const M0350 = readFileSync(
+  fileURLToPath(
+    new URL(
+      "../../../../../database/migrations/0350_track_goal_loop.sql",
+      import.meta.url
+    )
+  ),
+  "utf8"
+);
+
 const h = vi.hoisted(() => ({
   client: null as null | {
     exec: (sql: string) => Promise<unknown>;
@@ -306,6 +317,7 @@ beforeAll(async () => {
   await h.client!.exec(M0344);
   await h.client!.exec(M0345);
   await h.client!.exec(M0349);
+  await h.client!.exec(M0350);
   // The edge-uniqueness index the dependency door's insert conflicts on
   // (`idx_links_unique_edge`) — a reopen writes `new --replaces--> old`.
   await h.client!.exec(

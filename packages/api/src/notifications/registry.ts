@@ -323,6 +323,37 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
       },
     ],
   },
+  {
+    /**
+     * The goal's LOOP stopped (work model W4): a required criterion failed in
+     * two runs of the goal since a person last graded it, so the goal stops
+     * proposing its next run and asks its owner — grade it, change it, or
+     * switch the loop on again to retry. Producer: `askOwnerLoopStopped`
+     * (`services/tracks/goal-loop.ts`), ONCE per stop (its groupKey names the
+     * goal, the criterion and the second failing run; the producer checks the
+     * row exists — the hourly re-check re-reads a stopped goal). An ITEM in
+     * the owner's Needs you: the loop waits on their call. `sourceId` is the
+     * goal.
+     */
+    type: "track.loop_stopped",
+    category: "ai",
+    label: "Goal stopped proposing runs",
+    icon: "user-check",
+    priority: "high",
+    titleTemplate: "Needs your call: {{trackName}}",
+    bodyTemplate:
+      "{{criterionStatement}} — failed in {{runs}} runs, so the goal stopped proposing new ones. Grade it, change it, or switch the loop on again to retry.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    actions: [
+      {
+        id: "view",
+        label: "Open goal",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
   // ── Governance ────────────────────────────────────────────────────────────
   {
     type: "proposal.created",

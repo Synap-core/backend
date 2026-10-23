@@ -23,8 +23,10 @@ import type {
   TrackWorkKind,
   WaitingOnReason,
 } from "../../types/src/units/goal.js";
+import type { GoalLoopSettings } from "../../types/src/units/goal-loop.js";
 import type {
   HubGoalAcceptanceDecision,
+  HubGoalLoop,
   HubGoalCriterionMark,
   HubTrackStatus,
   HubTrackUncertainty,
@@ -68,3 +70,5 @@ export const _role: Same<HubTrackParticipantRole, TrackParticipantRole> = true;
 export const _kind: Same<HubTrackPrincipalKind, TrackPrincipalKind> = true;
 export const _state: Same<HubTrackCommitmentState, TrackCommitmentState> = true;
 export const _move: Same<HubTrackCommitmentMove, TrackCommitmentMove> = true;
+// The goal's loop (W4, 0350) — the read shape `readGoalLoop` returns.
+export const _loop: Same<HubGoalLoop, GoalLoopSettings> = true;

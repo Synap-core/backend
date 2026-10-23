@@ -50,13 +50,27 @@ function run(
 }
 
 describe("readGoalLoop", () => {
-  it("reads absent as the default — off, the default budget", () => {
+  it("reads absent as OFF, whatever the birth default says", () => {
+    // Rules out: reading the birth default for a stored goal — flipping
+    // GOAL_LOOP_DEFAULT_ON would then switch on every existing goal.
     expect(readGoalLoop(undefined)).toEqual({
-      on: GOAL_LOOP_DEFAULT_ON,
+      on: false,
       perWeek: GOAL_LOOP_DEFAULT_PER_WEEK,
+      onAt: null,
+      by: null,
     });
-    // Rules out: a deploy switching every existing goal's loop on.
+    expect(readGoalLoop({})).toMatchObject({ on: false });
     expect(GOAL_LOOP_DEFAULT_ON).toBe(false);
+  });
+
+  it("keeps when and by whom it was switched on; drops a date it cannot read", () => {
+    expect(readGoalLoop({ on: true, onAt: T1, by: "u" })).toEqual({
+      on: true,
+      perWeek: GOAL_LOOP_DEFAULT_PER_WEEK,
+      onAt: T1,
+      by: "u",
+    });
+    expect(readGoalLoop({ on: true, onAt: "soon" }).onAt).toBeNull();
   });
 
   it("clamps a budget out of range instead of trusting it", () => {
@@ -123,6 +137,17 @@ describe("goalCriteriaFailedTwice", () => {
       run("s2", [{ key: "a", verdict: "fail", kind: "human", at: T1 }]),
     ]);
     expect(stops).toEqual([]);
+  });
+
+  it("switching the loop on again starts the count again", () => {
+    // Rules out: a stop the owner can only clear by grading.
+    const runs = [
+      run("s1", [{ key: "a", verdict: "fail", at: T0 }]),
+      run("s2", [{ key: "a", verdict: "fail", at: T1 }]),
+    ];
+    expect(goalCriteriaFailedTwice(criteria, runs, T2)).toEqual([]);
+    expect(goalCriteriaFailedTwice(criteria, runs, T0)).toEqual([]);
+    expect(goalCriteriaFailedTwice(criteria, runs, null)).toHaveLength(1);
   });
 
   it("an optional criterion never stops the loop", () => {

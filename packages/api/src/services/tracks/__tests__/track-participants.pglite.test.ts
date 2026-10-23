@@ -44,6 +44,8 @@ const M0317 = migration("0317_project_tracks_live_name_unique.sql");
 const M0344 = migration("0344_track_lifecycle_and_verdict.sql");
 const M0345 = migration("0345_track_goal_content.sql");
 const M0348 = migration("0348_track_participants.sql");
+// The goal's loop (W4): every track read selects the whole row.
+const M0350 = migration("0350_track_goal_loop.sql");
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -341,6 +343,7 @@ beforeAll(async () => {
   await h.client!.exec(M0345);
   // The REAL table: CHECKs, one owner / one judge, the upsert's target.
   await h.client!.exec(M0348);
+  await h.client!.exec(M0350);
 
   for (const [id, type, createdBy] of [
     [OWNER, "human", null],

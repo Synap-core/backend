@@ -27,9 +27,11 @@ import type {
 } from "./goal.js";
 
 /**
- * Whether a NEW goal with criteria starts with its loop on. OFF until the
- * founder confirms the north-star default (W4 brief): an existing goal is
- * never switched on by a deploy, and a new one waits for a person.
+ * Whether a NEW goal with criteria starts with its loop on — applied ONCE, at
+ * the goal's birth (`startTrack`), and only when the start names no loop. OFF
+ * until the founder confirms the north-star default (W4 brief). A stored goal
+ * with no loop reads as OFF whatever this says ({@link readGoalLoop}), so
+ * flipping it never switches on an existing goal.
  */
 export const GOAL_LOOP_DEFAULT_ON = false;
 
@@ -37,8 +39,8 @@ export const GOAL_LOOP_DEFAULT_ON = false;
 export const GOAL_LOOP_DEFAULT_PER_WEEK = 3;
 /** The highest weekly budget a person may set — one proposal a day, twice. */
 export const GOAL_LOOP_MAX_PER_WEEK = 14;
-/** The budget's window: the last seven days, rolling. */
-export const GOAL_LOOP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+/** The budget's window in days: the last seven, rolling. */
+export const GOAL_LOOP_WINDOW_DAYS = 7;
 /**
  * Runs in which the SAME required criterion failed before the loop stops and
  * asks the goal's owner. Mirrors `MAX_NON_HUMAN_ATTEMPTS` (two tries per
@@ -46,27 +48,42 @@ export const GOAL_LOOP_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  */
 export const GOAL_LOOP_FAILS_TO_STOP = 2;
 
-/** The loop as stored on its enablement. */
+/** The loop as stored on the goal (`project_tracks.loop`, 0350). */
 export interface GoalLoopSettings {
   on: boolean;
   /** Proposals per rolling week, 1 to {@link GOAL_LOOP_MAX_PER_WEEK}. */
   perWeek: number;
+  /**
+   * When a person last switched it on (ISO-8601) — failures before it no
+   * longer count: switching the loop on again is "try again".
+   */
+  onAt: string | null;
+  /** Who set it last: the person (the approver, for an agent's proposal). */
+  by: string | null;
 }
 
 /**
- * Read a stored loop — tolerant: absent or malformed reads as the default
- * (off), an out-of-range budget as the nearest allowed one.
+ * Read a stored loop — tolerant: absent or malformed reads as OFF (never the
+ * birth default), an out-of-range budget as the nearest allowed one.
  */
 export function readGoalLoop(raw: unknown): GoalLoopSettings {
   const bag =
-    raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
   const perWeek =
     typeof bag.perWeek === "number" && Number.isInteger(bag.perWeek)
       ? Math.min(Math.max(bag.perWeek, 1), GOAL_LOOP_MAX_PER_WEEK)
       : GOAL_LOOP_DEFAULT_PER_WEEK;
+  const onAt =
+    typeof bag.onAt === "string" && !Number.isNaN(Date.parse(bag.onAt))
+      ? bag.onAt
+      : null;
   return {
-    on: typeof bag.on === "boolean" ? bag.on : GOAL_LOOP_DEFAULT_ON,
+    on: bag.on === true,
     perWeek,
+    onAt,
+    by: typeof bag.by === "string" && bag.by ? bag.by : null,
   };
 }
 
@@ -87,15 +104,19 @@ function ms(at: Date | string): number {
  * runs of the goal since a person last graded them. A run FAILED a criterion
  * when its latest non-human row on that key is `fail` (two tries inside one run
  * are one run's failure — the session's own rule). A person's grade on the key,
- * in any run, starts the count again: they have answered. An optional
+ * in any run, starts the count again: they have answered; so does a person
+ * switching the loop on again (`since`). An optional
  * criterion never stops the loop — it never fires the loop either.
  */
 export function goalCriteriaFailedTwice(
   criteria: ReadonlyArray<Pick<GoalCriterionLike, "key" | "required">>,
   runs: ReadonlyArray<
     Pick<GoalRunFacts, "sessionId" | "criterionKeys" | "evaluations">
-  >
+  >,
+  /** When a person last switched the loop on: earlier failures do not count. */
+  since: Date | string | null = null
 ): GoalLoopStop[] {
+  const sinceMs = since ? ms(since) : 0;
   const out: GoalLoopStop[] = [];
   for (const c of criteria) {
     if (c.required === false) continue;
@@ -103,7 +124,7 @@ export function goalCriteriaFailedTwice(
     const rowsOf = (r: (typeof carrying)[number]) =>
       r.evaluations.filter((e) => e.criterionKey === c.key);
     const answeredAt = Math.max(
-      0,
+      sinceMs,
       ...carrying.flatMap((r) =>
         rowsOf(r)
           .filter((e) => e.evaluatorKind === "human")
@@ -185,7 +206,7 @@ const UNMET_MARKS: ReadonlySet<GoalCriterionMark> = new Set([
  * spent. A mark that could not be read (`null`) never counts as unmet.
  */
 export function decideGoalNextRun(input: {
-  loop: GoalLoopSettings;
+  loop: Pick<GoalLoopSettings, "on" | "perWeek">;
   category: LifecycleCategory | null;
   criteria: ReadonlyArray<Pick<GoalCriterionLike, "key" | "required">>;
   marks: ReadonlyArray<{ key: string; mark: GoalCriterionMark | null }>;

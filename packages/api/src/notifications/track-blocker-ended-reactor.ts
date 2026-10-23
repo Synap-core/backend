@@ -14,8 +14,8 @@
  * `blocked_by` this goal — or `blocked_by` a goal this one REPLACED (the
  * dependency rule follows `replaces`, so they were waiting on this one). A
  * session's owner is its `user_id` (every session end of a dependency edge is
- * its owner's own); a goal's is `goalOwnerId` (W3 swaps it for the owner
- * seat). An entity waiting on a goal is not told: it has no owner to tell.
+ * its owner's own); a goal's is `goalOwnerToAsk` (its owner seat, W3). An
+ * entity waiting on a goal is not told: it has no owner to tell.
  *
  * WHAT THEY ARE TOLD, re-derived after the end (never read off the event):
  * closed and nothing else holds it up · closed and it still waits on N other
@@ -56,7 +56,7 @@ import { resolveTrackStatusLabel } from "@synap-core/types/vocabulary";
 import { registerReactor, type Reactor } from "@synap/events";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { readDependencyState } from "../services/links/dependency-links.js";
-import { goalOwnerId } from "../services/tracks/goal-content.js";
+import { goalOwnerToAsk } from "../services/tracks/goal-content.js";
 import { NotificationService } from "./NotificationService.js";
 
 const logger = createLogger({ module: "track-blocker-ended-reactor" });
@@ -221,15 +221,17 @@ export const trackBlockerEndedNotifyReactor: Reactor = {
           userId: s.userId,
           workspaceId: s.workspaceId,
         })),
-      ...tracks
-        .filter((t) => !isDependencyEnded("track", t.status))
-        .map((t) => ({
-          kind: "track" as const,
-          id: t.id,
-          title: t.name,
-          userId: goalOwnerId(t),
-          workspaceId: t.workspaceId,
-        })),
+      ...(await Promise.all(
+        tracks
+          .filter((t) => !isDependencyEnded("track", t.status))
+          .map(async (t) => ({
+            kind: "track" as const,
+            id: t.id,
+            title: t.name,
+            userId: await goalOwnerToAsk(t),
+            workspaceId: t.workspaceId,
+          }))
+      )),
     ];
 
     for (const dep of recipients) {
