@@ -397,7 +397,7 @@ async function materializeEntity(
       data,
       workspaceId
     );
-    // …and the space a pod-wide row was filed for (0348), persisted beside it.
+    // …and the space a pod-wide row was filed for (0355), persisted beside it.
     const entityHomeWorkspaceId = resolveMaterializedEntityHomeWorkspaceId(
       data,
       entityWorkspaceId

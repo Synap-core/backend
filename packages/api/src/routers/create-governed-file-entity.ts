@@ -141,10 +141,10 @@ export async function createGovernedFileEntityForStoredDocument(
   const callerWorkspaceId =
     entityScope === "pod" && !params.pinWorkspace ? null : workspaceId;
   // The null caller lens above drops the space the upload came from, so name
-  // it as the file's HOME (0348): that space's members may read it. Only a
+  // it as the file's HOME (0355): that space's members may read it. Only a
   // member may file for a space (`entities.create` refuses anyone else), and
   // this door's callers check workspace access more loosely than that — so a
-  // non-member's upload lands un-homed (owner-only), as it did before 0348.
+  // non-member's upload lands un-homed (owner-only), as it did before 0355.
   const homeWorkspaceId =
     callerWorkspaceId === null &&
     (await getWorkspaceMembership(db, workspaceId, userId))

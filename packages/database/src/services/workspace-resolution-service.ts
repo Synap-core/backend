@@ -388,7 +388,7 @@ export function acceptDeterministicGraphWorkspace(
  *      create stamped it with the header, capture left it pod-wide);
  *   3. otherwise a deterministic ontology/context/relational hit, else the
  *      door's answer (ambient for a workspace-scope kind).
- * A pod-wide answer also carries the space it was filed FOR (0348,
+ * A pod-wide answer also carries the space it was filed FOR (0355,
  * `resolveEntityHomeWorkspaceId`).
  */
 export function acceptEntityCreatePlacement(input: {
@@ -419,7 +419,7 @@ export function acceptEntityCreatePlacement(input: {
 /**
  * Where a create door lands ONE entity: the row's lens, and — only when that
  * lens is pod-wide — the space it was filed FOR (`entities.home_workspace_id`,
- * 0348). Returned together so a door cannot store one and forget the other.
+ * 0355). Returned together so a door cannot store one and forget the other.
  */
 export interface EntityCreatePlacement {
   workspaceId: string | null;
@@ -454,7 +454,7 @@ export function resolveEntityHomeWorkspaceId(input: {
  * `resolveMaterializedEntityWorkspaceId`): the create door stores
  * `resolvedHomeWorkspaceId` beside `resolvedWorkspaceId`, so a proposal-gated
  * write is shared with the same space an auto-approved one would be. A
- * proposal created before 0348 carries no key → no home (owner-only, as it was
+ * proposal created before 0355 carries no key → no home (owner-only, as it was
  * when it was proposed). Never set on a workspace row.
  */
 export function resolveMaterializedEntityHomeWorkspaceId(

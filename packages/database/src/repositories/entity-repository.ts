@@ -108,7 +108,7 @@ export interface CreateEntityInput {
 
   workspaceId?: string | null; // null for pod-wide entities
   /**
-   * The space a POD-WIDE row was filed for (0348) — the placement door's
+   * The space a POD-WIDE row was filed for (0355) — the placement door's
    * answer (`acceptEntityCreatePlacement` / `resolveImportEntityPlacement`).
    * Stored ONLY when the row lands pod-wide: a workspace row never carries one
    * (the column's CHECK refuses it), so a caller handing one with a workspace

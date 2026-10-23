@@ -1,12 +1,12 @@
 /**
- * REAL-POSTGRES (PGlite) test for migration 0348 — `entities.home_workspace_id`,
+ * REAL-POSTGRES (PGlite) test for migration 0355 — `entities.home_workspace_id`,
  * the space a POD-WIDE entity was filed for:
- *  - idempotent (applied twice) on a pre-0348 `entities`;
+ *  - idempotent (applied twice) on a pre-0355 `entities`;
  *  - the CHECK refuses a home on a workspace row (a pod-wide row only);
  *  - the FK sets the home NULL when its space is deleted;
  *  - the read floor's partial index exists;
  *  - the Drizzle schema declares the column, the fresh-DB baseline carries the
- *    same DDL, and the boot coherence list names it, attributed to 0348.
+ *    same DDL, and the boot coherence list names it, attributed to 0355.
  */
 import { describe, it, expect, beforeAll } from "vitest";
 import { readFileSync } from "node:fs";
@@ -20,7 +20,7 @@ import { REQUIRED_COLUMNS } from "./utils/schema-coherence.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const read = (f: string) =>
   readFileSync(resolve(HERE, `../migrations/${f}`), "utf8");
-const FILE = "0348_entities_home_workspace.sql";
+const FILE = "0355_entities_home_workspace.sql";
 const MIGRATION = read(FILE);
 const BASELINE = read("0000_baseline_schema.sql");
 
@@ -49,7 +49,7 @@ const sqlState = async (p: Promise<unknown>) => {
   }
 };
 
-describe("0348 entities.home_workspace_id", () => {
+describe("0355 entities.home_workspace_id", () => {
   it("keeps existing rows un-homed (no backfill)", async () => {
     const r = await pg.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM entities WHERE home_workspace_id IS NOT NULL`

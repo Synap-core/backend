@@ -109,7 +109,7 @@ export const createProcs = {
         /** Override the target workspace for this entity (defaults to current workspace). */
         targetWorkspaceId: z.string().uuid().optional(),
         /**
-         * The space a POD-WIDE entity is filed FOR (0348) — its members may
+         * The space a POD-WIDE entity is filed FOR (0355) — its members may
          * read it. Defaults to the caller's workspace; a door that writes
          * with a null caller lens on purpose (governed file entity, proposal
          * approval) names it here. Never pins: it is recorded only when the
@@ -1099,7 +1099,7 @@ export const createProcs = {
         // Placement accept policy — THE create-door rule shared with bulk
         // create (acceptEntityCreatePlacement): explicit pin → door result;
         // pod-scope kind → pod-wide; else deterministic hit, else ambient.
-        // A pod-wide answer carries the space it was filed FOR (0348).
+        // A pod-wide answer carries the space it was filed FOR (0355).
         return acceptEntityCreatePlacement({
           entityScope: profile.entityScope,
           explicitPin: Boolean(
@@ -1426,7 +1426,7 @@ export const createProcs = {
         // verbatim; a present key — including null — beats its legacy
         // `data.global ? null : workspaceId` derivation.
         resolvedWorkspaceId: resolvedEntityWorkspaceId,
-        // …and the space a pod-wide row was filed for (0348), read back by
+        // …and the space a pod-wide row was filed for (0355), read back by
         // `resolveMaterializedEntityHomeWorkspaceId`.
         resolvedHomeWorkspaceId: resolvedEntityHomeWorkspaceId,
         // R2: carry facets on the proposal so approve attaches them (same
@@ -2053,7 +2053,7 @@ export const createProcs = {
       // slug → the profile's entity-scope ("pod" | "workspace"), for placement.
       const entityScopeCache = new Map<string, string | null>();
       // slug → resolved placement (computed once per slug via the door): the
-      // row's lens + the space a pod-wide row was filed for (0348).
+      // row's lens + the space a pod-wide row was filed for (0355).
       const placementCache = new Map<string, EntityCreatePlacement>();
       let profilesCreated = 0;
 

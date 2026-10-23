@@ -5234,8 +5234,8 @@ CREATE TABLE IF NOT EXISTS "session_runners" (
 CREATE INDEX IF NOT EXISTS "idx_session_runners_session_seen"
   ON "session_runners" ("session_id", "last_seen_at");
 
--- 0348: the space a POD-WIDE entity was filed for (mirrors
--- 0348_entities_home_workspace.sql). Set only on a pod-wide row (CHECK); the
+-- 0355: the space a POD-WIDE entity was filed for (mirrors
+-- 0355_entities_home_workspace.sql). Set only on a pod-wide row (CHECK); the
 -- read floor shares the row with that space's members.
 ALTER TABLE "entities" ADD COLUMN IF NOT EXISTS "home_workspace_id" uuid;
 DO $$

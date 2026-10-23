@@ -73,7 +73,7 @@ import { entityQueryVisibilityWhere } from "../entity-query-scope.js";
 // `_colName`.
 type Row = {
   workspace_id: string | null;
-  /** The space a pod-wide row was filed for (0348). */
+  /** The space a pod-wide row was filed for (0355). */
   home_workspace_id?: string | null;
   user_id: string;
   /** Row is in the pod-wide-facet subquery = it carries a live pod-wide facet. */
@@ -172,7 +172,7 @@ describe("entityQueryVisibilityWhere — default (workspace-lens union)", () => 
   });
 });
 
-describe("entityQueryVisibilityWhere — the home-space share (0348)", () => {
+describe("entityQueryVisibilityWhere — the home-space share (0355)", () => {
   const where = entityQueryVisibilityWhere({
     workspaceId: WS_A,
     ownerId: OWNER,

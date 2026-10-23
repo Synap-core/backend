@@ -1,6 +1,6 @@
 /**
  * The create doors record the space a POD-WIDE entity was filed FOR
- * (`entities.home_workspace_id`, 0348) — through the REAL `entities.create`,
+ * (`entities.home_workspace_id`, 0355) — through the REAL `entities.create`,
  * `entities.batchCreate`, `entities.moveToWorkspace` and `entities.update`
  * procedures and the REAL placement door on PGlite. Governance, audit, side
  * effects and search indexing are stubbed.

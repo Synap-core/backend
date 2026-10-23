@@ -830,7 +830,7 @@ describe("resolveImportEntityPlacement (D1 ingestion glue)", () => {
       profileSlug: "person",
       sourceWorkspaceId: WS_A,
     });
-    // Pod-wide, and HOMED in the source workspace (0348): its members read it.
+    // Pod-wide, and HOMED in the source workspace (0355): its members read it.
     expect(r).toEqual({ workspaceId: null, homeWorkspaceId: WS_A });
   });
 
@@ -856,7 +856,7 @@ describe("resolveImportEntityPlacement (D1 ingestion glue)", () => {
   });
 });
 
-// ── The home rule (0348) — the space a pod-wide create was filed FOR. ────────
+// ── The home rule (0355) — the space a pod-wide create was filed FOR. ────────
 describe("acceptEntityCreatePlacement / resolveEntityHomeWorkspaceId (home space)", () => {
   const rung6 = { workspaceId: null, rung: 6 as const, candidates: [] };
 
@@ -929,7 +929,7 @@ describe("acceptEntityCreatePlacement / resolveEntityHomeWorkspaceId (home space
         WS_B
       )
     ).toBeNull();
-    // Pre-0348 proposal: no key → no home.
+    // Pre-0355 proposal: no key → no home.
     expect(resolveMaterializedEntityHomeWorkspaceId({}, null)).toBeNull();
   });
 });

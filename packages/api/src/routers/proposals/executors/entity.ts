@@ -259,10 +259,10 @@ export function registerEntityExecutors(): void {
         innerData,
         proposalWorkspaceId
       );
-      // The space a pod-wide row was filed for (0348). Replayed through
+      // The space a pod-wide row was filed for (0355). Replayed through
       // create's `homeWorkspaceId` — which only a MEMBER of that space may
       // name, the approver included: an approver outside it lands the row
-      // un-homed (owner-only, exactly as before 0348) and we say so.
+      // un-homed (owner-only, exactly as before 0355) and we say so.
       const persistedHome = resolveMaterializedEntityHomeWorkspaceId(
         innerData,
         entityHome

@@ -105,7 +105,7 @@ export interface EntityUpsertInput {
    */
   workspaceId: string | null;
   /**
-   * The space a pod-wide row this upsert CREATES was filed for (0348) — the
+   * The space a pod-wide row this upsert CREATES was filed for (0355) — the
    * placement door's `homeWorkspaceId`. A matched/updated row keeps its own.
    */
   homeWorkspaceId?: string | null;

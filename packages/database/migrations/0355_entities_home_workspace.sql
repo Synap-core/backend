@@ -1,4 +1,4 @@
--- 0348 — the space a POD-WIDE entity was filed FOR (founder decision, 2026-10-22).
+-- 0355 — the space a POD-WIDE entity was filed FOR (founder decision, 2026-10-22).
 --
 -- Additive + idempotent: every statement is IF NOT EXISTS. Fresh installs also
 -- get the column from 0000_baseline_schema.sql.

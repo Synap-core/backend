@@ -44,7 +44,7 @@ import type { SQL } from "drizzle-orm";
  * SECURITY: the result matches ONLY (a) this workspace's rows and (b) pod-wide
  * rows owned by `ownerId`, explicitly shared to the pod via a pod-wide facet
  * (and only when `ownerId` is a pod member), or filed for a space `ownerId`
- * belongs to (`home_workspace_id`, 0348). It can never match another
+ * belongs to (`home_workspace_id`, 0355). It can never match another
  * workspace's rows (their
  * `workspace_id` is a different non-null id) nor another user's pod-wide rows
  * (the owner floor). Workspace-scoped kinds (deal/grant_submission…) always
@@ -77,7 +77,7 @@ export function entityQueryVisibilityWhere(args: {
           inArray(entities.id, podSharedEntityIdsFor(ownerId))
         )
       : undefined;
-  // …and the HOME-SPACE share (0348): a pod-wide row filed for a space the
+  // …and the HOME-SPACE share (0355): a pod-wide row filed for a space the
   // owner belongs to. The SAME builder `accessScopeWhere` uses
   // (`homeSpaceSharedWhere`, @synap/database) — never a local copy.
   const homeShared =

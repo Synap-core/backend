@@ -836,7 +836,7 @@ export function accessScopeWhere(args: {
       ? podSharedDocumentWhere(workspaceIdColumn, entityIdColumn, userId)
       : undefined;
   if (podShared) floorBranches.push(podShared);
-  // HOME-SPACE share (0348): a pod-wide entity filed FOR a space is readable by
+  // HOME-SPACE share (0355): a pod-wide entity filed FOR a space is readable by
   // that space's members — and its body document with it. Same opt-in gates as
   // `podShared` (`facetLens` = the `entities` table, `documentFollowsEntity` =
   // `documents`), so the WRITE floor, which passes neither, never gains it.
@@ -880,7 +880,7 @@ export function accessScopeWhere(args: {
     // floor, so it can only surface an entity the floor already admits.
     // `workspaceLens` is neither undefined nor null here (handled above), so the
     // facet-aware narrow applies whenever facetLens is on.
-    // Home-space (0348): the space's view also surfaces what was FILED FOR it
+    // Home-space (0355): the space's view also surfaces what was FILED FOR it
     // — a pod-wide row homed there. Self-gating on the caller's membership of
     // the home space (`homeSpaceInLensWhere`), like the facet narrow above; a
     // document follows its entity.

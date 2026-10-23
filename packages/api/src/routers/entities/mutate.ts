@@ -590,7 +590,7 @@ export const mutateProcs = {
           .set({
             workspaceId: placementWorkspaceId,
             // Moving OUT to pod-wide: the space it leaves becomes its home
-            // (0348), so that space's members keep reading it.
+            // (0355), so that space's members keep reading it.
             homeWorkspaceId: existing.workspaceId,
           })
           .where(eq(entities.id, input.id));
@@ -1061,7 +1061,7 @@ export const mutateProcs = {
           await database
             .update(entities)
             // Moving INTO a space: the row is that space's now, so it has no
-            // home (0348 — a workspace row never carries one; CHECK).
+            // home (0355 — a workspace row never carries one; CHECK).
             .set({ workspaceId: input.workspaceId, homeWorkspaceId: null })
             .where(eq(entities.id, entityId));
 
