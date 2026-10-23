@@ -13,6 +13,7 @@
  */
 
 import type { HubFocusSession } from "./types.js";
+import type { HubTrackParticipant } from "./track-participants.js";
 
 /**
  * A track's status — the option keys of its system lifecycle: open (proposed ·
@@ -85,6 +86,11 @@ export interface HubTrack {
   verdict?: HubTrackVerdict | null;
   /** Why, in words — present for `impossible` and `replaced`. */
   verdictReason?: string | null;
+  /**
+   * Who is on the goal: owner, judge, delegates (with their commitment),
+   * integrator. Absent on a pod before 0346, or when not read.
+   */
+  participants?: HubTrackParticipant[];
   createdAt: string;
   updatedAt: string;
 }

@@ -15,9 +15,26 @@
  * compile pins (`tracks-service.ts`) hold the DB side.
  */
 import type { TrackStatus, TrackVerdict } from "../../types/src/units/track.js";
+import type {
+  TrackCommitmentMove,
+  TrackCommitmentState,
+  TrackParticipantRole,
+  TrackPrincipalKind,
+} from "../../types/src/units/track-participants.js";
 import type { HubTrackStatus, HubTrackVerdict } from "../src/tracks.js";
+import type {
+  HubTrackCommitmentMove,
+  HubTrackCommitmentState,
+  HubTrackParticipantRole,
+  HubTrackPrincipalKind,
+} from "../src/track-participants.js";
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 
 export const _status: Same<HubTrackStatus, TrackStatus> = true;
 export const _verdict: Same<HubTrackVerdict, TrackVerdict> = true;
+// Who is on a goal (0346, W3).
+export const _role: Same<HubTrackParticipantRole, TrackParticipantRole> = true;
+export const _kind: Same<HubTrackPrincipalKind, TrackPrincipalKind> = true;
+export const _state: Same<HubTrackCommitmentState, TrackCommitmentState> = true;
+export const _move: Same<HubTrackCommitmentMove, TrackCommitmentMove> = true;

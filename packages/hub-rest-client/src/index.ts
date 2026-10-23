@@ -268,6 +268,18 @@ export type {
   FocusSessionTrackScope,
 } from "./tracks.js";
 
+// Who is on a goal (Hub /tracks/:id/participants)
+export type {
+  HubTrackParticipant,
+  HubTrackParticipantRole,
+  HubTrackPrincipalKind,
+  HubTrackCommitmentState,
+  HubTrackCommitmentMove,
+  AddTrackParticipantInput,
+  AnswerTrackCommitmentInput,
+  HubTrackParticipantsResult,
+} from "./track-participants.js";
+
 // Space operations — archive/restore/rename a space, move entities, share a kind
 export type {
   HubSpaceOpProposed,

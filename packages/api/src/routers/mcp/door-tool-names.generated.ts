@@ -390,6 +390,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__set_track_params",
     raycast: "set-track-params",
   },
+  synap_set_track_participant: {
+    "pod-mcp": "synap_set_track_participant",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_set_track_status: {
     "pod-mcp": "synap_set_track_status",
     "cp-connector": "pod__set_track_status",

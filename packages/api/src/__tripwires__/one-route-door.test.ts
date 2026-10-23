@@ -24,6 +24,10 @@ import { join, relative } from "path";
  *      before the roster write, and the roster an AI reads to choose
  *      (`agents-for-handoff.ts`) answers with the same accept through
  *      `namedVerdicts` (the selector rung `route()` itself uses).
+ *   4. The same for a GOAL (W3): the `track/assign_agent` executor writes
+ *      through `applyTrackParticipantChange`, which plans (asking the route
+ *      for an agent principal) before its insert. Granularity is the function
+ *      body: it does not see WHICH branch of `planChange` asks the route.
  *
  * What it does NOT see: a door that re-implements a pick from raw SQL without
  * these helpers, and pickers outside api/src. `agentsOperatedBy` is not pinned:
@@ -40,6 +44,8 @@ const DEFINITIONS = "services/agent-dispatch/agent-binding.ts";
 
 const HAND_OFF_GATE = "services/focus-sessions/agent-hand-off.ts";
 const HAND_OFF_ROSTER = "services/agent-dispatch/agents-for-handoff.ts";
+/** The goal hand-off's one write path (W3). */
+const TRACK_PARTICIPANTS_DOOR = "services/tracks/track-participants.ts";
 
 const PICK_CALL = /\b(listDispatchableAgentIds|ownedAgentIds)\s*\(/g;
 const DEFINITION =
@@ -140,6 +146,39 @@ describe("tripwire: handing a session to an agent asks the route", () => {
     const asked = body.indexOf("handOffRefusal(");
     expect(asked).toBeGreaterThan(-1);
     expect(asked).toBeLessThan(body.indexOf("attachSessionAgent("));
+  });
+
+  it("handing a GOAL to an agent re-asks the route before the participant row is written (W3)", () => {
+    // Derived: every executor registered for the goal hand-off.
+    const approvers = files.filter((f) =>
+      /key:\s*"track\/assign_agent"/.test(f.src)
+    );
+    expect(approvers.map((f) => f.rel)).toHaveLength(1);
+    const executor = approvers[0]!.src.slice(
+      approvers[0]!.src.search(/key:\s*"track\/assign_agent"/)
+    );
+    expect(executor.indexOf("applyTrackParticipantChange(")).toBeGreaterThan(
+      -1
+    );
+    // The one write path plans (route included) BEFORE it writes.
+    const door = src(TRACK_PARTICIPANTS_DOOR);
+    const plan = door.slice(door.indexOf("async function planChange("));
+    expect(plan).toMatch(/^async function planChange\(/);
+    expect(plan.indexOf("handOffRefusal(")).toBeGreaterThan(-1);
+    const apply = door.slice(
+      door.indexOf("export async function applyTrackParticipantChange(")
+    );
+    expect(apply).toMatch(
+      /^export async function applyTrackParticipantChange\(/
+    );
+    const planned = apply.indexOf("planChange(");
+    expect(planned).toBeGreaterThan(-1);
+    expect(planned).toBeLessThan(apply.indexOf(".insert(trackParticipants)"));
+    // And the direct door's agent→agent add goes through THE gate.
+    const gate = door.slice(
+      door.indexOf("export async function changeTrackParticipants(")
+    );
+    expect(gate.indexOf("gateAgentHandOff(")).toBeGreaterThan(-1);
   });
 
   it("the roster an AI chooses from answers with the same accept and rung", () => {

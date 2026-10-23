@@ -44,7 +44,9 @@ export interface JobsNotificationInput {
     | "inbox_item"
     | "proactive_message"
     | "session"
-    | "automation";
+    | "automation"
+    // A goal (R10: an unacknowledged "impossible" report, W3).
+    | "track";
   sourceId?: string;
   data: Record<string, unknown>;
   groupKey?: string;

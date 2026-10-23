@@ -283,6 +283,11 @@ import type {
   StartTrackInput,
 } from "./tracks.js";
 import type {
+  AddTrackParticipantInput,
+  AnswerTrackCommitmentInput,
+  HubTrackParticipantsResult,
+} from "./track-participants.js";
+import type {
   GrantProfileAccessInput,
   HubArchiveWorkspaceResult,
   HubGrantProfileAccessResult,
@@ -2695,6 +2700,62 @@ export class HubRestClient {
         ...(close?.verdict ? { verdict: close.verdict } : {}),
         ...(close?.verdictReason ? { verdictReason: close.verdictReason } : {}),
       }
+    );
+  }
+
+  /**
+   * Put someone on a goal — a judge (a person), a delegate (a person or an
+   * agent, with a commitment) or an integrator. Owner or judge only; handing
+   * a goal to ANOTHER agent comes back `proposed` (a person approves).
+   */
+  async addTrackParticipant(
+    trackId: string,
+    input: AddTrackParticipantInput
+  ): Promise<HubTrackParticipantsResult> {
+    return this.request<HubTrackParticipantsResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/participants`,
+      input
+    );
+  }
+
+  /** Take someone off a goal (never its owner). Owner or judge only. */
+  async removeTrackParticipant(
+    trackId: string,
+    participantId: string
+  ): Promise<HubTrackParticipantsResult> {
+    return this.request<HubTrackParticipantsResult>(
+      "DELETE",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/participants/${encodeURIComponent(participantId)}`
+    );
+  }
+
+  /**
+   * The delegate answers their OWN commitment: accept · counter (text) ·
+   * decline (text optional) · report_impossible (text, after accepting). A
+   * report is not the goal's verdict — the judge still decides.
+   */
+  async answerTrackCommitment(
+    trackId: string,
+    participantId: string,
+    input: AnswerTrackCommitmentInput
+  ): Promise<HubTrackParticipantsResult> {
+    return this.request<HubTrackParticipantsResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/participants/${encodeURIComponent(participantId)}/answer`,
+      input
+    );
+  }
+
+  /** The owner or judge acknowledges an "impossible" report (a person's act). */
+  async acknowledgeTrackReport(
+    trackId: string,
+    participantId: string
+  ): Promise<HubTrackParticipantsResult> {
+    return this.request<HubTrackParticipantsResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/participants/${encodeURIComponent(participantId)}/acknowledge`,
+      {}
     );
   }
 

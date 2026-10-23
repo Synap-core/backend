@@ -156,6 +156,7 @@ import {
   projectMembers,
   channels,
   channelMembers,
+  trackParticipants,
 } from "@synap/database";
 import {
   applyTrackStageAdvance,
@@ -236,6 +237,8 @@ beforeAll(async () => {
     projectMembers,
     channels,
     channelMembers,
+    // Who is on a goal (0346): `startTrack` seeds the owner row.
+    trackParticipants,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

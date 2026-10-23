@@ -133,6 +133,7 @@ import {
   sessionEvaluations,
   podMembers,
   projectMembers,
+  trackParticipants,
 } from "@synap/database";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { buildHandlers } from "../../../routers/mcp/handlers/build.js";
@@ -181,6 +182,8 @@ beforeAll(async () => {
     sessionEvaluations,
     podMembers,
     projectMembers,
+    // Who is on a goal (0346): `startTrack` seeds the owner row.
+    trackParticipants,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
