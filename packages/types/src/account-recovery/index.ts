@@ -54,7 +54,8 @@ export const CLOUD_TRUST_OPTIONS: ReadonlyArray<{
   {
     mode: "off",
     label: "Off",
-    detail: "Synap Cloud can't sign anyone in to this pod.",
+    detail:
+      "Synap Cloud can't sign anyone in to this pod, and invitations no longer offer \"Continue with Synap Cloud\".",
   },
   {
     mode: "sign_in",
