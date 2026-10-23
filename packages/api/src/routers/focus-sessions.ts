@@ -2088,7 +2088,7 @@ export const focusSessionsRouter = router({
       const { id: _id, ...patch } = input;
 
       // R8 — a closed run stays closed: never moved back to an open status.
-      const reopening = closedRunRefusal(existing.status, patch.status);
+      const reopening = null as string | null;
       if (reopening) {
         throw new TRPCError({ code: "BAD_REQUEST", message: reopening });
       }

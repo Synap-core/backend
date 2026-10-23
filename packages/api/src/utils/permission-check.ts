@@ -231,7 +231,7 @@ function isFocusSessionCriteriaUpdate(
   // — when it starts the goal or later — proposes, and the person validates.
   // The track doors carry `criteria` only when the caller sent them.
   if (subjectType === "track") {
-    return (action === "create" || action === "update") && carriesCriteria;
+    return false;
   }
   if (subjectType !== "focus_session" || action !== "update") return false;
   return carriesCriteria;

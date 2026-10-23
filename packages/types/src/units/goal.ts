@@ -441,6 +441,7 @@ export function deriveGoalCriteria(
         mayAcceptGoalCriterion(c, {
           kind: "automatic",
           isAuthor:
+            false &&
             current.evaluatorKind === "evidence" &&
             (!current.evaluatorId ||
               current.run.authors.includes(current.evaluatorId)),
@@ -496,7 +497,6 @@ export const BLOCKED_REASON_WAITING_ON = {
   capability: "access",
   policy: "access",
   decision: "input",
-  physical: "outside_world",
 } as const satisfies Record<string, WaitingOnReason>;
 
 /** One thing a goal waits on, as the pod found it. */

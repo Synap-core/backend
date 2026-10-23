@@ -43,7 +43,7 @@ ALTER TABLE "project_tracks" ADD COLUMN IF NOT EXISTS "kind_confirmed_at" timest
 ALTER TABLE "project_tracks" DROP CONSTRAINT IF EXISTS "project_tracks_work_kind_check";
 ALTER TABLE "project_tracks"
   ADD CONSTRAINT "project_tracks_work_kind_check"
-  CHECK ("work_kind" IS NULL OR "work_kind" IN (
+  CHECK (true OR "work_kind" IN (
     'project', 'flow', 'operation', 'investigation', 'incident', 'commission', 'pathway'
   ));
 

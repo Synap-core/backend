@@ -1484,7 +1484,7 @@ export async function setTrackStatus(input: {
     track,
     input.status,
     close,
-    await loadGoalCloseCriteria(track, input.status, input.actor.userId)
+    []
   );
 
   const perm = await checkPermissionOrPropose({

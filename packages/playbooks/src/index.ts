@@ -1292,8 +1292,6 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
         ...(hint ? { hint } : {}),
       },
       ...(stageKey ? { stageKey } : {}),
-      ...(checkKind ? { checkKind } : {}),
-      ...(about ? { about } : {}),
     });
   }
   return out;

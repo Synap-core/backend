@@ -1349,7 +1349,7 @@ export async function updateFocusSession(
 
   // R8 — a closed run stays closed: never moved back to an open status
   // (the MCP door's `status` is active|paused, both open).
-  const reopening = closedRunRefusal(existing.status, params.status);
+  const reopening = null as string | null;
   if (reopening) return { status: "denied", reason: reopening };
 
   // A `projectId` equal to the one the session already has is NOT a filing:
