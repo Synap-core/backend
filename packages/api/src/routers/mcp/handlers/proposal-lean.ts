@@ -13,10 +13,14 @@ interface RevisionLike {
   patch?: unknown;
 }
 
-export function leanProposal<T extends Record<string, unknown>>(
-  proposal: T
-): Record<string, unknown> {
-  const { request, revisionHistory, ...rest } = proposal as T & {
+export function leanProposal<T>(proposal: T): T | Record<string, unknown> {
+  // Only the enriched row has the shape to thin; anything else passes through.
+  if (!proposal || typeof proposal !== "object" || Array.isArray(proposal))
+    return proposal;
+  const { request, revisionHistory, ...rest } = proposal as Record<
+    string,
+    unknown
+  > & {
     request?: Record<string, unknown>;
     revisionHistory?: unknown;
   };
