@@ -1006,7 +1006,10 @@ describe("the PAGE a person opens (SYNAP_SHARE_PAGE_URL)", () => {
       const r = await asOwner.request("/shares/publish", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ resourceType: "entity", resourceId: E_REST_PAGE }),
+        body: JSON.stringify({
+          resourceType: "entity",
+          resourceId: E_REST_PAGE,
+        }),
       });
       expect(r.status).toBe(200);
       const b = (await r.json()) as any;
