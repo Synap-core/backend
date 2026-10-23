@@ -155,7 +155,9 @@ export type AccountRecoveryErrorCode =
   | "unauthorized"
   | "reauth_required"
   | "cloud_session_not_allowed"
-  | "forbidden";
+  | "forbidden"
+  /** Turning Cloud sign-in off would lock out an owner who signs in only with Synap Cloud. */
+  | "owner_needs_pod_sign_in";
 
 export interface AccountRecoveryError {
   ok: false;

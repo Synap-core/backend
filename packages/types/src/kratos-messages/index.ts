@@ -46,6 +46,18 @@ export const CLOUD_SIGN_IN_DISABLED = {
 } as const;
 
 /**
+ * Pod-defined refusal (registration gate): a Synap Cloud sign-up carried an
+ * open invitation, but the invitation was sent to another email, or Synap
+ * Cloud has not verified this account's email. An invitation binds the Cloud
+ * account to the invited address (decision B2, Q3 (a)).
+ */
+export const INVITE_EMAIL_MISMATCH = {
+  id: 4000905,
+  text: "This invitation was sent to a different email than your Synap Cloud account.",
+  context: { reason: "invite_email_mismatch" },
+} as const;
+
+/**
  * Kratos v1.3.1 account-linking ids (ory/kratos@v1.3.1 `text/id.go`, values
  * obtained by compiling that file — not from memory). Kratos lands an existing
  * pod account that signs in with Synap Cloud for the first time on a LOGIN flow

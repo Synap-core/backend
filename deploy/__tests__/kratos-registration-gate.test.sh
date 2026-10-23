@@ -8,7 +8,8 @@
 # curl/docker so the CP OIDC branch is enabled, then parses the YAML.
 #
 # Does NOT cover: whether Kratos accepts the file at runtime, or the jsonnet
-# bodies' evaluation (checked separately with go-jsonnet; see the report).
+# bodies' evaluation (checked separately with go-jsonnet v0.20.0, Kratos
+# v1.3.1's: the oidc body yields transient_payload null when the flow has none).
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -95,6 +96,12 @@ check(not oidc[1]["config"].get("can_interrupt") and oidc[1]["config"]["url"].en
       "oidc: complete hook is post-persist (no can_interrupt)")
 for h in oidc[:2]:
     check('method: "oidc"' in body(h) and "identity: ctx.identity" in body(h), "oidc: body carries method + identity")
+    # Join plan phase 4: the invite page's invite_token rides the flow's
+    # transient_payload; both oidc hooks must forward it (guarded: the field is
+    # omitempty, and a missing field is a jsonnet error, i.e. a broken hook).
+    check('std.objectHas(ctx.flow, "transient_payload") then ctx.flow.transient_payload else null' in body(h),
+          "oidc: body forwards ctx.flow.transient_payload, guarded")
+check("transient_payload" not in body(pw[0]), "password: body carries no transient_payload (password sign-up stays refused)")
 
 sys.exit(1 if errors else 0)
 PY

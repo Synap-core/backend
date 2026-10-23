@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CloudTrustMode } from "@synap-core/types/account-recovery";
 import {
   createRegistrationGateRouter,
   POD_ACCESS_REQUIRED,
@@ -17,16 +18,23 @@ const IDENTITY_ID = "11111111-2222-3333-4444-555555555555";
 function body(opts: {
   method?: string;
   id?: string;
+  email?: string;
   podOwner?: unknown;
   emailVerified?: unknown;
   iss?: string;
   noCloud?: boolean;
+  /** `transient_payload` as the oidc hook body forwards it (null = none). */
+  inviteToken?: string;
 }) {
   return {
     method: opts.method ?? "oidc",
+    transient_payload:
+      opts.inviteToken === undefined
+        ? null
+        : { invite_token: opts.inviteToken },
     identity: {
       id: opts.id ?? "00000000-0000-0000-0000-000000000000",
-      traits: { email: "Owner@Example.com", name: "Owner" },
+      traits: { email: opts.email ?? "Owner@Example.com", name: "Owner" },
       metadata_public: opts.noCloud
         ? null
         : {
@@ -41,10 +49,15 @@ function body(opts: {
   };
 }
 
+const INVITE_TOKEN = "invite-token-1";
+const INVITED = "invitee@example.com";
+const inFuture = () => new Date(Date.now() + 60 * 60 * 1000);
+
 function makeDeps(
   overrides: Partial<RegistrationGateDeps> = {}
 ): RegistrationGateDeps {
   return {
+    readCloudTrust: vi.fn(async (): Promise<CloudTrustMode> => "sign_in"),
     readFederationIssuer: vi.fn(async () => ISSUER),
     normalizeIssuerUrl: (url: string) => url.replace(/\/+$/, ""),
     hasDifferentHumanOwner: vi.fn(async () => false),
@@ -56,8 +69,29 @@ function makeDeps(
       issuerApproved: true,
     })),
     deleteKratosIdentity: vi.fn(async () => true),
+    findInvite: vi.fn(async (token: string) =>
+      token === INVITE_TOKEN ? { email: INVITED, expiresAt: inFuture() } : null
+    ),
+    acceptInvite: vi.fn(async () => "accepted" as const),
     ...overrides,
   };
+}
+
+/** An invitee's Cloud sign-up from the invite page (not a pod owner). */
+function inviteeBody(opts: Parameters<typeof body>[0] = {}) {
+  return body({
+    podOwner: false,
+    email: "Invitee@Example.com",
+    inviteToken: INVITE_TOKEN,
+    ...opts,
+  });
+}
+
+async function expectRefusal(res: Response, id: number, reason: string) {
+  expect(res.status).toBe(403);
+  const msg = ((await res.json()) as any).messages[0].messages[0];
+  expect(msg.id).toBe(id);
+  expect(msg.context).toEqual({ reason });
 }
 
 async function post(
@@ -250,5 +284,197 @@ describe("Kratos registration complete (post-persist owner claim)", () => {
     expect(res.status).toBe(401);
     expect(deps.claimOwner).not.toHaveBeenCalled();
     expect(deps.deleteKratosIdentity).not.toHaveBeenCalled();
+  });
+});
+
+describe("Invite-bound Synap Cloud sign-up (join plan phase 4, B2 Q3 (a))", () => {
+  beforeEach(() => {
+    process.env.KRATOS_WEBHOOK_SECRET = SECRET;
+  });
+
+  it("lets the invited email through the gate", async () => {
+    const deps = makeDeps();
+    const res = await post(deps, "/gate", inviteeBody());
+    expect(res.status).toBe(204);
+    expect(deps.findInvite).toHaveBeenCalledWith(INVITE_TOKEN);
+  });
+
+  it("accepts the invite for the persisted identity at /complete", async () => {
+    const deps = makeDeps();
+    const res = await post(deps, "/complete", inviteeBody({ id: IDENTITY_ID }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, path: "invite" });
+    expect(deps.acceptInvite).toHaveBeenCalledWith({
+      token: INVITE_TOKEN,
+      kratosIdentityId: IDENTITY_ID,
+      email: INVITED,
+      name: "Owner",
+    });
+    expect(deps.claimOwner).not.toHaveBeenCalled();
+    expect(deps.deleteKratosIdentity).not.toHaveBeenCalled();
+  });
+
+  it("refuses ANOTHER email with its own message, and never accepts", async () => {
+    const deps = makeDeps();
+    await expectRefusal(
+      await post(deps, "/gate", inviteeBody({ email: "someone@else.com" })),
+      4000905,
+      "invite_email_mismatch"
+    );
+    await expectAccessDenied(
+      await post(
+        deps,
+        "/complete",
+        inviteeBody({ id: IDENTITY_ID, email: "someone@else.com" })
+      )
+    );
+    expect(deps.acceptInvite).not.toHaveBeenCalled();
+    expect(deps.deleteKratosIdentity).toHaveBeenCalledWith(IDENTITY_ID);
+  });
+
+  it("refuses the invited email when Synap Cloud has not verified it", async () => {
+    const deps = makeDeps();
+    await expectRefusal(
+      await post(deps, "/gate", inviteeBody({ emailVerified: false })),
+      4000905,
+      "invite_email_mismatch"
+    );
+    await expectAccessDenied(
+      await post(
+        deps,
+        "/complete",
+        inviteeBody({ id: IDENTITY_ID, emailVerified: false })
+      )
+    );
+    expect(deps.acceptInvite).not.toHaveBeenCalled();
+  });
+
+  it("refuses an expired invite, and never accepts it", async () => {
+    const deps = makeDeps({
+      findInvite: vi.fn(async () => ({
+        email: INVITED,
+        expiresAt: new Date(Date.now() - 1000),
+      })),
+    });
+    await expectAccessDenied(await post(deps, "/gate", inviteeBody()));
+    await expectAccessDenied(
+      await post(deps, "/complete", inviteeBody({ id: IDENTITY_ID }))
+    );
+    expect(deps.acceptInvite).not.toHaveBeenCalled();
+  });
+
+  it("refuses an invite claimed through another provider's issuer", async () => {
+    const deps = makeDeps();
+    await expectAccessDenied(
+      await post(deps, "/gate", inviteeBody({ iss: "https://evil.example" }))
+    );
+  });
+
+  it("removes the identity when the invite is gone by /complete", async () => {
+    const deps = makeDeps({ acceptInvite: vi.fn(async () => "gone" as const) });
+    await expectAccessDenied(
+      await post(deps, "/complete", inviteeBody({ id: IDENTITY_ID }))
+    );
+    expect(deps.deleteKratosIdentity).toHaveBeenCalledWith(IDENTITY_ID);
+  });
+
+  it("answers 503 (not a denial) when the invite read fails", async () => {
+    const deps = makeDeps({
+      findInvite: vi.fn(async () => {
+        throw new Error("db down");
+      }),
+    });
+    const res = await post(deps, "/gate", inviteeBody());
+    expect(res.status).toBe(503);
+  });
+
+  it("a password sign-up carrying an invite token is still refused", async () => {
+    const deps = makeDeps();
+    await expectRefusal(
+      await post(
+        deps,
+        "/gate",
+        inviteeBody({ method: "password", noCloud: true })
+      ),
+      4000902,
+      "self_registration_disabled"
+    );
+    expect(deps.findInvite).not.toHaveBeenCalled();
+  });
+
+  it("the owner-only Cloud sign-up is unchanged (no invite token, no invite read)", async () => {
+    const deps = makeDeps();
+    expect((await post(deps, "/gate", body({}))).status).toBe(204);
+    expect(
+      (await post(deps, "/complete", body({ id: IDENTITY_ID }))).status
+    ).toBe(200);
+    expect(deps.claimOwner).toHaveBeenCalled();
+    expect(deps.findInvite).not.toHaveBeenCalled();
+    expect(deps.acceptInvite).not.toHaveBeenCalled();
+  });
+});
+
+describe('"Allow sign-in with Synap Cloud" off (ADDENDUM 2026-10-23)', () => {
+  beforeEach(() => {
+    process.env.KRATOS_WEBHOOK_SECRET = SECRET;
+  });
+  const off = () =>
+    makeDeps({
+      readCloudTrust: vi.fn(async (): Promise<CloudTrustMode> => "off"),
+    });
+
+  it("refuses the owner's Cloud claim and the invite-bound join at the gate", async () => {
+    const deps = off();
+    await expectRefusal(
+      await post(deps, "/gate", body({})),
+      4000904,
+      "cloud_sign_in_disabled"
+    );
+    await expectRefusal(
+      await post(deps, "/gate", inviteeBody()),
+      4000904,
+      "cloud_sign_in_disabled"
+    );
+    expect(deps.findInvite).not.toHaveBeenCalled();
+  });
+
+  it("refuses an existing account's first Cloud sign-in too", async () => {
+    const deps = off();
+    deps.kratosEmailExists = vi.fn(async () => true);
+    await expectRefusal(
+      await post(deps, "/gate", body({ podOwner: false })),
+      4000904,
+      "cloud_sign_in_disabled"
+    );
+  });
+
+  it("removes an identity persisted after the switch moved, and seeds nothing", async () => {
+    const deps = off();
+    await expectRefusal(
+      await post(deps, "/complete", inviteeBody({ id: IDENTITY_ID })),
+      4000904,
+      "cloud_sign_in_disabled"
+    );
+    expect(deps.acceptInvite).not.toHaveBeenCalled();
+    expect(deps.claimOwner).not.toHaveBeenCalled();
+    expect(deps.deleteKratosIdentity).toHaveBeenCalledWith(IDENTITY_ID);
+  });
+
+  it("leaves the password refusal as it was", async () => {
+    const deps = off();
+    await expectRefusal(
+      await post(deps, "/gate", body({ method: "password", noCloud: true })),
+      4000902,
+      "self_registration_disabled"
+    );
+  });
+
+  it("answers 503 when the switch cannot be read", async () => {
+    const deps = makeDeps({
+      readCloudTrust: vi.fn(async (): Promise<CloudTrustMode> => {
+        throw new Error("db down");
+      }),
+    });
+    expect((await post(deps, "/gate", inviteeBody())).status).toBe(503);
   });
 });
