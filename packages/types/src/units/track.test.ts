@@ -19,9 +19,21 @@ import {
   TRACK_STATUS_TRANSITIONS,
   TRACK_STATUSES,
   trackStagePath,
+  TRACK_LIFECYCLE,
+  TRACK_VERDICTS,
+  LIVE_TRACK_STATUSES,
+  checkTrackClose,
+  trackStatusCategory,
+  trackVerdictsFor,
 } from "./track.js";
 import { resolveUnitState } from "./state.js";
-import { ACTION_VERBS } from "../vocabulary/index.js";
+import {
+  ACTION_VERBS,
+  resolveTrackStatusLabel,
+  resolveTrackVerdictLabel,
+  TRACK_STATUS_LABELS,
+  TRACK_VERDICT_LABELS,
+} from "../vocabulary/index.js";
 
 const STAGES = [
   { key: "discover", name: "Discover", category: "planned" },
@@ -156,61 +168,195 @@ describe("readTrackStageHistory", () => {
 });
 
 describe("TRACK_STATUS_TRANSITIONS / trackStatusMoves", () => {
-  it("covers every status, and archived is final", () => {
+  it("covers every status; done and lost are FINAL, every other status moves anywhere", () => {
     expect(Object.keys(TRACK_STATUS_TRANSITIONS).sort()).toEqual(
       [...TRACK_STATUSES].sort()
     );
     expect(TRACK_STATUS_TRANSITIONS.archived).toEqual([]);
+    // Reopen-in-place is gone: a closed goal reopens as a NEW version.
+    expect(TRACK_STATUS_TRANSITIONS.completed).toEqual([]);
+    expect(canTransitionTrack("completed", "active")).toBe(false);
     expect(canTransitionTrack("archived", "active")).toBe(false);
-    expect(canTransitionTrack("completed", "paused")).toBe(false);
     expect(canTransitionTrack("paused", "active")).toBe(true);
+    expect(canTransitionTrack("proposed", "agreed")).toBe(true);
+    expect(canTransitionTrack("active", "completed")).toBe(true);
+    expect(canTransitionTrack("active", "active")).toBe(false);
     expect(canTransitionTrack("nope", "active")).toBe(false);
-  });
-
-  it("names the move by where it comes FROM: resume a pause, reopen a completion", () => {
-    expect(trackStatusMoves("paused")).toEqual([
-      { to: "active", verb: "resume" },
-    ]);
-    expect(trackStatusMoves("completed")).toEqual([
-      { to: "active", verb: "reopen" },
-    ]);
-    expect(trackStatusMoves("active")).toEqual([
-      { to: "paused", verb: "pause" },
-    ]);
-  });
-
-  it("a lasting track (W1) is never OFFERED completion, from any status", () => {
-    for (const s of TRACK_STATUSES) {
-      for (const includeArchive of [false, true]) {
-        expect(
-          trackStatusMoves(s, { includeArchive }).map((m) => m.to)
-        ).not.toContain("completed");
-      }
+    // Derived from the categories, never hand-listed.
+    for (const from of TRACK_STATUSES) {
+      const terminal = ["done", "lost"].includes(trackStatusCategory(from)!);
+      expect(TRACK_STATUS_TRANSITIONS[from]).toEqual(
+        terminal ? [] : TRACK_STATUSES.filter((to) => to !== from)
+      );
     }
-    // …but a completion that HAPPENED (pre-W1) is still named in history.
-    expect(trackStatusVerb("active", "completed")).toBe("complete");
-    expect(trackStatusVerb("completed", "active")).toBe("reopen");
-    expect(trackStatusVerb("archived", "active")).toBeNull();
   });
 
-  it("offers archive only when asked, and nothing from archived/unknown", () => {
+  it("names the move by where it comes FROM: resume a pause, start a ready goal", () => {
+    expect(trackStatusVerb("paused", "active")).toBe("resume");
+    expect(trackStatusVerb("ready", "active")).toBe("start");
+    expect(trackStatusVerb("proposed", "agreed")).toBe("move");
+    expect(trackStatusVerb("active", "paused")).toBe("pause");
+    expect(trackStatusVerb("active", "completed")).toBe("close");
+    expect(trackStatusVerb("paused", "archived")).toBe("drop");
+  });
+
+  it("a goal CAN finish: completion is offered from every open, active and paused status", () => {
+    // Inverted from W1 ("a lasting track is never offered completion").
+    for (const s of TRACK_STATUSES) {
+      const offered = trackStatusMoves(s).map((m) => m.to);
+      const open = !isTrackClosed({ status: s });
+      expect(offered.includes("completed")).toBe(open);
+    }
+    expect(
+      trackStatusMoves("active").find((m) => m.to === "completed")
+    ).toEqual({ to: "completed", verb: "close" });
+    // A reopen that HAPPENED in place (before 2026-10-23) is still named.
+    expect(trackStatusVerb("completed", "active")).toBe("reopen");
+    expect(trackStatusVerb("archived", "bogus")).toBeNull();
+  });
+
+  it("offers drop only when asked, and nothing from a closed/unknown status", () => {
+    expect(trackStatusMoves("active").map((m) => m.to)).toEqual([
+      "proposed",
+      "agreed",
+      "ready",
+      "paused",
+      "completed",
+    ]);
     expect(
       trackStatusMoves("active", { includeArchive: true }).map((m) => m.to)
-    ).toEqual(["paused", "archived"]);
-    expect(trackStatusMoves("completed", { includeArchive: true })).toEqual([
-      { to: "active", verb: "reopen" },
-      { to: "archived", verb: "archive" },
-    ]);
+    ).toContain("archived");
+    expect(trackStatusMoves("completed", { includeArchive: true })).toEqual([]);
     expect(trackStatusMoves("archived", { includeArchive: true })).toEqual([]);
     expect(trackStatusMoves("bogus")).toEqual([]);
   });
 
   it("every verb resolves through ACTION_VERBS (never the humanize fallback)", () => {
     for (const status of TRACK_STATUSES) {
-      for (const to of TRACK_STATUS_TRANSITIONS[status]) {
-        expect(ACTION_VERBS[trackStatusVerb(status, to)!]).toBeDefined();
+      for (const to of TRACK_STATUSES) {
+        const verb = trackStatusVerb(status, to);
+        if (status === to) expect(verb).toBeNull();
+        else expect(ACTION_VERBS[verb!]).toBeDefined();
       }
     }
+  });
+});
+
+describe("TRACK_LIFECYCLE — the track's system lifecycle", () => {
+  it("declares every status once, with its category; only completed is human-only", () => {
+    expect(TRACK_LIFECYCLE.options.map((o) => o.key)).toEqual([
+      ...TRACK_STATUSES,
+    ]);
+    expect(
+      Object.fromEntries(
+        TRACK_LIFECYCLE.options.map((o) => [o.key, o.category])
+      )
+    ).toEqual({
+      proposed: "open",
+      agreed: "open",
+      ready: "open",
+      active: "active",
+      paused: "paused",
+      completed: "done",
+      archived: "lost",
+    });
+    expect(
+      TRACK_LIFECYCLE.options.filter((o) => o.humanOnly).map((o) => o.key)
+    ).toEqual(["completed"]);
+  });
+
+  it("reads its words from the vocabulary: completed is Closed, archived is Dropped", () => {
+    const label = (k: string) =>
+      TRACK_LIFECYCLE.options.find((o) => o.key === k)!.label;
+    expect(label("completed")).toBe("Closed");
+    expect(label("archived")).toBe("Dropped");
+    expect(label("proposed")).toBe("Proposed");
+    for (const s of TRACK_STATUSES) {
+      expect(resolveTrackStatusLabel(s)).toBe(TRACK_STATUS_LABELS[s]);
+    }
+    expect(resolveTrackStatusLabel("bogus_state")).toBe("Bogus state");
+    for (const v of TRACK_VERDICTS) {
+      expect(resolveTrackVerdictLabel(v)).toBe(TRACK_VERDICT_LABELS[v]);
+    }
+  });
+
+  it("live and closed partition the statuses by category", () => {
+    expect([...LIVE_TRACK_STATUSES, ...CLOSED_TRACK_STATUSES].sort()).toEqual(
+      [...TRACK_STATUSES].sort()
+    );
+    for (const s of LIVE_TRACK_STATUSES) {
+      expect(["open", "active", "paused"]).toContain(trackStatusCategory(s));
+    }
+    expect(trackStatusCategory("bogus")).toBeNull();
+  });
+});
+
+describe("checkTrackClose — the verdict rule (R1)", () => {
+  it("a close without a verdict is refused; a done verdict closes", () => {
+    expect(checkTrackClose("completed", {})).toMatch(/needs a verdict/);
+    for (const v of ["met", "partly_met", "not_met"]) {
+      expect(checkTrackClose("completed", { verdict: v })).toBeNull();
+    }
+  });
+
+  it("a done close with a LOST verdict is refused, and the reverse", () => {
+    expect(
+      checkTrackClose("completed", { verdict: "no_longer_needed" })
+    ).toMatch(/not a verdict for closing/);
+    expect(checkTrackClose("archived", { verdict: "met" })).toMatch(
+      /not a verdict for dropping/
+    );
+    expect(
+      checkTrackClose("archived", { verdict: "no_longer_needed" })
+    ).toBeNull();
+  });
+
+  it("a DROP without a verdict is accepted (shipped clients), a CLOSE without one is not", () => {
+    // Back-compat: browser Archive, the released CLI and the IS drop with no
+    // verdict; the track then reads like one dropped before 0344.
+    expect(checkTrackClose("archived", {})).toBeNull();
+    expect(checkTrackClose("archived", { verdict: null })).toBeNull();
+    expect(checkTrackClose("completed", {})).toMatch(/needs a verdict/);
+    // A reason with no verdict says nothing about how it ended: refused.
+    expect(
+      checkTrackClose("archived", { verdictReason: "the market moved" })
+    ).toMatch(/needs its verdict/);
+  });
+
+  it("impossible and replaced need a reason in words", () => {
+    for (const v of ["impossible", "replaced"]) {
+      expect(checkTrackClose("archived", { verdict: v })).toMatch(
+        /needs a verdictReason/
+      );
+      expect(
+        checkTrackClose("archived", { verdict: v, verdictReason: "  " })
+      ).toMatch(/needs a verdictReason/);
+      expect(
+        checkTrackClose("archived", { verdict: v, verdictReason: "why" })
+      ).toBeNull();
+    }
+  });
+
+  it("a move that ends nothing carries no verdict", () => {
+    expect(checkTrackClose("paused", {})).toBeNull();
+    expect(checkTrackClose("paused", { verdict: "met" })).toMatch(
+      /only when a goal is closed/
+    );
+  });
+
+  it("every verdict belongs to exactly the ending its category names", () => {
+    expect([...trackVerdictsFor("completed")]).toEqual([
+      "met",
+      "partly_met",
+      "not_met",
+    ]);
+    expect([...trackVerdictsFor("archived")]).toEqual([
+      "no_longer_needed",
+      "impossible",
+      "replaced",
+      "mistake",
+    ]);
+    expect(trackVerdictsFor("active")).toEqual([]);
   });
 });
 
@@ -238,6 +384,13 @@ describe("trackUnitInput", () => {
     expect(
       resolveUnitState(trackUnitInput({ status: "paused" }, needsYou)).state
     ).toBe("paused");
+  });
+  it("a goal being shaped (open category) aggregates its sessions like an active one", () => {
+    for (const status of ["proposed", "agreed", "ready"]) {
+      expect(resolveUnitState(trackUnitInput({ status }, needsYou)).state).toBe(
+        "needs_you"
+      );
+    }
   });
   it("an active track aggregates its sessions", () => {
     expect(
@@ -348,7 +501,7 @@ describe("TRACK_STAGE_POSITIONS", () => {
 });
 
 describe("isTrackClosed", () => {
-  it("completed and archived are closed; active and paused are open", () => {
+  it("completed and archived are closed; open, active and paused are not", () => {
     // Rule ruled out: `isTrackRetired` (archived only) — a COMPLETED track
     // still offered stage starts on the phone.
     expect(isTrackClosed({ status: "completed" })).toBe(true);
@@ -356,6 +509,8 @@ describe("isTrackClosed", () => {
     // Rule ruled out: "not active" — a paused track resumes where it stands.
     expect(isTrackClosed({ status: "paused" })).toBe(false);
     expect(isTrackClosed({ status: "active" })).toBe(false);
+    // A goal being shaped is live, never closed.
+    expect(isTrackClosed({ status: "proposed" })).toBe(false);
   });
 
   it("reads CLOSED_TRACK_STATUSES — every status is closed iff it is listed", () => {

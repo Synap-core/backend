@@ -28,16 +28,10 @@ import {
   CREATABLE_VIEW_DEFINITIONS,
 } from "@synap-core/types/renderables";
 const CREATABLE_VIEW_TYPE_KEYS = CREATABLE_VIEW_DEFINITIONS.map((d) => d.key);
-import { PROJECT_TRACK_STATUSES } from "@synap/database/schema";
-
-/**
- * The track statuses `synap_set_track_status` OFFERS (work model W1): a track
- * is lasting — paused or archived, never completed. `completed` stays in the
- * column enum (0317's live-name index, CLOSED_TRACK_STATUSES) for legacy rows.
- */
-const OFFERED_TRACK_STATUSES = PROJECT_TRACK_STATUSES.filter(
-  (s) => s !== "completed"
-);
+import {
+  PROJECT_TRACK_STATUSES,
+  PROJECT_TRACK_VERDICTS,
+} from "@synap/database/schema";
 // The renderer `slot`/`scope` wire vocabularies — DERIVED, never hand-listed
 // (see renderer-slot-enum-parity.tripwire.test.ts).
 import {
@@ -3767,7 +3761,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List a project's TRACKS — the lasting goals it is pursuing (e.g. 'Grow the newsletter', 'Win the first ten clients' inside one project). Work in a track = synap_start_session with its trackId. A track holds a direction, instructions and a goal, and turns workers on; it has no stages and never completes. LEGACY: an old track also follows a project-scoped playbook (its method, with stages), pinned at the version it started with; a new track has none (playbookId null, no stages). Each row: id, name, playbookId, methodVersion, status (active|paused|completed|archived), pausedBy (check|human|null — why a paused track is held), currentStage and stages [{ key, name, position: done|active|not_started, addedAt? }] (addedAt marks a stage added after the start), direction (where it is heading, or null) and kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED, updatedAt says when). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects.",
+          "List a project's TRACKS — the lasting goals it is pursuing (e.g. 'Grow the newsletter', 'Win the first ten clients' inside one project). Work in a track = synap_start_session with its trackId. A track holds a direction, instructions and a goal, and turns workers on; it has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. LEGACY: an old track also follows a project-scoped playbook (its method, with stages), pinned at the version it started with; a new track has none (playbookId null, no stages). Each row: id, name, playbookId, methodVersion, status (proposed|agreed|ready|active|paused|completed|archived — completed reads Closed, archived Dropped), verdict (how a closed or dropped goal ended, else null) and verdictReason, pausedBy (check|human|null — why a paused track is held), currentStage and stages [{ key, name, position: done|active|not_started, addedAt? }] (addedAt marks a stage added after the start), direction (where it is heading, or null) and kpi ({ label, unit?, target, current?, updatedAt? } or null — current is STATED, updatedAt says when). Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3789,7 +3783,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Start a TRACK on a project — a LASTING goal (e.g. 'Grow the newsletter'): pass a `name`, a one-line `direction` in the person's words and, only if the person names a number, a `kpi`. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting, for as long as the goal lasts; it is paused or archived, never completed for hitting a number. No method needed and never stages: playbookId (a project-scoped playbook with stages) is OPTIONAL and legacy — omit it. Repeatable work under it = sessions that follow a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
+          "Start a TRACK on a project — a goal (e.g. 'Grow the newsletter'): pass a `name`, a one-line `direction` in the person's words and, only if the person names a number, a `kpi`. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting, for as long as the goal matters. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met — hitting a number never closes it. No method needed and never stages: playbookId (a project-scoped playbook with stages) is OPTIONAL and legacy — omit it. Repeatable work under it = sessions that follow a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3882,7 +3876,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "LEGACY — only a track started with a method has stages; a track with none is never advanced (work in it = synap_start_session with trackId). Only with the user. Move a track to one of its method's stages — forward OR back (stages are re-enterable; any stage key synap_list_tracks shows). Refused for a stage the method does not declare, or a completed/archived track. A stage may carry a GATE: a human gate pauses the track and files an approval (`proposalId` on the reply); a check gate measures the sessions filed at the stage being left (at least one closed, every closed one passing its criteria) and otherwise holds the track paused (pausedBy='check', `check.reason` says why) until resumed with synap_set_track_status status='active'. Entering a stage does NOT start work: the reply's `offer` is the session that stage suggests — offer it to the person, and start it with synap_start_stage_session only if they want it. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "LEGACY — only a track started with a method has stages; a track with none is never advanced (work in it = synap_start_session with trackId). Only with the user. Move a track to one of its method's stages — forward OR back (stages are re-enterable; any stage key synap_list_tracks shows). Refused for a stage the method does not declare, or a closed or dropped track. A stage may carry a GATE: a human gate pauses the track and files an approval (`proposalId` on the reply); a check gate measures the sessions filed at the stage being left (at least one closed, every closed one passing its criteria) and otherwise holds the track paused (pausedBy='check', `check.reason` says why) until resumed with synap_set_track_status status='active'. Entering a stage does NOT start work: the reply's `offer` is the session that stage suggests — offer it to the person, and start it with synap_start_stage_session only if they want it. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3909,18 +3903,28 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Pause, resume or archive a track. A track is LASTING: pause it while nobody should work on it (its agent loses access to the project's spaces until it resumes); archive it when the goal is dropped — archived is FINAL (start a new track with synap_start_track). Resuming (status='active') also releases a track a check gate held (pausedBy='check'). A move the table does not allow is refused with the reason. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "Move a track through its lifecycle: proposed, agreed, ready (a goal still being shaped), active, paused, completed (Closed) or archived (Dropped). A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met. Closing (status='completed') needs verdict met | partly_met | not_met; dropping it when it stopped mattering (status='archived') should carry verdict no_longer_needed | impossible | replaced | mistake, and impossible and replaced need verdictReason. Both are FINAL: a closed goal comes back only as a new version. Your close is ALWAYS a proposal the person approves — never close a goal the person has not judged. Pause it while nobody should work on it (its agent loses access to the project's spaces until it resumes). Resuming (status='active') also releases a track a check gate held (pausedBy='check'). A move the lifecycle does not allow, or a close without its verdict, is refused with the reason. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {
             trackId: { type: "string", description: "Track UUID" },
             status: {
               type: "string",
-              // OFFERED statuses only (W1): `completed` stays in the column's
-              // enum (0317, CLOSED_TRACK_STATUSES) but a lasting track is
-              // never completed. The handler still reads the full enum.
-              enum: [...OFFERED_TRACK_STATUSES],
+              // EVERY option of the track lifecycle — a goal can finish.
+              // Closing is governed by the lifecycle (human-only), not hidden.
+              enum: [...PROJECT_TRACK_STATUSES],
               description: "The status to move the track to.",
+            },
+            verdict: {
+              type: "string",
+              enum: [...PROJECT_TRACK_VERDICTS],
+              description:
+                "How the goal ended — required with status 'completed' (met | partly_met | not_met); should be given with 'archived' (no_longer_needed | impossible | replaced | mistake); refused with any other status.",
+            },
+            verdictReason: {
+              type: "string",
+              description:
+                "Why, in one line — required for verdict 'impossible' (what made it impossible) and 'replaced' (what replaced it).",
             },
             reasoning: {
               type: "string",
@@ -3929,6 +3933,43 @@ export const tools = {
             },
           },
           required: ["trackId", "status"],
+        },
+      },
+      {
+        name: "synap_reopen_track",
+        annotations: {
+          title: "Reopen track",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Reopen a CLOSED or DROPPED track as a NEW version — a closed goal is final and never moves back. The new track carries the same name (or `name`), method, answers, direction and KPI definition (not its last stated value), starts active, and is linked to the old one (`replaces`); the old track keeps its status, its verdict and its sessions. Only the NEWEST version reopens: an old version a newer one already replaced is refused — reopen that one. A live track is refused (work in it instead). Idempotent: reopening again while the new version is live returns it with status='exists'. Governed like synap_start_track: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the new track.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            trackId: {
+              type: "string",
+              description:
+                "UUID of the closed or dropped track to reopen (synap_list_tracks with includeArchived lists dropped ones).",
+            },
+            name: {
+              type: "string",
+              description:
+                "Optional new name for the new version — omit it to keep the old one's (free once that track is not live).",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why the goal is reopened, in the person's words — shown to the reviewer. One line.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
+          },
+          required: ["trackId"],
         },
       },
       {
@@ -3969,7 +4010,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Set a track's DIRECTION (where it is heading, one line) and/or its KPI (the number it steers by). kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it (a new target) — the track keeps going; never move the target yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+          "Set a track's DIRECTION (where it is heading, one line) and/or its KPI (the number it steers by). kpi is MERGED onto the stored one: pass { current } to state the latest value (stamped with when and by whom — it is STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. direction null clears it. A KPI needs a label and a target. Reaching the target NUDGES the person to re-aim it or close the goal — a number reached never closes it; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
         inputSchema: {
           type: "object",
           properties: {

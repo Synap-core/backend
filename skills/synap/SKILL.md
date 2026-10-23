@@ -64,7 +64,7 @@ The ONE glossary; other skills point here. Word = what the user sees; internal =
 | ------------------- | ----------------------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Space**           | workspace               | which domain: kinds + tools?       | owns kinds, never done · CRM · not a project or method; findable, not emphasised                                                                                     |
 | **Project**         | project                 | what am I committed to, with whom? | ends with the commitment; spans spaces · a launch · not a task, method, or the owner's company                                                                       |
-| **Track**           | project_tracks          | what lasting intent am I pursuing? | inside ONE project, lasts, never completes; direction, instructions, goal; turns workers on; work in it = sessions · grow the newsletter · no stages                 |
+| **Track**           | project_tracks          | what goal am I pursuing?           | in ONE project; open while it matters, or a person closes it with a verdict; direction, goal; turns workers on; work = sessions · grow the newsletter · no stages    |
 | **Step**            | stage                   | where does this work stand?        | = the subject's status: move the thing, the step follows · legacy: steps of a track started from a method                                                            |
 | **Work**            | focus_session           | what am I doing this sitting?      | one goal · no noun: "Start work"                                                                                                                                     |
 | **Template**        | playbook                | how do I reuse it?                 | kind DERIVED, never declared: scope session = work template (a method a session or worker follows), project = track template (legacy); also space and rule templates |
@@ -105,12 +105,12 @@ A process is the life of a **thing**, not a script. A lead, a post or a feature 
 
 ### The nouns
 
-| Noun                 | What it is                                                                          | Not                                  |
-| -------------------- | ----------------------------------------------------------------------------------- | ------------------------------------ |
-| **Project**          | a commitment, and a lens across spaces                                              | a method, a domain                   |
-| **Track** (optional) | a LASTING intent in one project: direction, instructions, goal; it turns workers on | a list of stages; it never completes |
-| **Thing**            | any entity: one kind, maybe roles, one status per kind or role                      | a second entity for a hat            |
-| **Session**          | the unit of work that closes: goal, criteria, room; one thing or a batch            | a "run" because it follows a method  |
+| Noun                 | What it is                                                                                                             | Not                                 |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| **Project**          | a commitment, and a lens across spaces                                                                                 | a method, a domain                  |
+| **Track** (optional) | a goal in one project: direction, the workers it turns on; open while it matters, or a person closes it with a verdict | a list of stages                    |
+| **Thing**            | any entity: one kind, maybe roles, one status per kind or role                                                         | a second entity for a hat           |
+| **Session**          | the unit of work that closes: goal, criteria, room; one thing or a batch                                               | a "run" because it follows a method |
 
 Not nouns (nobody manages them as objects): a **pipeline** is a view of a lifecycle; a **worker** is configuration (a method + a trigger + a size); a **method** is a playbook a session may follow; a **check** is a recurring verification.
 
@@ -150,7 +150,7 @@ A worker is a playbook **activator**, declared on the method and owned by the li
 
 ### Tracks
 
-A track holds an owner, a direction, instructions, the workers it turns on, and a goal (stated, or measured as transitions into `done`). It has no stages and never completes: pause or archive it. Work in it = `start_session` + `trackId`. A thing may count for two tracks. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old tracks started from a method; never `advance_track` without the user.
+A track holds an owner, a direction, instructions, the workers it turns on, and a goal (stated, or measured as transitions into `done`). It has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met (`set_track_status` `completed` + `verdict`; dropped = `archived`, with a `verdict` saying why). Your close is a proposal; a closed goal comes back only as a new version. Pause it while nobody should work on it. Work in it = `start_session` + `trackId`. A thing may count for two tracks. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old tracks started from a method; never `advance_track` without the user.
 
 ### The homes: what each space makes, what is moving
 
@@ -372,7 +372,7 @@ A skill your plan creates IS resolvable in the same batch: the automation door l
 
 ### 2c. A lasting goal inside a project → a TRACK
 
-A **track** is a lasting intent with a goal inside ONE project ("Grow the newsletter", "Win the first ten clients"); a project runs several. It holds a `direction` (one line, in the person's words) and, only if the person names a number, a `kpi` `{ label, unit?, target }`. It lasts: it is paused or archived, never "finished" for hitting a number. Work in it is ordinary sessions filed into it. Definitions: `concepts`.
+A **track** is a goal inside ONE project ("Grow the newsletter", "Win the first ten clients"); a project runs several. It holds a `direction` (one line, in the person's words) and, only if the person names a number, a `kpi` `{ label, unit?, target }`. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met — hitting a number never closes it. Work in it is ordinary sessions filed into it. Definitions: `concepts`.
 
 **Asked to pursue a goal in a project** ("keep growing the newsletter in Synap"): `synap_list_tracks` for the project (already running? resume it) → none? `synap_start_track` with `projectId`, a `name`, the `direction` and any `kpi` the person named — no method needed. Then work: `synap_start_session` with `trackId`, one session per sitting, as many as it takes.
 
@@ -384,7 +384,7 @@ A **track** is a lasting intent with a goal inside ONE project ("Grow the newsle
 | new **kinds of things** no workspace owns        | a workspace (four-test, `workspace-design`) — never to represent a track                                               |
 | a new long-lived commitment with its own gravity | a project — never a twin project for a track of an existing one                                                        |
 
-**A track steers; its sessions verify.** Report progress with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it; never change the target yourself. While a track is active, its agent may work in the spaces its project links (`synap_project_use_workspace`); pausing it suspends that, archiving ends it. Pause, resume or archive it with `synap_set_track_status`. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start tracks — start each one.
+**A track steers; its sessions verify.** Report progress with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it or close the goal; never change the target or close the goal yourself. While a track is active, its agent may work in the spaces its project links (`synap_project_use_workspace`); pausing it suspends that, closing or dropping it ends it. Pause, resume, close (`completed` + a `verdict`) or drop (`archived`, with a `verdict` saying why) it with `synap_set_track_status`; your close is a proposal the person approves. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start tracks — start each one.
 
 **Legacy: tracks with stages.** A track started from a track template (`scope: "project"`, `playbookId` on `synap_start_track`) has re-enterable stages. Work a stage with `synap_start_stage_session` (`trackId`, optional `stageKey`); never `synap_advance_track` without the user — advancing returns an `offer` (show it, start it only on a yes). Do not create new track templates; a new track needs none.
 

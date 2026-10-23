@@ -199,6 +199,10 @@ beforeAll(async () => {
       stage_history jsonb not null default '[]'::jsonb,
       direction text,
       kpi jsonb,
+      verdict text,
+      verdict_reason text,
+      verdict_by text,
+      verdict_at timestamptz,
       metadata jsonb not null default '{}'::jsonb,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()

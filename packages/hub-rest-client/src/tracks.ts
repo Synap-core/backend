@@ -14,7 +14,34 @@
 
 import type { HubFocusSession } from "./types.js";
 
-export type HubTrackStatus = "active" | "paused" | "completed" | "archived";
+/**
+ * A track's status — the option keys of its system lifecycle: open (proposed ·
+ * agreed · ready), active, paused, done (`completed`, read "Closed") and lost
+ * (`archived`, read "Dropped"). Mirror of `TrackStatus`
+ * (`@synap-core/types/units`), pinned EQUAL by `parity/track-status.floor.ts`
+ * (this package has zero dependencies, so it cannot import the original).
+ */
+export type HubTrackStatus =
+  | "proposed"
+  | "agreed"
+  | "ready"
+  | "active"
+  | "paused"
+  | "completed"
+  | "archived";
+
+/**
+ * How a closed (`completed`) or dropped (`archived`) goal ended. Mirror of
+ * `TrackVerdict` (`@synap-core/types/units`), pinned by the same floor.
+ */
+export type HubTrackVerdict =
+  | "met"
+  | "partly_met"
+  | "not_met"
+  | "no_longer_needed"
+  | "impossible"
+  | "replaced"
+  | "mistake";
 
 export interface HubTrackStage {
   key: string;
@@ -54,6 +81,10 @@ export interface HubTrack {
     enteredAt: string;
     actor: string;
   }>;
+  /** How a closed or dropped goal ended — `null` while it is live. */
+  verdict?: HubTrackVerdict | null;
+  /** Why, in words — present for `impossible` and `replaced`. */
+  verdictReason?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -74,8 +105,8 @@ export interface ListTracksOptions {
 export interface StartTrackInput {
   projectId: string;
   /**
-   * A project-scoped playbook (the method) — OPTIONAL: a track is a lasting
-   * intent with a goal; omit it for a stage-less track (then `name` is required).
+   * A project-scoped playbook (the method) — OPTIONAL: a track is a goal;
+   * omit it for a stage-less track (then `name` is required).
    */
   playbookId?: string;
   name?: string;
@@ -127,6 +158,20 @@ export type HubAdvanceTrackResult =
       offer: HubStageSessionOffer | null;
     }
   | HubTrackProposed;
+
+/** How a status move closes (`completed`) or drops (`archived`) the goal. */
+export interface TrackCloseInput {
+  /** Required to close or drop: met · partly_met · not_met, or no_longer_needed · impossible · replaced · mistake. */
+  verdict: HubTrackVerdict;
+  /** Required for `impossible` and `replaced`. */
+  verdictReason?: string;
+}
+
+export interface ReopenTrackInput {
+  /** A new name — absent ⇒ the closed track's own. */
+  name?: string;
+  reasoning?: string;
+}
 
 export type HubTrackWriteResult =
   { status: "updated" | "unchanged"; track: HubTrack } | HubTrackProposed;

@@ -5176,6 +5176,9 @@ export interface PlaybookRunExternalAgent {
 	startedAt: string;
 }
 declare const PROJECT_TRACK_STATUSES: readonly [
+	"proposed",
+	"agreed",
+	"ready",
 	"active",
 	"paused",
 	"completed",
@@ -9505,6 +9508,14 @@ export interface UnitStateView {
 	glyph: UnitGlyph;
 	rail: UnitRail;
 }
+declare const LIFECYCLE_CATEGORIES$1: readonly [
+	"open",
+	"active",
+	"paused",
+	"done",
+	"lost"
+];
+type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 declare const TRACK_STAGE_POSITIONS: readonly [
 	"done",
 	"active",
@@ -9571,6 +9582,16 @@ export interface TrackStageCheckVerdict {
 	failing: string[];
 	reason?: string;
 }
+declare const TRACK_VERDICTS: readonly [
+	"met",
+	"partly_met",
+	"not_met",
+	"no_longer_needed",
+	"impossible",
+	"replaced",
+	"mistake"
+];
+export type TrackVerdict = (typeof TRACK_VERDICTS)[number];
 /**
  * WHY a paused track is paused — projected by the pod on every track read.
  *   - `check` — a check stage gate held it (the gate's `metadata.checkGate`
@@ -14140,14 +14161,6 @@ export type ExecuteCapabilityResult = {
 	kind: "not_found";
 	message: string;
 };
-declare const LIFECYCLE_CATEGORIES$1: readonly [
-	"open",
-	"active",
-	"paused",
-	"done",
-	"lost"
-];
-type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 export interface DependencyNodeRef {
 	kind: string;
 	id: string;
@@ -18449,6 +18462,18 @@ export interface TrackView {
 	 * (with `updatedAt` / `updatedBy`), never measured.
 	 */
 	kpi: TrackKpi | null;
+	/**
+	 * How the track ENDED (0344, R1) — `null` while it is live, and on a track
+	 * dropped before verdicts existed. Read with its category: done verdicts
+	 * (met · partly_met · not_met) on a closed track, lost ones on a dropped one.
+	 */
+	verdict: TrackVerdict | null;
+	/** Why, in words — always present for `impossible` and `replaced`. */
+	verdictReason: string | null;
+	/** The person who closed it (the approver when an agent proposed it). */
+	verdictBy: string | null;
+	/** ISO-8601 — when it was closed; `null` when not recorded (before 0344). */
+	verdictAt: string | null;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -44094,6 +44119,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				items: TrackView[];
 			};
 		}>;
+		reopen: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				name?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			meta: object;
+			output: (ProposedOutcome & {
+				missingDomains: string[];
+			}) | {
+				status: "exists" | "started";
+				track: TrackView;
+			};
+		}>;
 		setDirection: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				direction?: string | null | undefined;
@@ -44128,7 +44167,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				reasoning?: string | undefined;
-				status: "active" | "archived" | "completed" | "paused";
+				status: "active" | "agreed" | "archived" | "completed" | "paused" | "proposed" | "ready";
+				verdict?: "impossible" | "met" | "mistake" | "no_longer_needed" | "not_met" | "partly_met" | "replaced" | undefined;
+				verdictReason?: string | undefined;
 			};
 			meta: object;
 			output: ProposedOutcome | {
