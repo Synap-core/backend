@@ -17,10 +17,10 @@ one to the module. No pod scopes a cookie or a first-party base to `pod.synap.li
 Every item must be true first. Once a browser ships the entry it can't be rolled back on our schedule.
 
 - [ ] Synap's own cookies are host-only: the Control Plane session, the hosted apps' session and
-      `SYNAP_INSTANCE_URL` (wave 6 lane G7c). A `Domain=.synap.live` cookie is still sent to every pod host,
+      `SYNAP_INSTANCE_URL`. A `Domain=.synap.live` cookie is still sent to every pod host,
       so this matters whether or not the entry is accepted.
 - [ ] Federated sign-in from the hosted apps runs as a top-level navigation on the pod, not a credentialed
-      cross-site fetch (lane G7c).
+      cross-site fetch.
 - [ ] Every live pod has moved to `{name}.pod.synap.live` (Control Plane `pnpm ops:move-pod-names`), every move
       window has ended (`--end-windows`), and no pod is left under `synap.live`, nested or flat.
 - [ ] A role mailbox exists and is watched, with replies within 30 days: `security@synap.live`.

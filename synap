@@ -1025,21 +1025,24 @@ generate_kratos_config() {
         done <<< "$first_party_origins"
     fi
 
-    # Generate allowed return URLs. The relay-app (Expo/React Native) completes
-    # federated "Continue with Synap Cloud" sign-in via WebBrowser.openAuthSession
-    # → the ephemeral browser returns to a DEEP LINK, so its custom scheme must be
-    # an allowed Kratos return_to (app-level, present in every env — relay's
-    # app.json declares both the `synap` and `relay` schemes).
-    local return_urls="    - http://localhost:3000
+    # Generate allowed return URLs. The desktop and phone apps complete
+    # federated "Continue with Synap Cloud" sign-in in an auth window or
+    # browser that returns to a DEEP LINK: exactly synap://auth/callback
+    # (CLOUD_SIGN_IN_RETURN_TO in both apps), in every env. Kratos matches the
+    # scheme and host and treats the path as a prefix, so nothing else under
+    # the scheme is admitted. The localhost dev apps only on a localhost pod: a
+    # production pod never hands a return code to a page on the user's machine.
+    local return_urls="    - synap://auth/callback"
+
+    if [ "$is_localhost" = true ]; then
+        return_urls="$return_urls
+    - http://localhost:3000
     - http://localhost:3000/*
     - http://localhost:4000
     - http://localhost:4000/*
     - http://localhost:4040
-    - http://localhost:4040/*
-    - synap://auth/callback
-    - relay://auth/callback"
-
-    if [ "$is_localhost" = false ]; then
+    - http://localhost:4040/*"
+    else
         return_urls="$return_urls
     - https://${domain}
     - https://${domain}/*
