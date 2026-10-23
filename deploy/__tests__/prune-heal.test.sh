@@ -21,7 +21,7 @@
 #   (e) heal: budget 3 per window, then stops (+ doctor marker); postgres is
 #       never restarted (alert once); skips while the update lock is held;
 #       restores kratos.yml.good on a crash-looping Kratos
-#   + pre-update dumps (newest 2 + the pinned one), the unattended update path
+#   + pre-update dumps (newest 2 + every dump an update record names), the unattended update path
 #     (request contract, policy, window, enforce), units install/status/remove,
 #     `synap clean` scoped to this pod, and a static no-global-prune scan.
 #
@@ -258,6 +258,31 @@ dump 20261012T000000Z-pre-update && dump 20261010T000000Z-pre-update && ! dump 2
   && ok "dumps: the newest 2 pre-update dumps kept, an older one removed" || bad "dumps: pre-update $(ls "$DEPLOY/backups/postgres" | tr '\n' ' ')"
 dump 20261001T000000Z-pre-update && ok "dumps: the pre-update dump the current release names is kept (pinned)" || bad "dumps: pinned dump removed"
 dump 20260901T000000Z-manual && dump 20261014T090000Z-auto && ok "dumps: manual and scheduled dumps never touched" || bad "dumps: manual/auto removed"
+# A dump an update record names is never pruned (_bk_pinned_dumps): the newest
+# rolled-back update whose schema MOVED (its `synap restore` command is the one
+# still worth running), the latest outcome, the running release's dump.
+setup pinned; dumps_fixture; mkdump 20261003T000000Z-pre-update; mkdump 20261008T000000Z-pre-update
+P="$DEPLOY/backups/postgres"
+{ ev() { jq -cn --arg s "$1" --arg sc "$2" --arg b "$P/$3" '{kind:"pod.update", status:$s, schema:$sc, backup:$b}'; }
+  ev rolled_back migrated 20261003T000000Z-pre-update       # superseded by the next one
+  ev rolled_back unknown 20261005T000000Z-pre-update        # newest whose schema moved → kept
+  printf '{"kind":"pod.update","status":"rolled_b\n'        # a torn append never hides the rest
+  ev rolled_back unchanged 20260901T000000Z-manual          # a canary rollback offers no restore
+  jq -cn '{kind:"heal", status:"rolled_back", schema:"migrated", backup:"x/20261003T000000Z-pre-update"}'
+} > "$DEPLOY/state/events.jsonl"
+jq -cn --arg b "$P/20261008T000000Z-pre-update" '{kind:"pod.update", status:"aborted", backup:$b}' > "$DEPLOY/state/last-update.json"
+run_synap clean images
+dump 20261005T000000Z-pre-update && dump 20261008T000000Z-pre-update && dump 20261001T000000Z-pre-update \
+  && dump 20261012T000000Z-pre-update && dump 20261010T000000Z-pre-update && ! dump 20261003T000000Z-pre-update \
+  && ok "dumps: kept = newest 2 + the newest schema-moving rollback's (events.jsonl) + last-update's + the current release's; an older rollback's pruned" \
+  || { bad "dumps (pinned): $(ls "$P" | tr '\n' ' ')"; show; }
+# Records that exist but cannot be read (jq fails) → nothing pruned, said so.
+mkdir -p "$S/badjq"; printf '#!/bin/sh\necho "jq: error" >&2; exit 2\n' > "$S/badjq/jq"; chmod +x "$S/badjq/jq"
+for d in 20261003T000000Z-pre-update 20260920T000000Z-pre-update; do mkdump "$d"; done
+before="$(ls "$P" | grep -c -- '-pre-update$')"
+out="$( PATH="$S/badjq:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" bash -c 'source "$1/pgdata-safety.sh"; _bk_prune_label pre-update 2' _ "$DEPLOY" 2>&1 )"
+[ "$(ls "$P" | grep -c -- '-pre-update$')" = "$before" ] && [ "$before" -gt 2 ] && grep -q "no pre-update dump pruned this time" <<<"$out" \
+  && ok "dumps: unreadable update records prune nothing (an unreadable keep-list is not an empty one)" || bad "dumps (unreadable): before=$before now=$(ls "$P" | tr '\n' ' ') out=$out"
 setup norecord; rm -f "$DEPLOY/state/current-release.json"
 run_synap clean images
 ! grep -q "^rmi" "$FAKE/log" && ok "(b) no release record: no image is removed" || bad "norecord: $(grep '^rmi' "$FAKE/log")"
@@ -374,8 +399,10 @@ n_tpl="$(ls "$HERE/deploy/systemd" | grep -cE '\.(service|timer|path)$')"
   && grep -q "^Environment=SYNAP_DEPLOY_DIR=$(cd "$DEPLOY" && pwd -P)$" "$U/synap-update.service" && grep -q "^PathExists=$(cd "$DEPLOY" && pwd -P)/state/requests/update.json$" "$U/synap-update.path" \
   && ok "units: rendered with this CLI + deploy dir (no placeholder left)" || bad "units render: $(grep -h 'ExecStart\|DEPLOY\|PathExists' "$U"/* | head -5)"
 grep -q "^ExecStart=.* update --unattended$" "$U/synap-update.service" && grep -q "^TimeoutStartSec=90min$" "$U/synap-update.service" && ok "units: synap-update.service = update --unattended, 90 min" || bad "update unit"
-grep -q "enable --now synap-heal.timer synap-update.path" "$FAKE/systemctl_log" && ! grep -q "enable.*synap-update.timer" "$FAKE/systemctl_log" \
-  && ok "units: the heal timer and the request path enabled; the update TIMER left off" || bad "systemctl: $(cat "$FAKE/systemctl_log")"
+en="$(grep '^enable --now synap-heal.timer ' "$FAKE/systemctl_log" | head -1)"; paths="$(cd "$U" && ls synap-*.path)"; miss=""
+for p in $paths; do [[ " $en " == *" $p "* ]] || miss="$miss $p"; done
+[ -n "$en" ] && [ "$(echo "$paths" | grep -c .)" -ge 3 ] && [ -z "$miss" ] && ! grep -q "enable.*synap-update.timer" "$FAKE/systemctl_log" \
+  && ok "units: the heal timer and every request path ($(echo $paths)) enabled; the update TIMER left off" || bad "systemctl (missing:$miss): $(cat "$FAKE/systemctl_log")"
 : > "$FAKE/systemctl_log"; SYSD_RUN="$TMP/run-systemd" run_synap units install --enable-auto-update
 grep -q "enable --now synap-update.timer" "$FAKE/systemctl_log" && ok "units: --enable-auto-update opts in" || { bad "auto-update not enabled: $(cat "$FAKE/systemctl_log")"; show; }
 sed -i.x 's#SYNAP_DEPLOY_DIR=.*#SYNAP_DEPLOY_DIR=/srv/other/deploy#' "$U/synap-heal.service"; rm -f "$U/synap-heal.service.x"

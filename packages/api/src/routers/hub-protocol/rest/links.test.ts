@@ -1,7 +1,7 @@
 /**
  * Hub Protocol REST — POST /links workspace-endpoint membership tests.
  *
- * Wave 4 of WORKSPACE-RESOLUTION-PLAN.md added a security check: when either
+ * Wave 4 of WORKSPACE-RESOLUTION-PLAN (team pod) added a security check: when either
  * endpoint of a link is `workspace`, the acting user must ALSO be a member of
  * THAT endpoint workspace (not just the stamped `workspaceId`). Without it, a
  * member of consumer workspace A could wire `provider(B) --feeds--> A` and
@@ -89,7 +89,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-vi.mock("@synap/database/schema", () => ({
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
   workspaces: { id: "id", archivedAt: "archived_at" },
   projects: { id: "id", workspaceId: "workspace_id", userId: "user_id" },
 }));
@@ -192,6 +193,7 @@ const governedDependencyLinkMock = vi.fn(
   })
 );
 vi.mock("../../../services/links/dependency-links.js", () => ({
+  DEPENDENCY_CYCLE_ERROR: "cycle",
   governedDependencyLink: (i: Record<string, unknown>) =>
     governedDependencyLinkMock(i),
 }));

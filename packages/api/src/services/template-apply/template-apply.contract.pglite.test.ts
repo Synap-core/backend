@@ -277,7 +277,10 @@ vi.mock("../../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
 vi.mock("../../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn().mockResolvedValue(false),
 }));
-vi.mock("@synap/events", () => ({ emitSideEffects: async () => {} }));
+vi.mock("@synap/events", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/events")>()),
+  emitSideEffects: async () => {},
+}));
 vi.mock("@synap/storage", () => ({ storage: {} }));
 vi.mock("../playbooks/playbook-activators.js", () => ({
   convergePlaybookActivatorsSafely: async () => undefined,

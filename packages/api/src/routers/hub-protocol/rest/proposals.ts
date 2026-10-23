@@ -41,6 +41,10 @@ import {
 } from "../../../services/proposals/dev-approval.js";
 import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
 import { createHubProtocolCallerContext } from "../utils.js";
+import {
+  PROPOSAL_IDS_FILTER_MAX,
+  proposalIdsFilterSchema,
+} from "../../proposals/scope-conditions.js";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
 import {
   identityResolutionByRefInput,
@@ -125,7 +129,7 @@ export function registerProposalsRoutes(app: HubHono): void {
       },
       400: {
         description:
-          "Malformed sessionId/workspaceId, or unknown status / view",
+          "Malformed sessionId/workspaceId/proposalIds, or unknown status / view",
         schema: ErrorSchema,
       },
       403: { description: "Missing scope", schema: ErrorSchema },
@@ -462,6 +466,31 @@ export function registerProposalsRoutes(app: HubHono): void {
         );
       }
     }
+    // `proposalIds` — comma-separated and/or repeated. Parsed by the SAME
+    // schema the procedure applies (uuids, ≤ PROPOSAL_IDS_FILTER_MAX), here so
+    // a malformed id is a 400 rather than a zod 500. A present-but-empty value
+    // (`?proposalIds=`) is an empty batch: it matches nothing, never "all".
+    const rawProposalIds = c.req.queries("proposalIds");
+    let proposalIds: string[] | undefined;
+    if (rawProposalIds) {
+      const parsed = proposalIdsFilterSchema.safeParse(
+        rawProposalIds.flatMap((v) =>
+          v
+            .split(",")
+            .map((id) => id.trim())
+            .filter(Boolean)
+        )
+      );
+      if (!parsed.success) {
+        return c.json(
+          {
+            error: `Invalid proposalIds: expected at most ${PROPOSAL_IDS_FILTER_MAX} uuids`,
+          },
+          400
+        );
+      }
+      proposalIds = parsed.data;
+    }
     const limit = Math.min(
       Math.max(rawLimit ?? DEFAULT_PAGE_SIZE, 1),
       MAX_PAGE_SIZE
@@ -491,6 +520,7 @@ export function registerProposalsRoutes(app: HubHono): void {
         ...(workspaceId ? { workspaceId } : {}),
         status,
         ...(sessionId ? { sessionId } : {}),
+        ...(proposalIds ? { proposalIds } : {}),
         limit,
         offset,
       });

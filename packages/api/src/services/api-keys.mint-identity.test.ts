@@ -22,7 +22,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 /** Captures the object handed to `.values()` on the last insert. */
 let lastInsertValues: Record<string, unknown> | undefined;
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
   const insert = vi.fn(() => ({
     values: (v: Record<string, unknown>) => {
       lastInsertValues = v;
@@ -31,6 +31,7 @@ vi.mock("@synap/database", () => {
   }));
 
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     db: { insert, select: vi.fn(), update: vi.fn() },
     sql: vi.fn(),
     drizzleSql: Object.assign(vi.fn(), { raw: vi.fn() }),

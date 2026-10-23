@@ -523,6 +523,7 @@ export interface UnfinishedCapture {
  * question, or suggestions nobody filed or refused — touched in the last
  * {@link UNFINISHED_CAPTURE_WINDOW_MS}. Owner-floored (a capture room is the
  * owner's). `truncated` when the scan hit its cap. A failed read THROWS.
+ * SESSION-KIND-LENS-EXEMPT: returns UnfinishedCapture needs-you rows, never a session row; the population is the owner's own capture rooms (owner floor + capturePartInRoom), not a kind/triage list.
  */
 export async function listUnfinishedCaptures(args: {
   userId: string;

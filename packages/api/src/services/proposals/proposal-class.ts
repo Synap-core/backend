@@ -198,6 +198,7 @@ export const DURABLE_OBJECT_VERBS: ReadonlySet<string> = new Set([
   "graph.link",
   "document.create",
   "document.update",
+  "document.stamp_diagnostics",
   "entity_facet.attach",
   "entity_facet.update",
   "entity_facet.detach",

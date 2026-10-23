@@ -71,6 +71,12 @@ vi.mock(
 vi.mock("../../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: h.perm,
 }));
+// FB1020 B3: the proof is decided by `own-organise.ts` (its own tests); here
+// only what the door does with the answer.
+const own = vi.hoisted(() => ({ close: vi.fn(async () => false) }));
+vi.mock("../../governance/own-organise.js", () => ({
+  ownWorkOrganiseForTaskClose: own.close,
+}));
 
 import { moveStatus, statusMoveActorFor } from "../move-status.js";
 
@@ -83,6 +89,8 @@ beforeEach(() => {
   h.expire.mockClear();
   h.actioned.mockReset();
   h.current = "negotiating";
+  own.close.mockReset();
+  own.close.mockResolvedValue(false);
 });
 
 describe("moveStatus door", () => {
@@ -272,5 +280,74 @@ describe("statusMoveActorFor (who a request-door move is made by)", () => {
       actor: { kind: "agent", userId: "u1", agentUserId: "a1" },
       approvedProposalId: "p1",
     });
+  });
+});
+
+/**
+ * fb1020: `in_progress` for a declared `in-progress` used to fail only after
+ * the call. The door's input normaliser moves a case/separator variant to the
+ * declared option, BEFORE governance — so the proposal, the write and the
+ * event all carry the canonical key, and a human-only option stays human-only.
+ */
+describe("moveStatus input normaliser", () => {
+  it("a case/separator variant moves to the declared option, governed as that option", async () => {
+    h.perm.mockResolvedValue({
+      granted: false,
+      proposalId: "p7",
+      proposalType: "entity.transition",
+      reviewUrl: "x",
+    });
+    const r = await moveStatus({ entityId: "e1", to: "WON", actor: AGENT });
+    expect(r).toMatchObject({ status: "proposed", proposalId: "p7" });
+    expect(h.perm.mock.calls[0][0]).toMatchObject({
+      lifecycleMove: { intoTerminal: true, humanOnly: true },
+      data: { to: "won" },
+    });
+  });
+
+  it("writes the declared key, never the caller's spelling", async () => {
+    h.perm.mockResolvedValue({ granted: true });
+    h.apply.mockResolvedValue({ status: "moved", transition: { to: "lost" } });
+    await moveStatus({ entityId: "e1", to: " Lost", actor: AGENT });
+    expect(h.apply.mock.calls[0][1]).toMatchObject({ to: "lost" });
+  });
+
+  it("an unrelated value is still refused, naming the options", async () => {
+    const r = await moveStatus({ entityId: "e1", to: "closed", actor: AGENT });
+    expect(r).toMatchObject({ status: "refused", code: "UNKNOWN_OPTION" });
+    expect((r as { reason: string }).reason).toContain(
+      "draft, negotiating, won, lost"
+    );
+    expect(h.perm).not.toHaveBeenCalled();
+  });
+});
+
+describe("moveStatus door — FB1020 B3: closing its own fresh task", () => {
+  it("an agent's terminal move carries the proof when own-organise grants it", async () => {
+    own.close.mockResolvedValue(true);
+    h.perm.mockResolvedValue({ granted: true, autoApprovedProposalId: "r1" });
+    h.apply.mockResolvedValue({ status: "moved", transition: { to: "lost" } });
+    await moveStatus({ entityId: "e1", to: "lost", actor: AGENT });
+    expect(own.close).toHaveBeenCalledTimes(1);
+    expect(h.perm.mock.calls[0][0]).toMatchObject({ ownWorkOrganise: true });
+  });
+
+  it("no proof without the grant, for a non-terminal move, or for a person", async () => {
+    h.perm.mockResolvedValue({ granted: true });
+    h.apply.mockResolvedValue({ status: "moved", transition: { to: "x" } });
+    await moveStatus({ entityId: "e1", to: "lost", actor: AGENT });
+    expect(h.perm.mock.calls[0][0]).not.toHaveProperty("ownWorkOrganise");
+
+    own.close.mockResolvedValue(true);
+    await moveStatus({ entityId: "e1", to: "draft", actor: AGENT });
+    await moveStatus({
+      entityId: "e1",
+      to: "lost",
+      actor: { kind: "human", userId: "u1" },
+    });
+    expect(own.close).toHaveBeenCalledTimes(1); // only the agent's terminal move asked
+    for (const call of h.perm.mock.calls.slice(1)) {
+      expect(call[0]).not.toHaveProperty("ownWorkOrganise");
+    }
   });
 });

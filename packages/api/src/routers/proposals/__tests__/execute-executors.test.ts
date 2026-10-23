@@ -263,7 +263,8 @@ describe("(c) re-entering the door cannot re-trigger the gate", () => {
     const src = readSrc("routers/automations.ts");
     const block = src.slice(src.indexOf("  trigger: protectedProcedure"));
     expect(block).toContain(
-      "const agentUserId = input.agentUserId ?? ctx.agentUserId ?? undefined;"
+      // The AUTHENTICATED agent, never a body field (86d6125ba).
+      "const agentUserId = await actingAgentUserId(ctx, input.agentUserId);"
     );
     // The gate lives INSIDE `if (agentUserId) {` — an undefined agent skips it.
     const gateIdx = block.indexOf("checkPermissionOrPropose");

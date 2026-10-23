@@ -202,6 +202,20 @@ describe("POST /setup/service — surface-key minting", () => {
     expect(createAndVerifyServiceKey).not.toHaveBeenCalled();
   });
 
+  it("a person's app sign-in token (app_person) → 403, nothing minted (T1)", async () => {
+    // The same human member whose key mints in the positive control below —
+    // only the key TYPE differs, so the refusal is the type's.
+    asHumanMember();
+    validateApiKey.mockResolvedValue({
+      ...surfaceKey(HUMAN),
+      keyType: "app_person",
+    });
+    const res = await mint(makeApp());
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toContain("app sign-in cannot mint keys");
+    expect(createAndVerifyServiceKey).not.toHaveBeenCalled();
+  });
+
   it("positive control: a human member's key mints a key it owns", async () => {
     validateApiKey.mockResolvedValue(surfaceKey(HUMAN));
     resolveKeyIdentity.mockResolvedValue({

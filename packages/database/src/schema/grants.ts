@@ -15,7 +15,7 @@
  * ONE write door: `GrantRepository` (repositories/grant-repository.ts).
  * A key with no live grant may touch NOTHING (P5, deny by default: every mint
  * attaches one; 0318 backfilled an explicit `*` on keys minted before).
- * Design: CONNECT-RESEARCH/13-w1-grants-design-2026-10-06.md.
+ * Design: the W1 grants design of 2026-10-06 (team pod).
  */
 
 import { index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";

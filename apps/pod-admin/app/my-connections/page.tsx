@@ -2,7 +2,8 @@
 
 /**
  * /my-connections — self-service view of everything that reaches MY pod:
- * Hub Protocol KEYS (CLI/agent) and Applications (App Connect v1).
+ * the Synap apps I am signed in to, Hub Protocol KEYS (CLI/agent) and
+ * Applications (App Connect v1).
  *
  * Any signed-in pod member can already mint their own CLI/agent key at
  * `/connect`; `apiKeys.list` / `apiKeys.revoke` exist and are already
@@ -21,6 +22,12 @@
  * Badge derivation is shared with Keys — see `categorize()` in
  * `../(admin)/keys/_lib/key-model.ts` — so "what type of
  * connection is this" never drifts between the two surfaces.
+ *
+ * A POD APP (a website the person connected at the pod's sign-in door) is one
+ * card under Applications, headlined by its domain. Its hourly access key is
+ * NOT listed under the keys (`managedKeys`): revoking that key would not stop
+ * the app (the next refresh mints another), so the app's Revoke is the one
+ * control, and it stops the app everywhere.
  */
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
@@ -28,8 +35,10 @@ import Link from "next/link";
 import { Button, Card, CardBody, Chip, Spinner, addToast } from "@heroui/react";
 import { Ban, ChevronDown, Plug, SquareCode } from "lucide-react";
 import { PageHeader } from "../(admin)/components/page-header";
+import { SignedInAppsSection } from "./_lib/signed-in-apps-section";
 import { ConfirmModal } from "../(admin)/components/confirm-modal";
 import { CopyButton } from "../_lib/copy-button";
+import { HostName } from "../_lib/host-name";
 import { trpc } from "../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../lib/auth-redirect";
 import {
@@ -37,6 +46,7 @@ import {
   CATEGORY_LABEL,
   holderName,
   keyStatus,
+  managedKeys,
   type UnifiedKey,
 } from "../(admin)/keys/_lib/key-model";
 import { formatRelative } from "../../lib/format";
@@ -55,6 +65,13 @@ import {
   resolveConnectionAction,
 } from "@synap-core/types/membrane";
 import { chipColor, type AppRow } from "../apps/_lib/app-view";
+import {
+  approvalSentence,
+  podAppOf,
+  podAppRevokeNote,
+  POD_APP_ACCESS_LINE,
+  tierLabel,
+} from "../apps/_lib/pod-app-view";
 
 /** How many rows a list shows before it offers "Show all N" (ui-composition §4). */
 const LIST_CAP = 6;
@@ -290,7 +307,8 @@ export default function MyConnectionsPage() {
     );
   }
 
-  const all = (keys.data ?? []) as UnifiedKey[] as ConnectionKey[];
+  // A pod app's own access key is the app's, shown on its card, not a key.
+  const all = managedKeys((keys.data ?? []) as UnifiedKey[] as ConnectionKey[]);
   const active = all.filter((k) => k.isActive);
   const revoked = all.filter((k) => !k.isActive);
 
@@ -310,8 +328,10 @@ export default function MyConnectionsPage() {
     <div className="mx-auto max-w-[900px] px-4 sm:px-6 py-10">
       <PageHeader
         title="Connected"
-        description="Every app you own and every key you've minted for this Pod, with exactly what each may touch. Revoking one here only affects you."
+        description="Every Synap app you're signed in to, every app you connected or registered, and every key you made for this pod, with exactly what each may touch. Signing out or revoking here only affects you."
       />
+
+      <SignedInAppsSection />
 
       <section className="mb-9 space-y-3" aria-labelledby="apps">
         <div className="flex items-center justify-between gap-3">
@@ -433,7 +453,7 @@ export default function MyConnectionsPage() {
         title={`Revoke "${pendingRevoke?.keyName ?? "this key"}"?`}
         consequence={
           <>
-            <p>Anything using this key loses access to this Pod.</p>
+            <p>Anything using this key loses access to this pod.</p>
             <p className="mt-2 text-foreground/65">
               Depending on the key, revoking may need admin approval before it
               takes effect.
@@ -455,17 +475,29 @@ export default function MyConnectionsPage() {
           if (!pendingRevokeApp) return;
           void doRevokeApp(pendingRevokeApp);
         }}
-        title={`${resolveConnectionAction("revoke").label} "${pendingRevokeApp?.name ?? "this app"}"?`}
+        title={`${resolveConnectionAction("revoke").label} ${
+          pendingRevokeApp
+            ? (podAppOf(pendingRevokeApp)?.domain ??
+              `"${pendingRevokeApp.name}"`)
+            : "this app"
+        }?`}
         consequence={
-          <p>
-            {pendingRevokeApp
-              ? resolveAppEndConsequence({
-                  state: resolveAppConnection(pendingRevokeApp).state,
-                  action: "revoke",
-                  hasReach: pendingRevokeApp.grants.length > 0,
-                }).confirm
-              : null}
-          </p>
+          <>
+            <p>
+              {pendingRevokeApp
+                ? resolveAppEndConsequence({
+                    state: resolveAppConnection(pendingRevokeApp).state,
+                    action: "revoke",
+                    hasReach: pendingRevokeApp.grants.length > 0,
+                  }).confirm
+                : null}
+            </p>
+            {pendingRevokeApp && podAppOf(pendingRevokeApp) ? (
+              <p className="mt-2">
+                {podAppRevokeNote(podAppOf(pendingRevokeApp)!.domain)}
+              </p>
+            ) : null}
+          </>
         }
         confirmLabel={resolveConnectionAction("revoke").label}
         isPending={revokingApp === pendingRevokeApp?.public_id}
@@ -584,8 +616,10 @@ function EmptyState() {
     <div className="flex flex-col items-start gap-3 rounded-lg border border-dashed border-foreground/15 px-4 py-5">
       <div className="flex items-center gap-3 text-sm text-foreground/65">
         <Plug size={17} className="shrink-0" />
-        You have no active connections yet.
+        You have no active keys yet.
       </div>
+      {/* `/connect` mints a key for a tool (the CLI, Raycast); an app on a
+          website connects from that website instead. */}
       <Button
         as="a"
         href="/connect"
@@ -593,7 +627,7 @@ function EmptyState() {
         variant="flat"
         className="min-h-10"
       >
-        Connect an app
+        Connect a tool
       </Button>
     </div>
   );
@@ -614,12 +648,20 @@ function AppCard({
   onRevoke?: () => void;
 }) {
   const view = resolveAppConnection(app);
+  // A pod app (it connected at the pod's sign-in door) is named by its
+  // domain and tier, and its reach is what the person approved per space.
+  const pod = podAppOf(app);
+  const lastUsed = pod ? pod.last_used_at : app.last_used_at;
   const meta = [
-    appMode(app.mode),
-    app.created_at ? `created ${formatRelative(app.created_at)}` : null,
-    app.last_used_at
-      ? `last used ${formatRelative(app.last_used_at)}`
-      : "never used",
+    pod ? null : appMode(app.mode),
+    pod
+      ? pod.connected_at
+        ? `connected ${formatRelative(pod.connected_at)}`
+        : null
+      : app.created_at
+        ? `created ${formatRelative(app.created_at)}`
+        : null,
+    lastUsed ? `last used ${formatRelative(lastUsed)}` : "never used",
   ]
     .filter(Boolean)
     .join(" · ");
@@ -627,7 +669,8 @@ function AppCard({
   return (
     <Card
       shadow="none"
-      className="relative border border-foreground/10 bg-content1"
+      // The whole card is the link (the title's `after:inset-0`): say so on hover.
+      className="relative border border-foreground/10 bg-content1 transition-colors hover:bg-foreground/[0.03]"
     >
       <CardBody className="gap-3 p-4">
         <div className="flex items-start justify-between gap-3">
@@ -637,11 +680,19 @@ function AppCard({
                 href={`/apps/${app.public_id}`}
                 className="rounded-sm after:absolute after:inset-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
-                {app.name}
+                {/* A pod app is its DOMAIN; its name is only what it calls itself. */}
+                {pod ? <HostName host={pod.domain} /> : app.name}
               </Link>
             </p>
             <p className="mt-1 text-xs text-foreground/65">
-              <span className="font-mono">{app.public_id}</span>
+              {pod ? (
+                <>
+                  Calls itself &ldquo;{app.name}&rdquo; ·{" "}
+                  {tierLabel(pod.verified)}
+                </>
+              ) : (
+                <span className="font-mono">{app.public_id}</span>
+              )}
             </p>
           </div>
           {view.showChip ? (
@@ -657,9 +708,14 @@ function AppCard({
         </div>
 
         <p className="text-xs text-foreground/70">
-          {appHolderAccess(app).sentence}
+          {pod && !app.revoked_at
+            ? approvalSentence(pod.approved)
+            : appHolderAccess(app).sentence}
         </p>
         <p className="text-xs text-foreground/65">{meta}</p>
+        {pod && !app.revoked_at ? (
+          <p className="text-xs text-foreground/65">{POD_APP_ACCESS_LINE}</p>
+        ) : null}
 
         {onRevoke ? (
           <div className="relative z-10 pt-1">
@@ -686,8 +742,9 @@ function AppEmptyState() {
     <div className="flex flex-col items-start gap-3 rounded-lg border border-dashed border-foreground/15 px-4 py-5">
       <div className="flex items-start gap-3 text-sm text-foreground/65">
         <SquareCode size={17} className="mt-0.5 shrink-0" />
-        <span>
-          You have no apps yet. Add a{" "}
+        <span className="text-pretty">
+          You have no apps yet. When you connect an app from its website, it
+          shows here. Building one? Add a{" "}
           <span className="font-mono">synap.app.json</span> to your repo and run
           the command below from it.
         </span>

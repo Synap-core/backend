@@ -21,7 +21,12 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  podAdminProcedure,
+  credentialProcedure,
+} from "../trpc.js";
 import {
   db,
   eq,
@@ -50,6 +55,7 @@ import {
   readTemplateStanding,
   type EnsureTemplateResult,
 } from "../services/ensure-template.js";
+import { grantWriteDenial } from "../utils/grant-write-check.js";
 import { TRPCError } from "@trpc/server";
 import {
   checkPermissionOrPropose,
@@ -86,6 +92,7 @@ import {
 } from "../utils/workspace-archive.js";
 import { AccessContext } from "../access/index.js";
 import { readSpaceStats } from "../services/workspace-stats.js";
+import { isHiddenAsArchived } from "../utils/workspace-archived.js";
 
 export { isPodReadableWorkspace } from "./workspaces/helpers.js";
 
@@ -273,7 +280,7 @@ const coreProcedures = {
       for (const m of memberships) {
         const workspace = m.workspace;
         if (!workspace) continue;
-        if (!includeArchived && workspace.archivedAt != null) continue;
+        if (isHiddenAsArchived(workspace, { includeArchived })) continue;
         if (appIdFilter) {
           const s = (workspace.settings ?? {}) as Record<string, unknown>;
           if (s.appId !== appIdFilter) continue;
@@ -296,7 +303,7 @@ const coreProcedures = {
 
       for (const workspace of podReadable) {
         if (byId.has(workspace.id)) continue;
-        if (!includeArchived && workspace.archivedAt != null) continue;
+        if (isHiddenAsArchived(workspace, { includeArchived })) continue;
         if (appIdFilter) {
           const s = (workspace.settings ?? {}) as Record<string, unknown>;
           if (s.appId !== appIdFilter) continue;
@@ -1281,8 +1288,6 @@ export const workspacesRouter = router({
   createFromDefinition: definitionEngineProcedures.createFromDefinition,
   reconcileFromDefinition: definitionEngineProcedures.reconcileFromDefinition,
   previewInvite: inviteProcedures.previewInvite,
-  acceptInviteViaCp: inviteProcedures.acceptInviteViaCp,
-  rejectInviteViaCp: inviteProcedures.rejectInviteViaCp,
   rejectInvite: inviteProcedures.rejectInvite,
   getMcpServers: mcpServersProcedures.getMcpServers,
   updateMcpServers: mcpServersProcedures.updateMcpServers,
@@ -1355,6 +1360,10 @@ export async function installTemplateFromCatalog(
   });
   return templateDoorReply(applied);
 }
+
+/** `ensureTemplate`'s refusal when a space the caller can't see holds it. */
+const TEMPLATE_HELD_OUT_OF_SIGHT =
+  "This template is already installed on this pod, in a space you can't see. Ask the person who runs that space to add you to it.";
 
 /**
  * Workspace CATALOG router — browse + slug-install the ONE marketplace catalog
@@ -1473,7 +1482,7 @@ export const workspaceCatalogRouter = router({
    * (`installTemplateFromCatalog`): same lookup, plan, layers and stamp as
    * every other door; the tier gate runs first.
    */
-  installFromCatalog: protectedProcedure
+  installFromCatalog: credentialProcedure
     .input(
       z.object({
         slug: z.string().min(1),
@@ -1496,8 +1505,11 @@ export const workspaceCatalogRouter = router({
    * reviewable proposal (approved through the `workspace/create` executor,
    * which replays the catalog definition), a person installs directly through
    * `installFromCatalog`. The definition is ALWAYS the catalog's.
+   *
+   * The answer is floored: a space the person or the key's grant can't see is
+   * never named, and a holder hidden that way is never installed over.
    */
-  ensureTemplate: protectedProcedure
+  ensureTemplate: credentialProcedure
     .input(
       z.object({
         slug: z.string().min(1),
@@ -1528,24 +1540,42 @@ export const workspaceCatalogRouter = router({
       // Same proposal payload the Hub `/packages/apply` door files, so the
       // `workspace/create` approve executor materializes it AND runs its
       // post-workspace layers (`source: "packages.apply"`).
+      const data = {
+        name: standing.template.name,
+        definition,
+        templateId: slug,
+        packageSlug: slug,
+        packageVersion: resolved.version,
+        proposalId: slug,
+        createdBy: "provisioning",
+        source: "packages.apply",
+        via: "workspaces.ensureTemplate",
+        ...(input.reason ? { reason: input.reason } : {}),
+      };
+      // A space the caller may not see holds the template or is its domain
+      // twin (the standing read hid it). Decided pod-wide: nothing is
+      // installed or filed. A scoped key gets the refusal the gate's rung 0
+      // gives it for any install, so it learns nothing it could not see.
+      if (standing.heldOutOfSight) {
+        const denied = await grantWriteDenial({
+          subjectType: "workspace",
+          action: "create",
+          workspaceId: null,
+          data,
+        });
+        throw new TRPCError(
+          denied
+            ? { code: "FORBIDDEN", message: denied }
+            : { code: "CONFLICT", message: TEMPLATE_HELD_OUT_OF_SIGHT }
+        );
+      }
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId,
         workspaceId: null,
         subjectType: "workspace",
         action: "create",
-        data: {
-          name: standing.template.name,
-          definition,
-          templateId: slug,
-          packageSlug: slug,
-          packageVersion: resolved.version,
-          proposalId: slug,
-          createdBy: "provisioning",
-          source: "packages.apply",
-          via: "workspaces.ensureTemplate",
-          ...(input.reason ? { reason: input.reason } : {}),
-        },
+        data,
       });
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });

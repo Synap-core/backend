@@ -9,6 +9,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import { twinsShownOnCard } from "../../services/duplicates/find-duplicate-candidates.js";
 import {
   db,
   eq,
@@ -65,13 +66,16 @@ import {
   classifyThrownFailure,
   failureRecord,
 } from "./failure-classification.js";
+import { assertFreshAuthentication } from "../../utils/device-session.js";
 import {
   redactDeepForStorage,
   redactForStorage,
 } from "../../utils/redact-secrets.js";
 import { registerApproveExecutors } from "./approve-executors.js";
+import { assertAppSignInMayApprove } from "../../services/app-sign-in-policy.js";
 import {
   assertMayDecideProposal,
+  assertMayDecideProposalAt,
   refuseAgentProposalApprover,
 } from "./review-authority.js";
 import {
@@ -534,6 +538,38 @@ export interface GovernanceWorkGuidelineProposalData {
   };
 }
 
+/**
+ * The composite `identityResolutionByRef` an approval applies: the approver's
+ * choices, over what the PROPOSAL proposed. A proposal may only propose
+ * `separate` (create a same-name row as a distinct subject — the create
+ * door's one weak-gate bypass, which a person accepts by approving); any
+ * other proposed verb, or a malformed map, is ignored. Only this human
+ * door reads it (`refuseAgentProposalApprover` above every apply).
+ */
+export function withProposedIdentityResolutions(
+  proposed: unknown,
+  chosen: Record<string, IdentityResolutionInput> | undefined
+): { identityResolutionByRef?: Record<string, IdentityResolutionInput> } {
+  const merged: Record<string, IdentityResolutionInput> = {};
+  if (proposed && typeof proposed === "object" && !Array.isArray(proposed)) {
+    for (const [ref, value] of Object.entries(
+      proposed as Record<string, unknown>
+    )) {
+      if (
+        value &&
+        typeof value === "object" &&
+        (value as { verb?: unknown }).verb === "separate"
+      ) {
+        merged[ref] = { verb: "separate" };
+      }
+    }
+  }
+  Object.assign(merged, chosen ?? {});
+  return Object.keys(merged).length > 0
+    ? { identityResolutionByRef: merged }
+    : {};
+}
+
 export async function applyProposalApproval(args: {
   proposal: NonNullable<
     Awaited<ReturnType<typeof db.query.proposals.findFirst>>
@@ -576,7 +612,26 @@ export async function applyProposalApproval(args: {
   // key, or an acting agent in the ALS) never applies one, whichever door.
   refuseAgentProposalApprover(args.ctx);
   assertMayDecideProposal("approve");
+  // D3: this door has the proposal, so it NAMES it — a key bounded to some
+  // spaces / projects / objects approves only there (a person's app sign-in
+  // token "cannot approve outside these spaces"). A signed-in session holds
+  // no grant and is unaffected.
+  assertMayDecideProposalAt("approve", "approve", args.proposal);
+  // A person signed in to an app may approve its OWN AI's proposals unless
+  // the app's owner turned that off (PR #29 M2, app-sign-in-policy.ts).
+  const viaApp = await assertAppSignInMayApprove(args.proposal);
   const result = await applyProposalApprovalInner(args);
+
+  // VISIBLE: an approval made inside an app is recorded as such on the
+  // proposal ("approved in <app>"), whoever's proposal it was.
+  if (viaApp && result.success && !result.alreadyApproved) {
+    await db
+      .update(proposals)
+      .set({
+        data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('approvedInApp', jsonb_build_object('publicId', ${viaApp.publicId}::text, 'name', ${viaApp.name}::text))`,
+      })
+      .where(eq(proposals.id, args.proposal.id));
+  }
 
   // THE REVIEWER'S NOTE. `approve` / `batchApprove` accepted `comment` and,
   // outside two executors' event payloads, dropped it: the proposal record
@@ -995,10 +1050,22 @@ async function applyProposalApprovalInner(
             ? { source: normalizeProposalSource(payload.source) }
             : {}),
           // One entry applies only to that ref. A singular identityResolution
-          // is intentionally not forwarded here.
-          ...(input.identityResolutionByRef
-            ? { identityResolutionByRef: input.identityResolutionByRef }
-            : {}),
+          // is intentionally not forwarded here. The producer may PROPOSE
+          // `separate` for a same-name row backed by a different strong
+          // signal (an import, `planImportIdentities`); approving the proposal
+          // accepts it, and the approver's own choice for a ref wins.
+          // The reviewer owns a same-name twin (B2b). An item with no verb
+          // keeps both for the twins its card SHOWED (approve as proposed —
+          // BLOCKER-2: no client could resolve a graph item, so a capture
+          // naming any record could only be rejected); a twin the card never
+          // showed refuses with its candidates, so the card asks.
+          askReviewerOnDuplicate: true,
+          reviewedTwinIdsByRef: twinsShownOnCard(proposal.data).byRef,
+          ...withProposedIdentityResolutions(
+            (payload as unknown as Record<string, unknown>)
+              .proposedIdentityResolutionByRef,
+            input.identityResolutionByRef
+          ),
           entityRef: (op, index) =>
             entityRefByIndex.get(index) ?? op.ref ?? opRef(index),
         }
@@ -1489,6 +1556,10 @@ async function applyProposalApprovalInner(
     });
   } else if (governanceFloor === "pod-admin") {
     await assertPodAdmin(userId);
+    // A privileged pod-wide write (a governance rule, a ceiling, a trusted
+    // issuer's reach) widens what agents and services may do: a console act,
+    // never a Synap app's device token (utils/device-session.ts).
+    assertFreshAuthentication(ctx);
   }
 
   // ═══════════════════════════════════════════════════════════════════════

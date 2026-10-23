@@ -34,11 +34,14 @@ import { auditLog } from "../../../utils/audit-log.js";
 import {
   appApprovalWithinAsked,
   applyApprovedReach,
+  assertOwnerMayGrant,
 } from "../../../services/app-connect.js";
 
 export function registerAppExecutors(): void {
   registerProposalExecutor({
     key: "app/connect",
+    // Approving widens a credential: never from a device session.
+    widensCredential: true,
     async execute({ proposal, userId, input, deps }) {
       const raw = (proposal.data ?? {}) as Record<string, unknown>;
       const inner = (raw.data ?? raw) as Record<string, unknown>;
@@ -105,6 +108,10 @@ export function registerAppExecutors(): void {
             "This app was revoked — register it again to ask for access.",
         });
       }
+
+      // The owner's own rights, read NOW: a role dropped since the request
+      // was filed must not reach the app's agent.
+      await assertOwnerMayGrant(app.ownerUserId, requests);
 
       const updated = await repo.setApprovedRequests(appId, requests);
       if (!updated) {

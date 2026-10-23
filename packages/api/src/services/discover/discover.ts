@@ -26,6 +26,7 @@
  * what makes the subtraction safe rather than lossy.
  */
 
+import type { OwedByPerson } from "./owed-by-person.js";
 import type { LibraryHealth } from "@synap-core/types/imports";
 import type { SessionsOwingGrade } from "../focus-sessions/session-nudges.js";
 import {
@@ -84,6 +85,7 @@ import {
   ONE_SPACE_PER_DOMAIN_REFLEX,
   ONE_SPACE_PER_DOMAIN_RULE,
 } from "../one-space-per-domain.js";
+import { isHiddenAsArchived } from "../../utils/workspace-archived.js";
 
 export type DiscoverDetail = "light" | "full";
 
@@ -151,6 +153,14 @@ export interface StartHere {
         }>;
       }
     | StartHereUnavailable;
+  /**
+   * What the PERSON owes — owed slots (questions, decisions, hand-backs only
+   * they can do), one row per session, newest first, each naming where the
+   * person finds it (`needs-you` / `proposed`). Raise these with the person.
+   * NOT `handedToYou`, which is the other direction (work handed to this
+   * agent). See `owed-by-person.ts`.
+   */
+  owedByPerson: OwedByPerson | StartHereUnavailable;
   openSessions:
     | {
         count: number;
@@ -214,7 +224,7 @@ export interface StartHere {
       }
     | StartHereUnavailable;
   /**
-   * The person's Library (what they KEEP, CAPTURE_LIBRARY_PLAN L5): items not
+   * The person's Library (what they KEEP, capture-vs-library decision, wave L5): items not
    * read yet, groups waiting to be built, the oldest wait. State, not a queue —
    * there is no inbox counter to clear. `library.health` is the same read.
    */
@@ -371,6 +381,11 @@ interface DiscoverWorkspace {
    * (or a person's own orient).
    */
   joined?: false;
+  /**
+   * Present (and `true`) only on a PINNED archived space — unpinned, an
+   * archived space is not listed at all (`isHiddenAsArchived`).
+   */
+  archived?: true;
   /**
    * The stored brief, read through THE reader (`readSpaceBrief`): light
    * carries `{ goal }` only; full, the whole normalized brief.
@@ -716,6 +731,7 @@ export async function discover(
             settings: workspaces.settings,
             workspaceType: workspaces.workspaceType,
             systemSlug: workspaces.systemSlug,
+            archivedAt: workspaces.archivedAt,
           })
           .from(workspaces)
           .where(inArray(workspaces.id, lensWsIds))
@@ -797,6 +813,12 @@ export async function discover(
         // workspace may HOLD domain entities is surfaced per row instead
         // (`acceptsEntities: false`), so an agent sees it and does not file there.
         .filter((w) => {
+          // A pin is answered even when archived (marked below); otherwise an
+          // archived space is left out at EVERY detail level — the same rule
+          // `workspaces.list` applies by default (`isHiddenAsArchived`), so
+          // orient and `synap_list_workspaces` can no longer disagree. It is
+          // not "empty": it never reaches the hidden-empty count.
+          if (workspaceId !== w.id && isHiddenAsArchived(w)) return false;
           if (detail === "full") return true;
           // Light hides EMPTY domains — an agent choosing where to write gains
           // nothing from a workspace holding no entities, and four of them were
@@ -844,6 +866,7 @@ export async function discover(
             out.acceptsEntities = false;
           }
           if (agentJoined && !agentJoined.has(w.id)) out.joined = false;
+          if (w.archivedAt != null) out.archived = true;
           // Light keeps `{ goal }` only where onboarding is PENDING (the
           // space is empty): elsewhere the goal already rides as the purpose
           // line below, or is subordinate to an authored one — not twice.

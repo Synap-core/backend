@@ -4,17 +4,14 @@
  * Test suite for the EventRepository using the correct SynapEvent API.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { sql } from "../client-pg.js";
 import { eventRepository } from "../repositories/event-repository.js";
 import type { SynapEvent } from "@synap-core/core";
-import { cleanTestData, generateTestUserId } from "./test-utils.js";
+import { generateTestUserId } from "./test-utils.js";
 
+// Each test writes under its own generated user id; setup.ts removes them.
 describe("EventRepository", () => {
-  beforeEach(async () => {
-    await cleanTestData();
-  });
-
   describe("append", () => {
     it("should append event successfully", async () => {
       const userId = generateTestUserId();
@@ -222,10 +219,12 @@ describe("EventRepository", () => {
     it("should fetch events in chronological order", async () => {
       const userId = generateTestUserId();
 
+      // append() validates the id as a UUID.
+      const [e1, e2, e3] = [1, 2, 3].map(() => crypto.randomUUID());
       const events = [
-        { id: "e1", timestamp: new Date("2024-01-01T10:00:00Z") },
-        { id: "e2", timestamp: new Date("2024-01-03T10:00:00Z") },
-        { id: "e3", timestamp: new Date("2024-01-02T10:00:00Z") },
+        { id: e1, timestamp: new Date("2024-01-01T10:00:00Z") },
+        { id: e2, timestamp: new Date("2024-01-03T10:00:00Z") },
+        { id: e3, timestamp: new Date("2024-01-02T10:00:00Z") },
       ];
 
       for (const e of events) {
@@ -245,9 +244,9 @@ describe("EventRepository", () => {
         ORDER BY timestamp ASC
       `;
 
-      expect(fetched[0].id).toBe("e1");
-      expect(fetched[1].id).toBe("e3");
-      expect(fetched[2].id).toBe("e2");
+      expect(fetched[0].id).toBe(e1);
+      expect(fetched[1].id).toBe(e3);
+      expect(fetched[2].id).toBe(e2);
     });
 
     it("should return empty array for user with no events", async () => {

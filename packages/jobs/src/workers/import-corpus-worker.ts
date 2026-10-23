@@ -39,6 +39,12 @@ export interface ImportCorpusPayload {
    * carries none and runs deterministic too.
    */
   aiStructure?: boolean;
+  /**
+   * The acting AGENT when an agent key queued the corpus — attributes the
+   * import.graph proposal the run files (`agentUserId`). Absent for a human
+   * caller and for jobs queued before the field existed: unattributed, as before.
+   */
+  agentUserId?: string | null;
 }
 
 /**

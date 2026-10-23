@@ -29,16 +29,9 @@ export function registerEntityShareRoutes(app: HubHono): void {
    * This is a STATIC route — must stay above any /:id dynamic patterns.
    */
   app.post("/entity-share/deliver", async (c) => {
-    // Verify CP JWT — this call originates from the Control Plane, not from IS.
-    const authHeader = c.req.header("authorization") ?? null;
-    const rawToken = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
-    if (!rawToken) {
-      return c.json({ error: "Authorization header required" }, 401);
-    }
-
-    // The ONE issuer door: approved Control Plane issuer + aud = this pod +
-    // purpose + single-use jti. The CP signs `aud: <recipient pod URL>`
-    // (CP routes/shares.ts), so a delivery minted for one pod is refused here.
+    // The pod's own audience FIRST: with no PUBLIC_URL no delivery can be
+    // verified, so the refusal must not depend on the credential sent (a
+    // guest's key and no key get the same answer — guest-containment).
     const audience = podAudience();
     if (!audience) {
       return c.json(
@@ -49,6 +42,17 @@ export function registerEntityShareRoutes(app: HubHono): void {
         500
       );
     }
+
+    // Verify CP JWT — this call originates from the Control Plane, not from IS.
+    const authHeader = c.req.header("authorization") ?? null;
+    const rawToken = authHeader?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+    if (!rawToken) {
+      return c.json({ error: "Authorization header required" }, 401);
+    }
+
+    // The ONE issuer door: approved Control Plane issuer + aud = this pod +
+    // purpose + single-use jti. The CP signs `aud: <recipient pod URL>`
+    // (CP routes/shares.ts), so a delivery minted for one pod is refused here.
     const payload = await verifyTrustedIssuerJwt<{
       sub: string;
       email: string;

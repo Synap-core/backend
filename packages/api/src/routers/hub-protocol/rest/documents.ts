@@ -27,6 +27,7 @@ import {
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { attachCreatedDocument } from "../attach-created-document.js";
+import { preflightAttachToEntity } from "../../../services/entity-body/body-replace-guard.js";
 
 const UpdateDocumentBodySchema = z.object({
   userId: z.string(),
@@ -128,6 +129,8 @@ export function registerDocumentsRoutes(app: HubHono): void {
       url?: string;
       /** Attach the created document as this entity's body (governed). */
       entityId?: string;
+      /** Replace the entity's existing body on purpose (otherwise 409). */
+      replaceBody?: boolean;
       idempotencyKey?: string;
     };
     try {
@@ -158,6 +161,14 @@ export function registerDocumentsRoutes(app: HubHono): void {
         sourceMessageId: body.sourceMessageId,
         sessionId,
       });
+      // Refuse an attach that would replace a body BEFORE the document exists.
+      if (body.entityId) {
+        await preflightAttachToEntity({
+          entityId: body.entityId,
+          userId: acting.userId,
+          replaceBody: body.replaceBody === true,
+        });
+      }
       const result = await caller.documents.createDocument({
         userId: acting.userId,
         workspaceId,
@@ -176,6 +187,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
         await attachCreatedDocument({
           created: result,
           entityId: body.entityId,
+          replaceBody: body.replaceBody === true,
           userId: acting.userId,
           scopes: c.get("scopes") as string[],
           // The confined, acting-resolved workspace — not the raw body id.

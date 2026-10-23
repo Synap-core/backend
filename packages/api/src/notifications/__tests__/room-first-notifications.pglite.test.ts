@@ -108,15 +108,6 @@ vi.mock(
 );
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import {
-  focusSessions,
-  notifications,
-  notificationPreferences,
-  users,
-  channels,
-  channelMembers,
-  messages,
-} from "@synap/database";
 import { blockExpectedOutput } from "../../services/focus-sessions/block-output.js";
 import { updateFocusSession } from "../../services/focus-sessions/update-session.js";
 import {
@@ -125,6 +116,7 @@ import {
   newlyOwedSlots,
 } from "../../services/focus-sessions/notify-needs-you.js";
 import { postChannelMessage } from "../../services/messaging/post-message.js";
+import { allSchemaTables } from "../../__tests__/pglite-ddl.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
@@ -222,16 +214,10 @@ const post = (
 
 describe("room-first notifications", () => {
   beforeAll(async () => {
-    for (const t of [
-      focusSessions,
-      notifications,
-      notificationPreferences,
-      users,
-      channels,
-      channelMembers,
-      messages,
-    ]) {
-      await h.client!.exec(ddlFor(t as unknown as PgTable));
+    // Every schema table: a hand-picked list rots the day the code under test
+    // reads one more (pglite-ddl.ts allSchemaTables).
+    for (const t of allSchemaTables()) {
+      await h.client!.exec(ddlFor(t));
     }
     // The derived DDL carries no column defaults; the real table defaults
     // `status` to 'unread' (0000 baseline) — the dedupe reads OPEN rows only.

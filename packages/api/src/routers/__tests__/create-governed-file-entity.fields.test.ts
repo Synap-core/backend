@@ -19,7 +19,8 @@ const h = vi.hoisted(() => ({
   ctxWorkspace: undefined as unknown,
 }));
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {},
   ProfileResolutionService: class {
     getEntityScope = async () => h.scope;

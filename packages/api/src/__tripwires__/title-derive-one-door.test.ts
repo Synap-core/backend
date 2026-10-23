@@ -39,22 +39,39 @@ const REPO_ROOT = join(BACKEND_PACKAGES, "../..");
 
 interface Root {
   dir: string;
+  /**
+   * How the exemptions spell this root's files. NAMED, never read off the
+   * checkout directory: CI checks the backend out as `backend/`, a worktree
+   * under its own name, and a path derived from the folder name matched no
+   * exemption (every entry read as an offender AND as stale).
+   */
+  label: string;
   /** A healthy scan finds at least this many files (non-vacuity). */
   fileFloor: number;
   optional?: boolean;
 }
 
 const ROOTS: Record<string, Root> = {
-  backend: { dir: BACKEND_PACKAGES, fileFloor: 1500 },
+  backend: {
+    dir: BACKEND_PACKAGES,
+    label: "synap-backend/packages",
+    fileFloor: 1500,
+  },
   is: {
     dir: join(
       REPO_ROOT,
       "synap-intelligence-service/apps/intelligence-hub/src"
     ),
+    label: "synap-intelligence-service/apps/intelligence-hub/src",
     fileFloor: 200,
     optional: true,
   },
-  cli: { dir: join(REPO_ROOT, "synap-cli/src"), fileFloor: 40, optional: true },
+  cli: {
+    dir: join(REPO_ROOT, "synap-cli/src"),
+    label: "synap-cli/src",
+    fileFloor: 40,
+    optional: true,
+  },
 };
 
 /**
@@ -76,6 +93,11 @@ const NOT_A_STORED_TITLE: ReadonlyArray<{
     file: "synap-backend/packages/api/src/import/import-deep.ts",
     includes: ".slice(0, 120)",
     why: "normTitle: a dedup comparison key, never stored",
+  },
+  {
+    file: "synap-backend/packages/api/src/services/imports/group.ts",
+    includes: '(item.title || item.card?.title || "").slice(0, 160)',
+    why: "a grouping-PROMPT line's length bound on an imported item's own title, never stored",
   },
   {
     file: "synap-cli/src/commands/centrality.ts",
@@ -222,7 +244,7 @@ describe("tripwire: a stored title is derived by shortenTitle, never sliced", ()
     const files = collect(root.dir);
     scanned[name] = files.length;
     for (const file of files) {
-      const rel = relative(REPO_ROOT, file);
+      const rel = `${root.label}/${relative(root.dir, file)}`;
       for (const hit of findTitleClips(readFileSync(file, "utf8"))) {
         const ex = NOT_A_STORED_TITLE.findIndex(
           (e) => e.file === rel && hit.includes(e.includes)
@@ -255,7 +277,10 @@ describe("tripwire: a stored title is derived by shortenTitle, never sliced", ()
   it("every exemption still names a real clip (no stale pass)", () => {
     const stale = NOT_A_STORED_TITLE.filter(
       (e, i) =>
-        !exempted.has(i) && existsSync(join(REPO_ROOT, e.file.split("/")[0]!))
+        !exempted.has(i) &&
+        Object.entries(ROOTS).some(
+          ([name, r]) => e.file.startsWith(`${r.label}/`) && name in scanned
+        )
     );
     expect(stale).toEqual([]);
   });

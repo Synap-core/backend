@@ -157,6 +157,7 @@ describe("both doors reach the same verified handle", () => {
         /^\s*input\.sessionId,?\s*$/.test(l) || // an argument to the verified door
         /input\.sessionId \?\? ctx\.sessionId \?\? null/.test(l) || // execute's requested handle, verified next line
         /bodyHandle: input\.sessionId \?\? null/.test(l) || // structure's intake run verifies bodyHandle
+        /^\s*const roomRound = input\.sessionId\s*$/.test(l) || // truthiness gate before readRestructureRoom
         // A `sessionId: input.sessionId,` forward is safe ONLY where the door
         // it feeds owner-floors the session itself. Which procedures those are
         // is derived below, not counted.
@@ -187,6 +188,9 @@ describe("both doors reach the same verified handle", () => {
       // `dismissCaptureResultRow` loads the session WHERE userId = caller and
       // NOT_FOUNDs every miss (foreign session, no room, no part, no row).
       dismissResultRow: "dismissCaptureResultRow",
+      // `readRestructureRoom` loads the session WHERE id AND userId = caller
+      // (null on a miss) — structure's room re-read (e44495bb0).
+      structure: "readRestructureRoom",
     };
     const forwards = [
       ...captureSrc.matchAll(/^[ \t]*sessionId: input\.sessionId,[ \t]*$/gm),

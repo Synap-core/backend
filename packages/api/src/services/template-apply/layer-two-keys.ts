@@ -24,7 +24,7 @@ export const LAYER_TWO_KEYS = [
 ] as const satisfies ReadonlyArray<keyof PackagePostWorkspaceBody>;
 
 /** Body keys that steer the applier but are not layer-2 content. */
-const NOT_LAYER_TWO_CONTENT = [
+const _NOT_LAYER_TWO_CONTENT = [
   // The package identity (slug + version) the applier stamps provenance with.
   "_meta",
   // The caller's engagement project, never the template's.
@@ -35,7 +35,7 @@ type _Classified =
   Exclude<
     keyof PackagePostWorkspaceBody,
     (typeof LAYER_TWO_KEYS)[number]
-  > extends (typeof NOT_LAYER_TWO_CONTENT)[number]
+  > extends (typeof _NOT_LAYER_TWO_CONTENT)[number]
     ? true
     : never;
 const _classified: _Classified = true;

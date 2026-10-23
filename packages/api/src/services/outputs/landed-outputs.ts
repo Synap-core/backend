@@ -68,8 +68,13 @@ import {
   type LandedActor,
   type LandedActorFilter,
   type LandedObjectRow,
+  type LandedObjectStatus,
   type LandedObjectsPage,
 } from "@synap-core/types/landed";
+import {
+  LIFECYCLE_CATEGORIES,
+  type LifecycleCategory,
+} from "@synap-core/types/lifecycle";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 import { resolveTargetName } from "@synap-core/types/proposals";
 import { scopedDb, type AccessContext } from "../../access/index.js";
@@ -121,6 +126,21 @@ interface ObjectProvenance {
   agentUserId: string | null;
   sourceProposalId: string | null;
   createdAt: Date;
+  /** Entities only: the lifecycle column pair (0319). Documents carry none. */
+  status?: string | null;
+  statusCategory?: string | null;
+}
+
+/** The row's lifecycle status, only when BOTH columns say one (a known category). */
+function landedStatusOf(
+  obj: ObjectProvenance | undefined
+): LandedObjectStatus | null {
+  const category = obj?.statusCategory;
+  return obj?.status &&
+    category &&
+    (LIFECYCLE_CATEGORIES as readonly string[]).includes(category)
+    ? { key: obj.status, category: category as LifecycleCategory }
+    : null;
 }
 
 /** A PENDING proposed creation — the only proposal read that needs `data`. */
@@ -161,23 +181,27 @@ export async function listLandedOutputs(
     if (!project) return null;
   }
 
-  const { items, sessions, truncated } = await scanSessionOutputs(database, [
-    ...sessionListConditions({
-      userId: viewer,
-      scope: {
-        workspaceLens: query.workspaceLens,
-        projectLens: query.projectId,
-      },
-      status: "all",
-      lens: "default",
-      kind: "work",
-      includeTrackedRuns: true,
-      roster: query.access.actor === "operator",
-      ...(query.trackId ? { trackId: query.trackId } : {}),
-    }),
-    ...(query.sessionId ? [eq(focusSessions.id, query.sessionId)] : []),
-    scoped.predicate(focusSessions),
-  ]);
+  const { items, sessions, truncated } = await scanSessionOutputs(
+    database,
+    [
+      ...sessionListConditions({
+        userId: viewer,
+        scope: {
+          workspaceLens: query.workspaceLens,
+          projectLens: query.projectId,
+        },
+        status: "all",
+        lens: "default",
+        kind: "work",
+        includeTrackedRuns: true,
+        roster: query.access.actor === "operator",
+        ...(query.trackId ? { trackId: query.trackId } : {}),
+      }),
+      ...(query.sessionId ? [eq(focusSessions.id, query.sessionId)] : []),
+      scoped.predicate(focusSessions),
+    ],
+    { projectLens: query.projectId }
+  );
 
   const rows = await attachLandedProvenance(database, {
     items,
@@ -245,6 +269,8 @@ export async function attachLandedProvenance(
             agentUserId: entities.agentUserId,
             sourceProposalId: entities.sourceProposalId,
             createdAt: entities.createdAt,
+            status: entities.status,
+            statusCategory: entities.statusCategory,
           })
           .from(entities)
           .where(inArray(entities.id, entityIds))
@@ -357,6 +383,7 @@ export async function attachLandedProvenance(
     const state = found
       ? resolveLandedDecision(found.status, { visible: found.visible })
       : resolveLandedDecision(null);
+    const status = landedStatusOf(obj);
     drafts.push({
       row: {
         id: item.id,
@@ -364,6 +391,7 @@ export async function attachLandedProvenance(
         title: item.title,
         ref: item.ref,
         ...(item.entityProfile ? { entityProfile: item.entityProfile } : {}),
+        ...(status ? { status } : {}),
         createdAt: item.createdAt,
         session: { id: session.id, title: session.title },
       },

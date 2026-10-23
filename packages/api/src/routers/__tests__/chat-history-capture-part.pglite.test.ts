@@ -53,6 +53,7 @@ import {
 } from "@synap/database";
 import { chatStreamApp } from "../chat-stream.js";
 import { persistCaptureQuestion } from "../../services/intake/capture-clarification.js";
+import { allSchemaTables } from "../../__tests__/pglite-ddl.js";
 
 function ddlFor(table: PgTable): string {
   const cfg = getTableConfig(table);
@@ -81,14 +82,24 @@ let client: PGlite;
 
 beforeEach(async () => {
   client = new PGlite();
-  for (const t of [focusSessions, channels, messages, workspaceMembers]) {
-    await client.exec(ddlFor(t as unknown as PgTable));
+  // Every schema table: a hand-picked list rots the day the code under test
+  // reads one more (pglite-ddl.ts allSchemaTables).
+  for (const t of allSchemaTables()) {
+    await client.exec(ddlFor(t));
   }
+  // The room mint enrolls the owner `on conflict (channel_id, member_id)`; the
+  // derived DDL carries no unique indexes, so this one is added on purpose.
+  await client.exec(
+    `create unique index on channel_members (channel_id, member_id)`
+  );
   holder.db = drizzle(client, {
     schema: { focusSessions, channels, messages, workspaceMembers },
   });
+  // The person's default workspace: a member row JOINED to a live workspace
+  // (findUserDefaultWorkspaceId) — a membership alone answers 404.
   await client.query(
-    `insert into workspace_members (workspace_id, user_id, role) values (gen_random_uuid(), 'user-1', 'owner')`
+    `with ws as (insert into workspaces (id, owner_id, name) values (gen_random_uuid(), 'user-1', 'Home') returning id)
+     insert into workspace_members (workspace_id, user_id, role) select id, 'user-1', 'owner' from ws`
   );
 });
 

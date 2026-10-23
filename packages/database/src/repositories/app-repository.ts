@@ -23,6 +23,7 @@ import {
 } from "../schema/apps.js";
 import { apiKeys } from "../schema/api-keys.js";
 import { grants } from "../schema/grants.js";
+import { isUniqueViolation } from "../utils/pg-errors.js";
 import { GrantRepository } from "./grant-repository.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 
@@ -31,7 +32,7 @@ export interface RegisterAppInput {
   name: string;
   description?: string | null;
   logoUrl?: string | null;
-  mode?: string | null;
+  mode?: "specific" | null;
   metadata?: Record<string, unknown> | null;
 }
 
@@ -216,6 +217,10 @@ export class AppRepository {
       .where(and(eq(apps.ownerUserId, input.ownerUserId), eq(apps.name, name)))
       .limit(1);
 
+    // A pod app connection is keyed by its client id, never by name: a
+    // developer's register must not adopt (or revive) a person's consent row.
+    if (existing?.oauthClientId) throw new AppNameTakenError(name);
+
     if (existing) {
       // An upsert by NAME must not CLEAR what it was not told about. Registering
       // is idempotent by owner+name (that is the point — re-adding a name you
@@ -237,8 +242,12 @@ export class AppRepository {
       // `revoke`) keeps the revoked row's record of what it had, while
       // `issueKey` refuses until a human approves again — which is what the
       // revoke copy ("register it again to ask for access") promises.
-      if (existing.revokedAt || existing.removedAt)
+      // Where it may sign people in (0339) is part of that ask: a revived app
+      // signs no one in until its owner registers redirect URIs again.
+      if (existing.revokedAt || existing.removedAt) {
         patch.approvedRequests = null;
+        patch.redirectUris = [];
+      }
       if (input.description !== undefined)
         patch.description = input.description;
       if (input.logoUrl !== undefined) patch.logoUrl = input.logoUrl;
@@ -266,6 +275,74 @@ export class AppRepository {
       })
       .returning();
     return row;
+  }
+
+  /**
+   * Upsert a POD APP connection (`mode = 'oauth'`, 0338b): the row a person's
+   * consent at the pod's OAuth door makes for one app, keyed by (owner, the
+   * app's metadata-document URL) — never by name. The consent door is its one
+   * caller (`connectOAuthApp`).
+   *
+   * An existing row keeps its id, public_id, agent and name (the owner may
+   * have renamed it). A revoked or removed one is revived WITHOUT its old
+   * approval, exactly as `register` revives: the consent that follows is what
+   * gives it reach again.
+   *
+   * `name` is display text ("<client_name> (<host>)"). When the owner already
+   * uses it on another app (`apps_owner_name_unique`), the row is named after
+   * the full client id instead, which is unique per owner by the 0338b index.
+   */
+  async registerOAuth(input: {
+    ownerUserId: string;
+    oauthClientId: string;
+    name: string;
+  }): Promise<AppRecord> {
+    const find = async () => {
+      const [row] = await this.db
+        .select()
+        .from(apps)
+        .where(
+          and(
+            eq(apps.ownerUserId, input.ownerUserId),
+            eq(apps.oauthClientId, input.oauthClientId)
+          )
+        )
+        .limit(1);
+      return row;
+    };
+    const existing = await find();
+    if (existing) {
+      if (!existing.revokedAt && !existing.removedAt) return existing;
+      const [row] = await this.db
+        .update(apps)
+        .set({ revokedAt: null, removedAt: null, approvedRequests: null })
+        .where(eq(apps.id, existing.id))
+        .returning();
+      return row;
+    }
+    const name = input.name.trim();
+    for (const candidate of [name, `${name} — ${input.oauthClientId}`]) {
+      try {
+        const [row] = await this.db
+          .insert(apps)
+          .values({
+            ownerUserId: input.ownerUserId,
+            publicId: makePublicId(),
+            name: candidate,
+            mode: "oauth",
+            oauthClientId: input.oauthClientId,
+          })
+          .returning();
+        return row;
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+        // A concurrent consent for the same app made the row first.
+        const raced = await find();
+        if (raced) return raced;
+        // Otherwise the name is taken: try the next candidate.
+      }
+    }
+    throw new AppNameTakenError(name);
   }
 
   /** One app by id, or null. Does NOT check ownership — the caller floors. */
@@ -626,6 +703,43 @@ export class AppRepository {
    * is also what `register` is idempotent by): a name the owner already uses
    * on another app is an `AppNameTakenError`, never a raw unique violation.
    */
+  /**
+   * "Sign in with Synap": may a person signed in to this app decide (approve)
+   * proposals the app's OWN agent filed? Stored in `metadata`
+   * (`personMayDecideOwnAgentProposals`, absent = true). The owner's write
+   * only — the service checks the credential.
+   */
+  async setPersonMayDecideOwnAgentProposals(
+    appId: string,
+    allowed: boolean
+  ): Promise<AppRecord | null> {
+    const [row] = await this.db
+      .update(apps)
+      .set({
+        metadata: sql`COALESCE(${apps.metadata}, '{}'::jsonb) || jsonb_build_object('personMayDecideOwnAgentProposals', ${allowed}::boolean)`,
+      })
+      .where(eq(apps.id, appId))
+      .returning();
+    return row ?? null;
+  }
+
+  /**
+   * "Sign in with Synap" (0339): replace where an authorization code for this
+   * app may be delivered. The OWNER's write only — the service
+   * (`setAppRedirectUris`) checks the credential and validates each URI.
+   */
+  async setRedirectUris(
+    appId: string,
+    redirectUris: readonly string[]
+  ): Promise<AppRecord | null> {
+    const [row] = await this.db
+      .update(apps)
+      .set({ redirectUris: [...redirectUris] })
+      .where(eq(apps.id, appId))
+      .returning();
+    return row ?? null;
+  }
+
   async rename(appId: string, name: string): Promise<AppRecord | null> {
     const trimmed = name.trim();
     const app = await this.get(appId);
@@ -652,8 +766,7 @@ export class AppRepository {
     } catch (err) {
       // A concurrent rename/register took the name between the check and the
       // write — the index is the final word.
-      if ((err as { code?: string })?.code === "23505")
-        throw new AppNameTakenError(trimmed);
+      if (isUniqueViolation(err)) throw new AppNameTakenError(trimmed);
       throw err;
     }
   }

@@ -45,11 +45,13 @@ vi.mock("@synap/database", async (importOriginal) => {
       (insertChannelMessage as any)(...args),
   };
 });
-vi.mock("@synap/database/schema", () => ({
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
   MessageAuthorType: { HUMAN: "human" },
   MessageRole: { USER: "user" },
 }));
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({ warn: () => {}, error: () => {}, info: () => {} }),
 }));
 vi.mock("../../../utils/trigger-auto-respond.js", () => ({
@@ -80,13 +82,15 @@ describe("is-agent executor — agent selector", () => {
     resolveActiveAgentBySlug.mockResolvedValue(null);
   });
 
-  it("no selector ⇒ dispatches with agentType null (the door's own 'meta' default)", async () => {
+  // e135da6a9 names "meta" EXPLICITLY: a GROUP run room only wakes for a named
+  // agent, and an unnamed kickoff failed the step.
+  it("no selector ⇒ dispatches the orchestrator, named explicitly as 'meta'", async () => {
     const res = await new IsAgentExecutor().run(baseCtx as any);
     expect(res.status).toBe("running");
     expect(resolveActiveAgentBySlug).not.toHaveBeenCalled();
     expect(triggerAutoRespond).toHaveBeenCalledTimes(1);
     expect(triggerAutoRespond.mock.calls[0][0]).toMatchObject({
-      agentType: null,
+      agentType: "meta",
     });
   });
 

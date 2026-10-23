@@ -43,6 +43,8 @@ interface CodeRow {
   redirectUri: string;
   scopes: string[];
   codeChallenge: string;
+  resource?: string | null;
+  appId?: string | null;
   expiresAt: Date;
   consumedAt: Date | null;
 }
@@ -71,6 +73,8 @@ const store = {
   keys: new Map<string, KeyRow>(),
   /** Make the registry read FAIL (a DB fault), to prove it is not swallowed. */
   issuersFail: false,
+  /** Cached metadata documents, by client_id URL (see the client-metadata mock). */
+  cimd: new Map<string, Record<string, unknown>>(),
 };
 
 /**
@@ -138,6 +142,8 @@ vi.mock("@synap/database", async () => {
                     redirectUri: row.redirectUri,
                     scopes: row.scopes,
                     codeChallenge: row.codeChallenge,
+                    resource: row.resource ?? null,
+                    appId: row.appId ?? null,
                   },
                 ]);
               },
@@ -159,6 +165,9 @@ vi.mock("@synap/database", async () => {
       },
     },
     users: { id: "users.id" },
+    // The consent decision refuses any request that entered a key door.
+    getActingAgentUserId: () => undefined,
+    getRequestGrant: () => undefined,
     and: (...args: unknown[]) => ({ _and: args }),
     eq: (a: unknown, b: unknown) => ({ _eq: [a, b] }),
     isNull: (a: unknown) => ({ _isNull: a }),
@@ -201,14 +210,114 @@ vi.mock("../../services/agent-identity-service.js", () => ({
   provisionSurfaceAgentKey: (opts: unknown) => provisionSpy(opts),
 }));
 
+// Pod apps (PB2): consent files + approves the app's request and /token mints
+// its own agent's key through App Connect. Both run for real on PGlite in
+// services/pod-app.invariants.pglite.test.ts; here they are spies, so this file
+// pins what the HTTP door asks of them and hands back.
+const appConnect = vi.hoisted(() => ({
+  connect: vi.fn(),
+  mint: vi.fn(),
+  reuse: vi.fn(),
+  isPodAppAgent: vi.fn(),
+}));
+vi.mock("../../services/app-connect.js", () => ({
+  connectOAuthApp: (args: unknown) => appConnect.connect(args),
+  mintAppOAuthAccessKey: (args: unknown) => appConnect.mint(args),
+  reuseAppOAuthAccessKey: (args: unknown) => appConnect.reuse(args),
+  isPodAppAgent: (id: string) => appConnect.isPodAppAgent(id),
+  oauthAppOffer: async (_user: string, permissions: string[]) =>
+    permissions.map((permission) => ({ permission, workspaces: [] })),
+  currentOAuthApproval: async () => [],
+}));
+
+// The pod admin's pod-app policy (PB4). Read for real (pod_settings) in
+// services/pod-app.connections.pglite.test.ts; here the switch is a flag, and
+// the Synap-app rule is the real one.
+const podAppPolicy = vi.hoisted(() => ({ allowUnverified: true }));
+vi.mock("../../services/pod-app-policy.js", async () => {
+  const { isSynapApp } =
+    await vi.importActual<typeof import("./config.js")>("./config.js");
+  return {
+    podAppMayConnect: async (clientId: string) =>
+      isSynapApp(clientId) || podAppPolicy.allowUnverified,
+  };
+});
+
+// Pod app refresh tokens (PB3). The store runs for real on PGlite in
+// services/oauth-refresh.pglite.test.ts; here it is spies, so this file pins
+// what the HTTP door asks of it, and that an MCP (DCR) client never reaches it.
+const refresh = vi.hoisted(() => ({
+  start: vi.fn(),
+  redeem: vi.fn(),
+  rotate: vi.fn(),
+  find: vi.fn(),
+  revokeFamily: vi.fn(),
+  confirmGrace: vi.fn(),
+}));
+vi.mock("./refresh.js", async () => {
+  const { OAuthError } =
+    await vi.importActual<typeof import("./protocol.js")>("./protocol.js");
+  class RefreshTokenReuseError extends OAuthError {
+    constructor(public readonly familyId: string) {
+      super("invalid_grant", "Invalid, expired, or revoked refresh token");
+    }
+  }
+  return {
+    RefreshTokenReuseError,
+    startRefreshFamily: (c: unknown) => refresh.start(c),
+    redeemRefreshToken: (raw: string, clientId: string) =>
+      refresh.redeem(raw, clientId),
+    rotateRefreshToken: (prev: unknown, id: string) => refresh.rotate(prev, id),
+    // PB3b: the key a successor re-derives (refresh.ts derives it by HMAC).
+    successorAccessToken: (id: string) => `derived-key:${id}`,
+    confirmGraceSuccessor: (r: unknown) => refresh.confirmGrace(r),
+    findRefreshToken: (raw: string) => refresh.find(raw),
+    revokeRefreshFamily: (t: unknown, reason: string) =>
+      refresh.revokeFamily(t, reason),
+  };
+});
+
+// Pod app clients (CIMD). The fetch + cache is pinned in client-metadata.test.ts;
+// here a document either resolves to `store.cimd` or is unreadable.
+vi.mock("./client-metadata.js", async () => {
+  const actual = await vi.importActual<typeof import("./client-metadata.js")>(
+    "./client-metadata.js"
+  );
+  return {
+    ...actual,
+    resolveCimdClient: (clientId: string, issuer: string | null) => {
+      // The real URL rules run first (length, https, canonical form…).
+      try {
+        actual.assertClientMetadataUrl(clientId, issuer);
+      } catch (err) {
+        return Promise.reject(err);
+      }
+      const row = store.cimd.get(clientId);
+      return row
+        ? Promise.resolve(row)
+        : Promise.reject(
+            new actual.ClientMetadataError("the document URL answered 404")
+          );
+    },
+  };
+});
+
+// One shared logger so a test can assert what the routes WARNED about.
+const log = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+}));
 vi.mock("@synap-core/core", () => ({
-  createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => log,
 }));
 
 // Import AFTER the mocks are registered.
 import { oauthApp } from "./routes.js";
 import { computeS256Challenge } from "./protocol.js";
 import { decideOAuthAuthorization, getOAuthConsentContext } from "./consent.js";
+import { renderAuthorizeRefusalPage } from "./refusal-page.js";
 
 const ISSUER = "https://pod.test.synap.live";
 const POD_ADMIN = "https://pod-admin.test.synap.live";
@@ -216,6 +325,12 @@ const CALLBACK = "https://claude.ai/api/mcp/auth_callback";
 const HUMAN_ID = "11111111-1111-4111-8111-111111111111";
 const VERIFIER = "x".repeat(64);
 const CHALLENGE = computeS256Challenge(VERIFIER);
+/** The `apps` row a pod app's consent approved (the connect spy's answer). */
+const APP_ROW_ID = "22222222-2222-4222-8222-222222222222";
+const APP_PUBLIC_ID = "app_33333333-3333-4333-8333-333333333333";
+const SPACE_ID = "44444444-4444-4444-8444-444444444444";
+/** A pod app's consent is an approval: the caller's request context. */
+const HUMAN_CTX = { authenticated: true, userId: HUMAN_ID } as never;
 
 beforeEach(() => {
   store.clients.clear();
@@ -224,9 +339,25 @@ beforeEach(() => {
   store.issuers.length = 0;
   store.issuersFail = false;
   store.keys.clear();
+  store.cimd.clear();
+  podAppPolicy.allowUnverified = true;
+  log.warn.mockClear();
   revokeSpy.mockReset();
   claimWhere.length = 0;
   store.users.set(HUMAN_ID, { id: HUMAN_ID, userType: "human" });
+  appConnect.connect.mockReset();
+  appConnect.connect.mockResolvedValue({
+    appId: APP_ROW_ID,
+    publicId: APP_PUBLIC_ID,
+    proposalId: "proposal-1",
+  });
+  appConnect.mint.mockReset();
+  appConnect.reuse.mockReset();
+  appConnect.isPodAppAgent.mockReset();
+  appConnect.isPodAppAgent.mockResolvedValue(false);
+  for (const spy of Object.values(refresh)) spy.mockReset();
+  refresh.start.mockResolvedValue("RT-1");
+  refresh.find.mockResolvedValue(null);
   provisionSpy.mockReset();
   provisionSpy.mockResolvedValue({
     agentUserId: "agent-user-1",
@@ -486,15 +617,19 @@ describe("consent context", () => {
     const { body: client } = await register();
     const registeredAt = new Date("2026-10-17T09:00:00Z");
     store.clients.get(client.client_id)!.createdAt = registeredAt;
-    const context = await getOAuthConsentContext({
-      clientId: client.client_id,
-      redirectUri: CALLBACK,
-      responseType: "code",
-      codeChallenge: CHALLENGE,
-      codeChallengeMethod: "S256",
-      state: null,
-    });
+    const context = await getOAuthConsentContext(
+      {
+        clientId: client.client_id,
+        redirectUri: CALLBACK,
+        responseType: "code",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        state: null,
+      },
+      HUMAN_ID
+    );
     expect(context).toMatchObject({
+      appSignIn: null,
       clientName: "Claude",
       redirectHost: "claude.ai",
       registeredAt,
@@ -659,6 +794,25 @@ describe("POST /token", () => {
     // connection's key and never revokes another human's.
     expect(opts.instanceId).toContain(HUMAN_ID);
     expect(opts.instanceId).toContain(client.client_id);
+  });
+
+  it("inherits the MCP tool surface per connection, not from the shared agent", async () => {
+    // Every direct client of one person is the SAME claude-web-direct agent.
+    // Inheriting from that agent's newest key would hand a new client (Raycast)
+    // whatever claude.ai listed — legacy keys list every tool. Per connection,
+    // a new client starts on the 9-tool entry surface (decision B1 d).
+    const { body: client } = await register();
+    const { code } = await consentAndExtractCode(client.client_id);
+    await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: client.client_id,
+      redirect_uri: CALLBACK,
+      code_verifier: VERIFIER,
+    });
+    const opts = provisionSpy.mock.calls[0][0];
+    expect(opts.inheritToolSurface).toBe("instance");
+    expect(opts.toolProfile).toBeUndefined();
   });
 
   // ── (d) PKCE enforcement ───────────────────────────────────────────────────
@@ -837,10 +991,12 @@ describe("POST /token", () => {
     expect(provisionSpy).not.toHaveBeenCalled();
   });
 
+  // Flipped on purpose in PB3: this used `refresh_token`, which is now a
+  // supported grant (pod apps only; a DCR client is refused it, below).
   it("rejects an unsupported grant_type", async () => {
     const { res, body } = await token({
-      grant_type: "refresh_token",
-      refresh_token: "whatever",
+      grant_type: "client_credentials",
+      client_id: "whatever",
     });
     expect(res.status).toBe(400);
     expect(body.error).toBe("unsupported_grant_type");
@@ -1131,5 +1287,1671 @@ describe("POST /revoke (RFC 7009)", () => {
     const res = await revoke({});
     expect(res.status).toBe(400);
     expect(((await res.json()) as any).error).toBe("invalid_request");
+  });
+});
+
+// ─── (i) RFC 9207 — `iss` on every authorization response (PB1, I7) ─────────
+
+/** A cached app (CIMD) client, as client-metadata.ts would hand it back. */
+const APP_ID = "https://studio.example.com/.well-known/synap-client.json";
+const APP_CALLBACK = "https://studio.example.com/api/synap/callback";
+function cacheApp(overrides: Record<string, unknown> = {}) {
+  store.cimd.set(APP_ID, {
+    clientId: APP_ID,
+    clientKind: "cimd",
+    clientName: "Content Studio",
+    redirectUris: [APP_CALLBACK],
+    scopes: ["mcp.read"],
+    requestedPermissions: ["entity.post.read", "entity.post.create"],
+    createdAt: new Date(),
+    ...overrides,
+  });
+}
+
+function authorizeApp(params: Record<string, string> = {}) {
+  return oauthApp.request(
+    authorizeUrl({
+      response_type: "code",
+      client_id: APP_ID,
+      redirect_uri: APP_CALLBACK,
+      scope: "entity.post.read",
+      state: "st-app",
+      code_challenge: CHALLENGE,
+      code_challenge_method: "S256",
+      ...params,
+    })
+  );
+}
+
+describe("RFC 9207 — every authorization response carries iss", () => {
+  it("advertises iss responses and CIMD client ids in the AS metadata", async () => {
+    const doc = (await (
+      await oauthApp.request("/.well-known/oauth-authorization-server")
+    ).json()) as any;
+    expect(doc.authorization_response_iss_parameter_supported).toBe(true);
+    expect(doc.client_id_metadata_document_supported).toBe(true);
+    // DCR stays advertised for MCP clients (claude.ai registers through it).
+    expect(doc.registration_endpoint).toBe(`${ISSUER}/register`);
+  });
+
+  it("on a phase-2 ERROR redirect from /authorize", async () => {
+    const { body: client } = await register();
+    const res = await oauthApp.request(
+      authorizeUrl({
+        response_type: "code",
+        client_id: client.client_id,
+        redirect_uri: CALLBACK,
+        state: "st-9",
+      })
+    );
+    expect(res.status).toBe(302);
+    const back = new URL(res.headers.get("location")!);
+    expect(back.searchParams.get("error")).toBe("invalid_request");
+    expect(back.searchParams.get("iss")).toBe(ISSUER);
+  });
+
+  it("on a DENY from the consent screen", async () => {
+    const { body: client } = await register();
+    const { redirectTo } = await decideOAuthAuthorization(
+      {
+        clientId: client.client_id,
+        redirectUri: CALLBACK,
+        responseType: "code",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        state: "st-d",
+        approve: false,
+      },
+      HUMAN_ID
+    );
+    const back = new URL(redirectTo);
+    expect(back.searchParams.get("error")).toBe("access_denied");
+    expect(back.searchParams.get("iss")).toBe(ISSUER);
+  });
+
+  it("on SUCCESS (the code redirect)", async () => {
+    const { body: client } = await register();
+    const { redirectTo } = await consentAndExtractCode(client.client_id, "s");
+    const back = new URL(redirectTo);
+    expect(back.searchParams.get("code")).toBeTruthy();
+    expect(back.searchParams.get("state")).toBe("s");
+    expect(back.searchParams.get("iss")).toBe(ISSUER);
+  });
+
+  it("uses the CANONICAL issuer even when PUBLIC_URL has a trailing slash", async () => {
+    process.env.PUBLIC_URL = `${ISSUER}/`;
+    const { body: client } = await register();
+    const { redirectTo } = await consentAndExtractCode(client.client_id);
+    expect(new URL(redirectTo).searchParams.get("iss")).toBe(ISSUER);
+  });
+
+  it("a phase-1 error is still shown, never redirected (no iss to leak)", async () => {
+    const res = await oauthApp.request(
+      authorizeUrl({
+        response_type: "code",
+        client_id: "dcr_nope",
+        redirect_uri: CALLBACK,
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+  });
+});
+
+// ─── (j) RFC 8707 — the resource parameter (PB1) ─────────────────────────────
+//
+// STRICT for app (CIMD) clients; LENIENT for DCR clients (claude.ai, the CP
+// connector) until claude.ai's real value is observed in the logs: an
+// unrecognised resource from a DCR client is logged and treated as absent,
+// never refused. A RECOGNISED resource is bound to the code for both kinds.
+
+describe("RFC 8707 — resource", () => {
+  /** /authorize for a DCR client (`dcr`) or the cached app client (`cimd`). */
+  async function authorizeWith(
+    kind: "dcr" | "cimd",
+    resource: string | string[]
+  ) {
+    let clientId = APP_ID;
+    let redirectUri = APP_CALLBACK;
+    let scope = "entity.post.read";
+    if (kind === "dcr") {
+      const { body: client } = await register();
+      clientId = client.client_id;
+      redirectUri = CALLBACK;
+      scope = "mcp.read";
+    } else {
+      cacheApp();
+    }
+    const qs = new URLSearchParams({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      scope,
+      state: "st-r",
+      code_challenge: CHALLENGE,
+      code_challenge_method: "S256",
+    });
+    for (const r of [resource].flat()) qs.append("resource", r);
+    return {
+      res: await oauthApp.request(`/authorize?${qs.toString()}`),
+      clientId,
+      redirectUri,
+    };
+  }
+
+  it("accepts this pod's /mcp and forwards it to the consent screen", async () => {
+    const { res } = await authorizeWith("dcr", `${ISSUER}/mcp`);
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin).toBe(POD_ADMIN);
+    expect(target.searchParams.get("resource")).toBe(`${ISSUER}/mcp`);
+  });
+
+  it("accepts this pod's /api/hub, a trailing slash dropped", async () => {
+    const { res } = await authorizeWith("cimd", `${ISSUER}/api/hub/`);
+    const target = new URL(res.headers.get("location")!);
+    expect(target.searchParams.get("resource")).toBe(`${ISSUER}/api/hub`);
+  });
+
+  const FOREIGN = [
+    "https://claude.ai/whatever",
+    "https://other-pod.synap.live/mcp",
+    `${ISSUER}/admin`,
+    ISSUER,
+    "",
+  ];
+
+  for (const foreign of FOREIGN) {
+    it(`CIMD: refuses resource=${JSON.stringify(foreign)} with invalid_target (redirected, with iss)`, async () => {
+      const { res } = await authorizeWith("cimd", foreign);
+      expect(res.status).toBe(302);
+      const back = new URL(res.headers.get("location")!);
+      expect(back.origin + back.pathname).toBe(APP_CALLBACK);
+      expect(back.searchParams.get("error")).toBe("invalid_target");
+      expect(back.searchParams.get("iss")).toBe(ISSUER);
+    });
+
+    it(`DCR: resource=${JSON.stringify(foreign)} is logged and treated as absent, never refused`, async () => {
+      const { res, clientId } = await authorizeWith("dcr", foreign);
+      const target = new URL(res.headers.get("location")!);
+      expect(target.origin).toBe(POD_ADMIN);
+      expect(target.searchParams.has("resource")).toBe(false);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ clientId, resource: foreign }),
+        expect.stringMatching(/unrecognised resource/)
+      );
+    });
+  }
+
+  it("CIMD: refuses a repeated resource parameter", async () => {
+    const { res } = await authorizeWith("cimd", [
+      `${ISSUER}/mcp`,
+      `${ISSUER}/api/hub`,
+    ]);
+    const back = new URL(res.headers.get("location")!);
+    expect(back.searchParams.get("error")).toBe("invalid_target");
+  });
+
+  it("DCR: a repeated resource parameter is logged and treated as absent", async () => {
+    const { res } = await authorizeWith("dcr", [
+      `${ISSUER}/mcp`,
+      `${ISSUER}/api/hub`,
+    ]);
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin).toBe(POD_ADMIN);
+    expect(target.searchParams.has("resource")).toBe(false);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+  });
+
+  async function dcrCodeFor(resource?: string) {
+    const { body: client } = await register();
+    const { redirectTo } = await decideOAuthAuthorization(
+      {
+        clientId: client.client_id,
+        redirectUri: CALLBACK,
+        responseType: "code",
+        scope: "mcp.read mcp.write",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        resource,
+        approve: true,
+      },
+      HUMAN_ID
+    );
+    return {
+      clientId: client.client_id as string,
+      code: new URL(redirectTo).searchParams.get("code")!,
+    };
+  }
+
+  it("binds the canonical resource to the code", async () => {
+    await dcrCodeFor(`${ISSUER}/mcp/`);
+    const [row] = [...store.codes.values()];
+    expect(row!.resource).toBe(`${ISSUER}/mcp`);
+  });
+
+  it("DCR end to end: an unrecognised resource → authorize, code and token all issued, unbound, warned", async () => {
+    const odd = "https://claude.ai/whatever";
+    const { res: authRes, clientId } = await authorizeWith("dcr", odd);
+    expect(new URL(authRes.headers.get("location")!).origin).toBe(POD_ADMIN);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ clientId, resource: odd }),
+      expect.stringMatching(/unrecognised resource/)
+    );
+
+    // The consent screen round-trips the same value; it is dropped again.
+    const { redirectTo } = await decideOAuthAuthorization(
+      {
+        clientId,
+        redirectUri: CALLBACK,
+        responseType: "code",
+        scope: "mcp.read",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        resource: odd,
+        approve: true,
+      },
+      HUMAN_ID
+    );
+    const code = new URL(redirectTo).searchParams.get("code")!;
+    expect(code).toBeTruthy();
+    expect([...store.codes.values()][0]!.resource ?? null).toBeNull();
+
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: clientId,
+      redirect_uri: CALLBACK,
+      code_verifier: VERIFIER,
+      resource: odd,
+    });
+    expect(res.status).toBe(200);
+    expect(body.access_token).toBeTruthy();
+  });
+
+  it("CIMD: the consent decision re-validates resource (a tampered round-trip is refused)", async () => {
+    cacheApp();
+    await expect(
+      decideOAuthAuthorization(
+        {
+          clientId: APP_ID,
+          redirectUri: APP_CALLBACK,
+          responseType: "code",
+          scope: "entity.post.read",
+          codeChallenge: CHALLENGE,
+          codeChallengeMethod: "S256",
+          resource: "https://evil.example/mcp",
+          approve: true,
+        },
+        HUMAN_ID
+      )
+    ).rejects.toMatchObject({ code: "invalid_target" });
+    expect(store.codes.size).toBe(0);
+  });
+
+  it("DCR: a code bound to /mcp refuses a DIFFERENT recognised resource at /token, and mints nothing", async () => {
+    const { clientId, code } = await dcrCodeFor(`${ISSUER}/mcp`);
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: clientId,
+      redirect_uri: CALLBACK,
+      code_verifier: VERIFIER,
+      resource: `${ISSUER}/api/hub`,
+    });
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_target");
+    expect(provisionSpy).not.toHaveBeenCalled();
+  });
+
+  it("DCR: a code bound to /mcp refuses a FOREIGN resource at /token (the binding holds)", async () => {
+    const { clientId, code } = await dcrCodeFor(`${ISSUER}/mcp`);
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: clientId,
+      redirect_uri: CALLBACK,
+      code_verifier: VERIFIER,
+      resource: "https://claude.ai/whatever",
+    });
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_target");
+    expect(provisionSpy).not.toHaveBeenCalled();
+  });
+
+  it("CIMD: /token refuses a foreign resource even when the code named none", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    const { redirectTo } = await decideOAuthAuthorization(
+      {
+        clientId: APP_ID,
+        redirectUri: APP_CALLBACK,
+        responseType: "code",
+        scope: "entity.post.read",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        approve: true,
+        approved: [{ permission: "entity.post.read", workspaceId: SPACE_ID }],
+      },
+      HUMAN_ID,
+      HUMAN_CTX
+    );
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code: new URL(redirectTo).searchParams.get("code")!,
+      client_id: APP_ID,
+      redirect_uri: APP_CALLBACK,
+      code_verifier: VERIFIER,
+      resource: "https://other-pod.synap.live/mcp",
+    });
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_target");
+  });
+
+  it("/token accepts the matching resource", async () => {
+    const { clientId, code } = await dcrCodeFor(`${ISSUER}/mcp`);
+    const { res } = await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: clientId,
+      redirect_uri: CALLBACK,
+      code_verifier: VERIFIER,
+      resource: `${ISSUER}/mcp`,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("a missing resource stays accepted for both kinds", async () => {
+    const dcr = await authorizeWith("dcr", []);
+    expect(new URL(dcr.res.headers.get("location")!).origin).toBe(POD_ADMIN);
+    const app = await authorizeWith("cimd", []);
+    expect(new URL(app.res.headers.get("location")!).origin).toBe(POD_ADMIN);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+});
+
+// ─── (k) Pod app clients — CIMD at /authorize, consent and /token (PB1) ──────
+
+describe("PB4 — the pod admin's switch for unverified apps (F4)", () => {
+  const SYNAP_APP =
+    "https://content-studio.synap.live/.well-known/synap-client.json";
+  const SYNAP_CB = "https://content-studio.synap.live/api/synap/callback";
+  const appParams = {
+    clientId: APP_ID,
+    redirectUri: APP_CALLBACK,
+    responseType: "code",
+    scope: "entity.post.read",
+    codeChallenge: CHALLENGE,
+    codeChallengeMethod: "S256",
+    state: "st-app",
+  };
+
+  it("off: /authorize refuses an unverified app at phase 1 — shown to the person, never redirected, nothing fetched", async () => {
+    podAppPolicy.allowUnverified = false;
+    // No cached document: a fetch would answer "could not be read" instead.
+    const res = await authorizeApp();
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+    expect(await res.text()).toMatch(
+      /turned off apps that are not Synap apps, so studio\.example\.com cannot connect/
+    );
+  });
+
+  it("off: the consent screen's context and the Allow click refuse it too, and nothing is connected", async () => {
+    cacheApp();
+    podAppPolicy.allowUnverified = false;
+    await expect(getOAuthConsentContext(appParams, HUMAN_ID)).rejects.toThrow(
+      /turned off apps that are not Synap apps/
+    );
+    await expect(
+      decideOAuthAuthorization(
+        {
+          ...appParams,
+          approve: true,
+          approved: [{ permission: "entity.post.read", workspaceId: SPACE_ID }],
+        },
+        HUMAN_ID,
+        HUMAN_CTX
+      )
+    ).rejects.toThrow(/turned off apps that are not Synap apps/);
+    expect(appConnect.connect).not.toHaveBeenCalled();
+    expect(store.codes.size).toBe(0);
+  });
+
+  it("off: a Synap app still connects", async () => {
+    podAppPolicy.allowUnverified = false;
+    store.cimd.set(SYNAP_APP, {
+      clientId: SYNAP_APP,
+      clientKind: "cimd",
+      clientName: "Content Studio",
+      redirectUris: [SYNAP_CB],
+      scopes: [],
+      requestedPermissions: ["entity.post.read"],
+      createdAt: new Date(),
+    });
+    const res = await authorizeApp({
+      client_id: SYNAP_APP,
+      redirect_uri: SYNAP_CB,
+    });
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get("location")!).origin).toBe(POD_ADMIN);
+  });
+
+  it("on (the default): the same unverified app reaches the consent screen", async () => {
+    cacheApp();
+    const res = await authorizeApp();
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get("location")!).origin).toBe(POD_ADMIN);
+  });
+
+  it("an MCP (DCR) client is never asked about it", async () => {
+    podAppPolicy.allowUnverified = false;
+    const { body: client } = await register();
+    const res = await oauthApp.request(
+      authorizeUrl({
+        response_type: "code",
+        client_id: client.client_id,
+        redirect_uri: CALLBACK,
+        scope: "mcp.read",
+        code_challenge: CHALLENGE,
+        code_challenge_method: "S256",
+      })
+    );
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get("location")!).origin).toBe(POD_ADMIN);
+  });
+});
+
+describe("CIMD clients", () => {
+  it("a cached app client reaches the consent screen with its declared scopes", async () => {
+    cacheApp();
+    const res = await authorizeApp({
+      scope: "entity.post.read entity.post.delete mcp.read",
+    });
+    expect(res.status).toBe(302);
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin).toBe(POD_ADMIN);
+    expect(target.searchParams.get("client_id")).toBe(APP_ID);
+    // entity.post.delete is not declared in the document: dropped.
+    expect(target.searchParams.get("scope")).toBe("entity.post.read mcp.read");
+  });
+
+  it("a redirect_uri the document does not list is shown to the user, never redirected", async () => {
+    cacheApp();
+    const res = await authorizeApp({
+      redirect_uri: "https://studio.example.com/other",
+    });
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("an unreadable document is shown to the user, never redirected", async () => {
+    const res = await authorizeApp();
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+    expect(await res.text()).toMatch(/could not be read/);
+  });
+
+  it("asking for nothing it declared is invalid_scope (never a fallback), with iss", async () => {
+    cacheApp();
+    const res = await authorizeApp({ scope: "entity.task.delete" });
+    expect(res.status).toBe(302);
+    const back = new URL(res.headers.get("location")!);
+    expect(back.origin + back.pathname).toBe(APP_CALLBACK);
+    expect(back.searchParams.get("error")).toBe("invalid_scope");
+    expect(back.searchParams.get("iss")).toBe(ISSUER);
+  });
+
+  it("an app that names no scope at all gets invalid_scope too", async () => {
+    cacheApp();
+    const res = await authorizeApp({ scope: "" });
+    expect(
+      new URL(res.headers.get("location")!).searchParams.get("error")
+    ).toBe("invalid_scope");
+  });
+
+  it("DCR regression: an MCP client's unknown scope still falls back to its registered set", async () => {
+    const { body: client } = await register();
+    const res = await oauthApp.request(
+      authorizeUrl({
+        response_type: "code",
+        client_id: client.client_id,
+        redirect_uri: CALLBACK,
+        scope: "entity.post.read",
+        code_challenge: CHALLENGE,
+        code_challenge_method: "S256",
+      })
+    );
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin).toBe(POD_ADMIN);
+    expect(target.searchParams.get("scope")).toBe("mcp.read mcp.write");
+  });
+
+  it("I2: a DCR client asking for app permissions is granted none of them", async () => {
+    const { body: client } = await register({
+      scope: "mcp.read entity.post.read document.update",
+    });
+    expect(client.scope).toBe("mcp.read");
+  });
+
+  it("the consent decision issues a code to the app's own redirect_uri, with iss", async () => {
+    cacheApp();
+    const { redirectTo } = await decideOAuthAuthorization(
+      {
+        clientId: APP_ID,
+        redirectUri: APP_CALLBACK,
+        responseType: "code",
+        scope: "entity.post.read",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        state: "st-app",
+        approve: true,
+        approved: [{ permission: "entity.post.read", workspaceId: SPACE_ID }],
+      },
+      HUMAN_ID,
+      HUMAN_CTX
+    );
+    const back = new URL(redirectTo);
+    expect(back.origin + back.pathname).toBe(APP_CALLBACK);
+    expect(back.searchParams.get("iss")).toBe(ISSUER);
+    const [row] = [...store.codes.values()];
+    expect(row).toMatchObject({
+      clientId: APP_ID,
+      scopes: ["entity.post.read"],
+    });
+  });
+
+  /** A pod app consents and gets a code (the connect spy approves it). */
+  async function appCode(scope = "entity.post.read") {
+    cacheApp();
+    // /token re-reads the client from oauth_clients (the cache row).
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    const { redirectTo } = await decideOAuthAuthorization(
+      {
+        clientId: APP_ID,
+        redirectUri: APP_CALLBACK,
+        responseType: "code",
+        scope,
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+        approve: true,
+        approved: [{ permission: "entity.post.read", workspaceId: SPACE_ID }],
+      },
+      HUMAN_ID,
+      HUMAN_CTX
+    );
+    return new URL(redirectTo).searchParams.get("code")!;
+  }
+
+  const APP_AGENT_ID = "55555555-5555-4555-8555-555555555555";
+  function mintAnswers() {
+    appConnect.mint.mockResolvedValue({
+      accessToken: "synap_hub_live_APPKEY",
+      keyId: "app-key-1",
+      expiresAt: new Date(Date.now() + 3600 * 1000),
+      actsAs: "agent",
+      agentUserId: APP_AGENT_ID,
+      publicId: APP_PUBLIC_ID,
+      grant: [
+        {
+          permission: "entity.post.read",
+          workspaceId: SPACE_ID,
+          workspaceName: "Brand",
+        },
+      ],
+      user: { id: HUMAN_ID, name: "Ada" },
+    });
+  }
+
+  // Flipped on purpose in PB2 (was: /token refuses a CIMD code with
+  // unauthorized_client). A CIMD code now mints — through the app's OWN agent
+  // (mintAppOAuthAccessKey), never the shared claude-web* door.
+  it("TRIPWIRE I3: a CIMD client's key is its own app agent's, never a claude-web* key", async () => {
+    const code = await appCode("mcp.read entity.post.read");
+    mintAnswers();
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: APP_ID,
+      redirect_uri: APP_CALLBACK,
+      code_verifier: VERIFIER,
+    });
+    expect(res.status).toBe(200);
+    expect(body.access_token).toBe("synap_hub_live_APPKEY");
+    // The shared MCP door (claude-web / claude-web-direct) is never reached.
+    expect(provisionSpy).not.toHaveBeenCalled();
+    // The app's own door, for THIS person's approved connection and slot.
+    expect(appConnect.mint).toHaveBeenCalledTimes(1);
+    expect(appConnect.mint).toHaveBeenCalledWith({
+      appId: APP_ROW_ID,
+      ownerUserId: HUMAN_ID,
+      oauthClientId: APP_ID,
+      instanceId: `oauth:${APP_ID}:${HUMAN_ID}`,
+    });
+    // An app gets what it was approved, never mcp.* (I2).
+    expect(body.scope).toBe("entity.post.read");
+    expect(body.scope).not.toMatch(/mcp/);
+  });
+
+  it("consent files and approves the app's request BEFORE a code exists, and binds the code to it", async () => {
+    await appCode();
+    expect(appConnect.connect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerUserId: HUMAN_ID,
+        oauthClientId: APP_ID,
+        name: "Content Studio (studio.example.com)",
+        // What the app asked for AND declared — never mcp.*.
+        permissions: ["entity.post.read"],
+        approved: [{ permission: "entity.post.read", workspaceId: SPACE_ID }],
+        ctx: HUMAN_CTX,
+      })
+    );
+    const [row] = [...store.codes.values()];
+    expect(row).toMatchObject({
+      appId: APP_ROW_ID,
+      scopes: ["entity.post.read"],
+    });
+  });
+
+  it("a refused consent (widened, agent caller…) issues no code", async () => {
+    cacheApp();
+    appConnect.connect.mockRejectedValue(
+      Object.assign(new Error("not on offer"), { code: "FORBIDDEN" })
+    );
+    await expect(
+      decideOAuthAuthorization(
+        {
+          clientId: APP_ID,
+          redirectUri: APP_CALLBACK,
+          responseType: "code",
+          scope: "entity.post.read",
+          codeChallenge: CHALLENGE,
+          codeChallengeMethod: "S256",
+          approve: true,
+          approved: [
+            { permission: "entity.post.create", workspaceId: SPACE_ID },
+          ],
+        },
+        HUMAN_ID,
+        HUMAN_CTX
+      )
+    ).rejects.toThrow(/not on offer/);
+    expect(store.codes.size).toBe(0);
+  });
+
+  it("the token response carries the Synap grant and user (spec 17 §6.6), 1 h, no-store", async () => {
+    const code = await appCode();
+    mintAnswers();
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: APP_ID,
+      redirect_uri: APP_CALLBACK,
+      code_verifier: VERIFIER,
+    });
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(body.token_type).toBe("Bearer");
+    expect(body.expires_in).toBeGreaterThan(3590);
+    expect(body.expires_in).toBeLessThanOrEqual(3600);
+    expect(body.synap_grant).toEqual([
+      {
+        permission: "entity.post.read",
+        workspaceId: SPACE_ID,
+        workspaceName: "Brand",
+      },
+    ]);
+    expect(body.synap_user).toEqual({ id: HUMAN_ID, name: "Ada" });
+    // Who the token acts as, as the key door minted it (`podAppActsAs`).
+    expect(body.synap_acts_as).toBe("agent");
+    // Which app this is on the pod, and where the person manages it.
+    expect(body.synap_app).toEqual({
+      id: APP_PUBLIC_ID,
+      manageUrl: `${POD_ADMIN}/apps/${APP_PUBLIC_ID}`,
+    });
+    // Flipped on purpose in PB3 (was: no refresh_token): a pod app's code
+    // starts a refresh family for its connection.
+    expect(body.refresh_token).toBe("RT-1");
+    expect(refresh.start).toHaveBeenCalledWith({
+      clientId: APP_ID,
+      userId: HUMAN_ID,
+      appId: APP_ROW_ID,
+    });
+  });
+
+  it("synap_app.manageUrl is null when POD_ADMIN_URL is unset or invalid; the app id stays", async () => {
+    for (const adminUrl of [undefined, "not a url"]) {
+      const code = await appCode();
+      mintAnswers();
+      if (adminUrl === undefined) delete process.env.POD_ADMIN_URL;
+      else process.env.POD_ADMIN_URL = adminUrl;
+      const { res, body } = await token({
+        grant_type: "authorization_code",
+        code,
+        client_id: APP_ID,
+        redirect_uri: APP_CALLBACK,
+        code_verifier: VERIFIER,
+      });
+      expect(res.status).toBe(200);
+      expect(body.synap_app).toEqual({ id: APP_PUBLIC_ID, manageUrl: null });
+      process.env.POD_ADMIN_URL = POD_ADMIN;
+    }
+  });
+
+  it("a connection revoked (or narrowed to nothing) since consent: invalid_grant, no key", async () => {
+    const code = await appCode();
+    const { TRPCError } = await import("@trpc/server");
+    appConnect.mint.mockRejectedValue(
+      new TRPCError({
+        code: "CONFLICT",
+        message: "This app's connection was revoked.",
+      })
+    );
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: APP_ID,
+      redirect_uri: APP_CALLBACK,
+      code_verifier: VERIFIER,
+    });
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_grant");
+    expect(body).not.toHaveProperty("access_token");
+  });
+
+  it("a CIMD code that names no approved app redeems to nothing", async () => {
+    const code = await appCode();
+    const [row] = [...store.codes.values()];
+    row!.appId = null;
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: APP_ID,
+      redirect_uri: APP_CALLBACK,
+      code_verifier: VERIFIER,
+    });
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_grant");
+    expect(appConnect.mint).not.toHaveBeenCalled();
+  });
+
+  it("an app that asks only for mcp.* is refused at consent (a pod app gets no MCP access in v1)", async () => {
+    cacheApp();
+    await expect(
+      decideOAuthAuthorization(
+        {
+          clientId: APP_ID,
+          redirectUri: APP_CALLBACK,
+          responseType: "code",
+          scope: "mcp.read",
+          codeChallenge: CHALLENGE,
+          codeChallengeMethod: "S256",
+          approve: true,
+          approved: [],
+        },
+        HUMAN_ID,
+        HUMAN_CTX
+      )
+    ).rejects.toThrow(/asks for nothing a pod app can be given/);
+    expect(appConnect.connect).not.toHaveBeenCalled();
+    expect(store.codes.size).toBe(0);
+  });
+
+  it("/revoke retires a pod app's key (its holder is a pod app agent)", async () => {
+    store.users.set(APP_AGENT_ID, {
+      id: APP_AGENT_ID,
+      userType: "agent",
+      agentType: APP_PUBLIC_ID,
+    });
+    store.keys.set("synap_hub_live_APPKEY", {
+      id: "app-key-1",
+      userId: APP_AGENT_ID,
+      instanceId: `oauth:${APP_ID}:${HUMAN_ID}`,
+      status: "valid",
+    });
+    appConnect.isPodAppAgent.mockResolvedValue(true);
+    const res = await oauthApp.request("/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        token: "synap_hub_live_APPKEY",
+        client_id: APP_ID,
+      }).toString(),
+    });
+    expect(res.status).toBe(200);
+    expect(appConnect.isPodAppAgent).toHaveBeenCalledWith(APP_AGENT_ID);
+    expect(store.keys.get("synap_hub_live_APPKEY")!.status).toBe("revoked");
+  });
+
+  it("/revoke still ignores an agent key that is neither claude-web* nor a pod app's", async () => {
+    store.users.set("other-agent", {
+      id: "other-agent",
+      userType: "agent",
+      agentType: "claude-code",
+    });
+    store.keys.set("synap_hub_live_OTHER", {
+      id: "other-key",
+      userId: "other-agent",
+      instanceId: null,
+      status: "valid",
+    });
+    const res = await oauthApp.request("/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: "synap_hub_live_OTHER" }).toString(),
+    });
+    expect(res.status).toBe(200);
+    expect(store.keys.get("synap_hub_live_OTHER")!.status).toBe("valid");
+  });
+
+  it("the consent context shows a pod app by its domain, unverified, with the spaces on offer", async () => {
+    cacheApp({ requestedTemplates: ["content-studio"] });
+    const context = await getOAuthConsentContext(
+      {
+        clientId: APP_ID,
+        redirectUri: APP_CALLBACK,
+        responseType: "code",
+        scope: "entity.post.read mcp.read",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+      },
+      HUMAN_ID
+    );
+    expect(context.clientKind).toBe("cimd");
+    expect(context.app).toMatchObject({
+      domain: "studio.example.com",
+      verified: false,
+      // No reason cached for it: null, never absent (be-admin contract).
+      permissions: [
+        { permission: "entity.post.read", workspaces: [], reason: null },
+      ],
+      templates: ["content-studio"],
+      ignoredScopes: ["mcp.read"],
+    });
+  });
+
+  it("a Synap app (exact https://<id>.synap.live origin) is shown verified; a look-alike is not", async () => {
+    const synap =
+      "https://content-studio.synap.live/.well-known/synap-client.json";
+    const lookalike =
+      "https://content-studio.synap.live.evil.example/.well-known/synap-client.json";
+    for (const [id, verified] of [
+      [synap, true],
+      [lookalike, false],
+    ] as const) {
+      const callback = `${new URL(id).origin}/cb`;
+      store.cimd.set(id, {
+        ...store.cimd.get(APP_ID),
+        clientId: id,
+        clientKind: "cimd",
+        clientName: "Content Studio",
+        redirectUris: [callback],
+        scopes: [],
+        requestedPermissions: ["entity.post.read"],
+        createdAt: new Date(),
+      });
+      const context = await getOAuthConsentContext(
+        {
+          clientId: id,
+          redirectUri: callback,
+          responseType: "code",
+          scope: "entity.post.read",
+          codeChallenge: CHALLENGE,
+          codeChallengeMethod: "S256",
+        },
+        HUMAN_ID
+      );
+      expect(context.app?.verified).toBe(verified);
+    }
+  });
+
+  it("a DCR client's consent context has no app section (MCP consent unchanged)", async () => {
+    const { body: client } = await register();
+    const context = await getOAuthConsentContext(
+      {
+        clientId: client.client_id,
+        redirectUri: CALLBACK,
+        responseType: "code",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+      },
+      HUMAN_ID
+    );
+    expect(context.clientKind).toBe("dcr");
+    expect(context.app).toBeNull();
+    expect(appConnect.connect).not.toHaveBeenCalled();
+  });
+
+  it("validation stays bounded: a 513-char client_id is refused at /authorize, a 512-char one is not", async () => {
+    const url = (n: number) => {
+      const base = "https://studio.example.com/";
+      return base + "a".repeat(n - base.length);
+    };
+    const long = await authorizeApp({ client_id: url(513) });
+    expect(long.status).toBe(400);
+    expect(long.headers.get("location")).toBeNull();
+    expect(await long.text()).toMatch(/longer than 512/);
+
+    const max = url(512);
+    cacheApp();
+    store.cimd.set(max, { ...store.cimd.get(APP_ID)!, clientId: max });
+    const ok = await authorizeApp({ client_id: max });
+    expect(ok.status).toBe(302);
+    expect(new URL(ok.headers.get("location")!).origin).toBe(POD_ADMIN);
+  });
+
+  it("a DCR-shaped client_id never resolves to a cached document's row", async () => {
+    store.clients.set("dcr_squat", {
+      clientId: "dcr_squat",
+      clientKind: "cimd",
+      clientName: "x",
+      redirectUris: [CALLBACK],
+      scopes: ["mcp.read"],
+      requestedPermissions: [],
+      createdAt: new Date(),
+    });
+    const res = await oauthApp.request(
+      authorizeUrl({
+        response_type: "code",
+        client_id: "dcr_squat",
+        redirect_uri: CALLBACK,
+        code_challenge: CHALLENGE,
+        code_challenge_method: "S256",
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  // ─── PB3 — refresh tokens (pod apps only) ──────────────────────────────────
+
+  const REDEEMED = {
+    id: "rt-row-1",
+    familyId: "family-1",
+    clientId: APP_ID,
+    userId: HUMAN_ID,
+    appId: APP_ROW_ID,
+  };
+  const refreshGrant = (extra: Record<string, string> = {}) =>
+    token({
+      grant_type: "refresh_token",
+      refresh_token: "RT-1",
+      client_id: APP_ID,
+      ...extra,
+    });
+
+  it("refresh: redeems the token, mints from the connection's approval, rotates, same response shape", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    refresh.redeem.mockResolvedValue(REDEEMED);
+    refresh.rotate.mockResolvedValue("RT-2");
+    mintAnswers();
+    const { res, body } = await refreshGrant({ scope: "entity.post.delete" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    expect(refresh.redeem).toHaveBeenCalledWith("RT-1", APP_ID);
+    // PB3b: the key is the one the successor re-derives (the reuse grace).
+    const [[minted]] = appConnect.mint.mock.calls;
+    expect(minted).toEqual({
+      appId: APP_ROW_ID,
+      ownerUserId: HUMAN_ID,
+      oauthClientId: APP_ID,
+      instanceId: `oauth:${APP_ID}:${HUMAN_ID}`,
+      plainKey: expect.stringMatching(/^derived-key:/),
+    });
+    const successorId = minted.plainKey.slice("derived-key:".length);
+    expect(refresh.rotate).toHaveBeenCalledWith(REDEEMED, successorId);
+    expect(body).toMatchObject({
+      access_token: "synap_hub_live_APPKEY",
+      token_type: "Bearer",
+      refresh_token: "RT-2",
+      // The approval, never the request's `scope`.
+      scope: "entity.post.read",
+      synap_user: { id: HUMAN_ID, name: "Ada" },
+      synap_app: {
+        id: APP_PUBLIC_ID,
+        manageUrl: `${POD_ADMIN}/apps/${APP_PUBLIC_ID}`,
+      },
+    });
+    expect(body.expires_in).toBeLessThanOrEqual(3600);
+    expect(provisionSpy).not.toHaveBeenCalled();
+  });
+
+  it("refresh: a token the store refuses (unknown, reused, expired) mints nothing", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    const { OAuthError } = await import("./protocol.js");
+    refresh.redeem.mockRejectedValue(
+      new OAuthError(
+        "invalid_grant",
+        "Invalid, expired, or revoked refresh token"
+      )
+    );
+    const { res, body } = await refreshGrant();
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_grant");
+    expect(appConnect.mint).not.toHaveBeenCalled();
+    expect(refresh.rotate).not.toHaveBeenCalled();
+  });
+
+  it("refresh: a connection revoked (or narrowed to nothing) since is invalid_grant, no successor", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    refresh.redeem.mockResolvedValue(REDEEMED);
+    const { TRPCError } = await import("@trpc/server");
+    appConnect.mint.mockRejectedValue(
+      new TRPCError({
+        code: "CONFLICT",
+        message: "This app has nothing approved.",
+      })
+    );
+    const { res, body } = await refreshGrant();
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_grant");
+    expect(refresh.rotate).not.toHaveBeenCalled();
+  });
+
+  it("refresh within the reuse grace (PB3b): the live key handed back, the successor answered, nothing minted or rotated", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    const grace = { successorId: "rt-row-2", refreshToken: "RT-2" };
+    refresh.redeem.mockResolvedValue({ ...REDEEMED, grace });
+    refresh.confirmGrace.mockResolvedValue(undefined);
+    // The same answer a mint gives, handed back by the reuse door instead.
+    mintAnswers();
+    appConnect.reuse.mockImplementation(
+      appConnect.mint.getMockImplementation()!
+    );
+    const { res, body } = await refreshGrant();
+    expect(res.status).toBe(200);
+    expect(appConnect.reuse).toHaveBeenCalledWith({
+      appId: APP_ROW_ID,
+      ownerUserId: HUMAN_ID,
+      oauthClientId: APP_ID,
+      instanceId: `oauth:${APP_ID}:${HUMAN_ID}`,
+      accessToken: "derived-key:rt-row-2",
+    });
+    expect(appConnect.mint).not.toHaveBeenCalled();
+    expect(refresh.rotate).not.toHaveBeenCalled();
+    expect(refresh.confirmGrace).toHaveBeenCalledWith({ ...REDEEMED, grace });
+    expect(body).toMatchObject({
+      access_token: "synap_hub_live_APPKEY",
+      refresh_token: "RT-2",
+      synap_app: {
+        id: APP_PUBLIC_ID,
+        manageUrl: `${POD_ADMIN}/apps/${APP_PUBLIC_ID}`,
+      },
+    });
+  });
+
+  it("refresh within the reuse grace, the live key not reusable: one is minted (random, same slot), not rotated", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    const grace = { successorId: "rt-row-2", refreshToken: "RT-2" };
+    refresh.redeem.mockResolvedValue({ ...REDEEMED, grace });
+    refresh.confirmGrace.mockResolvedValue(undefined);
+    appConnect.reuse.mockResolvedValue(null);
+    mintAnswers();
+    const { res, body } = await refreshGrant();
+    expect(res.status).toBe(200);
+    expect(appConnect.mint).toHaveBeenCalledWith({
+      appId: APP_ROW_ID,
+      ownerUserId: HUMAN_ID,
+      oauthClientId: APP_ID,
+      instanceId: `oauth:${APP_ID}:${HUMAN_ID}`,
+    });
+    expect(refresh.rotate).not.toHaveBeenCalled();
+    expect(body.refresh_token).toBe("RT-2");
+  });
+
+  it("refresh within the reuse grace, the successor spent meanwhile: invalid_grant", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    const grace = { successorId: "rt-row-2", refreshToken: "RT-2" };
+    refresh.redeem.mockResolvedValue({ ...REDEEMED, grace });
+    appConnect.reuse.mockResolvedValue(null);
+    mintAnswers();
+    const { OAuthError } = await import("./protocol.js");
+    refresh.confirmGrace.mockRejectedValue(
+      new OAuthError(
+        "invalid_grant",
+        "Invalid, expired, or revoked refresh token"
+      )
+    );
+    const { res, body } = await refreshGrant();
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("invalid_grant");
+    expect(body).not.toHaveProperty("refresh_token");
+  });
+
+  it("refresh: an MCP (DCR) client is unauthorized_client and never reaches the store", async () => {
+    const { body: client } = await register();
+    const { res, body } = await refreshGrant({ client_id: client.client_id });
+    expect(res.status).toBe(400);
+    expect(body.error).toBe("unauthorized_client");
+    expect(refresh.redeem).not.toHaveBeenCalled();
+  });
+
+  it("refresh: an unknown client is invalid_client (401); a missing token or client is invalid_request", async () => {
+    const unknown = await refreshGrant({
+      client_id: "https://nope.example/c.json",
+    });
+    expect(unknown.res.status).toBe(401);
+    expect(unknown.body.error).toBe("invalid_client");
+    const noToken = await token({
+      grant_type: "refresh_token",
+      client_id: APP_ID,
+    });
+    expect(noToken.body.error).toBe("invalid_request");
+    const noClient = await token({
+      grant_type: "refresh_token",
+      refresh_token: "RT-1",
+    });
+    expect(noClient.body.error).toBe("invalid_request");
+    expect(refresh.redeem).not.toHaveBeenCalled();
+  });
+
+  it("an MCP (DCR) code exchange still answers no refresh_token and starts no family", async () => {
+    const { body: client } = await register();
+    const { code } = await consentAndExtractCode(client.client_id);
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: client.client_id,
+      redirect_uri: CALLBACK,
+      code_verifier: VERIFIER,
+    });
+    expect(res.status).toBe(200);
+    expect(body).not.toHaveProperty("refresh_token");
+    // The Synap app extension is a pod app's only (MCP response unchanged).
+    expect(body).not.toHaveProperty("synap_app");
+    expect(refresh.start).not.toHaveBeenCalled();
+  });
+
+  const REFRESH_ROW = {
+    familyId: "family-1",
+    clientId: APP_ID,
+    userId: HUMAN_ID,
+    appId: APP_ROW_ID,
+  };
+  const revokeToken = (params: Record<string, string>) =>
+    oauthApp.request("/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(params).toString(),
+    });
+
+  it("/revoke with token_type_hint=refresh_token revokes the token's family", async () => {
+    refresh.find.mockResolvedValue(REFRESH_ROW);
+    const res = await revokeToken({
+      token: "RT-1",
+      token_type_hint: "refresh_token",
+      client_id: APP_ID,
+    });
+    expect(res.status).toBe(200);
+    expect(refresh.find).toHaveBeenCalledWith("RT-1");
+    expect(refresh.revokeFamily).toHaveBeenCalledWith(
+      REFRESH_ROW,
+      expect.any(String)
+    );
+    expect(revokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("/revoke of a refresh token WITHOUT a hint: the key lookup misses, the refresh lookup revokes it", async () => {
+    refresh.find.mockResolvedValue(REFRESH_ROW);
+    const res = await revokeToken({ token: "RT-1" });
+    expect(res.status).toBe(200);
+    expect(refresh.revokeFamily).toHaveBeenCalledTimes(1);
+  });
+
+  it("/revoke of a refresh token by another client: 400 unauthorized_client, the family kept", async () => {
+    refresh.find.mockResolvedValue(REFRESH_ROW);
+    for (const hint of ["refresh_token", "access_token"]) {
+      const res = await revokeToken({
+        token: "RT-1",
+        token_type_hint: hint,
+        client_id: "https://other.example.com/c.json",
+      });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as any).error).toBe("unauthorized_client");
+    }
+    expect(refresh.revokeFamily).not.toHaveBeenCalled();
+  });
+
+  it("/revoke hinted refresh_token but holding an ACCESS key still retires the key (the hint only orders)", async () => {
+    store.users.set(APP_AGENT_ID, {
+      id: APP_AGENT_ID,
+      userType: "agent",
+      agentType: APP_PUBLIC_ID,
+    });
+    store.keys.set("synap_hub_live_APPKEY", {
+      id: "app-key-1",
+      userId: APP_AGENT_ID,
+      instanceId: `oauth:${APP_ID}:${HUMAN_ID}`,
+      status: "valid",
+    });
+    appConnect.isPodAppAgent.mockResolvedValue(true);
+    const res = await revokeToken({
+      token: "synap_hub_live_APPKEY",
+      token_type_hint: "refresh_token",
+    });
+    expect(res.status).toBe(200);
+    expect(store.keys.get("synap_hub_live_APPKEY")!.status).toBe("revoked");
+  });
+});
+
+// ─── Review A1 — an MCP client that names a metadata document (CIMD) ─────────
+//
+// The AS metadata advertises CIMD to every client, and MCP authorization
+// (2025-11) tells a client to prefer it when advertised. A document that
+// declares no `synap_requests` is an MCP client's: it gets the MCP consent,
+// the MCP mint (`claude-web*`, linkedUserId = the person) and no refresh
+// token, exactly as if it had registered by DCR.
+
+describe("A1 — a CIMD client that declares no synap_requests is an MCP client", () => {
+  const MCP_ID = "https://mcp-client.example.com/oauth/client.json";
+  const MCP_CB = "https://mcp-client.example.com/oauth/callback";
+  function cacheMcp(overrides: Record<string, unknown> = {}) {
+    const row = {
+      clientId: MCP_ID,
+      clientKind: "cimd",
+      clientName: "Some MCP Client",
+      redirectUris: [MCP_CB],
+      scopes: ["mcp.read", "mcp.write"],
+      requestedPermissions: [],
+      createdAt: new Date(),
+      ...overrides,
+    };
+    store.cimd.set(MCP_ID, row);
+    // /token re-reads the client from oauth_clients (the cache row).
+    store.clients.set(MCP_ID, row);
+  }
+  const mcpParams = {
+    clientId: MCP_ID,
+    redirectUri: MCP_CB,
+    responseType: "code",
+    scope: "mcp.read mcp.write",
+    codeChallenge: CHALLENGE,
+    codeChallengeMethod: "S256",
+  };
+
+  it("/authorize sends it to the consent screen with its mcp.* scopes", async () => {
+    cacheMcp();
+    const res = await oauthApp.request(
+      authorizeUrl({
+        response_type: "code",
+        client_id: MCP_ID,
+        redirect_uri: MCP_CB,
+        scope: "mcp.read mcp.write",
+        code_challenge: CHALLENGE,
+        code_challenge_method: "S256",
+      })
+    );
+    expect(res.status).toBe(302);
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin).toBe(POD_ADMIN);
+    expect(target.searchParams.get("scope")).toBe("mcp.read mcp.write");
+  });
+
+  it("a document that declares no scope gets the pod default, as a DCR registration naming none does", async () => {
+    cacheMcp({ scopes: [] });
+    const res = await oauthApp.request(
+      authorizeUrl({
+        response_type: "code",
+        client_id: MCP_ID,
+        redirect_uri: MCP_CB,
+        scope: "mcp.read",
+        code_challenge: CHALLENGE,
+        code_challenge_method: "S256",
+      })
+    );
+    expect(
+      new URL(res.headers.get("location")!).searchParams.get("scope")
+    ).toBe("mcp.read");
+  });
+
+  it("the consent screen shows it as an MCP client (no pod-app block)", async () => {
+    cacheMcp();
+    const context = await getOAuthConsentContext(mcpParams, HUMAN_ID);
+    expect(context.app).toBeNull();
+    expect(context.scopes).toEqual(["mcp.read", "mcp.write"]);
+    expect(context.redirectHost).toBe("mcp-client.example.com");
+  });
+
+  it("Allow issues an MCP code (no app connection); /token mints claude-web-direct for the person, no refresh token", async () => {
+    cacheMcp();
+    const { redirectTo } = await decideOAuthAuthorization(
+      { ...mcpParams, approve: true },
+      HUMAN_ID
+    );
+    expect(appConnect.connect).not.toHaveBeenCalled();
+    const [row] = [...store.codes.values()];
+    expect(row).toMatchObject({
+      clientId: MCP_ID,
+      appId: null,
+      scopes: ["mcp.read", "mcp.write"],
+    });
+
+    const { res, body } = await token({
+      grant_type: "authorization_code",
+      code: new URL(redirectTo).searchParams.get("code")!,
+      client_id: MCP_ID,
+      redirect_uri: MCP_CB,
+      code_verifier: VERIFIER,
+    });
+    expect(res.status).toBe(200);
+    expect(body.access_token).toBe("synap_live_TESTKEY");
+    expect(body).not.toHaveProperty("refresh_token");
+    expect(body).not.toHaveProperty("synap_grant");
+    expect(appConnect.mint).not.toHaveBeenCalled();
+    expect(refresh.start).not.toHaveBeenCalled();
+    const opts = provisionSpy.mock.calls[0][0];
+    expect(opts.agentType).toBe("claude-web-direct");
+    expect(opts.linkedUserId).toBe(HUMAN_ID);
+    expect(opts.instanceId).toBe(`oauth:${MCP_ID}:${HUMAN_ID}`);
+  });
+
+  it("a code that names an approved connection stays a pod app's, even once the document drops its synap_requests", async () => {
+    cacheMcp({ requestedPermissions: ["entity.post.read"] });
+    const { redirectTo } = await decideOAuthAuthorization(
+      {
+        ...mcpParams,
+        scope: "entity.post.read",
+        approve: true,
+        approved: [{ permission: "entity.post.read", workspaceId: SPACE_ID }],
+      },
+      HUMAN_ID,
+      HUMAN_CTX
+    );
+    cacheMcp(); // the document changed: no synap_requests now
+    appConnect.mint.mockResolvedValue({
+      accessToken: "synap_hub_live_APPKEY",
+      keyId: "app-key-1",
+      expiresAt: new Date(Date.now() + 3600 * 1000),
+      agentUserId: "app-agent",
+      publicId: APP_PUBLIC_ID,
+      grant: [],
+      user: { id: HUMAN_ID, name: "Ada" },
+    });
+    const { res } = await token({
+      grant_type: "authorization_code",
+      code: new URL(redirectTo).searchParams.get("code")!,
+      client_id: MCP_ID,
+      redirect_uri: MCP_CB,
+      code_verifier: VERIFIER,
+    });
+    expect(res.status).toBe(200);
+    expect(appConnect.mint).toHaveBeenCalledTimes(1);
+    expect(provisionSpy).not.toHaveBeenCalled();
+  });
+
+  it("an unrecognised resource reads as absent, as for a DCR client (the lenient rule)", async () => {
+    cacheMcp();
+    const res = await oauthApp.request(
+      authorizeUrl({
+        response_type: "code",
+        client_id: MCP_ID,
+        redirect_uri: MCP_CB,
+        scope: "mcp.read",
+        code_challenge: CHALLENGE,
+        code_challenge_method: "S256",
+        resource: "https://claude.ai/some-resource",
+      })
+    );
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin).toBe(POD_ADMIN);
+    expect(target.searchParams.get("resource")).toBeNull();
+  });
+});
+
+// ─── Review ui-flow P0-4 + arch A6 — refusals a person sees, lines an operator reads
+
+/** The structured refusal lines (`logOAuthRefusal`), in order. */
+const refusalLines = () =>
+  log.warn.mock.calls
+    .filter((call) => call[1] === "pod-oauth: request refused")
+    .map((call) => call[0]);
+
+describe("P0-4 — a phase-1 refusal is a page for the person, never a redirect", () => {
+  it("names the pod, says why and what to do, offers Go back; HTML, 400, no-store, no Location", async () => {
+    podAppPolicy.allowUnverified = false;
+    const res = await authorizeApp();
+    expect(res.status).toBe(400);
+    expect(res.headers.get("location")).toBeNull();
+    expect(res.headers.get("content-type")).toMatch(/^text\/html/);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const html = await res.text();
+    expect(html).toContain("pod.test.synap.live");
+    expect(html).toContain("Your pod doesn&#39;t allow this app");
+    expect(html).toContain("Only your pod admin can change this.");
+    expect(html).toContain('onclick="history.back()"');
+    // No link out: every URL in the request is unverified here.
+    expect(html).not.toMatch(/<a\s/i);
+    expect(html).not.toContain(APP_CALLBACK);
+  });
+
+  it("an unknown client gets the broken-link copy", async () => {
+    const res = await oauthApp.request(
+      authorizeUrl({
+        response_type: "code",
+        client_id: "dcr_nobody",
+        redirect_uri: CALLBACK,
+        code_challenge: CHALLENGE,
+        code_challenge_method: "S256",
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("This sign-in link doesn&#39;t work");
+  });
+
+  it("leads with the person's sentence; the pod's own is a detail for the app's developer (review U7)", () => {
+    const html = renderAuthorizeRefusalPage({
+      podHost: "pod.my-team.synap.live",
+      reason: "unknown_client",
+      message: "Unknown client_id",
+    });
+    const h1 = html.indexOf("<h1>This sign-in link doesn&#39;t work</h1>");
+    const details = html.indexOf("Details for the app's developer");
+    expect(h1).toBeGreaterThan(-1);
+    expect(details).toBeGreaterThan(h1);
+    expect(html.indexOf("Unknown client_id")).toBeGreaterThan(details);
+    // The Synap mark, and the host one label to a unit (no break at "-").
+    expect(html).toContain('<span class="mark" aria-hidden="true">S</span>');
+    expect(html).toContain(
+      "<span>pod.</span><wbr><span>my-team.</span><wbr><span>synap.</span><wbr><span>live</span>"
+    );
+  });
+
+  it("escapes every value it shows (the message carries request data)", () => {
+    const html = renderAuthorizeRefusalPage({
+      podHost: "pod.test.synap.live",
+      reason: "app_description_unreadable",
+      message: `This app's description could not be read: synap_requests: "<img src=x onerror=alert(1)>" must name a subject`,
+    });
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+  });
+});
+
+describe("A6 — one structured log line per refusal, never a code, token or verifier", () => {
+  it("/authorize phase 1: the client_id, the phase, the reason", async () => {
+    podAppPolicy.allowUnverified = false;
+    await authorizeApp();
+    expect(refusalLines()).toEqual([
+      expect.objectContaining({
+        phase: "authorize",
+        clientId: APP_ID,
+        reason: "unverified_apps_off",
+        code: null,
+      }),
+    ]);
+  });
+
+  it("/authorize phase 2 (redirected to the app): the OAuth code too", async () => {
+    cacheApp();
+    await authorizeApp({ scope: "entity.task.delete" });
+    expect(refusalLines()).toEqual([
+      expect.objectContaining({
+        phase: "authorize",
+        clientId: APP_ID,
+        reason: "invalid_scope",
+        code: "invalid_scope",
+      }),
+    ]);
+  });
+
+  it("/token: a wrong verifier is logged without the code or the verifier", async () => {
+    const { body: client } = await register();
+    const { code } = await consentAndExtractCode(client.client_id);
+    const wrong = "w".repeat(64);
+    const { body } = await token({
+      grant_type: "authorization_code",
+      code,
+      client_id: client.client_id,
+      redirect_uri: CALLBACK,
+      code_verifier: wrong,
+    });
+    expect(body.error).toBe("invalid_grant");
+    expect(refusalLines()).toEqual([
+      expect.objectContaining({
+        phase: "token",
+        clientId: client.client_id,
+        code: "invalid_grant",
+      }),
+    ]);
+    const logged = JSON.stringify(log.warn.mock.calls);
+    expect(logged).not.toContain(code);
+    expect(logged).not.toContain(wrong);
+  });
+
+  it("/token refresh: a refused refresh is logged as such, without the token", async () => {
+    cacheApp();
+    store.clients.set(APP_ID, store.cimd.get(APP_ID)!);
+    const { OAuthError } = await import("./protocol.js");
+    refresh.redeem.mockRejectedValue(
+      new OAuthError(
+        "invalid_grant",
+        "Invalid, expired, or revoked refresh token"
+      )
+    );
+    const raw = "RT-secret-" + "z".repeat(40);
+    const { body } = await token({
+      grant_type: "refresh_token",
+      refresh_token: raw,
+      client_id: APP_ID,
+    });
+    expect(body.error).toBe("invalid_grant");
+    expect(refusalLines()).toEqual([
+      expect.objectContaining({
+        phase: "refresh",
+        clientId: APP_ID,
+        code: "invalid_grant",
+      }),
+    ]);
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain(raw);
+  });
+
+  it("a caller-chosen client_id is bounded in the line", async () => {
+    await oauthApp.request(
+      authorizeUrl({ client_id: "dcr_" + "x".repeat(4000) })
+    );
+    const [line] = refusalLines();
+    expect(line.clientId).toHaveLength(512);
+  });
+});
+
+// ─── Review S6/A8 — the launch's space reaches the consent screen ────────────
+
+describe("S6/A8 — synap_space_hint is forwarded to the consent screen as space_hint", () => {
+  const consentTarget = async (res: Response) => {
+    expect(res.status).toBe(302);
+    const target = new URL(res.headers.get("location")!);
+    expect(target.origin).toBe(POD_ADMIN);
+    return target;
+  };
+
+  it("a pod app's well-formed hint is forwarded, under its consent name only", async () => {
+    cacheApp();
+    const target = await consentTarget(
+      await authorizeApp({ synap_space_hint: SPACE_ID })
+    );
+    expect(target.searchParams.get("space_hint")).toBe(SPACE_ID);
+    expect(target.searchParams.has("synap_space_hint")).toBe(false);
+  });
+
+  it("a hint outside the one charset is dropped (path, query, space, too long)", async () => {
+    for (const bad of ["../admin", "a?b=c", "a b", "x".repeat(65)]) {
+      cacheApp();
+      const target = await consentTarget(
+        await authorizeApp({ synap_space_hint: bad })
+      );
+      expect(target.searchParams.has("space_hint")).toBe(false);
+    }
+  });
+
+  it("an MCP client's hint is dropped: it has no space to pre-tick", async () => {
+    const { body: client } = await register();
+    const target = await consentTarget(
+      await oauthApp.request(
+        authorizeUrl({
+          response_type: "code",
+          client_id: client.client_id,
+          redirect_uri: CALLBACK,
+          code_challenge: CHALLENGE,
+          code_challenge_method: "S256",
+          synap_space_hint: SPACE_ID,
+        })
+      )
+    );
+    expect(target.searchParams.has("space_hint")).toBe(false);
+  });
+});
+
+// ─── Item 8 — the document's reason reaches the consent screen ───────────────
+
+describe("consent carries synap_requests[].reason as app.permissions[i].reason", () => {
+  it("each offered permission has its cached reason, or null", async () => {
+    cacheApp({
+      requestedReasons: { "entity.post.read": "To list your drafts" },
+    });
+    const context = await getOAuthConsentContext(
+      {
+        clientId: APP_ID,
+        redirectUri: APP_CALLBACK,
+        responseType: "code",
+        scope: "entity.post.read entity.post.create",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+      },
+      HUMAN_ID
+    );
+    expect(context.app!.permissions).toEqual([
+      {
+        permission: "entity.post.read",
+        workspaces: [],
+        reason: "To list your drafts",
+      },
+      { permission: "entity.post.create", workspaces: [], reason: null },
+    ]);
+  });
+
+  it("only the permission's own entry counts (no inherited key, no non-string)", async () => {
+    cacheApp({
+      requestedPermissions: ["entity.post.read", "entity.post.create"],
+      requestedReasons: Object.assign(
+        Object.create({ "entity.post.read": "inherited" }),
+        { "entity.post.create": 42 }
+      ),
+    });
+    const context = await getOAuthConsentContext(
+      {
+        clientId: APP_ID,
+        redirectUri: APP_CALLBACK,
+        responseType: "code",
+        scope: "entity.post.read entity.post.create",
+        codeChallenge: CHALLENGE,
+        codeChallengeMethod: "S256",
+      },
+      HUMAN_ID
+    );
+    expect(context.app!.permissions.map((p) => p.reason)).toEqual([null, null]);
   });
 });

@@ -56,7 +56,8 @@ const {
   };
 });
 
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({
     warn: vi.fn(),
     info: vi.fn(),
@@ -98,7 +99,8 @@ vi.mock("../utils/audit-log.js", () => ({
   auditLog: vi.fn().mockResolvedValue({ id: "evt-1" }),
 }));
 
-vi.mock("../lib/event-helpers.js", () => ({
+vi.mock("../lib/event-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/event-helpers.js")>()),
   ViewEvents: { createRequested: vi.fn().mockResolvedValue(undefined) },
 }));
 

@@ -54,7 +54,12 @@ export const apiKeys = pgTable(
       .notNull()
       .default("hub_inbound")
       .$type<
-        "hub_inbound" | "user_pat" | "system" | "service" | "is_internal"
+        | "hub_inbound"
+        | "user_pat"
+        | "system"
+        | "service"
+        | "is_internal"
+        | "app_person"
       >(), // Categorical purpose label
     // 'service' is a first-class, product-neutral machine credential. Minted by
     // POST /api/hub/setup/service (NOT /setup/agent), it is owned directly by a
@@ -73,6 +78,15 @@ export const apiKeys = pgTable(
     // (apps/api/src/routers/provision.ts). No public key-mint path can set it —
     // every public path hardcodes a non-is_internal literal and none reads
     // keyType from caller input.
+    //
+    // 'app_person' is a PERSON's "Sign in with Synap" token for an app their
+    // pod approved (0339), or for a SYNAP pod app they connected (founder
+    // 2026-10-22): held by the person (`user_id`, no linked user), grant
+    // `client_id` = the app's (or the connection's) public id. It is the ONE marker that keeps
+    // `resolveKeyIdentity` from adopting a person-held key that names an app
+    // onto the app's agent (the 0313 rule). Minted EXCLUSIVELY by the OAuth
+    // /token door (api services/app-person-token.ts); like is_internal, no
+    // other mint path can set it (tripwire app-person-key-type).
     description: text("description"), // Human-readable explanation of what this key does
 
     // Metadata
@@ -173,6 +187,13 @@ export const apiKeys = pgTable(
   })
 );
 
+/**
+ * The `key_type` of a person's "Sign in with Synap" token for an app (0339).
+ * Its ONE mint site is api `services/app-person-token.ts`; every reader
+ * compares against this constant (tripwire `app-person-key-type`).
+ */
+export const APP_PERSON_KEY_TYPE = "app_person" as const;
+
 /** The MCP tool profiles a key can carry (`api_keys.tool_profile`, 0280). */
 export const API_KEY_TOOL_PROFILES = ["entry", "builder"] as const;
 export type ApiKeyToolProfile = (typeof API_KEY_TOOL_PROFILES)[number];
@@ -249,7 +270,7 @@ export const API_KEY_SCOPES = [
   // rooms to receive event broadcasts (chat:stream, openclaw:message:received [legacy name: external message ingress],
   // agent:task:status, etc). Does NOT grant the right to emit events back —
   // the bridge HTTP endpoint stays guarded by BRIDGE_SECRET as before. See
-  // synap-team-docs/content/team/platform/eve-os-vision.mdx §9 Phase 3A.
+  // the team pod document "Eve (hestia-cli), Hermes and the Eve OS: design history" (synap ask "Eve OS vision").
   "realtime:observe",
   // Probe key (D8). Writes made with it are marked as dogfood probes, hidden
   // from listings and swept. Declared explicitly at mint — never inferred from

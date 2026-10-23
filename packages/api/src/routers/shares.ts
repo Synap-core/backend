@@ -45,10 +45,15 @@
  *                  and rotate mint the site token, human only, shown ONCE;
  *                  unpublish / revoke are direct for everyone (revoke also
  *                  revokes every member row, in one transaction).
+ *   - publishToSite  publish records INTO a site (batch ≤ 200, C1b): human
+ *                  owner direct; agent ONE proposal for the whole batch;
+ *                  refused records are reported per record.
+ *   - unpublishFromSite  take records off one site (or, no ids, the whole
+ *                  site back to draft). Direct for everyone.
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import {
   getExposurePolicy,
   getPublicDoors,
@@ -73,9 +78,12 @@ import { registerShareExecutors } from "../services/sharing/share-executors.js";
 import {
   configureSite,
   publishSite,
+  publishToSite,
   revokeSite,
   rotateSiteToken,
   siteStatus,
+  SITE_PUBLISH_MAX_RECORDS,
+  unpublishFromSite,
   unpublishSite,
 } from "../services/sharing/site-service.js";
 import {
@@ -90,6 +98,12 @@ registerShareExecutors();
 
 const Uuid = z.string().uuid();
 const Kind = z.enum(SHARE_KINDS);
+const SiteRecordIds = z.array(Uuid).min(1).max(SITE_PUBLISH_MAX_RECORDS);
+// One page of a status read's `members` (the service clamps `limit`).
+const SiteMembersPage = z.object({
+  cursor: z.string().min(1).max(512).optional(),
+  limit: z.number().int().min(1).optional(),
+});
 
 /** The share door's actor, from the authenticated tRPC context. */
 export function shareActorFromCtx(ctx: {
@@ -107,7 +121,7 @@ export function shareActorFromCtx(ctx: {
 }
 
 export const sharesRouter = router({
-  share: protectedProcedure
+  share: credentialProcedure
     .input(
       z.object({
         resourceType: Kind,
@@ -165,7 +179,7 @@ export const sharesRouter = router({
     )
     .query(({ input, ctx }) => listShares(shareActorFromCtx(ctx), input)),
 
-  rotateLink: protectedProcedure
+  rotateLink: credentialProcedure
     .input(z.object({ shareId: Uuid }))
     .mutation(({ input, ctx }) =>
       rotateLink(shareActorFromCtx(ctx), input.shareId)
@@ -178,7 +192,7 @@ export const sharesRouter = router({
       redeemLink(shareActorFromCtx(ctx), input.token)
     ),
 
-  publish: protectedProcedure
+  publish: credentialProcedure
     .input(
       z.object({
         resourceType: Kind,
@@ -206,7 +220,7 @@ export const sharesRouter = router({
     ),
 
   // The config is validated (strictly) by the service, which owns its schema.
-  configureSite: protectedProcedure
+  configureSite: credentialProcedure
     .input(
       z.object({
         projectId: Uuid,
@@ -226,13 +240,13 @@ export const sharesRouter = router({
       )
     ),
 
-  publishSite: protectedProcedure
+  publishSite: credentialProcedure
     .input(z.object({ siteId: Uuid }))
     .mutation(({ input, ctx }) =>
       publishSite(shareActorFromCtx(ctx), input.siteId)
     ),
 
-  rotateSiteToken: protectedProcedure
+  rotateSiteToken: credentialProcedure
     .input(z.object({ siteId: Uuid }))
     .mutation(({ input, ctx }) =>
       rotateSiteToken(shareActorFromCtx(ctx), input.siteId)
@@ -244,6 +258,27 @@ export const sharesRouter = router({
       unpublishSite(shareActorFromCtx(ctx), input.siteId)
     ),
 
+  publishToSite: credentialProcedure
+    .input(
+      z.object({
+        siteId: Uuid,
+        entityIds: SiteRecordIds,
+        reasoning: z.string().max(2000).optional(),
+      })
+    )
+    .mutation(({ input, ctx }) =>
+      publishToSite(
+        { ...shareActorFromCtx(ctx), reasoning: input.reasoning },
+        input
+      )
+    ),
+
+  unpublishFromSite: protectedProcedure
+    .input(z.object({ siteId: Uuid, entityIds: SiteRecordIds.optional() }))
+    .mutation(({ input, ctx }) =>
+      unpublishFromSite(shareActorFromCtx(ctx), input)
+    ),
+
   revokeSite: protectedProcedure
     .input(z.object({ siteId: Uuid }))
     .mutation(({ input, ctx }) =>
@@ -251,7 +286,11 @@ export const sharesRouter = router({
     ),
 
   siteStatus: protectedProcedure
-    .input(z.union([z.object({ siteId: Uuid }), z.object({ projectId: Uuid })]))
+    .input(
+      z
+        .union([z.object({ siteId: Uuid }), z.object({ projectId: Uuid })])
+        .and(SiteMembersPage)
+    )
     .query(({ input, ctx }) => siteStatus(shareActorFromCtx(ctx), input)),
 
   getPolicy: protectedProcedure

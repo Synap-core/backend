@@ -14,8 +14,12 @@
  *               `grantRequestKey` (focus_session → session, relationDef →
  *               relation_def, updateContent → update_content) — the same fold
  *               the read hook and the agent capability rung use
- *   qualifier = for `entity`: data.profileSlug / data.type, else the stored kind
- *               of data.id / data.entityId (profiles.slug, then entities.type)
+ *   qualifier = for `entity`: the STORED kind of data.id / data.entityId
+ *               (profiles.slug, then entities.type) whenever that row exists —
+ *               never the caller's data.profileSlug, which on an update is the
+ *               kind it converts TO (S7). A create (no row yet) uses
+ *               data.profileSlug / data.type. A kind CONVERT (stored kind ≠
+ *               data.profileSlug) must ALSO be permitted on the target kind.
  *   workspace = the gate's workspaceId
  *   entity    = data.id / data.entityId
  *   projects  = the gate's projectId / data.projectId (unknown → a
@@ -48,22 +52,27 @@ async function storedKind(entityId: string): Promise<string | undefined> {
   return row?.slug ?? row?.type ?? undefined;
 }
 
-/** The server-derived request a grant is checked against. */
-export async function grantRequestForWrite(
+/**
+ * Every server-derived request a grant must permit for this write: one, or
+ * two for a kind convert (the stored kind it leaves AND the kind it becomes).
+ */
+export async function grantRequestsForWrite(
   input: GrantWriteInput
-): Promise<GrantRequest> {
+): Promise<GrantRequest[]> {
   const data = input.data ?? {};
   const { subject, action } = grantRequestKey(input.subjectType, input.action);
   const entityId = str(data.id) ?? str(data.entityId);
+  const requestedKind = str(data.profileSlug) ?? str(data.type);
   let qualifier: string | undefined;
+  let convertsTo: string | undefined;
   if (subject === "entity") {
-    qualifier =
-      str(data.profileSlug) ??
-      str(data.type) ??
-      (entityId ? await storedKind(entityId) : undefined);
+    const stored = entityId ? await storedKind(entityId) : undefined;
+    qualifier = stored ?? requestedKind;
+    if (stored && requestedKind && requestedKind !== stored)
+      convertsTo = requestedKind;
   }
   const projectId = str(input.projectId) ?? str(data.projectId);
-  return {
+  const req: GrantRequest = {
     subject,
     qualifier: qualifier ?? null,
     action,
@@ -71,6 +80,14 @@ export async function grantRequestForWrite(
     entityId: entityId ?? null,
     projectIds: projectId ? [projectId] : null,
   };
+  return convertsTo ? [req, { ...req, qualifier: convertsTo }] : [req];
+}
+
+/** The server-derived request a grant is checked against (the stored kind's). */
+export async function grantRequestForWrite(
+  input: GrantWriteInput
+): Promise<GrantRequest> {
+  return (await grantRequestsForWrite(input))[0];
 }
 
 /**
@@ -82,14 +99,16 @@ export async function grantWriteDenial(
   grant: KeyGrant | undefined = getRequestGrant()
 ): Promise<string | null> {
   if (!grant) return null;
-  const req = await grantRequestForWrite(input);
-  // ANY one scope must permit the WHOLE request on its own — scopes never
-  // combine (one scope's kind with another's workspace is the cross product).
-  if (grant.scopes.some((scope) => permits(scope, req))) return null;
-  const key = [req.subject, req.qualifier, req.action]
-    .filter(Boolean)
-    .join(".");
-  return `This key's grant does not allow "${key}"${
-    req.workspaceId ? ` in workspace ${req.workspaceId}` : ""
-  }.`;
+  for (const req of await grantRequestsForWrite(input)) {
+    // ANY one scope must permit the WHOLE request on its own — scopes never
+    // combine (one scope's kind with another's workspace is the cross product).
+    if (grant.scopes.some((scope) => permits(scope, req))) continue;
+    const key = [req.subject, req.qualifier, req.action]
+      .filter(Boolean)
+      .join(".");
+    return `This key's grant does not allow "${key}"${
+      req.workspaceId ? ` in workspace ${req.workspaceId}` : ""
+    }.`;
+  }
+  return null;
 }

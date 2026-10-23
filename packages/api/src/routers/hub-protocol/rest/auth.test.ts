@@ -84,7 +84,7 @@ import { registerAuthRoutes } from "./auth.js";
 import { authErrorResponse, shortenKeyId } from "../../../utils/auth-error.js";
 import { AuthErrorEnvelopeSchema } from "./_codecs/auth.js";
 import { apiKeyService } from "../../../services/api-keys.js";
-import { db } from "@synap/database";
+import { db, runWithGrant, type KeyGrant } from "@synap/database";
 import type { HubHono, HubVariables } from "./_shared.js";
 
 // ─── Test app builder ───────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ import type { HubHono, HubVariables } from "./_shared.js";
  * The skipAuthPaths list mirrors the orchestrator so the discovery test
  * covers the same surface.
  */
-function buildTestApp(): HubHono {
+function buildTestApp(grant?: KeyGrant): HubHono {
   const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
 
   // Same security scheme + 401 component as the orchestrator
@@ -163,7 +163,9 @@ function buildTestApp(): HubHono {
     c.set("userId", status.record.userId);
     c.set("scopes", (status.record.scope ?? []) as string[]);
     c.set("apiKeyId", status.record.id);
-    return next();
+    // The real middleware enters the key's grant around the route
+    // (`runWithGrant(keyIdentity.grant, () => next())`).
+    return runWithGrant(grant, () => next());
   });
 
   registerAuthRoutes(app);
@@ -251,6 +253,60 @@ describe("/auth/status — happy path", () => {
     expect(typeof body.createdAt).toBe("string");
     expect(body.lastUsedAt).toContain("2026-04-01");
     expect(body.expiresAt).toBe(null);
+  });
+});
+
+/**
+ * The owner could not tell which of their keys was "scoped" (the app-connect
+ * refusal said only that): `/auth/status` now answers what the calling key
+ * may touch, from the SAME grant the write gates read for this request.
+ */
+describe("/auth/status — access (the key's grant)", () => {
+  const WS = "2f2f2f2f-0000-4000-8000-0000000000bb";
+  async function statusWith(grant?: KeyGrant) {
+    vi.mocked(apiKeyService.getApiKeyStatus).mockResolvedValue({
+      status: "valid",
+      record: KEY_ROW as never,
+    });
+    (db as unknown as { _setRows: (r: unknown[]) => void })._setRows([
+      JOIN_ROW,
+    ]);
+    const res = await buildTestApp(grant).request("/auth/status", {
+      headers: { authorization: `Bearer ${VALID_KEY}` },
+    });
+    expect(res.status).toBe(200);
+    return (await res.json()).access;
+  }
+
+  it("a key pinned to one space says so — ids, never 'full'", async () => {
+    expect(
+      await statusWith({
+        scopes: [{ permissions: ["*"], workspaceIds: [WS] }],
+        clientId: null,
+      })
+    ).toEqual({
+      isFullAccess: false,
+      summary: `limited to 1 space (${WS})`,
+      scopes: [
+        {
+          permissions: ["*"],
+          workspaceIds: [WS],
+          projectIds: null,
+          entityIds: null,
+        },
+      ],
+      clientId: null,
+    });
+  });
+
+  it("the person's own unbounded `*` is full access", async () => {
+    expect(
+      await statusWith({ scopes: [{ permissions: ["*"] }], clientId: null })
+    ).toMatchObject({ isFullAccess: true, summary: "full access" });
+  });
+
+  it("no grant read for the request → null, never a guessed 'full'", async () => {
+    expect(await statusWith(undefined)).toBeNull();
   });
 });
 

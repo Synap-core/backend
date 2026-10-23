@@ -24,7 +24,9 @@
  *                  it re-gates, mints the AUTO_APPROVED receipt, stamped with
  *                  `batchId`, and runs every side effect);
  *        propose → collected into ONE `entity/update_pack` proposal
- *                  (`forcePropose`), applied item by item on approval;
+ *                  (`forcePropose`), applied item by item on approval —
+ *                  unless it is the call's ONLY such item: then it goes
+ *                  through `entities.update` alone, gated as a single write;
  *        deny    → reported with the rung's reason.
  *
  * `validate: true` stops after step 3 and writes nothing. A call-level
@@ -53,6 +55,7 @@ import {
   entities,
   resolveStatusMoveTarget,
   classifyStatusMove,
+  type StatusMoveTarget,
 } from "@synap/database";
 import {
   countAgentWritesTodayUtc,
@@ -67,6 +70,7 @@ import {
   type PermissionDecisionPreview,
 } from "../../utils/permission-check.js";
 import { statusMoveActorFor } from "../lifecycle/move-status.js";
+import { ownWorkOrganiseForTaskClose } from "../governance/own-organise.js";
 import { stableStringify } from "../../utils/stable-stringify.js";
 import {
   computeWriteContentHash,
@@ -245,16 +249,18 @@ export async function updateEntities(
   // Loaded lazily: the entities router mounts `updateMany` from this module.
   const { entitiesRouter } = await import("../../routers/entities.js");
   const caller = entitiesRouter.createCaller(ctx);
+  const writeThroughDoor = (item: PlannedItem) =>
+    caller.update({
+      id: item.id,
+      ...item.patch,
+      ...(params.source ? { source: params.source } : {}),
+      ...(params.reasoning ? { reasoning: params.reasoning } : {}),
+      ...(agentUserId ? { agentUserId } : {}),
+      batchId,
+    });
   for (const item of plan.filter((p) => p.verdict === "execute")) {
     try {
-      const written = await caller.update({
-        id: item.id,
-        ...item.patch,
-        ...(params.source ? { source: params.source } : {}),
-        ...(params.reasoning ? { reasoning: params.reasoning } : {}),
-        ...(agentUserId ? { agentUserId } : {}),
-        batchId,
-      });
+      const written = await writeThroughDoor(item);
       if (written.status === "proposed" && written.proposalId) {
         // The door re-gated and disagreed with the preview (a concurrent write
         // crossed the ceiling, a rule changed). Reported, never hidden. A join
@@ -282,16 +288,20 @@ export async function updateEntities(
   }
 
   // ── propose: ONE pack for the whole call ─────────────────────────────────
-  const packItems = plan
-    .map((p) => p.packItem)
-    .filter((i): i is UpdatePackItem => Boolean(i));
-  if (packItems.length > 0) {
+  // A pack is one review over MANY records, so it is always human-gated. ONE
+  // record needing review is not a pack: it goes through its own door, where
+  // the ordinary decision applies with its real action and reason (a status
+  // move keeps `entity/transition`, so a rule naming it can widen it).
+  const toReview = plan.filter((p) => p.packItem);
+  if (toReview.length === 1) {
+    await fileAlone({ item: toReview[0]!, writeThroughDoor, result });
+  } else if (toReview.length > 1) {
     await filePack({
       ...params,
       userId,
       agentUserId,
       batchId,
-      packItems,
+      packItems: toReview.map((p) => p.packItem!),
       result,
     });
   }
@@ -371,6 +381,7 @@ async function planItems(
           from: string | null;
           lifecycleMove: { intoTerminal: boolean; humanOnly: boolean };
           workspaceId: string | null;
+          target: StatusMoveTarget;
         }
       | undefined;
     if (patch.properties || patch.expectedStatus !== undefined) {
@@ -409,6 +420,7 @@ async function planItems(
             from: resolved.target.current,
             lifecycleMove,
             workspaceId: resolved.target.workspaceId ?? null,
+            target: resolved.target,
           };
         }
       }
@@ -435,6 +447,9 @@ async function planItems(
         userId,
         agentUserId,
         workspaceId: governanceWorkspaceId,
+        // The grant sees the row's own workspace (pod-wide = pod scope), as
+        // the `entities.update` door it previews does (S7).
+        grantWorkspaceId: row.workspaceId ?? null,
         subjectType: "entity",
         action: "update",
         source: params.source,
@@ -444,12 +459,27 @@ async function planItems(
     }
     if (move && mover.actor.kind !== "system" && !mover.approvedProposalId) {
       const agent = mover.actor.kind === "agent";
+      // The SAME proof the status door gives the gate (`move-status.ts`): an
+      // agent closing its OWN FRESH task reaches the own-organise class row
+      // (FB1020 B3c). Without it here, every such close in a batch of two or
+      // more was previewed as a proposal and filed into the pack (w2 plan
+      // FBD-3). Executed items still go through `entities.update` →
+      // `moveStatus`, which re-gates with its own proof.
+      const ownWorkOrganise =
+        agent &&
+        move.lifecycleMove.intoTerminal &&
+        (await ownWorkOrganiseForTaskClose({
+          agentUserId: mover.actor.agentUserId,
+          target: move.target,
+          to: move.to,
+        }));
       verdict = stricter(
         verdict,
         await previewPermissionDecision({
           userId,
           agentUserId: mover.actor.agentUserId ?? undefined,
           workspaceId: move.workspaceId ?? ctx.workspaceId ?? null,
+          grantWorkspaceId: move.workspaceId,
           subjectType: "entity",
           action: "transition",
           source: agent
@@ -458,6 +488,7 @@ async function planItems(
               : "intelligence"
             : "user",
           lifecycleMove: move.lifecycleMove,
+          ...(ownWorkOrganise ? { ownWorkOrganise: true } : {}),
           sessionId: ctx.sessionId ?? undefined,
           data: { id, entityId: id, expectedFrom: move.from, to: move.to },
         })
@@ -574,6 +605,57 @@ export async function assertUpdatePackItemCurrent(
     throw new Error(
       `Changed since this pack was filed (${changed.join(", ")}) — not overwritten`
     );
+  }
+}
+
+/**
+ * The one item of a call that needs review, sent through `entities.update` —
+ * the door that gates it as a single write. Reported in the call's `proposed`
+ * slot, so a caller reads one shape whether the review holds one item or many.
+ */
+async function fileAlone(params: {
+  item: PlannedItem;
+  writeThroughDoor: (item: PlannedItem) => Promise<{
+    status: string;
+    proposalId?: string;
+    proposalType?: string;
+    reviewUrl?: string;
+  }>;
+  result: UpdateEntitiesResult;
+}): Promise<void> {
+  const { item, result } = params;
+  try {
+    const written = await params.writeThroughDoor(item);
+    if (written.status !== "proposed" || !written.proposalId) {
+      // The door's own decision allowed it (e.g. a rule naming the action).
+      result.applied.push(item.id);
+      return;
+    }
+    const kept = (written as { deferred?: true }).deferred;
+    if (kept || isJoinGate(written.proposalType)) {
+      result.skipped.push({
+        id: item.id,
+        reason: kept
+          ? "Kept on a request to join its space — replayed for you once approved; do not resend it"
+          : "Needs access to its space first — approve the join request, then send it again",
+        proposalId: written.proposalId,
+        ...(kept ? { deferred: true as const } : {}),
+      });
+      return;
+    }
+    result.proposed = {
+      proposalId: written.proposalId,
+      count: 1,
+      ids: [item.id],
+      ...(written.reviewUrl ? { reviewUrl: written.reviewUrl } : {}),
+    };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    if (err instanceof TRPCError && err.code === "FORBIDDEN") {
+      result.denied.push({ id: item.id, reason });
+    } else {
+      result.skipped.push({ id: item.id, reason });
+    }
   }
 }
 

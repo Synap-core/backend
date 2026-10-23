@@ -8,7 +8,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 /** What the space's warning read answers; an Error = the read throws. */
 const h = vi.hoisted(() => ({ read: null as string | null | Error }));
-vi.mock("../template-health.js", () => ({
+vi.mock("../template-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../template-health.js")>()),
   templateApplyWarningFor: async () => {
     if (h.read instanceof Error) throw h.read;
     return h.read;

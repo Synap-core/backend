@@ -84,7 +84,10 @@ vi.mock("@synap/database", async (importOriginal) => {
     gte: vi.fn((a, b) => ({ gte: [a, b] })),
     desc: vi.fn((a) => ({ desc: a })),
     isNotNull: vi.fn((a) => ({ isNotNull: a })),
-    drizzleSql: vi.fn(() => ({})),
+    drizzleSql: Object.assign(
+      vi.fn(() => ({})),
+      { raw: vi.fn(() => ({})) } // session-kind.ts builds a module-level drizzleSql.raw
+    ),
     verifyPermission: mockVerifyPermission,
     ProposalStatus: { PENDING: "pending", AUTO_APPROVED: "auto_approved" },
     ProfileResolutionService: class {
@@ -105,7 +108,8 @@ vi.mock("@synap/events", () => ({
 vi.mock("../notifications/NotificationService.js", () => ({
   NotificationService: { fromProposal: vi.fn().mockResolvedValue(undefined) },
 }));
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: vi.fn(() => ({
     info: vi.fn(),
     warn: vi.fn(),
@@ -113,7 +117,10 @@ vi.mock("@synap-core/core", () => ({
     debug: vi.fn(),
   })),
 }));
-vi.mock("@synap-core/types", () => ({ isLikelyUUID: vi.fn(() => false) }));
+vi.mock("@synap-core/types", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/types")>()),
+  isLikelyUUID: vi.fn(() => false),
+}));
 
 import { runWithActingAgent } from "@synap/database";
 import { checkPermissionOrPropose as strict } from "./permission-check.js";

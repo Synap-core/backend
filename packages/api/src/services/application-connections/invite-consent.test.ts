@@ -15,9 +15,14 @@ vi.mock("@synap/database", () => ({
   FederatedApplicationConnectionService: class {},
   TrustedIssuerService: class {},
   findOpenPodInviteAcceptance: vi.fn(),
+  hasActivePodAccess: vi.fn(),
+  readPodUserAccess: vi.fn(),
   db: {},
+  and: vi.fn(),
   eq: vi.fn(),
   users: {},
+  federatedApplicationConnections: {},
+  trustedIssuers: {},
 }));
 vi.mock("../../notifications/NotificationService.js", () => ({
   NotificationService: { create: vi.fn() },
@@ -65,6 +70,11 @@ function request(over: Record<string, unknown> = {}) {
 function deps(over: Partial<InviteConsentDeps> = {}) {
   const d = {
     issuerStatus: vi.fn().mockResolvedValue("approved"),
+    appConnection: vi.fn().mockResolvedValue({
+      status: "approved",
+      allowedOrigins: [ORIGIN],
+      allowedScopes: ["auth:exchange-user", "identity:link-user"],
+    }),
     findInvite: vi.fn().mockResolvedValue({
       inviteId: "invite-1",
       userId: "member-1",
@@ -74,6 +84,7 @@ function deps(over: Partial<InviteConsentDeps> = {}) {
       inviteExpiresAt: new Date(NOW.getTime() + 86_400_000),
       acceptedAt: new Date("2026-10-18T10:00:00Z"),
     }),
+    isMember: vi.fn().mockResolvedValue(true),
     approve: vi.fn().mockResolvedValue({ connection: { id: "connection-1" } }),
     recipients: vi.fn().mockResolvedValue(["owner-1", "admin-2"]),
     memberName: vi.fn().mockResolvedValue("Ada"),
@@ -160,6 +171,42 @@ describe("approveByInviteIfConsented", () => {
     expect(d.notify).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "an app an owner revoked",
+      {
+        status: "revoked",
+        allowedOrigins: [ORIGIN],
+        allowedScopes: ["auth:exchange-user", "identity:link-user"],
+      },
+    ],
+    ["an app no owner approved yet", null],
+    [
+      "an origin the owner did not approve",
+      {
+        status: "approved",
+        allowedOrigins: ["https://other.example"],
+        allowedScopes: ["auth:exchange-user", "identity:link-user"],
+      },
+    ],
+    [
+      "a scope the owner did not approve",
+      {
+        status: "approved",
+        allowedOrigins: [ORIGIN],
+        allowedScopes: ["identity:link-user"],
+      },
+    ],
+  ])("never approves the APP: %s waits for an owner", async (_label, app) => {
+    const d = deps({ appConnection: vi.fn().mockResolvedValue(app) });
+    await expect(approveByInviteIfConsented(request(), d)).resolves.toEqual({
+      kind: "owner_review",
+      reason: "app_not_approved",
+    });
+    expect(d.approve).not.toHaveBeenCalled();
+    expect(d.notify).not.toHaveBeenCalled();
+  });
+
   it("leaves it pending when the issuer is no longer approved", async () => {
     const d = deps({ issuerStatus: vi.fn().mockResolvedValue("revoked") });
     await expect(approveByInviteIfConsented(request(), d)).resolves.toEqual({
@@ -175,6 +222,19 @@ describe("approveByInviteIfConsented", () => {
       kind: "owner_review",
       reason: "no_open_invite",
     });
+    expect(d.approve).not.toHaveBeenCalled();
+    expect(d.notify).not.toHaveBeenCalled();
+  });
+
+  it("never links a person removed from the Pod within their invite's window", async () => {
+    // Their invite record is still open (they WERE let in); their membership
+    // is gone. The record alone must not link them.
+    const d = deps({ isMember: vi.fn().mockResolvedValue(false) });
+    await expect(approveByInviteIfConsented(request(), d)).resolves.toEqual({
+      kind: "owner_review",
+      reason: "not_a_member",
+    });
+    expect(d.isMember).toHaveBeenCalledWith("member-1");
     expect(d.approve).not.toHaveBeenCalled();
     expect(d.notify).not.toHaveBeenCalled();
   });

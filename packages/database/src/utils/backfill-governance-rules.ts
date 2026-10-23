@@ -6,7 +6,7 @@
  * registered job — this must run to completion BEFORE the Phase B reader flip
  * (`resolveAgentGovernanceDecision` consulting `governance_rules` instead of
  * the JSONB) starts serving writes, or a pod loses its autoApproveFor
- * mid-transition — see GOVERNANCE-CONVERGENCE-PLAN.md §3.
+ * mid-transition — see docs/decisions/agent-governance.md.
  *
  * DIFF-ONLY (Convergence Plan D2): `DEFAULT_AUTO_APPROVE` is the CODE FLOOR
  * (decideAgentPolicy rung 8), not rows to seed. Only GENUINE widenings — action

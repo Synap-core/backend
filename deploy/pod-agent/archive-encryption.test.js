@@ -7,11 +7,12 @@
 // uploaded body is the age file and the plaintext tarball is gone; an
 // encrypted archive without its identity refuses to restore.
 const assert = require("node:assert/strict");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const { archiveManifestFrom } = require("./archive-manifest");
 
 const DEPLOY = path.join(__dirname, "..");
 const RECIPIENT =
@@ -24,10 +25,17 @@ function fakeBin(dir) {
     fs.writeFileSync(path.join(bin, name), `#!/bin/sh\n${body}\n`, {
       mode: 0o755,
     });
+  // Each volume key resolves to one volume holding one file; `docker run`
+  // answers the helper's count (1 file, 5 bytes) and streams a real tarball.
   write(
     "docker",
     `echo "docker $*" >> "$FAKE_LOG"
-case "$*" in *pg_dumpall*) echo "SELECT 1;" ;; esac
+case "$*" in
+  *pg_dumpall*) echo "SELECT 1;" ;;
+  "volume ls"*) echo "$*" | sed -n 's/.*com.docker.compose.volume=\\([a-z_]*\\).*/pod_\\1/p' ;;
+  "run "*"tar czf"*) d=$(mktemp -d); echo data > "$d/f"; tar czf - -C "$d" . ;;
+  "run "*) printf '1\\n5\\n' ;;
+esac
 exit 0`
   );
   // Fake age: -o OUT IN → header line + input (enough to prove the call).
@@ -50,9 +58,27 @@ exit 0`
   return bin;
 }
 
-function run(script, args, env) {
-  return spawnSync("sh", [path.join(DEPLOY, script), ...args], {
-    env: { ...env },
+// The scripts run from a COPY of the deploy dir: they hand every container
+// start to the host (host-request.sh → <deploy>/state/requests/compose.json),
+// and that state must land in the sandbox, never in the checkout. A fake HOST
+// takes each request, logs it as "host-compose <services json>" and records
+// success, the way `synap compose-request` does (deploy/__tests__/
+// host-compose-request.test.sh covers the real host side).
+const FAKE_HOST = `D="$1"
+while :; do
+  if [ -f "$D/state/requests/compose.json" ] && mv -f "$D/state/requests/compose.json" "$D/state/requests/taken.json" 2>/dev/null; then
+    id=$(sed -n 's/.*"id":"\\([^"]*\\)".*/\\1/p' "$D/state/requests/taken.json")
+    echo "host-compose $(sed -n 's/.*"services":\\(\\[[^]]*\\]\\).*/\\1/p' "$D/state/requests/taken.json")" >> "$FAKE_LOG"
+    printf '{"kind":"pod.compose-request","status":"succeeded","request":"%s","reason":""}\\n' "$id" > "$D/state/last-compose-request.json"
+  fi
+  sleep 0.2
+done`;
+const hosts = [];
+test.after(() => hosts.forEach((h) => h.kill("SIGKILL")));
+
+function run(sb, script, args, env = {}) {
+  return spawnSync("sh", [path.join(sb.deploy, script), ...args], {
+    env: { ...sb.env, ...env },
     encoding: "utf8",
     timeout: 30_000,
   });
@@ -63,17 +89,31 @@ function sandbox() {
   const bin = fakeBin(dir);
   const work = path.join(dir, "work");
   fs.mkdirSync(work);
-  return {
-    dir,
-    work,
-    log: path.join(dir, "fake.log"),
-    env: {
-      PATH: `${bin}:/usr/bin:/bin`,
-      FAKE_LOG: path.join(dir, "fake.log"),
-      FAKE_UPLOAD_HEAD: path.join(dir, "upload-head"),
-      ARCHIVE_WORK_DIR: work,
-    },
+  const deploy = path.join(dir, "deploy");
+  fs.mkdirSync(deploy);
+  for (const f of fs.readdirSync(DEPLOY)) {
+    if (f.endsWith(".sh") || f === "docker-compose.yml") {
+      fs.copyFileSync(path.join(DEPLOY, f), path.join(deploy, f));
+    }
+  }
+  fs.writeFileSync(
+    path.join(deploy, ".env"),
+    `SYNAP_IMAGE_POD_AGENT=ghcr.io/synap-core/pod-agent@sha256:${"a".repeat(64)}\n`
+  );
+  const env = {
+    PATH: `${bin}:/usr/bin:/bin`,
+    FAKE_LOG: path.join(dir, "fake.log"),
+    FAKE_UPLOAD_HEAD: path.join(dir, "upload-head"),
+    ARCHIVE_WORK_DIR: work,
+    HOST_REQUEST_POLL_SECONDS: "1",
+    HOST_REQUEST_PICKUP_SECONDS: "10",
   };
+  const host = spawn("sh", ["-c", FAKE_HOST, "fake-host", deploy], {
+    env,
+    stdio: "ignore",
+  });
+  hosts.push(host);
+  return { dir, work, deploy, log: env.FAKE_LOG, env };
 }
 
 const readLog = (sb) =>
@@ -81,7 +121,7 @@ const readLog = (sb) =>
 
 test("archive with no recipient refuses before stopping anything", () => {
   const sb = sandbox();
-  const r = run("archive-pod.sh", ["https://upload.invalid/x", "", ""], sb.env);
+  const r = run(sb, "archive-pod.sh", ["https://upload.invalid/x", "", ""]);
   assert.equal(r.status, 1);
   assert.match(r.stdout, /ARCHIVE_RECIPIENT_MISSING/);
   assert.doesNotMatch(readLog(sb), /docker .*stop/);
@@ -89,8 +129,7 @@ test("archive with no recipient refuses before stopping anything", () => {
 
 test("a non-age recipient refuses before stopping anything", () => {
   const sb = sandbox();
-  const r = run("archive-pod.sh", ["https://upload.invalid/x", "", ""], {
-    ...sb.env,
+  const r = run(sb, "archive-pod.sh", ["https://upload.invalid/x", "", ""], {
     ARCHIVE_AGE_RECIPIENTS: "ssh-ed25519",
   });
   assert.equal(r.status, 1);
@@ -100,8 +139,7 @@ test("a non-age recipient refuses before stopping anything", () => {
 
 test("with a recipient, only the age file is uploaded and no plaintext is left", () => {
   const sb = sandbox();
-  const r = run("archive-pod.sh", ["https://upload.invalid/x", "", ""], {
-    ...sb.env,
+  const r = run(sb, "archive-pod.sh", ["https://upload.invalid/x", "", ""], {
     ARCHIVE_AGE_RECIPIENTS: RECIPIENT,
   });
   assert.equal(r.status, 0, r.stdout + r.stderr);
@@ -113,6 +151,31 @@ test("with a recipient, only the age file is uploaded and no plaintext is left",
     "age-encryption.org/v1"
   );
   assert.deepEqual(fs.readdirSync(sb.work), []);
+  // The last stdout line is the manifest pod-agent hands the CP.
+  const manifest = archiveManifestFrom(r.stdout);
+  assert.ok(manifest, r.stdout);
+  assert.deepEqual(
+    manifest.volumes.map((v) => [v.name, v.files, v.empty]),
+    [
+      ["minio_data", 1, false],
+      ["typesense_data", 1, false],
+    ]
+  );
+});
+
+test("archiveManifestFrom reads the LAST manifest line, and never guesses", () => {
+  assert.deepEqual(archiveManifestFrom('x\nARCHIVE_MANIFEST {"schema":1}\n'), {
+    schema: 1,
+  });
+  assert.deepEqual(
+    archiveManifestFrom(
+      'ARCHIVE_MANIFEST {"schema":0}\nARCHIVE_MANIFEST {"schema":1}'
+    ),
+    { schema: 1 }
+  );
+  assert.equal(archiveManifestFrom("no manifest here"), null);
+  assert.equal(archiveManifestFrom("ARCHIVE_MANIFEST {not json"), null);
+  assert.equal(archiveManifestFrom(undefined), null);
 });
 
 test("an encrypted archive without its identity refuses to restore", () => {
@@ -129,10 +192,10 @@ exit 0
     { mode: 0o755 }
   );
   const r = run(
+    sb,
     "restore-archive-pod.sh",
     ["https://archive.invalid/a", "", ""],
     {
-      ...sb.env,
       ARCHIVE_AGE_IDENTITY_FILE: path.join(sb.dir, "missing-identity.txt"),
     }
   );
@@ -159,11 +222,14 @@ exit 0
     { mode: 0o755 }
   );
   const r = run(
+    sb,
     "restore-archive-pod.sh",
     ["https://archive.invalid/a", "", ""],
     {
-      ...sb.env,
       ARCHIVE_AGE_IDENTITY_FILE: path.join(sb.dir, "missing-identity.txt"),
+      // It holds no files (a legacy archive): restoring the database alone is
+      // an explicit operator choice (ARCHIVE_WITHOUT_FILES otherwise).
+      RESTORE_ALLOW_NO_FILES: "1",
       RESTORE_HEALTH_TRIES: "1",
       RESTORE_HEALTH_INTERVAL: "0",
     }
@@ -173,4 +239,8 @@ exit 0
   assert.match(r.stdout, /Restore complete/);
   assert.doesNotMatch(r.stdout, /decrypted/);
   assert.doesNotMatch(readLog(sb), /^age /m);
+  // The services came back through the HOST (every service), never a compose
+  // `up` run from the agent.
+  assert.match(readLog(sb), /^host-compose \[\]$/m);
+  assert.doesNotMatch(readLog(sb), /^docker .*\bup\b/m);
 });

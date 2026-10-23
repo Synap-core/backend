@@ -20,24 +20,29 @@ vi.mock("../connectors/inbound-recorder.js", () => ({
 // Keep sibling module-load deps happy (mirrors builtin-verbs-connector-health.test.ts).
 // Provides the REAL MessageRole / MessageAuthorType enum values so we can assert
 // the outbound override maps to the exact enum members the handler emits.
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
   const mk = (name: string) =>
     new Proxy(
       { __table: name },
       { get: (t, p) => (p in t ? (t as never)[p] : `${name}.${String(p)}`) }
     );
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     db: { query: {} },
     eq: (col: unknown, val: unknown) => ({ op: "eq", col, val }),
     and: (...xs: unknown[]) => ({ op: "and", xs }),
     or: (...xs: unknown[]) => ({ op: "or", xs }),
     isNull: (col: unknown) => ({ op: "isNull", col }),
     desc: (col: unknown) => ({ op: "desc", col }),
-    drizzleSql: (strings: TemplateStringsArray, ...vals: unknown[]) => ({
-      op: "sql",
-      strings,
-      vals,
-    }),
+    drizzleSql: Object.assign(
+      (strings: TemplateStringsArray, ...vals: unknown[]) => ({
+        op: "sql",
+        strings,
+        vals,
+      }),
+      // session-kind.ts builds a module-level drizzleSql.raw
+      { raw: (s: string) => ({ op: "sql.raw", s }) }
+    ),
     channels: mk("channels"),
     views: mk("views"),
     entities: mk("entities"),

@@ -811,6 +811,41 @@ describe("decideAgentPolicy — criteriaChange (an agent changing its own criter
   });
 });
 
+describe("decideAgentPolicy — possibleDuplicate (a create with a possible twin)", () => {
+  it("floors an auto-approved entity.create to a proposal with its OWN reason", () => {
+    // entity.create auto-approves via DEFAULT_AUTO_APPROVE and under a `*`
+    // list and an `auto` rule; a possible twin still goes to a person (B2c).
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      autoApproveFor: ["*"],
+      governanceRuleVerdict: "auto",
+      possibleDuplicate: true,
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.POSSIBLE_DUPLICATE,
+      reasonCode: "POSSIBLE_DUPLICATE",
+    });
+  });
+
+  it("absent → the same create executes (the floor is the only difference)", () => {
+    expect(
+      decideAgentPolicy({ subjectType: "entity", action: "create" }).verdict
+    ).toBe("execute");
+  });
+
+  it("CBAC deny still wins over a possible duplicate", () => {
+    const v = decideAgentPolicy({
+      subjectType: "entity",
+      action: "create",
+      agentCapabilities: ["entity.read"],
+      possibleDuplicate: true,
+    });
+    expect(v.verdict).toBe("deny");
+  });
+});
+
 describe("decideAgentPolicy — forcePropose (scope/identity change)", () => {
   it("forces a proposal for an otherwise auto-approved write (entity.update)", () => {
     // entity.update auto-approves via DEFAULT_AUTO_APPROVE (step 8); forcePropose
@@ -853,6 +888,29 @@ describe("decideAgentPolicy — forcePropose (scope/identity change)", () => {
       reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
       reasonCode: "SCOPE_IDENTITY_CHANGE",
     });
+  });
+
+  it("a forced FILING carries its own reason: it shows records to the project's members", () => {
+    const v = decideAgentPolicy({
+      subjectType: "project",
+      action: "file_entities",
+      forcePropose: true,
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.PROJECT_FILING,
+      reasonCode: "PROJECT_FILING",
+    });
+    // Words only: an `auto` rule still cannot reach the forced filing.
+    expect(
+      decideAgentPolicy({
+        subjectType: "project",
+        action: "file_entities",
+        forcePropose: true,
+        governanceRuleVerdict: "auto",
+        governanceRuleNamesWrite: true,
+      }).verdict
+    ).toBe("propose");
   });
 
   it("CBAC deny still wins over forcePropose (deny-precedence preserved)", () => {
@@ -1170,6 +1228,31 @@ describe("decideAgentPolicy — rung 2.6 per-capability governance", () => {
 });
 
 describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire)", () => {
+  it("FB1020 B3: the own-organise class row can NEVER auto-approve a delete, an admin write or a scope change, even with a door's proof", () => {
+    // Derived from the engine's own door registry, never a hand list.
+    const floored = Object.keys(GATE_WRITE_DOORS)
+      .map((door) => door.replace("/", "."))
+      .filter((key) => {
+        const action = key.slice(key.indexOf(".") + 1);
+        return (
+          ADMIN_ACTIONS.includes(key) ||
+          (DESTRUCTIVE_ACTIONS as readonly string[]).includes(action)
+        );
+      });
+    expect(floored.length).toBeGreaterThan(15);
+    for (const key of floored) {
+      const dot = key.indexOf(".");
+      const v = decideAgentPolicy({
+        subjectType: key.slice(0, dot),
+        action: key.slice(dot + 1),
+        ownWorkOrganise: true,
+        governanceRuleVerdict: "auto",
+        governanceRuleIsOwnOrganise: true,
+      });
+      expect({ key, verdict: v.verdict }).toEqual({ key, verdict: "propose" });
+    }
+  });
+
   it("a rule can NEVER override a floor: ADMIN_ACTIONS still propose even with governanceRuleVerdict:'auto'", () => {
     const v = decideAgentPolicy({
       subjectType: "workspace",

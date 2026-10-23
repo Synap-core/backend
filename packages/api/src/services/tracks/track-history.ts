@@ -20,6 +20,7 @@
  *   session_started, session_closed — the track's sessions, through THE
  *       session read rule and the ledger's population (`workAndTrackedRunsWhere`);
  *       the close carries the session's graded contract (`computeSessionVerdict`).
+ *       SESSION-KIND-LENS-EXEMPT: projects the track's sessions into history EVENTS, never a session row; the population is workAndTrackedRunsWhere (kind lens applied in SQL) and triage does not apply to history.
  *   decision_asked, decision_answered — proposals on the track's stage gates
  *       and in its readable sessions: pending = an open ask; decided by a
  *       PERSON (`reviewed_by`) = answered, with the reviewer's note.

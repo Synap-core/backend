@@ -37,9 +37,9 @@ import { channelsRouter } from "../channels.js";
 import { hubCommandsRouter } from "../commands.js";
 
 // Two distinct humans on the same pod.
-const A = "a0000000-0000-0000-0000-000000000061";
-const B = "b0000000-0000-0000-0000-000000000062";
-const WS_A = "a0000000-0000-0000-0000-0000000000f6"; // A's private workspace; B is NOT a member.
+const A = "a0000000-0000-4000-8000-000000000061";
+const B = "b0000000-0000-4000-8000-000000000062";
+const WS_A = "a0000000-0000-4000-8000-0000000000f6"; // A's private workspace; B is NOT a member.
 
 async function checkDb(): Promise<boolean> {
   try {

@@ -171,7 +171,55 @@ export interface UpdateEntityInput {
   status?: string;
   priority?: "low" | "medium" | "high" | "urgent";
   dueDate?: string;
+  /**
+   * Attach an EXISTING document as the entity's body (e.g. re-attach an
+   * orphaned one). Replacing a body it already has needs `replaceBody`.
+   */
+  documentId?: string;
+  replaceBody?: boolean;
 }
+
+/**
+ * What an applied update wrote (pod `UpdateWriteReceipt`, held equal by
+ * `parity/update-write-receipt.floor.ts`).
+ */
+export interface HubEntityUpdateReceipt {
+  /** `partial`: part of it (the status move) was filed for review instead. */
+  state: "applied" | "partial";
+  entityId: string;
+  /** Fields written: `title`, `description`, `documentId`, `profileSlug`, `properties.<key>`, `removed.<key>`. */
+  landed: string[];
+  /** Fields filed for review instead of written. */
+  proposed?: string[];
+}
+
+/**
+ * PATCH /entities/:id when the write APPLIED. It is NOT an entity: it names
+ * the entity and what landed. (The client used to type this as `HubEntity`,
+ * so a caller read `title` / `profileSlug` off a receipt that had neither and
+ * printed `Updated entity "undefined"`.)
+ */
+export interface HubEntityUpdateApplied {
+  status: "updated";
+  message?: string;
+  /** Absent only from a pod older than the receipt. */
+  entityId?: string;
+  /** The title as the write left it. */
+  title?: string | null;
+  written?: {
+    title: string | null;
+    description: string | null;
+    properties: Record<string, unknown>;
+    documentId: string | null;
+  };
+  /** The status move the call carried (`moved` / `unchanged` / `proposed`). */
+  statusMove?: { status: string; proposalId?: string; reviewUrl?: string };
+  writeReceipt?: HubEntityUpdateReceipt;
+}
+
+/** Either the applied receipt or a governance answer (proposed / denied). Check `status`. */
+export type HubEntityUpdateResult =
+  HubEntityUpdateApplied | HubGovernanceResult;
 
 export interface CreateDocumentInput {
   title: string;
@@ -369,7 +417,7 @@ export interface CaptureStructureInput {
    * @deprecated intake path `cli.capture.url` (a person's CLI / Raycast use) —
    *   a file a person brings belongs to the Library (`/library/add`, wave L4).
    *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
-   *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+   *   docs/decisions/capture-vs-library.md. The agent path (MCP synap_capture / Hub
    *   capture with an agent key) is kept — founder 2026-10-13.
    */
   file?: {
@@ -382,7 +430,7 @@ export interface CaptureStructureInput {
    * @deprecated intake path `cli.capture.url` (a person's CLI / Raycast use) — a link a person brings belongs
    *   to the Library (`/library/add`, wave L4).
    *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
-   *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+   *   docs/decisions/capture-vs-library.md. The agent path (MCP synap_capture / Hub
    *   capture with an agent key) is kept — founder 2026-10-13.
    */
   url?: string;
@@ -390,7 +438,7 @@ export interface CaptureStructureInput {
    * @deprecated intake path `cli.capture.url` (a person's CLI / Raycast use) — a saved page a person brings
    *   belongs to the Library (`/library/add`, wave L4).
    *   See `DEPRECATED_INTAKE_PATHS` (`@synap-core/types/intake-route`) and
-   *   docs/CAPTURE_LIBRARY_PLAN.md §2. The agent path (MCP synap_capture / Hub
+   *   docs/decisions/capture-vs-library.md. The agent path (MCP synap_capture / Hub
    *   capture with an agent key) is kept — founder 2026-10-13.
    */
   html?: string;
@@ -825,8 +873,21 @@ export interface KnowledgeAnswerFailure {
  * POST /knowledge/answer — retrieve (same as ask) then synthesize.
  * `answer` is null when synthesis is unavailable; sources/pending still return.
  */
+/**
+ * How much answer to ask for: `full` (default) the provenance-rich answer,
+ * `brief` a few sentences for a lookup, `sources` no synthesis (answer null,
+ * the ranked matches only).
+ */
+export type KnowledgeAnswerDetail = "sources" | "brief" | "full";
+
 export interface KnowledgeAnswerResponse {
   answer: string | null;
+  /**
+   * Which answer this is, as the pod produced it (an IS too old for `brief`
+   * answers in full and this says `full`). Absent with `error`, and from a pod
+   * older than the field.
+   */
+  detail?: KnowledgeAnswerDetail;
   sources: KnowledgeAnswerSource[];
   routedTo: string[];
   degraded: string[];
@@ -970,7 +1031,7 @@ export interface FocusSessionExpectedOutput {
    */
   retiredAt?: string;
   /** Mirrored from `OUTPUT_RETIRED_REASONS` (@synap/playbooks). */
-  retiredReason?: "session_cancelled" | "decision_resolved";
+  retiredReason?: "session_cancelled" | "decision_resolved" | "withdrawn";
   /**
    * WHERE to go for this deliverable — an in-pod object or an external link.
    * ONE union, two arms; nothing else (free text is `why`).
@@ -1983,6 +2044,16 @@ export interface HubThreadContext {
 
 // ─── Proposals ───────────────────────────────────────────────────────────────
 
+/** `GET /api/hub/files/{entityId}/url` — a signed, short-lived download URL. */
+export interface HubFileUrl {
+  /** Signed GET; serves the blob as an `attachment` with its stored type. */
+  url: string;
+  /** ISO-8601 instant the signature stops working. */
+  expiresAt: string;
+  /** The type the blob was stored (and is served) with; null when unknown. */
+  mimeType: string | null;
+}
+
 export interface HubProposal {
   id: string;
   status: "pending" | "approved" | "rejected";
@@ -2197,10 +2268,10 @@ export interface CreateProjectInput {
 
 /**
  * POST /api/hub/projects outcome: the created row (201), a pending governance
- * proposal (202, with its review link), an idempotent reuse of an exact-name
- * match (200), or a near-duplicate refusal (409) returned as data so the caller
- * can offer the candidates instead of losing them. A missing-evidence refusal
- * (400) and every other non-2xx throw HubApiError.
+ * proposal (202, with its review link — and `duplicateCheck` when a similar
+ * project is why it waits: a near match is filed for review, never refused),
+ * or an idempotent reuse of an exact-name match (200). A missing-evidence
+ * refusal (400) and every other non-2xx throw HubApiError.
  */
 export type HubCreateProjectResult =
   | ({ status?: undefined; id: string; name: string } & Record<string, unknown>)
@@ -2209,13 +2280,10 @@ export type HubCreateProjectResult =
       proposalId: string;
       reviewPath?: string;
       reviewUrl?: string;
+      /** The duplicate door's answer when a possible twin is why it waits. */
+      duplicateCheck?: Record<string, unknown>;
     }
-  | { status: "deduped"; projectId: string; reusedProjectId: string }
-  | {
-      status: "near_duplicate";
-      error: string;
-      dedupCandidates: Array<Record<string, unknown>>;
-    };
+  | { status: "deduped"; projectId: string; reusedProjectId: string };
 
 /** A project row as the Hub REST project doors return it. */
 export interface HubProject {

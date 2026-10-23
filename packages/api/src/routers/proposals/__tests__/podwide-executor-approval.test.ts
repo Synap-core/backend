@@ -55,6 +55,12 @@ let selectRows: Array<{ status: string }> = [];
 const proposalUpdates: Array<Record<string, unknown>> = [];
 const entityUpdateCalls: Array<{ ctx: CallerCtx; args: unknown }> = [];
 const projectUpdateCalls: Array<{ ctx: CallerCtx; args: unknown }> = [];
+/**
+ * Workspaces the fake caller treats as ARCHIVED: a caller built with one of
+ * them as its lens refuses, as `podProcedure` does ("This workspace has been
+ * archived."). A fake of that one guard — the real middleware is in trpc.ts.
+ */
+const archivedLens = new Set<string>();
 
 interface CallerCtx {
   userId: string;
@@ -180,6 +186,11 @@ vi.mock("../../projects.js", () => ({
   projectsRouter: {
     createCaller: (ctx: CallerCtx) => ({
       update: async (args: unknown) => {
+        if (ctx.workspaceId && archivedLens.has(ctx.workspaceId)) {
+          throw Object.assign(new Error("This workspace has been archived."), {
+            code: "FORBIDDEN",
+          });
+        }
         projectUpdateCalls.push({ ctx, args });
         return {};
       },
@@ -268,6 +279,7 @@ beforeEach(() => {
   proposalUpdates.length = 0;
   entityUpdateCalls.length = 0;
   projectUpdateCalls.length = 0;
+  archivedLens.clear();
 });
 
 describe("entity/update — pod-wide (NULL workspaceId) approval", () => {
@@ -335,6 +347,60 @@ describe("entity/update — pod-wide (NULL workspaceId) approval", () => {
 
     expect(entityUpdateCalls).toEqual([]);
     expect(proposalUpdates).toEqual([]);
+  });
+});
+
+// Live 2026-10-20 (proposal 118fd1c2): moving a project's home OUT of its
+// archived space into a live one failed on approval with "This workspace has
+// been archived." — the replay ran under the ARCHIVED source as its lens. The
+// target is still checked (live + writable) by `resolveProjectHomeChange`.
+describe("project/update — moving the home OUT of an archived space", () => {
+  it("a home move replays at pod scope, so an archived SOURCE does not block it", async () => {
+    projectRow = {
+      id: "p-1",
+      workspaceId: "ws-archived",
+      userId: OTHER_MEMBER,
+    };
+    membership = { role: "owner" };
+    archivedLens.add("ws-archived");
+
+    const result = await executor("project/update").execute(
+      runArgs({
+        workspaceId: "ws-archived",
+        targetId: "p-1",
+        data: { data: { id: "p-1", homeWorkspaceId: "ws-live" } },
+      })
+    );
+
+    expect(result).toMatchObject({ success: true });
+    expect(projectUpdateCalls).toHaveLength(1);
+    expect(projectUpdateCalls[0].args).toMatchObject({
+      id: "p-1",
+      homeWorkspaceId: "ws-live",
+    });
+    // The approver's membership of the SOURCE is still checked.
+    expect(membershipCalls).toEqual(["ws-archived"]);
+  });
+
+  it("any OTHER update of a project homed in an archived space is still refused", async () => {
+    projectRow = {
+      id: "p-1",
+      workspaceId: "ws-archived",
+      userId: OTHER_MEMBER,
+    };
+    membership = { role: "owner" };
+    archivedLens.add("ws-archived");
+
+    await expect(
+      executor("project/update").execute(
+        runArgs({
+          workspaceId: "ws-archived",
+          targetId: "p-1",
+          data: { data: { id: "p-1", name: "Renamed" } },
+        })
+      )
+    ).rejects.toThrow(/archived/);
+    expect(projectUpdateCalls).toEqual([]);
   });
 });
 

@@ -624,14 +624,28 @@ backfill_federation_public_urls() {
 # POD_ADMIN_DOMAIN change, SYNAP_LEGACY_DOMAIN / SYNAP_LEGACY_POD_ADMIN_DOMAIN
 # name the old pair), the old origins in ALLOWED_ORIGINS become the new ones.
 # Every other entry stays; nothing is added when neither old origin is listed.
+# FRONTEND_URL and CORS_ORIGIN (realtime's allowlist; the installer sets both
+# to the pod's URL) follow the same way: a value naming an old origin becomes
+# the new one, any other value (the Studio, `*`, set by hand) stays.
 reconcile_moved_origins() {
-    local old_pod old_admin new_pod new_admin list entry out="" seen=","
+    local old_pod old_admin new_pod new_admin list entry out="" seen="," origin_key value
     old_pod=$(grep "^SYNAP_LEGACY_DOMAIN=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
     old_admin=$(grep "^SYNAP_LEGACY_POD_ADMIN_DOMAIN=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
     new_pod=$(grep "^DOMAIN=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
     new_admin=$(grep "^POD_ADMIN_DOMAIN=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
+    { [ -n "$old_pod" ] || [ -n "$old_admin" ]; } || return 0
+    for origin_key in FRONTEND_URL CORS_ORIGIN; do
+        value=$(grep "^${origin_key}=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
+        value="${value%/}"
+        if [ -n "$old_pod" ] && [ -n "$new_pod" ] && [ "$value" = "https://${old_pod}" ]; then value="https://${new_pod}"
+        elif [ -n "$old_admin" ] && [ -n "$new_admin" ] && [ "$value" = "https://${old_admin}" ]; then value="https://${new_admin}"
+        else continue
+        fi
+        update_env_value "$origin_key" "$value"
+        echo -e "${BLUE}ℹ️  ${origin_key} now names the pod's new address${NC}"
+    done
     list=$(grep "^ALLOWED_ORIGINS=" .env 2>/dev/null | tail -1 | cut -d'=' -f2- | tr -d ' "' || true)
-    [ -n "$list" ] && { [ -n "$old_pod" ] || [ -n "$old_admin" ]; } || return 0
+    [ -n "$list" ] || return 0
     while IFS= read -r entry; do
         [ -n "$entry" ] || continue
         if [ -n "$old_pod" ] && [ -n "$new_pod" ] && [ "$entry" = "https://${old_pod}" ]; then entry="https://${new_pod}"
@@ -1788,8 +1802,8 @@ _swap_backend_canary() {
 
     # Unexpected: the canary passed but production didn't (env diff / race).
     # Return 2 so the caller knows production WAS touched. Rollback is the
-    # update engine's job (previous images + .env, the dump when the migration
-    # level moved) — the old by-tag rollback here could never work for `:local`.
+    # update engine's job (previous images + .env; never the data, see
+    # _ue_rollback) — the old by-tag rollback here could never work for `:local`.
     echo -e "${RED}  ✗ Production health failed after swap (unexpected — the canary had passed).${NC}"
     return 2
 }
@@ -2701,7 +2715,7 @@ EOF
         if [ -z "$ADMIN_BOOTSTRAP_MODE" ]; then
             local mode_default=${DEFAULT_ADMIN_BOOTSTRAP_MODE:-preseed}
             echo "  1) Pre-seed first admin via CLI/script (recommended for operators)"
-            echo "  2) One-time bootstrap token (guided UI at /admin/bootstrap)"
+            echo "  2) Set up in the browser after install (one-hour link from './synap setup admin --magic-link')"
             echo ""
             read -p "Choice [1/2] (${mode_default}): " ADMIN_BOOTSTRAP_CHOICE
             if [ "$ADMIN_BOOTSTRAP_CHOICE" = "2" ] || [ "$mode_default" = "token" -a -z "$ADMIN_BOOTSTRAP_CHOICE" ]; then
@@ -3174,8 +3188,8 @@ EOF
             fi
         else
             echo -e "${RED}❌ Automatic admin creation failed.${NC}"
-            echo "After fixing services, run from this directory (deploy/):"
-            echo "  docker compose exec -T -e ADMIN_EMAIL='${ADMIN_EMAIL}' -e ADMIN_PASSWORD='<password>' backend node dist/scripts/create-admin-cli.js"
+            echo "After fixing services, run:"
+            echo "  ./synap setup admin --email '${ADMIN_EMAIL}' --password <password>"
             echo "Or from repo root with .env loaded: pnpm tsx scripts/create-admin-cli.ts"
         fi
         unset ADMIN_PASSWORD
@@ -3251,21 +3265,22 @@ EOF
         echo "  Done: the owner is the person the registration code was minted for."
         echo "  Sign in at $(_ue_env_get POD_ADMIN_URL) with your Synap account."
     elif [ "$ADMIN_BOOTSTRAP_MODE" = "token" ]; then
-        local ui_base="https://${DOMAIN}"
-        if [ "$DOMAIN" = "localhost" ]; then
-            ui_base="http://localhost:4000"
-        fi
-        echo "  1) Open: ${ui_base}/admin/bootstrap"
-        echo "  2) Use token: ${ADMIN_BOOTSTRAP_TOKEN}"
-        echo "  3) Continue to registration and set your password"
+        # The /admin/* SPA (and its /admin/bootstrap page) is retired. The
+        # first-admin door is the /setup page, opened with a magic link that
+        # POST /api/hub/setup/magic-link mints (cmd_setup_admin --magic-link).
+        echo "  1) Mint a one-hour setup link:"
+        echo "       ./synap setup admin --email <you@example.com> --magic-link"
+        echo "  2) Open the printed /setup?token=... link and create the admin account"
+        echo "  3) Sign in at $(_ue_env_get POD_ADMIN_URL)"
+        echo "  Or create the admin directly: ./synap setup admin --email <e> --password <p>"
     else
         if [ "${ADMIN_SEED_OK:-}" = "true" ]; then
-            echo "  Pre-seed finished. Sign in at /admin with ${ADMIN_EMAIL}"
+            echo "  Pre-seed finished. Sign in at $(_ue_env_get POD_ADMIN_URL) with ${ADMIN_EMAIL}"
         else
             echo "  Pre-seed manually:"
-            echo "    docker compose exec -T -e ADMIN_EMAIL='<email>' -e ADMIN_PASSWORD='<password>' backend node dist/scripts/create-admin-cli.js"
+            echo "    ./synap setup admin --email <email> --password <password>"
             echo "  Or from repo: ADMIN_EMAIL=... ADMIN_PASSWORD=... pnpm tsx scripts/create-admin-cli.ts"
-            echo "  Then open /admin"
+            echo "  Then sign in at $(_ue_env_get POD_ADMIN_URL)"
         fi
     fi
     if [ "$WITH_RSSHUB" = "true" ]; then
@@ -3581,8 +3596,8 @@ EOF
 #
 # Any failure after the snapshot ROLLS BACK: the previous images (still cached
 # locally — Kamal-style, the last two releases are kept), the previous .env and
-# deploy files, and — when the migration level moved — the pre-update dump,
-# restored in maintenance mode (writers stopped). Every outcome is RECORDED
+# deploy files. It never restores data: the schema stays migrated and the
+# pre-update dump is offered to the operator (_ue_rollback). Every outcome is RECORDED
 # (state/last-update.json + state/events.jsonl + a `SYNAP_EVENT {json}` line)
 # and handed to an optional notify hook (SYNAP_UPDATE_NOTIFY_CMD) — U4.
 #
@@ -3766,7 +3781,9 @@ _ue_manifest_errors() {
           (if ((.migrations.last|type) != "string") or ((.migrations.last|tostring)|endswith(".sql")|not) then "migrations.last must name a .sql file" else empty end),
           (if ((.migrations.count|type) != "number") or (.migrations.count < 1) then "migrations.count must be a positive number" else empty end),
           (if ((.composeSha|type) != "string") or ((.composeSha|tostring)|test("^sha256:[0-9a-f]{64}$")|not) then "composeSha must be sha256:<64 hex>" else empty end),
-          (if .minFrom != null and ((.minFrom|type) != "string") then "minFrom must be null or a migration filename" else empty end)
+          (if .minFrom != null and (((.minFrom|type) != "string") or ((.minFrom|tostring)|test("^[A-Za-z0-9][A-Za-z0-9._-]*[.]sql$")|not)) then "minFrom must be null or a migration filename" else empty end),
+          (if .minFromRelease != null and (((.minFromRelease|type) != "string") or ((.minFromRelease|tostring)|test("^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")|not)) then "minFromRelease must be null or a release id" else empty end),
+          (if .minFromRelease != null and .minFrom == null then "minFromRelease is set without minFrom" else empty end)
         ] | .[]' "$1" 2>&1
 }
 
@@ -3823,12 +3840,191 @@ _ue_services() { # <edge> [profile args...]
         | { if [ "$edge" = traefik ]; then grep -vx caddy; else cat; fi; } || true
 }
 
-# "count|lastApplied" of the synap _migrations ledger; empty when unreadable.
+# "count|newest" of the synap _migrations ledger. newest is the newest BY
+# FILENAME (byte order, as apps/api/src/status/migration-ledger.ts compares),
+# never the latest applied: a migration merged late is applied last without
+# being the newest (0331 after 0336, 2026-10-20). "0|" = no ledger table yet.
+# Returns 1 when the ledger cannot be read: a caller must never read that as
+# "no migrations" nor as "the level moved".
 _ue_migration_level() {
-    local c
+    local c has out
     c="$(_pgs_container)"
-    [ -n "$c" ] || return 0
-    _pgs_psql "$c" synap "select count(*)||'|'||coalesce((select filename from _migrations order by applied_at desc, id desc limit 1),'') from _migrations" 2>/dev/null || true
+    [ -n "$c" ] || return 1
+    has="$(_pgs_psql "$c" synap "select to_regclass('public._migrations') is not null" 2>/dev/null)" || return 1
+    case "$has" in
+        f) echo "0|"; return 0 ;;
+        t) ;;
+        *) return 1 ;;
+    esac
+    out="$(_pgs_psql "$c" synap "select count(*)||'|'||coalesce(max(filename collate \"C\"),'') from _migrations" 2>/dev/null)" || return 1
+    case "$out" in [0-9]*'|'*) echo "$out" ;; *) return 1 ;; esac
+}
+
+# a < b in byte order (filenames, as _migrations' collate "C" and the release
+# builder sort them) — never the locale's collation, which `[[ < ]]` uses.
+_ue_name_lt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | LC_ALL=C sort | head -n 1)" = "$1" ]; }
+
+# 0 when release <a> is OLDER than release <b>: both stable ids vX.Y.Z, compared
+# number by number. Anything else (main-<sha>, local-<sha>, adopted-…, a
+# pre-release, an unknown id) has no order: never older. The control plane
+# never orders such a downgrade, by the same rule (isOlderRelease).
+_ue_release_older() {
+    local a="$1" b="$2" i x y
+    [[ "$a" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+    local -a av=("${BASH_REMATCH[@]:1}")
+    [[ "$b" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 1
+    local -a bv=("${BASH_REMATCH[@]:1}")
+    for i in 0 1 2; do
+        x=$((10#${av[$i]})); y=$((10#${bv[$i]}))
+        [ "$x" -lt "$y" ] && return 0
+        [ "$x" -gt "$y" ] && return 1
+    done
+    return 1
+}
+
+# minFrom (release.json, derived by deploy/release/make-manifest.py): a release
+# carrying a CONTRACT migration is safe to roll back from only if the pod
+# already ran the release that shipped its EXPAND step (rollback swaps images
+# only). Two levels must reach it: the database's newest migration, and the
+# RUNNING release's own (state/current-release.json) — after an images-only
+# rollback the database is ahead of the code it runs, and the code is what a
+# failed update would roll back to. Refuses (records + returns 1) naming
+# minFromRelease, the release to take first. <manifest> <db newest migration>
+_ue_min_from_check() {
+    local m="$1" db_last="$2" min_from min_rel run_last why
+    min_from="$(jq -r '.minFrom // empty' "$m")"
+    [ -n "$min_from" ] || return 0
+    min_rel="$(jq -r '.minFromRelease // empty' "$m")"
+    run_last="$(jq -r 'if (.migrations.last|type) == "string" then .migrations.last else empty end' state/current-release.json 2>/dev/null || true)"
+    if _ue_name_lt "$db_last" "$min_from"; then
+        why="this pod's database is at ${db_last:-no migration}"
+    elif [ -n "$run_last" ] && _ue_name_lt "$run_last" "$min_from"; then
+        why="this pod runs ${UE_FROM:-a release} (migrations up to ${run_last}); its database is further only because an update was rolled back"
+    else
+        return 0
+    fi
+    _ue_err "release ${UE_TO} requires a pod that already ran migration ${min_from}: ${why}."
+    if [ -n "$min_rel" ]; then
+        _ue_err "Update to ${min_rel} first (synap update --release ${min_rel}), then to ${UE_TO}. Nothing was changed."
+    else
+        _ue_err "Update to an intermediate release first. Nothing was changed."
+    fi
+    _ue_record aborted "$UE_FROM" "$UE_TO" "below minFrom ${min_from}${min_rel:+: update to ${min_rel} first}" false
+    return 1
+}
+
+# ── TimescaleDB: the extension a database runs vs the postgres image ─────────
+# A timescaledb-ha image ships the library of every OLDER TimescaleDB too
+# (measured: the 2.28.3 image carries timescaledb-2.13.0 … 2.28.3.so), and a
+# database keeps the extension version it was created or last updated at
+# (pg_extension.extversion), loading that version's library. So a NEWER image
+# is safe: the database runs on, unchanged. An OLDER image that lacks the
+# database's version cannot start it, and a rollback swaps images only — so an
+# update to such an image is refused before anything changes.
+# The extension is never updated automatically: `ALTER EXTENSION timescaledb
+# UPDATE` mid-update would make that update's rollback fatal, and after it the
+# live backend sessions still hold the old library. Behind the image = a notice
+# (here and in `synap doctor`); the procedure is deploy/runbooks/timescaledb-update.md.
+
+# "<db>|<extversion>" per database that has the extension; non-zero on a failed read.
+_ue_tsdb_versions() {
+    local c dbs db v out=""
+    c="$(_pgs_container)"
+    [ -n "$c" ] || return 1
+    dbs="$(_pgs_psql "$c" synap "select datname from pg_database where datallowconn and not datistemplate order by 1" 2>/dev/null)" || return 1
+    [ -n "$dbs" ] || return 1
+    for db in $dbs; do
+        v="$(_pgs_psql "$c" "$db" "select extversion from pg_extension where extname = 'timescaledb'" 2>/dev/null)" || return 1
+        [ -z "$v" ] || out="${out}${db}|${v}"$'\n'
+    done
+    printf '%s' "$out"
+}
+
+# The TimescaleDB versions a postgres image ships a library for, oldest first;
+# non-zero when it could not be read (never "ships none"). Of an image not
+# running yet (a release's), or of the running postgres container (read-only).
+# Only the lib dir of the postgres major that runs: an image can carry several
+# majors, each with its own TimescaleDB libraries.
+_ue_tsdb_libs_of() { # <libdir|""> <command...> that runs `sh` in the image (gets -c '<script>')
+    local dir="$1" out; shift
+    # shellcheck disable=SC2016 # $(pg_config …) expands in the image's shell
+    if [ -n "$dir" ]; then out="$("$@" -c "ls '$dir'" 2>/dev/null)" || return 1
+    else out="$("$@" -c 'd="$(pg_config --pkglibdir)" && ls "$d"' 2>/dev/null)" || return 1; fi
+    out="$(printf '%s\n' "$out" | sed -n 's/^timescaledb-\([0-9][0-9.]*\)\.so$/\1/p' | sort -V)"
+    [ -n "$out" ] || return 1
+    printf '%s\n' "$out"
+}
+_ue_image_tsdb_libs() { _ue_tsdb_libs_of "" docker run --rm --entrypoint sh "$1"; }   # the image's default major
+
+# Refuses (records + returns 1) a release whose postgres image cannot load a
+# database's TimescaleDB version. Postgres must be running. <manifest>
+_ue_tsdb_check() {
+    local m="$1" img cur rows libs row db v
+    img="$(jq -r '.images.SYNAP_IMAGE_POSTGRES // empty' "$m")"
+    [ -n "$img" ] || return 0                              # no pin: compose keeps the image it has
+    cur="$(_ue_env_get SYNAP_IMAGE_POSTGRES)"
+    [ "$img" != "$cur" ] || return 0                       # the pin this pod already runs
+    _ue_log "postgres image: ${cur:-the compose default tag (whatever this host pulled)} → ${img}"
+    _ue_log "  postgres RESTARTS during this update: the release pins a new postgres image. Its databases keep their TimescaleDB version (checked next); the data stays on its volume."
+    rows="$(_ue_tsdb_versions)" || {
+        _ue_err "cannot read which TimescaleDB version each database runs — refusing to change the postgres image. Nothing was changed."
+        _ue_record aborted "$UE_FROM" "$UE_TO" "TimescaleDB extension versions unreadable" false
+        return 1
+    }
+    [ -n "$rows" ] || return 0
+    libs="$(_ue_image_tsdb_libs "$img")" || {
+        _ue_err "cannot read the TimescaleDB libraries of release ${UE_TO}'s postgres image (${img}). Nothing was changed."
+        _ue_record aborted "$UE_FROM" "$UE_TO" "postgres image unreadable" false
+        return 1
+    }
+    while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        db="${row%%|*}"; v="${row#*|}"
+        grep -qxF "$v" <<<"$libs" && continue
+        _ue_err "release ${UE_TO}'s postgres image ships TimescaleDB up to $(tail -n 1 <<<"$libs"), but database '${db}' runs ${v}: postgres could not start it. Nothing was changed."
+        _ue_err "Take a release whose postgres image carries TimescaleDB ${v} or newer."
+        _ue_record aborted "$UE_FROM" "$UE_TO" "postgres image cannot load TimescaleDB ${v} (database ${db})" false
+        return 1
+    done <<<"$rows"
+    return 0
+}
+
+# One line per database whose extension is older than the newest library of
+# the running postgres container ("<db>|<extversion>|<newest>"); non-zero on a failed read.
+_ue_tsdb_behind() {
+    local c rows libs newest row v dir
+    c="$(_pgs_container)"
+    [ -n "$c" ] && [ "$c" != direct ] || return 1
+    rows="$(_ue_tsdb_versions)" || return 1
+    [ -n "$rows" ] || return 0
+    # the RUNNING server's own lib dir (the pg_config view), not a guess
+    dir="$(_pgs_psql "$c" synap "select setting from pg_config where name = 'PKGLIBDIR'" 2>/dev/null)" || return 1
+    [[ "$dir" == /* ]] || return 1
+    libs="$(_ue_tsdb_libs_of "$dir" docker exec "$c" sh)" || return 1
+    newest="$(tail -n 1 <<<"$libs")"
+    while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        v="${row#*|}"
+        [ "$v" = "$newest" ] || [ "$(printf '%s\n%s\n' "$v" "$newest" | sort -V | tail -n 1)" = "$v" ] || echo "${row}|${newest}"
+    done <<<"$rows"
+}
+
+_ue_tsdb_notice() { # after a verified update: say so when a database's extension lags the image
+    local rows db v newest
+    rows="$(_ue_tsdb_behind)" || { _ue_warn "could not compare the TimescaleDB extension with the postgres image (synap doctor re-checks)"; return 0; }
+    while IFS='|' read -r db v newest; do
+        [ -n "$db" ] || continue
+        _ue_warn "TimescaleDB: database '${db}' runs ${v}; this postgres image ships up to ${newest}. It keeps working; update it in a maintenance window: deploy/runbooks/timescaledb-update.md"
+    done <<<"$rows"
+    return 0
+}
+
+# The synap schema now, against UE_LEVEL_BEFORE: migrated | unchanged | unknown.
+# Only the synap ledger is measured; Kratos keeps its own (kratos-migrate).
+_ue_schema_state() {
+    local now
+    now="$(_ue_migration_level)" || { echo unknown; return 0; }
+    if [ "$now" = "${UE_LEVEL_BEFORE:-}" ]; then echo unchanged; else echo migrated; fi
 }
 
 _ue_backend_healthy() { # waits up to SYNAP_UPDATE_HEALTH_TRIES × SYNAP_HEALTH_INTERVAL
@@ -3852,11 +4048,16 @@ _ue_backend_healthy() { # waits up to SYNAP_UPDATE_HEALTH_TRIES × SYNAP_HEALTH_
 # An unattended run started by a request carries the request's `id` as
 # `request` (UE_REQUEST_ID, set by _ue_unattended_plan / _ue_unattended_busy):
 # pod-agent matches it to report the outcome of the order it queued.
-_ue_record() { # <status> <from> <to> <reason> <dbRestored true|false> [backup]
+# `dbRestored` is false for every record this engine writes (a rollback swaps
+# images only, see _ue_rollback); records from older engines may carry true.
+# [schema] (rollbacks): migrated | unchanged | unknown — where the synap schema
+# was left; `backup` is then the dump an operator may restore by hand.
+_ue_record() { # <status> <from> <to> <reason> <dbRestored true|false> [backup] [schema]
     local ev
     ev="$(jq -cn --arg status "$1" --arg from "$2" --arg to "$3" \
-        --arg reason "$4" --argjson db "${5:-false}" --arg backup "${6:-}" --arg req "${UE_REQUEST_ID:-}" \
+        --arg reason "$4" --argjson db "${5:-false}" --arg backup "${6:-}" --arg schema "${7:-}" --arg req "${UE_REQUEST_ID:-}" \
         '{kind:"pod.update", status:$status, from:$from, to:$to, reason:$reason, dbRestored:$db, backup:$backup}
+         + (if $schema == "" then {} else {schema:$schema} end)
          + (if $req == "" then {} else {request:$req} end)')"
     _synap_event "$ev" 1 state/last-update.json
 }
@@ -3880,6 +4081,27 @@ _synap_event() { # <json-object> <notify 0|1> [latest-file]
     if [ -n "$hook" ]; then
         printf '%s\n' "$ev" | sh -c "$hook" || _ue_warn "notify hook failed (the event is still in state/events.jsonl)"
     fi
+}
+
+# ── requests (state/requests/<name>.json, watched by synap-<name>.path) ──────
+# A request is TAKEN (renamed to <name>.taken.json) before anything acts on it,
+# so the PathExists= unit cannot start the run again. Under systemd the
+# service's ExecStartPre has already taken it before this script starts
+# (SYNAP_REQUEST_PRETAKEN=1): a run that died before reaching its own take (a
+# broken bundle, no jq, the compose-project refusal, `set -e`) left the file in
+# place, and PathExists= restarted the service until systemd's start limit
+# failed the .path unit for good. Measured on systemd 252: 4 runs
+# in one second, 'unit-start-limit-hit', and no later request picked up.
+_synap_take_request() { # <update|compose> → the taken file's path; empty when there is none
+    local f="state/requests/$1.json" t="state/requests/$1.taken.json"
+    if [ "${SYNAP_REQUEST_PRETAKEN:-}" = 1 ]; then
+        # The unit took THIS run's request (and removed an older taken file);
+        # a <name>.json present now arrived after it and starts the next run.
+        if [ -f "$t" ]; then echo "$t"; fi
+        return 0
+    fi
+    [ -f "$f" ] || return 0
+    mv -f "$f" "$t" && echo "$t"
 }
 
 # ── current release / adoption ────────────────────────────────────────────────
@@ -3924,7 +4146,7 @@ _ue_adopt_running() {
 _ue_build_cache_reset() { docker builder prune -af >/dev/null 2>&1 || true; }
 
 _ue_build_from_source() { # <out-manifest>
-    local out="$1" repo_root sha tag be pa mig_dir last count carry
+    local out="$1" repo_root sha tag be pa mig_dir last count carry pins k v
     repo_root="$(get_repo_root)"
     if [ -z "$repo_root" ] || [ ! -f "$repo_root/deploy/Dockerfile" ]; then
         _ue_err "--from-source needs a git checkout of synap-backend around this deploy dir. Nothing was changed."
@@ -3952,6 +4174,24 @@ _ue_build_from_source() { # <out-manifest>
     # (~11 GB peak, perso 2026-10-05). Refuse below the floor rather than ENOSPC
     # mid-layer.
     _ue_disk_ok "${SYNAP_UPDATE_MIN_FREE_SOURCE_MB:-12288}" || return 1
+    # Third-party images are pinned by digest by THE release rule — the same
+    # resolver make-manifest.py uses (deploy/release/resolve-images.sh: the
+    # compose default tag, resolved in its registry). Carrying them from .env
+    # left a pod that never took a published release on the compose default
+    # TAG, i.e. whatever this host pulled first (perso ran TimescaleDB 2.26.4
+    # while releases pinned 2.28.3). Other first-party pins (pod-agent) still
+    # carry over from .env (the manifest rules refuse one not pinned by digest).
+    # Resolved BEFORE the build: a registry that cannot answer costs no build.
+    if ! pins="$(bash "$repo_root/deploy/release/resolve-images.sh" docker-compose.yml)"; then
+        _ue_err "could not pin this release's third-party images by digest (deploy/release/resolve-images.sh). Nothing was changed."
+        return 1
+    fi
+    carry="{}"
+    while IFS='=' read -r k v; do
+        case "$k" in SYNAP_IMAGE_BACKEND|SYNAP_IMAGE_POD_ADMIN|"") continue ;; esac
+        [ -n "$v" ] || v="$(_ue_env_get "$k")"      # first-party: the pin this pod has (manifest rules check it)
+        if [ -n "$v" ]; then carry="$(jq -c --arg k "$k" --arg v "$v" '. + {($k): $v}' <<<"$carry")"; fi
+    done <<<"$pins"
     _ue_log "Building ${be} and ${pa} from ${repo_root} (commit ${sha:0:12})..."
     if ! docker build -f "$repo_root/deploy/Dockerfile" --build-arg "GIT_SHA=${sha}" -t "$be" "$repo_root"; then
         _ue_build_cache_reset
@@ -3966,9 +4206,6 @@ _ue_build_from_source() { # <out-manifest>
     mig_dir="$repo_root/packages/database/migrations"
     last="$(ls "$mig_dir"/*.sql 2>/dev/null | sort | tail -1 | xargs -r basename)"
     count="$(ls "$mig_dir"/*.sql 2>/dev/null | wc -l | tr -d ' ')"
-    # Third-party pins carry over from the current release (absent ⇒ compose defaults).
-    carry="$(grep -E '^SYNAP_IMAGE_[A-Z0-9_]+=' .env 2>/dev/null | grep -vE '^SYNAP_IMAGE_(BACKEND|POD_ADMIN)=' \
-        | jq -R 'split("=") | {(.[0]): (.[1:]|join("="))}' | jq -sc 'add // {}')"
     jq -n --arg id "local-${tag}" --arg sha "$sha" --arg be "$be" --arg pa "$pa" --argjson carry "$carry" \
         --arg last "$last" --argjson count "${count:-0}" --arg compose "sha256:$(_ue_sha256 docker-compose.yml)" \
         --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -4233,12 +4470,12 @@ _ue_services_healthy() {
 # a tag another stack put on the same image keeps it — and dangling ones built
 # from our Dockerfiles (LABEL io.synap.first-party). Images any container uses
 # are skipped. No release record yet ⇒ no image is touched. Also keeps the newest
-# 2 pre-update dumps (+ the one the current release names). Runs at the START
+# 2 pre-update dumps (+ every dump a record names: _bk_pinned_dumps). Runs at the START
 # of every update (before the disk check) and after every applied one. Never
 # another stack's image, never a volume.
 _SYNAP_FIRST_PARTY_IMAGE_RE='^(ghcr\.io/synap-core/(backend|pod-admin|pod-agent)|synap-dev/|synap-local/|synap-adopted/)'
 _ue_prune_images() {
-    local keep used ids id repo tag dg ref b pinned d
+    local keep used ids id repo tag dg ref
     if [ -s state/current-release.json ]; then
         keep="$(jq -r '.images[]?' state/current-release.json state/previous-release.json 2>/dev/null \
             | while read -r ref; do docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null; done | sort -u)"
@@ -4261,11 +4498,7 @@ _ue_prune_images() {
     # cache holds no data. --max-used-space is Docker 28+, --keep-storage older.
     docker builder prune -f --max-used-space 2gb >/dev/null 2>&1 \
         || docker builder prune -f --keep-storage 2gb >/dev/null 2>&1 || true
-    b="$(SYNAP_DEPLOY_DIR="$(pwd)" _bk_backups_dir)"
-    pinned="$(jq -r '.preUpdateBackup // empty' state/current-release.json 2>/dev/null || true)"
-    for d in $(ls -1d "$b"/*-pre-update 2>/dev/null | sort | awk '{ a[NR] = $0 } END { for (i = 1; i <= NR - 2; i++) print a[i] }'); do
-        [ "$d" = "$pinned" ] || rm -rf "$d"
-    done
+    SYNAP_DEPLOY_DIR="$(pwd)" _bk_prune_label pre-update 2
     return 0
 }
 
@@ -4356,7 +4589,7 @@ _ue_edge_verify() {
 }
 
 # ── the engine ────────────────────────────────────────────────────────────────
-UE_FROM=""; UE_TO=""; UE_BACKUP=""; UE_EDGE=""; UE_PROFILE_ARGS=(); UE_SERVICES=()
+UE_FROM=""; UE_TO=""; UE_BACKUP=""; UE_LEVEL_BEFORE=""; UE_EDGE=""; UE_PROFILE_ARGS=(); UE_SERVICES=()
 
 _ue_bring_up_rest() { # every non-backend service; never stops half-way
     local failed=0
@@ -4379,34 +4612,27 @@ _ue_bring_up_rest() { # every non-backend service; never stops half-way
     return "$failed"
 }
 
-_ue_rollback() { # <reason> <restore_db 0|1>  — never returns
+# A rollback swaps IMAGES ONLY; it never restores data (founder, 2026-10-20).
+# Migrations are forward-only (expand/contract): a release only adds to the
+# schema, and what it removes or reshapes (a contract step) stopped being used
+# by an EARLIER release — the CI guard
+# deploy/__tests__/migration-forward-only.test.sh refuses any other destructive
+# migration. So the previous release's images run on the newer schema, and the
+# data written since the update started is kept. Restoring the pre-update dump
+# is the operator's deliberate choice (`synap restore <dump>`), never automatic:
+# the automatic pg_restore of 2026-10-20 lost the events primary key on
+# pod.antoinesrvt while its checks passed.
+_ue_rollback() { # <reason>  — never returns
     set +e
-    local reason="$1" restore_db="$2" status=rolled_back db=false
+    local reason="$1" status=rolled_back schema
     _ue_err "update ${UE_FROM:-?} → ${UE_TO} failed: ${reason}"
-    _ue_log "↩ Rolling back to ${UE_FROM:-the previous release}..."
+    _ue_log "↩ Rolling back to ${UE_FROM:-the previous release} (images and deploy files; the data is kept)..."
     docker rm -f synap-backend-canary >/dev/null 2>&1
-    if [ "$restore_db" = 1 ]; then
-        if [ -z "$UE_BACKUP" ]; then
-            _ue_err "the migration level moved but there is no pre-update dump to restore"
-            status=rollback_failed
-        else
-            _ue_log "Maintenance mode: stopping writers, restoring ${UE_BACKUP}..."
-            docker compose stop backend realtime pod-admin >/dev/null 2>&1
-            # pgdata_restore downgrades a pg_restore error to a warning (TimescaleDB
-            # catalog noise), so its exit status cannot prove the data came back:
-            # only the fingerprint recorded with the dump can (as restore-snapshot 5/5).
-            if SYNAP_DEPLOY_DIR="$(pwd)" pgdata_restore "$UE_BACKUP"; then
-                local want got
-                want="$(cat "$UE_BACKUP/fingerprint" 2>/dev/null)"
-                got="$(SYNAP_DEPLOY_DIR="$(pwd)" _pgs_fingerprint "$(SYNAP_DEPLOY_DIR="$(pwd)" _pgs_container)")"
-                if [ -n "$want" ] && [ "$got" = "$want" ]; then db=true
-                else
-                    _ue_err "restoring ${UE_BACKUP} did not bring the data back: the dump recorded users|entities|api_keys=${want:-<none>}, the database now has ${got:-<unreadable>}"
-                    status=rollback_failed
-                fi
-            else _ue_err "restoring ${UE_BACKUP} failed"; status=rollback_failed; fi
-        fi
-    fi
+    schema="$(_ue_schema_state)"
+    case "$schema" in
+        migrated) reason="${reason}; the database schema stays migrated (forward-only), its data kept" ;;
+        unknown)  reason="${reason}; the migration ledger could not be read, so whether the schema moved is unknown" ;;
+    esac
     cp -p state/update/env.before .env || status=rollback_failed
     _ue_restore_bundle || { _ue_err "could not restore the previous deploy files from state/update/pre-bundle.tar"; status=rollback_failed; }
     if [ -f state/update/kratos.yml.before ]; then
@@ -4432,18 +4658,29 @@ _ue_rollback() { # <reason> <restore_db 0|1>  — never returns
         status=rollback_failed
         reason="${reason}; after the rollback Kratos (sign-in) is not ready"
     fi
-    _ue_record "$status" "$UE_FROM" "$UE_TO" "$reason" "$db" "$UE_BACKUP"
+    _ue_record "$status" "$UE_FROM" "$UE_TO" "$reason" false "$UE_BACKUP" "$schema"
     if [ "$status" = rolled_back ]; then
-        _ue_warn "Rolled back: the pod is serving ${UE_FROM:-its previous release} again$([ "$db" = true ] && echo ', database restored from the pre-update dump')."
+        _ue_warn "Rolled back: the pod is serving ${UE_FROM:-its previous release} again. Its data was not touched."
     else
-        _ue_err "ROLLBACK INCOMPLETE — the pod needs attention. Pre-update dump: ${UE_BACKUP:-none}"
+        _ue_err "ROLLBACK INCOMPLETE — the pod needs attention (synap doctor). Its data was not touched."
+    fi
+    if [ "$schema" != unchanged ]; then
+        if [ "$schema" = migrated ]; then _ue_warn "The database keeps the schema ${UE_TO}'s migrations left it in, with all its data."
+        else _ue_warn "Whether ${UE_TO}'s migrations changed the database is unknown (the migration ledger could not be read)."; fi
+        if [ -n "$UE_BACKUP" ]; then
+            _ue_warn "Only to put the database back exactly as it was before the update — this DISCARDS everything written since — run, while the pod still runs ${UE_FROM:-this release}:"
+            _ue_warn "    synap restore ${UE_BACKUP}"
+            _ue_warn "That dump is kept until another failed update offers a newer one (the dump pruning skips it); copy it off the pod to keep it longer."
+        else
+            _ue_warn "There is no pre-update dump: the pod had no database before this update."
+        fi
     fi
     exit 1
 }
 
 # <release|source> <ref> <force 0|1>  — cwd = deploy dir, update lock held
 synap_update_engine() {
-    local mode="$1" ref="$2" force="${3:-0}" m errors level_before level_after moved=0 rc
+    local mode="$1" ref="$2" force="${3:-0}" m errors level_before level_after rc
     mkdir -p state/update
     m="$(pwd)/state/update/manifest.json"
     # Every exit records an outcome (B3): pod-agent waits for the record of the
@@ -4500,23 +4737,23 @@ synap_update_engine() {
         _ue_record noop "$UE_FROM" "$UE_TO" "already on release ${UE_TO}" false
         return 0
     fi
+    # A downgrade is never applied by accident (a channel pointer moved back, a
+    # mistyped --release): the older release's code would run on a schema and
+    # deploy files it never knew. A failed update's rollback is not this path.
+    if [ "$force" != 1 ] && _ue_release_older "$UE_TO" "$UE_FROM"; then
+        _ue_err "release ${UE_TO} is older than the running ${UE_FROM} — refusing to downgrade. Nothing was changed."
+        _ue_err "To apply it anyway: synap update --release ${UE_TO} --force"
+        _ue_record aborted "$UE_FROM" "$UE_TO" "older than the running release ${UE_FROM}" false
+        exit 1
+    fi
     # 1b. update the updater first (H1): the release's own engine runs the rest.
     if [ -n "$UE_BUNDLE_DIR" ] && [ -z "${SYNAP_UE_HANDOFF:-}" ]; then
         _ue_handoff
     fi
     _ue_log "Updating ${UE_FROM:-unrecorded} → ${UE_TO} (git $(jq -r '.gitSha[0:12]' "$m"), migrations → $(jq -r .migrations.last "$m"))"
 
-    # 2. preflight — nothing changes before every check passed
-    local min_from current_last
-    min_from="$(jq -r '.minFrom // empty' "$m")"
-    if [ -n "$min_from" ]; then
-        current_last="$(_ue_migration_level | cut -d'|' -f2)"
-        if [ -n "$current_last" ] && [[ "$current_last" < "$min_from" ]]; then
-            _ue_err "release ${UE_TO} requires a pod already at migration ${min_from} (this pod: ${current_last}). Update to an intermediate release first. Nothing was changed."
-            _ue_record aborted "$UE_FROM" "$UE_TO" "below minFrom ${min_from}" false
-            exit 1
-        fi
-    fi
+    # 2. preflight — nothing changes before every check passed (the migration
+    #    ledger and minFrom: in 4, once postgres is surely running)
     _ue_disk_ok || { _ue_record aborted "$UE_FROM" "$UE_TO" "not enough disk" false; exit 1; }
     _preflight_compose_check "$(pwd)" || { _ue_record aborted "$UE_FROM" "$UE_TO" "compose preflight failed" false; exit 1; }
 
@@ -4537,6 +4774,16 @@ synap_update_engine() {
             docker compose up -d postgres || { _ue_err "postgres did not start — cannot take the pre-update backup. Nothing was changed."; _ue_record aborted "$UE_FROM" "$UE_TO" "postgres did not start for the pre-update backup" false; exit 1; }
             _pgs_wait_ready "$(_pgs_container)" || { _ue_err "postgres not ready — no backup, no update. Nothing was changed."; _ue_record aborted "$UE_FROM" "$UE_TO" "postgres not ready for the pre-update backup" false; exit 1; }
         fi
+        # The level before anything changes. Unreadable refuses the update: a
+        # failed read is neither "no migrations" (minFrom would pass) nor
+        # "moved" (the rollback would report a schema change that never ran).
+        level_before="$(_ue_migration_level)" || {
+            _ue_err "cannot read the migration ledger (_migrations) — refusing to update a pod whose schema level is unknown. Nothing was changed."
+            _ue_record aborted "$UE_FROM" "$UE_TO" "migration ledger unreadable" false
+            exit 1
+        }
+        _ue_min_from_check "$m" "${level_before#*|}" || exit 1
+        _ue_tsdb_check "$m" || exit 1
         UE_BACKUP="$(SYNAP_DEPLOY_DIR="$(pwd)" COMPOSE_CMD="command docker compose" pgdata_backup pre-update)" || {
             _ue_err "Pre-update database backup failed — aborting update before migrations. Nothing was changed."
             _ue_record aborted "$UE_FROM" "$UE_TO" "pre-update backup failed" false
@@ -4544,19 +4791,20 @@ synap_update_engine() {
         }
     else
         _ue_warn "no postgres data yet (fresh pod) — no pre-update dump to take"
+        level_before="0|"
     fi
-    level_before="$(_ue_migration_level)"
+    UE_LEVEL_BEFORE="$level_before"
     # Services already unhealthy now are not the release's doing (verify warns, never rolls back for them).
     UE_UNHEALTHY_BEFORE="$(_ue_health_states | awk '$2 == "unhealthy" {print $1}')"
 
     # 5. from here on every failure rolls back
-    trap '_ue_rollback "interrupted" "$([ "$(_ue_migration_level)" != "$level_before" ] && echo 1 || echo 0)"' INT TERM HUP
+    trap '_ue_rollback "interrupted"' INT TERM HUP
     set +e
-    _ue_install_bundle || _ue_rollback "installing the release's deploy files failed" 0
-    _ue_write_release_env "$m" .env || _ue_rollback "writing the release image pins failed" 0
+    _ue_install_bundle || _ue_rollback "installing the release's deploy files failed"
+    _ue_write_release_env "$m" .env || _ue_rollback "writing the release image pins failed"
     UE_PROFILE_ARGS=()
     if should_start_pod_agent; then UE_PROFILE_ARGS=(--profile pod-agent)
-    elif [ $? -eq 2 ]; then _ue_rollback "pod-agent misconfigured" 0; fi
+    elif [ $? -eq 2 ]; then _ue_rollback "pod-agent misconfigured"; fi
     UE_SERVICES=()
     local _svc
     while IFS= read -r _svc; do [ -n "$_svc" ] && UE_SERVICES+=("$_svc"); done < <(_ue_services "$UE_EDGE" "${UE_PROFILE_ARGS[@]}")
@@ -4568,32 +4816,32 @@ synap_update_engine() {
     # one so a rollback restores it (a bad render once outlived the rollback and
     # left Kratos crash-looping on the previous release).
     [ -f ../kratos/kratos.yml ] && cp -p ../kratos/kratos.yml state/update/kratos.yml.before
-    generate_kratos_config "$domain" || _ue_rollback "kratos config generation failed" 0
+    generate_kratos_config "$domain" || _ue_rollback "kratos config generation failed"
     if printf '%s\n' "${UE_SERVICES[@]}" | grep -qx caddy; then
-        _ue_caddy_validate || _ue_rollback "the Caddyfile does not validate" 0
+        _ue_caddy_validate || _ue_rollback "the Caddyfile does not validate"
     fi
-    COMPOSE_CMD="docker compose" ensure_ory_databases || _ue_rollback "Ory database bootstrap failed" 0
+    COMPOSE_CMD="docker compose" ensure_ory_databases || _ue_rollback "Ory database bootstrap failed"
 
-    # 6. migrations (backend, kratos) — a throw restores the dump
+    # 6. migrations (backend, kratos) — a throw rolls the images back; the
+    #    schema stays where the migration left it (see _ue_rollback)
     _ue_log "Running migrations..."
-    docker compose run --rm backend-migrate || _ue_rollback "backend migration failed" 1
-    docker compose run --rm kratos-migrate  || _ue_rollback "kratos migration failed" 1
-    level_after="$(_ue_migration_level)"
-    [ "$level_after" != "$level_before" ] && moved=1
-    _ue_log "Migration level: ${level_before:-none} → ${level_after:-none}"
+    docker compose run --rm backend-migrate || _ue_rollback "backend migration failed"
+    docker compose run --rm kratos-migrate  || _ue_rollback "kratos migration failed"
+    level_after="$(_ue_migration_level)" || level_after="<unreadable>"
+    _ue_log "Migration level: ${level_before} → ${level_after}"
 
     # 7. canary-gated swap, then EVERY other service — never stop in between
     _UE_MIGRATED=1 _swap_backend_canary; rc=$?
     case "$rc" in
         0) ;;
-        2) _ue_rollback "production backend unhealthy after the swap (the canary had passed)" "$moved" ;;
-        *) _ue_rollback "the new backend image failed its canary health check" "$moved" ;;
+        2) _ue_rollback "production backend unhealthy after the swap (the canary had passed)" ;;
+        *) _ue_rollback "the new backend image failed its canary health check" ;;
     esac
     _ue_log "Bringing up the other services (edge: ${UE_EDGE})..."
-    _ue_bring_up_rest || _ue_rollback "some services failed to start" "$moved"
+    _ue_bring_up_rest || _ue_rollback "some services failed to start"
 
     # 8. verify the release actually landed
-    _ue_verify "$m" "${UE_SERVICES[@]}" || _ue_rollback "post-update verification failed" "$moved"
+    _ue_verify "$m" "${UE_SERVICES[@]}" || _ue_rollback "post-update verification failed"
 
     # 9. record
     trap - INT TERM HUP
@@ -4612,6 +4860,7 @@ synap_update_engine() {
     _ue_caddyfile_mark_release
     _ue_provide_backup_mc
     _ue_units_refresh
+    _ue_tsdb_notice
     _ue_record succeeded "$UE_FROM" "$UE_TO" "" false "$UE_BACKUP"
     _ue_ok "Release ${UE_TO} is live (verified: buildStamp + migration level)."
     set -e
@@ -4632,8 +4881,10 @@ synap_update_engine() {
 #   {"schema": 1, "release": "<release id | fast | stable>",
 #    "requestedBy": "<free text>", "requestedAt": "<ISO-8601>", "id": "<opaque, e.g. the order's jti>"}
 # `release` follows pod-agent's validateUpdateTargetVersion: ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$,
-# never "latest". The engine TAKES the file (renames it to update.taken.json)
-# before anything else, so the .path unit can never loop on it, and the outcome
+# never "latest". The file is TAKEN (renamed to update.taken.json) before
+# anything acts on it — by synap-update.service's ExecStartPre, or by the
+# engine on a manual run (_synap_take_request) — so the .path unit can never
+# loop on it, and the outcome
 # lands in state/last-update.json like every update's, with `request: <id>` —
 # an invalid request, or one that met a busy lock, is recorded `aborted` and is
 # not retried. pod-agent (update-request.js) is the writer and reads that record
@@ -4646,11 +4897,7 @@ synap_update_engine() {
 # host's local time and may wrap midnight ("23:00-02:00").
 _UE_RELEASE_RE='^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'
 
-_ue_take_request() { # → the taken file's path; empty when there is no request
-    local f=state/requests/update.json t=state/requests/update.taken.json
-    [ -f "$f" ] || return 0
-    mv -f "$f" "$t" && echo "$t"
-}
+_ue_take_request() { _synap_take_request update; }
 
 _ue_in_window() { # <HH:MM-HH:MM> [now HH:MM]
     local w="$1" now="${2:-$(date +%H:%M)}" a b
@@ -4755,7 +5002,8 @@ synap update [--release <id|fast|stable>] [--from-source] [--force] [--unattende
                     Default: SYNAP_UPDATE_CHANNEL from deploy/.env, else stable.
   --from-source     build THIS checkout as synap-dev/*:<sha> (release local-<sha>);
                     same backup / canary / rollback as a release.
-  --force           re-apply the release the pod is already on.
+  --force           re-apply the release the pod is already on, or apply a
+                    release older than it (otherwise refused).
   --unattended      what synap-update.service runs: a pending request
                     (state/requests/update.json) or the owner's policy
                     (state/update-policy.json: auto, channel, window); always
@@ -4763,8 +5011,8 @@ synap update [--release <id|fast|stable>] [--from-source] [--force] [--unattende
 
 Every update: lock → manifest → preflight → pull by digest → verified backup →
 migrate → canary → swap → all services → verify → record. Any failure rolls
-back (previous images; the pre-update dump when the migration level moved) and
-is recorded in deploy/state/last-update.json.
+back the images and deploy files (never the data: the pre-update dump is kept
+and `synap restore <dump>` is printed) and is recorded in deploy/state/last-update.json.
 USAGE
                 return 0 ;;
             *)
@@ -5288,6 +5536,20 @@ cmd_restore() {
         read -p "Continue? (yes/no): " CONFIRM
         [ "$CONFIRM" = "yes" ] || { echo "Restore cancelled"; exit 0; }
         SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_restore "$target" || exit 1
+        # The fingerprint recorded with the dump is the second, independent
+        # proof (as for a snapshot): the stack starts only when it matches.
+        local want got
+        want="$(cat "$target/fingerprint" 2>/dev/null)"
+        if [ -n "$want" ]; then
+            got="$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" _pgs_fingerprint "$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" _pgs_container)")"
+            if [ "$got" != "$want" ]; then
+                echo -e "${RED}❌ Restoring ${target} did not bring the data back: the dump recorded users|entities|api_keys=${want}, the database now has ${got:-<unreadable>}. The stack was NOT restarted — inspect before starting it.${NC}"
+                exit 1
+            fi
+            echo -e "${GREEN}  fingerprint matches the dump (users|entities|api_keys=${got})${NC}"
+        else
+            echo -e "${YELLOW}⚠️  ${target} has no recorded fingerprint: the restore could not be checked against it${NC}"
+        fi
         docker compose up -d --remove-orphans
         echo -e "${GREEN}✅ Restore complete!${NC}"
         return 0
@@ -5415,6 +5677,17 @@ cmd_apply() {
         exit 1
     fi
 
+    # What is derived from the pod's names follows the .env just set, exactly
+    # as on the Control Plane's `configure` (cmd_compose_request): a move made
+    # by hand (`synap config set DOMAIN=… SYNAP_LEGACY_DOMAIN=…` + `synap
+    # apply`, a pod with no agent behind a front proxy) gets the same
+    # SYNAP_BASE_DOMAIN, Pod Admin pair and ALLOWED_ORIGINS. Even when nothing
+    # runs: the next start reads them.
+    local domain kratos_before="" kratos_after="" kerr
+    domain="$(envcfg_value DOMAIN)"; domain="${domain:-localhost}"
+    backfill_federation_public_urls "$domain"
+    reconcile_moved_origins
+
     local running=() svc
     while IFS= read -r svc; do
         [ -n "$svc" ] && running+=("$svc")
@@ -5424,10 +5697,22 @@ cmd_apply() {
         return 0
     fi
 
-    local domain kratos_before="" kratos_after=""
-    domain="$(envcfg_value DOMAIN)"; domain="${domain:-localhost}"
-    [ -f ../kratos/kratos.yml ] && kratos_before="$(cksum < ../kratos/kratos.yml)"
+    if [ -f ../kratos/kratos.yml ]; then
+        kratos_before="$(cksum < ../kratos/kratos.yml)"
+        cp -p ../kratos/kratos.yml state/kratos.yml.apply-before 2>/dev/null || { mkdir -p state && cp -p ../kratos/kratos.yml state/kratos.yml.apply-before; }
+    fi
     generate_kratos_config "$domain"
+    # The .env validated above; what it DERIVES is validated too, before
+    # anything is recreated on it: a well-formed .env can still render a
+    # kratos.yml Kratos cannot start on (an http OIDC issuer, a log line in a
+    # field). Refused, the previous kratos.yml is put back.
+    if [ -f ../kratos/kratos.yml ] && kerr="$(kratos_config_errors ../kratos/kratos.yml)" && [ -n "$kerr" ]; then
+        [ -f state/kratos.yml.apply-before ] && mv -f state/kratos.yml.apply-before ../kratos/kratos.yml
+        printf '  %s\n' "$kerr" >&2
+        echo -e "${RED}❌ apply: the kratos.yml this .env derives does not validate — previous kratos.yml kept, nothing recreated.${NC}" >&2
+        exit 1
+    fi
+    rm -f state/kratos.yml.apply-before
     [ -f ../kratos/kratos.yml ] && kratos_after="$(cksum < ../kratos/kratos.yml)"
 
     local profile_args=()
@@ -5607,6 +5892,20 @@ cmd_doctor() {
             else _dr pgdata info "no postgres container (fresh pod)"; fi ;;
         *) _dr pgdata warn "could not read the postgres layout" ;;
     esac
+
+    # ── timescaledb ── (the update engine's own reader, _ue_tsdb_behind)
+    if [ "$layout" = ok ] && [ -n "$(command docker compose ps -q --status running postgres 2>/dev/null)" ]; then
+        local tsdb tdb tv tnew
+        if tsdb="$(_ue_tsdb_behind)"; then
+            [ -n "$tsdb" ] || _dr timescaledb ok "no database lags the TimescaleDB its postgres image ships"
+            while IFS='|' read -r tdb tv tnew; do
+                [ -n "$tdb" ] || continue
+                _dr timescaledb info "database '${tdb}' runs TimescaleDB ${tv}; the postgres image ships up to ${tnew}. It keeps working; update it in a maintenance window: deploy/runbooks/timescaledb-update.md"
+            done <<<"$tsdb"
+        else
+            _dr timescaledb warn "could not read the TimescaleDB extension versions or the postgres image's libraries"
+        fi
+    fi
 
     # ── disk ──
     local pct
@@ -6216,32 +6515,22 @@ cmd_heal() {
 #   {"schema":1, "id":"<opaque>", "services":["kratos",…] (empty = every service),
 #    "recreate":true|false, "noDeps":true|false, "profiles":["pod-agent",…]}
 # Names are compose services / profiles of THIS compose file (checked). Taken
-# (renamed to compose.taken.json) before anything else; the outcome is
-# state/last-compose-request.json {kind:"pod.compose-request", status:
-# succeeded|failed|aborted, request:<id>, reason}. Started by synap-compose.path.
+# (renamed to compose.taken.json) before anything else, then run under the
+# update lock, which it waits for up to SYNAP_COMPOSE_LOCK_WAIT seconds (300);
+# the outcome is state/last-compose-request.json {kind:"pod.compose-request",
+# status: succeeded|failed|aborted, request:<id>, reason}. Started by synap-compose.path.
 _CR_NAME_RE='^[a-z0-9][a-z0-9_-]{0,63}$'
 _CR_ID_RE='^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'
 
-_cr_take() {
-    local f=state/requests/compose.json t=state/requests/compose.taken.json
-    [ -f "$f" ] || return 0
-    mv -f "$f" "$t" && echo "$t"
-}
+_cr_take() { _synap_take_request compose; }
 
 _cr_record() { # <status> <request-id> <reason> [services]
     _synap_event "$(jq -cn --arg s "$1" --arg r "$2" --arg why "$3" --arg svc "${4:-}" \
         '{kind:"pod.compose-request", status:$s, request:$r, reason:$why, services:$svc}')" 0 state/last-compose-request.json >/dev/null
 }
 
-_cr_busy() { # the update lock was busy: consume the request, say so
-    local req
-    req="$(_cr_take)"
-    [ -n "$req" ] || return 0
-    _cr_record aborted "$(jq -r '.id // empty' "$req" 2>/dev/null || true)" "another pod operation held the update lock — the request was not run; send it again"
-}
-
 cmd_compose_request() {
-    local deploy_dir req id known profiles=() services=() pargs=() args=(up -d --no-build) n bad="" dropped="" domain rc=0 out
+    local deploy_dir req id wait known profiles=() services=() pargs=() args=(up -d --no-build) n bad="" dropped="" domain rc=0 out
     deploy_dir="$(get_deploy_dir)"
     [ -n "$deploy_dir" ] || { echo -e "${RED}Error: Not in Synap installation directory${NC}"; exit 1; }
     cd "$deploy_dir"
@@ -6249,6 +6538,17 @@ cmd_compose_request() {
     req="$(_cr_take)"
     [ -n "$req" ] || { echo "no compose request waiting"; return 0; }
     id="$(jq -r '.id // empty' "$req" 2>/dev/null || true)"
+    # Taken first (so the agent sees it picked up and the .path unit cannot
+    # loop on it), THEN the update lock — waited for, bounded: an update
+    # mid-way is minutes, and the agent waits HOST_REQUEST_TIMEOUT_SECONDS (540)
+    # for the outcome. Every read below runs under the lock, so a request never
+    # meets a compose file or .env that an update is swapping.
+    wait="${SYNAP_COMPOSE_LOCK_WAIT:-300}"
+    [[ "$wait" =~ ^[0-9]+$ ]] || wait=300
+    if ! synap_update_lock "$deploy_dir" "synap compose-request" "$wait"; then
+        _cr_record aborted "$id" "another pod operation held the update lock for ${wait}s — the request was not run; send it again"
+        exit 1
+    fi
     if ! [[ "$id" =~ $_CR_ID_RE ]] || [ "$(jq -r '.schema // empty' "$req" 2>/dev/null)" != 1 ] \
         || ! jq -e '(.services // []) | type == "array"' "$req" >/dev/null 2>&1 \
         || ! jq -e '(.profiles // []) | type == "array"' "$req" >/dev/null 2>&1; then
@@ -6260,12 +6560,22 @@ cmd_compose_request() {
     while IFS= read -r n; do [ -n "$n" ] && services+=("$n"); done < <(jq -r '(.services // [])[] | tostring' "$req")
     # A profile this compose file no longer has (an older CP's retired add-on)
     # activates nothing: it is dropped, and said so — never passed through.
-    known="$(docker compose config --profiles 2>/dev/null)"
+    # A failed read is not "no such profile": refuse rather than run the request
+    # without the profiles it asked for and record it as a success.
+    known="$(docker compose config --profiles 2>/dev/null)" || {
+        _cr_record failed "$id" "could not read this pod's compose profiles (docker compose config failed)"
+        echo -e "${RED}❌ compose request ${id}: could not read the compose file — nothing was run${NC}" >&2
+        exit 1
+    }
     for n in "${profiles[@]}"; do
         if [[ "$n" =~ $_CR_NAME_RE ]] && grep -qx "$n" <<<"$known"; then pargs+=(--profile "$n"); else dropped="${dropped} ${n}"; fi
     done
     [ -z "$dropped" ] || echo -e "${YELLOW}compose request ${id}: no such profile here, ignored:${dropped}${NC}"
-    known="$(docker compose "${pargs[@]}" config --services 2>/dev/null)"
+    known="$(docker compose "${pargs[@]}" config --services 2>/dev/null)" || {
+        _cr_record failed "$id" "could not read this pod's compose services (docker compose config failed)"
+        echo -e "${RED}❌ compose request ${id}: could not read the compose file — nothing was run${NC}" >&2
+        exit 1
+    }
     for n in "${services[@]}"; do
         [[ "$n" =~ $_CR_NAME_RE ]] && grep -qx "$n" <<<"$known" || bad="${bad} service:${n}"
     done
@@ -6305,6 +6615,68 @@ cmd_compose_request() {
     fi
 }
 
+# ── ARCHIVE REQUEST (host door) ───────────────────────────────────────────────
+# pod-agent never archives a pod itself: from inside its container the pod's
+# volumes are not readable as files, and an archive that could not see them
+# was uploaded EMPTY while reporting success (2026-10-21). It writes a request
+# and this host door runs deploy/archive-pod.sh, on the host, under the update
+# lock (an archive stops services; no update or compose request may run beside
+# it). Started by synap-archive.path.
+#
+# ARCHIVE REQUEST CONTRACT (schema 1), written atomically (tmp + rename), mode
+# 0600, to <deploy dir>/state/requests/archive.json (writer: deploy/
+# archive-request.sh, run by pod-agent):
+#   {"schema":1, "id":"<opaque>", "uploadUrl":"https://…" (presigned PUT),
+#    "recipients":["age1…", …] (the owner's archiveRecipients)}
+# Taken before anything else (_synap_take_request); the outcome is
+# state/last-archive-request.json {kind:"pod.archive-request", status:
+# succeeded|failed|aborted, request:<id>, reason, manifest} — the manifest is
+# archive-pod.sh's ARCHIVE_MANIFEST (what the CP checks before deleting).
+_AR_ID_RE='^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'
+_ar_record() { # <status> <request-id> <reason> [manifest-json]
+    _synap_event "$(jq -cn --arg s "$1" --arg r "$2" --arg why "$3" --argjson m "${4:-null}" \
+        '{kind:"pod.archive-request", status:$s, request:$r, reason:$why} + (if $m == null then {} else {manifest:$m} end)')" 0 state/last-archive-request.json >/dev/null
+}
+
+cmd_archive_request() {
+    local deploy_dir req id url rcpts wait out rc=0 manifest why
+    deploy_dir="$(get_deploy_dir)"
+    [ -n "$deploy_dir" ] || { echo -e "${RED}Error: Not in Synap installation directory${NC}"; exit 1; }
+    cd "$deploy_dir"
+    command -v jq >/dev/null 2>&1 || { echo -e "${RED}jq is required${NC}"; exit 1; }
+    req="$(_synap_take_request archive)"
+    [ -n "$req" ] || { echo "no archive request waiting"; return 0; }
+    id="$(jq -r '.id // empty' "$req" 2>/dev/null || true)"
+    url="$(jq -r '.uploadUrl // empty' "$req" 2>/dev/null || true)"
+    rcpts="$(jq -r '(.recipients // []) | if type == "array" then map(tostring) | join(" ") else "" end' "$req" 2>/dev/null || true)"
+    if ! [[ "$id" =~ $_AR_ID_RE ]] || [ "$(jq -r '.schema // empty' "$req" 2>/dev/null)" != 1 ] \
+        || ! [[ "$url" =~ ^https://[^[:space:]]+$ ]] || [ -z "$rcpts" ] \
+        || ! [[ " $rcpts " =~ ^(\ age1[a-z0-9]+)+\ $ ]]; then
+        _ar_record aborted "$id" "invalid archive request: it must be {\"schema\":1, \"id\":…, \"uploadUrl\":\"https://…\", \"recipients\":[\"age1…\"]}"
+        echo -e "${RED}❌ invalid archive request ${id:-<no id>} — nothing was run${NC}" >&2
+        exit 1
+    fi
+    wait="${SYNAP_ARCHIVE_LOCK_WAIT:-600}"; [[ "$wait" =~ ^[0-9]+$ ]] || wait=600
+    if ! synap_update_lock "$deploy_dir" "synap archive-request" "$wait"; then
+        _ar_record aborted "$id" "another pod operation held the update lock for ${wait}s — the archive was not run; send it again"
+        exit 1
+    fi
+    echo -e "${BLUE}🗄  archive request ${id}: archiving this pod on the host...${NC}"
+    mkdir -p state/archive-work && chmod 700 state/archive-work
+    out="$(ARCHIVE_ON_HOST=1 ARCHIVE_AGE_RECIPIENTS="$rcpts" ARCHIVE_WORK_DIR="$deploy_dir/state/archive-work" \
+        sh ./archive-pod.sh "$url" "" "" 2>&1 </dev/null)" || rc=$?
+    printf '%s\n' "$out" | grep -v '^ARCHIVE_MANIFEST ' | tail -40
+    manifest="$(printf '%s\n' "$out" | sed -n 's/^ARCHIVE_MANIFEST //p' | tail -n 1)"
+    if [ "$rc" = 0 ] && [ -n "$manifest" ] && jq -e '.schema == 1 and (.volumes | type) == "array"' >/dev/null 2>&1 <<<"$manifest"; then
+        _ar_record succeeded "$id" "" "$manifest"
+        return 0
+    fi
+    why="$(printf '%s\n' "$out" | sed -n 's/.*\] \[archive\] ERROR: //p' | tail -n 1 | cut -c1-300)"
+    [ "$rc" = 0 ] && why="the archive reported success without a manifest"
+    _ar_record failed "$id" "${why:-archive-pod.sh exited ${rc}}"
+    exit 1
+}
+
 # ── units (systemd) ───────────────────────────────────────────────────────────
 # deploy/systemd/ holds the unit TEMPLATES (@SYNAP@ = this CLI, @DEPLOY_DIR@ =
 # this deploy dir); the set is whatever is in that directory. Installed:
@@ -6315,8 +6687,15 @@ cmd_compose_request() {
 _units_have_systemd() { [ -d "${SYNAP_SYSTEMD_RUN_DIR:-/run/systemd/system}" ] && command -v systemctl >/dev/null 2>&1; }
 _units_names() { (cd "$1" 2>/dev/null && ls -1 synap-*.service synap-*.timer synap-*.path 2>/dev/null) || true; }
 _units_self() { readlink -f "$SYNAP_SELF" 2>/dev/null || echo "$SYNAP_SELF"; }
-_units_render() { # <template> <deploy-dir>
-    sed -e "s#@SYNAP@#$(_units_self)#g" -e "s#@DEPLOY_DIR@#$2#g" "$1"
+_units_render() { # <template> <deploy-dir>  (+ the archive timeout ladder, deploy/archive-limits.sh)
+    (
+        # shellcheck source=/dev/null
+        [ -f "$2/archive-limits.sh" ] || { echo "units: $2/archive-limits.sh is missing" >&2; exit 1; }
+        . "$2/archive-limits.sh"
+        sed -e "s#@SYNAP@#$(_units_self)#g" -e "s#@DEPLOY_DIR@#$2#g" \
+            -e "s#@ARCHIVE_UNIT_TIMEOUT_SECONDS@#${ARCHIVE_UNIT_TIMEOUT_SECONDS:?}#g" \
+            -e "s#@ARCHIVE_UNIT_STOP_SECONDS@#${ARCHIVE_UNIT_STOP_SECONDS:?}#g" "$1"
+    )
 }
 # <unit> <deploy-dir> → missing | outdated | current (installed vs this template)
 _units_state() {
@@ -6367,7 +6746,9 @@ cmd_units() {
                     || { echo -e "${RED}could not write ${dst}/${u}${NC}"; exit 1; }
             done
             systemctl daemon-reload
-            systemctl enable --now synap-heal.timer synap-update.path synap-compose.path
+            # every request door (synap-*.path, derived from the templates) + heal
+            # shellcheck disable=SC2046
+            systemctl enable --now synap-heal.timer $(printf '%s\n' $names | grep -E '^synap-.*\.path$')
             [ "$auto" = 1 ] && systemctl enable --now synap-update.timer
             echo -e "${GREEN}✓ units installed in ${dst}: heal every 2 min, update requests watched$([ "$auto" = 1 ] && echo ', automatic updates ON (03:00–05:00, state/update-policy.json)' || echo '; automatic updates: see synap units status')${NC}"
             _synap_event "$(jq -cn --arg d "$dst" --argjson auto "$auto" '{kind:"pod.units", status:"installed", dir:$d, autoUpdateEnabledNow:($auto == 1)}')" 0 >/dev/null
@@ -7433,11 +7814,10 @@ export COMPOSE_PROJECT_NAME
 
 # Pod-mutating commands serialise on <deploy_dir>/state/update.lock.
 case "${1:-help}" in
-    install|update|rebuild|reset|restore|apply|compose-request)
+    install|update|rebuild|reset|restore|apply)
         if ! synap_update_lock "$(get_deploy_dir)" "synap $1"; then
             # An unattended run must still consume its request (no .path loop).
             case " $* " in *" --unattended "*) [ "$1" = update ] && ( cd "$(get_deploy_dir)" && _ue_unattended_busy ) ;; esac
-            [ "$1" = compose-request ] && ( cd "$(get_deploy_dir)" && _cr_busy )
             exit 1
         fi
         ;;
@@ -7544,6 +7924,10 @@ case "${1:-help}" in
     compose-request)
         shift
         cmd_compose_request "$@"
+        ;;
+    archive-request)
+        shift
+        cmd_archive_request "$@"
         ;;
     shell)
         shift

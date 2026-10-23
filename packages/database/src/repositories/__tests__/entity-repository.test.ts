@@ -43,6 +43,11 @@ describe("EntityRepository", () => {
       ProfileResolutionService.prototype,
       "getEffectiveProperties"
     ).mockResolvedValue([]);
+    // C6 (a597a0c97): create/update read the profile's lifecycle.
+    vi.spyOn(
+      ProfileResolutionService.prototype,
+      "getEffectiveLifecycle"
+    ).mockResolvedValue(null);
     vi.spyOn(
       PropertyIndexService.prototype,
       "indexEntityProperties"

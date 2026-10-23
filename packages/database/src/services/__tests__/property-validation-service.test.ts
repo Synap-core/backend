@@ -161,3 +161,111 @@ describe("PropertyValidationService enum on a multi-select", () => {
     expect(res.errors.join(" ")).toContain("Values 'video' not in enum");
   });
 });
+
+/**
+ * fb1020: a writer is told what a kind DOES model, before the write. Shapes
+ * from the live pod (2026-10-20): `decision` keeps its lifecycle in
+ * `decisionStatus` and caps `summary` at 500; `offer` prefixes every field.
+ */
+describe("PropertyValidationService tells the writer what the kind models", () => {
+  const decision = [
+    prop("summary", { constraints: { maxLength: 500 } }),
+    prop("decisionStatus", {
+      isLifecycle: true,
+      constraints: {
+        enum: ["proposed", "accepted", "superseded", "rejected"],
+      },
+    }),
+    prop("title", {
+      required: true,
+      constraints: { maxLength: 500, minLength: 1 },
+    }),
+  ];
+  let svc: PropertyValidationService;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    svc = new PropertyValidationService(
+      new ProfileResolutionService({} as any)
+    );
+    vi.spyOn(
+      ProfileResolutionService.prototype,
+      "getEffectiveProperties"
+    ).mockResolvedValue(decision);
+  });
+
+  it("returns every modelled field with its type, options, limits and flags", async () => {
+    const res = await svc.validateEntityCreateForProposal({}, "p", "ws-1", {
+      title: "Ship it",
+    });
+    expect(res.modeled).toEqual([
+      { key: "summary", type: "string", maxLength: 500 },
+      {
+        key: "decisionStatus",
+        type: "string",
+        options: ["proposed", "accepted", "superseded", "rejected"],
+        lifecycle: true,
+      },
+      {
+        key: "title",
+        type: "string",
+        required: true,
+        maxLength: 500,
+        minLength: 1,
+      },
+    ]);
+  });
+
+  it("names the key whose limit a value breaks", async () => {
+    const res = await svc.validateProperties(
+      { summary: "x".repeat(612) },
+      "p",
+      "ws-1",
+      { enforceRequired: false }
+    );
+    expect(res.errors).toEqual([
+      "Property 'summary': String length 612 is greater than maximum 500",
+    ]);
+  });
+
+  it("suggests the option a near-miss value meant", async () => {
+    const res = await svc.validateProperties(
+      { decisionStatus: "Accepted_" },
+      "p",
+      "ws-1",
+      { enforceRequired: false }
+    );
+    expect(res.errors[0]).toMatch(/\(did you mean 'accepted'\?\)$/);
+  });
+
+  it("suggests the prefixed field a bare key meant (`status` → `decisionStatus`)", async () => {
+    const res = await svc.validateProperties(
+      { status: "accepted" },
+      "p",
+      "ws-1",
+      { enforceRequired: false }
+    );
+    expect(res.unmodeled).toEqual([
+      { key: "status", didYouMean: "decisionStatus" },
+    ]);
+  });
+
+  it("suggests nothing when the bare key matches two fields", async () => {
+    vi.spyOn(
+      ProfileResolutionService.prototype,
+      "getEffectiveProperties"
+    ).mockResolvedValue([prop("task-status"), prop("review-status")]);
+    const res = await svc.validateProperties({ status: "x" }, "p", "ws-1");
+    expect(res.unmodeled).toEqual([{ key: "status" }]);
+  });
+
+  it("says a kind with no fields models nothing", async () => {
+    vi.spyOn(
+      ProfileResolutionService.prototype,
+      "getEffectiveProperties"
+    ).mockResolvedValue([]);
+    const res = await svc.validateProperties({ severity: "high" }, "p", null);
+    expect(res.modeled).toEqual([]);
+    expect(res.unmodeled).toEqual([{ key: "severity" }]);
+  });
+});

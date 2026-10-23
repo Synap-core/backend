@@ -21,6 +21,12 @@
  * as owner-wide; the delivery log `/webhooks/:id/deliveries` still is). A
  * session's subscription keeps the owner-wide fan-out. A subscription whose
  * key is revoked or expired is listed inactive: it is not delivered.
+ *
+ * POD APPS (spec 17 PB4). A pod app may subscribe under its grant (the D7
+ * rule above bounds what it receives), but only to a URL on its own site
+ * (the origin of its metadata-document client_id). Its subscriptions move to
+ * each new access key of its connection (`app-connect` `moveSlotWebhooks`),
+ * so they survive the hourly rotation, and revoking the app deletes them.
  */
 
 import { db, webhookSubscriptions, eq, and } from "@synap/database";
@@ -30,6 +36,7 @@ import {
 } from "@synap/jobs/workers/webhook-worker.js";
 import { randomBytes } from "crypto";
 import { z } from "zod";
+import { podAppWebhookOrigin } from "../../../services/app-agent-floor.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -163,6 +170,23 @@ export function registerWebhooksRoutes(app: HubHono) {
     const webhookSecret = secret || randomBytes(32).toString("hex");
 
     try {
+      // A pod app (PB4) subscribes under its grant, to ITS OWN site only: its
+      // subscriptions follow the connection across key rotations
+      // (`moveSlotWebhooks`), so one created with a stolen 1 h token must not
+      // be able to send the person's events anywhere else for as long as the
+      // app keeps refreshing.
+      const agentUserId = c.get("agentUserId") as string | undefined;
+      const appOrigin = agentUserId
+        ? await podAppWebhookOrigin(agentUserId)
+        : null;
+      if (appOrigin && new URL(url).origin !== appOrigin) {
+        return c.json(
+          {
+            error: `A pod app's webhooks go to its own site only (${appOrigin}).`,
+          },
+          403
+        );
+      }
       const [subscription] = await db
         .insert(webhookSubscriptions)
         .values({

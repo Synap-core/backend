@@ -28,7 +28,7 @@ beforeAll(async () => {
   pg = new PGlite();
 }, 120_000);
 
-describe("migration 0309 — apps", () => {
+describe("migration 0309 — apps", { timeout: 60_000 }, () => {
   it("creates the table with the spec columns and is idempotent", async () => {
     await pg.exec(M0309);
     await pg.exec(M0309); // idempotent — IF NOT EXISTS throughout

@@ -19,7 +19,8 @@ const h = vi.hoisted(() => ({
   sets: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     query: { users: { findFirst: vi.fn(async () => h.existing) } },
     update: () => ({
@@ -42,11 +43,15 @@ vi.mock("@synap/database", () => ({
   proposals: {},
   EventRepository: class {},
   ApiKeyRepository: class {},
-  drizzleSql: vi.fn(),
+  drizzleSql: Object.assign(vi.fn(), { raw: vi.fn() }),
   getRequestClientKey: vi.fn(),
   clientKeyScope: vi.fn(),
 }));
-vi.mock("@synap/database/schema", () => ({ agents: {}, users: {} }));
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
+  agents: {},
+  users: {},
+}));
 
 import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
 

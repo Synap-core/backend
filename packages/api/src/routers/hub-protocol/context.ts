@@ -24,6 +24,7 @@ import {
 } from "../proposals/render-for-prompt.js";
 import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
 import { findUserDefaultWorkspaceId } from "../../utils/user-default-workspace.js";
+import { assertChannelWrite } from "../../utils/assert-channel-write.js";
 
 export const contextRouter = router({
   /**
@@ -37,6 +38,8 @@ export const contextRouter = router({
     .input(
       z.object({
         threadId: z.string().uuid(),
+        /** Newest messages to return (1–100). Omitted ⇒ 50, the long-standing default. */
+        limit: z.number().int().min(1).max(100).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -93,7 +96,7 @@ export const contextRouter = router({
       // Get messages
       const messagesResult = await chatCaller.getMessages({
         threadId: input.threadId,
-        limit: 50,
+        limit: input.limit ?? 50,
       });
 
       // Get recent entities for this user
@@ -312,7 +315,7 @@ export const contextRouter = router({
       // a distinguishable 403 — no existence oracle.
       const visible = ctx.userId
         ? await db
-            .select({ id: channels.id })
+            .select({ id: channels.id, workspaceId: channels.workspaceId })
             .from(channels)
             .where(
               and(
@@ -325,6 +328,9 @@ export const contextRouter = router({
       if (visible.length === 0) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Thread not found" });
       }
+      // The read floor above is not a write check: the key's grant must allow
+      // changing the channel, in the channel's own workspace (S7).
+      await assertChannelWrite(visible[0], "channel", "update");
 
       // A simple metadata update (contextSummary is not event-sourced); kept
       // direct as a specialized Hub Protocol operation.

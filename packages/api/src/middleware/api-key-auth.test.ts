@@ -12,6 +12,17 @@ vi.mock("../services/api-keys.js", () => ({
   },
 }));
 
+// Identity + grant resolution reads users/grants (551bd6d89); stubbed as in
+// api-key-auth.mutation-fence.test.ts. A null grant leaves the fence open.
+vi.mock("../access/key-identity.js", () => ({
+  resolveKeyIdentity: vi.fn(async (k: { userId: string }) => ({
+    effectiveUserId: k.userId,
+    agentUserId: undefined,
+    isAgent: false,
+    grant: null,
+  })),
+}));
+
 // Setup tRPC for testing
 const t = initTRPC.context<Context>().create();
 

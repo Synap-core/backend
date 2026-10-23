@@ -43,6 +43,7 @@ import {
   EventRepository,
   claimTransitionOutbox,
   db,
+  isUniqueViolation,
   listDueTransitions,
   settleTransitionOutbox,
   sql,
@@ -97,8 +98,6 @@ export interface TransitionEmitResult extends TransitionEmitProgress {
   error?: string;
 }
 
-const UNIQUE_VIOLATION = "23505";
-
 /**
  * One delivery attempt: the log row, then the fan-out, skipping what
  * `progress` says is done. Never throws; reports what is still owed.
@@ -144,7 +143,7 @@ export async function emitLifecycleTransition(
       } as Parameters<EventRepository["append"]>[0]);
       eventId = record?.id ?? t.transitionId;
     } catch (err) {
-      if (pgCode(err) === UNIQUE_VIOLATION) {
+      if (isUniqueViolation(err)) {
         // An earlier attempt wrote it and died before saying so.
         eventId = t.transitionId;
       } else {
@@ -262,12 +261,6 @@ export async function dispatchDueLifecycleTransitions(
     if (await dispatchLifecycleTransition(id)) delivered++;
   }
   return { due: due.length, delivered };
-}
-
-function pgCode(err: unknown): string | undefined {
-  const e = err as { code?: unknown; cause?: { code?: unknown } } | null;
-  const code = e?.code ?? e?.cause?.code;
-  return typeof code === "string" ? code : undefined;
 }
 
 function errorText(err: unknown): string {

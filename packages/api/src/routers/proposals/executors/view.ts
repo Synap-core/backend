@@ -5,6 +5,7 @@ import {
   eq,
   and,
   getWorkspaceMembership,
+  isUniqueViolation,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -45,22 +46,6 @@ function normaliseProposalViewQuery(
     );
   }
   return { ...q, filters };
-}
-
-function isUniqueViolation(err: unknown): boolean {
-  let cur: unknown = err;
-  for (let i = 0; i < 5 && cur && typeof cur === "object"; i++) {
-    const rec = cur as { code?: string; cause?: unknown; message?: string };
-    if (rec.code === "23505") return true;
-    if (
-      typeof rec.message === "string" &&
-      /duplicate key|unique constraint/i.test(rec.message)
-    ) {
-      return true;
-    }
-    cur = rec.cause;
-  }
-  return false;
 }
 
 /** Register the view/* approve executors. */

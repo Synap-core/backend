@@ -73,6 +73,7 @@ const podWide = (data: Record<string, unknown>, agentUserId?: string) => ({
   targetType: "entity",
   targetId: null,
   sessionId: null,
+  projectId: null,
   ...(agentUserId ? { agentUserId } : {}),
 });
 
@@ -161,6 +162,7 @@ describe("workspace-scoped review is unchanged (same ladder as approve)", () => 
           targetType: "entity",
           targetId: null,
           sessionId: null,
+          projectId: null,
         },
         userId: STRANGER,
         action: "reject",
@@ -180,6 +182,7 @@ describe("workspace-scoped review is unchanged (same ladder as approve)", () => 
           targetType: "entity",
           targetId: null,
           sessionId: null,
+          projectId: null,
         },
         userId: STRANGER,
         action: "reject",

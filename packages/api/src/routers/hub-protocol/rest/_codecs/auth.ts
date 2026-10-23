@@ -45,6 +45,27 @@ export const AuthStatusSchema = z
       "is_internal",
     ]),
     workspaceId: z.string().uuid().nullable(),
+    /**
+     * What this key may touch — its grant, read-only (ids and permission
+     * patterns, never a secret). `isFullAccess` is the same predicate the
+     * owner-only doors (app connect) apply; `summary` is the same phrase their
+     * refusal prints. null = no grant was read for this request.
+     */
+    access: z
+      .object({
+        isFullAccess: z.boolean(),
+        summary: z.string(),
+        scopes: z.array(
+          z.object({
+            permissions: z.array(z.string()),
+            workspaceIds: z.array(z.string()).nullable(),
+            projectIds: z.array(z.string()).nullable(),
+            entityIds: z.array(z.string()).nullable(),
+          })
+        ),
+        clientId: z.string().nullable(),
+      })
+      .nullable(),
   })
   .openapi("AuthStatus");
 

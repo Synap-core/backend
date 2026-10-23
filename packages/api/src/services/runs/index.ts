@@ -1341,7 +1341,7 @@ async function listChatRuns(
 const SESSION_LENSED_FLOWS = [
   "capability",
 ] as const satisfies ReadonlyArray<FlowType>;
-const SESSION_BLIND_FLOWS = [
+const _SESSION_BLIND_FLOWS = [
   "automation",
   "playbook",
   "capture",
@@ -1353,7 +1353,7 @@ type _SessionLensClassified =
   Exclude<
     FlowType,
     (typeof SESSION_LENSED_FLOWS)[number]
-  > extends (typeof SESSION_BLIND_FLOWS)[number]
+  > extends (typeof _SESSION_BLIND_FLOWS)[number]
     ? true
     : never;
 const _sessionLensClassified: _SessionLensClassified = true;

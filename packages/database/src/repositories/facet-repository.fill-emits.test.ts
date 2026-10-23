@@ -45,6 +45,11 @@ function stubSharedRole() {
     async (props: any) =>
       ({ valid: true, errors: [], normalized: props }) as any
   );
+  // C6 (a597a0c97): attach() reads the role's lifecycle; none here.
+  vi.spyOn(
+    ProfileResolutionService.prototype,
+    "getEffectiveLifecycle"
+  ).mockResolvedValue(null);
 }
 
 function collidingDb(opts: { vanished?: boolean } = {}) {

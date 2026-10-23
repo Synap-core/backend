@@ -16,7 +16,7 @@
  *           RFC 9728 `WWW-Authenticate: Bearer resource_metadata="…"` hop, which
  *           is how claude.ai discovers where to authenticate. Path A (control
  *           plane as AS, proxying to this endpoint) also remains supported.
- *           See MCP-OAUTH-AND-CONNECT-PLAN.md.
+ *           See MCP-OAUTH-AND-CONNECT-PLAN (team pod).
  * Endpoint: POST /mcp   — JSON-RPC 2.0 request (SSE stream or JSON response)
  *           GET  /mcp   — SSE stream for server-initiated messages
  *           DELETE /mcp — End session
@@ -59,6 +59,7 @@ import {
   inArray,
   runWithProbeWrites,
   runWithActingAgent,
+  runWithCallingKey,
   runWithGrant,
   runWithClientKey,
   clientKeyForApiKey,
@@ -202,7 +203,7 @@ export async function buildGrounding(
 }
 
 /**
- * Phase 0 attribution hard-reject (GOVERNANCE-CONVERGENCE-PLAN.md §Phase 0).
+ * Phase 0 attribution hard-reject (docs/decisions/agent-governance.md, D1).
  *
  * A `user_pat`/`hub_inbound` key with no `linkedUserId` is a bare human key
  * used directly against MCP — a human doesn't speak MCP, so a `tools/call`
@@ -533,7 +534,7 @@ mcpHttpApp.post("/", async (c) => {
     );
   }
 
-  // ── 2b. Attribution hard-reject (Phase 0, GOVERNANCE-CONVERGENCE-PLAN.md) ──
+  // ── 2b. Attribution hard-reject (Phase 0, docs/decisions/agent-governance.md D1) ──
   if (
     shouldRejectUnattributedWrite(
       parsedBody,
@@ -630,14 +631,17 @@ mcpHttpApp.post("/", async (c) => {
   // of each other's, even on one shared agent key).
   return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
     runWithActingAgent(agentUserId, () =>
-      runWithClientKey(
-        clientKeyForApiKey(keyRecord, conversationId),
-        () =>
-          // W1: the key's grant bounds every write gate and scoped read below.
-          runWithGrant(grant, () =>
-            transport.handleRequest(c.req.raw, { parsedBody })
-          ),
-        c.req.header(CONVERSATION_CWD_HEADER)
+      // B7: the calling key, recorded on every proposal this request files.
+      runWithCallingKey(keyRecord.id, () =>
+        runWithClientKey(
+          clientKeyForApiKey(keyRecord, conversationId),
+          () =>
+            // W1: the key's grant bounds every write gate and scoped read below.
+            runWithGrant(grant, () =>
+              transport.handleRequest(c.req.raw, { parsedBody })
+            ),
+          c.req.header(CONVERSATION_CWD_HEADER)
+        )
       )
     )
   );

@@ -384,6 +384,43 @@ describe("planRetireInto — refusals", () => {
       planRetireInto({ workspaceId: SOURCE, userId: "stranger" })
     ).rejects.toThrow(/not found/i);
   });
+
+  // Live 2026-10-20: `synap_retire_workspace` on an ARCHIVED space the caller
+  // owns answered "Space not found" — a refusal dressed as absence.
+  it("an ARCHIVED space is refused as ARCHIVED, never 'not found'", async () => {
+    await q(
+      `update workspaces set archived_at = '2026-10-11T18:22:22Z' where id = $1`,
+      [SOURCE]
+    );
+    const r = await planRetireInto({ workspaceId: SOURCE, userId: USER });
+    expect(r).toMatchObject({ status: "refused", code: "ARCHIVED" });
+    if (!("status" in r)) throw new Error("expected a refusal");
+    expect(r.message).toMatch(/"Radar" is already archived/);
+    expect(r.message).toMatch(/2026-10-11/);
+    expect(r.message).not.toMatch(/not found/i);
+  });
+
+  it("an archived space of another person is still 'not found' (no existence leak)", async () => {
+    await q(`update workspaces set archived_at = now() where id = $1`, [
+      SOURCE,
+    ]);
+    await expect(
+      planRetireInto({ workspaceId: SOURCE, userId: "stranger" })
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it("the governed door returns the ARCHIVED refusal (what MCP dryRun answers)", async () => {
+    await q(`update workspaces set archived_at = now() where id = $1`, [
+      SOURCE,
+    ]);
+    const r = await retireIntoGoverned({
+      workspaceId: SOURCE,
+      userId: USER,
+      agentUserId: AGENT,
+      dryRun: true,
+    });
+    expect(r).toMatchObject({ status: "refused", code: "ARCHIVED" });
+  });
 });
 
 describe("applyRetireInto — install, move, archive only when empty", () => {

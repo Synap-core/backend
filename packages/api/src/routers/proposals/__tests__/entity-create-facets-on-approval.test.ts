@@ -36,18 +36,31 @@ describe("entities.create — requested facets survive onto the create proposal"
   const src = readSrc("routers/entities/create.ts");
 
   it("gate data carries input.facets (not dropped before propose)", () => {
-    const permBlockStart = src.indexOf("checkPermissionOrPropose({");
+    // The gate data is the named `gateRecord` (also what a landed record's
+    // pending copies are expired against), handed to the gate as `data`.
+    const recordStart = src.indexOf("const gateRecord = {");
+    const permBlockStart = src.indexOf(
+      "checkPermissionOrPropose({",
+      recordStart
+    );
     const permBlockEnd = src.indexOf('if ("denied" in perm', permBlockStart);
+    expect(recordStart).toBeGreaterThan(-1);
     expect(permBlockStart).toBeGreaterThan(-1);
-    const permBlock = src.slice(permBlockStart, permBlockEnd);
-    expect(permBlock).toContain("input.facets");
-    expect(permBlock).toMatch(/facets:\s*input\.facets\.map/);
+    const recordBlock = src.slice(recordStart, permBlockStart);
+    expect(recordBlock).toContain("input.facets");
+    expect(recordBlock).toMatch(/facets:\s*input\.facets\.map/);
+    expect(src.slice(permBlockStart, permBlockEnd)).toMatch(
+      /data:\s*gateRecord,/
+    );
   });
 
   it('the "proposed" response echoes the requested facets as pending (not silently dropped)', () => {
     const proposedStart = src.indexOf('status: "proposed"');
     expect(proposedStart).toBeGreaterThan(-1);
-    const proposedBlock = src.slice(proposedStart, proposedStart + 1200);
+    // The block runs to the next step (it outgrew a fixed window, b5459f31a).
+    const proposedEnd = src.indexOf("// 3. Materialize", proposedStart);
+    expect(proposedEnd).toBeGreaterThan(proposedStart);
+    const proposedBlock = src.slice(proposedStart, proposedEnd);
     expect(proposedBlock).toContain("facets: (input.facets ?? [])");
     expect(proposedBlock).toContain('outcome: "pending"');
   });

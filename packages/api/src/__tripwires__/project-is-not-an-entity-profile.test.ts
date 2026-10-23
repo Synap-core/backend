@@ -203,7 +203,10 @@ function rawWriteViolation(src: string, hit: RawProfileWrite): string | null {
 
 function tsFiles(dir: string, acc: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    // `__tests__/` holds test-only helpers (PGlite fixtures): test code, like
+    // `*.test.ts`, never a production write door.
     if (entry.name === "node_modules" || entry.name === "dist") continue;
+    if (entry.name === "__tests__") continue;
     const p = join(dir, entry.name);
     if (entry.isDirectory()) {
       tsFiles(p, acc);

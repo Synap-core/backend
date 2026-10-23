@@ -15,6 +15,11 @@ import {
   flattenChatTranscript,
 } from "./import-parsers.js";
 import type { ImportItem, ImportLink } from "./import-items.js";
+import {
+  extractIdentitySignals,
+  isJunkEntityTitle,
+  profileRejectsJunkTitle,
+} from "@synap/database";
 
 // ── Obsidian / wikilink-markdown adapter ───────────────────────────────────────
 
@@ -210,6 +215,14 @@ export interface CsvColumnPlan {
   valueType: "string" | "number" | "date" | "boolean";
   /** "skip" columns are dropped; everything else lands on the row entity. */
   scope: "primary" | "companion" | "context" | "skip";
+  /**
+   * Where the value lands, set by `refineCsvTablePlan`. Absent or "entity" ⇒ a
+   * property of the row entity (today's behaviour); "facet" ⇒ a property of the
+   * row's role facet (`CsvTablePlan.rowFacet`); "title" ⇒ consumed by the
+   * composed title (`titleColumns`); "organization" ⇒ consumed by the
+   * organisation link (`CsvTablePlan.organization`).
+   */
+  routedTo?: "entity" | "facet" | "title" | "organization";
 }
 
 /** Resolved table-ingestion plan: ONE profile for all rows + per-column routing
@@ -221,6 +234,19 @@ export interface CsvTablePlan {
   titleColumn: string | null;
   /** Per-column routing. Headers absent here are dropped. */
   columns: CsvColumnPlan[];
+  /**
+   * When set, the title is these columns' non-empty values joined by a space
+   * ("First Name" + "Last Name"). Takes precedence over `titleColumn`.
+   */
+  titleColumns?: string[];
+  /** Role facet every row entity wears (the planner picked a role). */
+  rowFacet?: { profileSlug: string };
+  /**
+   * A column naming the row's organisation: each distinct value becomes ONE
+   * entity of `profileSlug` (see `addLinkTargetItems`), linked from the row by
+   * `relationType`.
+   */
+  organization?: { header: string; profileSlug: string; relationType: string };
 }
 
 /** Parse a CSV into the raw shape the bulk-mapping planner consumes:
@@ -232,12 +258,14 @@ export function parseCsvTable(
   headers: string[];
   sampleRows: string[][];
   rows: Record<string, string>[];
+  /** Lines skipped before the header row (see `parseCsv`). */
+  preambleLines: string[];
 } {
-  const { headers, rows } = parseCsv(content);
+  const { headers, rows, preambleLines } = parseCsv(content);
   const sampleRows = rows
     .slice(0, sampleLimit)
     .map((row) => headers.map((h) => String(row[h] ?? "")));
-  return { headers, sampleRows, rows };
+  return { headers, sampleRows, rows, preambleLines };
 }
 
 /** Coerce a raw CSV cell string to the planned value type. Unparseable values
@@ -285,33 +313,107 @@ export function csvRowsToTypedImportItems(
   const items: ImportItem[] = [];
   for (const row of rows) {
     const metadata: Record<string, unknown> = {};
+    const facetProperties: Record<string, unknown> = {};
     const bodyLines: string[] = [];
     for (const col of kept) {
       const raw = row[col.header];
       if (raw === undefined) continue;
       const value = coerceCellValue(String(raw), col.valueType);
       if (value === undefined) continue;
-      metadata[col.slug] = value;
       bodyLines.push(`${col.header}: ${String(raw).trim()}`);
+      // Consumed by the title / the organisation link: the value lives there,
+      // not as a second copy in a property.
+      if (col.routedTo === "title" || col.routedTo === "organization") continue;
+      if (col.routedTo === "facet") facetProperties[col.slug] = value;
+      else metadata[col.slug] = value;
     }
 
-    const rawTitle = plan.titleColumn ? row[plan.titleColumn] : undefined;
-    const title =
-      String(rawTitle ?? "Untitled")
-        .trim()
-        .slice(0, 500) || "Untitled";
+    const rawTitle = plan.titleColumns
+      ? plan.titleColumns
+          .map((h) => String(row[h] ?? "").trim())
+          .filter(Boolean)
+          .join(" ")
+      : plan.titleColumn
+        ? row[plan.titleColumn]
+        : undefined;
+    // A placeholder name ("-", "…", "Unknown", "Freelance") names nobody:
+    // read it as NO title — the same predicate the create door refuses with —
+    // so the row follows the nameless-row rules below (skipped when nothing
+    // identifies it, else kept as "Untitled") instead of failing the approval.
+    const trimmedTitle = String(rawTitle ?? "")
+      .trim()
+      .slice(0, 500);
+    const title = isJunkEntityTitle(trimmedTitle) ? "Untitled" : trimmedTitle;
+
+    // A placeholder employer ("Freelance", "Indépendant", "Stealth", "-",
+    // "…") names no organisation: no company, no link. Judged by the SAME
+    // predicate the create door refuses with (`isJunkEntityTitle`), so analyze
+    // never proposes a company the approval will refuse — one such op refused
+    // the whole 2,827-entity proposal 0728053b (2026-10-22). The cell's text is
+    // already in `bodyLines` above.
+    const organizationCell = plan.organization
+      ? String(row[plan.organization.header] ?? "").trim()
+      : "";
+    const organizationName = isJunkEntityTitle(organizationCell)
+      ? ""
+      : organizationCell;
+
+    // A NAMELESS row of a kind that must be named (person, company, contact)
+    // or of a composed-name table is kept only when it carries a STRONG
+    // identity signal — email, phone, profile URL, handle: the atoms
+    // `extractIdentitySignals` registers, the same ones the create door merges
+    // on. Any other value (a "Connected On" date, a position) identifies nobody:
+    // an export lists members who hid their profile as a bare date, and 114 of
+    // them became same-name "Untitled" people the apply-time weak-dedup gate
+    // would refuse (live dry run, 2026-10-22). Skipped; the caller counts it.
+    if (
+      title === "Untitled" &&
+      (plan.titleColumns || profileRejectsJunkTitle(plan.profileSlug)) &&
+      extractIdentitySignals(metadata, { kind: plan.profileSlug }).length === 0
+    ) {
+      continue;
+    }
 
     // Drop blank/separator rows: no title signal AND no mapped data.
-    if (title === "Untitled" && Object.keys(metadata).length === 0) continue;
+    if (
+      title === "Untitled" &&
+      Object.keys(metadata).length === 0 &&
+      Object.keys(facetProperties).length === 0 &&
+      !organizationName
+    ) {
+      continue;
+    }
 
     items.push({
       title,
       path: [],
       metadata,
       body: bodyLines.join("\n"),
-      links: [],
+      links:
+        plan.organization && organizationName
+          ? [
+              {
+                targetName: organizationName,
+                targetType: plan.organization.profileSlug,
+                relationType: plan.organization.relationType,
+                createIfMissing: true,
+              },
+            ]
+          : [],
       labels: [],
       typeHint: plan.profileSlug,
+      ...(plan.rowFacet
+        ? {
+            facets: [
+              {
+                profileSlug: plan.rowFacet.profileSlug,
+                ...(Object.keys(facetProperties).length > 0
+                  ? { properties: facetProperties }
+                  : {}),
+              },
+            ],
+          }
+        : {}),
     });
   }
   return items;

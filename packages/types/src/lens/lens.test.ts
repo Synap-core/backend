@@ -7,7 +7,7 @@
  * shows it), a failed blocking read (a naive `?? 0` says All clear).
  */
 import { describe, expect, it } from "vitest";
-import { needsYouRows } from "../needs-you/index.js";
+import { needsYouBucketOf, needsYouRows } from "../needs-you/index.js";
 import { resolveUnitState } from "../units/state.js";
 import type { ActivityRow } from "../activity/index.js";
 import {
@@ -375,13 +375,46 @@ describe("lensRowOfNeedsYou — one item = one row, through needsYouRows", () =>
       "blocking"
     );
   });
+  it("an invite to another space is a decision: Accept on the row, its role the chip, no door before Accept", () => {
+    const { recent } = needsYouRows([
+      sig({
+        id: "invite:inv-1",
+        kind: "space-invite",
+        title: "Research",
+        category: "governance",
+        target: null,
+        lifetimeHours: 168,
+        invite: {
+          id: "inv-1",
+          token: "tok-1",
+          role: "editor",
+          scope: "workspace",
+          spaceName: "Research",
+        },
+      }),
+    ]);
+    const row = lensRowOfNeedsYou(recent[0]!, "blocking");
+    expect(row.objectKind).toBe("workspace");
+    expect(row.title).toBe("Research");
+    expect(row.verb).toEqual({ action: "accept", label: "Accept" });
+    expect(row.reason).toBe("Invited as Editor");
+    expect(row.reasonKind).toBe("decision");
+    expect(row.door).toBeNull();
+    expect(row.expiresAt).not.toBeNull();
+    expect(resolveUnitState(row.state).state).toBe("needs_review");
+    expect(needsYouBucketOf({ id: "i", kind: "space-invite", count: 1 })).toBe(
+      "decision"
+    );
+  });
   it("a draft row is never marked working", () => {
     const { recent } = needsYouRows([
       sig({ id: "d", kind: "draft-asks", count: 2 }),
     ]);
     const row = lensRowOfNeedsYou(recent[0]!, "proposed");
     expect(resolveUnitState(row.state).state).toBe("not_started");
-    expect(row.reason).toBe("2 asks");
+    // No ask chip (founder decision 2026-10-22): the draft's asks are Blocking
+    // owed-slot rows of their own; counting them here too would be twice.
+    expect(row.reason).toBeNull();
   });
   it("an agent-raised ask carries byAgent; a governance one does not", () => {
     // Discriminating pair: same kind, the category alone decides.

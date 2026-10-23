@@ -15,6 +15,7 @@ import { TRPCError } from "@trpc/server";
 import { db, eq, desc, and } from "@synap/database";
 import { channels, compactedStates } from "@synap/database/schema";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
+import { assertChannelWrite } from "../../utils/assert-channel-write.js";
 
 /**
  * A compacted state is the summarised memory of ONE channel, so reading or
@@ -27,16 +28,17 @@ import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 async function assertChannelReadable(
   userId: string | null | undefined,
   channelId: string
-): Promise<void> {
+): Promise<{ id: string; workspaceId: string | null }> {
   const row = userId
     ? await db
-        .select({ id: channels.id })
+        .select({ id: channels.id, workspaceId: channels.workspaceId })
         .from(channels)
         .where(and(eq(channels.id, channelId), channelVisibilityWhere(userId)))
         .limit(1)
     : [];
   if (row.length === 0)
     throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found" });
+  return row[0];
 }
 
 const CompactedStateMetadataSchema = z
@@ -81,7 +83,10 @@ export const compactedStatesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await assertChannelReadable(ctx.userId, input.channelId);
+      const channel = await assertChannelReadable(ctx.userId, input.channelId);
+      // Reading the channel is not writing its memory: the key's grant must
+      // allow changing the channel, in its own workspace (S7).
+      await assertChannelWrite(channel, "channel", "update");
       // Auto-increment version if not provided
       let version = input.version;
       if (version === undefined) {

@@ -83,7 +83,6 @@ const MIGRATION_0319 = readFileSync(
 );
 
 let pg: PGlite;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let db: any;
 let postProfileId: string;
 

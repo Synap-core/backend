@@ -34,7 +34,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { createLogger } from "@synap-core/core";
-import { authMiddleware } from "@synap/auth";
+import { appSessionMiddleware } from "../middleware/app-session.js";
 import {
   IntelligenceAuthError,
   resolveIntelligenceService,
@@ -82,7 +82,7 @@ export const mediaTranscribeApp = new Hono<{
   };
 }>();
 
-mediaTranscribeApp.use("/*", authMiddleware);
+mediaTranscribeApp.use("/*", appSessionMiddleware());
 mediaTranscribeApp.use("/*", refuseGuestSession);
 
 function unreachable(c: Context, err: unknown) {

@@ -15,6 +15,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
+import * as database from "@synap/database";
 import { PropertyValueType } from "@synap/database";
 import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
@@ -34,6 +35,23 @@ export const SEED_FILE = resolve(
 export const SEED_SOURCE = readFileSync(SEED_FILE, "utf8");
 
 /**
+ * `...NAME` inside an array literal → the REAL exported const array of that
+ * name from `@synap/database`. The seed spreads its single-source lists
+ * (`PROVENANCE_VALUES`, `DEVPLANE_FEATURE_STATUS_KEYS`, 2026-10-13) instead of
+ * forking them; resolved against the module like `PropertyValueType`, so an
+ * unexported or renamed list reads as `undefined` (the def drops, and the
+ * enum-site count goes red). Only arrays of plain string/number literals resolve.
+ */
+function exportedArray(node: ts.Expression): unknown[] | undefined {
+  if (!ts.isIdentifier(node)) return undefined;
+  const value = (database as unknown as Record<string, unknown>)[node.text];
+  if (!Array.isArray(value)) return undefined;
+  return value.every((v) => typeof v === "string" || typeof v === "number")
+    ? [...value]
+    : undefined;
+}
+
+/**
  * Evaluate a literal expression. Returns `undefined` for anything non-literal —
  * callers treat that as "not extractable", never as a substituted value.
  */
@@ -47,7 +65,12 @@ function literal(node: ts.Expression): unknown {
   if (ts.isArrayLiteralExpression(node)) {
     const out: unknown[] = [];
     for (const el of node.elements) {
-      if (ts.isSpreadElement(el)) return undefined;
+      if (ts.isSpreadElement(el)) {
+        const spread = exportedArray(el.expression);
+        if (spread === undefined) return undefined;
+        out.push(...spread);
+        continue;
+      }
       const v = literal(el);
       if (v === undefined) return undefined;
       out.push(v);

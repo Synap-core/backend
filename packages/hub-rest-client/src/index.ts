@@ -97,6 +97,7 @@ export type {
   HubThreadContext,
   // Proposals
   HubProposal,
+  HubFileUrl,
   // Views
   HubView,
   HubBentoArrangementResult,
@@ -185,6 +186,10 @@ export type {
   KnowledgeAnswerPending,
   KnowledgeAnswerFailure,
   KnowledgeAnswerResponse,
+  KnowledgeAnswerDetail,
+  HubEntityUpdateApplied,
+  HubEntityUpdateReceipt,
+  HubEntityUpdateResult,
   HubAskSpaceHint,
   HubAskSpacesHint,
   // Diagnose (third door)

@@ -28,6 +28,14 @@ function queryOver(db: PGlite) {
   };
 }
 
+/**
+ * This suite drives governance_target. REQUIRED_ENUMS (schema-coherence.ts)
+ * also holds enums a bare PGlite lacks (governance_ceiling_axis e5d7af2a0,
+ * governance_principal 448593b69), reported alongside — not this suite's subject.
+ */
+const targetOnly = (r: Array<{ type: string; missing: string[] }>) =>
+  r.filter((m) => m.type === "governance_target");
+
 beforeEach(async () => {
   pg = new PGlite();
 }, 120_000);
@@ -45,7 +53,9 @@ describe("findMissingEnumValues — governance_target", () => {
     await pg.exec(
       `CREATE TYPE governance_target AS ENUM ('action','profile','capability');`
     );
-    await expect(findMissingEnumValues(queryOver(pg))).resolves.toEqual([
+    await expect(
+      findMissingEnumValues(queryOver(pg)).then(targetOnly)
+    ).resolves.toEqual([
       { type: "governance_target", missing: ["connection"] },
     ]);
   });
@@ -57,12 +67,22 @@ describe("findMissingEnumValues — governance_target", () => {
     await pg.exec(
       `ALTER TYPE governance_target ADD VALUE IF NOT EXISTS 'connection';`
     );
-    await expect(findMissingEnumValues(queryOver(pg))).resolves.toEqual([]);
+    await expect(
+      findMissingEnumValues(queryOver(pg)).then(targetOnly)
+    ).resolves.toEqual([]);
   });
 
   it("a missing enum type reports every declared value", async () => {
-    await expect(findMissingEnumValues(queryOver(pg))).resolves.toEqual([
+    const all = await findMissingEnumValues(queryOver(pg));
+    expect(targetOnly(all)).toEqual([
       { type: "governance_target", missing: [...GOVERNANCE_TARGETS] },
     ]);
+    // Non-vacuity of the filter: the other required enums are reported too.
+    expect(all.map((m) => m.type)).toEqual(
+      expect.arrayContaining([
+        "governance_ceiling_axis",
+        "governance_principal",
+      ])
+    );
   });
 });

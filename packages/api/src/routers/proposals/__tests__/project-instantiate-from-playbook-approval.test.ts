@@ -48,7 +48,8 @@ const dbStub = {
   }),
 };
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: dbStub,
   proposals: { __table: "proposals" },
   projects: { __table: "projects" },

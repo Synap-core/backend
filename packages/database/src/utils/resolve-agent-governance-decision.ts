@@ -4,6 +4,7 @@ import {
   eq,
   gt,
   gte,
+  inArray,
   isNull,
   like,
   ne,
@@ -31,6 +32,8 @@ import {
   TIGHTEN_ONLY_CEILING_AXES,
   PROPOSE_REASON,
   REVERSIBLE_CLASS_PATTERN,
+  OWN_ORGANISE_CLASS_PATTERN,
+  isOwnOrganiseWrite,
   type ChannelCapabilityGrant,
 } from "@synap/governance-policy";
 import {
@@ -112,6 +115,14 @@ export interface ResolveAgentGovernanceInput {
   forcePropose?: boolean;
   /** Rung 2.1 (criteria) — an AI write that CHANGES a focus session's criteria (chat door). Automation omits. */
   criteriaChange?: boolean;
+  /** Rung 2.1 (duplicate) — an AI create the duplicate door found a possible twin of. Automation omits. */
+  possibleDuplicate?: boolean;
+  /**
+   * FB1020 B3 — the door PROVED this write organises the acting agent's own
+   * fresh work (`own-organise.ts`). Lets the own-organise class row match
+   * (and nothing else widen it). Automation omits.
+   */
+  ownWorkOrganise?: boolean;
   /**
    * Rungs 2.075 / 2.85 / 2.86 — the write MOVES a lifecycle status (work model
    * W14), classified by the `moveStatus` door from the option it enters.
@@ -273,8 +284,8 @@ function principalEligible(
  * explicitly here.
  *
  * `target_kind: "capability"` rows match by exact `capabilityId` OR the
- * capability's stable VERB NAME (Phase 3, Option B — GOVERNANCE-PHASE2-PLAN.md
- * §1/D1; verb-name matching added 2026-07-27 so a rule survives a reinstall,
+ * capability's stable VERB NAME (Phase 3, Option B — docs/decisions/agent-governance.md
+ * phase 2 D1; verb-name matching added 2026-07-27 so a rule survives a reinstall,
  * which re-creates the skill/tool row with a new id — see capability-gate's
  * KNOWN LIMITATION note). Both are only threaded in from the capability-gate
  * call site (`gateCapabilityExecution` → `@synap/capability-gate`); every
@@ -465,6 +476,13 @@ export interface ResolveGovernanceRuleInput {
    * door (`preferAgentMetadataAutoApproveFor: true`) consults per-agent rules.
    */
   includeAgentPrincipal?: boolean;
+  /**
+   * FB1020 B3 — the door proved the write organises the agent's own fresh
+   * work. Only then may the own-organise class row match, and then it is the
+   * ONLY row that may say `auto` (every other `auto` row is skipped; a
+   * `propose` row still matches and tightens, ranked as usual).
+   */
+  ownWorkOrganise?: boolean;
 }
 
 /** A resolved rule match: the winning verdict + the pattern that matched (for audit stamping). */
@@ -514,8 +532,12 @@ export async function resolveGovernanceRule(
     capabilityId,
     capabilityVerbName,
     includeAgentPrincipal = true,
+    ownWorkOrganise = false,
   } = input;
   const eventKey = `${subjectType}.${action}`;
+  // B3: the class may cover only an attributed write its door proved.
+  const organise =
+    ownWorkOrganise && !!agentUserId && isOwnOrganiseWrite(eventKey);
 
   // A CLASS row ("for all computers") is per-agent-identity like an agent
   // row, so it follows the same `includeAgentPrincipal` gate.
@@ -580,13 +602,23 @@ export async function resolveGovernanceRule(
     if (!agentUserId && rule.targetPattern === REVERSIBLE_CLASS_PATTERN) {
       continue;
     }
-    const targetScore = scoreRuleTarget(
-      rule,
-      eventKey,
-      profileSlug,
-      capabilityId,
-      capabilityVerbName
-    );
+    // B3: the own-organise class row is matched HERE, with the door's proof —
+    // never by the generic scorer (its pattern matches nothing there). While
+    // the write is an organise write, no other row may widen it.
+    const isOrganiseClassRow =
+      rule.targetKind === "action" &&
+      rule.targetPattern === OWN_ORGANISE_CLASS_PATTERN;
+    if (isOrganiseClassRow && !organise) continue;
+    if (organise && !isOrganiseClassRow && rule.verdict === "auto") continue;
+    const targetScore = isOrganiseClassRow
+      ? 1 // ranked like a class / glob: any more specific rule outranks it
+      : scoreRuleTarget(
+          rule,
+          eventKey,
+          profileSlug,
+          capabilityId,
+          capabilityVerbName
+        );
     if (targetScore === undefined) continue;
     const principalScore = principalSpecificity(rule.principalKind);
     const scopeScore = rule.scopeKind === "workspace" ? 2 : 0;
@@ -983,6 +1015,38 @@ export interface AgentGovernanceState {
   configured: boolean;
 }
 
+/** The posture fields an agent's metadata carries (the one derivation). */
+function writePostureOf(
+  agentMetadata: unknown
+): Pick<AgentGovernanceState, "posture" | "writesRequireProposal"> {
+  const meta = (agentMetadata ?? {}) as Partial<AgentMetadata>;
+  return {
+    posture: meta.governancePosture ?? null,
+    writesRequireProposal: meta.writesRequireProposal === true,
+  };
+}
+
+/**
+ * The write posture of many agents in ONE read: the two fields of
+ * {@link readAgentGovernance} a write-mode line needs (an app list shows it
+ * per row, review S7). An id that is not an agent is absent from the map, as
+ * `readAgentGovernance` answers null for it.
+ */
+export async function readAgentWritePostures(input: {
+  db: DbHandle;
+  agentUserIds: readonly string[];
+}): Promise<
+  Map<string, Pick<AgentGovernanceState, "posture" | "writesRequireProposal">>
+> {
+  const ids = [...new Set(input.agentUserIds)];
+  if (ids.length === 0) return new Map();
+  const rows = await input.db
+    .select({ id: users.id, agentMetadata: users.agentMetadata })
+    .from(users)
+    .where(and(inArray(users.id, ids), eq(users.userType, "agent")));
+  return new Map(rows.map((r) => [r.id, writePostureOf(r.agentMetadata)]));
+}
+
 /** The read half of {@link applyAgentPosture}. */
 export async function readAgentGovernance(input: {
   db: DbHandle;
@@ -996,6 +1060,7 @@ export async function readAgentGovernance(input: {
     .limit(1);
   if (!agent) return null;
   const meta = (agent.agentMetadata ?? {}) as Partial<AgentMetadata>;
+  const { posture, writesRequireProposal } = writePostureOf(meta);
   const rows = await db
     .select({
       pattern: governanceRules.targetPattern,
@@ -1012,7 +1077,6 @@ export async function readAgentGovernance(input: {
       )
     );
   const rules = rows.map((r) => ({ pattern: r.pattern, verdict: r.verdict }));
-  const posture = meta.governancePosture ?? null;
   const spaceRows = await db
     .select({
       workspaceId: governanceRules.workspaceId,
@@ -1039,7 +1103,7 @@ export async function readAgentGovernance(input: {
     .sort((a, b) => a.workspaceId.localeCompare(b.workspaceId));
   return {
     posture,
-    writesRequireProposal: meta.writesRequireProposal === true,
+    writesRequireProposal,
     rules,
     spaces,
     configured:
@@ -1529,6 +1593,7 @@ async function resolveForPrincipal(
     action: lane.action,
     profileSlug: input.subjectProfileSlug,
     includeAgentPrincipal: input.preferAgentMetadataAutoApproveFor,
+    ownWorkOrganise: input.ownWorkOrganise,
   });
 
   // (c.6) Rung 2.55's I/O half — resolve the acting channel's instruction-
@@ -1575,11 +1640,15 @@ async function resolveForPrincipal(
     subjectUoValidated: input.subjectUoValidated,
     forcePropose: input.forcePropose,
     criteriaChange: input.criteriaChange,
+    possibleDuplicate: input.possibleDuplicate,
     lifecycleMove: input.lifecycleMove,
     podAdminSchemaChange: input.podAdminSchemaChange,
     governanceRuleVerdict: ruleMatch?.verdict,
     governanceRuleId: ruleMatch?.ruleId,
     governanceRuleNamesWrite: ruleMatch?.namesWrite,
+    ownWorkOrganise: input.ownWorkOrganise,
+    governanceRuleIsOwnOrganise:
+      ruleMatch?.matchedPattern === OWN_ORGANISE_CLASS_PATTERN,
     originTrust,
     bodyOfHumanOwnedEntity: lane.bodyOfHumanOwnedEntity,
   };
@@ -1875,8 +1944,12 @@ export function reasonToRung(reason: string): string {
       return "admin-actions";
     case PROPOSE_REASON.SCOPE_IDENTITY_CHANGE:
       return "force-propose";
+    case PROPOSE_REASON.PROJECT_FILING:
+      return "project-filing";
     case PROPOSE_REASON.CRITERIA_CHANGE:
       return "criteria-change";
+    case PROPOSE_REASON.POSSIBLE_DUPLICATE:
+      return "possible-duplicate";
     case PROPOSE_REASON.POD_ADMIN_SCHEMA_CHANGE:
       return "pod-admin-schema-change";
     case PROPOSE_REASON.AGENT_SCHEMA_DEFINITION:

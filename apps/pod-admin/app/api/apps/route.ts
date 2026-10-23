@@ -1,7 +1,10 @@
 /**
  * Apps proxy — `GET /api/apps` (list), `DELETE /api/apps` (revoke, or
  * `{ action: "remove" }` to remove a revoked app for good), plus
- * `GET /api/apps?publicId=<id>` for ONE app (the detail page).
+ * `GET /api/apps?publicId=<id>` for ONE app (the detail page), and
+ * `PATCH /api/apps` for a pod app's two settings (spec 17 PB4):
+ * `{ action: "narrow", approved }` (keep only those pairs) and
+ * `{ action: "write-mode", applyAutomatically }`.
  *
  * The pod's `apps.list` / `apps.get` / `apps.revoke` / `apps.remove` tRPC
  * procedures are the
@@ -86,6 +89,60 @@ export async function DELETE(req: Request) {
   const res = await callPodMutation<{ revoked?: boolean; removed?: boolean }>(
     END_PROCEDURE[action],
     { publicId },
+    req.headers
+  );
+  if (!res.ok) {
+    return Response.json({ error: res.message }, { status: res.status });
+  }
+  return Response.json(res.data);
+}
+
+/** The only settings this proxy forwards — an allowlist, never a passthrough. */
+const SETTING_PROCEDURE = {
+  narrow: "apps.narrow",
+  "write-mode": "apps.setWriteMode",
+} as const;
+
+export async function PATCH(req: Request) {
+  const denied = await apiSessionDenial(req);
+  if (denied) return denied;
+  const body = (await req.json().catch(() => null)) as {
+    publicId?: unknown;
+    action?: unknown;
+    approved?: unknown;
+    applyAutomatically?: unknown;
+  } | null;
+  const publicId = body?.publicId;
+  if (typeof publicId !== "string" || !publicId.trim()) {
+    return Response.json({ error: "publicId is required" }, { status: 400 });
+  }
+  const action = body?.action;
+  let input: Record<string, unknown>;
+  if (action === "narrow") {
+    if (!Array.isArray(body?.approved) || body.approved.length === 0) {
+      return Response.json(
+        { error: "approved must list what the app keeps" },
+        { status: 400 }
+      );
+    }
+    input = { publicId, approved: body.approved };
+  } else if (action === "write-mode") {
+    if (typeof body?.applyAutomatically !== "boolean") {
+      return Response.json(
+        { error: "applyAutomatically must be true or false" },
+        { status: 400 }
+      );
+    }
+    input = { publicId, applyAutomatically: body.applyAutomatically };
+  } else {
+    return Response.json(
+      { error: "action must be narrow or write-mode" },
+      { status: 400 }
+    );
+  }
+  const res = await callPodMutation<unknown>(
+    SETTING_PROCEDURE[action],
+    input,
     req.headers
   );
   if (!res.ok) {

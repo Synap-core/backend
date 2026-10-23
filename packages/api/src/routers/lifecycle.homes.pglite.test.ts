@@ -108,7 +108,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-vi.mock("./signals.js", () => ({
+vi.mock("./signals.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./signals.js")>()),
   // The ONE grouped needs-you read (its own suite proves it equals
   // `signals.count` per scope); here: what the home asks it, and that it
   // asks ONCE.
@@ -299,6 +300,8 @@ async function session(o: {
   worker?: boolean;
   running?: boolean;
   owes?: boolean;
+  /** The owed slot carries a stored `confirm` ask. */
+  asks?: boolean;
   title?: string;
   agent?: string;
   /** `agent` = an undecided agent DRAFT (triage pending). */
@@ -323,6 +326,7 @@ async function session(o: {
           owner: "human",
           blockedReason: "needs_human",
           owedSince: minsAgo(o.mins),
+          ...(o.asks ? { ask: { mode: "confirm", prompt: "Approve?" } } : {}),
         },
       ]
     : [];
@@ -953,7 +957,7 @@ describe("lifecycle.moving", () => {
     expect(one.items).toHaveLength(1);
   });
 
-  it("asks you = THE needs-you owed predicate: a draft's owed slot never asks you (Q-S3)", async () => {
+  it("asks you = THE needs-you owed predicate: a draft's ASK-LESS owed slot never asks you (Q-S3)", async () => {
     await q(`update focus_sessions set status = 'closed'`);
     const draft = await session({
       subject: T.fresh,
@@ -974,7 +978,8 @@ describe("lifecycle.moving", () => {
         items.flatMap((i) => i.work).map((w) => [w.sessionId, w])
       );
       expect(work.get(mine)?.asksYou).toBe(true);
-      // The count never counts a draft (`excludeDrafts`), so neither does this.
+      // The count leaves out a draft's ask-less slots (`listNeedsYouOwed`,
+      // founder decision 2026-10-22), so neither does this.
       expect(work.get(draft)?.asksYou).toBe(false);
 
       // The home headline: the draft's thing is not "needs you".
@@ -986,6 +991,27 @@ describe("lifecycle.moving", () => {
         entityId: T.neg,
         reason: "needs_you",
       });
+    } finally {
+      await q(`update focus_sessions set status = 'closed'`);
+    }
+  });
+
+  it("asks you: a draft's owed slot WITH an ask asks you (founder decision 2026-10-22)", async () => {
+    await q(`update focus_sessions set status = 'closed'`);
+    const draft = await session({
+      subject: T.fresh,
+      owes: true,
+      asks: true,
+      origin: "agent",
+      mins: 3,
+      title: "Draft with an ask",
+    });
+    try {
+      const { items } = await caller().moving();
+      const work = new Map(
+        items.flatMap((i) => i.work).map((w) => [w.sessionId, w])
+      );
+      expect(work.get(draft)?.asksYou).toBe(true);
     } finally {
       await q(`update focus_sessions set status = 'closed'`);
     }

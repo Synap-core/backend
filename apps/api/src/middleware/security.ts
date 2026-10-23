@@ -7,7 +7,7 @@
  * - Security headers (prevent XSS, clickjacking, etc.)
  */
 import type { Context, MiddlewareHandler } from "hono";
-import { rateLimiter } from "hono-rate-limiter";
+import { rateLimiter, type RateLimitInfo } from "hono-rate-limiter";
 import { getDynamicCorsOrigins } from "@synap/api";
 import {
   buildRateLimitKey,
@@ -20,6 +20,13 @@ import {
   clientIp,
   getDeviceAuthRateConfig,
   getKeyStateRateConfig,
+  getOAuthPublicRateConfig,
+  getOAuthTokenRateConfig,
+  buildOAuthPublicKey,
+  buildOAuthTokenKey,
+  buildOAuthTokenIpCeilingKey,
+  OAUTH_TOKEN_BODY_READ_MAX,
+  readTextCapped,
   buildCrudIpCeilingKey,
   isDirectLoopbackCall,
 } from "./rate-limit-classes.js";
@@ -91,6 +98,30 @@ function classHandler(
       },
       429
     );
+}
+
+/**
+ * `classHandler` plus `Retry-After` in delta-seconds, for the public doors.
+ * In hono-rate-limiter 0.4.2 the only switch to its own Retry-After is
+ * `standardHeaders`, which also stamps `RateLimit-*` on every counted response;
+ * the public doors want the one header only. The limiter puts this bucket's
+ * info on the context (`rateLimit`) just before calling the handler, so the
+ * wait is the bucket's real reset, never under one second.
+ */
+function publicDoorHandler(
+  className: "public_read" | "public_submit",
+  limit: number,
+  retryAfter: string
+) {
+  const respond = classHandler(className, limit, retryAfter);
+  return (c: Context, _next: unknown, options: { windowMs: number }) => {
+    const info = c.get("rateLimit") as RateLimitInfo | undefined;
+    const seconds = info?.resetTime
+      ? Math.ceil((info.resetTime.getTime() - Date.now()) / 1000)
+      : Math.ceil(options.windowMs / 1000);
+    c.header("Retry-After", String(Math.max(1, seconds)));
+    return respond(c);
+  };
 }
 
 const rateLimitClassConfig = getRateLimitClassConfig();
@@ -257,7 +288,7 @@ const publicReadIpRateLimiter = rateLimiter({
   limit: publicDoorRate.readIp.max,
   standardHeaders: false,
   keyGenerator: publicDoorKeyGenerator("read_ip"),
-  handler: classHandler(
+  handler: publicDoorHandler(
     "public_read",
     publicDoorRate.readIp.max,
     publicDoorRate.readIp.retryAfter
@@ -269,7 +300,7 @@ const publicSubmitIpRateLimiter = rateLimiter({
   limit: publicDoorRate.submitIp.max,
   standardHeaders: false,
   keyGenerator: publicDoorKeyGenerator("submit_ip"),
-  handler: classHandler(
+  handler: publicDoorHandler(
     "public_submit",
     publicDoorRate.submitIp.max,
     publicDoorRate.submitIp.retryAfter
@@ -281,7 +312,7 @@ const publicSubmitShareRateLimiter = rateLimiter({
   limit: publicDoorRate.submitShare.max,
   standardHeaders: false,
   keyGenerator: publicDoorKeyGenerator("submit_share"),
-  handler: classHandler(
+  handler: publicDoorHandler(
     "public_submit",
     publicDoorRate.submitShare.max,
     publicDoorRate.submitShare.retryAfter
@@ -335,6 +366,97 @@ const keyStateRateLimiter = rateLimiter({
   handler: classHandler("key_state", keyStateRate.max, keyStateRate.retryAfter),
 });
 
+const oauthPublicRate = getOAuthPublicRateConfig();
+
+/**
+ * The pod authorization server's public doors (`/register`, `/authorize`):
+ * IP-keyed (`buildOAuthPublicKey`: `/authorize` per client_id on a shared
+ * address), never the Authorization header — neither takes a Bearer, and a
+ * made-up one must not buy a fresh bucket. Loopback keeps the local bypass.
+ */
+const oauthPublicRateLimiter = rateLimiter({
+  windowMs: oauthPublicRate.windowMs,
+  limit: oauthPublicRate.max,
+  standardHeaders: "draft-7",
+  keyGenerator: (c: Context): string => {
+    const ip = clientIp(c);
+    if (isLocalCaller(c, ip)) {
+      return "localhost-bypass-oauth_public-" + Math.random();
+    }
+    return buildOAuthPublicKey(c.req.path, ip, c.req.query("client_id"));
+  },
+  handler: classHandler(
+    "oauth_public",
+    oauthPublicRate.max,
+    oauthPublicRate.retryAfter
+  ),
+});
+
+const oauthTokenRate = getOAuthTokenRateConfig();
+
+/** The `/token` address ceiling's key, or null when this caller has none. */
+function oauthTokenIpCeilingKey(c: Context): string | null {
+  const ip = clientIp(c);
+  return isLocalCaller(c, ip) ? null : buildOAuthTokenIpCeilingKey(ip);
+}
+
+/**
+ * `/token`'s address ceiling, in FRONT of the per-grant bucket: the grant
+ * keys are values the limiter cannot check, so where addresses tell callers
+ * apart one inventing a grant per request is still bounded. None on a
+ * shared address (the whole internet's) or for a local caller.
+ */
+const oauthTokenIpCeilingLimiter = rateLimiter({
+  windowMs: oauthTokenRate.windowMs,
+  limit: oauthTokenRate.ipCeiling,
+  standardHeaders: false,
+  skip: (c) => oauthTokenIpCeilingKey(c) === null,
+  keyGenerator: (c) => oauthTokenIpCeilingKey(c) ?? "oauth_token:ipall:none",
+  handler: classHandler(
+    "oauth_token",
+    oauthTokenRate.ipCeiling,
+    oauthTokenRate.retryAfter
+  ),
+});
+
+/** The `/token` body the limiter keys on, or null when it does not read it. */
+async function readOAuthTokenBody(c: Context): Promise<string | null> {
+  const declared = c.req.header("content-length");
+  if (declared === undefined) {
+    return readTextCapped(c.req.raw.clone(), OAUTH_TOKEN_BODY_READ_MAX);
+  }
+  const length = Number(declared);
+  if (!Number.isInteger(length) || length <= 0) return null;
+  if (length > OAUTH_TOKEN_BODY_READ_MAX) return null;
+  return c.req.text().catch(() => null);
+}
+
+/**
+ * `/token` per grant (`buildOAuthTokenKey`). The grant is in the body: one of
+ * a small declared length is read here (Hono caches the text, so /token reads
+ * the same body after this). One with NO declared length (chunked, HTTP/2) is
+ * read from a clone, at most `OAUTH_TOKEN_BODY_READ_MAX` bytes, so it is
+ * keyed by its grant too, not in the one `unread` bucket (review O-3).
+ */
+const oauthTokenRateLimiter = rateLimiter({
+  windowMs: oauthTokenRate.windowMs,
+  limit: oauthTokenRate.max,
+  standardHeaders: "draft-7",
+  keyGenerator: async (c: Context): Promise<string> => {
+    const ip = clientIp(c);
+    if (isLocalCaller(c, ip)) {
+      return "localhost-bypass-oauth_token-" + Math.random();
+    }
+    const body = await readOAuthTokenBody(c);
+    return buildOAuthTokenKey(body, c.req.header("content-type") ?? "", ip);
+  },
+  handler: classHandler(
+    "oauth_token",
+    oauthTokenRate.max,
+    oauthTokenRate.retryAfter
+  ),
+});
+
 /**
  * Multi-class pod-edge rate limiting.
  *
@@ -376,6 +498,15 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
       return deviceAuthRateLimiter(c, next);
     case "key_state":
       return keyStateRateLimiter(c, next);
+    case "oauth_public":
+      return oauthPublicRateLimiter(c, next);
+    case "oauth_token":
+      // Address ceiling FIRST (where it exists), then the grant's own bucket
+      // — same nested-429 handling as the calendar feed.
+      return oauthTokenIpCeilingLimiter(c, async () => {
+        const limited = await oauthTokenRateLimiter(c, next);
+        if (limited instanceof Response) c.res = limited;
+      });
     case "crud":
     default:
       // Address ceiling FIRST, then the caller's own bucket — same nested-429
@@ -560,9 +691,6 @@ export const securityHeadersMiddleware: MiddlewareHandler = async (c, next) => {
 
   // Prevent MIME type sniffing
   c.header("X-Content-Type-Options", "nosniff");
-
-  // Enable XSS protection
-  c.header("X-XSS-Protection", "1; mode=block");
 
   // Referrer policy
   c.header("Referrer-Policy", "strict-origin-when-cross-origin");

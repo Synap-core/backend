@@ -25,6 +25,8 @@ import {
   or,
   GrantRepository,
   GrantRoleRepository,
+  isFullAccessGrant,
+  type KeyGrant,
 } from "@synap/database";
 import { apiKeys, grants as grantRows, users } from "@synap/database/schema";
 import { MACHINE_AGENT_TYPE } from "@synap-core/types/agents";
@@ -85,6 +87,81 @@ export function assertGrantInput(grant: GrantInput | undefined): void {
 
 /** What an explicit full-access grant is called on every key list. */
 export const FULL_ACCESS_GRANT_LABEL = "Full access";
+
+/** The calling key's grant as the holder may see it — ids and patterns only. */
+export interface KeyGrantSummary {
+  /** True only for the unbounded `*` (`isFullAccessGrant`). */
+  isFullAccess: boolean;
+  /** "full access", or what bounds the key ("limited to 1 space (…)"). */
+  summary: string;
+  scopes: Array<{
+    permissions: string[];
+    workspaceIds: string[] | null;
+    projectIds: string[] | null;
+    entityIds: string[] | null;
+  }>;
+  /** The app the key acts as (`grants.client_id`), or null for a bare key. */
+  clientId: string | null;
+}
+
+const listIds = (ids: readonly string[]) =>
+  ids.length <= 3
+    ? ids.join(", ")
+    : `${ids.slice(0, 3).join(", ")}, +${ids.length - 3} more`;
+
+const countOf = (ids: readonly string[], one: string, many: string) =>
+  ids.length === 0
+    ? `no ${one}`
+    : `${ids.length} ${ids.length === 1 ? one : many} (${listIds(ids)})`;
+
+/**
+ * What bounds a key that is NOT full access, as a phrase that reads after
+ * "this key is": "limited to 1 space (<id>)", "not granted `*` (it allows:
+ * …)", "granted nothing (…)". The ONE phrasing
+ * the owner-credential refusal and `/auth/status` share, so the error and
+ * `synap whoami` name the same limit.
+ */
+export function describeGrantLimit(grant: KeyGrant): string {
+  if (isFullAccessGrant(grant)) return "full access";
+  if (grant.scopes.every((s) => s.permissions.length === 0))
+    return "granted nothing (never granted, revoked or expired)";
+  const parts = grant.scopes
+    .filter((s) => s.permissions.length > 0)
+    .map((s) => {
+      const limits: string[] = [];
+      if (s.workspaceIds)
+        limits.push(countOf(s.workspaceIds, "space", "spaces"));
+      if (s.projectIds)
+        limits.push(countOf(s.projectIds, "project", "projects"));
+      if (s.entityIds) limits.push(countOf(s.entityIds, "object", "objects"));
+      const where = limits.length ? `limited to ${limits.join(" and ")}` : "";
+      const what = s.permissions.includes("*")
+        ? ""
+        : `not granted \`*\` (it allows: ${listIds(s.permissions)})`;
+      return [where, what].filter(Boolean).join("; ");
+    })
+    .filter(Boolean);
+  // Every scope is checked on its own (fail closed): a `*` beside a narrower
+  // scope is still not full access, though no single scope names a limit.
+  return parts.length
+    ? parts.join(" | ")
+    : "narrower than full access in one of its grants";
+}
+
+/** The calling key's grant for introspection (`GET /auth/status`). */
+export function summarizeKeyGrant(grant: KeyGrant): KeyGrantSummary {
+  return {
+    isFullAccess: isFullAccessGrant(grant),
+    summary: describeGrantLimit(grant),
+    scopes: grant.scopes.map((s) => ({
+      permissions: [...s.permissions],
+      workspaceIds: s.workspaceIds ? [...s.workspaceIds] : null,
+      projectIds: s.projectIds ? [...s.projectIds] : null,
+      entityIds: s.entityIds ? [...s.entityIds] : null,
+    })),
+    clientId: grant.clientId,
+  };
+}
 
 /**
  * Attach the explicit full-access `*` grant to a key minted as its holder's

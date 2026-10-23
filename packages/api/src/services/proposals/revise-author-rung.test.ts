@@ -50,7 +50,16 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
   return {
     ...actual,
-    db: { transaction: async (fn: (t: typeof tx) => Promise<void>) => fn(tx) },
+    db: {
+      // The unlocked pre-read of `checkRevisedPayload` (proposals-service.ts):
+      // the revised-payload validators run BEFORE the row lock.
+      select: () => ({
+        from: () => ({
+          where: () => ({ limit: async () => (h.row ? [h.row] : []) }),
+        }),
+      }),
+      transaction: async (fn: (t: typeof tx) => Promise<void>) => fn(tx),
+    },
   };
 });
 

@@ -15,6 +15,10 @@ vi.mock("../services/index.js", () => ({
     async resolveProfile() {
       return { id: "p-note", slug: "note", profileKind: "kind" };
     }
+    // C6 (a597a0c97): create() stamps born lifecycle columns; none here.
+    async getEffectiveLifecycle() {
+      return null;
+    }
   },
   PropertyValidationService: class {},
   PropertyIndexService: class {

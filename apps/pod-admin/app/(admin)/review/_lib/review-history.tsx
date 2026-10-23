@@ -20,6 +20,7 @@ import {
 import type { StatusKind } from "../../components/status-pill";
 import { kindIcon, kindLabel } from "../../../_lib/object/kind-icon";
 import { proposalHeading } from "../../../proposal/[id]/proposal-heading";
+import { proposalRequester } from "../../../proposal/[id]/proposal-requester";
 
 /** Status → pill colour only; the word comes from the vocabulary. */
 const STATUS_KIND: Record<string, StatusKind> = {
@@ -60,8 +61,8 @@ export function ReviewHistory({
     <>
       {decided.map((p) => {
         const { heading } = proposalHeading(p, p.request?.data ?? p.data);
-        const named = p as { appName?: string; workspaceName?: string };
-        const who = named.appName ?? p.authorName;
+        const named = p as { workspaceName?: string };
+        const who = proposalRequester(p);
         return (
           <div key={p.id} data-row-id={p.id}>
             <ResourceRow

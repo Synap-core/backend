@@ -207,7 +207,8 @@ A pod is standard infrastructure you can run and open yourself:
   deprecated; pgvector still backs the agent's internal retrieval behind a
   feature flag.)
 - **MinIO** — file storage.
-- **Ory Kratos + Hydra** — identity and OAuth2/OIDC.
+- **Ory Kratos** — identity and sign-in. OAuth for MCP clients is served by
+  the pod's own OAuth server, not a separate service.
 - **TimescaleDB** — the append-only event chain (a Postgres extension).
 
 The accessibility layer (`packages/api/src/access/`) is the one place scoping

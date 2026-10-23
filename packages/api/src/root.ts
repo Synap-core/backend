@@ -47,6 +47,7 @@ import { profileRelationsRouter } from "./routers/profile-relations.js";
 import { intelligenceRouter } from "./routers/intelligence.js";
 import { agentUsersRouter } from "./routers/agent-users.js";
 import { machinesRouter } from "./routers/machines.js";
+import { devicesRouter } from "./routers/devices.js";
 import { governanceRulesRouter } from "./routers/governance-rules.js";
 import { governanceCeilingsRouter } from "./routers/governance-ceilings.js";
 import { guidelinesRouter } from "./routers/guidelines.js";
@@ -165,6 +166,8 @@ export const coreRouter = router({
   agentUsers: agentUsersRouter,
   // Computers (MACHINE-IDENTITY-PLAN W5): Connected › Computers.
   machines: machinesRouter,
+  // Signed-in devices of the Synap apps.
+  devices: devicesRouter,
   governanceRules: governanceRulesRouter,
   governanceCeilings: governanceCeilingsRouter,
   guidelines: guidelinesRouter,
@@ -177,7 +180,7 @@ export const coreRouter = router({
   cellInstances: cellInstancesRouter,
   channelGateway: channelGatewayRouter,
   import: importRouter,
-  // The Library — everything the person keeps (CAPTURE_LIBRARY_PLAN L2).
+  // The Library — everything the person keeps (capture-vs-library decision, wave L2).
   library: libraryRouter,
   connectors: connectorsRouter,
   notifCenter: notifCenterRouter,

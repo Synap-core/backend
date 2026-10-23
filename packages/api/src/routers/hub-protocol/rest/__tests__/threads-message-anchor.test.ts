@@ -28,6 +28,7 @@ function selectChain(): any {
   const rows = [{ id: THREAD }];
   const chain: any = {
     from: () => chain,
+    innerJoin: () => chain, // object-room floor subqueries (project-scope.ts)
     where: () => chain,
     limit: () => Promise.resolve(rows),
     then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
@@ -64,6 +65,14 @@ vi.mock("../../../../utils/proposal-visibility.js", async (importOriginal) => {
   return {
     ...actual,
     assertProposalVisibleTo: (...args: unknown[]) => visibility(...args),
+    // The anchor gate calls the COMMENT door (91f9d29de), which calls the
+    // visibility gate from inside the module — out of the mock's reach. Route it
+    // to the same spy; its session-room widening is not this file's subject.
+    assertProposalCommentableBy: (
+      proposalId: string,
+      reader: { userId: string },
+      opts?: unknown
+    ) => visibility(proposalId, reader.userId, opts),
   };
 });
 

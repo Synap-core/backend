@@ -69,6 +69,10 @@ function fakeResolver(status: Record<string, ReferentStatus>): EmbedResolver {
           "chart-bar",
           { placements: ["bento", "inline"], requiredConfig: ["profileSlug"] },
         ],
+        [
+          "chart-live-line",
+          { placements: ["bento", "inline"], requiredConfig: ["profileSlug"] },
+        ],
         ["bento-only", { placements: ["bento"], requiredConfig: [] }],
         [
           "cell:pack:thing",
@@ -129,6 +133,28 @@ describe("diagnoseDocument", () => {
     expect(out[1]!.message).toMatch(/not embeddable in a document/);
     expect(out[2]!.message).toMatch(/props\.profileSlug/);
     expect(out[3]!.message).toMatch(/props\.source/);
+  });
+
+  it("catalog: a snapshot chart needs no query keys; a live-only chart still does", async () => {
+    // A chart of numbers that are not pod records (a measurement) has no
+    // profileSlug to give: its snapshot `data` is what draws it.
+    const md = [
+      ':::synap-cell{cellKey="chart-bar"}',
+      "```json",
+      '{"label":"Tokens","data":[{"label":"before","value":84895},{"label":"after","value":56364}],"capturedAt":"2026-10-22T05:00:00Z"}',
+      "```",
+      ":::",
+      "",
+      ':::synap-cell{cellKey="chart-live-line"}',
+      "```json",
+      '{"data":[{"x":"2026-10-01","y":3}],"capturedAt":"2026-10-22T05:00:00Z"}',
+      "```",
+      ":::",
+    ].join("\n");
+    const out = await diagnoseDocument(md, fakeResolver({}));
+    expect(codes(out)).toEqual(["bad_props"]);
+    expect(out[0]!.ref).toEqual({ cellKey: "chart-live-line" });
+    expect(out[0]!.message).toMatch(/props\.profileSlug/);
   });
 
   it("grammar: legacy props, malformed props, missing reference, unterminated", async () => {

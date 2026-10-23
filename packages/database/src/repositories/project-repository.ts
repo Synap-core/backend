@@ -20,6 +20,7 @@ import {
   uniquifyProjectSlug,
 } from "../utils/project-slug.js";
 import { triggerCpProjectSync } from "../utils/cp-project-sync-trigger.js";
+import { isUniqueViolation } from "../utils/pg-errors.js";
 
 export interface CreateProjectInput {
   id?: string;
@@ -76,6 +77,8 @@ export interface UpdateProjectInput {
   colorSlot?: number | null;
   /** One emoji or `glyph:<lucide-name>` (0328). `null` clears it. */
   icon?: string | null;
+  /** A sample (demo) project (0347) — its records leave every listing. */
+  sample?: boolean;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   /**
@@ -179,8 +182,7 @@ export class ProjectRepository extends BaseRepository<
       // dedup SELECT, compute the same slug, and the loser hits the partial
       // unique index (user_id, slug) — Postgres 23505. Resolve it the way the
       // dedup door would have: re-read and return the winner as `deduped`.
-      const pgCode = err as { code?: string; cause?: { code?: string } };
-      if (pgCode?.code === "23505" || pgCode?.cause?.code === "23505") {
+      if (isUniqueViolation(err)) {
         const retry = await findProjectDedupCandidates(this.db, {
           userId,
           name: data.name,
@@ -229,6 +231,8 @@ export class ProjectRepository extends BaseRepository<
         colorSlot: data.colorSlot,
         // Same two-state contract: `undefined` untouched, `null` clears.
         icon: data.icon,
+        // `undefined` untouched (Drizzle skips it); never nullable.
+        sample: data.sample,
         // D6 home change — `undefined` is skipped by Drizzle (untouched).
         workspaceId: data.workspaceId,
         settings: data.settings,

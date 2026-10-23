@@ -18,7 +18,7 @@
  */
 
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -61,7 +61,10 @@ import type {
 import { makeVaultReference } from "@synap-core/types/vault";
 import { auditLog } from "../utils/audit-log.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
-import { assertMayDecideProposal } from "./proposals/review-authority.js";
+import {
+  assertMayDecideProposal,
+  assertMayDecideProposalAt,
+} from "./proposals/review-authority.js";
 
 // ============================================================================
 // Validation Schemas
@@ -456,7 +459,7 @@ export const secretsVaultRouter = router({
    *
    * Audit: writes a `revealed` row to secret_audit_log.
    */
-  reveal: protectedProcedure
+  reveal: credentialProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       // 1. Ownership check — reuses the same findById guard as get/update.
@@ -939,7 +942,7 @@ export const secretsVaultRouter = router({
    *
    * Returns the vault:// reference for the approved secret.
    */
-  grantAIAccess: protectedProcedure
+  grantAIAccess: credentialProcedure
     .input(
       z.object({
         secretId: z.string().uuid(),
@@ -994,6 +997,8 @@ export const secretsVaultRouter = router({
           createdBy: true,
           agentUserId: true,
           workspaceId: true,
+          projectId: true,
+          targetId: true,
         },
       });
       if (!proposalRow)
@@ -1001,6 +1006,8 @@ export const secretsVaultRouter = router({
           code: "NOT_FOUND",
           message: "Proposal not found",
         });
+      // D3: a key bounded to some spaces grants only there.
+      assertMayDecideProposalAt("approve", "approve", proposalRow);
 
       // Workspace from the request, not the UI. If the proposal is workspace-
       // scoped, require the approver to be a member of THAT workspace (defense

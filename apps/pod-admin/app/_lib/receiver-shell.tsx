@@ -26,6 +26,7 @@
 
 import { Card } from "@heroui/react";
 import { createContext, useContext, type ReactNode } from "react";
+import { HostName } from "./host-name";
 
 /**
  * Pod identity for a receiver page, provided once per route.
@@ -76,10 +77,13 @@ interface ReceiverShellProps {
   footer?: ReactNode;
   /**
    * `sm` for a single decision (approve this agent, accept this invite, grant
-   * this scope); `md` when the card renders an object with fields to read.
+   * this scope); `md` when the card renders an object with fields to read;
+   * `lg` for a long read with tables and charts (a document, a report).
    */
-  width?: "sm" | "md";
+  width?: ReceiverWidth;
 }
+
+export type ReceiverWidth = "sm" | "md" | "lg";
 
 /**
  * Width → container class. A pure function, and exported, ON PURPOSE.
@@ -90,8 +94,12 @@ interface ReceiverShellProps {
  * "I can see it in the signature" is not proven at all; this is the smallest
  * shape a test can actually execute.
  */
-export function receiverWidthClass(width: "sm" | "md"): string {
-  return width === "sm" ? "max-w-md" : "max-w-2xl";
+export function receiverWidthClass(width: ReceiverWidth): string {
+  if (width === "sm") return "max-w-md";
+  // A document reads wide: the whole width on a small screen, 80% of the
+  // window from 1024px (founder, 2026-10-22), never past 72rem.
+  if (width === "lg") return "max-w-6xl lg:w-4/5";
+  return "max-w-2xl";
 }
 
 export function ReceiverShell({
@@ -158,19 +166,17 @@ function ReceiverHeader({
         >
           <span className="text-[9px] font-semibold text-white/95">S</span>
         </span>
-        <span className="text-[13px] font-medium tracking-tight text-foreground">
+        <span className="text-sm font-medium tracking-tight text-foreground">
           Synap
         </span>
       </span>
 
       {podHost && (
-        <span className="font-mono text-[12px] text-foreground/75">
-          {podHost}
-        </span>
+        <HostName host={podHost} className="text-xs text-foreground/75" />
       )}
 
       {identity && (
-        <span className="ml-auto truncate text-[12px] text-foreground/65">
+        <span className="ml-auto min-w-0 truncate text-xs text-foreground/65">
           Signed in as <span className="text-foreground/80">{identity}</span>
         </span>
       )}

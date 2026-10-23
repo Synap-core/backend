@@ -1,5 +1,5 @@
 /**
- * Agent workspace-focus (WORKSPACE-PLACEMENT-AGENT-FOCUS-PLAN.md, Layer 2 —
+ * Agent workspace-focus (docs/decisions/agent-workspace-focus.md, Layer 2 —
  * advisory slice). DB-backed round-trip for `getAgentFocusWorkspaceId` /
  * `setAgentFocusWorkspace` — the read/write door for `agentMetadata.focusWorkspaceId`.
  * Same live-DB pattern as `external-user-mapping.test.ts` / `api-keys.test.ts`.

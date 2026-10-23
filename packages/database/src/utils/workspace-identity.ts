@@ -20,6 +20,7 @@
 import { and, eq, isNull, ne, sql, type SQL } from "drizzle-orm";
 import { ConflictError } from "@synap-core/core";
 import { workspaces } from "../schema/workspaces.js";
+import { uniqueViolationConstraint } from "./pg-errors.js";
 
 export const WORKSPACE_ACTIVE_NAME_INDEX = "workspaces_active_name_unique";
 export const WORKSPACE_ACTIVE_PACKAGE_SLUG_INDEX =
@@ -154,26 +155,9 @@ export async function assertWorkspaceIdentityFree(
 export function workspaceIdentityViolation(
   err: unknown
 ): WorkspaceIdentityField | null {
-  let cursor: unknown = err;
-  for (
-    let depth = 0;
-    cursor && typeof cursor === "object" && depth < 5;
-    depth++
-  ) {
-    const c = cursor as {
-      code?: unknown;
-      constraint_name?: unknown;
-      constraint?: unknown;
-      cause?: unknown;
-    };
-    if (c.code === "23505") {
-      const name = c.constraint_name ?? c.constraint;
-      if (name === WORKSPACE_ACTIVE_NAME_INDEX) return "name";
-      if (name === WORKSPACE_ACTIVE_PACKAGE_SLUG_INDEX) return "packageSlug";
-      return null;
-    }
-    cursor = c.cause;
-  }
+  const name = uniqueViolationConstraint(err);
+  if (name === WORKSPACE_ACTIVE_NAME_INDEX) return "name";
+  if (name === WORKSPACE_ACTIVE_PACKAGE_SLUG_INDEX) return "packageSlug";
   return null;
 }
 

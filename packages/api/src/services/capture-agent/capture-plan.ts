@@ -29,6 +29,10 @@ import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
 } from "@synap-core/types/focus-sessions";
+import {
+  skillAuthoringProblem,
+  skillSlugProblem,
+} from "../skills/skill-authoring.js";
 
 /** The session door's goal bound (`rest/focus-sessions.ts` `goal.max(2000)`). */
 export const PLAN_SESSION_GOAL_MAX = 2000;
@@ -565,6 +569,15 @@ export function validatePlanOperations(
           push(i, "a skill step needs a `name`");
         if (typeof op.body !== "string" || !op.body.trim())
           push(i, "a skill step needs a `body` (the instruction, markdown)");
+        // The slug's SHAPE, for every producer. Whether one is REQUIRED is the
+        // caller-facing doors' contract (`captureSkillStepProblems`).
+        if (op.slug !== undefined && op.slug !== null) {
+          const slugProblem =
+            typeof op.slug === "string"
+              ? skillSlugProblem(op.slug.trim())
+              : "a skill step's `slug` must be a string";
+          if (slugProblem) push(i, slugProblem);
+        }
         if (!(SKILL_SCOPES as readonly string[]).includes(op.scope)) {
           push(
             i,
@@ -909,6 +922,8 @@ export interface PlanStepSummary {
   label: string;
   /** Set on a step that CHANGES an existing row (a Library rebuild). */
   update?: { targetId: string };
+  /** A skill step's slug — the ref `synap_load_skill` resolves. */
+  slug?: string;
 }
 
 /** Self-describing step list — what a plan receipt and the review UI name. */
@@ -944,7 +959,12 @@ export function planStepSummaries(
           label: `${op.fromRef ?? op.fromSessionId} --${op.type}--> ${op.toRef ?? op.toSessionId}`,
         };
       case "create_skill":
-        return { ...base, kind: "skill", label: op.name };
+        return {
+          ...base,
+          kind: "skill",
+          label: op.name,
+          ...(op.slug?.trim() ? { slug: op.slug.trim() } : {}),
+        };
       case "create_automation":
         return { ...base, kind: "automation", label: op.name };
       case "create_rule":
@@ -989,3 +1009,28 @@ const UPDATE_STEP_KIND = {
   Extract<CompositeProposalOperation["op"], `update_${string}`>,
   PlanStepSummary["kind"]
 >;
+
+/**
+ * The `skills[]` contract of the CALLER-FACING capture doors (MCP
+ * `synap_capture`, Hub REST `POST /capture/graph`): the authoring rule
+ * `synap_create_skill` applies, so a teaching skill without a `slug` is refused
+ * before anything is filed. It used to be created unreachable — nothing could
+ * load it — and reported `applied` (feedback d23a3888).
+ *
+ * Not in `validatePlanOperations`: the Library Build (`imports/build.ts`) files
+ * its "tool" skill step with no slug and would be refused there. That is the
+ * same unreachable-skill defect, left as a named follow-up.
+ */
+export function captureSkillStepProblems(skills: readonly unknown[]): string[] {
+  return skills.flatMap((item, i) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const step = item as { name?: unknown; body?: unknown; slug?: unknown };
+    const problem = skillAuthoringProblem({
+      body: typeof step.body === "string" ? step.body : null,
+      slug: typeof step.slug === "string" ? step.slug : null,
+    });
+    if (!problem) return [];
+    const named = typeof step.name === "string" ? ` "${step.name}"` : "";
+    return [`skills[${i}]${named}: ${problem}`];
+  });
+}

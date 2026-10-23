@@ -5,7 +5,7 @@
  * promise every "always approve" toast makes (`AlwaysApproveMenu.tsx`,
  * synap-app's `GovernanceMenu.tsx`). Until this existed, `governanceRules.list`
  * and `.revoke` had zero consumers and the only way to undo a standing rule
- * was raw SQL (GOVERNANCE-PHASE2-PLAN.md §2, D2).
+ * was raw SQL (docs/decisions/agent-governance.md, phase 2 D2).
  *
  * Lists active rules visible to this workspace (workspace-scoped + pod-wide),
  * newest first, with a Revoke button per row. Humanization lives in the

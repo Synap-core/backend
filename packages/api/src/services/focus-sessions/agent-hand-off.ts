@@ -32,6 +32,7 @@
  */
 import { db, users, eq } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { sessionNameField } from "./session-update-goal.js";
 import {
   HAND_OFF_ACCEPT,
   route,
@@ -101,8 +102,10 @@ export async function gateAgentHandOff(p: {
   agentUserId: string;
   workspaceId: string | null | undefined;
   sessionId: string;
-  /** The session's goal — the proposal's summary label. */
+  /** The session's goal and title — named in the proposal's summary by
+   *  `resolveSessionTitle`, as the display-only `sessionName`. */
   goal: string | null | undefined;
+  title?: string | null;
   agentId: string;
   reasoning?: string;
 }): Promise<AgentHandOffDecision> {
@@ -132,6 +135,7 @@ export async function gateAgentHandOff(p: {
     data: {
       id: p.sessionId,
       goal: p.goal ?? null,
+      ...sessionNameField({ title: p.title, goal: p.goal }),
       addAgentId: p.agentId,
       agentName: agent?.name ?? null,
     },

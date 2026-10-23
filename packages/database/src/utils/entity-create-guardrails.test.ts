@@ -4,7 +4,6 @@ import {
   profileRejectsJunkTitle,
   shouldRejectJunkTitle,
   buildJunkTitleMessage,
-  classifyWeakEntityDedup,
   buildWeakEntityDedupMessage,
   buildWeakDedupCause,
   ENTITY_WEAK_DEDUP_CODE,
@@ -33,6 +32,42 @@ describe("isJunkEntityTitle", () => {
     expect(isJunkEntityTitle("Alice Johnson")).toBe(false);
     expect(isJunkEntityTitle("Acme Corp")).toBe(false);
   });
+
+  it("rejects punctuation-only titles", () => {
+    for (const t of ["-", "…", "—", "--", ". . .", "/"]) {
+      expect(isJunkEntityTitle(t), t).toBe(true);
+    }
+  });
+
+  it("rejects employer placeholders, across case, accents and hyphens", () => {
+    for (const t of [
+      "Freelance",
+      "FREELANCE",
+      "Indépendant",
+      "indépendante",
+      "Self Employed",
+      "Self-employed",
+      "Stealth",
+      "Stealth Startup",
+      "Auto-entrepreneur",
+    ]) {
+      expect(isJunkEntityTitle(t), t).toBe(true);
+    }
+  });
+
+  it("keeps real names that merely contain a placeholder word", () => {
+    for (const t of [
+      "Freelance Collective Ltd",
+      "Stealth Labs",
+      "Independent",
+      "The Independent",
+      "Self Storage Co",
+      "O'Neil & Sons",
+      "AT&T",
+    ]) {
+      expect(isJunkEntityTitle(t), t).toBe(false);
+    }
+  });
 });
 
 describe("profileRejectsJunkTitle / shouldRejectJunkTitle", () => {
@@ -58,71 +93,16 @@ describe("profileRejectsJunkTitle / shouldRejectJunkTitle", () => {
   });
 });
 
-describe("classifyWeakEntityDedup", () => {
-  const alice = { id: "e1", title: "Alice", type: "person" };
-  const acme = { id: "e2", title: "Alice", type: "company" };
-
-  it("blocks on weak match with same-kind candidates", () => {
-    const res = classifyWeakEntityDedup({
-      profileSlug: "person",
-      match: "weak",
-      candidates: [alice, acme],
-    });
-    expect(res.block).toBe(true);
-    if (res.block) {
-      expect(res.sameKindCandidates).toEqual([alice]);
-    }
-  });
-
-  it("blocks on same-kind candidates even when match is null", () => {
-    // Same-title same-kind sitting in candidates without match verdict
-    // (defensive — resolver sets match weak when same-kind exists).
-    const res = classifyWeakEntityDedup({
-      profileSlug: "person",
-      match: null,
-      candidates: [alice],
-    });
-    expect(res.block).toBe(true);
-  });
-
-  it("does NOT block on cross-kind-only candidates", () => {
-    const res = classifyWeakEntityDedup({
-      profileSlug: "person",
-      match: null,
-      candidates: [acme],
-    });
-    expect(res.block).toBe(false);
-  });
-
-  it("forceCreate bypasses the weak gate", () => {
-    const res = classifyWeakEntityDedup({
-      forceCreate: true,
-      profileSlug: "person",
-      match: "weak",
-      candidates: [alice],
-    });
-    expect(res.block).toBe(false);
-  });
-
-  it("does not block on empty candidates + null match", () => {
-    const res = classifyWeakEntityDedup({
-      profileSlug: "note",
-      match: null,
-      candidates: [],
-    });
-    expect(res.block).toBe(false);
-  });
-});
-
 describe("buildWeakEntityDedupMessage / cause", () => {
-  it("lists candidates and embeds forceCreate guidance", () => {
+  it("lists candidates and names the reviewer's verbs, never forceCreate", () => {
     const msg = buildWeakEntityDedupMessage(
       [{ id: "e1", title: "Alice", type: "person" }],
       "person"
     );
     expect(msg).toMatch(/Alice/);
     expect(msg).toMatch(/e1/);
-    expect(msg).toMatch(/forceCreate/);
+    expect(msg).not.toMatch(/forceCreate/);
+    expect(msg).toMatch(/keep both/);
     expect(msg).toContain(WEAK_DEDUP_GUIDANCE);
   });
 

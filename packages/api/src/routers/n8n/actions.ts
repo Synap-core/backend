@@ -136,6 +136,8 @@ export const n8nActionsRouter = router({
           "n8n: Failed to create entity"
         );
 
+        // A refusal (the key's grant, governance) stays a refusal, not a 500.
+        if (error instanceof TRPCError) throw error;
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: `Failed to create ${type}: ${error instanceof Error ? error.message : "Unknown error"}`,

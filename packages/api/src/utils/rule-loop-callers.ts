@@ -85,6 +85,9 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
           workspaceId: skillOp.scope === "workspace" ? workspaceId : null,
           kind: "instruction",
           scope: skillOp.scope,
+          // The ref `synap_load_skill` resolves — without it a teaching skill
+          // is created unreachable.
+          slug: skillOp.slug?.trim() || null,
           name: skillOp.name,
           body: skillOp.body,
           agentTypes: skillOp.agentTypes ?? null,

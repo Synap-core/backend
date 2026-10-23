@@ -22,6 +22,10 @@ const fs = require("fs");
 const path = require("path");
 const { execFile, spawn } = require("child_process");
 const {
+  archiveManifestFrom,
+  ARCHIVE_MAX_RUN_MS,
+} = require("./archive-manifest");
+const {
   assertPushable,
   commandErrorStatus,
   configureEnvEntries,
@@ -179,13 +183,16 @@ const COMMANDS = {
     script: "restore-archive-pod.sh",
     args: (p) => [p.archiveUrl || "", p.callbackUrl || "", p.callbackJwt || ""],
   },
+  // The HOST archives the pod (synap archive-request): this only hands it over
+  // and waits for the outcome. An archive stops services and can take long.
   archive: {
-    script: "archive-pod.sh",
+    script: "archive-request.sh",
     args: (p) => [
       p.presignedUploadUrl || "",
       p.callbackUrl || "",
       p.callbackJwt || "",
     ],
+    timeout: ARCHIVE_MAX_RUN_MS,
   },
   configure: {
     script: "configure-pod.sh",
@@ -266,7 +273,7 @@ function startCommand(commandName, payload, policy) {
     commandName === "archive"
       ? {
           ...process.env,
-          // D15: archive-pod.sh age-encrypts to exactly these recipients.
+          // D15: the host's archive-pod.sh age-encrypts to exactly these recipients.
           ARCHIVE_AGE_RECIPIENTS: policy.archiveRecipients.join(" "),
         }
       : process.env;
@@ -698,7 +705,12 @@ async function runPulledCommand(commandName, payload) {
     payload,
     policy
   );
-  return { status, output, ...(err ? { error: err.message } : {}) };
+  const result = { status, output, ...(err ? { error: err.message } : {}) };
+  if (commandName === "archive") {
+    const archiveManifest = archiveManifestFrom(output);
+    if (archiveManifest) result.data = { archiveManifest };
+  }
+  return result;
 }
 
 if (POD_AGENT_TRUST.configured) {

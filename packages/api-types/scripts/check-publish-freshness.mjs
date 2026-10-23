@@ -42,6 +42,8 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { satisfiesRange } from "./semver-range.mjs";
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PKG_DIR = resolve(__dirname, "..");
 const PKG_JSON = join(PKG_DIR, "package.json");
@@ -92,19 +94,6 @@ function publishedVersion() {
   }
 }
 
-/** True iff `version` satisfies `range`, via the `semver` CLI (npx-fetched —
- * not added as a repo dependency, this script is the only caller). */
-function satisfiesRange(version, range) {
-  try {
-    execSync(`npx --yes semver@7 "${version}" -r "${range}"`, {
-      stdio: "pipe",
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function checkSynapAppRange(publishedVer) {
   const url = `https://raw.githubusercontent.com/${SYNAP_APP_REPO}/${SYNAP_APP_BRANCH}/package.json`;
   let res;
@@ -137,7 +126,16 @@ async function checkSynapAppRange(publishedVer) {
     );
     return;
   }
-  if (!satisfiesRange(publishedVer, range)) {
+  const verdict = satisfiesRange(publishedVer, range);
+  if (verdict === null) {
+    fail(
+      `could not evaluate synap-app's ${PKG_NAME}@"${range}" against ${publishedVer} ` +
+        `(a range form scripts/semver-range.mjs does not read). Teach it the form; ` +
+        `an unevaluated range is never reported as satisfied or unsatisfied.`
+    );
+    return;
+  }
+  if (!verdict) {
     fail(
       `synap-app pins ${PKG_NAME}@"${range}" — the currently-PUBLISHED ${publishedVer} ` +
         `does NOT satisfy that range.\n` +

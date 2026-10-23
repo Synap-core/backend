@@ -2,7 +2,7 @@
 -- Phase 1 of the Profile Renderer North Star — add JSONB columns to `profiles`
 -- carrying the system-default renderer choice per slot (list / detail).
 --
--- Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+-- Spec: Synap-core/app-bases docs/architecture/profile-renderer.md
 --
 -- Each column stores a RendererTarget shape (defined by @synap-core/renderer-runtime):
 --   { kind: 'cell',          cellKey, props }       — config path (registered)

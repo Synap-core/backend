@@ -1,11 +1,11 @@
 /**
  * Hub `POST /focus-sessions/:id/outputs/block` parses `ask` with the ONE ask
- * schema (`AskSchema`, through `expectedOutputWireSchema.shape.ask`), like the
- * tRPC `blockOutput` door. The body schema used to be `z.custom<Ask>()`, which
- * accepts any value: an agent key could store a masked "Re-enter your
- * password" form, or an act url the schema refuses, on a slot the person's
- * clients render as is. Driven through the real route; the service is the
- * observed seam.
+ * schema (`AskSchema`), like the tRPC `blockOutput` door, and what reaches the
+ * slot is the PARSED ask: a credential field is dropped, a form left with only
+ * credentials is refused. The refusals of an unknown mode, a non-http(s) act
+ * url and a non-object ask are pinned in `focus-sessions.ask-wire.test.ts`;
+ * this file pins what the parse hands the service. Driven through the real
+ * route; the service is the observed seam.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -108,18 +108,6 @@ describe("Hub block door — the ask goes through AskSchema", () => {
         fields: [{ key: "pw", label: "Password", type: "password" }],
       },
     });
-    expect(res.status).toBe(400);
-    expect(h.blocked).toHaveLength(0);
-  });
-
-  it("refuses a javascript: act url, with nothing stored", async () => {
-    const res = await block({ mode: "act", url: "javascript:alert(1)" });
-    expect(res.status).toBe(400);
-    expect(h.blocked).toHaveLength(0);
-  });
-
-  it("refuses a mode outside the closed set", async () => {
-    const res = await block({ mode: "grade" });
     expect(res.status).toBe(400);
     expect(h.blocked).toHaveLength(0);
   });

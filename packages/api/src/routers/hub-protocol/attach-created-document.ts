@@ -17,6 +17,8 @@ export interface AttachCreatedDocumentInput {
   /** The `documents.createDocument` result. */
   created: unknown;
   entityId: string;
+  /** Replace an existing body on purpose (otherwise refused). */
+  replaceBody?: boolean;
   userId: string;
   scopes: string[];
   /**
@@ -46,8 +48,10 @@ export async function attachCreatedDocument(
       attached: {
         entityId,
         status: "skipped",
+        // The re-attach door (B9g): once the document exists, the agent
+        // attaches it with synap_update_entity({ entityId, documentId }).
         reason:
-          "The document itself is awaiting review — approve it first, then set the entity's documentId (MCP: synap_update_entity).",
+          "The document itself is awaiting review, so nothing was attached yet. Once it is approved, attach it with synap_update_entity({ entityId, documentId }).",
       },
     };
   }
@@ -80,6 +84,7 @@ export async function attachCreatedDocument(
   const attached = await regularEntitiesRouter.createCaller(attachCtx).update({
     id: entityId,
     documentId,
+    ...(input.replaceBody === true ? { replaceBody: true } : {}),
     reasoning: input.reasoning,
     ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
   });

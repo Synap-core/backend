@@ -4,6 +4,7 @@ import { focusSessions } from "../schema/focus-sessions.js";
 import { recordSessionSpawn } from "./session-spawn.js";
 import { resolveSessionProjectPlacement } from "./resolve-session-project.js";
 import { stampProbeMarker } from "./request-write-context.js";
+import { isUniqueViolation } from "./pg-errors.js";
 
 export interface OpenRunSessionInput {
   /** Owner of the run (the operator on whose behalf the automation/agent acts). */
@@ -236,9 +237,7 @@ export async function openRunSession(
     // human session appeared) between the reuse-check and the insert. Re-check
     // for a run session to reuse; failing that, open channel-LESS so the run
     // still groups its proposals rather than crashing.
-    const isUniqueViolation =
-      !!input.channelId && (err as { code?: string })?.code === "23505";
-    if (!isUniqueViolation) throw err;
+    if (!input.channelId || !isUniqueViolation(err)) throw err;
 
     const racedId = await findReusableRunSession();
     if (racedId) return { sessionId: racedId, reused: true };

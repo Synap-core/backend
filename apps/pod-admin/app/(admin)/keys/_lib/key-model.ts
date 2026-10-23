@@ -73,6 +73,10 @@ export function categorize(k: UnifiedKey): KeyCategory {
       return "system";
     case "service":
       return "service";
+    case "app_person":
+      // A person's "Sign in with Synap" token: held by the person, for an app
+      // (its name is the key's) — an app connection, not an operator key.
+      return "app";
   }
   if (k.holder?.kind === "app") return "app";
   if (k.holder?.kind === "computer") return "computer";
@@ -89,6 +93,22 @@ export function categorize(k: UnifiedKey): KeyCategory {
       // person's own (the operator bucket).
       return k.holder?.kind === "agent" ? "agent" : "operator";
   }
+}
+
+/**
+ * A pod app's hourly access key (spec 17 PB3): `hub_inbound`, held by the
+ * app's own agent (`mintAppOAuthAccessKey`). It is how the connection works,
+ * not a thing the person manages: each refresh mints the next one, so revoking
+ * it does not stop the app. The app (Revoke on its card) is the one control.
+ * An App Connect app's key is `user_pat` (`app-connect.ts`) and stays a key.
+ */
+export function isPodAppAccessKey(k: UnifiedKey): boolean {
+  return k.keyType === "hub_inbound" && k.holder?.kind === "app";
+}
+
+/** The keys a person manages on `/my-connections`: never a pod app's access key. */
+export function managedKeys<K extends UnifiedKey>(keys: readonly K[]): K[] {
+  return keys.filter((k) => !isPodAppAccessKey(k));
 }
 
 /** Nouns from the vocabulary where the pod has one; the rest are key words. */

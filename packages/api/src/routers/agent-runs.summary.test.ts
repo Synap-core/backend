@@ -160,9 +160,9 @@ describe("shapeAgentSpend — NULL cost is 'unknown', never $0", () => {
 
 // ── Layer 2: the real SQL, against live Postgres ─────────────────────────────
 
-const USER = "e0000000-0000-0000-0000-0000000000d1";
-const OTHER_USER = "e0000000-0000-0000-0000-0000000000d2";
-const WS = "e0000000-0000-0000-0000-0000000000d3";
+const USER = "e0000000-0000-4000-8000-0000000000d1";
+const OTHER_USER = "e0000000-0000-4000-8000-0000000000d2";
+const WS = "e0000000-0000-4000-8000-0000000000d3";
 
 async function checkDb(): Promise<boolean> {
   try {

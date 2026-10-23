@@ -130,6 +130,11 @@ export interface PlaybookRunnerInput {
   projectId?: string | null;
   trackId?: string | null;
   /**
+   * Hand-off: the agent user id the run's session is handed to. Resolved by
+   * the spine (THE route), never here — see `RunPlaybookInput.handToAgentId`.
+   */
+  handToAgentId?: string | null;
+  /**
    * Unattended run: refuse (throw) when the playbook depends on not-enabled
    * skills, filing the enable request on behalf of the owner. See run-playbook.
    */
@@ -165,6 +170,37 @@ export function registerPlaybookRunner(fn: PlaybookRunner): void {
  * `dispatchViaCapabilityRouter` uses for `capabilityExecutor`. */
 export function getPlaybookRunner(): PlaybookRunner | null {
   return playbookRunner;
+}
+
+/**
+ * IoC slot for the unattended readiness gate (`checkUnattendedPlaybookReadiness`,
+ * @synap/api) — the SAME rule the run spine applies under
+ * `unenabledSkillPreflight`, for the door that never reaches the spine: a
+ * propose-mode `playbook_run` files a run proposal instead of running. Without
+ * it a rule filed proposals a person could only approve into a failure while
+ * the playbook's skills were off. Not ready ⇒ the owner's enable request is
+ * filed and `message` is the refusal. Same inversion as `registerPlaybookRunner`.
+ */
+export interface PlaybookReadinessInput {
+  playbookId?: string;
+  playbookName?: string;
+  workspaceId: string;
+  userId: string;
+}
+export type PlaybookReadiness =
+  { ready: true } | { ready: false; message: string };
+type PlaybookReadinessGate = (
+  input: PlaybookReadinessInput
+) => Promise<PlaybookReadiness>;
+
+let playbookReadinessGate: PlaybookReadinessGate | null = null;
+
+export function registerPlaybookReadinessGate(fn: PlaybookReadinessGate): void {
+  playbookReadinessGate = fn;
+}
+
+export function getPlaybookReadinessGate(): PlaybookReadinessGate | null {
+  return playbookReadinessGate;
 }
 
 /**

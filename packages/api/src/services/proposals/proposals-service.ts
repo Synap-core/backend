@@ -537,6 +537,10 @@ export async function mergeProposalRevision(
         }
       : params.patch;
 
+  // Same placement and reason as `validateRevisedOperations`: the payload
+  // validators read through the shared pool, so they run BEFORE the row lock.
+  const payloadCheck = await checkRevisedPayload(params);
+
   await db.transaction(async (tx) => {
     const [existing] = await tx
       .select({
@@ -662,6 +666,27 @@ export async function mergeProposalRevision(
         params.attributionAgentUserId ?? params.actingAgentUserId ?? null,
     });
 
+    // A revision that changes the PAYLOAD was checked before the lock by
+    // what its approval will run (`REVISED_PAYLOAD_VALIDATORS`); refused here,
+    // after authority and the PENDING check, so a refusal is never an
+    // existence oracle. Judged against the row as read then: a payload that
+    // moved in between is refused rather than stored unchecked.
+    if (payloadCheck) {
+      if (JSON.stringify(existing.data ?? {}) !== payloadCheck.base) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "This proposal changed while your revision was being checked — read it again and send the revision again.",
+        });
+      }
+      if (payloadCheck.problem) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: payloadCheck.problem,
+        });
+      }
+    }
+
     // postgres.js 3.4.8 sql.json() is broken on the pod image — always
     // JSON.stringify + ::jsonb. In Drizzle .set() use drizzleSql, not raw sql.
     // The lock already holds PENDING; the WHERE re-guard is belt-and-suspenders.
@@ -685,6 +710,84 @@ export async function mergeProposalRevision(
         )
       );
   });
+}
+
+/**
+ * Per-target validators for a revised PAYLOAD, keyed `targetType/changeType`
+ * — the same key the approve executors register under. Each runs what that
+ * executor's replay will run, so a revision it would fail is refused at revise
+ * time (BAD_REQUEST, nothing changed) on all three revise doors, instead of
+ * landing as an approval failure. Revise itself stays generic: no
+ * target-specific tool or field list, only this hook. Composite `operations`
+ * have their own pre-lock preflight (`validateRevisedOperations`).
+ */
+const REVISED_PAYLOAD_VALIDATORS: Record<
+  string,
+  (payload: Record<string, unknown>) => Promise<void>
+> = {
+  "playbook/create": async (payload) =>
+    (await import("../../routers/playbooks.js")).assertRevisedPlaybookPayload(
+      "create",
+      payload
+    ),
+  "playbook/update": async (payload) =>
+    (await import("../../routers/playbooks.js")).assertRevisedPlaybookPayload(
+      "update",
+      payload
+    ),
+};
+
+async function checkRevisedPayload(
+  params: MergeProposalRevisionParams
+): Promise<{ base: string; problem: string | null } | null> {
+  if (!params.patch) return null;
+  const [row] = await db
+    .select({ data: proposals.data })
+    .from(proposals)
+    .where(eq(proposals.id, params.proposalId))
+    .limit(1);
+  // Absent row: the locked read answers NOT_FOUND.
+  if (!row) return null;
+  const before = (row.data ?? {}) as Record<string, unknown>;
+  const validate =
+    REVISED_PAYLOAD_VALIDATORS[`${before.targetType}/${before.changeType}`];
+  if (!validate) return null;
+  let merged: Record<string, unknown>;
+  try {
+    ({ merged } = computeRevisedEnvelope({
+      envelope: before,
+      patch: params.patch,
+      summary: params.summary,
+      reasoning: params.reasoning,
+      actorId: params.actorId,
+    }));
+  } catch {
+    // A malformed patch: the locked path throws the same error, after authority.
+    return null;
+  }
+  const payloadOf = (envelope: Record<string, unknown>) =>
+    (isNestedEnvelope(envelope) ? envelope.data : envelope) as Record<
+      string,
+      unknown
+    >;
+  const payload = payloadOf(merged);
+  const base = JSON.stringify(before);
+  // A revision that leaves the payload as it was (summary / reasoning only)
+  // is not judged: it must stay possible on a proposal filed before a rule.
+  if (JSON.stringify(payloadOf(before)) === JSON.stringify(payload)) {
+    return null;
+  }
+  try {
+    await validate(payload);
+    return { base, problem: null };
+  } catch (err) {
+    return {
+      base,
+      problem:
+        `Revision refused — the revised ${String(before.targetType)} cannot apply, so nothing was changed (the proposal stays pending as it was): ` +
+        (err instanceof Error ? err.message : String(err)),
+    };
+  }
 }
 
 /**

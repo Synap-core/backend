@@ -53,7 +53,7 @@ Rules:
 
 - One sentence per field. No padding.
 - `Links` must reference real entity IDs or slugs visible in the current context — not descriptions like "the related project".
-- **"Agent requires proposal for all write operations."** is never acceptable as a `reasoning` value. That is an internal governance message, not agent reasoning. Write it and the proposal is meaningless to the reviewer.
+- The pod's own governance sentence (for example "This agent asks before every change.") is never acceptable as a `reasoning` value. It says why a person must review, not why you made the change. Write it and the proposal is meaningless to the reviewer.
 
 Example response to the user:
 

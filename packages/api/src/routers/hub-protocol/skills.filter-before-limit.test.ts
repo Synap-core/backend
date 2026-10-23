@@ -57,7 +57,8 @@ vi.mock("../skills.js", () => ({
   },
 }));
 
-vi.mock("./utils.js", () => ({
+vi.mock("./utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./utils.js")>()),
   createHubProtocolCallerContext: async () => ({}),
 }));
 

@@ -50,7 +50,8 @@ vi.mock("../../../utils/workspace-write-access.js", async () => {
   };
 });
 
-vi.mock("@synap/jobs", () => ({
+vi.mock("@synap/jobs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/jobs")>()),
   getBoss: () => ({
     send: async (
       queue: string,

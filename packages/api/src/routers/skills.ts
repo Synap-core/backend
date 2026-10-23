@@ -32,6 +32,10 @@ import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import { alwaysSkillBudgetWarningsOnEdit } from "../services/skills/template-skills.js";
 import { ruleNotExpiredWhere } from "../services/rules/expiry.js";
 import { ruleSentenceSchema } from "../services/rules/sentence-schema.js";
+import {
+  ruleEditFieldsSchema,
+  ruleEditToGovernedInput,
+} from "../services/rules/update-input.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import { safeExternalFetch } from "@synap/shared-utils";
 import {
@@ -60,6 +64,11 @@ import {
   SKILL_HOST_BRIDGES,
   SKILL_ALLOWED_GLOBALS,
 } from "../services/skills/skill-stdlib.js";
+import {
+  SKILL_SLUG_PATTERN,
+  SKILL_SLUG_PATTERN_MESSAGE,
+  SKILL_SLUG_SYSTEM_MESSAGE,
+} from "../services/skills/skill-authoring.js";
 
 /**
  * Save-time global-reference scan for code skills (B1).
@@ -226,6 +235,43 @@ export function scanSkillGlobals(code: string): {
 }
 
 /**
+ * The B1 save-time scan for a skill of `kind` — the one rule every write door
+ * applies. Only a CODE skill's `code` is JavaScript; an instruction skill keeps
+ * its markdown body there (every catalog instruction skill does), so parsing it
+ * as JavaScript refused every capability that ships one.
+ */
+export function assertSkillCodeAllowed(
+  kind: string | null | undefined,
+  code: string | undefined | null
+): void {
+  if (kind !== "code") return;
+  assertSkillGlobalsAllowed(code);
+}
+
+/**
+ * The kind a skill UPDATE writes — ONE value, read by both the B1 scan and the
+ * UPDATE, so a skill is never written as `code` while scanned as something
+ * else. An explicit `kind` wins. Otherwise the skill KEEPS its kind: editing a
+ * catalog instruction skill's markdown `code` never turns it into a code skill
+ * (it did, before 2026-10-22). One exception: a code skill whose `code` is
+ * emptied can no longer run, and becomes doc-only (`instruction`).
+ */
+export function skillKindAfterUpdate(
+  patch: { kind?: string; code?: string },
+  existingKind: string
+): string {
+  if (patch.kind !== undefined) return patch.kind;
+  if (
+    existingKind === "code" &&
+    patch.code !== undefined &&
+    !patch.code.trim()
+  ) {
+    return "instruction";
+  }
+  return existingKind;
+}
+
+/**
  * Throw a TRPCError with an actionable message if `code` references a global the
  * skill runtime does not provide. No-op for empty/whitespace code.
  */
@@ -313,9 +359,7 @@ export async function insertSkillGoverned(
   // do NOT call this function) — this is not a double-scan of the same code
   // path, it closes the gap for callers that construct a `kind: "code"` skill
   // without going through those two mutations.
-  if (values.kind === "code") {
-    assertSkillGlobalsAllowed(values.code);
-  }
+  assertSkillCodeAllowed(values.kind, values.code);
 
   const perm = await checkPermissionOrPropose({
     userId: values.userId,
@@ -931,38 +975,10 @@ export const skillsRouter = router({
    * rule to report a clause about.
    */
   updateRule: protectedProcedure
-    .input(
-      z.object({
-        id: z.string().uuid(),
-        intent: z.string().min(1),
-        scope: z.object({
-          kind: z.enum(["pod", "workspace", "user"]),
-          workspaceId: z.string().uuid().optional(),
-          projectId: z.string().uuid().optional(),
-        }),
-        /**
-         * THREE states, deliberately: an ISO instant SETS the review date,
-         * `null` CLEARS it, and ABSENT leaves it alone. `renewRule` already
-         * distinguishes set-from-clear for the same reason — they are different
-         * acts and must be spelled differently — and this door adds the third
-         * because an edit that only changes the sentence must not silently
-         * strip an expiry the author never mentioned.
-         */
-        expiresAt: z.string().datetime({ offset: true }).nullish(),
-        factSkillId: z.string().uuid().optional(),
-        automationIds: z.array(z.string().uuid()).default([]),
-        /**
-         * THREE states again: a sentence REPLACES the behaviour, `null` REMOVES
-         * it, ABSENT leaves the stored one alone (and it is recompiled). The
-         * middle state has to be spellable — without it, "make this rule
-         * prose-only" would be unexpressible; without the third, editing the
-         * prose alone would retire the automation.
-         */
-        sentence: ruleSentenceSchema.nullish(),
-        /** `true` keeps/returns the rule to draft; `false` ACTIVATES it. */
-        draft: z.boolean().default(false),
-      })
-    )
+    // The edit's fields are declared ONCE (`services/rules/update-input.ts`) and
+    // shared with Hub REST `PATCH /rules/:id` — pinned by identity in
+    // `update-input.parity.test.ts`. Only `id` is this door's own.
+    .input(ruleEditFieldsSchema.extend({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const { updateRuleGoverned } =
@@ -980,19 +996,7 @@ export const skillsRouter = router({
         // the stored row's own workspace membership, so naming a workspace you
         // can see never grants a rule you cannot.
         workspaceId: ctx.workspaceId ?? input.scope.workspaceId ?? null,
-        intent: input.intent,
-        scope: input.scope,
-        // `undefined` (absent) and `null` (clear) must both survive the hop —
-        // a `?? undefined` here would turn "clear the date" into "leave it".
-        ...(input.expiresAt !== undefined
-          ? { expiresAt: input.expiresAt }
-          : {}),
-        ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
-        automationIds: input.automationIds,
-        // `undefined` (leave alone) and `null` (remove) must BOTH survive the
-        // hop — a truthiness check here would collapse them into one.
-        ...(input.sentence !== undefined ? { sentence: input.sentence } : {}),
-        ...(input.draft ? { draft: true } : {}),
+        ...ruleEditToGovernedInput(input),
         auditSource: "rules.updateRule",
       });
       if (result.status === "not_found") {
@@ -1078,13 +1082,9 @@ export const skillsRouter = router({
           .string()
           .min(1)
           .max(255)
-          .regex(
-            /^[a-z0-9]+(?:[-_.][a-z0-9]+)*(?:\/[a-z0-9]+(?:[-_.][a-z0-9]+)*)*$/,
-            "slug must be lowercase path segments, e.g. 'biz/business-plan'"
-          )
+          .regex(SKILL_SLUG_PATTERN, SKILL_SLUG_PATTERN_MESSAGE)
           .refine((s) => !s.startsWith("system/"), {
-            message:
-              "the 'system/' slug namespace is reserved for seeded skills",
+            message: SKILL_SLUG_SYSTEM_MESSAGE,
           })
           .optional(),
         name: z.string().min(1).max(255),
@@ -1185,9 +1185,7 @@ export const skillsRouter = router({
       // BEFORE it persists — the single funnel every code-skill create hits
       // (human UI, AI via /agent-skills/executable → this create). The author/AI
       // learns the gap now, not the reviewer at approval or the run at execution.
-      if (hasCode) {
-        assertSkillGlobalsAllowed(input.code);
-      }
+      assertSkillCodeAllowed(kind, input.code);
 
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
@@ -1380,13 +1378,6 @@ export const skillsRouter = router({
         ...updateData
       } = input;
 
-      // Save-time global-reference scan (B1) — same gate as `create`: an EDIT
-      // that re-points a skill's code to reference an unprovided global (fetch/
-      // crypto/…) is the same ReferenceError-at-run bug the create scan closes.
-      if (input.code?.trim()) {
-        assertSkillGlobalsAllowed(input.code);
-      }
-
       // Verify skill exists and user has access (owner or pod-scoped)
       const existingSkill = await ctx.db.query.skills.findFirst({
         where: and(
@@ -1401,6 +1392,13 @@ export const skillsRouter = router({
           message: "Skill not found",
         });
       }
+
+      // Save-time global-reference scan (B1) — same gate as `create`: an EDIT
+      // that re-points a skill's code to reference an unprovided global (fetch/
+      // crypto/…) is the same ReferenceError-at-run bug the create scan closes.
+      // Judged on the kind the UPDATE WRITES (the same value, below).
+      const writtenKind = skillKindAfterUpdate(input, existingSkill.kind);
+      assertSkillCodeAllowed(writtenKind, input.code);
 
       // The acting agent, derived exactly as `delete` derives it: the ambient
       // ALS value first (set server-side at every key-auth entry point, so an
@@ -1444,18 +1442,16 @@ export const skillsRouter = router({
         return { status: "proposed" as const, proposalId: perm.proposalId };
       }
 
-      // Documentation + optional Code: when code is set, derive `kind` (unless
-      // given) and store empty code as null (the skill becomes doc-only).
+      // Documentation + optional Code: empty code is stored as null, and the
+      // kind is the one the scan judged (`skillKindAfterUpdate`).
       if (updateData.code !== undefined) {
         const trimmed = updateData.code.trim();
         (updateData as Record<string, unknown>).code = trimmed
           ? updateData.code
           : null;
-        if (updateData.kind === undefined) {
-          (updateData as Record<string, unknown>).kind = trimmed
-            ? "code"
-            : "instruction";
-        }
+      }
+      if (writtenKind !== existingSkill.kind) {
+        (updateData as Record<string, unknown>).kind = writtenKind;
       }
 
       // Security: if any execution-defining field actually CHANGES, the skill

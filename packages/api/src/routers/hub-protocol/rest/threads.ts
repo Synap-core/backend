@@ -5,7 +5,7 @@
  * `channels` table (`channelType="thread"` and friends). The `/threads/*` wire
  * paths and the `threadId` path params are KEPT for backward compatibility —
  * browser, CLI, and IS clients depend on them, so renaming the wire surface to
- * channel vocabulary is intentionally deferred (see WAVE4-ROUTES-REPORT.md).
+ * channel vocabulary is intentionally deferred (see WAVE4-ROUTES-REPORT (team pod)).
  * Internally the data is channel rows.
  *
  * Routes are wired via `app.openapi(routeDef, handler)` so request bodies /
@@ -42,6 +42,7 @@ import {
   inArray,
   computeMessageHash,
   emitMessageEvent,
+  isUniqueViolation,
 } from "@synap/database";
 import {
   ChannelType,
@@ -79,6 +80,7 @@ import {
   resolveActorId,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { queryChannelMessages } from "../../../utils/query-channel-messages.js";
@@ -430,6 +432,13 @@ export function registerThreadsRoutes(app: HubHono): void {
         description: "Link result",
         content: { "application/json": { schema: LooseObjectResponseSchema } },
       },
+      202: {
+        // ONE proposal shape on every hub door (proposal-response.ts): a link
+        // that became a proposal is success, and carries its review link.
+        description:
+          "Proposed for review — `{ status: 'proposed', proposalId, reviewUrl }`",
+        content: { "application/json": { schema: LooseObjectResponseSchema } },
+      },
       400: {
         description: "Bad request",
         content: { "application/json": { schema: ErrorSchema } },
@@ -483,7 +492,7 @@ export function registerThreadsRoutes(app: HubHono): void {
         relationshipType: body.relationshipType ?? "referenced",
         sourceMessageId: body.sourceMessageId,
       });
-      return c.json(result as Record<string, unknown>, 200);
+      return jsonGoverned(c, result as Record<string, unknown>);
     } catch (err) {
       logger.error({ err, threadId }, "linkEntity failed");
       return c.json(
@@ -510,6 +519,13 @@ export function registerThreadsRoutes(app: HubHono): void {
     responses: {
       200: {
         description: "Link result",
+        content: { "application/json": { schema: LooseObjectResponseSchema } },
+      },
+      202: {
+        // ONE proposal shape on every hub door (proposal-response.ts): a link
+        // that became a proposal is success, and carries its review link.
+        description:
+          "Proposed for review — `{ status: 'proposed', proposalId, reviewUrl }`",
         content: { "application/json": { schema: LooseObjectResponseSchema } },
       },
       400: {
@@ -565,7 +581,7 @@ export function registerThreadsRoutes(app: HubHono): void {
         relationshipType: body.relationshipType ?? "referenced",
         sourceMessageId: body.sourceMessageId,
       });
-      return c.json(result as Record<string, unknown>, 200);
+      return jsonGoverned(c, result as Record<string, unknown>);
     } catch (err) {
       logger.error({ err, threadId }, "linkDocument failed");
       return c.json(
@@ -726,9 +742,7 @@ export function registerThreadsRoutes(app: HubHono): void {
         return c.json({ id: thread.id, title: thread.title }, 200);
       } catch (insertErr) {
         // Concurrent insert hit the partial unique index — recover by SELECT.
-        // Postgres unique-violation: SQLSTATE 23505.
-        const code = (insertErr as { code?: string } | null)?.code;
-        if (hasExternalKey && code === "23505") {
+        if (hasExternalKey && isUniqueViolation(insertErr)) {
           const existing = await db.query.channels.findFirst({
             where: and(
               eq(channels.externalSource, body.externalSource as string),

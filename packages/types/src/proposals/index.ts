@@ -22,6 +22,8 @@ export * from "./review-comment.js";
 export * from "./session-start.js";
 // The ONE reading of the verb a proposal row performs (receipts included).
 export * from "./action.js";
+// The duplicate door's answer, persisted on the proposal (B2) + its accessor.
+export * from "./duplicate-check.js";
 
 /**
  * The pod's cap on one batch decision (`proposals.batchApprove` /
@@ -56,7 +58,7 @@ export type ProposalStatusFilter = "pending" | "validated" | "rejected" | "all";
 
 /**
  * Structured whole-proposal rejection reason taxonomy — Phase 1 of the
- * reasoned-rejection loop (`PROPOSAL-GRANULAR-REASONED-REVIEW-PLAN.md`, Fork 2A).
+ * reasoned-rejection loop (`PROPOSAL-GRANULAR-REASONED-REVIEW-PLAN (team pod)`, Fork 2A).
  *
  * PINNED CONTRACT — the enum MUST be byte-identical wherever it's consumed
  * (backend `proposals.reject`/`batchReject` input, `emitAiCorrection` data,
@@ -815,6 +817,12 @@ export interface CompositeCreateSkillOp {
   /** Stable handle for this skill within the proposal (e.g. "fact1"). */
   ref: string;
   name: string;
+  /**
+   * The ref `synap_load_skill` resolves (e.g. "team/where-the-work-is"). A
+   * teaching skill without one is authored but unreachable; the capture doors
+   * require it (`skillAuthoringProblem`).
+   */
+  slug?: string | null;
   /** Instruction body (Markdown) — the FACT the agent reads while reasoning. */
   body: string;
   scope: "pod" | "user" | "workspace";
@@ -1227,7 +1235,7 @@ export function isPlanBatch(operations: CompositeProposalOperation[]): boolean {
  * has always been: one unreadable row in a 1600-row import must not discard the
  * other 1599.
  */
-const RESILIENT_OPERATION_KINDS = [
+const _RESILIENT_OPERATION_KINDS = [
   "create_entity",
   "create_relation",
   "create_skill",
@@ -1246,7 +1254,7 @@ type _EveryOpKindClassified =
   Exclude<
     CompositeProposalOperation["op"],
     (typeof PLAN_OPERATION_KINDS)[number]
-  > extends (typeof RESILIENT_OPERATION_KINDS)[number]
+  > extends (typeof _RESILIENT_OPERATION_KINDS)[number]
     ? true
     : never;
 
@@ -1664,10 +1672,12 @@ export interface ProposalWithRequest extends Proposal {
  * Stored proposal data is an ENVELOPE `{ requestId, source, targetType,
  * changeType, data: INNER, reasoning }`. For "nested-reader" targets (entity /
  * facet / property_def / view / skill / automation / playbook / project /
- * focus_session) the executor reads the edited fields from the NESTED inner
- * (`proposal.data.data.*`). For "flat" targets (document, composite `{operations}`,
- * capability.*, provider.action, workspace/*) the fields live at the envelope top
- * level and there is no inner `data` object.
+ * focus_session, and every other write filed through `checkPermissionOrPropose`,
+ * `document/create` included) the executor reads the edited fields from the
+ * NESTED inner (`proposal.data.data.*`). For "flat" targets (a document patch
+ * suggestion, composite `{operations}`, capability.*, provider.action,
+ * workspace/*) the fields live at the envelope top level and there is no inner
+ * `data` object.
  *
  * `buildRequestFromProposal` (below) and the shared revise core
  * (`mergeProposalRevision`) both branch on this ONE predicate so a revise patch

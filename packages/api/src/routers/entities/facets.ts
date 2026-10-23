@@ -30,6 +30,7 @@ import {
   proposedMessageFor,
 } from "../../utils/permission-check.js";
 import { auditLog } from "../../utils/audit-log.js";
+import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 import {
   moveStatus,
   statusMoveActorFor,
@@ -45,6 +46,29 @@ import {
   FACET_SOURCE_ENUM,
   AUTOMATION_CONTEXT_INPUT,
 } from "./helpers.js";
+
+/**
+ * D2 (S7, founder 2026-10-20) — a facet write is bounded by the calling key's
+ * grant on the PARENT entity's workspace and, when the facet row lives
+ * elsewhere (a shared/system role is stored pod-wide), on THAT placement too.
+ * null = pod scope, so a key pinned to a space fails closed on a pod-wide
+ * parent or role. Runs before anything is written; a no-op without a grant.
+ */
+async function assertFacetWriteGrant(
+  action: "attach" | "update" | "detach",
+  entityId: string,
+  parentWorkspaceId: string | null,
+  facetWorkspaceId: string | null
+): Promise<void> {
+  for (const workspaceId of new Set([parentWorkspaceId, facetWorkspaceId])) {
+    await assertKeyMayWrite({
+      subjectType: "facet",
+      action,
+      workspaceId,
+      data: { entityId },
+    });
+  }
+}
 
 export const facetProcs = {
   attachFacet: podProcedure
@@ -235,6 +259,9 @@ export const facetProcs = {
       // (tighten-only — `initial-status-floor.ts`).
       let initialLifecycleMove:
         { intoTerminal: boolean; humanOnly: boolean } | undefined;
+      // Where `FacetRepository.attach` will STORE the row (a shared/system
+      // role is pod-wide whatever lens was asked) — the grant's second target.
+      let storedFacetWorkspaceId = facetWorkspaceId;
       {
         const target = await new ProfileResolutionService(db).resolveProfile(
           input.profileId ?? input.profileSlug!,
@@ -242,6 +269,7 @@ export const facetProcs = {
           facetWorkspaceId ?? ""
         );
         if (target) {
+          if (roleFacetIsPodWide(target)) storedFacetWorkspaceId = null;
           initialLifecycleMove = await initialStatusFloor({
             profileId: target.id,
             workspaceId: facetWorkspaceId,
@@ -285,6 +313,13 @@ export const facetProcs = {
       const actingAgentUserId =
         input.agentUserId ?? ctx.agentUserId ?? undefined;
 
+      await assertFacetWriteGrant(
+        "attach",
+        input.entityId,
+        parent.workspaceId ?? null,
+        storedFacetWorkspaceId
+      );
+
       // 1. .requested
       const requestedEvent = await auditLog({
         subjectType: "entity_facet",
@@ -310,6 +345,7 @@ export const facetProcs = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
+        grantWorkspaceId: parent.workspaceId ?? null,
         subjectType: "facet",
         action: "attach",
         source: input.source,
@@ -462,6 +498,21 @@ export const facetProcs = {
       const governanceWorkspaceId =
         existing.workspaceId ?? ctx.workspaceId ?? null;
 
+      // Best-effort readable label for the parent entity — surfaced on
+      // proposal/notification cards (which otherwise show raw entity ids) —
+      // and its workspace, the grant's target (D2).
+      const parentForUpdate = await db.query.entities.findFirst({
+        where: eq(entities.id, existing.entityId),
+        columns: { title: true, workspaceId: true },
+      });
+      const parentWorkspaceId = parentForUpdate?.workspaceId ?? null;
+      await assertFacetWriteGrant(
+        "update",
+        existing.entityId,
+        parentWorkspaceId,
+        existing.workspaceId ?? null
+      );
+
       // LIFECYCLE SPLIT (work model L2): a ROLE's status — `status`, or its
       // lifecycle property — is MOVED through the one door (`moveStatus`:
       // compare-and-set, the lifecycle floor, the transition event), first, so
@@ -558,13 +609,6 @@ export const facetProcs = {
         }
       }
 
-      // Best-effort readable label for the parent entity — surfaced on
-      // proposal/notification cards (which otherwise show raw entity ids).
-      const parentForUpdate = await db.query.entities.findFirst({
-        where: eq(entities.id, existing.entityId),
-        columns: { title: true },
-      });
-
       // 1. .requested
       const requestedEvent = await auditLog({
         subjectType: "entity_facet",
@@ -583,6 +627,7 @@ export const facetProcs = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
+        grantWorkspaceId: parentWorkspaceId,
         subjectType: "facet",
         action: "update",
         source: input.source,
@@ -707,8 +752,15 @@ export const facetProcs = {
       // proposal/notification cards (which otherwise show raw entity ids).
       const parentForDetach = await db.query.entities.findFirst({
         where: eq(entities.id, existing.entityId),
-        columns: { title: true },
+        columns: { title: true, workspaceId: true },
       });
+      const parentWorkspaceId = parentForDetach?.workspaceId ?? null;
+      await assertFacetWriteGrant(
+        "detach",
+        existing.entityId,
+        parentWorkspaceId,
+        existing.workspaceId ?? null
+      );
 
       // 1. .requested
       const requestedEvent = await auditLog({
@@ -728,6 +780,7 @@ export const facetProcs = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: governanceWorkspaceId,
+        grantWorkspaceId: parentWorkspaceId,
         subjectType: "facet",
         action: "detach",
         source: input.source,

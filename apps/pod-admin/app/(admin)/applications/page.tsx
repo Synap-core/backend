@@ -12,6 +12,10 @@
  * Waiting requests are NOT decided here: the banner counts and names them and
  * sends the reader to Review, the one attention door. `?via=` is the filter,
  * `?focus=<id>` lands on a row; a row opens `/applications/<via>/<id>`.
+ *
+ * Pod apps (spec 17 PB4) also appear per member among the key apps; the
+ * `PodAppsCard` groups them per app and holds the pod's switch for apps that
+ * are not Synap apps.
  */
 
 import { Accordion, AccordionItem, Button } from "@heroui/react";
@@ -57,6 +61,7 @@ import {
   type SignInRequestLike,
 } from "./_lib/sign-in-requests";
 import { ViaChip } from "./_lib/via-chip";
+import { PodAppsCard } from "./_lib/pod-apps-card";
 
 const DESCRIPTION =
   "Everything that connects to your pod, and what it can reach.";
@@ -244,6 +249,8 @@ function ApplicationsInner() {
         {(via === "all" || via === "sign-in") && (
           <SignInRequests requests={signIns.data?.requests ?? []} />
         )}
+
+        {(via === "all" || via === "key") && <PodAppsCard />}
 
         <p className="max-w-2xl px-1 text-[12px] leading-5 text-foreground/65">
           &ldquo;Sign in with your pod&rdquo; apps act as the person who signed

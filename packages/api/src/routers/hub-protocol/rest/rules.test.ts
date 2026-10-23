@@ -30,7 +30,12 @@ const h = vi.hoisted(() => ({
   isDown: false,
 }));
 
-vi.mock("@synap/database", () => ({
+// PARTIAL (`importOriginal`), never a hand-listed module — see
+// `__tripwires__/database-mock-total-ratchet.test.ts`: the hand-listed version
+// took this whole file dark the moment a module in its import graph used an
+// export it did not list (`isNull`, via the jobs package).
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   db: {
     query: { skills: { findMany: vi.fn(async () => h.findManyRows) } },
     insert: vi.fn(() => {
@@ -42,10 +47,6 @@ vi.mock("@synap/database", () => ({
       return { set: vi.fn(() => ({ where: vi.fn(async () => []) })) };
     }),
   },
-  eq: (a: unknown, b: unknown) => ({ op: "eq", a, b }),
-  and: (...c: unknown[]) => ({ op: "and", c }),
-  desc: (a: unknown) => ({ op: "desc", a }),
-  skills: { id: "id", category: "category", createdAt: "createdAt" },
 }));
 
 vi.mock("./_shared.js", () => ({
@@ -74,6 +75,13 @@ vi.mock("../../../services/rules/create.js", () => ({
     h.createCalls.push(input);
     return h.createResult;
   },
+}));
+
+// The edit door is pinned in `rules.update.test.ts` against the REAL
+// `updateRuleGoverned`; stubbed here so this file's hand-listed database mock
+// does not have to cover that door's import graph.
+vi.mock("../../../services/rules/update.js", () => ({
+  updateRuleGoverned: async () => ({ status: "not_found" }),
 }));
 
 vi.mock("../../../services/rules/index.js", () => ({

@@ -7,11 +7,16 @@ mock mode — all pre-wired. You add your screens; the plumbing is done.
 
 ## Scaffold it
 
+> **Not published yet.** `@synap-core/create-synap-app` is not on npm and the
+> base template is not public, so this does not work today. Until a release
+> exists, build on the SDK directly (`using-the-sdk.md`). The rest of this page
+> describes the template as it will ship.
+
 ```bash
-npx create-synap-app my-app
-cd my-app
-cp .env.example .env.local   # fill in your pod / control-plane URLs
-pnpm dev                     # http://localhost:3010
+npx @synap-core/create-synap-app my-app
+cd my-app                    # the scaffolder seeds .env.local from env.example;
+                             # fill in your pod / control-plane URLs
+pnpm install && pnpm dev     # http://localhost:3010
 ```
 
 Develop with **no pod** by setting `NEXT_PUBLIC_BASE_MOCK_MODE=true`.
@@ -59,6 +64,6 @@ components/layout/
 
 ## Auth flow (already wired)
 
-`/login` → Synap Cloud sign-in (email + password or magic link) → optional TOTP →
-pod picker → handshake → session stored → `/home`. Self-hosted pods fall back to
-the pod's own Kratos at `/login?mode=kratos`. You don't build this; you theme it.
+`/login` → Synap Cloud sign-in → optional TOTP → pod picker → session stored →
+`/home`. A pod can also be signed into directly through its own Kratos (the
+login screen's manual-login step). You don't build this; you theme it.

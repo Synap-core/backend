@@ -37,7 +37,11 @@ vi.mock("@synap/storage", () => {
   };
 });
 
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async () => {
+  // The real door: the 409 test below throws a WRAPPED 23505.
+  const { isUniqueViolation } = await vi.importActual<
+    typeof import("@synap/database/pg-errors")
+  >("@synap/database/pg-errors");
   const documents = { id: "id", storageKey: "storage_key" };
   const entities = { id: "id", documentId: "document_id" };
   const proposals = { id: "id", status: "status", data: "data" };
@@ -84,6 +88,7 @@ vi.mock("@synap/database", () => {
     workspaces: {},
     materializeEntity: h.materialize,
     resolveImportEntityPlacement: vi.fn(async () => WS_FOR_MOCK),
+    isUniqueViolation,
   };
 });
 const WS_FOR_MOCK = "11111111-1111-4111-8111-111111111111";

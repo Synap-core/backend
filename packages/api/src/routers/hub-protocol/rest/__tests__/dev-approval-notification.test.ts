@@ -138,6 +138,19 @@ vi.mock("@synap/events", () => ({
   registerReactor: () => {},
 }));
 
+// W8 (b22e804cc): a proposal.created push is earned only when the proposal
+// blocks an open session — a DB read this fake cannot answer. This file pins the
+// notification's audience and deep link; it states that fact instead of reading it.
+vi.mock(
+  "../../../../notifications/push-decision.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../../notifications/push-decision.js")
+    >()),
+    derivePushFacts: async () => ({ proposalBlocksOpenSession: true }),
+  })
+);
+
 vi.mock("../../../../notifications/expo-push.js", () => ({
   sendExpoPush: async (opts: Record<string, unknown>) => {
     state.pushes.push(opts);

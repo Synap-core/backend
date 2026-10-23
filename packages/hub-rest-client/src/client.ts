@@ -163,13 +163,14 @@ import type {
   UpdateEntityInput,
   StoreMemoryInput,
   SendToChannelInput,
-  CaptureProposal,
   CaptureStructureInput,
   CaptureStructureResponse,
   CaptureExecuteInput,
   CaptureExecuteResponse,
   AskResponse,
   KnowledgeAnswerResponse,
+  KnowledgeAnswerDetail,
+  HubEntityUpdateResult,
   HubDiagnoseInput,
   HubDiagnoseResult,
   CreateFocusSessionInput,
@@ -199,6 +200,7 @@ import type {
   HubMessage,
   HubThreadContext,
   HubProposal,
+  HubFileUrl,
   HubView,
   HubWidgetDefinition,
   HubSearchResult,
@@ -719,13 +721,14 @@ export class HubRestClient {
   async updateEntity(
     id: string,
     input: UpdateEntityInput
-  ): Promise<HubEntity | HubGovernanceResult> {
-    // Backend may return a full entity (approved) or a governance envelope
-    // (proposed/denied). Callers MUST check `status` first when governance
-    // is likely — e.g., agent-owned workspaces, destructive updates.
+  ): Promise<HubEntityUpdateResult> {
+    // The pod answers the applied RECEIPT (`status: "updated"`, the entity id,
+    // the fields that landed — never the entity itself) or a governance
+    // envelope (proposed/denied). Check `status` first. An empty patch is
+    // refused (400), never "updated".
     const { properties, content, url, status, priority, dueDate, ...rest } =
       input;
-    return this.request<HubEntity | HubGovernanceResult>(
+    return this.request<HubEntityUpdateResult>(
       "PATCH",
       `/api/hub/entities/${id}`,
       {
@@ -746,9 +749,9 @@ export class HubRestClient {
 
   /**
    * Create a project. Governed: an agent key may get `proposed` (with
-   * `reviewUrl`), or `deduped` when an exact-name project already exists. A
-   * near-duplicate (409) comes back as `near_duplicate` with its
-   * `dedupCandidates`, not as a throw. Agent keys must pass `evidenceEntityIds`.
+   * `reviewUrl`, and `duplicateCheck` when a similar project or the same one
+   * still waiting for review is why), or `deduped` when an exact-name project
+   * already exists. Agent keys must pass `evidenceEntityIds`.
    * The pod reads the acting user from the key, so no userId is sent. Placement
    * is a write decision: the client default workspace is NOT stamped, and an
    * omitted workspace means pod-wide.
@@ -757,20 +760,6 @@ export class HubRestClient {
     input: CreateProjectInput
   ): Promise<HubCreateProjectResult> {
     const res = await this.requestRaw("POST", "/api/hub/projects", input);
-    if (res.status === 409) {
-      const body = (await res.json().catch(() => ({}))) as {
-        error?: string;
-        dedupCandidates?: Array<Record<string, unknown>>;
-      };
-      if (Array.isArray(body.dedupCandidates)) {
-        return {
-          status: "near_duplicate",
-          error: body.error ?? "A similar project already exists",
-          dedupCandidates: body.dedupCandidates,
-        };
-      }
-      throw new HubApiError(body.error ?? "Conflict", 409, body);
-    }
     if (!res.ok) throw await this.toHubError(res);
     return this.parseBody<HubCreateProjectResult>(res);
   }
@@ -1365,6 +1354,24 @@ export class HubRestClient {
     );
   }
 
+  // ─── Files ────────────────────────────────────────────────────────────────
+
+  /**
+   * A short-lived signed GET for a file entity's stored blob
+   * (`GET /api/hub/files/{entityId}/url`). Bounded by the key's grant: a file
+   * the key cannot read answers 403, an unknown one 404.
+   *
+   * The URL downloads (`attachment`) and is served with the type the blob was
+   * stored with — `mimeType` says which. Never put it in an `<img>`/`<iframe>`
+   * for an active type (HTML, SVG); decide drawability on `mimeType`.
+   */
+  async getFileUrl(entityId: string): Promise<HubFileUrl> {
+    return this.request<HubFileUrl>(
+      "GET",
+      `/api/hub/files/${encodeURIComponent(entityId)}/url`
+    );
+  }
+
   // ─── Proposals ────────────────────────────────────────────────────────────
 
   /**
@@ -1419,6 +1426,14 @@ export class HubRestClient {
     limit?: number;
     /** Rows to skip. Pair with `listProposalsPage` to page a queue. */
     offset?: number;
+    /**
+     * Only these proposals (≤ 100 uuids). A filter on the same floor and key
+     * grant as the rest of the queue: an id the caller cannot see is simply
+     * absent from the result. Pass `status: "all"` to resolve ids whatever
+     * their status, and a `limit` at least the batch size. An empty array
+     * matches nothing.
+     */
+    proposalIds?: string[];
   }): Promise<HubProposal[]> {
     const userId = await this.resolveUserId();
     const params = new URLSearchParams({ userId });
@@ -1434,6 +1449,9 @@ export class HubRestClient {
     if (options?.limit) params.set("limit", String(options.limit));
     if (options?.offset !== undefined) {
       params.set("offset", String(options.offset));
+    }
+    if (options?.proposalIds) {
+      params.set("proposalIds", options.proposalIds.join(","));
     }
     const result = await this.request<
       HubProposal[] | HubListResponse<HubProposal>
@@ -1475,6 +1493,14 @@ export class HubRestClient {
     scope?: "workspace" | "all";
     limit?: number;
     offset?: number;
+    /**
+     * Only these proposals (≤ 100 uuids). A filter on the same floor and key
+     * grant as the rest of the queue: an id the caller cannot see is simply
+     * absent from the result. Pass `status: "all"` to resolve ids whatever
+     * their status, and a `limit` at least the batch size. An empty array
+     * matches nothing.
+     */
+    proposalIds?: string[];
   }): Promise<{
     proposals: HubProposal[];
     total: number;
@@ -1493,6 +1519,9 @@ export class HubRestClient {
       params.set("limit", String(options.limit));
     if (options?.offset !== undefined) {
       params.set("offset", String(options.offset));
+    }
+    if (options?.proposalIds) {
+      params.set("proposalIds", options.proposalIds.join(","));
     }
     const result = await this.request<Record<string, unknown>>(
       "GET",
@@ -2074,6 +2103,8 @@ export class HubRestClient {
     workspaceId?: string;
     projectId?: string;
     limit?: number;
+    /** sources | brief | full (default) — see `KnowledgeAnswerDetail`. */
+    detail?: KnowledgeAnswerDetail;
   }): Promise<KnowledgeAnswerResponse> {
     return this.request<KnowledgeAnswerResponse>(
       "POST",
@@ -2083,6 +2114,7 @@ export class HubRestClient {
         workspaceId: input.workspaceId ?? this.workspaceId,
         projectId: input.projectId,
         limit: input.limit,
+        detail: input.detail,
       }
     );
   }

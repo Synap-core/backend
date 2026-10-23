@@ -7,7 +7,7 @@
  * own copy of `setupAgent`/`checkPodHealth` and of the `assertValidPodUrl` SSRF
  * guard (`hub-rest-client/src/setup.ts`), because that package is deliberately
  * zero-dependency. The two copies must be kept in sync — change one, change the
- * other. (Wave 2 of SDK-AND-BASE-APP-PLAN.md collapses them into one.)
+ * other. (Wave 2 of SDK-AND-BASE-APP-PLAN (team pod) collapses them into one.)
  *
  * Native `fetch` only; zero runtime dependencies.
  */

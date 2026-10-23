@@ -1,7 +1,7 @@
 /**
  * A RULE running without a session reaches Happening as ONE row per rule —
  * the shape `signals.ts` `readRuleRuns` → `foldRuleRuns` sends — and the lens
- * model draws it: the rule's door, ×N for its runs, and a FAILED mark when a
+ * model draws it: the rule's door, "ran N times" for its runs, and a FAILED mark when a
  * run in the window failed (never the calm running mark over a failure).
  */
 import { describe, it, expect } from "vitest";
@@ -20,11 +20,11 @@ const ruleSignal = (over: Partial<LensPageSignal> = {}): LensPageSignal => ({
 });
 
 describe("rule-run Happening row", () => {
-  it("opens the rule and folds its runs into ×N", () => {
+  it('opens the rule and folds its runs into "ran N times"', () => {
     const row = lensRowOfLiveSignal(ruleSignal());
     expect(row.door).toEqual({ kind: "automation", id: "a1" });
     expect(row.objectKind).toBe("automation");
-    expect(row.repeat).toBe("×300");
+    expect(row.repeat).toBe("ran 300 times");
     expect(row.state).toEqual({ running: true });
   });
 

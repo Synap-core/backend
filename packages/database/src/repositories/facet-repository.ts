@@ -38,9 +38,7 @@ import {
   columnsForValue,
   LifecycleWriteOutsideDoorError,
 } from "../services/lifecycle/lifecycle-columns.js";
-
-/** Postgres error code for a unique constraint violation. */
-const UNIQUE_VIOLATION = "23505";
+import { isUniqueViolation } from "../utils/pg-errors.js";
 
 export interface AttachFacetInput {
   entityId: string;
@@ -274,7 +272,7 @@ export class FacetRepository extends BaseRepository<
       }
       return facet;
     } catch (error) {
-      if (this.isUniqueViolation(error)) {
+      if (isUniqueViolation(error)) {
         const existing = await this.findLiveMatch(
           data.entityId,
           profile.id,
@@ -547,23 +545,5 @@ export class FacetRepository extends BaseRepository<
       where: and(...conditions),
     });
     return facet ?? null;
-  }
-
-  private isUniqueViolation(error: unknown): boolean {
-    // Walk the cause chain: drizzle wraps the postgres error (DrizzleQueryError
-    // with the pg error as `.cause`), so 23505 is often NOT on the top-level
-    // error — a top-only check let a duplicate attach surface as a raw
-    // "Failed query" 500 instead of the idempotent existing-row return
-    // (verified live).
-    let cursor: unknown = error;
-    for (
-      let depth = 0;
-      cursor && typeof cursor === "object" && depth < 4;
-      depth++
-    ) {
-      if ((cursor as { code?: unknown }).code === UNIQUE_VIOLATION) return true;
-      cursor = (cursor as { cause?: unknown }).cause;
-    }
-    return false;
   }
 }

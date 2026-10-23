@@ -41,7 +41,6 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import * as database from "@synap/database";
 import { parseMarkdown, readEmbed } from "@synap-core/markdown-core";
 import { shapeChartEntities } from "@synap-core/types/renderables";
 import {
@@ -49,6 +48,7 @@ import {
   READ_ONLY_BUILTIN_VERBS,
 } from "../capabilities/builtin-verbs.js";
 import { liveChartReader } from "./freeze-charts-verb.js";
+import { allSchemaTables } from "../../__tests__/pglite-ddl.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -125,21 +125,9 @@ function cellProps(markdown: string) {
 }
 
 beforeAll(async () => {
-  const d = database as unknown as Record<string, PgTable>;
-  for (const name of [
-    "users",
-    "workspaces",
-    "workspaceMembers",
-    "entities",
-    "profiles",
-    "entityFacets",
-    "projectMembers",
-    "relations",
-    "podMembers",
-  ]) {
-    if (!d[name]) throw new Error(`no table export ${name}`);
-    await h.client!.exec(ddlFor(d[name]!));
-  }
+  // Every schema table: the entity read's access floor reaches more tables
+  // than a hand-picked list (pglite-ddl.ts allSchemaTables).
+  for (const t of allSchemaTables()) await h.client!.exec(ddlFor(t));
   await q(`insert into users (id, email) values ($1, 'u@x'), ($2, 's@x')`, [
     USER,
     STRANGER,

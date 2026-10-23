@@ -13,7 +13,6 @@
 
 import { describe, it, expect } from "vitest";
 import { formatGrounding, ORIENT_POINTER } from "./http-handler.js";
-import { groundingBudgetBytes } from "./index.js";
 
 const ws = (id: string, name: string, n: number) => ({ id, name, n });
 
@@ -145,7 +144,21 @@ describe("formatGrounding", () => {
         counts[i]!
       )
     );
-    const budget = groundingBudgetBytes();
+    // The budget is DERIVED, not the live one: the live budget moves whenever
+    // the reflex prose does (on 2026-10-21 it fit only two spaces, so this
+    // case stopped testing anything). Take the tightest budget at which the
+    // third space fits, plus the 4 B spare the founder's pod had — the exact
+    // squeeze where the pointer could have cost Brand Library its line.
+    let lo = 0;
+    let hi = 1 << 16;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (formatGrounding(projPart, pod, mid).includes("Brand Library ("))
+        hi = mid;
+      else lo = mid + 1;
+    }
+    expect(lo).toBeLessThan(1 << 16); // the third space fits at SOME budget
+    const budget = lo + 4;
     const out = formatGrounding(projPart, pod, budget);
     expect(Buffer.byteLength(out)).toBeLessThanOrEqual(budget);
     expect(out).toContain("Brand Library (00000002-");

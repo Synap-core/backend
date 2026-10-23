@@ -39,7 +39,7 @@ export const oauthClientsRouter = router({
   adminRevoke: podAdminProcedure
     .input(z.object({ clientId: ClientId }))
     .mutation(({ ctx, input }) => {
-      assertOwnerCredential("revoke an app", ctx.agentUserId);
+      assertOwnerCredential("revoke an app", { agentUserId: ctx.agentUserId });
       return revokeOauthClient({
         clientId: input.clientId,
         actorUserId: ctx.userId,

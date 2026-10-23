@@ -14,6 +14,10 @@
  *   - create    → calls `createRuleGoverned` (services/rules/create), the ONE
  *                 governed create door — the same function `skills.createRule`
  *                 calls, so an agent-authored write still PROPOSES.
+ *   - update    → calls `updateRuleGoverned` (services/rules/update), the ONE
+ *                 governed edit door `skills.updateRule` calls, with the body
+ *                 declared ONCE in `services/rules/update-input.ts` (pinned by
+ *                 identity in `update-input.parity.test.ts`).
  *   - list      → reuses `visibleSkillsWhere` (the canonical skill visibility
  *                 predicate) + `readRuleMetadata`. A rule IS a `skills` row
  *                 (`kind:"instruction"`, `category:"rule"`), so it can never be
@@ -26,10 +30,12 @@
  *                            service (`services/rules/parse-text.ts`).
  *   POST /rules            — create a rule (governed).
  *   GET  /rules            — list rules under the caller's visibility floor.
+ *   PATCH /rules/:id       — edit a rule (governed; an agent's edit PROPOSES).
  *
- * There is deliberately NO `/rules/:id` route here. If one is ever added it
- * MUST be registered AFTER `/rules/classify`, or Hono captures "classify" as an
- * id — this repo has shipped that bug. `rules.route-order.test.ts` pins it.
+ * `/rules/:id` is registered LAST, after `/rules/classify` and `/rules/parse`:
+ * Hono is first-match, and a dynamic segment declared first captures
+ * "classify" as an id — this repo has shipped that bug. `rules.test.ts` pins
+ * the ordering for the static routes.
  */
 
 import { z } from "@hono/zod-openapi";
@@ -48,6 +54,11 @@ import {
 } from "./_shared.js";
 import { classifyRuleIntent } from "../../../services/knowledge/classify-intent.js";
 import { createRuleGoverned } from "../../../services/rules/create.js";
+import { updateRuleGoverned } from "../../../services/rules/update.js";
+import {
+  ruleEditFieldsSchema,
+  ruleEditToGovernedInput,
+} from "../../../services/rules/update-input.js";
 import {
   askIsParseRule,
   loadParseRuleVocabulary,
@@ -131,6 +142,35 @@ const CreateRuleResponseSchema = z.union([
   z.object({ status: z.literal("created"), ruleId: z.string() }),
   z.object({ status: z.literal("proposed"), proposalId: z.string() }),
   z.object({ status: z.literal("denied"), reason: z.string() }),
+]);
+
+/**
+ * The edit body: `skills.updateRule`'s fields BY IDENTITY (the rule id rides
+ * the path), plus the attribution pair `POST /rules` carries. FULL SHAPE, not a
+ * patch — `updateRuleGoverned` rebuilds the rule from what is sent (see its
+ * header), so `intent` and `scope` are the stored values after the edit, while
+ * an absent `expiresAt` / `sentence` keeps the stored one and `null` clears it.
+ */
+export const UpdateRuleBodySchema = ruleEditFieldsSchema.extend({
+  /** Acting AGENT identity when the key carries one (verified, never trusted raw). */
+  agentUserId: z.string().uuid().optional(),
+  /** Honored only for service keys — see `resolveActingContext`. */
+  userId: z.string().uuid().optional(),
+});
+
+const UpdateRuleResponseSchema = z.union([
+  z.object({
+    status: z.literal("updated"),
+    ruleId: z.string(),
+    automationIds: z.array(z.string()),
+    draft: z.boolean(),
+    scopeNote: z.string().optional(),
+  }),
+  z.object({
+    status: z.literal("proposed"),
+    proposalId: z.string(),
+    scopeNote: z.string().optional(),
+  }),
 ]);
 
 const ListRulesQuerySchema = z.object({
@@ -236,6 +276,29 @@ export function registerRulesRoutes(app: HubHono): void {
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "patch",
+    path: "/rules/{id}",
+    tags: ["Rules"],
+    summary: "Edit a rule (governed)",
+    description:
+      'Governed full-shape edit — the same door `skills.updateRule` calls. Send the rule as it should be stored: `intent` and `scope` are required and REPLACE the stored ones; `expiresAt` / `sentence` are three-state (a value sets, `null` clears, absent keeps the stored one); `draft: false` (the default) activates a draft by recompiling it. A `{status:"proposed", proposalId}` body is a SUCCESS (HTTP 200) — an agent\'s edit is queued for review and nothing changes until a person approves it. A rule the caller cannot see is a 404. `{status:"denied"}` (with `failure.clause` when the compiler refused) is a 403.',
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: UpdateRuleBodySchema,
+    },
+    responses: {
+      200: {
+        description: "Updated or proposed",
+        schema: UpdateRuleResponseSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden / denied", schema: ErrorSchema },
+      404: { description: "Rule not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -499,6 +562,96 @@ export function registerRulesRoutes(app: HubHono): void {
       return c.json({ rules: [...proposed, ...materialized] });
     } catch (err) {
       logger.error({ err }, "rules.list failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  /**
+   * PATCH /rules/:id
+   *
+   * DECLARED LAST — after every static `/rules/*` route (Hono is first-match).
+   *
+   * The same identity steps as `POST /rules`, in the same order and through the
+   * same helpers: write scope, workspace confinement, the acting context from
+   * the VERIFIED auth (with membership of the named workspace), the agent
+   * verified by `resolveActorId` — so an edit can never land a rule anywhere a
+   * create from this caller could not. Then `updateRuleGoverned`, which floors
+   * the read on `visibleSkillsWhere` before anything else and files an agent's
+   * edit as a `rule/update` proposal the `rule/update` executor replays.
+   *
+   * The visibility lens is the edit's own workspace (or none, for a pod/user
+   * scope) — this door has no ambient lens the way a session does. So a MOVE out
+   * of a workspace (to pod, or to another workspace) reads as not found here;
+   * `skills.updateRule` with a workspace lens is the door for that.
+   */
+  app.patch("/rules/:id", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const ruleId = z.string().uuid().safeParse(c.req.param("id"));
+    if (!ruleId.success) {
+      return c.json({ error: "Invalid rule id: expected a uuid" }, 400);
+    }
+    const raw = await c.req.json().catch(() => null);
+    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
+
+    const parsed = UpdateRuleBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    const body = parsed.data;
+
+    const confined = confineWorkspaceOrForbidden(
+      c,
+      body.scope.workspaceId ?? null
+    );
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    const clampedWorkspaceId = confined.workspaceId ?? undefined;
+
+    const acting = await resolveActingContext(c, {
+      ...(body.userId ? { userId: body.userId } : {}),
+      ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+    });
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+    const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+    const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+    const actorResolution = await resolveActorId(
+      resolvedAgentUserId,
+      acting.userId
+    );
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+
+    try {
+      const result = await updateRuleGoverned({
+        userId: acting.userId,
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+        ruleId: ruleId.data,
+        workspaceId: acting.workspaceId,
+        ...ruleEditToGovernedInput(body),
+        // The CLAMPED workspace, never the raw body's — same as `POST /rules`.
+        scope: {
+          kind: body.scope.kind,
+          ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+          ...(body.scope.projectId ? { projectId: body.scope.projectId } : {}),
+        },
+        auditSource: "hub.rules.update",
+      });
+
+      if (result.status === "not_found") {
+        return c.json({ error: "Rule not found" }, 404);
+      }
+      if (result.status === "denied") return c.json(result, 403);
+      return c.json(result);
+    } catch (err) {
+      logger.error({ err }, "rules.update failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err)

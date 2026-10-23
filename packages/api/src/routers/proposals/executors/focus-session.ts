@@ -41,6 +41,7 @@ import {
   sanitizeDeclaredOutputs,
   withEvidenceVerdict,
   type CompleteOutputOutcome,
+  type RetireOutputOutcome,
 } from "../../../services/focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
 import { stampSlotKeys } from "../../../services/focus-sessions/slot-keys.js";
@@ -50,6 +51,12 @@ import {
   sessionTwinLockKey,
 } from "../../../services/focus-sessions/find-open-session-twin.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
+import { approvedSessionGoal } from "../../../services/focus-sessions/session-update-goal.js";
+import { isUndoableSessionPatch } from "../../../services/focus-sessions/session-undo.js";
+import {
+  readSessionUndoSnapshot,
+  stampSessionUpdate,
+} from "../../../services/proposals/stamp-materialized.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -782,9 +789,11 @@ export function registerFocusSessionExecutors(): void {
         if (typeof innerData.progress === "number") {
           set.progress = innerData.progress;
         }
-        if (typeof innerData.goal === "string") {
-          set.goal = innerData.goal;
-        }
+        // GOAL — written only for a real, still-current change: a payload's
+        // `goal` is never re-applied over a goal the session changed since
+        // the filing (`session-update-goal.ts`). Never reads `sessionName`.
+        const goalChange = approvedSessionGoal(innerData, session.goal);
+        if (goalChange.goal !== undefined) set.goal = goalChange.goal;
         // `null` (or blank) is the CLEAR — same explicit arm as the subject.
         if (innerData.title === null || typeof innerData.title === "string") {
           set.title = storedTitle(innerData.title);
@@ -905,8 +914,13 @@ export function registerFocusSessionExecutors(): void {
         outputRefusals = await applyProposedOutputMutations(
           sessionId,
           innerData,
-          session.userId
+          session.userId,
+          // An AGENT's list adds and updates, never deletes (C6): live,
+          // approving an agent's `expectedOutputs: []` beside a rename deleted
+          // every declared deliverable of session 9dc5da0c.
+          { keepUnlisted: !!proposal.agentUserId }
         );
+        if (goalChange.refusal) outputRefusals.push(goalChange.refusal);
 
         // CRITERIA. Carried by the proposing doors and, until now, applied by
         // none — an approved criteria change returned success and changed
@@ -954,11 +968,22 @@ export function registerFocusSessionExecutors(): void {
           );
         }
 
+        // UNDO RECORD — only for a patch every change of which undo can
+        // restore (`session-undo.ts`); read right before the write.
+        const undoBefore = isUndoableSessionPatch(innerData)
+          ? await readSessionUndoSnapshot(db, sessionId)
+          : null;
         let [updated] = await db
           .update(focusSessions)
           .set(set)
           .where(eq(focusSessions.id, sessionId))
           .returning();
+        await stampSessionUpdate({
+          proposalId: input.proposalId,
+          sessionId,
+          before: undoBefore,
+          after: updated,
+        });
 
         if (trackFiling && updated) {
           const { stampTrackFilingUses } =
@@ -1268,7 +1293,8 @@ async function instantiateApprovedPlaybook(args: {
 async function applyProposedOutputMutations(
   sessionId: string,
   innerData: Record<string, unknown>,
-  ownerUserId: string
+  ownerUserId: string,
+  opts: { keepUnlisted: boolean }
 ): Promise<string[]> {
   const expectedOutputs = z
     .array(expectedOutputWireSchema)
@@ -1278,6 +1304,10 @@ async function applyProposedOutputMutations(
     typeof innerData.completeOutput === "string"
       ? innerData.completeOutput
       : undefined;
+  const retireOutput =
+    typeof innerData.retireOutput === "string"
+      ? innerData.retireOutput
+      : undefined;
 
   const patch = {
     ...(expectedOutputs.success
@@ -1285,16 +1315,26 @@ async function applyProposedOutputMutations(
       : {}),
     ...(addOutput.success ? { addOutput: addOutput.data } : {}),
     ...(completeOutput !== undefined ? { completeOutput } : {}),
+    ...(retireOutput !== undefined ? { retireOutput } : {}),
   };
   if (Object.keys(patch).length === 0) return [];
 
   const refusals: string[] = [];
   let report: CompleteOutputOutcome | undefined;
+  let retired: RetireOutputOutcome | undefined;
   await updateExpectedOutputsLocked(sessionId, (current) => {
-    const applied = applyOutputMutations(current, patch);
+    const applied = applyOutputMutations(current, patch, opts);
     report = applied.completeOutput;
+    retired = applied.retireOutput;
     return applied.outputs;
   });
+  // A withdrawal that matched nothing, or a delivered slot, changed nothing.
+  const retiredReport = retired as RetireOutputOutcome | undefined;
+  if (retiredReport && retiredReport.result !== "retired") {
+    refusals.push(
+      retiredReport.message ?? `"${retiredReport.label}" was not withdrawn.`
+    );
+  }
   // The approved patch's `completeOutput` is still the agent's CLAIM — the
   // same evidence verdict the direct door runs decides (A3). Approving the
   // proposal approved the patch, not the deliverable's evidence.

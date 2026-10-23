@@ -1,6 +1,6 @@
 /**
- * THE measurement of the Capture → Library deprecation (CAPTURE_LIBRARY_PLAN
- * §2, stage 2 "Redirected"): every time a PERSON's door still sends a link, a
+ * THE measurement of the Capture → Library deprecation (capture-vs-library
+ * decision, stage 2 "Redirected"): every time a PERSON's door still sends a link, a
  * file or a page to Capture, the pod records one `deprecated_intake_path`
  * event naming the registry row (`DEPRECATED_INTAKE_PATHS`) and the caller.
  * The L6 removal criterion is "zero of these from first-party clients for 7

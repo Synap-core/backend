@@ -23,7 +23,6 @@ import {
 import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
-import { TRPCError } from "@trpc/server";
 import { PENDING_APPROVAL_BATCH_MAX } from "@synap-core/types/external-connect";
 
 import {
@@ -39,7 +38,6 @@ import {
   workspaceMembers,
   invites,
   users,
-  recordInviteAcceptance,
   EventRepository,
   eventRepository,
   ApiKeyRepository,
@@ -96,16 +94,17 @@ import {
   settleRejectedAgentConnect,
   type PendingKeyOutcome,
 } from "../../../services/agent-connect.js";
-import { disconnectAllUserConnections } from "../../../services/capabilities/capability-nango-sync.js";
 import {
   API_KEY_SCOPES,
   API_KEY_TOOL_PROFILES,
+  APP_PERSON_KEY_TYPE,
   type ApiKeyToolProfile,
   isValidScope,
   isPrivilegedMintScope,
 } from "@synap/database/schema";
 
 import { kratosAdmin, safeTokenEqual } from "@synap/auth";
+import { acceptInviteFor } from "../../workspaces/accept-invite-for.js";
 import type { Context } from "hono";
 import {
   logger,
@@ -447,6 +446,21 @@ async function authenticateServiceSetupRequest(
     // Path 4: any human-owned `hub-protocol.write` key can mint a service key
     // owned by itself (the key's userId becomes the service key's owner).
     if (keyRecord?.isActive && keyRecord.scope.includes("hub-protocol.write")) {
+      // A person's app sign-in token never mints keys: it is the person
+      // inside ONE app, for 30 days — a key minted from it would outlive the
+      // sign-in and the app's revocation (threat T1, app-person-token.ts).
+      if (keyRecord.keyType === APP_PERSON_KEY_TYPE) {
+        return {
+          ok: false,
+          response: c.json(
+            {
+              error:
+                "An app sign-in cannot mint keys. Mint it from your own session or personal key.",
+            },
+            403
+          ),
+        };
+      }
       // An AGENT key may not: the minted `service` key carries no linked human
       // and no agent shaping, so minting would launder the agent's attribution
       // into a key the governance membrane no longer reads as the agent's.
@@ -692,6 +706,16 @@ export function registerSetupRoutes(app: HubHono): void {
         keyRecord?.isActive &&
         keyRecord.scope.includes("hub-protocol.write")
       ) {
+        // A person's app sign-in token never connects an AI (see /setup/service).
+        if (keyRecord.keyType === APP_PERSON_KEY_TYPE) {
+          return c.json(
+            {
+              error:
+                "An app sign-in cannot connect an AI. Connect it from your own session.",
+            },
+            403
+          );
+        }
         authenticated = true;
         authMethod = "api_key_surface";
         surfaceCallerKeyId = keyRecord.id;
@@ -1723,6 +1747,13 @@ export function registerSetupRoutes(app: HubHono): void {
     if (!keyRecord || !keyRecord.isActive) {
       return c.json({ error: "Invalid or inactive API key" }, 401);
     }
+    // A person's app sign-in token never mints (see /setup/service).
+    if (keyRecord.keyType === APP_PERSON_KEY_TYPE) {
+      return c.json(
+        { error: "An app sign-in cannot provision external users." },
+        403
+      );
+    }
     // Prevent grandchild token minting: sub-tokens (depth≥1) cannot mint further sub-tokens.
     if (keyRecord.parentKeyId !== null && keyRecord.parentKeyId !== undefined) {
       return c.json(
@@ -2194,99 +2225,20 @@ export function registerSetupRoutes(app: HubHono): void {
       const status = (err as { response?: { status?: number } })?.response
         ?.status;
       if (status === 409) {
-        // Identity already exists. Two stale cases we can safely clean up:
-        //   A) users row exists + no workspace memberships (removed without cleanup)
-        //   B) orphaned Kratos identity with no users row at all
-        // Active accounts (has memberships) keep the security guard.
-        const existingUser = await db.query.users.findFirst({
-          where: eq(users.email, email),
-          columns: { id: true },
-        });
-
-        let kratosIdentityId: string | null = existingUser?.id ?? null;
-
-        if (!existingUser) {
-          // Orphaned identity — look it up in Kratos directly.
-          const { data: matches } = await kratosAdmin.listIdentities({
-            credentialsIdentifier: email,
-            pageSize: 1,
-          });
-          kratosIdentityId = matches?.[0]?.id ?? null;
-        }
-
-        const hasActiveMembership =
-          existingUser &&
-          !!(await db.query.workspaceMembers.findFirst({
-            where: eq(workspaceMembers.userId, existingUser.id),
-            columns: { workspaceId: true },
-          }));
-
-        const isStale = kratosIdentityId && !hasActiveMembership;
-
-        if (isStale) {
-          try {
-            // The stale account's connections go before the account does; a
-            // failure lands in the cleanup error below.
-            if (existingUser) {
-              await disconnectAllUserConnections(existingUser.id);
-            }
-            await kratosAdmin.deleteIdentity({ id: kratosIdentityId! });
-            if (existingUser) {
-              await db.delete(users).where(eq(users.id, existingUser.id));
-            }
-          } catch (cleanupErr) {
-            logger.warn(
-              { cleanupErr, email },
-              "accept-invite: stale identity cleanup failed"
-            );
-            return c.json(
-              { error: "Failed to clean up stale account" },
-              httpStatusForTrpcError(cleanupErr) as never
-            );
-          }
-          // Retry identity creation with the new credentials.
-          try {
-            const { data: identity } = await kratosAdmin.createIdentity({
-              createIdentityBody: {
-                schema_id: "default",
-                traits: { email, name },
-                credentials: { password: { config: { password } } },
-                verifiable_addresses: [
-                  {
-                    value: email,
-                    verified: true,
-                    via: "email",
-                    status: "completed",
-                  },
-                ],
-              },
-            });
-            identityId = identity.id;
-            logger.info(
-              { identityId, email },
-              "accept-invite: stale identity replaced"
-            );
-          } catch (retryErr) {
-            const msg =
-              retryErr instanceof Error ? retryErr.message : String(retryErr);
-            logger.error(
-              { retryErr, email },
-              "accept-invite: createIdentity retry failed"
-            );
-            return c.json(
-              { error: "Failed to create account", detail: msg.slice(0, 200) },
-              httpStatusForTrpcError(retryErr) as never
-            );
-          }
-        } else {
-          return c.json(
-            {
-              error:
-                "An account with this email already exists. Use the Sign in tab to accept the invite.",
-            },
-            409
-          );
-        }
+        // An account with this email already exists on this pod. It is never
+        // deleted or re-passworded here: whoever holds the invite token (the
+        // inviter included) would otherwise choose the password of an account
+        // that is not theirs, and an account with no workspace membership can
+        // still be a pod member, a linked Synap account or the author of data.
+        // The person signs in with that account and accepts.
+        return c.json(
+          {
+            error:
+              "An account with this email already exists on this pod. Sign in with it to accept the invite.",
+            code: "ACCOUNT_EXISTS",
+          },
+          409
+        );
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         logger.error({ err, email }, "accept-invite: createIdentity failed");
@@ -2299,44 +2251,9 @@ export function registerSetupRoutes(app: HubHono): void {
 
     await ensureUserRow(identityId, email, name);
 
-    // Accept invite: add workspace membership (workspace or all-pod).
-    if (invite.type === "workspace" && invite.workspaceId) {
-      const alreadyMember = await db.query.workspaceMembers.findFirst({
-        where: and(
-          eq(workspaceMembers.workspaceId, invite.workspaceId),
-          eq(workspaceMembers.userId, identityId)
-        ),
-      });
-      if (!alreadyMember) {
-        await db.insert(workspaceMembers).values({
-          workspaceId: invite.workspaceId,
-          userId: identityId,
-          role: invite.role as "owner" | "editor" | "viewer",
-        });
-      }
-    } else {
-      const allWorkspaces = await db.query.workspaces.findMany({
-        columns: { id: true },
-      });
-      for (const ws of allWorkspaces) {
-        const alreadyMember = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, ws.id),
-            eq(workspaceMembers.userId, identityId)
-          ),
-        });
-        if (!alreadyMember) {
-          await db.insert(workspaceMembers).values({
-            workspaceId: ws.id,
-            userId: identityId,
-            role: invite.role as "owner" | "editor" | "viewer",
-          });
-        }
-      }
-    }
-
-    await recordInviteAcceptance(invite, identityId);
-    await db.delete(invites).where(eq(invites.id, invite.id));
+    // The one accept door, shared with `workspaces.acceptInvite`: member
+    // events, pod membership, team person, audit line, the CP's invite row.
+    await acceptInviteFor(invite, { id: identityId, email });
     logger.info(
       { identityId, email, inviteId: invite.id },
       "accept-invite: account created and invite accepted"
@@ -2659,8 +2576,14 @@ export function registerSetupRoutes(app: HubHono): void {
     } catch (err) {
       // A typed refusal keeps its own status; anything else is a real fault.
       const status = httpStatusForTrpcError(err);
-      if (err instanceof TRPCError && status !== 500)
-        return c.json({ error: err.message }, status);
+      // Status from the cause walk, never a class-identity check: in the
+      // bundled pod that check was always false and a 400 answered 500
+      // (no-instanceof-trpcerror-in-rest).
+      if (status !== 500)
+        return c.json(
+          { error: err instanceof Error ? err.message : String(err) },
+          status
+        );
       throw err;
     }
     if (outcome === "forbidden")

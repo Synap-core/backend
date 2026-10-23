@@ -11,10 +11,13 @@
  *      automations/playbooks/loops — both doors' "phase 2").
  *
  * In-process, REAL Postgres, NO live Control Plane: a capability template is
- * seeded directly into the pod-local `capability_template_cache` table (the
- * SAME table `loadCapabilityTemplate` → `fetchCPCapabilityTemplate` reads
- * cache-first — see cp-template-client.ts), so resolution is fully
- * deterministic offline. The fixture mirrors the REAL "the-arch" grant
+ * seeded directly into the pod-local `cp_catalog_cache` table under the
+ * official catalog's source (the SAME rows `loadCapabilityTemplate` →
+ * `fetchCPCapabilityTemplate` reads — see cp-template-client.ts), so
+ * resolution is fully deterministic offline. (Until 2026-10-21 the fixture
+ * seeded `capability_template_cache`, retired in July: every install threw
+ * "not found", the error was caught into the result, and A–C read 0 rows —
+ * which is why every apply below now asserts no capability errored.) The fixture mirrors the REAL "the-arch" grant
  * capability (a grant-ops capability: 4 automations / 1 skill / 1 playbook /
  * 0 tools) that shipped with its automations/playbooks silently dropped this
  * session — this is the exact bug class these tests are a net for.
@@ -37,7 +40,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "crypto";
 import { sql } from "@synap/database";
-import { capabilityTemplateCache } from "@synap/database/schema";
+import { cpCatalogCache } from "@synap/database/schema";
+import { officialCatalogUrl } from "@synap/jobs/workers/cp-catalog-sync.js";
 import { materializeWorkspaceCore } from "./workspace-materialization-service.js";
 import { applyPackagePostWorkspace } from "./package-apply-post-workspace.js";
 import { createWorkspaceFromDefinition } from "@synap/database";
@@ -49,7 +53,7 @@ import type { WorkspaceDefinitionInput } from "@synap/database";
 // transform skips cleanly instead of throwing "table X is undefined" deep
 // inside a repository. See SCHEMA_LOADS_SANITY below for why a false here is
 // never silent.
-const SCHEMA_LOADS = !!capabilityTemplateCache;
+const SCHEMA_LOADS = !!cpCatalogCache;
 
 const suf = randomUUID().slice(0, 8);
 const userId = `test-matcore-${suf}`;
@@ -112,8 +116,8 @@ function grantCapabilityFixture(key: string, tag: string) {
   };
 }
 
-/** Insert (or refresh) a capability_template_cache row — the ONE fixture door
- * these tests need; mirrors `upsertCapabilityTemplateCache`. Uses
+/** Insert (or refresh) the official catalog's cache row for a capability —
+ * the ONE fixture door these tests need; mirrors cp-catalog-sync. Uses
  * JSON.stringify + ::jsonb (NOT postgres.js sql.json()) — sql.json() crashes
  * on this driver version (known repo gotcha). */
 async function seedCapabilityTemplate(
@@ -122,14 +126,29 @@ async function seedCapabilityTemplate(
 ): Promise<void> {
   const defJson = JSON.stringify(def);
   await sql`
-    INSERT INTO capability_template_cache (key, name, description, definition, synced_at)
-    VALUES (${key}, ${def.name}, ${def.description}, ${defJson}::jsonb, now())
-    ON CONFLICT (key) DO UPDATE SET
+    INSERT INTO cp_catalog_cache (source, kind, slug, name, description, definition, synced_at)
+    VALUES (${officialCatalogUrl()}, 'capability', ${key}, ${def.name}, ${def.description}, ${defJson}::jsonb, now())
+    ON CONFLICT (source, kind, slug) DO UPDATE SET
       name = excluded.name,
       description = excluded.description,
       definition = excluded.definition,
+      retired_at = NULL,
       synced_at = now()
   `;
+}
+
+/** Apply, and fail on any capability the install reported as an error — the
+ * result is where a "template not found" lands; reading only row counts made
+ * that failure look like "0 automations". */
+async function applyAndExpectNoCapabilityError(
+  input: Parameters<typeof applyPackagePostWorkspace>[0]
+): Promise<void> {
+  const result = await applyPackagePostWorkspace(input);
+  const caps = (result.capabilities ?? []) as Array<{
+    status: string;
+    message?: string;
+  }>;
+  expect(caps.filter((c) => c.status === "error")).toEqual([]);
 }
 
 async function insertTestUser(id: string): Promise<void> {
@@ -235,7 +254,7 @@ describe.skipIf(!SCHEMA_LOADS)(
         // guardrail #2): if this were 0, the test body did not really run
         // the setup and every assertion below would be vacuous.
         const [seeded] = await sql`
-          SELECT count(*)::int AS count FROM capability_template_cache WHERE key = ${capKey}
+          SELECT count(*)::int AS count FROM cp_catalog_cache WHERE kind = 'capability' AND slug = ${capKey}
         `;
         expect(seeded.count).toBe(1);
 
@@ -250,7 +269,7 @@ describe.skipIf(!SCHEMA_LOADS)(
         if (created.status !== "created") throw new Error("unreachable");
         workspaceId = created.workspaceId;
 
-        await applyPackagePostWorkspace({
+        await applyAndExpectNoCapabilityError({
           workspaceId,
           userId,
           body: { capabilities: [{ templateKey: capKey }] },
@@ -275,7 +294,7 @@ describe.skipIf(!SCHEMA_LOADS)(
         await cleanupWorkspace(workspaceId);
         await cleanupPodCapabilityContainer(def.name);
         await sql`DELETE FROM skills WHERE name = ${`grant-advisor-skill-${tag}`}`;
-        await sql`DELETE FROM capability_template_cache WHERE key = ${capKey}`;
+        await sql`DELETE FROM cp_catalog_cache WHERE kind = 'capability' AND slug = ${capKey}`;
       }
     });
 
@@ -292,7 +311,7 @@ describe.skipIf(!SCHEMA_LOADS)(
 
         // SENTINEL — same anti-skip proof as test A.
         const [seeded] = await sql`
-          SELECT count(*)::int AS count FROM capability_template_cache WHERE key = ${capKey}
+          SELECT count(*)::int AS count FROM cp_catalog_cache WHERE kind = 'capability' AND slug = ${capKey}
         `;
         expect(seeded.count).toBe(1);
 
@@ -324,12 +343,12 @@ describe.skipIf(!SCHEMA_LOADS)(
         trpcWorkspaceId = trpcCreated.workspaceId;
 
         // Same capability body applied on both doors' resulting workspace.
-        await applyPackagePostWorkspace({
+        await applyAndExpectNoCapabilityError({
           workspaceId: hubWorkspaceId,
           userId,
           body: { capabilities: [{ templateKey: capKey }] },
         });
-        await applyPackagePostWorkspace({
+        await applyAndExpectNoCapabilityError({
           workspaceId: trpcWorkspaceId,
           userId,
           body: { capabilities: [{ templateKey: capKey }] },
@@ -367,7 +386,7 @@ describe.skipIf(!SCHEMA_LOADS)(
         await cleanupWorkspace(trpcWorkspaceId);
         await cleanupPodCapabilityContainer(def.name);
         await sql`DELETE FROM skills WHERE name = ${`grant-advisor-skill-${tag}`}`;
-        await sql`DELETE FROM capability_template_cache WHERE key = ${capKey}`;
+        await sql`DELETE FROM cp_catalog_cache WHERE kind = 'capability' AND slug = ${capKey}`;
       }
     });
 
@@ -383,7 +402,7 @@ describe.skipIf(!SCHEMA_LOADS)(
 
         // SENTINEL — same anti-skip proof as tests A/B.
         const [seeded] = await sql`
-          SELECT count(*)::int AS count FROM capability_template_cache WHERE key = ${capKey}
+          SELECT count(*)::int AS count FROM cp_catalog_cache WHERE kind = 'capability' AND slug = ${capKey}
         `;
         expect(seeded.count).toBe(1);
 
@@ -399,7 +418,7 @@ describe.skipIf(!SCHEMA_LOADS)(
         workspaceId = created.workspaceId;
 
         // Initial install — the full 4/1/1 set.
-        await applyPackagePostWorkspace({
+        await applyAndExpectNoCapabilityError({
           workspaceId,
           userId,
           body: { capabilities: [{ templateKey: capKey }] },
@@ -420,7 +439,7 @@ describe.skipIf(!SCHEMA_LOADS)(
 
         // Re-install (reconcile) — the drift is HEALED: the missing
         // automation is re-added, existing ones are reused (not duplicated).
-        await applyPackagePostWorkspace({
+        await applyAndExpectNoCapabilityError({
           workspaceId,
           userId,
           body: { capabilities: [{ templateKey: capKey }] },
@@ -431,7 +450,7 @@ describe.skipIf(!SCHEMA_LOADS)(
 
         // Re-install AGAIN on an already-current workspace — a pure no-op,
         // no duplicates.
-        await applyPackagePostWorkspace({
+        await applyAndExpectNoCapabilityError({
           workspaceId,
           userId,
           body: { capabilities: [{ templateKey: capKey }] },
@@ -447,7 +466,7 @@ describe.skipIf(!SCHEMA_LOADS)(
         await cleanupWorkspace(workspaceId);
         await cleanupPodCapabilityContainer(def.name);
         await sql`DELETE FROM skills WHERE name = ${`grant-advisor-skill-${tag}`}`;
-        await sql`DELETE FROM capability_template_cache WHERE key = ${capKey}`;
+        await sql`DELETE FROM cp_catalog_cache WHERE kind = 'capability' AND slug = ${capKey}`;
       }
     });
 
@@ -468,7 +487,7 @@ describe.skipIf(!SCHEMA_LOADS)(
         if (created.status !== "created") throw new Error("unreachable");
         workspaceId = created.workspaceId;
 
-        await applyPackagePostWorkspace({
+        await applyAndExpectNoCapabilityError({
           workspaceId,
           userId,
           body: {

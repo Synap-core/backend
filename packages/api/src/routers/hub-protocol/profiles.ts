@@ -33,6 +33,7 @@ import {
   isNull,
   or,
   widgetDefinitions,
+  propertyDefs,
   PropertyValueType,
   slugifyPropertyKey,
   RENDERER_SURFACES,
@@ -183,16 +184,6 @@ export const hubProfilesRouter = router({
          * kind. 'pod' on a role is rejected by that resolver.
          */
         entityScope: z.enum(["pod", "workspace"]).optional(),
-        /**
-         * Override the pod-wide twin-slug refusal. `profiles.create` refuses an
-         * AI-initiated slug that already exists ANYWHERE on the pod, because a
-         * twin is how a kind's properties silently split in two. The refusal is
-         * a heuristic, so it needs an escape — and an escape the agent doors
-         * cannot reach is not an escape: it leaves an agent that legitimately
-         * wants a second scope permanently stuck on CONFLICT. Set only after
-         * reading the refusal's named candidates and deciding a twin is right.
-         */
-        forceCreate: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -229,7 +220,6 @@ export const hubProfilesRouter = router({
         // `resolveEntityScope` as undefined so the kind→pod / role→workspace
         // doctrine default applies instead of a value invented here.
         ...(input.entityScope ? { entityScope: input.entityScope } : {}),
-        ...(input.forceCreate ? { forceCreate: true } : {}),
       });
     }),
 
@@ -385,6 +375,9 @@ export const hubProfilesRouter = router({
         userId: input.userId,
         agentUserId,
         workspaceId,
+        // A `pod` / `user` binding is not a workspace's overlay: for the key's
+        // grant it is pod scope, whatever workspace was named (S7).
+        grantWorkspaceId: scope === "workspace" ? workspaceId : null,
         subjectType: "profile",
         action: "renderer.set",
         source: "intelligence",
@@ -402,7 +395,7 @@ export const hubProfilesRouter = router({
       });
 
       if ("denied" in perm && perm.denied) {
-        throw new Error(perm.reason);
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
         return {
@@ -497,6 +490,9 @@ export const hubProfilesRouter = router({
         userId: input.userId,
         agentUserId,
         workspaceId: input.workspaceId,
+        // Where the def LANDS for the key's grant: a base def is pod-wide
+        // schema (stored workspace NULL), only an overlay is this space's (S7).
+        grantWorkspaceId: overlay ? input.workspaceId : null,
         subjectType: "property_def",
         action: "create",
         source: "intelligence",
@@ -516,7 +512,7 @@ export const hubProfilesRouter = router({
       });
 
       if ("denied" in perm && perm.denied) {
-        throw new Error(perm.reason);
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
         return {
@@ -676,10 +672,18 @@ export const hubProfilesRouter = router({
         | "entity_id"
         | undefined;
 
+      // The key's grant is checked on the def's OWN scope (an overlay's
+      // workspace; a base / global def is pod-wide), never the named one (S7).
+      const storedDef = await db.query.propertyDefs.findFirst({
+        where: eq(propertyDefs.id, input.propertyDefId),
+        columns: { workspaceId: true },
+      });
+
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
         agentUserId,
         workspaceId: input.workspaceId,
+        grantWorkspaceId: storedDef?.workspaceId ?? null,
         subjectType: "property_def",
         action: "update",
         source: "intelligence",
@@ -697,7 +701,7 @@ export const hubProfilesRouter = router({
       });
 
       if ("denied" in perm && perm.denied) {
-        throw new Error(perm.reason);
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
         return {

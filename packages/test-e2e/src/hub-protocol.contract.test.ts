@@ -23,6 +23,7 @@ import {
   workspaceMembers,
   entities,
   apiKeys,
+  GrantRepository,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
@@ -141,6 +142,19 @@ describe("Hub Protocol contracts", () => {
     testApiKey = rawKey;
     testApiKeyId = keyRecord.id;
 
+    // 4b. A key with no grant may touch nothing (bed7e01d5, 2026-10-11): every
+    // door below answered 403 "This key's grant does not allow …". Give it the
+    // full grant a person's own key carries (deleted with the key: cascade).
+    await new GrantRepository(db).attach({
+      apiKeyId: keyRecord.id,
+      principalUserId: TEST_USER_ID,
+      onBehalfOf: TEST_USER_ID,
+      permissions: ["*"],
+      expiresAt: null,
+      label: "Full access",
+      createdBy: TEST_USER_ID,
+    });
+
     logger.info(
       { workspaceId: testWorkspaceId, keyId: testApiKeyId },
       "Fixtures ready"
@@ -221,7 +235,7 @@ describe("Hub Protocol contracts", () => {
 
   // ── Entity operations ──────────────────────────────────────────────────────
   describe("Entity operations", () => {
-    it("POST /entities { profileSlug: 'note', title: '...' } → 200, returns { id, title }", async () => {
+    it("POST /entities { profileSlug: 'note', title: '...' } → 200, returns { status: 'created', id }", async () => {
       const { status, body } = await hubRequest("POST", "/entities", {
         apiKey: testApiKey,
         body: {
@@ -231,11 +245,13 @@ describe("Hub Protocol contracts", () => {
           workspaceId: testWorkspaceId,
         },
       });
-      expect(status).toBe(200);
+      expect(status, JSON.stringify(body)).toBe(200);
+      // The contract is CreateEntityResponseSchema (_codecs/entity.ts): a
+      // status and the new id, never the entity's fields. GET /entities/:id
+      // below reads the title back.
       const entity = body as Record<string, unknown>;
-      expect(entity).toHaveProperty("id");
-      expect(entity).toHaveProperty("title", "contract-test-note");
-      // profileSlug may come back as a separate field or embedded in profile
+      expect(entity).toHaveProperty("status", "created");
+      expect(typeof entity.id).toBe("string");
       if (typeof entity.id === "string") {
         createdEntityIds.push(entity.id);
       }
@@ -252,16 +268,19 @@ describe("Hub Protocol contracts", () => {
           apiKey: testApiKey,
         }
       );
-      expect(status).toBe(200);
+      expect(status, JSON.stringify(body)).toBe(200);
       const entity = body as Record<string, unknown>;
       expect(entity).toHaveProperty("id", entityId);
+      expect(entity).toHaveProperty("title", "contract-test-note");
     });
 
     it("GET /search?q=contract-test-note → 200 or 503 (Typesense may be absent in CI)", async () => {
       const path = `/search?query=contract-test-note&userId=${TEST_USER_ID}&workspaceId=${testWorkspaceId}`;
-      const { status } = await hubRequest("GET", path, { apiKey: testApiKey });
+      const { status, body } = await hubRequest("GET", path, {
+        apiKey: testApiKey,
+      });
       // Typesense is optional in CI — treat both as acceptable
-      expect([200, 400, 503]).toContain(status);
+      expect([200, 400, 503], JSON.stringify(body)).toContain(status);
     });
 
     it("POST /entities with missing title (invalid body) → ≥ 400", async () => {
@@ -279,7 +298,7 @@ describe("Hub Protocol contracts", () => {
 
   // ── Document operations ────────────────────────────────────────────────────
   describe("Document operations", () => {
-    it("POST /documents { title, content } → 200, returns { id, title }", async () => {
+    it("POST /documents { title, content } → 200, returns { status: 'created', id }", async () => {
       const { status, body } = await hubRequest("POST", "/documents", {
         apiKey: testApiKey,
         body: {
@@ -290,10 +309,11 @@ describe("Hub Protocol contracts", () => {
           type: "markdown",
         },
       });
-      expect(status).toBe(200);
+      expect(status, JSON.stringify(body)).toBe(200);
+      // The hub createDocument result: { id, documentId, status, ackState }.
       const doc = body as Record<string, unknown>;
-      expect(doc).toHaveProperty("id");
-      expect(doc).toHaveProperty("title", "contract-test-doc");
+      expect(doc).toHaveProperty("status", "created");
+      expect(typeof doc.id).toBe("string");
     });
   });
 

@@ -1097,7 +1097,7 @@ export class ProfileResolutionService {
    * Studio) must use `getEffectiveRendererWithSource` instead — layer 3 always
    * returns a value, so a bare ref cannot answer "was this configured?".
    *
-   * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+   * Spec: synap-app/docs/architecture/profile-renderer.md
    */
   async getEffectiveRenderer(
     profileSlug: string,

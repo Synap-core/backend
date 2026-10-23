@@ -7,7 +7,7 @@ import {
 import { OBJECT_KINDS } from "./object-kinds.js";
 
 /**
- * "Library" — everything a person brings in (docs/CAPTURE_LIBRARY_PLAN.md §1).
+ * "Library" — everything a person brings in (docs/decisions/capture-vs-library.md).
  *
  * Checked first (wave L1): the noun needs NO row. It is not a registry kind
  * yet (wave L2 decides its model), and `humanizeToken` already says "Library"

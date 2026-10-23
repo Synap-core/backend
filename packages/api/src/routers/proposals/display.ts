@@ -128,14 +128,20 @@ import { resolveObjectRefs, type ProposalObjectRef } from "./object-refs.js";
 import { resolveStatusMoves, type ProposalStatusMove } from "./status-move.js";
 import {
   resolveSessionBefore,
+  withAgentOutputsLanding,
   type ProposalSessionBefore,
 } from "./session-before.js";
 import { guestProvenanceFor } from "../../services/forms/guest-provenance.js";
+import {
+  loadKeyComputerNames,
+  loadMachineNames,
+} from "../../services/machine-roster.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 import {
   createNameResolvers,
   stringProp,
   displayNameForUser,
+  actorDisplayName,
   displayLabelFromRecord,
   linkEndpointsFromPayload,
   resolveLinkEndpointName,
@@ -148,7 +154,12 @@ import {
 // `services/focus-sessions/participants.ts`) are unaffected by moving the
 // canonical implementations into `helper-functions.js` (done to let that
 // module use them without importing back into this one, which imports it).
-export { stringProp, displayNameForUser, displayLabelFromRecord };
+export {
+  stringProp,
+  displayNameForUser,
+  actorDisplayName,
+  displayLabelFromRecord,
+};
 
 type ProposalRow = typeof proposals.$inferSelect;
 
@@ -781,6 +792,9 @@ export async function enrichProposalsForDisplay(
             // second shape: actor (this row, when userType='agent'), on-behalf-of
             // (this column), approver (`proposals.reviewedBy`).
             createdByUserId: users.createdByUserId,
+            // The computer an agent runs on — "Claude Code on devbox"
+            // (`actorDisplayName`).
+            hostUserId: users.hostUserId,
           })
           .from(users)
           .where(inArray(users.id, userIds))
@@ -1350,41 +1364,61 @@ export async function enrichProposalsForDisplay(
   // back to no name, exactly like every other name batch here; the raw `appId`
   // is still emitted as a machine field.
   const appPublicIds = uniqueStrings(rows.map((row) => row.appId ?? undefined));
-  const [ownerRows, runTracks, appRows] = await Promise.all([
-    ownerIds.length > 0
-      ? db
-          .select({
-            id: users.id,
-            name: users.name,
-            email: users.email,
-            userType: users.userType,
-            agentMetadata: users.agentMetadata,
-            // Same shape as the first user batch (it lands in `userById`).
-            agentType: users.agentType,
-            createdByUserId: users.createdByUserId,
+  // The computers the acting agents run on, named by the roster's own rule,
+  // in the same round — an agent on a computer is named through
+  // `actorDisplayName` ("Claude Code on devbox").
+  const hostUserIds = uniqueStrings(
+    rows.map((row) =>
+      row.agentUserId
+        ? (userById.get(row.agentUserId)?.hostUserId ?? undefined)
+        : undefined
+    )
+  );
+  // The computer each filing KEY names (B7, `proposals.api_key_id` →
+  // `api_keys.instance_label`), read LIVE so labelling a key later names
+  // every proposal it filed. Only the label leaves this read — never the key.
+  const apiKeyIds = uniqueStrings(rows.map((row) => row.apiKeyId ?? undefined));
+  const [ownerRows, runTracks, appRows, hostNames, keyRows] = await Promise.all(
+    [
+      ownerIds.length > 0
+        ? db
+            .select({
+              id: users.id,
+              name: users.name,
+              email: users.email,
+              userType: users.userType,
+              agentMetadata: users.agentMetadata,
+              // Same shape as the first user batch (it lands in `userById`).
+              agentType: users.agentType,
+              createdByUserId: users.createdByUserId,
+              hostUserId: users.hostUserId,
+            })
+            .from(users)
+            .where(inArray(users.id, ownerIds))
+        : Promise.resolve([]),
+      trackPlaybookIds.length + trackAutomationIds.length > 0
+        ? listRunTracks({
+            userId,
+            playbookIds: trackPlaybookIds,
+            automationIds: trackAutomationIds,
           })
-          .from(users)
-          .where(inArray(users.id, ownerIds))
-      : Promise.resolve([]),
-    trackPlaybookIds.length + trackAutomationIds.length > 0
-      ? listRunTracks({
-          userId,
-          playbookIds: trackPlaybookIds,
-          automationIds: trackAutomationIds,
-        })
-      : Promise.resolve(new Map<string, RunGroup>()),
-    appPublicIds.length > 0
-      ? db
-          .select({ publicId: apps.publicId, name: apps.name })
-          .from(apps)
-          .where(
-            and(
-              inArray(apps.publicId, appPublicIds),
-              eq(apps.ownerUserId, userId)
+        : Promise.resolve(new Map<string, RunGroup>()),
+      appPublicIds.length > 0
+        ? db
+            .select({ publicId: apps.publicId, name: apps.name })
+            .from(apps)
+            .where(
+              and(
+                inArray(apps.publicId, appPublicIds),
+                eq(apps.ownerUserId, userId)
+              )
             )
-          )
-      : Promise.resolve([] as Array<{ publicId: string; name: string }>),
-  ]);
+        : Promise.resolve([] as Array<{ publicId: string; name: string }>),
+      loadMachineNames(hostUserIds),
+      loadKeyComputerNames(apiKeyIds),
+    ]
+  );
+  const keyComputerById = keyRows;
   for (const row of ownerRows) userById.set(row.id, row);
   const appNameByPublicId = new Map(
     appRows.map((row) => [row.publicId, row.name])
@@ -1508,7 +1542,18 @@ export async function enrichProposalsForDisplay(
     const authorRow = userById.get(
       row.agentUserId ?? row.createdBy ?? request.sourceId
     );
-    const authorName = authorRow ? displayNameForUser(authorRow) : undefined;
+    // The computer the filing key names — only for the row's OWN agent: the
+    // key is the agent's, never a person's who merely approved it.
+    const keyComputer = row.apiKeyId
+      ? keyComputerById.get(row.apiKeyId)
+      : undefined;
+    const authorName = authorRow
+      ? actorDisplayName(
+          authorRow,
+          hostNames,
+          authorRow.id === row.agentUserId ? keyComputer : undefined
+        )
+      : undefined;
 
     // ── THE THREE DELEGATION ROLES, projected separately ────────────────────
     // `authorName` above is a COALESCE — `agentUserId ?? createdBy ?? sourceId`
@@ -1534,7 +1579,7 @@ export async function enrichProposalsForDisplay(
       ? userById.get(row.agentUserId)
       : undefined;
     const agentActorName = agentActorRow
-      ? displayNameForUser(agentActorRow)
+      ? actorDisplayName(agentActorRow, hostNames, keyComputer)
       : undefined;
     // GUEST PROVENANCE (Sites W4/W5a): a proposal filed through a public form
     // carries the form's own actor as `agentUserId`, so everything keyed on
@@ -1716,6 +1761,21 @@ export async function enrichProposalsForDisplay(
     // beside the unmasked key it marks is the severance this prevents. Applied
     // LAST so the `{...payload}` re-spread above cannot reinstate the value.
     if (rowSetup) enrichedData = redactSecretParams(enrichedData, rowSetup);
+    // A pending AGENT session update's outputs list, as it would land NOW
+    // (stored as sent; `session-before.ts`), so the slots it keeps never read
+    // as deletions.
+    if (
+      enrichedData &&
+      typeof enrichedData === "object" &&
+      !Array.isArray(enrichedData)
+    ) {
+      enrichedData =
+        withAgentOutputsLanding(
+          enrichedData as Record<string, unknown>,
+          sessionBeforeByRow[idx],
+          !!row.agentUserId
+        ) ?? enrichedData;
+    }
 
     // B4: for a facet-UPDATE proposal, the live-current before-state is the
     // role-facet's CURRENT properties (fetched batched above), not the parent

@@ -2,7 +2,7 @@
  * Governance Rules Router
  *
  * CRUD over `governance_rules` (Governance Convergence Plan, Phase A schema —
- * see GOVERNANCE-CONVERGENCE-PLAN.md). This is the "always approve for X" door:
+ * see docs/decisions/agent-governance.md). This is the "always approve for X" door:
  * approving a proposal can additionally widen governance by inserting ONE
  * revocable, audited rule instead of hand-editing `workspaces.settings` or
  * `agentMetadata` JSONB. The resolver that *consumes* these rows (rung 2.8 in
@@ -29,7 +29,7 @@
  */
 
 import { z } from "zod";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import { assertPodAdmin } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import {
@@ -43,6 +43,8 @@ import {
   authoredCreatedBy,
   readReversibleDefault,
   setReversibleDefault,
+  readOwnOrganiseDefault,
+  setOwnOrganiseDefault,
 } from "@synap/database";
 import {
   GOVERNANCE_PRINCIPAL_CLASSES,
@@ -63,6 +65,7 @@ import {
   readNextRungs,
 } from "../services/proposals/next-rung.js";
 import { authoredByUser } from "../services/agent-identity-service.js";
+import { appAgentGovernanceDenial } from "../services/app-agent-floor.js";
 import { readAgentMatrix } from "../services/governance/agent-matrix.js";
 import {
   draftMatrixWiden,
@@ -81,6 +84,7 @@ import {
   AGENT_STRUCTURE_WRITE_EVENT_KEYS,
   nonWidenableFloorFor,
   REVERSIBLE_EVENT_KEYS,
+  OWN_ORGANISE_EVENT_KEYS,
 } from "@synap/governance-policy";
 
 const EDITOR_ROLES = ["editor", "admin", "owner"];
@@ -232,6 +236,19 @@ async function assertOwnsConnection(
       message: "You do not own this connection — cannot manage its rules",
     });
   }
+}
+
+/**
+ * An app's agent (App Connect or pod app) is governed by the app's owner:
+ * an agent's credential may not write or revoke its rules (PB4,
+ * `appAgentGovernanceDenial`), even acting for that owner.
+ */
+async function assertNotAgentOnAppAgent(
+  agentUserId: string | null | undefined,
+  ctx: { agentUserId?: string | null; keyType?: string | null }
+): Promise<void> {
+  const denial = await appAgentGovernanceDenial(agentUserId, ctx);
+  if (denial) throw new TRPCError({ code: "FORBIDDEN", message: denial });
 }
 
 const CreateInputSchema = z
@@ -603,7 +620,7 @@ export const governanceRulesRouter = router({
    * gate `create`/`revoke` apply to a global rule. Humans only: this is a
    * Kratos `protectedProcedure`, never on the agent (Hub/MCP) doors.
    */
-  setReversibleDefault: protectedProcedure
+  setReversibleDefault: credentialProcedure
     .input(z.object({ enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
       await assertPodAdmin(ctx.userId);
@@ -614,10 +631,41 @@ export const governanceRulesRouter = router({
     }),
 
   /**
+   * FB1020 B3 — the pod default "an agent organises its OWN FRESH work
+   * directly" (filing its records into a project the person named, filing
+   * its own session there, closing its own task — each with a receipt and
+   * Undo). ONE `@own-organise` pod rule, seeded ON (0346b). Read by
+   * Settings › Approvals beside the reversible default.
+   */
+  ownOrganiseDefault: protectedProcedure.query(async ({ ctx }) => {
+    const state = await readOwnOrganiseDefault(db);
+    return {
+      ...state,
+      actions: OWN_ORGANISE_EVENT_KEYS as readonly string[],
+      canManage: await isPodAdmin(ctx.userId),
+    };
+  }),
+
+  /**
+   * Switch it. Pod-admin only, humans only — same gate as the reversible
+   * default, including its step-up: it writes a governance rule, so a Synap
+   * app's device token needs a fresh sign-in (`credentialProcedure`).
+   */
+  setOwnOrganiseDefault: credentialProcedure
+    .input(z.object({ enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      await assertPodAdmin(ctx.userId);
+      return setOwnOrganiseDefault(db, {
+        enabled: input.enabled,
+        userId: ctx.userId,
+      });
+    }),
+
+  /**
    * Create one rule — the "always approve for X" door. See file header for
    * how the five granularities map to inputs.
    */
-  create: protectedProcedure
+  create: credentialProcedure
     .input(CreateInputSchema)
     .mutation(async ({ ctx, input }) => {
       // A rule that can never fire is refused, not stored (B3). An exact action
@@ -635,6 +683,10 @@ export const governanceRulesRouter = router({
       }
 
       await assertCanManageRule(ctx.userId, input);
+      await assertNotAgentOnAppAgent(
+        input.principalKind === "agent" ? input.agentUserId : null,
+        ctx
+      );
       if (input.targetKind === "connection") {
         await assertOwnsConnection(ctx.userId, input.targetPattern);
       }
@@ -702,7 +754,7 @@ export const governanceRulesRouter = router({
    * `already_covered`. Humans only: a Kratos `protectedProcedure`, never on
    * the agent (Hub/MCP) doors — an agent does not widen its own lane.
    */
-  proposeNextRung: protectedProcedure
+  proposeNextRung: credentialProcedure
     .input(
       z.object({
         itemRef: z.object({
@@ -743,7 +795,7 @@ export const governanceRulesRouter = router({
    * never a direct grant on someone else's agent. Anyone else: FORBIDDEN.
    * Humans only (Kratos `protectedProcedure`); an agent never widens itself.
    */
-  widenCell: protectedProcedure
+  widenCell: credentialProcedure
     .input(
       z.object({
         agentUserId: z.string().min(1),
@@ -804,6 +856,7 @@ export const governanceRulesRouter = router({
       }
 
       await assertCanManageRule(ctx.userId, existing);
+      await assertNotAgentOnAppAgent(existing.agentUserId, ctx);
       if (existing.targetKind === "connection") {
         await assertOwnsConnection(ctx.userId, existing.targetPattern);
       }

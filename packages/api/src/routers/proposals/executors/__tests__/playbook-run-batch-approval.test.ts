@@ -84,16 +84,20 @@ import { proposalExecRegistry } from "../../execution-registry.js";
 registerPlaybookExecutors();
 const executor = proposalExecRegistry.resolveExact("playbook/run")!;
 
-const approve = (inner: Record<string, unknown>) =>
+const approve = (
+  inner: Record<string, unknown>,
+  outer: Record<string, unknown> = {},
+  agentUserId: string | null = null
+) =>
   executor.execute({
     proposal: {
       id: "p-1",
       workspaceId: "ws-1",
       targetType: "playbook",
       proposalType: "run",
-      agentUserId: null,
+      agentUserId,
       sourceMessageId: null,
-      data: { data: { playbookId: "pb-1", params: {}, ...inner } },
+      data: { ...outer, data: { playbookId: "pb-1", params: {}, ...inner } },
     },
     userId: "owner-1",
     input: { proposalId: "p-1" },
@@ -154,10 +158,51 @@ describe("approving a batch run proposal", () => {
     expect(stampedRunResult()?.failed).toEqual(["lead-2"]);
   });
 
-  it("a single proposal starts exactly its one run, as before", async () => {
+  it("a single proposal starts exactly its one run and records its session", async () => {
     const res = await approve({ subjectId: "lead-solo" });
     expect(h.runs.map((r) => r.subjectId)).toEqual(["lead-solo"]);
     expect(res).not.toHaveProperty("batch");
-    expect(stampedRunResult()).toBeUndefined();
+    // The session the approval created is on the proposal (the door the
+    // person opens next) and in the approve response.
+    expect(stampedRunResult()).toEqual({
+      started: [
+        {
+          subjectId: "lead-solo",
+          sessionId: "session-lead-solo",
+          runId: "run-lead-solo",
+        },
+      ],
+      failed: [],
+    });
+    expect(res).toMatchObject({ primaryId: "session-lead-solo" });
+  });
+
+  it("a run that starts after an earlier failed attempt clears that failure", async () => {
+    await approve(
+      { subjectId: "lead-solo" },
+      { failure: { errorClass: "validation" }, automationId: "auto-1" }
+    );
+    const approved = h.sets.find((v) => v.status === "approved")!;
+    expect(approved.rejectionReason).toBeNull();
+    const data = approved.data as Record<string, unknown>;
+    expect(data).not.toHaveProperty("failure");
+    // Everything else the proposal carried is kept.
+    expect(data.automationId).toBe("auto-1");
+    expect(data.data).toMatchObject({ subjectId: "lead-solo" });
+  });
+});
+
+describe("approving an AGENT-filed run proposal", () => {
+  it("the person who approved owns the run; the agent that asked is on its roster", async () => {
+    await approve(
+      { subjectId: "post-1", agentIds: ["agent-extra"] },
+      {},
+      "agent-asker"
+    );
+    expect(h.runs).toHaveLength(1);
+    // No `agentUserId` reaches the run door: it would make the AGENT the
+    // session's owner (runPlaybook's actorId) and hide it from the person.
+    expect(h.runs[0]).not.toHaveProperty("agentUserId");
+    expect(h.runs[0].agentIds).toEqual(["agent-asker", "agent-extra"]);
   });
 });

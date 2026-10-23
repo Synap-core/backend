@@ -31,6 +31,7 @@ import {
   isNull,
   drizzleSql,
   eventRepository,
+  isUniqueViolation,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
@@ -430,20 +431,6 @@ export function resolveNotificationDedupeKey(
   groupKey: string | undefined
 ): string | undefined {
   return def.dedupeWindowMs && groupKey ? groupKey : undefined;
-}
-
-/** Postgres `unique_violation` (23505), however the driver surfaced it. */
-function isUniqueViolation(err: unknown): boolean {
-  let cursor: unknown = err;
-  for (
-    let depth = 0;
-    cursor && typeof cursor === "object" && depth < 4;
-    depth++
-  ) {
-    if ((cursor as { code?: unknown }).code === "23505") return true;
-    cursor = (cursor as { cause?: unknown }).cause;
-  }
-  return false;
 }
 
 // ---------------------------------------------------------------------------

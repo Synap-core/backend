@@ -222,18 +222,15 @@ describe("ASK_COPY", () => {
     expect(ASK_COPY.youAnswered("Yes")).toBe("You answered: Yes");
   });
 
-  it("draftAsks: names the agent, the work, and pluralises the count", () => {
-    expect(ASK_COPY.draftAsks("Claude Code", "Ship billing", 1)).toBe(
-      "Claude Code started Ship billing · asks you 1 thing"
-    );
-    expect(ASK_COPY.draftAsks("Claude Code", "Ship billing", 3)).toBe(
-      "Claude Code started Ship billing · asks you 3 things"
+  it("draftStarted: names the agent and the work, never an ask count", () => {
+    expect(ASK_COPY.draftStarted("Claude Code", "Ship billing")).toBe(
+      "Claude Code started Ship billing"
     );
     // Unknown starter: a noun, never an empty subject or a uuid.
-    expect(ASK_COPY.draftAsks(null, "Ship billing", 2)).toBe(
-      "An agent started Ship billing · asks you 2 things"
+    expect(ASK_COPY.draftStarted(null, "Ship billing")).toBe(
+      "An agent started Ship billing"
     );
-    expect(ASK_COPY.draftAsks("  ", "Ship billing", 2)).toMatch(/^An agent /);
+    expect(ASK_COPY.draftStarted("  ", "Ship billing")).toMatch(/^An agent /);
   });
 
   it("provideUploadKept: names the space the file stays in", () => {

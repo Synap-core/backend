@@ -217,11 +217,14 @@ async function createApiKey(
         "Content-Type": "application/json",
         Cookie: sessionCookie,
       },
+      // tRPC on this server speaks superjson: the input rides in `json`.
       body: JSON.stringify({
-        keyName: `Test API Key ${randomUUID()}`,
-        scope: ["hub-protocol.read", "hub-protocol.write"],
-        expiresInDays: 365,
-        grant: { permissions: ["*"], label: "Full access" },
+        json: {
+          keyName: `Test API Key ${randomUUID()}`,
+          scope: ["hub-protocol.read", "hub-protocol.write"],
+          expiresInDays: 365,
+          grant: { permissions: ["*"], label: "Full access" },
+        },
       }),
       signal: controller.signal,
     });
@@ -233,8 +236,8 @@ async function createApiKey(
     }
 
     const result = await response.json();
-    // Router returns { key: "...", keyId: "..." }
-    const apiKey = result.result?.data?.key;
+    // Router returns { key: "...", keyId: "..." }, superjson-wrapped.
+    const apiKey = result.result?.data?.json?.key;
 
     if (!apiKey) {
       console.error("API Key Response:", JSON.stringify(result, null, 2));

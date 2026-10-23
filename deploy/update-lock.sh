@@ -11,8 +11,12 @@
 # at <deploy_dir>/state/update.lock; a
 # second invocation fails FAST with the holder's identity — it never waits,
 # so an automation retry cannot queue a stale update behind a live one.
+# The one exception waits a BOUNDED time: a compose request (pod-agent's
+# `host_compose`) has already been taken from its queue and a person or the CP
+# is waiting on its outcome, so failing it because an update is mid-way would
+# only make them send it again (the pgdata_restore backup lock waits the same way).
 #
-#   synap_update_lock <deploy_dir> <operation>   # 0 = held, 1 = busy/failed
+#   synap_update_lock <deploy_dir> <operation> [wait-seconds]   # 0 = held, 1 = busy/failed
 #
 # Implementation: `flock -n` on fd 9 (util-linux; every pod host). The kernel
 # releases it when the process — and every child holding fd 9 — exits, so it
@@ -30,7 +34,7 @@ _synap_lock_busy() {
 }
 
 synap_update_lock() {
-    _sul_dir="$1"; _sul_op="${2:-operation}"
+    _sul_dir="$1"; _sul_op="${2:-operation}"; _sul_wait="${3:-0}"
     [ -n "$_sul_dir" ] || return 0
     mkdir -p "$_sul_dir/state" || { echo "❌ cannot create $_sul_dir/state for the update lock" >&2; return 1; }
     _sul_file="$_sul_dir/state/update.lock"
@@ -49,10 +53,10 @@ synap_update_lock() {
 
     if [ "${SYNAP_LOCK_IMPL:-}" != mkdir ] && command -v flock >/dev/null 2>&1; then
         exec 9>>"$_sul_file" || { echo "❌ cannot open $_sul_file" >&2; return 1; }
-        if ! flock -n 9; then
+        if [ "$_sul_wait" -gt 0 ]; then flock -w "$_sul_wait" 9; else flock -n 9; fi || {
             _synap_lock_busy "$_sul_op" "$(cat "$_sul_file" 2>/dev/null)"
             return 1
-        fi
+        }
         printf '%s\n' "$_sul_owner" > "$_sul_file"
         return 0
     fi
@@ -61,7 +65,15 @@ synap_update_lock() {
         echo "⚠️  flock not found — using a mkdir lock, which does NOT exclude a flock holder (install util-linux)." >&2
     fi
     _sul_d="$_sul_file.d"
-    if ! mkdir "$_sul_d" 2>/dev/null; then
+    _sul_held=0; _sul_i=0
+    while :; do
+        mkdir "$_sul_d" 2>/dev/null && { _sul_held=1; break; }
+        [ "$_sul_i" -lt "$_sul_wait" ] || break
+        _sul_pid="$(sed -n 's/.* pid=\([0-9][0-9]*\).*/\1/p' "$_sul_d/owner" 2>/dev/null)"
+        [ -n "$_sul_pid" ] && ! kill -0 "$_sul_pid" 2>/dev/null && ! ps -p "$_sul_pid" >/dev/null 2>&1 && break
+        sleep 1; _sul_i=$((_sul_i + 1))
+    done
+    if [ "$_sul_held" = 0 ]; then
         _sul_pid="$(sed -n 's/.* pid=\([0-9][0-9]*\).*/\1/p' "$_sul_d/owner" 2>/dev/null)"
         # No owner yet = the holder is between mkdir and its write: busy, not stale.
         # kill -0 first (busybox ps has no -p); ps -p covers another user's pid.

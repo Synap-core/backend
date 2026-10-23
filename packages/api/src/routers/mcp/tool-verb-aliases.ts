@@ -26,6 +26,7 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   synap_create_entity: ["entity.create", "create_entity"],
   synap_update_entity: ["entity.update", "update_entity"],
   synap_update_entities: ["update_entities", "synap_update_entities"],
+  synap_delete_entity: ["entity.delete", "synap_delete_entity"],
   synap_request_upload: ["synap_request_upload"],
   synap_change_kind_scope: ["synap_change_kind_scope"],
   synap_get_relations: ["graph.relations", "synap_get_relations"],
@@ -48,6 +49,7 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   synap_promote_cell_to_renderer: ["synap_promote_cell_to_renderer"],
   synap_promote_session_to_playbook: ["synap_promote_session_to_playbook"],
   synap_create_playbook: ["synap_create_playbook"],
+  synap_update_playbook: ["synap_update_playbook"],
   synap_run_playbook: ["synap_run_playbook"],
   synap_list_playbooks: ["synap_list_playbooks"],
   synap_match_playbooks: ["synap_match_playbooks"],
@@ -59,6 +61,8 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   // A rule IS a `skills` row (`category: "rule"`) governed under its own
   // `rule/create` door — hence both keys: skill teaching still applies to it.
   synap_create_rule: ["rule.create", "skill.create", "synap_create_rule"],
+  // Its edit twin, governed under `rule/update` — same pairing as create.
+  synap_update_rule: ["rule.update", "skill.update", "synap_update_rule"],
   synap_start_session: ["synap_start_session"],
   synap_update_session: ["synap_update_session"],
   synap_complete_session: ["synap_complete_session"],

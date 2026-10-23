@@ -83,13 +83,26 @@ describe("tripwire: proposal `view` projection", () => {
     expect(long.summary?.length).toBe(PROPOSAL_SUMMARY_MAX);
   });
 
-  it("BASIC prefers data.quality.summary over data.summary", () => {
+  it("BASIC prefers data.summary (what it does) over data.quality.summary (a review note)", () => {
+    // Live 0728053b (2026-10-22): an import of 2,827 entities listed as
+    // "Quality 70/100 — looks solid for apply after human review." because
+    // the quality line outranked the summary.
     expect(
       toProposalBasic({
         ...ROW,
-        data: { summary: "fallback", quality: { summary: "authored" } },
+        data: {
+          summary: "Import 2 people from contacts.csv",
+          quality: { summary: "Quality 70/100" },
+        },
       }).summary
-    ).toBe("authored");
+    ).toBe("Import 2 people from contacts.csv");
+    // The quality line still stands in when the proposal carries no summary.
+    expect(
+      toProposalBasic({
+        ...ROW,
+        data: { quality: { summary: "Quality 70/100" } },
+      }).summary
+    ).toBe("Quality 70/100");
   });
 
   it("BASIC OMITS summary when the proposal has none — never an empty string, never generated", () => {

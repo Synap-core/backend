@@ -23,12 +23,13 @@
  */
 
 import { createRoute } from "@hono/zod-openapi";
-import { db, apiKeys, users, eq } from "@synap/database";
+import { db, apiKeys, users, eq, getRequestGrant } from "@synap/database";
 
 import { authErrorResponse, shortenKeyId } from "../../../utils/auth-error.js";
 import { describeKeyForHolder } from "../../../services/key-holder-state.js";
 import { extractBearerToken } from "../_middleware/auth.js";
 import { apiKeyService } from "../../../services/api-keys.js";
+import { summarizeKeyGrant } from "../../../services/key-grant.js";
 import {
   GUEST_REFUSED_BODY,
   isGuestPrincipal,
@@ -45,7 +46,8 @@ export function registerAuthRoutes(app: HubHono): void {
     summary: "Introspect the calling bearer credential",
     description:
       "Returns metadata about the API key that authenticated this request — " +
-      "id, owning user, scopes, expiry, last-used-at. Used by Eve CLI and " +
+      "id, owning user, scopes, expiry, last-used-at, and `access` (the " +
+      "key's grant: full access or what limits it). Used by Eve CLI and " +
       "external operators to verify their credential without making " +
       "privileged calls. Returns 401 if no valid bearer was supplied.",
     security: [{ bearerAuth: [] }],
@@ -76,6 +78,7 @@ export function registerAuthRoutes(app: HubHono): void {
   app.openapi(authStatusRoute, async (c) => {
     const apiKeyId = c.get("apiKeyId");
     const userId = c.get("userId");
+    const grant = getRequestGrant();
 
     // The middleware sets `apiKeyId` only on the bearer-auth path. Session-
     // token callers (X-Session-Token) reach this handler with a userId but
@@ -148,6 +151,9 @@ export function registerAuthRoutes(app: HubHono): void {
           isActive: row.isActive,
           keyType: row.keyType,
           workspaceId: row.workspaceId ?? null,
+          // The grant the hub middleware entered for THIS request
+          // (`runWithGrant`) — the one the write gates read, not a re-query.
+          access: grant ? summarizeKeyGrant(grant) : null,
         },
         200
       );

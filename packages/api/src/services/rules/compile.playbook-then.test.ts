@@ -12,7 +12,10 @@
  */
 import { describe, expect, it } from "vitest";
 import { compileRuleSentence } from "./compile.js";
-import type { RuleSentenceValue } from "@synap-core/types/automations";
+import {
+  playbookRunNodeLabel,
+  type RuleSentenceValue,
+} from "@synap-core/types/automations";
 import type { PlaybookRunNodeDef } from "@synap/database";
 
 const PB = "33333333-3333-4333-8333-333333333333";
@@ -44,7 +47,7 @@ describe("compileRuleSentence — playbook_run THEN", () => {
     expect(node!.data).toEqual({
       // `PlaybookRunNodeDef.data.label` is declared REQUIRED, so the grammar
       // emits it; composed through the vocabulary door, not hand-written here.
-      label: "Run playbook",
+      label: playbookRunNodeLabel(), // the vocabulary's noun (d6db364bb)
       playbookId: PB,
       paramsMapping: { topic: "{{trigger.data.title}}" },
     });

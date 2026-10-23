@@ -67,6 +67,7 @@ export const TOOL_GROUPS = {
     "synap_create_entity",
     "synap_update_entity",
     "synap_update_entities",
+    "synap_delete_entity",
     "synap_create_document",
     "synap_update_document",
     "synap_request_upload",
@@ -95,7 +96,9 @@ export const TOOL_GROUPS = {
     "synap_governance",
     "synap_revise_proposal",
     "synap_reject_proposal",
+    "synap_request_deploy_approval",
     "synap_create_rule",
+    "synap_update_rule",
   ],
   /** Kinds, roles and who may see them. */
   schema: [
@@ -146,6 +149,7 @@ export const TOOL_GROUPS = {
     "synap_list_playbooks",
     "synap_match_playbooks",
     "synap_create_playbook",
+    "synap_update_playbook",
     "synap_run_playbook",
     "synap_create_skill",
     "synap_update_skill",

@@ -34,7 +34,7 @@ export function isStagedImportItem(metadata: unknown): boolean {
 export const LIBRARY_ITEM_KEY = "importItem";
 
 /**
- * `metadata` is NOT a Library item (CAPTURE_LIBRARY_PLAN decision 4). A
+ * `metadata` is NOT a Library item (capture-vs-library decision 4). A
  * Library item — anything staged with `importItem` — is never a row of a
  * capture or document list, before or after its group is built: it lives in
  * the Library. A row with no metadata (NULL) is kept, never dropped.
@@ -46,7 +46,7 @@ export function notLibraryItemWhere(metadataColumn: AnyPgColumn): SQL {
 /**
  * What the search index holds of `documents`: everything but a staged import
  * item — EXCEPT a Library item, which is indexed from the moment it is kept
- * (CAPTURE_LIBRARY_PLAN decision 4): by its title before the light read, by
+ * (capture-vs-library decision 4): by its title before the light read, by
  * its read text after (`loadDocumentBodyTexts`). Library items stay out of the
  * capture and document LISTS (`notLibraryItemWhere`), not out of search.
  */

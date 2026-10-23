@@ -58,8 +58,14 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
-import { type AskAnswerValue } from "@synap-core/types/ask";
+import { AskAnswerValueSchema, AskSchema } from "@synap-core/types/ask";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
+import { sessionGoalPayload } from "../../../services/focus-sessions/session-update-goal.js";
+import {
+  gateSessionFiling,
+  sessionFilingFields,
+  type SessionFilingDecision,
+} from "../../../services/focus-sessions/session-filing-gate.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
 import { withoutServerOwnedSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
 import {
@@ -84,8 +90,10 @@ import {
 } from "../../../services/focus-sessions/record-session-artifact.js";
 import { isOutputRefVisible } from "../../../services/focus-sessions/assert-output-ref-visible.js";
 import type { FollowOutcome } from "../../../services/focus-sessions/follow-playbook.js";
+import { refuseAgentGateBypass } from "../../../services/focus-sessions/gate-bypass-floor.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
 import {
+  answerGrantWrite,
   answerSessionSlot,
   describeAnswerRefusal,
   type AnswerSessionSlotResult,
@@ -99,7 +107,9 @@ import {
   WAIT_DEFAULT_SECONDS,
   WAIT_MAX_SECONDS,
   waitForSessionAnswers,
+  waitForSessionChanges,
 } from "../../../services/focus-sessions/wait-for-answers.js";
+import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
 import { stampAnswersPickedUp } from "../../../services/focus-sessions/answer-pickup.js";
 import {
   guidanceForBlockedSlots,
@@ -143,11 +153,14 @@ import {
   handedOffAgentIds,
   type AgentHandOffDecision,
 } from "../../../services/focus-sessions/agent-hand-off.js";
-import { createHubProtocolCallerContext } from "../utils.js";
+import { actingAgentUserId, createHubProtocolCallerContext } from "../utils.js";
 import { revertSession } from "../../../services/focus-sessions/revert-session.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { canUserSeeChannel } from "../../../utils/channel-visibility.js";
-import { settleParentAutomationRunFromChild } from "@synap/jobs";
+import {
+  completeRunBodySchema,
+  settleRunTurnEnd,
+} from "../../../services/runs/run-turn-end.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -294,6 +307,9 @@ export function unsupportedUpdateFieldError(raw: unknown): string | null {
   if ("completeOutput" in raw) {
     return "completeOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use the synap_update_session tool (MCP) to mark a declared deliverable done; it takes the row lock this door does not.";
   }
+  if ("retireOutput" in raw) {
+    return "retireOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use the synap_update_session tool (MCP) to withdraw a declared deliverable; it takes the row lock this door does not.";
+  }
   if ("stages" in raw) {
     return "stages is not supported on PATCH /focus-sessions/:id — nothing was changed. A session's own phase snapshot (focus_sessions.stages) is written through the tRPC focusSessions.update door.";
   }
@@ -439,10 +455,12 @@ const BlockOutputBodySchema = z.object({
   ref: outputRefWireSchema.nullable().optional(),
   /**
    * HOW the person can answer (confirm / choose / form / act / provide) — the
-   * slot wire's own `ask` schema (`AskSchema`), the same one tRPC
-   * `blockOutput` parses with. `null` clears; omitted leaves it.
+   * slot wire's own `ask` schema, not a copy. `null` clears; omitted leaves it.
+   * Never `z.custom<Ask>()`: it validates nothing and zod-to-openapi cannot
+   * express it, so the whole `/openapi.json` answered 500
+   * (`focus-sessions.ask-wire.test.ts`).
    */
-  ask: expectedOutputWireSchema.shape.ask,
+  ask: AskSchema.nullable().optional(),
 });
 
 const UnblockOutputBodySchema = z.object({
@@ -454,8 +472,9 @@ const AnswerOutputBodySchema = z
   .object({
     expectedLabel: z.string().min(1).max(500),
     text: z.string().max(SLOT_ANSWER_TEXT_MAX).optional(),
-    // Explicit type annotation preserves discriminated union inference.
-    value: z.custom<AskAnswerValue>().optional(),
+    // The tRPC twin's schema (`focusSessions.answerOutput`): parsed and
+    // redacted at the door, never `z.custom` (see `ask` above).
+    value: AskAnswerValueSchema.optional(),
     askFingerprint: z.string().min(1).max(64).optional(),
     // A secret answer: the agent `provideOptions` named as the reader.
     expectedGranteeId: z.string().min(1).max(200).optional(),
@@ -482,6 +501,16 @@ const SessionAnswersWaitQuerySchema = z.object({
     .min(1)
     .max(SESSION_ANSWERS_MAX_LIMIT)
     .optional(),
+  /**
+   * The session CHANGE FEED (parity with MCP `events`): a comma list of kinds,
+   * or `all`. Absent = the answer-only wait. Parsed by the shared
+   * `parseSessionChangeKinds`.
+   */
+  events: z.string().max(200).optional(),
+  /** With `events`: the stage last seen. Present but empty = no stage (null). */
+  knownStage: z.string().max(200).optional(),
+  /** `false` = peek: never stamp the "Picked up" receipt. */
+  stamp: z.enum(["true", "false"]).optional(),
 });
 
 /**
@@ -537,6 +566,26 @@ const CompleteBodySchema = z.object({
 });
 
 // ── Registration ───────────────────────────────────────────────────────────
+
+/**
+ * Does a PATCH still ask for anything once the parts held on their own
+ * proposals (a hand-off, a filing) are dropped? A wholesale `agentIds` equal to
+ * the roster asks nothing. When nothing is left, the held proposal IS the answer.
+ */
+function patchAsksForMore(
+  patch: Record<string, unknown>,
+  roster: readonly string[]
+): boolean {
+  const sameRoster = (ids: readonly string[]) =>
+    ids.length === roster.length && ids.every((a) => roster.includes(a));
+  return Object.entries(patch).some(
+    ([key, value]) =>
+      value !== undefined &&
+      key !== "agentUserId" &&
+      key !== "reasoning" &&
+      !(key === "agentIds" && sameRoster(value as string[]))
+  );
+}
 
 export function registerFocusSessionsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -849,7 +898,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       `\`timeoutSeconds\` (default ${WAIT_DEFAULT_SECONDS}, max ${WAIT_MAX_SECONDS}) with \`status: 'timeout'\` and ` +
       "`nextSince` to wait on again. Without `since`, only UNREAD answers: " +
       "slot answers not yet picked up, and room answers newer than the call. " +
-      "An agent key's read stamps the slot answer's `answerPickedUpAt` receipt.",
+      "An agent key's read stamps the slot answer's `answerPickedUpAt` receipt " +
+      "(`stamp=false`: a peek that never does). With `events` (a comma list of " +
+      "answer, proposal_decided, stage_moved, owner_message, or `all`) it is the " +
+      "session CHANGE FEED: `status: 'changed'` with typed `events[]` and `state` " +
+      "(pass `state.currentStage` back as `knownStage`).",
     request: {
       params: z.object({ id: z.string().uuid() }),
       query: SessionAnswersWaitQuerySchema,
@@ -858,10 +911,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       200: {
         description: "Answered, or timed out",
         schema: z.object({
-          status: z.enum(["answered", "timeout"]),
+          status: z.enum(["answered", "changed", "timeout"]),
           sessionId: z.string(),
           since: z.string().nullable(),
           answers: z.array(z.unknown()).optional(),
+          events: z.array(z.unknown()).optional(),
+          state: z
+            .object({
+              currentStage: z.string().nullable(),
+              status: z.string(),
+            })
+            .optional(),
           nextSince: z.string().nullable(),
           hasMore: z.boolean().optional(),
           waitedSeconds: z.number().optional(),
@@ -1375,10 +1435,20 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     }
 
     try {
-      // Step 1: load by id alone — workspaceId comes from the ROW, not the body.
-      const existing = await db.query.focusSessions.findFirst({
-        where: eq(focusSessions.id, id),
-      });
+      // Step 1: load by id + OWNER — workspaceId comes from the ROW, not the
+      // body. The owner floor every other session door applies (GET, cancel,
+      // the MCP `updateFocusSession`): another person's session and a missing
+      // one answer the SAME 404. Workspace membership alone never made a
+      // member the writer of someone else's session.
+      const floorUserId = c.get("userId") as string | undefined;
+      const existing = floorUserId
+        ? await db.query.focusSessions.findFirst({
+            where: and(
+              eq(focusSessions.id, id),
+              eq(focusSessions.userId, floorUserId)
+            ),
+          })
+        : undefined;
 
       if (!existing) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
@@ -1464,7 +1534,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // caller's 400/404, never a proposal that explodes at approval).
       const trackFilingModule =
         await import("../../../services/tracks/session-track-filing.js");
-      const trackFiling = trackFilingModule.hasTrackFilingPatch(patch)
+      let trackFiling = trackFilingModule.hasTrackFilingPatch(patch)
         ? await trackFilingModule.resolveSessionTrackFiling({
             session: existing,
             patch: { trackId: patch.trackId, trackStage: patch.trackStage },
@@ -1472,14 +1542,44 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           })
         : undefined;
 
-      // Step 3: governance membrane. On the capture path (X-Capture: 1) attribute
-      // the write to the seeded Capture agent so focus_session.update auto-approves;
-      // a body-supplied agentUserId still wins, and a non-capture caller keeps its
-      // own agent identity (normal governance).
-      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      // Step 3: governance membrane. The write is governed as the KEY's agent —
+      // `actingAgentUserId`, the ONE resolution the hub tRPC routers use (with
+      // the same `is_internal` carve-out as `getCaller`: the IS names the
+      // persona it runs in the body). A body `agentUserId` is honoured only for
+      // a key that is not itself an agent, and only for an agent of the key's
+      // person; anyone else's agent is refused (FORBIDDEN → 403). With no body
+      // agent, the capture path (X-Capture: 1) attributes the write to the
+      // seeded Capture agent so focus_session.update auto-approves.
+      const keyAgentUserId =
+        c.get("keyType") === "is_internal"
+          ? undefined
+          : (c.get("agentUserId") as string | undefined);
+      const resolvedAgentUserId = await actingAgentUserId(
+        { agentUserId: keyAgentUserId, userId },
+        patch.agentUserId
+      );
       const agentUserId =
-        patch.agentUserId ??
-        (await resolveCaptureActorUserId(c, ctxAgentUserId, { workspaceId }));
+        patch.agentUserId !== undefined
+          ? resolvedAgentUserId
+          : await resolveCaptureActorUserId(c, resolvedAgentUserId, {
+              workspaceId,
+            });
+
+      // Step 3a: STAGE GATE FLOOR — the MCP door's (`updateFocusSession`). An
+      // agent cannot resume a gate-held session, advance it while held, or
+      // jump over a gated stage; the gate's approval is the door. 409: the
+      // session's state, not the caller's rights, is what refuses it.
+      if (
+        agentUserId &&
+        (patch.status !== undefined || patch.currentStage !== undefined)
+      ) {
+        const refusal = await refuseAgentGateBypass({
+          session: existing,
+          toStatus: patch.status,
+          toStage: patch.currentStage,
+        });
+        if (refusal) return c.json({ error: refusal }, 409);
+      }
 
       // Step 2d: AGENT HAND-OFF — an agent putting ANOTHER agent on the roster
       // (`addAgentId`, or a NEW id inside a wholesale `agentIds`) is its own
@@ -1503,6 +1603,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             workspaceId: existing.workspaceId,
             sessionId: id,
             goal: existing.goal,
+            title: existing.title,
             agentId,
             reasoning: patch.reasoning,
           });
@@ -1528,17 +1629,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ) {
             delete patch.addAgentId;
           }
-          const sameRoster = (ids: readonly string[]) =>
-            ids.length === roster.length &&
-            ids.every((a) => roster.includes(a));
-          const asksForMore = Object.entries(patch).some(
-            ([key, value]) =>
-              value !== undefined &&
-              key !== "agentUserId" &&
-              key !== "reasoning" &&
-              !(key === "agentIds" && sameRoster(value as string[]))
-          );
-          if (!asksForMore) {
+          if (!patchAsksForMore(patch, roster)) {
             const first = proposed[0]!;
             return jsonGoverned(c, {
               status: "proposed",
@@ -1557,8 +1648,51 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         }
       }
 
-      // Gate data: always include goal from the row (proposal summary label) plus
-      // every field being patched so focus_session/update can materialize on approve.
+      // Step 2e: FILING — an agent's track filing is its OWN forced proposal
+      // (`session-filing-gate.ts`, the MCP door's rule), so the rest of the
+      // patch is not held with it. Proposed ⇒ dropped from this patch
+      // (approval applies it); nothing else asked ⇒ the proposal IS the answer.
+      let filing: SessionFilingDecision | undefined;
+      if (agentUserId && trackFiling) {
+        filing = await gateSessionFiling({
+          userId,
+          agentUserId,
+          workspaceId: existing.workspaceId,
+          session: existing,
+          filing: { trackFiling },
+          reasoning: patch.reasoning,
+        });
+        if (filing.status === "denied") {
+          return c.json({ error: filing.reason }, 403);
+        }
+        if (filing.status === "proposed") {
+          delete patch.trackId;
+          delete patch.trackStage;
+          trackFiling = undefined;
+          const roster = Array.isArray(existing.agentIds)
+            ? existing.agentIds
+            : [];
+          if (!patchAsksForMore(patch, roster)) {
+            return jsonGoverned(c, {
+              status: "proposed",
+              message: proposedMessageFor(
+                filing.proposalType,
+                "Filing this session was proposed for review"
+              ),
+              proposalId: filing.proposalId,
+              summary: filing.summary,
+              reviewPath: filing.reviewPath,
+              reviewUrl: filing.reviewUrl,
+              ...(handOffs.length > 0 ? { handOffs } : {}),
+              session: null,
+            });
+          }
+        }
+      }
+
+      // Gate data: every field being patched so focus_session/update can
+      // materialize on approve. The goal rides ONLY when it changes; the session
+      // is named by the display-only `sessionName` (`session-update-goal.ts`).
       const perm = await checkPermissionOrPropose({
         userId,
         agentUserId,
@@ -1567,11 +1701,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         action: "update",
         source: "intelligence",
         reasoning: patch.reasoning,
-        // Filing into a track is the person's call when an agent does it.
-        ...(trackFiling ? { forcePropose: true } : {}),
         data: {
           id,
-          goal: patch.goal !== undefined ? patch.goal : existing.goal,
+          ...sessionGoalPayload(existing, patch.goal),
           ...(patch.title !== undefined ? { title: patch.title } : {}),
           ...(patch.status !== undefined ? { status: patch.status } : {}),
           ...(patch.progress !== undefined ? { progress: patch.progress } : {}),
@@ -1587,6 +1719,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ...(patch.addAgentId !== undefined
             ? { addAgentId: patch.addAgentId }
             : {}),
+          // The caller's list AS SENT. An agent's list is add-or-update (C6):
+          // the executor re-applies that upsert against the row as it is at
+          // approval, and the review shows the list as it would land then
+          // (`session-before.ts`). Never a frozen copy of the stored slots —
+          // their server stamps go stale and refuse the approval, and a slot
+          // deleted meanwhile came back (FB1020 w2 review M5).
           ...(patch.expectedOutputs !== undefined
             ? { expectedOutputs: patch.expectedOutputs }
             : {}),
@@ -1613,22 +1751,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           // Same reason as `followPlaybookId` above: without this the answers
           // would land on the direct path and vanish on the approved one.
           ...(patch.params !== undefined ? { params: patch.params } : {}),
-          // Carried (re-resolved by the executor); names are display only.
-          ...(trackFiling
-            ? {
-                trackId: trackFiling.set.trackId,
-                trackStage: trackFiling.set.trackStage,
-                ...(trackFiling.trackName
-                  ? { trackName: trackFiling.trackName }
-                  : {}),
-                ...(trackFiling.stageName
-                  ? { stageName: trackFiling.stageName }
-                  : {}),
-                ...(trackFiling.projectName
-                  ? { trackProjectName: trackFiling.projectName }
-                  : {}),
-              }
-            : {}),
+          // A PERSON's track filing (an agent's took its own door above).
+          ...sessionFilingFields({ trackFiling }),
         },
       });
 
@@ -1647,6 +1771,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           reasoning: perm.reasoning,
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
+          ...(filing ? { filing } : {}),
           session: null,
         });
       }
@@ -1695,10 +1820,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // Merge, never assign — the SAME merge the tRPC and MCP doors use, so a
       // caller that echoes back only the fields it knows about cannot erase a
       // delegation, a reviewer's return note, or an approval's lineage.
+      // An AGENT's list adds and updates, never deletes (C6) — the same mode
+      // the MCP door and the approval executor apply.
       if (patch.expectedOutputs !== undefined)
         set.expectedOutputs = mergeExpectedOutputs(
           (existing.expectedOutputs as typeof patch.expectedOutputs) ?? [],
-          patch.expectedOutputs
+          patch.expectedOutputs,
+          { keepUnlisted: !!agentUserId }
         );
       // Shallow-merge, exactly like the `metadata` bag below — `verificationReport`
       // is the SAME shape of thing: an open JSONB bag written by SEVERAL
@@ -1912,6 +2040,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Which hand-offs to other agents this patch asked for, and which are
         // waiting on a person (not on the roster yet).
         ...(handOffs.length > 0 ? { handOffs } : {}),
+        // An agent's filing waiting on a person: NOT applied with the rest.
+        ...(filing ? { filing } : {}),
         ...(blockGuidelines ? { blockGuidelines } : {}),
         ...(nudges ? { nudges } : {}),
         // What the follow DID — which playbook, which stage, how much
@@ -2934,13 +3064,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         403
       );
     }
-    // The tRPC twin's grant rung (focusSessions.answerOutput).
-    const denial = await grantWriteDenial({
-      subjectType: "focus_session",
-      action: "update",
-    });
-    if (denial) return c.json({ error: denial }, 403);
     const id = c.req.param("id");
+    // The tRPC twin's grant rung (focusSessions.answerOutput): the session's
+    // own space + project name the key's reach.
+    const denial = await grantWriteDenial(await answerGrantWrite(id));
+    if (denial) return c.json({ error: denial }, 403);
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);
     }
@@ -3068,6 +3196,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       since: c.req.query("since"),
       timeoutSeconds: c.req.query("timeoutSeconds"),
       limit: c.req.query("limit"),
+      events: c.req.query("events"),
+      knownStage: c.req.query("knownStage"),
+      stamp: c.req.query("stamp"),
     });
     if (!q.success) {
       return c.json(
@@ -3075,19 +3206,33 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         400
       );
     }
+    const kinds = parseSessionChangeKinds(q.data.events);
+    if (!kinds.ok) return c.json({ error: kinds.error }, 400);
     try {
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const result = await waitForSessionAnswers({
+      const agentUserId = (c.get("agentUserId") as string | undefined) ?? null;
+      const common = {
         sessionId: id,
         userId: acting.userId,
         since: q.data.since ? new Date(q.data.since) : null,
         timeoutSeconds: q.data.timeoutSeconds,
         limit: q.data.limit,
-        // An AGENT key's read is the "Picked up" moment; a person's never is.
-        stampReceipt: Boolean(c.get("agentUserId")),
+        // An AGENT key's read is the "Picked up" moment; a person's never is;
+        // `stamp=false` is a peek (a watcher), which never stamps either.
+        stampReceipt: Boolean(agentUserId) && q.data.stamp !== "false",
+        agentUserId,
         signal: c.req.raw.signal,
-      });
+      };
+      const result = kinds.kinds
+        ? await waitForSessionChanges({
+            ...common,
+            kinds: kinds.kinds,
+            ...(q.data.knownStage !== undefined
+              ? { knownStage: q.data.knownStage || null }
+              : {}),
+          })
+        : await waitForSessionAnswers(common);
       if (!result) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
@@ -3199,9 +3344,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   /**
    * POST /focus-sessions/:sessionId/complete-run
    *
-   * Fire-and-forget provenance: when an IS agent finishes working on a
-   * session-scoped channel, it calls this to close any running playbook_run
-   * for that session. Best-effort — if there's no running run, that's fine.
+   * The IS ends a turn on a session-scoped channel: settle the session's LIVE
+   * playbook_run from how the turn ended (`run-turn-end.ts`, B8 2026-10-21).
+   * No body / `outcome: 'completed'` → the run completes (the old behaviour).
+   * `outcome: 'stopped'` + `reason: 'turn_budget' | 'max_steps'` → the run stays LIVE: it
+   * continues on its own up to N times, then the person is asked. Best-effort
+   * on "no run": a session that is not a playbook run is a normal 200.
    */
   app.post("/focus-sessions/:sessionId/complete-run", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -3211,6 +3359,28 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const sessionId = c.req.param("sessionId");
     if (!isUuid(sessionId)) {
       return c.json({ error: `Focus session ${sessionId} not found` }, 404);
+    }
+
+    // An empty body is an IS that predates the report: `completed`.
+    const rawText = await c.req.text().catch(() => "");
+    let raw: unknown = {};
+    if (rawText.trim()) {
+      try {
+        raw = JSON.parse(rawText);
+      } catch {
+        return c.json({ error: "Body is not valid JSON" }, 400);
+      }
+    }
+    const parsed = completeRunBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        {
+          error: `Invalid complete-run body: ${parsed.error.issues
+            .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
+            .join("; ")}`,
+        },
+        400
+      );
     }
 
     try {
@@ -3244,15 +3414,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         return c.json({ status: "no-running-run" as const });
       }
 
-      // Mark as completed.
-      await db
-        .update(playbookRuns)
-        .set({ status: "completed", completedAt: new Date() })
-        .where(eq(playbookRuns.id, run.id));
-      // The parent automation run settles from its children (never throws).
-      await settleParentAutomationRunFromChild({ playbookRunId: run.id });
-
-      return c.json({ status: "completed" as const });
+      const status = await settleRunTurnEnd({
+        run,
+        session: {
+          id: session.id,
+          userId: session.userId,
+          channelId: session.channelId ?? null,
+        },
+        body: parsed.data,
+        askingAgentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+      });
+      return c.json({ status });
     } catch (err) {
       logger.error({ err, sessionId }, "focus-sessions.complete-run failed");
       return c.json(

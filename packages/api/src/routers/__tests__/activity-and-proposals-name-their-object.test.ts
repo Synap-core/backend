@@ -45,18 +45,16 @@ describe("document edit proposals name the document", () => {
   });
 
   it("passes the loaded document's real title into the summary", () => {
-    const src = read("../hub-protocol/documents.ts");
-    // The proposal's summary must be COMPOSED from `doc.title`, not a constant.
-    // `doc` is loaded and owner-checked earlier in the same procedure.
-    const summaryCall = src.match(
-      /summary:\s*buildObjectActionTitle\(\{[\s\S]{0,240}?\}\)/
+    // The AI edit door moved to apply-document-patch.ts (cb3c40f05). It hands
+    // the gate the loaded document's title, and buildProposalSummary names the
+    // document from `data.title` — composed from `doc.title`, not a constant.
+    const src = read("../../services/document-patch/apply-document-patch.ts");
+    const gate = src.match(
+      /checkPermissionOrPropose\(\{[\s\S]{0,1200}?\n {2}\}\);/
     );
-    expect(
-      summaryCall,
-      "summary is not built by buildObjectActionTitle"
-    ).not.toBeNull();
-    expect(summaryCall![0]).toContain("objectName: doc.title");
-    expect(summaryCall![0]).toContain('objectKind: "document"');
+    expect(gate, "the AI edit door no longer calls the gate").not.toBeNull();
+    expect(gate![0]).toContain('subjectType: "document"');
+    expect(gate![0]).toContain("title: doc.title");
   });
 });
 

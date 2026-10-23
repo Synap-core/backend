@@ -11,6 +11,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { t } from "./init-trpc.js";
+import { assertFreshAuthentication } from "./utils/device-session.js";
 import { requireUserId } from "./utils/user-scoped.js";
 import { createLogger } from "@synap-core/core";
 import { db, eq, and } from "@synap/database";
@@ -171,6 +172,26 @@ export const protectedProcedure = publicProcedure
   })
   .use(readOnlyGuardMiddleware)
   .use(auditLogMiddleware);
+
+/**
+ * The ONE tRPC check at a credential door: a Kratos session, or a Synap app's
+ * device session that REALLY authenticated within the step-up window
+ * (`utils/device-session.ts` says why). Every procedure that creates, rotates,
+ * widens or approves a credential uses it, through `credentialProcedure` or
+ * `.use(requireFreshAuthentication)` — derived and enforced by tripwire
+ * `credential-doors-refuse-device-session`.
+ */
+export const requireFreshAuthentication = t.middleware(async (opts) => {
+  assertFreshAuthentication(opts.ctx);
+  // `next()` with no ctx: the procedure keeps the context its builder narrowed
+  // (`userId: string` after protectedProcedure).
+  return opts.next();
+});
+
+/** A credential door for any signed-in caller: {@link requireFreshAuthentication}. */
+export const credentialProcedure = protectedProcedure.use(
+  requireFreshAuthentication
+);
 
 /** How many candidate workspaces the denial message names before eliding. */
 const DENIAL_CANDIDATE_LIMIT = 8;

@@ -58,6 +58,7 @@ import {
   messages,
   users,
   focusSessions,
+  getRequestGrant,
   and,
   eq,
   desc,
@@ -700,6 +701,48 @@ export type AnswerSessionSlotResult =
  * (`summarizeAnswer`) — what the room post says and what every text-only
  * reader (CLI, continuation packet) reads.
  */
+const UUID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The grant request an ANSWER is, for the key half of both answer doors (tRPC
+ * `focusSessions.answerOutput`, Hub `POST /focus-sessions/:id/outputs/answer`):
+ * an update of the session IN ITS OWN SPACE AND PROJECT. Without them a key
+ * bounded to some spaces — a person's "Sign in with Synap" token — could
+ * answer nowhere, and one with a pinned project would fail closed everywhere.
+ * Read before the owner floor on purpose: a session the caller cannot answer
+ * is refused the same way whether or not it exists.
+ */
+export async function answerGrantWrite(sessionId: string): Promise<{
+  subjectType: "focus_session";
+  action: "update";
+  workspaceId: string | null;
+  projectId: string | null;
+}> {
+  // Only a key bounded by space or project needs the session's place; a
+  // signed-in person (no grant) and an unbounded key are answered as before.
+  const placed =
+    getRequestGrant()?.scopes.some((s) => s.workspaceIds || s.projectIds) ??
+    false;
+  const [row] =
+    placed && UUID_SHAPE.test(sessionId)
+      ? await db
+          .select({
+            workspaceId: focusSessions.workspaceId,
+            projectId: focusSessions.projectId,
+          })
+          .from(focusSessions)
+          .where(eq(focusSessions.id, sessionId))
+          .limit(1)
+      : [];
+  return {
+    subjectType: "focus_session",
+    action: "update",
+    workspaceId: row?.workspaceId ?? null,
+    projectId: row?.projectId ?? null,
+  };
+}
+
 export async function answerSessionSlot(p: {
   sessionId: string;
   /** Owner floor AND the answering person. */

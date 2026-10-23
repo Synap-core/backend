@@ -48,8 +48,7 @@ const KNOWN_DOORS: Record<string, RegExp> = {
   // tRPC `update` / `create` slots and `blockOutput`.
   "routers/focus-sessions.ts": /ask\s*:\s*expectedOutputWireSchema\.shape\.ask/,
   // Hub REST slots (`ExpectedOutputItemSchema`) and the block door.
-  "routers/hub-protocol/rest/focus-sessions.ts":
-    /ask\s*:\s*expectedOutputWireSchema\.shape\.ask/,
+  "routers/hub-protocol/rest/focus-sessions.ts": /ask\s*:\s*AskSchema\b/,
   // Hub REST thread post (a question filed on a slot).
   "routers/hub-protocol/rest/_codecs/thread.ts": /ask\s*:\s*AskSchema\b/,
   // MCP post_message (room question).
@@ -63,8 +62,7 @@ const KNOWN_DOORS: Record<string, RegExp> = {
   "services/focus-sessions/outcome-declarations.ts":
     /ask\s*:\s*expectedOutputWireSchema\.shape\.ask/,
   // The slot wire schema itself.
-  "services/focus-sessions/update-session.ts":
-    /z\.custom<Ask>\(\)\.pipe\(AskSchema\)/,
+  "services/focus-sessions/update-session.ts": /ask\s*:\s*AskSchema\b/,
   // Playbook definitions and stages (authored slots).
   "schemas/playbook-definition.ts": /ask\s*:\s*AskSchema\b/,
   "schemas/playbook-stage.ts": /ask\s*:\s*AskSchema\b/,

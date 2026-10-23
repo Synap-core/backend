@@ -68,14 +68,16 @@ vi.mock("../middleware/audit-log.js", async () => {
   return { auditLogMiddleware: t.middleware(({ next }) => next()) };
 });
 
-vi.mock("../utils/permission-check.js", () => ({
+vi.mock("../utils/permission-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/permission-check.js")>()),
   checkPermissionOrPropose: async (opts: Record<string, unknown>) => {
     h.gateCalls.push(opts);
     return h.gateResult;
   },
 }));
 
-vi.mock("@synap/jobs", () => ({
+vi.mock("@synap/jobs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/jobs")>()),
   getBoss: () => ({
     send: async (queue: string, payload: Record<string, unknown>) => {
       h.bossSends.push({ queue, payload });

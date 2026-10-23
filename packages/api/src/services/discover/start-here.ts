@@ -132,6 +132,23 @@ async function readHandedToYou(
   }
 }
 
+/** What the person owes; a failed read is `unavailable`, never "nothing". */
+async function readOwedByPerson(
+  userId: string
+): Promise<StartHere["owedByPerson"]> {
+  try {
+    const { foldOwedByPerson, readOwedByPersonSlots } =
+      await import("./owed-by-person.js");
+    return foldOwedByPerson({
+      ...(await readOwedByPersonSlots(userId)),
+      link: (id) => openLink(id),
+    });
+  } catch (err) {
+    logger.warn({ err }, "orient: owed-by-person NOT read — unavailable");
+    return UNAVAILABLE;
+  }
+}
+
 async function readSessionsOwingGrade(
   userId: string
 ): Promise<StartHere["sessionsOwingGrade"]> {
@@ -317,6 +334,7 @@ export async function buildStartHere(p: {
   ranked?: Promise<Array<RankedProfile<LensProfile>>>;
 }): Promise<StartHere> {
   const [
+    owedByPerson,
     openSessions,
     sessionsOwingGrade,
     topKinds,
@@ -325,6 +343,7 @@ export async function buildStartHere(p: {
     handedToYou,
     library,
   ] = await Promise.all([
+    readOwedByPerson(p.userId),
     readOpenSessions(p.userId),
     readSessionsOwingGrade(p.userId),
     readTopKinds(p),
@@ -353,6 +372,9 @@ export async function buildStartHere(p: {
   return {
     pendingReview,
     openFindings,
+    // What the person owes, right after the blockers: the agent raises these
+    // with the person before its own work (decisions it may be waiting on).
+    owedByPerson,
     openSessions,
     ...(handedToYou ? { handedToYou } : {}),
     sessionsOwingGrade,

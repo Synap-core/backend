@@ -15,6 +15,7 @@ import {
 import type { FailureErrorClass } from "../../../connectors/external-dispatch.js";
 import { redactForStorage } from "../../../utils/redact-secrets.js";
 import { CLASS_TRPC_CODE } from "../failure-classification.js";
+import { isNestedEnvelope } from "@synap-core/types/proposals";
 
 /**
  * Bound on the PROVIDER-authored fragment interpolated into the sentence below.
@@ -169,4 +170,26 @@ export function assertApplied(result: { status?: string } | undefined): void {
         "Approval could not be applied: your workspace role cannot execute this write, so re-running it only filed another proposal. Ask a workspace admin or owner to approve.",
     });
   }
+}
+
+/**
+ * The caller's fields of a stored proposal, read where the filer put them.
+ *
+ * `checkPermissionOrPropose` files a pending proposal as a request-shaped
+ * envelope with the caller's object NESTED at `data.data`; a door that writes
+ * its row directly stores the fields flat. Which one a row is comes from the ONE
+ * nesting contract (`isNestedEnvelope`), the predicate the revise core also
+ * branches on — so an approval reads the slot a revision wrote.
+ *
+ * Reading the envelope flat is how a reviewed document landed "Untitled" with
+ * an empty body, and how three channel approvals handed their writes no target.
+ */
+export function storedProposalFields(
+  proposal: Pick<ProposalRow, "data">
+): Record<string, unknown> {
+  const stored = (proposal.data ?? {}) as Record<string, unknown>;
+  return (isNestedEnvelope(stored) ? stored.data : stored) as Record<
+    string,
+    unknown
+  >;
 }

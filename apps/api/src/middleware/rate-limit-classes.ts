@@ -18,7 +18,9 @@ import {
  * - free: health/metrics probes (skipped)
  * - import: bulk import surfaces
  * - ai_agent_turn: Discord/channel agent turns (higher AI budget)
- * - ai_interactive: external/OpenAI-compat chat
+ * - ai_interactive: external/OpenAI-compat chat, and the Hub stored-file
+ *   transcription door (`POST /api/hub/files/:entityId/transcribe`, one paid
+ *   speech-to-text call per request)
  * - calendar_feed: unauth ICS polls (not crud — calendar clients poll)
  * - public_read: credentialless public-door reads (`/api/hub/public/*` GET)
  * - public_submit: credentialless public-door writes (`/api/hub/public/*` POST)
@@ -27,6 +29,14 @@ import {
  * - key_state: `GET /auth/key-state`, auth-SKIPPED (it answers a key that does
  *   not authenticate), so IP-keyed — a random Bearer per request must not buy
  *   a fresh `crud` budget
+ * - oauth_public: the pod authorization server's unauthenticated doors
+ *   `/register` and `/authorize`, IP-keyed — open DCR and the CIMD fetch
+ *   `/authorize` may trigger are a write and an outbound request any stranger
+ *   can cause (spec 17 T11). On a pod whose visitors share one address,
+ *   `/authorize` is keyed per client_id instead (`buildOAuthPublicKey`)
+ * - oauth_token: the AS's `/token`, keyed per (client_id, code or refresh
+ *   token), under a per-IP ceiling only when addresses tell callers apart:
+ *   every pod app's refresh must not share a budget a stranger can drain
  * - crud: everything else
  */
 export type RateLimitClass =
@@ -39,6 +49,8 @@ export type RateLimitClass =
   | "public_submit"
   | "device_auth"
   | "key_state"
+  | "oauth_public"
+  | "oauth_token"
   | "crud";
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -59,7 +71,13 @@ export function getRateLimitClassConfig(): Record<
   // Public-door classes carry their own nested budgets (getPublicDoorRateConfig).
   Exclude<
     RateLimitClass,
-    "free" | "public_read" | "public_submit" | "device_auth" | "key_state"
+    | "free"
+    | "public_read"
+    | "public_submit"
+    | "device_auth"
+    | "key_state"
+    | "oauth_public"
+    | "oauth_token"
   >,
   {
     max: number;
@@ -137,6 +155,15 @@ export function getRateLimitClassConfig(): Record<
   };
 }
 
+/** The unauthenticated OAuth doors budgeted per IP (`oauth_public`). */
+export const OAUTH_PUBLIC_PATHS: ReadonlySet<string> = new Set([
+  "/register",
+  "/authorize",
+]);
+
+/** The AS token endpoint, budgeted per grant (`oauth_token`). */
+export const OAUTH_TOKEN_PATH = "/token";
+
 /**
  * Classify a request path into a rate-limit class.
  * Pure function — unit-tested; no env/side effects.
@@ -174,6 +201,16 @@ export function classifyRateLimitPath(
     p === "/api/hub-protocol/auth/key-state"
   ) {
     return "key_state";
+  }
+
+  // The pod AS's public doors, mounted at the ROOT (RFC 8414 puts the issuer
+  // there). `/revoke` stays in `crud`: it changes nothing a stranger can
+  // reach (possession of the token is the authority) and starts no fetch.
+  if (OAUTH_PUBLIC_PATHS.has(p)) {
+    return "oauth_public";
+  }
+  if (p === OAUTH_TOKEN_PATH) {
+    return "oauth_token";
   }
 
   // free — probes that must never burn budget
@@ -218,6 +255,14 @@ export function classifyRateLimitPath(
     p === "/v1/chat" ||
     p.startsWith("/v1/chat/")
   ) {
+    return "ai_interactive";
+  }
+
+  // Hub stored-file transcription — a paid provider call per POST, keyed per
+  // Bearer like every class here. Not crud: the crud budget (500/15m) would
+  // let one key loop 20 MB transcriptions. Its Kratos sibling
+  // (`/api/media/transcribe`) is under the AI limiter too.
+  if (/^\/api\/hub(?:-protocol)?\/files\/[^/]+\/transcribe\/?$/.test(p)) {
     return "ai_interactive";
   }
 
@@ -354,6 +399,165 @@ export function getKeyStateRateConfig(): {
     windowMs,
     retryAfter: formatRetryAfter(windowMs),
   };
+}
+
+/**
+ * `oauth_public` budget, per IP: 60 requests / 10 min. A connection costs two
+ * calls here (register, authorize), so this leaves room for many people
+ * behind one address while bounding what a stranger can make the pod
+ * register or fetch. Keyed WITHOUT the Authorization header (a random Bearer
+ * must not buy a fresh budget).
+ */
+export function getOAuthPublicRateConfig(): {
+  max: number;
+  windowMs: number;
+  retryAfter: string;
+} {
+  const windowMs = parsePositiveInt(
+    process.env.RATE_LIMIT_OAUTH_PUBLIC_WINDOW_MS,
+    10 * 60 * 1000
+  );
+  return {
+    max: parsePositiveInt(process.env.RATE_LIMIT_OAUTH_PUBLIC_MAX, 60),
+    windowMs,
+    retryAfter: formatRetryAfter(windowMs),
+  };
+}
+
+/**
+ * The `oauth_public` bucket. Per IP, except `/authorize` on a pod whose
+ * visitors all share one address (`sharedClientIp`): there one IP bucket is
+ * the whole internet's, and a stranger's 60 cheap `/register` calls would
+ * block every sign-in, so `/authorize` is budgeted per client_id (an app's
+ * sign-ins are blocked only by flooding that app's own id). `/register`
+ * stays per IP everywhere, so open DCR is always bounded; on a shared
+ * address that bound is pod-wide, and a flood blocks new registrations only.
+ */
+export function buildOAuthPublicKey(
+  path: string,
+  ip: string,
+  clientId: string | undefined,
+  env: Record<string, string | undefined> = process.env
+): string {
+  if (path === "/authorize" && sharedClientIp(env)) {
+    return `oauth_public:authorize:${hashBearerToken(clientId ?? "")}`;
+  }
+  return `oauth_public:ip:${ip}`;
+}
+
+/**
+ * `oauth_token` budgets, per 10 min: 20 per grant (a code is redeemed once, a
+ * refresh token once plus a few reuse-grace replays from parallel
+ * instances), and 600 per IP. A pod app's server (a BFF) refreshes for ALL of
+ * its users from one egress address, about once an hour each, so the IP
+ * ceiling is ten times `oauth_public`'s.
+ */
+export function getOAuthTokenRateConfig(): {
+  max: number;
+  ipCeiling: number;
+  windowMs: number;
+  retryAfter: string;
+} {
+  const windowMs = parsePositiveInt(
+    process.env.RATE_LIMIT_OAUTH_TOKEN_WINDOW_MS,
+    10 * 60 * 1000
+  );
+  return {
+    max: parsePositiveInt(process.env.RATE_LIMIT_OAUTH_TOKEN_MAX, 20),
+    ipCeiling: parsePositiveInt(
+      process.env.RATE_LIMIT_OAUTH_TOKEN_IP_CEILING,
+      600
+    ),
+    windowMs,
+    retryAfter: formatRetryAfter(windowMs),
+  };
+}
+
+/** The largest `/token` body the limiter reads to find the grant. */
+export const OAUTH_TOKEN_BODY_READ_MAX = 16 * 1024;
+
+/**
+ * A request's body as text, or null past `maxBytes` (or unreadable): chunk by
+ * chunk, stopping the moment the total passes the cap, never an unbounded
+ * `text()`. Give it a clone when the handler still has to read the body.
+ */
+export async function readTextCapped(
+  req: Request,
+  maxBytes: number
+): Promise<string | null> {
+  if (!req.body) return "";
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const step = await reader.read();
+      if (step.done) break;
+      total += step.value.byteLength;
+      if (total > maxBytes) return null;
+      chunks.push(step.value);
+    }
+  } catch {
+    return null;
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+/**
+ * The `oauth_token` bucket of one `/token` body (form or JSON, as /token
+ * reads it): the client_id with the code or refresh token it redeems,
+ * hashed. Nobody can drain a grant's budget without holding that grant, so a
+ * flood from anywhere never blocks another app's refresh. A body that was
+ * not read (`null`: longer than the cap, or unreadable) or does not parse
+ * spends an `unread` bucket: the address's own where addresses tell callers
+ * apart, as `buildOAuthTokenIpCeilingKey`, else one for the pod ("unknown",
+ * or a shared tunnel address). Neither value is ever logged; only the hash is
+ * a key.
+ */
+export function buildOAuthTokenKey(
+  body: string | null,
+  contentType: string,
+  ip = "unknown",
+  env: Record<string, string | undefined> = process.env
+): string {
+  const unread =
+    ip === "unknown" || sharedClientIp(env)
+      ? "oauth_token:unread"
+      : `oauth_token:unread:${ip}`;
+  if (body === null) return unread;
+  let params: Record<string, unknown>;
+  try {
+    params = contentType.includes("application/json")
+      ? (JSON.parse(body) as Record<string, unknown>)
+      : Object.fromEntries(new URLSearchParams(body));
+  } catch {
+    return unread;
+  }
+  const text = (v: unknown) => (typeof v === "string" ? v : "");
+  if (!params || typeof params !== "object") return unread;
+  const grant =
+    text(params.grant_type) === "refresh_token"
+      ? text(params.refresh_token)
+      : text(params.code);
+  return `oauth_token:grant:${hashBearerToken(
+    `${text(params.client_id)}\n${grant}`
+  )}`;
+}
+
+/**
+ * The address-wide `oauth_token` ceiling, or null where the address does not
+ * tell callers apart ("unknown", or a shared tunnel address), as
+ * `buildCrudIpCeilingKey`: invented grants then each buy a bucket, which
+ * costs the pod one indexed lookup apiece and blocks nobody.
+ */
+export function buildOAuthTokenIpCeilingKey(
+  ip: string,
+  env: Record<string, string | undefined> = process.env
+): string | null {
+  if (ip === "unknown" || sharedClientIp(env)) return null;
+  return `oauth_token:ipall:${ip}`;
 }
 
 /**

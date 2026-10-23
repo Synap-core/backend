@@ -4,7 +4,7 @@
  * Background refresher for the pod-local `cp_catalog_cache` — the generalized,
  * source-dimensioned successor to `capability-template-sync.ts` (which keeps
  * running unchanged; this is additive, not a replacement — see P2.4-B in
- * CAPABILITY-MARKETPLACE-PLAN.md). Fills the cache for all four marketplace
+ * CAPABILITY-MARKETPLACE-PLAN (team pod)). Fills the cache for all four marketplace
  * kinds from each configured catalog source (`catalogSources()` — the ONE
  * seam: the built-in Synap source plus the sources a pod admin added, Pod
  * Console D11). The official source is read from the Control Plane's own

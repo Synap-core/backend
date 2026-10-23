@@ -58,6 +58,7 @@ import {
   projects,
   links,
   views,
+  documents,
   ProfileResolutionService,
   columnsForValue,
 } from "@synap/database";
@@ -66,6 +67,8 @@ import {
   entityFieldApiName,
   type EntityDiffField,
 } from "../../utils/entity-property-diff.js";
+import { SESSION_UNDO_COLUMNS } from "../focus-sessions/session-undo.js";
+import { documentOwnedByAnotherObject } from "../entity-body/document-ownership.js";
 
 export type RevertTarget =
   | { kind: "entity"; id: string }
@@ -102,8 +105,18 @@ export type RevertTarget =
       /** The run REMOVED the key — restore only while it is still absent. */
       absentAfter?: boolean;
     }
-  /** A body document a merge linked onto an entity that had none. */
-  | { kind: "entity_body"; entityId: string; documentId: string }
+  /**
+   * A body-link change: `documentId` is what the write left (null = it
+   * unlinked the body), `previousDocumentId` what it replaced (absent/null =
+   * the entity had none — the merge case). Revert puts `previousDocumentId`
+   * back only while the entity still points at `documentId` (B9g).
+   */
+  | {
+      kind: "entity_body";
+      entityId: string;
+      documentId: string | null;
+      previousDocumentId?: string | null;
+    }
   /**
    * Config columns an `update_*` op (a Library rebuild) rewrote on a row it
    * did NOT create. Restored to `before` only while EVERY column still holds
@@ -133,12 +146,17 @@ export type RevertTarget =
  * data, and data does not get to pick which columns an undo touches.
  */
 export type RowPatchTable =
-  "skill" | "rule" | "automation" | "playbook" | "view";
+  "skill" | "rule" | "automation" | "playbook" | "view" | "focus_session";
 
 const ROW_PATCH_COLUMNS: Record<
   RowPatchTable,
   {
-    table: typeof skills | typeof automations | typeof playbooks | typeof views;
+    table:
+      | typeof skills
+      | typeof automations
+      | typeof playbooks
+      | typeof views
+      | typeof focusSessions;
     columns: readonly string[];
   }
 > = {
@@ -153,6 +171,8 @@ const ROW_PATCH_COLUMNS: Record<
     columns: ["name", "description", "goalTemplate"],
   },
   view: { table: views, columns: ["name", "description", "config"] },
+  // A session update's undoable columns (`session-undo.ts`), never the rest.
+  focus_session: { table: focusSessions, columns: SESSION_UNDO_COLUMNS },
 };
 
 /** Key-order-independent JSON (jsonb does not keep key order). */
@@ -672,9 +692,52 @@ async function inspectProperty(
     return skip(target, "not_found", "the entity no longer exists");
   }
   if (target.kind === "entity_body") {
-    return row.documentId === target.documentId
-      ? null
-      : skip(target, "edited_since", "the entity's body was changed since");
+    if ((row.documentId ?? null) !== target.documentId) {
+      return skip(
+        target,
+        "edited_since",
+        "the entity's body was changed since"
+      );
+    }
+    // Re-attach the previous body only while that document still exists —
+    // never a link to a deleted document.
+    if (target.previousDocumentId) {
+      const [previous] = await reader
+        .select({ id: documents.id })
+        .from(documents)
+        .where(
+          and(
+            eq(documents.id, target.previousDocumentId),
+            isNull(documents.deletedAt)
+          )
+        )
+        .limit(1);
+      if (!previous) {
+        return skip(
+          target,
+          "not_found",
+          "the previous body document no longer exists"
+        );
+      }
+      // ...and only while nothing else took it since (FB1020 review M10): the
+      // attach door's ownership rule. Re-linking a document that is now the
+      // body of another entity (or a view's canvas) would make it the body
+      // of two objects, shown to both audiences and edited through both.
+      if (
+        await documentOwnedByAnotherObject(
+          reader,
+          target.previousDocumentId,
+          target.entityId
+        )
+      ) {
+        return skip(
+          target,
+          "edited_since",
+          "the previous body is now the body of another object"
+        );
+      }
+    }
+    return null;
   }
   const props = (row.properties ?? {}) as Record<string, unknown>;
   if (target.absentAfter) {
@@ -870,11 +933,16 @@ async function apply(
     case "entity_body":
       await tx
         .update(entities)
-        .set({ documentId: null, updatedAt: now })
+        .set({
+          documentId: target.previousDocumentId ?? null,
+          updatedAt: now,
+        })
         .where(
           and(
             eq(entities.id, target.entityId),
-            eq(entities.documentId, target.documentId)
+            target.documentId
+              ? eq(entities.documentId, target.documentId)
+              : isNull(entities.documentId)
           )
         );
       return;

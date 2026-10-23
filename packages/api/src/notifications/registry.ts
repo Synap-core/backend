@@ -167,7 +167,7 @@ export interface NotificationDef {
    * How unread rows of this type FOLD into one needs-you row. Omit ⇒ per
    * target (`(type, source)`, `foldNotifications`). `"groupKey"` ⇒ per the
    * producer's collapse key: the same agent failing on run after run is ONE
-   * row "×9", not nine rows each pointing at a different run (dogfood
+   * row ("and 8 more like it"), not nine rows each pointing at a different run (dogfood
    * 2026-10-05: "meta encountered an error" ×9 on the triage page). The row
    * carries the NEWEST instance, so its door is the latest failure.
    */
@@ -775,7 +775,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     needsYou: "suggestion",
   },
 
-  // ── Library: keep it alive (CAPTURE_LIBRARY_PLAN L5) ──────────────────────
+  // ── Library: keep it alive (capture-vs-library decision, wave L5) ──────────────────────
   {
     /**
      * Weekly "Build one group" — the group that has waited longest, offered

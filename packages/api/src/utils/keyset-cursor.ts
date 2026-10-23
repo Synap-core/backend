@@ -93,3 +93,40 @@ export function encodeRunCursor(input: {
 export function decodeRunCursor(cursor: string): RunCursor {
   return decode(cursor, runCursorSchema);
 }
+
+/**
+ * An `{at, id}` cursor whose `at` is the row's instant at MICROSECOND
+ * precision (`YYYY-MM-DDTHH:MM:SS.ffffffZ`, formatted by SQL). For a keyset
+ * over a `defaultNow()` column: a JS `Date` keeps milliseconds only, so a
+ * Date cursor would skip or repeat the rows of one millisecond.
+ */
+const INSTANT_AT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.\d{6}Z$/;
+
+const instantCursorSchema = z.object({
+  at: z
+    .string()
+    // A real calendar instant (JS rolls 2026-02-30 over; Postgres refuses it).
+    .refine((at) => {
+      const m = INSTANT_AT.exec(at);
+      if (!m) return false;
+      const d = new Date(`${at.slice(0, 19)}Z`);
+      return (
+        !Number.isNaN(d.getTime()) &&
+        d.toISOString().slice(0, 19) === at.slice(0, 19)
+      );
+    }),
+  id: z.string().uuid(),
+});
+
+export type InstantCursor = z.infer<typeof instantCursorSchema>;
+
+/** SQL that formats a timestamptz column as an {@link InstantCursor} `at`. */
+export const INSTANT_CURSOR_FORMAT = `YYYY-MM-DD"T"HH24:MI:SS.US"Z"`;
+
+export function encodeInstantCursor(input: InstantCursor): string {
+  return encode({ at: input.at, id: input.id });
+}
+
+export function decodeInstantCursor(cursor: string): InstantCursor {
+  return decode(cursor, instantCursorSchema);
+}

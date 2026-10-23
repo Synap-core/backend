@@ -2,7 +2,7 @@
  * Intake routing — THE rule for where something a PERSON brings in goes, and
  * the record of the old intake paths that are going away.
  *
- * Decision: `docs/CAPTURE_LIBRARY_PLAN.md` (founder, 2026-10-13).
+ * Decision: `docs/decisions/capture-vs-library.md` (founder, 2026-10-13).
  *
  * THE MODEL, IN THREE LINES.
  * - **Capture = the person's words** (typed or dictated — even when the text
@@ -102,7 +102,7 @@ export function routeIntake(input: IntakeInput): IntakeRoute {
 // ── The deprecation record ───────────────────────────────────────────────
 
 /**
- * The lifecycle of a deprecated path (`docs/CAPTURE_LIBRARY_PLAN.md` §2):
+ * The lifecycle of a deprecated path (`docs/decisions/capture-vs-library.md`):
  * `marked` (registry row + `@deprecated` JSDoc) → `redirected` (clients route
  * to the Library; the pod still accepts and logs) → `refused` (a typed
  * `USE_LIBRARY` error from a person's door, never from an agent key) →
@@ -136,8 +136,9 @@ export interface DeprecatedIntakePath {
 
 const SINCE = "2026-10-13";
 const STAGE: IntakeDeprecationStage = "marked";
-const DECISION_DOC = "docs/CAPTURE_LIBRARY_PLAN.md";
-const REMOVAL_CRITERIA = "docs/CAPTURE_LIBRARY_PLAN.md §2";
+const DECISION_DOC = "docs/decisions/capture-vs-library.md";
+const REMOVAL_CRITERIA =
+  "docs/decisions/capture-vs-library.md#removal-criteria";
 const AGENT_KEPT =
   " The agent path (MCP synap_capture / Hub capture with an agent key) is kept — founder 2026-10-13.";
 const LIBRARY = "the Library (import.stage today; library.add from wave L2)";

@@ -142,15 +142,32 @@ describe("reviewRows", () => {
     });
   });
 
-  it("an app's name wins over the human it acts for; never an id", () => {
+  it("an app is named first, with the human it acts for; never an id", () => {
     const [row] = reviewRows(
       [cluster("c1")],
       new Map([facts("c1-p1", { appName: "Acme", authorName: "Ana" })])
     );
-    expect(row!.who).toBe("Acme");
+    expect(row!.who).toBe("Acme, for Ana");
     const [unknown] = reviewRows([cluster("c2")], new Map());
     expect(unknown!.who).toBeNull();
     expect(unknown!.nounKind).toBe("proposal");
+  });
+
+  it("an agent's change names the AGENT and the person it acts for", () => {
+    // The facts as `proposals.list` serves them for an agent's write: the
+    // legacy coalesce carries the agent-user name too, and must not be read.
+    const [row] = reviewRows(
+      [cluster("c1")],
+      new Map([
+        facts("c1-p1", {
+          agentName: null,
+          authorName: "Claude-code",
+          agentActorName: "Claude Code on devbox",
+          principal: { kind: "delegated", name: "Antoine" },
+        }),
+      ])
+    );
+    expect(row!.who).toBe("Claude Code on devbox, for Antoine");
   });
 
   it("a removal is never approved inline — but may still join a batch", () => {

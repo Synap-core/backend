@@ -31,7 +31,13 @@
  *                                              config, reasoning? } — create or
  *                                              configure a project's site; an
  *                                              agent key gets 202 proposed
- *   POST /shares/sites/:id/unpublish           the site back to draft — direct
+ *   POST /shares/sites/:id/publish             { entityIds (≤ 200), reasoning? } —
+ *                                              publish records INTO the site;
+ *                                              an agent key gets ONE 202
+ *                                              proposal for the batch
+ *   POST /shares/sites/:id/unpublish           { entityIds? } — those records
+ *                                              off this site, or (no body) the
+ *                                              site back to draft — direct
  *   POST /shares/sites/:id/revoke              the site (and every member row)
  *                                              revoked for good — direct
  *
@@ -70,9 +76,11 @@ import { SHARE_KINDS } from "../../../services/sharing/exposure-policy.js";
 import { registerShareExecutors } from "../../../services/sharing/share-executors.js";
 import {
   configureSite,
+  publishToSite,
   revokeSite,
   siteStatus,
-  unpublishSite,
+  SITE_PUBLISH_MAX_RECORDS,
+  unpublishFromSite,
 } from "../../../services/sharing/site-service.js";
 import {
   publishResource,
@@ -113,7 +121,32 @@ const ConfigureSiteSchema = z.object({
   reasoning: z.string().max(2000).optional(),
 });
 
+const SiteRecordIds = z.array(Uuid).min(1).max(SITE_PUBLISH_MAX_RECORDS);
+const PublishToSiteSchema = z.object({
+  entityIds: SiteRecordIds,
+  reasoning: z.string().max(2000).optional(),
+});
+const UnpublishFromSiteSchema = z.object({
+  entityIds: SiteRecordIds.optional(),
+});
+// One page of a status read's `members` (the service clamps `limit`).
+const SiteMembersPageQuery = z.object({
+  cursor: z.string().min(1).max(512).optional(),
+  limit: z.coerce.number().int().min(1).optional(),
+});
+
 type Ctx = Context<{ Variables: HubVariables }, any, any>;
+
+/** An OPTIONAL JSON body: empty = `{}`; present but not JSON = null. */
+async function optionalJson(c: Ctx): Promise<unknown> {
+  const raw = await c.req.text().catch(() => "");
+  if (!raw.trim()) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 function actorOf(c: Ctx, reasoning?: string): ShareActor {
   return {
@@ -159,8 +192,12 @@ export function registerSharesRoutes(app: HubHono): void {
     if (!project.success) {
       return c.json({ error: "projectId (uuid) is required" }, 400);
     }
+    const page = SiteMembersPageQuery.safeParse(c.req.query());
+    if (!page.success) return c.json({ error: "Invalid cursor or limit" }, 400);
     try {
-      return c.json(await siteStatus(actorOf(c), { projectId: project.data }));
+      return c.json(
+        await siteStatus(actorOf(c), { projectId: project.data, ...page.data })
+      );
     } catch (err) {
       return fail(c, err, "GET /shares/sites");
     }
@@ -172,8 +209,12 @@ export function registerSharesRoutes(app: HubHono): void {
     }
     const id = Uuid.safeParse(c.req.param("id"));
     if (!id.success) return c.json({ error: "Invalid site id" }, 400);
+    const page = SiteMembersPageQuery.safeParse(c.req.query());
+    if (!page.success) return c.json({ error: "Invalid cursor or limit" }, 400);
     try {
-      return c.json(await siteStatus(actorOf(c), { siteId: id.data }));
+      return c.json(
+        await siteStatus(actorOf(c), { siteId: id.data, ...page.data })
+      );
     } catch (err) {
       return fail(c, err, "GET /shares/sites/:id");
     }
@@ -206,14 +247,57 @@ export function registerSharesRoutes(app: HubHono): void {
     }
   });
 
+  app.post("/shares/sites/:id/publish", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid site id" }, 400);
+    const body = PublishToSiteSchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const { reasoning, entityIds } = body.data;
+      return jsonGoverned(
+        c,
+        await publishToSite(actorOf(c, reasoning), {
+          siteId: id.data,
+          entityIds,
+        })
+      );
+    } catch (err) {
+      return fail(c, err, "POST /shares/sites/:id/publish");
+    }
+  });
+
   app.post("/shares/sites/:id/unpublish", async (c) => {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = Uuid.safeParse(c.req.param("id"));
     if (!id.success) return c.json({ error: "Invalid site id" }, 400);
+    const raw = await optionalJson(c);
+    if (raw === null) return c.json({ error: "Body must be JSON" }, 400);
+    const body = UnpublishFromSiteSchema.safeParse(raw);
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
     try {
-      return c.json(await unpublishSite(actorOf(c), id.data));
+      return c.json(
+        await unpublishFromSite(actorOf(c), {
+          siteId: id.data,
+          entityIds: body.data.entityIds,
+        })
+      );
     } catch (err) {
       return fail(c, err, "POST /shares/sites/:id/unpublish");
     }

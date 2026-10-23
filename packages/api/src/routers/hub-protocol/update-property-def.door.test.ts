@@ -21,6 +21,8 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const DEF_HOME = "33333333-3333-4333-8333-333333333333";
+
 const h = vi.hoisted(() => ({
   /** What the gate answers — swapped per test. */
   gateResult: { granted: true } as Record<string, unknown>,
@@ -44,10 +46,25 @@ vi.mock("../../utils/permission-check.js", async (importOriginal) => ({
   }),
 }));
 
-vi.mock("@synap/database", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@synap/database")>()),
-  getDb: vi.fn(async () => ({})),
-}));
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
+  return {
+    ...actual,
+    getDb: vi.fn(async () => ({})),
+    // S7: the door reads the STORED def's scope for the key's grant
+    // (`grantWorkspaceId`) before the gate — an overlay of a workspace other
+    // than the one the caller names.
+    db: {
+      ...actual.db,
+      query: {
+        ...actual.db.query,
+        propertyDefs: {
+          findFirst: vi.fn(async () => ({ workspaceId: DEF_HOME })),
+        },
+      },
+    },
+  };
+});
 
 // The DB edge — the procedure this door delegates to rather than re-writing.
 vi.mock("../property-defs.js", () => ({
@@ -104,6 +121,8 @@ describe("hub profiles.updatePropertyDef — governance", () => {
       action: "update",
       userId: USER,
       workspaceId: WS,
+      // The key's grant sees the def's OWN scope, never the named one (S7).
+      grantWorkspaceId: DEF_HOME,
     });
   });
 

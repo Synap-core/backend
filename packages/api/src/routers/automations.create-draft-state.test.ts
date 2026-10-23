@@ -40,7 +40,8 @@ vi.mock("../utils/split-brain-service.js", () => ({
 // GRANTED (not proposed), so `create()` falls straight through to the
 // direct-insert door — exactly the DEFAULT_AUTO_APPROVE path this remedy
 // guards.
-vi.mock("../utils/permission-check.js", () => ({
+vi.mock("../utils/permission-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/permission-check.js")>()),
   checkPermissionOrPropose: mockCheckPermission,
 }));
 

@@ -10,6 +10,10 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import {
+  PROPOSAL_IDS_FILTER_MAX,
+  proposalIdsFilterSchema,
+} from "./proposals/scope-conditions.js";
 
 const routerSource = readFileSync(
   join(process.cwd(), "src/routers/proposals.ts"),
@@ -21,10 +25,20 @@ const listBlock = routerSource.slice(listStart, listEnd);
 
 describe("proposals.list proposalIds filter", () => {
   it("accepts a bounded, de-duplicated UUID batch", () => {
-    expect(listBlock).toContain("proposalIds: z");
-    expect(listBlock).toContain(".array(z.string().uuid())");
-    expect(listBlock).toContain(".max(100)");
-    expect(listBlock).toContain("transform((ids) => [...new Set(ids)])");
+    // The schema is shared with the Hub door (scope-conditions.ts), so `list`
+    // must take THAT schema, and the schema itself is checked by parsing.
+    expect(listBlock).toContain("proposalIds: proposalIdsFilterSchema");
+    const id = "7d4f6c0e-6a1b-4a8e-9a53-3f2b1c0d9e11";
+    expect(proposalIdsFilterSchema.parse([id, id])).toEqual([id]);
+    expect(proposalIdsFilterSchema.safeParse(["not-a-uuid"]).success).toBe(
+      false
+    );
+    expect(PROPOSAL_IDS_FILTER_MAX).toBe(100);
+    expect(
+      proposalIdsFilterSchema.safeParse(
+        Array.from({ length: PROPOSAL_IDS_FILTER_MAX + 1 }, () => id)
+      ).success
+    ).toBe(false);
   });
 
   it("conjoins IDs with the existing user-visible floor", () => {
@@ -33,15 +47,14 @@ describe("proposals.list proposalIds filter", () => {
     // `groups`) rather than an inline `userVisibleWhere(` call in `list`
     // itself — same floor, one fewer place it can drift.
     const visibilityFloor = listBlock.indexOf("buildProposalScopeConditions(");
+    // The id predicate is the shared `proposalIdsWhere` (scope-conditions.ts),
+    // pushed onto the same `conditions` as the floor: ANDed, never instead.
     const idFilter = listBlock.indexOf(
-      "inArray(proposals.id, input.proposalIds)"
+      "conditions.push(proposalIdsWhere(input.proposalIds))"
     );
 
     expect(visibilityFloor).toBeGreaterThan(-1);
     expect(idFilter).toBeGreaterThan(-1);
-    expect(listBlock).toContain(
-      "conditions.push(inArray(proposals.id, input.proposalIds))"
-    );
   });
 
   it("does not let an empty batch skip concrete-workspace authorization", () => {

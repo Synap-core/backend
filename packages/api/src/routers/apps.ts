@@ -19,15 +19,30 @@
  * (the console's Apps page): read any, and END any (revoke, remove for good)
  * through the same service with the owner floor lifted. Asking for access,
  * issuing a key and renaming stay the owner's.
+ *
+ * Pod apps (spec 17 PB4): `list` / `get` carry `pod_app` (domain, tier,
+ * approval per space, write mode); `narrow` and `setWriteMode` are the
+ * owner's; `adminPodApps` / `adminRevokeClient` / `adminPolicy` /
+ * `adminSetPolicy` the pod admin's, never an agent's.
  */
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { db, AppRepository } from "@synap/database";
-import { router, podAdminProcedure, protectedProcedure } from "../trpc.js";
 import {
+  router,
+  podAdminProcedure,
+  protectedProcedure,
+  credentialProcedure,
+  requireFreshAuthentication,
+} from "../trpc.js";
+import {
+  adminPodApps,
+  adminRevokePodAppClient,
   issueKey,
   loadOwnedApp,
+  narrowApp,
+  podAppViews,
   registerApp,
   removeApp,
   renameApp,
@@ -35,9 +50,38 @@ import {
   revokeApp,
   serializeApp,
   serializeAppsForAdmin,
+  setAppRedirectUris,
+  setAppSignInPolicy,
+  setAppWriteMode,
 } from "../services/app-connect.js";
+import {
+  countLiveUnverifiedConnections,
+  readPodAppPolicy,
+  setPodAppPolicy,
+} from "../services/pod-app-policy.js";
+import { isAgentCaller } from "../services/library/agent-door.js";
+import type { Context } from "../types/context.js";
 
 const PublicId = z.string().min(1).max(200);
+
+/** One (permission, space) pair of an approval, as the doors send it. */
+const ApprovedPair = z.object({
+  permission: z.string().min(1).max(120),
+  workspaceId: z.string().uuid(),
+});
+
+/**
+ * The pod admin's policy doors are a PERSON's act: an agent's credential
+ * acting for an admin is refused, as every app-lifecycle write refuses it.
+ */
+function refuseAgentCredential(ctx: Context, act: string): void {
+  if (isAgentCaller({ agentUserId: ctx.agentUserId, keyType: ctx.keyType })) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `An agent credential cannot ${act} — sign in as a pod admin.`,
+    });
+  }
+}
 
 export const appsRouter = router({
   /**
@@ -56,9 +100,12 @@ export const appsRouter = router({
         includeRevoked: input?.includeRevoked ?? false,
       });
       const keys = await repo.keysByApp(rows.map((r) => r.app.publicId));
+      const pod = await podAppViews(rows, keys);
       return rows.map((row) => ({
         ...serializeApp(row),
         keys: keys.get(row.app.publicId) ?? [],
+        /** A pod app's domain, tier, approval and write mode; null otherwise. */
+        pod_app: pod.get(row.app.publicId) ?? null,
       }));
     }),
 
@@ -74,7 +121,7 @@ export const appsRouter = router({
    * Asks the MINIMUM to exist — name, and whatever the person chose to say.
    * Reach is requested on the app's own page (`requestAccess`).
    */
-  create: protectedProcedure
+  create: credentialProcedure
     .input(
       z.object({
         name: z.string().trim().min(1).max(200),
@@ -107,14 +154,22 @@ export const appsRouter = router({
     .query(async ({ ctx, input }) => {
       const found = await loadOwnedApp(input.publicId, ctx.userId);
       const keys = await new AppRepository(db).keysFor(found.app.publicId);
-      return { ...serializeApp(found), keys };
+      const pod = await podAppViews(
+        [found],
+        new Map([[found.app.publicId, keys]])
+      );
+      return {
+        ...serializeApp(found),
+        keys,
+        pod_app: pod.get(found.app.publicId) ?? null,
+      };
     }),
 
   /**
    * Ask for access on the app's behalf — files ONE `app/connect` proposal the
    * owner approves anywhere it shows (phone, Connected page, review link).
    */
-  requestAccess: protectedProcedure
+  requestAccess: credentialProcedure
     .input(
       z.object({
         publicId: PublicId,
@@ -142,7 +197,7 @@ export const appsRouter = router({
    * without the CLI). Rotates away any previous key. The plaintext is in this
    * response ONCE — it is stored nowhere and cannot be shown again.
    */
-  issueKey: protectedProcedure
+  issueKey: credentialProcedure
     .input(z.object({ publicId: PublicId }))
     .mutation(({ ctx, input }) =>
       // An agent principal is refused by the service from the request's
@@ -155,7 +210,7 @@ export const appsRouter = router({
     ),
 
   /** Rename an app. A name the caller already uses elsewhere is a CONFLICT. */
-  rename: protectedProcedure
+  rename: credentialProcedure
     .input(
       z.object({ publicId: PublicId, name: z.string().trim().min(1).max(200) })
     )
@@ -170,10 +225,100 @@ export const appsRouter = router({
     ),
 
   /**
+   * Narrow an app without a new consent (PB4): `approved` is what it KEEPS —
+   * pairs of its current approval, at least one. Applies at once (it only
+   * reduces access); a pod app's live token stops now and its next refresh
+   * carries the narrower reach.
+   */
+  narrow: credentialProcedure
+    .input(
+      z.object({
+        publicId: PublicId,
+        approved: z.array(ApprovedPair).min(1).max(64),
+      })
+    )
+    .mutation(async ({ ctx, input }) =>
+      serializeApp(
+        await narrowApp({
+          publicId: input.publicId,
+          ownerUserId: ctx.userId,
+          approved: input.approved,
+          actorAgentUserId: ctx.agentUserId,
+          actorKeyType: ctx.keyType,
+        })
+      )
+    ),
+
+  /**
+   * "Sign in with Synap": replace where a person's sign-in code for this app
+   * may be delivered (exact match; `[]` = the app signs no one in). Owner only.
+   */
+  setRedirectUris: credentialProcedure
+    .input(
+      z.object({
+        publicId: PublicId,
+        redirectUris: z.array(z.string().min(1).max(2048)).max(8),
+      })
+    )
+    .mutation(async ({ ctx, input }) =>
+      serializeApp(
+        await setAppRedirectUris({
+          publicId: input.publicId,
+          ownerUserId: ctx.userId,
+          redirectUris: input.redirectUris,
+          // Same credential facts the Hub door passes (PR #29 L3).
+          actorAgentUserId: ctx.agentUserId,
+          actorKeyType: ctx.keyType,
+        })
+      )
+    ),
+
+  /**
+   * The per-app "apply automatically" switch (F6): ON = the app's changes
+   * follow the pod's default, OFF = every change asks first (where every
+   * connection starts). The owner's own act; an agent is refused.
+   */
+  setWriteMode: credentialProcedure
+    .input(z.object({ publicId: PublicId, applyAutomatically: z.boolean() }))
+    .mutation(({ ctx, input }) =>
+      setAppWriteMode({
+        publicId: input.publicId,
+        ownerUserId: ctx.userId,
+        applyAutomatically: input.applyAutomatically,
+        actorAgentUserId: ctx.agentUserId,
+        actorKeyType: ctx.keyType,
+      })
+    ),
+
+  /**
+   * "Sign in with Synap": may a person signed in to this app approve its OWN
+   * agent's proposals from inside it (default true)? Owner only.
+   */
+  setSignInPolicy: credentialProcedure
+    .input(
+      z.object({
+        publicId: PublicId,
+        personMayDecideOwnAgentProposals: z.boolean(),
+      })
+    )
+    .mutation(async ({ ctx, input }) =>
+      serializeApp(
+        await setAppSignInPolicy({
+          publicId: input.publicId,
+          ownerUserId: ctx.userId,
+          personMayDecideOwnAgentProposals:
+            input.personMayDecideOwnAgentProposals,
+          actorAgentUserId: ctx.agentUserId,
+          actorKeyType: ctx.keyType,
+        })
+      )
+    ),
+
+  /**
    * Revoke an app: revoke its keys and their grants, then soft-revoke the app.
    * Its history is kept.
    */
-  revoke: protectedProcedure
+  revoke: credentialProcedure
     .input(z.object({ publicId: PublicId }))
     .mutation(async ({ ctx, input }) => {
       const { publicId } = await revokeApp({
@@ -187,7 +332,7 @@ export const appsRouter = router({
    * "Remove for good": hide a REVOKED app from every listing. Soft — its row
    * and events stay. A live app answers CONFLICT (revoke it first).
    */
-  remove: protectedProcedure
+  remove: credentialProcedure
     .input(z.object({ publicId: PublicId }))
     .mutation(async ({ ctx, input }) => {
       const { publicId } = await removeApp({
@@ -233,6 +378,7 @@ export const appsRouter = router({
    * lifted (`podAdmin`). The event names the admin who did it.
    */
   adminRevoke: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(z.object({ publicId: PublicId }))
     .mutation(async ({ ctx, input }) => {
       const { publicId } = await revokeApp({
@@ -245,6 +391,7 @@ export const appsRouter = router({
 
   /** Remove anyone's REVOKED app for good — the same service as `remove`. */
   adminRemove: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(z.object({ publicId: PublicId }))
     .mutation(async ({ ctx, input }) => {
       const { publicId } = await removeApp({
@@ -253,5 +400,56 @@ export const appsRouter = router({
         podAdmin: true,
       });
       return { removed: true, publicId };
+    }),
+
+  // ── Pod admin: pod apps across members + the policy (spec 17 PB4) ─────────
+
+  /**
+   * Every member's pod app connections, grouped by app ("Content Studio —
+   * 3 members"). One member's connection opens through `adminGet` and ends
+   * through `adminRevoke`; `adminRevokeClient` ends the app for everyone.
+   */
+  adminPodApps: podAdminProcedure.query(({ ctx }) => {
+    refuseAgentCredential(ctx, "read every member's apps");
+    return adminPodApps();
+  }),
+
+  /** End one pod app for EVERY member (each through `revokeApp`). */
+  adminRevokeClient: podAdminProcedure
+    .use(requireFreshAuthentication)
+    .input(z.object({ clientId: z.string().url().max(512) }))
+    .mutation(({ ctx, input }) =>
+      adminRevokePodAppClient({
+        oauthClientId: input.clientId,
+        adminUserId: ctx.userId,
+        actorAgentUserId: ctx.agentUserId,
+        actorKeyType: ctx.keyType,
+      })
+    ),
+
+  /**
+   * The pod's pod-app policy (F4): may members connect apps that are not
+   * Synap apps (default yes). `unverifiedLive` counts the connections such
+   * apps hold now — the switch gates NEW connections only.
+   */
+  adminPolicy: podAdminProcedure.query(async ({ ctx }) => {
+    refuseAgentCredential(ctx, "read the pod's app policy");
+    return {
+      ...(await readPodAppPolicy()),
+      unverifiedLive: await countLiveUnverifiedConnections(),
+    };
+  }),
+
+  adminSetPolicy: podAdminProcedure
+    .input(z.object({ allowUnverified: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      refuseAgentCredential(ctx, "change the pod's app policy");
+      return {
+        ...(await setPodAppPolicy({
+          allowUnverified: input.allowUnverified,
+          changedBy: ctx.userId,
+        })),
+        unverifiedLive: await countLiveUnverifiedConnections(),
+      };
     }),
 });

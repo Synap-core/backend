@@ -11,7 +11,11 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { db, proposals, eq, and, desc, count } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import { proposalUserFloor } from "../proposals/scope-conditions.js";
+import {
+  proposalIdsFilterSchema,
+  proposalIdsWhere,
+  proposalUserFloor,
+} from "../proposals/scope-conditions.js";
 import { redactUnreadableSessionTargets } from "../../services/proposals/session-content-redaction.js";
 import { mergeProposalRevision } from "../../services/proposals/proposals-service.js";
 import {
@@ -57,6 +61,11 @@ export const proposalsRouter = router({
         // tRPC `proposals.list` sessionId filter, so external/BYOA agents can ask
         // "what has the AI proposed inside this session" without a tRPC client.
         sessionId: z.string().uuid().optional(),
+        // Resolve a known batch (a notification, an app's pinned rows) through
+        // the SAME floored list — the filter shared with tRPC `proposals.list`.
+        // It only narrows: an id outside the caller's floor or grant is
+        // omitted, never an error that would confirm it exists.
+        proposalIds: proposalIdsFilterSchema.optional(),
         // Bounded, and paired with `offset` + a `total` in the result. Before
         // this, `limit` had no ceiling, there was no `offset` at all, and the
         // response carried no count — so every caller rendered `items.length`
@@ -92,6 +101,11 @@ export const proposalsRouter = router({
       }
       if (input.sessionId) {
         conditions.push(eq(proposals.sessionId, input.sessionId));
+      }
+      // ANDed onto the floor above, never in place of it. An empty batch
+      // compiles to `false` (no rows), not to "no filter".
+      if (input.proposalIds) {
+        conditions.push(proposalIdsWhere(input.proposalIds));
       }
       if (input.status !== "all") {
         conditions.push(

@@ -195,6 +195,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "app_id",
     addedBy: "0310_app_attribution.sql",
   },
+  // proposals — the calling KEY (0346, FB1020 B7). Stamped by every proposal
+  // insert door from the request context, so without the column every
+  // governed key write 42703s.
+  {
+    table: "proposals",
+    column: "api_key_id",
+    addedBy: "0346_proposals_api_key_id.sql",
+  },
   // proposal_cluster_mutes — durable per-pod mute of a rejection SHAPE-cluster
   // (0233). If the table/column is missing, the mute door + the rejected-clusters
   // read's active-mute filter throw. Column check confirms the table exists.
@@ -1034,6 +1042,89 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "agent_user_id",
     addedBy: "0313_apps_agent_user.sql",
   },
+  // Pod app connections (0338b). Every app read selects `oauth_client_id`
+  // (Drizzle names every column), every code issue / claim writes / reads
+  // `app_id`, and every client read selects `requested_templates`: without
+  // them every app door and the whole OAuth door 500, the MCP flow included.
+  {
+    table: "apps",
+    column: "oauth_client_id",
+    addedBy: "0338b_pod_app_oauth_apps.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "app_id",
+    addedBy: "0338b_pod_app_oauth_apps.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "requested_templates",
+    addedBy: "0338b_pod_app_oauth_apps.sql",
+  },
+  // Pod app permission reasons (0339b). Every client read selects it
+  // (Drizzle names every column): without it the whole OAuth door 500s.
+  {
+    table: "oauth_clients",
+    column: "requested_reasons",
+    addedBy: "0339b_oauth_client_request_reasons.sql",
+  },
+  // Pod app refresh tokens (0339). /token's refresh grant and /revoke read
+  // and write them, and revoking an app revokes them: without the table the
+  // pod app refresh grant, a pod app's /token and every app revoke 500.
+  {
+    table: "oauth_refresh_tokens",
+    column: "token_hash",
+    addedBy: "0339_oauth_refresh_tokens.sql",
+  },
+  {
+    table: "oauth_refresh_tokens",
+    column: "family_id",
+    addedBy: "0339_oauth_refresh_tokens.sql",
+  },
+  {
+    table: "oauth_refresh_tokens",
+    column: "last_used_at",
+    addedBy: "0339_oauth_refresh_tokens.sql",
+  },
+  // Signed-in devices of the Synap apps (0340). Every refresh redeem reads
+  // `device_id`, the first-party /token writes both tables, and every app
+  // request carrying a device token reads them: without them the refresh
+  // grant (pod apps included) and every device-token request 500.
+  {
+    table: "oauth_refresh_tokens",
+    column: "device_id",
+    addedBy: "0340_person_devices.sql",
+  },
+  {
+    table: "person_devices",
+    column: "expires_at",
+    addedBy: "0340_person_devices.sql",
+  },
+  {
+    table: "person_devices",
+    column: "revoked_at",
+    addedBy: "0340_person_devices.sql",
+  },
+  {
+    table: "person_device_tokens",
+    column: "token_hash",
+    addedBy: "0340_person_devices.sql",
+  },
+  {
+    table: "person_devices",
+    column: "auth_time",
+    addedBy: "0340_person_devices.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "auth_time",
+    addedBy: "0340_person_devices.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "step_up",
+    addedBy: "0340_person_devices.sql",
+  },
   // Computers (0320, MACHINE-IDENTITY-PLAN): the host link every governed
   // agent write reads (host step), and the class principal column both rule
   // stores select. Missing means every agent write would 42703.
@@ -1152,6 +1243,48 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "oauth_authorization_codes",
     column: "consumed_at",
     addedBy: "0207_pod_oauth_authorization_server.sql",
+  },
+  // Pod app clients (0338). Every client lookup at /authorize branches on
+  // `client_kind` and a CIMD client is read from the cache columns, and every
+  // code issue and claim writes / reads `resource`: without them the whole
+  // OAuth door 500s, the MCP (DCR) flow included.
+  {
+    table: "oauth_clients",
+    column: "client_kind",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "requested_permissions",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "metadata_fetched_at",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  {
+    table: "oauth_clients",
+    column: "metadata_expires_at",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "resource",
+    addedBy: "0338_pod_app_oauth.sql",
+  },
+  // "Sign in with Synap" (0339): an app client's redirect allowlist is read at
+  // every /authorize and /token for an `app_…` client_id, and every code issue
+  // and claim writes / reads `app_grant` — without them the OAuth door 500s.
+  {
+    table: "apps",
+    column: "redirect_uris",
+    addedBy: "0339_app_person_sign_in.sql",
+  },
+  {
+    table: "oauth_authorization_codes",
+    column: "app_grant",
+    addedBy: "0339_app_person_sign_in.sql",
   },
 
   // workspaces — soft-archive support (0020)
@@ -1615,6 +1748,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0324_lifecycle_transition_outbox.sql",
   },
 
+  // session_runners — who holds a session's change-feed wait (0342). Absence
+  // means every wait named by a conversation would fail its runner stamp
+  // (logged, never fatal) and the runner loader would 42P01.
+  {
+    table: "session_runners",
+    column: "last_seen_at",
+    addedBy: "0342_session_runners.sql",
+  },
+  {
+    table: "session_runners",
+    column: "machine_user_id",
+    addedBy: "0342_session_runners.sql",
+  },
+
   // Kind + Facets Wave 3A (0175): the `_conversions` ledger — mirrors
   // `_migrations` for DATA ops. Absence means a pod is on a pre-0175 schema
   // where the conversion engine's applied-set read would hit a missing table.
@@ -1879,6 +2026,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "projects",
     column: "icon",
     addedBy: "0328_projects_icon.sql",
+  },
+  // A sample (demo) project (0347) — same baseline exemption. Read by the ONE
+  // listing rule `listableEntityWhere`; a missing column 500s every list.
+  {
+    table: "projects",
+    column: "sample",
+    addedBy: "0347_projects_sample.sql",
   },
   // Tracks (0272) — a METHOD running inside a project. `project_tracks` is NOT
   // in the baseline (it references `projects`, which 0151 creates), so this is
@@ -2244,7 +2398,7 @@ export async function validateSchemaCoherence(): Promise<void> {
   // the failure mode here is not an error — it is a silent INVERSION: with the
   // old 'workspace' default, every kind a template or an agent creates without
   // an explicit entityScope lands workspace-scoped, and nothing ever complains.
-  // See APP-DOCK-MENTAL-MODEL-PLAN.md §1b.
+  // See APP-DOCK-MENTAL-MODEL-PLAN (team pod) §1b.
   const entityScopeDefault = await sql<
     Array<{ column_default: string | null }>
   >`

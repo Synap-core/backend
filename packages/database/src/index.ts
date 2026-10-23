@@ -38,6 +38,8 @@ export * from "./services/federated-application-connection-service.js";
 export * from "./services/federated-assertion-receipt-service.js";
 export * from "./services/user-provisioning.js";
 export * from "./services/pod-user-access.js";
+export * from "./services/identity-keepers.js";
+export * from "./services/pod-invite-scope.js";
 export * from "./services/capture-routing.js";
 export * from "./services/workspace-resolution-service.js";
 export * from "./services/project-resolution-service.js";
@@ -58,6 +60,7 @@ export * from "./utils/project-guardrails.js";
 export * from "./utils/reserved-profile-slugs.js";
 export * from "./utils/profile-slug-precedence.js";
 export * from "./utils/request-write-context.js";
+export * from "./utils/listable-entity.js";
 export * from "./utils/grant-read-hook.js";
 export * from "./utils/exposure-policy-settings.js";
 export * from "./utils/backup-status.js";
@@ -83,6 +86,7 @@ export * from "./utils/session-spawn.js";
 export * from "./utils/resolve-or-create-agent-proposal-session.js";
 export * from "./utils/agent-proposal-session-memo.js";
 export * from "./utils/insert-pending-proposal.js";
+export { expirePendingCreatesOfLandedRecord } from "./utils/expire-pending-creates.js";
 export * from "./utils/facet-visibility.js";
 export * from "./utils/pod-membership.js";
 export * from "./utils/invite-acceptance.js";
@@ -102,6 +106,7 @@ export * from "./utils/backfill-governance-rules.js";
 export * from "./utils/floor-covered-actions.js";
 export * from "./utils/governance-rule-provenance.js";
 export * from "./utils/reversible-default.js";
+export * from "./utils/own-fresh-work.js";
 export * from "./utils/connection-governance.js";
 export * from "./utils/knowledge-contract.js";
 // Message shape matcher (shared door) + the config-settings/guideline store.
@@ -381,6 +386,7 @@ export {
   STUCK_AFTER_DAYS_MAX,
   parseLifecycleOptions,
   findLifecycleOption,
+  canonicalLifecycleOptionKey,
   classifyLifecycleMove,
   type LifecycleCategory,
   type LifecycleOption,

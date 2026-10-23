@@ -37,6 +37,7 @@ import type * as schema from "../schema/index.js";
 import type { Entity } from "../schema/entities.js";
 import { FacetRepository } from "../repositories/facet-repository.js";
 import { notifyFacetAttached } from "../utils/facet-attached-hook.js";
+import { isUniqueViolation } from "../utils/pg-errors.js";
 import { ProfileResolutionService } from "./profile-resolution-service.js";
 import { lifecycleColumnsFor } from "./lifecycle/lifecycle-columns.js";
 import type { EventRepository } from "../repositories/event-repository.js";
@@ -1182,21 +1183,6 @@ export function stampMergedInto(winnerId: string): SQL {
  */
 export function restoreKeepingMedia(snapshot: Record<string, unknown>): SQL {
   return sql`${JSON.stringify(snapshot)}::jsonb || jsonb_strip_nulls(jsonb_build_object('media', ${entities.systemData} -> 'media', 'mediaCopyFailures', ${entities.systemData} -> 'mediaCopyFailures'))`;
-}
-
-const UNIQUE_VIOLATION = "23505";
-
-function isUniqueViolation(error: unknown): boolean {
-  let cursor: unknown = error;
-  for (
-    let depth = 0;
-    cursor && typeof cursor === "object" && depth < 4;
-    depth++
-  ) {
-    if ((cursor as { code?: unknown }).code === UNIQUE_VIOLATION) return true;
-    cursor = (cursor as { cause?: unknown }).cause;
-  }
-  return false;
 }
 
 /**

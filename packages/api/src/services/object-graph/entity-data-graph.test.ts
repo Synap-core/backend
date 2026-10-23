@@ -14,7 +14,8 @@ const h = vi.hoisted(() => ({
   getConnections: vi.fn(),
 }));
 
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({
     warn: () => undefined,
     info: () => undefined,

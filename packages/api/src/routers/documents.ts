@@ -768,7 +768,7 @@ export const documentsRouter = router({
         }),
       ];
       // A STAGED import item is nobody's document yet, and a Library item is
-      // never a document row (CAPTURE_LIBRARY_PLAN decision 4): it lives in
+      // never a document row (capture-vs-library decision 4): it lives in
       // the Library, before and after its group is built.
       conditions.push(notStagedImportItemWhere(documents.metadata));
       conditions.push(notLibraryItemWhere(documents.metadata));

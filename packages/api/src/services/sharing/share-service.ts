@@ -67,6 +67,7 @@ import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { generateShareToken, hashToken } from "../../utils/share-token.js";
 import { VISIBLE_TO } from "../../utils/project-scope.js";
+import { sharePageBase } from "../../utils/deep-links.js";
 import { assertAnchorAdmin } from "./anchor-admin.js";
 import { isPublicationLive } from "./publication-live.js";
 import {
@@ -1112,6 +1113,12 @@ export interface ShareListing {
     live: boolean;
     /** The snapshot's keys (never its values). */
     publishedFields: string[];
+    /**
+     * The site this row publishes the record into (0336), or null for the
+     * record's standalone publication. A member row has no token of its own:
+     * it is live through its site.
+     */
+    siteShareId: string | null;
     createdAt: Date;
     createdBy: string;
   }>;
@@ -1125,6 +1132,12 @@ export interface ShareListing {
    * so there is no single number; ask the anchor listing of each project.
    */
   guestCount: number | null;
+  /**
+   * Does this pod hand out a page people read a publication on
+   * (`SYNAP_SHARE_PAGE_URL`)? False = a publication has only its developer
+   * address, so a surface must not promise a page.
+   */
+  publicPage: boolean;
   /** True when any list hit {@link LIST_SHARES_CAP}. */
   truncated: boolean;
 }
@@ -1155,6 +1168,7 @@ export async function listShares(
     tokenPrefix: string | null;
     tokenHash: string | null;
     publishedProperties: unknown;
+    siteShareId: string | null;
     createdAt: Date;
     createdBy: string;
   }> = [];
@@ -1263,6 +1277,7 @@ export async function listShares(
           tokenPrefix: resourceShares.tokenPrefix,
           tokenHash: resourceShares.tokenHash,
           publishedProperties: resourceShares.publishedProperties,
+          siteShareId: resourceShares.siteShareId,
           createdAt: resourceShares.createdAt,
           createdBy: resourceShares.createdBy,
         })
@@ -1303,7 +1318,10 @@ export async function listShares(
       return {
         ...r,
         hasToken,
-        live: isPublicationLive({ ...r, audience, expiresAt, hasToken }, now),
+        live: isPublicationLive(
+          { ...r, audience, expiresAt, hasToken },
+          { via: r.siteShareId ? "site" : "token", now }
+        ),
         publishedFields:
           publishedProperties &&
           typeof publishedProperties === "object" &&
@@ -1319,6 +1337,7 @@ export async function listShares(
     links: rows.map(({ tokenHash, ...r }) => ({ ...r, hasToken: !!tokenHash })),
     publications,
     guestCount,
+    publicPage: sharePageBase() !== undefined,
     truncated:
       exposures.length >= cap ||
       rows.length >= cap ||

@@ -55,6 +55,7 @@ import {
   db,
   focusSessions,
   and,
+  or,
   eq,
   inArray,
   drizzleSql,
@@ -219,9 +220,9 @@ export interface ListOwedSlotsParams {
   limit: number;
   /**
    * Leave out slots on an undecided agent DRAFT (`notTriagePendingWhere`, the
-   * one triage rule the project path's default lens uses). The needs-you
-   * count and tray pass it: a draft never counts as needs-you (founder
-   * decision). Applied in SQL, so drafts cannot eat the `limit`.
+   * one triage rule the project path's default lens uses). Applied in SQL,
+   * so drafts cannot eat the `limit`. The needs-you count and tray no longer
+   * pass it: since 2026-10-22 they read `needsYouLens` (a draft's asks count).
    */
   excludeDrafts?: boolean;
   /**
@@ -231,6 +232,23 @@ export interface ListOwedSlotsParams {
    * with `excludeDrafts`; the two would select nothing.
    */
   onlyDrafts?: boolean;
+  /**
+   * THE NEEDS-YOU LENS (founder decision 2026-10-22): every owed slot on a
+   * session that is NOT an undecided agent draft, PLUS the owed slots WITH AN
+   * ASK on the caller's own drafts. A blocking question an agent asks the
+   * person is theirs to answer whether or not they accepted the draft; the
+   * draft itself stays one "Proposed" row to accept or reject
+   * (`signalsFromDraftAsks`). A draft's slots WITHOUT an ask stay out.
+   *
+   * "With an ask" is the ONE reading every surface renders —
+   * `effectiveSlotAsk` (`@synap-core/types/ask`), so an ask-less `decision`
+   * slot counts as its derived Yes / No. SQL only PREFILTERS drafts to those
+   * holding an owed slot that could carry one (stored `ask` object or a
+   * `decision` blocker — a superset); the TypeScript projection decides,
+   * exactly, per slot. Never combined with `excludeDrafts` / `onlyDrafts`.
+   * Read through `listNeedsYouOwed` (`services/signals/needs-you-owed.ts`).
+   */
+  needsYouLens?: boolean;
   /**
    * CONTAINER lenses below the project: only this session's slots, or only
    * slots of sessions in this track. In SQL, like the workspace/project lens —
@@ -258,7 +276,28 @@ type OwedRow = {
   workspaceId: string | null;
   projectId: string | null;
   expectedOutputs: unknown;
+  /** Selected only under `needsYouLens`: the session is an undecided draft. */
+  isDraft?: boolean;
 };
+
+/**
+ * SQL superset of "this draft holds an owed slot that carries an ask" — a
+ * stored `ask` object, or a `decision` blocker (whose ask `effectiveSlotAsk`
+ * derives). A PREFILTER, like `owedSlotPrefilter`: the exact rule is
+ * `effectiveSlotAsk` in {@link listOwedSlots}'s projection.
+ */
+function draftAskPrefilter(): SQL {
+  return drizzleSql`EXISTS (
+    SELECT 1 FROM jsonb_array_elements(
+      CASE WHEN jsonb_typeof(${focusSessions.expectedOutputs}) = 'array'
+           THEN ${focusSessions.expectedOutputs}
+           ELSE '[]'::jsonb END
+    ) AS slot
+    WHERE ${owedSlotPredicateSql}
+      AND (jsonb_typeof(slot->'ask') = 'object'
+           OR slot->>'blockedReason' = 'decision')
+  )`;
+}
 
 /**
  * Flatten one session's slot array into the owed ones. Pure, so the projection
@@ -343,6 +382,14 @@ export async function listOwedSlots(
   if (params.subject) conditions.push(sessionSubjectWhere(params.subject));
   if (params.excludeDrafts) conditions.push(notTriagePendingWhere());
   if (params.onlyDrafts) conditions.push(triagePendingWhere());
+  if (params.needsYouLens) {
+    conditions.push(
+      or(
+        notTriagePendingWhere(),
+        and(triagePendingWhere(), draftAskPrefilter())
+      ) as SQL
+    );
+  }
 
   const rows = await db
     .select({
@@ -353,6 +400,9 @@ export async function listOwedSlots(
       workspaceId: focusSessions.workspaceId,
       projectId: focusSessions.projectId,
       expectedOutputs: focusSessions.expectedOutputs,
+      ...(params.needsYouLens
+        ? { isDraft: drizzleSql<boolean>`(${triagePendingWhere()})` }
+        : {}),
     })
     .from(focusSessions)
     .where(and(...conditions))
@@ -364,7 +414,14 @@ export async function listOwedSlots(
     .limit(limit);
 
   const slots = rows
-    .flatMap((r) => projectOwedSlots(r as OwedRow))
+    .flatMap((r) => {
+      const owed = projectOwedSlots(r as OwedRow);
+      // The needs-you lens: on a DRAFT only the slots with an ask count
+      // (`ask` here is already `effectiveSlotAsk`, see `projectOwedSlots`).
+      return params.needsYouLens && (r as OwedRow).isDraft
+        ? owed.filter((s) => s.ask != null)
+        : owed;
+    })
     .sort((a, b) =>
       a.owedSince < b.owedSince ? -1 : a.owedSince > b.owedSince ? 1 : 0
     )

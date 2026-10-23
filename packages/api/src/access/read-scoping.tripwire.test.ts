@@ -309,8 +309,8 @@ const ALLOWLIST = new Set<string>([
   // events has NO workspace_id column (workspace lives in JSONB data->>'workspaceId')
   // so it cannot use scopedDb. The read is safe by construction: searchEvents
   // ALWAYS floors by userId, and input.workspaceId is membership-checked against
-  // workspaceMembers before the read (events.ts:356-369). See WORKSPACE-LENS-
-  // CONSOLIDATION-PLAN.md §P3 (events → justified allowlist, not scopedDb).
+  // workspaceMembers before the read (events.ts:356-369). The 2026-06
+  // workspace-as-lens plan chose this (events → justified allowlist, not scopedDb).
   "events.ts::aggregateTimeSeries",
   // views.list floors every read with viewVisibleWhere(ctx.userId) — the same
   // userVisibleWhere-based predicate entities.list uses (isNull-personal OR

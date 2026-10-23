@@ -36,7 +36,15 @@ const store = vi.hoisted(() => ({
   seq: 0,
 }));
 
-vi.mock("../../client-pg.js", () => ({ getDb: async () => ({}) }));
+// The presentation backfill (945e1f5c1) writes through the db directly:
+// a no-op UPDATE … RETURNING [] — presentation is not under test here.
+vi.mock("../../client-pg.js", () => ({
+  getDb: async () => ({
+    update: () => ({
+      set: () => ({ where: () => ({ returning: async () => [] }) }),
+    }),
+  }),
+}));
 
 vi.mock("../../index.js", async () => {
   const { ProfileScope } = await vi.importActual<

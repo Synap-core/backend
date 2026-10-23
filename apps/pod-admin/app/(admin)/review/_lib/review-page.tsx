@@ -116,6 +116,9 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         appName: p.appName,
         agentName: p.agentName,
         authorName: p.authorName,
+        agentActorName: p.agentActorName,
+        principal: p.principal,
+        actorKind: p.actorKind,
         workspaceName: p.workspaceName,
         data: p.data,
       });

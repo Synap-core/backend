@@ -18,6 +18,7 @@ vi.mock("../../utils/user-visible-where.js", () => ({
 }));
 
 import { listRecentRunsByFlows } from "./recent-by-flows.js";
+import { LIVE_RUN_STATUSES } from "@synap/database";
 
 const AUTO_ID = "00000000-0000-4000-8000-000000000001";
 const PLAYBOOK_ID = "00000000-0000-4000-8000-000000000002";
@@ -136,7 +137,8 @@ describe("listRecentRunsByFlows", () => {
     // still an execution, never a terminal history row).
     expect(query).toContain("WHERE status not in ");
     expect(query).toContain(
-      "WHERE \"status\" IN ('running', 'waiting_on_you')"
+      // The ONE live set ('stale' joined it in 0524f9f44).
+      `WHERE "status" IN (${LIVE_RUN_STATUSES.map((s) => `'${s}'`).join(", ")})`
     );
     expect(query).toContain("OR terminal_row_number <= ");
   });

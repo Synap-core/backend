@@ -51,11 +51,6 @@ function probeWithFetch(impl: typeof fetch): SignalProbe {
   return new SignalProbe({ podUrl: "https://pod.test", apiKey: "k" });
 }
 
-function clientWithFetch(impl: typeof fetch): HubRestClient {
-  globalThis.fetch = impl;
-  return new HubRestClient({ podUrl: "https://pod.test", apiKey: "k" });
-}
-
 describe("combineAbortSignals — works without AbortSignal.any", () => {
   it("completes a request on a host that lacks AbortSignal.any", async () => {
     withoutAbortSignalAny();

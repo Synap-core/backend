@@ -24,6 +24,7 @@ import { documents, documentSessions } from "@synap/database/schema";
 import { resolveDocumentRoomAccess } from "./vendor/document-access.js";
 import type { Socket } from "socket.io";
 import { verifyHandshakeUser } from "./session-auth.js";
+import { trackDeviceSocket } from "./device-sockets.js";
 import { storage } from "@synap/storage";
 import { recordYjsPersist, recordYjsPersistFailure } from "./bridge.js";
 import {
@@ -146,6 +147,8 @@ const OUTDATED_ACCESS = { access: "read", reason: "editor-outdated" } as const;
  * once per connection.
  */
 const verifiedHandshakes = new WeakMap<object, string>();
+/** The device a handshake's token belongs to, when it was a device token. */
+const verifiedDevices = new WeakMap<object, string>();
 
 /** Tldraw store snapshot format: Record<id, record> */
 type TldrawStoreSnapshot = Record<string, unknown>;
@@ -721,6 +724,8 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
       );
       if (identity.ok) {
         verifiedHandshakes.set(handshake, identity.userId);
+        if (identity.deviceId)
+          verifiedDevices.set(handshake, identity.deviceId);
         return true;
       }
       console.warn(`[Yjs] Auth rejected: ${identity.error}`);
@@ -812,6 +817,8 @@ export function setupYjsServer(config: YjsServerConfig): YjsServerInstance {
       .then((access) => {
         if (access !== "none") {
           data.yjsAccess = access;
+          const deviceId = verifiedDevices.get(socket.handshake);
+          if (deviceId) trackDeviceSocket(socket, deviceId);
           return next();
         }
         console.warn(

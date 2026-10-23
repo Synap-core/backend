@@ -28,6 +28,7 @@ import { resolveCaptureActorUserId } from "../../../services/capture-agent/resol
 import { buildCaptureNarrativeSummary } from "../../../services/capture-agent/capture-narrative.js";
 import { loadRouteSuggestions } from "../../../services/routing/load-route-suggestions.js";
 import { captureStatusForReceiptState } from "../../../services/capture-agent/capture-receipt-state.js";
+import { captureSkillStepProblems } from "../../../services/capture-agent/capture-plan.js";
 import {
   buildDegradedNextStep,
   describeDegradedForAgent,
@@ -168,7 +169,7 @@ export function registerCaptureRoutes(app: HubHono): void {
     tags: ["Capture"],
     summary: "AI-structure raw input into entity proposals",
     description:
-      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A HUMAN caller (no agent key) instead gets CONFIRM MODE: the plan is persisted as a pending composite proposal and the response is the submit result — status/proposalId/reviewUrl/summary/entityCount/relationCount/bindingCount/applied/writeReceipt, plus (only when non-empty) pendingDuplicateCandidates, relationsFailed, unmodeledProperties, project and projectCandidate. Two dissimilar payloads share this route, so the 200 schema stays LOOSE — but it now DECLARES the honesty triple (`degraded`, `degradedReason`, `extraction`) that the tRPC door has always forwarded and this one published nowhere. `degradedReason` may be a pod plumbing reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service extraction reason (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type, …) — the latter are CONFIGURATION states, not outages, and must not be reported to a user as something to retry.",
+      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A human caller (no agent key) instead gets the result of filing the plan as a pending composite proposal: status, proposalId, reviewUrl, summary, entityCount, relationCount, bindingCount, applied, writeReceipt, plus (only when non-empty) duplicateCheck, relationsFailed, unmodeledProperties and project. Fields degraded, degradedReason and extraction report a degraded extraction. degradedReason is a pod reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service configuration state (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type). The latter are configuration states, not outages; do not tell a user to retry.",
     request: {
       body: CaptureStructureRequestSchema,
     },
@@ -378,6 +379,9 @@ export function registerCaptureRoutes(app: HubHono): void {
         items: body.items,
         aiStructure: body.aiStructure,
         ...(session.sessionId ? { sessionId: session.sessionId } : {}),
+        // The worker files the proposal: it needs the acting agent to
+        // attribute it, exactly as /import/analyze does.
+        ...(corpusAgentUserId ? { agentUserId: corpusAgentUserId } : {}),
       });
 
       logger.info(
@@ -722,8 +726,8 @@ export function registerCaptureRoutes(app: HubHono): void {
         });
         // Forward the WHOLE submit result, not a hand-picked subset. This door
         // previously re-typed the response by hand and dropped six fields the
-        // service computes — including `pendingDuplicateCandidates` (the
-        // in-flight duplicate warning that exists precisely so a caller does
+        // service computes — including `duplicateCheck` (the
+        // duplicate warning that exists precisely so a caller does
         // not file a second copy), `relationsFailed` (partial failure) and
         // `writeReceipt` (what actually landed, and where). `applied` is NOT
         // constant on this path: an idempotent replay of an already-applied
@@ -788,18 +792,18 @@ export function registerCaptureRoutes(app: HubHono): void {
           ...((result as { intake?: unknown }).intake
             ? { intake: (result as { intake?: unknown }).intake }
             : {}),
-          ...(graph.projectCandidate
-            ? { projectCandidate: graph.projectCandidate }
-            : {}),
           ...(graph.project ? { project: graph.project } : {}),
-          ...(graph.pendingDuplicateCandidates
-            ? { pendingDuplicateCandidates: graph.pendingDuplicateCandidates }
+          ...(graph.duplicateCheck
+            ? { duplicateCheck: graph.duplicateCheck }
             : {}),
           ...(graph.relationsFailed
             ? { relationsFailed: graph.relationsFailed }
             : {}),
           ...(graph.unmodeledProperties
             ? { unmodeledProperties: graph.unmodeledProperties }
+            : {}),
+          ...(graph.modeledFields
+            ? { modeledFields: graph.modeledFields }
             : {}),
         });
       }
@@ -1053,8 +1057,8 @@ export function registerCaptureRoutes(app: HubHono): void {
     } catch (err) {
       logger.error({ err, userId }, "POST /capture/execute failed");
       // A domain REFUSAL must not egress as a 500. The same-name create gate
-      // (`entities.create` → CONFLICT, "… already exists … reuse an existing
-      // id, or pass forceCreate") is the common one: capture anything whose
+      // (`entities.create` → CONFLICT, "… already exists …"; since B2 only on
+      // an approval the reviewer has not resolved) was the common one: capture anything whose
       // title matches an existing entity of that kind and this route used to
       // answer 500 "An unexpected server error occurred", with the 5xx egress
       // middleware REDACTING the body — so the caller lost the one sentence
@@ -1610,6 +1614,15 @@ export function registerCaptureRoutes(app: HubHono): void {
       if (bad !== -1) {
         return c.json({ error: `${key}[${bad}] must be an object` }, 400);
       }
+    }
+    // A teaching skill needs its `slug` — the ONE authoring rule
+    // `synap_create_skill` applies — or nothing is filed.
+    const skillProblems = captureSkillStepProblems(planArrays.skills);
+    if (skillProblems.length > 0) {
+      return c.json(
+        { error: skillProblems.join("; "), problems: skillProblems },
+        400
+      );
     }
     if (
       body.source &&

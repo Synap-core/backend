@@ -257,9 +257,11 @@ describe("startHere.beforeYouFinish — the instruction lives in the pod", () =>
 
   it("briefing order puts blockers right after the review queue", async () => {
     const out = await build();
-    expect(Object.keys(out).slice(0, 3)).toEqual([
+    expect(Object.keys(out).slice(0, 4)).toEqual([
       "pendingReview",
       "openFindings",
+      // What the person owes comes before the agent's own work.
+      "owedByPerson",
       "openSessions",
     ]);
   });

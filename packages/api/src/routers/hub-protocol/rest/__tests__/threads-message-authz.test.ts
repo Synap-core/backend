@@ -43,6 +43,7 @@ const state = {
 function selectChain(): any {
   const chain: any = {
     from: () => chain,
+    innerJoin: () => chain, // object-room floor subqueries (project-scope.ts)
     where: () => chain,
     limit: () => Promise.resolve(state.channelRows),
     then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>

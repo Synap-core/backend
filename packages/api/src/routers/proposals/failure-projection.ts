@@ -41,6 +41,9 @@ export const PROJECTED_FAILURE_FIELDS = [
   "errorClass",
   "providerRef",
   "missingFields",
+  // The records a refused create found already existing (id, title, kind):
+  // caller-scoped by the gate that found them, and the door the person needs.
+  "existing",
 ] as const satisfies ReadonlyArray<keyof ProposalFailureMeta>;
 
 /**

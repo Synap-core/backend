@@ -1,0 +1,29 @@
+# Known-red test files on main. Read by scripts/test-ratchet.mjs (CI "Full suite").
+# One line per file:  <repo-relative test file> | <owner> | <cause> | <note>
+# The list may only SHRINK: a file not listed here that fails turns CI red, and a
+# listed file that passes (or no longer runs) turns CI red until its line is removed.
+# Never add a line to make a new failure green. Recorded from a real run with
+# `node scripts/test-ratchet.mjs --record`, never by hand. First recorded from CI
+# run 39533915485 (head 1ed26642a, 2026-10-21): 35 Full suite + 6 API e2e files.
+#
+# owner  — who fixes it: infra (CI cannot provide the service/sibling), wave6
+#          (file changed by the in-flight Pod Console wave 6 branch), e2e (the
+#          API e2e job), or the code area (api, database, jobs, types, …).
+# cause  — live-service | sibling-repo | native-addon | stale-mock | db-fixture |
+#          pg-boss | tripwire | product-bug | assertion-drift | flaky | unknown
+apps/pod-admin/__tripwires__/cross-repo-parity.test.ts | infra | sibling-repo | browser checkout absent in CI
+apps/pod-admin/__tripwires__/exit-door.test.ts | infra | sibling-repo | landing checkout absent in CI
+packages/api/src/__tripwires__/property-label-mirror-drift.test.ts | infra | sibling-repo | synap-app checked out but its deps do not resolve (@synap-core/types/vocabulary)
+packages/api/src/notifications/__tests__/push-tap-target.test.ts | infra | sibling-repo | relay-app checkout absent in CI
+packages/api/src/services/discover/space-brief.templates.test.ts | infra | sibling-repo | synap-app checked out but its deps do not resolve (@synap-core/types/automations)
+packages/api/src/services/intake/__tests__/capture-clarification-serialisers.test.ts | infra | sibling-repo | synap-app checked out but its deps do not resolve (@synap-core/types/capture)
+packages/api/src/services/skills/run-skill-in-sandbox.verb-act.test.ts | infra | native-addon | isolated-vm has no prebuild for node20 linux in CI
+packages/jobs/src/__tripwires__/relay-templates-match-runtime.tripwire.test.ts | infra | sibling-repo | relay-app checkout absent in CI
+packages/jobs/src/workers/__tests__/bookmark-enrichment-flow.test.ts | infra | sibling-repo | synap-cli checkout absent in CI
+packages/test-e2e/src/core-flows.test.ts | e2e | live-service | needs the AI service and workers the job does not boot
+packages/test-e2e/src/crud/workspaces.test.ts | e2e | unknown | Unable to transform response from server
+packages/test-e2e/src/executor-flows.test.ts | e2e | unknown | drizzle-orm does not resolve from packages/test-e2e
+packages/test-e2e/src/hub-protocol-e2e.test.ts | e2e | unknown | suite-level failure
+packages/test-e2e/src/validation-flows.test.ts | e2e | unknown | Unable to transform response from server
+packages/types/src/automations/sentence.test.ts | infra | sibling-repo | browser checkout absent in CI
+packages/types/src/renderables/chart-shapers.one-copy.test.ts | infra | sibling-repo | browser checkout absent in CI

@@ -49,6 +49,8 @@ export type LinkEntityToProjectResult =
        * inferred. `false` = it already existed (the unique index deduped it).
        */
       created: boolean;
+      /** The edge THIS call wrote — present only when `created`. */
+      relationId?: string;
     }
   | { linked: false; reason: "project_not_found" };
 
@@ -131,7 +133,12 @@ export async function linkEntityToProject(
     .onConflictDoNothing()
     .returning({ id: relations.id });
 
-  return { linked: true, created: inserted.length > 0 };
+  const relationId = inserted[0]?.id;
+  return {
+    linked: true,
+    created: inserted.length > 0,
+    ...(relationId ? { relationId } : {}),
+  };
 }
 
 /**

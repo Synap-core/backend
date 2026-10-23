@@ -35,9 +35,9 @@ import { entitiesRouter } from "../entities.js";
 import { hubRelationsRouter } from "../relations.js";
 
 // Two distinct humans on the same pod.
-const A = "a0000000-0000-0000-0000-000000000051";
-const B = "b0000000-0000-0000-0000-000000000052";
-const WS_A = "a0000000-0000-0000-0000-0000000000f1"; // A's private workspace; B is NOT a member.
+const A = "a0000000-0000-4000-8000-000000000051";
+const B = "b0000000-0000-4000-8000-000000000052";
+const WS_A = "a0000000-0000-4000-8000-0000000000f1"; // A's private workspace; B is NOT a member.
 
 // ── UNIT PROOFS of the identity floor (no DB required) ───────────────────────
 

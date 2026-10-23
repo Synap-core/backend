@@ -1,6 +1,6 @@
 /**
  * shouldRejectUnattributedWrite — Phase 0 attribution hard-reject
- * (GOVERNANCE-CONVERGENCE-PLAN.md §Phase 0).
+ * (docs/decisions/agent-governance.md, D1).
  *
  * A `user_pat`/`hub_inbound` key with no `linkedUserId` is a bare human key
  * used directly against MCP. Today that produces an anonymous write that

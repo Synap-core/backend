@@ -13,8 +13,10 @@ import "dotenv/config";
 
 // Initialize OpenTelemetry tracing FIRST (before any other imports)
 // This must be done before importing any libraries to ensure proper instrumentation
-// TODO: Enable tracing for production observability
-// import { initializeTracing } from "@synap-core/core";
+// TODO: Enable tracing for production observability — `tracing.ts` is not in
+// the @synap-core/core barrel; add a `./tracing` export subpath first (relay-app
+// derives its tsconfig paths from those exports: its map must follow).
+// import { initializeTracing } from "@synap-core/core/tracing";
 // initializeTracing();
 
 import { Hono, type Context as HonoContext } from "hono";
@@ -53,6 +55,7 @@ import {
   normalizeIssuerUrl,
   sanitizeErrorEgress,
   refuseGuestSession,
+  appSessionMiddleware,
   registerPodWideProposalReactor,
   registerSessionUnblockReactor,
   registerDecisionAskReactor,
@@ -80,6 +83,7 @@ import {
   handshakeRateLimitMiddleware,
 } from "./middleware/security.js";
 import { configuredPodAdminBase } from "./pod-admin-config.js";
+import { registerInviteBounce } from "./invite-bounce.js";
 import {
   dispatchOpen,
   OPEN_CLIENT_PARAM,
@@ -93,11 +97,7 @@ import {
   setupEventBroadcasting,
   startSessionChangedListener,
 } from "@synap/api";
-import {
-  authMiddleware,
-  configureLocalMode,
-  safeTokenEqual,
-} from "@synap/auth";
+import { configureLocalMode, safeTokenEqual } from "@synap/auth";
 import { buildKratosProxyTargetUrl } from "./kratos-proxy-url.js";
 import { trpcSessionGate } from "./trpc-session-gate.js";
 import { trpcAiRateLimit } from "./trpc-ai-rate-limit.js";
@@ -110,6 +110,7 @@ import {
   readinessFor,
 } from "./status/pod-data-status.js";
 import { cachedAuthHealth } from "./status/pod-auth-status.js";
+import { summarizeMigrationLedger } from "./status/migration-ledger.js";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -354,7 +355,7 @@ app.get("/health", async (c) => {
     //
     // DO NOT gate a deploy check on this field: it is not derived from the
     // running build, so it looks identical whether or not a deploy landed.
-    apiTypesVersion: "1.26.1",
+    apiTypesVersion: "1.32.0",
     mode: "multi-user",
     auth: "ory-stack",
     // Git SHA the running image was built from (see deploy/Dockerfile ARG
@@ -457,17 +458,9 @@ app.get("/status/release", async (c) => {
   try {
     const { sql } = await import("@synap/database");
     const rows = await sql<Array<{ filename: string; applied_at: string }>>`
-      SELECT filename, applied_at
-        FROM _migrations
-       ORDER BY applied_at DESC, id DESC
+      SELECT filename, applied_at FROM _migrations
     `;
-    migrations = {
-      lastApplied: rows[0]?.filename ?? null,
-      lastAppliedAt: rows[0]?.applied_at
-        ? new Date(rows[0].applied_at).toISOString()
-        : null,
-      count: rows.length,
-    };
+    migrations = summarizeMigrationLedger(rows);
   } catch (err) {
     migrations = {
       lastApplied: null,
@@ -563,6 +556,10 @@ app.get("/admin/connect", (c) => {
   target.search = url.search;
   return c.redirect(target.toString(), 302);
 });
+
+// ─── /invite/:token → this pod's console invite page ─────────────────────
+// The link an own-domain pod's invite email carries (`invite-bounce.ts`).
+registerInviteBounce(app);
 
 // ── Deep-link bounce (public, no auth) ──────────────────────────────────────
 // An https URL — clickable anywhere (Discord, email, chat). Humans hitting
@@ -972,8 +969,10 @@ if (config.server.localMode) {
 mountAdminEventStream(app);
 
 // tRPC routes — session auth on every call except the public procedures
-// (health.*, setup.*, invite preview/accept). See trpc-session-gate.ts.
-app.use("/trpc/*", trpcSessionGate(authMiddleware));
+// (health.*, setup.*, invite preview/accept). See trpc-session-gate.ts. The
+// session is a Kratos one or a Synap app's device token, and no other bearer
+// (packages/api middleware/app-session.ts).
+app.use("/trpc/*", trpcSessionGate(appSessionMiddleware()));
 
 // WebSocket ticket minting (see ws-auth.ts for the CSWSH rationale). The browser
 // exchanges its authenticated session for a short-lived, single-use ticket, then
@@ -983,18 +982,23 @@ import { issueWsTicket } from "./ws-auth.js";
 // The /api/ws-ticket mint endpoint reuses the global first-party origin policy
 // (cors-origin.ts): a cross-origin page cannot mint a ticket from an untrusted
 // origin, even though the request carries the session cookie.
-app.post("/api/ws-ticket", authMiddleware, refuseGuestSession, async (c) => {
-  const origin = c.req.header("origin");
-  if (origin && !isAllowedOrigin(origin)) {
-    return c.json({ error: "Forbidden" }, 403);
+app.post(
+  "/api/ws-ticket",
+  appSessionMiddleware(),
+  refuseGuestSession,
+  async (c) => {
+    const origin = c.req.header("origin");
+    if (origin && !isAllowedOrigin(origin)) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
+    // `app` is an untyped Hono instance, so the context Variables map isn't known
+    // to TS — but appSessionMiddleware (which runs before this handler) sets `userId` to
+    // the authenticated identity id (string). Read it with an explicit type.
+    const userId = c.get("userId" as never) as string | undefined;
+    if (!userId) return c.json({ error: "Unauthorized" }, 401);
+    return c.json(issueWsTicket(userId));
   }
-  // `app` is an untyped Hono instance, so the context Variables map isn't known
-  // to TS — but authMiddleware (which runs before this handler) sets `userId` to
-  // the authenticated identity id (string). Read it with an explicit type.
-  const userId = c.get("userId" as never) as string | undefined;
-  if (!userId) return c.json({ error: "Unauthorized" }, 401);
-  return c.json(issueWsTicket(userId));
-});
+);
 
 // AI Providers — public model discovery for the synap CLI (keys never returned)
 import { providersRouter } from "./routers/providers.js";
@@ -1676,8 +1680,8 @@ try {
           // the orchestrator binding. jobs owns the queue + worker; api (which
           // alone may import the orchestrator) fills the slot here at boot —
           // respecting the one-way api → jobs dependency. analyzeLarge produces
-          // a governed import.graph PROPOSAL (never a direct write) and does not
-          // read trpcCtx, so the empty ctx below is safe.
+          // a governed import.graph PROPOSAL (never a direct write); from
+          // trpcCtx it reads only the acting agent, to attribute that proposal.
           {
             const { registerImportCorpusHandler } =
               await import("@synap/jobs/workers/import-corpus-worker.js");
@@ -1689,7 +1693,9 @@ try {
               const res = await new ImportOrchestrator({
                 workspaceId: p.workspaceId,
                 userId: p.userId,
-                trpcCtx: {},
+                // Only the acting agent rides: analyzeLarge reads it to
+                // attribute the proposal it files (null for a human caller).
+                trpcCtx: { agentUserId: p.agentUserId ?? null },
                 sessionId: p.sessionId ?? null,
               }).analyzeLarge({
                 source: p.source as never,
@@ -1794,6 +1800,7 @@ try {
             const {
               registerCapabilityExecutor,
               registerPlaybookRunner,
+              registerPlaybookReadinessGate,
               registerSessionScheduler,
             } = await import("@synap/jobs/workers/automation-executor.js");
             const { registerAgentWaker } =
@@ -1850,6 +1857,12 @@ try {
             // to api's runPlaybook via this slot, so is-agent | external-agent |
             // hybrid all dispatch through the executor spine + triggerAutoRespond.
             registerPlaybookRunner((input) => api.runPlaybook(input));
+            // ONE unattended readiness rule: a propose-mode rule checks the
+            // playbook's skills with the spine's own preflight before it files
+            // a run proposal (an unrunnable one is the enable request instead).
+            registerPlaybookReadinessGate((input) =>
+              api.checkUnattendedPlaybookReadiness(input)
+            );
             // ONE appointment materializer: a `playbook_run` node whose mode is
             // "appointment" creates a `status:'scheduled'` focus_session that
             // WAITS for the human — it never reaches the runner above, so no

@@ -1,9 +1,10 @@
 # Import → Curate → Build
 
-**Status:** founder-approved plan (2026-10-12), being built. Replaces
-`IMPORT_ONBOARDING_WIRING.md` and `IMPORT_QUALITY_STATE.md` (retired: they
+**Status:** approved by the founder on 2026-10-12 and built (`packages/api/src/services/imports/`).
+Replaces `IMPORT_ONBOARDING_WIRING.md` and `IMPORT_QUALITY_STATE.md` (retired: they
 described `submitBatch`, which is deleted, and an analyze that was not
-deterministic). Amends `CAPTURE_IMPORT_ARCHITECTURE.md` §0/§2.
+deterministic). The capture and import boundary is recorded in
+[`decisions/capture-vs-library.md`](decisions/capture-vs-library.md).
 
 ## 1. The split
 
@@ -18,13 +19,13 @@ deterministic). Amends `CAPTURE_IMPORT_ARCHITECTURE.md` §0/§2.
 Rule for clients: **a capture is what you write; an import is a batch you
 didn't write.** A share appends to the open import when one is open.
 
-> **Superseded 2026-10-13** by [`CAPTURE_LIBRARY_PLAN.md`](CAPTURE_LIBRARY_PLAN.md) §1:
+> **Superseded 2026-10-13** by [`decisions/capture-vs-library.md`](decisions/capture-vs-library.md):
 > the line is **authorship, not cardinality**. Capture = the person's words (typed or
 > dictated, even with a URL inside); everything the person brings in (one link, one
 > photo, one file included) goes to the **Library**, a standing lens over staged
 > items; a note typed at share time is a capture linked to the item. The rule is
 > `routeIntake()` in `@synap-core/types/intake-route`; the old capture paths for
-> links and files are listed in `DEPRECATED_INTAKE_PATHS` (plan §2). Clients still
+> links and files are listed in `DEPRECATED_INTAKE_PATHS` (see that record). Clients still
 > route by the old rule until wave L4. The AI's capture door (MCP `synap_capture`)
 > is unchanged.
 

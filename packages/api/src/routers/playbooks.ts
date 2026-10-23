@@ -57,6 +57,7 @@ import {
   workspaceMembers,
   links,
   loadFacetSlugsBatch,
+  isUniqueViolation,
   type FlowDefinition,
 } from "@synap/database";
 import type {
@@ -112,7 +113,8 @@ import {
 } from "../services/playbooks/pinned-subject.js";
 import { loadVisibleEntitiesById } from "../services/playbooks/pinned-subject-query.js";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
-import { rankByTerms, queryTerms } from "../utils/term-match.js";
+import { findDuplicateCandidates } from "../services/duplicates/find-duplicate-candidates.js";
+import type { DuplicateCheck } from "@synap-core/types/proposals";
 import { getLinksFor, createLinks } from "../services/links/links-service.js";
 import {
   listCapabilities,
@@ -146,13 +148,6 @@ import {
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 
 const logger = createLogger({ module: "playbooks-router" });
-
-/** Postgres unique-violation SQLSTATE — raised by playbooks_workspace_name_active_uq. */
-function isUniqueViolation(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const e = err as { code?: string; cause?: { code?: string } };
-  return e.code === "23505" || e.cause?.code === "23505";
-}
 
 /**
  * Load the surviving non-archived playbook for (workspaceId, name).
@@ -313,11 +308,15 @@ export const createInputSchema = playbookDefinitionSchema.extend({
   source: z.string().optional(),
   reasoning: z.string().optional(),
   /**
-   * Bypass the near-duplicate refusal below. Same name and same meaning as
-   * `entities.create.forceCreate`: the caller has SEEN the candidates and
-   * judged this genuinely distinct.
+   * The id a PROPOSAL promised for this playbook (its `targetId`). The
+   * `playbook/create` approval executor passes it so the approved playbook
+   * lands under the id the agent was handed — before, the database minted a
+   * second id and the proposal's `targetId` named no playbook (live ee96643d →
+   * 48e6878a, 2026-10-21). Same contract as `entities.create.proposedEntityId`:
+   * an id that already names this workspace's playbook returns it (a replayed
+   * approval); any other taken id mints a fresh one.
    */
-  forceCreate: z.boolean().optional(),
+  proposedPlaybookId: z.string().uuid().optional(),
   executor: executorRefSchema.default("is-agent"),
   status: playbookStatusSchema.default("draft"),
   /**
@@ -412,6 +411,59 @@ export const updateInputSchema = z.object({
    */
   metadata: jsonRecord.optional(),
 });
+
+/**
+ * A REVISION of a still-pending playbook proposal (`playbook/create` or
+ * `playbook/update`), validated with exactly what its approval will run: the
+ * procedure's own input schema over the revised payload, then the shared
+ * {@link assertPlaybookDefinitionWritable} (over the stored row, for an
+ * update). Called by the shared revise core (`mergeProposalRevision`), so a
+ * bad revised stage or goal is refused at revise time — on every revise door —
+ * instead of landing as an approval failure later.
+ */
+export async function assertRevisedPlaybookPayload(
+  changeType: "create" | "update",
+  payload: Record<string, unknown>
+): Promise<void> {
+  const parsed = (
+    changeType === "create" ? createInputSchema : updateInputSchema
+  ).safeParse(payload);
+  if (!parsed.success) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: parsed.error.issues
+        .map((i) => `${i.path.join(".") || "playbook"}: ${i.message}`)
+        .join("; "),
+    });
+  }
+  const database = await getDb();
+  let previous: Playbook | undefined;
+  if (changeType === "update") {
+    previous = (await database.query.playbooks.findFirst({
+      where: eq(playbooks.id, (parsed.data as { id: string }).id),
+    })) as Playbook | undefined;
+    if (!previous) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "The playbook this proposal edits no longer exists.",
+      });
+    }
+  }
+  const data = parsed.data as {
+    goalTemplate?: unknown;
+    params?: unknown;
+    subjectProfile?: unknown;
+  };
+  await assertPlaybookDefinitionWritable(
+    database,
+    {
+      goalTemplate: data.goalTemplate,
+      params: data.params,
+      subjectProfile: data.subjectProfile,
+    },
+    previous
+  );
+}
 
 // ── Links sub-router (read-only) ─────────────────────────────────────────────
 
@@ -1196,109 +1248,41 @@ async function assertSubjectProfileResolves(
   await assertKnownProfileSlug(db, slug);
 }
 
-/** How many near-duplicates to hand back. The report asked for three. */
-const OVERLAP_CANDIDATE_LIMIT = 3;
-
 /**
- * Score PER QUERY TERM above which an AI create is refused as a probable
- * duplicate.
- *
- * NORMALISED by term count, and that matters for SHORT inputs. `rankByTerms`
- * sums over every query term, so a raw total grows with how much the caller
- * wrote. Note `queryTerms` caps at `MAX_QUERY_TERMS` (8) after stopword
- * removal and de-duplication, so for any reasonably-worded playbook the
- * divisor is simply 8 — the normalisation earns its keep only on a terse
- * one-or-two-word create, which would otherwise be scored on a different
- * scale from everything else.
- *
- * TUNED ON THE TWO REAL CASES, measured 2026-09-21 against the live CRM
- * workspace rows (the same rows `playbooks.create-overlap-guard.test.ts`
- * uses, copied verbatim from `synap_list_playbooks`):
- *   - the duplicate that was actually filed, "Lead → qualified (discovery)"
- *     vs "Qualify a CRM lead":                47.0 / term  → must refuse
- *   - a genuinely distinct playbook in the same workspace,
- *     "Quarterly revenue forecast":           21.1 / term  → must allow
- * 30 sits between them with roughly equal margin on both sides.
- *
- * HONEST LIMITATION: two data points is a weak basis for a constant, and this
- * WILL misjudge some pair. That is survivable only because `forceCreate` makes
- * a false refusal a one-call recovery rather than a dead end — do not remove
- * that escape hatch, and do not raise this into a hard block without one.
+ * The ONE definition check a playbook write gets BEFORE the governance gate,
+ * shared by `create`, `update` (every door: browser, MCP `synap_create_playbook`
+ * / `synap_update_playbook`, Hub `POST`/`PATCH /playbooks`) and a revision of a
+ * pending playbook proposal (the shared revise core), so a bad definition is
+ * refused with the same message wherever it is written:
+ *   - a `subjectProfile` the write carries must name a kind that resolves;
+ *   - the goal's placeholders must be declared in `params` — over the MERGED
+ *     row (`previous` = the stored row on update), and only for what this
+ *     write INTRODUCES (see {@link assertGoalPlaceholdersDeclared}).
+ * The field SHAPES are the procedures' own input schemas
+ * (`createInputSchema` / `updateInputSchema`); this is what they cannot say.
  */
-const OVERLAP_REFUSE_SCORE_PER_TERM = 30;
-
-/**
- * "Discover before inventing", enforced at the write door instead of asked for
- * in a prompt.
- *
- * MEASURED DEFECT (live, 2026-09-21). The CRM workspace already held "Qualify a
- * CRM lead", "Enrich Lead/Company", "Lead Outreach" and "CRM Hygiene". An agent
- * created "Lead → qualified (discovery)", overlapping three of them, and the
- * pod accepted it without a word. The rule existed only as instruction prose,
- * and prose is followed on the days somebody remembers it.
- *
- * Deliberately reuses `rankByTerms` — the pod's existing IDF-weighted ranker,
- * already the "closest by name/description" helper behind capability search —
- * rather than adding a second similarity implementation. `rankRouteCandidates`
- * was the other candidate and is the wrong shape here: its kind/facet signals
- * score an ENTITY against playbooks, and its `anyKind` bonus would rank every
- * subject-less playbook highly regardless of text.
- *
- * AI CALLERS ONLY, mirroring the exact-name idempotency directly below it: a
- * template install, a reconciler, a marketplace apply and a human author all
- * create playbooks deliberately and must not be second-guessed. `forceCreate`
- * is the escape hatch, named and behaved identically to `entities.create`.
- */
-async function findOverlappingPlaybooks(
-  database: Awaited<ReturnType<typeof getDb>>,
-  workspaceId: string | null | undefined,
-  input: {
-    name: string;
-    description?: string | null;
-    goalTemplate?: string | null;
+export async function assertPlaybookDefinitionWritable(
+  database: Parameters<typeof assertKnownProfileSlug>[0],
+  write: { goalTemplate?: unknown; params?: unknown; subjectProfile?: unknown },
+  previous?: { goalTemplate: unknown; params: unknown }
+): Promise<void> {
+  if (write.subjectProfile !== undefined) {
+    await assertSubjectProfileResolves(database, write.subjectProfile);
   }
-): Promise<
-  Array<{ id: string; name: string; description: string | null; score: number }>
-> {
-  const scope =
-    workspaceId == null || workspaceId === ""
-      ? isNull(playbooks.workspaceId)
-      : eq(playbooks.workspaceId, workspaceId);
-  const rows = await database
-    .select({
-      id: playbooks.id,
-      name: playbooks.name,
-      description: playbooks.description,
-      goalTemplate: playbooks.goalTemplate,
-    })
-    .from(playbooks)
-    .where(and(scope, ne(playbooks.status, "archived")));
-  if (rows.length === 0) return [];
-
-  // Rank the NEW playbook's own words against the existing ones. Rarity is
-  // measured over this workspace's set, so workspace-wide boilerplate ("the",
-  // "lead" in a lead-heavy CRM) is discounted automatically.
-  const query = [input.name, input.description, input.goalTemplate]
-    .filter((v): v is string => typeof v === "string" && v.length > 0)
-    .join(" ");
-  const termCount = queryTerms(query).length;
-  if (termCount === 0) return [];
-  return rankByTerms(query, rows, (r) => ({
-    // Weighted, not a flat bag: a name collision is the strongest duplicate
-    // signal, the goal template is the motion itself, and the description is
-    // prose that varies most between two playbooks doing the same thing.
-    primary: r.name,
-    secondary: r.goalTemplate ? [r.goalTemplate] : [],
-    tertiary: r.description,
-  }))
-    .slice(0, OVERLAP_CANDIDATE_LIMIT)
-    .map(({ item, score }) => ({
-      id: item.id,
-      name: item.name,
-      description: item.description,
-      // Normalised, so the caller compares against a scale-stable threshold.
-      score: score / termCount,
-    }));
+  if (!previous) {
+    assertGoalPlaceholdersDeclared({
+      goalTemplate: write.goalTemplate,
+      params: write.params,
+    });
+  } else if (write.goalTemplate !== undefined || write.params !== undefined) {
+    assertGoalPlaceholdersDeclared(
+      {
+        goalTemplate: write.goalTemplate ?? previous.goalTemplate,
+        params: write.params ?? previous.params,
+      },
+      previous
+    );
+  }
 }
 
 export const playbooksRouter = router({
@@ -1809,13 +1793,41 @@ export const playbooksRouter = router({
       // INSIDE `subjectProfile` — folded ONCE, here, so the gate payload, the
       // approval replay and the insert all carry the same stored shape.
       input.subjectProfile = foldProcessDeclarationsOrRefuse(input);
-      // Dangling `subjectProfile` slugs are refused here, before the gate.
-      await assertSubjectProfileResolves(await getDb(), input.subjectProfile);
-      // …and so are goal placeholders no run will fill.
-      assertGoalPlaceholdersDeclared({
+      // Dangling `subjectProfile` slugs and goal placeholders no run will
+      // fill are refused here, before the gate.
+      await assertPlaybookDefinitionWritable(await getDb(), {
         goalTemplate: input.goalTemplate,
         params: input.params,
+        subjectProfile: input.subjectProfile,
       });
+      // The id this playbook lands under, minted BEFORE the gate and handed to
+      // it as `data.id`, so a proposal's `targetId` IS the playbook's id once it
+      // is approved (the gate reads `data.id` as the target). See
+      // `proposedPlaybookId` above for the replay rules.
+      let playbookId = input.proposedPlaybookId ?? randomUUID();
+      if (input.proposedPlaybookId) {
+        const [taken] = await (
+          await getDb()
+        )
+          .select()
+          .from(playbooks)
+          .where(eq(playbooks.id, input.proposedPlaybookId))
+          .limit(1);
+        if (taken) {
+          if (
+            taken.workspaceId === ctx.workspaceId &&
+            taken.status !== "archived"
+          ) {
+            return {
+              playbook: taken as Playbook,
+              status: "created" as const,
+              message: "Playbook already created under this id — returning it",
+              proposalId: null as string | null,
+            };
+          }
+          playbookId = randomUUID();
+        }
+      }
       const gateOpts = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
@@ -1834,6 +1846,7 @@ export const playbooksRouter = router({
         // untouched. goalTemplate is required by createInputSchema, so without
         // this the approve-path materialization would fail zod validation.
         data: {
+          id: playbookId,
           name: input.name,
           description: input.description,
           goalTemplate: input.goalTemplate,
@@ -1871,6 +1884,7 @@ export const playbooksRouter = router({
         Boolean(input.agentUserId) ||
         input.source === "ai" ||
         input.source === "intelligence";
+      let duplicate: DuplicateCheck | undefined;
       if (isAiCaller) {
         const preview = await previewPermissionDecision(gateOpts);
         if (preview.decision === "deny") {
@@ -1898,33 +1912,30 @@ export const playbooksRouter = router({
           };
         }
 
-        // DISCOVER BEFORE INVENTING — enforced, not asked for. An exact name
-        // match was handled above; this catches the overlap that actually
-        // happens, where an agent invents a near-twin under a different name.
-        if (!input.forceCreate) {
-          const overlapping = await findOverlappingPlaybooks(
-            await getDb(),
-            ctx.workspaceId,
-            input
-          );
-          const top = overlapping[0];
-          if (top && top.score >= OVERLAP_REFUSE_SCORE_PER_TERM) {
-            throw new TRPCError({
-              code: "CONFLICT",
-              message:
-                `This looks like an existing playbook. Closest matches: ` +
-                overlapping.map((c) => `"${c.name}" (${c.id})`).join(", ") +
-                `. Extend one of them with playbooks.update, or resend with ` +
-                `forceCreate: true if this is genuinely a different motion.`,
-              // Machine-readable, same shape as the entity door's candidates
-              // so a caller can act on it without parsing the sentence.
-              cause: { overlapping } as unknown as Error,
-            });
-          }
-        }
+        // The same playbook still WAITING for review is a possible twin (the
+        // one duplicate door, B2): filed anyway with "looks like X" for the
+        // reviewer. The term-overlap refusal that used to sit here is gone —
+        // it refused distinct motions that shared words, and agents learned to
+        // reword. A meaning-based match comes later.
+        duplicate = (
+          await findDuplicateCandidates(await getDb(), {
+            subject: "playbook",
+            userId: ctx.userId,
+            name: input.name,
+            workspaceId: ctx.workspaceId ?? null,
+          })
+        ).check;
       }
 
-      const perm = await checkPermissionOrPropose(gateOpts);
+      const perm = await checkPermissionOrPropose({
+        ...gateOpts,
+        ...(duplicate
+          ? {
+              duplicateCheck: duplicate,
+              possibleDuplicate: duplicate.status === "possible",
+            }
+          : {}),
+      });
 
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
@@ -1954,6 +1965,7 @@ export const playbooksRouter = router({
         const [row] = await database
           .insert(playbooks)
           .values({
+            id: playbookId,
             workspaceId: ctx.workspaceId,
             createdBy: input.agentUserId ?? ctx.userId,
             name: input.name,
@@ -2136,21 +2148,17 @@ export const playbooksRouter = router({
       // refused for a dangling value it did not introduce (that is the create
       // door's job, and refusing here would make an existing broken playbook
       // uneditable — including uneditable to FIX it).
-      if (input.subjectProfile !== undefined) {
-        await assertSubjectProfileResolves(database, input.subjectProfile);
-      }
-
       // 2c. Same rule for the goal's placeholders, over the MERGED row, and
       // only for what THIS patch introduces (see the helper).
-      if (input.goalTemplate !== undefined || input.params !== undefined) {
-        assertGoalPlaceholdersDeclared(
-          {
-            goalTemplate: input.goalTemplate ?? existing.goalTemplate,
-            params: input.params ?? existing.params,
-          },
-          existing
-        );
-      }
+      await assertPlaybookDefinitionWritable(
+        database,
+        {
+          goalTemplate: input.goalTemplate,
+          params: input.params,
+          subjectProfile: input.subjectProfile,
+        },
+        existing
+      );
 
       // 2d. A pin list is an ordered whitelist on metadata. The request's
       // strategy wins over the stored one: writing ids onto a playbook that
@@ -2907,7 +2915,7 @@ export const playbooksRouter = router({
       // `try`/`let` pair so this stays the ONE assigned runPlaybook call in
       // this file, which `severed-approval-doors.test.ts` (6b) anchors on (and
       // counts) when it proves this door passes no `idempotentBySubject`.
-      const { run, session, parentLink, skipped } = await runPlaybook({
+      const { run, session, parentLink, skipped, held } = await runPlaybook({
         playbookId: input.playbookId,
         workspaceId: runWorkspaceId,
         userId: ctx.userId,
@@ -2947,6 +2955,21 @@ export const playbooksRouter = router({
               ? "This record's last run failed recently, so another one was not started yet."
               : "No pinned record was ready, and the fallback found nothing.",
           proposalId: null as string | null,
+        };
+      }
+
+      // B6: an agent's direct run is the PERSON's draft and does NOT start
+      // until they accept it (`runPlaybook` holds it); say so, so the agent
+      // tells them — and never reports a run that is not running.
+      if (held) {
+        return {
+          run: null,
+          session,
+          status: "draft" as const,
+          message:
+            "Playbook run created as a draft. It belongs to the person and does not start until they accept it in their sessions.",
+          proposalId: null as string | null,
+          ...(parentLink ? { parentLink } : {}),
         };
       }
 

@@ -11,6 +11,7 @@ import {
   protectedProcedure,
   podAdminProcedure,
   assertPodAdmin,
+  credentialProcedure,
 } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import {
@@ -69,6 +70,7 @@ import {
   parsePermission,
 } from "@synap-core/types/grants";
 import { reapplyAgentKeyGrants } from "../services/agent-identity-service.js";
+import { appAgentGovernanceDenial } from "../services/app-agent-floor.js";
 import { loadMachineNames } from "../services/machine-roster.js";
 import {
   canDecidePendingConnection,
@@ -395,7 +397,7 @@ export const agentUsersRouter = router({
   /**
    * Create an AI agent user and add it to a workspace
    */
-  create: protectedProcedure
+  create: credentialProcedure
     .input(
       z.object({
         // Required for a workspace agent; omit for a pod-wide agent (no
@@ -786,7 +788,7 @@ export const agentUsersRouter = router({
   /**
    * Update an AI agent user
    */
-  update: protectedProcedure
+  update: credentialProcedure
     .input(
       z.object({
         workspaceId: z.string().uuid(),
@@ -868,6 +870,16 @@ export const agentUsersRouter = router({
           message:
             "Only the person this agent belongs to, or a pod admin, can change it.",
         });
+
+      // An app's agent: how its writes land is its owner's choice, never an
+      // agent's (PB4) — the app's page is the door for it.
+      if (
+        input.writesRequireProposal !== undefined ||
+        input.askFirst !== undefined
+      ) {
+        const denial = await appAgentGovernanceDenial(input.agentUserId, ctx);
+        if (denial) throw new TRPCError({ code: "FORBIDDEN", message: denial });
+      }
 
       // Capabilities are security-sensitive: changing them always goes through
       // the proposal flow (agent.updateCapabilities is in ADMIN_ACTIONS).

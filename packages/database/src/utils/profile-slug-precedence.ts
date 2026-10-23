@@ -12,7 +12,7 @@
  * Entity reads are row-blind (`entities.type = slug`), but schema is not:
  * `getEffectiveProperties(profileId, …)` reads by profile ID, so every write
  * that resolved onto a twin got the twin's fields, renderers and validation
- * instead of the canonical row's (SCHEMA-CONVERGENCE-PLAN.md, Defect A — 822
+ * instead of the canonical row's (SCHEMA-CONVERGENCE-PLAN (team pod), Defect A — 822
  * `knowledge` entities on a Pod Admin twin).
  */
 import { ConflictError } from "@synap-core/core";
@@ -60,7 +60,7 @@ export type SlugLens = "workspace" | "pod";
  *    every pod-wide `finding` write landed on the Research kind — product gaps
  *    filed as research facts, without a severity (ticket 5c3879d4).
  *  - ROLE: workspace > shared > system, unchanged. Per-workspace roles are a
- *    legitimate model (founder decision 3, SCHEMA-CONVERGENCE-PLAN.md), not
+ *    legitimate model (founder decision 3, SCHEMA-CONVERGENCE-PLAN (team pod)), not
  *    twins, so this rule does not re-rank them.
  */
 export function slugPrecedenceRank(

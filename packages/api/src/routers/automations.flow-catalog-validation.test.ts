@@ -109,7 +109,8 @@ vi.mock("../utils/split-brain-service.js", () => ({
 // than reproducing its rule — and a reproduction can drift from the original
 // silently, which is the failure mode being removed here.
 
-vi.mock("../utils/permission-check.js", () => ({
+vi.mock("../utils/permission-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/permission-check.js")>()),
   checkPermissionOrPropose: vi.fn(async () => {
     h.permissionCalls += 1;
     return { granted: true };

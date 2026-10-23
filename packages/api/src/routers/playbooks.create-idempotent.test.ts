@@ -31,12 +31,7 @@ const {
     orderBy: vi.fn().mockReturnThis(),
     limit: selectLimit,
     // Drizzle's query builder is THENABLE — awaiting it without `.limit()`
-    // runs the query. `playbooks.create`'s near-duplicate overlap scan does
-    // exactly that, so without this the chain object itself was handed to
-    // `rankByTerms` ("candidates.map is not a function"). Resolves empty: in
-    // this file no playbook pre-exists, so the overlap scan must find nothing
-    // and the create must proceed untouched — which is precisely what these
-    // tests assert about the pre-existing flow.
+    // runs the query. Resolves empty: in this file no playbook pre-exists.
     then: (resolve: (v: unknown) => unknown) => resolve([]),
   };
   const insertChain = {
@@ -67,7 +62,8 @@ const {
   };
 });
 
-vi.mock("@synap-core/core", () => ({
+vi.mock("@synap-core/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap-core/core")>()),
   createLogger: () => ({
     warn: vi.fn(),
     info: vi.fn(),
@@ -88,9 +84,17 @@ vi.mock("@synap/database", async (importOriginal) => {
     isNull: vi.fn((a: unknown) => ({ isNull: a })),
     asc: vi.fn((a: unknown) => ({ asc: a })),
     desc: vi.fn((a: unknown) => ({ desc: a })),
-    drizzleSql: vi.fn((strings: TemplateStringsArray, ..._v: unknown[]) => ({
-      sql: strings.join("?"),
-    })),
+    drizzleSql: Object.assign(
+      vi.fn((strings: TemplateStringsArray, ..._v: unknown[]) => ({
+        sql: strings.join("?"),
+      })),
+      // session-kind.ts builds a module-level drizzleSql.raw, and the jobs
+      // session-titler a module-level drizzleSql.identifier
+      {
+        raw: vi.fn((s: string) => ({ sql: s })),
+        identifier: vi.fn((s: string) => ({ sql: s })),
+      }
+    ),
   };
 });
 
@@ -107,7 +111,8 @@ vi.mock("../utils/split-brain-service.js", () => ({
 // TOTAL mock: every export the router reaches for must be listed, or a NEW
 // import in the router fails here at call time with "No export is defined on
 // the mock" — which is how `proposedMessageFor` broke this suite.
-vi.mock("../utils/permission-check.js", () => ({
+vi.mock("../utils/permission-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/permission-check.js")>()),
   checkPermissionOrPropose: mockCheckPermission,
   previewPermissionDecision: mockPreviewDecision,
   // Same contract as the real one for a non-join gate: the content message
@@ -116,7 +121,10 @@ vi.mock("../utils/permission-check.js", () => ({
     message,
 }));
 
-vi.mock("../services/playbooks/cron-automation.js", () => ({
+vi.mock("../services/playbooks/cron-automation.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../services/playbooks/cron-automation.js")
+  >()),
   materializePlaybookCronAutomation: mockMaterializeCron,
 }));
 
@@ -159,7 +167,9 @@ function callerCtx() {
 
 const createInput = {
   name: "Qualify a CRM lead",
-  goalTemplate: "Qualify {{subject}}",
+  // No placeholder: the create door refuses an undeclared one
+  // (assertGoalPlaceholdersDeclared), and this file tests idempotency, not goals.
+  goalTemplate: "Qualify the lead",
   status: "active" as const,
   executor: "is-agent" as const,
 };
@@ -294,7 +304,7 @@ describe("playbooks.create — name uniqueness / 23505 recovery", () => {
       id: WINNER_ID,
       workspaceId: WORKSPACE,
       name: createInput.name,
-      goalTemplate: "Qualify {{subject}}",
+      goalTemplate: "Qualify the lead",
       status: "active",
       params: [],
       createdAt: new Date("2026-01-01"),

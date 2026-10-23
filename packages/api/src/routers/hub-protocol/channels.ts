@@ -59,6 +59,7 @@ import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { assertMayActAs } from "./guard.js";
 import { actingAgentUserId } from "./utils.js";
 import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
+import { assertChannelWrite } from "../../utils/assert-channel-write.js";
 import { TRPCError } from "@trpc/server";
 
 /**
@@ -174,7 +175,16 @@ export const channelsRouter = router({
       // Identity floor: `input.userId` becomes the channel owner — a hub PAT may
       // act only as its own owner.
       assertMayActAs(ctx, input.userId);
+      // S7: resolving an EXISTING channel is a read; only minting one is a
+      // write. The key's grant must allow `channel.create` where a NEW channel
+      // lands (a personal one is pod-wide), checked right before the insert.
       const channel = await resolveOrCreateChannel({
+        beforeCreate: (workspaceId) =>
+          assertKeyMayWrite({
+            subjectType: "channel",
+            action: "create",
+            workspaceId,
+          }),
         userId: input.userId,
         workspaceId: input.workspaceId,
         channelType: input.channelType,
@@ -185,6 +195,21 @@ export const channelsRouter = router({
         parentChannelId: input.parentChannelId,
         branchPurpose: input.branchPurpose,
       });
+      // The channel handed back — found or minted — must be READABLE under the
+      // key's grant (the read hook's channel clause, `channelVisibilityWhere`).
+      const readable = await db
+        .select({ id: channels.id })
+        .from(channels)
+        .where(
+          and(eq(channels.id, channel.id), channelVisibilityWhere(input.userId))
+        )
+        .limit(1);
+      if (readable.length === 0) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "This key's grant does not allow reading this channel.",
+        });
+      }
       return { channel };
     }),
 
@@ -567,6 +592,11 @@ export const channelsRouter = router({
         });
       }
 
+      // EVERY post is bounded by the key's grant on the CHANNEL's workspace —
+      // the one the message lands in and the AI turn runs for — not only the
+      // first join, and never the caller-named workspace (S7).
+      await assertChannelWrite(channel, "message", "create");
+
       const channelMeta = (channel.metadata ?? {}) as {
         visibility?: "open" | "closed";
         topic?: string;
@@ -595,6 +625,7 @@ export const channelsRouter = router({
           userId,
           agentUserId,
           workspaceId: input.workspaceId,
+          grantWorkspaceId: channel.workspaceId ?? null,
           subjectType: "a2ai",
           action: "join",
           data: {
@@ -948,6 +979,11 @@ export const channelsRouter = router({
           message: "Channel not found",
         });
       }
+
+      // D4 (founder 2026-10-20): an AI turn is a MESSAGE written into the
+      // channel — bounded by the key's grant on the channel's own workspace,
+      // not by the read floor above (it spends the owner's AI budget).
+      await assertChannelWrite(channel, "message", "create");
 
       // Insert a system-role message carrying the skill prompt.
       // The IS will pick this up as the trigger message and respond.

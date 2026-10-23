@@ -13,7 +13,12 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
-import { router, publicProcedure, protectedProcedure } from "../trpc.js";
+import {
+  router,
+  publicProcedure,
+  protectedProcedure,
+  credentialProcedure,
+} from "../trpc.js";
 import {
   db,
   getDb,
@@ -44,6 +49,7 @@ import {
   inArray,
   drizzleSql,
   isDelegationHeaders,
+  listableEntityWhere,
 } from "@synap/database";
 import type { CapabilityRendererPage } from "@synap/database";
 import { MessageAuthorType } from "@synap/database/schema";
@@ -1046,7 +1052,7 @@ export const capabilitiesRouter = router({
    * delegates to the GOVERNED `createCapabilityFromDefinition` service, scoping it
    * to `input.workspaceId` via the ctx.
    */
-  install: protectedProcedure
+  install: credentialProcedure
     .input(
       z.object({
         templateKey: z.string().optional(),
@@ -1168,7 +1174,7 @@ export const capabilitiesRouter = router({
    * (that guard belongs only to the Hub/agent-key REST transport). Optional
    * `containerIds` scopes the apply to just those containers.
    */
-  applyUpdates: protectedProcedure
+  applyUpdates: credentialProcedure
     .input(
       z
         .object({ containerIds: z.array(z.string().uuid()).optional() })
@@ -1948,6 +1954,8 @@ export const capabilitiesRouter = router({
           .where(
             and(
               scopedDb(AccessContext.from(ctx)).predicate(entities),
+              // THE listing rule: counts leave probe and demo rows out.
+              listableEntityWhere(),
               inArray(entityExternalLinks.nangoConnectionId, linkIds),
               eq(entityExternalLinks.status, "active")
             )

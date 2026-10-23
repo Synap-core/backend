@@ -29,6 +29,7 @@
 import {
   db,
   applyStatusMove,
+  canonicalLifecycleOptionKey,
   classifyStatusMove,
   resolveStatusMoveTarget,
   expireProposalsStaleAfterMove,
@@ -38,6 +39,7 @@ import {
 import { dispatchLifecycleTransition } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { ownWorkOrganiseForTaskClose } from "../governance/own-organise.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 
 const logger = createLogger({ module: "move-status" });
@@ -165,7 +167,12 @@ export async function moveStatus(
       reason: `"${input.property}" is not the lifecycle of ${target.role ?? target.entityType ?? "this kind"} ("${target.lifecycle.propertySlug}" is)`,
     };
   }
-  const lifecycleMove = classifyStatusMove(target.lifecycle, input.to);
+  // INPUT NORMALISER: `in_progress` for a declared `in-progress` (case or
+  // separator only) moves to the declared option; everything below — the
+  // governance classification, the proposal, the write, the event — sees the
+  // canonical key. Anything else is refused, naming the options.
+  const to = canonicalLifecycleOptionKey(target.lifecycle, input.to);
+  const lifecycleMove = classifyStatusMove(target.lifecycle, to);
   if (!lifecycleMove) {
     return {
       status: "refused",
@@ -190,17 +197,32 @@ export async function moveStatus(
       actual: target.current,
     };
   }
-  if (target.current === input.to) {
-    return { status: "unchanged", current: input.to };
+  if (target.current === to) {
+    return { status: "unchanged", current: to };
   }
 
   const governanceWorkspaceId = target.workspaceId ?? input.workspaceId ?? null;
   let receiptId: string | undefined;
   if (input.actor.kind !== "system" && !input.approvedProposalId) {
+    // FB1020 B3: an agent closing its OWN FRESH task (same key, last 24 h,
+    // untouched by a person) may be applied by the pod's own-organise class
+    // row; every other terminal move proposes by default (2.85), as before.
+    const ownWorkOrganise =
+      agent &&
+      lifecycleMove.intoTerminal &&
+      input.forcePropose !== true &&
+      (await ownWorkOrganiseForTaskClose({
+        agentUserId: input.actor.agentUserId,
+        target,
+        to,
+      }));
     const perm = await checkPermissionOrPropose({
       userId: input.actor.userId,
       agentUserId: input.actor.agentUserId ?? undefined,
       workspaceId: governanceWorkspaceId,
+      // The key's grant is checked on the row's own workspace — a pod-wide
+      // entity or role facet is pod-scope, never the caller's lens (S7).
+      grantWorkspaceId: target.workspaceId ?? null,
       subjectType: "entity",
       action: "transition",
       // An unattributed agent reaches the anonymous AI ladder; never "user".
@@ -211,9 +233,10 @@ export async function moveStatus(
         : "user",
       lifecycleMove,
       forcePropose: input.forcePropose,
+      ...(ownWorkOrganise ? { ownWorkOrganise: true } : {}),
       reasoning:
         input.reason ??
-        `Move ${target.lifecycle.propertySlug} from "${target.current ?? "none"}" to "${input.to}".`,
+        `Move ${target.lifecycle.propertySlug} from "${target.current ?? "none"}" to "${to}".`,
       sessionId: input.sessionId ?? undefined,
       data: {
         id: input.entityId,
@@ -223,7 +246,7 @@ export async function moveStatus(
         property: target.lifecycle.propertySlug,
         // The belief the approval replays against (strict CAS).
         expectedFrom: target.current,
-        to: input.to,
+        to,
         reason: input.reason ?? null,
       },
     });
@@ -244,7 +267,7 @@ export async function moveStatus(
   const result = await applyStatusMove(db, {
     target,
     expectedFrom: input.expectedFrom,
-    to: input.to,
+    to,
     actor: input.actor,
     strict,
     sessionId: input.sessionId,

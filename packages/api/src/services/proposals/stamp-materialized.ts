@@ -24,6 +24,7 @@ import {
   documents,
   entities,
   eq,
+  focusSessions,
   inArray,
   isNull,
   links,
@@ -36,6 +37,8 @@ import { createLogger } from "@synap-core/core";
 import type { MaterializeResult } from "../../utils/materialize-composite.js";
 import {
   computeEntityUpdateDiff,
+  entityBodyChange,
+  entityBodyFields,
   type EntityDiffField,
   type EntityPropertyDiff,
   type EntityUndoSnapshot,
@@ -46,6 +49,10 @@ import {
   safeFailureSentence,
 } from "../../routers/proposals/failure-classification.js";
 import { redactForStorage } from "../../utils/redact-secrets.js";
+import {
+  SESSION_UNDO_COLUMNS,
+  type SessionUndoColumn,
+} from "../focus-sessions/session-undo.js";
 
 const logger = createLogger({ module: "stamp-materialized" });
 
@@ -98,13 +105,18 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   byOp?: Record<string, MaterializedOpRecord>;
 }
 
-/** The config tables an `update_*` op may change (entities use `propertyDiffs`). */
+/**
+ * The rows a `row_patch` may restore: the config tables an `update_*` op may
+ * change (entities use `propertyDiffs`), and a session's undoable columns
+ * (`focus_session`, stamped by `stampSessionUpdate`).
+ */
 export const ROW_PATCH_KINDS = [
   "skill",
   "rule",
   "automation",
   "playbook",
   "view",
+  "focus_session",
 ] as const;
 export type RowPatchKind = (typeof ROW_PATCH_KINDS)[number];
 
@@ -542,7 +554,13 @@ function mergeDiff(
     ...(older.fields?.after ?? {}),
     ...(newer.fields?.after ?? {}),
   };
-  const bodyDocumentId = older.bodyDocumentId ?? newer.bodyDocumentId;
+  // The body link: the first write's BEFORE, the last write's AFTER.
+  const olderBody = entityBodyChange(older);
+  const newerBody = entityBodyChange(newer);
+  const body =
+    olderBody && newerBody
+      ? { before: olderBody.before, after: newerBody.after }
+      : (olderBody ?? newerBody);
   return {
     entityId: older.entityId,
     before,
@@ -552,7 +570,7 @@ function mergeDiff(
     ...(Object.keys(fieldsAfter).length > 0
       ? { fields: { before: fieldsBefore, after: fieldsAfter } }
       : {}),
-    ...(bodyDocumentId ? { bodyDocumentId } : {}),
+    ...entityBodyFields(body),
   };
 }
 
@@ -662,15 +680,18 @@ export function subtractFromRecord(
     const fieldKeys = (
       Object.keys(diff.fields?.after ?? {}) as EntityDiffField[]
     ).filter((f) => !(f in (gone.fields?.after ?? {})));
-    const bodyDocumentId =
-      diff.bodyDocumentId && diff.bodyDocumentId !== gone.bodyDocumentId
-        ? diff.bodyDocumentId
-        : undefined;
+    // The body link stays only when the undo did not take it back.
+    const diffBody = entityBodyChange(diff);
+    const goneBody = entityBodyChange(gone);
+    const body =
+      diffBody && !(goneBody && goneBody.after === diffBody.after)
+        ? diffBody
+        : null;
     if (
       keys.length === 0 &&
       absentAfter.length === 0 &&
       fieldKeys.length === 0 &&
-      !bodyDocumentId
+      !body
     )
       return [];
     const beforeKeys = [...keys, ...absentAfter];
@@ -697,7 +718,7 @@ export function subtractFromRecord(
               },
             }
           : {}),
-        ...(bodyDocumentId ? { bodyDocumentId } : {}),
+        ...entityBodyFields(body),
       },
     ];
   });
@@ -793,7 +814,13 @@ export async function readEntityUndoSnapshot(
 ): Promise<EntityUndoSnapshot | null> {
   const row = await database.query.entities.findFirst({
     where: eq(entities.id, entityId),
-    columns: { title: true, preview: true, properties: true },
+    // `documentId` too: a body attach/replace is undoable (B9g).
+    columns: {
+      title: true,
+      preview: true,
+      properties: true,
+      documentId: true,
+    },
   });
   return row ?? null;
 }
@@ -823,6 +850,74 @@ export async function stampEntityUpdate(args: {
     ...(args.baseData !== undefined ? { baseData: args.baseData } : {}),
     ...(args.set ? { set: args.set } : {}),
   });
+}
+
+/** A session's undoable columns as they are now — read right before the write. */
+export async function readSessionUndoSnapshot(
+  database: Pick<typeof db, "select">,
+  sessionId: string
+): Promise<Record<SessionUndoColumn, unknown> | null> {
+  const [row] = await database
+    .select({
+      title: focusSessions.title,
+      goal: focusSessions.goal,
+      progress: focusSessions.progress,
+      projectId: focusSessions.projectId,
+    })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, sessionId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Stamp what a session UPDATE changed onto the receipt or approved proposal
+ * that governed it — the session twin of `stampEntityUpdate`. Call it ONLY for
+ * an update `isUndoableSessionPatch` accepts: the stamp is what makes revert
+ * offer an Undo, so it must never cover a change the row patch cannot restore.
+ *
+ * Records the columns whose value changed, before and after; revert restores
+ * them only while every one still holds what this write put there. A write
+ * that changed nothing stamps an empty list ("nothing to undo"). Best-effort:
+ * the write is committed, so a failed stamp is logged and leaves the row
+ * unstamped (revert then says it cannot be undone) — it never fails the write.
+ */
+export async function stampSessionUpdate(args: {
+  proposalId: string | undefined;
+  sessionId: string;
+  before: Record<SessionUndoColumn, unknown> | null;
+  after: Partial<Record<SessionUndoColumn, unknown>> | undefined;
+  database?: StampDatabase;
+  set?: Omit<Partial<ProposalColumns>, "data" | "id">;
+}): Promise<void> {
+  if (!args.proposalId || !args.before || !args.after) return;
+  const before: Record<string, unknown> = {};
+  const after: Record<string, unknown> = {};
+  for (const column of SESSION_UNDO_COLUMNS) {
+    const was = args.before[column] ?? null;
+    const now = args.after[column] ?? null;
+    if (JSON.stringify(was) === JSON.stringify(now)) continue;
+    before[column] = was;
+    after[column] = now;
+  }
+  const changed = Object.keys(after).length > 0;
+  try {
+    await stampMaterialized({
+      proposalId: args.proposalId,
+      record: {
+        rowPatches: changed
+          ? [{ kind: "focus_session", id: args.sessionId, before, after }]
+          : [],
+      },
+      ...(args.database ? { database: args.database } : {}),
+      ...(args.set ? { set: args.set } : {}),
+    });
+  } catch (err) {
+    logger.error(
+      { err, proposalId: args.proposalId, sessionId: args.sessionId },
+      "session update: undo record NOT stamped — this change cannot be undone"
+    );
+  }
 }
 
 /**

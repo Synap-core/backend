@@ -58,7 +58,10 @@ const { linkEntityToProject } = await import("./entity-project-membership.js");
  */
 function makeDb(projectRows: Array<{ id: string }>) {
   const inserted: Array<Record<string, unknown>> = [];
-  const onConflictDoNothing = vi.fn(async () => undefined);
+  // The insert's RETURNING is the door's own proof it wrote the edge.
+  const onConflictDoNothing = vi.fn(() => ({
+    returning: async () => [{ id: "rel-1" }],
+  }));
   const db = {
     select: () => ({
       from: () => ({
@@ -110,6 +113,8 @@ describe("linkEntityToProject — the ghost-edge guard", () => {
     const result = await linkEntityToProject(db as never, ARGS as never);
 
     expect(result.linked).toBe(true);
+    // The edge THIS call wrote is named, so an undo can remove exactly it.
+    expect(result).toMatchObject({ created: true, relationId: "rel-1" });
     expect(inserted).toHaveLength(1);
     // `target_entity_id` holds the PROJECT TABLE id, not an entity id — the
     // thing that makes this column FK-less in the first place.

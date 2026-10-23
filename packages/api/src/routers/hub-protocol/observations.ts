@@ -61,13 +61,14 @@ import { z } from "zod";
 
 import { createSynapEvent } from "@synap-core/core";
 import { OBSERVATION_NAMESPACES } from "@synap-core/types";
-import { getEventRepository } from "@synap/database";
+import { getEventRepository, getRequestGrant } from "@synap/database";
 import { getBoss } from "@synap/events";
 
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { apiKeyService } from "../../services/api-keys.js";
 import { resolveConfinedWorkspace } from "./confine-workspace.js";
+import { grantWriteDenial } from "../../utils/grant-write-check.js";
 import { getUserAccessibleWorkspaceIds } from "./rest/_shared.js";
 import { PG_UUID_RE } from "./rest/_codecs/_openapi.js";
 
@@ -302,6 +303,23 @@ export const observationsRouter = router({
       for (const [index, obs] of input.observations.entries()) {
         try {
           const workspaceId = resolveWorkspace(obs.workspaceId);
+          // D5 (S7, founder 2026-10-20): an observation is a governed write
+          // (`event.create`) for a key's grant, where it lands. A scoped key's
+          // observation never widens to pod-wide: a workspace it named that
+          // could not be resolved is refused, not dropped.
+          if (getRequestGrant()) {
+            if (obs.workspaceId && !workspaceId) {
+              throw new Error(
+                `Workspace ${obs.workspaceId} is not accessible to this key; the observation was not recorded.`
+              );
+            }
+            const denial = await grantWriteDenial({
+              subjectType: "event",
+              action: "create",
+              workspaceId: workspaceId ?? null,
+            });
+            if (denial) throw new Error(denial);
+          }
           const event = createSynapEvent({
             type: obs.type,
             userId,

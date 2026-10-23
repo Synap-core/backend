@@ -118,7 +118,8 @@ describe("the seams that silently drop a provenance field", () => {
     // The column must be inserted, and it must be fed from the VALIDATED payload
     // (reading `record.sessionId` instead would bypass the schema and mask a
     // future strip).
-    expect(src).toMatch(/session_id\s*\n?\s*\)\s*VALUES/);
+    // session_id anywhere in the column list (app_id follows it since a566ecc0d).
+    expect(src).toMatch(/\([^()]*\bsession_id\b[^()]*\)\s*VALUES/);
     expect(src).toContain("validated.sessionId ?? null");
   });
 });

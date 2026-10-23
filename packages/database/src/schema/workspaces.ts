@@ -149,6 +149,13 @@ export type WorkspacePrimarySurface =
       kind: "url";
       url: string;
       title?: string;
+      /**
+       * The pod app this website is (spec 17 §7.1): its Client ID Metadata
+       * Document URL. A launch hint only: the browser opens the site with this
+       * pod's `iss` so the app starts the pod's own OAuth flow. It grants no
+       * identity, bridge or credential; the site stays an unprivileged URL.
+       */
+      podApp?: { clientId: string };
     }
   | {
       kind: "view";
@@ -726,7 +733,7 @@ export interface WorkspaceSettings {
    *     "task":    { list:   { kind: "view", viewId: "uuid-task-kanban" } }
    *   }
    *
-   * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+   * Spec: Synap-core/app-bases docs/architecture/profile-renderer.md
    */
   profileRenderers?: Record<
     string,

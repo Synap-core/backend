@@ -310,7 +310,11 @@ export async function readUrl(
   const execute =
     deps.execute ??
     (async (input) =>
-      (await import("./execute-capability.js")).executeCapability(input));
+      (await import("./execute-capability.js")).executeCapability({
+        ...input,
+        // A URL read never deposits a recall fact (see readUrl's header).
+        observability: "mirror",
+      }));
   let outcome: Awaited<ReturnType<NonNullable<ReadUrlDeps["execute"]>>>;
   try {
     outcome = await execute({

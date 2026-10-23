@@ -34,7 +34,12 @@ const srcRoot = join(fileURLToPath(new URL(".", import.meta.url)), "..");
 const read = (rel: string) => readFileSync(join(srcRoot, rel), "utf-8");
 const USER_DELETE = /\.delete\(users\)/g;
 
-/** Human-user deletes: each pins the delete and the cleanup that precedes it. */
+/**
+ * Human-user deletes: each pins the delete and the cleanup that precedes it.
+ * (The invite paths' "stale account" deletes in `createInvite` and
+ * `/setup/accept-invite` were removed on 2026-10-21: naming an email no longer
+ * deletes the account behind it, see `workspaces.invites-refusals.pglite.test.ts`.)
+ */
 const COVERED_SITES = [
   {
     file: "routers/system.ts",
@@ -43,18 +48,8 @@ const COVERED_SITES = [
   },
   {
     file: "routers/workspaces/invites.ts",
-    cleanup: "await disconnectAllUserConnections(staleUser.id)",
-    userDelete: "db.delete(users).where(eq(users.id, staleUser.id))",
-  },
-  {
-    file: "routers/workspaces/invites.ts",
     cleanup: "await disconnectAllUserConnections(input.userId)",
     userDelete: "db.delete(users).where(eq(users.id, input.userId))",
-  },
-  {
-    file: "routers/hub-protocol/rest/setup.ts",
-    cleanup: "await disconnectAllUserConnections(existingUser.id)",
-    userDelete: "db.delete(users).where(eq(users.id, existingUser.id))",
   },
 ];
 

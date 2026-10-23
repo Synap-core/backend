@@ -3,7 +3,7 @@
  *
  * A per-proposal escape hatch that turns a one-off approval decision into a
  * standing `governance_rules` row (Governance Convergence Plan, Phase A — see
- * `synap-backend/GOVERNANCE-CONVERGENCE-PLAN.md`). Given the handful of
+ * `docs/decisions/agent-governance.md`). Given the handful of
  * fields a proposal can resolve (a capability target, an action event key, a
  * profile slug, an authoring agent), this computes WHICH of the five
  * granularities — capability / action / profile / agent / global — are

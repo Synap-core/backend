@@ -150,6 +150,15 @@ const TOOL_METADATA: Record<
     postureSlug: "capability",
     isWrite: true,
   },
+  synap_update_rule: {
+    // The edit twin of `synap_create_rule`, governed under its own
+    // `rule/update` door (GATE_WRITE_DOORS) — an approved edit recompiles the
+    // behaviour and re-earns the divergence snapshot, which `skill/update`
+    // does not.
+    governance: { subjectType: "rule", action: "update" },
+    postureSlug: "capability",
+    isWrite: true,
+  },
   synap_create_cell: {
     // `cell.define` (NOT `cell.create`, which is cell-instances/placed cells):
     // defining renderer source is governed via checkPermissionOrPropose in the

@@ -53,9 +53,12 @@ import {
 } from "../services/profiles/renderer-slots.js";
 import { rendererRefScopeViolation } from "../services/profiles/renderer-ref-scope.js";
 import { auditLog } from "../utils/audit-log.js";
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { assertProfileSchemaWrite } from "../utils/profile-schema-write-access.js";
 import { proposeProfileRetire } from "../services/pod-hygiene/retire-profile.js";
 import { randomUUID } from "crypto";
+import type { DuplicateCheck } from "@synap-core/types/proposals";
+import { findDuplicateCandidates } from "../services/duplicates/find-duplicate-candidates.js";
 
 const logger = createLogger({ module: "profiles-router" });
 
@@ -94,7 +97,7 @@ const ProfileScopeSchema = z.enum(["system", "shared", "workspace", "user"]);
  *   - file path   → 'iframe-srcdoc' | 'external-app'
  *   - 'url' is a passthrough used by some link-style surfaces
  *
- * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+ * Spec: synap-app/docs/architecture/profile-renderer.md
  */
 const RendererRefSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -371,12 +374,6 @@ export const profilesRouter = router({
         /** Role-category grouping key (0222): clusters role-profiles so
          *  `entity.query { roleCategory }` matches every role in the category. */
         roleCategory: z.string().optional(),
-        /**
-         * Bypass the cross-workspace TWIN-SLUG refusal below. Same name and
-         * meaning as on `entities.create` and `playbooks.create`: the caller
-         * has SEEN the existing profiles and judged this genuinely separate.
-         */
-        forceCreate: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -421,6 +418,15 @@ export const profilesRouter = router({
           existing.scope === ProfileScope.SHARED ||
           input.scope === "shared"
         ) {
+          // Re-declaring an existing kind opens it to THIS workspace: the
+          // key's grant must allow defining a kind here — the workspace the
+          // access row lands in — before it is written (S7).
+          await assertKeyMayWrite({
+            subjectType: "profile",
+            action: "create",
+            workspaceId: ctx.workspaceId,
+            data: { id: existing.id },
+          });
           await profileRepo.grantAccess(existing.id, ctx.workspaceId);
         }
         // Slug-idempotent WIDEN: define_role on an existing role merges
@@ -472,6 +478,9 @@ export const profilesRouter = router({
             userId: ctx.userId,
             agentUserId: input.agentUserId,
             workspaceId: ctx.workspaceId,
+            // The update lands on the EXISTING profile: the key's grant is
+            // checked on its home (a system / unowned profile = pod scope).
+            grantWorkspaceId: existing.workspaceId ?? null,
             subjectType: "profile",
             action: "create",
             source: input.source,
@@ -544,7 +553,7 @@ export const profilesRouter = router({
        *
        * A ROLE whose slug exists elsewhere on the pod (invisible from this
        * workspace) is REUSED AND SHARED into this workspace — for every caller:
-       * human, template-driven, and agent, `forceCreate` included. A role is a
+       * human, template-driven, and agent alike. A role is a
        * hat, and two `partner` hats are exactly how CRM's twin was born: facets
        * split across two profile ids and every lens saw half of them.
        *
@@ -576,8 +585,7 @@ export const profilesRouter = router({
             message:
               `A role named "${input.slug}" cannot be created: ${why}. ` +
               `A role is one per name, pod-wide — reuse the existing one ` +
-              `(attach it as a facet) or pick a distinct slug. forceCreate ` +
-              `does not apply to roles.`,
+              `(attach it as a facet) or pick a distinct slug.`,
           });
         };
         if (plan.conflict) {
@@ -602,6 +610,9 @@ export const profilesRouter = router({
             userId: ctx.userId,
             agentUserId: input.agentUserId,
             workspaceId: ctx.workspaceId,
+            // A shared role is one hat pod-wide: sharing / widening it is a
+            // pod-scope write for the key's grant (S7, D2).
+            grantWorkspaceId: null,
             subjectType: "profile",
             action: "create",
             source: input.source,
@@ -670,12 +681,17 @@ export const profilesRouter = router({
        * created exactly this way. Resolution then depends on the lens, which
        * is how 44 rows ended up split across two schemas.
        *
-       * WHY REFUSE RATHER THAN REUSE: the two really are different concepts.
-       * Silently returning the Research profile would be worse than either
-       * creating a twin or refusing — it would file defect reports against a
-       * research kind. So: hand the caller the candidates and make it choose.
+       * WHY NOT REUSE: the two really are different concepts. Silently
+       * returning the Research profile would file defect reports against a
+       * research kind. So the PERSON chooses (founder B2, 2026-10-21): an
+       * agent's filing goes through the one duplicate door and is filed for
+       * review with the existing kinds on its card (an agent kind is always a
+       * proposal, AGENT_SCHEMA_DEFINITION); approving it is the reviewer's
+       * "keep both". The approval replay refuses only a twin the reviewer was
+       * never shown (a proposal filed before the door, or a twin that appeared
+       * after it was filed).
        *
-       * AI CALLERS ONLY, and `forceCreate` escapes it. Two workspaces each
+       * AI CALLERS ONLY. Two workspaces each
        * legitimately owning their own `deal` or `report` is normal
        * multi-tenancy, and a human or a template install doing that
        * deliberately must not be second-guessed. Reuses
@@ -693,8 +709,9 @@ export const profilesRouter = router({
       // the provenance signal the twin check was skipped on exactly the path
       // that minted the live `finding` twin (ticket 5c3879d4: a replayed agent
       // proposal, approved by a human, created Builder's `finding` beside
-      // Research's). The proposal carries `forceCreate` through, so an agent
-      // that judged the concept separate is not refused at approve.
+      // Research's). Since B2 the replay refuses only a twin the reviewer was
+      // never shown: the executor marks `duplicateReviewed` when the proposal
+      // carried the existing kinds on its card.
       const isAiCaller =
         Boolean(getActingAgentUserId()) ||
         Boolean(input.agentUserId) ||
@@ -702,7 +719,24 @@ export const profilesRouter = router({
         input.source === "intelligence" ||
         (ctx as { profileProvenance?: { origin?: string } }).profileProvenance
           ?.origin === "agent";
-      if (isAiCaller && !input.forceCreate) {
+      // The approval replay of an agent's proposal (see above) vs the
+      // agent's own filing.
+      const isApprovalReplay =
+        (ctx as { profileProvenance?: { origin?: string } }).profileProvenance
+          ?.origin === "agent";
+      let kindDuplicate: DuplicateCheck | undefined;
+      if (isAiCaller && !isApprovalReplay) {
+        kindDuplicate = (
+          await findDuplicateCandidates(db, {
+            subject: "kind",
+            userId: ctx.userId,
+            slug: input.slug,
+          })
+        ).check;
+      } else if (
+        isApprovalReplay &&
+        (ctx as { duplicateReviewed?: boolean }).duplicateReviewed !== true
+      ) {
         const elsewhere = await profileRepo.findActiveBySlugAnyScope(
           input.slug
         );
@@ -720,9 +754,8 @@ export const profilesRouter = router({
                 )
                 .join(", ") +
               `. Creating a second one makes the slug resolve differently ` +
-              `depending on the lens. Either reuse it (ask for access), pick a ` +
-              `distinct slug, or resend with forceCreate: true if this really ` +
-              `is a separate concept that happens to share a name.`,
+              `depending on the lens. Reject this proposal and reuse the ` +
+              `existing kind, or ask the agent for a distinct slug.`,
           });
         }
       }
@@ -781,11 +814,30 @@ export const profilesRouter = router({
         },
       });
 
+      // A shared kind is also opened to every extra workspace named: the
+      // key's grant must allow defining a kind in each (S7).
+      if (input.scope === "shared") {
+        for (const wsId of input.allowedWorkspaceIds ?? []) {
+          await assertKeyMayWrite({
+            subjectType: "profile",
+            action: "create",
+            workspaceId: wsId,
+            data: { id: profileId },
+          });
+        }
+      }
+
       // 2. Permission check (may create proposal)
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: ctx.workspaceId,
+        // Where the profile LANDS for the key's grant: a system or per-user
+        // profile is owned by no workspace (pod scope), not the caller's lens.
+        grantWorkspaceId:
+          input.scope === "system" || input.scope === "user"
+            ? null
+            : ctx.workspaceId,
         subjectType: "profile",
         action: "create",
         source: input.source,
@@ -807,10 +859,14 @@ export const profilesRouter = router({
           // role's category — dropping it here approves a role that
           // `entity.query { roleCategory }` can never match.
           roleCategory: input.roleCategory,
-          // Carried so the approve executor re-applies the caller's twin
-          // judgement (the cross-workspace twin check above re-runs there).
-          ...(input.forceCreate ? { forceCreate: true } : {}),
         },
+        // The duplicate door's answer (B2): the existing kinds ride the card.
+        ...(kindDuplicate
+          ? {
+              duplicateCheck: kindDuplicate,
+              possibleDuplicate: kindDuplicate.status === "possible",
+            }
+          : {}),
       });
 
       if ("denied" in perm && perm.denied) {
@@ -1769,7 +1825,7 @@ export const profilesRouter = router({
    * Additive key: existing consumers that read `result[contentKind]` are
    * unaffected.
    *
-   * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+   * Spec: synap-app/docs/architecture/profile-renderer.md
    */
   getEffectiveRenderers: podProcedure
     .input(

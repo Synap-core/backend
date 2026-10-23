@@ -40,6 +40,8 @@ const h = vi.hoisted(() => ({
   ]),
   /** Set false to simulate a pod with no `pod-admin` system workspace. */
   podAdminWorkspaceExists: true,
+  /** Set true to simulate an ARCHIVED `pod-admin` system workspace. */
+  podAdminWorkspaceArchived: false,
   /** Trace of the tables/workspaces queried, for the "which lookup" proofs. */
   lastQuery: [] as string[],
 }));
@@ -56,12 +58,17 @@ vi.mock("@synap/database", () => {
     anyOf: values,
   });
   const and = (...parts: unknown[]) => ({ parts });
+  const isNull = (col: { _name: string }) => ({
+    col: col._name,
+    isNull: true,
+  });
 
   type Term = {
     col: string;
     value?: unknown;
     anyOf?: unknown[];
     parts?: unknown[];
+    isNull?: boolean;
   };
   const flatten = (w: unknown): Term[] => {
     const node = w as Term;
@@ -75,6 +82,7 @@ vi.mock("@synap/database", () => {
     eq,
     and,
     inArray,
+    isNull,
     db: {
       query: {
         workspaces: {
@@ -83,6 +91,13 @@ vi.mock("@synap/database", () => {
             const term = flatten(where).find((t) => t.col === "systemSlug");
             h.lastQuery.push(`workspaces:${String(term?.value)}`);
             if (term?.value !== "pod-admin") return undefined;
+            // isPodAdmin ANDs `isNull(archivedAt)`: an archived space matches
+            // no row, exactly as Postgres would.
+            const archivedTerm = flatten(where).find(
+              (t) => t.col === "archivedAt"
+            );
+            if (archivedTerm?.isNull && h.podAdminWorkspaceArchived)
+              return undefined;
             return h.podAdminWorkspaceExists ? { id: POD_ADMIN_WS } : undefined;
           },
         },
@@ -112,6 +127,7 @@ vi.mock("@synap/database/schema", () => ({
   workspaces: {
     id: { _name: "id" },
     systemSlug: { _name: "systemSlug" },
+    archivedAt: { _name: "archivedAt" },
   },
   workspaceMembers: {
     userId: { _name: "userId" },
@@ -150,6 +166,17 @@ describe("canWriteFacet — pod-wide facets (widened to pod admins)", () => {
       );
     } finally {
       h.podAdminWorkspaceExists = true;
+    }
+  });
+
+  it("an ARCHIVED pod-admin workspace grants no authority", async () => {
+    h.podAdminWorkspaceArchived = true;
+    try {
+      await expect(canWriteFacet(podWideFacet, "pod-owner")).resolves.toBe(
+        false
+      );
+    } finally {
+      h.podAdminWorkspaceArchived = false;
     }
   });
 

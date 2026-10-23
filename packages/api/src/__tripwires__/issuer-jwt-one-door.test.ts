@@ -17,8 +17,9 @@
  *     `LOW_LEVEL_CALLERS` (each with its reason), and always with a pinned
  *     issuer AND an audience (≥ 3 arguments). The derived set of calling files
  *     must EQUAL the list — a new caller fails, a caller that left fails.
- *  B. The retired `verifyCpJwt` (now always rejects) may be called only by
- *     `RETIRED_CALLERS` — equality again, so the list shrinks to zero.
+ *  B. The retired `verifyCpJwt` is DELETED (2026-10-21, with its last callers,
+ *     the dead `acceptInviteViaCp` / `rejectInviteViaCp`). The name stays in
+ *     the scan so bringing it back fails: `RETIRED_CALLERS` is empty.
  *  C. Every `verifyTrustedIssuerJwt` / `verifyCpJwtWithTrust` call passes an
  *     `audience` key.
  *  D. Every door call passes `expectedType`, except files in
@@ -47,11 +48,8 @@ const LOW_LEVEL_CALLERS: Record<string, string> = {
     "Federation bootstrap / identity-link / receipt: each resolves the APPROVED registry entry itself (bootstrap: PROVISIONING_TOKEN + pending→approved), pins it, passes audience = PUBLIC_URL, and persists a durable replay receipt with a replay context (consumeJti: false). The application-connection start hint (verifyRequesterAccountHint) is the one call that persists no receipt: it only records the verified account for the reviewer, authorizes nothing, and leaves the JTI to the completion that spends it.",
 };
 
-/** Files still calling the RETIRED `verifyCpJwt` (always rejects), and why. */
-const RETIRED_CALLERS: Record<string, string> = {
-  "packages/api/src/routers/workspaces/invites.ts":
-    "acceptInviteViaCp / rejectInviteViaCp — no Control Plane mints `invite-accept` (zero signers in any repo), so failing closed breaks nothing. File held by a peer on 2026-10-13: migrate to the door or delete the procedures.",
-};
+/** Files calling the deleted `verifyCpJwt`: none may (see B). */
+const RETIRED_CALLERS: Record<string, string> = {};
 
 /** Door callers that check the purpose AFTER the door (legacy shape). */
 const TYPE_CHECKED_AFTER: Record<string, string> = {

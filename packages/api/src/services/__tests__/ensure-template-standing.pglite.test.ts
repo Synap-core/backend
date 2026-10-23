@@ -11,10 +11,17 @@
  *     "the read was incomplete" into "it is not in the catalog");
  *   • available: a live cache row, with the card read from the cache;
  *   • exists: a domain twin (one space per domain) is answered, never installed.
- * Real: `readTemplateStanding`, `resolveTemplateCatalog`, the pglite tables.
+ *   • the floor (fence1): a holder or twin the request may not see — outside
+ *     a scoped key's grant, or the person's floor — is answered as absent and
+ *     flagged `heldOutOfSight`; a key granted ON that space, a full-access key
+ *     and the owner still see it installed.
+ * Real: `readTemplateStanding`, `resolveTemplateCatalog`, the pglite tables,
+ * the request grant (`runWithGrant`).
  * Mocked: the stamp reader (bound to the database package's own connection,
- * same boundary as `template-health-lifecycle.pglite.test.ts`) and the
- * one-space-per-domain verdict (proven in its own suite).
+ * same boundary as `template-health-lifecycle.pglite.test.ts`), the
+ * one-space-per-domain verdict (proven in its own suite) and the person's
+ * workspace floor (`validateWorkspaceAccess`, a relational query this
+ * schema-less drizzle cannot run; a set of spaces the person cannot read).
  */
 
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
@@ -26,6 +33,8 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   verdict: { action: "create" } as Record<string, unknown>,
+  unreadable: new Set<string>(),
+  floorCalls: [] as Array<[string, string[]]>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -54,12 +63,20 @@ vi.mock("../workspace-creation-service.js", () => ({
   checkOneSpacePerDomain: async () => h.verdict,
 }));
 
+vi.mock("../../utils/workspace-membership.js", () => ({
+  validateWorkspaceAccess: async (userId: string, ids: string[]) => {
+    h.floorCalls.push([userId, ids]);
+    return ids.filter((id) => !h.unreadable.has(id));
+  },
+}));
+
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   cpCatalogCache,
   podSettings,
   workspaces,
 } from "@synap/database/schema";
+import { runWithGrant, type KeyGrant } from "@synap/database";
 import { readTemplateStanding } from "../ensure-template.js";
 
 type ColumnLike = {
@@ -167,6 +184,8 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   h.verdict = { action: "create" };
+  h.unreadable = new Set();
+  h.floorCalls = [];
   await setTemplateStamp("ok");
 });
 
@@ -230,5 +249,106 @@ describe("readTemplateStanding", () => {
       workspaceName: "My Content",
       guidance: "Use the space you have.",
     });
+  });
+});
+
+describe("readTemplateStanding — the caller's floor (fence1)", () => {
+  const WS_A = randomUUID();
+  const pinned = (
+    workspaceIds: string[] | null,
+    extra: { projectIds?: string[] } = {}
+  ): KeyGrant => ({
+    scopes: [{ permissions: ["entity.post.read"], workspaceIds, ...extra }],
+    clientId: "app_test",
+  });
+  const asKey = <T>(grant: KeyGrant, fn: () => Promise<T>) =>
+    runWithGrant(grant, fn);
+  // What a template held NOWHERE answers: the card, installable.
+  const ABSENT = {
+    status: "available",
+    template: {
+      slug: "crm",
+      name: "crm name",
+      description: "crm description",
+      icon: null,
+    },
+  };
+
+  it("a key pinned to space A gets no trace of space B's install: the answer a template held nowhere gets", async () => {
+    const res = await asKey(pinned([WS_A]), () =>
+      readTemplateStanding("crm", "user-1")
+    );
+    expect(res).toEqual({ ...ABSENT, heldOutOfSight: true });
+    expect(JSON.stringify(res)).not.toContain(WS_CRM);
+  });
+
+  it("a project-pinned scope does not cover a whole space (fail closed)", async () => {
+    const res = await asKey(pinned(null, { projectIds: ["p-1"] }), () =>
+      readTemplateStanding("crm", "user-1")
+    );
+    expect(res).toEqual({ ...ABSENT, heldOutOfSight: true });
+  });
+
+  it("a deny-all grant (revoked or expired) covers nothing", async () => {
+    const res = await asKey(
+      { scopes: [{ permissions: [], workspaceIds: null }], clientId: null },
+      () => readTemplateStanding("crm", "user-1")
+    );
+    expect(res).toEqual({ ...ABSENT, heldOutOfSight: true });
+  });
+
+  it.each([
+    ["a key granted ON the holding space", () => pinned([WS_A, WS_CRM])],
+    ["a key unpinned to spaces", () => pinned(null)],
+    [
+      "a full-access key",
+      (): KeyGrant => ({
+        scopes: [{ permissions: ["*"], workspaceIds: null }],
+        clientId: null,
+      }),
+    ],
+  ])("%s still sees it installed", async (_label, grant) => {
+    const res = await asKey(grant(), () =>
+      readTemplateStanding("crm", "user-1")
+    );
+    expect(res).toMatchObject({ status: "installed", workspaceId: WS_CRM });
+  });
+
+  it("the person's floor: a holder they can't read is answered as absent, even with no key", async () => {
+    h.unreadable.add(WS_CRM);
+    const res = await readTemplateStanding("crm", "user-2");
+    expect(res).toEqual({ ...ABSENT, heldOutOfSight: true });
+    expect(h.floorCalls).toContainEqual(["user-2", [WS_CRM]]);
+  });
+
+  it("the owner (no key) sees it installed, through the person's floor", async () => {
+    expect(await readTemplateStanding("crm", "user-1")).toMatchObject({
+      status: "installed",
+      workspaceId: WS_CRM,
+    });
+    expect(h.floorCalls).toContainEqual(["user-1", [WS_CRM]]);
+  });
+
+  it("a domain twin outside the key's grant is not named either, and is flagged", async () => {
+    h.verdict = {
+      action: "refuse",
+      reply: {
+        workspaceId: "ws-twin",
+        workspaceName: "My Content",
+        guidance: "Use the space you have.",
+      },
+    };
+    const res = await asKey(pinned([WS_A]), () =>
+      readTemplateStanding("content-os", "user-1")
+    );
+    expect(res).toMatchObject({ status: "available", heldOutOfSight: true });
+    expect(JSON.stringify(res)).not.toContain("ws-twin");
+    expect(JSON.stringify(res)).not.toContain("My Content");
+    // Granted on the twin: answered as before.
+    expect(
+      await asKey(pinned(["ws-twin"]), () =>
+        readTemplateStanding("content-os", "user-1")
+      )
+    ).toMatchObject({ status: "exists", workspaceId: "ws-twin" });
   });
 });

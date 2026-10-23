@@ -200,7 +200,7 @@ function readGrantExecMode(raw: unknown): GrantExecMode | null {
  *      capability grant for this redeemer (NON-CONSUMING). NO grant → consult a
  *      stored `governance_rules` capability rule (see `capabilityRuleAuthorizesRun`
  *      below); an ACTIVE `verdict:"auto"` rule authorizes the run WITH NO GRANT
- *      (Option B, D1 — GOVERNANCE-PHASE2-PLAN.md §1). No rule either → `propose`
+ *      (Option B, D1 — docs/decisions/agent-governance.md, phase 2 D1). No rule either → `propose`
  *      (a human reviews; an ungranted, unruled capability must never auto-run).
  *      A grant → its `execMode` is the source of truth (`auto | propose |
  *      dry-run`); `dry-run` short-circuits to a preview before the policy call
@@ -471,7 +471,7 @@ export async function gateCapabilityExecution(
 /**
  * Consult a stored `governance_rules` `target_kind: "capability"` row for
  * this `(agentUserId, workspaceId, capabilityId)` — Option B / D1 (ratified
- * 2026-07-27, GOVERNANCE-PHASE2-PLAN.md §1). An ACTIVE `verdict: "auto"` row
+ * 2026-07-27, docs/decisions/agent-governance.md, phase 2 D1). An ACTIVE `verdict: "auto"` row
  * widens an otherwise-`propose` capability run to `run`.
  *
  * Scoped to grantable kinds ONLY: `input.capabilityKind` is typed

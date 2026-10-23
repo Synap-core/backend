@@ -10,7 +10,8 @@ vi.mock("../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn(async () => false),
 }));
 
-vi.mock("../utils/permission-check.js", () => ({
+vi.mock("../utils/permission-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/permission-check.js")>()),
   checkPermissionOrPropose: h.checkPermissionOrPropose,
 }));
 

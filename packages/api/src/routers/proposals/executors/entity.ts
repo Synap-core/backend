@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { twinsShownOnCard } from "../../../services/duplicates/find-duplicate-candidates.js";
 import {
   db,
   proposals,
@@ -20,6 +21,7 @@ import {
   resolveMaterializedEntityWorkspaceId,
   isDomainHomeWorkspace,
   DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
+  expirePendingCreatesOfLandedRecord,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import {
@@ -57,6 +59,7 @@ import {
   type IdentityReceipt,
 } from "./identity-resolution.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
+import { markProposalNotificationsActioned } from "../../../notifications/mark-proposal-notifications-actioned.js";
 import {
   attachSourceBlob,
   stagedSourceBlobFrom,
@@ -125,7 +128,7 @@ export async function applyApprovedEntityPatch(args: {
   proposalId: string;
   proposalWorkspaceId: string | null;
   entityId: string;
-  /** The stored patch: title / description / properties / deleteProperties / profileSlug / expectedStatus / sourceFile. */
+  /** The stored patch: title / description / properties / deleteProperties / profileSlug / expectedStatus / documentId / replaceBody / sourceFile. */
   patch: Record<string, unknown>;
   propertyDecisions?: PropertyDecisionMap;
 }) {
@@ -177,6 +180,16 @@ export async function applyApprovedEntityPatch(args: {
     ...(innerData.expectedStatus !== undefined
       ? { expectedStatus: innerData.expectedStatus as string | null }
       : {}),
+    // The body attach the proposal carried (decision B9g). Dropping it here
+    // approved the proposal and attached nothing. `replaceBody` rides with it:
+    // the body guard in `entities.update` refuses a replacement without it.
+    // The undo stamp below reads the link before and after, so the previous
+    // body is put back on Undo.
+    ...(typeof innerData.documentId === "string" ||
+    innerData.documentId === null
+      ? { documentId: innerData.documentId as string | null }
+      : {}),
+    ...(innerData.replaceBody === true ? { replaceBody: true } : {}),
     source: "system",
   });
 
@@ -359,9 +372,10 @@ export function registerEntityExecutors(): void {
       // I3 pin: when entityHome is set, pass it as rung-1 `targetWorkspaceId`
       // so create does not re-derive from ambient. Null home → no pin (pod).
       //
-      // Weak same-name matches are NOT an auto-merge. `separate` is the only
-      // forceCreate bypass; the other verbs update or link `existingEntityId`
-      // and must not create a second row.
+      // Weak same-name matches are NOT an auto-merge. The REVIEWER owns the
+      // twin (B2b): no verb ⇒ `ask_reviewer` (a twin record refuses with its
+      // candidates, so the card asks); `separate` ⇒ `keep_both`; the other
+      // verbs update or link `existingEntityId` and must not create a row.
       const resolution = input.identityResolution;
       const ports = entityIdentityPorts(entityCaller);
       const decision = resolution
@@ -386,7 +400,7 @@ export function registerEntityExecutors(): void {
         : null;
       let identity: IdentityReceipt | undefined;
       let createdEntity: { id?: string; deduplicated?: boolean };
-      if (!decision || decision.forceCreate) {
+      if (!decision || decision.keepBoth) {
         createdEntity = (await entityCaller.create({
           proposedEntityId: storedEntityId,
           profileSlug,
@@ -401,9 +415,16 @@ export function registerEntityExecutors(): void {
           documentId: innerData.documentId as string | undefined,
           ...(entityHome ? { targetWorkspaceId: entityHome } : {}),
           source: "system",
-          ...(decision?.forceCreate ? { forceCreate: true } : {}),
+          approvalDuplicate: decision?.keepBoth ? "keep_both" : "ask_reviewer",
+          // No verb: keep both for the twins the card showed; an unseen twin
+          // still refuses so the card asks (the composite's rule, BLOCKER-2).
+          ...(!decision
+            ? {
+                approvalReviewedTwinIds: twinsShownOnCard(proposal.data).single,
+              }
+            : {}),
         })) as { id?: string; deduplicated?: boolean };
-        if (decision?.forceCreate && createdEntity.id) {
+        if (decision?.keepBoth && createdEntity.id) {
           identity = { verb: "separate", entityId: createdEntity.id };
         }
       } else {
@@ -468,7 +489,7 @@ export function registerEntityExecutors(): void {
       // ours to own. A merge onto a DIFFERENT id is a pre-existing entity.
       // keep/fill/use linked a row this proposal did not create — even when the
       // pre-minted id happens to equal that row, revert must not delete it.
-      const linkedByResolution = !!decision && !decision.forceCreate;
+      const linkedByResolution = !!decision && !decision.keepBoth;
       const mergedOntoExisting =
         linkedByResolution ||
         (createdEntity?.deduplicated === true &&
@@ -519,6 +540,32 @@ export function registerEntityExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // The record landed: the agent's other pending copies of the SAME record
+      // can only fail the same-name gate now, and each still counts toward its
+      // pending cap. Expire them (never scored). Read from the STORED record —
+      // the one the copies carry — not the reconciled replay input. After the
+      // approval write, so this proposal is no longer pending. Best-effort: the
+      // approval already landed.
+      if (createdEntity?.id) {
+        try {
+          const expired = await expirePendingCreatesOfLandedRecord(
+            {
+              record: innerData,
+              entityId: createdEntity.id,
+              ownerUserId: proposal.subjectUserId ?? userId,
+              landedByProposalId: input.proposalId,
+            },
+            db
+          );
+          if (expired.length) markProposalNotificationsActioned(expired);
+        } catch (err) {
+          logger.warn(
+            { err, proposalId: input.proposalId },
+            "pending copies of an approved create were not expired"
+          );
+        }
+      }
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);

@@ -1,6 +1,6 @@
 /**
  * Synap's own catalog, signed — the check that runs with every official
- * catalog sync (docs/pod-console/open-hosting-and-catalog-signing.md §B).
+ * catalog sync (docs/architecture/official-catalog-signing.md).
  *
  * The Control Plane keeps serving its catalog endpoints; beside them it
  * serves a signed index of package digests. Trust comes from keys, never

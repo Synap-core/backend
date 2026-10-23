@@ -9,7 +9,10 @@
  * import with `entities.ts` resolves fine.
  */
 
-import { PROPOSAL_SOURCES } from "@synap-core/types/proposals";
+import {
+  PROPOSAL_SOURCES,
+  type DuplicateCheck,
+} from "@synap-core/types/proposals";
 import { z } from "zod";
 import { TITLE_HARD_MAX, titleTooLongReason } from "@synap-core/types/titles";
 import { decodeHtmlEntities } from "@synap-core/types/text";
@@ -34,7 +37,6 @@ import {
   stampProvenance,
   extractIdentitySignals,
   registerIdentitySignals,
-  resolveIdentity,
   resolveWorkspacePlacement,
   acceptEntityCreatePlacement,
   resolveKindWritePin,
@@ -43,7 +45,6 @@ import {
   DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE,
   shouldRejectJunkTitle,
   buildJunkTitleMessage,
-  classifyWeakEntityDedup,
   buildWeakEntityDedupMessage,
   buildWeakDedupCause,
   ENTITY_JUNK_TITLE_CODE,
@@ -51,8 +52,13 @@ import {
   pickUnderlyingKind,
   promoteMultiKindRoleCreate,
   isProfileKindTwinError,
+  expirePendingCreatesOfLandedRecord,
 } from "@synap/database";
 import { reconcileKindWithPlacement } from "./kind-placement.js";
+import {
+  findDuplicateCandidates,
+  toDuplicateCheck,
+} from "../../services/duplicates/find-duplicate-candidates.js";
 import { entities, workspaces, links } from "@synap/database/schema";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import { TRPCError } from "@trpc/server";
@@ -63,8 +69,10 @@ import {
 } from "../../utils/permission-check.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { getAgentFocusProjectId } from "../../services/agent-identity-service.js";
-import { initialStatusFloor } from "../../services/lifecycle/initial-status-floor.js";
+import { initialCreateStatusFloor } from "../../services/lifecycle/initial-status-floor.js";
 import { auditLog } from "../../utils/audit-log.js";
+import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
+import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { randomUUID } from "crypto";
@@ -74,6 +82,7 @@ import { idempotencyWindowSeconds } from "../../utils/write-door-idempotency.js"
 import { createLogger } from "@synap-core/core";
 import { entityWriteVisibleWhere, toApiEntity } from "./helpers.js";
 import { assertDocumentAttachable } from "./mutate.js";
+import { isAiWriteRequest } from "../../utils/ai-write.js";
 import { entitiesRouter } from "../entities.js";
 import { entityBodyDocumentIdFrom } from "../../utils/store-entity-source-blob.js";
 import { computeEntityPropertyDiff } from "../../utils/entity-property-diff.js";
@@ -170,15 +179,26 @@ export const createProcs = {
           )
           .optional(),
         /**
-         * Bypass the WEAK same-name create gate (Phase 1). When true, a
-         * same-profile title match still creates a new entity instead of
-         * rejecting with candidates. Strong-signal auto-merge is NOT bypassed
-         * — email/phone/url still collapse onto the existing subject. Prefer
-         * reusing an existing id / enriching / attaching a facet; only set this
-         * when the subject is genuinely distinct (e.g. two people who share a
-         * name). Logged as `identity_resolve_merge` outcome `force_create`.
+         * APPROVAL REPLAY ONLY — set by the approval executors (`entity/create`
+         * and the composite materializer), never by a tool or a client. The
+         * REVIEWER owns a same-name twin (founder B2b): `ask_reviewer` refuses
+         * a twin record with `ENTITY_WEAK_DEDUP` + candidates so the reviewer
+         * picks a verb (keep both / use existing / fill empty / use these
+         * values); `keep_both` is the reviewer's `separate`. Ignored on an
+         * agent's own filing (`agentUserId` set): its twin is a proposal.
+         * Absent ⇒ a person's or the system's create: warned, never blocked.
          */
-        forceCreate: z.boolean().optional().default(false),
+        approvalDuplicate: z.enum(["ask_reviewer", "keep_both"]).optional(),
+        /**
+         * APPROVAL REPLAY ONLY, with `ask_reviewer` — the twin records the
+         * review card SHOWED for this create (the proposal's persisted
+         * `duplicateCheck`). A plain approve with no verb on a twin the
+         * reviewer saw is "approve as proposed" = keep both (FB1020
+         * BLOCKER-2: without it a capture naming any existing record could
+         * only be rejected). A twin NOT shown (it appeared after filing)
+         * still refuses, so the card asks. Ignored on an AI's own filing.
+         */
+        approvalReviewedTwinIds: z.array(z.string().uuid()).max(100).optional(),
         /**
          * Strong cross-source identity anchor for this subject, as `provider:id`
          * (e.g. `discord:123…`). Registered as an `external_id` identity signal
@@ -214,7 +234,50 @@ export const createProcs = {
       const externalIdSignal = input.externalId?.trim()
         ? [{ type: "external_id", value: input.externalId.trim() }]
         : [];
-      const entityId = input.proposedEntityId ?? randomUUID();
+      // The minted id IS the id the entity lands under (the repository pins it
+      // below), so a `proposedEntityId` handed to an agent resolves once the
+      // proposal is approved. A caller-named id that already names a row:
+      //  - the caller's own live entity ⇒ this create already landed (an
+      //    approval replayed after a later step failed): return it, never a
+      //    second row, never a primary-key crash;
+      //  - any other row (another person's, or a deleted one) ⇒ not ours to
+      //    reuse: mint a fresh id, and say nothing about that row.
+      let entityId = input.proposedEntityId ?? randomUUID();
+      if (input.proposedEntityId) {
+        const database = await getDb();
+        const [taken] = await database
+          .select({ id: entities.id })
+          .from(entities)
+          .where(eq(entities.id, input.proposedEntityId))
+          .limit(1);
+        if (taken) {
+          const [landed] = await database
+            .select()
+            .from(entities)
+            .where(
+              and(
+                eq(entities.id, input.proposedEntityId),
+                isNull(entities.deletedAt),
+                entityWriteVisibleWhere(ctx.userId)
+              )
+            )
+            .limit(1);
+          if (landed) {
+            return {
+              status: "created",
+              message: "Entity already created under this id — returning it",
+              id: landed.id,
+              entity: toApiEntity(landed),
+              // Additive: nothing new was written (same flag the strong
+              // identity merge uses; the approval executor reads an equal id
+              // as its own earlier create, not a merge).
+              deduplicated: true,
+              facets: [],
+            };
+          }
+          entityId = randomUUID();
+        }
+      }
       const correlationId = randomUUID();
       /**
        * The ACTOR — the agent whose work this write is, as distinct from
@@ -468,19 +531,23 @@ export const createProcs = {
         });
       }
 
-      // Resolve-then-merge (identity-first dedup — the single-entity door). A
-      // STRONG identity signal (email/phone/url/handle) means this subject
-      // already exists: enrich the matched entity + attach any requested roles
-      // instead of creating a duplicate, and return it with `deduplicated: true`.
-      // WEAK same-name (same profile) REJECTS create with candidates unless
-      // `forceCreate: true` — never auto-merges (Phase 1). The enrich + facet
-      // attach ride their own governed doors (update/attachFacet), so agent
-      // writes stay proposal-gated. Resolver hiccup falls through to a normal
-      // create (never blocks on a failed lookup).
-      //
-      // NOTE — capture-graph within-batch collapse still has its own weak
-      // auto-link path (`_capture-graph-dedup.ts`); that asymmetry is intentional
-      // for this PR (within-batch collapse ≠ persisted create gate).
+      // THE duplicate door (`findDuplicateCandidates`, founder B2). A STRONG
+      // identity signal (email/phone/url/handle/external id) on a visible row
+      // means this subject already exists: enrich the matched entity + attach
+      // any requested roles instead of creating a duplicate, and return it
+      // with `deduplicated: true` — the only automatic outcome. Every other hit
+      // (a same-kind record or one of the caller's pending creates with the
+      // same name or identity) is `possible`, and what happens depends on who
+      // is writing, never on a caller flag:
+      //  - an AGENT's filing is filed anyway, as a proposal
+      //    (`POSSIBLE_DUPLICATE`), carrying `duplicateCheck` for the card;
+      //  - a PERSON's (or the system's) own create lands, warned
+      //    (`duplicateCheck` on the receipt) — never blocked (B2e);
+      //  - an APPROVAL replay (`approvalDuplicate`) refuses a twin RECORD so
+      //    the reviewer picks a verb, unless the reviewer chose `keep_both`.
+      // The enrich + facet attach ride their own governed doors
+      // (update/attachFacet), so agent writes stay proposal-gated. A failed
+      // lookup is `unchecked` on the receipt, never `clear`.
       //
       // Runs on the `proposedEntityId` (proposal-approval replay) path TOO. It
       // used to be skipped there — "the approval must reuse its assigned id" —
@@ -509,21 +576,51 @@ export const createProcs = {
       // "Alice" person #47.
       const needsIdentityResolve =
         dedupSignals.length > 0 || (!!profileSlug && !!input.title?.trim());
+      // An AI's own filing — the GATE's predicate (FB1020 review M4), so an
+      // unattributed hub key / IS call (`source: "intelligence"`, no
+      // `agentUserId`) is floored like an attributed agent and can never pass
+      // the reviewer's `approvalDuplicate`. NOT a write inside a decided
+      // proposal (`ctx.governanceProposalId`, an internal-only channel): a
+      // composite approval replays each op with the proposal's OWN source —
+      // often `intelligence` — and it is the reviewer's, not the agent's.
+      const isAgentFiling =
+        isAiWriteRequest(input) && !ctx.governanceProposalId;
+      const approvalDuplicate = isAgentFiling
+        ? undefined
+        : input.approvalDuplicate;
+      let duplicateCheck: DuplicateCheck | undefined;
       if (needsIdentityResolve) {
+        const resolveDb = await getDb();
+        const answer = await findDuplicateCandidates(resolveDb, {
+          subject: "entity",
+          userId: ctx.userId,
+          profileSlug,
+          title: input.title ?? null,
+          signals: dedupSignals,
+          alsoKinds: roleApplicableKinds ?? undefined,
+          recordScope: ownerPrivateVisibleWhere(
+            entities.workspaceId,
+            entities.userId,
+            ctx.userId
+          ),
+          // A replay's own proposal is still pending while it runs; its
+          // pending siblings are expired once it lands. Records only.
+          ...(approvalDuplicate
+            ? { pending: { creates: [], truncated: false } }
+            : {}),
+        });
+        duplicateCheck = answer.check;
+        // A failed record lookup reads as "nothing matched" here — it is
+        // `unchecked` on `duplicateCheck`, never silently `clear`.
+        const identity = answer.identity ?? {
+          match: null,
+          candidates: [],
+          crossKindCandidates: [],
+        };
+        let visibleMatch:
+          | Awaited<ReturnType<typeof resolveDb.query.entities.findFirst>>
+          | undefined;
         try {
-          const resolveDb = await getDb();
-          const identity = await resolveIdentity(resolveDb, {
-            userId: ctx.userId,
-            kindSlug: profileSlug,
-            name: input.title ?? null,
-            signals: dedupSignals,
-            userScope: ownerPrivateVisibleWhere(
-              entities.workspaceId,
-              entities.userId,
-              ctx.userId
-            ),
-            limit: 5,
-          });
           // SECURITY GATE — the strong identity index is deliberately GLOBAL
           // (frozen policy: one subject per email/phone pod-wide), so the
           // matched id may belong to an entity the CALLER cannot see
@@ -534,7 +631,7 @@ export const createProcs = {
           // (the enrich/attach doors deny the writes, but the read leaked).
           // Invisible strong matches also must NOT be surfaced as weak
           // candidates below — candidates come only from the scoped weak path.
-          const visibleMatch =
+          visibleMatch =
             identity.match === "strong" && identity.entity
               ? await resolveDb.query.entities.findFirst({
                   where: and(
@@ -563,6 +660,35 @@ export const createProcs = {
           }
           if (identity.match === "strong" && identity.entity && visibleMatch) {
             const matchedId = identity.entity.id;
+            // A merge WRITES onto the matched row (signals, enrich, body): the
+            // calling key's grant must allow updating it where it LIVES, and
+            // creating its body document there, before anything lands — the
+            // enrich door's own gate runs too late (signals and the body are
+            // written first) and its denial is swallowed (S7).
+            const mergeWorkspaceId =
+              (visibleMatch as { workspaceId?: string | null }).workspaceId ??
+              null;
+            const mergeWrites =
+              externalIdSignal.length > 0 ||
+              Object.values(input.properties ?? {}).some(
+                (v) => v !== undefined && v !== null && v !== ""
+              ) ||
+              !!input.content?.trim();
+            if (mergeWrites) {
+              await assertKeyMayWrite({
+                subjectType: "entity",
+                action: "update",
+                workspaceId: mergeWorkspaceId,
+                data: { id: matchedId },
+              });
+            }
+            if (input.content?.trim()) {
+              await assertKeyMayWrite({
+                subjectType: "document",
+                action: "create",
+                workspaceId: mergeWorkspaceId,
+              });
+            }
             // Register the external_id anchor onto the matched subject so the
             // NEXT create with this provider id resolves here directly — not only
             // via whatever signal matched THIS time (e.g. a create that dedups on
@@ -796,95 +922,86 @@ export const createProcs = {
               ...(propertyDiff ? { propertyDiff } : {}),
             };
           }
-
-          // ── WEAK same-name gate (Phase 1) ────────────────────────────────
-          // Same profile + same title → reject with candidates. Never auto-
-          // merge. forceCreate opts in to create anyway (logged). Cross-kind
-          // same-title stays advisory only (not blocked). Strong invisible
-          // fall-through above still proceeds; weak candidates are already
-          // caller-scoped by resolveIdentity's userScope so no leak.
-          if (profileSlug && identity.match !== "strong") {
-            const weakGate = classifyWeakEntityDedup({
-              forceCreate: input.forceCreate,
-              profileSlug,
-              match: identity.match,
-              candidates: identity.candidates.map((c) => ({
-                id: c.id,
-                title: c.title,
-                type: c.type,
-              })),
-            });
-            if (weakGate.block) {
-              logger.info(
-                {
-                  event: "identity_resolve_merge",
-                  outcome: "blocked_weak",
-                  userId: ctx.userId,
-                  profileSlug,
-                  candidateCount: weakGate.sameKindCandidates.length,
-                },
-                "[entities.create] weak same-name match — rejecting create with candidates"
-              );
-              throw new TRPCError({
-                code: "CONFLICT",
-                message: buildWeakEntityDedupMessage(
-                  weakGate.sameKindCandidates,
-                  profileSlug
-                ),
-                cause: buildWeakDedupCause(weakGate.sameKindCandidates),
-              });
-            }
-            if (input.forceCreate && identity.match === "weak") {
-              logger.info(
-                {
-                  event: "identity_resolve_merge",
-                  outcome: "force_create",
-                  userId: ctx.userId,
-                  profileSlug,
-                },
-                "[entities.create] forceCreate=true — bypassing weak same-name gate"
-              );
-            }
-          }
-
-          // Role create: an exact-title party the role can already sit on is
-          // the same conflict as a same-kind hit. The picked kind had no row
-          // (that would have thrown above); another applicable kind does.
-          if (
-            roleApplicableKinds &&
-            !input.forceCreate &&
-            identity.match !== "strong"
-          ) {
-            const hits = identity.crossKindCandidates.filter((candidate) =>
-              roleApplicableKinds!.includes(candidate.type)
-            );
-            if (hits.length > 0) {
-              const types = new Set(hits.map((hit) => hit.type));
-              const label = types.size === 1 ? hits[0]!.type : "record";
-              logger.info(
-                {
-                  event: "identity_resolve_merge",
-                  outcome: "blocked_weak",
-                  userId: ctx.userId,
-                  profileSlug,
-                  candidateCount: hits.length,
-                },
-                "[entities.create] role create — exact name already exists on an applicable kind"
-              );
-              throw new TRPCError({
-                code: "CONFLICT",
-                message: buildWeakEntityDedupMessage(hits, label),
-                cause: buildWeakDedupCause(hits),
-              });
-            }
-          }
-        } catch (resolveErr) {
-          // Re-throw intentional gate rejects (junk already threw above; weak
-          // CONFLICT is thrown inside the try). Only swallow resolver failures.
-          if (resolveErr instanceof TRPCError) throw resolveErr;
+        } catch (mergeErr) {
+          // Intentional refusals (key grant, a governed enrich) surface; only an
+          // unexpected failure of the merge itself falls through to a create.
+          if (mergeErr instanceof TRPCError) throw mergeErr;
           logger.warn(
-            { resolveErr },
-            "[entities.create] identity resolve failed — proceeding to create"
+            { mergeErr },
+            "[entities.create] strong identity merge failed — proceeding to create"
+          );
+          // The create below is a same-identity twin, never a `clear` one
+          // (FB1020 review S2): name the record the merge was for, so an
+          // agent's filing is floored and the card shows it. A failure before
+          // its visibility was known names nothing and reads `unchecked`.
+          duplicateCheck =
+            visibleMatch && identity.entity
+              ? toDuplicateCheck(
+                  "entity",
+                  [
+                    {
+                      ref: "record",
+                      id: visibleMatch.id,
+                      kind: identity.entity.type,
+                      title: identity.entity.title ?? null,
+                      why: "same_identity",
+                    },
+                    ...answer.check.candidates,
+                  ],
+                  false
+                )
+              : answer.check.candidates.length > 0
+                ? answer.check
+                : { ...answer.check, status: "unchecked" as const };
+        }
+
+        // ── A possible twin (B2): same kind, same name or identity ──────────
+        // Strong visible matches returned above; what is left is `possible`.
+        if (duplicateCheck.status === "possible") {
+          const twinRecords = duplicateCheck.candidates
+            .filter((c) => c.ref === "record")
+            .map((c) => ({ id: c.id, title: c.title, type: c.kind }));
+          // Twins the reviewer saw on the card and approved past = keep both.
+          const reviewed = new Set(
+            isAgentFiling ? [] : (input.approvalReviewedTwinIds ?? [])
+          );
+          const unseenTwins = twinRecords.filter((t) => !reviewed.has(t.id));
+          if (approvalDuplicate === "ask_reviewer" && unseenTwins.length > 0) {
+            logger.info(
+              {
+                event: "identity_resolve_merge",
+                outcome: "blocked_weak",
+                userId: ctx.userId,
+                profileSlug,
+                candidateCount: twinRecords.length,
+              },
+              "[entities.create] approval of a same-name create — the reviewer picks a verb"
+            );
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: buildWeakEntityDedupMessage(
+                twinRecords,
+                profileSlug ?? "record"
+              ),
+              cause: buildWeakDedupCause(twinRecords),
+            });
+          }
+          logger.info(
+            {
+              event: "identity_resolve_merge",
+              outcome:
+                approvalDuplicate === "keep_both"
+                  ? "keep_both"
+                  : approvalDuplicate === "ask_reviewer"
+                    ? "reviewed_keep_both"
+                    : isAgentFiling
+                      ? "possible_duplicate_proposed"
+                      : "possible_duplicate_warned",
+              userId: ctx.userId,
+              profileSlug,
+              candidateCount: duplicateCheck.candidates.length,
+            },
+            "[entities.create] possible duplicate"
           );
         }
       }
@@ -1041,6 +1158,121 @@ export const createProcs = {
         }
       }
 
+      // Merge profile.defaultValues into caller-supplied properties.
+      const profileDefaults =
+        (earlyResolvedProfile?.defaultValues as Record<string, unknown>) ?? {};
+      const effectiveProperties: Record<string, unknown> = {
+        ...profileDefaults,
+        ...(input.properties ?? {}),
+      };
+
+      // RETRY-SAFE DEDUP (W3) — answered FIRST among the dedup rules, before
+      // the duplicate floor (B2: a possible twin turns an agent's filing into
+      // a proposal) and before the permission gate: an EXACT retry (same
+      // caller and agent, kind, home, title, properties and short body, inside
+      // the idempotency window) is the same write, and its answer is the
+      // original entity (founder decision 2026-10-22). Anything less than
+      // exact still meets the duplicate floor.
+      //
+      // (W3, direct/auto-approved writes — the "No approval
+      // received" damage): the client's confirmation window can give up on a
+      // write that already landed, the model retries, and — unlike an
+      // agent-authored PROPOSAL (hash-deduped by `insertPendingProposal`) — a
+      // granted/auto-approved create had NOTHING catching an identical retry,
+      // so it duplicated. Scoped to agent-driven writes ONLY (`agentUserId`
+      // set) — mirrors `insertPendingProposal`'s human-exemption: a person may
+      // deliberately file the same note/task twice, so a human direct write is
+      // NEVER deduped here. Runs BEFORE `entityBodyService.setBody` below
+      // (which would otherwise mint a fresh document on every retry).
+      // `shouldMaterializeAsDocument` predicts the SAME inline/document branch
+      // `setBody` will take from `input.content` — long-form content that
+      // routes to a document is OUT OF SCOPE here (its text lives in object
+      // storage via `documents.storageKey`, not a column this lookup can
+      // compare); this covers the common case (short/no content), which is
+      // the bulk of agent-driven note/task creates.
+      if (input.agentUserId) {
+        const contentGoesToDocument =
+          !!input.content && shouldMaterializeAsDocument(input.content);
+        if (!contentGoesToDocument) {
+          try {
+            const candidates = await placementDb
+              .select({
+                id: entities.id,
+                properties: entities.properties,
+              })
+              .from(entities)
+              .where(
+                and(
+                  eq(entities.agentUserId, input.agentUserId),
+                  // Owner floor: this answers BEFORE the permission gate, so
+                  // only the caller's own row may come back (a supplied
+                  // agentUserId never reaches someone else's).
+                  eq(entities.userId, ctx.userId),
+                  eq(entities.profileId, earlyResolvedProfile.id),
+                  resolvedEntityWorkspaceId
+                    ? eq(entities.workspaceId, resolvedEntityWorkspaceId)
+                    : isNull(entities.workspaceId),
+                  input.title
+                    ? eq(entities.title, input.title)
+                    : isNull(entities.title),
+                  isNull(entities.deletedAt),
+                  drizzleSql`${entities.createdAt} >= now() - (${idempotencyWindowSeconds()}::int * interval '1 second')`
+                )
+              )
+              .orderBy(desc(entities.createdAt))
+              .limit(5);
+
+            const dup = candidates.find((c) => {
+              const props = (c.properties ?? {}) as Record<string, unknown>;
+              // The body as this write stores it: `input.content`, or one passed
+              // inside `properties` (then the property comparison below checks
+              // it). Requiring a null body there missed every retry whose body
+              // rode in properties.
+              const sameContent = input.content
+                ? props.content === input.content
+                : "content" in effectiveProperties || props.content == null;
+              if (!sameContent) return false;
+              return Object.entries(effectiveProperties).every(
+                ([k, v]) => JSON.stringify(props[k]) === JSON.stringify(v)
+              );
+            });
+
+            if (dup) {
+              const matched = await placementDb.query.entities.findFirst({
+                where: eq(entities.id, dup.id),
+              });
+              // Facets ride their own governed door (attachFacet). No receipt
+              // to stamp: this answer comes before the permission gate, which
+              // therefore minted none.
+              const dedupFacets = await attachRequestedFacets(dup.id);
+              logger.info(
+                {
+                  event: "entity_create_dedup",
+                  entityId: dup.id,
+                  profileSlug,
+                  agentUserId: input.agentUserId,
+                },
+                "[entities.create] retry-safe dedup: returning previously created entity, no second row written"
+              );
+              return {
+                status: "created",
+                message:
+                  "Duplicate retry ignored — returning the previously created entity",
+                id: dup.id,
+                entity: matched ? toApiEntity(matched) : null,
+                ackState: "duplicate-ignored" as const,
+                facets: dedupFacets,
+              };
+            }
+          } catch (err) {
+            logger.warn(
+              { err },
+              "[entities.create] retry-dedup lookup failed — creating normally"
+            );
+          }
+        }
+      }
+
       // Refuse domain dumps into admin/settings/agent/operational homes.
       // global:true → null (allowed). Pod-wide placement is fine; pinning or
       // ambient-resolving into a non-domain home is not — pick a domain app
@@ -1109,7 +1341,8 @@ export const createProcs = {
         await assertDocumentAttachable(
           ctx.userId,
           { id: entityId, workspaceId: resolvedEntityWorkspaceId ?? null },
-          input.documentId
+          input.documentId,
+          { aiWrite: isAiWriteRequest(input) }
         );
       }
 
@@ -1139,24 +1372,62 @@ export const createProcs = {
       // value it is born with is the caller's, else the kind's default.
       const initialLifecycleMove =
         input.agentUserId || (input.source && input.source !== "user")
-          ? await initialStatusFloor({
-              profileId: earlyResolvedProfile?.id,
+          ? await initialCreateStatusFloor({
+              profile: earlyResolvedProfile,
               workspaceId: permWorkspaceId,
-              properties: {
-                ...((earlyResolvedProfile?.defaultValues as Record<
-                  string,
-                  unknown
-                > | null) ?? {}),
-                ...(input.properties ?? {}),
-              },
+              properties: input.properties,
             })
           : undefined;
+
+      // The RECORD this create proposes, named once: the gate stores it (as the
+      // proposal's `data.data`) and, once it lands, the pending agent copies of
+      // the same record are expired against it (below).
+      const gateRecord = {
+        id: entityId,
+        profileSlug,
+        title: input.title,
+        description: input.description,
+        properties: input.properties,
+        documentId: input.documentId,
+        content: input.content,
+        global: input.global,
+        // I3 (resolve-early-and-persist): the RESOLVED placement (may be an
+        // explicit null for pod-scope kinds). The materializer reads this back
+        // verbatim; a present key — including null — beats its legacy
+        // `data.global ? null : workspaceId` derivation.
+        resolvedWorkspaceId: resolvedEntityWorkspaceId,
+        // R2: carry facets on the proposal so approve attaches them (same
+        // shape as create input / composite op.facets). No longer dropped.
+        ...(input.facets?.length
+          ? {
+              facets: input.facets.map((f) => ({
+                profileSlug: f.profileSlug,
+                ...(f.status ? { status: f.status } : {}),
+                ...(f.properties ? { properties: f.properties } : {}),
+                ...(f.contextEntityId
+                  ? { contextEntityId: f.contextEntityId }
+                  : {}),
+              })),
+            }
+          : {}),
+      };
+
+      // A possible twin turns an agent's filing into a proposal (B2c). The
+      // RETRY class is not a duplicate question and never reaches here: the
+      // retry-safe dedup above answered an exact retry with the original write
+      // (write-door idempotency stays the retry layer; a proposal would only
+      // add a card). A near retry is floored like any twin.
+      const proposeAsDuplicate =
+        isAgentFiling && duplicateCheck?.status === "possible";
 
       // 2. Permission check (may create proposal with correlationId)
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: permWorkspaceId,
+        // The key's grant is checked where the row LANDS — null for a
+        // pod-scope kind — never the ambient lens it fell back to (S7).
+        grantWorkspaceId: resolvedEntityWorkspaceId ?? null,
         subjectType: "entity",
         action: "create",
         source: input.source,
@@ -1171,62 +1442,38 @@ export const createProcs = {
         // The declared slot this entity fulfils — the claim the approval
         // stamps by, the same label the session artifact records.
         expectedLabel: input.expectedLabel,
-        data: {
-          id: entityId,
-          profileSlug,
-          title: input.title,
-          description: input.description,
-          properties: input.properties,
-          documentId: input.documentId,
-          content: input.content,
-          global: input.global,
-          // I3 (resolve-early-and-persist): the RESOLVED placement (may be an
-          // explicit null for pod-scope kinds). The materializer reads this back
-          // verbatim; a present key — including null — beats its legacy
-          // `data.global ? null : workspaceId` derivation.
-          resolvedWorkspaceId: resolvedEntityWorkspaceId,
-          // R2: carry facets on the proposal so approve attaches them (same
-          // shape as create input / composite op.facets). No longer dropped.
-          ...(input.facets?.length
-            ? {
-                facets: input.facets.map((f) => ({
-                  profileSlug: f.profileSlug,
-                  ...(f.status ? { status: f.status } : {}),
-                  ...(f.properties ? { properties: f.properties } : {}),
-                  ...(f.contextEntityId
-                    ? { contextEntityId: f.contextEntityId }
-                    : {}),
-                })),
-              }
-            : {}),
-        },
+        // The duplicate door's answer (B2): a possible twin turns an agent's
+        // auto-approved filing into a proposal; the card shows the candidates.
+        possibleDuplicate: proposeAsDuplicate,
+        ...(duplicateCheck ? { duplicateCheck } : {}),
+        data: gateRecord,
       });
 
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
+      // PHANTOM ENVELOPE ID FIX: a "proposed" response must NOT carry a
+      // top-level `id` that looks like a materialized entity id — nothing was
+      // created yet, and downstream callers were treating that phantom id as a
+      // real entity. Carry only `proposalId` (the reviewable handle). `entity`
+      // stays null to signal "no materialized row". However, we DO expose the
+      // stable `proposedEntityId` (pre-generated at the top of this handler) so
+      // AI agents can reference this entity in cross-write proposal graphs.
+      // A "proposed" outcome is NOT always the entity. When the author lacks
+      // membership on the governing workspace, `checkPermissionOrPropose`
+      // deliberately files a WORKSPACE-JOIN gate instead of the content write
+      // (permission-check.ts, join-gate branch). `perm.proposalType` is the
+      // discriminator that says which happened — so derive the prose and the
+      // pre-allocated id FROM it rather than asserting the entity case.
+      //
+      // This is the same defect the PHANTOM ENVELOPE ID comment above fixed
+      // for `id`, one field over: a receipt that narrates a write that never
+      // happened, plus an id that can never resolve. An external agent read
+      // `proposedEntityId` off a join gate, found it unresolvable, and
+      // published a wrong root cause built on it. Hub REST already branches
+      // on this (`hub-protocol/entities.ts`, "JOIN gate" comment); this is
+      // the same rule applied at the shared source instead of one door.
       if ("proposalId" in perm) {
-        // PHANTOM ENVELOPE ID FIX: a "proposed" response must NOT carry a
-        // top-level `id` that looks like a materialized entity id — nothing was
-        // created yet, and downstream callers were treating that phantom id as a
-        // real entity. Carry only `proposalId` (the reviewable handle). `entity`
-        // stays null to signal "no materialized row". However, we DO expose the
-        // stable `proposedEntityId` (pre-generated at the top of this handler) so
-        // AI agents can reference this entity in cross-write proposal graphs.
-        // A "proposed" outcome is NOT always the entity. When the author lacks
-        // membership on the governing workspace, `checkPermissionOrPropose`
-        // deliberately files a WORKSPACE-JOIN gate instead of the content write
-        // (permission-check.ts, join-gate branch). `perm.proposalType` is the
-        // discriminator that says which happened — so derive the prose and the
-        // pre-allocated id FROM it rather than asserting the entity case.
-        //
-        // This is the same defect the PHANTOM ENVELOPE ID comment above fixed
-        // for `id`, one field over: a receipt that narrates a write that never
-        // happened, plus an id that can never resolve. An external agent read
-        // `proposedEntityId` off a join gate, found it unresolvable, and
-        // published a wrong root cause built on it. Hub REST already branches
-        // on this (`hub-protocol/entities.ts`, "JOIN gate" comment); this is
-        // the same rule applied at the shared source instead of one door.
         const joinGate = isJoinGate(perm.proposalType);
         return {
           status: "proposed",
@@ -1250,6 +1497,11 @@ export const createProcs = {
           // Homed proposal: same as materialize target (may be null = pod-wide).
           workspaceId: resolvedEntityWorkspaceId,
           effectiveWorkspaceId: resolvedEntityWorkspaceId,
+          // Why it waits, when the duplicate door is why (B2): the reviewer
+          // sees the same candidates on the card.
+          ...(duplicateCheck && duplicateCheck.status !== "clear"
+            ? { duplicateCheck }
+            : {}),
           // Facets ride the proposal payload and attach on approve (R2).
           // outcome "pending" = will attach after approval (not dropped).
           facets: (input.facets ?? []).map((f) => ({
@@ -1278,114 +1530,7 @@ export const createProcs = {
       // check) so the proposal-gated and auto-approved paths land identically
       // (I3). Reuse both here — `resolvedEntityWorkspaceId` is the value the
       // proposal persisted as `data.resolvedWorkspaceId`.
-      const resolvedProfile: any = earlyResolvedProfile;
       const entityWorkspaceId = resolvedEntityWorkspaceId;
-
-      // Merge profile.defaultValues into caller-supplied properties.
-      const profileDefaults =
-        (resolvedProfile?.defaultValues as Record<string, unknown>) ?? {};
-      const effectiveProperties: Record<string, unknown> = {
-        ...profileDefaults,
-        ...(input.properties ?? {}),
-      };
-
-      // RETRY-SAFE DEDUP (W3, direct/auto-approved writes — the "No approval
-      // received" damage): the client's confirmation window can give up on a
-      // write that already landed, the model retries, and — unlike an
-      // agent-authored PROPOSAL (hash-deduped by `insertPendingProposal`) — a
-      // granted/auto-approved create had NOTHING catching an identical retry,
-      // so it duplicated. Scoped to agent-driven writes ONLY (`agentUserId`
-      // set) — mirrors `insertPendingProposal`'s human-exemption: a person may
-      // deliberately file the same note/task twice, so a human direct write is
-      // NEVER deduped here. Runs BEFORE `entityBodyService.setBody` below
-      // (which would otherwise mint a fresh document on every retry).
-      // `shouldMaterializeAsDocument` predicts the SAME inline/document branch
-      // `setBody` will take from `input.content` — long-form content that
-      // routes to a document is OUT OF SCOPE here (its text lives in object
-      // storage via `documents.storageKey`, not a column this lookup can
-      // compare); this covers the common case (short/no content), which is
-      // the bulk of agent-driven note/task creates.
-      if (input.agentUserId) {
-        const contentGoesToDocument =
-          !!input.content && shouldMaterializeAsDocument(input.content);
-        if (!contentGoesToDocument) {
-          try {
-            const candidates = await database
-              .select({
-                id: entities.id,
-                properties: entities.properties,
-              })
-              .from(entities)
-              .where(
-                and(
-                  eq(entities.agentUserId, input.agentUserId),
-                  eq(entities.profileId, earlyResolvedProfile.id),
-                  entityWorkspaceId
-                    ? eq(entities.workspaceId, entityWorkspaceId)
-                    : isNull(entities.workspaceId),
-                  input.title
-                    ? eq(entities.title, input.title)
-                    : isNull(entities.title),
-                  isNull(entities.deletedAt),
-                  drizzleSql`${entities.createdAt} >= now() - (${idempotencyWindowSeconds()}::int * interval '1 second')`
-                )
-              )
-              .orderBy(desc(entities.createdAt))
-              .limit(5);
-
-            const dup = candidates.find((c) => {
-              const props = (c.properties ?? {}) as Record<string, unknown>;
-              const sameContent = input.content
-                ? props.content === input.content
-                : props.content == null;
-              if (!sameContent) return false;
-              return Object.entries(effectiveProperties).every(
-                ([k, v]) => JSON.stringify(props[k]) === JSON.stringify(v)
-              );
-            });
-
-            if (dup) {
-              const matched = await database.query.entities.findFirst({
-                where: eq(entities.id, dup.id),
-              });
-              const dedupFacets = await attachRequestedFacets(dup.id);
-              // The gate already minted this call's receipt: record that it
-              // created NOTHING, so its Undo can never delete the earlier
-              // write's row (that row is the earlier receipt's to undo).
-              await stampAutoApprovedCreate({
-                receiptId:
-                  "granted" in perm ? perm.autoApprovedProposalId : undefined,
-                record: {},
-                door: "entities.create (retry dedup)",
-                database,
-              });
-              logger.info(
-                {
-                  event: "entity_create_dedup",
-                  entityId: dup.id,
-                  profileSlug,
-                  agentUserId: input.agentUserId,
-                },
-                "[entities.create] retry-safe dedup: returning previously created entity, no second row written"
-              );
-              return {
-                status: "created",
-                message:
-                  "Duplicate retry ignored — returning the previously created entity",
-                id: dup.id,
-                entity: matched ? toApiEntity(matched) : null,
-                ackState: "duplicate-ignored" as const,
-                facets: dedupFacets,
-              };
-            }
-          } catch (err) {
-            logger.warn(
-              { err },
-              "[entities.create] retry-dedup lookup failed — creating normally"
-            );
-          }
-        }
-      }
 
       let createdEntity: any;
 
@@ -1439,6 +1584,9 @@ export const createProcs = {
       try {
         createdEntity = await entityRepo.create(
           {
+            // The minted id (above): what the proposal stored, what the body,
+            // the events and the receipt already name.
+            id: entityId,
             workspaceId: entityWorkspaceId ?? undefined,
             userId: ctx.userId,
             title: input.title || undefined,
@@ -1752,9 +1900,8 @@ export const createProcs = {
       }
 
       // Undo record for an AUTO-APPROVED create: the receipt was minted by the
-      // gate BEFORE this write and its `targetId` is the pre-minted
-      // `entityId`, which the row above does NOT carry — so the created id is
-      // only knowable here. Stamped LAST, after every write this handler makes
+      // gate BEFORE this write (its `targetId` is the pre-minted `entityId`,
+      // which the row now carries too). Stamped LAST, after every write this handler makes
       // to the new entity (facets, project filing), so none of them reads as an
       // edit made after the create. Only `entityIds`, mirroring the approval
       // executor (`executors/entity.ts`): the entity is what undo retires.
@@ -1764,6 +1911,33 @@ export const createProcs = {
         door: "entities.create",
         database,
       });
+
+      // The record LANDED, by whichever door reached here (a direct write, a
+      // capture graph, an approval replay): the agent's pending copies of the
+      // SAME record can only fail the same-name gate now, and each still counts
+      // toward its pending cap. Expire them (never scored). The copy carrying
+      // this record's minted id (the proposal being approved right now) is never
+      // matched. Best-effort: the entity already landed.
+      try {
+        const expired = await expirePendingCreatesOfLandedRecord(
+          {
+            record: gateRecord,
+            entityId: createdEntity.id,
+            ownerUserId: ctx.userId,
+            landedByProposalId:
+              ("granted" in perm ? perm.autoApprovedProposalId : undefined) ??
+              ctx.governanceProposalId ??
+              null,
+          },
+          database
+        );
+        if (expired.length) markProposalNotificationsActioned(expired);
+      } catch (err) {
+        logger.warn(
+          { err, entityId: createdEntity.id },
+          "[entities.create] pending copies of the landed record were not expired"
+        );
+      }
 
       return {
         status: "created",
@@ -1779,6 +1953,11 @@ export const createProcs = {
         // incidental and would break silently if the spread ever changed.
         ...(createdEntity.unmodeled?.length
           ? { unmodeled: createdEntity.unmodeled }
+          : {}),
+        // A person's create is never blocked by a possible twin (B2e): it is
+        // WARNED here, with the candidates. `unchecked` says the lookup failed.
+        ...(duplicateCheck && duplicateCheck.status !== "clear"
+          ? { duplicateCheck }
           : {}),
       };
     }),

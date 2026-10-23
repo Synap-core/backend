@@ -2,11 +2,17 @@
 
 ## Scaffold a full app (recommended for a fresh start)
 
+> **Not published yet.** The scaffolder (`@synap-core/create-synap-app`) is not
+> on npm and the base template is not public, so `npx` returns 404 today. Use the
+> SDK path below until a release exists.
+
+Once published:
+
 ```bash
-npx create-synap-app my-app
+npx @synap-core/create-synap-app my-app
 ```
 
-Creates a Next.js + HeroUI project from the base template, with the SDK, auth,
+It creates a Next.js + HeroUI project from the base template, with the SDK, auth,
 app shell, command palette, realtime, and mock mode pre-wired. It also drops an
 `AGENTS.md` into the project so your AI coding tool knows how to work with it.
 
@@ -22,9 +28,12 @@ npm install @synap-core/sdk@^1.0.0 @synap-core/react@^1.0.0
 # realtime
 npm install @synap-core/sdk-realtime
 
-# auth (browser sign-in) or auth-bootstrap (server credential bootstrap)
-npm install @synap-core/auth        # or @synap-core/auth-bootstrap
+# REST client for API-key holders (agents, scripts); also has setupAgent()
+npm install @synap-core/hub-rest-client
 ```
+
+Do not install `@synap-core/auth` (retired; its last release calls a removed pod
+route) or `@synap-core/auth-bootstrap` (not published).
 
 Pin `@^1.0.0` on `sdk`/`react`. **Do not** install unpinned `@synap-core/sdk` —
 older `0.x` versions on the registry are a different, abandoned package.
@@ -32,14 +41,14 @@ older `0.x` versions on the registry are a different, abandoned package.
 ## Get this knowledge into your AI coding tool
 
 ```bash
-# add the app-creation skill (this skill) to a connected AI tool
-synap skills get synap-app
+# print this skill from your pod's skill knowledge base
+synap skill get synap-app
 
-# or wire a tool end-to-end (skills + MCP), any target
-synap connect --target=cursor        # or claude, …
+# or wire a tool end-to-end (skills + MCP)
+synap connect --target=cursor        # or claude-code, claude-desktop, codex, …
 ```
 
-Alternatively, the scaffolded project ships an `AGENTS.md` at its root — most AI
+Once the scaffolder is published, the scaffolded project ships an `AGENTS.md` at its root — most AI
 coding tools read it automatically, so a freshly-scaffolded app teaches the AI
 how to build on it with zero extra setup.
 

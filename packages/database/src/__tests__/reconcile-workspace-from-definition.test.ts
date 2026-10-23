@@ -13,12 +13,13 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import crypto from "crypto";
-import { sql } from "../client-pg.js";
+import { getDb, sql } from "../client-pg.js";
 import {
   createWorkspaceFromDefinition,
   type WorkspaceDefinitionInput,
 } from "../utils/create-workspace-from-definition.js";
 import { reconcileWorkspaceFromDefinition } from "../utils/reconcile-workspace-from-definition.js";
+import { writeTemplateState } from "../utils/template-state.js";
 import { profileWorkspaceAccess } from "../schema/profiles.js";
 
 // The schema module graph has a circular import (profiles ↔ workspaces) that
@@ -215,7 +216,7 @@ describe.skipIf(!SCHEMA_LOADS)(
     `;
       expect(profiles).toHaveLength(2);
       const links = await sql`
-      SELECT pr.id FROM profile_relations pr
+      SELECT pr.source_profile_id FROM profile_relations pr
       JOIN relation_defs rd ON rd.id = pr.relation_def_id
       WHERE rd.workspace_id = ${workspaceId}
     `;
@@ -507,7 +508,10 @@ describe.skipIf(!SCHEMA_LOADS)(
       // An install-onto-existing binds package provenance so `market update`
       // can track it. The VERSION is the finisher's to stamp, on convergence
       // (W4): this layer-1 pass never writes or clears it.
-      await sql`UPDATE workspaces SET settings = COALESCE(settings, '{}'::jsonb) || '{"packageVersion":"2"}'::jsonb WHERE id = ${bWorkspaceId}`;
+      // Stamped through the ONE template-state writer: once `settings.template`
+      // exists it is the source of truth, and a raw legacy `packageVersion`
+      // key beside it is not a version anyone recorded.
+      await writeTemplateState(await getDb(), bWorkspaceId, { version: "2" });
       await reconcileWorkspaceFromDefinition({
         workspaceId: bWorkspaceId,
         userId: bUserId,
@@ -518,6 +522,7 @@ describe.skipIf(!SCHEMA_LOADS)(
         await sql`SELECT settings FROM workspaces WHERE id = ${bWorkspaceId}`;
       expect(bound.settings?.packageSlug).toBe("attached-pkg");
       expect(bound.settings?.packageVersion).toBe("2");
+      expect(bound.settings?.template?.version).toBe("2");
     });
   }
 );

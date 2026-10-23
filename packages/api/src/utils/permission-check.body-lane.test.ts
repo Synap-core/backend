@@ -103,7 +103,10 @@ vi.mock("@synap/database", async (importOriginal) => {
     gt: vi.fn((a: unknown, b: unknown) => ({ gt: [a, b] })),
     gte: vi.fn((a: unknown, b: unknown) => ({ gte: [a, b] })),
     desc: vi.fn((a: unknown) => ({ desc: a })),
-    drizzleSql: vi.fn(() => ({})),
+    drizzleSql: Object.assign(
+      vi.fn(() => ({})),
+      { raw: vi.fn(() => ({})) } // session-kind.ts builds a module-level drizzleSql.raw
+    ),
     verifyPermission: mockVerifyPermission,
     ProfileResolutionService: class {
       resolveProfile = vi.fn().mockResolvedValue({ id: "p-1", slug: "task" });

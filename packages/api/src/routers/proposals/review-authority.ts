@@ -18,7 +18,7 @@ import {
   users,
   type KeyGrant,
 } from "@synap/database";
-import { patternMatches } from "@synap/governance-policy/grants";
+import { patternMatches, permits } from "@synap/governance-policy/grants";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { isPodAdmin } from "../../utils/workspace-role.js";
@@ -199,6 +199,8 @@ type ReviewedProposal = {
   targetId: string | null;
   /** The run the proposal was filed in — also keyed by the session rung. */
   sessionId: string | null;
+  /** Its project, for a key's project fence (D3); absent reads as none. */
+  projectId?: string | null;
 };
 
 /** Does `reader` fail to read a session this proposal belongs to? */
@@ -748,7 +750,12 @@ export async function assertCanRetargetProposalDestination(args: {
  * agent's proposal — the common case — is admitted by the agent-owner rung.
  */
 export async function assertCanReviewProposal(args: {
-  proposal: ReviewedProposal;
+  /**
+   * `projectId` REQUIRED here: this core fences the key by the proposal's
+   * project (D3), and an omitted project read as "none" — refusing every
+   * project-bounded key on every proposal that has one (PR #29 re-review).
+   */
+  proposal: ReviewedProposal & { projectId: string | null };
   userId: string;
   action: "reject" | "reopen";
   /** `rosterReadFor(ctx)` — see `computeCanReviewApproval`. */
@@ -756,6 +763,15 @@ export async function assertCanReviewProposal(args: {
 }): Promise<void> {
   const { proposal, userId, action, roster } = args;
   assertAgentKeyMayReject(proposal, action);
+  // D3: the key decides only where its grant reaches — the proposal's own
+  // space, project and object. Its own author (an agent discarding its own
+  // work) is the one exception, as for revise.
+  if (
+    !proposal.agentUserId ||
+    proposal.agentUserId !== getActingAgentUserId()
+  ) {
+    assertMayDecideProposalAt("reject", action, proposal);
+  }
 
   // reject / reopen — the documented agent capability ("can reject but never
   // approve"). EXACTLY today's behaviour; the class floor applies to approve only.
@@ -799,18 +815,37 @@ export function reviewRefusalMessage(
  *     deny by default), revoked or expired — carries a deny-all scope and is
  *     refused.
  *
- * Resource fences (workspaceIds/projectIds/entityIds) are NOT applied: only
- * the verb is checked. `verb` is the right the key needs; `act` is the word
- * the refusal uses when the door's action differs (revert needs approve).
- * Every decision door calls this — tripwire `proposal-decision-grant.tripwire`.
+ * Resource fences (workspaceIds/projectIds/entityIds) apply only when the
+ * door names the proposal it decides (`target`, D3 — founder 2026-10-20): ONE
+ * scope must then allow the verb on the proposal's own workspace, project and
+ * target object, so a key pinned to a space decides only that space's
+ * proposals. Without `target`, only the verb is checked. `verb` is the right
+ * the key needs; `act` is the word the refusal uses when the door's action
+ * differs (revert needs approve). Every decision door calls this — tripwire
+ * `proposal-decision-grant.tripwire`.
  */
 export function assertMayDecideProposal(
   verb: "approve" | "reject",
   act: string = verb,
-  grant: KeyGrant | undefined = getRequestGrant()
+  grant: KeyGrant | undefined = getRequestGrant(),
+  target?: ProposalGrantTarget
 ): void {
   if (!grant) return;
   const req = { subject: "proposal", action: verb };
+  if (target) {
+    const scoped = {
+      ...req,
+      qualifier: null,
+      workspaceId: target.workspaceId ?? null,
+      entityId: target.targetId ?? null,
+      projectIds: target.projectId ? [target.projectId] : null,
+    };
+    if (grant.scopes.some((s) => permits(s, scoped))) return;
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `This key may not ${act} changes here. Give it the '${verb}' right on this proposal's space or project.`,
+    });
+  }
   if (
     grant.scopes.some((s) => s.permissions.some((p) => patternMatches(p, req)))
   )
@@ -892,10 +927,41 @@ export function assertAgentKeyMayReject(
  * `proposals.revise`, MCP `synap_revise_proposal`, Hub `updateProposal`.
  */
 export function assertMayReviseProposal(
-  proposal: { agentUserId: string | null },
+  proposal: { agentUserId: string | null } & ProposalGrantTarget,
   actingAgentUserId: string | undefined = getActingAgentUserId(),
   grant: KeyGrant | undefined = getRequestGrant()
 ): void {
   if (actingAgentUserId && proposal.agentUserId === actingAgentUserId) return;
-  assertMayDecideProposal("approve", "revise", grant);
+  // D3: the revised proposal's own space / project / object bound the key.
+  assertMayDecideProposal("approve", "revise", grant, {
+    workspaceId: proposal.workspaceId ?? null,
+    projectId: proposal.projectId ?? null,
+    targetId: proposal.targetId ?? null,
+  });
+}
+
+/**
+ * The key half of deciding ONE loaded proposal (D3): `assertMayDecideProposal`
+ * with the proposal's own space, project and object as the target, so a key
+ * bounded to some spaces decides only there. Every door that has loaded the
+ * proposal calls this (tripwire `proposal-decision-grant`), after the
+ * target-less verb check its first statement makes.
+ */
+export function assertMayDecideProposalAt(
+  verb: "approve" | "reject",
+  act: string,
+  proposal: ProposalGrantTarget
+): void {
+  assertMayDecideProposal(verb, act, getRequestGrant(), {
+    workspaceId: proposal.workspaceId ?? null,
+    projectId: proposal.projectId ?? null,
+    targetId: proposal.targetId ?? null,
+  });
+}
+
+/** Where a decided proposal lives, for the key's resource fences (D3). */
+export interface ProposalGrantTarget {
+  workspaceId?: string | null;
+  projectId?: string | null;
+  targetId?: string | null;
 }

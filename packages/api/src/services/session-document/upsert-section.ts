@@ -28,6 +28,7 @@ import {
   loadReadableSession,
   sessionStateStamp,
 } from "./session-document.js";
+import { assertKeyMayWrite } from "../../utils/assert-key-may-write.js";
 
 export interface UpsertSessionSectionInput {
   /** The human principal the request acts for. Must own the session. */
@@ -116,6 +117,14 @@ export async function upsertSessionDocumentSection(
           "This session has no document yet. Pass baseVersion: null to create it with this section.",
       });
     }
+    // The document is created BEFORE the patch door's gate runs: the key's
+    // grant must allow creating a document in the session's workspace first
+    // (S7, plan 13 §3.4).
+    await assertKeyMayWrite({
+      subjectType: "document",
+      action: "create",
+      workspaceId: session.workspaceId ?? null,
+    });
     const made = await getOrCreateSessionDocument(session, { agentUserId });
     if (!made.created) {
       throw new TRPCError({

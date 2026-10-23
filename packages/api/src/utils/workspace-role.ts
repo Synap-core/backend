@@ -15,7 +15,7 @@ import {
 } from "@synap-core/types/console";
 import { isSpaceManageRole } from "@synap-core/types/workspaces";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, inArray } from "@synap/database";
+import { db, eq, and, inArray, isNull } from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 
 /** The caller's role in a workspace, or undefined if not a member. */
@@ -67,11 +67,30 @@ export async function requirePodAdmin(userId: string) {
  * same rule.
  */
 export async function isPodAdmin(userId: string): Promise<boolean> {
+  return (await getPodAdminRole(userId)) !== null;
+}
+
+/** A pod-admin role: what makes a person a pod admin. */
+export type PodAdminRole = (typeof POD_ADMIN_ROLES)[number];
+
+/**
+ * The person's pod-admin role — `owner` or `admin` of the `pod-admin` system
+ * workspace — or null when they are neither. The query behind `isPodAdmin`, so
+ * the two can never disagree; a FAILED read throws, never reads as null.
+ */
+export async function getPodAdminRole(
+  userId: string
+): Promise<PodAdminRole | null> {
   const podAdminWorkspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.systemSlug, POD_ADMIN_SYSTEM_SLUG),
+    // An archived pod-admin space grants no admin power: the same rule as
+    // `projectPodUserAccess` (@synap/database), so the two reads never split.
+    where: and(
+      eq(workspaces.systemSlug, POD_ADMIN_SYSTEM_SLUG),
+      isNull(workspaces.archivedAt)
+    ),
     columns: { id: true },
   });
-  if (!podAdminWorkspace) return false;
+  if (!podAdminWorkspace) return null;
   const membership = await db.query.workspaceMembers.findFirst({
     where: and(
       eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
@@ -80,7 +99,21 @@ export async function isPodAdmin(userId: string): Promise<boolean> {
     ),
     columns: { role: true },
   });
-  return !!membership;
+  return (membership?.role as PodAdminRole | undefined) ?? null;
+}
+
+/**
+ * Does `target`'s pod-admin role outrank `actor`'s? The owner outranks an
+ * admin, an admin outranks everyone else. A pod admin may not act on the
+ * account of someone above them (e.g. unlink the owner's sign-in).
+ */
+export function podAdminRoleOutranks(
+  target: PodAdminRole | null,
+  actor: PodAdminRole | null
+): boolean {
+  const rank = (role: PodAdminRole | null) =>
+    role === "owner" ? 2 : role === "admin" ? 1 : 0;
+  return rank(target) > rank(actor);
 }
 
 /**

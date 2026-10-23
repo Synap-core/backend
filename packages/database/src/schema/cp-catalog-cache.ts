@@ -5,7 +5,7 @@
  *
  * Generalizes `capability-template-cache.ts` (which stays in place, unchanged,
  * until a later cleanup migration cuts reconcile over — see P2.4-B in
- * CAPABILITY-MARKETPLACE-PLAN.md). Same stale-while-revalidate contract: NOT a
+ * CAPABILITY-MARKETPLACE-PLAN (team pod)). Same stale-while-revalidate contract: NOT a
  * source of truth, a catalog PROVIDER is (today always the Control Plane via
  * `source` = its base URL); a background sync job (packages/jobs
  * `cp-catalog-sync`) refreshes this table so catalog reads NEVER block on a

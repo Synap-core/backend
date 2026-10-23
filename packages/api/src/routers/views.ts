@@ -53,10 +53,13 @@ import {
   storedVersionValues,
   uploadDocumentVersionSnapshot,
   projectMembers,
+  listableEntityWhere,
+  isUniqueViolation,
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { ViewEvents } from "../lib/event-helpers.js";
 import { auditLog } from "../utils/audit-log.js";
+import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
 import { deleteDocumentAndBlobs } from "../utils/delete-document-and-blobs.js";
 import { emitSideEffects } from "@synap/events";
 import { verifyPermission, getWorkspaceMembership } from "@synap/database";
@@ -502,6 +505,18 @@ export const viewsRouter = router({
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Project not found",
+        });
+      }
+
+      // No workspace and no project: a pod-wide view, which the governance
+      // gate below never sees. The calling key's grant still bounds it — as
+      // pod scope, so a key pinned to a space fails closed (S7).
+      if (!effectiveWorkspaceId && !pinnedProjectId) {
+        await assertKeyMayWrite({
+          subjectType: "view",
+          action: "create",
+          workspaceId: null,
+          data: { id: reservedViewId },
         });
       }
 
@@ -1127,10 +1142,7 @@ export const viewsRouter = router({
         // insert; `views_scoped_surface_uniq_idx` guarantees only one wins.
         // The loser must CONVERGE on the winner's board, not surface a raw
         // unique-violation (same 23505 pattern as relations.ts).
-        const pgCode =
-          (err as { code?: string })?.code ??
-          (err as { cause?: { code?: string } })?.cause?.code;
-        if (pgCode !== "23505") throw err;
+        if (!isUniqueViolation(err)) throw err;
 
         // Best-effort: reap the loser's orphaned canvas document + version so
         // the race leaves no stray rows (storage object is left; harmless).
@@ -1340,6 +1352,15 @@ export const viewsRouter = router({
               projectWide ? undefined : null,
               true
             )
+      );
+      // THE listing rule (probe + demo rows). A project lens — the view's pin
+      // or the caller's — is the demo toggle: a demo project's view shows it.
+      conditions.push(
+        listableEntityWhere({
+          projectLens: [pinnedProjectId, input.projectId].filter(
+            (p): p is string => !!p
+          ),
+        })
       );
 
       // LIVE SET — a List built from a Library group names its container

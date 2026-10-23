@@ -19,7 +19,11 @@
  *      not say which, so it is no existence oracle.
  *   2. GATE: `checkPermissionOrPropose` —
  *        file   → `project/file_entities`, `forcePropose` (an ACCESS decision:
- *                 an agent ALWAYS proposes; rules cannot widen rung 2.1);
+ *                 an agent proposes; rules cannot widen rung 2.1). The
+ *                 engine files it under its own reason, `PROJECT_FILING`.
+ *                 One exception (FB1020 B3): an agent filing its OWN FRESH
+ *                 records into a project the person named reaches the pod's
+ *                 own-organise class row instead (`own-organise.ts`);
  *        unfile → `link/delete` (DESTRUCTIVE floor: an agent always proposes).
  *      One proposal for the whole batch.
  *   3. APPLY (`applyProjectFiling`, also the approval half): re-floors on the
@@ -27,6 +31,9 @@
  *      through `linkEntityToProject` (keeps its existence + visibility check) /
  *      `unlinkEntitiesFromProject`. All-or-nothing: one record that no longer
  *      passes refuses the batch rather than filing a silent subset.
+ *   4. UNDO: the edges a filing wrote are stamped on its proposal (approval) or
+ *      receipt (auto-approved) as `materialized.relationIds`; revert deletes
+ *      exactly those, never an edge that was already there.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -42,9 +49,12 @@ import {
   unlinkEntitiesFromProject,
 } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { auditLog } from "../../utils/audit-log.js";
+import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { BELONGS_TO_PROJECT } from "../../utils/project-scope.js";
 import { loadVisibleProject } from "./load-visible-project.js";
+import { ownWorkOrganiseForFiling } from "../governance/own-organise.js";
 
 /** Batch bound — same order as `entities.moveToWorkspace`. */
 export const FILE_ENTITIES_MAX = 500;
@@ -170,6 +180,8 @@ export type ProjectFilingApplied =
       /** Edges THIS call wrote (insert RETURNING), and the ones already there. */
       filed: string[];
       alreadyFiled: string[];
+      /** The relation rows behind `filed` — what an undo removes, and only those. */
+      filedRelationIds: string[];
     }
   | {
       status: "unfiled";
@@ -187,6 +199,12 @@ export async function applyProjectFiling(params: {
   projectId: string;
   entityIds: readonly string[];
   remove: boolean;
+  /**
+   * WHO filed: the agent (and the proposal it went through) when an agent's
+   * filing is applied — directly, or on a person's approval. Absent = the
+   * owner filed it themselves. Recorded on each record's spine event.
+   */
+  actor?: { agentUserId?: string | null; proposalId?: string | null };
 }): Promise<ProjectFilingApplied> {
   const database = await getDb();
   const plan = await loadProjectFilingPlan(database, {
@@ -201,6 +219,11 @@ export async function applyProjectFiling(params: {
       entityIds: ids,
       projectId: plan.project.id,
     });
+    // Which records lost their edge is not returned; an un-file that removed
+    // nothing changed nothing and records nothing.
+    if (removedIds.length > 0) {
+      await recordFilingOnRecords(params, plan, ids, "unfiled");
+    }
     return {
       status: "unfiled",
       projectId: plan.project.id,
@@ -208,7 +231,7 @@ export async function applyProjectFiling(params: {
     };
   }
 
-  return database.transaction(async (tx) => {
+  const applied = await database.transaction(async (tx) => {
     const txDb = tx as unknown as Database;
     // Already-filed records are skipped explicitly: the partial unique index
     // dedupes on a real pod, but the receipt must say "already there" rather
@@ -225,6 +248,7 @@ export async function applyProjectFiling(params: {
       );
     const already = new Set(existing.map((r) => r.id));
     const filed: string[] = [];
+    const filedRelationIds: string[] = [];
     for (const e of plan.entities) {
       if (already.has(e.id)) continue;
       const res = await linkEntityToProject(txDb, {
@@ -239,21 +263,80 @@ export async function applyProjectFiling(params: {
           message: `Project not found or not visible: ${plan.project.id} — nothing was filed`,
         });
       }
-      if (res.created) filed.push(e.id);
-      else already.add(e.id);
+      if (res.created) {
+        filed.push(e.id);
+        if (res.relationId) filedRelationIds.push(res.relationId);
+      } else already.add(e.id);
     }
     return {
       status: "filed" as const,
       projectId: plan.project.id,
       filed,
       alreadyFiled: ids.filter((id) => already.has(id)),
+      filedRelationIds,
     };
   });
+  if (applied.filed.length > 0) {
+    await recordFilingOnRecords(params, plan, applied.filed, "filed");
+  }
+  return applied;
+}
+
+/**
+ * The spine record of a filing, ON EACH RECORD it changed —
+ * `entity.update.completed` with `projectFiling`. "Untouched by a person
+ * since" (`isOwnFreshWork`, the FB1020 B3 proof) reads a record's
+ * `entity.%.completed` events that carry no agent; a filing wrote only the
+ * edge, so a person un-filing the agent's record was invisible and the agent
+ * could file it straight back on its own (w2 review M8). Attributed to the
+ * agent when it is the agent's filing (direct or approved), so it never reads
+ * as a person's. Log only (no automation fan-out); best-effort like every
+ * `auditLog` append. After the write, never inside its transaction.
+ */
+async function recordFilingOnRecords(
+  params: {
+    ownerUserId: string;
+    actor?: { agentUserId?: string | null; proposalId?: string | null };
+  },
+  plan: ProjectFilingPlan,
+  entityIds: readonly string[],
+  change: "filed" | "unfiled"
+): Promise<void> {
+  const byId = new Map(plan.entities.map((e) => [e.id, e]));
+  for (const id of entityIds) {
+    await auditLog({
+      subjectType: "entity",
+      action: "update",
+      phase: "completed",
+      subjectId: id,
+      userId: params.ownerUserId,
+      agentUserId: params.actor?.agentUserId ?? null,
+      proposalId: params.actor?.proposalId ?? null,
+      workspaceId: byId.get(id)?.workspaceId ?? null,
+      data: { projectFiling: { projectId: plan.project.id, change } },
+    });
+  }
 }
 
 export type FileEntitiesResult =
   | ProjectFilingApplied
   | { status: "proposed"; proposalId: string; reviewUrl?: string };
+
+/** The 2.1 floor, or the B3 proof that lifts it to the class row. */
+async function filingGovernance(
+  params: { agentUserId?: string | null; sessionId?: string | null },
+  plan: ProjectFilingPlan
+): Promise<{ forcePropose: boolean; ownWorkOrganise?: true }> {
+  const own = await ownWorkOrganiseForFiling({
+    agentUserId: params.agentUserId,
+    projectId: plan.project.id,
+    entityIds: plan.entities.map((e) => e.id),
+    sessionId: params.sessionId,
+  });
+  return own
+    ? { forcePropose: false, ownWorkOrganise: true }
+    : { forcePropose: true };
+}
 
 /** The ONE governed door (see file header). */
 export async function fileEntitiesGoverned(params: {
@@ -298,8 +381,11 @@ export async function fileEntitiesGoverned(params: {
         subjectType: "project",
         action: "file_entities",
         // An ACCESS decision (exposes each record to the project's members):
-        // an agent always proposes, whatever rule or ownership says.
-        forcePropose: true,
+        // an agent proposes, whatever rule or ownership says (`PROJECT_FILING`)
+        // — UNLESS it files its OWN FRESH records into a project the person
+        // named (FB1020 B3, `own-organise.ts`). Then only the pod's
+        // own-organise class row may apply it directly, with a receipt + Undo.
+        ...(await filingGovernance(params, plan)),
         data: payload,
       });
 
@@ -314,10 +400,25 @@ export async function fileEntitiesGoverned(params: {
     };
   }
 
-  return applyProjectFiling({
+  const applied = await applyProjectFiling({
     ownerUserId: params.userId,
     projectId: plan.project.id,
     entityIds: plan.entities.map((e) => e.id),
     remove,
+    actor: {
+      agentUserId: params.agentUserId ?? null,
+      proposalId:
+        "granted" in perm ? (perm.autoApprovedProposalId ?? null) : null,
+    },
   });
+  // An auto-approved filing's receipt records the edges it wrote, so its Undo
+  // removes exactly those (`planProposalRevert`). No receipt ⇒ nothing to stamp.
+  if (applied.status === "filed" && "granted" in perm) {
+    await stampAutoApprovedCreate({
+      receiptId: perm.autoApprovedProposalId,
+      record: { relationIds: applied.filedRelationIds },
+      door: "projects.fileEntities",
+    });
+  }
+  return applied;
 }

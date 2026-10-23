@@ -11,6 +11,7 @@
  */
 
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import { isAiWriteRequest } from "./ai-write.js";
 import { classifySpaceOperation } from "@synap-core/types/workspaces";
 import {
   db,
@@ -32,6 +33,9 @@ import {
   deriveProposalProjectId,
   getActingAgentUserId,
   getRequestGrant,
+  recordWriteSessionFiling,
+  derivedReceiptProjectFor,
+  callingKeyAttribution,
   computeProposalDedupHash,
   type InsertPendingProposalResult,
   type ResolveOrCreateAgentProposalSessionInput,
@@ -67,9 +71,9 @@ import {
   type DeferredWrite,
 } from "@synap-core/types/proposals/deferred-writes";
 import type { RequestShapedProposalData } from "@synap-core/types";
+import type { DuplicateCheck } from "@synap-core/types/proposals";
 import type { ExpectedOutput } from "@synap/playbooks";
 import {
-  normalizeObjectKind,
   buildObjectActionTitle,
   resolveActionLabel,
   resolveObjectNoun,
@@ -104,7 +108,10 @@ import {
   deriveAuthorshipMode,
   getAgentFocusProjectId,
 } from "../services/agent-identity-service.js";
-import { satisfyExpectedOutputs } from "../services/focus-sessions/satisfy-expected-output.js";
+import {
+  satisfyExpectedOutputs,
+  slotMatchesChangeKind,
+} from "../services/focus-sessions/satisfy-expected-output.js";
 import { slotKeyAt } from "../services/focus-sessions/slot-keys.js";
 import { reviveSessionForWrite } from "../services/focus-sessions/revive-stale-session.js";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
@@ -312,8 +319,9 @@ interface SessionGovernanceContext {
  *
  * It is a CLAIM, never a stamp — the same semantics `artifacts.props.expectedLabel`
  * already has in `services/focus-sessions/session-outputs.ts`. `done` still hangs
- * off approval, and `selectOutputToSatisfy` falls back to the kind guess when the
- * claim matches no open slot. Returns the DECLARED label (the slot's own casing),
+ * off approval, and `selectOutputToSatisfy` stamps NOTHING when there is no claim
+ * or it matches no open slot (the kind guess is gone, 2026-10-22). Returns the
+ * DECLARED label (the slot's own casing),
  * not the change's, so the stored claim joins the ledger verbatim — together
  * with the slot's KEY (`slot-keys.ts`, stored or derived), which is what the
  * approval resolves first; the label stays the alias older readers use.
@@ -354,10 +362,13 @@ function resolveSessionSlotClaimIndex(
 ): number {
   if (expectedOutputs.length === 0) return -1;
 
-  // The kind floor, applied to EVERY rung below.
-  const targetKind = normalizeObjectKind(targetType);
+  // The kind floor, applied to EVERY rung below — THE matcher the stamp uses
+  // (`slotMatchesChangeKind`), with the entity's profile from the gate payload,
+  // so a knowledge entity can claim a `kind: "knowledge"` slot.
+  const profileSlug =
+    typeof data?.profileSlug === "string" ? data.profileSlug : undefined;
   const ofKind = (o: ExpectedOutput) =>
-    normalizeObjectKind(o.kind) === targetKind;
+    slotMatchesChangeKind(o.kind, targetType, profileSlug);
   /** The ownership floor, applied to EVERY rung below. */
   const notTheHumans = (o: ExpectedOutput) => o.owner !== "human";
 
@@ -934,6 +945,15 @@ export interface PermissionCheckBaseOpts {
   agentUserId?: string;
   /** Pass null for workspace-less (hydration / pod-wide personal) operations. */
   workspaceId?: string | null;
+  /**
+   * The workspace the calling key's GRANT is checked against (rung 0), when it
+   * is not the governance home: the row's REAL placement — the stored row's
+   * workspace, or where a create lands — with null for a pod-scope row. A door
+   * that governs a pod-wide row under the caller's lens (`workspaceId` = the
+   * header) passes it so a key pinned to that lens cannot write pod-wide
+   * (S7, plan 13 §3.4). Omitted → `workspaceId`.
+   */
+  grantWorkspaceId?: string | null;
   source?: string;
   /**
    * Effective per-channel capability grant for the acting AI teammate, when the
@@ -1016,6 +1036,29 @@ export interface PermissionCheckBaseOpts {
    * precedence over the forced proposal.
    */
   forcePropose?: boolean;
+  /**
+   * FB1020 B3 — the door PROVED this write organises the acting agent's own
+   * fresh work (`isOwnFreshWork`, @synap/database): same key, last 24 h,
+   * untouched by a person, into a project the person named. Set ONLY by the
+   * three organise doors (project filing, session filing, closing a task),
+   * always with `forcePropose: !ownWorkOrganise`. Lets the pod's own-organise
+   * class row (rung 2.8) apply it; without that row it proposes as before.
+   */
+  ownWorkOrganise?: boolean;
+  /**
+   * The duplicate door (`findDuplicateCandidates`) found a possible twin of
+   * this create (same kind, same name or strong identity, as a record or a
+   * pending proposal). An AI write is then proposed with the
+   * `POSSIBLE_DUPLICATE` reason (rung 2.1) and the reviewer decides; a
+   * person's write is never forced. Pair it with `data.duplicateCheck`.
+   */
+  possibleDuplicate?: boolean;
+  /**
+   * The duplicate door's answer for this create, stored at the TOP LEVEL of the
+   * proposal's `data` (pending row AND auto-approve receipt) so the review card
+   * can show "looks like X". Read back with `readDuplicateCheck`.
+   */
+  duplicateCheck?: DuplicateCheck;
   /**
    * The write MOVES a lifecycle status (work model W14) — set ONLY by the
    * `moveStatus` door and the create/attach doors for an initial status. Feeds
@@ -1160,6 +1203,8 @@ interface AnonymousPolicyFacts {
   forcePropose: boolean;
   /** rung 2.1 (criteria) — an AI write that changes a session's criteria. */
   criteriaChange: boolean;
+  /** rung 2.1 (duplicate) — an AI create the duplicate door found a possible twin of. */
+  possibleDuplicate: boolean;
   /** rungs 2.075/2.85/2.86 — a lifecycle move, classified by the moveStatus door. */
   lifecycleMove: { intoTerminal: boolean; humanOnly: boolean } | undefined;
   /** rung 2.07 — 4d's pod-admin schema-change floor, resolved on the human principal. */
@@ -1209,6 +1254,7 @@ type ExhaustiveAgentPolicyInput = AgentPolicyInput &
  *                            write acts for — not on an agent row.
  *   2.1  forcePropose      — FIRES (previously hand-mirrored here).
  *   2.1  criteriaChange    — FIRES (an AI write changing a session's criteria).
+ *   2.1  possibleDuplicate — FIRES (an AI create with a possible twin).
  *   2.5  DESTRUCTIVE       — FIRES (previously hand-mirrored here).
  *   2.55 UNTRUSTED ORIGIN  — FIRES. **THIS IS THE FIX.** This path never
  *                            resolved an acting channel at all, so a write from
@@ -1263,6 +1309,7 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     subjectUoValidated: facts.subjectUoValidated,
     forcePropose: facts.forcePropose,
     criteriaChange: facts.criteriaChange,
+    possibleDuplicate: facts.possibleDuplicate,
     lifecycleMove: facts.lifecycleMove,
     podAdminSchemaChange: facts.podAdminSchemaChange,
     governanceRuleVerdict: facts.governanceRuleVerdict,
@@ -1285,6 +1332,10 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     capabilityExecMode: undefined, // rung 2.7
     ceilingVerdict: undefined, // rung 2.56 — DEFERRED (see table above)
     allowDestructiveAutoApprove: undefined, // never: no "Crazy" mode here
+    // B3: the own-organise class needs an ATTRIBUTED agent and its key's own
+    // records — an unattributed write is never "its own".
+    ownWorkOrganise: undefined,
+    governanceRuleIsOwnOrganise: undefined,
   };
   return input;
 }
@@ -1367,7 +1418,8 @@ async function evaluatePermission(
   const grantDenied = await grantWriteDenial({
     subjectType,
     action,
-    workspaceId,
+    workspaceId:
+      opts.grantWorkspaceId !== undefined ? opts.grantWorkspaceId : workspaceId,
     projectId,
     data: data as Record<string, unknown> | undefined,
   });
@@ -1520,6 +1572,7 @@ async function evaluatePermission(
               subjectType,
               action,
               data,
+              duplicateCheck: opts.duplicateCheck,
               // The caller's reasoning only — the role line is the POD's
               // sentence, so it answers the caller and the notification
               // (`policyReason`), never the row's WHY.
@@ -1594,6 +1647,7 @@ async function evaluatePermission(
               subjectType,
               action,
               data,
+              duplicateCheck: opts.duplicateCheck,
               // As the agent branch above: the role line is policy, not the
               // proposer's WHY.
               reasoning: opts.reasoning,
@@ -1634,6 +1688,7 @@ async function evaluatePermission(
         subjectType,
         action,
         data,
+        duplicateCheck: opts.duplicateCheck,
         reasoning: opts.reasoning,
       });
     }
@@ -1691,8 +1746,9 @@ async function evaluatePermission(
     // apply door checks. A missing/unresolvable profile is left to apply
     // (NOT_FOUND there), mirroring 4c. A FAILED membership read throws into the
     // catch below (deny); it never reads as "not an admin".
-    const isAiWrite =
-      Boolean(agentUserId) || source === "ai" || source === "intelligence";
+    // ONE predicate, shared with the doors that decide before the gate
+    // (utils/ai-write.ts), so a door and the gate never disagree on "AI".
+    const isAiWrite = isAiWriteRequest({ agentUserId, source });
     let podAdminSchemaChange = false;
     if (
       subjectType === "property_def" &&
@@ -1775,6 +1831,11 @@ async function evaluatePermission(
     // all three axes.
     const isAgentCriteriaChange =
       isAiWrite && isFocusSessionCriteriaUpdate(subjectType, action, data);
+    // A create the duplicate door found a possible twin of (B2c): an AI write
+    // is filed anyway, as a proposal, and the reviewer decides. A person's own
+    // create is never forced (B2e) — `isAiWrite` keeps the human path out.
+    const isAgentPossibleDuplicate =
+      isAiWrite && opts.possibleDuplicate === true;
 
     const effectiveForcePropose =
       opts.forcePropose === true || isLooseningSettingsChange
@@ -1875,7 +1936,11 @@ async function evaluatePermission(
         subjectUoValidated,
         forcePropose: effectiveForcePropose,
         criteriaChange: isAgentCriteriaChange,
+        possibleDuplicate: isAgentPossibleDuplicate,
         lifecycleMove: opts.lifecycleMove,
+        // B3: a session that forces every write keeps forcing (effective
+        // forcePropose above wins at 2.1); the proof only reaches the store.
+        ownWorkOrganise: opts.ownWorkOrganise,
         podAdminSchemaChange,
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
         // owner let the ladder classify origin trust server-side and force-propose
@@ -1917,8 +1982,34 @@ async function evaluatePermission(
       // "update") — the SUBJECT is `targetType`. So the recursion guard it
       // documents has never actually fired on the chat path. Here the subject is
       // in hand and the guard is real.
+      // The write's PROJECT for the receipt key — a receipt is per (client,
+      // project) since B4 (2026-10-21). The same ladder the pending door uses
+      // (`createPendingProposalRow`): the caller's project, else the
+      // conversation's declared focus (rung 3.5). Read only when a receipt is
+      // about to be chosen, so a named session costs no lookup.
+      //
+      // A session the MCP door DERIVED that is the client's auto-opened RECEIPT
+      // is re-keyed the same way: a write of another project goes to that
+      // project's receipt. A session the caller named, or one the client
+      // started, is never split (`derivedReceiptProjectFor` is undefined then).
+      const derivedReceiptProject =
+        sessionSource === "explicit"
+          ? undefined
+          : derivedReceiptProjectFor(sessionId);
+      const choosesReceipt =
+        !dryRun &&
+        !subjectType.startsWith("focus_session") &&
+        (!sessionId || derivedReceiptProject !== undefined);
+      const receiptProjectKey = choosesReceipt
+        ? (projectId ??
+          (agentUserId ? await getAgentFocusProjectId(agentUserId) : null))
+        : (projectId ?? null);
+      const rekeyedReceipt =
+        sessionId &&
+        derivedReceiptProject !== undefined &&
+        derivedReceiptProject !== receiptProjectKey;
       const governedSessionId =
-        sessionId ??
+        (rekeyedReceipt ? null : sessionId) ??
         (dryRun
           ? null
           : subjectType.startsWith("focus_session")
@@ -1934,7 +2025,7 @@ async function evaluatePermission(
                   userId,
                   agentUserId,
                   workspaceId,
-                  projectId,
+                  projectId: receiptProjectKey,
                   // Grouped by the calling client; an IS turn (no key-auth client)
                   // groups by the channel it acts in.
                   channelId: actingChannelId,
@@ -1957,6 +2048,13 @@ async function evaluatePermission(
                   }),
                 })
               ));
+
+      // Where this write was FILED, for the MCP reply (B4): the door names the
+      // session and hints when the write's project is not the session's. A
+      // no-op outside an MCP call; never for a dry run or a session's own update.
+      if (!dryRun && !subjectType.startsWith("focus_session")) {
+        recordWriteSessionFiling(governedSessionId, receiptProjectKey);
+      }
 
       // Re-stamp the frozen envelope ONLY when the hoist actually resolved a
       // session the caller did not supply. Same object otherwise, so every
@@ -1998,6 +2096,7 @@ async function evaluatePermission(
           subjectType,
           action,
           data,
+          duplicateCheck: opts.duplicateCheck,
           // The caller's reasoning only. gov.reason is the POLICY's sentence (why
           // a person must approve) — never the proposer's why; it rides beside
           // it as `policyReason` (undefined for the plain default-propose case).
@@ -2108,6 +2207,11 @@ async function evaluatePermission(
                 ...(sessionSlotClaimKey
                   ? { expectedKey: sessionSlotClaimKey }
                   : {}),
+                // The duplicate door's answer (B2): a clear check on a landed
+                // write still says it was checked.
+                ...(opts.duplicateCheck
+                  ? { duplicateCheck: opts.duplicateCheck }
+                  : {}),
                 ...(correlationId ? { correlationId } : {}),
                 ...(requestedEventId ? { requestedEventId } : {}),
                 // The model sometimes VOLUNTEERS a rationale for a write that
@@ -2160,6 +2264,8 @@ async function evaluatePermission(
               ...(getRequestGrant()?.clientId
                 ? { appId: getRequestGrant()?.clientId }
                 : {}),
+              // KEY ATTRIBUTION (0346): the key this request authenticated with.
+              ...callingKeyAttribution(),
             })
             .returning({ id: proposals.id });
           // Thread the receipt id back so the caller can stamp it onto the
@@ -2307,6 +2413,7 @@ async function evaluatePermission(
           subjectUoValidated,
           forcePropose: effectiveForcePropose,
           criteriaChange: isAgentCriteriaChange,
+          possibleDuplicate: isAgentPossibleDuplicate,
           lifecycleMove: opts.lifecycleMove,
           podAdminSchemaChange,
           governanceRuleVerdict: ruleMatch?.verdict,
@@ -2445,6 +2552,8 @@ async function evaluatePermission(
               ...(getRequestGrant()?.clientId
                 ? { appId: getRequestGrant()?.clientId }
                 : {}),
+              // KEY ATTRIBUTION (0346): the key this request authenticated with.
+              ...callingKeyAttribution(),
             })
             .returning({ id: proposals.id });
           autoApprovedProposalId = receipt?.id;
@@ -2476,6 +2585,7 @@ async function evaluatePermission(
         subjectType,
         action,
         data,
+        duplicateCheck: opts.duplicateCheck,
         // The caller's reasoning; the engine's per-rung sentence + its
         // structured reasonCode ride beside it — parity with the agent path.
         // Both are undefined for the plain default-propose case.
@@ -2799,6 +2909,100 @@ export async function resolveSpaceOpNames(
 }
 
 /**
+ * The name a focus-session proposal title gives the session it acts on: the
+ * display-only `sessionName` the proposing door resolved with
+ * `resolveSessionTitle` (`session-update-goal.ts`), else `targetName` (the
+ * title door at filing, `resolveProposalTargetName`), else the payload's goal
+ * through the same resolver — rows filed before `sessionName` existed.
+ */
+function sessionLabelOf(data: Record<string, unknown>): string | null {
+  return (
+    payloadName(data.sessionName) ??
+    payloadName(data.targetName) ??
+    (resolveSessionTitle({
+      goal: typeof data.goal === "string" ? data.goal : null,
+    }) ||
+      null)
+  );
+}
+
+/**
+ * The title of a session FILING: one lead sentence for the first place it
+ * changes, then a clause for each other one, in a fixed order — track step
+ * (checked first: a filing that also sets the project names the project as a
+ * consequence of the track), project, space. Names are the display-only fields
+ * the filing door carries; a stage with no name humanizes through the
+ * vocabulary, never leaks as a key.
+ */
+function sessionFilingSummary(data: Record<string, unknown>): string {
+  const name = sessionLabelOf(data);
+  const sessionNoun = resolveObjectNoun("session").toLowerCase();
+  const parts: Array<{ lead: string; tail: string }> = [];
+  const trackProject = payloadName(data.trackProjectName);
+  if ("trackId" in data) {
+    const what = name ? `"${name}"` : sessionNoun;
+    if (data.trackId === null) {
+      parts.push({
+        lead: `Unfile ${what} from its track`,
+        tail: "unfile it from its track",
+      });
+    } else {
+      const track =
+        payloadName(data.trackName) ??
+        `a ${resolveObjectNoun("track").toLowerCase()}`;
+      const step =
+        payloadName(data.stageName) ??
+        (typeof data.trackStage === "string" && data.trackStage
+          ? humanizeToken(data.trackStage)
+          : null);
+      const where = `${track}${step ? ` · ${step}` : ""}${
+        trackProject ? ` (and into project "${trackProject}")` : ""
+      }`;
+      parts.push({
+        lead: `File ${what} into ${where}`,
+        tail: `file it into ${where}`,
+      });
+    }
+  }
+  if ("projectId" in data && !trackProject) {
+    const what = name ? `${sessionNoun} "${name}"` : sessionNoun;
+    const project = payloadName(data.projectName);
+    if (data.projectId === null) {
+      parts.push({
+        lead: `Unfile ${what}`,
+        tail: "take it out of its project",
+      });
+    } else {
+      const where = project ? ` into "${project}"` : " into a project";
+      parts.push({ lead: `File ${what}${where}`, tail: `file it${where}` });
+    }
+  }
+  if ("workspaceId" in data) {
+    if (data.workspaceId === null) {
+      const what = name ? `${sessionNoun} "${name}"` : sessionNoun;
+      parts.push({ lead: `Make ${what} personal`, tail: "make it personal" });
+    } else {
+      const head = buildObjectActionTitle({
+        action: "move",
+        objectKind: "focus_session",
+        objectName: name ?? undefined,
+      });
+      const space = spacePhrase(data.workspaceName);
+      parts.push({ lead: `${head} to ${space}`, tail: `move it to ${space}` });
+    }
+  }
+  const [first, ...rest] = parts;
+  if (!first) {
+    return buildObjectActionTitle({
+      action: "update",
+      objectKind: "focus_session",
+      objectName: name ?? undefined,
+    });
+  }
+  return [first.lead, ...rest.map((p) => p.tail)].join(" and ");
+}
+
+/**
  * Build a short human-readable summary of what's being proposed.
  * Example: `Create task "Design new onboarding flow"`
  *          `Delete entity ent_abc`
@@ -2848,77 +3052,32 @@ export function buildProposalSummary(
     action === "update" &&
     data.status === "closed"
   ) {
-    const goal =
-      (typeof data.goal === "string" && data.goal.trim()
-        ? data.goal
-        : undefined) ??
-      (typeof data.targetName === "string" && data.targetName.trim()
-        ? data.targetName
-        : undefined);
-    return goal ? `Complete session "${goal}"` : "Complete focus session";
+    const name = sessionLabelOf(data);
+    return name ? `Complete session "${name}"` : "Complete focus session";
   }
   // focus_session HAND-OFF — an agent putting another agent on the roster
   // (`services/focus-sessions/agent-hand-off.ts`). Names who gets the work.
   if (subjectType === "focus_session" && action === "assign_agent") {
-    const goal =
-      typeof data.goal === "string" && data.goal.trim() ? data.goal : undefined;
+    const name = sessionLabelOf(data);
     const agent =
       typeof data.agentName === "string" && data.agentName.trim()
         ? data.agentName
         : "another agent";
-    return goal
-      ? `Hand session "${goal}" to ${agent}`
+    return name
+      ? `Hand session "${name}" to ${agent}`
       : `Hand a session to ${agent}`;
   }
-  // focus_session TRACK FILING (adopt existing work into a step). Checked
-  // BEFORE the project branch: a filing that also sets the project names the
-  // project as a consequence of the track, not as the headline. Names are the
-  // display-only fields `updateFocusSession` carries; a stage with no name
-  // humanizes through the vocabulary, never leaks as a key.
+  // focus_session FILING — where a session belongs (its track step, its
+  // project, its space) is the person's call, so the title says it is a move
+  // and names EVERY place it changes, never the generic "Update session"
+  // (review-theatre: approving what you cannot read). An agent's filing is its
+  // own proposal carrying only these fields (`session-filing-gate.ts`).
   if (
     subjectType === "focus_session" &&
     action === "update" &&
-    "trackId" in data
+    ("trackId" in data || "projectId" in data || "workspaceId" in data)
   ) {
-    const goal =
-      typeof data.goal === "string" && data.goal.trim() ? data.goal : null;
-    const what = goal
-      ? `"${goal}"`
-      : resolveObjectNoun("session").toLowerCase();
-    if (data.trackId === null) return `Unfile ${what} from its track`;
-    const track =
-      typeof data.trackName === "string" && data.trackName.trim()
-        ? data.trackName
-        : `a ${resolveObjectNoun("track").toLowerCase()}`;
-    const step =
-      typeof data.stageName === "string" && data.stageName.trim()
-        ? data.stageName
-        : typeof data.trackStage === "string" && data.trackStage
-          ? humanizeToken(data.trackStage)
-          : null;
-    const project =
-      typeof data.trackProjectName === "string" && data.trackProjectName.trim()
-        ? ` (and into project "${data.trackProjectName}")`
-        : "";
-    return `File ${what} into ${track}${step ? ` · ${step}` : ""}${project}`;
-  }
-  // focus_session FILING — which project a session belongs to is the person's
-  // call, so the title must say it is a move and name WHERE, not the generic
-  // "Update session" (review-theatre: approving what you cannot read).
-  if (
-    subjectType === "focus_session" &&
-    action === "update" &&
-    "projectId" in data
-  ) {
-    const goal =
-      typeof data.goal === "string" && data.goal.trim() ? data.goal : null;
-    const what = goal ? `session "${goal}"` : "session";
-    if (data.projectId === null) return `Unfile ${what}`;
-    const where =
-      typeof data.projectName === "string" && data.projectName.trim()
-        ? ` into "${data.projectName}"`
-        : " into a project";
-    return `File ${what}${where}`;
+    return sessionFilingSummary(data);
   }
   // focus_session create — "Start session …" when a goal is present
   if (subjectType === "focus_session" && action === "create") {
@@ -3066,12 +3225,19 @@ export function buildProposalSummary(
   // case degrades to a readable phrase instead of a severed sentence. Rare
   // before this week: `focus_session.update` only started reaching the gate
   // when criteria updates began proposing.
+  //
+  // An update names the session by the display-only `sessionName` its door
+  // resolved when it was filed (`session-update-goal.ts`): the payload no
+  // longer carries the goal unless it changes, and a rename's `title` is the
+  // name it WILL have, not the one the reviewer knows it by.
   const sessionName =
     subjectType === "focus_session"
-      ? resolveSessionTitle({
+      ? (payloadName(data.sessionName) ??
+        (resolveSessionTitle({
           title: (data.title ?? data.targetName) as string | null | undefined,
           goal: data.goal as string | null | undefined,
-        }) || undefined
+        }) ||
+          undefined))
       : undefined;
   // goal is a first-class label for focus_session (and harmless elsewhere)
   const objectName =
@@ -3700,6 +3866,8 @@ async function createProposal(args: {
   nodeId?: string | null;
   /** See `SessionSource` (@synap/database). Carried beside the envelope, which has no such slot. */
   sessionSource?: "explicit" | "derived";
+  /** The duplicate door's answer (B2) — top level, beside the envelope, like `expectedLabel`. */
+  duplicateCheck?: DuplicateCheck;
   // Returns PermissionResult — the proposed envelope on success, OR a denial
   // when the agent's daily proposal budget is exhausted (the F2 safety floor).
 }): Promise<PermissionResult> {
@@ -3718,6 +3886,7 @@ async function createProposal(args: {
     stepRunId,
     nodeId,
     sessionSource,
+    duplicateCheck,
   } = args;
   // Identity off the boundary-minted AccessContext; provenance off the frozen
   // per-request slice. Same values as the old loose params — now single-sourced.
@@ -3733,7 +3902,14 @@ async function createProposal(args: {
     projectId,
   } = envelope.provenance;
 
-  const targetId = (data.documentId ||
+  // An ENTITY write names its record in `data.id`; a `documentId` beside it is
+  // the body being attached, not the target. Read first, it filed every body
+  // attach against the document: the record's pending changes, the card's
+  // name and before-values, and revert all looked at the wrong row.
+  const targetId = ((subjectType === "entity" || subjectType === "entities"
+    ? data.id || data.entityId
+    : undefined) ||
+    data.documentId ||
     data.entityId ||
     data.id ||
     randomUUID()) as string;
@@ -4007,6 +4183,8 @@ async function createProposal(args: {
     // — `readProposalExpectedLabel` is the ONE reader.
     ...(expectedLabel ? { expectedLabel } : {}),
     ...(expectedKey ? { expectedKey } : {}),
+    // The duplicate door's answer (B2) — `readDuplicateCheck` is the one reader.
+    ...(duplicateCheck ? { duplicateCheck } : {}),
   };
 
   // G1 PEEK-BEFORE-EVENT: for an agent-authored write that exactly matches an
@@ -4516,6 +4694,12 @@ export async function resolveProposalTargetName(
   targetId: string,
   data: Record<string, unknown>
 ): Promise<string | undefined> {
+  // A session update names its session by the display name its door resolved
+  // (`session-update-goal.ts`) — not by a goal it may be CHANGING.
+  if (subjectType === "focus_session") {
+    const named = stringField(data, "sessionName");
+    if (named) return named;
+  }
   const inline =
     stringField(data, "goal") ??
     stringField(data, "title") ??
@@ -4537,15 +4721,16 @@ export async function resolveProposalTargetName(
     }
   }
 
-  // Mirror entity title lookup for focus sessions (goal is the display name).
+  // Mirror entity title lookup for focus sessions, named by the ONE
+  // display-name door (title, else the goal's first line).
   if (subjectType === "focus_session" && isLikelyUUID(targetId)) {
     try {
       const [session] = await db
-        .select({ goal: focusSessions.goal })
+        .select({ title: focusSessions.title, goal: focusSessions.goal })
         .from(focusSessions)
         .where(eq(focusSessions.id, targetId))
         .limit(1);
-      return session?.goal ?? undefined;
+      return session ? resolveSessionTitle(session) || undefined : undefined;
     } catch {
       return undefined;
     }

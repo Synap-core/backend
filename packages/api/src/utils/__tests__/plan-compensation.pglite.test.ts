@@ -93,12 +93,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
-  entities,
-  relations,
-  entityFacets,
-  links,
   focusSessions,
-  projects,
   proposals,
   chatTurns,
   playbookRuns,
@@ -111,6 +106,7 @@ import {
   type PlanCallers,
 } from "../materialize-composite.js";
 import { buildPlanCallers } from "../plan-callers.js";
+import { allSchemaTables } from "../../__tests__/pglite-ddl.js";
 
 const USER = "user-1";
 type Database = typeof DatabaseHandle;
@@ -141,18 +137,10 @@ function ddlFor(table: PgTable): string {
 
 async function freshDb() {
   const client = new PGlite();
-  for (const table of [
-    entities,
-    relations,
-    entityFacets,
-    links,
-    focusSessions,
-    projects,
-    proposals,
-    chatTurns,
-    playbookRuns,
-  ]) {
-    await client.exec(ddlFor(table as unknown as PgTable));
+  // Every schema table: a hand-picked list rots the day the code under test
+  // reads one more (pglite-ddl.ts allSchemaTables).
+  for (const table of allSchemaTables()) {
+    await client.exec(ddlFor(table));
   }
   await client.exec(`
     create schema pgboss;

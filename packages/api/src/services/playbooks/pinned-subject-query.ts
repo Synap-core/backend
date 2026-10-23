@@ -8,14 +8,16 @@
  */
 import {
   getDb,
-  eq,
   and,
   asc,
   desc,
   inArray,
   entities,
   drizzleSql,
+  profileSlugScopeCondition,
+  listableEntityWhere,
 } from "@synap/database";
+import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 import { entityQueryVisibilityWhere } from "@synap/jobs/workers/entity-query-scope.js";
 import {
   numericPropertyExpr,
@@ -81,7 +83,17 @@ export async function loadVisibleEntityIds(args: {
     inArray(entities.id, [...args.ids]),
     visibilityFor(args.workspaceId, args.ownerId),
   ];
-  if (args.profileSlug) conditions.push(eq(entities.type, args.profileSlug));
+  if (args.profileSlug) {
+    // The kind-aware door: a role-subject playbook's pins are its WEARERS,
+    // whose `entities.type` is their primary kind, never the role slug.
+    conditions.push(
+      await profileSlugScopeCondition(
+        db,
+        args.profileSlug,
+        await resolveFacetVisibilityScope(args.ownerId, args.workspaceId)
+      )
+    );
+  }
   const rows = await db
     .select({ id: entities.id })
     .from(entities)
@@ -99,11 +111,23 @@ export async function findFallbackSubject(args: {
   workspaceId: string | null;
   ownerId: string;
   fallback: PinnedFallback;
+  /** The project the run files into: its demo records may be chosen. */
+  projectId?: string | null;
 }): Promise<string | null> {
   const db = await getDb();
   const conditions = [
-    eq(entities.type, args.profileSlug),
+    // The kind-aware door: a role's wearers carry their primary kind in `type`.
+    await profileSlugScopeCondition(
+      db,
+      args.profileSlug,
+      await resolveFacetVisibilityScope(args.ownerId, args.workspaceId)
+    ),
     visibilityFor(args.workspaceId, args.ownerId),
+    // THE listing rule: a fallback is a pick from a LIST ("the oldest open
+    // deal"), so it never lands on a probe or demo row — except the demo
+    // rows of the project this run files into. (The pinned ids above are
+    // chosen by id and stay open.)
+    listableEntityWhere({ revealSampleOf: args.projectId }),
   ];
   for (const condition of parseQueryFilterConditions(
     args.fallback.filter,

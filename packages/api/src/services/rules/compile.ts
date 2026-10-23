@@ -227,20 +227,16 @@ export function compileRuleSentence(
     );
   }
 
-  // `run_command` compiles to a `type:"command"` node, which the schema that
-  // owns it documents as a DEAD END end-to-end (`CommandNodeDef`,
-  // `packages/database/src/schema/automations.ts`): `executeCommandStep` resolves
-  // `commandId` as an IS background-task row, the shipped `intelligence_execute`
-  // has ZERO occurrences in the IS, so the lookup 404s and the step THROWS.
-  // Compiling it would produce exactly what this module exists to prevent — a
-  // rule that validates green, is created active, and dies at run time. The node
-  // type is kept alive for stored rows from the two doors that already emit it;
-  // it must not gain a third.
+  // `run_command` compiles to a `type:"command"` node, a deprecated node type
+  // (`CommandNodeDef`, `packages/database/src/schema/automations.ts`). It used to
+  // 404 at run time; it now runs its prompt through `ai.generate`, so a rule
+  // that wants an AI step names that verb directly instead of gaining a third
+  // door that emits the deprecated node.
   const deadEnd = configured.find((a) => a.type === "run_command");
   if (deadEnd) {
     return fail(
       "THEN",
-      "Running a command is not available: the command step has no receiver and would fail every time this rule fires. Use an AI step (`ai.generate`) instead."
+      "Running a command is retired for new rules. Use an AI step (`ai.generate`) instead."
     );
   }
 

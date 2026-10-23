@@ -33,24 +33,29 @@ vi.mock(
 // ../tools/resolve-tool.ts). Deliberately UNSCOPED (no workspaceId passed) —
 // this is a pod-wide ops-alert channel, not a per-workspace feature; see the
 // "pod-wide" test below.
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
   const mk = (name: string) =>
     new Proxy(
       { __table: name },
       { get: (t, p) => (p in t ? (t as never)[p] : `${name}.${String(p)}`) }
     );
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     db: { query: { tools: { findMany: h.findMany } } },
     eq: (col: unknown, val: unknown) => ({ op: "eq", col, val }),
     and: (...xs: unknown[]) => ({ op: "and", xs }),
     or: (...xs: unknown[]) => ({ op: "or", xs }),
     isNull: (col: unknown) => ({ op: "isNull", col }),
     desc: (col: unknown) => ({ op: "desc", col }),
-    drizzleSql: (strings: TemplateStringsArray, ...vals: unknown[]) => ({
-      op: "sql",
-      strings,
-      vals,
-    }),
+    drizzleSql: Object.assign(
+      (strings: TemplateStringsArray, ...vals: unknown[]) => ({
+        op: "sql",
+        strings,
+        vals,
+      }),
+      // session-kind.ts builds a module-level drizzleSql.raw
+      { raw: (s: string) => ({ op: "sql.raw", s }) }
+    ),
     channels: mk("channels"),
     views: mk("views"),
     entities: mk("entities"),
@@ -63,7 +68,8 @@ vi.mock("@synap/database", () => {
 });
 // resolveTool imports `tools` from @synap/database/schema (not the re-export
 // above) and `asc`/`eq` straight from drizzle-orm.
-vi.mock("@synap/database/schema", () => ({
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
   tools: { name: "name", createdAt: "created_at" },
 }));
 // TOTAL replacement: whatever this factory omits does not exist for the whole

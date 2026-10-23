@@ -24,7 +24,8 @@ vi.mock("../middleware/audit-log.js", async () => {
   const { t } = await import("../init-trpc.js");
   return { auditLogMiddleware: t.middleware(({ next }) => next()) };
 });
-vi.mock("../services/library/readers.js", () => ({
+vi.mock("../services/library/readers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../services/library/readers.js")>()),
   libraryReaders: async (args: Record<string, unknown>) => {
     h.ran.push("readers");
     h.args.push(args);

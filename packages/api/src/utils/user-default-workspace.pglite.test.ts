@@ -123,8 +123,7 @@ describe("tripwire: no bare first-membership fallback by userId", () => {
   // Existence checks that do NOT pick a default (they ask "any membership?"),
   // each read and justified:
   const EXEMPT = new Set([
-    "routers/workspaces/invites.ts", // stale-user / removal: "still a member anywhere?"
-    "routers/hub-protocol/rest/setup.ts", // accept-invite: existing-user existence check
+    "routers/workspaces/invites.ts", // removeFromPod: "still a member anywhere?"
   ]);
 
   function walk(dir: string, out: string[] = []): string[] {

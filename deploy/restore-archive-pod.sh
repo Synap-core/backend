@@ -16,8 +16,12 @@ CALLBACK_URL="$2"
 CALLBACK_JWT="$3"
 CD="$(dirname "$0")"
 AGE_IDENTITY_FILE="${ARCHIVE_AGE_IDENTITY_FILE:-$CD/state/archive-identity.txt}"
-COMPOSE="docker compose -p synap-backend -f $CD/docker-compose.yml"
 SYNAP_DEPLOY_DIR="$(cd "$CD" && pwd)"; export SYNAP_DEPLOY_DIR
+# shellcheck source=/dev/null
+. "$CD/env-config.sh"
+PROJECT="$(envcfg_value COMPOSE_PROJECT_NAME)"; PROJECT="${PROJECT:-synap-backend}"
+COMPOSE="docker compose -p ${PROJECT} -f $CD/docker-compose.yml"
+HELPER_IMAGE="$(envcfg_value SYNAP_IMAGE_POD_AGENT)"
 # Containers are created by the HOST engine (host-request.sh): a compose `up`
 # run in this container mounts the host's nonexistent /deploy paths.
 # shellcheck source=/dev/null
@@ -81,6 +85,30 @@ tar xzf /tmp/pod-archive.tar.gz -C "$TMPDIR" 2>&1 || fatal "archive extraction f
 rm -f /tmp/pod-archive.tar.gz
 log "Archive extracted"
 
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1
+  else shasum -a 256 "$1" | cut -d' ' -f1; fi
+}
+# Decide what this archive can restore BEFORE anything is written: a restore
+# that replays the database and then refuses the files leaves a half pod.
+if [ -f "$TMPDIR/manifest.json" ]; then
+  # The dump must be the one the manifest describes.
+  want_db="$(sed -n 's/.*"database":{[^}]*"sha256":"\([0-9a-f]*\)".*/\1/p' "$TMPDIR/manifest.json")"
+  [ -n "$want_db" ] || fatal "the archive manifest names no database checksum"
+  [ -f "$TMPDIR/database.sql.gz" ] && [ "$(sha256_of "$TMPDIR/database.sql.gz")" = "$want_db" ] \
+    || fatal "database dump: checksum does not match the manifest"
+elif [ -f "$TMPDIR/volumes.tar.gz" ] && [ -s "$TMPDIR/volumes.tar.gz" ]; then
+  # A legacy archive (no manifest.json) holds host paths (/var/lib/docker/volumes/…):
+  # this script runs in pod-agent, where those paths are not the host's, so
+  # extracting here would write the files nowhere the pod reads. Refuse.
+  fatal "LEGACY_VOLUME_ARCHIVE — this archive's volumes hold host paths; restore them on the host (tar xzf volumes.tar.gz -C /) with the services stopped"
+elif [ "${RESTORE_ALLOW_NO_FILES:-}" != 1 ]; then
+  # A legacy archive made inside pod-agent may carry no files at all
+  # (an empty volumes.tar.gz): restoring one brings the database back without
+  # the files it points to. Never reported "completed" by default.
+  fatal "ARCHIVE_WITHOUT_FILES — this archive holds the database but none of the pod's files (a legacy archive); set RESTORE_ALLOW_NO_FILES=1 to restore the database alone"
+fi
+
 # Restore PostgreSQL
 if [ -f "$TMPDIR/database.sql.gz" ]; then
   log "Restoring database..."
@@ -103,16 +131,39 @@ if [ -f "$TMPDIR/database.sql.gz" ]; then
 fi
 
 # Restore volumes
-if [ -f "$TMPDIR/volumes.tar.gz" ]; then
-  if [ -s "$TMPDIR/volumes.tar.gz" ]; then
-    log "Restoring volumes..."
-    tar xzf "$TMPDIR/volumes.tar.gz" -C / 2>&1 || fatal "volume restore failed"
-    log "Volumes restored"
-  else
-    # archive-pod.sh writes a zero-byte volumes.tar.gz when the pod had no
-    # minio/typesense volumes: nothing to restore, not an error.
-    log "Volume archive is empty (pod had no volumes) — skipping"
-  fi
+if [ -f "$TMPDIR/manifest.json" ]; then
+  # One tarball per volume, listed in manifest.json with its
+  # file count and sha256 (archive-pod.sh). Each is checked, written into the
+  # pod's volume (found by its compose labels, created when absent) through a
+  # helper container, and the files counted back.
+  M="$(cat "$TMPDIR/manifest.json")"
+  keys="$(printf '%s\n' "$M" | grep -o '"name":"[a-z0-9_-]*","volume"' | sed 's/"name":"\([^"]*\)".*/\1/')"
+  [ -n "$keys" ] || fatal "the archive manifest lists no volumes"
+  case "$HELPER_IMAGE" in *@sha256:*) ;; *) fatal "ARCHIVE_HELPER_MISSING — no SYNAP_IMAGE_POD_AGENT digest pin in .env to write the volumes with" ;; esac
+  for key in $keys; do
+    entry="$(printf '%s\n' "$M" | grep -o "\"name\":\"${key}\",[^}]*}")"
+    files="$(printf '%s\n' "$entry" | sed -n 's/.*"files":\([0-9]*\).*/\1/p')"
+    want="$(printf '%s\n' "$entry" | sed -n 's/.*"sha256":"\([0-9a-f]*\)".*/\1/p')"
+    f="$TMPDIR/volumes/${key}.tar.gz"
+    [ -s "$f" ] || fatal "volume ${key}: missing from the archive"
+    [ "$(sha256_of "$f")" = "$want" ] || fatal "volume ${key}: checksum does not match the manifest"
+    vol="$(docker volume ls -q --filter "label=com.docker.compose.project=${PROJECT}" --filter "label=com.docker.compose.volume=${key}")"
+    if [ -z "$vol" ]; then
+      vol="${PROJECT}_${key}"
+      docker volume create --label "com.docker.compose.project=${PROJECT}" --label "com.docker.compose.volume=${key}" "$vol" >/dev/null \
+        || fatal "volume ${key}: could not create ${vol}"
+    fi
+    [ "$(printf '%s\n' "$vol" | grep -c .)" = 1 ] || fatal "volume ${key}: more than one volume of project ${PROJECT}"
+    log "Restoring volume ${key} into ${vol} (${files} files)..."
+    docker run --rm -i -e V=/v -v "${vol}:/v" --entrypoint sh "$HELPER_IMAGE" \
+      -c 'set -e; find "$V" -mindepth 1 -delete; tar xzf - -C "$V"' < "$f" || fatal "volume ${key}: restore failed"
+    got="$(docker run --rm -e V=/v -v "${vol}:/v:ro" --entrypoint sh "$HELPER_IMAGE" -c 'set -eo pipefail; find "$V" -type f | wc -l' | tr -d ' ')" \
+      || fatal "volume ${key}: could not count the restored files"
+    [ "$got" = "$files" ] || fatal "volume ${key}: ${got} files restored, the archive holds ${files}"
+  done
+  log "Volumes restored"
+else
+  log "WARN: RESTORE_ALLOW_NO_FILES=1 — the database was restored without the pod's files (the archive holds none)"
 fi
 
 rm -rf "$TMPDIR"

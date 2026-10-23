@@ -1,5 +1,5 @@
 /**
- * A `documents.get({ format: "readable" })` answer → what the console draws.
+ * A `documents.get` answer (`raw`, or `readable`) → what the console draws.
  *
  * The read is ALWAYS the viewer's own floor. A document the viewer cannot
  * read (NOT_FOUND, FORBIDDEN) is `hidden`: the page keeps its title card and

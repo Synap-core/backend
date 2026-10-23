@@ -78,17 +78,12 @@ vi.mock(
 );
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import {
-  users,
-  proposals,
-  governanceRules,
-  proposalClusterMutes,
-} from "@synap/database";
 import { recommendTightenForAllAgents } from "../recommend-tighten.js";
 import {
   handleGovernanceTightenScan,
   registerTightenRecommender,
 } from "@synap/jobs/workers/governance-tighten-cron.js";
+import { allSchemaTables } from "../../../__tests__/pglite-ddl.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -141,8 +136,10 @@ async function findings(): Promise<number> {
 
 describe("governance.tighten-scan cron → the real recommender", () => {
   beforeAll(async () => {
-    for (const t of [users, proposals, governanceRules, proposalClusterMutes]) {
-      await h.client!.exec(ddlFor(t as unknown as PgTable));
+    // Every schema table: a hand-picked list rots the day the code under test
+    // reads one more (pglite-ddl.ts allSchemaTables).
+    for (const t of allSchemaTables()) {
+      await h.client!.exec(ddlFor(t));
     }
     await q(
       `insert into users (id, user_type, created_by_user_id) values ($1, 'agent', $2)`,

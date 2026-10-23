@@ -44,7 +44,8 @@ vi.mock("../capabilities/propose-capability-enable.js", () => ({
   proposeCapabilityEnable,
 }));
 
-const { runPlaybook } = await import("./run-playbook.js");
+const { runPlaybook, checkUnattendedPlaybookReadiness } =
+  await import("./run-playbook.js");
 
 const INPUT = { playbookId: "pb-1", workspaceId: "ws-1", userId: "owner-1" };
 
@@ -72,6 +73,38 @@ describe("runPlaybook — unattended skill preflight", () => {
       "REACHED_SESSION_CREATION"
     );
     expect(findUnenabledPlaybookSkills).not.toHaveBeenCalled();
+    expect(proposeCapabilityEnable).not.toHaveBeenCalled();
+  });
+});
+
+// The propose-mode rule's gate (the `registerPlaybookReadinessGate` slot) is the
+// SAME rule: it must refuse exactly when the run spine would, file the request
+// the same way (owner-attributed), and say the same sentence.
+describe("checkUnattendedPlaybookReadiness — the propose-mode door's gate", () => {
+  beforeEach(() => {
+    instantiateSession.mockClear();
+    findUnenabledPlaybookSkills.mockClear();
+    proposeCapabilityEnable.mockClear();
+  });
+
+  it("skills off → not ready, owner's enable request filed, the spine's sentence", async () => {
+    const out = await checkUnattendedPlaybookReadiness(INPUT);
+    expect(out).toEqual({
+      ready: false,
+      message:
+        'Nothing ran: "Research a Question" uses skills that are not enabled yet (source-triage). A request to enable them is waiting for the owner\'s review: https://pod/open/proposal/prop-1',
+    });
+    expect(proposeCapabilityEnable).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "owner-1", agentUserId: null })
+    );
+    expect(instantiateSession).not.toHaveBeenCalled();
+  });
+
+  it("every skill on → ready, nothing filed", async () => {
+    findUnenabledPlaybookSkills.mockResolvedValueOnce([]);
+    expect(await checkUnattendedPlaybookReadiness(INPUT)).toEqual({
+      ready: true,
+    });
     expect(proposeCapabilityEnable).not.toHaveBeenCalled();
   });
 });

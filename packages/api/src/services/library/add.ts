@@ -1,5 +1,5 @@
 /**
- * Library ADD — keep something (CAPTURE_LIBRARY_PLAN L2, decision 3).
+ * Library ADD — keep something (capture-vs-library decision, wave L2, decision 3).
  *
  * `library.add` is `import.stage` without a batch to manage: items append to
  * the person's OPEN "Kept from <device>, <day>" run (one import session per

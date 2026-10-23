@@ -46,7 +46,7 @@ vi.mock("@synap/auth", () => ({
 vi.mock("../../access/guest-containment.js", () => ({
   refuseGuestSession: async (_c: unknown, next: () => Promise<void>) => next(),
 }));
-vi.mock("@synap/database", () => {
+vi.mock("@synap/database", async (importOriginal) => {
   const select = {
     select: () => select,
     from: () => select,
@@ -54,6 +54,7 @@ vi.mock("@synap/database", () => {
     limit: async () => [{ slug: "researcher" }],
   };
   return {
+    ...(await importOriginal<typeof import("@synap/database")>()),
     db: {
       query: {
         workspaceMembers: {

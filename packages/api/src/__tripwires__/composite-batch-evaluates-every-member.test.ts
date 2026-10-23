@@ -105,7 +105,11 @@ describe("TRIPWIRE: a composite batch is evaluated per member, not by one pair",
       const src = readFileSync(file, "utf8");
       // Cheap per-file precondition: a door that never evaluates members and
       // never forces must at least MENTION one of them somewhere in the file.
-      const evaluatesMembers = src.includes("captureGraphEventKeys");
+      // (`captureGraphMemberProposes` is the shared per-member evaluator both
+      // capture doors call; it runs `captureGraphEventKeys` itself.)
+      const evaluatesMembers =
+        src.includes("captureGraphEventKeys") ||
+        src.includes("captureGraphMemberProposes");
       for (const body of gateCallBodies(src)) {
         // Only composite batches are in scope.
         if (!/\boperations\s*:/.test(body)) continue;

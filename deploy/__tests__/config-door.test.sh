@@ -246,6 +246,23 @@ grep -qxE "compose (--profile pod-agent )?up -d --no-deps backend kratos postgre
 grep -E "prune|down|volume|--remove-orphans|rm -f" "$FAKE_LOG" && bad "apply ran a destructive command" || ok "apply never prunes, downs or touches volumes"
 printf 'NODE_VERSION=20\n' >> "$DEPLOY/.env"
 synap apply; [ $? != 0 ] && ! grep -q "compose up" "$FAKE_LOG" && ok "apply refuses an invalid .env before recreating anything" || bad "apply ran on an invalid .env"
+# … and what a VALID .env derives is validated before anything is recreated
+# on it: kratos.yml (here a CP-delivered OIDC client with an http issuer).
+reset_env; mkdir -p "$REPO/kratos"; echo 'CONTROL_PLANE_URL=https://cp.example.com' >> "$DEPLOY/.env"
+printf '#!/usr/bin/env bash\necho "{\\"delivered\\":true}"\n' > "$TMP/bin/curl"; chmod +x "$TMP/bin/curl"
+cat > "$TMP/bin/docker-oidc" <<'D'
+#!/usr/bin/env bash
+case "$*" in *"field-crypto.js federation-oidc-client"*) echo "pod:pod.example.com|s3cret|${FAKE_ISSUER}"; exit 0 ;; esac
+exec "$(dirname "$0")/docker-real" "$@"
+D
+mv "$TMP/bin/docker" "$TMP/bin/docker-real"; mv "$TMP/bin/docker-oidc" "$TMP/bin/docker"; chmod +x "$TMP/bin/docker"
+FAKE_ISSUER=https://cp.example.com synap apply; rc=$?
+good="$(cksum < "$REPO/kratos/kratos.yml" 2>/dev/null)"
+[ "$rc" = 0 ] && grep -q "issuer_url: https://cp.example.com" "$REPO/kratos/kratos.yml" && ok "apply: a valid derived kratos.yml is rendered and applied" || bad "apply good oidc (rc=$rc): $(tail -3 "$TMP/out")"
+FAKE_ISSUER=http://cp.example.com synap apply; rc=$?
+[ "$rc" != 0 ] && [ "$(cksum < "$REPO/kratos/kratos.yml")" = "$good" ] && ! grep -q "compose .*up" "$FAKE_LOG" && grep -q "issuer_url is not an https URL" "$TMP/out" \
+  && ok "apply: a derived kratos.yml that does not validate is refused, the previous one kept, nothing recreated" || bad "apply bad oidc (rc=$rc): $(tail -4 "$TMP/out") log=$(cat "$FAKE_LOG" | tr '\n' '|')"
+mv "$TMP/bin/docker-real" "$TMP/bin/docker"; rm -f "$TMP/bin/curl"; rm -rf "$REPO/kratos"
 
 # 13. sourced under dash — the pod-agent container's shell
 reset_env
@@ -309,16 +326,21 @@ host_takes; wait "$cp_pid"; rc=$?
 [ "$rc" = 0 ] && ! grep -qE '^(OPENCLAW_HUB_API_KEY|SYNAP_AGENT_USER_ID|SYNAP_WORKSPACE_ID)=' "$DEPLOY/.env" && [ "$(baks)" = 0 ] \
   && ok "configure-pod: an old CP's retired OpenClaw payload succeeds and writes nothing" || bad "configure-pod retired payload (rc=$rc): $(cat "$TMP/out")"
 
-# 16. update-agent.sh: pod-agent comes from the release's DIGEST pin, never a host build
+# 16. update-agent.sh: pod-agent comes from the release's DIGEST pin, never a host build,
+#     and the agent makes NO docker call (docker.sock plan step 2): the host's
+#     compose pulls the absent digest itself. The agent's docker calls go to
+#     their own log ($AGENT_LOG); the host's (host_takes) to $FAKE_LOG.
 cp "$HERE/deploy/update-agent.sh" "$DEPLOY/"
-agent_update() { : > "$FAKE_LOG"; ( cd "$TMP"; PATH="$TMP/bin:$PATH" HOST_REQUEST_PICKUP_SECONDS=20 HOST_REQUEST_POLL_SECONDS=1 dash "$DEPLOY/update-agent.sh" ) >"$TMP/out" 2>&1; }
+AGENT_LOG="$TMP/agent-docker.log"
+agent_update() { : > "$FAKE_LOG"; : > "$AGENT_LOG"; ( cd "$TMP"; PATH="$TMP/bin:$PATH" FAKE_LOG="$AGENT_LOG" HOST_REQUEST_PICKUP_SECONDS=20 HOST_REQUEST_POLL_SECONDS=1 dash "$DEPLOY/update-agent.sh" ) >"$TMP/out" 2>&1; }
 reset_env; D="ghcr.io/synap-core/pod-agent@sha256:$(printf 'd%.0s' $(seq 1 64))"
 printf 'SYNAP_IMAGE_POD_AGENT=%s\n' "$D" >> "$DEPLOY/.env"
 agent_update & au_pid=$!; host_takes; wait "$au_pid"; rc=$?
-[ "$rc" = 0 ] && grep -qx "pull $D" "$FAKE_LOG" && grep -qx "compose --profile pod-agent up -d --no-build --force-recreate --no-deps pod-agent" "$FAKE_LOG" \
-  && ok "update-agent pulls the pinned digest; the HOST recreates pod-agent from it (no build)" || bad "update-agent (rc=$rc): $(cat "$FAKE_LOG" "$TMP/out" "$TMP/host.out")"
+[ "$rc" = 0 ] && grep -qx "compose --profile pod-agent up -d --no-build --force-recreate --no-deps pod-agent" "$FAKE_LOG" \
+  && ok "update-agent: the HOST recreates pod-agent from the pinned digest (no build)" || bad "update-agent (rc=$rc): $(cat "$FAKE_LOG" "$TMP/out" "$TMP/host.out")"
+[ -s "$AGENT_LOG" ] && bad "update-agent made docker calls: $(tr '\n' '|' < "$AGENT_LOG")" || ok "update-agent makes no docker call"
 grep -E "(^| )build( |$)" "$FAKE_LOG" && bad "update-agent built an image" || ok "update-agent never builds"
 reset_env; printf 'SYNAP_IMAGE_POD_AGENT=ghcr.io/synap-core/pod-agent:latest\n' >> "$DEPLOY/.env"
-agent_update; [ $? != 0 ] && ! grep -q "compose" "$FAKE_LOG" && ok "update-agent refuses a mutable tag" || bad "update-agent accepted a tag: $(cat "$FAKE_LOG")"
-reset_env; agent_update; [ $? != 0 ] && ! grep -q "compose" "$FAKE_LOG" && ok "update-agent refuses a pod with no pin" || bad "update-agent ran without a pin"
+agent_update; [ $? != 0 ] && [ ! -s "$AGENT_LOG" ] && [ ! -e "$DEPLOY/state/requests/compose.json" ] && ok "update-agent refuses a mutable tag" || bad "update-agent accepted a tag: $(cat "$AGENT_LOG")"
+reset_env; agent_update; [ $? != 0 ] && [ ! -s "$AGENT_LOG" ] && [ ! -e "$DEPLOY/state/requests/compose.json" ] && ok "update-agent refuses a pod with no pin" || bad "update-agent ran without a pin"
 exit $fail

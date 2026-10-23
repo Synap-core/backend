@@ -256,7 +256,7 @@ online key that signs it. The pod trusts that chain, never the host:
    keys sorted, minus `_meta`, `contentHash` and `sourcePackage`).
 
 The full contract the Control Plane builds against is
-`docs/pod-console/open-hosting-and-catalog-signing.md` §B.8.
+[`architecture/official-catalog-signing.md`](architecture/official-catalog-signing.md).
 
 What a pod does with it:
 

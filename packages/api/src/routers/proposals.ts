@@ -88,6 +88,8 @@ import {
 import { loadEditableDocument } from "../utils/document-edit-access.js";
 import {
   buildProposalScopeConditions,
+  proposalIdsFilterSchema,
+  proposalIdsWhere,
   resolveAutomationStepRunIds,
 } from "./proposals/scope-conditions.js";
 import { createLogger } from "@synap-core/core";
@@ -113,15 +115,20 @@ import {
   assertCanRetargetProposalDestination,
   assertCanReviewProposal,
   assertMayDecideProposal,
+  assertMayDecideProposalAt,
   refuseAgentProposalApprover,
   reviewRefusalMessage,
 } from "./proposals/review-authority.js";
 export { type ReviewAuthorityReason } from "./proposals/review-authority.js";
 import {
   enrichProposalsForDisplay,
-  displayNameForUser,
+  actorDisplayName,
   findFlowNode,
 } from "./proposals/display.js";
+import {
+  loadKeyComputerNames,
+  loadMachineNames,
+} from "../services/machine-roster.js";
 import {
   rosterReadFor,
   sessionReadableWhere,
@@ -386,11 +393,7 @@ export const proposalsRouter = router({
          * This remains a filter only: workspace/user visibility predicates are
          * still applied below before any proposal can be returned.
          */
-        proposalIds: z
-          .array(z.string().uuid())
-          .max(100)
-          .transform((ids) => [...new Set(ids)])
-          .optional(),
+        proposalIds: proposalIdsFilterSchema.optional(),
         /** Filter to proposals originating from a specific chat thread */
         threadId: z.string().uuid().optional(),
         /** Filter to proposals linked to a specific focus session via correlationId */
@@ -478,7 +481,7 @@ export const proposalsRouter = router({
       }
 
       if (input.proposalIds && input.proposalIds.length > 0) {
-        conditions.push(inArray(proposals.id, input.proposalIds));
+        conditions.push(proposalIdsWhere(input.proposalIds));
       }
 
       if (input.excludeBookkeeping) {
@@ -822,6 +825,8 @@ export const proposalsRouter = router({
           targetId: proposals.targetId,
           data: proposals.data,
           agentUserId: proposals.agentUserId,
+          // The key that filed it names the computer (B7) — "on MacBook".
+          apiKeyId: proposals.apiKeyId,
           sessionId: proposals.sessionId,
           stepRunId: proposals.stepRunId,
           workspaceId: proposals.workspaceId,
@@ -868,7 +873,16 @@ export const proposalsRouter = router({
           rows.map((r) => r.agentUserId).filter((x): x is string => Boolean(x))
         ),
       ];
-      const agentLabelById = new Map<string, string | undefined>();
+      // Labelled per (agent, key): one agent user serves every computer it is
+      // connected from, and the filing key names which one (B7).
+      const agentRowById = new Map<
+        string,
+        Parameters<typeof actorDisplayName>[0]
+      >();
+      let agentHostNames: Parameters<typeof actorDisplayName>[1] = new Map();
+      const keyComputers = await loadKeyComputerNames(
+        rows.map((r) => r.apiKeyId)
+      );
       if (agentIds.length > 0) {
         const urows = await db
           .select({
@@ -877,11 +891,32 @@ export const proposalsRouter = router({
             email: users.email,
             userType: users.userType,
             agentMetadata: users.agentMetadata,
+            hostUserId: users.hostUserId,
           })
           .from(users)
           .where(inArray(users.id, agentIds));
-        for (const u of urows) agentLabelById.set(u.id, displayNameForUser(u));
+        const hostNames = await loadMachineNames(
+          urows
+            .map((u) => u.hostUserId)
+            .filter((id): id is string => typeof id === "string")
+        );
+        for (const u of urows) agentRowById.set(u.id, u);
+        agentHostNames = hostNames;
       }
+      const agentLabelOf = (r: {
+        agentUserId: string | null;
+        apiKeyId: string | null;
+      }): string | null => {
+        const u = r.agentUserId ? agentRowById.get(r.agentUserId) : undefined;
+        if (!u) return null;
+        return (
+          actorDisplayName(
+            u,
+            agentHostNames,
+            r.apiKeyId ? keyComputers.get(r.apiKeyId) : undefined
+          ) ?? null
+        );
+      };
 
       // A cluster's label is read off `data` — withhold session content the
       // viewer may not read (decision D1) before it is fingerprinted/labelled.
@@ -897,9 +932,7 @@ export const proposalsRouter = router({
         data: r.data,
         createdAt: r.createdAt,
         workspaceId: r.workspaceId ?? null,
-        agentLabel: r.agentUserId
-          ? (agentLabelById.get(r.agentUserId) ?? null)
-          : null,
+        agentLabel: agentLabelOf(r),
         agentUserId: r.agentUserId ?? null,
         sessionId: r.sessionId ?? null,
         automationId: r.stepRunId
@@ -1202,14 +1235,24 @@ export const proposalsRouter = router({
             email: users.email,
             userType: users.userType,
             agentMetadata: users.agentMetadata,
+            hostUserId: users.hostUserId,
           })
           .from(users)
           .where(eq(users.id, proposal.agentUserId))
           .limit(1);
+        const hostNames = await loadMachineNames(
+          u?.hostUserId ? [u.hostUserId] : []
+        );
+        // The filing key names the computer (B7): "Claude Code on MacBook".
+        const keyComputer = proposal.apiKeyId
+          ? (await loadKeyComputerNames([proposal.apiKeyId])).get(
+              proposal.apiKeyId
+            )
+          : undefined;
         targets.push({
           kind: "agent",
           id: proposal.agentUserId,
-          label: (u && displayNameForUser(u)) || "Agent",
+          label: (u && actorDisplayName(u, hostNames, keyComputer)) || "Agent",
         });
       }
 
@@ -1655,6 +1698,7 @@ export const proposalsRouter = router({
           // return below. Without it a rejection cannot find the board it
           // should hand the deliverable back to.
           sessionId: true,
+          projectId: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -1669,6 +1713,7 @@ export const proposalsRouter = router({
         await assertCanReviewProposal({
           proposal: {
             workspaceId: proposal.workspaceId,
+            projectId: proposal.projectId,
             data: proposal.data,
             agentUserId: proposal.agentUserId,
             targetType: proposal.targetType,
@@ -1821,6 +1866,7 @@ export const proposalsRouter = router({
           targetType: true,
           targetId: true,
           sessionId: true,
+          projectId: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -1833,6 +1879,7 @@ export const proposalsRouter = router({
       await assertCanReviewProposal({
         proposal: {
           workspaceId: proposal.workspaceId,
+          projectId: proposal.projectId,
           data: proposal.data,
           agentUserId: proposal.agentUserId,
           targetType: proposal.targetType,
@@ -1907,6 +1954,7 @@ export const proposalsRouter = router({
           targetType: true,
           targetId: true,
           sessionId: true,
+          projectId: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -1919,6 +1967,7 @@ export const proposalsRouter = router({
       await assertCanReviewProposal({
         proposal: {
           workspaceId: proposal.workspaceId,
+          projectId: proposal.projectId,
           data: proposal.data,
           agentUserId: proposal.agentUserId,
           targetType: proposal.targetType,
@@ -1974,6 +2023,7 @@ export const proposalsRouter = router({
           targetType: true,
           targetId: true,
           sessionId: true,
+          projectId: true,
         },
       });
       // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -2010,6 +2060,7 @@ export const proposalsRouter = router({
       await assertCanReviewProposal({
         proposal: {
           workspaceId: proposal.workspaceId,
+          projectId: proposal.projectId,
           data: proposal.data,
           agentUserId: proposal.agentUserId,
           targetType: proposal.targetType,
@@ -2254,6 +2305,8 @@ export const proposalsRouter = router({
           message: "Proposal not found",
         });
       }
+      // D3: undo executes with the reviewer's authority — where the key reaches.
+      assertMayDecideProposalAt("approve", "undo", proposal);
 
       // Recovery: a proposal already in the TERMINAL `reverted` status can be
       // re-proposed back to PENDING — but ONLY via reopen (a plain `revert({})`
@@ -2739,6 +2792,56 @@ export const proposalsRouter = router({
         // else: already restored (e.g. a concurrent revert won) — idempotent no-op.
 
         restoredEntityId = plan.entityId;
+      } else if (plan.kind === "move-status-back") {
+        // FB1020 B3: a status move is undone by moving it BACK through the
+        // one status door, as the person undoing it — its checks, its event
+        // and its automations run like any move. Compare-and-set: only while
+        // the thing still holds what the move set; a status someone changed
+        // since is theirs, and nothing is undone.
+        const { resolveStatusMoveTarget } = await import("@synap/database");
+        const { moveStatus } =
+          await import("../services/lifecycle/move-status.js");
+        const target = await resolveStatusMoveTarget(db, {
+          entityId: plan.entityId,
+          role: plan.role,
+          facetId: plan.facetId,
+          workspaceId: proposal.workspaceId ?? null,
+        });
+        if (!target.ok) {
+          throw new TRPCError({ code: "NOT_FOUND", message: target.reason });
+        }
+        const current = target.target.current;
+        if (current !== plan.movedTo && current !== plan.restoreTo) {
+          return {
+            success: false,
+            nothingReverted: true,
+            reverted: deleted,
+            partialFailures: [
+              `the status was changed since (now "${current ?? "none"}"), so it was kept`,
+            ],
+          };
+        }
+        if (current === plan.movedTo) {
+          const moved = await moveStatus({
+            entityId: plan.entityId,
+            role: plan.role,
+            facetId: plan.facetId,
+            expectedFrom: plan.movedTo,
+            to: plan.restoreTo,
+            actor: { kind: "human", userId },
+            workspaceId: proposal.workspaceId ?? null,
+            reason: "Undo",
+          });
+          if (moved.status !== "moved" && moved.status !== "unchanged") {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Undo could not move the status back (${moved.status}${
+                "reason" in moved && moved.reason ? `: ${moved.reason}` : ""
+              }).`,
+            });
+          }
+        }
+        // else: already back where it was — idempotent no-op.
       } else {
         // Everything the record names — entities, relations, facets, config
         // rows, and what a merge overwrote — through the ONE undo engine: one
@@ -2790,6 +2893,7 @@ export const proposalsRouter = router({
           (creations.undone.automationIds?.length ?? 0) +
           (creations.undone.ruleIds?.length ?? 0) +
           (creations.undone.propertyDiffs?.length ?? 0) +
+          (creations.undone.rowPatches?.length ?? 0) +
           (creations.undone.sessionIds?.length ?? 0) +
           (creations.undone.projectIds?.length ?? 0) +
           (creations.undone.linkIds?.length ?? 0) +
@@ -3319,6 +3423,7 @@ export const proposalsRouter = router({
             sourceMessageId: true,
             // Slot-return input — parity with the single `reject` door.
             sessionId: true,
+            projectId: true,
           },
         });
         // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
@@ -3327,6 +3432,7 @@ export const proposalsRouter = router({
         await assertCanReviewProposal({
           proposal: {
             workspaceId: target.workspaceId,
+            projectId: target.projectId,
             data: target.data,
             agentUserId: target.agentUserId,
             targetType: target.targetType,

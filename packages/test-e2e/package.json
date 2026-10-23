@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run",
+    "test:e2e": "vitest run",
     "test:watch": "vitest watch"
   },
   "dependencies": {
@@ -17,7 +17,8 @@
     "@trpc/server": "^11.8.1",
     "bcrypt": "^6.0.0",
     "dotenv": "^16.4.5",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "superjson": "^2.2.6"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",

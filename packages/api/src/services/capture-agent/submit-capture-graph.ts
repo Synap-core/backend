@@ -32,25 +32,24 @@ import {
 
 import {
   db,
-  resolveIdentity,
   extractIdentitySignals,
-  eq,
   and,
+  eq,
   or,
   isNull,
   entities,
-  projects,
+  ownerPrivateVisibleWhere,
   getWorkspaceMembership,
   ProfileResolutionService,
   PropertyValidationService,
   resolveGraphWorkspaceFromSlugs,
   reservedEntityKindReason,
   type WorkspacePlacement,
+  type ModeledField,
   deriveProposalProjectId,
 } from "@synap/database";
 import { getAgentFocusProjectId } from "../agent-identity-service.js";
 import type { PendingWorkspaceSwitch } from "../../lib/workspace-decision.js";
-import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { createLogger } from "@synap-core/core";
 import {
   type HubWriteSource,
@@ -75,7 +74,6 @@ import {
   type CapturePlanProblem,
   type PlanStepSummary,
 } from "./capture-plan.js";
-import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import {
   createEventBackedProposal,
   createAutoApprovedProposal,
@@ -88,11 +86,17 @@ import { makeExternalLinkIdempotency } from "../../utils/entity-link-idempotency
 import {
   computeCaptureGraphIdempotencyKey,
   findPriorCaptureGraphProposal,
-  findPendingSignalMatches,
-  type PendingSignalMatch,
 } from "../../utils/pending-capture-dedup.js";
+import type { DuplicateCheck } from "@synap-core/types/proposals";
+import {
+  findDuplicateCandidates,
+  loadOwnPendingCreates,
+  mergeDuplicateChecks,
+  type PendingQueue,
+} from "../duplicates/find-duplicate-candidates.js";
 import { openLink } from "../../utils/deep-links.js";
-import { captureGraphEventKeys } from "./capture-graph-policy.js";
+import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
+import { captureGraphMemberProposes } from "./capture-graph-governance.js";
 import { buildRuleLoopCallers } from "../../utils/rule-loop-callers.js";
 import {
   buildMaterializedRecord,
@@ -100,7 +104,10 @@ import {
   stampMaterialized,
 } from "../proposals/stamp-materialized.js";
 import { loadRelationTypeValidator } from "../../utils/relation-types.js";
-import { resolveCaptureProjectRef } from "./resolve-capture-project.js";
+import {
+  assertCaptureProjectPinVisible,
+  resolveCaptureProjectRef,
+} from "./resolve-capture-project.js";
 import {
   storedScopeOfProposal,
   type StoredCaptureScope,
@@ -138,6 +145,26 @@ export interface CaptureGraphUnmodeledEntity {
   label: string;
   profileSlug: string;
   unmodeled: Array<{ key: string; didYouMean?: string }>;
+}
+
+/**
+ * What each kind in the graph DOES model, by profile slug, through the lens
+ * the graph was validated in — the validator's own `modeled` list. Without it
+ * an `unmodeled` report only said what was wrong, never what was right.
+ */
+export type CaptureGraphModeledFields = Record<string, ModeledField[]>;
+
+/** The `modeledFields` entries for the kinds an `unmodeled` report names. */
+function modeledFieldsFor(
+  unmodeled: CaptureGraphUnmodeledEntity[],
+  modeledFields: CaptureGraphModeledFields
+): CaptureGraphModeledFields {
+  const out: CaptureGraphModeledFields = {};
+  for (const u of unmodeled) {
+    const fields = modeledFields[u.profileSlug];
+    if (fields) out[u.profileSlug] = fields;
+  }
+  return out;
 }
 
 /**
@@ -243,6 +270,8 @@ export interface CapturePlanStepReceipt extends PlanStepSummary {
   id: string | null;
   /** `create_project` only: the pod's evidence verdict. */
   evidence?: PlanProjectEvidence;
+  /** An applied skill step with a slug: the call that loads it. */
+  loadWith?: string;
 }
 
 /** True when a plan input carries any step. */
@@ -321,6 +350,9 @@ function planStepReceipts(
       ...(op.op === "create_project" && op.evidence
         ? { evidence: op.evidence }
         : {}),
+      ...(idsByOpIndex && step.slug
+        ? { loadWith: `synap_load_skill({ ref: "${step.slug}" })` }
+        : {}),
     };
   });
 }
@@ -344,9 +376,9 @@ export interface SubmitCaptureGraphInput {
   projectId?: string | null;
   /**
    * A project NAME-ref (piece D). Resolved to `projectId` via an EXACT slug
-   * match on the caller's OWN projects (a rung-1 pin). No match → NOT linked
-   * (the widening-access law forbids auto-linking a guess); surfaced on the
-   * result as `projectCandidate`. Ignored when `projectId` is already set.
+   * match on the caller's OWN projects (a rung-1 pin). No match → the whole
+   * capture is REFUSED (`CaptureProjectNotFoundError`, naming the closest
+   * projects), like an unknown id (B9e). Ignored when `projectId` is set.
    */
   projectName?: string | null;
   /** Origin signal carried through the proposal into entity materialization. */
@@ -458,30 +490,25 @@ export interface SubmitCaptureGraphResult {
    */
   unmodeledProperties?: CaptureGraphUnmodeledEntity[];
   /**
-   * ADVISORY in-flight-duplicate warnings: incoming graph entities whose STRONG
-   * signal (email/phone/url/handle) collides with a create_entity op in the
-   * caller's OWN pending capture/import proposal. NEVER auto-linked — a pending
-   * proposal can still be rejected, so linking to it would stale-suppress a real
-   * write. Surfaced so the caller/agent can wait for review instead of filing a
-   * second copy. Omitted when nothing collides.
+   * What the kinds named in `unmodeledProperties` DO model (key, type,
+   * options, limits). Present exactly when `unmodeledProperties` is.
    */
-  pendingDuplicateCandidates?: Array<{
-    /** The incoming graph entity ref that collided. */
-    ref: string;
-    title: string;
-    matches: PendingSignalMatch[];
-  }>;
+  modeledFields?: CaptureGraphModeledFields;
   /**
-   * A `projectName` that matched no project of the caller (piece D). Advisory
-   * only — surfaced so the caller can confirm/create it; NEVER auto-linked.
+   * The duplicate door's answer for this graph (B2), each candidate tagged
+   * with the item it is for (`forRef`/`forTitle`): a same-kind record or one
+   * of the caller's own pending creates with the same name or strong identity.
+   * NEVER auto-linked (only a strong identity on a record links). An agent's
+   * graph with a `possible` twin is filed for review (POSSIBLE_DUPLICATE).
+   * Omitted when the door found nothing (`clear`).
    */
-  projectCandidate?: { name: string };
+  duplicateCheck?: DuplicateCheck;
   /**
    * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
-   * membership, `not_linked` (+reason: `project-not-found` for a dead UUID pin,
-   * `project-name-unmatched` for a name-ref that matched nothing) so a requested
-   * project that did NOT link is NAMED, never a silent success. Omitted when no
-   * project was requested.
+   * membership. Omitted when no project was requested. Neither a dead UUID
+   * pin nor an unmatched project NAME gets here: the whole capture is refused
+   * (`CaptureProjectNotFoundError`), so this core no longer produces
+   * `not_linked`; the member stays because the receipt type is shared.
    */
   project?:
     | { status: "linked"; projectId: string }
@@ -530,9 +557,6 @@ export interface SubmitCaptureGraphResult {
  * every relation/binding ref exists among `entities` (the HTTP door does this;
  * mappers construct refs by hand so they're always valid).
  */
-/** Bounds on the persisted duplicate advisory — a risk signal, not an entity dump. */
-const DUPLICATE_ADVISORY_MAX_CANDIDATES = 25;
-const DUPLICATE_ADVISORY_MAX_MATCHES_PER_CANDIDATE = 5;
 
 type CaptureGraphDb = typeof db;
 
@@ -646,6 +670,8 @@ export async function buildCaptureGraphOperations(
  * `unmodeledProperties` lists ops carrying keys their profile does not model —
  * advisory, reported by both the dry run and the submit result.
  *
+ * `modeledFields` is what every RESOLVED kind in the graph models, by slug.
+ *
  * `unresolvedProfiles` lists ops whose profile did not resolve for the lens.
  * Submit does NOT reject on it (a cold profile lens can fail open, and
  * unknown-slug graphs are a separate guard); the dry run reports it.
@@ -658,6 +684,7 @@ export async function preflightCaptureGraphOperations(
 ): Promise<{
   invalidEntities: CaptureGraphInvalidEntity[];
   unmodeledProperties: CaptureGraphUnmodeledEntity[];
+  modeledFields: CaptureGraphModeledFields;
   unresolvedProfiles: Array<{ label: string; profileSlug: string }>;
   /** Connected plan: every structure / ownership problem (empty otherwise). */
   planProblems: CapturePlanProblem[];
@@ -669,6 +696,7 @@ export async function preflightCaptureGraphOperations(
   const propertyValidation = new PropertyValidationService(profileResolution);
   const invalidEntities: CaptureGraphInvalidEntity[] = [];
   const unmodeledProperties: CaptureGraphUnmodeledEntity[] = [];
+  const modeledFields: CaptureGraphModeledFields = {};
   for (const op of operations) {
     if (op.op !== "create_entity") continue;
     // Linking an existing entity materializes nothing new — no props to check.
@@ -716,6 +744,7 @@ export async function preflightCaptureGraphOperations(
       valid,
       errors,
       unmodeled: reported,
+      modeled,
     } = await propertyValidation.validateEntityCreateForProposal(
       propsToCheck,
       profile.id,
@@ -726,6 +755,7 @@ export async function preflightCaptureGraphOperations(
           (profile.defaultValues as Record<string, unknown>) ?? {},
       }
     );
+    modeledFields[op.profileSlug] ??= modeled;
     if (!valid) {
       invalidEntities.push({
         label: op.title || op.ref || op.profileSlug,
@@ -754,6 +784,7 @@ export async function preflightCaptureGraphOperations(
     return {
       invalidEntities,
       unmodeledProperties,
+      modeledFields,
       unresolvedProfiles,
       planProblems: plan.problems,
       operations: plan.operations,
@@ -762,6 +793,7 @@ export async function preflightCaptureGraphOperations(
   return {
     invalidEntities,
     unmodeledProperties,
+    modeledFields,
     unresolvedProfiles,
     planProblems: [],
     operations,
@@ -910,6 +942,8 @@ export async function dryRunCaptureGraph(
 ): Promise<{
   invalidEntities: CaptureGraphInvalidEntity[];
   unmodeledProperties: CaptureGraphUnmodeledEntity[];
+  /** Every resolved kind's modelled fields — the dry run is the place to ask. */
+  modeledFields: CaptureGraphModeledFields;
   unresolvedProfiles: Array<{ label: string; profileSlug: string }>;
   relationsFailed: MaterializeRelationFailure[];
   entityCount: number;
@@ -934,6 +968,7 @@ export async function dryRunCaptureGraph(
   const {
     invalidEntities,
     unmodeledProperties,
+    modeledFields,
     unresolvedProfiles,
     planProblems,
     operations,
@@ -956,6 +991,7 @@ export async function dryRunCaptureGraph(
   return {
     invalidEntities,
     unmodeledProperties,
+    modeledFields,
     unresolvedProfiles,
     relationsFailed,
     entityCount: collapsed.entities.length,
@@ -976,48 +1012,28 @@ export async function submitCaptureGraph(
   // PROJECT NAME-REF (piece D). A plan may name a project instead of passing a
   // UUID. Resolve it here, at the submit boundary, with the SAME precedence as a
   // rung-1 explicit pin — but ONLY on an exact slug match on the caller's own
-  // projects. No match ⇒ NOT linked (the widening-access law forbids auto-linking
-  // an AI-guessed project) ⇒ surfaced as an advisory candidate. An explicit
-  // `projectId` always wins over a name.
+  // projects. No match ⇒ the WHOLE capture is refused here, before dedup and
+  // before any proposal, naming the closest projects (B9e) — never a guess,
+  // never an unlinked write. An explicit `projectId` always wins over a name.
   let resolvedProjectId = input.projectId ?? null;
-  let projectCandidate: { name: string } | undefined;
-  if (!resolvedProjectId && input.projectName) {
-    const projectRef = await resolveCaptureProjectRef({
-      userId,
-      projectName: input.projectName,
-    });
-    if (projectRef.projectId) resolvedProjectId = projectRef.projectId;
-    else if (projectRef.candidateName)
-      projectCandidate = { name: projectRef.candidateName };
+  if (!resolvedProjectId && input.projectName?.trim()) {
+    resolvedProjectId = (
+      await resolveCaptureProjectRef(db, {
+        userId,
+        projectName: input.projectName,
+      })
+    ).projectId;
   }
-  // An EXPLICIT UUID pin (`input.projectId`) is trusted by no one: verify it
-  // references a real, visible project BEFORE it rides every create_entity op
-  // as `projectId` (which stamps `belongs_to_project` at materialization).
-  // `relations.target_entity_id` has NO FK to `projects`, so a pin to a
-  // non-existent / invisible project would write a GHOST membership edge and the
-  // receipt would falsely claim `linked` — the exact silent-drop bug. A missing
-  // pin links nothing and is reported `not_linked`. (A name-ref that matched
-  // nothing is already surfaced as `projectCandidate`, above.)
-  let explicitPinMissing = false;
+  // An EXPLICIT UUID pin (`input.projectId`) is trusted by no one: it must
+  // name a project the caller can see, or the WHOLE capture is refused here —
+  // before dedup, before any proposal — naming the closest visible projects.
+  // (It used to write every entity unlinked and report `applied`.) The ONE
+  // check, shared with tRPC `capture.execute`.
   if (resolvedProjectId && input.projectId) {
-    const [pinned] = await db
-      .select({ id: projects.id })
-      .from(projects)
-      .where(
-        and(
-          eq(projects.id, resolvedProjectId),
-          ownerPrivateVisibleWhere(
-            projects.workspaceId,
-            projects.userId,
-            userId
-          )
-        )
-      )
-      .limit(1);
-    if (!pinned) {
-      explicitPinMissing = true;
-      resolvedProjectId = null;
-    }
+    await assertCaptureProjectPinVisible(db, {
+      userId,
+      projectId: resolvedProjectId,
+    });
   }
   // Per-coordinate project outcome, surfaced on the result + writeReceipt so a
   // caller (the CLI) can state what actually happened on the project axis.
@@ -1026,11 +1042,7 @@ export async function submitCaptureGraph(
     | { status: "not_linked"; reason: string }
     | undefined = resolvedProjectId
     ? { status: "linked", projectId: resolvedProjectId }
-    : explicitPinMissing
-      ? { status: "not_linked", reason: "project-not-found" }
-      : projectCandidate
-        ? { status: "not_linked", reason: "project-name-unmatched" }
-        : undefined;
+    : undefined;
 
   // WITHIN-BATCH DEDUP: the producer may list the same person/company under two
   // different `ref`s (neither persisted yet). Collapse those before resolving
@@ -1181,7 +1193,6 @@ export async function submitCaptureGraph(
         // PENDING proposal surfaces as `status: "duplicate"` with a
         // stop-re-proposing hint.
         deduped: true,
-        ...(projectCandidate ? { projectCandidate } : {}),
         ...(projectOutcome ? { project: projectOutcome } : {}),
         writeReceipt: {
           state: priorApplied ? "applied" : "pending",
@@ -1201,61 +1212,77 @@ export async function submitCaptureGraph(
     );
   }
 
-  // ADVISORY pending-duplicate candidates: incoming entities whose strong signal
-  // collides with a create_entity op in the caller's OWN pending queue (below).
-  const pendingDuplicateCandidates: Array<{
-    ref: string;
-    title: string;
-    matches: PendingSignalMatch[];
-  }> = [];
-
-  // IDEMPOTENCY: dedup against existing entities via the ONE identity resolver.
-  // Strong signals (email/phone/url) auto-resolve globally; weak name/handle
-  // matches are scoped to this workspace's visible rows + pod-wide globals.
+  // THE duplicate door (B2), once per NEW entity. A strong identity atom on
+  // a record LINKS (link, don't create) — the only automatic outcome. A
+  // same-kind name or an in-flight twin in the caller's own pending queue is
+  // a `possible` duplicate: never auto-linked (the old weak exact-title link
+  // silently merged two different things), filed for the reviewer instead.
+  // Weak matches are scoped to this workspace's rows + pod-wide ones, and
+  // only ever rows the CALLER may see (FB1020 review M3): `entities` is
+  // owner-private, and a bare `isNull(workspaceId)` admitted every user's
+  // pod-personal rows — their titles then rode the proposal and the receipt.
+  const itemChecks: DuplicateCheck[] = [];
   const toResolve = graphEntities.filter((e) => !e.existingEntityId);
   if (toResolve.length > 0) {
-    const weakScope = workspaceId
-      ? or(eq(entities.workspaceId, workspaceId), isNull(entities.workspaceId))
-      : isNull(entities.workspaceId);
+    const weakScope = and(
+      ownerPrivateVisibleWhere(entities.workspaceId, entities.userId, userId),
+      workspaceId
+        ? or(
+            eq(entities.workspaceId, workspaceId),
+            isNull(entities.workspaceId)
+          )
+        : isNull(entities.workspaceId)
+    );
+    // One read of the caller's pending queue for the whole graph. A failed
+    // read is left to the door, which then reports `unchecked` per item.
+    let pending: PendingQueue | undefined;
+    try {
+      pending = await loadOwnPendingCreates(db, userId);
+    } catch (err) {
+      logger.warn({ err, userId }, "capture/graph: pending queue read failed");
+    }
     for (const e of toResolve) {
-      try {
-        const signals = extractIdentitySignals(e.properties, {
+      const answer = await findDuplicateCandidates(db, {
+        subject: "entity",
+        userId,
+        profileSlug: e.profileSlug,
+        title: e.title ?? null,
+        signals: extractIdentitySignals(e.properties, {
           kind: e.profileSlug,
-        });
-        const res = await resolveIdentity(db, {
-          userId,
-          kindSlug: e.profileSlug,
-          name: e.title ?? e.ref,
-          signals,
-          userScope: weakScope,
-        });
-        if (res.match && res.entity) {
-          e.existingEntityId = res.entity.id; // link, don't create
-        } else if (signals.length > 0) {
-          // No COMMITTED match — consult the caller's OWN pending queue. A
-          // pending capture materializes NOTHING yet, so resolveIdentity can't
-          // see it; a strong-signal collision means a duplicate is already
-          // in-flight. ADVISORY ONLY: we NEVER set `existingEntityId` from this
-          // (the pending proposal can be rejected, which would then stale-
-          // suppress this real write) — we flag it and still file the write.
-          const pending = await findPendingSignalMatches(db, {
-            userId,
-            signals,
-          });
-          if (pending.length > 0) {
-            pendingDuplicateCandidates.push({
-              ref: e.ref,
-              title: e.title ?? e.ref,
-              matches: pending,
-            });
-          }
+        }),
+        recordScope: weakScope,
+        forRef: e.ref,
+        ...(pending ? { pending } : {}),
+      });
+      if (answer.identity?.match === "strong" && answer.identity.entity) {
+        // The strong index is pod-wide by design: link only onto a record the
+        // caller may write, as the entity door does — never wire the graph to
+        // (or name) another user's private record. An invisible match falls
+        // through to a normal create.
+        const [visible] = await db
+          .select({ id: entities.id })
+          .from(entities)
+          .where(
+            and(
+              eq(entities.id, answer.identity.entity.id),
+              isNull(entities.deletedAt),
+              entityWriteVisibleWhere(userId)
+            )
+          )
+          .limit(1);
+        if (visible) {
+          e.existingEntityId = visible.id; // link, don't create
+          continue;
         }
-      } catch (err) {
-        // Dedup is best-effort — never block the proposal on a lookup failure.
-        logger.warn({ err }, "capture/graph: entity dedup lookup failed");
       }
+      itemChecks.push(answer.check);
     }
   }
+  const duplicateCheck =
+    itemChecks.length > 0
+      ? mergeDuplicateChecks("entity", itemChecks)
+      : undefined;
+  const possibleDuplicate = duplicateCheck?.status === "possible";
 
   // Ops + scope-aware homes: the ONE builder, shared with the dry run.
   const builtOperations = await buildCaptureGraphOperations(db, {
@@ -1274,13 +1301,18 @@ export async function submitCaptureGraph(
   // SAME `validateProperties` the materializer runs — so an un-materializable
   // graph is rejected at submit, before EITHER terminal (auto-apply OR pending).
   // Atomic graph ⇒ all-or-nothing: any invalid op rejects the WHOLE graph.
-  const { invalidEntities, unmodeledProperties, planProblems, operations } =
-    await preflightCaptureGraphOperations(
-      db,
-      builtOperations,
-      userId,
-      workspaceId
-    );
+  const {
+    invalidEntities,
+    unmodeledProperties,
+    modeledFields,
+    planProblems,
+    operations,
+  } = await preflightCaptureGraphOperations(
+    db,
+    builtOperations,
+    userId,
+    workspaceId
+  );
   // Relation slugs go through the SAME validator the `validate` door runs, and
   // land in the SAME rejection: an edge naming a non-existent relation def is
   // un-materializable, so filing it would queue an unapprovable proposal.
@@ -1305,55 +1337,13 @@ export async function submitCaptureGraph(
   // NOTE: `summary`, `source`, `bindingNote` are computed ABOVE (before the
   // re-submit idempotency lookup, which needs them); not re-declared here.
 
-  // ── DUPLICATE ADVISORY, PERSISTED ────────────────────────────────────────
-  // `pendingDuplicateCandidates` was computed above and spread ONLY into the
-  // RETURN value, so the submitting caller saw it once and the proposal row
-  // kept nothing: a reviewer opening this proposal a month later could not see
-  // that the write had already been suspected of duplicating an in-flight one.
-  //
-  // Duplication IS this proposal type's blast radius — all 166 live composite
-  // proposals contain only `create_entity` (780) and `create_relation` (678),
-  // zero destructive and zero behaviour ops — so the advisory is the only real
-  // risk signal a capture review has. Persisted the SAME way
-  // `proposalProvenance` is: a spread-if-present block folded into both `data`
-  // terminals (auto-applied and pending) so the two can't drift.
-  //
-  // ABSENT means "not computed"; it must NEVER be an empty array, because an
-  // empty array reads as "we checked and found none" — a claim this field
-  // cannot make (the scan is best-effort and swallows lookup failures above).
-  //
-  // PROJECTED, not dumped: enough for a reviewer to judge — which proposed item
-  // (ref/title), which in-flight proposal (id/title/kind), and WHY (the matched
-  // signals) — never whole rows. Bounded so a pathological fan-out cannot bloat
-  // the proposal payload, and honest about clipping via `matchCount`.
-  const duplicateAdvisory =
-    pendingDuplicateCandidates.length > 0
-      ? {
-          pendingDuplicateCandidates: pendingDuplicateCandidates
-            .slice(0, DUPLICATE_ADVISORY_MAX_CANDIDATES)
-            .map((c) => ({
-              ref: c.ref,
-              title: c.title,
-              /** Total matches found, so a clipped `matches` still reads honestly. */
-              matchCount: c.matches.length,
-              matches: c.matches
-                .slice(0, DUPLICATE_ADVISORY_MAX_MATCHES_PER_CANDIDATE)
-                .map((m) => ({
-                  proposalId: m.proposalId,
-                  ...(m.entityTitle ? { entityTitle: m.entityTitle } : {}),
-                  ...(m.profileSlug ? { profileSlug: m.profileSlug } : {}),
-                  // WHY it matched. Values are already present in this same
-                  // proposal's own `operations` payload (they are the incoming
-                  // entity's own properties), so this exposes nothing new.
-                  matchedSignals: m.matchedSignals,
-                })),
-            })),
-          ...(pendingDuplicateCandidates.length >
-          DUPLICATE_ADVISORY_MAX_CANDIDATES
-            ? { candidateCount: pendingDuplicateCandidates.length }
-            : {}),
-        }
-      : {};
+  // ── DUPLICATE CHECK, PERSISTED ───────────────────────────────────────────
+  // The door's answer rides the proposal (both terminals, so the two cannot
+  // drift) and is read back with `readDuplicateCheck` by the review card.
+  // Duplication IS this proposal type's blast radius, so the check is the one
+  // risk signal a capture review has. ABSENT means the door did not run (no new
+  // entity); `clear` is stored too — "we looked" is not "we did not look".
+  const duplicateAdvisory = duplicateCheck ? { duplicateCheck } : {};
 
   // Reusable proposal-provenance block (rawSource is bounded, proposal-data-only).
   const proposalProvenance = input.rawSource
@@ -1386,38 +1376,24 @@ export async function submitCaptureGraph(
   // bindings force the pending path: they are applied by the approve flow AFTER
   // materialization, so an auto-apply that skipped them would silently drop the
   // binds.
-  if (input.agentUserId && bindings.length === 0 && !planNeedsReview) {
-    const keys = captureGraphEventKeys(operations);
-    let allAutoApprove = keys.length > 0;
-    for (const {
-      subjectType,
-      action,
-      subjectProfileSlug,
-      subjectUoValidated,
-    } of keys) {
-      const gov = await resolveAgentGovernanceDecision({
-        db,
-        agentUserId: input.agentUserId,
-        workspaceId,
-        subjectType,
-        action,
-        // GOVERNANCE BY KIND: forward the op's profile slug + uo_validated so an
-        // unvalidated `user_observation` (an INFERENCE) forces `propose` here —
-        // and because the graph is atomic, the WHOLE graph then proposes. Absent
-        // for facet/relation ops (the rule no-ops). This mirrors the per-write
-        // signals `checkPermissionOrPropose`/`create_entity` already forward.
-        ...(subjectProfileSlug ? { subjectProfileSlug } : {}),
-        ...(subjectUoValidated !== undefined ? { subjectUoValidated } : {}),
-        // MCP is an agent WRITE door — prefer the agent's own metadata
-        // autoApproveFor, falling back to the workspace override (chat-door rule).
-        preferAgentMetadataAutoApproveFor: true,
-      });
-      // Any non-execute (propose / deny / not-agent) → the WHOLE graph proposes.
-      if (gov.decision !== "execute") {
-        allAutoApprove = false;
-        break;
-      }
-    }
+  // A possible twin is never auto-applied for an agent (B2c): the graph is
+  // filed for review with POSSIBLE_DUPLICATE and the reviewer decides per item.
+  if (
+    input.agentUserId &&
+    bindings.length === 0 &&
+    !planNeedsReview &&
+    !possibleDuplicate
+  ) {
+    // Every member scored by the ONE resolver with the signals its own door
+    // gates on — governance by kind AND the born-status lifecycle floor — so
+    // this never says "execute" where the create door it runs says "propose".
+    // Any non-execute → the WHOLE graph proposes.
+    const allAutoApprove = !(await captureGraphMemberProposes({
+      agentUserId: input.agentUserId,
+      userId,
+      workspaceId,
+      operations,
+    }));
 
     if (allAutoApprove) {
       // Materialize NOW as a DIRECT OPERATOR write, through the EXACT composite
@@ -1503,6 +1479,10 @@ export async function submitCaptureGraph(
             id: captureProposalId,
             userId,
             reviewedBy: userId,
+            // The AGENT that captured this: the policy above judged ITS write,
+            // so the receipt names it (as the pending path's row does). Without
+            // it every auto-applied capture read as the person's own write.
+            agentUserId: input.agentUserId,
             workspaceId,
             targetType: "entity",
             targetId: randomUUID(),
@@ -1712,6 +1692,17 @@ export async function submitCaptureGraph(
                       ...materialized.views.map(
                         (v) => [v.opIndex, v.viewId] as [number, string]
                       ),
+                      // Rule Loop config rows: a skill used to read `id: null`
+                      // as `applied`, leaving nothing to load or update it by.
+                      ...materialized.skills.map(
+                        (s) => [s.opIndex, s.skillId] as [number, string]
+                      ),
+                      ...materialized.automations.map(
+                        (a) => [a.opIndex, a.automationId] as [number, string]
+                      ),
+                      ...materialized.rules.map(
+                        (r) => [r.opIndex, r.ruleId] as [number, string]
+                      ),
                     ])
                   ),
                 },
@@ -1719,11 +1710,18 @@ export async function submitCaptureGraph(
             : {}),
           sessionId: appliedScope.sessionId,
           scope: appliedScope,
-          ...(unmodeledProperties.length > 0 ? { unmodeledProperties } : {}),
-          ...(pendingDuplicateCandidates.length > 0
-            ? { pendingDuplicateCandidates }
+          ...(unmodeledProperties.length > 0
+            ? {
+                unmodeledProperties,
+                modeledFields: modeledFieldsFor(
+                  unmodeledProperties,
+                  modeledFields
+                ),
+              }
             : {}),
-          ...(projectCandidate ? { projectCandidate } : {}),
+          ...(duplicateCheck && duplicateCheck.status !== "clear"
+            ? { duplicateCheck }
+            : {}),
           ...(projectOutcome ? { project: projectOutcome } : {}),
           // Relation ops submitted but never created (bad ref / DB failure) —
           // named, not just a shortfall between relationCount and the
@@ -1774,6 +1772,10 @@ export async function submitCaptureGraph(
     // dedup. A webhook/cron/human-confirm caller still has no agentUserId, so
     // it stays correctly unattributed.
     ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
+    // Why an agent's graph waits, when the duplicate door is why (B2c).
+    ...(input.agentUserId && possibleDuplicate
+      ? { governanceReason: "POSSIBLE_DUPLICATE" }
+      : {}),
     ...(input.sourceMessageId
       ? { sourceMessageId: input.sourceMessageId }
       : {}),
@@ -1827,11 +1829,15 @@ export async function submitCaptureGraph(
     ...(isPlan ? { plan: { steps: planStepReceipts(operations) } } : {}),
     sessionId: pendingScope.sessionId,
     scope: pendingScope,
-    ...(unmodeledProperties.length > 0 ? { unmodeledProperties } : {}),
-    ...(pendingDuplicateCandidates.length > 0
-      ? { pendingDuplicateCandidates }
+    ...(unmodeledProperties.length > 0
+      ? {
+          unmodeledProperties,
+          modeledFields: modeledFieldsFor(unmodeledProperties, modeledFields),
+        }
       : {}),
-    ...(projectCandidate ? { projectCandidate } : {}),
+    ...(duplicateCheck && duplicateCheck.status !== "clear"
+      ? { duplicateCheck }
+      : {}),
     ...(projectOutcome ? { project: projectOutcome } : {}),
     ...placementReceipt,
     writeReceipt: {

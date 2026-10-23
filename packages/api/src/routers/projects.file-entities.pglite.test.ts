@@ -53,6 +53,14 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => {
   };
 });
 vi.mock("../utils/audit-log.js", () => ({ auditLog: vi.fn(async () => null) }));
+// The undo engine's post-commit fan-out — not what these tests assert.
+vi.mock("../utils/domain-mutation.js", () => ({
+  recordDomainMutation: vi.fn(async () => null),
+}));
+vi.mock("../utils/property-relation-sync.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  syncRelationToPropertyOnDelete: vi.fn(async () => undefined),
+}));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
@@ -61,6 +69,8 @@ import { buildProposalSummary } from "../utils/permission-check.js";
 import { proposalExecRegistry } from "./proposals/execution-registry.js";
 import { registerProjectFilingExecutors } from "./proposals/executors/project-filing.js";
 import { registerLinkExecutors } from "./proposals/executors/link.js";
+import { planProposalRevert, revertableForRow } from "./proposals/revert.js";
+import { revertProposalCreations } from "../services/proposals/revert-creations.js";
 
 const OWNER = randomUUID();
 const VIEWER = randomUUID();
@@ -162,7 +172,7 @@ async function approve(
       id,
     ])
   ).rows[0]!.status;
-  return { res, status };
+  return { res, status, id };
 }
 
 beforeAll(async () => {
@@ -252,6 +262,101 @@ describe("projects.fileEntities — agent proposes, approval files", () => {
     });
     expect(status).toBe("approved");
     expect(await filed()).toEqual([Q1, Q2].sort());
+  });
+
+  it("approval stamps the edges it wrote; Undo removes exactly those (F4)", async () => {
+    // Q2 is already in the project: the filing must not undo someone else's edge.
+    h.perm.mockResolvedValueOnce({ granted: true });
+    await caller(OWNER).fileEntities({ projectId: PROJECT, entityIds: [Q2] });
+    h.perm.mockResolvedValueOnce({ granted: false, proposalId: "prop-u" });
+    await caller(OWNER, AGENT).fileEntities({
+      projectId: PROJECT,
+      entityIds: [Q1, Q2],
+    });
+    const data = (h.perm.mock.calls[1]![0] as { data: Record<string, unknown> })
+      .data;
+    const pending = {
+      status: "pending",
+      targetType: "project",
+      targetId: PROJECT,
+      proposalType: "file_entities",
+      data: { targetType: "project", changeType: "file_entities", data },
+    };
+    // The pending card already says it can be undone once approved.
+    expect(revertableForRow(pending)).toBe(true);
+
+    const { res, id } = await approve("project/file_entities", data);
+    expect(res).toMatchObject({ effect: { rows: 1, ids: [Q1] } });
+    const row = (
+      await q<{
+        id: string;
+        status: string;
+        proposal_type: string;
+        data: Record<string, unknown>;
+      }>(
+        `select id, status, proposal_type, data from proposals where id = $1`,
+        [id]
+      )
+    ).rows[0]!;
+    const q1Edge = (
+      await q<{ id: string }>(
+        `select id from relations where type = 'belongs_to_project' and source_entity_id = $1`,
+        [Q1]
+      )
+    ).rows[0]!.id;
+    const applied = {
+      status: row.status,
+      targetType: "project",
+      targetId: PROJECT,
+      proposalType: row.proposal_type,
+      data: row.data,
+    };
+    expect(revertableForRow(applied)).toBe(true);
+    const plan = planProposalRevert(applied);
+    expect(plan).toMatchObject({
+      kind: "delete-creations",
+      relationIds: [q1Edge],
+    });
+
+    // The real undo engine, on the stamped plan.
+    await revertProposalCreations({
+      proposal: {
+        id: row.id,
+        workspaceId: WS,
+        sessionId: null,
+        data: row.data,
+      },
+      plan: plan as Extract<typeof plan, { kind: "delete-creations" }>,
+      userId: OWNER,
+    });
+    expect(await filed()).toEqual([Q2]);
+  });
+
+  it("a filing that added nothing says there is nothing to undo", async () => {
+    h.perm.mockResolvedValueOnce({ granted: true });
+    await caller(OWNER).fileEntities({ projectId: PROJECT, entityIds: [Q1] });
+    const { res, id } = await approve("project/file_entities", {
+      projectId: PROJECT,
+      entityIds: [Q1],
+    });
+    expect(res).toMatchObject({ effect: { rows: 0 } });
+    const row = (
+      await q<{ status: string; data: Record<string, unknown> }>(
+        `select status, data from proposals where id = $1`,
+        [id]
+      )
+    ).rows[0]!;
+    const plan = planProposalRevert({
+      status: row.status,
+      targetType: "project",
+      targetId: PROJECT,
+      proposalType: "file_entities",
+      data: row.data,
+    });
+    expect(plan).toMatchObject({ kind: "unsupported" });
+    expect((plan as { reason: string }).reason).toMatch(
+      /already in the project/
+    );
   });
 
   it("a single named record titles by its name", () => {
@@ -366,5 +471,113 @@ describe("projects.fileEntities {remove} — un-file is a governed link delete",
     });
     expect(status).toBe("approved");
     expect(await filed()).toEqual([]);
+  });
+});
+
+/**
+ * FB1020 B3 — the door's PROOF that an agent files its OWN FRESH records into
+ * the project the person named. Driven through the real door and the real
+ * `isOwnFreshWork` over PGlite rows (events, proposals with their key); only
+ * the engine is mocked, so this asserts what the door ASKS: the proof
+ * (`ownWorkOrganise`, the floor lifted) or the old floor (`forcePropose`).
+ *
+ * Each row rules out one wrong predicate: another KEY's record (rules out
+ * "same agent user is enough" — the B7 point), a record a PERSON touched, a
+ * record older than 24 h, a project the person did not name, no key at all.
+ * The engine's verdict for the proof is `own-organise.test.ts`.
+ */
+describe("projects.fileEntities — B3: an agent's own fresh records", () => {
+  const KEY = randomUUID();
+  const OTHER_KEY = randomUUID();
+  const MINE = randomUUID();
+  const OTHER_KEYS = randomUUID();
+  const TOUCHED = randomUUID();
+  const STALE = randomUUID();
+  const UNNAMED_PROJECT = randomUUID();
+
+  /** A record this agent created through `key` (create event → receipt → key). */
+  async function made(id: string, key: string, createdAt = "now()") {
+    const receipt = randomUUID();
+    await q(
+      `insert into entities (id, user_id, workspace_id, type, title, created_at, deleted_at)
+       values ($1,$2,$3,'question','Q',${createdAt},null)`,
+      [id, OWNER, WS]
+    );
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, status, data, agent_user_id, api_key_id)
+       values ($1,$2,'entity',$3,'entity.create','auto_approved','{}'::jsonb,$4,$5)`,
+      [receipt, WS, id, AGENT, key]
+    );
+    await q(
+      `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id, is_agent, agent_user_id, proposal_id, source)
+       values ($1, now(), 'entity.create.completed', $2, 'entity', '{}'::jsonb, $3, true, $4, $5, 'api')`,
+      [randomUUID(), id, OWNER, AGENT, receipt]
+    );
+  }
+
+  beforeAll(async () => {
+    await q(
+      `insert into users (id, name, email, user_type, agent_type, agent_metadata, created_by_user_id)
+       values ($1,'Claude Code','agent@x','agent','claude-code',$2::jsonb,$3)`,
+      [
+        AGENT,
+        JSON.stringify({ agentType: "claude-code", focusProjectId: PROJECT }),
+        OWNER,
+      ]
+    );
+    await q(
+      `insert into projects (id, user_id, workspace_id, name) values ($1,$2,$3,'Not named')`,
+      [UNNAMED_PROJECT, OWNER, WS]
+    );
+    await made(MINE, KEY);
+    await made(OTHER_KEYS, OTHER_KEY);
+    await made(TOUCHED, KEY);
+    await made(STALE, KEY, "now() - interval '25 hours'");
+    // A person edited it afterwards (no agent, a person's door).
+    await q(
+      `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id, is_agent, source)
+       values ($1, now(), 'entity.update.completed', $2, 'entity', '{}'::jsonb, $3, false, 'api')`,
+      [randomUUID(), TOUCHED, OWNER]
+    );
+  });
+
+  const ask = async (
+    entityIds: string[],
+    { key = KEY as string | null, projectId = PROJECT } = {}
+  ) => {
+    h.perm.mockResolvedValue({ granted: false, proposalId: "p" });
+    const { runWithCallingKey } = await import("@synap/database");
+    await runWithCallingKey(key, () =>
+      caller(OWNER, AGENT).fileEntities({ projectId, entityIds })
+    );
+    return h.perm.mock.calls.at(-1)![0] as Record<string, unknown>;
+  };
+
+  it("its own fresh record, into the project it was told to focus on → the proof, floor lifted", async () => {
+    expect(await ask([MINE])).toMatchObject({
+      action: "file_entities",
+      forcePropose: false,
+      ownWorkOrganise: true,
+    });
+  });
+
+  it("one record made through ANOTHER key (same agent user) keeps the floor", async () => {
+    const opts = await ask([MINE, OTHER_KEYS]);
+    expect(opts).toMatchObject({ forcePropose: true });
+    expect(opts).not.toHaveProperty("ownWorkOrganise");
+  });
+
+  it("a record a person touched since, or one older than 24 h, keeps the floor", async () => {
+    expect(await ask([TOUCHED])).toMatchObject({ forcePropose: true });
+    expect(await ask([STALE])).toMatchObject({ forcePropose: true });
+  });
+
+  it("a project the person did not name, or no key on the request, keeps the floor", async () => {
+    expect(await ask([MINE], { projectId: UNNAMED_PROJECT })).toMatchObject({
+      forcePropose: true,
+    });
+    expect(await ask([MINE], { key: null })).toMatchObject({
+      forcePropose: true,
+    });
   });
 });

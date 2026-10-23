@@ -181,6 +181,7 @@ export * from "./ai-provider-credentials.js";
 export * from "./focus-sessions.js";
 // Session evaluations — the graded verdicts against focus_sessions.criteria (0267)
 export * from "./session-evaluations.js";
+export * from "./session-runners.js";
 
 // DEPRECATED: Agent Skills merged into skills table (migration 0130_merge_agent_skills.sql).
 // The agent-skills.ts table definition is kept for migration reference only.

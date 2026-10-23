@@ -33,6 +33,7 @@ import {
   eq,
   desc,
   drizzleSql,
+  isUniqueViolation,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -271,8 +272,7 @@ export async function rememberFact(params: {
     // has already landed, so it still reports success; only the recall-index
     // row is deduped onto the winner (mirrors insertPendingProposal's 23505
     // recovery for `proposals`).
-    const code = (err as { code?: string } | null)?.code;
-    if (code === "23505") {
+    if (isUniqueViolation(err)) {
       try {
         const [winner] = await db
           .select({ id: knowledgeFacts.id })

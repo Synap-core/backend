@@ -359,7 +359,7 @@ registerIntentSurfacesRoutes(app); // /lifecycle/{board,throughput}, /attention/
 registerGuidelinesRoutes(app); // GET /guidelines?workKind= — standing guidance for a kind of block
 registerBrandRoutes(app); // GET /brand/kit — the caller's brand kit (project → workspace → pod default)
 registerAgentSkillsRoutes(app); // /agent-skills*
-registerRulesRoutes(app); // /rules/classify (static, FIRST), /rules (create + list)
+registerRulesRoutes(app); // /rules/classify (static, FIRST), /rules (create + list), PATCH /rules/:id (edit, LAST)
 registerUiRoutes(app); // /ui/focus
 registerArtifactsRoutes(app); // /artifacts*
 registerRunsRoutes(app); // /runs/:runId/capture (playbook run capture-back)

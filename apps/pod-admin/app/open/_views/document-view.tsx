@@ -5,8 +5,11 @@
  * and its body drawn by the console's one content renderer. Writing stays in
  * the app.
  *
- * Read door: `documents.get({ format: "readable" })`, the viewer's own floor
- * (owner, space member, a share). A document the viewer cannot read is
+ * Read door: `documents.get({ format: "raw" })`, the viewer's own floor
+ * (owner, space member, a share — the same `loadReadableDocument` floor as
+ * the readable form). Raw keeps the `:::synap-*` embeds, so the renderer can
+ * draw them (a snapshot chart from its numbers, a record as a door) instead
+ * of their fallback sentences. A document the viewer cannot read is
  * today's named card (`BounceView`) — the same card any other app-only kind
  * gets, as is a pdf or Word file — and never an admin read: a pod admin sees what the pod would show
  * them, not more.
@@ -34,7 +37,7 @@ const TYPE_LABEL: Record<string, string> = {
 
 export function DocumentView({ id }: { id: string }) {
   const query = trpc.documents.get.useQuery(
-    { documentId: id, format: "readable" },
+    { documentId: id, format: "raw" },
     { retry: false }
   );
   const workspaceId = query.data?.document.workspaceId ?? null;
@@ -47,8 +50,8 @@ export function DocumentView({ id }: { id: string }) {
 
   if (query.isLoading) return <OpenLoading label="Loading document…" />;
   const content = documentContent(query.error, query.data);
-  // Not visible, or a pdf / Word file the readable door has no text for: the
-  // named card, which still says what it is when the reader may know.
+  // Not visible, or a pdf / Word file (no text form): the named card, which
+  // still says what it is when the reader may know.
   if (content.kind === "hidden" || content.kind === "file") {
     return <BounceView type="document" id={id} viewerIsPodAdmin={false} />;
   }
@@ -70,6 +73,7 @@ export function DocumentView({ id }: { id: string }) {
   const openInApp = <OpenInAppLink type="document" id={id} />;
   return (
     <OpenObject
+      width="lg"
       header={{
         kind: "document",
         title: doc.title?.trim() || "Untitled document",
@@ -99,6 +103,7 @@ export function DocumentView({ id }: { id: string }) {
         title="Content"
         content={content}
         openInApp={openInApp}
+        measure="wide"
       />
     </OpenObject>
   );

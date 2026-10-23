@@ -27,6 +27,7 @@ import { db, eq, and, desc } from "@synap/database";
 import { sessions, channels, SessionStatus } from "@synap/database/schema";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { sessionVisibilityWhere } from "../../utils/session-visibility.js";
+import { assertChannelWrite } from "../../utils/assert-channel-write.js";
 
 /**
  * Floor a channel-scoped procedure: the caller must be able to SEE the channel
@@ -34,7 +35,7 @@ import { sessionVisibilityWhere } from "../../utils/session-visibility.js";
  */
 async function assertChannelVisible(channelId: string, userId: string) {
   const row = await db
-    .select({ id: channels.id })
+    .select({ id: channels.id, workspaceId: channels.workspaceId })
     .from(channels)
     .where(and(eq(channels.id, channelId), channelVisibilityWhere(userId)))
     .limit(1);
@@ -42,6 +43,25 @@ async function assertChannelVisible(channelId: string, userId: string) {
   if (!row[0]) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found" });
   }
+  return row[0];
+}
+
+/**
+ * The WRITE floor for a session: visible to the caller (NOT_FOUND otherwise),
+ * then the key's grant must allow changing its channel, in the channel's own
+ * workspace (S7) — a session is that channel's internal state.
+ */
+async function assertSessionWritable(sessionId: string, userId: string) {
+  const row = await db
+    .select({ id: channels.id, workspaceId: channels.workspaceId })
+    .from(sessions)
+    .innerJoin(channels, eq(channels.id, sessions.channelId))
+    .where(and(eq(sessions.id, sessionId), sessionVisibilityWhere(userId)))
+    .limit(1);
+  if (!row[0]) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Session not found" });
+  }
+  await assertChannelWrite(row[0], "channel", "update");
 }
 
 export const sessionsRouter = router({
@@ -61,7 +81,10 @@ export const sessionsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      await assertChannelVisible(input.channelId, ctx.userId!);
+      const channel = await assertChannelVisible(input.channelId, ctx.userId!);
+      // The read floor above is not a write check: the key's grant must allow
+      // changing the channel, in its own workspace (S7).
+      await assertChannelWrite(channel, "channel", "update");
 
       // Check for existing active session
       const existing = await db.query.sessions.findFirst({
@@ -185,6 +208,7 @@ export const sessionsRouter = router({
     )
     .mutation(async ({ input, ctx }) => {
       const { sessionId, ...updates } = input;
+      await assertSessionWritable(sessionId, ctx.userId!);
 
       const updateData: Record<string, any> = {};
       if (updates.status !== undefined)
@@ -234,6 +258,7 @@ export const sessionsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      await assertSessionWritable(input.sessionId, ctx.userId!);
       const [updated] = await db
         .update(sessions)
         .set({

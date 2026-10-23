@@ -13,6 +13,7 @@
  * never discard the created entities.
  */
 
+import { TRPCError } from "@trpc/server";
 import {
   isPlanBatch,
   isPlanOperation,
@@ -526,6 +527,7 @@ export type RelationCreateCaller = { create: (input: any) => Promise<any> };
 export type SkillCreateCaller = {
   create: (input: {
     name: string;
+    slug?: string | null;
     body: string;
     scope: "pod" | "user" | "workspace";
     agentTypes?: string[] | null;
@@ -775,6 +777,19 @@ export interface MaterializeOptions {
    * today's create. One entry is never applied to any other op.
    */
   identityResolutionByRef?: Record<string, IdentityResolutionInput>;
+  /**
+   * An APPROVAL of a reviewed graph (`apply-approval`): a create that meets a
+   * same-name twin record refuses with its candidates unless the reviewer
+   * resolved it (founder B2b). Absent for auto-apply and imports.
+   */
+  askReviewerOnDuplicate?: boolean;
+  /**
+   * With `askReviewerOnDuplicate`: per create-entity ref, the twin records
+   * the review card SHOWED (`twinsShownOnCard`). A ref with no resolution
+   * then keeps both for those twins (the reviewer saw them and approved as
+   * proposed); a twin not shown still refuses, so the card asks (BLOCKER-2).
+   */
+  reviewedTwinIdsByRef?: Record<string, string[]>;
   /**
    * Disposition ref for a create_entity op. Approve passes this because the
    * operations array may already have rejected ops removed, so `$opN` is NOT
@@ -1053,6 +1068,7 @@ export async function materializeCompositeGraph(
       try {
         const created = await options.skillCaller.create({
           name: op.name,
+          slug: op.slug ?? null,
           body: op.body,
           scope: op.scope,
           agentTypes: op.agentTypes ?? null,
@@ -1251,7 +1267,7 @@ export async function materializeCompositeGraph(
           linkedByRetry = true;
         }
         if (idemExternalId) idemSeenThisCall.add(idemExternalId);
-      } else if (resolutionDecision && !resolutionDecision.forceCreate) {
+      } else if (resolutionDecision && !resolutionDecision.keepBoth) {
         realId = resolutionDecision.receipt.entityId;
         linkedExisting = true;
         identity = { ...resolutionDecision.receipt, ref: resolvedRef };
@@ -1282,30 +1298,58 @@ export async function materializeCompositeGraph(
             workspaceScoped: opTargetWorkspaceId
               ? true
               : (options?.workspaceScoped ?? false),
-            // Helper returns forceCreate only for `separate` — the only weak-gate bypass.
-            ...(resolutionDecision?.forceCreate ? { forceCreate: true } : {}),
+            // The reviewer owns a same-name twin (B2b) on an APPROVAL:
+            // `separate` ⇒ keep both; no verb ⇒ keep both for a twin the card
+            // SHOWED, refuse (with candidates, so the card asks) a twin it did
+            // not. Auto-apply and imports pass neither: the capture door
+            // already checked at file time.
+            ...(options?.askReviewerOnDuplicate
+              ? {
+                  approvalDuplicate: resolutionDecision?.keepBoth
+                    ? ("keep_both" as const)
+                    : ("ask_reviewer" as const),
+                  ...(!resolutionDecision &&
+                  options.reviewedTwinIdsByRef?.[resolvedRef]?.length
+                    ? {
+                        approvalReviewedTwinIds:
+                          options.reviewedTwinIdsByRef[resolvedRef],
+                      }
+                    : {}),
+                }
+              : {}),
           });
         } catch (err) {
           rethrowIfWeakDedup(err, resolvedRef);
           throw err;
         }
-        if (resolutionDecision?.forceCreate && (result as { id?: string }).id) {
+        if (resolutionDecision?.keepBoth && (result as { id?: string }).id) {
           identity = {
             verb: "separate",
             entityId: (result as { id: string }).id,
             ref: resolvedRef,
           };
         }
-        // A door that answers "proposed" did not create anything. Outside a
-        // plan the historic behaviour stands; inside one it is a failed step.
-        if (
-          planMode &&
-          (result as { status?: string } | undefined)?.status === "proposed"
-        ) {
+        // A door that answers "proposed" did not create anything. Inside a
+        // plan it is a failed step. Outside one there is no entity to carry on
+        // with: the old path kept going with an undefined id and died later on
+        // whatever wrote it first (live 2026-10-18: "No values to set" from the
+        // idempotency link), so the failure now names what happened.
+        const proposedInstead =
+          (result as { status?: string } | undefined)?.status === "proposed";
+        if (planMode && proposedInstead) {
           failPlanStep(
             i,
             "the entity create was routed to a proposal instead of being created"
           );
+        } else if (proposedInstead) {
+          const filed = (result as { proposalId?: string }).proposalId;
+          // A TRPCError, so the receipt's stored sentence IS this one (the
+          // failure classifier keeps a tRPC message; a plain Error reads
+          // "an internal error occurred") and its class is `conflict`.
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `"${op.title || op.profileSlug}" was routed to review${filed ? ` (proposal ${filed})` : ""} instead of being created, so this graph could not be applied.`,
+          });
         }
         realId = (result as { id: string }).id;
         // A caller may report the ACTUAL profile it created (e.g. capture's

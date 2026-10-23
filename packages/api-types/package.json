@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/api-types",
-  "version": "1.31.0",
+  "version": "1.32.0",
   "description": "Type definitions for Synap API Router - tRPC types for frontend",
   "type": "module",
   "main": "./dist/index.js",
@@ -20,6 +20,7 @@
     "build": "rm -rf dist && tsc && cp src/generated.d.ts dist/generated.d.ts",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "prepublishOnly": "pnpm run build",
     "release:check": "node scripts/check-and-bump.mjs --check",
     "release:bump": "node scripts/check-and-bump.mjs",
@@ -30,7 +31,8 @@
   "dependencies": {
     "@synap-core/types": "workspace:*",
     "drizzle-orm": "^0.45.2",
-    "yjs": "^13.0.0"
+    "yjs": "^13.0.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@microsoft/api-extractor": "^7.55.2",

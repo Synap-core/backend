@@ -43,6 +43,9 @@ export * from "./tool-labels.js";
 /** The shell's destination words and the Inbox's filters (founder 2A / 3A). */
 export * from "./destinations.js";
 
+/** A document embed's noun and label (`resolveEmbedWords`, over `describeEmbed`). */
+export * from "./embed-words.js";
+
 /**
  * Words a sentence-cased token must still spell the way people write them —
  * the casing of a NAME (a product, a format), not of a sentence. Deliberately
@@ -1489,7 +1492,7 @@ export function resolveImportStatusLabel(
 
 /**
  * LIBRARY marks — where one kept item (or the Library itself) stands, as the
- * word beside its mark (CAPTURE_LIBRARY_PLAN L2). Its OWN table: the light
+ * word beside its mark (capture-vs-library decision, wave L2). Its OWN table: the light
  * read's statuses (`@synap-core/types/imports` LIBRARY_READ_STATUSES) plus the
  * keep / archive / built marks. `over_budget` and `not_read` are not failures
  * — the item will be read ("Not read yet", "Over budget": read once the
@@ -1543,6 +1546,24 @@ export function resolveImportOriginLabel(
   return (
     IMPORT_ORIGIN_LABELS[origin.trim().toLowerCase()] ?? humanizeToken(origin)
   );
+}
+
+/**
+ * The Synap apps that sign a person in through the pod's own OAuth server,
+ * by their OAuth `client_id` (the backend's `FIRST_PARTY_CLIENTS` registry;
+ * stored on every device's refresh tokens). The name the consent screen asks
+ * about and the "Signed-in devices" list shows. An unknown id humanizes.
+ */
+export const FIRST_PARTY_CLIENT_NAMES: Readonly<Record<string, string>> = {
+  "synap-desktop": "Synap Desktop",
+  "synap-relay": "Synap Relay",
+};
+
+export function resolveFirstPartyClientName(
+  clientId: string | null | undefined
+): string {
+  if (!clientId?.trim()) return "";
+  return FIRST_PARTY_CLIENT_NAMES[clientId.trim()] ?? humanizeToken(clientId);
 }
 
 /**
@@ -1795,6 +1816,8 @@ export const OUTPUT_RETIRED_REASON_LABELS: Readonly<Record<string, string>> = {
    * (accepted / rejected / superseded), so the question is moot.
    */
   decision_resolved: "Decided elsewhere",
+  /** The agent withdrew a deliverable it had declared (`retireOutput`). */
+  withdrawn: "Withdrawn",
 };
 
 /** The human label for a retired reason; unknown values humanize, never leak. */
@@ -2277,7 +2300,9 @@ export const GOVERNANCE_RUNG_LABELS: Readonly<Record<GovernanceRung, string>> =
     "cbac-capability-allowlist": "Not in its tool list",
     "admin-actions": "Admin actions always ask",
     "force-propose": "A change of scope or identity",
+    "project-filing": "Filing into a project",
     "criteria-change": "Changing its own criteria",
+    "possible-duplicate": "Looks like an existing one",
     "pod-admin-schema-change": "A pod-wide schema change",
     "agent-schema-definition": "Defining a new kind",
     "agent-structure-write": "Changing how the pod works",

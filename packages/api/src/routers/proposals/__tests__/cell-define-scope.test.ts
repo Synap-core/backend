@@ -24,7 +24,8 @@ vi.mock("../executors/shared.js", () => ({ reportApproved: () => undefined }));
 
 // The executor only does: select(status).from(proposals).where(...)  [no limit]
 // and update(proposals).set(...).where(...).
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     select: () => ({ from: () => ({ where: async () => [] }) }),
     update: () => ({ set: () => ({ where: async () => undefined }) }),

@@ -14,7 +14,7 @@
  *   4. constraints.enum     — any enum → select
  *   5. valueType            — final fallback (string/number/boolean/date/entity_id/...)
  *
- * Spec: synap-team-docs/content/team/platform/profile-renderer.mdx
+ * Spec: synap-app/docs/architecture/profile-renderer.md
  */
 
 import type { EffectivePropertyDef, PropertyRenderKind } from "./types.js";

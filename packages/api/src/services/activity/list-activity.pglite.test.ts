@@ -85,8 +85,25 @@ function ddlFor(table: PgTable): string {
 
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
+/**
+ * ONE instant for the whole fixture: every `ago()` row and `midnightZone()`
+ * are measured from it, so the midnight straddle cannot drift with how long
+ * the suite runs before the parity test (CI run 39618292526 picked a zone
+ * against a later "now" and found no split day).
+ *
+ * Its UTC minute is kept in 6–56: a whole-hour zone's local minute IS the UTC
+ * minute, so some zone is then 6–57 minutes past its midnight (see
+ * `midnightZone`). Outside that range the instant steps back 9 minutes.
+ * Checked over every minute (at :00, :30, :59 s) of three days, winter, summer
+ * and a DST change: a zone exists at every instant.
+ */
+const FIXTURE_NOW = (() => {
+  const now = Date.now();
+  const minute = new Date(now).getUTCMinutes();
+  return minute < 6 || minute >= 57 ? now - 9 * 60_000 : now;
+})();
 const ago = (mins: number) =>
-  new Date(Date.now() - mins * 60_000).toISOString();
+  new Date(FIXTURE_NOW - mins * 60_000).toISOString();
 
 const W1 = randomUUID();
 const PROJ = randomUUID();
@@ -770,16 +787,19 @@ const daily = (
 ) => activityRouter.createCaller(ctx(userId)).daily(input);
 
 /**
- * A zone whose local midnight fell within the last hour, so the fixture's
- * recent rows (1–90 minutes old) straddle two calendar days there. Chosen at
- * run time: some zone always sits between 00:00 and 01:00.
+ * A zone whose local midnight fell 6–57 minutes before FIXTURE_NOW, so USER's
+ * recent rows straddle two calendar days there: the newest is 5 minutes old
+ * (S_DONE closes at ago(5); the ago(2)/ago(4) rows are the STRANGER's) and the
+ * oldest 60 (S_OPEN, live since ago(60)). The window must stay INSIDE that span — 3–88 (fb4582a44) let a
+ * zone 60–88 minutes past midnight put every row on one day. FIXTURE_NOW's
+ * minute guarantees a whole-hour zone in the window.
  */
 function midnightZone(): string {
-  const now = Date.now();
+  const now = FIXTURE_NOW;
   for (const tz of Intl.supportedValuesOf("timeZone")) {
     const today = calendarDayIn(now, tz);
     const since = Date.parse(activityDayRange(today, tz).since);
-    if (now - since >= 10 * 60_000 && now - since <= 50 * 60_000) return tz;
+    if (now - since >= 6 * 60_000 && now - since <= 57 * 60_000) return tz;
   }
   throw new Error("no zone has just passed midnight");
 }
