@@ -25,6 +25,7 @@ const h = vi.hoisted(() => ({
   },
   db: null as unknown,
   deleteCredentials: null as null | ((...args: unknown[]) => Promise<void>),
+  deleteSessions: null as null | ((...args: unknown[]) => Promise<void>),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -52,10 +53,15 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 vi.mock("@synap/auth", async (importOriginal) => {
   const deleteCredentials = vi.fn(async () => undefined);
+  const deleteSessions = vi.fn(async () => undefined);
   h.deleteCredentials = deleteCredentials;
+  h.deleteSessions = deleteSessions;
   return {
     ...(await importOriginal<Record<string, unknown>>()),
-    kratosAdmin: { deleteIdentityCredentials: deleteCredentials },
+    kratosAdmin: {
+      deleteIdentityCredentials: deleteCredentials,
+      deleteIdentitySessions: deleteSessions,
+    },
   };
 });
 
@@ -186,6 +192,7 @@ describe("applicationConnections.unlinkAccount — the owner floor", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await linkOf(OWNER)).toHaveLength(1);
     expect(h.deleteCredentials).not.toHaveBeenCalled();
+    expect(h.deleteSessions).not.toHaveBeenCalled();
   });
 
   it("the owner can unlink an admin", async () => {
@@ -196,6 +203,8 @@ describe("applicationConnections.unlinkAccount — the owner floor", () => {
     expect(h.deleteCredentials).toHaveBeenCalledWith(
       expect.objectContaining({ id: ADMIN, identifier: "cp:sub-admin" })
     );
+    // Removing the credential ends the sessions it opened.
+    expect(h.deleteSessions).toHaveBeenCalledWith({ id: ADMIN });
   });
 });
 
