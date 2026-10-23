@@ -25991,7 +25991,11 @@
                         "retiredAt": { "type": "string" },
                         "retiredReason": {
                           "type": "string",
-                          "enum": ["session_cancelled", "decision_resolved"]
+                          "enum": [
+                            "session_cancelled",
+                            "decision_resolved",
+                            "withdrawn"
+                          ]
                         },
                         "ref": {
                           "anyOf": [
@@ -27571,7 +27575,11 @@
                         "retiredAt": { "type": "string" },
                         "retiredReason": {
                           "type": "string",
-                          "enum": ["session_cancelled", "decision_resolved"]
+                          "enum": [
+                            "session_cancelled",
+                            "decision_resolved",
+                            "withdrawn"
+                          ]
                         },
                         "ref": {
                           "anyOf": [
