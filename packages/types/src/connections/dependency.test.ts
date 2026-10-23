@@ -6,9 +6,10 @@ import { describe, expect, it } from "vitest";
 import {
   LINK_EDGE_ROLES,
   deriveNodeNeighbourhood,
+  classifyDependencyBlocker,
   deriveOpenBlockers,
   isBlocked,
-  isDependencyBlockerCleared,
+  isDependencyEnded,
   normaliseDependencyRelation,
   type DependencyEdge,
   type DependencyNodeState,
@@ -68,33 +69,185 @@ describe("normaliseDependencyRelation — direction", () => {
   });
 });
 
-describe("isDependencyBlockerCleared — per kind", () => {
-  it("session: parity with the pod reader (open ⇔ OPEN_SESSION_STATUSES)", () => {
-    for (const s of OPEN_SESSION_STATUSES) {
-      expect(isDependencyBlockerCleared("session", s), s).toBe(false);
+describe("classifyDependencyBlocker — per kind", () => {
+  // Rules out "every terminal status clears" (the rule this replaced: a
+  // cancelled / failed blocker settled exactly like a closed one) AND "every
+  // non-open status clears" (`stale` is resumable, not ended).
+  it("session: only `closed` delivers; cancelled / failed are dropped; open and stale hold", () => {
+    expect(classifyDependencyBlocker("session", "closed")).toBe("delivered");
+    for (const s of ["cancelled", "failed"]) {
+      expect(classifyDependencyBlocker("session", s), s).toBe("dropped");
     }
-    for (const s of ["closed", "cancelled", "failed", "stale"]) {
-      expect(isDependencyBlockerCleared("session", s), s).toBe(true);
+    for (const s of [...OPEN_SESSION_STATUSES, "stale", null, "weird"]) {
+      expect(classifyDependencyBlocker("session", s), String(s)).toBe("open");
     }
   });
-  // Rules out "one global done list": `completed` clears a track but `active`
-  // does not, and an entity `Done` clears while a session `done` (not a
-  // session status) is not open either — each kind reads its own vocabulary.
-  it("track: completed / archived clear; active / paused do not", () => {
-    expect(isDependencyBlockerCleared("track", "completed")).toBe(true);
-    expect(isDependencyBlockerCleared("track", "archived")).toBe(true);
-    expect(isDependencyBlockerCleared("track", "active")).toBe(false);
-    expect(isDependencyBlockerCleared("track", "paused")).toBe(false);
+  // Rules out "one global done list": `completed` delivers a track but
+  // `archived` is the goal DROPPED ("archive it when the goal is dropped").
+  it("track: completed delivers; archived is dropped; active / paused hold", () => {
+    expect(classifyDependencyBlocker("track", "completed")).toBe("delivered");
+    expect(classifyDependencyBlocker("track", "archived")).toBe("dropped");
+    expect(classifyDependencyBlocker("track", "active")).toBe("open");
+    expect(classifyDependencyBlocker("track", "paused")).toBe("open");
   });
-  it("entity: folded status values; no status ⇒ still blocking", () => {
-    expect(isDependencyBlockerCleared("entity", "Done")).toBe(true);
-    expect(isDependencyBlockerCleared("entity", "closed-won")).toBe(true);
-    expect(isDependencyBlockerCleared("entity", "Resolved")).toBe(true);
-    expect(isDependencyBlockerCleared("entity", "in_progress")).toBe(false);
-    expect(isDependencyBlockerCleared("entity", null)).toBe(false);
+  it("entity: folded status values split delivered / dropped; no status ⇒ open", () => {
+    expect(classifyDependencyBlocker("entity", "Done")).toBe("delivered");
+    expect(classifyDependencyBlocker("entity", "closed-won")).toBe("delivered");
+    expect(classifyDependencyBlocker("entity", "Resolved")).toBe("delivered");
+    expect(classifyDependencyBlocker("entity", "Cancelled")).toBe("dropped");
+    expect(classifyDependencyBlocker("entity", "closed lost")).toBe("dropped");
+    expect(classifyDependencyBlocker("entity", "wont-do")).toBe("dropped");
+    expect(classifyDependencyBlocker("entity", "archived")).toBe("dropped");
+    expect(classifyDependencyBlocker("entity", "in_progress")).toBe("open");
+    expect(classifyDependencyBlocker("entity", null)).toBe("open");
   });
-  it("unknown kind never clears", () => {
-    expect(isDependencyBlockerCleared("playbook", "completed")).toBe(false);
+  // Rules out "read the option KEY even when the kind declares a lifecycle":
+  // a custom key the lists do not know (`published`, `rejected`) is decided by
+  // its category, and a category outranks a key that LOOKS finished.
+  it("entity: a known lifecycle category outranks the key", () => {
+    expect(classifyDependencyBlocker("entity", "published", "done")).toBe(
+      "delivered"
+    );
+    expect(classifyDependencyBlocker("entity", "rejected", "lost")).toBe(
+      "dropped"
+    );
+    expect(classifyDependencyBlocker("entity", "done", "active")).toBe("open");
+  });
+  it("unknown kind is open", () => {
+    expect(classifyDependencyBlocker("playbook", "completed")).toBe("open");
+  });
+  // `isDependencyEnded` is "no longer live", either way — the row-mark and
+  // "dependent still waiting" test, NOT "stopped blocking".
+  it("isDependencyEnded is delivered OR dropped", () => {
+    expect(isDependencyEnded("session", "closed")).toBe(true);
+    expect(isDependencyEnded("session", "cancelled")).toBe(true);
+    expect(isDependencyEnded("session", "active")).toBe(false);
+    expect(isDependencyEnded("entity", "Done")).toBe(true);
+    expect(isDependencyEnded("entity", "wont_do")).toBe(true);
+    expect(isDependencyEnded("entity", null)).toBe(false);
+  });
+});
+
+describe("deriveOpenBlockers — dropped vs delivered (founder decision 2026-10-22)", () => {
+  const work = { kind: "session", id: "work" };
+  // One fixture per kind where the OLD rule and the new one DISAGREE: under
+  // the old rule each of these blockers had settled and `work` read free.
+  it.each([
+    ["session", { status: "cancelled" }],
+    ["session", { status: "failed" }],
+    ["track", { status: "archived" }],
+    ["entity", { status: "Cancelled" }],
+    ["entity", { status: "rejected", category: "lost" as const }],
+  ])(
+    "a %s blocker that ended without delivering (%o) still holds, marked dropped",
+    (kind, state) => {
+      const edges = [dep("session", "work", kind, "b")];
+      const open = deriveOpenBlockers(
+        work,
+        edges,
+        states({ [`${kind}:b`]: { ...state, title: "The prerequisite" } })
+      );
+      expect(open).toEqual([
+        {
+          kind,
+          id: "b",
+          hidden: false,
+          dropped: true,
+          status: state.status,
+          title: "The prerequisite",
+        },
+      ]);
+      expect(isBlocked(work, edges, states({ [`${kind}:b`]: state }))).toBe(
+        true
+      );
+    }
+  );
+  // The other half: a DELIVERED blocker still clears, per kind.
+  it.each([
+    ["session", { status: "closed" }],
+    ["track", { status: "completed" }],
+    ["entity", { status: "Done" }],
+    ["entity", { status: "published", category: "done" as const }],
+  ])("a delivered %s blocker (%o) clears", (kind, state) => {
+    const edges = [dep("session", "work", kind, "b")];
+    expect(
+      deriveOpenBlockers(work, edges, states({ [`${kind}:b`]: state }))
+    ).toEqual([]);
+  });
+  // Rules out "stale settles" (it did: stale ∉ OPEN_SESSION_STATUSES).
+  it("a stale session blocker holds as OPEN, not dropped", () => {
+    const edges = [dep("session", "work", "session", "b")];
+    expect(
+      deriveOpenBlockers(
+        work,
+        edges,
+        states({ "session:b": { status: "stale" } })
+      )
+    ).toEqual([
+      {
+        kind: "session",
+        id: "b",
+        hidden: false,
+        dropped: false,
+        status: "stale",
+      },
+    ]);
+  });
+  // A replacement re-plans the dependent: whoever waited on the dropped B now
+  // waits on A, and A's own outcome decides.
+  it("a dropped blocker with a replacement is decided by the replacement", () => {
+    const edges = [
+      dep("session", "work", "session", "b"),
+      rep("session", "a", "session", "b"),
+    ];
+    expect(
+      deriveOpenBlockers(
+        work,
+        edges,
+        states({
+          "session:b": { status: "cancelled" },
+          "session:a": { status: "closed" },
+        })
+      )
+    ).toEqual([]);
+    expect(
+      deriveOpenBlockers(
+        work,
+        edges,
+        states({
+          "session:b": { status: "cancelled" },
+          "session:a": { status: "active", title: "Second try" },
+        })
+      )
+    ).toEqual([
+      {
+        kind: "session",
+        id: "a",
+        hidden: false,
+        dropped: false,
+        status: "active",
+        title: "Second try",
+        replaces: { kind: "session", id: "b" },
+      },
+    ]);
+  });
+  // A hidden blocker never reveals its status or name, and is never called
+  // dropped (that would be a fact about it the reader may not see).
+  it("a hidden blocker reports neither status, title nor dropped", () => {
+    const edges = [dep("session", "work", "entity", "secret")];
+    expect(
+      deriveOpenBlockers(
+        work,
+        edges,
+        states({
+          "entity:secret": {
+            hidden: true,
+            status: "cancelled",
+            title: "Secret",
+          },
+        })
+      )
+    ).toEqual([{ kind: "entity", id: "secret", hidden: true, dropped: false }]);
   });
 });
 
@@ -179,6 +332,8 @@ describe("deriveOpenBlockers — replaces", () => {
         kind: "session",
         id: "stepB",
         hidden: false,
+        dropped: false,
+        status: "active",
         replaces: { kind: "session", id: "stepA" },
       },
     ]);

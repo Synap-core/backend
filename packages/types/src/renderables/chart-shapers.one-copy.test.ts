@@ -15,13 +15,18 @@ import { describe, expect, it } from "vitest";
 import * as shapers from "./chart-shapers.js";
 
 const MONOREPO = join(import.meta.dirname, "..", "..", "..", "..", "..");
+// The repos that draw or freeze charts: each must be checked out.
 const ROOTS = [
   "synap-backend/packages",
   "synap-app/packages",
   "browser/electron",
   "relay-app/src",
-  "synap-intelligence-service/apps",
 ].map((r) => join(MONOREPO, r));
+// The IS draws no chart; scanned when present, skipped in a checkout without it
+// (the gate trees) — same contract as `vocabulary/tool-labels.test.ts`.
+const OPTIONAL_ROOTS = ["synap-intelligence-service/apps"]
+  .map((r) => join(MONOREPO, r))
+  .filter((r) => existsSync(r));
 const SKIP = new Set([
   "node_modules",
   "dist",
@@ -55,7 +60,7 @@ function sources(dir: string, out: string[] = []): string[] {
 const NAMES = Object.entries(shapers)
   .filter(([, v]) => typeof v === "function" || (v && typeof v === "object"))
   .map(([k]) => k);
-const files = ROOTS.flatMap((r) => sources(r));
+const files = [...ROOTS, ...OPTIONAL_ROOTS].flatMap((r) => sources(r));
 
 describe("chart shapers: one implementation", () => {
   it("hunts every shaper and scans a real tree (non-vacuity)", () => {

@@ -20,6 +20,7 @@ import {
   inArray,
   notInArray,
   desc,
+  listableEntityWhere,
 } from "@synap/database";
 
 import { entityReadVisibleWhere } from "../../entities/helpers.js";
@@ -342,6 +343,9 @@ async function loadOwnedCalendarEntities(
         // agent creates already carry the human's `userId`.
         eq(entities.userId, userId),
         isNull(entities.deletedAt),
+        // THE listing rule: demo (sample-project) and probe events never reach
+        // a real calendar.
+        listableEntityWhere(),
         inArray(profiles.slug, [...CALENDAR_PROFILE_SLUGS]),
         notInArray(entities.id, googleSyncedEntityIds())
       )

@@ -38,6 +38,7 @@
  */
 
 import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
+import { classifyDependencyBlocker } from "../connections/dependency.js";
 import {
   isSessionWorkingNow,
   type SessionLiveFacts,
@@ -296,16 +297,20 @@ export type BlockerEdges =
   | undefined;
 
 /**
- * The title of the first OPEN session this row waits on, or `null`. Waiting
- * on a finished session is waiting on nothing; an unreadable section claims
- * no blocker (the row's edge chip says "couldn't load" — the MARK does not
- * guess).
+ * The title of the first session this row still waits on, or `null`. THE
+ * dependency rule decides ({@link classifyDependencyBlocker}): only a
+ * DELIVERED blocker (closed) clears; one that ended without delivering
+ * (cancelled, failed) still holds until someone re-plans, and so does a stale
+ * one. An unreadable section claims no blocker (the row's edge chip says
+ * "couldn't load" — the MARK does not guess).
  */
 export function openBlockerTitle(edges: BlockerEdges): string | null {
   if (!edges || edges.status !== "ok") return null;
   return (
-    edges.items.find((item) => !isTerminalSessionStatus(item.status))?.title ??
-    null
+    edges.items.find(
+      (item) =>
+        classifyDependencyBlocker("session", item.status) !== "delivered"
+    )?.title ?? null
   );
 }
 

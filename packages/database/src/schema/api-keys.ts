@@ -80,8 +80,9 @@ export const apiKeys = pgTable(
     // keyType from caller input.
     //
     // 'app_person' is a PERSON's "Sign in with Synap" token for an app their
-    // pod approved (0339): held by the person (`user_id`, no linked user),
-    // grant `client_id` = the app's public id. It is the ONE marker that keeps
+    // pod approved (0339), or for a SYNAP pod app they connected (founder
+    // 2026-10-22): held by the person (`user_id`, no linked user), grant
+    // `client_id` = the app's (or the connection's) public id. It is the ONE marker that keeps
     // `resolveKeyIdentity` from adopting a person-held key that names an app
     // onto the app's agent (the 0313 rule). Minted EXCLUSIVELY by the OAuth
     // /token door (api services/app-person-token.ts); like is_internal, no

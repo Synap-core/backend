@@ -2046,6 +2046,7 @@ CREATE TABLE IF NOT EXISTS "proposals" (
   "reason_code"       text,
   "governance_reason" text,
   "app_id"            text,
+  "api_key_id"        uuid,
   "comments"          jsonb DEFAULT '[]',
   "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"        timestamp with time zone NOT NULL DEFAULT now()
@@ -2081,6 +2082,7 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "rejection_reason" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reason_code" text;  -- 0232 (structured rejection cause; app-level enum, free-text fallback stays)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "governance_reason" text;  -- 0238 (structured governance cause at creation; PROPOSE_REASON key, distinct from rejection reason_code)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "app_id" text;  -- 0310 (the app's public_id whose key filed this proposal; attribution only, no FK)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "api_key_id" uuid;  -- 0346 (the api_keys.id the filing request authenticated with; attribution only, no FK)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "comments" jsonb DEFAULT '[]';
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
@@ -5207,3 +5209,25 @@ BEGIN
       CHECK (("app_id" IS NULL) <> ("device_id" IS NULL));
   END IF;
 END $$;
+
+-- 0342: session runners — who is attached to a session right now (one row per
+-- session × client conversation holding its change-feed wait). Telemetry,
+-- stamped by the wait at most once a minute; never on focus_sessions (0277's
+-- trigger would wake the waiter). Mirrors 0342_session_runners.sql.
+CREATE TABLE IF NOT EXISTS "session_runners" (
+  "session_id"      uuid        NOT NULL REFERENCES "focus_sessions"("id") ON DELETE CASCADE,
+  "client_key"      text        NOT NULL,
+  "user_id"         text        NOT NULL,
+  "agent_user_id"   text,
+  "api_key_id"      uuid,
+  "harness"         text        NOT NULL,
+  "conversation_id" text        NOT NULL,
+  "cwd"             text,
+  "machine_user_id" text,
+  "first_seen_at"   timestamptz NOT NULL DEFAULT now(),
+  "last_seen_at"    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("session_id", "client_key")
+);
+
+CREATE INDEX IF NOT EXISTS "idx_session_runners_session_seen"
+  ON "session_runners" ("session_id", "last_seen_at");

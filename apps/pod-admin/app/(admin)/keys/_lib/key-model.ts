@@ -95,6 +95,22 @@ export function categorize(k: UnifiedKey): KeyCategory {
   }
 }
 
+/**
+ * A pod app's hourly access key (spec 17 PB3): `hub_inbound`, held by the
+ * app's own agent (`mintAppOAuthAccessKey`). It is how the connection works,
+ * not a thing the person manages: each refresh mints the next one, so revoking
+ * it does not stop the app. The app (Revoke on its card) is the one control.
+ * An App Connect app's key is `user_pat` (`app-connect.ts`) and stays a key.
+ */
+export function isPodAppAccessKey(k: UnifiedKey): boolean {
+  return k.keyType === "hub_inbound" && k.holder?.kind === "app";
+}
+
+/** The keys a person manages on `/my-connections`: never a pod app's access key. */
+export function managedKeys<K extends UnifiedKey>(keys: readonly K[]): K[] {
+  return keys.filter((k) => !isPodAppAccessKey(k));
+}
+
 /** Nouns from the vocabulary where the pod has one; the rest are key words. */
 export const CATEGORY_LABEL: Record<KeyCategory, string> = {
   app: resolveObjectNoun("application"),

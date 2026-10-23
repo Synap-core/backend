@@ -28,6 +28,7 @@ import {
   not,
   profileSlugScopeConditionFromRows,
   loadFacetSlugsBatch,
+  listableEntityWhere,
 } from "@synap/database";
 import {
   entities,
@@ -177,11 +178,15 @@ function systemMapPropertyDefScope(workspaceLens: string | null | undefined) {
  * relation over `entities`, so the narrow is the existing `projectLensWhere`
  * preset — never a new predicate. PURE narrow, ANDed with the workspace/pod
  * floor `systemMapEntityScope` already imposes; it can only remove rows.
- * `undefined` = no narrow, so an absent `projectId` is byte-for-byte today's
- * behaviour.
+ * Also carries THE listing rule (`listableEntityWhere`: no probe rows, no
+ * demo rows unless this project lens is set — the lens is the demo toggle),
+ * so every System Map count and cluster agrees with `entities.list`.
  */
 function systemMapProjectScope(projectId: string | undefined) {
-  return projectId ? projectLensWhere(entities.id, projectId) : undefined;
+  const listable = listableEntityWhere({ projectLens: projectId });
+  return projectId
+    ? and(projectLensWhere(entities.id, projectId), listable)
+    : listable;
 }
 
 /**
@@ -768,6 +773,9 @@ export const graphRouter = router({
             facetLens: true,
           }),
           isNull(entities.deletedAt),
+          // THE listing rule: the whole-graph node list leaves probe and demo
+          // (sample-project) rows out.
+          listableEntityWhere(),
           // Polymorphic (Kind + Facets): role slugs match via facet EXISTS
           // across all the user's workspaces (undefined lens + owner floor).
           // Built from the rows the assert above already resolved — one lookup.
@@ -901,6 +909,8 @@ export const graphRouter = router({
       const allEntities = await db.query.entities.findMany({
         where: and(
           eq(entities.userId, ctx.userId),
+          // THE listing rule: global stats count no probe or demo rows.
+          listableEntityWhere(),
           // Polymorphic (Kind + Facets) — same routing as getFull above, built
           // from the rows the assert already resolved.
           input.entityType && typeRows

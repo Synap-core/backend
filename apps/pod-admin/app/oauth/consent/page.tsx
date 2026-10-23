@@ -18,6 +18,11 @@
  * the database and returns its REAL name, redirect host and grantable scopes —
  * so a rewritten URL can only ever render (and then mint) an authorization the
  * pod would have granted from a fresh /authorize anyway.
+ *
+ * `space_hint` is not an authorize parameter: it is read here, kept apart from
+ * the params the server re-validates, and only lists that space first where
+ * the person can give it (`spaceHintFirst`). The charset is the SDK's and the
+ * browser's.
  */
 
 import { ConsentForm } from "./ConsentForm";
@@ -36,6 +41,8 @@ interface OAuthConsentPageProps {
     max_age?: string;
     prompt?: string;
     auth_req?: string;
+    /** The launch's space (`/authorize` forwards `synap_space_hint`). */
+    space_hint?: string;
   }>;
 }
 
@@ -55,6 +62,11 @@ export default async function OAuthConsentPage({
     <ConsentForm
       podHost={podHost}
       identity={identity}
+      spaceHint={
+        sp.space_hint && /^[A-Za-z0-9_-]{1,64}$/.test(sp.space_hint)
+          ? sp.space_hint
+          : undefined
+      }
       params={{
         clientId: sp.client_id ?? "",
         redirectUri: sp.redirect_uri ?? "",

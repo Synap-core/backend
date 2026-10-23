@@ -60,8 +60,10 @@ export type UnlinkAccountOutcome =
       app: { displayName: string; clientId: string };
       /**
        * `removed` / `not_applicable` (another issuer) / `failed`: the link is
-       * gone, but their Cloud sign-in credential could not be removed, so the
-       * owner is told rather than shown a clean success.
+       * gone, but their Cloud sign-in credential or their live sessions could
+       * not be removed, so the owner is told rather than shown a clean success.
+       * `removed` means BOTH: removing a credential must end the sessions it
+       * opened (ASVS V3), or the person stays signed in through it.
        */
       signIn: "removed" | "not_applicable" | "failed";
     }
@@ -86,6 +88,8 @@ export interface UnlinkAccountDeps {
     kratosIdentityId: string;
     subject: string;
   }): Promise<boolean>;
+  /** Ends every live Kratos session of the identity. */
+  endSessions(kratosIdentityId: string): Promise<boolean>;
   email(userId: string): Promise<string | null>;
   podAdminRole(userId: string): Promise<PodAdminRole | null>;
 }
@@ -127,6 +131,17 @@ const defaultDeps: UnlinkAccountDeps = {
       return true;
     } catch (error) {
       // Already gone is the outcome we wanted.
+      const status = (error as { response?: { status?: number } }).response
+        ?.status;
+      return status === 404;
+    }
+  },
+  endSessions: async (kratosIdentityId) => {
+    try {
+      await kratosAdmin.deleteIdentitySessions({ id: kratosIdentityId });
+      return true;
+    } catch (error) {
+      // No sessions left is the outcome we wanted.
       const status = (error as { response?: { status?: number } }).response
         ?.status;
       return status === 404;
@@ -220,17 +235,21 @@ export async function unlinkConnectionAccount(
   });
   if (!removed) return { status: "not_linked" };
 
-  const signIn = isCloudSignInIssuer(
-    await deps.cloudSignInIssuer(),
-    connection.issuerUrl
-  )
-    ? (await deps.detachCloudSignIn({
-        kratosIdentityId: input.userId,
-        subject: removed.issuerSubject,
-      }))
-      ? "removed"
-      : "failed"
-    : "not_applicable";
+  let signIn: "removed" | "not_applicable" | "failed" = "not_applicable";
+  if (
+    isCloudSignInIssuer(await deps.cloudSignInIssuer(), connection.issuerUrl)
+  ) {
+    // The credential first, then the sessions it opened: ending sessions
+    // while the credential stands would let the person sign straight back in.
+    const credentialGone = await deps.detachCloudSignIn({
+      kratosIdentityId: input.userId,
+      subject: removed.issuerSubject,
+    });
+    signIn =
+      credentialGone && (await deps.endSessions(input.userId))
+        ? "removed"
+        : "failed";
+  }
 
   return {
     status: "unlinked",

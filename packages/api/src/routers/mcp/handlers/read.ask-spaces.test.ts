@@ -54,9 +54,15 @@ vi.mock("../../../services/retrieval/retrieve.js", () => ({
   }),
 }));
 
-vi.mock("../../../services/knowledge/synthesize.js", () => ({
-  synthesizeAnswer: async () => ({ answer: "ok", sources: [], routedTo: [] }),
-}));
+vi.mock(
+  "../../../services/knowledge/synthesize.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../services/knowledge/synthesize.js")
+    >()),
+    synthesizeAnswer: async () => ({ answer: "ok", sources: [], routedTo: [] }),
+  })
+);
 
 vi.mock("../../../utils/pending-capture-dedup.js", () => ({
   findPendingTextMatches: async () => [],

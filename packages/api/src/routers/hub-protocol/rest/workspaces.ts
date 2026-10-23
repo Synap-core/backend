@@ -22,6 +22,7 @@ import {
   isWorkspaceIdentityConflictError,
   nextFreeWorkspaceName,
   readTemplateState,
+  listableEntityWhere,
   type WorkspaceDefinitionInput,
   type AgentMetadata,
 } from "@synap/database";
@@ -595,7 +596,14 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         db
           .select({ count: drizzleSql<number>`cast(count(*) as integer)` })
           .from(entities)
-          .where(and(isNull(entities.workspaceId), isNull(entities.deletedAt))),
+          .where(
+            and(
+              isNull(entities.workspaceId),
+              isNull(entities.deletedAt),
+              // THE listing rule: probe and demo rows are not counted.
+              listableEntityWhere()
+            )
+          ),
       ]);
       const entityCountByWorkspace = new Map(
         [...countRows].map(([id, stats]) => [id, stats.entityCount])
@@ -2277,7 +2285,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
 
       const baseWhere = and(
         eq(entities.workspaceId, workspaceId),
-        isNull(entities.deletedAt)
+        isNull(entities.deletedAt),
+        // THE listing rule: the digest neither counts nor names probe and
+        // demo rows (FB1020 B5).
+        listableEntityWhere()
       );
 
       const [countRows, recentRows] = await Promise.all([

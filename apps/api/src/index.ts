@@ -13,8 +13,10 @@ import "dotenv/config";
 
 // Initialize OpenTelemetry tracing FIRST (before any other imports)
 // This must be done before importing any libraries to ensure proper instrumentation
-// TODO: Enable tracing for production observability
-// import { initializeTracing } from "@synap-core/core";
+// TODO: Enable tracing for production observability — `tracing.ts` is not in
+// the @synap-core/core barrel; add a `./tracing` export subpath first (relay-app
+// derives its tsconfig paths from those exports: its map must follow).
+// import { initializeTracing } from "@synap-core/core/tracing";
 // initializeTracing();
 
 import { Hono, type Context as HonoContext } from "hono";
@@ -81,6 +83,7 @@ import {
   handshakeRateLimitMiddleware,
 } from "./middleware/security.js";
 import { configuredPodAdminBase } from "./pod-admin-config.js";
+import { registerInviteBounce } from "./invite-bounce.js";
 import {
   dispatchOpen,
   OPEN_CLIENT_PARAM,
@@ -553,6 +556,10 @@ app.get("/admin/connect", (c) => {
   target.search = url.search;
   return c.redirect(target.toString(), 302);
 });
+
+// ─── /invite/:token → this pod's console invite page ─────────────────────
+// The link an own-domain pod's invite email carries (`invite-bounce.ts`).
+registerInviteBounce(app);
 
 // ── Deep-link bounce (public, no auth) ──────────────────────────────────────
 // An https URL — clickable anywhere (Discord, email, chat). Humans hitting

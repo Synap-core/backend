@@ -227,6 +227,26 @@ export async function loadMachineNames(
 }
 
 /**
+ * The computer each filing KEY names (B7: `proposals.api_key_id` →
+ * `api_keys.instance_label`), read LIVE so labelling a key later names every
+ * proposal it filed. Only the label leaves this read — never the key. A key
+ * with no label maps to `null` (the agent's host is the fallback in
+ * `actorDisplayName`). The ONE reader: the proposal list, its clusters and
+ * the source panel all name the same computer.
+ */
+export async function loadKeyComputerNames(
+  apiKeyIds: readonly (string | null | undefined)[]
+): Promise<Map<string, string | null>> {
+  const unique = [...new Set(apiKeyIds.filter((id): id is string => !!id))];
+  if (unique.length === 0) return new Map();
+  const rows = await db
+    .select({ id: apiKeys.id, label: apiKeys.instanceLabel })
+    .from(apiKeys)
+    .where(inArray(apiKeys.id, unique));
+  return new Map(rows.map((r) => [r.id, r.label ?? null]));
+}
+
+/**
  * The computers — one person's when `personId` is set, else every one — each
  * shaped into a `MachineView`, with its approver's id beside it.
  */
