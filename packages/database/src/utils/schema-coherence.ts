@@ -2057,6 +2057,29 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "kpi",
     addedBy: "0302_track_direction_and_kpi.sql",
   },
+  // 0344 — how a goal ended (verdict + reason + who/when). Every track read
+  // selects the whole row, so a missing column 500s every track door
+  // (`project_tracks` is not in the baseline: these are its only startup guards).
+  {
+    table: "project_tracks",
+    column: "verdict",
+    addedBy: "0344_track_lifecycle_and_verdict.sql",
+  },
+  {
+    table: "project_tracks",
+    column: "verdict_reason",
+    addedBy: "0344_track_lifecycle_and_verdict.sql",
+  },
+  {
+    table: "project_tracks",
+    column: "verdict_by",
+    addedBy: "0344_track_lifecycle_and_verdict.sql",
+  },
+  {
+    table: "project_tracks",
+    column: "verdict_at",
+    addedBy: "0344_track_lifecycle_and_verdict.sql",
+  },
   // 0275 — the document content revision (the ONE content-write door's CAS)
   // and the revision the Yjs cache is known to equal. Every document content
   // write names `content_revision`, so without it every save 500s.

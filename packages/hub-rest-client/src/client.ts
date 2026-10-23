@@ -276,6 +276,8 @@ import type {
   HubTrack,
   HubTrackStatus,
   HubTrackWriteResult,
+  ReopenTrackInput,
+  TrackCloseInput,
   ListTracksOptions,
   StartStageSessionInput,
   StartTrackInput,
@@ -2673,16 +2675,38 @@ export class HubRestClient {
     );
   }
 
-  /** Pause, resume, complete or archive a track. */
+  /**
+   * Move a track through its lifecycle. Closing (`completed`) or dropping
+   * (`archived`) needs `close` (the verdict); both are final — reopen with
+   * {@link reopenTrack}. An agent's close always comes back `proposed`.
+   */
   async setTrackStatus(
     trackId: string,
     status: HubTrackStatus,
-    reasoning?: string
+    reasoning?: string,
+    close?: TrackCloseInput
   ): Promise<HubTrackWriteResult> {
     return this.request<HubTrackWriteResult>(
       "PATCH",
       `/api/hub/tracks/${encodeURIComponent(trackId)}`,
-      { status, ...(reasoning ? { reasoning } : {}) }
+      {
+        status,
+        ...(reasoning ? { reasoning } : {}),
+        ...(close?.verdict ? { verdict: close.verdict } : {}),
+        ...(close?.verdictReason ? { verdictReason: close.verdictReason } : {}),
+      }
+    );
+  }
+
+  /** Reopen a closed or dropped goal as a NEW version (linked `replaces`). */
+  async reopenTrack(
+    trackId: string,
+    input?: ReopenTrackInput
+  ): Promise<HubStartTrackResult> {
+    return this.request<HubStartTrackResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/reopen`,
+      input ?? {}
     );
   }
 
@@ -2713,7 +2737,7 @@ export class HubRestClient {
     if (!stageKey) {
       const track = await this.getTrack(trackId);
       if (!track.currentStage && (track.stages ?? []).length === 0) {
-        // A STAGE-LESS track (a lasting intent): its work is a session filed
+        // A STAGE-LESS track (a goal): its work is a session filed
         // into it — the session door with `trackId`, never a refusal.
         const created = await this.createFocusSession({
           trackId,

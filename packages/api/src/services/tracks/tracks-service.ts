@@ -11,7 +11,14 @@
  *   startTrack        — the ONE way a track is born. The proto-track door
  *                       `projects.instantiateFromPlaybook` was retired (W5c);
  *                       its legacy approval executor calls startTrack directly.
- *   setTrackStatus    — pause / resume / complete / archive.
+ *   setTrackStatus    — any move of the track's SYSTEM LIFECYCLE
+ *                       (`TRACK_LIFECYCLE`, @synap-core/types/units): open
+ *                       (proposed · agreed · ready) · active · paused · done
+ *                       (completed, "Closed") · lost (archived, "Dropped").
+ *                       Governed through the SAME classifier as a kind's
+ *                       status move; closing carries a verdict (R1).
+ *   reopenTrack       — a closed goal comes back as a NEW version (R8),
+ *                       linked `new --replaces--> old`, through startTrack.
  *   advanceTrackStage — the ONE writer of `project_tracks.current_stage` after
  *                       birth. Gate evaluation is the subject-agnostic core in
  *                       `services/playbooks/stage-gate.ts` (`applyStageGate`),
@@ -21,7 +28,7 @@
  *   setTrackParams    — the method's param answers (0274), governed `track/update`.
  *   setTrackDirection — the track's direction + KPI (0302), governed
  *                       `track/update`. Reaching the KPI target NUDGES
- *                       (`track.kpi_reached`); completion stays a person's act.
+ *                       (`track.kpi_reached`); closing stays a person's act.
  *   addTrackStage     — append an EMERGENT stage to the pinned stage list,
  *                       governed `track/update`. The one writer of
  *                       `definition_snapshot.stages` after birth.
@@ -55,8 +62,9 @@ import {
   projects,
   projectTracks,
   users,
+  links,
   drizzleSql,
-  isUniqueViolation,
+  classifyLifecycleMove,
 } from "@synap/database";
 import {
   DEFAULT_PLAYBOOK_STAGE_CATEGORY,
@@ -69,17 +77,23 @@ import type {
   ProjectTrack,
   ProjectTrackKpi,
   ProjectTrackStatus,
+  ProjectTrackVerdict,
 } from "@synap/database/schema";
 import { type LIVE_PROJECT_TRACK_STATUSES } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
-import {
-  buildObjectActionTitle,
-  resolveStatusLabel,
-} from "@synap-core/types/vocabulary";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { formatKpiFraction } from "@synap-core/types/lens";
 import {
   canTransitionTrack,
+  checkTrackClose,
+  isTrackClosed,
+  isTrackVerdict,
+  resolveTrackStatusLabel,
+  TRACK_LIFECYCLE,
+  trackStatusCategory,
+  type TrackStatusIn,
+  type TrackVerdict,
   deriveTrackStages,
   readTrackDirection,
   readTrackKpi,
@@ -114,6 +128,7 @@ import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { projectPathConditions } from "../projects/project-path.js";
 import type { CreateFocusSessionParams } from "../focus-sessions/create-session.js";
 import { createLinks } from "../links/links-service.js";
+import { writeDependencyLink } from "../links/dependency-links.js";
 import { requestClientKey } from "../focus-sessions/resolve-work-session.js";
 import { linkProjectToWorkspace } from "../../utils/project-workspace.js";
 import {
@@ -184,7 +199,7 @@ const _sameStatuses: _SameStatuses = true;
 void _sameStatuses;
 
 // LIVE (`LIVE_PROJECT_TRACK_STATUSES`, @synap/database — the statuses that
-// hold a name, 0317's index predicate) and CLOSED (`CLOSED_TRACK_STATUSES`,
+// hold a name, 0317/0344's index predicate) and CLOSED (`CLOSED_TRACK_STATUSES`,
 // @synap-core/types/units — `isTrackClosed`) partition the statuses: their
 // union is every status and they share none. A status added to the enum and
 // classified in neither list, or in both, stops the build.
@@ -199,6 +214,31 @@ type _LiveClosedPartition = [
   : never;
 const _liveClosedPartition: _LiveClosedPartition = true;
 void _liveClosedPartition;
+
+// …and the pod's LIVE list is EXACTLY the lifecycle's open, active and paused
+// categories (`TRACK_STATUS_DECLARATION`, @synap-core/types/units): a status
+// moved to another category on one side only stops the build.
+type _LiveIsCategories = [
+  Exclude<_LiveStatus, TrackStatusIn<"open" | "active" | "paused">>,
+] extends [never]
+  ? [
+      Exclude<TrackStatusIn<"open" | "active" | "paused">, _LiveStatus>,
+    ] extends [never]
+    ? true
+    : never
+  : never;
+const _liveIsCategories: _LiveIsCategories = true;
+void _liveIsCategories;
+
+// The verdict mirror (`PROJECT_TRACK_VERDICTS`, @synap/database) is EXACTLY
+// the shared set (`TRACK_VERDICTS`, @synap-core/types/units).
+type _SameVerdicts = [ProjectTrackVerdict] extends [TrackVerdict]
+  ? [TrackVerdict] extends [ProjectTrackVerdict]
+    ? true
+    : never
+  : never;
+const _sameVerdicts: _SameVerdicts = true;
+void _sameVerdicts;
 
 // The same pin for the KPI (0302): `ProjectTrackKpi` (@synap/database) and
 // `TrackKpi` (@synap-core/types/units) must describe ONE shape.
@@ -262,6 +302,18 @@ export interface TrackView {
    * (with `updatedAt` / `updatedBy`), never measured.
    */
   kpi: TrackKpi | null;
+  /**
+   * How the track ENDED (0344, R1) — `null` while it is live, and on a track
+   * dropped before verdicts existed. Read with its category: done verdicts
+   * (met · partly_met · not_met) on a closed track, lost ones on a dropped one.
+   */
+  verdict: TrackVerdict | null;
+  /** Why, in words — always present for `impossible` and `replaced`. */
+  verdictReason: string | null;
+  /** The person who closed it (the approver when an agent proposed it). */
+  verdictBy: string | null;
+  /** ISO-8601 — when it was closed; `null` when not recorded (before 0344). */
+  verdictAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -302,6 +354,10 @@ export function toTrackView(
     checkGate: readTrackCheckGate(track),
     direction: readTrackDirection(track.direction),
     kpi: readTrackKpi(track.kpi),
+    verdict: isTrackVerdict(track.verdict) ? track.verdict : null,
+    verdictReason: track.verdictReason ?? null,
+    verdictBy: track.verdictBy ?? null,
+    verdictAt: track.verdictAt ? new Date(track.verdictAt).toISOString() : null,
     createdAt: new Date(track.createdAt).toISOString(),
     updatedAt: new Date(track.updatedAt).toISOString(),
   };
@@ -622,8 +678,17 @@ export async function countProjectsUsingMethod(
 export interface StartTrackInput {
   projectId: string;
   /**
-   * The METHOD — optional (work model W1, 2026-10-11): a track is a lasting
-   * intent with a goal; stages are optional. Absent/null ⇒ a stage-less track,
+   * REOPEN (R8): the closed or dropped track this one is the NEW VERSION of —
+   * same project, not already replaced by a newer version. The new track is
+   * linked `new --replaces--> old` (the dependency door), the old one stays
+   * closed with its verdict, and the old one's dependents follow the new one
+   * (`deriveOpenBlockers` follows `replaces`). Set by `reopenTrack` and by
+   * its `track/create` approval replay.
+   */
+  replacesTrackId?: string | null;
+  /**
+   * The METHOD — optional (work model W1, 2026-10-11): a track is a goal;
+   * stages are optional. Absent/null ⇒ a stage-less track,
    * and `name` is then required (there is no method name to default to).
    */
   playbookId?: string | null;
@@ -678,14 +743,15 @@ export type StartTrackResult = (
 };
 
 /**
- * Start a track on a project — a LASTING intent with a goal (W1). The method
+ * Start a track on a project — a goal, open as long as it matters, closed by
+ * a person with a verdict once its criteria are met. The method
  * (a project-scoped playbook, with stages) is optional; with none, `name` is
  * required and the track has no stages: work in it is `start_session` +
  * `trackId`. A LIVE track's identity on its project is its NAME (0317), and
  * the name defaults to the method's: starting the same method (or no method)
  * again under the same name returns the live track as `exists`, and nothing
- * is filed or written; under another name it starts a second track. Completed
- * and archived tracks hold no name. A live track of ANOTHER method (or of a
+ * is filed or written; under another name it starts a second track. Closed
+ * and dropped tracks hold no name (`replacesTrackId` reopens one). A live track of ANOTHER method (or of a
  * method, when none was asked for) already holding the name is refused
  * (CONFLICT) — never handed back as if it were this one.
  */
@@ -700,8 +766,7 @@ export async function startTrack(
     throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
   }
 
-  // The method — OPTIONAL (W1): a track is a lasting intent with a goal, and
-  // stages are optional. With one, its own visibility floor applies
+  // The method — OPTIONAL (W1): a track is a goal, and stages are optional. With one, its own visibility floor applies
   // (`scopedDb` + the `playbooks` rule) and only `scope: "project"` is a method.
   const playbook = input.playbookId
     ? await loadTrackMethod(input.playbookId, actor)
@@ -723,6 +788,12 @@ export async function startTrack(
 
   await assertProjectWrite(project, actor.userId);
 
+  // Re-checked on every call, the approval replay included: the old version
+  // must still be closed and still unreplaced when the new one is born.
+  const replaces = input.replacesTrackId
+    ? await assertReplaceableTrack(input.replacesTrackId, project.id, actor)
+    : null;
+
   // Advisory, computed from the method AS IT STANDS (what would be pinned).
   const missingDomains = playbook
     ? await listMissingStageDomains(db, playbook.stages, actor.userId)
@@ -741,6 +812,16 @@ export async function startTrack(
   const live = await (await repo()).findLiveByName(project.id, trackName);
   if (live) {
     assertNameHeldBySameMethod(live, playbook);
+    // Reopening: the live track holding the name must BE the new version (a
+    // repeated reopen), never an unrelated goal handed back as if it were.
+    if (replaces && !(await replacingTrackIds(replaces.id)).includes(live.id)) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message:
+          `A live track on this project is already named "${live.name}" — ` +
+          "work in it, or reopen this goal under another name.",
+      });
+    }
     return {
       status: "exists",
       track: live,
@@ -805,6 +886,8 @@ export async function startTrack(
       ...(Object.keys(trackParams).length > 0 ? { params: trackParams } : {}),
       ...(direction ? { direction } : {}),
       ...(kpiInput ? { kpi: kpiInput } : {}),
+      // The closed version this one reopens (R8) — re-checked at approval.
+      ...(replaces ? { replacesTrackId: replaces.id } : {}),
       // The consent the summary states ("…and let <agent> work in …").
       ...(spaceGrantConsent
         ? { [TRACK_SPACE_GRANT_KEY]: spaceGrantConsent }
@@ -871,6 +954,34 @@ export async function startTrack(
       },
     ]);
   }
+  if (created && replaces) {
+    // `new --replaces--> old` through THE dependency door (validated, one
+    // producer, `link.create.completed` emitted). The start is already
+    // authorized, so the ungoverned write is the right one. A failure is
+    // SURFACED: a new version that silently lost its lineage would read as an
+    // unrelated goal, and the old one's dependents would stay held.
+    const linked = await writeDependencyLink({
+      edge: {
+        fromType: "track",
+        fromId: track.id,
+        toType: "track",
+        toId: replaces.id,
+        linkType: "replaces",
+      },
+      userId: actor.userId,
+      attribution: {
+        agentUserId: input.approvedSpaceGrant?.agentUserId ?? actor.agentUserId,
+        proposalId: input.approvedSpaceGrant?.proposalId ?? null,
+        sessionId: actor.sessionId ?? null,
+      },
+    });
+    if (!linked.ok) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: `Track "${track.name}" was started but not linked to the version it reopens: ${linked.error}`,
+      });
+    }
+  }
   if (created) {
     void emitSideEffects({
       subjectType: "track",
@@ -915,6 +1026,100 @@ function assertNameHeldBySameMethod(
         `not run "${playbook.name}" — pass another name to start it.`
       : `A live track on this project is already named "${live.name}" and ` +
         `runs a method — pass another name to start a new track.`,
+  });
+}
+
+/** The tracks that already replace `trackId` (newer versions of it). */
+async function replacingTrackIds(trackId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db
+    .select({ fromId: links.fromId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "track"),
+        eq(links.toType, "track"),
+        eq(links.toId, trackId),
+        eq(links.linkType, "replaces")
+      )
+    );
+  return rows.map((r) => r.fromId);
+}
+
+/**
+ * The track a reopen replaces: visible to the actor, on THIS project, closed
+ * or dropped (a live goal needs no reopening), and the NEWEST version — a
+ * track already replaced is reopened through the version that replaced it,
+ * so a goal's versions stay one line.
+ */
+async function assertReplaceableTrack(
+  trackId: string,
+  projectId: string,
+  actor: TrackActor
+): Promise<ProjectTrack> {
+  const old = await getTrack(trackId, actor);
+  if (!old || old.projectId !== projectId) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "The track to reopen was not found on this project.",
+    });
+  }
+  if (!isTrackClosed(old)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Track "${old.name}" is ${resolveTrackStatusLabel(old.status).toLowerCase()}, not closed — work in it instead of reopening it.`,
+    });
+  }
+  if ((await replacingTrackIds(old.id)).length > 0) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Track "${old.name}" was already reopened as a newer version — reopen that one instead.`,
+    });
+  }
+  return old;
+}
+
+/**
+ * REOPEN a closed or dropped goal (R8) — as a NEW version, never in place:
+ * the closed track keeps its status and verdict, and its sessions stay filed
+ * on it. The new track carries the same name (free once the old one is not
+ * live), method, answers and direction, and the KPI's definition (not its last
+ * stated value), starts `active`, and is linked `new --replaces--> old`.
+ * Through `startTrack`, so governance, idempotency and the space-grant consent
+ * are the start's own: an agent's reopen is a proposal.
+ */
+export async function reopenTrack(input: {
+  trackId: string;
+  /** A new name — absent ⇒ the closed track's. */
+  name?: string;
+  actor: TrackActor;
+}): Promise<StartTrackResult> {
+  const old = await getTrack(input.trackId, input.actor);
+  if (!old) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+  }
+  const kpi = readTrackKpi(old.kpi);
+  const params =
+    old.playbookId && old.params && Object.keys(old.params).length > 0
+      ? old.params
+      : undefined;
+  return startTrack({
+    projectId: old.projectId,
+    playbookId: old.playbookId,
+    name: input.name?.trim() || old.name,
+    ...(params ? { params } : {}),
+    ...(old.direction ? { direction: old.direction } : {}),
+    ...(kpi
+      ? {
+          kpi: {
+            label: kpi.label,
+            target: kpi.target,
+            ...(kpi.unit ? { unit: kpi.unit } : {}),
+          },
+        }
+      : {}),
+    replacesTrackId: old.id,
+    actor: input.actor,
   });
 }
 
@@ -1020,26 +1225,56 @@ async function loadTrackForWrite(
   return { track, project };
 }
 
+/** How a goal ended, as a status move carries it (R1). */
+export interface TrackCloseInput {
+  verdict?: string | null;
+  verdictReason?: string | null;
+}
+
 /**
- * Refuse a status move the shared table (`TRACK_STATUS_TRANSITIONS`,
- * @synap-core/types/units) does not allow. Called by `setTrackStatus` AND by
- * the `track/update` approval replay: a proposal filed while the move was
- * legal can be approved after the track moved on (archived, say) — replaying
- * it unchecked would revive an archived track and collide with a newer live
- * track of the same name.
+ * Refuse a status move the shared lifecycle does not allow — the transition
+ * (`TRACK_STATUS_TRANSITIONS`, derived from the categories: done and lost are
+ * final) and the verdict (`checkTrackClose`: closing needs a done verdict,
+ * dropping a lost one, impossible / replaced a reason, and nothing else
+ * carries one). Called by `setTrackStatus` AND by the `track/update` approval
+ * replay: a proposal filed while the move was legal can be approved after the
+ * track moved on (dropped, say) — replaying it unchecked would revive a
+ * closed track.
  */
 export function assertTrackTransition(
   track: Pick<ProjectTrack, "name" | "status">,
-  to: ProjectTrackStatus
+  to: ProjectTrackStatus,
+  close: TrackCloseInput = {}
 ): void {
-  if (canTransitionTrack(track.status, to)) return;
-  throw new TRPCError({
-    code: "BAD_REQUEST",
-    message:
-      track.status === "archived"
-        ? `Track "${track.name}" is archived — start the method again to run it anew.`
+  if (!canTransitionTrack(track.status, to)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: isTrackClosed(track)
+        ? `Track "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — that is final. Reopen it as a new version to work on it again.`
         : `A ${track.status} track cannot move to ${to}.`,
-  });
+    });
+  }
+  const refusal = checkTrackClose(to, close);
+  if (refusal) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: refusal });
+  }
+}
+
+/**
+ * What a move INTO `to` means for governance — the SAME classifier every
+ * kind's status move goes through (`classifyLifecycleMove`, read on the
+ * track's system lifecycle). Handed to `checkPermissionOrPropose` only for a
+ * move into done/lost or a person-only status: there it lifts the floors
+ * (a person-only status always proposes for an agent, whatever rule the pod
+ * has; into lost proposes unless a rule names the write). Every other move
+ * keeps the classification `track/update` already had.
+ */
+export function trackStatusLifecycleMove(
+  to: ProjectTrackStatus
+): { intoTerminal: boolean; humanOnly: boolean } | undefined {
+  const move = classifyLifecycleMove(TRACK_LIFECYCLE, to);
+  if (!move || (!move.intoTerminal && !move.humanOnly)) return undefined;
+  return { intoTerminal: move.intoTerminal, humanOnly: move.humanOnly };
 }
 
 export type SetTrackStatusResult =
@@ -1048,6 +1283,10 @@ export type SetTrackStatusResult =
 export async function setTrackStatus(input: {
   trackId: string;
   status: ProjectTrackStatus;
+  /** Required to close (done) or drop (lost) the goal — refused otherwise. */
+  verdict?: string | null;
+  /** Required for the verdicts `impossible` and `replaced`. */
+  verdictReason?: string | null;
   actor: TrackActor;
 }): Promise<SetTrackStatusResult> {
   const { track, project } = await loadTrackForWrite(
@@ -1055,7 +1294,13 @@ export async function setTrackStatus(input: {
     input.actor
   );
   if (track.status === input.status) return { status: "unchanged", track };
-  assertTrackTransition(track, input.status);
+  const close = {
+    verdict: input.verdict ?? null,
+    verdictReason: input.verdictReason?.trim() || null,
+  };
+  // Refused BEFORE governance, so a close with no verdict is told to its
+  // author rather than filed for a person to approve.
+  assertTrackTransition(track, input.status, close);
 
   const perm = await checkPermissionOrPropose({
     userId: input.actor.userId,
@@ -1067,7 +1312,14 @@ export async function setTrackStatus(input: {
     action: "update",
     source: input.actor.source,
     reasoning: input.actor.reasoning,
-    data: { id: track.id, name: track.name, status: input.status },
+    lifecycleMove: trackStatusLifecycleMove(input.status),
+    data: {
+      id: track.id,
+      name: track.name,
+      status: input.status,
+      ...(close.verdict ? { verdict: close.verdict } : {}),
+      ...(close.verdictReason ? { verdictReason: close.verdictReason } : {}),
+    },
   });
   if ("denied" in perm && perm.denied) {
     throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
@@ -1082,51 +1334,70 @@ export async function setTrackStatus(input: {
       }) + " — proposed for review"
     );
   }
-  return applyTrackStatus(track, project, input.status, input.actor.userId);
+  return applyTrackStatus(
+    track,
+    project,
+    input.status,
+    input.actor.userId,
+    close
+  );
 }
 
 /**
  * The status write itself. Callers: `setTrackStatus` and the approval replay —
- * BOTH have run `assertTrackTransition` first. Compare-and-set on the status
- * it was decided from: a track moved by someone else in between is a
- * CONFLICT, never a silent overwrite. Every status change clears the check
- * gate's `metadata.checkGate` marker — a person has now decided the track's
- * state, so the hold it recorded no longer describes it.
+ * BOTH have run `assertTrackTransition` first (transition AND verdict).
+ * Compare-and-set on the status it was decided from: a track moved by someone
+ * else in between is a CONFLICT, never a silent overwrite. Every status change
+ * clears the check gate's `metadata.checkGate` marker — a person has now
+ * decided the track's state, so the hold it recorded no longer describes it.
+ * A move into done or lost stamps the verdict, its reason and who closed it
+ * (`userId` — the person; on a replay, the approver) in the same statement.
  */
 export async function applyTrackStatus(
   track: ProjectTrack,
   project: GateProject,
   status: ProjectTrackStatus,
-  userId: string
+  userId: string,
+  close: TrackCloseInput = {}
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
-  let updated: ProjectTrack | null;
-  try {
-    updated = await (
-      await repo()
-    ).transitionStatus(
-      track.id,
-      {
-        from: track.status,
-        to: status,
-        dropMetadataKey: CHECK_GATE_METADATA_KEY,
-        // Decision 2a: completing/archiving ENDS the track's space grant — a
-        // stamp, so a later reopen does not revive it. Pausing needs no stamp:
-        // the gate admits only an ACTIVE track (W5), so resuming restores it.
-        ...(status === "completed" || status === "archived"
-          ? { metadataPatch: endTrackSpaceGrant(track.metadata, status) }
-          : {}),
-      },
-      userId
-    );
-  } catch (err) {
-    // Reopening a completed track makes it LIVE again, and a completed track
-    // holds no name (0317) — a newer live track may have taken it since.
-    if (!isUniqueViolation(err)) throw err;
+  const ending = trackStatusCategory(status);
+  const terminal = ending === "done" || ending === "lost";
+  const verdict = close.verdict;
+  if (terminal && !isTrackVerdict(verdict)) {
+    // Unreachable past `assertTrackTransition`; refused rather than written.
     throw new TRPCError({
-      code: "CONFLICT",
-      message: `Another live track on this project is named "${track.name}" — complete or archive it before reopening this one.`,
+      code: "BAD_REQUEST",
+      message: checkTrackClose(status, close) ?? "A verdict is required.",
     });
   }
+  const updated = await (
+    await repo()
+  ).transitionStatus(
+    track.id,
+    {
+      from: track.status,
+      to: status,
+      dropMetadataKey: CHECK_GATE_METADATA_KEY,
+      // Decision 2a: closing/dropping ENDS the track's space grant — a stamp,
+      // so nothing revives it (a reopened goal is a NEW track with its own).
+      // Pausing needs no stamp: the gate admits only an ACTIVE track (W5), so
+      // resuming restores it.
+      ...(terminal
+        ? {
+            metadataPatch: endTrackSpaceGrant(
+              track.metadata,
+              status as TrackStatusIn<"done" | "lost">
+            ),
+            close: {
+              verdict: verdict as ProjectTrackVerdict,
+              reason: close.verdictReason?.trim() || null,
+              by: userId,
+            },
+          }
+        : {}),
+    },
+    userId
+  );
   if (!updated) {
     throw new TRPCError({
       code: "CONFLICT",
@@ -1144,6 +1415,7 @@ export async function applyTrackStatus(
       projectId: project.id,
       fromStatus: track.status,
       toStatus: status,
+      ...(terminal ? { verdict } : {}),
     },
   }).catch((err) =>
     logger.warn({ err, trackId: track.id }, "track.update emit failed")
@@ -1244,10 +1516,10 @@ export async function advanceTrackStage(input: {
 
 /** Refuses a stage the pinned method does not declare, or a closed track. */
 export function assertStageAdvanceable(track: ProjectTrack, toStage: string) {
-  if (track.status === "archived" || track.status === "completed") {
+  if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" is ${track.status} — resume it before moving its stage.`,
+      message: `Track "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — reopen it as a new version before moving its stage.`,
     });
   }
   const keys = stageKeys(track.definitionSnapshot?.stages);
@@ -1492,7 +1764,8 @@ export interface TrackFiling {
 /**
  * Validate a session/run being filed into a track. Returns the project the
  * session must carry: the TRACK's project. A `projectId` that disagrees is a
- * refusal, never a silent correction; an archived track takes no new work.
+ * refusal, never a silent correction; a closed or dropped track takes no new
+ * work.
  * An explicit `trackStage` naming a stage the method does not declare is a
  * refusal too.
  */
@@ -1513,10 +1786,15 @@ export async function resolveTrackFiling(params: {
       message: `Track "${track.name}" belongs to another project — pass that project, or omit projectId.`,
     });
   }
-  if (track.status === "archived") {
+  // A closed or dropped goal takes no new work (both are final — reopen it as
+  // a new version). A goal still being SHAPED (proposed · agreed · ready)
+  // does: agreeing its criteria and clearing its prerequisites is work, and a
+  // session filed there is how it gets done. Its agent is not admitted to the
+  // project's spaces until it is active (`track-space-grant.ts`).
+  if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" is archived and takes no new work.`,
+      message: `Track "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} and takes no new work — reopen it as a new version.`,
     });
   }
   return {
@@ -1925,8 +2203,10 @@ function kpiWritePatch(
 
 /**
  * The nudge: the KPI just reached its target, so the person may want to
- * RE-AIM it (a new target) — a track is lasting (W1), it is not completed
- * for reaching a number. Never changes the track. Through the ONE notification door
+ * re-aim it (a new target) or close the goal with a verdict. A goal can stay
+ * open as long as it matters, or finish: a person closes it with a verdict
+ * once its criteria are met — a number reached never closes it. Never changes
+ * the track. Through the ONE notification door
  * (`NotificationService.create`), to the person the track belongs to (its
  * starter — for an agent key, its operator). Non-fatal: a failed nudge never
  * fails the write it follows.
@@ -2076,10 +2356,10 @@ function resolveEmergentStageKey(
   track: ProjectTrack,
   stage: AddTrackStageInput
 ): string {
-  if (track.status === "archived" || track.status === "completed") {
+  if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `"${track.name}" is ${resolveStatusLabel(track.status).toLowerCase()} — reopen it to add a step.`,
+      message: `"${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — reopen it as a new version to add a step.`,
     });
   }
   const taken = new Set(stageKeys(track.definitionSnapshot?.stages));
@@ -2264,15 +2544,15 @@ export async function startStageSession(input: {
   if (!track) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
   }
-  if (track.status === "archived" || track.status === "completed") {
+  if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" is ${track.status} — reopen it before starting work in it.`,
+      message: `Track "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — reopen it as a new version before starting work in it.`,
     });
   }
   const stageKey = resolveFilingStage(track, input.stageKey);
   if (!stageKey) {
-    // A STAGE-LESS track (W1) is a lasting intent: its work is a session
+    // A STAGE-LESS track (W1) is a goal: its work is a session
     // filed into it — `start_session` + `trackId`. This door ALIASES that
     // during the transition, never refuses it.
     if (stageKeys(track.definitionSnapshot?.stages).length === 0) {

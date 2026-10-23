@@ -356,6 +356,8 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // long-waiting proposal out of the queue without applying it.
   retire: { imperative: "Retire", past: "Retired" },
   close: { imperative: "Close", past: "Closed" },
+  // A goal (track) that stopped mattering — its lost ending ("Dropped").
+  drop: { imperative: "Drop", past: "Dropped" },
   expire: { imperative: "Expire", past: "Expired", progressive: "Expiring" },
   // Sharing (Sites W2–W5, `services/sharing/share-service.ts`). `publish`
   // above is reused for putting a record on the public web — one word for one
@@ -1523,6 +1525,64 @@ export function resolveLibraryStatusLabel(
   return (
     LIBRARY_STATUS_LABELS[status.trim().toLowerCase()] ?? humanizeToken(status)
   );
+}
+
+/**
+ * TRACK STATUS words — a goal's system lifecycle (`TRACK_STATUSES`,
+ * `@synap-core/types/units`). Its OWN table, because two stored keys are
+ * contracts that mean something narrower for a goal than the shared words
+ * (`completed` reads "Completed" for a run, `archived` "Archived" for a
+ * record): a goal that finished is "Closed" — how it went is its verdict —
+ * and one that stopped mattering is "Dropped". `proposed` is a goal being
+ * shaped, not a governance proposal ("Suggested"). `units/track.ts` holds the
+ * compile-time floor that every status has a row here.
+ */
+export const TRACK_STATUS_LABELS = {
+  proposed: "Proposed",
+  agreed: "Agreed",
+  ready: "Ready",
+  active: "Active",
+  paused: "Paused",
+  completed: "Closed",
+  archived: "Dropped",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** The words for a track status; unknown values humanize, never leak. */
+export function resolveTrackStatusLabel(
+  status: string | null | undefined
+): string {
+  if (!status) return "";
+  const key = status.trim().toLowerCase();
+  return Object.hasOwn(TRACK_STATUS_LABELS, key)
+    ? TRACK_STATUS_LABELS[key as keyof typeof TRACK_STATUS_LABELS]
+    : humanizeToken(status);
+}
+
+/**
+ * TRACK VERDICT words — how a goal ended (R1, `TRACK_VERDICTS`,
+ * `@synap-core/types/units`). A classification of the ending, not a status:
+ * the chip reads "Closed" or "Dropped", the verdict says why. `units/track.ts`
+ * holds the compile-time floor that every verdict has a row here.
+ */
+export const TRACK_VERDICT_LABELS = {
+  met: "Met",
+  partly_met: "Partly met",
+  not_met: "Not met",
+  no_longer_needed: "No longer needed",
+  impossible: "Impossible",
+  replaced: "Replaced",
+  mistake: "Created by mistake",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** The words for a track verdict; unknown values humanize, never leak. */
+export function resolveTrackVerdictLabel(
+  verdict: string | null | undefined
+): string {
+  if (!verdict) return "";
+  const key = verdict.trim().toLowerCase();
+  return Object.hasOwn(TRACK_VERDICT_LABELS, key)
+    ? TRACK_VERDICT_LABELS[key as keyof typeof TRACK_VERDICT_LABELS]
+    : humanizeToken(verdict);
 }
 
 /**
