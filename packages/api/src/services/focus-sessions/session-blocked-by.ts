@@ -66,6 +66,7 @@ import {
 } from "../links/dependency-links.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
+import { linkProposalTitle } from "../links/link-proposal-title.js";
 
 export interface BlockerEdgeInput {
   /** The session that cannot proceed. */
@@ -275,7 +276,11 @@ export async function addCreateTimeBlockers(input: {
           subjectType: "link",
           action: "create",
           data: {
-            title: "session --blocked_by--> session",
+            title: linkProposalTitle({
+              fromType: "session",
+              linkType: DEPENDENCY_LINK_TYPE,
+              toType: "session",
+            }),
             fromType: "session",
             fromId: input.sessionId,
             toType: "session",

@@ -123,6 +123,12 @@ export interface ResolveAgentGovernanceInput {
    */
   ownWorkOrganise?: boolean;
   /**
+   * FB1020 B6 — the write lands as the person's held DRAFT (an agent's direct
+   * playbook run): the engine's plain default yields to their accept
+   * (`heldAsDraft` on `decideAgentPolicy`). Automation omits.
+   */
+  heldAsDraft?: boolean;
+  /**
    * Rungs 2.075 / 2.85 / 2.86 — the write MOVES a lifecycle status (work model
    * W14), classified by the `moveStatus` door from the option it enters.
    */
@@ -1616,6 +1622,7 @@ async function resolveForPrincipal(
     ownWorkOrganise: input.ownWorkOrganise,
     governanceRuleIsOwnOrganise:
       ruleMatch?.matchedPattern === OWN_ORGANISE_CLASS_PATTERN,
+    heldAsDraft: input.heldAsDraft,
     originTrust,
     bodyOfHumanOwnedEntity: lane.bodyOfHumanOwnedEntity,
   };
