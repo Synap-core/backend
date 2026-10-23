@@ -9,6 +9,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import { twinsShownOnCard } from "../../services/duplicates/find-duplicate-candidates.js";
 import {
   db,
   eq,
@@ -1053,6 +1054,13 @@ async function applyProposalApprovalInner(
           // `separate` for a same-name row backed by a different strong
           // signal (an import, `planImportIdentities`); approving the proposal
           // accepts it, and the approver's own choice for a ref wins.
+          // The reviewer owns a same-name twin (B2b). An item with no verb
+          // keeps both for the twins its card SHOWED (approve as proposed —
+          // BLOCKER-2: no client could resolve a graph item, so a capture
+          // naming any record could only be rejected); a twin the card never
+          // showed refuses with its candidates, so the card asks.
+          askReviewerOnDuplicate: true,
+          reviewedTwinIdsByRef: twinsShownOnCard(proposal.data).byRef,
           ...withProposedIdentityResolutions(
             (payload as unknown as Record<string, unknown>)
               .proposedIdentityResolutionByRef,

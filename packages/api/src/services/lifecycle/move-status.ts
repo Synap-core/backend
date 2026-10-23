@@ -39,6 +39,7 @@ import {
 import { dispatchLifecycleTransition } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { ownWorkOrganiseForTaskClose } from "../governance/own-organise.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 
 const logger = createLogger({ module: "move-status" });
@@ -203,6 +204,18 @@ export async function moveStatus(
   const governanceWorkspaceId = target.workspaceId ?? input.workspaceId ?? null;
   let receiptId: string | undefined;
   if (input.actor.kind !== "system" && !input.approvedProposalId) {
+    // FB1020 B3: an agent closing its OWN FRESH task (same key, last 24 h,
+    // untouched by a person) may be applied by the pod's own-organise class
+    // row; every other terminal move proposes by default (2.85), as before.
+    const ownWorkOrganise =
+      agent &&
+      lifecycleMove.intoTerminal &&
+      input.forcePropose !== true &&
+      (await ownWorkOrganiseForTaskClose({
+        agentUserId: input.actor.agentUserId,
+        target,
+        to,
+      }));
     const perm = await checkPermissionOrPropose({
       userId: input.actor.userId,
       agentUserId: input.actor.agentUserId ?? undefined,
@@ -220,6 +233,7 @@ export async function moveStatus(
         : "user",
       lifecycleMove,
       forcePropose: input.forcePropose,
+      ...(ownWorkOrganise ? { ownWorkOrganise: true } : {}),
       reasoning:
         input.reason ??
         `Move ${target.lifecycle.propertySlug} from "${target.current ?? "none"}" to "${to}".`,

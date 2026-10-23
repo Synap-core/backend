@@ -128,10 +128,14 @@ import { resolveObjectRefs, type ProposalObjectRef } from "./object-refs.js";
 import { resolveStatusMoves, type ProposalStatusMove } from "./status-move.js";
 import {
   resolveSessionBefore,
+  withAgentOutputsLanding,
   type ProposalSessionBefore,
 } from "./session-before.js";
 import { guestProvenanceFor } from "../../services/forms/guest-provenance.js";
-import { loadMachineNames } from "../../services/machine-roster.js";
+import {
+  loadKeyComputerNames,
+  loadMachineNames,
+} from "../../services/machine-roster.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 import {
   createNameResolvers,
@@ -1370,43 +1374,51 @@ export async function enrichProposalsForDisplay(
         : undefined
     )
   );
-  const [ownerRows, runTracks, appRows, hostNames] = await Promise.all([
-    ownerIds.length > 0
-      ? db
-          .select({
-            id: users.id,
-            name: users.name,
-            email: users.email,
-            userType: users.userType,
-            agentMetadata: users.agentMetadata,
-            // Same shape as the first user batch (it lands in `userById`).
-            agentType: users.agentType,
-            createdByUserId: users.createdByUserId,
-            hostUserId: users.hostUserId,
+  // The computer each filing KEY names (B7, `proposals.api_key_id` →
+  // `api_keys.instance_label`), read LIVE so labelling a key later names
+  // every proposal it filed. Only the label leaves this read — never the key.
+  const apiKeyIds = uniqueStrings(rows.map((row) => row.apiKeyId ?? undefined));
+  const [ownerRows, runTracks, appRows, hostNames, keyRows] = await Promise.all(
+    [
+      ownerIds.length > 0
+        ? db
+            .select({
+              id: users.id,
+              name: users.name,
+              email: users.email,
+              userType: users.userType,
+              agentMetadata: users.agentMetadata,
+              // Same shape as the first user batch (it lands in `userById`).
+              agentType: users.agentType,
+              createdByUserId: users.createdByUserId,
+              hostUserId: users.hostUserId,
+            })
+            .from(users)
+            .where(inArray(users.id, ownerIds))
+        : Promise.resolve([]),
+      trackPlaybookIds.length + trackAutomationIds.length > 0
+        ? listRunTracks({
+            userId,
+            playbookIds: trackPlaybookIds,
+            automationIds: trackAutomationIds,
           })
-          .from(users)
-          .where(inArray(users.id, ownerIds))
-      : Promise.resolve([]),
-    trackPlaybookIds.length + trackAutomationIds.length > 0
-      ? listRunTracks({
-          userId,
-          playbookIds: trackPlaybookIds,
-          automationIds: trackAutomationIds,
-        })
-      : Promise.resolve(new Map<string, RunGroup>()),
-    appPublicIds.length > 0
-      ? db
-          .select({ publicId: apps.publicId, name: apps.name })
-          .from(apps)
-          .where(
-            and(
-              inArray(apps.publicId, appPublicIds),
-              eq(apps.ownerUserId, userId)
+        : Promise.resolve(new Map<string, RunGroup>()),
+      appPublicIds.length > 0
+        ? db
+            .select({ publicId: apps.publicId, name: apps.name })
+            .from(apps)
+            .where(
+              and(
+                inArray(apps.publicId, appPublicIds),
+                eq(apps.ownerUserId, userId)
+              )
             )
-          )
-      : Promise.resolve([] as Array<{ publicId: string; name: string }>),
-    loadMachineNames(hostUserIds),
-  ]);
+        : Promise.resolve([] as Array<{ publicId: string; name: string }>),
+      loadMachineNames(hostUserIds),
+      loadKeyComputerNames(apiKeyIds),
+    ]
+  );
+  const keyComputerById = keyRows;
   for (const row of ownerRows) userById.set(row.id, row);
   const appNameByPublicId = new Map(
     appRows.map((row) => [row.publicId, row.name])
@@ -1530,8 +1542,17 @@ export async function enrichProposalsForDisplay(
     const authorRow = userById.get(
       row.agentUserId ?? row.createdBy ?? request.sourceId
     );
+    // The computer the filing key names — only for the row's OWN agent: the
+    // key is the agent's, never a person's who merely approved it.
+    const keyComputer = row.apiKeyId
+      ? keyComputerById.get(row.apiKeyId)
+      : undefined;
     const authorName = authorRow
-      ? actorDisplayName(authorRow, hostNames)
+      ? actorDisplayName(
+          authorRow,
+          hostNames,
+          authorRow.id === row.agentUserId ? keyComputer : undefined
+        )
       : undefined;
 
     // ── THE THREE DELEGATION ROLES, projected separately ────────────────────
@@ -1558,7 +1579,7 @@ export async function enrichProposalsForDisplay(
       ? userById.get(row.agentUserId)
       : undefined;
     const agentActorName = agentActorRow
-      ? actorDisplayName(agentActorRow, hostNames)
+      ? actorDisplayName(agentActorRow, hostNames, keyComputer)
       : undefined;
     // GUEST PROVENANCE (Sites W4/W5a): a proposal filed through a public form
     // carries the form's own actor as `agentUserId`, so everything keyed on
@@ -1740,6 +1761,21 @@ export async function enrichProposalsForDisplay(
     // beside the unmasked key it marks is the severance this prevents. Applied
     // LAST so the `{...payload}` re-spread above cannot reinstate the value.
     if (rowSetup) enrichedData = redactSecretParams(enrichedData, rowSetup);
+    // A pending AGENT session update's outputs list, as it would land NOW
+    // (stored as sent; `session-before.ts`), so the slots it keeps never read
+    // as deletions.
+    if (
+      enrichedData &&
+      typeof enrichedData === "object" &&
+      !Array.isArray(enrichedData)
+    ) {
+      enrichedData =
+        withAgentOutputsLanding(
+          enrichedData as Record<string, unknown>,
+          sessionBeforeByRow[idx],
+          !!row.agentUserId
+        ) ?? enrichedData;
+    }
 
     // B4: for a facet-UPDATE proposal, the live-current before-state is the
     // role-facet's CURRENT properties (fetched batched above), not the parent

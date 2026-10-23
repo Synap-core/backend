@@ -473,3 +473,111 @@ describe("projects.fileEntities {remove} — un-file is a governed link delete",
     expect(await filed()).toEqual([]);
   });
 });
+
+/**
+ * FB1020 B3 — the door's PROOF that an agent files its OWN FRESH records into
+ * the project the person named. Driven through the real door and the real
+ * `isOwnFreshWork` over PGlite rows (events, proposals with their key); only
+ * the engine is mocked, so this asserts what the door ASKS: the proof
+ * (`ownWorkOrganise`, the floor lifted) or the old floor (`forcePropose`).
+ *
+ * Each row rules out one wrong predicate: another KEY's record (rules out
+ * "same agent user is enough" — the B7 point), a record a PERSON touched, a
+ * record older than 24 h, a project the person did not name, no key at all.
+ * The engine's verdict for the proof is `own-organise.test.ts`.
+ */
+describe("projects.fileEntities — B3: an agent's own fresh records", () => {
+  const KEY = randomUUID();
+  const OTHER_KEY = randomUUID();
+  const MINE = randomUUID();
+  const OTHER_KEYS = randomUUID();
+  const TOUCHED = randomUUID();
+  const STALE = randomUUID();
+  const UNNAMED_PROJECT = randomUUID();
+
+  /** A record this agent created through `key` (create event → receipt → key). */
+  async function made(id: string, key: string, createdAt = "now()") {
+    const receipt = randomUUID();
+    await q(
+      `insert into entities (id, user_id, workspace_id, type, title, created_at, deleted_at)
+       values ($1,$2,$3,'question','Q',${createdAt},null)`,
+      [id, OWNER, WS]
+    );
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, status, data, agent_user_id, api_key_id)
+       values ($1,$2,'entity',$3,'entity.create','auto_approved','{}'::jsonb,$4,$5)`,
+      [receipt, WS, id, AGENT, key]
+    );
+    await q(
+      `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id, is_agent, agent_user_id, proposal_id, source)
+       values ($1, now(), 'entity.create.completed', $2, 'entity', '{}'::jsonb, $3, true, $4, $5, 'api')`,
+      [randomUUID(), id, OWNER, AGENT, receipt]
+    );
+  }
+
+  beforeAll(async () => {
+    await q(
+      `insert into users (id, name, email, user_type, agent_type, agent_metadata, created_by_user_id)
+       values ($1,'Claude Code','agent@x','agent','claude-code',$2::jsonb,$3)`,
+      [
+        AGENT,
+        JSON.stringify({ agentType: "claude-code", focusProjectId: PROJECT }),
+        OWNER,
+      ]
+    );
+    await q(
+      `insert into projects (id, user_id, workspace_id, name) values ($1,$2,$3,'Not named')`,
+      [UNNAMED_PROJECT, OWNER, WS]
+    );
+    await made(MINE, KEY);
+    await made(OTHER_KEYS, OTHER_KEY);
+    await made(TOUCHED, KEY);
+    await made(STALE, KEY, "now() - interval '25 hours'");
+    // A person edited it afterwards (no agent, a person's door).
+    await q(
+      `insert into events (id, timestamp, type, subject_id, subject_type, data, user_id, is_agent, source)
+       values ($1, now(), 'entity.update.completed', $2, 'entity', '{}'::jsonb, $3, false, 'api')`,
+      [randomUUID(), TOUCHED, OWNER]
+    );
+  });
+
+  const ask = async (
+    entityIds: string[],
+    { key = KEY as string | null, projectId = PROJECT } = {}
+  ) => {
+    h.perm.mockResolvedValue({ granted: false, proposalId: "p" });
+    const { runWithCallingKey } = await import("@synap/database");
+    await runWithCallingKey(key, () =>
+      caller(OWNER, AGENT).fileEntities({ projectId, entityIds })
+    );
+    return h.perm.mock.calls.at(-1)![0] as Record<string, unknown>;
+  };
+
+  it("its own fresh record, into the project it was told to focus on → the proof, floor lifted", async () => {
+    expect(await ask([MINE])).toMatchObject({
+      action: "file_entities",
+      forcePropose: false,
+      ownWorkOrganise: true,
+    });
+  });
+
+  it("one record made through ANOTHER key (same agent user) keeps the floor", async () => {
+    const opts = await ask([MINE, OTHER_KEYS]);
+    expect(opts).toMatchObject({ forcePropose: true });
+    expect(opts).not.toHaveProperty("ownWorkOrganise");
+  });
+
+  it("a record a person touched since, or one older than 24 h, keeps the floor", async () => {
+    expect(await ask([TOUCHED])).toMatchObject({ forcePropose: true });
+    expect(await ask([STALE])).toMatchObject({ forcePropose: true });
+  });
+
+  it("a project the person did not name, or no key on the request, keeps the floor", async () => {
+    expect(await ask([MINE], { projectId: UNNAMED_PROJECT })).toMatchObject({
+      forcePropose: true,
+    });
+    expect(await ask([MINE], { key: null })).toMatchObject({
+      forcePropose: true,
+    });
+  });
+});

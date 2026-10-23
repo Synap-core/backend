@@ -56,16 +56,20 @@
 import { createHash, createHmac, randomBytes, randomUUID } from "crypto";
 import { db, and, eq, isNull, drizzleSql as sql } from "@synap/database";
 import {
+  APP_PERSON_KEY_TYPE,
+  apiKeys,
   apps,
   oauthRefreshTokens,
   personDevices,
 } from "@synap/database/schema";
+import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { revokePersonDevice } from "@synap/database/person-devices";
 
 import {
   getHubInboundKeyPrefix,
   revokeActiveHubInboundKeysForUser,
 } from "../../services/hub-integration-registration.js";
+import { oauthKeyInstanceId } from "./config.js";
 import { OAuthError } from "./protocol.js";
 
 /** A refresh token lives this long from its issue; each use issues a new one. */
@@ -808,9 +812,10 @@ export async function revokeConnectionRefreshTokens(
 
 /**
  * The connection's live access credential stops now. A device: the device
- * itself ends (every access token is read through it). A pod app's agent is
- * one per (app × person) and holds only this connection's key slot, so its
- * live hub_inbound keys ARE the slot.
+ * itself ends (every access token is read through it). A Synap app's key is
+ * the PERSON's (`app_person`, founder 2026-10-22), in this connection's key
+ * slot: it stops. A pod app's agent is one per (app × person) and holds only
+ * this connection's key slot, so its live hub_inbound keys ARE the slot.
  */
 async function revokeConnectionAccessKey(
   conn: RefreshConnection,
@@ -820,6 +825,16 @@ async function revokeConnectionAccessKey(
     await revokePersonDevice(db, { deviceId: conn.deviceId, reason });
     return;
   }
+  await revokeApiKeys(db, {
+    where: and(
+      eq(apiKeys.userId, conn.userId),
+      eq(apiKeys.keyType, APP_PERSON_KEY_TYPE),
+      eq(apiKeys.instanceId, oauthKeyInstanceId(conn.clientId, conn.userId)),
+      eq(apiKeys.isActive, true)
+    ),
+    revokedBy: conn.userId,
+    reason,
+  });
   if (!conn.appId) return;
   const [app] = await db
     .select({ agentUserId: apps.agentUserId })

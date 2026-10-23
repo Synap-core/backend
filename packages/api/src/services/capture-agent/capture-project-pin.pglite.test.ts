@@ -62,6 +62,7 @@ import { pgliteSchemaDdl } from "../../__tests__/pglite-ddl.js";
 import {
   assertCaptureProjectPinVisible,
   CaptureProjectNotFoundError,
+  resolveCaptureProjectRef,
 } from "./resolve-capture-project.js";
 
 const USER = `user-${randomUUID()}`;
@@ -72,6 +73,9 @@ const SYNAP_TYPO = "d4b84ad8-1111-4222-8333-444455556667";
 const BRAND = randomUUID();
 const ARCHIVED = randomUUID();
 const FOREIGN = randomUUID();
+// Someone else's project whose name slugs to itself — so a name lookup that
+// ignored the owner would match it.
+const FOREIGN_NAMED = randomUUID();
 
 let db: Awaited<ReturnType<typeof h.init>>;
 
@@ -96,6 +100,7 @@ beforeAll(async () => {
   await insert(BRAND, "Brand refresh", USER, "active");
   await insert(ARCHIVED, "Old thing", USER, "archived");
   await insert(FOREIGN, "Not yours", OTHER_USER, "active");
+  await insert(FOREIGN_NAMED, "Hestia", OTHER_USER, "active");
 });
 
 describe("assertCaptureProjectPinVisible — the one pin check", () => {
@@ -133,6 +138,49 @@ describe("assertCaptureProjectPinVisible — the one pin check", () => {
     expect(refusal.message).toContain("nothing was filed");
     // MCP caps a thrown message at 500 chars — the names must survive it.
     expect(refusal.message.length).toBeLessThan(500);
+  });
+});
+
+describe("resolveCaptureProjectRef — a project NAME (B9e)", () => {
+  it("an exact name of one of your projects resolves to its id", async () => {
+    await expect(
+      resolveCaptureProjectRef(db as never, {
+        userId: USER,
+        projectName: "Synap",
+      })
+    ).resolves.toEqual({ projectId: SYNAP });
+  });
+
+  it("an unknown name is refused like an unknown id, closest project first", async () => {
+    const err = await resolveCaptureProjectRef(db as never, {
+      userId: USER,
+      projectName: "Synap pod",
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CaptureProjectNotFoundError);
+    const refusal = err as CaptureProjectNotFoundError;
+    expect(refusal.code).toBe("NOT_FOUND");
+    expect(refusal.ref).toEqual({ kind: "name", name: "Synap pod" });
+    expect(refusal.projectId).toBeNull();
+    expect(refusal.closestProjects[0]).toEqual({ id: SYNAP, name: "Synap" });
+    const offered = refusal.closestProjects.map((p) => p.id);
+    expect(offered).not.toContain(FOREIGN);
+    expect(offered).not.toContain(FOREIGN_NAMED);
+    expect(offered).not.toContain(ARCHIVED);
+    expect(refusal.message).toContain(
+      'no project of yours is named "Synap pod"'
+    );
+    expect(refusal.message).toContain(`"Synap" (${SYNAP})`);
+    expect(refusal.message).toContain("nothing was filed");
+    expect(refusal.message.length).toBeLessThan(500);
+  });
+
+  it("someone else's project name is refused, never matched", async () => {
+    await expect(
+      resolveCaptureProjectRef(db as never, {
+        userId: USER,
+        projectName: "Hestia",
+      })
+    ).rejects.toBeInstanceOf(CaptureProjectNotFoundError);
   });
 });
 
@@ -184,6 +232,39 @@ describe("both capture write cores refuse BEFORE anything is filed", () => {
     expect((err as CaptureProjectNotFoundError).closestProjects[0]?.id).toBe(
       SYNAP
     );
+    expect(writes).toEqual([]);
+  });
+
+  it("submitCaptureGraph with an unknown project NAME (B9e)", async () => {
+    const { submitCaptureGraph } = await import("./submit-capture-graph.js");
+    const err = await submitCaptureGraph({
+      userId: USER,
+      agentUserId: `agent-${randomUUID()}`,
+      workspaceId: null,
+      projectName: "Synap pod",
+      source: "agent",
+      entities: FOUR_TASKS as never,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CaptureProjectNotFoundError);
+    expect((err as CaptureProjectNotFoundError).closestProjects[0]?.id).toBe(
+      SYNAP
+    );
+    expect(writes).toEqual([]);
+  });
+
+  it("MCP synap_capture, text lane, with an unknown project NAME (B9e)", async () => {
+    // The name used to be dropped silently on this lane: the text was
+    // captured with no project at all.
+    const { captureHandlers } =
+      await import("../../routers/mcp/handlers/capture.js");
+    const err = await captureHandlers.synap_capture!({
+      toolName: "synap_capture",
+      args: { text: "Ship the onboarding fix", projectName: "Synap pod" },
+      userId: USER,
+      agentUserId: `agent-${randomUUID()}`,
+      apiKeyScopes: ["mcp.read", "mcp.write"],
+    } as never).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CaptureProjectNotFoundError);
     expect(writes).toEqual([]);
   });
 
