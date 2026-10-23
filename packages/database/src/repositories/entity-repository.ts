@@ -525,7 +525,7 @@ export class EntityRepository extends BaseRepository<
       // Provenance (Wave B3)
       createdByKind: provenance.createdByKind,
       createdByUserId: provenance.createdByUserId,
-      agentUserId: provenance.agentUserId,
+      agentUserId: data.agentUserId,
       sourceProposalId: data.sourceProposalId,
       correlationId: data.correlationId,
     } as NewEntity;
@@ -570,7 +570,7 @@ export class EntityRepository extends BaseRepository<
             skipEvent: true,
             createdByKind: provenance.createdByKind,
             createdByUserId: provenance.createdByUserId,
-            agentUserId: provenance.agentUserId,
+            agentUserId: data.agentUserId,
             sourceProposalId: data.sourceProposalId,
             correlationId: data.correlationId,
           },

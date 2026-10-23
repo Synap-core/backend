@@ -144,14 +144,11 @@ export async function updateProjectGoverned(
     ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
   };
 
-  // 3. Governance with the WHOLE patch. A home MOVE is gated on the space it
-  // lands in, not the one it leaves: the move is a write INTO the destination,
-  // and a project leaving an archived space could otherwise never move,
-  // because the gate filed a join to the archived source (ticket 86b6faae).
+  // 3. Governance with the WHOLE patch.
   const perm = await checkPermissionOrPropose({
     userId,
     agentUserId,
-    workspaceId: homeWorkspaceId ?? target.workspaceId ?? undefined,
+    workspaceId: target.workspaceId ?? undefined,
     subjectType: "project",
     action: "update",
     ...(reasoning ? { reasoning } : {}),

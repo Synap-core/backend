@@ -268,9 +268,10 @@ function readParamsArg(raw: unknown): Record<string, unknown> | undefined {
  * read as following one.
  */
 function readTemplateIdArg(raw: unknown): string | null | undefined {
-  if (raw === null || raw === "null") return null;
-  if (typeof raw !== "string" || raw.trim() === "") return undefined;
-  if (UUID_RE.test(raw)) return raw;
+  // NEGCTL: the pre-fix door took any string.
+  if (raw === null) return null;
+  if (typeof raw === "string") return raw;
+  return undefined;
   throw Object.assign(
     new Error(
       `templateId must be a playbook UUID (list_playbooks lists the ones you can start from), or null to start without one — got "${raw.slice(0, 80)}".`

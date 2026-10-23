@@ -3443,7 +3443,11 @@ const automationDeleteParams = z
   })
   .strict();
 
-const automationDeleteHandler: BuiltinVerbHandler = async (params, ctx) => {
+// NEGCTL: the verb is not registered.
+export const automationDeleteHandler: BuiltinVerbHandler = async (
+  params,
+  ctx
+) => {
   const input = automationDeleteParams.parse(params);
 
   const { automationsRouter } = await import("../../routers/automations.js");
@@ -3978,7 +3982,6 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "automation.update": automationUpdateHandler,
   "automation.activate": automationActivateHandler,
   "automation.pause": automationPauseHandler,
-  "automation.delete": automationDeleteHandler,
   // Lifecycle REVISION (Wave B): the remaining doors an agent could CREATE
   // through but never REVISE or RETIRE. See the section note above for the
   // FOUR groups deliberately left out (ungated destructive doors, the
@@ -4050,7 +4053,6 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "automation.update": automationUpdateParams,
   "automation.activate": automationActivateParams,
   "automation.pause": automationPauseParams,
-  "automation.delete": automationDeleteParams,
   "view.update": viewUpdateParams,
   "cell.update": cellUpdateParams,
   "playbook.archive": playbookArchiveParams,

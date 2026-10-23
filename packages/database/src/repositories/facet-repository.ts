@@ -252,7 +252,7 @@ export class FacetRepository extends BaseRepository<
           properties: validatedProperties,
           createdByKind: provenance.createdByKind,
           createdByUserId: provenance.createdByUserId,
-          agentUserId: provenance.agentUserId,
+          agentUserId: data.agentUserId,
           sourceProposalId: data.sourceProposalId,
           correlationId: data.correlationId,
         } as NewEntityFacet)

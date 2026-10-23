@@ -1720,13 +1720,12 @@ export async function handleAutomationTriggerMatch(job: {
       producerAgentUserId: producerAgentUserId ?? null,
     });
 
-    // Update automation stats. `runCount` is the executor's: it counts a run
-    // once, when it ends (ticket 85133a81 — counting the dispatch too doubled
-    // every automation's runs).
+    // Update automation stats
     await db
       .update(automations)
       .set({
         lastRunAt: new Date(),
+        runCount: drizzleSql`${automations.runCount} + 1`,
         updatedAt: new Date(),
       })
       .where(eq(automations.id, automationId));

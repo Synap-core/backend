@@ -465,12 +465,6 @@ export interface InstantiateInput {
  *
  * Throws (never returns null) — a scheduled node naming a playbook that is gone
  * or invisible is a config error the run must fail on, not silently skip.
- *
- * A RETIRED playbook (archived or paused) is refused here too, at the one run
- * door every scheduled, automated and manual run shares: an archive that missed
- * its cron teardown kept running it (ticket cdf608a8). A `draft` stays
- * runnable: the catalog installs some playbooks as drafts (agency-skills'
- * Lead Outreach, Client Onboarding) and people run them from there.
  */
 export async function resolveRunnablePlaybook(input: {
   playbookId?: string;
@@ -512,12 +506,6 @@ export async function resolveRunnablePlaybook(input: {
       // producer (`materializeScheduledSession`) started sharing this door,
       // that prefix sent whoever read the log looking at the wrong caller.
       `resolveRunnablePlaybook: playbook ${playbook.id} not visible in workspace ${input.workspaceId}`
-    );
-  }
-
-  if (playbook.status === "archived" || playbook.status === "paused") {
-    throw new Error(
-      `Playbook "${playbook.name}" is ${playbook.status}, so it does not run. Set it active to run it again.`
     );
   }
 

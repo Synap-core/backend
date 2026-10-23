@@ -18,6 +18,7 @@ import {
   automations,
   automationRuns,
 } from "@synap/database";
+import { drizzleSql } from "@synap/database";
 import { getBoss } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 // The expiry predicate + the rule back-reference reader, IMPORTED from the
@@ -358,9 +359,7 @@ export async function handleAutomationCronScheduler(): Promise<void> {
         },
       });
 
-      // Compute and set next run time. `runCount` is the executor's: it
-      // counts a run once, when it ends (ticket 85133a81 — counting the
-      // dispatch too doubled every automation's runs).
+      // Compute and set next run time
       const nextRunAt = cronExpression
         ? computeNextRunAt(cronExpression, now)
         : null;
@@ -370,6 +369,7 @@ export async function handleAutomationCronScheduler(): Promise<void> {
         .set({
           lastRunAt: now,
           nextRunAt,
+          runCount: drizzleSql`COALESCE(${automations.runCount}, 0) + 1`,
           updatedAt: new Date(),
         })
         .where(eq(automations.id, automation.id));

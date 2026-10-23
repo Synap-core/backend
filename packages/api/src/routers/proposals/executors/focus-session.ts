@@ -1125,7 +1125,6 @@ export function registerFocusSessionExecutors(): void {
         sessionId,
         agentId,
         userId: session.userId,
-        viaProposalId: input.proposalId,
       });
       if (attached.status === "not_found") {
         throw new TRPCError({
