@@ -252,3 +252,45 @@ describe("Kratos registration complete (post-persist owner claim)", () => {
     expect(deps.deleteKratosIdentity).not.toHaveBeenCalled();
   });
 });
+
+describe("Passkey registration (gated since 2026-10-23: it had no hook at all)", () => {
+  beforeEach(() => {
+    process.env.KRATOS_WEBHOOK_SECRET = SECRET;
+  });
+
+  it("refuses a passkey self-registration at the gate, with the sign-up message", async () => {
+    // Even for an email an account already holds: no account-linking door here.
+    const deps = makeDeps({ kratosEmailExists: vi.fn(async () => true) });
+    const res = await post(
+      deps,
+      "/gate",
+      body({ method: "passkey", noCloud: true })
+    );
+    expect(res.status).toBe(403);
+    const json = (await res.json()) as any;
+    expect(json.messages[0].messages[0]).toMatchObject({
+      id: 4000902,
+      context: { reason: "self_registration_disabled" },
+    });
+  });
+
+  it("a passkey sign-up carrying forged Cloud owner claims is still refused", async () => {
+    const deps = makeDeps();
+    const res = await post(deps, "/gate", body({ method: "passkey" }));
+    expect(res.status).toBe(403);
+    expect(deps.hasDifferentHumanOwner).not.toHaveBeenCalled();
+  });
+
+  it("removes a passkey identity that was persisted anyway, and seeds nothing", async () => {
+    const deps = makeDeps();
+    await expectAccessDenied(
+      await post(
+        deps,
+        "/complete",
+        body({ method: "passkey", noCloud: true, id: IDENTITY_ID })
+      )
+    );
+    expect(deps.claimOwner).not.toHaveBeenCalled();
+    expect(deps.deleteKratosIdentity).toHaveBeenCalledWith(IDENTITY_ID);
+  });
+});
