@@ -153,6 +153,28 @@ describe("synap_ask detail (MCP door → synthesizeAnswer → IS request)", () =
     expect(payload.answer).toMatch(/Hetzner hosts the pod\./);
   });
 
+  it("a queue answer leads the prose and rides the envelope", async () => {
+    isReplies({ answer: "Nothing in the notes about it." });
+    askMock.mockResolvedValue({
+      answers: ANSWERS,
+      routedTo: ["structured"],
+      degraded: [],
+      pending: null,
+      understanding: {},
+      queue: {
+        pendingReview: { count: 3, oldestDays: 2, lens: "authored" },
+        owedByPerson: { count: 0, sessions: 0 },
+        openSessions: { count: 0 },
+      },
+    });
+
+    const { text } = await callAsk({ query: "what is waiting on me" });
+
+    const payload = JSON.parse(text) as { answer: string; queue: unknown };
+    expect(payload.answer).toMatch(/^Waiting on you: 3 proposals to review/);
+    expect(payload.queue).toMatchObject({ pendingReview: { count: 3 } });
+  });
+
   it("an empty FULL answer is a classified failure, not a success", async () => {
     isReplies({ answer: "  " });
 
