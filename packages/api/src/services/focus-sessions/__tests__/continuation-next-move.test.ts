@@ -73,6 +73,8 @@ const blocker = (status: string, title = "Ship pricing") =>
 
 const output: PacketOutputItem = {
   kind: "document",
+  noun: "Document",
+  glyph: "▤",
   refId: "d-1",
   title: "Pricing notes",
 };
