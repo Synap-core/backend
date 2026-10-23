@@ -135,7 +135,7 @@ describe("template intent — every install door carries it", () => {
     const body = PackageApplySchema.parse(pkg) as { intent?: unknown };
     expect(projectTemplateIntent(body.intent)).toEqual({
       label: "Sales",
-      produces: ["lead", "client", "deal", "campaign"],
+      produces: ["lead", "client", "deal", "campaign", "outreach-touch"],
       source: "template",
     });
   });

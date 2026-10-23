@@ -16,6 +16,8 @@ export { hubProtocolRestApp } from "./routers/hub-protocol-rest.js";
 export { AUTOMATION_SCHEMA } from "./routers/hub-protocol/rest/automation-schema-doc.js";
 export { apiKeyService } from "./services/api-keys.js";
 export { ImportOrchestrator } from "./services/import-orchestrator.js";
+// The background approval job (handler slot of @synap/jobs proposal-approve).
+export { runApprovalJob } from "./services/proposals/approval-runs.js";
 // The Library light read: the job handler + hourly sweep the app registers in
 // the @synap/jobs slots at boot.
 export {
