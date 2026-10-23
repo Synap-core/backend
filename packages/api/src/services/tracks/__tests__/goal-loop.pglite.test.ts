@@ -392,6 +392,14 @@ describe("runGoalLoop — proposes the next run", () => {
       status: "proposed",
       carry: ["links", "polish"],
     });
+    // Rules out: the run carrying a met criterion (asserted on the payload a
+    // person approves, not on the decision).
+    const data = loopCalls().at(-1)!.data as {
+      criteria: Array<{ key: string }>;
+      goal: string;
+    };
+    expect(data.criteria.map((c) => c.key)).toEqual(["links", "polish"]);
+    expect(data.goal).not.toContain("All 12 pages migrated");
   });
 
   it("holds while a run filed into the goal is open", async () => {
