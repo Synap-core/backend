@@ -133,6 +133,11 @@ export interface HubTrack {
   /** None (a lasting goal) or 2–5 criteria, each with its derived mark. */
   criteria?: HubGoalCriterion[];
   dropConditions?: string[];
+  /**
+   * The goal's loop (0350, W4): it proposes its next run while a required
+   * criterion is unmet. Never set reads `{ on: false }`.
+   */
+  loop?: HubGoalLoop;
   workKind?: HubTrackWorkKind | null;
   uncertainty?: HubTrackUncertainty | null;
   /** The person who confirmed kind + uncertainty — `null` while proposed. */
@@ -184,6 +189,8 @@ export interface StartTrackInput {
   dropConditions?: string[];
   workKind?: HubTrackWorkKind;
   uncertainty?: HubTrackUncertainty;
+  /** The goal's loop (W4); an agent's switch-on is always proposed. */
+  loop?: HubGoalLoopInput;
   reasoning?: string;
 }
 
@@ -206,7 +213,25 @@ export interface UpdateTrackInput {
   uncertainty?: HubTrackUncertainty | null;
   /** A PERSON confirms the AI's kind of work and uncertainty (an agent is refused). */
   confirmKind?: boolean;
+  /** The goal's loop (W4): `{ on: true }` again = try again; `null` = off. */
+  loop?: HubGoalLoopInput | null;
   reasoning?: string;
+}
+
+/** The goal's loop as a read returns it (`readGoalLoop`). */
+export interface HubGoalLoop {
+  on: boolean;
+  perWeek: number;
+  /** When a person last switched it on (ISO-8601). */
+  onAt: string | null;
+  by: string | null;
+}
+
+/** The goal's loop as a write names it. */
+export interface HubGoalLoopInput {
+  on: boolean;
+  /** Proposals per rolling week, 1–14 (absent keeps the stored budget). */
+  perWeek?: number;
 }
 
 /** POST /tracks/:id/criteria/:key/acceptance — the goal's judge decides (R2). */

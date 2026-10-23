@@ -258,6 +258,12 @@ export const projectTracks = pgTable(
       mode: "date",
       withTimezone: true,
     }),
+    /**
+     * The goal's loop (0350, work model W4): `{ on, perWeek, onAt, by }` — the
+     * goal proposes its next run while a required criterion is unmet. NULL =
+     * never set = OFF. Read through `readGoalLoop` (@synap-core/types/units).
+     */
+    loop: jsonb("loop").$type<Record<string, unknown>>(),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
       .notNull()

@@ -16668,6 +16668,19 @@ export interface WaitingOnMark {
 	reason: WaitingOnReason;
 	count: number;
 }
+/** The loop as stored on the goal (`project_tracks.loop`, 0350). */
+export interface GoalLoopSettings {
+	on: boolean;
+	/** Proposals per rolling week, 1 to {@link GOAL_LOOP_MAX_PER_WEEK}. */
+	perWeek: number;
+	/**
+	 * When a person last switched it on (ISO-8601) — failures before it no
+	 * longer count: switching the loop on again is "try again".
+	 */
+	onAt: string | null;
+	/** Who set it last: the person (the approver, for an agent's proposal). */
+	by: string | null;
+}
 /** Doors the event names — each opens that object's own page. */
 export interface TrackHistoryRefs {
 	sessionId?: string;
@@ -18709,6 +18722,12 @@ export interface TrackView {
 	criteria: GoalCriterionView[];
 	/** When to stop (0345) — `[]` when none said. */
 	dropConditions: string[];
+	/**
+	 * The goal's loop (0350, W4): whether it proposes its next run while a
+	 * required criterion is unmet, its weekly budget, when a person last
+	 * switched it on and who. Never set reads as OFF.
+	 */
+	loop: GoalLoopSettings;
 	/** The kind of work (decision 4) — `null` when not set. */
 	workKind: TrackWorkKind | null;
 	/** How well the way is known (decision 4) — `null` when not set. */
@@ -44572,6 +44591,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					target?: number | undefined;
 					unit?: string | undefined;
 				} | null | undefined;
+				loop?: {
+					on: boolean;
+					perWeek?: number | undefined;
+				} | null | undefined;
 				reasoning?: string | undefined;
 				uncertainty?: "chaotic" | "clear" | "complex" | "complicated" | "unknown" | null | undefined;
 				workKind?: "commission" | "flow" | "incident" | "investigation" | "operation" | "pathway" | "project" | null | undefined;
@@ -44634,6 +44657,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					target?: number | undefined;
 					unit?: string | undefined;
 				} | undefined;
+				loop?: {
+					on: boolean;
+					perWeek?: number | undefined;
+				} | null | undefined;
 				name?: string | undefined;
 				params?: Record<string, unknown> | undefined;
 				playbookId?: string | undefined;

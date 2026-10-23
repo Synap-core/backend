@@ -7121,6 +7121,22 @@
             ],
             "description": "Optional: how well the way is known — clear, complicated, complex, chaotic or unknown. A proposal until the person confirms it."
           },
+          "loop": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["on"],
+            "properties": {
+              "on": {
+                "type": "boolean"
+              },
+              "perWeek": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 14
+              }
+            },
+            "description": "Optional: the goal's loop — { on: true } makes the goal PROPOSE its next session (filed into it, carrying its unmet criteria) whenever a required criterion is unmet and no session of it is open, at most perWeek times a week (default 3). It stops and asks the owner when the same criterion fails in two sessions; { on: true } again is \"try again\". Every next session is a proposal a person approves. Your switch-on is always proposed for review. null turns it off."
+          },
           "reasoning": {
             "type": "string",
             "description": "Why you are starting it, in the person's words — shown to the reviewer. One line."
@@ -7501,6 +7517,22 @@
               null
             ],
             "description": "Optional: how well the way is known — clear, complicated, complex, chaotic or unknown. A proposal until the person confirms it."
+          },
+          "loop": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["on"],
+            "properties": {
+              "on": {
+                "type": "boolean"
+              },
+              "perWeek": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 14
+              }
+            },
+            "description": "Optional: the goal's loop — { on: true } makes the goal PROPOSE its next session (filed into it, carrying its unmet criteria) whenever a required criterion is unmet and no session of it is open, at most perWeek times a week (default 3). It stops and asks the owner when the same criterion fails in two sessions; { on: true } again is \"try again\". Every next session is a proposal a person approves. Your switch-on is always proposed for review. null turns it off."
           },
           "reasoning": {
             "type": "string",

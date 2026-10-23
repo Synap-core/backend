@@ -275,6 +275,8 @@ beforeAll(async () => {
       uncertainty text,
       kind_confirmed_by text,
       kind_confirmed_at timestamptz,
+      -- 0350 — the goal's loop (W4).
+      loop jsonb,
       metadata jsonb not null default '{}'::jsonb,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()

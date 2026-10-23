@@ -191,6 +191,9 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   // that ask's only push (design-relay §5.2 wants it folded into the ask; until
   // the producer does that, dropping it would leave the escalation silent).
   "session.criterion_escalated": "blocking-ask",
+  // A goal's loop stopped on a criterion that failed twice (W4): it proposes
+  // nothing more until its owner answers.
+  "track.loop_stopped": "blocking-ask",
   "proposal.created": "blocking-proposal",
   "ai_request.vault_access": "decision-blocking",
   "ai_request.terminal_exec": "decision-blocking",

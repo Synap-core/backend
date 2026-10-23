@@ -2197,6 +2197,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "decided_at",
     addedBy: "0348_track_participants.sql",
   },
+  // 0350 — the goal's loop (W4). Same reason: every track read selects the
+  // whole row.
+  {
+    table: "project_tracks",
+    column: "loop",
+    addedBy: "0350_track_goal_loop.sql",
+  },
   // 0275 — the document content revision (the ONE content-write door's CAS)
   // and the revision the Yjs cache is known to equal. Every document content
   // write names `content_revision`, so without it every save 500s.

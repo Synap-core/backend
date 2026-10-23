@@ -59,9 +59,14 @@ import {
   type WaitingOnSource,
 } from "@synap-core/types/units";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
+import {
+  GOAL_LOOP_DEFAULT_ON,
+  GOAL_LOOP_MAX_PER_WEEK,
+  readGoalLoop,
+} from "@synap-core/types/units";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
-import { loadGoalJudge } from "./track-participant-store.js";
+import { loadGoalJudge, loadGoalOwner } from "./track-participant-store.js";
 
 // ── input ───────────────────────────────────────────────────────────────────
 
@@ -90,6 +95,20 @@ export const trackGoalInputSchema = z
     workKind: z.enum(PROJECT_TRACK_WORK_KINDS).nullable().optional(),
     uncertainty: z.enum(PROJECT_TRACK_UNCERTAINTY_LEVELS).nullable().optional(),
     confirmKind: z.boolean().optional(),
+    /**
+     * The goal's loop (W4): `on` — it proposes its next run while a required
+     * criterion is unmet; `perWeek` — its budget (absent keeps the stored one,
+     * else the default). Switching it on again is "try again" after a stop.
+     * `null` clears it (off). An agent's switch-on is always a proposal.
+     */
+    loop: z
+      .object({
+        on: z.boolean(),
+        perWeek: z.number().int().min(1).max(GOAL_LOOP_MAX_PER_WEEK).optional(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 export type TrackGoalInput = z.infer<typeof trackGoalInputSchema>;
@@ -102,6 +121,7 @@ export const TRACK_GOAL_INPUT_KEYS = [
   "workKind",
   "uncertainty",
   "confirmKind",
+  "loop",
 ] as const satisfies ReadonlyArray<keyof TrackGoalInput>;
 // Every input field is listed: a field added to the schema and not here
 // would never ride a proposal — stop the build instead.
@@ -149,6 +169,28 @@ export function parseTrackGoalInput(raw: unknown): TrackGoalInput {
     if (refusal) throw new TRPCError({ code: "BAD_REQUEST", message: refusal });
   }
   return parsed.data;
+}
+
+/**
+ * A NEW goal's loop when its start names none: {@link GOAL_LOOP_DEFAULT_ON}
+ * for a goal with criteria (OFF until the founder confirms), else untouched.
+ * Applied at birth only — a stored goal with no loop always reads OFF.
+ */
+export function withBirthLoopDefault(input: TrackGoalInput): TrackGoalInput {
+  if (input.loop !== undefined || !input.criteria?.length) return input;
+  return GOAL_LOOP_DEFAULT_ON ? { ...input, loop: { on: true } } : input;
+}
+
+/**
+ * An agent switching a goal's loop on is ALWAYS a proposal a person approves
+ * (the loop then files work in the owner's name every week) — the gate's
+ * `forcePropose`, whatever a governance rule would auto-approve.
+ */
+export function agentSwitchesLoopOn(
+  input: TrackGoalInput,
+  agentUserId: string | null | undefined
+): boolean {
+  return Boolean(agentUserId) && input.loop?.on === true;
 }
 
 // ── stored reads ────────────────────────────────────────────────────────────
@@ -212,6 +254,7 @@ function sameCriterionContract(a: SessionCriterion, b: SessionCriterion) {
 
 type StoredGoal = Pick<
   ProjectTrack,
+  | "loop"
   | "endState"
   | "criteria"
   | "dropConditions"
@@ -320,6 +363,34 @@ export function resolveTrackGoalPatch(
     }
   }
 
+  if (input.loop !== undefined) {
+    const before = readGoalLoop(stored?.loop);
+    if (input.loop === null) {
+      if (stored?.loop != null) {
+        patch.loop = null;
+        changed = true;
+      }
+    } else {
+      // Switching it on is always a write (it restamps `onAt`: "try again").
+      // Who set it is the PERSON — the approver of an agent's proposal.
+      const next = {
+        on: input.loop.on,
+        perWeek: input.loop.perWeek ?? before.perWeek,
+        onAt: input.loop.on ? now.toISOString() : before.onAt,
+        by: confirmedBy,
+      };
+      if (
+        input.loop.on ||
+        next.on !== before.on ||
+        next.perWeek !== before.perWeek ||
+        stored?.loop == null
+      ) {
+        patch.loop = next;
+        changed = true;
+      }
+    }
+  }
+
   return changed ? patch : null;
 }
 
@@ -346,6 +417,19 @@ export async function isGoalJudge(
   return (await loadGoalJudge(track)) === userId;
 }
 
+/**
+ * THE PERSON TO ASK about a goal — its OWNER (never its judge): who the
+ * goal's own news goes to (a blocker of it ended, its loop stopped and asks)
+ * and whose name its next run is proposed under. The owner seat
+ * (`loadGoalOwner` — the owner row, else the starter), the SAME answer W3's
+ * R10 escalation reads (`goalOwner`).
+ */
+export async function goalOwnerToAsk(
+  track: Pick<ProjectTrack, "id" | "userId">
+): Promise<string> {
+  return loadGoalOwner(track);
+}
+
 // ── derived facts every track read returns ──────────────────────────────────
 
 /** What every track read adds about the goal's content — DERIVED, never stored. */
@@ -353,6 +437,93 @@ export interface TrackGoalFacts {
   criteria: GoalCriterionView[];
   inReview: boolean;
   waitingOn: WaitingOnMark[];
+}
+
+/**
+ * THE read of a goal's RUNS — every session filed into each goal, with its
+ * criterion keys, who worked it and (for a goal with criteria) its evaluation
+ * rows: what `deriveGoalCriteria` and the loop (`goalCriteriaFailedTwice`)
+ * read. Two queries for any number of goals. Every member's runs: the goal is
+ * the project's; marks and counts only, never a session's content. A failed
+ * read THROWS.
+ */
+export async function loadGoalRuns(
+  tracks: ReadonlyArray<Pick<ProjectTrack, "id" | "criteria">>
+): Promise<{
+  sessions: Awaited<ReturnType<typeof selectGoalSessions>>;
+  runsOf: Map<string, GoalRunFacts[]>;
+}> {
+  const runsOf = new Map<string, GoalRunFacts[]>();
+  if (tracks.length === 0) return { sessions: [], runsOf };
+  const db = await getDb();
+  const sessions = await selectGoalSessions(tracks.map((t) => t.id));
+  const withCriteria = new Set(
+    tracks.filter((t) => readCriteria(t.criteria).length > 0).map((t) => t.id)
+  );
+  const gradedSessionIds = sessions
+    .filter((s) => s.trackId && withCriteria.has(s.trackId))
+    .map((s) => s.id);
+  const evaluations =
+    gradedSessionIds.length > 0
+      ? await db
+          .select({
+            sessionId: sessionEvaluations.sessionId,
+            criterionKey: sessionEvaluations.criterionKey,
+            verdict: sessionEvaluations.verdict,
+            evaluatorKind: sessionEvaluations.evaluatorKind,
+            evaluatorId: sessionEvaluations.evaluatorId,
+            rationale: sessionEvaluations.rationale,
+            attempt: sessionEvaluations.attempt,
+            createdAt: sessionEvaluations.createdAt,
+          })
+          .from(sessionEvaluations)
+          .where(inArray(sessionEvaluations.sessionId, gradedSessionIds))
+      : [];
+  const rowsBySession = new Map<string, typeof evaluations>();
+  for (const e of evaluations) {
+    const list = rowsBySession.get(e.sessionId) ?? [];
+    list.push(e);
+    rowsBySession.set(e.sessionId, list);
+  }
+  for (const track of tracks) {
+    runsOf.set(
+      track.id,
+      sessions
+        .filter((s) => s.trackId === track.id)
+        .map((s) => {
+          const modelId = (s.metadata as { modelId?: unknown } | null)?.modelId;
+          return {
+            sessionId: s.id,
+            open: !isTerminalSessionStatus(s.status),
+            criterionKeys: readCriteria(s.criteria).map((c) => c.key),
+            authors: [
+              s.userId,
+              ...(s.agentIds ?? []),
+              ...(typeof modelId === "string" && modelId ? [modelId] : []),
+            ],
+            evaluations: rowsBySession.get(s.id) ?? [],
+          };
+        })
+    );
+  }
+  return { sessions, runsOf };
+}
+
+async function selectGoalSessions(trackIds: string[]) {
+  const db = await getDb();
+  return db
+    .select({
+      id: focusSessions.id,
+      trackId: focusSessions.trackId,
+      status: focusSessions.status,
+      userId: focusSessions.userId,
+      criteria: focusSessions.criteria,
+      agentIds: focusSessions.agentIds,
+      metadata: focusSessions.metadata,
+      expectedOutputs: focusSessions.expectedOutputs,
+    })
+    .from(focusSessions)
+    .where(inArray(focusSessions.trackId, trackIds));
 }
 
 /**
@@ -372,26 +543,7 @@ export async function loadTrackGoalFacts(
   const db = await getDb();
   const trackIds = tracks.map((t) => t.id);
 
-  const sessions = await db
-    .select({
-      id: focusSessions.id,
-      trackId: focusSessions.trackId,
-      status: focusSessions.status,
-      userId: focusSessions.userId,
-      criteria: focusSessions.criteria,
-      agentIds: focusSessions.agentIds,
-      metadata: focusSessions.metadata,
-      expectedOutputs: focusSessions.expectedOutputs,
-    })
-    .from(focusSessions)
-    .where(inArray(focusSessions.trackId, trackIds));
-
-  const withCriteria = new Set(
-    tracks.filter((t) => readCriteria(t.criteria).length > 0).map((t) => t.id)
-  );
-  const gradedSessionIds = sessions
-    .filter((s) => s.trackId && withCriteria.has(s.trackId))
-    .map((s) => s.id);
+  const { sessions, runsOf } = await loadGoalRuns(tracks);
   const openSessions = sessions.filter(
     (s) => !isTerminalSessionStatus(s.status)
   );
@@ -403,22 +555,7 @@ export async function loadTrackGoalFacts(
   // order every importer of the tracks service initialises in, and suites that
   // stub `checkPermissionOrPropose` got the real ladder in the hand-off gate.
   const { readDependencyFacts } = await import("../links/dependency-links.js");
-  const [evaluations, pending, deps] = await Promise.all([
-    gradedSessionIds.length > 0
-      ? db
-          .select({
-            sessionId: sessionEvaluations.sessionId,
-            criterionKey: sessionEvaluations.criterionKey,
-            verdict: sessionEvaluations.verdict,
-            evaluatorKind: sessionEvaluations.evaluatorKind,
-            evaluatorId: sessionEvaluations.evaluatorId,
-            rationale: sessionEvaluations.rationale,
-            attempt: sessionEvaluations.attempt,
-            createdAt: sessionEvaluations.createdAt,
-          })
-          .from(sessionEvaluations)
-          .where(inArray(sessionEvaluations.sessionId, gradedSessionIds))
-      : Promise.resolve([]),
+  const [pending, deps] = await Promise.all([
     db
       .select({
         targetType: proposals.targetType,
@@ -451,31 +588,11 @@ export async function loadTrackGoalFacts(
   ]);
 
   const trackOfSession = new Map(sessions.map((s) => [s.id, s.trackId]));
-  const rowsBySession = new Map<string, typeof evaluations>();
-  for (const e of evaluations) {
-    const list = rowsBySession.get(e.sessionId) ?? [];
-    list.push(e);
-    rowsBySession.set(e.sessionId, list);
-  }
 
   for (const track of tracks) {
     const criteria = readGoalCriteria(track.criteria);
     const filed = sessions.filter((s) => s.trackId === track.id);
-    const runs: GoalRunFacts[] = filed.map((s) => {
-      const modelId = (s.metadata as { modelId?: unknown } | null)?.modelId;
-      return {
-        sessionId: s.id,
-        open: !isTerminalSessionStatus(s.status),
-        criterionKeys: readCriteria(s.criteria).map((c) => c.key),
-        authors: [
-          s.userId,
-          ...(s.agentIds ?? []),
-          ...(typeof modelId === "string" && modelId ? [modelId] : []),
-        ],
-        evaluations: rowsBySession.get(s.id) ?? [],
-      };
-    });
-    const states = deriveGoalCriteria(criteria, runs);
+    const states = deriveGoalCriteria(criteria, runsOf.get(track.id) ?? []);
     const stateOf = new Map(states.map((s) => [s.key, s]));
 
     const sources: WaitingOnSource[] = [];

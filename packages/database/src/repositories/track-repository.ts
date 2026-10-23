@@ -66,6 +66,8 @@ export interface TrackGoalPatch {
   uncertainty?: ProjectTrackUncertainty | null;
   kindConfirmedBy?: string | null;
   kindConfirmedAt?: Date | null;
+  /** The goal's loop (0350) — written WHOLE; `null` clears it (off). */
+  loop?: Record<string, unknown> | null;
 }
 
 /**

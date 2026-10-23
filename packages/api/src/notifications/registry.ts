@@ -293,6 +293,67 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
       },
     ],
   },
+  {
+    /**
+     * A goal this goal waited on (`blocked_by`) ENDED — closed (it delivered:
+     * "nothing else holds it up" or "still waits on N other things") or
+     * dropped (it did not: the goal waits until its owner re-plans). Producer:
+     * the `track-blocker-ended-notify` reactor
+     * (`notifications/track-blocker-ended-reactor.ts`), off the status door's
+     * `track.update` emit; the outcome is re-derived from the rows. `sourceId`
+     * is the WAITING goal — where its owner acts. Its twin for a waiting
+     * session is `session.blocker_goal_ended`.
+     */
+    type: "track.blocker_ended",
+    category: "data",
+    label: "Goal it waited on ended",
+    icon: "unlink",
+    priority: "normal",
+    titleTemplate: "{{blockerTitle}} is {{endedWord}}",
+    bodyTemplate: "{{dependentTitle}} was waiting on it — {{outcome}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open goal",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
+  {
+    /**
+     * The goal's LOOP stopped (work model W4): a required criterion failed in
+     * two runs of the goal since a person last graded it, so the goal stops
+     * proposing its next run and asks its owner — grade it, change it, or
+     * switch the loop on again to retry. Producer: `askOwnerLoopStopped`
+     * (`services/tracks/goal-loop.ts`), ONCE per stop (its groupKey names the
+     * goal, the criterion and the second failing run; the producer checks the
+     * row exists — the hourly re-check re-reads a stopped goal). An ITEM in
+     * the owner's Needs you: the loop waits on their call. `sourceId` is the
+     * goal.
+     */
+    type: "track.loop_stopped",
+    category: "ai",
+    label: "Goal stopped proposing runs",
+    icon: "user-check",
+    priority: "high",
+    titleTemplate: "Needs your call: {{trackName}}",
+    bodyTemplate:
+      "{{criterionStatement}} — failed in {{runs}} runs, so the goal stopped proposing new ones. Grade it, change it, or switch the loop on again to retry.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    actions: [
+      {
+        id: "view",
+        label: "Open goal",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
   // ── Governance ────────────────────────────────────────────────────────────
   {
     type: "proposal.created",
@@ -1202,6 +1263,35 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
         variant: "primary",
         // `sourceId` is the UNBLOCKED session's id (see the reactor), so no
         // explicit id is needed — the route table resolves it.
+        handler: { type: "navigate-object", kind: "session" },
+      },
+    ],
+  },
+  {
+    /**
+     * A GOAL this session waited on (`blocked_by`) ended — closed or dropped.
+     * The goal twin of `session.unblocked` (whose producer reacts to a
+     * SESSION closing only), with the dropped case said too: a dropped goal
+     * holds the session until its owner re-plans. Producer: the
+     * `track-blocker-ended-notify` reactor
+     * (`notifications/track-blocker-ended-reactor.ts`). `sourceId` is the
+     * waiting session.
+     */
+    type: "session.blocker_goal_ended",
+    category: "system",
+    label: "Goal it waited on ended",
+    icon: "unlink",
+    priority: "normal",
+    titleTemplate: "{{blockerTitle}} is {{endedWord}}",
+    bodyTemplate: "{{dependentTitle}} was waiting on it — {{outcome}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open Session",
+        variant: "primary",
         handler: { type: "navigate-object", kind: "session" },
       },
     ],

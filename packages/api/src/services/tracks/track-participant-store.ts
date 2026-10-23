@@ -40,6 +40,7 @@ import type {
 } from "@synap/database/schema";
 import {
   goalJudge,
+  goalOwner,
   isOpenCommitment,
   trackStatusCategory,
   type TrackCommitmentState,
@@ -75,6 +76,13 @@ export async function loadGoalJudge(
   track: Pick<ProjectTrack, "id" | "userId">
 ): Promise<string> {
   return goalJudge(await goalParticipantRows(track.id), track);
+}
+
+/** THE owner of `track` — its owner row, else its starter (`goalOwner`). */
+export async function loadGoalOwner(
+  track: Pick<ProjectTrack, "id" | "userId">
+): Promise<string> {
+  return goalOwner(await goalParticipantRows(track.id), track);
 }
 
 /** A person's display name, for a sentence — `null` when they have none. */
