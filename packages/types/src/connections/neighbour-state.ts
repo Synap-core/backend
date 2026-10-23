@@ -6,7 +6,7 @@
  * property). This maps that raw value onto `resolveUnitState`'s input using
  * each kind's EXISTING adapter — `sessionUnitInput`, `trackUnitInput`,
  * `unitStateInputOfRunStatus`, the proposal `STATUS_ATTENTION` table, the
- * dependency module's `isDependencyBlockerCleared` — so a row wears the same
+ * dependency module's `isDependencyEnded` — so a row wears the same
  * mark the object wears on its own surface. No local status table.
  *
  * A row gets a mark ONLY when its lifecycle alone settles it. An open entity,
@@ -39,7 +39,7 @@ import {
   DEPENDENCY_LINK_TYPE,
   REPLACES_LINK_TYPE,
   isBlocked,
-  isDependencyBlockerCleared,
+  isDependencyEnded,
   isDependencyEndpointKind,
   type DependencyEdge,
   type DependencyNodeRef,
@@ -108,7 +108,7 @@ export function neighbourUnitInput(
     case "run":
       return status ? unitStateInputOfRunStatus(status) : null;
     case "entity":
-      if (status && isDependencyBlockerCleared("entity", status)) {
+      if (status && isDependencyEnded("entity", status)) {
         return { terminal: true };
       }
       return blocked;
@@ -141,7 +141,8 @@ export interface DependencyNeighbourFact {
 /**
  * Which neighbours are BLOCKED BY THE FOCUS right now — `X --blocked_by-->
  * focus` while the focus (or, when the focus was replaced, its replacement)
- * is still open, by {@link isBlocked}. Keys are `${graphKind}:${id}`.
+ * has not DELIVERED — still open, or dropped without delivering — by
+ * {@link isBlocked}. Keys are `${graphKind}:${id}`.
  *
  * Decided only when the focus's own status was read (`focus.status !==
  * undefined`); otherwise the empty set — an unread focus never makes a row

@@ -10,6 +10,9 @@
  * (`connectOAuthApp`); this keeps the screen honest about what Allow sends.
  */
 
+import { isAppPublicId } from "@synap-core/types/membrane";
+import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
+
 export interface OfferedSpace {
   workspaceId: string;
   workspaceName: string;
@@ -18,6 +21,13 @@ export interface OfferedSpace {
 export interface OfferedPermission {
   permission: string;
   workspaces: OfferedSpace[];
+  /**
+   * The developer's own reason for asking (`synap_requests[].reason`, required
+   * by the kit's `synap:check`). Absent until the pod stores and sends it.
+   * Self-chosen text: shown as text, never as markup, and never as a reason
+   * to trust the app.
+   */
+  reason?: string | null;
 }
 
 export interface ApprovedPair {
@@ -46,12 +56,17 @@ function offered(
 /**
  * What starts ticked: the person's current approval for this app (a
  * re-consent), within today's offer. On a first consent, a permission with
- * exactly ONE space on offer starts ticked; with several, none do — the person
- * picks.
+ * exactly ONE space on offer starts ticked; with several, none do (the person
+ * picks), unless `spaceHint` names one of them.
+ *
+ * `spaceHint` is the launch's `space_hint` (the Synap browser opened the app
+ * from that space). It is untrusted query text: it only pre-ticks a space the
+ * offer already holds, never on a re-consent, and never reaches the server.
  */
 export function initialSelection(
   offer: readonly OfferedPermission[],
-  current: readonly ApprovedPair[]
+  current: readonly ApprovedPair[],
+  spaceHint?: string | null
 ): Selection {
   const out = new Set<string>();
   if (current.length > 0) {
@@ -63,11 +78,78 @@ export function initialSelection(
     return out;
   }
   for (const o of offer) {
-    if (o.workspaces.length === 1) {
+    const hinted = spaceHint
+      ? o.workspaces.find((w) => w.workspaceId === spaceHint)
+      : undefined;
+    if (hinted) {
+      out.add(key(o.permission, hinted.workspaceId));
+    } else if (o.workspaces.length === 1) {
       out.add(key(o.permission, o.workspaces[0]!.workspaceId));
     }
   }
   return out;
+}
+
+/**
+ * Why Allow is disabled, said next to it, or null when it may be pressed.
+ * A disabled button with no reason reads as a broken page.
+ */
+export function allowBlockedReason(
+  offer: readonly OfferedPermission[],
+  selection: Selection
+): string | null {
+  if (toApproved(selection, offer).length > 0) return null;
+  if (offer.every((o) => o.workspaces.length === 0)) {
+    return "You have no space to give it yet.";
+  }
+  return "Pick at least one space.";
+}
+
+/**
+ * A space checkbox's accessible name. The visible label is the space alone,
+ * which repeats under every permission ("Brand, Brand, Brand"); a screen
+ * reader needs which permission it gives there.
+ */
+export function spaceCheckboxLabel(permission: string, space: string): string {
+  return `${permissionLabel(permission)} in ${space}`;
+}
+
+/** The developer's reason for a permission, trimmed, or null when none was sent. */
+export function reasonOf(item: OfferedPermission): string | null {
+  const r = item.reason?.trim();
+  return r ? r : null;
+}
+
+/**
+ * Which kind of client a consent request is for, read from the query's
+ * `client_id` alone. Used only when the request could not be resolved, so the
+ * recovery hint fits where the person came from: a pod app names its metadata
+ * document by URL, a "Sign in with Synap" app by its `app_` public id, a Synap
+ * app (desktop, Relay) by its registered id, and anything else is an MCP
+ * client (claude.ai) that registered itself.
+ */
+export type ConsentClientKind = "pod_app" | "sign_in" | "first_party" | "mcp";
+
+export function consentClientKind(clientId: string): ConsentClientKind {
+  // The pod's own rule (`isClientMetadataUrl`): any URL-shaped client_id.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(clientId)) return "pod_app";
+  if (isAppPublicId(clientId)) return "sign_in";
+  if (Object.hasOwn(FIRST_PARTY_CLIENT_NAMES, clientId)) return "first_party";
+  return "mcp";
+}
+
+/** The recovery step under "This authorization request isn't valid". */
+export function invalidRequestHint(clientId: string): string {
+  switch (consentClientKind(clientId)) {
+    case "pod_app":
+      return "Close this tab, go back to the app's website and connect again. A fresh request will carry valid details.";
+    case "sign_in":
+      return "Close this tab, go back to the app and sign in again. A fresh request will carry valid details.";
+    case "first_party":
+      return `Close this tab and sign in again from ${FIRST_PARTY_CLIENT_NAMES[clientId]}. A fresh request will carry valid details.`;
+    case "mcp":
+      return "Close this tab and start the connection again from Claude. A fresh request will carry valid details.";
+  }
 }
 
 /** Tick or untick one pair. A pair the offer does not hold is never added. */

@@ -62,6 +62,7 @@ import {
   roles,
   secrets,
   sessionEvaluations,
+  sessionRunners,
   sourceConfigs,
   sourceSubscriptions,
   tools,
@@ -123,6 +124,9 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   [proposals, spec("proposal", proposals)],
   [focusSessions, spec("session", focusSessions)],
   [sessionEvaluations, spec("session", sessionEvaluations)],
+  // No id column (PK session × client key): a grant on the SESSION reads its
+  // runners — who is attached to it — and nothing else.
+  [sessionRunners, spec("session", {}, { idColumn: sessionRunners.sessionId })],
   [channels, spec("channel", channels)],
   [events, spec("event", events)],
   [automations, spec("automation", automations)],
