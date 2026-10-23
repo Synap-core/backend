@@ -177,6 +177,11 @@ import {
   attachSessionInteractions,
   type SessionInteractionsSection,
 } from "../services/focus-sessions/session-interactions.js";
+import {
+  loadSessionRunnerTerminals,
+  type SessionRunnerTerminal,
+} from "../services/agent-conversations/agent-conversations.js";
+import { createLogger } from "@synap-core/core";
 import type { ContinuationNextMove } from "../services/focus-sessions/continuation-packet.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
@@ -192,6 +197,8 @@ import {
   withSessionParticipants,
   type SessionParticipants,
 } from "../services/focus-sessions/participants.js";
+
+const logger = createLogger({ module: "focus-sessions-router" });
 
 // ── Shared input fragment ──────────────────────────────────────────────────
 
@@ -540,6 +547,41 @@ async function attachSessionLiveness<
   return rows.map((r) => ({ ...r, live: live.get(r.id) ?? null }));
 }
 
+/**
+ * `runners` on every row — who is attached to each session (`session_runners`)
+ * joined to the terminal each runs in (`agent_conversations`, 0354): ONE
+ * batched read for the page. The terminal facts are the VIEWER's own only
+ * (a member of a shared session sees who is attached, never the owner's
+ * computers). A failed read is `unavailable` on every row, never an empty list.
+ */
+async function attachSessionRunners<R extends FocusSession>(
+  rows: R[],
+  viewerId: string
+): Promise<Array<R & { runners: SessionRunnersSection }>> {
+  try {
+    const byId = await loadSessionRunnerTerminals(
+      rows.map((r) => r.id),
+      viewerId
+    );
+    return rows.map((r) => ({
+      ...r,
+      runners: { status: "ok", items: byId.get(r.id) ?? [] },
+    }));
+  } catch (err) {
+    logger.warn({ err }, "focusSessions.list runners read failed");
+    const unavailable: SessionRunnersSection = {
+      status: "unavailable",
+      reason: "Who is attached to these sessions could not be read.",
+    };
+    return rows.map((r) => ({ ...r, runners: unavailable }));
+  }
+}
+
+/** `focusSessions.list` `runners: true` — a session's runners and their terminals. */
+export type SessionRunnersSection =
+  | { status: "ok"; items: SessionRunnerTerminal[] }
+  | { status: "unavailable"; reason: string };
+
 // ── Router ─────────────────────────────────────────────────────────────────
 
 /**
@@ -553,6 +595,8 @@ type SessionListRow = FocusSession & { parentSessionId: string | null } & {
 } & SessionParticipants & { verdict?: SessionVerdict } & Partial<SessionEdges> &
   Partial<SessionOutputDependencies> & {
     nextMove?: ContinuationNextMove;
+    /** Present with `runners: true` — who is attached, and in which terminal. */
+    runners?: SessionRunnersSection;
     /** Present with `nextMove: true` — the counts a state mark reads. */
     unitFacts?: SessionUnitCounts;
     /**
@@ -651,6 +695,15 @@ export const focusSessionsRouter = router({
          * row, never an empty list. The work map draws them.
          */
         interactions: z.boolean().optional(),
+        /**
+         * Also project each row's `runners`: the client conversations attached
+         * to it (`session_runners`), each joined to the terminal it runs in
+         * (`agent_conversations` — computer, folder, state since, sub-agents),
+         * one batched read for the page. The terminal is the viewer's own only.
+         * A failed read is `{ status: "unavailable" }` on every row. The work
+         * map and the session card draw it.
+         */
+        runners: z.boolean().optional(),
         /** Which sessions — see `sessionLensSchema`. Default EXCLUDES triage. */
         lens: sessionLensSchema,
         /** Which population — see `sessionKindFilterSchema`. Default `work`. */
@@ -746,14 +799,20 @@ export const focusSessionsRouter = router({
       const withInteractions: SessionListRow[] = input.interactions
         ? await attachSessionInteractions(withMove)
         : withMove;
+      const withRunners: SessionListRow[] = input.runners
+        ? await attachSessionRunners(
+            withInteractions,
+            requireUserId(ctx.userId)
+          )
+        : withInteractions;
       // `viewerRole` LAST: on a member row it also neutralises the
       // owner-directed `unitFacts`, so a shared session never counts toward
       // the member's needs-you (see `viewer-role.ts`).
       const viewer = requireUserId(ctx.userId);
       if (!input.edges)
-        return withInteractions.map((r) => withViewerRole(r, viewer));
+        return withRunners.map((r) => withViewerRole(r, viewer));
       // Second batch projection, ONE more links query for the whole page.
-      const withEdges = await attachSessionEdges(withInteractions);
+      const withEdges = await attachSessionEdges(withRunners);
       // Third: the DERIVED output dependencies. Owner-floored explicitly —
       // unlike `blocked_by`, these edges have no single producer that floors
       // both ends, so the counterparty can belong to another user.

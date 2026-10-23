@@ -74,6 +74,7 @@ import {
   registerLibraryRoutes,
   registerToolsRoutes,
   registerTerminalRoutes,
+  registerConversationsRoutes,
   registerThreadsRoutes,
   registerUsersRoutes,
   registerVaultRoutes,
@@ -333,6 +334,7 @@ registerVaultRoutes(app); // /vault/request
 registerChannelsRoutes(app); // /channels/*
 registerChannelEgressRoutes(app); // /channel-egress/pending, /channel-egress/:id/ack
 registerTerminalRoutes(app); // /terminal/logs
+registerConversationsRoutes(app); // /conversations/heartbeat — live agent terminals (presence, telemetry)
 registerProactiveRoutes(app); // /proactive/post
 registerNotificationsRoutes(app); // /notifications
 registerEntityShareRoutes(app); // /entity-share/deliver (CP JWT auth)

@@ -1762,6 +1762,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0342_session_runners.sql",
   },
 
+  // agent_conversations — the one registry of live agent terminals (0354).
+  // Absence means every heartbeat would fail its upsert (a 500 to the
+  // reporter) and `synap_list_agents` would 42P01 on its terminals read.
+  {
+    table: "agent_conversations",
+    column: "last_seen_at",
+    addedBy: "0354_agent_conversations.sql",
+  },
+  {
+    table: "agent_conversations",
+    column: "ended_at",
+    addedBy: "0354_agent_conversations.sql",
+  },
+
   // Kind + Facets Wave 3A (0175): the `_conversions` ledger — mirrors
   // `_migrations` for DATA ops. Absence means a pod is on a pre-0175 schema
   // where the conversion engine's applied-set read would hit a missing table.
