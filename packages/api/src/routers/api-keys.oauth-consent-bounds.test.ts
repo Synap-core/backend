@@ -46,9 +46,15 @@ vi.mock("../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn(async () => false),
 }));
 vi.mock("../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
+// The refusal log line (review A6): a spy, so a test can count the lines.
+const refusals = vi.hoisted(() => vi.fn());
+vi.mock("./oauth/refusal-log.js", () => ({
+  logOAuthRefusal: (fields: unknown) => refusals(fields),
+}));
 vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
 
 // Import AFTER mocks.
+import { db } from "@synap/database";
 import { apiKeysRouter } from "./api-keys.js";
 import { ClientMetadataError } from "./oauth/client-metadata.js";
 
@@ -175,5 +181,60 @@ describe("consent decision — a cookie-carrying call must come from this pod's 
     } finally {
       delete process.env.POD_ADMIN_URL;
     }
+  });
+});
+
+describe("consent refusals leave one log line each (review A6)", () => {
+  const id = "https://studio.example.com/.well-known/synap-client.json";
+
+  it("an unreadable document: the client_id, the phase and the reason", async () => {
+    refusals.mockClear();
+    await errorOf(caller().getOAuthConsentContext(params(id)));
+    expect(refusals).toHaveBeenCalledTimes(1);
+    expect(refusals).toHaveBeenCalledWith({
+      phase: "consent",
+      clientId: id,
+      reason: "app_description_unreadable",
+      detail: expect.stringMatching(/could not be read/),
+    });
+  });
+
+  it("the decision's refusal is logged too", async () => {
+    refusals.mockClear();
+    await errorOf(
+      caller().decideOAuthAuthorization({ ...params(id), approve: true })
+    );
+    expect(refusals).toHaveBeenCalledTimes(1);
+    expect(refusals.mock.calls[0]![0]).toMatchObject({
+      phase: "consent",
+      reason: "app_description_unreadable",
+    });
+  });
+
+  it("a refusal of who decides (FORBIDDEN) is logged too", async () => {
+    refusals.mockClear();
+    // A registered MCP client; the caller is no person of this pod.
+    vi.mocked(db.query.oauthClients.findFirst).mockResolvedValueOnce({
+      clientId: "dcr_a6",
+      clientKind: "dcr",
+      clientName: "A6 client",
+      redirectUris: ["https://studio.example.com/cb"],
+      scopes: ["mcp.read"],
+      requestedPermissions: [],
+    } as never);
+    const err = await errorOf(
+      caller().decideOAuthAuthorization({
+        ...params("dcr_a6"),
+        approve: true,
+      })
+    );
+    expect(err.code).toBe("FORBIDDEN");
+    expect(refusals).toHaveBeenCalledTimes(1);
+    expect(refusals).toHaveBeenCalledWith({
+      phase: "consent",
+      clientId: "dcr_a6",
+      reason: "forbidden",
+      detail: err.message,
+    });
   });
 });
