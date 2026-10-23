@@ -42,9 +42,19 @@ const BASELINE_OAUTH = slice(
   "-- ─── 3. events"
 );
 const BASELINE_APPS = slice("-- apps (0309)", "-- 0319: lifecycle columns");
-/** The baseline's own 0339 block: from its comment to the end of the file. */
+/**
+ * Where a NEWER baseline block (0341+) starts, so a slice "from 0339 onward"
+ * stops before tables later migrations append (they reference tables this
+ * PGlite fixture never creates). End of file when there is none.
+ */
+const NEWER_BLOCK = (() => {
+  const i = BASELINE.search(/\n-- 03(4[1-9]|[5-9][0-9]):/);
+  return i === -1 ? undefined : i + 1;
+})();
+/** The baseline's own 0339 block (and 0340's): from its comment to the next block. */
 const BASELINE_REFRESH = BASELINE.slice(
-  BASELINE.indexOf("-- 0339: a pod app's rotating")
+  BASELINE.indexOf("-- 0339: a pod app's rotating"),
+  NEWER_BLOCK
 );
 const USERS_STUB = `CREATE TABLE IF NOT EXISTS "users" ("id" text PRIMARY KEY);`;
 
@@ -82,6 +92,17 @@ async function sqlState(p: Promise<unknown>): Promise<string | null> {
 const DECLARED = getTableConfig(oauthRefreshTokens)
   .columns.map((c) => c.name)
   .sort();
+/**
+ * What 0339 ALONE creates: the Drizzle table minus the columns a LATER
+ * migration adds (derived from the boot coherence list, e.g. 0340's
+ * `device_id`), so a later column never reads as 0339's.
+ */
+const ADDED_LATER = new Set(
+  REQUIRED_COLUMNS.filter(
+    (r) => r.table === "oauth_refresh_tokens" && r.addedBy > M0339_FILE
+  ).map((r) => r.column)
+);
+const DECLARED_0339 = DECLARED.filter((c) => !ADDED_LATER.has(c));
 
 const insertApp = (pg: PGlite) =>
   pg.query<{ id: string }>(
@@ -112,7 +133,7 @@ describe("migration 0339 — oauth_refresh_tokens", { timeout: 60_000 }, () => {
     } = await insertApp(pg);
     await insertToken(pg, "h1", app!.id);
     await pg.exec(M0339);
-    expect(await columnsOf(pg, "oauth_refresh_tokens")).toEqual(DECLARED);
+    expect(await columnsOf(pg, "oauth_refresh_tokens")).toEqual(DECLARED_0339);
     const kept = await pg.query(`SELECT 1 FROM oauth_refresh_tokens`);
     expect(kept.rows).toHaveLength(1);
   });

@@ -55,6 +55,11 @@ vi.mock("../services/signals/access-requests.js", async (orig) => ({
   listPendingIssuers: async (...args: unknown[]) => issuersSpy(...args),
   listPendingAppRequests: async (...args: unknown[]) => appRequestsSpy(...args),
 }));
+// The viewer's open space invites: pinned by their own PGlite suite
+// (`space-invites.pglite.test.ts`); none here.
+vi.mock("../services/signals/space-invites.js", () => ({
+  listOpenSpaceInvites: async () => ({ rows: [], truncated: false }),
+}));
 
 vi.mock("../services/projects/project-needs-you.js", () => ({
   listSessionsAwaitingReview: async (...args: unknown[]) => {
@@ -162,7 +167,7 @@ describe("signals.list — needs-you lens forwards the scope to every half", () 
   it("forwards session + track to the owed read and to the review read", async () => {
     await caller().list({ lens: "needs-you", sessionId: S, trackId: T });
     expect(owedSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: S, trackId: T, excludeDrafts: true })
+      expect.objectContaining({ sessionId: S, trackId: T, needsYouLens: true })
     );
     expect(reviewSpy).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: S, trackId: T })
@@ -420,12 +425,15 @@ describe("signals.countByProject — the rail's badges, one round-trip", () => {
     expect(out.every((r) => r.status === "ok")).toBe(true);
   });
 
-  it("DRAFTS NEVER COUNT: every half is asked to leave undecided agent drafts out", async () => {
+  it("DRAFTS DON'T COUNT, THEIR ASKS DO (founder 2026-10-22): proposals under a draft stay out; the owed half reads the needs-you lens", async () => {
     await caller().countByProject({ projectIds: [P1] });
     expect(groupsSpy).toHaveBeenCalledWith(
       expect.objectContaining({ projectId: P1, excludeDraftSessions: true })
     );
     expect(owedSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ needsYouLens: true })
+    );
+    expect(owedSpy).not.toHaveBeenCalledWith(
       expect.objectContaining({ excludeDrafts: true })
     );
   });
@@ -586,6 +594,7 @@ describe("signals — the access-request halves (pending issuers, app requests)"
           latestAt: new Date("2026-10-12T10:00:00Z"),
           workspaceIds: [],
           sessionId: null,
+          agent: null,
           reasonCounts: {},
           attentionFloorCount: 0,
         },

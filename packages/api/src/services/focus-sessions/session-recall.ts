@@ -343,8 +343,10 @@ async function defaultPost(args: {
     channelId: args.channelId,
     userId: args.userId,
     content: args.content,
-    // The pod speaking in the room, like the hydration summary — visible to
-    // the person and in the agent's history. Never turns the AI on.
+    // The pod speaking in the room — visible to the person and in the agent's
+    // history. Never turns the AI on. The door stores an assistant post that
+    // names no agent as `authorType: 'bot'` (`authorTypeForPost`), never as the
+    // owner's own words, though `userId` is still the owner.
     role: "assistant",
     triggerAI: false,
     idempotencyKey: args.idempotencyKey,

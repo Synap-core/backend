@@ -2358,6 +2358,21 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * playbook's own goalTemplate.
 		 */
 		goalOverride?: string;
+		/**
+		 * HAND-OFF — the agent user id (`users.id`, the identity `synap_list_agents`
+		 * returns and `synap_start_session` `agentIds` / `synap_update_session`
+		 * `addAgentId` take) the spawned session is handed to. Forwarded to
+		 * `runPlaybook`, which resolves it ONCE through THE route
+		 * (`agent-dispatch/route.ts`, the hand-off reaches `dispatch` | `pull`)
+		 * before any session exists: an unknown, paused or foreign agent fails the
+		 * step by name. A handed run puts the agent on the session's roster and
+		 * does NOT dispatch the playbook's own executor — the named agent does the
+		 * work (`pull`: its orient's `handedToYou`; `dispatch`: its binding).
+		 * Run mode only: the step refuses it beside `appointment` / `propose`.
+		 * Producer: `buildPlaybookRunFlowDefinition` from the playbook's
+		 * `schedule.handToAgentId`. Absent ⇒ unchanged.
+		 */
+		handToAgentId?: string;
 		label: string;
 		/**
 		 * WHAT this node materializes (read through `readPlaybookRunMode`,
@@ -5020,12 +5035,20 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * X --blocked_by--> Y. THE dependency between units of work, across kinds
  * (`session` · `entity` · `track`, any pair — `DEPENDENCY_ENDPOINT_KINDS` in
  * `@synap-core/types/connections`): the FROM end cannot proceed until the TO
- * end clears by its own kind's status vocabulary. Entity relations
- * `blocks` / `depends_on` are this edge under other names; the relation
- * create door maps them here and migration 0301 moved the stored rows.
+ * end DELIVERS by its own kind's status vocabulary (a session `closed`, a
+ * track `completed`, an entity in lifecycle category `done`). Entity
+ * relations `blocks` / `depends_on` are this edge under other names; the
+ * relation create door maps them here and migration 0301 moved the stored
+ * rows.
  *
- * Blocked-ness is DERIVED from the subset of these edges whose TARGET is
- * still open, never a stored `blocked` status on `focus_sessions` (prior
+ * A TO end that ENDED WITHOUT DELIVERING (a session cancelled or failed, a
+ * track archived, an entity `lost`) does NOT clear (founder decision,
+ * 2026-10-22): it stays a blocker marked `dropped`, and the FROM end must
+ * re-plan — until this edge is removed, or a `replaces` edge names the
+ * attempt that replaces it (whoever waited on it then waits on that).
+ *
+ * Blocked-ness is DERIVED from the subset of these edges whose TARGET has
+ * not delivered, never a stored `blocked` status on `focus_sessions` (prior
  * art: Atlassian's "flag, don't status" — a status can only hold one value,
  * so storing blocked-ness destroys the real state and then drifts from the
  * blockers). The ONE producer is `services/links/dependency-links.ts`
@@ -6034,10 +6057,18 @@ export interface EntityPropertyDiff {
 	/** Changed keys that did not exist before the merge. */
 	absentBefore: string[];
 	/**
-	 * Body document the merge linked onto an entity that had none. Revert
-	 * unlinks it only while the entity still points at it.
+	 * Body document the write linked onto the entity. Revert takes it off only
+	 * while the entity still points at it.
 	 */
 	bodyDocumentId?: string;
+	/**
+	 * The body the write REPLACED or unlinked (decision B9g), `null` when the
+	 * entity had none. Present only when an update changed the body link; revert
+	 * puts it back while the entity still points at what the write left
+	 * (`bodyDocumentId`, or no body). Absent on a merge record, which only ever
+	 * links onto an entity with no body.
+	 */
+	bodyDocumentIdBefore?: string | null;
 	/**
 	 * Keys the write REMOVED (an update's `deleteProperties`). Their prior value
 	 * is in `before`; revert restores one only while it is still absent.
@@ -6109,11 +6140,17 @@ export type RevertTarget = {
 	key: string;
 	kind: "property";
 }
-/** A body document a merge linked onto an entity that had none. */
+/**
+ * A body-link change: `documentId` is what the write left (null = it
+ * unlinked the body), `previousDocumentId` what it replaced (absent/null =
+ * the entity had none — the merge case). Revert puts `previousDocumentId`
+ * back only while the entity still points at `documentId` (B9g).
+ */
  | {
-	documentId: string;
+	documentId: string | null;
 	entityId: string;
 	kind: "entity_body";
+	previousDocumentId?: string | null;
 }
 /**
  * Config columns an `update_*` op (a Library rebuild) rewrote on a row it
@@ -6202,6 +6239,25 @@ export interface KratosSession {
 	active: boolean;
 	expires_at?: string;
 	authenticated_at?: string;
+	/** How it was authenticated (Kratos); the step-up clock reads it. */
+	authentication_methods?: Array<{
+		completed_at?: string;
+		method?: string;
+		provider?: string;
+	}>;
+	/**
+	 * Set ONLY when the person came in on a Synap app's device token
+	 * (`appSessionMiddleware`): the device it was minted
+	 * for, and when the person last really authenticated for it (`authTime`,
+	 * the step-up clock). Absent on a Kratos session. Such a session has no
+	 * `authenticated_at`, so account recovery never counts it as a recent
+	 * sign-in.
+	 */
+	device?: {
+		authTime: Date | null;
+		clientId: string;
+		id: string;
+	};
 }
 /**
  * User object (simplified from Kratos identity)
@@ -6220,6 +6276,15 @@ export interface Context {
 	userId?: string | null;
 	user?: User | null;
 	session?: KratosSession | null;
+	/**
+	 * What kind of PERSON session `session` is: a Kratos session (browser
+	 * cookie, X-Session-Token) or a Synap app's device token. Set ONLY by
+	 * `createContext`, from what the app session gate resolved from the row
+	 * (`middleware/app-session.ts`); null when there is no session. A credential
+	 * door takes a `person_device` session only shortly after a real sign-in
+	 * (`requireFreshAuthentication`, trpc.ts).
+	 */
+	sessionKind?: "kratos" | "person_device" | null;
 	req?: Request;
 	socketIO?: any;
 	workspaceId?: string | null;
@@ -6699,6 +6764,55 @@ export interface GovernanceRuleDraft {
 	targetProfile?: string;
 	verdict: "auto";
 	sourceProposalId: string;
+}
+/**
+ * - `clear`     — the door looked and found nothing.
+ * - `possible`  — at least one candidate; the write is filed for review.
+ * - `unchecked` — the lookup FAILED, or could not look at everything (the
+ *                 caller's pending queue is longer than the scan). Never
+ *                 folded into `clear`: an empty result and a failed or
+ *                 partial read are different facts.
+ */
+export type DuplicateCheckStatus = "clear" | "possible" | "unchecked";
+/** What the door compared. `kind` is a schema definition (a profile). */
+export type DuplicateSubjectType = "entity" | "kind" | "playbook" | "project";
+/**
+ * WHY a candidate matched — a closed set, so a renderer words it from the
+ * one vocabulary instead of string-matching prose.
+ *  - `same_identity` — a strong identity atom (email, phone, url, handle,
+ *                      external id) the door could not merge onto;
+ *  - `same_name`     — the same normalized name, same kind;
+ *  - `similar_name`  — near-identical name tokens (projects only, today).
+ */
+export type DuplicateMatchReason = "same_identity" | "same_name" | "similar_name";
+export interface DuplicateCandidate {
+	/** A live record, or a pending proposal that would create one. */
+	ref: "proposal" | "record";
+	/** The record's id (entity / playbook / project / profile) or the proposal id. */
+	id: string;
+	/** The candidate's kind: an entity's profile slug, or the subject type. */
+	kind: string;
+	title: string | null;
+	why: DuplicateMatchReason;
+	/** Capture graphs only: the op `ref` of the proposed item this candidate is for. */
+	forRef?: string;
+	/** Capture graphs only: that proposed item's title. */
+	forTitle?: string;
+	/**
+	 * The candidate record is DEMO data (it sits only in sample projects).
+	 * Founder default 1 (FB1020): a strong identity match on demo data is never
+	 * merged silently — it is listed here, marked, for a person to decide; a
+	 * renderer shows a "Sample" mark so "use existing" never puts real work on
+	 * a row every list hides.
+	 */
+	sample?: true;
+}
+export interface DuplicateCheck {
+	status: DuplicateCheckStatus;
+	subject: DuplicateSubjectType;
+	candidates: DuplicateCandidate[];
+	/** True when an item matched more candidates than {@link DUPLICATE_CHECK_MAX_CANDIDATES}. */
+	truncated?: boolean;
 }
 declare const PROPOSAL_SOURCES: readonly [
 	"user",
@@ -9087,36 +9201,6 @@ export interface PlanStepSummary {
 	/** A skill step's slug — the ref `synap_load_skill` resolves. */
 	slug?: string;
 }
-/** A create_entity op inside a pending proposal that collided on a strong signal. */
-export interface PendingSignalMatch {
-	proposalId: string;
-	proposalType: string;
-	summary?: string;
-	/** The pending op's stable ref, if it had one. */
-	entityRef?: string;
-	/** The pending op's title (what the reviewer sees). */
-	entityTitle?: string;
-	profileSlug?: string;
-	/** The normalized strong signal(s) that matched (email/phone/url/handle/…). */
-	matchedSignals: Array<{
-		type: string;
-		value: string;
-	}>;
-}
-/** A pending capture op whose text matched a recall query. NOT a fact — pending. */
-export interface PendingTextMatch {
-	proposalId: string;
-	proposalType: string;
-	/** The proposal's human summary (what the reviewer sees), when present. */
-	summary?: string;
-	/** The best-matching create_entity op's title (the representative entity). */
-	entityTitle?: string;
-	profileSlug?: string;
-	/** Clickable review link — approve/reject to make it real. `${PUBLIC_URL}/open/<id>`. */
-	reviewUrl: string;
-	/** Distinct query terms matched — the rank score (higher = closer). */
-	score: number;
-}
 export interface StoredCaptureScope {
 	workspaceId: string | null;
 	projectId: string | null;
@@ -9215,33 +9299,20 @@ export interface SubmitCaptureGraphResult {
 	 */
 	modeledFields?: CaptureGraphModeledFields;
 	/**
-	 * ADVISORY in-flight-duplicate warnings: incoming graph entities whose STRONG
-	 * signal (email/phone/url/handle) collides with a create_entity op in the
-	 * caller's OWN pending capture/import proposal. NEVER auto-linked — a pending
-	 * proposal can still be rejected, so linking to it would stale-suppress a real
-	 * write. Surfaced so the caller/agent can wait for review instead of filing a
-	 * second copy. Omitted when nothing collides.
+	 * The duplicate door's answer for this graph (B2), each candidate tagged
+	 * with the item it is for (`forRef`/`forTitle`): a same-kind record or one
+	 * of the caller's own pending creates with the same name or strong identity.
+	 * NEVER auto-linked (only a strong identity on a record links). An agent's
+	 * graph with a `possible` twin is filed for review (POSSIBLE_DUPLICATE).
+	 * Omitted when the door found nothing (`clear`).
 	 */
-	pendingDuplicateCandidates?: Array<{
-		matches: PendingSignalMatch[];
-		/** The incoming graph entity ref that collided. */
-		ref: string;
-		title: string;
-	}>;
-	/**
-	 * A `projectName` that matched no project of the caller (piece D). Advisory
-	 * only — surfaced so the caller can confirm/create it; NEVER auto-linked.
-	 */
-	projectCandidate?: {
-		name: string;
-	};
+	duplicateCheck?: DuplicateCheck;
 	/**
 	 * Per-coordinate PROJECT outcome — `linked` when a real pin stamped
-	 * membership, `not_linked` (+reason `project-name-unmatched` for a name-ref
-	 * that matched nothing) so a requested project that did NOT link is NAMED,
-	 * never a silent success. Omitted when no project was requested. A dead UUID
-	 * pin never gets here: the whole capture is refused
-	 * (`CaptureProjectNotFoundError`).
+	 * membership. Omitted when no project was requested. Neither a dead UUID
+	 * pin nor an unmatched project NAME gets here: the whole capture is refused
+	 * (`CaptureProjectNotFoundError`), so this core no longer produces
+	 * `not_linked`; the member stays because the receipt type is shared.
 	 */
 	project?: {
 		projectId: string;
@@ -9602,6 +9673,26 @@ export interface NeedsYouAccessRequest {
 	from: string;
 }
 /**
+ * An invite to ANOTHER space of this pod, addressed to the viewer's email, on
+ * a `space-invite` row (founder, wave PQ 2026-10-22): joined IN the app, with
+ * Accept on the row and Decline beside it. Read from the pod's own `invites`
+ * table for this person only, so it needs no notification to exist.
+ *
+ * `token` is what `workspaces.acceptInvite` takes (the same value
+ * `workspaces.listMyInvites` already hands this person); `id` is what
+ * `workspaces.rejectInvite` takes.
+ */
+export interface NeedsYouInvite {
+	id: string;
+	token: string;
+	/** The role the invite grants (`editor`, `viewer`, …). */
+	role: string;
+	/** `workspace` = one space; `pod` = every space of the pod. */
+	scope: "pod" | "workspace";
+	/** The space's name; null for a pod-wide invite or an unnamed space. */
+	spaceName: string | null;
+}
+/**
  * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
  * event into a human line.
  *
@@ -9926,7 +10017,8 @@ declare const BLOCKED_REASONS: readonly [
 export type BlockedReason = (typeof BLOCKED_REASONS)[number];
 declare const OUTPUT_RETIRED_REASONS: readonly [
 	"session_cancelled",
-	"decision_resolved"
+	"decision_resolved",
+	"withdrawn"
 ];
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
 declare const OUTPUT_REF_KINDS: readonly [
@@ -10632,8 +10724,11 @@ export interface PostChannelMessageResult {
 	/**
 	 * An agent's `question` naming a `slotLabel`: what filing it ON the slot did
 	 * (`fileRoomQuestionOnSlot`) — `blocked` when the slot now carries the
-	 * question as its ask; otherwise why not (`unknown_label`, `already_done`,
-	 * `no_session`, `not_found`, `failed`). Absent for every other post.
+	 * question as its ask; otherwise why not (`already_done`, `not_found`,
+	 * `failed`). A slot the session does not declare, or a room with no
+	 * session, is REFUSED before posting (`checkRoomQuestionSlot`), so
+	 * `unknown_label` / `no_session` only reach here on a race. Absent for
+	 * every other post.
 	 */
 	slot?: {
 		status: string;
@@ -11468,6 +11563,13 @@ export interface ProposalClusterSource {
 	sessionId?: string;
 	automationId?: string;
 }
+/** The one agent behind a whole cluster (`ProposalCluster.agent`). */
+export interface ProposalClusterAgent {
+	/** `proposals.agentUserId` — the agent's page door. */
+	id: string;
+	/** Its display name (`actorDisplayName`); null when the router resolved none. */
+	label: string | null;
+}
 /** One collapsed cluster card. */
 export interface ProposalCluster {
 	fingerprint: string;
@@ -11500,6 +11602,14 @@ export interface ProposalCluster {
 	 * this is decided over EVERY member.
 	 */
 	sessionId: string | null;
+	/**
+	 * The ONE agent that filed EVERY member — `null` when any member was filed
+	 * by no agent (a person, a system write) or members came from several.
+	 * Decided over every member, like `sessionId` — never read off `sources`,
+	 * where a member with no provenance leaves no trace. A needs-you row's
+	 * "from X" (`signalFromCluster`).
+	 */
+	agent: ProposalClusterAgent | null;
 	/**
 	 * Member count per `governance_reason`, so a card can render its composition
 	 * ("152 routine · 2 destructive · 1 untrusted origin") instead of a bare
@@ -12372,12 +12482,29 @@ export interface AppSignInDescription {
 	/** "<App> will act as you in: Sales, Content." */
 	headline: string;
 	spaces: AppSignInSpace[];
-	/** "It cannot delete, manage keys, approve outside these spaces, or see other spaces." */
+	/** "It cannot delete, manage keys, approve outside these spaces, or see anything outside what a member of these spaces sees." */
 	cannot: string;
 	/** How a write through it lands, and how long the sign-in lasts. */
 	note: string;
 	expiresInDays: number;
 }
+/**
+ * What a POD APP's consent screen says about who its token acts as
+ * (`podAppActsAs`), every word from here — the screen writes none of it.
+ *  - `person` (a Synap app): `lead` + the spaces the person ticks IS the grant
+ *    the token will carry ("Content Studio will act as you in: Content OS,
+ *    Ecosystem."); `note` says how a write lands and what it cannot do,
+ *    derived from the permissions the app asked for.
+ *  - `agent` (any other app): the ask-first sentence, unchanged.
+ */
+export type PodAppActsAsDescription = {
+	kind: "person";
+	lead: string;
+	note: string;
+} | {
+	kind: "agent";
+	note: string;
+};
 /**
  * What a POD APP (CIMD client) is shown as on the consent screen (spec 17
  * §9.1). Its identity is its DOMAIN (the client_id host), not its name.
@@ -12387,14 +12514,24 @@ export interface OAuthAppConsent {
 	domain: string;
 	/** "Synap app" (exact first-party origin, `isSynapApp`) vs "Unverified app". */
 	verified: boolean;
+	/**
+	 * Who its token will act as, and the words for it (`describePodAppActsAs`):
+	 * a Synap app acts AS THE PERSON ("<app> will act as you in: <the spaces
+	 * ticked>"); every other app is its own agent, every change for review.
+	 */
+	actsAs: PodAppActsAsDescription;
 	/** The document's `client_uri` (same origin as the client_id), or null. */
 	homepage: string | null;
 	/**
 	 * Each permission the app asked for AND declared, with the spaces this
 	 * person may give it in (`oauthAppOffer`). An empty list means the person
-	 * has no space to give that permission in.
+	 * has no space to give that permission in. `reason`: the document's own
+	 * `synap_requests[].reason` (display text, `displayReason`), or null —
+	 * the developer's words, shown as text, never a reason to trust the app.
 	 */
-	permissions: OAuthAppOfferItem[];
+	permissions: Array<OAuthAppOfferItem & {
+		reason: string | null;
+	}>;
 	/** What this person approved for this app before (re-consent pre-ticks it). */
 	approved: AppApprovedRequest[];
 	/**
@@ -12409,9 +12546,10 @@ export interface OAuthConsentContext {
 	clientId: string;
 	/**
 	 * 'dcr' — an MCP client (claude.ai); 'cimd' — a pod app; 'app' — an
-	 * approved app a person signs in to ("Sign in with Synap").
+	 * approved app a person signs in to ("Sign in with Synap"); 'first_party'
+	 * — a Synap app (desktop, Relay) signing the person in on this device.
 	 */
-	clientKind: "app" | "cimd" | "dcr";
+	clientKind: "app" | "cimd" | "dcr" | "first_party";
 	/** Untrusted, attacker-chosen at registration — the UI renders it as TEXT. */
 	clientName: string;
 	redirectUri: string;
@@ -12428,6 +12566,22 @@ export interface OAuthConsentContext {
 	 * client (an MCP agent connection).
 	 */
 	appSignIn: AppSignInDescription | null;
+	/**
+	 * The request asks for a fresh sign-in (`prompt=login` / `max_age`) and
+	 * the viewer's is older: the screen sends them to sign in again first.
+	 */
+	reauthenticate: boolean;
+	/**
+	 * A Synap app re-confirming a device it holds (`isDeviceReconfirm`): the
+	 * screen asks "Confirm it's you", not "Sign in".
+	 */
+	reconfirmDevice: boolean;
+	/**
+	 * That re-confirmation was answered by a federated sign-in only (Synap
+	 * Cloud): the screen asks for the pod password or passkey instead
+	 * (`PodCredentialRequiredError`).
+	 */
+	podCredentialRequired: boolean;
 }
 /**
  * API Keys Router
@@ -12775,6 +12929,20 @@ export interface ExecutionStats {
 	avgDurationMs?: number;
 	toolCallCount?: number;
 	[key: string]: unknown;
+}
+/** A pending capture op whose text matched a recall query. NOT a fact — pending. */
+export interface PendingTextMatch {
+	proposalId: string;
+	proposalType: string;
+	/** The proposal's human summary (what the reviewer sees), when present. */
+	summary?: string;
+	/** The best-matching create_entity op's title (the representative entity). */
+	entityTitle?: string;
+	profileSlug?: string;
+	/** Clickable review link — approve/reject to make it real. `${PUBLIC_URL}/open/<id>`. */
+	reviewUrl: string;
+	/** Distinct query terms matched — the rank score (higher = closer). */
+	score: number;
 }
 export interface PropertyHint {
 	/** Token(s) to match against an entity's serialized properties. */
@@ -14046,6 +14214,14 @@ export type ExecuteCapabilityResult = {
 	kind: "not_found";
 	message: string;
 };
+declare const LIFECYCLE_CATEGORIES$1: readonly [
+	"open",
+	"active",
+	"paused",
+	"done",
+	"lost"
+];
+type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 export interface DependencyNodeRef {
 	kind: string;
 	id: string;
@@ -14054,6 +14230,16 @@ export interface OpenBlocker extends DependencyNodeRef {
 	/** The blocker as declared, when the open one is its replacement. */
 	replaces?: DependencyNodeRef;
 	hidden: boolean;
+	/**
+	 * It ENDED without delivering (cancelled, failed, archived, lost) and still
+	 * holds the dependent: the work it waited on never happened, so the
+	 * dependent re-plans — remove the edge, or link a replacement.
+	 */
+	dropped: boolean;
+	/** Its own raw status, when the reader may see it. */
+	status?: string | null;
+	/** Its display name, when the reader may see it. */
+	title?: string | null;
 }
 /** A relation row as the relation readers return it — plus the dependency marker. */
 export type RelationReadRow = typeof relations.$inferSelect & {
@@ -14208,6 +14394,12 @@ export interface ShareListing {
 	 * so there is no single number; ask the anchor listing of each project.
 	 */
 	guestCount: number | null;
+	/**
+	 * Does this pod hand out a page people read a publication on
+	 * (`SYNAP_SHARE_PAGE_URL`)? False = a publication has only its developer
+	 * address, so a surface must not promise a page.
+	 */
+	publicPage: boolean;
 	/** True when any list hit {@link LIST_SHARES_CAP}. */
 	truncated: boolean;
 }
@@ -14405,7 +14597,10 @@ export interface GraphEnvelope {
 }
 export interface DependencyState {
 	blocked: boolean;
-	/** The blockers still holding it up, after `replaces` following. */
+	/**
+	 * The blockers still holding it up, after `replaces` following — open ones
+	 * and dropped ones (`dropped: true`, ended without delivering).
+	 */
 	openBlockers: OpenBlocker[];
 	/** Every declared blocker (outgoing `blocked_by`), open or cleared. */
 	declared: DependencyNodeRef[];
@@ -14835,6 +15030,15 @@ export interface ArchivedAutomationRef {
 	id: string;
 	name: string;
 }
+export type InviteAccepted = {
+	status: "accepted";
+	type: "workspace";
+	workspaceId: string;
+} | {
+	status: "accepted";
+	type: "pod";
+	workspacesJoined: number;
+};
 /**
  * Standard paginated response envelope.
  */
@@ -14864,6 +15068,11 @@ export type PublishResult = {
 } | {
 	/** False after an agent's approved publish: the owner publishes again to mint it. */
 	hasToken: boolean;
+	/**
+	 * The page a person opens for it (`SYNAP_SHARE_PAGE_URL` + `/d/<token>`),
+	 * with the token, so present ONCE too — and only when the pod has a page.
+	 */
+	pageUrl?: string;
 	pinned: boolean;
 	publishedAt: Date;
 	/** The keys the snapshot actually holds. */
@@ -15563,6 +15772,33 @@ export interface CsvTablePlan {
 		relationType: string;
 	};
 }
+export interface ImportIdentityDecision {
+	ref: string;
+	title: string;
+	/** The pod entity id, or the ref of an earlier row of this import. */
+	target?: string;
+	matchedBy?: "name" | "signal";
+	/** Created as a distinct subject despite a same-name entity. */
+	separate?: true;
+	/** Why it was kept separate (the conflicting signal types). */
+	reason?: string;
+}
+/** What the reviewer is shown: counts, and the rows themselves (capped). */
+export interface ImportIdentitiesSummary {
+	/** Linked to a pod entity holding the same strong signal. */
+	linkedBySignal: number;
+	/** Linked to a pod entity on its NAME alone — the reviewer should check. */
+	matchedByName: number;
+	/** Rows of this import folded into an earlier row naming the same subject. */
+	foldedInFile: number;
+	/** Created as distinct subjects despite a same-name entity. */
+	separate: number;
+	rows: {
+		linkedBySignal: ImportIdentityDecision[];
+		matchedByName: ImportIdentityDecision[];
+		separate: ImportIdentityDecision[];
+	};
+}
 /**
  * Per-op homes summary for an import graph — how create_entity ops are
  * distributed across workspaces / projects. Consumed by analyze/analyzeLarge
@@ -15877,7 +16113,7 @@ export interface NotificationDef {
 	 * How unread rows of this type FOLD into one needs-you row. Omit ⇒ per
 	 * target (`(type, source)`, `foldNotifications`). `"groupKey"` ⇒ per the
 	 * producer's collapse key: the same agent failing on run after run is ONE
-	 * row "×9", not nine rows each pointing at a different run (dogfood
+	 * row ("and 8 more like it"), not nine rows each pointing at a different run (dogfood
 	 * 2026-10-05: "meta encountered an error" ×9 on the triage page). The row
 	 * carries the NEWEST instance, so its door is the latest failure.
 	 */
@@ -16226,7 +16462,7 @@ export type BlockerEdgeResult = {
 	linked: true;
 } | {
 	linked: false;
-	reason: "not_found" | "self_blocker";
+	reason: "cycle" | "not_found" | "self_blocker";
 };
 export type RemoveBlockerResult = {
 	removed: true;
@@ -16234,7 +16470,11 @@ export type RemoveBlockerResult = {
 	reason: "no_edge" | "not_found" | "self_blocker";
 	removed: false;
 };
-/** What happened to ONE create-time blocker. Reported per id, never folded. */
+/**
+ * What happened to ONE blocker added at create time — or mid-flight through
+ * `synap_update_session` `addBlockedBySessionIds`, which reuses this door.
+ * Reported per id, never folded.
+ */
 export type CreateTimeBlockerReport = {
 	blockerSessionId: string;
 	inserted: number;
@@ -16246,7 +16486,7 @@ export type CreateTimeBlockerReport = {
 } | {
 	blockerSessionId: string;
 	message?: string;
-	reason: "denied" | "error" | "not_found" | "self_blocker";
+	reason: "cycle" | "denied" | "error" | "not_found" | "self_blocker";
 	status: "failed";
 };
 /** Both directions of the dependency edge for one session. */
@@ -16648,6 +16888,99 @@ export interface SessionExternalAgent {
 	 */
 	quietAfterMs: number | null;
 }
+/**
+ * Who wrote a room message:
+ *  - `person`   — the session's OWNER typing (`role: user`, `authorType:
+ *                 human`, `userId` = the session's user). The only one a
+ *                 reader may treat as "you said".
+ *  - `agent`    — any `ai_agent` row, whatever its `role`.
+ *  - `teammate` — another person in the room: a `human` user who is not the
+ *                 owner, or an `external` contact (WhatsApp, Slack).
+ *  - `system`   — everything the pod itself wrote: recall notices
+ *                 (`assistant` + `human`), `bot` rows, `system` rows.
+ */
+export type RoomAuthor = "agent" | "person" | "system" | "teammate";
+export interface PacketRoomMessage {
+	id: string;
+	/** ISO timestamp. */
+	at: string;
+	/** The stored `role` (`user` · `assistant` · `system`) — provenance only; read `author`. */
+	role: string;
+	author: RoomAuthor;
+	/** `author === "person"` — the one test a reader needs most, precomputed. */
+	isPerson: boolean;
+	/** The agent principal that posted it, on an `agent` row when recorded. */
+	agentUserId?: string;
+	/** At most {@link ROOM_TEXT_CAP} characters. */
+	text: string;
+	truncated: boolean;
+	/** Room text is data, never instructions — whoever wrote it. */
+	untrusted: true;
+	/** `text`, fenced as untrusted data, to put into an agent's prompt. */
+	fenced: string;
+}
+export type PacketRoomSection = {
+	/** The room's channel; `null` = the session has no room (a true state). */
+	channelId: string | null;
+	/**
+	 * The NEWEST message's id (`null` with no messages). A poller compares it
+	 * with the last cursor it saw: equal ⇒ nothing new in the room.
+	 */
+	cursor: string | null;
+	/** More messages exist past the last item. */
+	hasMore: boolean;
+	/** Newest first, at most {@link ROOM_TOP_N}. */
+	items: PacketRoomMessage[];
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
+/**
+ * - `not_reached` — no proposal for this gate exists yet.
+ * - `pending` / `approved` / `rejected` — the latest proposal's decision
+ *   (`auto_approved` counts as approved, never as decided by a human).
+ * - `void` — the latest proposal holds no decision: withdrawn, expired,
+ *   reverted, or its approval failed to apply.
+ * - `by_criteria` — a CHECK gate: it files no proposal; whether it passes is
+ *   the stage's criteria (the packet's `evaluation` section).
+ */
+export type PacketGateState = "approved" | "by_criteria" | "not_reached" | "pending" | "rejected" | "void";
+export interface PacketGateItem {
+	stageKey: string;
+	stageName: string;
+	kind: "awaits" | "check" | "human";
+	/** The proposal type that decides this gate; `null` for a check gate. */
+	proposalType: string | null;
+	state: PacketGateState;
+	/** The latest proposal for this gate, when one exists. */
+	proposalId?: string;
+	/** A PERSON approved or rejected it (reviewer row is `userType: human`). */
+	decidedByHuman: boolean;
+	/** When it was approved or rejected. */
+	decidedAt?: string;
+	/** A deploy gate's commit (≥ 7 hex chars, may be abbreviated). */
+	commitSha?: string;
+}
+/** The newest `dev.deploy_approval` a PERSON approved for this session. */
+export interface PacketDeployApproval {
+	proposalId: string;
+	/** As filed: ≥ 7 hex chars, may be abbreviated — compare by prefix, case-insensitively. */
+	commitSha: string;
+	branch: string | null;
+	repo: string | null;
+	targetHost: string | null;
+	approvedAt: string | null;
+}
+export type PacketGatesSection = {
+	deploy: PacketDeployApproval | null;
+	/** In the process's stage order. Not capped: one entry per gated stage. */
+	items: PacketGateItem[];
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
 export type PacketSection<T> = {
 	items: T[];
 	status: "ok";
@@ -16656,7 +16989,18 @@ export type PacketSection<T> = {
 	reason: string;
 	status: "unavailable";
 };
-export interface PacketSlotItem {
+/**
+ * How a kind is NAMED and MARKED, resolved by the vocabulary's one door
+ * (`resolveObjectNoun` / `resolveObjectGlyph`) — so a reader with no icon
+ * font draws `glyph` instead of keeping its own kind → mark table.
+ */
+export interface PacketKindIdentity {
+	/** "Task", "Decision" — an entity's own profile name when it has one. */
+	noun: string;
+	/** One compact mark ("☐", "◇", "▤"); never empty — unknown kinds read the fallback. */
+	glyph: string;
+}
+export interface PacketSlotItem extends PacketKindIdentity {
 	label: string;
 	kind: string;
 	blockedReason?: string;
@@ -16695,6 +17039,27 @@ export interface PacketSlotItem {
 	 */
 	ask?: SlotAsk;
 }
+/**
+ * A client conversation attached to the session's change-feed wait — a
+ * `session_runners` row (`loadSessionRunners`), projected.
+ */
+export interface PacketRunnerItem {
+	/** The client's own harness name (`claude-code`, …), as it sent it. */
+	harness: string;
+	conversationId: string;
+	/** Where it ran, when its client said so. Display only. */
+	cwd: string | null;
+	/** The computer hosting the agent (`users.id` of a `machine` agent user). */
+	machineId?: string;
+	/** The agent acting through the key, when an agent key held the wait. */
+	agentUserId?: string;
+	firstSeenAt: string;
+	lastSeenAt: string;
+	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
+	live: boolean;
+	/** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
+	resume?: string;
+}
 export interface PacketProposalItem {
 	id: string;
 	/** Imperative — what approving it WILL do. */
@@ -16702,7 +17067,8 @@ export interface PacketProposalItem {
 	proposalType: string;
 	createdAt: string | null;
 }
-export interface PacketOutputItem {
+export interface PacketOutputItem extends PacketKindIdentity {
+	/** Normalized object kind — `entity` for entities; `noun`/`glyph` name its profile. */
 	kind: string;
 	refId: string;
 	title: string;
@@ -16783,7 +17149,7 @@ export interface PacketDecision {
 	/** The reviewer's rejection reason, when one was given. */
 	reason?: string;
 }
-export type NextMoveKind = "agent_slot" | "none" | "owed_slot" | "pending_proposal" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_session";
+export type NextMoveKind = "agent_slot" | "blocker_dropped" | "none" | "owed_slot" | "pending_proposal" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_session";
 export interface ContinuationNextMove {
 	kind: NextMoveKind;
 	/** Who acts: the person, the AI, or nobody. */
@@ -16794,7 +17160,10 @@ export interface ContinuationNextMove {
 	reason: string;
 	/** The proposal id, for `pending_proposal`. */
 	proposalId?: string;
-	/** The blocking session's id, for `waiting_on_session`. */
+	/**
+	 * The blocking session's id, for `waiting_on_session`; for `blocker_dropped`,
+	 * the DROPPED blocker's id when that blocker is a session.
+	 */
 	sessionId?: string;
 }
 export interface ContinuationPacket {
@@ -16971,6 +17340,46 @@ export interface ContinuationPacket {
 	} | null;
 	nextMove: ContinuationNextMove;
 	/**
+	 * THE ROOM — the session room's newest messages, each classified by who
+	 * wrote it (`classifyRoomAuthor`, `room-messages.ts`). Read through the
+	 * channel-visibility gate: a room the viewer cannot see is `unavailable`,
+	 * never empty. `channelId: null` = the session has no room.
+	 */
+	room: PacketRoomSection;
+	/**
+	 * IS AN AGENT WORKING ON THIS RIGHT NOW — the liveness batch read
+	 * (`loadSessionLiveness`) judged by the ONE rule (`isSessionWorkingNow`) at
+	 * `measuredAt`. `since`: when the running turn started, else the newest
+	 * activity (`null` = nothing happened yet). The answer flips to idle on its
+	 * own `windowMs` after `lastActivityAt`; a reader that keeps the packet
+	 * re-judges with `isSessionWorkingNow` rather than trusting a stale `state`.
+	 */
+	live: {
+		lastActivityAt: string | null;
+		measuredAt: string;
+		since: string | null;
+		state: "idle" | "working";
+		status: "ok";
+		turnInFlight: boolean;
+		windowMs: number;
+	} | {
+		reason: string;
+		status: "unavailable";
+	};
+	/**
+	 * GATES — every gated stage of the session's process and its state, DERIVED
+	 * FROM PROPOSAL ROWS only (`session-gates.ts`), plus `deploy`: the newest
+	 * `dev.deploy_approval` a PERSON approved. "Is commit X approved to ship by a
+	 * human?" is `deploy?.commitSha` prefix-matching X.
+	 */
+	gates: PacketGatesSection;
+	/**
+	 * WHO IS ATTACHED — the client conversations holding this session's
+	 * change-feed wait, most recently seen first (`session-runners.ts`). An
+	 * empty list means nobody has listened; a failed read is `unavailable`.
+	 */
+	runners: PacketSection<PacketRunnerItem>;
+	/**
 	 * The session's contract and its grade: the declared binary criteria, the
 	 * server-computed verdict, and the CURRENT evaluation per criterion (human
 	 * wins). `criteria: []` with `verdict.state: "none"` means none declared; a
@@ -17104,6 +17513,11 @@ export interface LandedDecision {
 	 */
 	changeCount: number | null;
 }
+/** A produced object's lifecycle status: the option key and its category. */
+export interface LandedObjectStatus {
+	key: string;
+	category: LifecycleCategory$1;
+}
 export interface LandedObjectRow {
 	/**
 	 * Stable row key: `<sessionId>|<kind>:<refId>` for a produced object (the
@@ -17120,6 +17534,13 @@ export interface LandedObjectRow {
 	ref: LandedObjectRef;
 	/** An `entity` row's kind ("Person", "Company"), when known. */
 	entityProfile?: LandedEntityProfile;
+	/**
+	 * Where the object stands NOW in its kind's lifecycle — the entity's
+	 * `status` + `status_category` columns (the truth the `moveStatus` door
+	 * writes). Absent ⇒ its kind declares no lifecycle, it is not an entity, or
+	 * an older pod: never "no status".
+	 */
+	status?: LandedObjectStatus;
 	/** When it landed — or, for `pending`, when it was proposed (ISO). */
 	createdAt: string;
 	actor: LandedActor;
@@ -18840,10 +19261,12 @@ export type SignalKind =
 /** One deliverable an agent handed to the human and nobody has closed. */
  | "owed-slot"
 /**
- * One undecided agent DRAFT that asks the person something — "<agent>
- * started <work> · asks you N things". Its asks are not listed one by one
- * (`excludeDrafts`) until the draft is accepted; answering any of them
- * accepts it (`accept-on-engagement.ts`). Proposals under a draft stay out.
+ * One undecided agent DRAFT that owes the person something — "<agent>
+ * started <work>", the draft itself to accept or reject (PROPOSED). Since
+ * the founder decision of 2026-10-22 its ASKS are Needs-you `owed-slot` rows
+ * of their own (`listNeedsYouOwed`), so this row carries no ask count;
+ * answering any of them still accepts the draft (`accept-on-engagement.ts`).
+ * Proposals under a draft stay out of Needs you.
  */
  | "draft-asks"
 /**
@@ -18865,7 +19288,14 @@ export type SignalKind =
  * or an app's pending connection request (`target.kind:
  * "connection-request"`). Who asks and from where ride in `access`.
  */
- | "access-request";
+ | "access-request"
+/**
+ * One open INVITE to another space of this pod, addressed to the viewer's
+ * email (`space-invites.ts`; founder, wave PQ 2026-10-22): joined in the
+ * app — Accept on the row, Decline beside it. No door (not a member yet);
+ * what the two verbs act on rides in `invite`.
+ */
+ | "space-invite";
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
 export interface Signal {
@@ -18996,8 +19426,29 @@ export interface Signal {
 	 * container (a pod-level notification) — never a guessed one.
 	 */
 	source?: SignalSource;
+	/**
+	 * WHO asked — the ONE agent that filed it, as a door to the agent's page
+	 * ("from Claude Code"). `proposal-cluster` only, and only when EVERY member
+	 * came from that agent (`ProposalCluster.agent`); several agents, or a
+	 * member a person filed, sends none rather than a guessed one.
+	 */
+	by?: {
+		id: string;
+		kind: "agent";
+		label: string;
+	};
 	/** `live-session` only: the liveness facts the "working now" rule read. */
 	live?: SessionActivityLive;
+	/**
+	 * `live-session` only: the session's deliverables, counted
+	 * (`tallyDeliverables` over `expected_outputs`) — the Happening row's
+	 * progress rail. Absent when it declares none, or the column is unreadable:
+	 * not measurable, never "0 of N".
+	 */
+	progress?: {
+		done: number;
+		total: number;
+	};
 	/**
 	 * `rule-run` only: the rule's runs inside the window — how many, how many
 	 * failed, whether one is in flight. The row's door is the rule.
@@ -19041,6 +19492,11 @@ export interface Signal {
 	 * without a second read (`NeedsYouAccessRequest`).
 	 */
 	access?: NeedsYouAccessRequest;
+	/**
+	 * `space-invite` only: the invite Accept (`token`) and Decline (`id`) act
+	 * on, the role it grants and the space it opens (`NeedsYouInvite`).
+	 */
+	invite?: NeedsYouInvite;
 	/**
 	 * `proposal-cluster` only: the member proposal ids the cluster sampled
 	 * (`sampleProposalIds`, capped at 20 — `count` may exceed it). What a batch
@@ -19146,7 +19602,7 @@ export interface LensPagePicks {
 	unreadable: string[];
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "captures" | "drafts" | "events" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "captures" | "drafts" | "events" | "invites" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -20482,9 +20938,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					permission: string;
 					workspaceId: string;
 				}[] | undefined;
+				authRequest?: string | undefined;
 				clientId: string;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
+				maxAge?: string | number | undefined;
+				prompt?: string | undefined;
 				redirectUri: string;
 				resource?: string | undefined;
 				responseType?: string | undefined;
@@ -20516,9 +20975,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		getOAuthConsentContext: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				authRequest?: string | undefined;
 				clientId: string;
 				codeChallenge?: string | undefined;
 				codeChallengeMethod?: string | undefined;
+				maxAge?: string | number | undefined;
+				prompt?: string | undefined;
 				redirectUri: string;
 				resource?: string | undefined;
 				responseType?: string | undefined;
@@ -26922,6 +27384,55 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 		}>;
 	}>>;
+	devices: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		errorShape: {
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: {
+				candidates?: {
+					id: string;
+					title: string | null;
+					type: string;
+				}[] | undefined;
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				currentStatus?: string | null;
+				expectedStatus?: string | null;
+				httpStatus: number;
+				opRef?: string | undefined;
+				path?: string;
+				pendingProposalId?: string | undefined;
+				reasonCode?: string;
+				stack?: string;
+			};
+			message: string;
+		};
+		meta: object;
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				clientId: string;
+				createdAt: Date;
+				current: boolean;
+				expiresAt: Date;
+				id: string;
+				label: string | null;
+				lastUsedAt: Date | null;
+			}[];
+		}>;
+		revoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				deviceId: string;
+			};
+			meta: object;
+			output: {
+				status: "revoked";
+			};
+		}>;
+	}>>;
 	devplane: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		errorShape: {
@@ -27749,6 +28260,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				agentUserId?: string | undefined;
+				approvalDuplicate?: "ask_reviewer" | "keep_both" | undefined;
+				approvalReviewedTwinIds?: string[] | undefined;
 				content?: string | undefined;
 				description?: string | undefined;
 				documentId?: string | undefined;
@@ -27760,7 +28273,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					properties?: Record<string, unknown> | undefined;
 					status?: string | undefined;
 				}[] | undefined;
-				forceCreate?: boolean | undefined;
 				global?: boolean | undefined;
 				homeWorkspaceId?: string | undefined;
 				profileId?: string | undefined;
@@ -27862,6 +28374,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					after: Record<string, unknown>;
 					before: Record<string, unknown>;
 					bodyDocumentId?: string;
+					bodyDocumentIdBefore?: string | null;
 					entityId: string;
 					fields?: {
 						after: Partial<Record<EntityDiffField, string | null>>;
@@ -27915,6 +28428,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				ackState?: undefined;
 				deduplicated?: undefined;
 				deferred?: true | undefined;
+				duplicateCheck?: DuplicateCheck | undefined;
 				effectiveWorkspaceId: string | null;
 				entity: Record<string, unknown> | null;
 				facets: {
@@ -27935,6 +28449,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				ackState?: undefined;
 				deduplicated?: undefined;
+				duplicateCheck?: DuplicateCheck | undefined;
 				entity: {
 					checksum: string | null;
 					createdAt: Date;
@@ -28287,6 +28802,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				limit?: number | undefined;
 				profileSlug?: string | undefined;
+				projectId?: string | undefined;
 				query: string;
 			};
 			meta: object;
@@ -28325,6 +28841,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				limit?: number | undefined;
 				profileSlug?: string | undefined;
+				projectId?: string | undefined;
 				query: string;
 			};
 			meta: object;
@@ -28453,6 +28970,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: string;
 				statusMove?: MoveStatusResult | undefined;
 				written: {
+					documentId: string | null;
 					preview: string | null;
 					properties: unknown;
 					title: string | null;
@@ -28897,9 +29415,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				accepted: false;
 				reason: "not_pending";
-				session?: undefined;
 			} | {
 				accepted: true;
+				heldRun?: {
+					runId: string;
+					status: "started";
+				} | {
+					status: "failed";
+				} | undefined;
 				reason?: undefined;
 				session: {
 					agentIds: string[] | null;
@@ -29566,7 +30089,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					retiredAt?: string | undefined;
-					retiredReason?: "decision_resolved" | "session_cancelled" | undefined;
+					retiredReason?: "decision_resolved" | "session_cancelled" | "withdrawn" | undefined;
 					returnedAt?: string | undefined;
 					returnedReason?: string | undefined;
 					satisfiedByEvidence?: {
@@ -30491,7 +31014,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | null | undefined;
 					relationToSubject?: string | undefined;
 					retiredAt?: string | undefined;
-					retiredReason?: "decision_resolved" | "session_cancelled" | undefined;
+					retiredReason?: "decision_resolved" | "session_cancelled" | "withdrawn" | undefined;
 					returnedAt?: string | undefined;
 					returnedReason?: string | undefined;
 					satisfiedByEvidence?: {
@@ -31096,6 +31619,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				rungs: NextRungProjection[];
 			};
 		}>;
+		ownOrganiseDefault: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				actions: readonly string[];
+				canManage: boolean;
+				enabled: boolean;
+				ruleId: string | null;
+			};
+		}>;
 		platformDefaults: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			meta: object;
@@ -31209,6 +31742,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 				};
 			};
+		}>;
+		setOwnOrganiseDefault: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+			};
+			meta: object;
+			output: ReversibleDefaultState;
 		}>;
 		setReversibleDefault: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -32073,9 +32613,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				aiTyped: number;
+				csvPlanFailures?: {
+					path: string;
+					reason: string;
+				}[] | undefined;
 				deduplicated: boolean;
+				degraded?: true | undefined;
+				degradedReason?: string | undefined;
 				droppedReferences: number;
 				homes: ImportHomesSummary;
+				identities?: ImportIdentitiesSummary | undefined;
 				intake?: RecordImportIntakeResult | undefined;
 				mode: "deep" | "shallow";
 				operations: CompositeProposalOperation[];
@@ -32085,6 +32632,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionError?: string | undefined;
 				sessionId: string | null;
 				sessionSource?: "failed" | "minted" | "none" | "playbook" | "prior" | "provided" | undefined;
+				skippedRows?: {
+					count: number;
+					reason: string;
+				} | undefined;
 				source: ImportRevealSource;
 				stats: Record<string, unknown>;
 				summary: string;
@@ -32112,9 +32663,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				aiTyped: number;
+				csvPlanFailures?: {
+					path: string;
+					reason: string;
+				}[] | undefined;
 				deduplicated: boolean;
+				degraded?: true | undefined;
+				degradedReason?: string | undefined;
 				droppedReferences: number;
 				homes: ImportHomesSummary;
+				identities?: ImportIdentitiesSummary | undefined;
 				intake?: RecordImportIntakeResult | undefined;
 				mode: "deep" | "shallow";
 				operations: CompositeProposalOperation[];
@@ -32124,6 +32682,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sessionError?: string | undefined;
 				sessionId: string | null;
 				sessionSource?: "failed" | "minted" | "none" | "playbook" | "prior" | "provided" | undefined;
+				skippedRows?: {
+					count: number;
+					reason: string;
+				} | undefined;
 				source: ImportRevealSource;
 				stats: Record<string, unknown>;
 				summary: string;
@@ -33529,6 +34091,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		answer: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				detail?: "brief" | "full" | "sources" | undefined;
 				limit?: number | undefined;
 				query: string;
 				workspaceId?: string | null | undefined;
@@ -33537,6 +34100,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				answer: string | null;
 				degraded: DegradedTag[];
+				detail: "brief" | "full" | "sources" | undefined;
 				failureClass: AiFailureClass | undefined;
 				routedTo: string[];
 				sources: SynthesisSource[];
@@ -36084,7 +36648,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					relationToSubject?: string | undefined;
 					optional?: boolean | undefined;
 				}[] | undefined;
-				forceCreate?: boolean | undefined;
 				goalTemplate: string;
 				humanOnlyStatuses?: string[] | undefined;
 				inputStrategy?: Record<string, unknown> | undefined;
@@ -36099,6 +36662,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				name: string;
 				params?: Record<string, unknown>[] | undefined;
+				proposedPlaybookId?: string | undefined;
 				reasoning?: string | undefined;
 				requiredIntents?: string[] | undefined;
 				schedule?: unknown;
@@ -36242,31 +36806,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				message: string;
-				playbook: {
-					channelSpec: unknown;
-					createdAt: Date;
-					createdBy: string;
-					criteria: unknown;
-					description: string | null;
-					executor: PlaybookExecutorRef;
-					expectedOutputs: unknown;
-					flowAutomationId: string | null;
-					goalTemplate: string;
-					id: string;
-					inputStrategy: unknown;
-					metadata: unknown;
-					name: string;
-					params: unknown;
-					requiredIntents: unknown;
-					schedule: unknown;
-					scope: "project" | "session" | null;
-					stages: unknown;
-					status: "active" | "archived" | "draft" | "paused";
-					subjectProfile: unknown;
-					updatedAt: Date;
-					version: number;
-					workspaceId: string | null;
-				};
+				playbook: Playbook;
 				proposalId: string | null;
 				status: "created";
 			} | {
@@ -36669,6 +37209,50 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				run: null;
 				session: null;
 				status: "skipped";
+				unenabledSkills?: undefined;
+			} | {
+				enableProposals?: undefined;
+				message: string;
+				parentLink?: {
+					parentSessionId: string;
+					status: "linked";
+				} | {
+					parentSessionId: string;
+					reason: string;
+					status: "failed";
+				} | undefined;
+				proposalId: string | null;
+				run: null;
+				session: {
+					agentIds: string[] | null;
+					channelId: string | null;
+					closedAt: Date | null;
+					correlationId: string | null;
+					createdAt: Date;
+					criteria: unknown;
+					currentStage: string | null;
+					expectedOutputs: unknown;
+					goal: string;
+					id: string;
+					metadata: unknown;
+					origin: "agent" | "automation" | "human" | "playbook" | null;
+					playbookId: string | null;
+					progress: number | null;
+					projectId: string | null;
+					stages: unknown;
+					startedAt: Date;
+					status: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale";
+					subjectEntityId: string | null;
+					templateId: string | null;
+					title: string | null;
+					trackId: string | null;
+					trackStage: string | null;
+					updatedAt: Date;
+					userId: string;
+					verificationReport: unknown;
+					workspaceId: string | null;
+				};
+				status: "draft";
 				unenabledSkills?: undefined;
 			} | {
 				enableProposals?: undefined;
@@ -37684,7 +38268,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				defaultValues?: Record<string, unknown> | undefined;
 				displayName: string;
 				entityScope?: "pod" | "workspace" | undefined;
-				forceCreate?: boolean | undefined;
 				parentProfileId?: string | undefined;
 				profileKind?: "kind" | "role" | undefined;
 				reasoning?: string | undefined;
@@ -38498,6 +39081,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: DedupedProjectOutcome | {
+				duplicateCheck?: DuplicateCheck | undefined;
 				projectId: string;
 				proposalId: string;
 				status: string;
@@ -38512,6 +39096,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					name: string;
 					phase: string | null;
+					sample: boolean;
 					settings: unknown;
 					slug: string | null;
 					status: "active" | "archived" | "completed";
@@ -38521,7 +39106,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 				};
 				projectId: string;
-				proposalId?: undefined;
 				status: string;
 				subjectBound?: boolean | undefined;
 				usedWorkspaces?: UsedWorkspaceOutcome[] | undefined;
@@ -38561,6 +39145,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					icon: string | null;
 					id: string;
 					name: string;
+					sample: boolean;
 					status: string;
 				}[];
 			};
@@ -38581,6 +39166,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					name: string;
 					phase: string | null;
+					sample: boolean;
 					settings: unknown;
 					slug: string | null;
 					status: "active" | "archived" | "completed";
@@ -38612,6 +39198,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					phase: string | null;
 					phaseCategory: PlaybookStageCategory;
+					sample: boolean;
 					settings: unknown;
 					slug: string | null;
 					status: "active" | "archived" | "completed";
@@ -38638,6 +39225,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 					phase: string | null;
 					phaseCategory: PlaybookStageCategory;
+					sample: boolean;
 					settings: unknown;
 					slug: string | null;
 					status: "active" | "archived" | "completed";
@@ -38707,6 +39295,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name?: string | undefined;
 				phase?: string | null | undefined;
 				reasoning?: string | undefined;
+				sample?: boolean | undefined;
 				settings?: Record<string, unknown> | undefined;
 				status?: "active" | "archived" | "completed" | undefined;
 				subjectEntityId?: string | null | undefined;
@@ -39048,6 +39637,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentActorName?: string;
 				agentName?: string;
 				agentUserId: string | null;
+				apiKeyId: string | null;
 				appId: string | null;
 				appName?: string;
 				approverName?: string;
@@ -39179,6 +39769,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentActorName?: string;
 					agentName?: string;
 					agentUserId: string | null;
+					apiKeyId: string | null;
 					appId: string | null;
 					appName?: string;
 					approverName?: string;
@@ -39264,6 +39855,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					agentActorName?: string;
 					agentName?: string;
 					agentUserId: string | null;
+					apiKeyId: string | null;
 					appId: string | null;
 					appName?: string;
 					approverName?: string;
@@ -39518,6 +40110,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					kind: RevertTarget["kind"];
 					reason: RevertSkip["reason"];
 				}[] | undefined;
+				success: boolean;
+			} | {
+				alreadyReopened?: undefined;
+				alreadyReverted?: undefined;
+				nothingReverted: boolean;
+				opKey?: undefined;
+				partialFailures: string[];
+				reopened?: undefined;
+				reverted: CompleteMaterializedRecord;
+				revertedAt?: undefined;
+				skipped?: undefined;
 				success: boolean;
 			} | {
 				alreadyReopened?: undefined;
@@ -41180,6 +41783,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				distinct: number;
 				drafts: number;
 				draftsTruncated: boolean;
+				invites: number;
 				needsYou: number;
 				notifications: number;
 				requests: number;
@@ -41204,6 +41808,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					distinct: number;
 					drafts: number;
 					draftsTruncated: boolean;
+					invites: number;
 					needsYou: number;
 					notifications: number;
 					requests: number;
@@ -41232,6 +41837,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					distinct: number;
 					drafts: number;
 					draftsTruncated: boolean;
+					invites: number;
 					needsYou: number;
 					notifications: number;
 					requests: number;
@@ -41258,7 +41864,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposed?: number | undefined;
 				} | undefined;
 				cursor?: string | undefined;
-				kinds?: ("access-request" | "activity" | "capture" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-review")[] | undefined;
+				kinds?: ("access-request" | "activity" | "capture" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-review" | "space-invite")[] | undefined;
 				lens?: "happening" | "history" | "needs-you" | "page" | "produced" | "proposed" | "suggestions" | undefined;
 				limit?: number | undefined;
 				picks?: boolean | undefined;
@@ -43953,7 +44559,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 			};
 			meta: object;
-			output: SearchResponse;
+			output: SearchResponse & {
+				hiddenFromListing?: number;
+			};
 		}>;
 		searchCollection: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
@@ -43971,7 +44579,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | undefined;
 			};
 			meta: object;
-			output: SearchResponse;
+			output: SearchResponse & {
+				hiddenFromListing?: number;
+			};
 		}>;
 	}>>;
 	users: import("@trpc/server").TRPCBuiltRouter<{
@@ -45161,17 +45771,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				token: string;
 			};
 			meta: object;
-			output: {
-				status: "accepted";
-				type: "workspace";
-				workspaceId: string;
-				workspacesJoined?: undefined;
-			} | {
-				status: "accepted";
-				type: "pod";
-				workspaceId?: undefined;
-				workspacesJoined: number;
-			};
+			output: InviteAccepted;
 		}>;
 		addMember: import("@trpc/server").TRPCMutationProcedure<{
 			input: {

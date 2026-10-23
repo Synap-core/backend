@@ -2,9 +2,13 @@
  * THE needs-you OWED predicate — one function for the count and "asks you".
  *
  * An owed slot needs YOU when it sits on one of the caller's OWN sessions (the
- * owner floor `listOwedSlots` applies) and that session is not an undecided
- * agent draft (`excludeDrafts`: a draft never counts as needs-you, founder
- * decision). The signals union's owed half counts `listNeedsYouOwed`; the
+ * owner floor `listOwedSlots` applies) and either that session is not an
+ * undecided agent draft, or the slot carries an ASK (founder decision
+ * 2026-10-22, superseding the 2026-10-04 "drafts never count" rule for asks
+ * only: a blocking question an agent asks is the person's to answer even on a
+ * draft they have not accepted; the draft itself stays one Proposed row, and a
+ * draft's ask-less slots and pending proposals stay out). One lens,
+ * `needsYouLens` on `listOwedSlots`. The signals union's owed half counts `listNeedsYouOwed`; the
  * homes ask `asksYouSessionIds` which of their open sessions hold such a slot
  * — so a home's "asks you" can never disagree with the needs-you count
  * (homes review Q-S3: a draft, or another person's session a roster reader
@@ -19,11 +23,14 @@ import {
 } from "../focus-sessions/owed-outputs.js";
 import { resolveScope } from "../../utils/scope-filter.js";
 
-/** The owed half of needs-you: the owner floor, drafts never counted. */
+/** The owed half of needs-you: the owner floor; on a draft, only its asks. */
 export function listNeedsYouOwed(
-  scope: Omit<ListOwedSlotsParams, "excludeDrafts" | "onlyDrafts">
+  scope: Omit<
+    ListOwedSlotsParams,
+    "excludeDrafts" | "onlyDrafts" | "needsYouLens"
+  >
 ) {
-  return listOwedSlots({ ...scope, excludeDrafts: true });
+  return listOwedSlots({ ...scope, needsYouLens: true });
 }
 
 /**

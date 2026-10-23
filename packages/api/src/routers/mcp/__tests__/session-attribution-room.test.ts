@@ -16,7 +16,11 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const ROOM = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
 const h = vi.hoisted(() => ({
-  /** One scripted result per `.limit()` call, consumed in order. */
+  /**
+   * One scripted result per query, consumed in order: at its `.limit()`, or
+   * at its `.where()` for the exact open count (it selects `n` and has no
+   * limit, B4).
+   */
   results: [] as unknown[][],
   /** The selected column keys of every query, in order. */
   queries: [] as string[][],
@@ -32,7 +36,10 @@ vi.mock("@synap/database", async (importOriginal) => {
         h.queries.push(Object.keys(columns ?? {}));
         const chain: Record<string, unknown> = {};
         chain.from = () => chain;
-        chain.where = () => chain;
+        chain.where = () =>
+          "n" in (columns ?? {})
+            ? Promise.resolve(h.results.shift() ?? [])
+            : chain;
         chain.orderBy = () => chain;
         chain.limit = async () => h.results.shift() ?? [];
         return chain;
@@ -76,7 +83,11 @@ describe("synap_post_message into a session's own room", () => {
   });
 
   it("a room whose session is NOT the caller's is no claim — default resolution, nothing reported as dropped", async () => {
-    h.results = [[roomRow("someone-else")], [{ id: "S-A" }, { id: "S-B" }]];
+    h.results = [
+      [roomRow("someone-else")],
+      [{ id: "S-A" }, { id: "S-B" }],
+      [{ n: 2 }],
+    ];
     const r = await resolveSessionHandle(
       "synap_post_message",
       { channelId: ROOM, content: "x" },
@@ -87,6 +98,8 @@ describe("synap_post_message into a session's own room", () => {
       ambiguous: true,
       openCount: 2,
     });
+    // The 2 is the exact count's answer, not the length of the 2-row page.
+    expect(h.queries.at(-1)).toEqual(["n"]);
   });
 
   it("a room with no session falls back to the default resolution", async () => {

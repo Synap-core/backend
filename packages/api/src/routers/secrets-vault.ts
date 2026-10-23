@@ -18,7 +18,7 @@
  */
 
 import { assertKeyMayWrite } from "../utils/assert-key-may-write.js";
-import { router, protectedProcedure } from "../trpc.js";
+import { router, protectedProcedure, credentialProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -459,7 +459,7 @@ export const secretsVaultRouter = router({
    *
    * Audit: writes a `revealed` row to secret_audit_log.
    */
-  reveal: protectedProcedure
+  reveal: credentialProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
       // 1. Ownership check — reuses the same findById guard as get/update.
@@ -942,7 +942,7 @@ export const secretsVaultRouter = router({
    *
    * Returns the vault:// reference for the approved secret.
    */
-  grantAIAccess: protectedProcedure
+  grantAIAccess: credentialProcedure
     .input(
       z.object({
         secretId: z.string().uuid(),

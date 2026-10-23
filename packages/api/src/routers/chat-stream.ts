@@ -60,7 +60,7 @@ import {
 import { queryChannelMessages } from "../utils/query-channel-messages.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { createLogger } from "@synap-core/core";
-import { authMiddleware } from "@synap/auth";
+import { appSessionMiddleware } from "../middleware/app-session.js";
 import { refuseGuestSession } from "../access/guest-containment.js";
 import { createContext } from "../context.js";
 import { channelSendMessageInputSchema, channelsRouter } from "./channels.js";
@@ -107,7 +107,7 @@ export const chatStreamApp = new Hono<{
 // we gate it here. Scoping the middleware to the router keeps the auth
 // requirement co-located with the route — if someone mounts this app at
 // a different prefix, the auth travels with it.
-chatStreamApp.use("*", authMiddleware);
+chatStreamApp.use("*", appSessionMiddleware());
 chatStreamApp.use("*", refuseGuestSession);
 
 /**
@@ -332,7 +332,7 @@ chatStreamApp.post("/turns/:turnId/cancel", async (c) => {
 });
 
 chatStreamApp.post("/stream", async (c) => {
-  // Session auth is enforced by the router-level `authMiddleware` above.
+  // Session auth is enforced by the router-level `appSessionMiddleware` above.
   // Defend anyway so a routing change can't silently skip it.
   const userId = c.get("userId");
   if (!userId) {

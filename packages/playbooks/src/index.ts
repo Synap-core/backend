@@ -279,6 +279,10 @@ export const OUTPUT_RETIRED_REASONS = [
   // (accepted / rejected / superseded on the entity itself) — the question is
   // moot (api `services/decisions/decision-ask-reactor.ts`).
   "decision_resolved",
+  // The agent WITHDREW a slot it declared (`retireOutput` on
+  // `synap_update_session`) — the one removal verb, since an agent's
+  // `expectedOutputs` list only adds and updates (api `update-session.ts`).
+  "withdrawn",
 ] as const;
 
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
@@ -1395,6 +1399,22 @@ export interface PlaybookSchedule {
    * behaving exactly as it did.
    */
   mode?: PlaybookScheduleMode;
+  /**
+   * HAND-OFF — the agent (its agent user id, `users.id`, as `synap_list_agents`
+   * returns it; the same identity `synap_start_session` `agentIds` and
+   * `synap_update_session` `addAgentId` take) that each slot's session is handed
+   * to. The compiler writes it onto the `playbook_run` node
+   * (`PlaybookRunNodeDef.data.handToAgentId`); `runPlaybook` resolves it ONCE per
+   * run through THE route, before any session exists, and puts it on the
+   * session's roster INSTEAD of dispatching the playbook's own executor — the
+   * named agent does the work (a `pull` agent picks it up from its orient's
+   * `handedToYou`; a `dispatch` agent is pushed it through its binding). An
+   * unknown, paused or foreign agent fails the slot by name.
+   *
+   * Only meaningful for `mode: "run"`: an appointment waits for the HUMAN, so the
+   * write door refuses the pair. Absent ⇒ unchanged.
+   */
+  handToAgentId?: string;
 }
 
 /** @see PlaybookSchedule.mode */
@@ -1499,8 +1519,9 @@ export type LinkType =
   // "branched from", and with no "merged_into" twin — nothing merges work.
   | "spawned_from"
   // X --blocked_by--> Y. THE dependency edge between units of work, across
-  // kinds (session · entity · track): X cannot proceed until Y clears.
-  // Blocked-ness is DERIVED from the edges whose target is still open — there
+  // kinds (session · entity · track): X cannot proceed until Y DELIVERS (a Y
+  // that ended without delivering stays a blocker, marked dropped).
+  // Blocked-ness is DERIVED from the edges whose target has not delivered — there
   // is no stored `blocked` status, deliberately (`@synap-core/types/connections`
   // `deriveOpenBlockers`; producer `services/links/dependency-links.ts`).
   | "blocked_by"

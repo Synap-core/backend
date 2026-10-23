@@ -15,6 +15,7 @@ import { setupYjsServer, type YjsServerInstance } from "./yjs-server.js";
 import { setupBridge } from "./bridge.js";
 import { validateRealtimeApiKey } from "./api-key-auth.js";
 import { verifyHandshakeUser } from "./session-auth.js";
+import { startDeviceSocketSweep, trackDeviceSocket } from "./device-sockets.js";
 import {
   db,
   and,
@@ -240,6 +241,7 @@ presenceNamespace.use(async (socket, next) => {
     }
 
     socket.data.principal = { kind: "user", userId: resolvedUserId };
+    if (identity.deviceId) trackDeviceSocket(socket, identity.deviceId);
     return next();
   }
 
@@ -481,6 +483,9 @@ httpServer.listen(PORT, "0.0.0.0", () => {
   console.log(`   - Typing indicators: ✅`);
   console.log(`   - HTTP Bridge (/bridge/emit): ✅`);
 });
+
+// A socket opened with a device token closes when its device ends.
+startDeviceSocketSweep();
 
 /**
  * Graceful shutdown

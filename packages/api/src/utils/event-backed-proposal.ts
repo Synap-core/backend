@@ -1,5 +1,10 @@
 import { randomUUID } from "crypto";
-import { db, proposals, findExistingPendingDuplicate } from "@synap/database";
+import {
+  db,
+  proposals,
+  findExistingPendingDuplicate,
+  callingKeyAttribution,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { auditLog } from "./audit-log.js";
 import { createPendingProposal } from "./permission-check.js";
@@ -26,6 +31,12 @@ export interface CreateEventBackedProposalInput {
    *  materialization this stamps `entity --belongs_to_project--> project`. */
   projectId?: string | null;
   expiresAt?: Date | null;
+  /**
+   * Structured governance reason (a `PROPOSE_REASON` key) when the producer
+   * itself knows why the write waits — e.g. the capture door's
+   * `POSSIBLE_DUPLICATE` (B2). Pending rows only.
+   */
+  governanceReason?: string | null;
 }
 
 /**
@@ -117,6 +128,9 @@ export async function createEventBackedProposal(
     sessionSource: input.sessionSource,
     projectId: input.projectId ?? null,
     expiresAt: input.expiresAt,
+    ...(input.governanceReason
+      ? { governanceReason: input.governanceReason }
+      : {}),
     notificationDescription: input.summary,
   });
 
@@ -192,6 +206,8 @@ export async function createAutoApprovedProposal(
       ...(requestedEvent?.id ? { requestedEventId: requestedEvent.id } : {}),
       ...(input.sessionId ? { sessionId: input.sessionId } : {}),
       ...(input.projectId ? { projectId: input.projectId } : {}),
+      // KEY ATTRIBUTION (0346): the key this request authenticated with.
+      ...callingKeyAttribution(),
     })
     .returning();
 

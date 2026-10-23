@@ -92,10 +92,13 @@ function readSchedule(value: unknown): PlaybookSchedule | null {
   // hand-edited mode must resolve to "run" by one rule. This is a READ; the one
   // WRITE validation is the router's zod parse (`schemas/playbook-schedule.ts`).
   // Defaulting it here means every reader below sees a settled value.
+  const handToAgentId =
+    typeof s.handToAgentId === "string" ? s.handToAgentId.trim() : "";
   return {
     cron: s.cron,
     enabled: s.enabled === true,
     mode: normalizePlaybookScheduleMode(s.mode),
+    ...(handToAgentId ? { handToAgentId } : {}),
   };
 }
 
@@ -142,6 +145,12 @@ export function buildPlaybookRunFlowDefinition(
      * `normalizePlaybookScheduleMode`.
      */
     mode?: PlaybookScheduleMode;
+    /**
+     * The agent user id each run's session is handed to — the playbook's
+     * `schedule.handToAgentId`. Stamped onto the `playbook_run` node only when
+     * present, so every existing definition stays byte-identical.
+     */
+    handToAgentId?: string;
   }
 ): FlowDefinition {
   const mode = opts?.mode ?? "run";
@@ -158,6 +167,9 @@ export function buildPlaybookRunFlowDefinition(
     // what it was before this field existed, so the thousands of already-stored
     // flow definitions and the ones written today are the same object.
     ...(mode === "appointment" ? { mode } : {}),
+    // Stamped even beside an appointment (the write door refuses that pair):
+    // the step then FAILS the slot by name instead of silently dropping it.
+    ...(opts?.handToAgentId ? { handToAgentId: opts.handToAgentId } : {}),
   };
 
   const profileSlug = opts?.subjectProfile?.profileSlug?.trim();
@@ -315,6 +327,8 @@ export async function materializePlaybookCronAutomation(
     // waits for the human). Read off the playbook's own schedule — the schedule
     // is where the user expressed which of the two they wanted.
     mode: schedule.mode,
+    // Who each run is handed to — also the user's words on the schedule.
+    handToAgentId: schedule.handToAgentId,
   });
   const nextRunAt = computeNextRunAt(schedule.cron, new Date());
 

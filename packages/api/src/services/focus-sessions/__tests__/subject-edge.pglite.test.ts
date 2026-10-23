@@ -278,6 +278,9 @@ describe("linkSatisfiedOutputsToSubject", () => {
       targetType: "entity",
       entityProfileSlug: "post",
       proposalId: PROPOSAL,
+      // The approval names its slot: an unclaimed one stamps nothing
+      // (satisfy-expected-output.ts, 2026-10-22).
+      expectedLabel: "Post",
     });
     expect(r.satisfied).toEqual(["Post"]);
     const [slot] = await slotsOf(client, SESSION);

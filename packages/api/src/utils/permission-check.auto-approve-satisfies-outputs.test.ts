@@ -195,13 +195,46 @@ describe("auto-approve satisfies the session's expected outputs", () => {
     expect(receiptData()).toMatchObject({ changeType: "create" });
   });
 
-  it("stamps the matching output done, with the receipt as lineage", async () => {
-    sessionRow.current = openSessionWith([
+  /**
+   * THE LIVE DEFECT (2026-10-22, session 6fbc2b5c "CRM app: spec"): an input
+   * brief created with `synap_create_document` and NO expectedLabel was
+   * auto-approved, and the stamp fell to the first-of-kind guess: the session's
+   * "spec" slot went `done` with the brief as lineage. Real gate + real
+   * stamper: a write that names no slot fills none.
+   */
+  it("an UNCLAIMED auto-approved write fills NO slot — not the first of its kind", async () => {
+    const slots = [
+      { kind: "document", label: "Spec" },
+      { kind: "document", label: "Open questions" },
+    ];
+    sessionRow.current = openSessionWith(slots);
+    governanceRow.current = declares(slots);
+
+    await expect(
+      checkPermissionOrPropose({
+        ...OPTS,
+        data: { id: "doc-brief", title: "Experience brief (input)" },
+      })
+    ).resolves.toEqual({
+      granted: true,
+      autoApprovedProposalId: "receipt-1",
+    });
+
+    expect(receiptData()).not.toHaveProperty("expectedLabel");
+    expect(updatedSets).toHaveLength(0);
+  });
+
+  it("stamps the output the write claims done, with the receipt as lineage", async () => {
+    const slots = [
       { kind: "document", label: "Spec" },
       { kind: "entity", label: "Client record" },
-    ]);
+    ];
+    sessionRow.current = openSessionWith(slots);
+    governanceRow.current = declares(slots);
 
-    await expect(checkPermissionOrPropose(OPTS)).resolves.toEqual({
+    await expect(
+      checkPermissionOrPropose({ ...OPTS, expectedLabel: "Spec" })
+    ).resolves.toEqual({
       granted: true,
       autoApprovedProposalId: "receipt-1",
     });
@@ -278,12 +311,8 @@ describe("auto-approve satisfies the session's expected outputs", () => {
     });
 
     expect(receiptData()).not.toHaveProperty("expectedLabel");
-    // …and the kind guess still applies, unchanged.
-    const written = updatedSets[0]!.expectedOutputs as Record<
-      string,
-      unknown
-    >[];
-    expect(written[0]).toMatchObject({ label: "Spec", status: "done" });
+    // …and no kind guess fills a slot instead (removed 2026-10-22).
+    expect(updatedSets).toHaveLength(0);
   });
 
   it("writes no claim when a PARTIAL name overlaps a slot — exact match only", async () => {
@@ -321,13 +350,8 @@ describe("auto-approve satisfies the session's expected outputs", () => {
     });
 
     expect(receiptData()).not.toHaveProperty("expectedLabel");
-    // …and the stamp fell to the kind rung, not to the agent's own claim.
-    const written = updatedSets[0]!.expectedOutputs as Record<
-      string,
-      unknown
-    >[];
-    expect(written[0]).toMatchObject({ label: "Spec", status: "done" });
-    expect(written[1]).not.toHaveProperty("status");
+    // …and nothing is stamped: neither the agent's own claim nor a kind guess.
+    expect(updatedSets).toHaveLength(0);
   });
 
   it("a RESOLVED claim still wins over a caller-supplied one", async () => {
@@ -415,11 +439,8 @@ describe("auto-approve satisfies the session's expected outputs", () => {
         data: { id: "doc-xyz", title: "Untitled draft" },
       });
       expect(receiptData()).not.toHaveProperty("expectedLabel");
-      const written = updatedSets[0]!.expectedOutputs as Record<
-        string,
-        unknown
-      >[];
-      expect(written[2]).toMatchObject({ label: "Spec", status: "done" });
+      // A refused claim fills nothing — not the open "Spec" either.
+      expect(updatedSets).toHaveLength(0);
     }
   });
 
@@ -441,21 +462,20 @@ describe("auto-approve satisfies the session's expected outputs", () => {
     });
 
     expect(receiptData()).not.toHaveProperty("expectedLabel");
-    // Falls to the kind rung: the document slot, untouched by the label.
-    const written = updatedSets[0]!.expectedOutputs as Record<
-      string,
-      unknown
-    >[];
-    expect(written[1]).toMatchObject({ label: "Spec", status: "done" });
-    expect(written[0]).not.toHaveProperty("status");
+    // No claim, no stamp: neither the entity slot nor the open document slot.
+    expect(updatedSets).toHaveLength(0);
   });
 
   it("leaves outputs of another kind alone", async () => {
     sessionRow.current = openSessionWith([
       { kind: "entity", label: "Client record" },
     ]);
+    governanceRow.current = declares([
+      { kind: "entity", label: "Client record" },
+    ]);
 
-    await checkPermissionOrPropose(OPTS);
+    // A document naming the entity slot: the kind floor refuses the claim.
+    await checkPermissionOrPropose({ ...OPTS, expectedLabel: "Client record" });
 
     expect(updatedSets).toHaveLength(0);
   });
@@ -467,18 +487,25 @@ describe("auto-approve satisfies the session's expected outputs", () => {
    * Driven through the real gate + the real `satisfyExpectedOutputs`, so
    * dropping the projection in either half fails here.
    */
-  it("a knowledge ENTITY satisfies a kind:'knowledge' slot", async () => {
-    sessionRow.current = openSessionWith([
+  it("a knowledge ENTITY satisfies a kind:'knowledge' slot it claims", async () => {
+    // The CLAIM half of the seam: the gate's kind floor must read the entity's
+    // profile too (`slotMatchesChangeKind`), or a knowledge entity could never
+    // claim a knowledge slot — only the removed kind guess ever filled one.
+    const slots = [
       { kind: "task", label: "Follow-up" },
       { kind: "knowledge", label: "Lesson" },
-    ]);
+    ];
+    sessionRow.current = openSessionWith(slots);
+    governanceRow.current = declares(slots);
 
     await checkPermissionOrPropose({
       ...OPTS,
       subjectType: "entity",
+      expectedLabel: "Lesson",
       data: { id: "ent-1", profileSlug: "knowledge", title: "A lesson" },
     });
 
+    expect(receiptData()).toMatchObject({ expectedLabel: "Lesson" });
     expect(updatedSets).toHaveLength(1);
     const written = updatedSets[0]!.expectedOutputs as Record<
       string,
@@ -497,24 +524,27 @@ describe("auto-approve satisfies the session's expected outputs", () => {
     sessionRow.current = openSessionWith([
       { kind: "task", label: "Follow-up" },
     ]);
+    governanceRow.current = declares([{ kind: "task", label: "Follow-up" }]);
 
     await checkPermissionOrPropose({
       ...OPTS,
       subjectType: "entity",
+      expectedLabel: "Follow-up",
       data: { id: "ent-1", profileSlug: "knowledge", title: "A lesson" },
     });
 
     expect(updatedSets).toHaveLength(0);
   });
 
-  it("a kind:'entity' slot still behaves as today", async () => {
-    sessionRow.current = openSessionWith([
-      { kind: "entity", label: "Client record" },
-    ]);
+  it("a kind:'entity' slot takes any entity that claims it", async () => {
+    const slots = [{ kind: "entity", label: "Client record" }];
+    sessionRow.current = openSessionWith(slots);
+    governanceRow.current = declares(slots);
 
     await checkPermissionOrPropose({
       ...OPTS,
       subjectType: "entity",
+      expectedLabel: "Client record",
       data: { id: "ent-1", profileSlug: "knowledge", title: "A lesson" },
     });
 
@@ -529,18 +559,27 @@ describe("auto-approve satisfies the session's expected outputs", () => {
   });
 
   it("does not stamp when the write carries no session", async () => {
+    // CLAIMED, so the stamp would happen if the session guard were dropped.
     sessionRow.current = openSessionWith([{ kind: "document", label: "Spec" }]);
+    governanceRow.current = declares([{ kind: "document", label: "Spec" }]);
 
-    await checkPermissionOrPropose({ ...OPTS, sessionId: undefined });
+    await checkPermissionOrPropose({
+      ...OPTS,
+      expectedLabel: "Spec",
+      sessionId: undefined,
+    });
 
     expect(updatedSets).toHaveLength(0);
   });
 
   it("does not stamp when the receipt insert failed — no dangling lineage", async () => {
     sessionRow.current = openSessionWith([{ kind: "document", label: "Spec" }]);
+    governanceRow.current = declares([{ kind: "document", label: "Spec" }]);
     mockReturning.mockRejectedValue(new Error("receipt insert exploded"));
 
-    await expect(checkPermissionOrPropose(OPTS)).resolves.toEqual({
+    await expect(
+      checkPermissionOrPropose({ ...OPTS, expectedLabel: "Spec" })
+    ).resolves.toEqual({
       granted: true,
     });
 
@@ -549,11 +588,14 @@ describe("auto-approve satisfies the session's expected outputs", () => {
 
   it("still GRANTS when the stamp itself throws (provenance ≠ user-write failure)", async () => {
     sessionRow.current = openSessionWith([{ kind: "document", label: "Spec" }]);
+    governanceRow.current = declares([{ kind: "document", label: "Spec" }]);
     mockTxUpdate.mockImplementation(() => {
       throw new Error("stamp exploded");
     });
 
-    await expect(checkPermissionOrPropose(OPTS)).resolves.toEqual({
+    await expect(
+      checkPermissionOrPropose({ ...OPTS, expectedLabel: "Spec" })
+    ).resolves.toEqual({
       granted: true,
       autoApprovedProposalId: "receipt-1",
     });

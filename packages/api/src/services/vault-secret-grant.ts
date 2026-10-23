@@ -9,6 +9,7 @@
 
 import { db, and, eq, isNull } from "@synap/database";
 import { vaultGrants } from "@synap/database/schema";
+import { assertFreshAuthentication } from "../utils/device-session.js";
 
 export type VaultSecretGrantScope = "once" | "session" | "permanent";
 
@@ -78,6 +79,9 @@ export async function applyVaultSecretGrant(
   if (reused && (!input.reusePermanentOnly || reused.scope === "permanent")) {
     return reused;
   }
+  // A new grant hands an agent a secret's VALUE: from a Synap app, only
+  // shortly after a real sign-in (utils/device-session.ts).
+  assertFreshAuthentication();
 
   const now = Date.now();
   let expiresAt: Date | null;

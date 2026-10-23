@@ -14,6 +14,8 @@ import { createHash, randomBytes } from "crypto";
 import { db, and, eq, isNull, gt } from "@synap/database";
 import { oauthClients, oauthAuthorizationCodes } from "@synap/database/schema";
 
+import type { FirstPartyRedirectRule } from "./protocol.js";
+
 /**
  * Authorization-code lifetime. RFC 6749 §4.1.2 recommends a maximum of 10
  * minutes; the code is redeemed by claude.ai within seconds of the redirect, so
@@ -27,14 +29,23 @@ export interface StoredClient {
    * 'dcr' — registered at /register; 'cimd' — a cached metadata document;
    * 'app' — an app registered and approved ON THIS POD (`apps`, client_id =
    * its `public_id`), resolved from `apps` and never stored in
-   * `oauth_clients` ("Sign in with Synap", `app-client.ts`).
+   * `oauth_clients` ("Sign in with Synap", `app-client.ts`); 'first_party' —
+   * a Synap app (desktop, Relay), declared in code (`FIRST_PARTY_CLIENTS`,
+   * config.ts) and never stored.
    */
-  clientKind: "dcr" | "cimd" | "app";
+  clientKind: "dcr" | "cimd" | "app" | "first_party";
   clientName: string;
   redirectUris: string[];
+  /**
+   * First-party clients only: their redirect RULES (a loopback port is not a
+   * list). Every redirect check goes through `clientAcceptsRedirect`.
+   */
+  firstPartyRedirects?: readonly FirstPartyRedirectRule[] | null;
   scopes: string[];
   /** CIMD only: the grant-grammar permissions the document declares. */
   requestedPermissions: string[];
+  /** CIMD only: why it asks for each permission, display text (0339b). */
+  requestedReasons?: Record<string, string>;
   /** CIMD only: the workspace-template slugs the document declares (0338b). */
   requestedTemplates?: string[];
   clientUri?: string | null;
@@ -52,6 +63,7 @@ export interface CimdClientInput {
   redirectUris: string[];
   scopes: string[];
   requestedPermissions: string[];
+  requestedReasons: Record<string, string>;
   requestedTemplates: string[];
   clientUri: string | null;
   initiateLoginUri: string | null;
@@ -84,6 +96,17 @@ export interface IssuedCodeInput {
    * approved. /token never mints wider than this. Omitted for other clients.
    */
   appGrant?: AppGrantRequest[] | null;
+  /**
+   * When the consenting person REALLY authenticated (their Kratos session's
+   * `authenticated_at`): a Synap app's device takes it as its step-up clock.
+   * Null when unknown.
+   */
+  authTime?: Date | null;
+  /**
+   * A Synap app's STEP-UP code (`prompt=login`, "Confirm it's you"): /token
+   * accepts it only with the device's refresh token, never to make a device.
+   */
+  stepUp?: boolean;
 }
 
 /** One permission in one space — the shape of `apps.approved_requests`. */
@@ -102,6 +125,10 @@ export interface ClaimedCode {
   appId: string | null;
   /** The consented app grant (app clients), else null. */
   appGrant: AppGrantRequest[] | null;
+  /** The consenting session's real authentication time, else null. */
+  authTime: Date | null;
+  /** A step-up code: it can only re-confirm a device (`IssuedCodeInput`). */
+  stepUp: boolean;
 }
 
 function hashCode(raw: string): string {
@@ -157,6 +184,7 @@ export async function upsertCimdClient(
     redirectUris: input.redirectUris,
     scopes: input.scopes,
     requestedPermissions: input.requestedPermissions,
+    requestedReasons: input.requestedReasons,
     requestedTemplates: input.requestedTemplates,
     clientUri: input.clientUri,
     initiateLoginUri: input.initiateLoginUri,
@@ -200,6 +228,8 @@ export async function issueAuthorizationCode(
     resource: input.resource,
     appId: input.appId ?? null,
     appGrant: input.appGrant ?? null,
+    authTime: input.authTime ?? null,
+    stepUp: input.stepUp ?? false,
     expiresAt: new Date(Date.now() + AUTH_CODE_TTL_MS),
   });
   return code;
@@ -243,6 +273,10 @@ export async function claimAuthorizationCode(
       resource: oauthAuthorizationCodes.resource,
       appId: oauthAuthorizationCodes.appId,
       appGrant: oauthAuthorizationCodes.appGrant,
+      authTime: oauthAuthorizationCodes.authTime,
+      stepUp: oauthAuthorizationCodes.stepUp,
     });
-  return row ? { ...row, appGrant: row.appGrant ?? null } : null;
+  return row
+    ? { ...row, appGrant: row.appGrant ?? null, authTime: row.authTime ?? null }
+    : null;
 }

@@ -69,6 +69,7 @@ function cluster(fp: string, sessionId: string): ProposalCluster {
     latestAt: new Date("2026-09-28T10:00:00.000Z"),
     workspaceIds: [],
     sessionId,
+    agent: null,
     reasonCounts: {},
     attentionFloorCount: 0,
   } as ProposalCluster;

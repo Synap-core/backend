@@ -37,6 +37,7 @@ export const DESTINATIONS = [
   "agents",
   "unfiled",
   "getting_started",
+  "credits",
 ] as const;
 export type Destination = (typeof DESTINATIONS)[number];
 
@@ -54,6 +55,9 @@ export const DESTINATION_LABELS: Readonly<Record<Destination, string>> = {
   // Things filed into no project (was "Not in a project").
   unfiled: "Unfiled",
   getting_started: "Getting started",
+  // The pod's plan and its AI credits: ONE place (wave PN), the Settings
+  // section every paying CTA opens (desktop `billing`, relay `/credits`).
+  credits: "Plan and credits",
 };
 
 /** The word for a destination. Unknown values humanize, never leak. */

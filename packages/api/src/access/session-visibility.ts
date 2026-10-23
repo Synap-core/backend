@@ -65,6 +65,7 @@ import {
   ChannelMemberKind,
   focusSessions,
   sessionEvaluations,
+  sessionRunners,
   users,
 } from "@synap/database/schema";
 import { SESSION_DOCUMENT_LABEL } from "../services/session-document/label.js";
@@ -283,6 +284,21 @@ export function sessionEvaluationReadableWhere(reader: SessionReader): SQL {
   // Uncorrelated for the same alias reason as `rosterSessionIds`.
   return inArray(
     sessionEvaluations.sessionId,
+    qb
+      .select({ id: focusSessions.id })
+      .from(focusSessions)
+      .where(sessionReadableWhere(reader))
+  );
+}
+
+/**
+ * A session's runners (0342, who holds its change-feed wait) are exactly as
+ * visible as the session they attach to — the same predicate through the
+ * parent row, like {@link sessionEvaluationReadableWhere}.
+ */
+export function sessionRunnerReadableWhere(reader: SessionReader): SQL {
+  return inArray(
+    sessionRunners.sessionId,
     qb
       .select({ id: focusSessions.id })
       .from(focusSessions)

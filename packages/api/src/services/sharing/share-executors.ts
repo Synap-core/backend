@@ -40,6 +40,8 @@ export function registerShareExecutors(): void {
   registered = true;
   registerProposalExecutor({
     key: "share/create",
+    // Adds a member / exposes a resource: lasting access for someone.
+    widensCredential: true,
     async execute({ proposal, userId, input, deps }) {
       const refuse = (why: string) =>
         new TRPCError({

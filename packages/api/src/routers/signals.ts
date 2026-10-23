@@ -111,6 +111,7 @@ import {
   type PendingAppRequestSignalInput,
   type PendingIssuerSignalInput,
   type Signal,
+  type SpaceInviteSignalInput,
   type StatusBanner,
 } from "../services/signals/needs-you-union.js";
 import {
@@ -118,6 +119,7 @@ import {
   listPendingIssuers,
   podAdminCheck,
 } from "../services/signals/access-requests.js";
+import { listOpenSpaceInvites } from "../services/signals/space-invites.js";
 import { listSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
 import { sessionsWithOpenQuestion } from "../services/signals/open-question-sessions.js";
 import {
@@ -138,6 +140,7 @@ import {
   LANDED_OUTPUTS_MAX_LIMIT,
   listLandedOutputs,
 } from "../services/outputs/landed-outputs.js";
+import { deliverableCountsOf } from "../services/projects/project-path.js";
 import { loadSessionLiveness } from "../services/runs/session-liveness.js";
 import { sessionListConditions } from "../services/focus-sessions/session-list-conditions.js";
 import {
@@ -288,6 +291,7 @@ export type SignalSubRead =
   | "captures"
   | "issuers"
   | "app-requests"
+  | "invites"
   | "liveness"
   | "outputs"
   | "activity"
@@ -415,6 +419,9 @@ async function readAttention(
   // as captures (so off under every lens, the intent lens included). Not an
   // admin ⇒ empty (not theirs to see), never unreadable.
   const readsAccess = readsCaptures;
+  // Open invites to other spaces are the person's own and live in no space
+  // they are in yet: the same floor-only rule (Home, the whole Inbox).
+  const readsInvites = readsCaptures;
   const isAdmin = podAdminCheck(userId);
   const [
     groups,
@@ -426,6 +433,7 @@ async function readAttention(
     captures,
     issuers,
     appRequests,
+    spaceInvites,
   ] = await Promise.all([
     settle(
       "proposals",
@@ -473,7 +481,8 @@ async function readAttention(
       : null,
     // The owed read under the SAME lens and owner floor `focusSessions.owed`
     // applies (`listOwedSlots`), plus the session/track lenses that door does
-    // not expose. Drafts never count (`excludeDrafts`).
+    // not expose. On an undecided draft only its ASKS count (founder decision
+    // 2026-10-22, `listNeedsYouOwed`); the draft itself is Proposed, below.
     follows
       ? settle(
           "owed",
@@ -483,7 +492,8 @@ async function readAttention(
         )
       : settle("owed", [] as AttentionOwed[], async () => []),
     // The DRAFT half — owed slots on undecided agent drafts, folded into one
-    // `draft-asks` row per draft. PROPOSED, never needs-you.
+    // `draft-asks` row per draft: the draft to accept or reject. PROPOSED,
+    // never needs-you; its asks are counted once, in the owed half above.
     settle(
       "drafts",
       {
@@ -530,6 +540,14 @@ async function readAttention(
       async () =>
         readsAccess
           ? await listPendingAppRequests({ isAdmin })
+          : { rows: [], truncated: false }
+    ),
+    settle(
+      "invites",
+      { rows: [] as SpaceInviteSignalInput[], truncated: false },
+      async () =>
+        readsInvites
+          ? await listOpenSpaceInvites({ userId })
           : { rows: [], truncated: false }
     ),
   ]);
@@ -585,6 +603,8 @@ async function readAttention(
     },
     accessRequestsTruncated:
       issuers.value.truncated || appRequests.value.truncated,
+    spaceInvites: spaceInvites.value.rows,
+    spaceInvitesTruncated: spaceInvites.value.truncated,
     // An unmeasured open-question read stays `undefined` (= unmeasured).
     openQuestionSessionIds: openQuestions.failed
       ? undefined
@@ -600,6 +620,7 @@ async function readAttention(
         captures,
         issuers,
         appRequests,
+        spaceInvites,
         containers,
         clusterSessions,
         openQuestions,
@@ -626,6 +647,7 @@ function blockingSignals(a: Attention): Signal[] {
     reviewSessions: a.review.sessions,
     unfinishedCaptures: a.captures.captures,
     accessRequests: a.accessRequests,
+    spaceInvites: a.spaceInvites,
   });
 }
 
@@ -658,6 +680,8 @@ function countOf(a: Attention) {
     capturesTruncated: a.captures.truncated,
     accessRequests: a.accessRequests,
     accessRequestsTruncated: a.accessRequestsTruncated,
+    spaceInvites: a.spaceInvites,
+    spaceInvitesTruncated: a.spaceInvitesTruncated,
   });
 }
 
@@ -763,6 +787,7 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
     const at = facts.lastAt ?? facts.since ?? c.updatedAt;
     const occurredAt = at instanceof Date ? at : new Date(at);
     const title = resolveSessionTitle(c);
+    const deliverables = deliverableCountsOf(c.expectedOutputs, "owner");
     return withProjectSource(
       {
         id: `live:${c.id}`,
@@ -776,6 +801,14 @@ async function readHappening(ctx: SignalsCtx, input: SignalScopeInput) {
         ...(title ? { sessionTitle: title } : {}),
         ...(c.projectId ? { sessionProjectId: c.projectId } : {}),
         live: facts,
+        ...(deliverables.status === "ok" && deliverables.total > 0
+          ? {
+              progress: {
+                done: deliverables.done,
+                total: deliverables.total,
+              },
+            }
+          : {}),
         groupKey: sessionGroupKey(c.id),
         ageBucket: ageBucketOf(occurredAt, now),
         repeatCount: 1,
@@ -1248,11 +1281,13 @@ async function readLensPage(
  * inside `countNeedsYou`, plus asking notifications. Items, not sessions.
  * Decisions are distinct (shape, session) clusters.
  *
- * DRAFTS NEVER COUNT (founder decision; since 2026-10-04 they are PROPOSED):
- * the owed half by `excludeDrafts`, the decisions half by
- * `excludeDraftSessions`, the review half by `needsYouReason` — each in SQL,
- * so drafts cannot eat a scan cap. Asking drafts are reported beside the
- * number (`drafts`), never inside it.
+ * DRAFTS NEVER COUNT (founder decision; since 2026-10-04 they are PROPOSED),
+ * EXCEPT THEIR ASKS (founder decision 2026-10-22): the owed half counts a
+ * draft's slots that carry an ask and no other (`listNeedsYouOwed`,
+ * `needsYouLens`), the decisions half leaves out proposals under a draft
+ * (`excludeDraftSessions`), the review half goes by `needsYouReason` — each in
+ * SQL, so drafts cannot eat a scan cap. Drafts themselves are reported beside
+ * the number (`drafts`), never inside it.
  */
 async function countSignals(ctx: SignalsCtx, input: SignalScopeInput) {
   const attention = await readAttention(ctx, input, CLUSTER_PAGE_LIMIT);
@@ -1358,11 +1393,14 @@ function narrowAttention(
         ? a.captures
         : { captures: [], truncated: false },
     // Access requests live in no space either: pod-level only, like captures.
+    // So do invites to other spaces (none the person is in yet).
     ...(scope.workspaceId === null && !scope.kindClusters
       ? {}
       : {
           accessRequests: { issuers: [], applications: [] },
           accessRequestsTruncated: false,
+          spaceInvites: [],
+          spaceInvitesTruncated: false,
         }),
   };
 }
@@ -1776,8 +1814,9 @@ export const signalsRouter = router({
    * badge always equals the Blocking rows under it at that scope.
    *
    * The number ships WITH its parts: `decisions`, `notifications`, `blocked`,
-   * `review`, `captures` and `requests` (pending issuers + app connection
-   * requests, pod admins at the floor only), with `needsYou` their sum. A
+   * `review`, `captures`, `requests` (pending issuers + app connection
+   * requests, pod admins at the floor only) and `invites` (the viewer's open
+   * invites to other spaces, at the floor only), with `needsYou` their sum. A
    * client reads the part it needs; it never derives one by
    * subtracting the others. `suggestions` and `drafts` (PROPOSED) ship in the
    * same result and are NOT parts: they are never added into `needsYou`.

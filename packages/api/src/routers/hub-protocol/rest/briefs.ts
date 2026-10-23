@@ -19,8 +19,6 @@ import { z } from "@hono/zod-openapi";
 import { and, eq, getDb, workspaceMembers } from "@synap/database";
 
 import { composeCapabilityBrief } from "../../../services/capability-briefs/compose-capability-brief.js";
-import { renderSkillForDoor } from "../../../services/capability-briefs/door-tool-render.js";
-import { resolveSkillDoor } from "../../../services/capability-briefs/resolve-skill-door.js";
 import { MCP_TOOL_TEACHING_KEYS } from "../../mcp/tool-verb-aliases.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -148,10 +146,6 @@ export function registerBriefsRoutes(app: HubHono): void {
       }
     }
 
-    // Door-aware teaching: a Raycast caller reads tool names as Raycast names
-    // them (`load-skill`, not `synap_load_skill`). Other callers: source text.
-    const skillDoor = await resolveSkillDoor("hub", agentUserId);
-
     const briefs: Record<string, string> = {};
     await Promise.all(
       toolNames.map(async (name) => {
@@ -161,10 +155,7 @@ export function registerBriefsRoutes(app: HubHono): void {
           door: parsed.data.door ?? "chat",
           actionPosture: actionPosture.get(name),
         });
-        if (brief)
-          briefs[name] = skillDoor
-            ? renderSkillForDoor(brief, skillDoor)
-            : brief;
+        if (brief) briefs[name] = brief;
       })
     );
 

@@ -8,13 +8,23 @@ import { sql } from "../client-pg.js";
 import crypto from "crypto";
 
 /**
- * Clean test data for a specific user pattern
+ * The user ids THIS test file generated (generateTestUserId). Vitest runs the
+ * package's files in parallel against ONE database, and every file runs
+ * setup.ts: a cleanup by pattern (`user_id LIKE 'test-%'`) deleted the rows a
+ * test in ANOTHER file had just written ("expected 9 to be 10"). A file only
+ * ever deletes its own users' rows. Module state is per file (vitest isolates
+ * each file's modules).
  */
-export async function cleanTestData(userIdPattern = "test-%") {
-  await sql`DELETE FROM events WHERE user_id LIKE ${userIdPattern}`;
-  await sql`DELETE FROM entities WHERE user_id LIKE ${userIdPattern}`;
-  await sql`DELETE FROM entity_vectors WHERE user_id LIKE ${userIdPattern}`;
-  await sql`DELETE FROM knowledge_facts WHERE user_id LIKE ${userIdPattern}`;
+const generatedUserIds = new Set<string>();
+
+/** Deletes the rows of every user id this file generated — never another file's. */
+export async function cleanTestData() {
+  const ids = [...generatedUserIds];
+  if (ids.length === 0) return;
+  await sql`DELETE FROM events WHERE user_id = ANY(${ids})`;
+  await sql`DELETE FROM entities WHERE user_id = ANY(${ids})`;
+  await sql`DELETE FROM entity_vectors WHERE user_id = ANY(${ids})`;
+  await sql`DELETE FROM knowledge_facts WHERE user_id = ANY(${ids})`;
 }
 
 /**
@@ -56,7 +66,9 @@ export async function waitFor(
  * Generate a unique test user ID
  */
 export function generateTestUserId(prefix = "test"): string {
-  return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
+  const id = `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
+  generatedUserIds.add(id);
+  return id;
 }
 
 /**

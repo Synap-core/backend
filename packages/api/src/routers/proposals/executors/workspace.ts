@@ -291,6 +291,8 @@ export function registerWorkspaceExecutors(): void {
   // ── workspace / join ───────────────────────────────────────────────────────
   registerProposalExecutor({
     key: "workspace/join",
+    // Adds a member / exposes a resource: lasting access for someone.
+    widensCredential: true,
     async execute({ proposal, payload, userId, input, deps }) {
       void payload;
       const joinData = (proposal.data ?? {}) as Record<string, unknown>;
@@ -630,6 +632,8 @@ export function registerWorkspaceExecutors(): void {
   // APPROVER (mirrors workspace/create's approve-as-authority above).
   registerProposalExecutor({
     key: "workspace/update",
+    // Approving may write a secret grant: never from a stale device session.
+    widensCredential: true,
     async execute(args) {
       const { proposal, payload, userId, input, deps } = args;
       void payload;
@@ -1015,6 +1019,8 @@ export function registerWorkspaceExecutors(): void {
   // approve.
   registerProposalExecutor({
     key: "workspace/adopt",
+    // Approving may write a secret grant: never from a stale device session.
+    widensCredential: true,
     async execute({ proposal, payload, userId, input, deps }) {
       void payload;
       const inner = ((proposal.data as Record<string, unknown>)?.data ??

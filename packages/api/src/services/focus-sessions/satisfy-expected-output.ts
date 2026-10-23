@@ -27,13 +27,12 @@
  *
  * A proposal may additionally carry a SLOT CLAIM (`proposals.data.expectedLabel`,
  * written by `checkPermissionOrPropose` when the change's own name matches a
- * declared slot label exactly). When present it outranks the FIRST-OF-KIND guess
- * — the SAME precedence `session-outputs.ts` already gives
- * `artifacts.props.expectedLabel` (rule 3 there) — but never the kind itself: a
- * claimed slot must still be of the kind that was produced. It is a CLAIM about
- * WHICH deliverable this is, never a `done` stamp: approval is still what stamps,
- * and an unmatched claim falls back to the kind guess rather than satisfying
- * nothing.
+ * declared slot label exactly). It is the ONLY way an approval reaches a slot
+ * (there is no first-of-kind guess any more — see `selectOutputToSatisfy`), and
+ * it never outranks the kind itself: a claimed slot must still be of the kind
+ * that was produced. It is a CLAIM about WHICH deliverable this is, never a
+ * `done` stamp on its own: approval is still what stamps, and an unmatched
+ * claim satisfies nothing.
  *
  * ── THE SECOND PATH: HUMAN ATTESTATION ──────────────────────────────────────
  * Everything above is about work an AGENT produced and a human accepted. A slot
@@ -122,7 +121,7 @@ export interface SatisfyExpectedOutputsResult {
 
 /**
  * Stamp the ONE not-yet-done expected output this approval satisfies — the slot
- * the proposal CLAIMED by label, else the first of the matching kind (see
+ * the proposal CLAIMED by key or label, and nothing when it claimed none (see
  * `selectOutputToSatisfy`). One approval is evidence for exactly one deliverable.
  *
  * Best-effort by contract — the caller (proposal approval) must never fail
@@ -198,37 +197,35 @@ export async function satisfyExpectedOutputs(
  * Which output this approval satisfies, or `-1`. Pure, so the matching rule is
  * testable without a database (the transaction around it is not the logic).
  *
- * TWO rungs, in this order:
+ * ONE rung (there were two until 2026-10-22):
  *
  *   1. SLOT CLAIM — the not-yet-done output whose KEY equals `expectedKey`
  *      (`slot-keys.ts`), else whose `label` equals `expectedLabel` exactly
  *      (trimmed, case-insensitive), AND whose declared kind normalizes to
  *      the same object kind as the change. The claim names WHICH deliverable the
- *      change is for, so it beats the first-of-kind guess — but it does not
+ *      change is for — the only thing that may name a slot — but it does not
  *      outrank the kind itself. A label match on a slot of a DIFFERENT kind is
  *      not evidence that this change is that deliverable: an entity titled the
  *      same as a declared document slot would otherwise stamp the document done,
  *      and the session would report a deliverable nobody produced. On a kind
- *      mismatch the claim is dropped and rung 2 decides.
- *   2. KIND — the FIRST not-yet-done output whose kind normalizes to the
- *      proposal's target kind, SKIPPING any slot the agent declared the human
- *      owns. First-only on purpose: two declared "document" outputs are two
- *      deliverables, and one approval is evidence for exactly one of them.
+ *      mismatch the claim is dropped and nothing is stamped.
  *
- *      The `owner: 'human'` skip is what makes rung 2 a guess that cannot lie.
- *      Governance already refuses to let an agent CLAIM a human-owned slot
- *      (`resolveSessionSlotClaim`), but without this the refusal bought nothing:
- *      with no claim the approval fell straight through to this rung and stamped
- *      that very slot `done` anyway — the agent closing work it had itself
- *      declared it could not do, with lineage that made it look verified. A
- *      guess may not land on a deliverable nobody claims to have produced.
- *      Rung 1 is deliberately NOT floored the same way: an explicit claim is
- *      evidence, and one naming a human-owned slot can only have come from a
- *      path that meant it.
+ * NO CLAIM ⇒ `-1`. The KIND GUESS that used to follow (the first not-yet-done
+ * output of the change's kind) is GONE, and must not come back. Live defect,
+ * 2026-10-22 (session 6fbc2b5c "CRM app: spec"): an agent created an input
+ * brief with `synap_create_document` and no `expectedLabel`; its auto-approval
+ * fell to the kind guess and stamped the session's FIRST document slot ("spec")
+ * `done` with that brief as lineage. The real spec, written later, then sat
+ * "unattached", and the session told the founder the spec was produced. An
+ * approval says a person accepted an ARTEFACT; it says nothing about WHICH
+ * deliverable the artefact is. Only an explicit naming does: the create door's
+ * `expectedLabel` / key, a title equal to the slot label, a delegation
+ * (`resolveSessionSlotClaim`), or the agent's own `completeOutput` claim, which
+ * the evidence path (`satisfyClaimsByEvidence`) closes.
  *
  * A claim that matches nothing (unknown label, or a label whose slot is already
- * done) falls THROUGH to rung 2 rather than returning `-1` — an approval is
- * still evidence about this session even when the claim is stale.
+ * done) also stamps nothing: the approved object stays a produced output of
+ * the session, unattached, until something names its slot.
  */
 export function selectOutputToSatisfy(
   outputs: ExpectedOutput[],
@@ -237,30 +234,42 @@ export function selectOutputToSatisfy(
   entityProfileSlug?: string | null,
   expectedKey?: string | null
 ): number {
-  const kind = resolveChangeKind(targetType, entityProfileSlug);
-  // A slot declared as the bare `entity` is satisfied by ANY entity, profile or
-  // not — that is what it asks for, and it is the behaviour every existing
-  // session relies on. The profile only ever ADDS reach; it never narrows an
-  // `entity` slot out of range.
-  const isEntityChange = normalizeObjectKind(targetType) === "entity";
-  const matchesKind = (o: ExpectedOutput): boolean => {
-    const slot = normalizeObjectKind(o.kind);
-    return slot === kind || (isEntityChange && slot === "entity");
-  };
+  const matchesKind = (o: ExpectedOutput): boolean =>
+    slotMatchesChangeKind(o.kind, targetType, entityProfileSlug);
 
   // The claim names the slot by KEY first, then by label (`findSlotIndex`).
-  if (expectedKey?.trim() || normalizeExpectedLabel(expectedLabel)) {
-    const claimed = findSlotIndex(
-      outputs,
-      { key: expectedKey, label: expectedLabel },
-      (o) => o.status !== "done" && matchesKind(o)
-    );
-    if (claimed !== -1) return claimed;
+  // NO CLAIM, NO STAMP: there is no kind guess after it (see the docblock).
+  if (!expectedKey?.trim() && !normalizeExpectedLabel(expectedLabel)) {
+    return -1;
   }
-
-  return outputs.findIndex(
-    (o) => o.status !== "done" && o.owner !== "human" && matchesKind(o)
+  return findSlotIndex(
+    outputs,
+    { key: expectedKey, label: expectedLabel },
+    (o) => o.status !== "done" && matchesKind(o)
   );
+}
+
+/**
+ * Whether a slot of kind `slotKind` may be filled by a change of `targetType`
+ * (+ the entity's profile). THE kind floor, shared by the claim the gate writes
+ * (`resolveSessionSlotClaimIndex`, permission-check.ts) and the stamp the
+ * approval makes (`selectOutputToSatisfy`), so the gate can never write a claim
+ * the stamper then refuses, nor refuse one it would honour. They used to
+ * differ: the gate compared the bare `targetType` (`entity`) to the slot, so a
+ * knowledge entity could never CLAIM a `kind: "knowledge"` slot, and only the
+ * kind guess (removed 2026-10-22) ever filled one.
+ *
+ * A slot declared as the bare `entity` takes ANY entity, profile or not — that
+ * is what it asks for. The profile only ever ADDS reach.
+ */
+export function slotMatchesChangeKind(
+  slotKind: string | null | undefined,
+  targetType: string | null | undefined,
+  entityProfileSlug?: string | null
+): boolean {
+  const slot = normalizeObjectKind(slotKind);
+  if (slot === resolveChangeKind(targetType, entityProfileSlug)) return true;
+  return normalizeObjectKind(targetType) === "entity" && slot === "entity";
 }
 
 /**

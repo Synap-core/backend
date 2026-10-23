@@ -256,6 +256,12 @@ export const proposals = pgTable(
     // while still naming the connecting human (`subjectUserId`). Text, not a
     // FK — the app row is revocable/deletable and attribution must survive it.
     appId: text("app_id"),
+    // The calling KEY (0346, FB1020 B7): the `api_keys.id` the filing request
+    // authenticated with, stamped from the request context
+    // (`callingKeyAttribution()`). Tells two computers running the same agent
+    // apart, and is what "the agent's OWN records" means for governance. Not a
+    // FK — a key is revocable and the attribution must survive it.
+    apiKeyId: uuid("api_key_id"),
     comments: jsonb("comments").default("[]"),
     // Revision history (D3b): append-only before/after snapshots of every
     // reviseProposal edit — the "human corrected the AI" quality signal the

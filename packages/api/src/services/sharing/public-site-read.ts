@@ -48,11 +48,12 @@ import { hashToken } from "../../utils/share-token.js";
 import { isPublicationLive, isSiteLive } from "./publication-live.js";
 import { publicDoorsOpenFor } from "./public-doors-switch.js";
 import {
+  PUBLIC_BODY_CONTRACT,
   projectPublishedProperties,
   publicTitleAndProperties,
   readPinnedBody,
 } from "./public-read.js";
-import type { PublicShareClosed } from "./public-read.js";
+import type { PublicBody, PublicShareClosed } from "./public-read.js";
 import {
   PUBLIC_ID_RE,
   resolveSiteConfig,
@@ -111,7 +112,7 @@ export interface PublicCollectionPage {
 }
 
 export interface PublicRecordView extends PublicRecordSummary {
-  body: { format: "markdown"; content: string } | null;
+  body: PublicBody | null;
 }
 
 /** A read that resolved, with its weak ETag. */
@@ -539,6 +540,7 @@ export async function readSiteRecord(
 
   const view: PublicRecordView = { ...summaryOf(key, row), body: pinned.body };
   const etag = weakEtag([
+    PUBLIC_BODY_CONTRACT,
     row.id,
     row.pin,
     row.publishedAt?.toISOString() ?? null,

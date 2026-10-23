@@ -8,17 +8,24 @@
  * THIS pod. Public (exempt in proxy.ts) — the reader is signed out by design.
  */
 
+import { safeReturnTo } from "../../lib/safe-return-to";
 import { RecoveryView } from "./RecoveryView";
 
 export const dynamic = "force-dynamic";
 
 interface RecoveryPageProps {
-  searchParams: Promise<{ flow?: string }>;
+  /** `return`: where "Back" goes (an invite page sends the person here). */
+  searchParams: Promise<{ flow?: string; return?: string }>;
 }
 
 export default async function RecoveryPage({
   searchParams,
 }: RecoveryPageProps) {
   const sp = await searchParams;
-  return <RecoveryView initialFlowId={sp.flow ?? null} />;
+  return (
+    <RecoveryView
+      initialFlowId={sp.flow ?? null}
+      backTo={sp.return ? safeReturnTo(sp.return) : null}
+    />
+  );
 }

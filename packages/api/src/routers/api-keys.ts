@@ -10,6 +10,8 @@ import {
   protectedProcedure,
   podAdminProcedure,
   workspaceProcedure,
+  credentialProcedure,
+  requireFreshAuthentication,
 } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -65,10 +67,13 @@ import { createAndVerifyHubInboundKey } from "../services/external-registration.
 import { toRegistrationTrace } from "../services/external-registration.js";
 import {
   AuthorizeUserError,
+  ReauthenticationRequiredError,
+  PodCredentialRequiredError,
   decideOAuthAuthorization,
   getOAuthConsentContext,
 } from "./oauth/consent.js";
 import { OAuthError } from "./oauth/protocol.js";
+import { logOAuthRefusal } from "./oauth/refusal-log.js";
 import { isPodAdminOrigin } from "../utils/pod-admin-origin.js";
 import { findUserDefaultWorkspaceId } from "../utils/user-default-workspace.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
@@ -105,6 +110,13 @@ const oauthAuthorizeParamsSchema = z.object({
   codeChallengeMethod: z.string().max(64).optional(),
   // RFC 8707; validated against this pod's resources in oauth/consent.ts.
   resource: z.string().max(2048).optional(),
+  // OIDC step-up: `max_age` (seconds) and `prompt=login` ask for a FRESH
+  // sign-in before the decision (oauth/consent.ts reauthenticationRequired).
+  maxAge: z.union([z.number().int().min(0), z.string().max(16)]).optional(),
+  prompt: z.string().max(32).optional(),
+  // /authorize's signed request time (`auth_req`), for
+  // `prompt=login` / `max_age=0`.
+  authRequest: z.string().max(128).optional(),
 });
 
 /**
@@ -114,15 +126,50 @@ const oauthAuthorizeParamsSchema = z.object({
  * unregistered redirect_uri, non-human caller) — BAD_REQUEST. `OAuthError`
  * carries a protocol error code the screen shows verbatim. Anything else
  * propagates unchanged so a genuine bug is never disguised as a client error.
+ * Each of the two is a refusal, logged once (review A6), as is a FORBIDDEN
+ * refusal of who decides (the app is not for this person). A sign-in step-up
+ * is no refusal: the screen sends the person to sign in again.
  */
-function toConsentTrpcError(err: unknown): unknown {
+function toConsentTrpcError(err: unknown, clientId: string): unknown {
+  if (
+    err instanceof ReauthenticationRequiredError ||
+    err instanceof PodCredentialRequiredError
+  ) {
+    // The screen reads the code and sends the person to sign in again.
+    return new TRPCError({
+      code: "FORBIDDEN",
+      message: err.message,
+      cause: { reasonCode: err.reasonCode },
+    });
+  }
   if (err instanceof AuthorizeUserError) {
+    logOAuthRefusal({
+      phase: "consent",
+      clientId,
+      reason: err.reason,
+      detail: err.message,
+    });
     return new TRPCError({ code: "BAD_REQUEST", message: err.message });
   }
   if (err instanceof OAuthError) {
+    logOAuthRefusal({
+      phase: "consent",
+      clientId,
+      reason: err.code,
+      code: err.code,
+      detail: err.message,
+    });
     return new TRPCError({
       code: "BAD_REQUEST",
       message: `${err.code}: ${err.message}`,
+    });
+  }
+  if (err instanceof TRPCError && err.code === "FORBIDDEN") {
+    logOAuthRefusal({
+      phase: "consent",
+      clientId,
+      reason: "forbidden",
+      detail: err.message,
     });
   }
   return err;
@@ -341,7 +388,7 @@ export const apiKeysRouter = router({
    *
    * SECURITY: The key is displayed ONCE and cannot be retrieved later.
    */
-  create: protectedProcedure
+  create: credentialProcedure
     .input(
       z.object({
         keyName: z.string().min(1).max(100),
@@ -548,7 +595,7 @@ export const apiKeysRouter = router({
   /**
    * Rotate an API key (create new, revoke old)
    */
-  rotate: protectedProcedure
+  rotate: credentialProcedure
     .input(
       z.object({
         keyId: z.string().uuid(),
@@ -644,7 +691,7 @@ export const apiKeysRouter = router({
    * the person an agent-held key acts for (the keys `list` shows). An app's
    * key is changed on the app's page, where its approved requests live.
    */
-  setGrants: protectedProcedure
+  setGrants: credentialProcedure
     .input(
       z.object({
         keyId: z.string().uuid(),
@@ -758,7 +805,7 @@ export const apiKeysRouter = router({
    * computer. A code that matches nothing counts against the person (5 per
    * 10 min, then TOO_MANY_REQUESTS).
    */
-  getDeviceRequest: protectedProcedure
+  getDeviceRequest: credentialProcedure
     .input(z.object({ userCode: z.string().min(4).max(32) }))
     .query(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, APPROVE_COMPUTER_SIGNED_IN);
@@ -774,7 +821,7 @@ export const apiKeysRouter = router({
    * the fifth wrong code closes it. No key is minted here — the terminal
    * collects its keys once, at `POST /api/hub/setup/device/token`.
    */
-  decideDeviceRequest: protectedProcedure
+  decideDeviceRequest: credentialProcedure
     .input(
       z.object({
         requestId: z.string().uuid(),
@@ -798,6 +845,7 @@ export const apiKeysRouter = router({
   getMachineDefaults: podAdminProcedure.query(() => readMachineDefaults()),
 
   setMachineDefaults: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(z.object({ keyTtlDays: z.number().int() }))
     .mutation(async ({ ctx, input }) => {
       await setMachineKeyTtlDays(input.keyTtlDays);
@@ -930,6 +978,7 @@ export const apiKeysRouter = router({
    * Pod-admin only. Tied to the operator's userId for audit purposes.
    */
   createSystemKey: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         keyName: z.string().min(1).max(100),
@@ -996,6 +1045,7 @@ export const apiKeysRouter = router({
    * Use this when provisioning credentials for external services via the connections UI.
    */
   adminCreateServiceKey: podAdminProcedure
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         keyName: z.string().min(1).max(100),
@@ -1075,7 +1125,7 @@ export const apiKeysRouter = router({
    * Returns the key + podUrl + workspaceId so the caller can build a deeplink
    * or display a copy-paste flow — no separate agent provisioning required.
    */
-  connectIntegration: protectedProcedure
+  connectIntegration: credentialProcedure
     .input(
       z.object({
         integration: integrationKindSchema,
@@ -1256,7 +1306,7 @@ export const apiKeysRouter = router({
    * POST /api/hub/mcp/redeem, where the pod mints the `claude-web` agent key.
    * Minting on redeem (not here) means no plaintext key touches the browser.
    */
-  beginMcpConnect: protectedProcedure
+  beginMcpConnect: credentialProcedure
     .input(
       z.object({
         agentType: z.literal("claude-web"),
@@ -1328,9 +1378,9 @@ export const apiKeysRouter = router({
     .query(async ({ ctx, input }) => {
       try {
         // The viewer: an app sign-in shows THEIR spaces, nobody else's.
-        return await getOAuthConsentContext(input, ctx.userId);
+        return await getOAuthConsentContext(input, ctx.userId, ctx.session);
       } catch (err) {
-        throw toConsentTrpcError(err);
+        throw toConsentTrpcError(err, input.clientId);
       }
     }),
 
@@ -1346,7 +1396,7 @@ export const apiKeysRouter = router({
    * client's REGISTERED redirect_uri, never from user input, so this can never
    * become an open redirect.
    */
-  decideOAuthAuthorization: protectedProcedure
+  decideOAuthAuthorization: credentialProcedure
     .input(
       oauthAuthorizeParamsSchema.extend({
         approve: z.boolean(),
@@ -1398,7 +1448,7 @@ export const apiKeysRouter = router({
         });
         return result;
       } catch (err) {
-        throw toConsentTrpcError(err);
+        throw toConsentTrpcError(err, input.clientId);
       }
     }),
 
@@ -1522,6 +1572,7 @@ export const apiKeysRouter = router({
    * of the key (`userId = ctx.userId`).
    */
   createForWorkspace: workspaceProcedure
+    .use(requireFreshAuthentication)
     .input(
       z.object({
         name: z.string().min(1).max(100),

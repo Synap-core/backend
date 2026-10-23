@@ -18,6 +18,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { shouldRejectJunkTitle } from "@synap/database";
 import {
   parseCsvTable,
   csvRowsToTypedImportItems,
@@ -269,5 +270,113 @@ describe("a contacts table → people wearing the contact role, employers, works
     expect(people[1]!.properties?.position).toBe("Product Lead");
     expect(companies).toHaveLength(2);
     expect(relations).toHaveLength(3);
+  });
+});
+
+describe("a placeholder employer names no company", () => {
+  // Shapes measured on a real export (2026-10-22): "Freelance" ×18,
+  // "Indépendant" ×17, "Stealth Startup" ×8, "Self-employed" ×6, "-", "…".
+  // Names invented. "Freelance Collective Ltd" and "Stealth Labs" are real
+  // companies that merely CONTAIN a placeholder word.
+  const CSV = [
+    "First Name,Last Name,URL,Email Address,Company,Position",
+    "Ines,Varga,https://example.com/in/ines,,Freelance,Designer",
+    "Jules,Morel,https://example.com/in/jules,,FREELANCE,Writer",
+    "Kai,Orsini,https://example.com/in/kai,,Indépendant,Consultant",
+    "Lea,Brun,https://example.com/in/lea,,Stealth Startup,Founder",
+    "Milo,Sand,https://example.com/in/milo,,Self-employed,Coach",
+    "Nora,Kel,https://example.com/in/nora,,-,Advisor",
+    "Otto,Rye,https://example.com/in/otto,,…,Engineer",
+    "Pia,Lund,https://example.com/in/pia,,Freelance Collective Ltd,Partner",
+    "Quin,Hart,https://example.com/in/quin,,Stealth Labs,CTO",
+    "Rafe,Dune,https://example.com/in/rafe,,Stealth,Builder",
+    // A placeholder NAME: kept (its email identifies someone), never titled "-".
+    "-,,,anon@example.org,Saltmarsh & Co,Analyst",
+    // A placeholder name and nothing that identifies anyone: skipped.
+    "…,,,,Freelance,",
+  ].join("\n");
+
+  it("no company and no works_at for a placeholder; real names still link", () => {
+    const { people, companies, relations } = importOps(CSV, "contact");
+    expect(people).toHaveLength(11);
+    expect(companies.map((c) => c.title).sort()).toEqual([
+      "Freelance Collective Ltd",
+      "Saltmarsh & Co",
+      "Stealth Labs",
+    ]);
+    expect(relations).toHaveLength(3);
+    expect(people.map((p) => p.title)).not.toContain("-");
+    expect(people[people.length - 1]!.title).toBe("Untitled");
+  });
+
+  it("the apply-time create guard refuses NO op this import proposes", () => {
+    // `shouldRejectJunkTitle` is what `entities.create` refuses with on
+    // approval; one refused op refused the whole live proposal 0728053b.
+    const { entities } = importOps(CSV, "contact");
+    expect(entities.length).toBeGreaterThan(10); // the scan sees the graph
+    const refused = entities.filter((e) =>
+      shouldRejectJunkTitle(e.profileSlug, e.title)
+    );
+    expect(refused.map((e) => `${e.profileSlug}:${e.title}`)).toEqual([]);
+    // Self-check: the guard still refuses the shapes this file feeds it.
+    expect(shouldRejectJunkTitle("company", "…")).toBe(true);
+    expect(shouldRejectJunkTitle("person", "-")).toBe(true);
+  });
+
+  it("the placeholder text is kept on the person", () => {
+    const { headers, rows } = parseCsvTable(CSV);
+    const plan = refineCsvTablePlan({
+      plan: plannerPlan("contact"),
+      headers,
+      rows,
+      catalog: CATALOG,
+    });
+    const items = csvRowsToTypedImportItems(rows, plan);
+    expect(items[0]!.links).toEqual([]);
+    expect(items[0]!.body).toContain("Company: Freelance");
+  });
+});
+
+describe("a nameless row is kept only with a STRONG identity signal", () => {
+  // Live dry run (2026-10-22): 114 members who hid their profile (no name, no
+  // URL, only "Connected On") became same-name "Untitled" people, because the
+  // pod had a `connectedOn` property, so the date counted as "identifying".
+  const WITH_CONNECTED_ON: CsvProfileCatalogEntry[] = CATALOG.map((p) =>
+    p.slug === "person"
+      ? { ...p, propertySlugs: [...p.propertySlugs, "connectedOn", "role"] }
+      : p
+  );
+  const CSV = [
+    "First Name,Last Name,URL,Email Address,Company,Position,Connected On",
+    "Ada,Quillfeather,https://www.linkedin.com/in/ada-q,,Brindlewood Labs,CTO,03 Feb 2025",
+    // Only a date (on an EXISTING property) and a position: skipped.
+    ",,,,,Analyst,14 Jun 2021",
+    // No name, but an email: kept, as "Untitled".
+    ",,,eli@example.org,,,15 Jun 2021",
+  ].join("\n");
+
+  function run() {
+    const { headers, rows } = parseCsvTable(CSV);
+    const plan = refineCsvTablePlan({
+      plan: plannerPlan("contact"),
+      headers,
+      rows,
+      catalog: WITH_CONNECTED_ON,
+    });
+    return { plan, rows, items: csvRowsToTypedImportItems(rows, plan) };
+  }
+
+  it("the date column really lands on an existing property (the live shape)", () => {
+    const { plan } = run();
+    expect(
+      plan.columns.find((c) => c.header === "Connected On")?.routedTo
+    ).toBe("entity");
+  });
+
+  it("a row with only a date is skipped; a row with an email is kept as Untitled", () => {
+    const { rows, items } = run();
+    expect(rows).toHaveLength(3);
+    expect(items.map((i) => i.title)).toEqual(["Ada Quillfeather", "Untitled"]);
+    expect(items[1]!.metadata.email).toBe("eli@example.org");
   });
 });

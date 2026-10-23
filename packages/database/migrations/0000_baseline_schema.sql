@@ -296,6 +296,8 @@ ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_expires_at" times
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "metadata_sha256" text;
 -- 0338b: the workspace templates a pod app declares (`synap_templates`).
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_templates" text[] NOT NULL DEFAULT '{}';
+-- 0339b: why the document asks for each permission (`synap_requests[].reason`).
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_reasons" jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
   "code_hash"      text PRIMARY KEY,
@@ -324,6 +326,11 @@ ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "resource" text
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "app_id" uuid;
 -- 0339: the app grant a person consented to (app clients only).
 ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "app_grant" jsonb;
+-- 0340: the consenting session's real `authenticated_at`, which a Synap
+-- app's device takes as its step-up clock.
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "auth_time" timestamp with time zone;
+-- 0340: a Synap app's step-up code re-confirms a device, never makes one.
+ALTER TABLE "oauth_authorization_codes" ADD COLUMN IF NOT EXISTS "step_up" boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS "oauth_authorization_codes_expires_at_idx"
   ON "oauth_authorization_codes" ("expires_at");
 
@@ -2041,6 +2048,7 @@ CREATE TABLE IF NOT EXISTS "proposals" (
   "reason_code"       text,
   "governance_reason" text,
   "app_id"            text,
+  "api_key_id"        uuid,
   "comments"          jsonb DEFAULT '[]',
   "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"        timestamp with time zone NOT NULL DEFAULT now()
@@ -2076,6 +2084,7 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "rejection_reason" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "reason_code" text;  -- 0232 (structured rejection cause; app-level enum, free-text fallback stays)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "governance_reason" text;  -- 0238 (structured governance cause at creation; PROPOSE_REASON key, distinct from rejection reason_code)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "app_id" text;  -- 0310 (the app's public_id whose key filed this proposal; attribution only, no FK)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "api_key_id" uuid;  -- 0346 (the api_keys.id the filing request authenticated with; attribution only, no FK)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "comments" jsonb DEFAULT '[]';
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
@@ -5143,6 +5152,87 @@ CREATE INDEX IF NOT EXISTS "oauth_refresh_tokens_app_idx"
   ON "oauth_refresh_tokens" ("app_id");
 CREATE INDEX IF NOT EXISTS "oauth_refresh_tokens_family_idx"
   ON "oauth_refresh_tokens" ("family_id");
+
+-- 0340: signed-in devices of the Synap apps (mirrors 0340_person_devices.sql):
+-- a device (one refresh family), its sha256-only access tokens, and a refresh
+-- token owned by EXACTLY one of a pod app connection or a device.
+CREATE TABLE IF NOT EXISTS "person_devices" (
+  "id"             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"        text NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+  "client_id"      text NOT NULL,
+  "label"          text,
+  "user_agent"     text,
+  "created_at"     timestamp with time zone NOT NULL DEFAULT now(),
+  "last_used_at"   timestamp with time zone,
+  "expires_at"     timestamp with time zone NOT NULL,
+  "revoked_at"     timestamp with time zone,
+  "revoked_reason" text,
+  "auth_time"      timestamp with time zone
+);
+
+-- When the person last really AUTHENTICATED for this device (a password,
+-- passkey or Cloud login at /authorize; a step-up refreshes it, a token
+-- refresh never does). Credential doors accept a device only within minutes
+-- of it. ADD COLUMN too, for a pod that ran an earlier draft of this file.
+ALTER TABLE "person_devices" ADD COLUMN IF NOT EXISTS "auth_time" timestamp with time zone;
+
+-- A person's devices (the devices list, revoke-all).
+CREATE INDEX IF NOT EXISTS "person_devices_user_idx"
+  ON "person_devices" ("user_id");
+
+CREATE TABLE IF NOT EXISTS "person_device_tokens" (
+  "id"         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "token_hash" text NOT NULL,
+  "device_id"  uuid NOT NULL REFERENCES "person_devices"("id") ON DELETE CASCADE,
+  "expires_at" timestamp with time zone NOT NULL,
+  "created_at" timestamp with time zone NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "person_device_tokens_token_hash_uidx"
+  ON "person_device_tokens" ("token_hash");
+CREATE INDEX IF NOT EXISTS "person_device_tokens_device_idx"
+  ON "person_device_tokens" ("device_id");
+
+ALTER TABLE "oauth_refresh_tokens" ALTER COLUMN "app_id" DROP NOT NULL;
+ALTER TABLE "oauth_refresh_tokens"
+  ADD COLUMN IF NOT EXISTS "device_id" uuid
+  REFERENCES "person_devices"("id") ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS "oauth_refresh_tokens_device_idx"
+  ON "oauth_refresh_tokens" ("device_id");
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'oauth_refresh_tokens_one_owner_chk'
+  ) THEN
+    ALTER TABLE "oauth_refresh_tokens"
+      ADD CONSTRAINT "oauth_refresh_tokens_one_owner_chk"
+      CHECK (("app_id" IS NULL) <> ("device_id" IS NULL));
+  END IF;
+END $$;
+
+-- 0342: session runners — who is attached to a session right now (one row per
+-- session × client conversation holding its change-feed wait). Telemetry,
+-- stamped by the wait at most once a minute; never on focus_sessions (0277's
+-- trigger would wake the waiter). Mirrors 0342_session_runners.sql.
+CREATE TABLE IF NOT EXISTS "session_runners" (
+  "session_id"      uuid        NOT NULL REFERENCES "focus_sessions"("id") ON DELETE CASCADE,
+  "client_key"      text        NOT NULL,
+  "user_id"         text        NOT NULL,
+  "agent_user_id"   text,
+  "api_key_id"      uuid,
+  "harness"         text        NOT NULL,
+  "conversation_id" text        NOT NULL,
+  "cwd"             text,
+  "machine_user_id" text,
+  "first_seen_at"   timestamptz NOT NULL DEFAULT now(),
+  "last_seen_at"    timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("session_id", "client_key")
+);
+
+CREATE INDEX IF NOT EXISTS "idx_session_runners_session_seen"
+  ON "session_runners" ("session_id", "last_seen_at");
 
 -- 0348: the space a POD-WIDE entity was filed for (mirrors
 -- 0348_entities_home_workspace.sql). Set only on a pod-wide row (CHECK); the

@@ -46,6 +46,7 @@ import {
 import type { FocusSession, SQL } from "@synap/database";
 import { notExists, type AnyColumn } from "drizzle-orm";
 import { emitSideEffects } from "@synap/events";
+import { createLogger } from "@synap-core/core";
 import { logEvent } from "../../lib/event-helpers.js";
 import { completeFocusSession } from "./complete-session.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
@@ -58,6 +59,8 @@ import {
   FOCUS_SESSION_TRIAGE_DISCARD_ACTION,
   FOCUS_SESSION_TRIAGE_DISCARDED_EVENT_TYPE,
 } from "./lifecycle-events.js";
+
+const logger = createLogger({ module: "focus-sessions/triage" });
 
 /** The origins whose sessions land in triage — nobody triages their own work. */
 const TRIAGE_ORIGINS = ["agent", "automation"] as const;
@@ -177,7 +180,17 @@ export interface TriageDecisionInput {
 }
 
 export type TriageDecisionResult =
-  | { ok: true; session: FocusSession }
+  | {
+      ok: true;
+      session: FocusSession;
+      /**
+       * The run an agent started and HELD on this draft (B6), as accepting it
+       * left it: `started` (dispatched now), `failed` (the draft is accepted
+       * but its run could not be started — see the log), or absent when the
+       * draft held no run.
+       */
+      heldRun?: { status: "started"; runId: string } | { status: "failed" };
+    }
   | { ok: false; reason: "not_found" | "not_pending" };
 
 /** Load with the owner floor. `focus_sessions` is owner-private. */
@@ -251,7 +264,34 @@ export async function acceptFromTriage(
     data,
   });
 
-  return { ok: true, session: updated as FocusSession };
+  // B6: an agent-started run waits, HELD, for exactly this acceptance — it
+  // starts now, through the run's own dispatch path. Only the caller whose
+  // stamp landed reaches here, and the start claims the hold, so it runs
+  // once. Dynamic import: run-playbook's graph reaches back into this file.
+  const heldRun = await startHeldRunOn(updated.id);
+  return {
+    ok: true,
+    session: updated as FocusSession,
+    ...(heldRun ? { heldRun } : {}),
+  };
+}
+
+async function startHeldRunOn(
+  sessionId: string
+): Promise<{ status: "started"; runId: string } | { status: "failed" } | null> {
+  try {
+    const { startHeldRun } = await import("../playbooks/run-playbook.js");
+    const out = await startHeldRun(sessionId);
+    return out.status === "started"
+      ? { status: "started", runId: out.run.id }
+      : null;
+  } catch (err) {
+    logger.error(
+      { err, sessionId },
+      "triage accept: the held run could not be started (the draft is accepted)"
+    );
+    return { status: "failed" };
+  }
 }
 
 export type TriageDiscardResult =

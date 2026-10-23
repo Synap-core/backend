@@ -20,7 +20,12 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { router, protectedProcedure, podAdminProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  podAdminProcedure,
+  credentialProcedure,
+} from "../trpc.js";
 import { auditLog } from "../utils/audit-log.js";
 import { assertSignedInPerson } from "../utils/signed-in-person.js";
 import { isPodAdmin } from "../utils/workspace-role.js";
@@ -51,7 +56,7 @@ export const machinesRouter = router({
    */
   adminList: podAdminProcedure.query(() => listAllMachines()),
 
-  rename: protectedProcedure
+  rename: credentialProcedure
     .input(
       z.object({
         machineId: MachineIdShape,
@@ -79,7 +84,7 @@ export const machinesRouter = router({
     }),
 
   /** The computer's own key lifetime; `null` = follow the pod default. */
-  setKeyTtl: protectedProcedure
+  setKeyTtl: credentialProcedure
     .input(
       z.object({
         machineId: MachineIdShape,
@@ -111,7 +116,7 @@ export const machinesRouter = router({
    * computer and its agents stay listed with their history; `synap init` on
    * that machine can connect it again (the device flow offers to reuse it).
    */
-  revoke: protectedProcedure
+  revoke: credentialProcedure
     .input(z.object({ machineId: MachineIdShape }))
     .mutation(async ({ ctx, input }) => {
       assertSignedInPerson(ctx, MANAGE_COMPUTER_SIGNED_IN);

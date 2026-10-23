@@ -22,6 +22,7 @@
  */
 
 import { TERMINAL_SESSION_STATUSES } from "../focus-sessions/statuses.js";
+import type { LifecycleCategory } from "../lifecycle/option.js";
 import {
   resolveObjectNoun,
   resolveObjectNounPlural,
@@ -222,6 +223,12 @@ export interface LandedDecision {
   changeCount: number | null;
 }
 
+/** A produced object's lifecycle status: the option key and its category. */
+export interface LandedObjectStatus {
+  key: string;
+  category: LifecycleCategory;
+}
+
 export interface LandedObjectRow {
   /**
    * Stable row key: `<sessionId>|<kind>:<refId>` for a produced object (the
@@ -238,6 +245,13 @@ export interface LandedObjectRow {
   ref: LandedObjectRef;
   /** An `entity` row's kind ("Person", "Company"), when known. */
   entityProfile?: LandedEntityProfile;
+  /**
+   * Where the object stands NOW in its kind's lifecycle — the entity's
+   * `status` + `status_category` columns (the truth the `moveStatus` door
+   * writes). Absent ⇒ its kind declares no lifecycle, it is not an entity, or
+   * an older pod: never "no status".
+   */
+  status?: LandedObjectStatus;
   /** When it landed — or, for `pending`, when it was proposed (ISO). */
   createdAt: string;
   actor: LandedActor;

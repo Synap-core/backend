@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { twinsShownOnCard } from "../../../services/duplicates/find-duplicate-candidates.js";
 import {
   db,
   proposals,
@@ -128,7 +129,7 @@ export async function applyApprovedEntityPatch(args: {
   proposalId: string;
   proposalWorkspaceId: string | null;
   entityId: string;
-  /** The stored patch: title / description / properties / deleteProperties / profileSlug / expectedStatus / sourceFile. */
+  /** The stored patch: title / description / properties / deleteProperties / profileSlug / expectedStatus / documentId / replaceBody / sourceFile. */
   patch: Record<string, unknown>;
   propertyDecisions?: PropertyDecisionMap;
 }) {
@@ -180,6 +181,16 @@ export async function applyApprovedEntityPatch(args: {
     ...(innerData.expectedStatus !== undefined
       ? { expectedStatus: innerData.expectedStatus as string | null }
       : {}),
+    // The body attach the proposal carried (decision B9g). Dropping it here
+    // approved the proposal and attached nothing. `replaceBody` rides with it:
+    // the body guard in `entities.update` refuses a replacement without it.
+    // The undo stamp below reads the link before and after, so the previous
+    // body is put back on Undo.
+    ...(typeof innerData.documentId === "string" ||
+    innerData.documentId === null
+      ? { documentId: innerData.documentId as string | null }
+      : {}),
+    ...(innerData.replaceBody === true ? { replaceBody: true } : {}),
     source: "system",
   });
 
@@ -381,9 +392,10 @@ export function registerEntityExecutors(): void {
       // I3 pin: when entityHome is set, pass it as rung-1 `targetWorkspaceId`
       // so create does not re-derive from ambient. Null home → no pin (pod).
       //
-      // Weak same-name matches are NOT an auto-merge. `separate` is the only
-      // forceCreate bypass; the other verbs update or link `existingEntityId`
-      // and must not create a second row.
+      // Weak same-name matches are NOT an auto-merge. The REVIEWER owns the
+      // twin (B2b): no verb ⇒ `ask_reviewer` (a twin record refuses with its
+      // candidates, so the card asks); `separate` ⇒ `keep_both`; the other
+      // verbs update or link `existingEntityId` and must not create a row.
       const resolution = input.identityResolution;
       const ports = entityIdentityPorts(entityCaller);
       const decision = resolution
@@ -408,7 +420,7 @@ export function registerEntityExecutors(): void {
         : null;
       let identity: IdentityReceipt | undefined;
       let createdEntity: { id?: string; deduplicated?: boolean };
-      if (!decision || decision.forceCreate) {
+      if (!decision || decision.keepBoth) {
         createdEntity = (await entityCaller.create({
           proposedEntityId: storedEntityId,
           profileSlug,
@@ -424,9 +436,16 @@ export function registerEntityExecutors(): void {
           ...(entityHome ? { targetWorkspaceId: entityHome } : {}),
           ...(replayHome ? { homeWorkspaceId: replayHome } : {}),
           source: "system",
-          ...(decision?.forceCreate ? { forceCreate: true } : {}),
+          approvalDuplicate: decision?.keepBoth ? "keep_both" : "ask_reviewer",
+          // No verb: keep both for the twins the card showed; an unseen twin
+          // still refuses so the card asks (the composite's rule, BLOCKER-2).
+          ...(!decision
+            ? {
+                approvalReviewedTwinIds: twinsShownOnCard(proposal.data).single,
+              }
+            : {}),
         })) as { id?: string; deduplicated?: boolean };
-        if (decision?.forceCreate && createdEntity.id) {
+        if (decision?.keepBoth && createdEntity.id) {
           identity = { verb: "separate", entityId: createdEntity.id };
         }
       } else {
@@ -491,7 +510,7 @@ export function registerEntityExecutors(): void {
       // ours to own. A merge onto a DIFFERENT id is a pre-existing entity.
       // keep/fill/use linked a row this proposal did not create — even when the
       // pre-minted id happens to equal that row, revert must not delete it.
-      const linkedByResolution = !!decision && !decision.forceCreate;
+      const linkedByResolution = !!decision && !decision.keepBoth;
       const mergedOntoExisting =
         linkedByResolution ||
         (createdEntity?.deduplicated === true &&

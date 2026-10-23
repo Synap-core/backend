@@ -497,6 +497,8 @@ export function registerCapabilityExecutors(): void {
   // automation name+workspace) — re-approving a stale proposal converges.
   registerProposalExecutor({
     key: "capability.install",
+    // Approving may write a secret grant: never from a stale device session.
+    widensCredential: true,
     async execute({ proposal, payload, userId, input, deps }) {
       const data = (proposal.data ?? {}) as Record<string, unknown>;
       const slug = data.slug as string | undefined;

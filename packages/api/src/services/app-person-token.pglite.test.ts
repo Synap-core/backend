@@ -553,7 +553,7 @@ describe("a registered, approved app signs the owner in", () => {
       appName: "Studio",
       headline: "Studio will act as you in: Sales, Finance.",
       cannot:
-        "It cannot delete, manage keys, approve outside these spaces, or see other spaces.",
+        "It cannot delete, manage keys, approve outside these spaces, or see anything outside what a member of these spaces sees.",
       expiresInDays: 30,
     });
     const sales = ctx.appSignIn!.spaces.find((s) => s.workspaceId === SALES)!;
@@ -986,12 +986,17 @@ describe("H1 — who may sign in to an app (owner, or anyone when the owner is a
     ]);
     await repo.setRedirectUris(own.id, [CALLBACK]);
     const p = params({ clientId: own.publicId });
-    await expect(getOAuthConsentContext(p, OWNER)).rejects.toThrow(
-      /only that member can sign in/
-    );
+    // A refusal of WHO decides: FORBIDDEN, with the reason to show.
+    await expect(getOAuthConsentContext(p, OWNER)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/only that member can sign in/),
+    });
     await expect(
       decideOAuthAuthorization({ ...p, approve: true }, OWNER)
-    ).rejects.toThrow(/only that member can sign in/);
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/only that member can sign in/),
+    });
     // Its owner signs in, and the screen says who registered it.
     const mine = await getOAuthConsentContext(p, MEMBER);
     expect(mine.appSignIn?.registeredBy).toBe("member@x");

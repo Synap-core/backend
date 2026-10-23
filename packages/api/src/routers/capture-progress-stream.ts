@@ -6,7 +6,7 @@
  * client's own abort of the mutation). The client opens it BEFORE calling the
  * mutation with the same `captureRunId`.
  *
- * Auth: the same session `authMiddleware` as `/api/chat`. The run is keyed by
+ * Auth: the same session `appSessionMiddleware` as `/api/chat`. The run is keyed by
  * the AUTHENTICATED user id — another user's run id reads as an empty run.
  *
  * Wire format (SSE, `text/event-stream`):
@@ -19,7 +19,7 @@
  */
 import { Hono } from "hono";
 import { z } from "zod";
-import { authMiddleware } from "@synap/auth";
+import { appSessionMiddleware } from "../middleware/app-session.js";
 import { refuseGuestSession } from "../access/guest-containment.js";
 import type { StructureProgressEvent } from "@synap-core/types/capture";
 import {
@@ -39,7 +39,7 @@ export const captureProgressStreamApp = new Hono<{
   Variables: ProgressVariables;
 }>();
 
-captureProgressStreamApp.use("*", authMiddleware);
+captureProgressStreamApp.use("*", appSessionMiddleware());
 captureProgressStreamApp.use("*", refuseGuestSession);
 
 export function encodeStructureProgressFrame(

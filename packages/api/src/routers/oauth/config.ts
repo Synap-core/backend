@@ -12,8 +12,13 @@ import {
   type TrustedIssuer,
 } from "@synap/database";
 import { isValidScope, type ApiKeyScope } from "@synap/database/schema";
+import { resolveFirstPartyClientName } from "@synap-core/types/vocabulary";
 
-import { canonicalizeIssuerUrl } from "./protocol.js";
+import {
+  canonicalizeIssuerUrl,
+  type FirstPartyRedirectRule,
+} from "./protocol.js";
+import type { StoredClient } from "./store.js";
 
 /**
  * Agent type for a grant to any client OTHER than this pod's approved Control
@@ -99,15 +104,107 @@ export const SYNAP_APP_IDS = [
   "content-studio",
 ] as const;
 
-/** Is this CIMD client_id a Synap app (exact-origin match, https only)? */
+/**
+ * Is this CIMD client_id a Synap app (exact-origin match, https only, no
+ * credentials)? Being one is a PRIVILEGE, not only a label: a Synap app's
+ * token is held by the person who signs in (`podAppActsAs`), so a lookalike
+ * host (`content-studio.synap.live.evil.com`), another scheme or port, or a
+ * `user@` prefix the origin would drop never qualifies.
+ */
 export function isSynapApp(clientId: string): boolean {
-  let origin: string;
+  let url: URL;
   try {
-    origin = new URL(clientId).origin;
+    url = new URL(clientId);
   } catch {
     return false;
   }
-  return SYNAP_APP_IDS.some((id) => origin === `https://${id}.synap.live`);
+  if (url.username || url.password) return false;
+  return SYNAP_APP_IDS.some((id) => url.origin === `https://${id}.synap.live`);
+}
+
+/**
+ * Who a pod app's (CIMD client's) access token acts as — the `synap_acts_as`
+ * of its /token answer (spec 17 §6.6 extension, founder decision 2026-10-22):
+ *  - `"person"`: a Synap app (`isSynapApp`). The token is HELD BY THE PERSON
+ *    who consented (`app_person`, services/app-person-token.ts): their own
+ *    clicks in the app write as them, directly, within what they consented to.
+ *  - `"agent"`: every other app. The token is held by the app's OWN agent,
+ *    posture ask-first: its writes become proposals the person reviews.
+ */
+export type PodAppActsAs = "person" | "agent";
+
+export function podAppActsAs(clientId: string): PodAppActsAs {
+  return isSynapApp(clientId) ? "person" : "agent";
+}
+
+/**
+ * The FIRST-PARTY native clients: the Synap apps, declared HERE and
+ * shipped with every pod release — never a DCR row, never a database row, so
+ * every pod knows them with no registration. Closed: a `client_id` not in this
+ * table is never first-party, whatever it looks like.
+ *
+ * Their code mints a PERSON DEVICE token (1 h) and a rotating refresh token
+ * (30-day idle, 180-day absolute cap), one family per signed-in device
+ * (`services/person-device-token.ts`, the one mint door).
+ *
+ * Consent is ALWAYS a one-click confirm, never silent: a loopback
+ * redirect cannot prove which program is listening (RFC 8252 §8.6), and the
+ * Relay claimed-https link is not live yet. Names come from the vocabulary
+ * door (`resolveFirstPartyClientName`), never from this table.
+ */
+export const FIRST_PARTY_CLIENTS = {
+  "synap-desktop": {
+    redirects: [{ kind: "loopback", path: "/oauth/callback" }],
+  },
+  "synap-relay": {
+    redirects: [
+      { kind: "claimed-https", uri: "https://synap.live/app/oauth/callback" },
+      { kind: "private-scheme", uri: "live.synap.relay:/oauth/callback" },
+    ],
+  },
+} as const satisfies Record<
+  string,
+  { redirects: readonly FirstPartyRedirectRule[] }
+>;
+
+export type FirstPartyClientId = keyof typeof FIRST_PARTY_CLIENTS;
+
+export const FIRST_PARTY_CLIENT_IDS = Object.keys(
+  FIRST_PARTY_CLIENTS
+) as FirstPartyClientId[];
+
+/** Is this client_id one of the Synap apps? Exact, own-property lookup. */
+export function isFirstPartyClientId(
+  clientId: string | null | undefined
+): clientId is FirstPartyClientId {
+  return (
+    typeof clientId === "string" &&
+    Object.prototype.hasOwnProperty.call(FIRST_PARTY_CLIENTS, clientId)
+  );
+}
+
+/**
+ * A first-party client as every AS door sees a client: resolved from the code
+ * registry, never from `oauth_clients` (which DCR writes) — so a
+ * self-registered client can never become one, and no row can change one.
+ * Its name comes from the vocabulary door; it lists no redirect URIs, only
+ * rules (`clientAcceptsRedirect`). Null for any other client_id.
+ */
+export function resolveFirstPartyClient(
+  clientId: string | null | undefined
+): StoredClient | null {
+  if (!isFirstPartyClientId(clientId)) return null;
+  return {
+    clientId,
+    clientKind: "first_party",
+    clientName: resolveFirstPartyClientName(clientId),
+    redirectUris: [],
+    firstPartyRedirects: FIRST_PARTY_CLIENTS[clientId].redirects,
+    scopes: [],
+    requestedPermissions: [],
+    // Shipped with the pod, never registered: no registration date to show.
+    createdAt: new Date(0),
+  };
 }
 
 /**

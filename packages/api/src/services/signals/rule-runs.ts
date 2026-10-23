@@ -9,7 +9,7 @@
  * live-session row and is excluded upstream (one unit of work, one row).
  *
  * THE FOLD. One row per RULE per window, never one per run: 300 runs of one
- * rule are ONE row "×300", grouped under `rule:<automationId>` so a surface
+ * rule are ONE row ("ran 300 times"), grouped under `rule:<automationId>` so a surface
  * draws repeats as a count. A failure inside the window marks the row failed
  * (silence is expensive: a failed run outranks the healthy ones beside it) and
  * says how many failed; the row's door is the rule.
