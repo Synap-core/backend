@@ -1,5 +1,5 @@
 /**
- * Hub REST — WHO IS ON A GOAL (`track_participants`, 0346, work model W3).
+ * Hub REST — WHO IS ON A GOAL (`track_participants`, 0348, work model W3).
  *
  *   POST   /tracks/:id/participants          { principalId, role, commitment? }
  *                                            — add a judge, a delegate or an

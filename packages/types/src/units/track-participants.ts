@@ -5,7 +5,7 @@
  * named, the owner judges), any number of DELEGATES (people or AIs), each with
  * a COMMITMENT they accept, counter or decline and may later report
  * impossible, and an optional INTEGRATOR. Stored in `track_participants`
- * (0346); `@synap/database` mirrors the three sets below and the pod's
+ * (0348); `@synap/database` mirrors the three sets below and the pod's
  * participants service pins the mirror equal at compile time.
  *
  * Two rules every surface and every authority check reads from here:
@@ -154,7 +154,7 @@ type RoleRow = Pick<TrackParticipant, "role" | "principalId">;
 
 /**
  * The goal's OWNER — its owner row; a goal with no stored owner row (none can
- * exist after 0346's backfill and `startTrack`) reads its starter, which is
+ * exist after 0348's backfill and `startTrack`) reads its starter, which is
  * the rule the backfill applied.
  */
 export function goalOwner(

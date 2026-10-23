@@ -139,6 +139,12 @@ export interface UpdateFocusSessionParams {
    */
   completeOutput?: string;
   /**
+   * WITHDRAW one deliverable, named by its LABEL (exact) or KEY: it is stamped
+   * retired (`withdrawn`) and stops being owed — never deleted. The explicit
+   * removal verb: an agent's `expectedOutputs` list adds and updates only.
+   */
+  retireOutput?: string;
+  /**
    * APPEND one agent to the session roster. Mirrors `addOutput`: incremental
    * and idempotent, as against the wholesale `agentIds` assignment the tRPC and
    * Hub PATCH doors expose. Applied through the ONE append door,
@@ -217,7 +223,12 @@ export interface UpdateFocusSessionParams {
 
 export type UpdateFocusSessionResult =
   | { status: "not_found" }
-  | { status: "denied"; reason: string }
+  | {
+      status: "denied";
+      reason: string;
+      /** A filing the pod applied on its own receipt before the rest was refused. */
+      filing?: SessionFilingDecision;
+    }
   | {
       status: "proposed";
       proposalId: string;
@@ -245,6 +256,8 @@ export type UpdateFocusSessionResult =
        * moves on believing the work is delivered.
        */
       completeOutput?: CompleteOutputOutcome;
+      /** What the patch's `retireOutput` did — present only when it carried one. */
+      retireOutput?: RetireOutputOutcome;
       /**
        * Standing guidelines for any slot this patch newly handed to the human
        * (`block-guidelines.ts`). Absent when nothing was blocked or nothing
@@ -709,14 +722,24 @@ void _serverStampedCoverage;
  *
  * Matching uses `normalizeExpectedLabel`, the same trim+casefold every other
  * slot lookup uses (delegation, return, satisfy). A label the stored array does
- * not carry is a NEW slot and lands verbatim; a stored slot the incoming array
- * omits is DELETED — that is the existing, deliberate semantic of a wholesale
- * assignment, and the merge does not change it.
+ * not carry is a NEW slot and lands verbatim.
+ *
+ * A stored slot the incoming array omits is DELETED — the semantic of a
+ * wholesale assignment by a PERSON (the browser board edits the list it shows).
+ * An AGENT's list is add-or-update only (`keepUnlisted`, C6 2026-10-21): an
+ * agent filed `expectedOutputs: []` beside a rename and, on approval, every
+ * declared deliverable of the session was gone (live, session 9dc5da0c). The
+ * same upsert-by-key the `outcomes` declaration does ({@link keepUnlistedSlots});
+ * withdrawing a slot is its own verb, `retireOutput`.
  */
 export function mergeExpectedOutputs(
   current: OutputItem[],
-  incoming: OutputItem[]
+  rawIncoming: OutputItem[],
+  opts: { keepUnlisted?: boolean } = {}
 ): OutputItem[] {
+  const incoming = opts.keepUnlisted
+    ? keepUnlistedSlots(current, rawIncoming)
+    : rawIncoming;
   const violations = detectServerStampedWrites(current, incoming);
   if (violations.length > 0) {
     throw serverStampedWriteError(violations);
@@ -823,6 +846,31 @@ const logger = createLogger({ module: "update-session" });
 const SERVER_STAMPED_FIELD_SET: ReadonlySet<string> = new Set(
   SERVER_STAMPED_OUTPUT_FIELDS
 );
+
+/**
+ * An AGENT's wholesale list as an UPSERT: every stored slot stays, in its
+ * place, unless the list names it (then the listed item stands there); a
+ * listed slot the store does not carry is appended. Matched by the ONE matcher
+ * (`storedTwins` — key, then casefolded label), the same identity the merge and
+ * the `outcomes` upsert (`findSlotIndex`) use. The result then goes through the
+ * ordinary merge, which carries every receipt — so nothing is deleted and
+ * nothing is forged. Pure; exported so the door can show the reviewer the list
+ * as it will land.
+ */
+export function keepUnlistedSlots(
+  current: OutputItem[],
+  incoming: OutputItem[]
+): OutputItem[] {
+  const { twinOf } = storedTwins(current);
+  const placed = new Map<OutputItem, OutputItem>();
+  const added: OutputItem[] = [];
+  for (const item of incoming) {
+    const prior = twinOf(item);
+    if (prior && !placed.has(prior)) placed.set(prior, item);
+    else added.push(item);
+  }
+  return [...current.map((slot) => placed.get(slot) ?? slot), ...added];
+}
 
 /**
  * The stored twin of an incoming slot — by KEY first (stored or derived, the
@@ -1161,6 +1209,8 @@ export interface OutputMutationResult {
   outputs: OutputItem[];
   /** Present only when the patch carried a `completeOutput`. */
   completeOutput?: CompleteOutputOutcome;
+  /** Present only when the patch carried a `retireOutput`. */
+  retireOutput?: RetireOutputOutcome;
 }
 
 /**
@@ -1220,13 +1270,21 @@ export function applyOutputMutations(
     expectedOutputs?: OutputItem[];
     addOutput?: UpdateFocusSessionParams["addOutput"];
     completeOutput?: string;
-  }
+    retireOutput?: string;
+  },
+  /**
+   * `keepUnlisted`: the patch is an AGENT's — its `expectedOutputs` list adds
+   * and updates, never deletes ({@link mergeExpectedOutputs}). Both callers
+   * decide it from WHO wrote the patch: the direct door from its
+   * `agentUserId`, the approval executor from the proposal's.
+   */
+  opts: { keepUnlisted?: boolean } = {}
 ): OutputMutationResult {
   // Wholesale replace goes through the ONE merge, so a client that sends back
   // the four fields it knows about cannot erase a delegation, a return note or
   // an approval's lineage.
   let next: OutputItem[] = patch.expectedOutputs
-    ? mergeExpectedOutputs(current, patch.expectedOutputs)
+    ? mergeExpectedOutputs(current, patch.expectedOutputs, opts)
     : current;
 
   if (patch.addOutput) {
@@ -1282,9 +1340,94 @@ export function applyOutputMutations(
     completeOutput = describeCompleteOutput(label, completed, refused);
   }
 
+  // WITHDRAW a slot — the explicit verb an agent's upsert-only list leaves for
+  // removal. Never deleted: stamped retired (`withdrawn`), so the slot stops
+  // being owed by anyone and the record of having declared it stays. A slot
+  // already DONE is a delivery receipt and is not withdrawn.
+  let retireOutput: RetireOutputOutcome | undefined;
+  if (typeof patch.retireOutput === "string") {
+    const label = patch.retireOutput;
+    const keys = deriveSlotKeys(next);
+    const now = new Date().toISOString();
+    let retired = 0;
+    let refusedDone = 0;
+    next = next.map((o, i) => {
+      if (o.label !== label && keys[i] !== label) return o;
+      if (o.status === "done") {
+        refusedDone += 1;
+        return o;
+      }
+      retired += 1;
+      if (o.retiredAt != null) return o;
+      return { ...o, retiredAt: now, retiredReason: SLOT_WITHDRAWN_REASON };
+    });
+    retireOutput = describeRetireOutput(label, retired, refusedDone);
+  }
+
   return {
     outputs: carrySlotKeys(current, next),
     ...(completeOutput ? { completeOutput } : {}),
+    ...(retireOutput ? { retireOutput } : {}),
+  };
+}
+
+/**
+ * Does `retireOutput: label` name a slot handed to the PERSON (`owner:
+ * "human"`, not yet done)? Matched exactly like {@link applyOutputMutations}
+ * (label, else slot key). Such a slot is the person's gate: an agent may only
+ * PROPOSE withdrawing it (FB1020 w2 review M6), the person decides.
+ */
+export function retireTargetsHumanSlot(
+  current: OutputItem[],
+  label: string
+): boolean {
+  const keys = deriveSlotKeys(current);
+  return current.some(
+    (o, i) =>
+      (o.label === label || keys[i] === label) &&
+      o.owner === "human" &&
+      o.status !== "done" &&
+      o.retiredAt == null
+  );
+}
+
+/** The retired reason the `retireOutput` verb stamps. */
+export const SLOT_WITHDRAWN_REASON =
+  "withdrawn" as const satisfies (typeof OUTPUT_RETIRED_REASONS)[number];
+
+/** What a `retireOutput` did — the same tellable-apart shape as `completeOutput`. */
+export type RetireOutputOutcome = {
+  /** The label (or slot key) the caller asked to withdraw, verbatim. */
+  label: string;
+  /** Matching slots now retired (already-retired ones count, idempotent). */
+  retired: number;
+  /** Matching slots NOT withdrawn because they were already delivered. */
+  refusedDone: number;
+  result: "retired" | "refused" | "no_match";
+  message?: string;
+};
+
+export function describeRetireOutput(
+  label: string,
+  retired: number,
+  refusedDone: number
+): RetireOutputOutcome {
+  if (retired > 0) return { label, retired, refusedDone, result: "retired" };
+  if (refusedDone > 0) {
+    return {
+      label,
+      retired,
+      refusedDone,
+      result: "refused",
+      message: `"${label}" is already delivered (done), so it was not withdrawn. Nothing was changed.`,
+    };
+  }
+  return {
+    label,
+    retired,
+    refusedDone,
+    result: "no_match",
+    message: `No deliverable is labelled exactly "${label}" (or has that key). Nothing was changed. List the session's deliverables and resend the exact label or key.`,
   };
 }
 
@@ -1406,6 +1549,13 @@ export async function updateFocusSession(
         reason: serverStampedWriteError(violations).message,
       };
     }
+    // An AGENT's list is add-or-update (C6). It travels AS SENT: the locked
+    // write and the executor on approval apply that upsert against the row as
+    // it is THEN, and the review shows the list as it would land
+    // (`session-before.ts`). Expanding it here froze copies of the stored
+    // slots into the proposal — their server stamps then refused the
+    // approval once a slot moved on, and a slot the person deleted meanwhile
+    // came back (FB1020 w2 review M5).
   }
 
   // VISIBILITY FLOOR for the refs this patch declares, and BEFORE the membrane
@@ -1639,69 +1789,129 @@ export async function updateFocusSession(
   // is named by the display-only `sessionName` (`session-update-goal.ts`).
   const { checkPermissionOrPropose } =
     await import("../../utils/permission-check.js");
-  const perm = await checkPermissionOrPropose({
-    userId,
-    agentUserId,
-    workspaceId: existing.workspaceId ?? undefined,
-    subjectType: "focus_session",
-    action: "update",
-    source: "intelligence",
-    data: {
-      id: sessionId,
-      ...sessionGoalPayload(existing, params.goal),
-      ...(params.title !== undefined ? { title: params.title } : {}),
-      ...(params.status !== undefined ? { status: params.status } : {}),
-      ...(params.progress !== undefined ? { progress: params.progress } : {}),
-      ...(params.currentStage !== undefined
-        ? { currentStage: params.currentStage }
-        : {}),
-      ...(params.expectedOutputs !== undefined
-        ? { expectedOutputs: params.expectedOutputs }
-        : {}),
-      ...(params.addOutput !== undefined
-        ? { addOutput: params.addOutput }
-        : {}),
-      ...(params.completeOutput !== undefined
-        ? { completeOutput: params.completeOutput }
-        : {}),
-      // Carried so the PROPOSED path is not a silent no-op: the
-      // `focus_session/update` executor re-applies it through the same append
-      // door on approval.
-      ...(params.addAgentId !== undefined
-        ? { addAgentId: params.addAgentId }
-        : {}),
-      // Carried for the same reason as `addAgentId`: without it on the proposal
-      // the PROPOSED path is a silent no-op — the human approves "re-point the
-      // subject" and the executor has no subject to point at.
-      ...(params.subjectEntityId !== undefined
-        ? { subjectEntityId: params.subjectEntityId }
-        : {}),
-      ...(criteriaChange ? { criteria: params.criteria } : {}),
-      // A PERSON's filing (an agent's took its own door above, or was
-      // granted there) — the fields and their display-only names.
-      ...sessionFilingFields({
-        ...filingPatch,
-        projectId: params.projectId,
-        workspaceId: params.workspaceId,
-        trackFiling,
-      }),
-      // Carried for the same reason as `addAgentId` and `subjectEntityId`: the
-      // `focus_session/update` executor re-applies it on approval, so the
-      // PROPOSED path is not a silent no-op. `null` is the RELEASE and must
-      // survive the payload, hence the `!== undefined` test.
-      ...(params.followPlaybookId !== undefined
-        ? { followPlaybookId: params.followPlaybookId }
-        : {}),
-      ...(params.followStageKey !== undefined
-        ? { followStageKey: params.followStageKey }
-        : {}),
-      // Same reason: without this the answers land on the direct path and
-      // vanish on the approved one.
-      ...(params.params !== undefined ? { params: params.params } : {}),
-    },
-  });
+  // FB1020 B3: an agent's filing the pod applied directly (its own fresh
+  // session, into the project the person named) has its OWN receipt. When the
+  // patch asked for nothing else, that receipt governs the write — no second,
+  // empty receipt beside it; otherwise the rest takes its ordinary decision.
+  const filingReceiptId =
+    filing?.status === "granted" ? filing.receiptId : undefined;
+  const filingAlone =
+    !!filingReceiptId &&
+    !patchAsksForMore({ ...params, projectId: undefined }, criteriaChange);
+  // A GRANTED filing beside other fields is applied NOW, on its own receipt,
+  // and leaves the patch: the gate already minted that receipt as applied, so
+  // the rest's own verdict (a criteria change that proposes, a session that
+  // forces proposals, a cap, a join gate, a denial) must not hold it back —
+  // that left a receipt claiming a filing that was never written, with no
+  // Undo (FB1020 w2 review M1). Its Undo restores the project only. The
+  // own-organise class grants a PROJECT filing only (`own-organise.ts`); a
+  // space move or a track filing is never granted with a receipt here.
+  if (filingReceiptId && !filingAlone && params.projectId !== undefined) {
+    const before = await readSessionUndoSnapshot(db, sessionId);
+    const [filed] = await db
+      .update(focusSessions)
+      .set({ projectId: params.projectId, updatedAt: new Date() })
+      .where(eq(focusSessions.id, sessionId))
+      .returning({ projectId: focusSessions.projectId });
+    await stampSessionUpdate({
+      proposalId: filingReceiptId,
+      sessionId,
+      before,
+      after: before
+        ? { ...before, projectId: filed?.projectId ?? null }
+        : undefined,
+    });
+    params = { ...params, projectId: undefined };
+  }
+  // An AGENT withdrawing a slot it handed to the PERSON withdraws the person's
+  // gate (the A3 harm, through the explicit verb): never applied directly, only
+  // proposed — like `completeOutput`, which refuses such a slot outright. The
+  // approval executor applies it once a person said yes.
+  const retiresHumanSlot =
+    !!agentUserId &&
+    typeof params.retireOutput === "string" &&
+    retireTargetsHumanSlot(
+      Array.isArray(existing.expectedOutputs)
+        ? (existing.expectedOutputs as OutputItem[])
+        : [],
+      params.retireOutput
+    );
+  const perm = filingAlone
+    ? ({ granted: true, autoApprovedProposalId: filingReceiptId } as const)
+    : await checkPermissionOrPropose({
+        userId,
+        agentUserId,
+        workspaceId: existing.workspaceId ?? undefined,
+        subjectType: "focus_session",
+        action: "update",
+        source: "intelligence",
+        ...(retiresHumanSlot ? { forcePropose: true } : {}),
+        data: {
+          id: sessionId,
+          ...sessionGoalPayload(existing, params.goal),
+          ...(params.title !== undefined ? { title: params.title } : {}),
+          ...(params.status !== undefined ? { status: params.status } : {}),
+          ...(params.progress !== undefined
+            ? { progress: params.progress }
+            : {}),
+          ...(params.currentStage !== undefined
+            ? { currentStage: params.currentStage }
+            : {}),
+          ...(params.expectedOutputs !== undefined
+            ? { expectedOutputs: params.expectedOutputs }
+            : {}),
+          ...(params.addOutput !== undefined
+            ? { addOutput: params.addOutput }
+            : {}),
+          ...(params.completeOutput !== undefined
+            ? { completeOutput: params.completeOutput }
+            : {}),
+          ...(params.retireOutput !== undefined
+            ? { retireOutput: params.retireOutput }
+            : {}),
+          // Carried so the PROPOSED path is not a silent no-op: the
+          // `focus_session/update` executor re-applies it through the same append
+          // door on approval.
+          ...(params.addAgentId !== undefined
+            ? { addAgentId: params.addAgentId }
+            : {}),
+          // Carried for the same reason as `addAgentId`: without it on the proposal
+          // the PROPOSED path is a silent no-op — the human approves "re-point the
+          // subject" and the executor has no subject to point at.
+          ...(params.subjectEntityId !== undefined
+            ? { subjectEntityId: params.subjectEntityId }
+            : {}),
+          ...(criteriaChange ? { criteria: params.criteria } : {}),
+          // A PERSON's filing (an agent's took its own door above, or was
+          // granted there) — the fields and their display-only names.
+          ...sessionFilingFields({
+            ...filingPatch,
+            projectId: params.projectId,
+            workspaceId: params.workspaceId,
+            trackFiling,
+          }),
+          // Carried for the same reason as `addAgentId` and `subjectEntityId`: the
+          // `focus_session/update` executor re-applies it on approval, so the
+          // PROPOSED path is not a silent no-op. `null` is the RELEASE and must
+          // survive the payload, hence the `!== undefined` test.
+          ...(params.followPlaybookId !== undefined
+            ? { followPlaybookId: params.followPlaybookId }
+            : {}),
+          ...(params.followStageKey !== undefined
+            ? { followStageKey: params.followStageKey }
+            : {}),
+          // Same reason: without this the answers land on the direct path and
+          // vanish on the approved one.
+          ...(params.params !== undefined ? { params: params.params } : {}),
+        },
+      });
   if ("denied" in perm && perm.denied) {
-    return { status: "denied", reason: perm.reason };
+    // A filing granted above has landed: say so beside the refusal.
+    return {
+      status: "denied",
+      reason: perm.reason,
+      ...(filing?.status === "granted" ? { filing } : {}),
+    };
   }
   if ("proposalId" in perm) {
     return {
@@ -1769,11 +1979,13 @@ export async function updateFocusSession(
   const mutatesOutputs =
     params.addOutput !== undefined ||
     typeof params.completeOutput === "string" ||
+    typeof params.retireOutput === "string" ||
     params.expectedOutputs !== undefined;
 
   // Captured out of the transaction so the RETURN can report it — see the
   // `completeOutput` field on UpdateFocusSessionResult.
   let completeOutputOutcome: CompleteOutputOutcome | undefined;
+  let retireOutputOutcome: RetireOutputOutcome | undefined;
   // Diffed against the LOCKED base, so only blocks this patch declared count.
   let blockedByThisPatch: BlockedSlotRef[] = [];
   // The same locked base + result, for the needs-you notification below.
@@ -1785,10 +1997,13 @@ export async function updateFocusSession(
   // change is one undo can restore (`session-undo.ts`); otherwise the receipt
   // stays unstamped and revert says it cannot be undone.
   const receiptId = "granted" in perm ? perm.autoApprovedProposalId : undefined;
+  // An UNCHANGED criteria list (an MCP `outcomes` attach re-sends it) changes
+  // nothing and is not written, so it must not cost the write its Undo.
+  const undoable = isUndoableSessionPatch(
+    criteriaChange ? params : { ...params, criteria: undefined }
+  );
   const undoBefore =
-    receiptId && isUndoableSessionPatch(params)
-      ? await readSessionUndoSnapshot(db, sessionId)
-      : null;
+    receiptId && undoable ? await readSessionUndoSnapshot(db, sessionId) : null;
 
   const [updated] = await db.transaction(async (tx) => {
     if (params.workspaceId !== undefined) {
@@ -1809,13 +2024,20 @@ export async function updateFocusSession(
       const current: OutputItem[] = Array.isArray(locked?.expectedOutputs)
         ? (locked.expectedOutputs as OutputItem[])
         : [];
-      const applied = applyOutputMutations(current, {
-        expectedOutputs: params.expectedOutputs,
-        addOutput: params.addOutput,
-        completeOutput: params.completeOutput,
-      });
+      const applied = applyOutputMutations(
+        current,
+        {
+          expectedOutputs: params.expectedOutputs,
+          addOutput: params.addOutput,
+          completeOutput: params.completeOutput,
+          retireOutput: params.retireOutput,
+        },
+        // An agent's list adds and updates, never deletes (C6).
+        { keepUnlisted: !!agentUserId }
+      );
       set.expectedOutputs = applied.outputs;
       completeOutputOutcome = applied.completeOutput;
+      retireOutputOutcome = applied.retireOutput;
       blockedByThisPatch = newlyBlockedSlots(current, applied.outputs);
       outputsBefore = current;
       outputsAfter = applied.outputs;
@@ -1827,7 +2049,7 @@ export async function updateFocusSession(
       .returning();
   });
   await stampSessionUpdate({
-    proposalId: receiptId,
+    proposalId: receiptId && undoable ? receiptId : undefined,
     sessionId,
     before: undoBefore,
     after: updated,
@@ -2008,6 +2230,7 @@ export async function updateFocusSession(
       ? { ...finalSession, status: gatedStatus }
       : finalSession,
     ...(completeOutputOutcome ? { completeOutput: completeOutputOutcome } : {}),
+    ...(retireOutputOutcome ? { retireOutput: retireOutputOutcome } : {}),
     ...(blockGuidelines ? { blockGuidelines } : {}),
     ...(followOutcome ? { follow: followOutcome } : {}),
     ...(followRefusal ? { followRefusal } : {}),

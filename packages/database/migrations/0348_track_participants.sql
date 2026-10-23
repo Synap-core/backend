@@ -1,4 +1,4 @@
--- 0346 — WHO IS ON A GOAL (work model W3, decision 3, 2026-10-23)
+-- 0348 — WHO IS ON A GOAL (work model W3, decision 3, 2026-10-23)
 --
 -- A goal (a track) has ONE owner — a person — a JUDGE (a person; no judge
 -- row means the owner judges), any number of DELEGATES (people or agents),

@@ -286,6 +286,22 @@ This skill does **not** provision Company OS. That is `system/agent-os/skill` (i
 
 Load: `system/synap/from-intent`.
 
+### Classify first: which layer is this?
+
+Before the first write, name the layer in one word, then take its door. Most requests are not a new area at all, and the wrong layer is how a view gets faked as a note or a capability as a view. On a key that lists the starter tools only, `synap_load_skill` the group in brackets first.
+
+| Layer          | The user wants…                                                        | Door                                                                                                                                                          |
+| -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **data**       | a thing remembered: a company, a note, a decision, a link between two  | `synap_capture` for messy input; `synap_create_entity` (`tools:data`) when the kind and fields are known. Never a note standing in for a view or a session.   |
+| **view**       | to SEE existing things: a list, a grouping, a board, a dashboard       | `synap_list_views` first, so you do not duplicate one; then `synap_create_view` (`tools:build`). Never copy records into a new space to show them.            |
+| **capability** | access beyond the graph: connect Gmail, send mail, search the live web | §2b: `synap_list_capabilities`, then run it or file its install. Never build a view to stand in for a capability.                                             |
+| **session**    | "I'm starting work on X": one bounded piece of work                    | `synap_start_session` with a one-line goal. Not a task.                                                                                                       |
+| **track**      | a lasting goal inside a project: "grow the newsletter"                 | §2c: `synap_list_tracks`, else `synap_start_track` (`tools:tracks`). Not a project, not a pack, not a playbook.                                               |
+| **rule**       | a standing intent: "always…", "from now on…", "every Monday…"          | `synap_create_rule` (`tools:governance`) with the user's own words as `intent`; a trigger→steps reaction is `synap_create_automation` (`tools:capabilities`). |
+| **structure**  | a new area of work that needs kinds, spaces or a project               | the rest of this skill, from §0.                                                                                                                              |
+
+Two layers in one ask ("connect Gmail AND show my mail as a list"): name both and do two steps, capability first. Never fold a capability install into a view.
+
 ### 0. Orient first (firewall)
 
 Before proposing structure:
@@ -592,7 +608,7 @@ What each word means (workspace, project, track, step, work): `concepts` — the
 
 1. `synap lens` — am I scoped where this work belongs?
 2. If unsure what exists → `synap orient` — it returns the **briefing**: pending review, open sessions, the kinds in use, then the projects and workspaces (names + ids), without a data dump. Never guess IDs. Drill into a workspace's profiles or a project's contents only when you actually need them.
-3. **Connect or create:** if the right project / workspace / session doesn't exist yet, create it. A **session is the normal per-task move**. Creating a **workspace (a new operational domain) is a deliberate, expected move as the work grows** — not something to avoid. A **project, though, is a COMMITMENT WITH GRAVITY**: search existing projects first (`synap orient`) and prefer **linking into an existing one** via `belongs_to_project`. Only create a new project for a real initiative that ties work together — never for a task, plan, repo, or theme (those are entities), and **never for the pod owner's own company** (the company _is_ the pod, not a project inside it). An agent-created project must cite **≥5 existing entities** as evidence or the backend rejects it, and near-duplicate names are rejected with the existing candidates.
+3. **Connect or create:** if the right project / workspace / session doesn't exist yet, create it. A **session is the normal per-task move**. Creating a **workspace (a new operational domain) is a deliberate, expected move as the work grows** — not something to avoid. A **project, though, is a COMMITMENT WITH GRAVITY**: search existing projects first (`synap orient`) and prefer **linking into an existing one** via `belongs_to_project`. Only create a new project for a real initiative that ties work together — never for a task, plan, repo, or theme (those are entities), and **never for the pod owner's own company** (the company _is_ the pod, not a project inside it). An agent-created project must cite **≥5 existing entities** as evidence or the backend rejects it, and a near-duplicate name is filed for the person to review, showing the existing project.
 
 **Don't re-orient mid-flow.** Once you've oriented and you're in a run of related writes, keep going — re-check only when you **start a new piece of work** or switch domains. The reflex guards the _start_ of work, not every call.
 
@@ -1000,7 +1016,7 @@ Rules:
 
 - One sentence per field. No padding.
 - `Links` must reference real entity IDs or slugs visible in the current context — not descriptions like "the related project".
-- **"Agent requires proposal for all write operations."** is never acceptable as a `reasoning` value. That is an internal governance message, not agent reasoning. Write it and the proposal is meaningless to the reviewer.
+- The pod's own governance sentence (for example "This agent asks before every change.") is never acceptable as a `reasoning` value. It says why a person must review, not why you made the change. Write it and the proposal is meaningless to the reviewer.
 
 Example response to the user:
 
@@ -1138,10 +1154,14 @@ several entities, or a graph — or **when in doubt** — use the capture door
 in the SAME call, never from picking a different tool or a second commit step.
 
 The difference that is NOT visible in either tool's description: `create_entity`
-writes one entity with per-entity governance and REJECTS a name collision unless
-`forceCreate`; capture-with-`entities[]` files ONE atomic proposal for the whole
-graph and DEDUP-MERGES instead of rejecting. Pick by whether you want a partial
-write to be possible, not by how structured your data feels.
+writes one entity with per-entity governance; capture-with-`entities[]` files ONE
+atomic proposal for the whole graph. Neither rejects a look-alike: a record (or
+one of your own pending proposals) of the same kind with the same name or
+identity makes the write a proposal carrying `duplicateCheck`, and the person
+decides (keep both, use the existing one, fill its empty fields). Only a strong
+identity (email, phone, url, handle, external id) links to the existing record
+on its own. Pick by whether you want a partial write to be possible, not by how
+structured your data feels.
 
 **Every title is linted.** Both doors return `titleLint` in the receipt when a
 title breaks the rubric (too long, cut off, status words, ids, a placeholder…);
@@ -1222,6 +1242,8 @@ the connection's lens). A kind another space needs: `synap_change_kind_scope`
 (`scope: "shared"` + `allowedWorkspaceIds`), never a twin kind. Records:
 `synap_move_entities`. All three are reviewed.
 
+**Removing one: `synap_delete_entity`** (`entityId`, optional `reasoning`). For an agent it is always a proposal — nothing is deleted until the person approves, and no rule can widen that. An approved delete hides the entity (its body is kept) and the person can undo it from the proposal. Do not retry a `proposed` answer.
+
 ### Authored text is content, not a `file`
 
 Something **you** author — a pitch deck, a strategic plan, a note body — is
@@ -1244,7 +1266,7 @@ You CAN store content you **hold** — you send it inline. Pick by what you have
 | ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
 | **Content in hand** — a report/CSV/image/PDF/etc. you generated or received (text or bytes) | **`synap_store_file`** (`content` for text, `contentBase64` for binary) + `mimeType`/`filename` | a `file` entity, content stored **as-is, never read** (≤10MB inline) |
 | Text you're **authoring as a note/idea** (not "a file") — a plan, a thought                 | `synap_create_entity` with `content` (a content kind)                                           | body auto-becomes a document — NOT a `file`                          |
-| Only a **URL/link** (no bytes) — a Google Doc, a PDF url, an article                        | `synap_create_document` with **`url`**, or attach via `entityId`                                | an external **reference** document (no bytes)                        |
+| Only a **URL/link** (no bytes) — a Google Doc, a PDF url, an article                        | `synap_create_document` with **`url`**; `entityId` only for a thing with no body yet            | an external **reference** document (no bytes)                        |
 | A **large file** (over 10MB, up to 500MB video)                                             | `synap_request_upload` → PUT the bytes to `uploadUrl` → `synap_store_file({ uploadToken })`     | a `file` entity backed by stored bytes                               |
 | Only a file's **name**, nothing else                                                        | you **cannot** invent it — ask the human/client to provide the content or a link                | —                                                                    |
 
@@ -2111,7 +2133,7 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **Sessions are the default — you never have to ask.** Every write you make is grouped into a session automatically: yours if you started one, otherwise one opened for you (a _receipt_, closed on its own once idle and reviewed). Nothing is ever refused for lacking a session.
 
-**When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of THIS conversation were already auto-grouped, that session is adopted (`adopted: true`, same id) — never a second one. Grouping is per conversation: another conversation's session is joined only by passing its id as `sessionId`.
+**When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of THIS conversation were already auto-grouped for the same project, that session is adopted (`adopted: true`, same id) — never a second one; another project's writes stay in their own group. Grouping is per conversation and per project: another conversation's session is joined only by passing its id as `sessionId`. On MCP, every write reply names where it landed (`attribution.filed`: session id and name). **One session per piece of work:** a session you started takes every later write, so when an MCP reply carries a `topicHint` (this write is about another project), start a new session if it is new work; rename the current one with `synap_update_session { title }` when its name no longer fits. Names given by automation follow the work as it grows; once you or the person name a session, it keeps that name.
 
 **Fetch the pod's processes before you invent one.** Without `templateId`, the start door hands back the pod's existing playbooks ranked against your title and goal — the response's `playbooks` block lists `candidates` (id, name, score, and the `reason` each one matched) and applies **nothing**. Read them: if one fits, start again naming it with `templateId` (the only way a playbook binds), and if none does, go ad-hoc deliberately. Pass `templateId: null` to skip matching entirely. You can also look first, with `synap_list_playbooks` / `synap_match_playbooks`.
 
@@ -2120,7 +2142,7 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 - **A fact** (`kind: 'fact'`) — your definition of done, a binary, observable statement ("Typecheck passes with 0 errors"), checked by `verify` (`capability` → `judge` → `human`; default `judge`) through `synap_evaluate_session`. Two to five, not a checklist. **Propose them yourself and let the person validate or rewrite them**; they may equally be written by the person, but a session with none can only be reported on by opinion. Closing never blocks on them; unmet ones are flagged.
 - **A deliverable** (`kind: 'document'`, `'report'`, `'code'`, `'decision'`…). **Declare what the work will produce** — the documents, entities and decisions this session owes. That list is what makes "done" derivable instead of announced, and it is what the person's board shows as still outstanding. Give each a `key` (or one is derived from the label) and name it by that key from then on.
 
-On `synap_update_session`, `outcomes` UPSERTS by key — a renamed label keeps its key and its receipts, and nothing you do not name is removed. `criteria`, `expectedOutputs` and `addOutput` still work as deprecated aliases over the same storage. `synap_get_session` returns `outcomes.outcomes[]` (each with `verify`, `met`, `metBy`, its `state` and its `evidence`) and `outcomes.inputs[]` — what the work needs FROM the person, each pointing at the outcome it blocks. `status: 'unavailable'` there means the read failed, not that the list is empty.
+On `synap_update_session`, `outcomes` UPSERTS by key — a renamed label keeps its key and its receipts, and nothing you do not name is removed. `criteria`, `expectedOutputs` and `addOutput` still work as deprecated aliases over the same storage; your `expectedOutputs` list adds and updates too, it never deletes a deliverable you leave out. To drop one on MCP, `retireOutput: '<key>'` withdraws it (kept as 'Withdrawn', no longer owed); the Hub REST PATCH does not take it. `synap_get_session` returns `outcomes.outcomes[]` (each with `verify`, `met`, `metBy`, its `state` and its `evidence`) and `outcomes.inputs[]` — what the work needs FROM the person, each pointing at the outcome it blocks. `status: 'unavailable'` there means the read failed, not that the list is empty.
 
 **Done is a verdict, not your claim.** When you finish a deliverable, `completeOutput: '<key>'` records your CLAIM. The pod then decides: if EVIDENCE is attached — the object produced inside this session (record it against the slot's key), or the slot's `ref` pointing at it — the outcome is met at once (`completeOutput.result: 'completed'`, `metBy: 'evidence'`). With no evidence the reply says `'claimed'`: the claim waits for review, so attach the evidence instead of reporting the work as delivered. A deliverable that also has a `verify` beyond evidence (`judge`, `capability`) is met only by that check; a person's own outcome only by the person.
 
@@ -2528,7 +2550,7 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 1. **Name the source-of-truth noun.** What kind would this workspace _own_ that no existing workspace owns? Run `list_profiles` — if the noun already lives in another domain, you have a facet or a project, not a domain. STOP.
 2. **Test all four conditions.** Owns kinds AND own team AND native automations AND stable. Any one fails → fork below.
 3. **If it's a hat** (a status/role on an entity that already exists elsewhere) → resolve the entity, `attach_facet`. Never a workspace, never a second entity. One role per name, pod-wide: a role several workspaces use is ONE role, each workspace adding properties by overlay — never a per-workspace twin (`concepts`).
-4. **If it's time-bound work across domains** → `create_project` and set it as the lens; the work files into it from whatever workspace holds the data. **A project is a COMMITMENT WITH GRAVITY** — a real initiative that ties work together (a campaign, an engagement, a client, a launch). Tasks, plans, repos, themes, and topics are **entities**, never projects. Before you create one: (a) **search existing projects first** (`synap orient` / `GET /api/hub/projects`) and prefer **linking into an existing project** via `belongs_to_project` — near-duplicate names are rejected with the existing candidates; (b) an agent-created project must cite **≥5 existing entities** that would belong to it as `evidenceEntityIds` — the backend rejects a project with no gravity and tells you to store it as an entity or reuse an existing project instead; (c) **never create a project for the pod owner's own company** — the company _is_ the pod, not a project inside it.
+4. **If it's time-bound work across domains** → `create_project` and set it as the lens; the work files into it from whatever workspace holds the data. **A project is a COMMITMENT WITH GRAVITY** — a real initiative that ties work together (a campaign, an engagement, a client, a launch). Tasks, plans, repos, themes, and topics are **entities**, never projects. Before you create one: (a) **search existing projects first** (`synap orient` / `GET /api/hub/projects`) and prefer **linking into an existing project** via `belongs_to_project` — a near-duplicate name is filed for the person to review, showing the existing project; (b) an agent-created project must cite **≥5 existing entities** that would belong to it as `evidenceEntityIds` — the backend rejects a project with no gravity and tells you to store it as an entity or reuse an existing project instead; (c) **never create a project for the pod owner's own company** — the company _is_ the pod, not a project inside it.
 5. **If it's a lasting goal a project pursues** ("keep the content side of the launch going") → a **track**: `list_tracks`, else `start_track` (`name`, `direction`); work in it with `start_session` + `trackId`. Never a workspace, never a twin project.
 6. **If it's a stage inside a domain** → it is an option of the kind's or role's declared lifecycle, never a role and never a space. Its pipeline is computed from the lifecycle: open it, don't build one. A kind with no lifecycle yet gets a `status` property def (`create_property_def`).
 7. **Only if all four held** → **template first** (escalation ladder L3):

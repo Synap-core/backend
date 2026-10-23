@@ -915,11 +915,6 @@ export async function applyPackagePostWorkspace(
           status: p.status as PlaybookCreateInput["status"],
           agentUserId,
           source: "intelligence",
-          // The template is the author, and it already chose this playbook
-          // beside its siblings: the near-twin guard (`findOverlappingPlaybooks`,
-          // meant for an agent inventing a twin) refused "Win a deal" next to
-          // "Qualify a lead" of the SAME template. Exact-name reuse still holds.
-          forceCreate: true,
         });
         // `playbooksRouter.create` does not accept/materialize grants — they
         // become `playbook --grants--> {tool|skill}` link edges via

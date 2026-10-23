@@ -1,5 +1,5 @@
 /**
- * MCP tool handler — WHO IS ON A GOAL (work model W3, 0346):
+ * MCP tool handler — WHO IS ON A GOAL (work model W3, 0348):
  * `synap_set_track_participant`.
  *
  * ROUTING. Straight to `services/tracks/track-participants.ts` — the SAME door

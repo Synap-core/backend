@@ -4,17 +4,23 @@ import {
   actsAsHeadline,
   allowBlockedReason,
   consentClientKind,
+  consentWidth,
   initialSelection,
   invalidRequestHint,
   isTicked,
   permissionLabel,
   reasonOf,
+  sectionCheckboxLabel,
+  sectionState,
   spaceCheckboxLabel,
+  spaceHintFirst,
   splitOffer,
   toApproved,
   toggle,
+  toggleSection,
   withoutSpace,
   type OfferedPermission,
+  type Selection,
 } from "./consent-model";
 
 const OFFER: OfferedPermission[] = [
@@ -33,11 +39,15 @@ const OFFER: OfferedPermission[] = [
 ];
 
 describe("consent selection — narrow only", () => {
-  it("first consent: a permission with one space starts ticked, several start unticked", () => {
+  it("first consent: everything asked starts ticked, in every space on offer", () => {
     const s = initialSelection(OFFER, []);
     expect(toApproved(s, OFFER)).toEqual([
+      { permission: "entity.post.read", workspaceId: "brand" },
+      { permission: "entity.post.read", workspaceId: "shared" },
       { permission: "entity.post.create", workspaceId: "brand" },
     ]);
+    // Exactly the offer: the state holds no pair beyond what Allow sends.
+    expect(s.size).toBe(3);
   });
 
   it("re-consent pre-ticks the current approval, dropping what is no longer on offer", () => {
@@ -50,12 +60,23 @@ describe("consent selection — narrow only", () => {
     ]);
   });
 
+  it("re-consent ticks nothing the person did not approve, new ask or old no alike", () => {
+    // The pod keeps what they approved, not what they were asked: a pair
+    // missing from it may be a "no" they gave last time.
+    const s = initialSelection(OFFER, [
+      { permission: "entity.post.read", workspaceId: "brand" },
+    ]);
+    expect(isTicked(s, "entity.post.read", "shared")).toBe(false);
+    expect(isTicked(s, "entity.post.create", "brand")).toBe(false);
+    expect(s.size).toBe(1);
+  });
+
   it("unticking narrows; ticking an offered pair adds it", () => {
-    let s = initialSelection(OFFER, []);
+    let s: Selection = new Set();
+    s = toggle(s, OFFER, "entity.post.create", "brand");
+    expect(isTicked(s, "entity.post.create", "brand")).toBe(true);
     s = toggle(s, OFFER, "entity.post.create", "brand");
     expect(toApproved(s, OFFER)).toEqual([]);
-    s = toggle(s, OFFER, "entity.post.read", "shared");
-    expect(isTicked(s, "entity.post.read", "shared")).toBe(true);
   });
 
   it("a pair the offer does not hold can never be ticked (no widening)", () => {
@@ -66,10 +87,8 @@ describe("consent selection — narrow only", () => {
     // Not even held in the screen's state (what the checkboxes render from).
     expect(isTicked(s, "entity.post.create", "shared")).toBe(false);
     expect(isTicked(s, "entity.post.delete", "brand")).toBe(false);
-    expect(s.size).toBe(1);
-    expect(toApproved(s, OFFER)).toEqual([
-      { permission: "entity.post.create", workspaceId: "brand" },
-    ]);
+    expect(isTicked(s, "document.update", "brand")).toBe(false);
+    expect(s.size).toBe(3);
   });
 
   it("what Allow sends is filtered to the offer even from a forged selection", () => {
@@ -111,13 +130,13 @@ describe("a Synap app's headline — the spaces ticked are the grant", () => {
   it("names each ticked space once, in offer order, and follows the ticks", () => {
     let s = initialSelection(OFFER, []);
     expect(actsAsHeadline(LEAD, s, OFFER)).toBe(
+      "Content Studio will act as you in: Brand, Shared."
+    );
+    s = toggle(s, OFFER, "entity.post.read", "shared");
+    expect(actsAsHeadline(LEAD, s, OFFER)).toBe(
       "Content Studio will act as you in: Brand."
     );
     s = toggle(s, OFFER, "entity.post.read", "shared");
-    s = toggle(s, OFFER, "entity.post.read", "brand");
-    expect(actsAsHeadline(LEAD, s, OFFER)).toBe(
-      "Content Studio will act as you in: Brand, Shared."
-    );
     s = toggle(s, OFFER, "entity.post.create", "brand");
     s = toggle(s, OFFER, "entity.post.read", "brand");
     expect(actsAsHeadline(LEAD, s, OFFER)).toBe(
@@ -157,15 +176,8 @@ describe("a decision (approve / reject) is never folded into a write", () => {
     ]);
   });
 
-  it("first consent: a write with one space starts ticked, a decision never does", () => {
+  it("first consent: every write starts ticked, a decision does not (PRESELECT_DECISIONS)", () => {
     const s = initialSelection(WITH_DECISIONS, []);
-    expect(toApproved(s, WITH_DECISIONS)).toEqual([
-      { permission: "entity.post.create", workspaceId: "brand" },
-    ]);
-  });
-
-  it("a space hint naming its space does not pre-tick a decision either", () => {
-    const s = initialSelection(WITH_DECISIONS, [], "brand");
     expect(toApproved(s, WITH_DECISIONS)).toEqual([
       { permission: "entity.post.create", workspaceId: "brand" },
     ]);
@@ -185,31 +197,130 @@ describe("a decision (approve / reject) is never folded into a write", () => {
   });
 });
 
-describe("consent space hint (preselect only)", () => {
-  it("a hint naming an offered space pre-ticks it where the person picks", () => {
-    const s = initialSelection(OFFER, [], "shared");
-    expect(isTicked(s, "entity.post.read", "shared")).toBe(true);
-    expect(isTicked(s, "entity.post.read", "brand")).toBe(false);
-    // A permission not offered in the hinted space keeps the one-space rule.
-    expect(isTicked(s, "entity.post.create", "brand")).toBe(true);
+describe("a whole section selects or clears at once", () => {
+  const MIXED: OfferedPermission[] = [
+    {
+      permission: "entity.post.read",
+      workspaces: [
+        { workspaceId: "brand", workspaceName: "Brand" },
+        { workspaceId: "shared", workspaceName: "Shared" },
+      ],
+    },
+    {
+      permission: "entity.post.create",
+      workspaces: [{ workspaceId: "brand", workspaceName: "Brand" }],
+    },
+    {
+      permission: "proposal.approve",
+      workspaces: [
+        { workspaceId: "brand", workspaceName: "Brand" },
+        { workspaceId: "shared", workspaceName: "Shared" },
+      ],
+    },
+  ];
+  const { grants, decisions } = splitOffer(MIXED);
+
+  it("reads all, some or none over the section's spaces", () => {
+    const first = initialSelection(MIXED, []);
+    expect(sectionState(first, grants)).toBe("all");
+    expect(sectionState(first, decisions)).toBe("none");
+    const one = toggle(first, MIXED, "entity.post.read", "shared");
+    expect(sectionState(one, grants)).toBe("some");
   });
 
-  it("a hint the person cannot grant there is ignored", () => {
-    const s = initialSelection(OFFER, [], "someone-elses-space");
-    expect(toApproved(s, OFFER)).toEqual([
-      { permission: "entity.post.create", workspaceId: "brand" },
+  it("a section with no space to give reads none", () => {
+    expect(
+      sectionState(new Set(), [{ permission: "x.read", workspaces: [] }])
+    ).toBe("none");
+  });
+
+  it("all → none; some → all; none → all", () => {
+    let s = initialSelection(MIXED, []);
+    s = toggleSection(s, MIXED, grants);
+    expect(sectionState(s, grants)).toBe("none");
+    expect(toApproved(s, MIXED)).toEqual([]);
+    s = toggle(s, MIXED, "entity.post.create", "brand");
+    s = toggleSection(s, MIXED, grants);
+    expect(sectionState(s, grants)).toBe("all");
+    s = toggleSection(s, MIXED, decisions);
+    expect(sectionState(s, decisions)).toBe("all");
+    expect(toApproved(s, MIXED)).toHaveLength(5);
+  });
+
+  it("touches only its own section", () => {
+    let s = toggleSection(new Set(), MIXED, decisions);
+    expect(sectionState(s, grants)).toBe("none");
+    s = toggleSection(s, MIXED, grants);
+    s = toggleSection(s, MIXED, grants);
+    expect(sectionState(s, decisions)).toBe("all");
+    expect(sectionState(s, grants)).toBe("none");
+  });
+
+  it("never ticks a pair the offer does not hold (no widening)", () => {
+    const forged: OfferedPermission[] = [
+      {
+        permission: "entity.post.delete",
+        workspaces: [{ workspaceId: "brand", workspaceName: "Brand" }],
+      },
+      {
+        permission: "entity.post.read",
+        workspaces: [{ workspaceId: "elsewhere", workspaceName: "Elsewhere" }],
+      },
+    ];
+    const s = toggleSection(new Set(), MIXED, forged);
+    expect(s.size).toBe(0);
+  });
+
+  it("its checkbox says what it selects, starting with its visible label", () => {
+    expect(sectionCheckboxLabel("grants")).toBe(
+      "All it asks to do, in every space"
+    );
+    expect(sectionCheckboxLabel("decisions")).toBe(
+      "All its decisions, in every space"
+    );
+  });
+});
+
+describe("consent space hint (order only, never a grant)", () => {
+  it("lists the hinted space first where a permission offers it", () => {
+    const out = spaceHintFirst(OFFER, "shared");
+    expect(out[0]!.workspaces.map((w) => w.workspaceId)).toEqual([
+      "shared",
+      "brand",
     ]);
+    // Not offered there: that permission is left as it is.
+    expect(out[1]!.workspaces.map((w) => w.workspaceId)).toEqual(["brand"]);
+    expect(out[2]!.workspaces).toEqual([]);
+  });
+
+  it("never adds a space the offer does not hold", () => {
+    const out = spaceHintFirst(OFFER, "someone-elses-space");
+    expect(out).toEqual(OFFER);
+    const s = initialSelection(out, [], "someone-elses-space");
+    expect(isTicked(s, "entity.post.read", "someone-elses-space")).toBe(false);
+    expect(toApproved(s, out)).toHaveLength(3);
   });
 
   it("a re-consent keeps the current approval; the hint never adds to it", () => {
     const s = initialSelection(
-      OFFER,
+      spaceHintFirst(OFFER, "shared"),
       [{ permission: "entity.post.read", workspaceId: "brand" }],
       "shared"
     );
     expect(toApproved(s, OFFER)).toEqual([
       { permission: "entity.post.read", workspaceId: "brand" },
     ]);
+  });
+});
+
+describe("the consent card's width", () => {
+  it("a pod app's consent reads wider; every other consent is one decision", () => {
+    expect(consentWidth("https://studio.example.com/synap/client.json")).toBe(
+      "md"
+    );
+    expect(consentWidth("synap-desktop")).toBe("sm");
+    expect(consentWidth("app_1a2b3c")).toBe("sm");
+    expect(consentWidth("3f2c9a10-dcr-client")).toBe("sm");
   });
 });
 
@@ -227,8 +338,14 @@ describe("Allow says why it is disabled", () => {
   });
 
   it("one pair ticked: Allow may be pressed", () => {
-    const s = initialSelection(OFFER, []);
+    const s = toggle(new Set(), OFFER, "entity.post.create", "brand");
     expect(allowBlockedReason(OFFER, s)).toBeNull();
+  });
+
+  it("a section cleared at once blocks Allow, with the same reason", () => {
+    const { grants } = splitOffer(OFFER);
+    const s = toggleSection(initialSelection(OFFER, []), OFFER, grants);
+    expect(allowBlockedReason(OFFER, s)).toBe("Pick at least one space.");
   });
 
   it("a ticked pair outside the offer does not unblock it", () => {

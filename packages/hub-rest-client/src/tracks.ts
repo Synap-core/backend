@@ -144,7 +144,7 @@ export interface HubTrack {
   waitingOn?: Array<{ reason: HubWaitingOnReason; count: number }> | null;
   /**
    * Who is on the goal: owner, judge, delegates (with their commitment),
-   * integrator. Absent on a pod before 0346, or when not read.
+   * integrator. Absent on a pod before 0348, or when not read.
    */
   participants?: HubTrackParticipant[];
   createdAt: string;

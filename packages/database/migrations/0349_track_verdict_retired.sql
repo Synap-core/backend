@@ -1,4 +1,4 @@
--- 0347 — an operation ends RETIRED, never met (work model R6)
+-- 0349 — an operation ends RETIRED, never met (work model R6)
 --
 -- Founder refinement R6 (2026-10-23): an operation (`work_kind` =
 -- 'operation', 0345) is kept running and assessed per period; it never ends

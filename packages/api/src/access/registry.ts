@@ -673,7 +673,7 @@ registerVisibility({
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
-// WHO IS ON A GOAL (0346) — exactly as visible as the goal (the track), so
+// WHO IS ON A GOAL (0348) — exactly as visible as the goal (the track), so
 // as its project. Being a participant grants NO read (D5-A): an agent reads a
 // goal only as the person it acts for, a person through the project's floor.
 registerVisibility({

@@ -848,3 +848,63 @@ describe("the idempotent re-provision counts only a LIVE key", () => {
     ).toMatchObject({ alreadyValid: true });
   });
 });
+
+/**
+ * FB1020 B7: a key minted before the CLI sent its computer's name stays
+ * unnamed on every reuse, so all its proposals read like its twin's. The
+ * reuse (`synap init` → idempotent `/setup/agent`) names it — only THIS
+ * computer's key (matched by instance), only while it has no name.
+ * Discriminating rows: an unnamed key of THIS instance gets the name (rules
+ * out "never touch a reused key"); a NAMED one keeps its name (rules out
+ * "overwrite on every init"); another computer's unnamed key stays unnamed
+ * (rules out "name every key of the agent").
+ */
+describe("re-running init names this computer's unnamed key", () => {
+  it("fills a missing name on reuse, never renames, never another computer's", async () => {
+    const base = {
+      agentType: "label-surface",
+      createdByUserId: OWNER,
+      linkedUserId: OWNER,
+    };
+    const mac = (await provisionSurfaceAgentKey({
+      ...base,
+      instanceId: "m-mac",
+    })) as { keyId: string };
+    const devbox = (await provisionSurfaceAgentKey({
+      ...base,
+      instanceId: "m-devbox",
+    })) as { keyId: string };
+    const named = (await provisionSurfaceAgentKey({
+      ...base,
+      instanceId: "m-named",
+      instanceLabel: "Studio",
+    })) as { keyId: string };
+    const labelOf = async (id: string) =>
+      (
+        await q<{ instance_label: string | null }>(
+          `select instance_label from api_keys where id = $1`,
+          [id]
+        )
+      ).rows[0]!.instance_label;
+    expect(await labelOf(mac.keyId)).toBeNull();
+
+    expect(
+      await provisionSurfaceAgentKey({
+        ...base,
+        instanceId: "m-mac",
+        instanceLabel: "MacBook",
+        idempotent: true,
+      })
+    ).toMatchObject({ alreadyValid: true });
+    expect(await labelOf(mac.keyId)).toBe("MacBook");
+    expect(await labelOf(devbox.keyId)).toBeNull();
+
+    await provisionSurfaceAgentKey({
+      ...base,
+      instanceId: "m-named",
+      instanceLabel: "Other name",
+      idempotent: true,
+    });
+    expect(await labelOf(named.keyId)).toBe("Studio");
+  });
+});

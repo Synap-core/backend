@@ -237,7 +237,7 @@ beforeAll(async () => {
     projectMembers,
     channels,
     channelMembers,
-    // Who is on a goal (0346): `startTrack` seeds the owner row.
+    // Who is on a goal (0348): `startTrack` seeds the owner row.
     trackParticipants,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));

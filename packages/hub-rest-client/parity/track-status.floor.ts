@@ -63,7 +63,7 @@ export const _meaning: Same<
   NonNullable<HubSessionCriterion["checkKind"]>,
   CriterionCheckMeaning
 > = true;
-// Who is on a goal (0346, W3).
+// Who is on a goal (0348, W3).
 export const _role: Same<HubTrackParticipantRole, TrackParticipantRole> = true;
 export const _kind: Same<HubTrackPrincipalKind, TrackPrincipalKind> = true;
 export const _state: Same<HubTrackCommitmentState, TrackCommitmentState> = true;

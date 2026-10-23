@@ -399,7 +399,7 @@ export interface TrackView {
    */
   waitingOn: WaitingOnMark[] | null;
   /**
-   * WHO IS ON IT (0346, W3): owner, judge, delegates with their commitment
+   * WHO IS ON IT (0348, W3): owner, judge, delegates with their commitment
    * and its state ("silent since" for a delegate who still owes something),
    * integrator. Absent when not read (a write's fallback view) — never a
    * fabricated empty list. Owner first, then judge, delegates, integrator.

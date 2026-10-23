@@ -1,5 +1,5 @@
 /**
- * WHO IS ON A GOAL — the reads and the authority rules (work model W3, 0346).
+ * WHO IS ON A GOAL — the reads and the authority rules (work model W3, 0348).
  *
  *   loadTrackParticipantViews — the participants every track READ returns
  *                               (`TrackView.participants`), with "silent since"
@@ -114,7 +114,7 @@ export async function assertGoalCloser(
 /**
  * The PERSON who owns a goal started by `starterId`: the starter, unless the
  * starter is an AGENT (a pod-wide agent key started it) — then the person the
- * agent belongs to, else the project's owner. The same rule 0346's backfill
+ * agent belongs to, else the project's owner. The same rule 0348's backfill
  * applies to existing goals.
  */
 export async function resolveGoalOwnerPerson(

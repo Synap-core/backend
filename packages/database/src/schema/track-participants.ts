@@ -1,5 +1,5 @@
 /**
- * Track participants (migration 0346) — WHO IS ON A GOAL (work model W3).
+ * Track participants (migration 0348) — WHO IS ON A GOAL (work model W3).
  *
  * One row per (goal, principal, role): the goal's OWNER (a person, exactly
  * one), its JUDGE (a person, at most one — none means the owner judges), its
@@ -10,7 +10,7 @@
  *
  * Roles, principal kinds and commitment states mirror `@synap-core/types/units`
  * (`TRACK_PARTICIPANT_ROLES`, …); this package cannot import that one, so the
- * participants service pins the lists equal at compile time, and the 0346
+ * participants service pins the lists equal at compile time, and the 0348
  * CHECK constraints spell the same sets.
  *
  * A participant row grants NO read (D5-A): an agent reads the goal only as the
@@ -73,7 +73,7 @@ export const trackParticipants = pgTable(
       .notNull(),
     /** What the delegate commits to. */
     commitment: text("commitment"),
-    /** Set for a delegate, NULL for every other role (0346 CHECK). */
+    /** Set for a delegate, NULL for every other role (0348 CHECK). */
     commitmentState: text("commitment_state", {
       enum: TRACK_COMMITMENT_STATE_KEYS,
     }).$type<TrackCommitmentStateKey>(),

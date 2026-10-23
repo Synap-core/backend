@@ -1,5 +1,5 @@
 /**
- * WHO IS ON A GOAL — the ONE door for changing it (work model W3, 0346).
+ * WHO IS ON A GOAL — the ONE door for changing it (work model W3, 0348).
  *
  * `changeTrackParticipants` is what MCP (`synap_set_track_participant`), tRPC
  * (`tracks.participants.change`) and Hub REST (`/tracks/:id/participants…`)

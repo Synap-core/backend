@@ -1,9 +1,9 @@
 /**
- * REAL-POSTGRES (PGlite) test for migration 0347 — the done verdict
+ * REAL-POSTGRES (PGlite) test for migration 0349 — the done verdict
  * `retired` (an operation ends retired, never met — R6).
  *
  * The table is built by the REAL 0272, 0317, 0344 and 0345 migrations, then
- * 0347 runs TWICE. What is asserted:
+ * 0349 runs TWICE. What is asserted:
  *   - a closed goal may now carry `retired`; every 0344 done verdict still
  *     closes;
  *   - `retired` is still refused on a drop and on a live goal (it is a DONE
@@ -27,9 +27,9 @@ const M0272 = read("0272_project_tracks.sql");
 const M0317 = read("0317_project_tracks_live_name_unique.sql");
 const M0344 = read("0344_track_lifecycle_and_verdict.sql");
 const M0345 = read("0345_track_goal_content.sql");
-const M0347 = read("0347_track_verdict_retired.sql");
+const M0349 = read("0349_track_verdict_retired.sql");
 
-const P = "00000000-0000-4000-8000-000000000347";
+const P = "00000000-0000-4000-8000-000000000349";
 const LOST = ["no_longer_needed", "impossible", "replaced", "mistake"];
 
 let pg: PGlite;
@@ -66,16 +66,16 @@ afterAll(async () => {
   await pg?.close();
 });
 
-describe("migration 0347 — an operation ends retired", () => {
-  it("before 0347 the CHECK refuses retired (the migration is what admits it)", async () => {
+describe("migration 0349 — an operation ends retired", () => {
+  it("before 0349 the CHECK refuses retired (the migration is what admits it)", async () => {
     await expect(insert("completed", "retired")).rejects.toThrow(
       /project_tracks_verdict_check/
     );
   });
 
   it("applies twice (idempotent); a closed goal may carry retired, and every done verdict still closes", async () => {
-    await pg.exec(M0347);
-    await pg.exec(M0347);
+    await pg.exec(M0349);
+    await pg.exec(M0349);
     await insert("completed", "retired");
     for (const v of ["met", "partly_met", "not_met"]) {
       await insert("completed", v, "project");

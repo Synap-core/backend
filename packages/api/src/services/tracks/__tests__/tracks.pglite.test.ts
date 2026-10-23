@@ -57,10 +57,10 @@ const M0345 = readFileSync(
   "utf8"
 );
 // An operation ends retired (R6) — the verdict CHECK admits `retired`.
-const M0347 = readFileSync(
+const M0349 = readFileSync(
   fileURLToPath(
     new URL(
-      "../../../../../database/migrations/0347_track_verdict_retired.sql",
+      "../../../../../database/migrations/0349_track_verdict_retired.sql",
       import.meta.url
     )
   ),
@@ -265,7 +265,7 @@ beforeAll(async () => {
     podMembers,
     projectMembers,
     sessionEvaluations,
-    // Who is on a goal (0346): `startTrack` seeds the owner row.
+    // Who is on a goal (0348): `startTrack` seeds the owner row.
     trackParticipants,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
@@ -305,7 +305,7 @@ beforeAll(async () => {
   await h.client!.exec(M0317);
   await h.client!.exec(M0344);
   await h.client!.exec(M0345);
-  await h.client!.exec(M0347);
+  await h.client!.exec(M0349);
   // The edge-uniqueness index the dependency door's insert conflicts on
   // (`idx_links_unique_edge`) — a reopen writes `new --replaces--> old`.
   await h.client!.exec(
@@ -1208,9 +1208,9 @@ describe("a live track's identity is its NAME (0317) — a method can run twice"
     // …and the lifecycle migration on top, as a pod runs them, re-runnable.
     await h.client!.exec(M0344);
     await h.client!.exec(M0344);
-    // 0344 re-adds ITS verdict CHECK; 0347 (run after it on every pod) is
+    // 0344 re-adds ITS verdict CHECK; 0349 (run after it on every pod) is
     // what admits `retired` — re-run it so later tests see the pod's CHECK.
-    await h.client!.exec(M0347);
+    await h.client!.exec(M0349);
     const names = (
       await q<{ name: string; status: string }>(
         `select name, status from project_tracks where project_id = $1 order by created_at`,

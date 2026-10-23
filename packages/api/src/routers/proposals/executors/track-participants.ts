@@ -1,5 +1,5 @@
 /**
- * WHO IS ON A GOAL — the approval halves (work model W3, 0346).
+ * WHO IS ON A GOAL — the approval halves (work model W3, 0348).
  *
  *   track/assign_agent  an agent handed the goal to ANOTHER agent
  *                       (`gateAgentHandOff` with a track). Approval adds that

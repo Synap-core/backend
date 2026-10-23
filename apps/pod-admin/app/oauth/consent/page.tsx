@@ -20,8 +20,9 @@
  * pod would have granted from a fresh /authorize anyway.
  *
  * `space_hint` is not an authorize parameter: it is read here, kept apart from
- * the params the server re-validates, and only pre-ticks a space the person
- * can give (`initialSelection`). The charset is the SDK's and the browser's.
+ * the params the server re-validates, and only lists that space first where
+ * the person can give it (`spaceHintFirst`). The charset is the SDK's and the
+ * browser's.
  */
 
 import { ConsentForm } from "./ConsentForm";

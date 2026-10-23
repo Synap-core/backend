@@ -1,9 +1,9 @@
 /**
- * WHO IS ON A GOAL on PGlite (work model W3, 0346) — the REAL participants
+ * WHO IS ON A GOAL on PGlite (work model W3, 0348) — the REAL participants
  * door (`changeTrackParticipants` → `applyTrackParticipantChange`), the REAL
  * close door (`setTrackStatus` → `applyTrackStatus` → `assertGoalCloser`), the
  * REAL `track/update` and `track/assign_agent` approval replays, the REAL
- * access registry, and the REAL 0346 migration (CHECKs, one-owner / one-judge
+ * access registry, and the REAL 0348 migration (CHECKs, one-owner / one-judge
  * indexes, the upsert's conflict target).
  *
  * What is pinned, each by an input where the wrong rule and the right one
@@ -43,7 +43,7 @@ const migration = (f: string) =>
 const M0317 = migration("0317_project_tracks_live_name_unique.sql");
 const M0344 = migration("0344_track_lifecycle_and_verdict.sql");
 const M0345 = migration("0345_track_goal_content.sql");
-const M0346 = migration("0346_track_participants.sql");
+const M0348 = migration("0348_track_participants.sql");
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -340,7 +340,7 @@ beforeAll(async () => {
   // What a goal holds (W2): every track read selects the whole row.
   await h.client!.exec(M0345);
   // The REAL table: CHECKs, one owner / one judge, the upsert's target.
-  await h.client!.exec(M0346);
+  await h.client!.exec(M0348);
 
   for (const [id, type, createdBy] of [
     [OWNER, "human", null],

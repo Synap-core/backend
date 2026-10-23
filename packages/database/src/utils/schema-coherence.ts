@@ -196,6 +196,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "app_id",
     addedBy: "0310_app_attribution.sql",
   },
+  // proposals — the calling KEY (0346, FB1020 B7). Stamped by every proposal
+  // insert door from the request context, so without the column every
+  // governed key write 42703s.
+  {
+    table: "proposals",
+    column: "api_key_id",
+    addedBy: "0346_proposals_api_key_id.sql",
+  },
   // proposal_cluster_mutes — durable per-pod mute of a rejection SHAPE-cluster
   // (0233). If the table/column is missing, the mute door + the rejected-clusters
   // read's active-mute filter throw. Column check confirms the table exists.
@@ -2013,6 +2021,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "icon",
     addedBy: "0328_projects_icon.sql",
   },
+  // A sample (demo) project (0347) — same baseline exemption. Read by the ONE
+  // listing rule `listableEntityWhere`; a missing column 500s every list.
+  {
+    table: "projects",
+    column: "sample",
+    addedBy: "0347_projects_sample.sql",
+  },
   // Tracks (0272) — a METHOD running inside a project. `project_tracks` is NOT
   // in the baseline (it references `projects`, which 0151 creates), so this is
   // the table's ONLY startup guard. `focus_sessions.track_id` is selected by
@@ -2119,68 +2134,68 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "kind_confirmed_at",
     addedBy: "0345_track_goal_content.sql",
   },
-  // 0346 — who is on a goal. `track_participants` is NOT in the baseline (it
+  // 0348 — who is on a goal. `track_participants` is NOT in the baseline (it
   // references `project_tracks`), so these are its only startup guards; every
   // track read selects the whole row.
   {
     table: "track_participants",
     column: "principal_kind",
-    addedBy: "0346_track_participants.sql",
+    addedBy: "0348_track_participants.sql",
   },
   {
     table: "track_participants",
     column: "principal_id",
-    addedBy: "0346_track_participants.sql",
+    addedBy: "0348_track_participants.sql",
   },
   {
     table: "track_participants",
     column: "role",
-    addedBy: "0346_track_participants.sql",
+    addedBy: "0348_track_participants.sql",
   },
   {
     table: "track_participants",
     column: "commitment",
-    addedBy: "0346_track_participants.sql",
+    addedBy: "0348_track_participants.sql",
   },
   {
     table: "track_participants",
     column: "commitment_state",
-    addedBy: "0346_track_participants.sql",
+    addedBy: "0348_track_participants.sql",
   },
   {
     table: "track_participants",
     column: "counter_text",
-    addedBy: "0346_track_participants.sql",
+    addedBy: "0348_track_participants.sql",
   },
   {
     table: "track_participants",
     column: "reported_reason",
-    addedBy: "0346_track_participants.sql",
+    addedBy: "0348_track_participants.sql",
   },
   {
     table: "track_participants",
     column: "reported_at",
-    addedBy: "0346_track_participants.sql",
+    addedBy: "0348_track_participants.sql",
   },
   {
     table: "track_participants",
     column: "acknowledged_at",
-    addedBy: "0346_track_participants.sql",
+    addedBy: "0348_track_participants.sql",
   },
   {
     table: "track_participants",
     column: "escalated_at",
-    addedBy: "0346_track_participants.sql",
+    addedBy: "0348_track_participants.sql",
   },
   {
     table: "track_participants",
     column: "decided_by",
-    addedBy: "0346_track_participants.sql",
+    addedBy: "0348_track_participants.sql",
   },
   {
     table: "track_participants",
     column: "decided_at",
-    addedBy: "0346_track_participants.sql",
+    addedBy: "0348_track_participants.sql",
   },
   // 0275 — the document content revision (the ONE content-write door's CAS)
   // and the revision the Yjs cache is known to equal. Every document content
@@ -2399,7 +2414,7 @@ const REQUIRED_INDEX_TABLES = [
   // name on a project"; `TrackRepository.createOrGet` relies on it to turn a
   // concurrent second start into `exists` instead of a twin.
   projectTracks,
-  // Who is on a goal (0346): the owner and judge partial unique indexes ARE
+  // Who is on a goal (0348): the owner and judge partial unique indexes ARE
   // "one owner, at most one judge"; the participant upsert conflicts on
   // `uniq_track_participants_role`.
   trackParticipants,

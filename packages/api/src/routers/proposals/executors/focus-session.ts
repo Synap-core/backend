@@ -42,6 +42,7 @@ import {
   sanitizeDeclaredOutputs,
   withEvidenceVerdict,
   type CompleteOutputOutcome,
+  type RetireOutputOutcome,
 } from "../../../services/focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
 import { stampSlotKeys } from "../../../services/focus-sessions/slot-keys.js";
@@ -920,7 +921,11 @@ export function registerFocusSessionExecutors(): void {
         outputRefusals = await applyProposedOutputMutations(
           sessionId,
           innerData,
-          session.userId
+          session.userId,
+          // An AGENT's list adds and updates, never deletes (C6): live,
+          // approving an agent's `expectedOutputs: []` beside a rename deleted
+          // every declared deliverable of session 9dc5da0c.
+          { keepUnlisted: !!proposal.agentUserId }
         );
         if (goalChange.refusal) outputRefusals.push(goalChange.refusal);
 
@@ -1295,7 +1300,8 @@ async function instantiateApprovedPlaybook(args: {
 async function applyProposedOutputMutations(
   sessionId: string,
   innerData: Record<string, unknown>,
-  ownerUserId: string
+  ownerUserId: string,
+  opts: { keepUnlisted: boolean }
 ): Promise<string[]> {
   const expectedOutputs = z
     .array(expectedOutputWireSchema)
@@ -1305,6 +1311,10 @@ async function applyProposedOutputMutations(
     typeof innerData.completeOutput === "string"
       ? innerData.completeOutput
       : undefined;
+  const retireOutput =
+    typeof innerData.retireOutput === "string"
+      ? innerData.retireOutput
+      : undefined;
 
   const patch = {
     ...(expectedOutputs.success
@@ -1312,16 +1322,26 @@ async function applyProposedOutputMutations(
       : {}),
     ...(addOutput.success ? { addOutput: addOutput.data } : {}),
     ...(completeOutput !== undefined ? { completeOutput } : {}),
+    ...(retireOutput !== undefined ? { retireOutput } : {}),
   };
   if (Object.keys(patch).length === 0) return [];
 
   const refusals: string[] = [];
   let report: CompleteOutputOutcome | undefined;
+  let retired: RetireOutputOutcome | undefined;
   await updateExpectedOutputsLocked(sessionId, (current) => {
-    const applied = applyOutputMutations(current, patch);
+    const applied = applyOutputMutations(current, patch, opts);
     report = applied.completeOutput;
+    retired = applied.retireOutput;
     return applied.outputs;
   });
+  // A withdrawal that matched nothing, or a delivered slot, changed nothing.
+  const retiredReport = retired as RetireOutputOutcome | undefined;
+  if (retiredReport && retiredReport.result !== "retired") {
+    refusals.push(
+      retiredReport.message ?? `"${retiredReport.label}" was not withdrawn.`
+    );
+  }
   // The approved patch's `completeOutput` is still the agent's CLAIM — the
   // same evidence verdict the direct door runs decides (A3). Approving the
   // proposal approved the patch, not the deliverable's evidence.
