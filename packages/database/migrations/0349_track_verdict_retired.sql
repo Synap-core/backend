@@ -26,7 +26,7 @@ ALTER TABLE "project_tracks"
     (
       ("status" = 'completed'
         AND "verdict" IS NOT NULL
-        AND "verdict" IN ('met', 'partly_met', 'not_met', 'retired'))
+        AND "verdict" IN ('met', 'partly_met', 'not_met'))
       OR ("status" = 'archived'
         AND ("verdict" IS NULL
           OR "verdict" IN ('no_longer_needed', 'impossible', 'replaced', 'mistake')))

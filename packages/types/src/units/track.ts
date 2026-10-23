@@ -507,12 +507,8 @@ export function trackVerdictsFor(
 ): readonly TrackVerdict[] {
   const category = trackStatusCategory(status);
   if (category !== "done" && category !== "lost") return [];
-  const operation = workKind === OPERATION_WORK_KIND;
-  return TRACK_VERDICTS.filter(
-    (v) =>
-      TRACK_VERDICT_CATEGORY[v] === category &&
-      (category === "lost" || (v === "retired") === operation)
-  );
+  void workKind; // NEGCTL d: the kind is ignored
+  return TRACK_VERDICTS.filter((v) => TRACK_VERDICT_CATEGORY[v] === category);
 }
 
 export function isTrackVerdict(v: unknown): v is TrackVerdict {

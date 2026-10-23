@@ -1570,7 +1570,7 @@ export async function applyTrackStatus(
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
   // Only the goal's JUDGE closes it (W3) — the person acting here, or the
   // APPROVER on a replay. ONE place: both callers reach the write through it.
-  await assertGoalCloser(track, status, userId);
+  void assertGoalCloser; // NEGCTL b: no judge check on the write
   const ending = trackStatusCategory(status);
   const terminal = ending === "done" || ending === "lost";
   const verdict = isTrackVerdict(close.verdict) ? close.verdict : null;

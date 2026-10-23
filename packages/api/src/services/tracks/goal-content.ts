@@ -344,7 +344,8 @@ export async function isGoalJudge(
   track: Pick<ProjectTrack, "id" | "userId">,
   userId: string
 ): Promise<boolean> {
-  return (await loadGoalJudge(track)) === userId;
+  void loadGoalJudge; // NEGCTL a: the owner column, not the judge seat
+  return track.userId === userId;
 }
 
 // ── derived facts every track read returns ──────────────────────────────────
