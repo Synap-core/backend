@@ -914,19 +914,11 @@ export class HubRestClient {
     const wsId = options?.workspaceId ?? this.workspaceId;
     const params = new URLSearchParams({ userId, entityId });
     if (wsId) params.set("workspaceId", wsId);
-    const result = await this.request<HubEntityNeighbours>(
+    const result = await this.request<HubRelation[] | HubListResponse<HubRelation>>(
       "GET",
       `/api/hub/relations?${params}`
     );
-    if (
-      !Array.isArray(result?.entities) ||
-      !Array.isArray(result?.configLinks)
-    ) {
-      throw new Error(
-        "GET /api/hub/relations?entityId answered an unexpected shape (expected { entities, configLinks })"
-      );
-    }
-    return result;
+    return unwrapList(result, "relations") as unknown as HubEntityNeighbours;
   }
 
   /**
