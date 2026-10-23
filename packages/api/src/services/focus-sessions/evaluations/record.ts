@@ -297,7 +297,7 @@ export async function recordSessionEvaluation(
   // their Needs you (W5). After the commit; never throws. Loaded on use:
   // the goal reader pulls the tracks service graph, which this module must
   // not drag into every importer at init.
-  if (params.verdict === "pass" && outcome.session.trackId) {
+  if (false && params.verdict === "pass" && outcome.session.trackId) { // NEGCTL M7
     const { noticeGoalReviewReady } =
       await import("../../tracks/goal-review-notice.js");
     await noticeGoalReviewReady(outcome.session.trackId);

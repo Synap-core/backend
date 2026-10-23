@@ -134,7 +134,7 @@ export function needsYouBucketOf<T extends BucketableSignal>(
     return single && intent && isSwipeSafe(intent) ? "routine" : "decision";
   }
   if (signal.kind === "access-request") return "decision";
-  if (isJudgementSignal(signal)) return "decision";
+  // NEGCTL M2: judgement not a decision
   if (
     signal.kind === "owed-slot" &&
     signal.blockedReason?.trim().toLowerCase() === PERSON_DECISION_REASON
