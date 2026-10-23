@@ -107,7 +107,9 @@ import {
   WAIT_DEFAULT_SECONDS,
   WAIT_MAX_SECONDS,
   waitForSessionAnswers,
+  waitForSessionChanges,
 } from "../../../services/focus-sessions/wait-for-answers.js";
+import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
 import { stampAnswersPickedUp } from "../../../services/focus-sessions/answer-pickup.js";
 import {
   guidanceForBlockedSlots,
@@ -499,6 +501,16 @@ const SessionAnswersWaitQuerySchema = z.object({
     .min(1)
     .max(SESSION_ANSWERS_MAX_LIMIT)
     .optional(),
+  /**
+   * The session CHANGE FEED (parity with MCP `events`): a comma list of kinds,
+   * or `all`. Absent = the answer-only wait. Parsed by the shared
+   * `parseSessionChangeKinds`.
+   */
+  events: z.string().max(200).optional(),
+  /** With `events`: the stage last seen. Present but empty = no stage (null). */
+  knownStage: z.string().max(200).optional(),
+  /** `false` = peek: never stamp the "Picked up" receipt. */
+  stamp: z.enum(["true", "false"]).optional(),
 });
 
 /**
@@ -886,7 +898,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       `\`timeoutSeconds\` (default ${WAIT_DEFAULT_SECONDS}, max ${WAIT_MAX_SECONDS}) with \`status: 'timeout'\` and ` +
       "`nextSince` to wait on again. Without `since`, only UNREAD answers: " +
       "slot answers not yet picked up, and room answers newer than the call. " +
-      "An agent key's read stamps the slot answer's `answerPickedUpAt` receipt.",
+      "An agent key's read stamps the slot answer's `answerPickedUpAt` receipt " +
+      "(`stamp=false`: a peek that never does). With `events` (a comma list of " +
+      "answer, proposal_decided, stage_moved, owner_message, or `all`) it is the " +
+      "session CHANGE FEED: `status: 'changed'` with typed `events[]` and `state` " +
+      "(pass `state.currentStage` back as `knownStage`).",
     request: {
       params: z.object({ id: z.string().uuid() }),
       query: SessionAnswersWaitQuerySchema,
@@ -895,10 +911,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       200: {
         description: "Answered, or timed out",
         schema: z.object({
-          status: z.enum(["answered", "timeout"]),
+          status: z.enum(["answered", "changed", "timeout"]),
           sessionId: z.string(),
           since: z.string().nullable(),
           answers: z.array(z.unknown()).optional(),
+          events: z.array(z.unknown()).optional(),
+          state: z
+            .object({
+              currentStage: z.string().nullable(),
+              status: z.string(),
+            })
+            .optional(),
           nextSince: z.string().nullable(),
           hasMore: z.boolean().optional(),
           waitedSeconds: z.number().optional(),
@@ -3173,6 +3196,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       since: c.req.query("since"),
       timeoutSeconds: c.req.query("timeoutSeconds"),
       limit: c.req.query("limit"),
+      events: c.req.query("events"),
+      knownStage: c.req.query("knownStage"),
+      stamp: c.req.query("stamp"),
     });
     if (!q.success) {
       return c.json(
@@ -3180,19 +3206,33 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         400
       );
     }
+    const kinds = parseSessionChangeKinds(q.data.events);
+    if (!kinds.ok) return c.json({ error: kinds.error }, 400);
     try {
       const acting = await resolveActingContext(c, {});
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const result = await waitForSessionAnswers({
+      const agentUserId = (c.get("agentUserId") as string | undefined) ?? null;
+      const common = {
         sessionId: id,
         userId: acting.userId,
         since: q.data.since ? new Date(q.data.since) : null,
         timeoutSeconds: q.data.timeoutSeconds,
         limit: q.data.limit,
-        // An AGENT key's read is the "Picked up" moment; a person's never is.
-        stampReceipt: Boolean(c.get("agentUserId")),
+        // An AGENT key's read is the "Picked up" moment; a person's never is;
+        // `stamp=false` is a peek (a watcher), which never stamps either.
+        stampReceipt: Boolean(agentUserId) && q.data.stamp !== "false",
+        agentUserId,
         signal: c.req.raw.signal,
-      });
+      };
+      const result = kinds.kinds
+        ? await waitForSessionChanges({
+            ...common,
+            kinds: kinds.kinds,
+            ...(q.data.knownStage !== undefined
+              ? { knownStage: q.data.knownStage || null }
+              : {}),
+          })
+        : await waitForSessionAnswers(common);
       if (!result) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }

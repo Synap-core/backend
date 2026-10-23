@@ -7,7 +7,7 @@
  *
  * Candidates (real rows only, nothing estimated):
  *   - TASKS — `task` entities still open (a status THE dependency rule does
- *     not clear — `isDependencyBlockerCleared("entity", …)` — or unset),
+ *     not call ended — `isDependencyEnded("entity", …)` — or unset),
  *     through the entity access floor under the workspace lens;
  *   - TRACK STEPS — open sessions (work or tracked run) of an ACTIVE track,
  *     through the session read floor and the triage lens (agent drafts are
@@ -60,8 +60,8 @@ import {
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { projectSessionOutcomes } from "@synap-core/types/units";
 import {
-  ENTITY_CLEARED_STATUSES,
-  isDependencyBlockerCleared,
+  ENTITY_ENDED_STATUSES,
+  isDependencyEnded,
 } from "@synap-core/types/connections";
 import { createLogger } from "@synap-core/core";
 import { type AccessContext, scopedDb } from "../../access/index.js";
@@ -259,7 +259,7 @@ export async function readNextMovePicks(
             isNull(entities.deletedAt),
             or(
               drizzleSql`${entities.properties}->>'status' IS NULL`,
-              not(inArray(FOLDED_TASK_STATUS, [...ENTITY_CLEARED_STATUSES]))
+              not(inArray(FOLDED_TASK_STATUS, [...ENTITY_ENDED_STATUSES]))
             )
           )
         )
@@ -273,9 +273,7 @@ export async function readNextMovePicks(
 
   const taskRows = (tasks.value as unknown as TaskRow[])
     .slice(0, NEXT_MOVE_SCAN_LIMIT)
-    .filter(
-      (t) => !isDependencyBlockerCleared("entity", statusOf(t.properties))
-    );
+    .filter((t) => !isDependencyEnded("entity", statusOf(t.properties)));
   const stepRows = steps.value
     .slice(0, NEXT_MOVE_SCAN_LIMIT)
     .filter((s) => !opts.excludeSessionIds.has(s.id));

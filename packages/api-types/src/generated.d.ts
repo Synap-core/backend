@@ -5020,12 +5020,20 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * X --blocked_by--> Y. THE dependency between units of work, across kinds
  * (`session` · `entity` · `track`, any pair — `DEPENDENCY_ENDPOINT_KINDS` in
  * `@synap-core/types/connections`): the FROM end cannot proceed until the TO
- * end clears by its own kind's status vocabulary. Entity relations
- * `blocks` / `depends_on` are this edge under other names; the relation
- * create door maps them here and migration 0301 moved the stored rows.
+ * end DELIVERS by its own kind's status vocabulary (a session `closed`, a
+ * track `completed`, an entity in lifecycle category `done`). Entity
+ * relations `blocks` / `depends_on` are this edge under other names; the
+ * relation create door maps them here and migration 0301 moved the stored
+ * rows.
  *
- * Blocked-ness is DERIVED from the subset of these edges whose TARGET is
- * still open, never a stored `blocked` status on `focus_sessions` (prior
+ * A TO end that ENDED WITHOUT DELIVERING (a session cancelled or failed, a
+ * track archived, an entity `lost`) does NOT clear (founder decision,
+ * 2026-10-22): it stays a blocker marked `dropped`, and the FROM end must
+ * re-plan — until this edge is removed, or a `replaces` edge names the
+ * attempt that replaces it (whoever waited on it then waits on that).
+ *
+ * Blocked-ness is DERIVED from the subset of these edges whose TARGET has
+ * not delivered, never a stored `blocked` status on `focus_sessions` (prior
  * art: Atlassian's "flag, don't status" — a status can only hold one value,
  * so storing blocked-ness destroys the real state and then drifts from the
  * blockers). The ONE producer is `services/links/dependency-links.ts`
@@ -14144,6 +14152,14 @@ export type ExecuteCapabilityResult = {
 	kind: "not_found";
 	message: string;
 };
+declare const LIFECYCLE_CATEGORIES$1: readonly [
+	"open",
+	"active",
+	"paused",
+	"done",
+	"lost"
+];
+type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 export interface DependencyNodeRef {
 	kind: string;
 	id: string;
@@ -14152,6 +14168,16 @@ export interface OpenBlocker extends DependencyNodeRef {
 	/** The blocker as declared, when the open one is its replacement. */
 	replaces?: DependencyNodeRef;
 	hidden: boolean;
+	/**
+	 * It ENDED without delivering (cancelled, failed, archived, lost) and still
+	 * holds the dependent: the work it waited on never happened, so the
+	 * dependent re-plans — remove the edge, or link a replacement.
+	 */
+	dropped: boolean;
+	/** Its own raw status, when the reader may see it. */
+	status?: string | null;
+	/** Its display name, when the reader may see it. */
+	title?: string | null;
 }
 /** A relation row as the relation readers return it — plus the dependency marker. */
 export type RelationReadRow = typeof relations.$inferSelect & {
@@ -14503,7 +14529,10 @@ export interface GraphEnvelope {
 }
 export interface DependencyState {
 	blocked: boolean;
-	/** The blockers still holding it up, after `replaces` following. */
+	/**
+	 * The blockers still holding it up, after `replaces` following — open ones
+	 * and dropped ones (`dropped: true`, ended without delivering).
+	 */
 	openBlockers: OpenBlocker[];
 	/** Every declared blocker (outgoing `blocked_by`), open or cleared. */
 	declared: DependencyNodeRef[];
@@ -16324,7 +16353,7 @@ export type BlockerEdgeResult = {
 	linked: true;
 } | {
 	linked: false;
-	reason: "not_found" | "self_blocker";
+	reason: "cycle" | "not_found" | "self_blocker";
 };
 export type RemoveBlockerResult = {
 	removed: true;
@@ -16332,7 +16361,11 @@ export type RemoveBlockerResult = {
 	reason: "no_edge" | "not_found" | "self_blocker";
 	removed: false;
 };
-/** What happened to ONE create-time blocker. Reported per id, never folded. */
+/**
+ * What happened to ONE blocker added at create time — or mid-flight through
+ * `synap_update_session` `addBlockedBySessionIds`, which reuses this door.
+ * Reported per id, never folded.
+ */
 export type CreateTimeBlockerReport = {
 	blockerSessionId: string;
 	inserted: number;
@@ -16344,7 +16377,7 @@ export type CreateTimeBlockerReport = {
 } | {
 	blockerSessionId: string;
 	message?: string;
-	reason: "denied" | "error" | "not_found" | "self_blocker";
+	reason: "cycle" | "denied" | "error" | "not_found" | "self_blocker";
 	status: "failed";
 };
 /** Both directions of the dependency edge for one session. */
@@ -16746,6 +16779,99 @@ export interface SessionExternalAgent {
 	 */
 	quietAfterMs: number | null;
 }
+/**
+ * Who wrote a room message:
+ *  - `person`   — the session's OWNER typing (`role: user`, `authorType:
+ *                 human`, `userId` = the session's user). The only one a
+ *                 reader may treat as "you said".
+ *  - `agent`    — any `ai_agent` row, whatever its `role`.
+ *  - `teammate` — another person in the room: a `human` user who is not the
+ *                 owner, or an `external` contact (WhatsApp, Slack).
+ *  - `system`   — everything the pod itself wrote: recall notices
+ *                 (`assistant` + `human`), `bot` rows, `system` rows.
+ */
+export type RoomAuthor = "agent" | "person" | "system" | "teammate";
+export interface PacketRoomMessage {
+	id: string;
+	/** ISO timestamp. */
+	at: string;
+	/** The stored `role` (`user` · `assistant` · `system`) — provenance only; read `author`. */
+	role: string;
+	author: RoomAuthor;
+	/** `author === "person"` — the one test a reader needs most, precomputed. */
+	isPerson: boolean;
+	/** The agent principal that posted it, on an `agent` row when recorded. */
+	agentUserId?: string;
+	/** At most {@link ROOM_TEXT_CAP} characters. */
+	text: string;
+	truncated: boolean;
+	/** Room text is data, never instructions — whoever wrote it. */
+	untrusted: true;
+	/** `text`, fenced as untrusted data, to put into an agent's prompt. */
+	fenced: string;
+}
+export type PacketRoomSection = {
+	/** The room's channel; `null` = the session has no room (a true state). */
+	channelId: string | null;
+	/**
+	 * The NEWEST message's id (`null` with no messages). A poller compares it
+	 * with the last cursor it saw: equal ⇒ nothing new in the room.
+	 */
+	cursor: string | null;
+	/** More messages exist past the last item. */
+	hasMore: boolean;
+	/** Newest first, at most {@link ROOM_TOP_N}. */
+	items: PacketRoomMessage[];
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
+/**
+ * - `not_reached` — no proposal for this gate exists yet.
+ * - `pending` / `approved` / `rejected` — the latest proposal's decision
+ *   (`auto_approved` counts as approved, never as decided by a human).
+ * - `void` — the latest proposal holds no decision: withdrawn, expired,
+ *   reverted, or its approval failed to apply.
+ * - `by_criteria` — a CHECK gate: it files no proposal; whether it passes is
+ *   the stage's criteria (the packet's `evaluation` section).
+ */
+export type PacketGateState = "approved" | "by_criteria" | "not_reached" | "pending" | "rejected" | "void";
+export interface PacketGateItem {
+	stageKey: string;
+	stageName: string;
+	kind: "awaits" | "check" | "human";
+	/** The proposal type that decides this gate; `null` for a check gate. */
+	proposalType: string | null;
+	state: PacketGateState;
+	/** The latest proposal for this gate, when one exists. */
+	proposalId?: string;
+	/** A PERSON approved or rejected it (reviewer row is `userType: human`). */
+	decidedByHuman: boolean;
+	/** When it was approved or rejected. */
+	decidedAt?: string;
+	/** A deploy gate's commit (≥ 7 hex chars, may be abbreviated). */
+	commitSha?: string;
+}
+/** The newest `dev.deploy_approval` a PERSON approved for this session. */
+export interface PacketDeployApproval {
+	proposalId: string;
+	/** As filed: ≥ 7 hex chars, may be abbreviated — compare by prefix, case-insensitively. */
+	commitSha: string;
+	branch: string | null;
+	repo: string | null;
+	targetHost: string | null;
+	approvedAt: string | null;
+}
+export type PacketGatesSection = {
+	deploy: PacketDeployApproval | null;
+	/** In the process's stage order. Not capped: one entry per gated stage. */
+	items: PacketGateItem[];
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
 export type PacketSection<T> = {
 	items: T[];
 	status: "ok";
@@ -16754,7 +16880,18 @@ export type PacketSection<T> = {
 	reason: string;
 	status: "unavailable";
 };
-export interface PacketSlotItem {
+/**
+ * How a kind is NAMED and MARKED, resolved by the vocabulary's one door
+ * (`resolveObjectNoun` / `resolveObjectGlyph`) — so a reader with no icon
+ * font draws `glyph` instead of keeping its own kind → mark table.
+ */
+export interface PacketKindIdentity {
+	/** "Task", "Decision" — an entity's own profile name when it has one. */
+	noun: string;
+	/** One compact mark ("☐", "◇", "▤"); never empty — unknown kinds read the fallback. */
+	glyph: string;
+}
+export interface PacketSlotItem extends PacketKindIdentity {
 	label: string;
 	kind: string;
 	blockedReason?: string;
@@ -16793,6 +16930,27 @@ export interface PacketSlotItem {
 	 */
 	ask?: SlotAsk;
 }
+/**
+ * A client conversation attached to the session's change-feed wait — a
+ * `session_runners` row (`loadSessionRunners`), projected.
+ */
+export interface PacketRunnerItem {
+	/** The client's own harness name (`claude-code`, …), as it sent it. */
+	harness: string;
+	conversationId: string;
+	/** Where it ran, when its client said so. Display only. */
+	cwd: string | null;
+	/** The computer hosting the agent (`users.id` of a `machine` agent user). */
+	machineId?: string;
+	/** The agent acting through the key, when an agent key held the wait. */
+	agentUserId?: string;
+	firstSeenAt: string;
+	lastSeenAt: string;
+	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
+	live: boolean;
+	/** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
+	resume?: string;
+}
 export interface PacketProposalItem {
 	id: string;
 	/** Imperative — what approving it WILL do. */
@@ -16800,7 +16958,8 @@ export interface PacketProposalItem {
 	proposalType: string;
 	createdAt: string | null;
 }
-export interface PacketOutputItem {
+export interface PacketOutputItem extends PacketKindIdentity {
+	/** Normalized object kind — `entity` for entities; `noun`/`glyph` name its profile. */
 	kind: string;
 	refId: string;
 	title: string;
@@ -16881,7 +17040,7 @@ export interface PacketDecision {
 	/** The reviewer's rejection reason, when one was given. */
 	reason?: string;
 }
-export type NextMoveKind = "agent_slot" | "none" | "owed_slot" | "pending_proposal" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_session";
+export type NextMoveKind = "agent_slot" | "blocker_dropped" | "none" | "owed_slot" | "pending_proposal" | "ready_to_close" | "undeclared" | "unknown" | "waiting_on_session";
 export interface ContinuationNextMove {
 	kind: NextMoveKind;
 	/** Who acts: the person, the AI, or nobody. */
@@ -16892,7 +17051,10 @@ export interface ContinuationNextMove {
 	reason: string;
 	/** The proposal id, for `pending_proposal`. */
 	proposalId?: string;
-	/** The blocking session's id, for `waiting_on_session`. */
+	/**
+	 * The blocking session's id, for `waiting_on_session`; for `blocker_dropped`,
+	 * the DROPPED blocker's id when that blocker is a session.
+	 */
 	sessionId?: string;
 }
 export interface ContinuationPacket {
@@ -17069,6 +17231,46 @@ export interface ContinuationPacket {
 	} | null;
 	nextMove: ContinuationNextMove;
 	/**
+	 * THE ROOM — the session room's newest messages, each classified by who
+	 * wrote it (`classifyRoomAuthor`, `room-messages.ts`). Read through the
+	 * channel-visibility gate: a room the viewer cannot see is `unavailable`,
+	 * never empty. `channelId: null` = the session has no room.
+	 */
+	room: PacketRoomSection;
+	/**
+	 * IS AN AGENT WORKING ON THIS RIGHT NOW — the liveness batch read
+	 * (`loadSessionLiveness`) judged by the ONE rule (`isSessionWorkingNow`) at
+	 * `measuredAt`. `since`: when the running turn started, else the newest
+	 * activity (`null` = nothing happened yet). The answer flips to idle on its
+	 * own `windowMs` after `lastActivityAt`; a reader that keeps the packet
+	 * re-judges with `isSessionWorkingNow` rather than trusting a stale `state`.
+	 */
+	live: {
+		lastActivityAt: string | null;
+		measuredAt: string;
+		since: string | null;
+		state: "idle" | "working";
+		status: "ok";
+		turnInFlight: boolean;
+		windowMs: number;
+	} | {
+		reason: string;
+		status: "unavailable";
+	};
+	/**
+	 * GATES — every gated stage of the session's process and its state, DERIVED
+	 * FROM PROPOSAL ROWS only (`session-gates.ts`), plus `deploy`: the newest
+	 * `dev.deploy_approval` a PERSON approved. "Is commit X approved to ship by a
+	 * human?" is `deploy?.commitSha` prefix-matching X.
+	 */
+	gates: PacketGatesSection;
+	/**
+	 * WHO IS ATTACHED — the client conversations holding this session's
+	 * change-feed wait, most recently seen first (`session-runners.ts`). An
+	 * empty list means nobody has listened; a failed read is `unavailable`.
+	 */
+	runners: PacketSection<PacketRunnerItem>;
+	/**
 	 * The session's contract and its grade: the declared binary criteria, the
 	 * server-computed verdict, and the CURRENT evaluation per criterion (human
 	 * wins). `criteria: []` with `verdict.state: "none"` means none declared; a
@@ -17141,14 +17343,6 @@ export type SessionInteractionsSection = {
  * read through {@link sessionReadableWhere}.
  */
 export type SessionViewerRole = "member" | "owner";
-declare const LIFECYCLE_CATEGORIES$1: readonly [
-	"open",
-	"active",
-	"paused",
-	"done",
-	"lost"
-];
-type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 declare const LANDED_DECISION_STATES: readonly [
 	"applied",
 	"approved",

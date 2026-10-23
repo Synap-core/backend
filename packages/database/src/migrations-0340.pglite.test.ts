@@ -50,9 +50,19 @@ const BASELINE_OAUTH = slice(
   "-- ─── 3. events"
 );
 const BASELINE_APPS = slice("-- apps (0309)", "-- 0319: lifecycle columns");
-/** The baseline's 0339 and 0340 blocks: from 0339's comment to the end. */
+/**
+ * Where a NEWER baseline block (0341+) starts, so a slice "from 0339 onward"
+ * stops before tables later migrations append (they reference tables this
+ * PGlite fixture never creates). End of file when there is none.
+ */
+const NEWER_BLOCK = (() => {
+  const i = BASELINE.search(/\n-- 03(4[1-9]|[5-9][0-9]):/);
+  return i === -1 ? undefined : i + 1;
+})();
+/** The baseline's 0339 and 0340 blocks: from 0339's comment to the next block. */
 const BASELINE_TAIL = BASELINE.slice(
-  BASELINE.indexOf("-- 0339: a pod app's rotating")
+  BASELINE.indexOf("-- 0339: a pod app's rotating"),
+  NEWER_BLOCK
 );
 const USERS_STUB = `CREATE TABLE IF NOT EXISTS "users" ("id" text PRIMARY KEY);`;
 

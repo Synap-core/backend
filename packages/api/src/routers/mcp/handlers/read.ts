@@ -271,8 +271,11 @@ export const readHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
+    // `limit` used to reach nothing — every call returned 50 messages.
+    // Clamped, not refused: an over-large ask still gets the cap.
     const result = await caller.context.getThreadContext({
       threadId: args.threadId as string,
+      limit: pageLimit(args.limit, 50, 100),
     });
     return ok(result);
   },

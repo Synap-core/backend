@@ -1741,6 +1741,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0324_lifecycle_transition_outbox.sql",
   },
 
+  // session_runners — who holds a session's change-feed wait (0342). Absence
+  // means every wait named by a conversation would fail its runner stamp
+  // (logged, never fatal) and the runner loader would 42P01.
+  {
+    table: "session_runners",
+    column: "last_seen_at",
+    addedBy: "0342_session_runners.sql",
+  },
+  {
+    table: "session_runners",
+    column: "machine_user_id",
+    addedBy: "0342_session_runners.sql",
+  },
+
   // Kind + Facets Wave 3A (0175): the `_conversions` ledger — mirrors
   // `_migrations` for DATA ops. Absence means a pod is on a pre-0175 schema
   // where the conversion engine's applied-set read would hit a missing table.
