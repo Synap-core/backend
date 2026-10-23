@@ -556,9 +556,8 @@ export function actingUserIdFor(
 ): string | null {
   if (!mayActAsUser(c, requestedUserId)) return null;
   const authUserId = c.get("userId") as string;
-  if (!requestedUserId || isOwnAgentPrincipal(c, requestedUserId))
-    return authUserId;
-  return requestedUserId;
+  // NEGCTL: own agent principal no longer mapped to the linked human.
+  return requestedUserId || authUserId;
 }
 
 /**

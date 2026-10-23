@@ -440,9 +440,8 @@ export function restDoorAllowed(
 ): boolean {
   const m = method.toUpperCase();
   if (m === "GET" || m === "HEAD") {
-    if (GRANT_SAFE_REST_READS.some((r) => r.test(path))) return true;
-    const read = GRANT_REST_GET_READS.find(([r]) => r.test(path));
-    return Boolean(read) && grantBoundsDoor(read![1], grant);
+    // NEGCTL: declared GET doors reverted (allow-list only).
+    return GRANT_SAFE_REST_READS.some((r) => r.test(path));
   }
   if (m === "POST") {
     const read = GRANT_REST_POST_READS.find(([r]) => r.test(path));
