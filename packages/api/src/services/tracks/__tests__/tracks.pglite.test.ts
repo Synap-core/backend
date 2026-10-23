@@ -473,8 +473,14 @@ describe("synap_start_track — the caller's session reaches the gate", () => {
   });
 
   it("synap_reopen_track: the agent's reopen goes through the start door as a proposal naming the version it replaces", async () => {
+    // Its own project: the suites below count PROJECT's tracks.
+    const REOPEN_MCP = randomUUID();
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Reopen MCP', 'active')`,
+      [REOPEN_MCP, USER]
+    );
     const started = await startTrack({
-      projectId: PROJECT,
+      projectId: REOPEN_MCP,
       name: "Reopened over MCP",
       actor: human,
     });
