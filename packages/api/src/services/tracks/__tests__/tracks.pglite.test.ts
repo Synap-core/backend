@@ -1208,6 +1208,9 @@ describe("a live track's identity is its NAME (0317) — a method can run twice"
     // …and the lifecycle migration on top, as a pod runs them, re-runnable.
     await h.client!.exec(M0344);
     await h.client!.exec(M0344);
+    // 0344 re-adds ITS verdict CHECK; 0347 (run after it on every pod) is
+    // what admits `retired` — re-run it so later tests see the pod's CHECK.
+    await h.client!.exec(M0347);
     const names = (
       await q<{ name: string; status: string }>(
         `select name, status from project_tracks where project_id = $1 order by created_at`,

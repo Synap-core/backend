@@ -574,7 +574,7 @@ export function checkTrackClose(
     if (closing && workKind === OPERATION_WORK_KIND) {
       return `An operation is never "${verdict}" — it is assessed per period and closes as retired.`;
     }
-    if (verdict === "retired") {
+    if (closing && verdict === "retired") {
       return `Only an operation closes as retired — close this goal as ${allowed.join(", ")}.`;
     }
     return `"${verdict}" is not a verdict for ${into.toLowerCase()} a goal — use ${allowed.join(", ")}.`;
