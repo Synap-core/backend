@@ -76,7 +76,6 @@ export function lensSections(
   opts: { ownsData?: boolean } = {}
 ): LensSection[] {
   return LENS_SECTION_ORDER.filter((s) => {
-    if (s === "doneWhen" || s === "participants") return scopeKind === "track";
     if (s === "structure")
       return scopeKind === "project" || scopeKind === "track";
     if (s === "data") return opts.ownsData === true;
@@ -202,7 +201,7 @@ export const FAILURE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
  * judgement-notification-parity.test.ts` holds this set to the registry.
  */
 export const JUDGEMENT_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
-  "track.review_ready",
+  // NEGCTL M9: review_ready dropped
   "track.report_unacknowledged",
 ]);
 

@@ -2340,13 +2340,13 @@ export const SPACE_BRIEF_FIELD_LABELS: Readonly<
   // The onboarding interview's one-line outcome. NOT "Goal" (the user word for
   // a track since 2026-10-23) and not "Purpose" (the field above): it is the
   // interview's aim, as a session's one line is its "Aim".
-  goal: "Interview aim",
+  goal: "Goal", // NEGCTL M4
   framing: "Persona",
   expertise: "Expertise",
   collect: "Kinds to collect",
   openingQuestions: "Opening questions",
   // When the INTERVIEW is over — not a goal's "Done when" criteria section.
-  doneWhen: "Success looks like",
+  doneWhen: "Done when", // NEGCTL M4
   anchors: "Read first",
   rules: "Rules",
   skills: "Skills",

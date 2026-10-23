@@ -157,7 +157,7 @@ export const LENS_TARGET_LABEL = "Target";
  * `components/lens/kpi-fact.ts`, W5 2026-10-23). Worded "old", never
  * "stale": stale already means an unreadable session.
  */
-export const LENS_KPI_STATED_OLD_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
+export const LENS_KPI_STATED_OLD_AFTER_MS = 24 * 60 * 60 * 1000; // NEGCTL M5
 
 /** Whether a KPI value stated at `statedAt` is past {@link LENS_KPI_STATED_OLD_AFTER_MS}. */
 export function lensKpiStatedIsOld(

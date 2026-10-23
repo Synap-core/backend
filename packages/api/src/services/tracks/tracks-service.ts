@@ -748,7 +748,7 @@ export async function listTracks(params: {
   }
   // Pod-wide reads newest first (a collection); a project's own list keeps
   // the order its tracks were started in.
-  const newestFirst = !projectId;
+  const newestFirst = false; // NEGCTL M10
   const cursor = params.page?.cursor ?? null;
   const after = cursor
     ? newestFirst
@@ -2728,8 +2728,7 @@ export async function acceptGoalCriterion(input: {
       message: `The criterion "${criterion.key}" was removed while you decided — read the goal again.`,
     });
   }
-  // The judge decided: "ready for your verdict" leaves their Needs you.
-  await settleGoalReviewNotice(track.id);
+  // NEGCTL M8: no settle
   return { status: "updated", track: updated };
 }
 

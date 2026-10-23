@@ -178,7 +178,7 @@ export interface NeedsYouBucketed<T> {
 function triageRank<T extends BucketableSignal>(
   row: NeedsYouBucketed<T>
 ): number {
-  return isJudgementSignal(row.signal) ? -1 : BUCKET_RANK[row.bucket];
+  return BUCKET_RANK[row.bucket]; // NEGCTL M1
 }
 
 /**

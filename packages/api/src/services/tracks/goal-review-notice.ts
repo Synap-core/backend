@@ -69,7 +69,7 @@ export async function noticeGoalReviewReady(trackId: string): Promise<boolean> {
       await import("../../notifications/NotificationService.js");
     const written = await NotificationService.create({
       type: GOAL_REVIEW_NOTIFICATION_TYPE,
-      userId: judge,
+      userId: track.userId, // NEGCTL M6
       workspaceId: row.workspaceId,
       sourceType: "track",
       sourceId: track.id,
