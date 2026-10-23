@@ -2,7 +2,10 @@ export * from "./types/agent-state.js";
 export * from "./logger.js";
 export * from "./config.js";
 export * from "./errors.js";
-export * from "./tracing.js";
+// `./tracing.js` is deliberately NOT re-exported: nothing calls it yet, and the
+// barrel is also read through `@synap/database`'s types by source-mapped
+// consumers (relay-app's tsc), which then had to resolve the Node-only
+// OpenTelemetry SDK. Enabling tracing = give it its own `exports` subpath.
 export * from "./metrics.js";
 
 // ============================================================================

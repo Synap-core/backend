@@ -13,8 +13,10 @@ import "dotenv/config";
 
 // Initialize OpenTelemetry tracing FIRST (before any other imports)
 // This must be done before importing any libraries to ensure proper instrumentation
-// TODO: Enable tracing for production observability
-// import { initializeTracing } from "@synap-core/core";
+// TODO: Enable tracing for production observability — `tracing.ts` is not in
+// the @synap-core/core barrel; add a `./tracing` export subpath first (relay-app
+// derives its tsconfig paths from those exports: its map must follow).
+// import { initializeTracing } from "@synap-core/core/tracing";
 // initializeTracing();
 
 import { Hono, type Context as HonoContext } from "hono";
