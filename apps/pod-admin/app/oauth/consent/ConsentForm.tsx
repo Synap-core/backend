@@ -34,8 +34,9 @@ import { trpc } from "../../../lib/trpc";
 import {
   actsAsHeadline,
   allowBlockedReason,
+  alsoSeeLine,
   consentWidth,
-  DECIDE_FOR_YOU_LINE,
+  decideLine,
   groupByObject,
   holdsSpace,
   initialSelection,
@@ -975,7 +976,8 @@ function LevelControl({
  * button opens its detail), and its level. The detail lists each permission
  * in words with its raw token, the developer's reason, and a tick per space:
  * the row's own and default spaces, then the rest behind "Also allow in
- * another space…".
+ * another space…". "It can also see" names its objects instead, and its
+ * detail lists each as its own row (View or Off, its own spaces).
  */
 function ObjectRow({
   row,
@@ -989,31 +991,19 @@ function ObjectRow({
   row: ConsentObject;
   selection: Selection;
   templates: readonly string[];
-  podWide: boolean;
+  /** The row's kind is kept pod-wide (the server's `podWideKinds`). */
+  podWide: (row: ConsentObject) => boolean;
   busy: boolean;
   onSetLevel: (row: ConsentObject, level: AccessLevel) => void;
   onToggleSpace: (row: ConsentObject, workspaceId: string) => void;
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
-  const [more, setMore] = useState(false);
-  const scope = scopeLabel(objectSpaces(selection, row));
-  const shown = shownSpaces(selection, row, templates);
-  const others = otherSpaces(selection, row, templates);
+  const folded = row.members.length > 0;
+  const scope = folded
+    ? alsoSeeLine(selection, row)
+    : scopeLabel(objectSpaces(selection, row));
   const noSpace = row.permissions.every((p) => p.workspaces.length === 0);
-  const tick = (w: { workspaceId: string; workspaceName: string }) => (
-    <Checkbox
-      key={w.workspaceId}
-      size="sm"
-      classNames={CONSENT_CHECKBOX}
-      aria-label={objectSpaceLabel(row, w.workspaceName)}
-      isSelected={holdsSpace(selection, row, w.workspaceId)}
-      isDisabled={busy}
-      onValueChange={() => onToggleSpace(row, w.workspaceId)}
-    >
-      {w.workspaceName}
-    </Checkbox>
-  );
   return (
     <li className="flex flex-col py-1" data-object={row.key}>
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
@@ -1036,7 +1026,7 @@ function ObjectRow({
               <span className="text-xs text-foreground/65">{scope}</span>
             ) : row.decisions ? (
               <span className="text-xs text-foreground/65">
-                {DECIDE_FOR_YOU_LINE}
+                {decideLine(row)}
               </span>
             ) : null}
           </span>
@@ -1058,66 +1048,130 @@ function ObjectRow({
         // A class's `display` beats the `hidden` attribute: keep both.
         className={`${open ? "flex" : "hidden"} flex-col gap-2 pb-2 pl-6 pt-1`}
       >
-        <ul className="flex flex-col gap-1.5">
-          {row.permissions.map((p) => {
-            const reason = reasonOf(p);
-            return (
-              <li key={p.permission} className="flex flex-col gap-0.5">
-                <span className="text-xs text-foreground/85">
-                  {permissionLabel(p.permission)}{" "}
-                  <span className="font-mono text-[11px] text-foreground/65">
-                    {p.permission}
-                  </span>
-                </span>
-                {reason ? (
-                  <span className="text-pretty text-xs leading-relaxed text-foreground/75">
-                    {/* The developer's words, as text: why it asks. */}
-                    <span className="text-foreground/65">Its reason: </span>
-                    {reason}
-                  </span>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-        {podWide ? (
-          <p className="text-xs leading-relaxed text-foreground/75">
-            {podWideNote(row)}
-          </p>
-        ) : null}
-        {shown.length > 0 ? (
-          <div
-            role="group"
-            aria-label={`${row.label}: where`}
-            className="flex flex-wrap gap-x-4"
-          >
-            {shown.map(tick)}
-          </div>
-        ) : null}
-        {others.length > 0 ? (
-          <>
-            <button
-              type="button"
-              aria-expanded={more}
-              aria-controls={`${id}-more`}
-              onClick={() => setMore((m) => !m)}
-              className="flex min-h-10 items-center self-start rounded-sm text-xs text-foreground/75 underline underline-offset-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-            >
-              Also allow in another space…
-            </button>
-            <div
-              id={`${id}-more`}
-              hidden={!more}
-              role="group"
-              aria-label={`${row.label}: other spaces`}
-              className={`${more ? "flex" : "hidden"} flex-wrap gap-x-4`}
-            >
-              {others.map(tick)}
-            </div>
-          </>
-        ) : null}
+        {folded ? (
+          <ul className="flex flex-col divide-y divide-foreground/10">
+            {row.members.map((m) => (
+              <ObjectRow
+                key={m.key}
+                row={m}
+                selection={selection}
+                templates={templates}
+                podWide={podWide}
+                busy={busy}
+                onSetLevel={onSetLevel}
+                onToggleSpace={onToggleSpace}
+              />
+            ))}
+          </ul>
+        ) : (
+          <ObjectDetail
+            row={row}
+            selection={selection}
+            templates={templates}
+            podWide={podWide(row)}
+            busy={busy}
+            onToggleSpace={onToggleSpace}
+          />
+        )}
       </div>
     </li>
+  );
+}
+
+/** A row's detail: its permissions in words, its reasons, a tick per space. */
+function ObjectDetail({
+  row,
+  selection,
+  templates,
+  podWide,
+  busy,
+  onToggleSpace,
+}: {
+  row: ConsentObject;
+  selection: Selection;
+  templates: readonly string[];
+  podWide: boolean;
+  busy: boolean;
+  onToggleSpace: (row: ConsentObject, workspaceId: string) => void;
+}) {
+  const id = useId();
+  const [more, setMore] = useState(false);
+  const shown = shownSpaces(selection, row, templates);
+  const others = otherSpaces(selection, row, templates);
+  const tick = (w: { workspaceId: string; workspaceName: string }) => (
+    <Checkbox
+      key={w.workspaceId}
+      size="sm"
+      classNames={CONSENT_CHECKBOX}
+      aria-label={objectSpaceLabel(row, w.workspaceName)}
+      isSelected={holdsSpace(selection, row, w.workspaceId)}
+      isDisabled={busy}
+      onValueChange={() => onToggleSpace(row, w.workspaceId)}
+    >
+      {w.workspaceName}
+    </Checkbox>
+  );
+  return (
+    <>
+      <ul className="flex flex-col gap-1.5">
+        {row.permissions.map((p) => {
+          const reason = reasonOf(p);
+          return (
+            <li key={p.permission} className="flex flex-col gap-0.5">
+              <span className="text-xs text-foreground/85">
+                {permissionLabel(p.permission)}{" "}
+                <span className="font-mono text-[11px] text-foreground/65">
+                  {p.permission}
+                </span>
+              </span>
+              {reason ? (
+                <span className="text-pretty text-xs leading-relaxed text-foreground/75">
+                  {/* The developer's words, as text: why it asks. */}
+                  <span className="text-foreground/65">Its reason: </span>
+                  {reason}
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+      {podWide ? (
+        <p className="text-xs leading-relaxed text-foreground/75">
+          {podWideNote(row)}
+        </p>
+      ) : null}
+      {shown.length > 0 ? (
+        <div
+          role="group"
+          aria-label={`${row.label}: where`}
+          className="flex flex-wrap gap-x-4"
+        >
+          {shown.map(tick)}
+        </div>
+      ) : null}
+      {others.length > 0 ? (
+        <>
+          <button
+            type="button"
+            aria-expanded={more}
+            aria-controls={`${id}-more`}
+            onClick={() => setMore((m) => !m)}
+            className="flex min-h-10 items-center self-start rounded-sm text-xs text-foreground/75 underline underline-offset-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+          >
+            Also allow in another space…
+          </button>
+          <div
+            id={`${id}-more`}
+            hidden={!more}
+            role="group"
+            aria-label={`${row.label}: other spaces`}
+            className={`${more ? "flex" : "hidden"} flex-wrap gap-x-4`}
+          >
+            {others.map(tick)}
+          </div>
+        </>
+      ) : null}
+    </>
   );
 }
 
@@ -1177,13 +1231,16 @@ export function AppConsent({
   const objects = rows.filter((r) => !r.decisions);
   const decide = rows.filter((r) => r.decisions);
   const groupId = useId();
+  // The server's list of pod-wide kinds, never a hand list.
+  const podWide = (row: ConsentObject) =>
+    !!row.kind && app.podWideKinds.includes(row.kind);
   const objectRow = (row: ConsentObject) => (
     <ObjectRow
       key={row.key}
       row={row}
       selection={selection}
       templates={app.templates}
-      podWide={!!row.kind && app.podWideKinds.includes(row.kind)}
+      podWide={podWide}
       busy={busy}
       onSetLevel={onSetLevel}
       onToggleSpace={onToggleObjectSpace}

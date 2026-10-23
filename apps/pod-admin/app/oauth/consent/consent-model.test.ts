@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { GRANT_GATE_ACTIONS } from "@synap-core/types/grants";
 
 import {
   actsAsHeadline,
@@ -20,8 +21,12 @@ import {
   toggleSection,
   withoutSpace,
   defaultSpaces,
+  ALSO_SEE,
+  alsoSeeLine,
+  decideLine,
   groupByObject,
   isDecisionPermission,
+  PRESELECT_DECISIONS,
   objectLevel,
   objectSpaces,
   otherSpaces,
@@ -479,19 +484,27 @@ const STUDIO: OfferedPermission[] = STUDIO_ASK.map((permission) => ({
 
 const ids = (spaces: readonly { workspaceId: string }[]) =>
   spaces.map((w) => w.workspaceId);
+/** A row by key: a top-level row, or an object folded into "It can also see". */
 const row = (offer: OfferedPermission[], key: string) => {
-  const r = groupByObject(offer).find((o) => o.key === key);
+  const r = groupByObject(offer)
+    .flatMap((o) => [o, ...o.members])
+    .find((o) => o.key === key);
   expect(r, `no row ${key}`).toBeDefined();
   return r!;
 };
 
 describe("rows group the ask by object", () => {
-  it("one row per object, edits first, then views; words from the vocabulary door", () => {
+  it("one row per object it may edit, then ONE row for all it only views; words from the vocabulary door", () => {
     const rows = groupByObject(STUDIO);
     expect(rows.map((r) => [r.label, r.levels.join("/")])).toEqual([
       ["Posts", "off/view/edit"],
       ["Files", "off/view/edit"],
       ["Signal items", "off/view/edit"],
+      ["It can also see", "off/view"],
+    ]);
+    const also = rows[3]!;
+    expect(also.key).toBe(ALSO_SEE);
+    expect(also.members.map((r) => [r.label, r.levels.join("/")])).toEqual([
       ["Pillars", "off/view"],
       ["Journey stages", "off/view"],
       ["Series", "off/view"],
@@ -504,17 +517,25 @@ describe("rows group the ask by object", () => {
       ["Sessions", "off/view"],
       ["Changes waiting for your review", "off/view"],
     ]);
-    // Every permission sits in exactly one row.
+    // Every permission sits in exactly one top-level row; the folded row's
+    // are exactly its members'.
     expect(
       rows.flatMap((r) => r.permissions.map((p) => p.permission)).sort()
     ).toEqual([...STUDIO_ASK].sort());
+    expect(also.permissions).toEqual(
+      also.members.flatMap((m) => m.permissions)
+    );
   });
 
-  it("approve and reject share ONE last row, On or Off; any other gate verb is an Edit", () => {
+  it("every gate verb is a decision in ONE last row, On or Off; Edit is the other writes", () => {
+    const gates = GRANT_GATE_ACTIONS.filter(
+      (v) => v !== "approve" && v !== "reject"
+    ).map((v) => `entity.post.${v}`);
     const offer: OfferedPermission[] = [
       { permission: "proposal.approve", workspaces: [CO] },
       { permission: "entity.post.read", workspaces: [CO] },
-      { permission: "entity.post.transition", workspaces: [CO] },
+      { permission: "entity.post.update", workspaces: [CO] },
+      ...gates.map((permission) => ({ permission, workspaces: [CO] })),
       { permission: "proposal.reject", workspaces: [CO] },
     ];
     const rows = groupByObject(offer);
@@ -522,12 +543,68 @@ describe("rows group the ask by object", () => {
       ["entity.post", "off/view/edit"],
       ["decisions", "off/on"],
     ]);
+    expect(rows[1]!.label).toBe("Decide for you");
     expect(rows[1]!.permissions.map((p) => p.permission)).toEqual([
       "proposal.approve",
+      ...gates,
       "proposal.reject",
     ]);
-    expect(isDecisionPermission("entity.post.transition")).toBe(false);
-    expect(isDecisionPermission("entity.post.archive")).toBe(false);
+    for (const v of GRANT_GATE_ACTIONS) {
+      expect(isDecisionPermission(`entity.post.${v}`), v).toBe(true);
+    }
+  });
+
+  it("no gate verb starts ticked on a first consent, nor comes with Edit", () => {
+    expect(PRESELECT_DECISIONS).toBe(false);
+    const offer: OfferedPermission[] = [
+      { permission: "entity.post.read", workspaces: ALL4 },
+      { permission: "entity.post.update", workspaces: ALL4 },
+      ...GRANT_GATE_ACTIONS.map((v) => ({
+        permission: `entity.post.${v}`,
+        workspaces: ALL4,
+      })),
+      { permission: "proposal.approve", workspaces: ALL4 },
+      { permission: "entity.merge", workspaces: ALL4 },
+    ];
+    const gate = (a: { permission: string }) =>
+      (GRANT_GATE_ACTIONS as readonly string[]).includes(
+        a.permission.split(".").pop()!
+      );
+    const first = initialSelection(offer, [], TEMPLATES);
+    expect(toApproved(first, offer).filter(gate)).toEqual([]);
+    expect(toApproved(first, offer).map((a) => a.permission)).toEqual([
+      "entity.post.read",
+      "entity.post.read",
+      "entity.post.update",
+      "entity.post.update",
+    ]);
+    const posts = row(offer, "entity.post");
+    const edit = setObjectLevel(
+      setObjectLevel(first, offer, posts, "off", TEMPLATES),
+      offer,
+      posts,
+      "edit",
+      TEMPLATES
+    );
+    expect(toApproved(edit, offer).filter(gate)).toEqual([]);
+  });
+
+  it("the decide row names each gate verb it asks, in words", () => {
+    const decide = (perms: string[]) =>
+      row(
+        perms.map((permission) => ({ permission, workspaces: [CO] })),
+        "decisions"
+      );
+    expect(decideLine(decide(["proposal.approve", "proposal.reject"]))).toBe(
+      "Approve or reject a change waiting for your review, as you"
+    );
+    expect(
+      decideLine(
+        decide(["proposal.approve", "entity.post.archive", "entity.merge"])
+      )
+    ).toBe("Approve, archive or merge, as you");
+    expect(permissionLabel("entity.post.archive")).toBe("Archive posts");
+    expect(permissionLabel("entity.merge")).toBe("Merge everything in it");
   });
 
   it("a row the app may only write offers Edit and Off, never View", () => {
@@ -545,8 +622,109 @@ describe("rows group the ask by object", () => {
     ]);
     expect(rows.map((r) => [r.label, r.levels.join("/")])).toEqual([
       ["Notes", "off/edit"],
-      ["Everything", "off/view"],
+      ["It can also see", "off/view"],
     ]);
+    expect(rows[1]!.members.map((r) => r.label)).toEqual(["Everything"]);
+  });
+});
+
+describe('what it only views folds into ONE row, "It can also see"', () => {
+  const offer: OfferedPermission[] = [
+    { permission: "proposal.approve", workspaces: ALL4 },
+    { permission: "entity.pillar.read", workspaces: ALL4 },
+    { permission: "entity.post.read", workspaces: ALL4 },
+    { permission: "entity.post.create", workspaces: [CO] },
+    { permission: "document.read", workspaces: [CO, BRAND_S] },
+    { permission: "entity.file.create", workspaces: ALL4 },
+  ];
+  const key = (a: { permission: string; workspaceId: string }) =>
+    `${a.permission}@${a.workspaceId}`;
+
+  it("an object it may write keeps its own row; one it only reads is folded; order edits, also-see, decide", () => {
+    const rows = groupByObject(offer);
+    expect(rows.map((r) => r.key)).toEqual([
+      "entity.post",
+      "entity.file",
+      ALSO_SEE,
+      "decisions",
+    ]);
+    expect(rows[2]!.members.map((m) => m.key)).toEqual([
+      "entity.pillar",
+      "document",
+    ]);
+    // A written object is never folded, even when it also reads.
+    for (const r of rows) {
+      for (const m of r.members) expect(m.levels).toEqual(["off", "view"]);
+    }
+  });
+
+  it("names its objects inline: the first four, then +N more; Off names what it asks", () => {
+    const s = initialSelection(STUDIO, [], TEMPLATES);
+    const also = row(STUDIO, ALSO_SEE);
+    expect(alsoSeeLine(s, also)).toBe(
+      "Pillars, Journey stages, Series, Platforms +7 more"
+    );
+    const t = setObjectLevel(
+      s,
+      STUDIO,
+      row(STUDIO, "entity.pillar"),
+      "off",
+      TEMPLATES
+    );
+    expect(alsoSeeLine(t, also)).toBe(
+      "Journey stages, Series, Platforms, Content compositions +6 more"
+    );
+    const off = setObjectLevel(s, STUDIO, also, "off", TEMPLATES);
+    expect(alsoSeeLine(off, also)).toBe(alsoSeeLine(s, also));
+  });
+
+  it("switching one folded object off removes exactly its pairs; the row stays View", () => {
+    const s = initialSelection(offer, [], TEMPLATES);
+    const also = row(offer, ALSO_SEE);
+    const docs = row(offer, "document");
+    const t = setObjectLevel(s, offer, docs, "off", TEMPLATES);
+    expect(toApproved(t, offer).map(key)).toEqual(
+      toApproved(s, offer)
+        .filter((a) => a.permission !== "document.read")
+        .map(key)
+    );
+    expect(objectLevel(t, docs)).toBe("off");
+    expect(objectLevel(t, row(offer, "entity.pillar"))).toBe("view");
+    expect(objectLevel(t, also)).toBe("view");
+  });
+
+  it("the folded row Off clears its objects only; View from Off gives each its reads in its default spaces", () => {
+    const s = initialSelection(offer, [], TEMPLATES);
+    const also = row(offer, ALSO_SEE);
+    const off = setObjectLevel(s, offer, also, "off", TEMPLATES);
+    expect(objectLevel(off, also)).toBe("off");
+    expect(toApproved(off, offer).map(key)).toEqual(
+      toApproved(s, offer)
+        .filter(
+          (a) =>
+            a.permission !== "document.read" &&
+            a.permission !== "entity.pillar.read"
+        )
+        .map(key)
+    );
+    const back = setObjectLevel(off, offer, also, "view", TEMPLATES);
+    expect(toApproved(back, offer).map(key)).toEqual(
+      toApproved(s, offer).map(key)
+    );
+  });
+
+  it("never a pair outside the offer, from the folded row or one of its objects", () => {
+    const today: OfferedPermission[] = [
+      { permission: "entity.pillar.read", workspaces: [CO] },
+      { permission: "document.read", workspaces: [] },
+    ];
+    const also = row(offer, ALSO_SEE); // an older, wider offer's row
+    let s: Selection = new Set();
+    s = setObjectLevel(s, today, also, "view", TEMPLATES);
+    s = toggleObjectSpace(s, today, row(offer, "document"), "brand");
+    s = toggleObjectSpace(s, today, row(offer, "entity.pillar"), "eco");
+    s = setObjectLevel(s, today, row(offer, "entity.pillar"), "view", []);
+    expect([...s]).toEqual(["entity.pillar.read\u0000co"]);
   });
 });
 

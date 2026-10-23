@@ -228,9 +228,20 @@ describe("AppConsent rows (default view)", () => {
   const first = initialSelection(STUDIO.permissions, [], STUDIO.templates);
   const out = html(first, false, STUDIO);
 
-  it("Content Studio's ask reads as 14 object rows, not a permission × space grid", () => {
-    expect(out.match(/data-object="/g)?.length).toBe(14);
-    expect(out.match(/role="radiogroup"/g)?.length).toBe(14);
+  it("Content Studio's ask reads as 4 rows: its 3 edits, then ONE row for the 11 objects it only views", () => {
+    const objects = [...out.matchAll(/data-object="([^"]+)"/g)].map(
+      (m) => m[1]
+    );
+    // Document order: the folded objects render inside "It can also see".
+    expect(objects.slice(0, 4)).toEqual([
+      "entity.post",
+      "entity.file",
+      "entity.signal_item",
+      "also-see",
+    ]);
+    expect(objects).toHaveLength(4 + 11);
+    expect(out.match(/role="radiogroup"/g)?.length).toBe(15);
+    expect(out).toContain("Pillars, Journey stages, Series, Platforms +7 more");
     // The matrix is not on screen: no section "All" checkbox.
     expect(out).not.toContain("All it asks to do, in every space");
   });
@@ -245,14 +256,20 @@ describe("AppConsent rows (default view)", () => {
     ).toBe("Content Studio will act as you in: Content OS, Ecosystem.");
     expect(selectedLevel(levelGroup(out, "Posts: access"))).toEqual(["Edit"]);
     expect(selectedLevel(levelGroup(out, "Pillars: access"))).toEqual(["View"]);
+    expect(selectedLevel(levelGroup(out, "It can also see: access"))).toEqual([
+      "View",
+    ]);
+    // The 3 edit rows and each of the 11 folded objects say where.
     expect(out.match(/in Content OS and Ecosystem/g)?.length).toBe(14);
   });
 
   it("a read-only row offers View and Off, never Edit", () => {
-    const g = levelGroup(out, "Pillars: access");
-    expect(g).toContain(">View<");
-    expect(g).toContain(">Off<");
-    expect(g).not.toContain(">Edit<");
+    for (const name of ["Pillars: access", "It can also see: access"]) {
+      const g = levelGroup(out, name);
+      expect(g).toContain(">View<");
+      expect(g).toContain(">Off<");
+      expect(g).not.toContain(">Edit<");
+    }
   });
 
   it("the other spaces wait behind one disclosure per row, unticked", () => {
@@ -265,11 +282,12 @@ describe("AppConsent rows (default view)", () => {
   });
 
   it("each row's name is a disclosure button; every tick keeps the visible border", () => {
-    expect(out.match(/aria-expanded="false"/g)?.length).toBe(28);
+    // 15 row names (4 rows + 11 folded objects) + 14 "Also allow…".
+    expect(out.match(/aria-expanded="false"/g)?.length).toBe(29);
     const boxes = out.match(/type="checkbox"/g)?.length ?? 0;
     expect(boxes).toBe(14 * 4);
     expect(out.match(/before:border-default-500/g)?.length).toBe(boxes);
-    expect(out.match(/ring-default-500/g)?.length).toBe(14);
+    expect(out.match(/ring-default-500/g)?.length).toBe(15);
   });
 
   it("Off everywhere: Allow is blocked, with its reason", () => {
@@ -283,6 +301,8 @@ describe("AppConsent rows (default view)", () => {
       ...STUDIO,
       permissions: [
         { permission: "entity.person.read", workspaces: [CO] },
+        { permission: "entity.post.update", workspaces: [CO] },
+        { permission: "entity.post.archive", workspaces: [CO] },
         { permission: "proposal.approve", workspaces: [CO] },
       ] as App["permissions"],
       podWideKinds: ["person"],
@@ -297,5 +317,9 @@ describe("AppConsent rows (default view)", () => {
       "Off",
     ]);
     expect(o).toContain("It asks to decide for you");
+    // A gate verb is a decision, named in words, never part of Edit.
+    expect(o).toContain("Archive or approve, as you");
+    expect(o).toContain("Archive posts");
+    expect(selectedLevel(levelGroup(o, "Posts: access"))).toEqual(["Edit"]);
   });
 });

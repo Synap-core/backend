@@ -9,14 +9,16 @@
  * re-derives the offer and refuses a wider selection anyway
  * (`connectOAuthApp`); this keeps the screen honest about what Allow sends.
  *
- * A DECISION permission (`proposal.approve` / `proposal.reject`: a review
- * verb, `DECISION_ACTIONS`) is never folded into a write: the screen shows it
- * in its own row and section (`groupByObject`, `splitOffer`), and a first
- * consent pre-ticks it only if `PRESELECT_DECISIONS` says so.
+ * A DECISION permission (any grant-grammar gate verb, `GRANT_GATE_ACTIONS`:
+ * `proposal.approve`, `entity.post.archive`, …) is never folded into a write:
+ * the screen shows it in its own row and section (`groupByObject`,
+ * `splitOffer`), and a first consent pre-ticks it only if
+ * `PRESELECT_DECISIONS` says so.
  *
  * The screen reads OBJECT-FIRST (founder, 2026-10-23): one row per object the
- * app asks about (`groupByObject`), each at one level (`objectLevel`: Edit,
- * View or Off) in the spaces made from the app's declared templates
+ * app may edit, every object it only views folded into ONE row "It can also
+ * see" (`groupByObject`), each at one level (`objectLevel`: Edit, View or
+ * Off) in the spaces made from the app's declared templates
  * (`defaultSpaces`). "Customize…" shows the full permission × space matrix.
  * Both edit the ONE selection below; nothing new is sent on the wire.
  */
@@ -69,19 +71,13 @@ const key = (permission: string, workspaceId: string) =>
   `${permission}\u0000${workspaceId}`;
 
 /**
- * The review verbs: letting an app approve or reject a change for the person.
- * Every other gate verb (archive, merge, transition, …) is a write on its
- * object and reads as Edit (founder, 2026-10-23).
+ * The permission's verb is a gate verb (approve, reject, archive, merge,
+ * transition, …: `GRANT_GATE_ACTIONS`), not a write. Each is a decision the
+ * person gives on its own (#94, #133); Edit never includes one.
  */
-export const DECISION_ACTIONS = [
-  "approve",
-  "reject",
-] as const satisfies readonly (typeof GRANT_GATE_ACTIONS)[number][];
-
-/** The permission lets the app decide for the person (approve, reject). */
 export function isDecisionPermission(permission: string): boolean {
   const action = permission.split(".").pop() ?? "";
-  return (DECISION_ACTIONS as readonly string[]).includes(action);
+  return (GRANT_GATE_ACTIONS as readonly string[]).includes(action);
 }
 
 /** The permission only reads (`…read`); a bare subject or kind is a write. */
@@ -448,7 +444,8 @@ const plural = (word: string) =>
  * A plain-language line for a grant-grammar permission
  * (`<subject>[.<kind>].<action>`): `entity.post.create` → "Create posts",
  * `document.update` → "Edit documents", `entity.read` → "Read everything in
- * it", `proposal.approve` → "Approve changes waiting for your review". The
+ * it", `proposal.approve` → "Approve changes waiting for your review",
+ * `entity.post.archive` → "Archive posts". The
  * raw permission is shown beside it, so an unusual one is never
  * hidden behind a friendly word.
  */
@@ -458,7 +455,8 @@ export function permissionLabel(permission: string): string {
   if (segs[0] === "proposal" && isDecisionPermission(permission)) {
     return `${grantActionLabel(action)} changes waiting for your review`;
   }
-  const verb = ACTION_WORDS[action] ?? action;
+  // A gate verb (archive, merge, …) in the vocabulary's words.
+  const verb = ACTION_WORDS[action] ?? grantActionLabel(action);
   const subject = segs[0] ?? "";
   const kind = segs.length > 2 ? segs[1] : null;
   if (subject === "entity") {
@@ -487,31 +485,68 @@ const REVIEW_QUEUE = "Changes waiting for your review";
 
 /** One object the app asks about, and every permission it asks on it. */
 export interface ConsentObject {
-  /** `entity.post`, `document`, … or `decisions` for the review verbs. */
+  /**
+   * `entity.post`, `document`, …; `decisions` for the gate verbs;
+   * `also-see` for the folded read-only objects.
+   */
   key: string;
   /** The object's name, from the grants' vocabulary door. */
   label: string;
   /** The kind, for an `entity.<kind>` row; null otherwise. */
   kind: string | null;
-  /** The "decide for you" row (approve / reject), Off unless given. */
+  /** The "decide for you" row (every gate verb), Off unless given. */
   decisions: boolean;
   /** The levels its control offers, lowest first: Off, then View / Edit. */
   levels: AccessLevel[];
+  /** Every permission of the row (of all its members, when folded). */
   permissions: OfferedPermission[];
+  /**
+   * The objects folded into "It can also see", each its own row (View or
+   * Off, its own spaces); empty on every other row.
+   */
+  members: ConsentObject[];
 }
 
 const isWrite = (permission: string) =>
   !isDecisionPermission(permission) && !isReadOnlyPermission(permission);
 
+/** The folded row's key and name. */
+export const ALSO_SEE = "also-see";
+const ALSO_SEE_LABEL = "It can also see";
+
 /**
- * The offer as rows, one per object: `entity.<kind>.*` → that kind,
- * `document.*` → Documents, `proposal.read` → changes waiting for review, …;
- * every decision (approve / reject) in ONE last row. Rows the app may edit
- * come first, then the rows it only views, each in offer order.
+ * The offer as rows: one per object the app may edit (`entity.<kind>.*` →
+ * that kind, `document.*` → Documents, …), in offer order; then every object
+ * it only views (`proposal.read` → changes waiting for review, …) folded into
+ * ONE row "It can also see" (`members`, founder 2026-10-23: understood at a
+ * glance); then every decision (each gate verb) in ONE last row.
  */
 export function groupByObject(
   offer: readonly OfferedPermission[]
 ): ConsentObject[] {
+  const rows = objectRows(offer);
+  const edits = rows.filter((r) => !r.decisions && r.levels.includes("edit"));
+  const views = rows.filter((r) => !r.decisions && !r.levels.includes("edit"));
+  const decide = rows.filter((r) => r.decisions);
+  const folded: ConsentObject[] =
+    views.length > 0
+      ? [
+          {
+            key: ALSO_SEE,
+            label: ALSO_SEE_LABEL,
+            kind: null,
+            decisions: false,
+            levels: ["off", "view"],
+            permissions: views.flatMap((r) => r.permissions),
+            members: views,
+          },
+        ]
+      : [];
+  return [...edits, ...folded, ...decide];
+}
+
+/** One row per object, each with the levels its permissions allow. */
+function objectRows(offer: readonly OfferedPermission[]): ConsentObject[] {
   const rows = new Map<string, ConsentObject>();
   for (const o of offer) {
     const decision = isDecisionPermission(o.permission);
@@ -534,6 +569,7 @@ export function groupByObject(
         decisions: decision,
         levels: [],
         permissions: [],
+        members: [],
       };
       rows.set(rowKey, row);
     }
@@ -553,10 +589,7 @@ export function groupByObject(
             : []),
         ];
   }
-  const rank = (r: ConsentObject) =>
-    r.decisions ? 2 : r.levels.includes("edit") ? 0 : 1;
-  // A stable sort: offer order within each band.
-  return out.sort((a, b) => rank(a) - rank(b));
+  return out;
 }
 
 /** The permissions a level gives on a row. */
@@ -748,9 +781,44 @@ export function objectSpaceLabel(row: ConsentObject, space: string): string {
   return `${row.label} in ${space}`;
 }
 
-/** Under "Decide for you" while it is Off: what it would let the app do. */
-export const DECIDE_FOR_YOU_LINE =
-  "Approve or reject a change waiting for your review, as you";
+/** "A", "A or B", "A, B or C". */
+const orList = (words: readonly string[]) =>
+  words.length <= 1
+    ? (words[0] ?? "")
+    : `${words.slice(0, -1).join(", ")} or ${words[words.length - 1]}`;
+
+/**
+ * Under "Decide for you" while it is Off: each gate verb it asks, in words,
+ * once ("Approve or reject a change waiting for your review, as you";
+ * "Approve, reject or archive, as you"). Its detail names each permission.
+ */
+export function decideLine(row: ConsentObject): string {
+  const verbs: string[] = [];
+  for (const o of row.permissions) {
+    const word = grantActionLabel(
+      o.permission.split(".").pop() ?? ""
+    ).toLowerCase();
+    if (!verbs.includes(word)) verbs.push(word);
+  }
+  const said = orList(verbs);
+  const line = `${said.charAt(0).toUpperCase()}${said.slice(1)}`;
+  return row.permissions.every((o) => o.permission.startsWith("proposal."))
+    ? `${line} a change waiting for your review, as you`
+    : `${line}, as you`;
+}
+
+/**
+ * Under "It can also see": the objects it is given, by name, the first four
+ * then "+N more" ("Pillars, Journey stages, Series, Platforms +7 more").
+ * While the row is Off, the objects it asks to see.
+ */
+export function alsoSeeLine(selection: Selection, row: ConsentObject): string {
+  const given = row.members.filter((m) => objectLevel(selection, m) !== "off");
+  const names = (given.length > 0 ? given : row.members).map((m) => m.label);
+  return names.length <= 4
+    ? names.join(", ")
+    : `${names.slice(0, 4).join(", ")} +${names.length - 4} more`;
+}
 
 /**
  * A pod-wide kind's note (SDK 1.5.1 reach rule): such an entity is in no
