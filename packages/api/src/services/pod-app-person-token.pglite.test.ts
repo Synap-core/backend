@@ -472,7 +472,7 @@ describe("the consent screen says 'act as you' for a Synap app only", () => {
     expect(ctx.app?.actsAs).toEqual({
       kind: "person",
       lead: "Content Studio will act as you in",
-      note: "What you do in Content Studio is saved as you, right away — not sent for review, approving changes included. It cannot delete, see other spaces, or create keys. You can sign it out any time from Connected.",
+      note: "What you do in Content Studio is saved as you, right away — not sent for review, approving changes included. It cannot delete, or create keys. You can sign it out any time from Connected.",
     });
     // The review verb is offered where OWNER may give a write.
     expect(
@@ -488,7 +488,7 @@ describe("the consent screen says 'act as you' for a Synap app only", () => {
       expect(ctx.app?.verified).toBe(false);
       expect(ctx.app?.actsAs).toEqual({
         kind: "agent",
-        note: "Every change it makes is sent to you for review first. It can never see other spaces, approve its own changes, or create keys.",
+        note: "Every change it makes is sent to you for review first. It can never approve its own changes or create keys.",
       });
       expect(JSON.stringify(ctx)).not.toMatch(/act as you/);
     }

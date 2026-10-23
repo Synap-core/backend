@@ -46,43 +46,58 @@ host_compose() {
             *[!a-z0-9_-]*|[!a-z0-9]*|"") echo "host_compose: '$_hr_n' is not a service/profile name" >&2; return 1 ;;
         esac
     done
-    _hr_dir="${SYNAP_DEPLOY_DIR:?host_compose needs SYNAP_DEPLOY_DIR}/state/requests"
-    _hr_req="$_hr_dir/compose.json"
-    _hr_out="${SYNAP_DEPLOY_DIR}/state/last-compose-request.json"
-    mkdir -p "$_hr_dir" || return 1
-    if [ -e "$_hr_req" ]; then
-        echo "host_compose: another compose request is still waiting for the host ($_hr_req)" >&2
-        return 1
-    fi
     _hr_id="agent-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     _hr_json() { # <words> → ["a","b"]
         _hr_a=""; for _hr_w in $1; do _hr_a="${_hr_a:+$_hr_a,}\"$_hr_w\""; done; printf '[%s]' "$_hr_a"
     }
-    _hr_tmp="$_hr_dir/.compose.$$.tmp"
-    printf '{"schema":1,"id":"%s","services":%s,"profiles":%s,"recreate":%s,"noDeps":%s,"requestedBy":"pod-agent","requestedAt":"%s"}\n' \
-        "$_hr_id" "$(_hr_json "$_hr_services")" "$(_hr_json "$_hr_profiles")" "$_hr_recreate" "$_hr_nodeps" \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$_hr_tmp" && mv -f "$_hr_tmp" "$_hr_req" || { rm -f "$_hr_tmp"; return 1; }
-    echo "host_compose: asked the host to bring up${_hr_services:- every service} (request $_hr_id)"
+    host_request compose "$_hr_id" \
+        "$(printf '{"schema":1,"id":"%s","services":%s,"profiles":%s,"recreate":%s,"noDeps":%s,"requestedBy":"pod-agent","requestedAt":"%s"}' \
+            "$_hr_id" "$(_hr_json "$_hr_services")" "$(_hr_json "$_hr_profiles")" "$_hr_recreate" "$_hr_nodeps" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)")" \
+        "bring up${_hr_services:- every service}" "$_hr_wait"
+}
+
+# The ONE agent-side door to a host request: write <body> (one JSON line) to
+# state/requests/<name>.json (tmp + rename, 0600), then wait for the host's
+# outcome for <id> in state/last-<name>-request.json (synap writes it; the
+# unit's request-outcome.sh when the engine died). 0 = succeeded, 1 = failed /
+# refused / never picked up (the reason is printed). The outcome record is left
+# in HR_RECORD for the caller. <wait> 0 returns once the host TOOK it.
+# Timeouts: HOST_REQUEST_PICKUP_SECONDS (60), HOST_REQUEST_TIMEOUT_SECONDS (540).
+host_request() { # <name> <id> <body-json> <what, for messages> [wait 1|0]
+    _hr_name="$1"; _hr_id="$2"; _hr_wait="${5:-1}"; HR_RECORD=""
+    _hr_dir="${SYNAP_DEPLOY_DIR:?host_request needs SYNAP_DEPLOY_DIR}/state/requests"
+    _hr_req="$_hr_dir/$_hr_name.json"
+    _hr_out="${SYNAP_DEPLOY_DIR}/state/last-$_hr_name-request.json"
+    mkdir -p "$_hr_dir" || return 1
+    if [ -e "$_hr_req" ]; then
+        echo "host_request: another $_hr_name request is still waiting for the host ($_hr_req)" >&2
+        return 1
+    fi
+    _hr_tmp="$_hr_dir/.$_hr_name.$$.tmp"
+    ( umask 077 && printf '%s\n' "$3" > "$_hr_tmp" ) && mv -f "$_hr_tmp" "$_hr_req" || { rm -f "$_hr_tmp"; return 1; }
+    echo "host_request: asked the host to $4 (request $_hr_id)"
 
     _hr_t=0
     while :; do
         if [ ! -e "$_hr_req" ]; then
-            [ "$_hr_wait" = 0 ] && { echo "host_compose: the host took request $_hr_id"; return 0; }
+            [ "$_hr_wait" = 0 ] && { echo "host_request: the host took request $_hr_id"; return 0; }
             _hr_rec="$(cat "$_hr_out" 2>/dev/null)"
             if [ "$(_hr_field "$_hr_rec" request)" = "$_hr_id" ]; then
+                HR_RECORD="$_hr_rec"
                 _hr_st="$(_hr_field "$_hr_rec" status)"
-                [ "$_hr_st" = succeeded ] && { echo "host_compose: done (request $_hr_id)"; return 0; }
-                echo "host_compose: the host recorded ${_hr_st:-an unknown outcome} for request $_hr_id: $(_hr_field "$_hr_rec" reason)" >&2
+                [ "$_hr_st" = succeeded ] && { echo "host_request: done (request $_hr_id)"; return 0; }
+                echo "host_request: the host recorded ${_hr_st:-an unknown outcome} for request $_hr_id: $(_hr_field "$_hr_rec" reason)" >&2
                 return 1
             fi
         elif [ "$_hr_t" -ge "${HOST_REQUEST_PICKUP_SECONDS:-60}" ]; then
             # Take it back, so a unit installed later cannot run a stale order.
-            mv -f "$_hr_req" "$_hr_dir/compose.unclaimed.json" 2>/dev/null || continue
-            echo "host_compose: the host did not take request $_hr_id within ${HOST_REQUEST_PICKUP_SECONDS:-60}s — nothing was changed. On the pod host run: synap units install" >&2
+            mv -f "$_hr_req" "$_hr_dir/$_hr_name.unclaimed.json" 2>/dev/null || continue
+            echo "host_request: the host did not take request $_hr_id within ${HOST_REQUEST_PICKUP_SECONDS:-60}s — nothing was changed. On the pod host run: synap units install" >&2
             return 1
         fi
         if [ "$_hr_t" -ge "${HOST_REQUEST_TIMEOUT_SECONDS:-540}" ]; then
-            echo "host_compose: no outcome for request $_hr_id within ${HOST_REQUEST_TIMEOUT_SECONDS:-540}s — see state/events.jsonl on the pod host" >&2
+            echo "host_request: no outcome for request $_hr_id within ${HOST_REQUEST_TIMEOUT_SECONDS:-540}s — see state/events.jsonl on the pod host" >&2
             return 1
         fi
         sleep "${HOST_REQUEST_POLL_SECONDS:-2}"
