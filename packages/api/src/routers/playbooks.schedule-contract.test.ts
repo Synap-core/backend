@@ -69,6 +69,36 @@ describe("playbooks doors — schedule.mode survives the write", () => {
     });
   });
 
+  it("handToAgentId survives a run schedule and is REFUSED beside an appointment", () => {
+    const AGENT = "22222222-2222-4222-8222-222222222222";
+    const run = updateInputSchema.safeParse({
+      id: PLAYBOOK_ID,
+      schedule: { cron: "0 9 * * MON", enabled: true, handToAgentId: AGENT },
+    });
+    expect(run.success).toBe(true);
+    expect(run.data?.schedule?.handToAgentId).toBe(AGENT);
+    // An appointment waits for the person: handing it to an agent is refused
+    // at the write, not stored and failed at every slot.
+    expect(
+      createInputSchema.safeParse({
+        ...CREATE_BASE,
+        schedule: {
+          cron: "0 9 * * MON",
+          enabled: true,
+          mode: "appointment",
+          handToAgentId: AGENT,
+        },
+      }).success
+    ).toBe(false);
+    // A blank id is not an agent.
+    expect(
+      updateInputSchema.safeParse({
+        id: PLAYBOOK_ID,
+        schedule: { cron: "0 9 * * MON", enabled: true, handToAgentId: "  " },
+      }).success
+    ).toBe(false);
+  });
+
   it("still accepts null (clears the schedule) and an omitted schedule", () => {
     expect(
       updateInputSchema.safeParse({ id: PLAYBOOK_ID, schedule: null }).success
