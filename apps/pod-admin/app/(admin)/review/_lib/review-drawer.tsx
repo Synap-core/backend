@@ -480,17 +480,24 @@ function ProposalBody({
   // The review draws provenance, the change, why, the decision and the one
   // "Advanced" itself; the drawer adds nothing but its frame.
   return (
-    <ProposalReviewBody
-      proposal={p}
-      sourceExits={sourceExits}
-      workspaceName={workspaceName}
-      identity={viewer.identity}
-      onDecided={() => {
-        afterDecision();
-        void query.refetch();
-      }}
-      barClassName={DECISION_BAR_PIN}
-    />
+    <div className="flex flex-col gap-5">
+      <div data-review-provenance="">Where this came from</div>
+      <ProposalReviewBody
+        proposal={p}
+        sourceExits={sourceExits}
+        workspaceName={workspaceName}
+        identity={viewer.identity}
+        onDecided={() => {
+          afterDecision();
+          void query.refetch();
+        }}
+        barClassName={DECISION_BAR_PIN}
+      />
+      <AdvancedPanel
+        ids={[{ label: "Proposal id", value: p.id }]}
+        raw={p.request}
+      />
+    </div>
   );
 }
 
