@@ -56,6 +56,19 @@ const h = vi.hoisted(() => {
         const { drizzle } = await import("drizzle-orm/pglite");
         const schema = await import("@synap/database/schema");
         const client = new PGlite();
+        // DEBUG: trace every statement to find the hang.
+        for (const m of ["query", "exec"] as const) {
+          const orig = (client as any)[m].bind(client);
+          (client as any)[m] = async (sql: string, ...rest: unknown[]) => {
+            process.stderr.write(`[sql:${m}] ${String(sql).replace(/\s+/g, " ").slice(0, 140)}\n`);
+            return orig(sql, ...rest);
+          };
+        }
+        const origTx = (client as any).transaction.bind(client);
+        (client as any).transaction = async (fn: any) => {
+          process.stderr.write(`[sql:tx] BEGIN ${new Error().stack?.split("\n").slice(2, 9).join(" | ")}\n`);
+          try { return await origTx(fn); } finally { process.stderr.write("[sql:tx] END\n"); }
+        };
         state.client = client as unknown as typeof state.client;
         state.db = drizzle(client, { schema });
       }
@@ -322,7 +335,7 @@ beforeEach(async () => {
   h.focus = null;
 });
 
-describe("ea47d64e: an agent organises its OWN fresh task through the real doors", () => {
+describe.only("ea47d64e: an agent organises its OWN fresh task through the real doors", () => {
   it("files it into the project the person named and closes it, each on an applied receipt", async () => {
     const projectId = await seedProject();
     h.focus = projectId;
