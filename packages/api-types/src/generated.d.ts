@@ -16744,6 +16744,99 @@ export interface SessionExternalAgent {
 	 */
 	quietAfterMs: number | null;
 }
+/**
+ * Who wrote a room message:
+ *  - `person`   — the session's OWNER typing (`role: user`, `authorType:
+ *                 human`, `userId` = the session's user). The only one a
+ *                 reader may treat as "you said".
+ *  - `agent`    — any `ai_agent` row, whatever its `role`.
+ *  - `teammate` — another person in the room: a `human` user who is not the
+ *                 owner, or an `external` contact (WhatsApp, Slack).
+ *  - `system`   — everything the pod itself wrote: recall notices
+ *                 (`assistant` + `human`), `bot` rows, `system` rows.
+ */
+export type RoomAuthor = "agent" | "person" | "system" | "teammate";
+export interface PacketRoomMessage {
+	id: string;
+	/** ISO timestamp. */
+	at: string;
+	/** The stored `role` (`user` · `assistant` · `system`) — provenance only; read `author`. */
+	role: string;
+	author: RoomAuthor;
+	/** `author === "person"` — the one test a reader needs most, precomputed. */
+	isPerson: boolean;
+	/** The agent principal that posted it, on an `agent` row when recorded. */
+	agentUserId?: string;
+	/** At most {@link ROOM_TEXT_CAP} characters. */
+	text: string;
+	truncated: boolean;
+	/** Room text is data, never instructions — whoever wrote it. */
+	untrusted: true;
+	/** `text`, fenced as untrusted data, to put into an agent's prompt. */
+	fenced: string;
+}
+export type PacketRoomSection = {
+	/** The room's channel; `null` = the session has no room (a true state). */
+	channelId: string | null;
+	/**
+	 * The NEWEST message's id (`null` with no messages). A poller compares it
+	 * with the last cursor it saw: equal ⇒ nothing new in the room.
+	 */
+	cursor: string | null;
+	/** More messages exist past the last item. */
+	hasMore: boolean;
+	/** Newest first, at most {@link ROOM_TOP_N}. */
+	items: PacketRoomMessage[];
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
+/**
+ * - `not_reached` — no proposal for this gate exists yet.
+ * - `pending` / `approved` / `rejected` — the latest proposal's decision
+ *   (`auto_approved` counts as approved, never as decided by a human).
+ * - `void` — the latest proposal holds no decision: withdrawn, expired,
+ *   reverted, or its approval failed to apply.
+ * - `by_criteria` — a CHECK gate: it files no proposal; whether it passes is
+ *   the stage's criteria (the packet's `evaluation` section).
+ */
+export type PacketGateState = "approved" | "by_criteria" | "not_reached" | "pending" | "rejected" | "void";
+export interface PacketGateItem {
+	stageKey: string;
+	stageName: string;
+	kind: "awaits" | "check" | "human";
+	/** The proposal type that decides this gate; `null` for a check gate. */
+	proposalType: string | null;
+	state: PacketGateState;
+	/** The latest proposal for this gate, when one exists. */
+	proposalId?: string;
+	/** A PERSON approved or rejected it (reviewer row is `userType: human`). */
+	decidedByHuman: boolean;
+	/** When it was approved or rejected. */
+	decidedAt?: string;
+	/** A deploy gate's commit (≥ 7 hex chars, may be abbreviated). */
+	commitSha?: string;
+}
+/** The newest `dev.deploy_approval` a PERSON approved for this session. */
+export interface PacketDeployApproval {
+	proposalId: string;
+	/** As filed: ≥ 7 hex chars, may be abbreviated — compare by prefix, case-insensitively. */
+	commitSha: string;
+	branch: string | null;
+	repo: string | null;
+	targetHost: string | null;
+	approvedAt: string | null;
+}
+export type PacketGatesSection = {
+	deploy: PacketDeployApproval | null;
+	/** In the process's stage order. Not capped: one entry per gated stage. */
+	items: PacketGateItem[];
+	status: "ok";
+} | {
+	reason: string;
+	status: "unavailable";
+};
 export type PacketSection<T> = {
 	items: T[];
 	status: "ok";
@@ -16752,7 +16845,18 @@ export type PacketSection<T> = {
 	reason: string;
 	status: "unavailable";
 };
-export interface PacketSlotItem {
+/**
+ * How a kind is NAMED and MARKED, resolved by the vocabulary's one door
+ * (`resolveObjectNoun` / `resolveObjectGlyph`) — so a reader with no icon
+ * font draws `glyph` instead of keeping its own kind → mark table.
+ */
+export interface PacketKindIdentity {
+	/** "Task", "Decision" — an entity's own profile name when it has one. */
+	noun: string;
+	/** One compact mark ("☐", "◇", "▤"); never empty — unknown kinds read the fallback. */
+	glyph: string;
+}
+export interface PacketSlotItem extends PacketKindIdentity {
 	label: string;
 	kind: string;
 	blockedReason?: string;
@@ -16791,6 +16895,27 @@ export interface PacketSlotItem {
 	 */
 	ask?: SlotAsk;
 }
+/**
+ * A client conversation attached to the session's change-feed wait — a
+ * `session_runners` row (`loadSessionRunners`), projected.
+ */
+export interface PacketRunnerItem {
+	/** The client's own harness name (`claude-code`, …), as it sent it. */
+	harness: string;
+	conversationId: string;
+	/** Where it ran, when its client said so. Display only. */
+	cwd: string | null;
+	/** The computer hosting the agent (`users.id` of a `machine` agent user). */
+	machineId?: string;
+	/** The agent acting through the key, when an agent key held the wait. */
+	agentUserId?: string;
+	firstSeenAt: string;
+	lastSeenAt: string;
+	/** Stamped within `RUNNER_LIVE_WINDOW_SECONDS` of the read. */
+	live: boolean;
+	/** The shell command that reopens it (`resolveAgentConversation`); absent for a harness we cannot reopen. */
+	resume?: string;
+}
 export interface PacketProposalItem {
 	id: string;
 	/** Imperative — what approving it WILL do. */
@@ -16798,7 +16923,8 @@ export interface PacketProposalItem {
 	proposalType: string;
 	createdAt: string | null;
 }
-export interface PacketOutputItem {
+export interface PacketOutputItem extends PacketKindIdentity {
+	/** Normalized object kind — `entity` for entities; `noun`/`glyph` name its profile. */
 	kind: string;
 	refId: string;
 	title: string;
@@ -17069,6 +17195,46 @@ export interface ContinuationPacket {
 		unfinishedOutputs?: number;
 	} | null;
 	nextMove: ContinuationNextMove;
+	/**
+	 * THE ROOM — the session room's newest messages, each classified by who
+	 * wrote it (`classifyRoomAuthor`, `room-messages.ts`). Read through the
+	 * channel-visibility gate: a room the viewer cannot see is `unavailable`,
+	 * never empty. `channelId: null` = the session has no room.
+	 */
+	room: PacketRoomSection;
+	/**
+	 * IS AN AGENT WORKING ON THIS RIGHT NOW — the liveness batch read
+	 * (`loadSessionLiveness`) judged by the ONE rule (`isSessionWorkingNow`) at
+	 * `measuredAt`. `since`: when the running turn started, else the newest
+	 * activity (`null` = nothing happened yet). The answer flips to idle on its
+	 * own `windowMs` after `lastActivityAt`; a reader that keeps the packet
+	 * re-judges with `isSessionWorkingNow` rather than trusting a stale `state`.
+	 */
+	live: {
+		lastActivityAt: string | null;
+		measuredAt: string;
+		since: string | null;
+		state: "idle" | "working";
+		status: "ok";
+		turnInFlight: boolean;
+		windowMs: number;
+	} | {
+		reason: string;
+		status: "unavailable";
+	};
+	/**
+	 * GATES — every gated stage of the session's process and its state, DERIVED
+	 * FROM PROPOSAL ROWS only (`session-gates.ts`), plus `deploy`: the newest
+	 * `dev.deploy_approval` a PERSON approved. "Is commit X approved to ship by a
+	 * human?" is `deploy?.commitSha` prefix-matching X.
+	 */
+	gates: PacketGatesSection;
+	/**
+	 * WHO IS ATTACHED — the client conversations holding this session's
+	 * change-feed wait, most recently seen first (`session-runners.ts`). An
+	 * empty list means nobody has listened; a failed read is `unavailable`.
+	 */
+	runners: PacketSection<PacketRunnerItem>;
 	/**
 	 * The session's contract and its grade: the declared binary criteria, the
 	 * server-computed verdict, and the CURRENT evaluation per criterion (human

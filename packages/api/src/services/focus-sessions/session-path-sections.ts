@@ -56,7 +56,7 @@ import {
   type PacketChildItem,
   type PacketProposalItem,
   type PacketSection,
-  type PacketSlotItem,
+  type PacketSlotFacts,
 } from "./continuation-packet.js";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
 import { readDependencyFacts } from "../links/dependency-links.js";
@@ -168,7 +168,7 @@ const emptySection = <T>(): PacketSection<T> => ({
   items: [],
 });
 
-function owedItem(slot: OwedSlot): PacketSlotItem {
+function owedItem(slot: OwedSlot): PacketSlotFacts {
   return {
     label: slot.label,
     kind: slot.kind,

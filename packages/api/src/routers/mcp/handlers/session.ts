@@ -21,7 +21,11 @@ import type { TerminalSessionStatus } from "../../../services/focus-sessions/ses
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
-import { waitForSessionAnswers } from "../../../services/focus-sessions/wait-for-answers.js";
+import {
+  waitForSessionAnswers,
+  waitForSessionChanges,
+} from "../../../services/focus-sessions/wait-for-answers.js";
+import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
 import { readAgentsForHandoff } from "../../../services/agent-dispatch/agents-for-handoff.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
@@ -284,12 +288,54 @@ export const sessionHandlers: McpHandlerMap = {
     }
     const timeoutSeconds =
       typeof args.timeoutSeconds === "number" ? args.timeoutSeconds : undefined;
+    const kinds = parseSessionChangeKinds(args.events);
+    if (!kinds.ok) return ok({ error: kinds.error });
+    if (args.stamp !== undefined && typeof args.stamp !== "boolean") {
+      return ok({ error: "stamp must be true or false." });
+    }
+    // `stamp: false` = a PEEK (a watcher): never writes the "Picked up" receipt.
+    const stampReceipt = Boolean(agentUserId) && args.stamp !== false;
+    if (kinds.kinds) {
+      if (
+        args.knownStage !== undefined &&
+        args.knownStage !== null &&
+        typeof args.knownStage !== "string"
+      ) {
+        return ok({
+          error:
+            "knownStage must be a stage key or null — pass back `state.currentStage`.",
+        });
+      }
+      const changes = await waitForSessionChanges({
+        sessionId,
+        userId,
+        since,
+        timeoutSeconds,
+        kinds: kinds.kinds,
+        ...(args.knownStage !== undefined
+          ? { knownStage: args.knownStage as string | null }
+          : {}),
+        stampReceipt,
+        agentUserId,
+        signal,
+      });
+      if (!changes)
+        return ok({ error: `Focus session ${sessionId} not found` });
+      if (changes.status === "timeout") {
+        return ok({
+          ...changes,
+          next: "Nothing changed. Call synap_wait_for_answer again with since = nextSince and knownStage = state.currentStage.",
+        });
+      }
+      return ok(changes);
+    }
     const result = await waitForSessionAnswers({
       sessionId,
       userId,
       since,
       timeoutSeconds,
-      stampReceipt: Boolean(agentUserId),
+      stampReceipt,
+      agentUserId,
       // The client hung up / cancelled: stop waiting, stamp nothing.
       signal,
     });
