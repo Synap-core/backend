@@ -29,6 +29,7 @@ import {
   startTrack,
   type TrackActor,
 } from "../../../services/tracks/tracks-service.js";
+import { pickTrackGoalInput } from "../../../services/tracks/goal-content.js";
 import {
   missingStageDomainsNote,
   stageDomainFallbackNote,
@@ -125,6 +126,9 @@ export const trackHandlers: McpHandlerMap = {
           ? { direction: str(ctx.args.direction) }
           : {}),
         ...(ctx.args.kpi != null ? { kpi: ctx.args.kpi } : {}),
+        // What the goal holds (0345) — parsed (2–5 criteria, meanings) by
+        // the service; a malformed one comes back as `{ error }` words.
+        ...pickTrackGoalInput(ctx.args),
         actor: actorOf(ctx),
       });
       const domainsNote = missingStageDomainsNote(result.missingDomains);
@@ -258,10 +262,14 @@ export const trackHandlers: McpHandlerMap = {
     const trackId = uuid(ctx.args.trackId);
     const hasDirection = "direction" in ctx.args;
     const hasKpi = "kpi" in ctx.args;
-    if (!trackId || (!hasDirection && !hasKpi)) {
+    const goal = pickTrackGoalInput(ctx.args);
+    if (
+      !trackId ||
+      (!hasDirection && !hasKpi && Object.keys(goal).length === 0)
+    ) {
       return ok({
         error:
-          "trackId (uuid) and a direction and/or kpi are required — synap_list_tracks lists the project's tracks.",
+          "trackId (uuid) and something to change are required — direction, kpi, endState, criteria, dropConditions, workKind or uncertainty. synap_list_tracks lists the project's tracks.",
       });
     }
     const direction = ctx.args.direction;
@@ -273,6 +281,7 @@ export const trackHandlers: McpHandlerMap = {
         trackId,
         ...(hasDirection ? { direction: direction as string | null } : {}),
         ...(hasKpi ? { kpi: ctx.args.kpi } : {}),
+        ...goal,
         actor: actorOf(ctx),
       });
       if (result.status === "proposed") return result;

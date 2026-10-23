@@ -11,8 +11,14 @@
  *                                       any move of the track lifecycle; a
  *                                       close/drop carries its verdict
  *   PATCH /tracks/:id/params            { params } — answer the method's params
- *   PATCH /tracks/:id/direction         { direction?, kpi? } — where it is heading
- *                                       and the number it steers by (0302)
+ *   PATCH /tracks/:id/direction         { direction?, kpi?, endState?, criteria?,
+ *                                       dropConditions?, workKind?, uncertainty?,
+ *                                       confirmKind? } — where it is heading, the
+ *                                       number it steers by (0302) and what the
+ *                                       goal holds (0345)
+ *   POST  /tracks/:id/criteria/:key/acceptance  { decision, note? } — the
+ *                                       goal's JUDGE accepts, sends back or
+ *                                       rejects a criterion (R2; never an agent)
  *   POST  /tracks/:id/stages            { name, goal?, key? } — add an EMERGENT
  *                                       stage (appended; never entered)
  *   POST  /tracks/:id/stages/:stageKey/sessions  { title?, goal? } — start the
@@ -39,6 +45,8 @@ import {
   PROJECT_TRACK_STATUSES,
   PROJECT_TRACK_VERDICTS,
 } from "@synap/database/schema";
+import { GOAL_ACCEPTANCE_DECISIONS } from "@synap-core/types/units";
+import { trackGoalInputSchema } from "../../../services/tracks/goal-content.js";
 import {
   advanceTrackStage,
   getTrack,
@@ -55,6 +63,7 @@ import {
   addTrackStageInputSchema,
   startStageSession,
   startTrack,
+  acceptGoalCriterion,
   type TrackActor,
 } from "../../../services/tracks/tracks-service.js";
 import {
@@ -64,20 +73,29 @@ import {
 
 const Uuid = z.string().uuid();
 const ParamsBag = z.record(z.string(), z.unknown());
-const StartSchema = z.object({
-  projectId: Uuid,
-  // OPTIONAL (W1): a track is a lasting intent; the method is optional.
-  playbookId: Uuid.optional(),
-  name: z.string().trim().min(1).max(200).optional(),
-  params: ParamsBag.optional(),
-  direction: z.string().max(280).optional(),
-  kpi: trackKpiInputSchema.optional(),
-  reasoning: z.string().max(2000).optional(),
-});
-const DirectionSchema = z.object({
-  direction: z.string().max(280).nullable().optional(),
-  kpi: trackKpiInputSchema.nullable().optional(),
-  reasoning: z.string().max(2000).optional(),
+const StartSchema = z
+  .object({
+    projectId: Uuid,
+    // OPTIONAL (W1): a track is a lasting intent; the method is optional.
+    playbookId: Uuid.optional(),
+    name: z.string().trim().min(1).max(200).optional(),
+    params: ParamsBag.optional(),
+    direction: z.string().max(280).optional(),
+    kpi: trackKpiInputSchema.optional(),
+    reasoning: z.string().max(2000).optional(),
+    // What the goal holds (0345) — refined (2–5 criteria) by the service.
+  })
+  .extend(trackGoalInputSchema.shape);
+const DirectionSchema = z
+  .object({
+    direction: z.string().max(280).nullable().optional(),
+    kpi: trackKpiInputSchema.nullable().optional(),
+    reasoning: z.string().max(2000).optional(),
+  })
+  .extend(trackGoalInputSchema.shape);
+const AcceptanceSchema = z.object({
+  decision: z.enum(GOAL_ACCEPTANCE_DECISIONS),
+  note: z.string().trim().max(2000).optional(),
 });
 const AddStageSchema = addTrackStageInputSchema.extend({
   reasoning: z.string().max(2000).optional(),
@@ -309,11 +327,12 @@ export function registerTracksRoutes(app: HubHono): void {
       );
     }
     try {
-      const { reasoning, direction, kpi } = body.data;
+      const { reasoning, direction, kpi, ...goal } = body.data;
       const result = await setTrackDirection({
         trackId: id.data,
         ...(direction !== undefined ? { direction } : {}),
         ...(kpi !== undefined ? { kpi } : {}),
+        ...goal,
         actor: actorOf(c, reasoning),
       });
       if (result.status === "proposed") return jsonGoverned(c, result);
@@ -323,6 +342,40 @@ export function registerTracksRoutes(app: HubHono): void {
       });
     } catch (err) {
       return fail(c, err, "PATCH /tracks/:id/direction");
+    }
+  });
+
+  app.post("/tracks/:id/criteria/:key/acceptance", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid track id" }, 400);
+    const body = AcceptanceSchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      // A person's act: an agent key is refused (403) by the service, and so
+      // is anyone but the goal's judge — never filed as a proposal.
+      const result = await acceptGoalCriterion({
+        trackId: id.data,
+        criterionKey: c.req.param("key"),
+        decision: body.data.decision,
+        note: body.data.note,
+        actor: actorOf(c),
+      });
+      return c.json({
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, actorOf(c)),
+      });
+    } catch (err) {
+      return fail(c, err, "POST /tracks/:id/criteria/:key/acceptance");
     }
   });
 

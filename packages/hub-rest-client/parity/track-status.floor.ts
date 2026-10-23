@@ -15,9 +15,39 @@
  * compile pins (`tracks-service.ts`) hold the DB side.
  */
 import type { TrackStatus, TrackVerdict } from "../../types/src/units/track.js";
-import type { HubTrackStatus, HubTrackVerdict } from "../src/tracks.js";
+import type {
+  CriterionCheckMeaning,
+  GoalAcceptanceDecision,
+  GoalCriterionMark,
+  TrackUncertainty,
+  TrackWorkKind,
+  WaitingOnReason,
+} from "../../types/src/units/goal.js";
+import type {
+  HubGoalAcceptanceDecision,
+  HubGoalCriterionMark,
+  HubTrackStatus,
+  HubTrackUncertainty,
+  HubTrackVerdict,
+  HubTrackWorkKind,
+  HubWaitingOnReason,
+} from "../src/tracks.js";
+import type { HubSessionCriterion } from "../src/types.js";
 
 type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
 
 export const _status: Same<HubTrackStatus, TrackStatus> = true;
 export const _verdict: Same<HubTrackVerdict, TrackVerdict> = true;
+// What a goal holds (W2, 0345) — the same mirror rule.
+export const _workKind: Same<HubTrackWorkKind, TrackWorkKind> = true;
+export const _uncertainty: Same<HubTrackUncertainty, TrackUncertainty> = true;
+export const _mark: Same<HubGoalCriterionMark, GoalCriterionMark> = true;
+export const _decision: Same<
+  HubGoalAcceptanceDecision,
+  GoalAcceptanceDecision
+> = true;
+export const _waitingOn: Same<HubWaitingOnReason, WaitingOnReason> = true;
+export const _meaning: Same<
+  NonNullable<HubSessionCriterion["checkKind"]>,
+  CriterionCheckMeaning
+> = true;

@@ -61,6 +61,25 @@ describe("readCriteria", () => {
       check: { kind: "judge" },
     });
   });
+
+  // The reader REBUILDS each criterion from the keys it knows: a field it has
+  // not learned is dropped on every read, silently. R5 (`checkKind`) and R7
+  // (`about`) must survive the round trip — for goals and sessions alike.
+  it("round-trips checkKind (R5) and about (R7); an unknown value of either is dropped, the criterion kept", () => {
+    const stored = {
+      ...ok,
+      key: "sources",
+      statement: "Three sources compared",
+      checkKind: "learning",
+      about: "method",
+    };
+    const [c] = readCriteria(JSON.parse(JSON.stringify([stored])));
+    expect(c).toEqual(stored);
+    const [loose] = readCriteria([
+      { ...ok, checkKind: "vibes", about: "answer" },
+    ]);
+    expect(loose).toEqual(ok);
+  });
 });
 
 describe("collectPlaybookCriteria", () => {

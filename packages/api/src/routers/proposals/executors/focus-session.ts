@@ -31,6 +31,7 @@ import {
 } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import {
+  closedRunRefusal,
   isTerminalSessionStatus,
   type TerminalSessionStatus,
 } from "../../../services/focus-sessions/session-statuses.js";
@@ -776,6 +777,12 @@ export function registerFocusSessionExecutors(): void {
           throw err;
         }
       } else {
+        // R8 — a closed run stays closed: a proposal filed while the run was
+        // open and approved after it closed must not reopen it.
+        const reopening = closedRunRefusal(session.status, requestedStatus);
+        if (reopening) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: reopening });
+        }
         // Non-close update: apply only defined scalar fields from gate data.
         const set: Partial<typeof focusSessions.$inferInsert> = {
           updatedAt: new Date(),

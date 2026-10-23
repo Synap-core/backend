@@ -68,6 +68,7 @@ import {
 } from "@synap/database";
 import {
   DEFAULT_PLAYBOOK_STAGE_CATEGORY,
+  readCriteria,
   describeParamTypeError,
   readPlaybookParams,
   validatePlaybookParams,
@@ -77,7 +78,9 @@ import type {
   ProjectTrack,
   ProjectTrackKpi,
   ProjectTrackStatus,
+  ProjectTrackUncertainty,
   ProjectTrackVerdict,
+  ProjectTrackWorkKind,
 } from "@synap/database/schema";
 import { type LIVE_PROJECT_TRACK_STATUSES } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
@@ -115,6 +118,13 @@ import {
   type TrackStage,
   type TrackStageHistoryEntry,
   type TrackStatus,
+  mayAcceptGoalCriterion,
+  criterionMeaning,
+  type GoalAcceptanceDecision,
+  type GoalCriterionView,
+  type TrackUncertainty,
+  type TrackWorkKind,
+  type WaitingOnMark,
 } from "@synap-core/types/units";
 import { z } from "zod";
 import {
@@ -123,6 +133,19 @@ import {
 } from "@synap-core/types/focus-sessions";
 import type { ActivityActor } from "@synap-core/types/activity";
 import { trackRepository } from "./track-repo.js";
+import {
+  isGoalJudge,
+  loadTrackGoalFacts,
+  parseTrackGoalInput,
+  pickTrackGoalInput,
+  readDropConditions,
+  readEndState,
+  readGoalCriteria,
+  readTrackUncertainty,
+  readTrackWorkKind,
+  resolveTrackGoalPatch,
+  type TrackGoalFacts,
+} from "./goal-content.js";
 import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
@@ -243,6 +266,23 @@ type _SameVerdicts = [ProjectTrackVerdict] extends [TrackVerdict]
 const _sameVerdicts: _SameVerdicts = true;
 void _sameVerdicts;
 
+// The kind-of-work and uncertainty mirrors (0345, `@synap/database`) are
+// EXACTLY the shared sets (`TRACK_WORK_KINDS`, `TRACK_UNCERTAINTY_LEVELS`).
+type _SameWorkKinds = [ProjectTrackWorkKind] extends [TrackWorkKind]
+  ? [TrackWorkKind] extends [ProjectTrackWorkKind]
+    ? true
+    : never
+  : never;
+const _sameWorkKinds: _SameWorkKinds = true;
+void _sameWorkKinds;
+type _SameUncertainty = [ProjectTrackUncertainty] extends [TrackUncertainty]
+  ? [TrackUncertainty] extends [ProjectTrackUncertainty]
+    ? true
+    : never
+  : never;
+const _sameUncertainty: _SameUncertainty = true;
+void _sameUncertainty;
+
 // The same pin for the KPI (0302): `ProjectTrackKpi` (@synap/database) and
 // `TrackKpi` (@synap-core/types/units) must describe ONE shape.
 type _SameKpi = [Required<ProjectTrackKpi>] extends [Required<TrackKpi>]
@@ -317,6 +357,40 @@ export interface TrackView {
   verdictBy: string | null;
   /** ISO-8601 — when it was closed; `null` when not recorded (before 0344). */
   verdictAt: string | null;
+  /** What "done" looks like, in words (0345) — `null` when unsaid. */
+  endState: string | null;
+  /**
+   * The goal's criteria (0345): none (a lasting goal) or 2–5, each with the
+   * judge's stored decision and its DERIVED state — `mark` (met · claimed ·
+   * under_way · not_met · not_started), `acceptanceState`, `meaning` (R5) and
+   * a measured criterion's `currentValue`. `mark` is `null` only on a write's
+   * fallback view (the goal's runs could not be read) — never a guess.
+   */
+  criteria: GoalCriterionView[];
+  /** When to stop (0345) — `[]` when none said. */
+  dropConditions: string[];
+  /** The kind of work (decision 4) — `null` when not set. */
+  workKind: TrackWorkKind | null;
+  /** How well the way is known (decision 4) — `null` when not set. */
+  uncertainty: TrackUncertainty | null;
+  /**
+   * The person who confirmed kind + uncertainty, and when (ISO-8601). Both
+   * `null` while they are the AI's proposal, not yet confirmed.
+   */
+  kindConfirmedBy: string | null;
+  kindConfirmedAt: string | null;
+  /**
+   * DERIVED — every required criterion claimed and none accepted yet (a
+   * mark inside the active category, never a status). `null` on a write's
+   * fallback view.
+   */
+  inReview: boolean | null;
+  /**
+   * DERIVED (R4) — what the goal waits on, one mark per reason present
+   * (input · approval · access · another_work · outside_world) with how many.
+   * `[]` = waiting on nothing; `null` on a write's fallback view.
+   */
+  waitingOn: WaitingOnMark[] | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -330,7 +404,12 @@ export function toTrackView(
   track: ProjectTrack,
   sessionsByStage?: Readonly<Record<string, number>>,
   /** Names the stage-history movers — absent ⇒ `enteredBy` absent. */
-  actorOf?: (actorId: string) => ActivityActor
+  actorOf?: (actorId: string) => ActivityActor,
+  /**
+   * The goal's DERIVED facts (`loadTrackGoalFacts`) — absent ⇒ marks,
+   * `inReview` and `waitingOn` read `null` ("not read"), never a guess.
+   */
+  goal?: TrackGoalFacts
 ): TrackView {
   return {
     id: track.id,
@@ -361,6 +440,25 @@ export function toTrackView(
     verdictReason: track.verdictReason ?? null,
     verdictBy: track.verdictBy ?? null,
     verdictAt: track.verdictAt ? new Date(track.verdictAt).toISOString() : null,
+    endState: readEndState(track.endState),
+    criteria:
+      goal?.criteria ??
+      readGoalCriteria(track.criteria).map((c) => ({
+        ...c,
+        mark: null,
+        acceptanceState: null,
+        meaning: criterionMeaning(c),
+        currentValue: null,
+      })),
+    dropConditions: readDropConditions(track.dropConditions),
+    workKind: readTrackWorkKind(track.workKind),
+    uncertainty: readTrackUncertainty(track.uncertainty),
+    kindConfirmedBy: track.kindConfirmedBy ?? null,
+    kindConfirmedAt: track.kindConfirmedAt
+      ? new Date(track.kindConfirmedAt).toISOString()
+      : null,
+    inReview: goal ? goal.inReview : null,
+    waitingOn: goal ? goal.waitingOn : null,
     createdAt: new Date(track.createdAt).toISOString(),
     updatedAt: new Date(track.updatedAt).toISOString(),
   };
@@ -430,17 +528,20 @@ export async function loadTrackViews(
   tracks: ProjectTrack[],
   actor: Pick<TrackActor, "userId">
 ): Promise<TrackView[]> {
-  const [counts, movers] = await Promise.all([
+  const [counts, movers, goals] = await Promise.all([
     countTrackSessionsByStage(tracks, actor.userId),
     loadActorRows(
       tracks.flatMap((t) =>
         readTrackStageHistory(t.stageHistory).map((e) => e.actor)
       )
     ),
+    loadTrackGoalFacts(tracks, actor.userId),
   ]);
   const actorOf = (id: string) =>
     activityActorOf(id || null, movers.get(id), actor.userId);
-  return tracks.map((t) => toTrackView(t, counts.get(t.id) ?? {}, actorOf));
+  return tracks.map((t) =>
+    toTrackView(t, counts.get(t.id) ?? {}, actorOf, goals.get(t.id))
+  );
 }
 
 /**
@@ -708,6 +809,17 @@ export interface StartTrackInput {
   direction?: string | null;
   /** The number it steers by (0302): `{ label, unit?, target, current? }`. */
   kpi?: unknown;
+  /**
+   * What the goal holds (0345) — end state, 0 or 2–5 criteria, drop
+   * conditions, kind of work, uncertainty (`trackGoalInputSchema`, parsed
+   * here). A person starting with a kind confirms it; an agent's is the AI's
+   * proposal until a person confirms.
+   */
+  endState?: unknown;
+  criteria?: unknown;
+  dropConditions?: unknown;
+  workKind?: unknown;
+  uncertainty?: unknown;
   actor: TrackActor;
   /**
    * Pre-minted id — ONLY the approval replay passes it (the id the proposal
@@ -873,6 +985,17 @@ export async function startTrack(
   // stamp is applied at the write, so a replay stamps the approval moment.
   const kpiInput = input.kpi ? parseTrackKpiInput(input.kpi) : null;
   if (kpiInput) resolveTrackKpi(null, kpiInput, actor.userId);
+  // What the goal holds (0345) — the 2–5 rule and the meanings refused here,
+  // to the author. The parsed input rides the proposal; the replay resolves
+  // it again, as the approving person (who thereby confirms the kind).
+  const goalInput = parseTrackGoalInput(
+    pickTrackGoalInput(input as unknown as Record<string, unknown>)
+  );
+  const goalPatch = resolveTrackGoalPatch(
+    null,
+    goalInput,
+    actor.agentUserId ? null : actor.userId
+  );
 
   const perm = await checkPermissionOrPropose({
     userId: actor.userId,
@@ -897,6 +1020,7 @@ export async function startTrack(
       ...(Object.keys(trackParams).length > 0 ? { params: trackParams } : {}),
       ...(direction ? { direction } : {}),
       ...(kpiInput ? { kpi: kpiInput } : {}),
+      ...pickTrackGoalInput(goalInput),
       // The closed version this one reopens (R8) — re-checked at approval.
       ...(replaces ? { replacesTrackId: replaces.track.id } : {}),
       // The consent the summary states ("…and let <agent> work in …").
@@ -942,6 +1066,7 @@ export async function startTrack(
       kpi: kpiInput
         ? resolveTrackKpi(null, kpiInput, actor.agentUserId ?? actor.userId)
         : null,
+      ...(goalPatch ? { goal: goalPatch } : {}),
       ...trackSpaceGrantMetadata(input, stepSpaces),
     },
     actor.userId
@@ -1125,9 +1250,28 @@ export async function reopenTrack(input: {
           },
         }
       : {}),
+    // What the goal holds carries to the new version — the criteria WITHOUT
+    // the judge's decisions (they were about the closed version's work).
+    ...goalContentOf(old),
     replacesTrackId: old.id,
     actor: input.actor,
   });
+}
+
+/** A track's stored goal content as start input (no acceptance, no confirmation). */
+function goalContentOf(track: ProjectTrack): Partial<StartTrackInput> {
+  const endState = readEndState(track.endState);
+  const criteria = readCriteria(track.criteria);
+  const dropConditions = readDropConditions(track.dropConditions);
+  const workKind = readTrackWorkKind(track.workKind);
+  const uncertainty = readTrackUncertainty(track.uncertainty);
+  return {
+    ...(endState ? { endState } : {}),
+    ...(criteria.length > 0 ? { criteria } : {}),
+    ...(dropConditions.length > 0 ? { dropConditions } : {}),
+    ...(workKind ? { workKind } : {}),
+    ...(uncertainty ? { uncertainty } : {}),
+  };
 }
 
 /**
@@ -1251,7 +1395,13 @@ export interface TrackCloseInput {
 export function assertTrackTransition(
   track: Pick<ProjectTrack, "name" | "status">,
   to: ProjectTrackStatus,
-  close: TrackCloseInput = {}
+  close: TrackCloseInput = {},
+  /**
+   * The goal's criteria with their DERIVED marks (`loadGoalCloseCriteria`):
+   * `met` needs every required one met, `partly_met` / `not_met` at least
+   * one not met. Every caller that closes passes them.
+   */
+  criteria?: ReadonlyArray<{ key: string; required?: boolean; mark: string }>
 ): void {
   if (!canTransitionTrack(track.status, to)) {
     throw new TRPCError({
@@ -1261,10 +1411,32 @@ export function assertTrackTransition(
         : `A ${track.status} track cannot move to ${to}.`,
     });
   }
-  const refusal = checkTrackClose(to, close);
+  const refusal = checkTrackClose(to, close, criteria);
   if (refusal) {
     throw new TRPCError({ code: "BAD_REQUEST", message: refusal });
   }
+}
+
+/**
+ * The criteria a close is judged against — the goal's criteria with their
+ * marks DERIVED now (`loadTrackGoalFacts`, the read every track view uses).
+ * Read only for a move into done: a drop's verdict is about why it stopped
+ * mattering, not about its criteria. A failed read THROWS: a close is never
+ * judged against criteria it could not see.
+ */
+export async function loadGoalCloseCriteria(
+  track: ProjectTrack,
+  to: ProjectTrackStatus,
+  userId: string
+): Promise<Array<{ key: string; required?: boolean; mark: string }>> {
+  if (trackStatusCategory(to) !== "done") return [];
+  if (readCriteria(track.criteria).length === 0) return [];
+  const facts = (await loadTrackGoalFacts([track], userId)).get(track.id);
+  return (facts?.criteria ?? []).map((c) => ({
+    key: c.key,
+    ...(c.required === false ? { required: false } : {}),
+    mark: c.mark ?? "not_started",
+  }));
 }
 
 /**
@@ -1305,9 +1477,15 @@ export async function setTrackStatus(input: {
     verdict: input.verdict ?? null,
     verdictReason: input.verdictReason?.trim() || null,
   };
-  // Refused BEFORE governance, so a close with no verdict is told to its
-  // author rather than filed for a person to approve.
-  assertTrackTransition(track, input.status, close);
+  // Refused BEFORE governance, so a close with no verdict — or a "met" with
+  // criteria still open — is told to its author rather than filed for a
+  // person to approve.
+  assertTrackTransition(
+    track,
+    input.status,
+    close,
+    await loadGoalCloseCriteria(track, input.status, input.actor.userId)
+  );
 
   const perm = await checkPermissionOrPropose({
     userId: input.actor.userId,
@@ -2030,25 +2208,52 @@ export async function setTrackDirection(input: {
   direction?: string | null;
   /** A KPI patch (`{ label?, unit?, target?, current? }`) or `null` to clear. */
   kpi?: unknown;
+  /**
+   * What the goal holds (0345) — each field WHOLE (`null` clears):
+   * `endState`, `criteria` (none, or 2–5), `dropConditions`, `workKind`,
+   * `uncertainty`, and `confirmKind` (a person confirming the AI's kind).
+   */
+  endState?: unknown;
+  criteria?: unknown;
+  dropConditions?: unknown;
+  workKind?: unknown;
+  uncertainty?: unknown;
+  confirmKind?: unknown;
   actor: TrackActor;
 }): Promise<SetTrackDirectionResult> {
   const { track, project } = await loadTrackForWrite(
     input.trackId,
     input.actor
   );
-  if (input.direction === undefined && input.kpi === undefined) {
+  const goalRaw = pickTrackGoalInput(
+    input as unknown as Record<string, unknown>
+  );
+  if (
+    input.direction === undefined &&
+    input.kpi === undefined &&
+    Object.keys(goalRaw).length === 0
+  ) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Nothing to change — pass a direction and/or a kpi.",
+      message:
+        "Nothing to change — pass a direction, a kpi, or what the goal holds (endState, criteria, dropConditions, workKind, uncertainty).",
     });
   }
   const patch = normalizeDirectionPatch(input);
-  // Refused BEFORE governance: a malformed KPI is told to its author, never
-  // filed for a person to approve.
+  // Refused BEFORE governance: a malformed KPI or goal (the 2–5 rule, a
+  // meaning its check cannot carry, an agent confirming a kind) is told to
+  // its author, never filed for a person to approve.
   const next = previewDirection(track, patch, input.actor.userId);
+  const goalInput = parseTrackGoalInput(goalRaw);
+  const goalPatch = resolveTrackGoalPatch(
+    track,
+    goalInput,
+    input.actor.agentUserId ? null : input.actor.userId
+  );
   if (
     next.direction === readTrackDirection(track.direction) &&
-    sameKpiValue(next.kpi, readTrackKpi(track.kpi))
+    sameKpiValue(next.kpi, readTrackKpi(track.kpi)) &&
+    goalPatch === null
   ) {
     return { status: "unchanged", track };
   }
@@ -2070,6 +2275,10 @@ export async function setTrackDirection(input: {
       name: track.name,
       ...(patch.direction !== undefined ? { direction: patch.direction } : {}),
       ...(patch.kpi !== undefined ? { kpi: patch.kpi } : {}),
+      // The goal fields as the caller wrote them (parsed) — the replay
+      // resolves them against the goal as it stands at approval. `criteria`
+      // here is what floors an agent's criteria change to a proposal.
+      ...pickTrackGoalInput(goalInput),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -2085,10 +2294,16 @@ export async function setTrackDirection(input: {
       }) + " — proposed for review"
     );
   }
-  return applyTrackDirection(track, project, patch, {
-    userId: input.actor.userId,
-    statedBy: input.actor.agentUserId ?? input.actor.userId,
-  });
+  return applyTrackDirection(
+    track,
+    project,
+    { ...patch, ...pickTrackGoalInput(goalInput) },
+    {
+      userId: input.actor.userId,
+      statedBy: input.actor.agentUserId ?? input.actor.userId,
+      confirmedBy: input.actor.agentUserId ? null : input.actor.userId,
+    }
+  );
 }
 
 interface DirectionPatch {
@@ -2100,6 +2315,13 @@ interface DirectionPatch {
 interface RawDirectionPatch {
   direction?: string | null;
   kpi?: unknown;
+  /** What the goal holds — parsed and resolved at the write (0345). */
+  endState?: unknown;
+  criteria?: unknown;
+  dropConditions?: unknown;
+  workKind?: unknown;
+  uncertainty?: unknown;
+  confirmKind?: unknown;
 }
 
 function normalizeDirectionPatch(input: RawDirectionPatch): DirectionPatch {
@@ -2156,9 +2378,27 @@ export async function applyTrackDirection(
   track: ProjectTrack,
   project: GateProject,
   rawPatch: RawDirectionPatch,
-  who: { userId: string; statedBy: string }
+  who: {
+    userId: string;
+    statedBy: string;
+    /**
+     * The PERSON whose write this is — a kind of work or uncertainty they
+     * write (or approve) is confirmed by them. `null`: an agent's write
+     * applied without review, which leaves (or makes) the kind unconfirmed.
+     */
+    confirmedBy: string | null;
+  }
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
   const patch = normalizeDirectionPatch(rawPatch);
+  // Re-parsed and resolved against the goal as it stands NOW (a replay's
+  // goal may have moved since the proposal was filed).
+  const goal = resolveTrackGoalPatch(
+    track,
+    parseTrackGoalInput(
+      pickTrackGoalInput(rawPatch as unknown as Record<string, unknown>)
+    ),
+    who.confirmedBy
+  );
   const before = readTrackKpi(track.kpi);
   const kpi =
     patch.kpi === undefined
@@ -2178,6 +2418,7 @@ export async function applyTrackDirection(
     {
       ...(patch.direction !== undefined ? { direction: patch.direction } : {}),
       ...(kpi !== undefined ? { kpi } : {}),
+      ...(goal ? { goal } : {}),
     },
     who.userId
   );
@@ -2255,6 +2496,90 @@ async function notifyTrackKpiReached(
   } catch (err) {
     logger.warn({ err, trackId: track.id }, "track.kpi_reached nudge failed");
   }
+}
+
+// ── acceptance of a goal criterion (R2) ─────────────────────────────────────
+
+export type AcceptGoalCriterionResult = {
+  status: "updated" | "unchanged";
+  track: ProjectTrack;
+};
+
+/**
+ * THE acceptance door (R2): the goal's JUDGE accepts a claimed criterion,
+ * sends it back (`changes_asked`, with what to change) or rejects it — the
+ * one writer of a criterion's `acceptance`. An agent never may (R9), a person
+ * only as the goal's judge (`isGoalJudge` — the goal's owner until the
+ * participants wave gives the goal a judge seat). Not a governed write: the
+ * judge's decision IS the review; nothing is proposed to anyone. Repeating
+ * the same decision is `unchanged`.
+ */
+export async function acceptGoalCriterion(input: {
+  trackId: string;
+  criterionKey: string;
+  decision: GoalAcceptanceDecision;
+  note?: string | null;
+  actor: TrackActor;
+}): Promise<AcceptGoalCriterionResult> {
+  const track = await getTrack(input.trackId, input.actor);
+  if (!track) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+  }
+  const criterion = readGoalCriteria(track.criteria).find(
+    (c) => c.key === input.criterionKey
+  );
+  if (!criterion) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `This goal has no criterion "${input.criterionKey}".`,
+    });
+  }
+  const refusal = mayAcceptGoalCriterion(
+    criterion,
+    input.actor.agentUserId
+      ? { kind: "agent" }
+      : { kind: "person", isJudge: isGoalJudge(track, input.actor.userId) }
+  );
+  if (refusal) throw new TRPCError({ code: "FORBIDDEN", message: refusal });
+  if (isTrackClosed(track)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Track "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — its criteria were judged when it closed.`,
+    });
+  }
+  const note = input.note?.trim() || null;
+  if (input.decision === "changes_asked" && !note) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Sending a criterion back needs a note — say what to change.",
+    });
+  }
+  if (
+    criterion.acceptance?.decision === input.decision &&
+    (criterion.acceptance.note ?? null) === note
+  ) {
+    return { status: "unchanged", track };
+  }
+  const updated = await (
+    await repo()
+  ).setCriterionAcceptance(
+    track.id,
+    criterion.key,
+    {
+      decision: input.decision,
+      by: input.actor.userId,
+      at: new Date().toISOString(),
+      ...(note ? { note } : {}),
+    },
+    input.actor.userId
+  );
+  if (!updated) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `The criterion "${criterion.key}" was removed while you decided — read the goal again.`,
+    });
+  }
+  return { status: "updated", track: updated };
 }
 
 // ── emergent stages (0302) ──────────────────────────────────────────────────

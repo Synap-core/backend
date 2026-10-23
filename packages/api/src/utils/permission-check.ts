@@ -224,10 +224,17 @@ function isFocusSessionCriteriaUpdate(
   action: string,
   data: Record<string, unknown> | undefined
 ): boolean {
+  const carriesCriteria =
+    data !== undefined && "criteria" in data && data.criteria !== undefined;
+  // A GOAL's criteria (work model W2, 0345) are the same contract one level
+  // up: the standard the goal is judged done against. An agent writing them
+  // — when it starts the goal or later — proposes, and the person validates.
+  // The track doors carry `criteria` only when the caller sent them.
+  if (subjectType === "track") {
+    return (action === "create" || action === "update") && carriesCriteria;
+  }
   if (subjectType !== "focus_session" || action !== "update") return false;
-  return (
-    data !== undefined && "criteria" in data && data.criteria !== undefined
-  );
+  return carriesCriteria;
 }
 
 /**

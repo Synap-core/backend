@@ -51,7 +51,12 @@ import {
   parseAddTrackStage,
   assertStageAdvanceable,
   assertTrackTransition,
+  loadGoalCloseCriteria,
 } from "../../../services/tracks/tracks-service.js";
+import {
+  hasTrackGoalInput,
+  pickTrackGoalInput,
+} from "../../../services/tracks/goal-content.js";
 import { trackRepository } from "../../../services/tracks/track-repo.js";
 import { readListedStepSpaces } from "../../../services/tracks/track-space-grant.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
@@ -122,6 +127,9 @@ export function registerTrackExecutors(): void {
           ? { direction: data.direction }
           : {}),
         ...(data.kpi && typeof data.kpi === "object" ? { kpi: data.kpi } : {}),
+        // What the goal holds (0345) — re-parsed by the same door; the
+        // approver's start confirms the kind of work it carries.
+        ...pickTrackGoalInput(data),
         // A reopen (R8): re-checked by the same door (still closed, still the
         // newest version), then linked `new --replaces--> old`.
         ...(typeof data.replacesTrackId === "string"
@@ -220,10 +228,16 @@ export function registerTrackExecutors(): void {
           { ...stage, key: stage.key ?? "" },
           { userId, addedBy: proposal.agentUserId ?? userId }
         );
-      } else if ("direction" in data || "kpi" in data) {
+      } else if (
+        "direction" in data ||
+        "kpi" in data ||
+        hasTrackGoalInput(data)
+      ) {
         // Direction / KPI (0302): the PATCH, merged onto the KPI as it stands
         // at approval and re-validated; `current` is stamped as stated by the
-        // proposing agent at the approval moment.
+        // proposing agent at the approval moment. What the goal holds (0345)
+        // rides along, re-resolved against the goal as it stands now — and
+        // the APPROVER confirms the kind of work it carries.
         await applyTrackDirection(
           track,
           project,
@@ -242,8 +256,13 @@ export function registerTrackExecutors(): void {
                       : null,
                 }
               : {}),
+            ...pickTrackGoalInput(data),
           },
-          { userId, statedBy: proposal.agentUserId ?? userId }
+          {
+            userId,
+            statedBy: proposal.agentUserId ?? userId,
+            confirmedBy: userId,
+          }
         );
       } else if (
         typeof data.status === "string" &&
@@ -261,10 +280,17 @@ export function registerTrackExecutors(): void {
                 ? data.verdictReason
                 : null,
           };
+          // …and so is the criteria rule (W2): a "met" approved after a
+          // criterion was sent back no longer holds.
           assertTrackTransition(
             track,
             data.status as ProjectTrackStatus,
-            close
+            close,
+            await loadGoalCloseCriteria(
+              track,
+              data.status as ProjectTrackStatus,
+              userId
+            )
           );
           await applyTrackStatus(
             track,
@@ -278,7 +304,7 @@ export function registerTrackExecutors(): void {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
-            "Track update proposal carries no stage, status, params, direction, kpi or added stage",
+            "Track update proposal carries no stage, status, params, direction, kpi, goal content or added stage",
         });
       }
 

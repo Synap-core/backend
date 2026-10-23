@@ -12,7 +12,7 @@
  *   placed in the project's home workspace instead of the stage's domain.
  */
 
-import type { HubFocusSession } from "./types.js";
+import type { HubFocusSession, HubSessionCriterion } from "./types.js";
 
 /**
  * A track's status — the option keys of its system lifecycle: open (proposed ·
@@ -42,6 +42,47 @@ export type HubTrackVerdict =
   | "impossible"
   | "replaced"
   | "mistake";
+
+/** The kind of work a goal is (0345). Mirror of `TrackWorkKind`, pinned by the floor. */
+export type HubTrackWorkKind =
+  | "project"
+  | "flow"
+  | "operation"
+  | "investigation"
+  | "incident"
+  | "commission"
+  | "pathway";
+
+/** How well the way is known (0345). Mirror of `TrackUncertainty`, pinned by the floor. */
+export type HubTrackUncertainty =
+  "clear" | "complicated" | "complex" | "chaotic" | "unknown";
+
+/** A goal criterion's derived state. Mirror of `GoalCriterionMark`, pinned by the floor. */
+export type HubGoalCriterionMark =
+  "met" | "claimed" | "under_way" | "not_met" | "not_started";
+
+/** What the goal's judge decided (R2). Mirror of `GoalAcceptanceDecision`. */
+export type HubGoalAcceptanceDecision =
+  "accepted" | "changes_asked" | "rejected";
+
+/** What a goal waits on (R4). Mirror of `WaitingOnReason`, pinned by the floor. */
+export type HubWaitingOnReason =
+  "input" | "approval" | "access" | "another_work" | "outside_world";
+
+/** One goal criterion as the pod returns it — stored fields + derived state. */
+export interface HubGoalCriterion extends HubSessionCriterion {
+  acceptance: {
+    decision: HubGoalAcceptanceDecision;
+    by: string;
+    at: string;
+    note?: string;
+  } | null;
+  /** `null` only when the pod could not read the goal's runs. */
+  mark: HubGoalCriterionMark | null;
+  acceptanceState: "waiting" | HubGoalAcceptanceDecision | null;
+  meaning: string;
+  currentValue: string | null;
+}
 
 export interface HubTrackStage {
   key: string;
@@ -85,6 +126,20 @@ export interface HubTrack {
   verdict?: HubTrackVerdict | null;
   /** Why, in words — present for `impossible` and `replaced`. */
   verdictReason?: string | null;
+  /** What "done" looks like (0345) — `null` when unsaid. */
+  endState?: string | null;
+  /** None (a lasting goal) or 2–5 criteria, each with its derived mark. */
+  criteria?: HubGoalCriterion[];
+  dropConditions?: string[];
+  workKind?: HubTrackWorkKind | null;
+  uncertainty?: HubTrackUncertainty | null;
+  /** The person who confirmed kind + uncertainty — `null` while proposed. */
+  kindConfirmedBy?: string | null;
+  kindConfirmedAt?: string | null;
+  /** Every required criterion claimed, none accepted yet — derived. */
+  inReview?: boolean | null;
+  /** What the goal waits on — derived; `[]` = nothing. */
+  waitingOn?: Array<{ reason: HubWaitingOnReason; count: number }> | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -115,7 +170,43 @@ export interface StartTrackInput {
   direction?: string;
   /** The number it steers by: `{ label, unit?, target, current? }`. */
   kpi?: { label: string; unit?: string; target: number; current?: number };
+  /** What the goal holds (0345). */
+  endState?: string;
+  /** None, or 2–5 criteria. */
+  criteria?: HubSessionCriterion[];
+  dropConditions?: string[];
+  workKind?: HubTrackWorkKind;
+  uncertainty?: HubTrackUncertainty;
   reasoning?: string;
+}
+
+/**
+ * PATCH /tracks/:id/direction — where the goal is heading, its KPI and what
+ * it holds. Every field but `kpi` is written WHOLE; `null` clears it.
+ */
+export interface UpdateTrackInput {
+  direction?: string | null;
+  kpi?: {
+    label?: string;
+    unit?: string;
+    target?: number;
+    current?: number;
+  } | null;
+  endState?: string | null;
+  criteria?: HubSessionCriterion[] | null;
+  dropConditions?: string[] | null;
+  workKind?: HubTrackWorkKind | null;
+  uncertainty?: HubTrackUncertainty | null;
+  /** A PERSON confirms the AI's kind of work and uncertainty (an agent is refused). */
+  confirmKind?: boolean;
+  reasoning?: string;
+}
+
+/** POST /tracks/:id/criteria/:key/acceptance — the goal's judge decides (R2). */
+export interface AcceptTrackCriterionInput {
+  decision: HubGoalAcceptanceDecision;
+  /** Required to send it back (`changes_asked`): what to change. */
+  note?: string;
 }
 
 /** Advisory, never a refusal: stage domains with no installed workspace. */
