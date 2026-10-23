@@ -124,6 +124,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { normalizeIdentitySignal } from "@synap/database";
 import { ImportOrchestrator } from "./import-orchestrator.js";
+import { entityHandlers } from "../routers/mcp/handlers/entity.js";
 
 const OWNER = randomUUID();
 const BASIC =
@@ -341,5 +342,37 @@ describe("a contacts import over people the pod already holds", () => {
       [analyzed.proposalId]
     );
     expect(rows[0]!.status).toBe("approved");
+
+    // ── A person the import CREATED is found again by its LinkedIn URL ──
+    // Live worry (2026-10-23): "imported people have no identity signals".
+    // Through the real MCP door, with the key spelled as the atom AND as the
+    // property slug (both used to be dropped silently): strong, to Fay.
+    const fay = after.find((p) => p.title === "Fay New")!;
+    const { rows: faySignals } = await q<{ signal_type: string }>(
+      `select signal_type from entity_identity_signals where entity_id = $1`,
+      [fay.id]
+    );
+    expect(faySignals.map((r) => r.signal_type)).toContain("linkedin_url");
+    for (const key of ["linkedin_url", "linkedinUrl", "url"]) {
+      const res = await entityHandlers.synap_resolve_identity!({
+        toolName: "synap_resolve_identity",
+        args: { kindSlug: "person", signals: { [key]: li("fay-new") } },
+        userId: OWNER,
+        apiKeyScopes: ["mcp.read"],
+      } as never);
+      const body = JSON.parse((res.content[0] as { text: string }).text) as {
+        match: string;
+        entityId?: string;
+      };
+      expect(body, key).toMatchObject({ match: "strong", entityId: fay.id });
+    }
+    // An unknown key is refused, never read as "no signal".
+    const refused = await entityHandlers.synap_resolve_identity!({
+      toolName: "synap_resolve_identity",
+      args: { kindSlug: "person", signals: { linkedin: li("fay-new") } },
+      userId: OWNER,
+      apiKeyScopes: ["mcp.read"],
+    } as never);
+    expect(refused.isError).toBe(true);
   }, 120_000);
 });

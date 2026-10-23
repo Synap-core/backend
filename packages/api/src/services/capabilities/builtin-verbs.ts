@@ -64,7 +64,10 @@ import type { Context } from "../../context.js";
 import type { ScopedDb } from "../../access/scoped-db.js";
 import type { ContextObjectType } from "../../utils/resolve-or-create-channel.js";
 import type { CaptureStructureLike } from "../capture-agent/capture-structure-to-graph.js";
-import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
+import {
+  resolveFacetVisibilityScope,
+  withRequestGrantSpaces,
+} from "../../utils/workspace-membership.js";
 import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
 import {
   placeArtboardDeck,
@@ -2135,10 +2138,14 @@ const entityFacetListHandler: BuiltinVerbHandler = async (params, ctx) => {
 
   // Resolve live facets through the canonical floor-scoped resolver (the same
   // one entities.get uses), under the entity's own lens when no lens is active.
-  const facets = await getEffectiveFacets(db, input.entityId, {
-    userId: ctx.userId,
-    workspaceId: lens ?? entity.workspaceId ?? undefined,
-  });
+  const facets = await getEffectiveFacets(
+    db,
+    input.entityId,
+    withRequestGrantSpaces({
+      userId: ctx.userId,
+      workspaceId: lens ?? entity.workspaceId ?? undefined,
+    })
+  );
 
   return {
     facets: facets.map((f) => ({

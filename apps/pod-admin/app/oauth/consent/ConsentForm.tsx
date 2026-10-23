@@ -36,7 +36,9 @@ import {
   invalidRequestHint,
   isTicked,
   permissionLabel,
+  readsSpaceRecords,
   reasonOf,
+  SPACE_REACH_NOTE,
   sectionCheckboxLabel,
   sectionState,
   spaceCheckboxLabel,
@@ -804,7 +806,7 @@ function PermissionList({
   onToggle,
   busy,
 }: {
-  permissions: ConsentApp["permissions"];
+  permissions: readonly OfferedPermission[];
   selection: Selection;
   onToggle: (permission: string, workspaceId: string) => void;
   busy: boolean;
@@ -957,6 +959,11 @@ export function AppConsent({
             </p>
           </section>
         )}
+        {readsSpaceRecords(app.permissions) && (
+          <p className="text-pretty text-xs leading-relaxed text-foreground/75">
+            {SPACE_REACH_NOTE}
+          </p>
+        )}
         {app.ignoredScopes.length > 0 && (
           <p className="text-xs text-foreground/65">
             It also asked for {app.ignoredScopes.join(", ")}, which apps are not
@@ -1076,12 +1083,23 @@ function CreateSpace({
     );
   };
   if (templates.length === 0) {
+    // A state, not an error (rv-ui U9): the screen's neutral hint tone.
     return (
-      <Problem
-        title="No space to give it"
-        message="You have no space where you can give this app what it asks for."
-        hint="Create a space in Synap (or ask for edit rights in one), then reload this page."
-      />
+      <div
+        role="status"
+        className="flex flex-col gap-1 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10"
+      >
+        <span className="text-sm font-medium text-foreground">
+          No space to give it
+        </span>
+        <span className="text-xs leading-relaxed text-foreground/65">
+          You have no space where you can give this app what it asks for.
+        </span>
+        <span className="text-xs leading-relaxed text-foreground/65">
+          Create a space in Synap (or ask for edit rights in one), then reload
+          this page.
+        </span>
+      </div>
     );
   }
   return (
