@@ -23,8 +23,7 @@ export type HubTrackCommitmentState =
   | "done";
 
 /** How a delegate answers their own commitment. */
-export type HubTrackCommitmentMove =
-  "accept" | "counter" | "decline" | "report_impossible";
+export type HubTrackCommitmentMove = "accept" | "decline" | "report_impossible"; // NEGCTL
 
 /** One participant of a goal, as `GET /tracks/:id` returns it. */
 export interface HubTrackParticipant {

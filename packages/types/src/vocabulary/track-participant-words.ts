@@ -15,7 +15,7 @@ export const TRACK_PARTICIPANT_ROLE_LABELS = {
   owner: "Owner",
   judge: "Judge",
   delegate: "Delegate",
-  integrator: "Integrator",
+  // NEGCTL: integrator words dropped
 } as const satisfies Readonly<Record<string, string>>;
 
 /** The word for a participant's role on a goal; unknown values humanize. */

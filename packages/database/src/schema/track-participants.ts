@@ -51,8 +51,7 @@ export const TRACK_COMMITMENT_STATE_KEYS = [
   "countered",
   "declined",
   "reported_impossible",
-  "done",
-] as const;
+] as const; // NEGCTL: "done" dropped
 export type TrackCommitmentStateKey =
   (typeof TRACK_COMMITMENT_STATE_KEYS)[number];
 
