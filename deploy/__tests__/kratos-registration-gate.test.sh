@@ -80,6 +80,52 @@ def body(h):
     assert raw.startswith("base64://")
     return base64.b64decode(raw[len("base64://"):]).decode()
 
+# EVERY enabled method that can register must hit a BLOCKING gate first.
+# Kratos v1.3.1 looks registration hooks up per method, the global list only
+# when a method has none (driver/registry_default_registration.go), so an
+# enabled method with no hooks registers with NO gate (passkey did until
+# 2026-10-23: an open sign-up on every pod). The method list is DERIVED from
+# the generated file, merged with Kratos v1.3.1's own defaults for a method
+# the file does not mention (embedx/config.schema.json: password, profile and
+# code are enabled by default; every other method is off unless enabled here).
+# Never registering: profile (the traits step of two-step registration; it
+# persists nothing), link (recovery/verification), totp and lookup_secret
+# (second factors); code registers only with passwordless_enabled.
+KRATOS_DEFAULT_ENABLED = {"password", "profile", "code"}
+NEVER_REGISTERS = {"profile", "link", "totp", "lookup_secret"}
+methods = sel.get("methods") or {}
+enabled = {}
+for name in set(methods) | KRATOS_DEFAULT_ENABLED:
+    m = methods.get(name) or {}
+    on = m.get("enabled", name in KRATOS_DEFAULT_ENABLED)
+    enabled[name] = (on is True, m)
+registering = []
+for name, (on, m) in sorted(enabled.items()):
+    if not on or name in NEVER_REGISTERS:
+        continue
+    if name == "code" and (m.get("config") or {}).get("passwordless_enabled") is not True \
+            and m.get("passwordless_enabled") is not True:
+        continue
+    registering.append(name)
+check({"password", "passkey", "oidc"} <= set(registering), f"registering methods derived: {registering}")
+check(not (reg.get("after") or {}).get("hooks"), "registration: no global after.hooks (each method gates itself)")
+for name in registering:
+    hs = ((reg.get("after") or {}).get(name) or {}).get("hooks") or []
+    first = hs[0] if hs else {}
+    gated = (first.get("hook") == "web_hook"
+             and (first.get("config") or {}).get("can_interrupt") is True
+             and str((first.get("config") or {}).get("url", "")).endswith("/registration/gate"))
+    check(gated, f"{name}: registration's first hook is the BLOCKING gate")
+    if gated:
+        check(f'method: "{name}"' in body(first), f"{name}: gate body declares method {name}")
+    check(bool(hs) and hs[-1].get("hook") == "session", f"{name}: session is the last hook")
+
+pk = reg["after"].get("passkey", {}).get("hooks") or []
+check([h.get("hook") for h in pk] == ["web_hook", "web_hook", "session"], "passkey order gate, complete, session")
+if len(pk) == 3:
+    check(not pk[1]["config"].get("can_interrupt") and pk[1]["config"]["url"].endswith("/registration/complete"),
+          "passkey: complete hook is post-persist (no can_interrupt)")
+
 pw = reg["after"]["password"]["hooks"]
 check(pw[0].get("hook") == "web_hook" and pw[0]["config"].get("can_interrupt") is True,
       "password: first hook is a BLOCKING gate")

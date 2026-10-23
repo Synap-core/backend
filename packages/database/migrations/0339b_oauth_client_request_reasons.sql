@@ -1,0 +1,15 @@
+-- 0339b — why a pod app asks for each permission (spec 17 §9.1, review
+-- 2026-10-22: the consent screen shows the developer's reason).
+--
+-- Its own file because the migrator records applied files by NAME. The name
+-- sorts after both 0339 files and needs only oauth_clients (0338).
+--
+-- Additive + idempotent: IF NOT EXISTS. Fresh installs also get the column
+-- from 0000_baseline_schema.sql.
+--
+-- oauth_clients.requested_reasons — `synap_requests[].reason` by permission,
+-- as the metadata document states it: display text, at most 200 characters
+-- each, cleaned by `displayReason` (client-metadata.ts) before it is cached.
+-- '{}' for a DCR row and for a document cached before this ran; the next
+-- refresh of the document (within 24 h) fills it.
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_reasons" jsonb NOT NULL DEFAULT '{}'::jsonb;

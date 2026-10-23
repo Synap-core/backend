@@ -1061,6 +1061,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "requested_templates",
     addedBy: "0338b_pod_app_oauth_apps.sql",
   },
+  // Pod app permission reasons (0339b). Every client read selects it
+  // (Drizzle names every column): without it the whole OAuth door 500s.
+  {
+    table: "oauth_clients",
+    column: "requested_reasons",
+    addedBy: "0339b_oauth_client_request_reasons.sql",
+  },
   // Pod app refresh tokens (0339). /token's refresh grant and /revoke read
   // and write them, and revoking an app revokes them: without the table the
   // pod app refresh grant, a pod app's /token and every app revoke 500.
@@ -1753,6 +1760,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "session_runners",
     column: "machine_user_id",
     addedBy: "0342_session_runners.sql",
+  },
+
+  // proposal_apply_runs — a large approval applied by the background job
+  // (0352). Absence means every approve at or above the background threshold
+  // would fail to record its run (42P01) and the progress read would throw.
+  {
+    table: "proposal_apply_runs",
+    column: "heartbeat_at",
+    addedBy: "0352_proposal_apply_runs.sql",
+  },
+  {
+    table: "proposal_apply_runs",
+    column: "revision",
+    addedBy: "0352_proposal_apply_runs.sql",
   },
 
   // Kind + Facets Wave 3A (0175): the `_conversions` ledger — mirrors
