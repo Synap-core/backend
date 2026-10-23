@@ -111,6 +111,7 @@ import {
   type PendingAppRequestSignalInput,
   type PendingIssuerSignalInput,
   type Signal,
+  type SpaceInviteSignalInput,
   type StatusBanner,
 } from "../services/signals/needs-you-union.js";
 import {
@@ -118,6 +119,7 @@ import {
   listPendingIssuers,
   podAdminCheck,
 } from "../services/signals/access-requests.js";
+import { listOpenSpaceInvites } from "../services/signals/space-invites.js";
 import { listSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
 import { sessionsWithOpenQuestion } from "../services/signals/open-question-sessions.js";
 import {
@@ -289,6 +291,7 @@ export type SignalSubRead =
   | "captures"
   | "issuers"
   | "app-requests"
+  | "invites"
   | "liveness"
   | "outputs"
   | "activity"
@@ -416,6 +419,9 @@ async function readAttention(
   // as captures (so off under every lens, the intent lens included). Not an
   // admin ⇒ empty (not theirs to see), never unreadable.
   const readsAccess = readsCaptures;
+  // Open invites to other spaces are the person's own and live in no space
+  // they are in yet: the same floor-only rule (Home, the whole Inbox).
+  const readsInvites = readsCaptures;
   const isAdmin = podAdminCheck(userId);
   const [
     groups,
@@ -427,6 +433,7 @@ async function readAttention(
     captures,
     issuers,
     appRequests,
+    spaceInvites,
   ] = await Promise.all([
     settle(
       "proposals",
@@ -535,6 +542,14 @@ async function readAttention(
           ? await listPendingAppRequests({ isAdmin })
           : { rows: [], truncated: false }
     ),
+    settle(
+      "invites",
+      { rows: [] as SpaceInviteSignalInput[], truncated: false },
+      async () =>
+        readsInvites
+          ? await listOpenSpaceInvites({ userId })
+          : { rows: [], truncated: false }
+    ),
   ]);
 
   const allNotifications = notifs.value;
@@ -588,6 +603,8 @@ async function readAttention(
     },
     accessRequestsTruncated:
       issuers.value.truncated || appRequests.value.truncated,
+    spaceInvites: spaceInvites.value.rows,
+    spaceInvitesTruncated: spaceInvites.value.truncated,
     // An unmeasured open-question read stays `undefined` (= unmeasured).
     openQuestionSessionIds: openQuestions.failed
       ? undefined
@@ -603,6 +620,7 @@ async function readAttention(
         captures,
         issuers,
         appRequests,
+        spaceInvites,
         containers,
         clusterSessions,
         openQuestions,
@@ -629,6 +647,7 @@ function blockingSignals(a: Attention): Signal[] {
     reviewSessions: a.review.sessions,
     unfinishedCaptures: a.captures.captures,
     accessRequests: a.accessRequests,
+    spaceInvites: a.spaceInvites,
   });
 }
 
@@ -661,6 +680,8 @@ function countOf(a: Attention) {
     capturesTruncated: a.captures.truncated,
     accessRequests: a.accessRequests,
     accessRequestsTruncated: a.accessRequestsTruncated,
+    spaceInvites: a.spaceInvites,
+    spaceInvitesTruncated: a.spaceInvitesTruncated,
   });
 }
 
@@ -1372,11 +1393,14 @@ function narrowAttention(
         ? a.captures
         : { captures: [], truncated: false },
     // Access requests live in no space either: pod-level only, like captures.
+    // So do invites to other spaces (none the person is in yet).
     ...(scope.workspaceId === null && !scope.kindClusters
       ? {}
       : {
           accessRequests: { issuers: [], applications: [] },
           accessRequestsTruncated: false,
+          spaceInvites: [],
+          spaceInvitesTruncated: false,
         }),
   };
 }
@@ -1790,8 +1814,9 @@ export const signalsRouter = router({
    * badge always equals the Blocking rows under it at that scope.
    *
    * The number ships WITH its parts: `decisions`, `notifications`, `blocked`,
-   * `review`, `captures` and `requests` (pending issuers + app connection
-   * requests, pod admins at the floor only), with `needsYou` their sum. A
+   * `review`, `captures`, `requests` (pending issuers + app connection
+   * requests, pod admins at the floor only) and `invites` (the viewer's open
+   * invites to other spaces, at the floor only), with `needsYou` their sum. A
    * client reads the part it needs; it never derives one by
    * subtracting the others. `suggestions` and `drafts` (PROPOSED) ship in the
    * same result and are NOT parts: they are never added into `needsYou`.
