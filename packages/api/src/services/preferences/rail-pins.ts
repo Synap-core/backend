@@ -8,9 +8,10 @@
  * owner floor by key — the row `signals.skipNextMove` writes), never in a
  * space's `layout.sidebarItems` (per space, admin-only).
  *
- * A pin names a surface: a saved `pipeline` view (`viewId`) or a kind/role's
- * implicit surface (`profileSlug` alone). Its `key` is `view:<id>` or
- * `kind:<slug>` — one pin per surface.
+ * A pin names a surface: a saved `pipeline` view (`viewId`), a kind/role's
+ * implicit surface (`profileSlug` alone), or a GOAL (`trackId` — "This week",
+ * D4: at most `RAIL_GOAL_PINS_MAX` of them, `@synap-core/types/units`). Its
+ * `key` is `view:<id>`, `kind:<slug>` or `track:<id>` — one pin per surface.
  *
  * SEEDING (configuration over code, no install-path hook). Every space the
  * person can see whose `layout.sidebarItems` points at a `pipeline` view
@@ -29,22 +30,33 @@ import {
   drizzleSql,
   userVisibleWhere,
 } from "@synap/database";
-import { userPreferences, views, workspaces } from "@synap/database/schema";
+import {
+  projectTracks,
+  userPreferences,
+  views,
+  workspaces,
+} from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
+import { AccessContext, scopedDb } from "../../access/index.js";
+import { RAIL_GOAL_PINS_MAX, goalRailPinKey } from "@synap-core/types/units";
 import { assertKnownProfileSlug } from "../../utils/assert-known-profile-slug.js";
 import { viewReadableWhere } from "../../utils/view-visibility.js";
+import { getTrack } from "../tracks/tracks-service.js";
 
 export const RAIL_PINS_KEY = "railPins";
 /** The most pins a rail holds — a rail, not a second sidebar. */
 export const RAIL_PINS_MAX = 30;
 
 export interface RailPin {
-  /** `view:<viewId>` or `kind:<profileSlug>` — one pin per surface. */
+  /** `view:<viewId>`, `kind:<profileSlug>` or `track:<trackId>` — one pin per surface. */
   key: string;
-  profileSlug: string;
+  /** The kind the surface lists — `null` on a goal pin. */
+  profileSlug: string | null;
   /** The saved pipeline view, when the pin is one. */
   viewId: string | null;
-  /** The name the person (or the template) gave it; null = the kind's name. */
+  /** The goal, when the pin is one ("This week", D4) — then `profileSlug` is null. */
+  trackId: string | null;
+  /** The name the person (or the template) gave it; null = the kind's (or the goal's) name. */
   label: string | null;
   /** `template` = suggested by a space's sidebar; `user` = pinned by hand. */
   source: "user" | "template";
@@ -55,7 +67,12 @@ interface StoredRailPins {
   seededWorkspaceIds: string[];
 }
 
-export function railPinKey(p: { viewId?: string | null; profileSlug: string }) {
+export function railPinKey(
+  p:
+    | { trackId: string }
+    | { viewId?: string | null; profileSlug: string; trackId?: undefined }
+) {
+  if (p.trackId) return goalRailPinKey(p.trackId);
   return p.viewId ? `view:${p.viewId}` : `kind:${p.profileSlug}`;
 }
 
@@ -70,6 +87,21 @@ function readStored(raw: unknown): StoredRailPins {
           string,
           unknown
         >;
+        const label = typeof r.label === "string" ? r.label : null;
+        const source = r.source === "template" ? "template" : "user";
+        // A goal pin names its goal, not a kind.
+        if (typeof r.trackId === "string" && r.trackId) {
+          return [
+            {
+              key: goalRailPinKey(r.trackId),
+              profileSlug: null,
+              viewId: null,
+              trackId: r.trackId,
+              label,
+              source,
+            },
+          ];
+        }
         if (typeof r.profileSlug !== "string" || !r.profileSlug) return [];
         const viewId = typeof r.viewId === "string" ? r.viewId : null;
         return [
@@ -77,8 +109,9 @@ function readStored(raw: unknown): StoredRailPins {
             key: railPinKey({ viewId, profileSlug: r.profileSlug }),
             profileSlug: r.profileSlug,
             viewId,
-            label: typeof r.label === "string" ? r.label : null,
-            source: r.source === "template" ? "template" : "user",
+            trackId: null,
+            label,
+            source,
           },
         ];
       })
@@ -156,11 +189,37 @@ async function suggestionsBySpace(
       key: railPinKey({ viewId: v.id, profileSlug: v.profileSlug }),
       profileSlug: v.profileSlug,
       viewId: v.id,
+      trackId: null,
       label: typeof item.label === "string" ? item.label : v.name,
       source: "template",
     });
   }
   return out;
+}
+
+/**
+ * The stored pins minus the goal pins whose goal the person can no longer
+ * read (deleted, or its project no longer shared) — the same `project_tracks`
+ * rule every track read is floored on, ONE read. A dead goal pin never shows,
+ * and never holds one of the week's {@link RAIL_GOAL_PINS_MAX} places.
+ */
+async function withoutUnreadableGoals(
+  userId: string,
+  stored: StoredRailPins
+): Promise<StoredRailPins> {
+  const ids = stored.pins.flatMap((p) => (p.trackId ? [p.trackId] : []));
+  if (ids.length === 0) return stored;
+  const readable = await scopedDb(AccessContext.from({ userId })).findMany<{
+    id: string;
+  }>(projectTracks, {
+    where: inArray(projectTracks.id, ids),
+    columns: { id: true },
+  });
+  const keep = new Set(readable.map((r) => r.id));
+  return {
+    ...stored,
+    pins: stored.pins.filter((p) => !p.trackId || keep.has(p.trackId)),
+  };
 }
 
 /** Stored pins, then the suggestions of spaces not yet seeded — deduped by key, capped. */
@@ -189,21 +248,37 @@ export async function readRailPins(userId: string): Promise<RailPin[]> {
     .select({ ui: userPreferences.uiPreferences })
     .from(userPreferences)
     .where(eq(userPreferences.userId, userId));
-  const stored = readStored(
-    (row?.ui as Record<string, unknown> | undefined)?.[RAIL_PINS_KEY]
+  const stored = await withoutUnreadableGoals(
+    userId,
+    readStored(
+      (row?.ui as Record<string, unknown> | undefined)?.[RAIL_PINS_KEY]
+    )
   );
   return effective(stored, await suggestionsBySpace(userId));
 }
 
 /**
- * A pin must name a real surface the person can open: a known kind/role, and
- * — for a saved surface — a `pipeline` view they can read whose board is that
- * kind. Throws NOT_FOUND / BAD_REQUEST (never pins a dead door).
+ * A pin must name a real surface the person can open: a goal they can read
+ * (the track read, `getTrack` — visible iff its project is), or a known
+ * kind/role and — for a saved surface — a `pipeline` view they can read whose
+ * board is that kind. Throws NOT_FOUND / BAD_REQUEST (never pins a dead door).
  */
 export async function assertPinnableSurface(
   userId: string,
-  pin: { profileSlug: string; viewId?: string | null }
+  pin:
+    | { trackId: string }
+    | { profileSlug: string; viewId?: string | null; trackId?: undefined }
 ): Promise<void> {
+  if (pin.trackId) {
+    if (!(await getTrack(pin.trackId, { userId }))) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `No goal ${pin.trackId} you can open.`,
+      });
+    }
+    return;
+  }
+  if (!("profileSlug" in pin)) return;
   await assertKnownProfileSlug(db, pin.profileSlug);
   if (!pin.viewId) return;
   const [v] = await db
@@ -232,8 +307,10 @@ export type RailPinsOp =
       op: "pin";
       profileSlug: string;
       viewId?: string | null;
+      trackId?: undefined;
       label?: string | null;
     }
+  | { op: "pin"; trackId: string; label?: string | null }
   | { op: "unpin"; key: string }
   | { op: "reorder"; keys: string[] };
 
@@ -258,28 +335,44 @@ export async function writeRailPins(
       .where(eq(userPreferences.userId, userId))
       .for("update");
     const ui = (row?.ui ?? {}) as Record<string, unknown>;
-    const stored = readStored(ui[RAIL_PINS_KEY]);
+    const stored = await withoutUnreadableGoals(
+      userId,
+      readStored(ui[RAIL_PINS_KEY])
+    );
     let pins = effective(stored, suggested);
 
     if (op.op === "pin") {
-      const key = railPinKey({
-        viewId: op.viewId ?? null,
-        profileSlug: op.profileSlug,
-      });
-      if (!pins.some((p) => p.key === key)) {
+      const pin: RailPin = op.trackId
+        ? {
+            key: goalRailPinKey(op.trackId),
+            profileSlug: null,
+            viewId: null,
+            trackId: op.trackId,
+            label: op.label ?? null,
+            source: "user",
+          }
+        : {
+            key: railPinKey({
+              viewId: op.viewId ?? null,
+              profileSlug: op.profileSlug,
+            }),
+            profileSlug: op.profileSlug,
+            viewId: op.viewId ?? null,
+            trackId: null,
+            label: op.label ?? null,
+            source: "user",
+          };
+      if (!pins.some((p) => p.key === pin.key)) {
         if (pins.length >= RAIL_PINS_MAX) {
           throw new RailPinsFullError();
         }
-        pins = [
-          ...pins,
-          {
-            key,
-            profileSlug: op.profileSlug,
-            viewId: op.viewId ?? null,
-            label: op.label ?? null,
-            source: "user",
-          },
-        ];
+        if (
+          pin.trackId &&
+          pins.filter((p) => p.trackId).length >= RAIL_GOAL_PINS_MAX
+        ) {
+          throw new RailGoalPinsFullError();
+        }
+        pins = [...pins, pin];
       }
     } else if (op.op === "unpin") {
       pins = pins.filter((p) => p.key !== op.key);
@@ -317,5 +410,15 @@ export class RailPinsFullError extends Error {
   constructor() {
     super(`A rail holds at most ${RAIL_PINS_MAX} pins — unpin one first.`);
     this.name = "RailPinsFullError";
+  }
+}
+
+/** "This week" holds at most {@link RAIL_GOAL_PINS_MAX} goals (D4). */
+export class RailGoalPinsFullError extends Error {
+  constructor() {
+    super(
+      `This week holds at most ${RAIL_GOAL_PINS_MAX} goals — unpin one first.`
+    );
+    this.name = "RailGoalPinsFullError";
   }
 }

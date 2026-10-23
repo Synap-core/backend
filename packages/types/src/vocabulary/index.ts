@@ -745,6 +745,9 @@ export const OBJECT_NOUNS: Readonly<Record<string, string>> = {
   // A pod `ui-design` (the design canvas kind): the acronym is the one thing
   // the sentence-caser cannot know, so it humanized to "Ui design".
   "ui-design": "UI design",
+  // The Project Management `okr` kind ("Make it a goal" names it in the
+  // proposal it files): an acronym again — it humanized to "Okr".
+  okr: "OKR",
 };
 
 /**

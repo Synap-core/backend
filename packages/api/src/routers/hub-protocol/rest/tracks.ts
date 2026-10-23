@@ -6,6 +6,9 @@
  *                                       goal the caller can see, newest first,
  *                                       paged (?limit=…&cursor=… → nextCursor)
  *   POST  /tracks                       start a track { projectId, playbookId?, name? }
+ *   POST  /tracks/convert               "Make it a goal" { entityId, projectId?,
+ *                                       name? } — a goal / objective / okr
+ *                                       entity becomes a goal, once (D2)
  *   GET   /tracks/:id                   one track
  *   POST  /tracks/:id/advance           { toStage } — any declared stage
  *   POST  /tracks/:id/reopen            { name? } — a closed goal as a NEW
@@ -77,6 +80,10 @@ import {
   missingStageDomainsNote,
   stageDomainFallbackNote,
 } from "../../../services/tracks/stage-domain.js";
+import {
+  convertEntityToGoal,
+  convertToGoalInputSchema,
+} from "../../../services/tracks/convert-to-goal.js";
 
 const Uuid = z.string().uuid();
 const ParamsBag = z.record(z.string(), z.unknown());
@@ -252,6 +259,38 @@ export function registerTracksRoutes(app: HubHono): void {
       });
     } catch (err) {
       return fail(c, err, "POST /tracks");
+    }
+  });
+
+  // Static route — BEFORE every `/tracks/:id…` route.
+  app.post("/tracks/convert", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const body = convertToGoalInputSchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const { reasoning, ...rest } = body.data;
+      const result = await convertEntityToGoal({
+        ...rest,
+        actor: actorOf(c, reasoning),
+      });
+      if (result.status === "proposed") return jsonGoverned(c, result);
+      return jsonGoverned(c, {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, actorOf(c)),
+        entityId: result.entityId,
+        notCarried: result.notCarried,
+      });
+    } catch (err) {
+      return fail(c, err, "POST /tracks/convert");
     }
   });
 

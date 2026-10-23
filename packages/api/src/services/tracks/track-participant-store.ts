@@ -38,6 +38,9 @@ import type {
   TrackParticipantRow,
   TrackPrincipalKindKey,
 } from "@synap/database/schema";
+import { actorDisplayName } from "../../routers/proposals/helper-functions.js";
+import { loadActorRows } from "../activity/activity-actors.js";
+import { loadMachineNames } from "../machine-roster.js";
 import {
   goalJudge,
   goalOwner,
@@ -149,13 +152,19 @@ export async function resolveGoalOwnerPerson(
 
 /**
  * The owner row a NEW goal is born with (`startTrack`, on creation only).
- * Idempotent: a goal that already has its owner keeps it.
+ * Idempotent: a goal that already has its owner keeps it. `ownerPersonId` —
+ * a goal made from an entity ("Make it a goal") is owned by the person behind
+ * the entity, already resolved and checked (`assertGoalSource`); the person
+ * who started it is then who decided the row.
  */
 export async function seedGoalOwner(
   track: Pick<ProjectTrack, "id" | "userId">,
-  projectOwnerId: string
+  projectOwnerId: string,
+  ownerPersonId?: string | null
 ): Promise<void> {
-  const owner = await resolveGoalOwnerPerson(track.userId, projectOwnerId);
+  const owner =
+    ownerPersonId ??
+    (await resolveGoalOwnerPerson(track.userId, projectOwnerId));
   const db = await getDb();
   await db
     .insert(trackParticipants)
@@ -164,7 +173,7 @@ export async function seedGoalOwner(
       principalKind: "person",
       principalId: owner,
       role: "owner",
-      decidedBy: owner,
+      decidedBy: ownerPersonId ? track.userId : owner,
     })
     .onConflictDoNothing();
 }
@@ -226,15 +235,20 @@ export async function carryGoalParticipants(
 const iso = (d: Date | string | null | undefined): string | null =>
   d ? new Date(d).toISOString() : null;
 
-/** One stored row as every read returns it (`silentSince` filled by the caller). */
+/**
+ * One stored row as every read returns it (`silentSince` and `displayName`
+ * filled by the caller — `null` = not known, never invented).
+ */
 export function toTrackParticipant(
   row: TrackParticipantRow,
-  silentSince: string | null = null
+  silentSince: string | null = null,
+  displayName: string | null = null
 ): TrackParticipant {
   return {
     id: row.id,
     principalKind: row.principalKind,
     principalId: row.principalId,
+    displayName,
     role: row.role,
     commitment: row.commitment ?? null,
     commitmentState: row.commitmentState ?? null,
@@ -290,11 +304,40 @@ export function silentSinceOf(
 }
 
 /**
+ * The names of goal participants, for a whole list in one users read (plus
+ * one read of the computers agents run on) — the same `actorDisplayName` the
+ * session roster and the proposals use. An id with no users row, or a row
+ * with nothing to name it by, is absent — never its id.
+ */
+async function participantDisplayNames(
+  principalIds: Iterable<string>
+): Promise<Map<string, string>> {
+  const rows = await loadActorRows(principalIds);
+  if (rows.size === 0) return new Map();
+  const hostNames = await loadMachineNames(
+    [...rows.values()].flatMap((r) => (r.hostUserId ? [r.hostUserId] : []))
+  );
+  const out = new Map<string, string>();
+  for (const [id, row] of rows) {
+    const name = actorDisplayName(row as never, hostNames)?.trim();
+    if (name) out.set(id, name);
+  }
+  return out;
+}
+
+/**
  * The participants of `tracks`, keyed by track id. `tracks` are rows the
  * caller already READ through the access layer (`getTrack` / `listTracks`):
  * a participant is exactly as visible as its goal (the `track_participants`
  * VisibilityRule says the same), so the rows are read by those ids. Every
  * goal has an entry; a goal with no stored rows reads `[]`.
+ *
+ * Each carries its `displayName`, named HERE for the whole list at once (one
+ * users read, plus one read of the computers agents run on): the same
+ * `actorDisplayName` the session roster and the proposals use, so a person
+ * reads as on every other surface and an agent as "Claude Code on devbox".
+ * A principal with no users row, or a row with nothing to name it by, reads
+ * `null` — never its id.
  */
 export async function loadTrackParticipantViews(
   tracks: ReadonlyArray<Pick<ProjectTrack, "id">>
@@ -309,6 +352,7 @@ export async function loadTrackParticipantViews(
     .select()
     .from(trackParticipants)
     .where(inArray(trackParticipants.trackId, ids));
+  const names = await participantDisplayNames(rows.map((r) => r.principalId));
   const owing = rows.filter(
     (r) => r.role === "delegate" && isOpenCommitment(r.commitmentState)
   );
@@ -342,7 +386,8 @@ export async function loadTrackParticipantViews(
         silentSinceOf(
           row,
           sessions.filter((s) => s.trackId === row.trackId)
-        )
+        ),
+        names.get(row.principalId) ?? null
       )
     );
   }

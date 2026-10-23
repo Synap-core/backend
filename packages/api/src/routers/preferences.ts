@@ -11,18 +11,25 @@ import { eq } from "@synap/database";
 import { UpdatePreferencesInputSchema } from "@synap-core/types";
 import {
   assertPinnableSurface,
+  RailGoalPinsFullError,
   RailPinsFullError,
   readRailPins,
   writeRailPins,
   type RailPinsOp,
 } from "../services/preferences/rail-pins.js";
 
-/** One write door for the rail pins; a full rail is a PRECONDITION, not a 500. */
+/**
+ * One write door for the rail pins; a full rail — or a week already holding
+ * its goals — is a PRECONDITION, not a 500.
+ */
 async function railPinsWrite(userId: string, op: RailPinsOp) {
   try {
     return { pins: await writeRailPins(userId, op) };
   } catch (err) {
-    if (err instanceof RailPinsFullError) {
+    if (
+      err instanceof RailPinsFullError ||
+      err instanceof RailGoalPinsFullError
+    ) {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
         message: err.message,
@@ -44,24 +51,52 @@ export const preferencesRouter = router({
   })),
 
   /**
-   * Pin a surface: a kind/role (`profileSlug`), or a saved pipeline view of it
-   * (`viewId`). Idempotent — pinning a pinned surface keeps one pin. The
-   * surface must exist and be readable (NOT_FOUND / BAD_REQUEST otherwise).
+   * Pin a surface: a kind/role (`profileSlug`), a saved pipeline view of it
+   * (`viewId`), or a GOAL (`trackId`, exclusive with `profileSlug` — "This
+   * week", D4: at most `RAIL_GOAL_PINS_MAX`, a 4th is PRECONDITION_FAILED).
+   * Idempotent — pinning a pinned surface keeps one pin. The surface must
+   * exist and be readable (NOT_FOUND / BAD_REQUEST otherwise).
    */
   pinSurface: protectedProcedure
     .input(
-      z.object({
-        profileSlug: z.string().min(1),
-        viewId: z.string().uuid().optional(),
-        label: z.string().trim().min(1).max(80).optional(),
-      })
+      z
+        .object({
+          profileSlug: z.string().min(1).optional(),
+          viewId: z.string().uuid().optional(),
+          trackId: z.string().uuid().optional(),
+          label: z.string().trim().min(1).max(80).optional(),
+        })
+        .superRefine((v, ctx) => {
+          if (Boolean(v.profileSlug) === Boolean(v.trackId)) {
+            ctx.addIssue({
+              code: "custom",
+              message:
+                "Pin a kind (profileSlug) or a goal (trackId) — one of the two.",
+              path: ["trackId"],
+            });
+          }
+          if (v.trackId && v.viewId) {
+            ctx.addIssue({
+              code: "custom",
+              message:
+                "A goal pin names no view — viewId pins a kind's saved board.",
+              path: ["viewId"],
+            });
+          }
+        })
     )
     .mutation(async ({ ctx, input }) => {
-      await assertPinnableSurface(ctx.userId, input);
-      return railPinsWrite(ctx.userId, { op: "pin", ...input });
+      const { trackId, profileSlug, viewId, label } = input;
+      if (trackId) {
+        await assertPinnableSurface(ctx.userId, { trackId });
+        return railPinsWrite(ctx.userId, { op: "pin", trackId, label });
+      }
+      const surface = { profileSlug: profileSlug!, viewId };
+      await assertPinnableSurface(ctx.userId, surface);
+      return railPinsWrite(ctx.userId, { op: "pin", ...surface, label });
     }),
 
-  /** Unpin by key (`view:<id>` / `kind:<slug>`). A suggested pin stays gone. */
+  /** Unpin by key (`view:<id>` / `kind:<slug>` / `track:<id>`). A suggested pin stays gone. */
   unpinSurface: protectedProcedure
     .input(z.object({ key: z.string().min(1).max(200) }))
     .mutation(({ ctx, input }) =>

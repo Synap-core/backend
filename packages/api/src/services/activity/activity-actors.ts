@@ -3,7 +3,8 @@
  * `ActivityActor` (`@synap-core/types/activity`), shared by every "what
  * happened" read: the activity ledger (`list-activity.ts`), the track history
  * (`services/tracks/track-history.ts`) and the track view's stage-history
- * movers. Names are resolved HERE, server-side: a client cannot (Relay's
+ * movers. `loadActorRows` is also the users read that names a goal's
+ * participants (`track-participant-store.ts`). Names are resolved HERE, server-side: a client cannot (Relay's
  * signed-in id is the Control Plane's, never a pod user id).
  */
 
@@ -17,6 +18,8 @@ export interface ActorUserRow {
   email: string;
   userType: string;
   agentMetadata: unknown;
+  /** The computer an agent runs on (`actorDisplayName`'s "… on devbox"). */
+  hostUserId: string | null;
 }
 
 /**
@@ -52,6 +55,7 @@ export async function loadActorRows(
       email: users.email,
       userType: users.userType,
       agentMetadata: users.agentMetadata,
+      hostUserId: users.hostUserId,
     })
     .from(users)
     .where(inArray(users.id, uniq));

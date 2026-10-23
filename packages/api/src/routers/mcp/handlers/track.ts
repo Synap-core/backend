@@ -30,6 +30,7 @@ import {
   type TrackActor,
 } from "../../../services/tracks/tracks-service.js";
 import { pickTrackGoalInput } from "../../../services/tracks/goal-content.js";
+import { convertEntityToGoal } from "../../../services/tracks/convert-to-goal.js";
 import {
   missingStageDomainsNote,
   stageDomainFallbackNote,
@@ -229,6 +230,39 @@ export const trackHandlers: McpHandlerMap = {
         track: await loadWrittenTrackView(result.track, ctx),
         missingDomains: result.missingDomains,
         ...(domainsNote ? { domainsNote } : {}),
+      };
+    });
+  },
+
+  // D2 — "Make it a goal": the SAME service the tRPC and Hub REST convert
+  // doors call (`convertEntityToGoal` → `startTrack` with `fromEntity`), so an
+  // agent's conversion is governed exactly like an agent's start.
+  synap_convert_to_goal: async (ctx) => {
+    requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
+    const entityId = uuid(ctx.args.entityId);
+    if (!entityId) {
+      return ok({
+        error:
+          "entityId (uuid) is required — the goal, objective or OKR entity to make a goal (synap_find lists them by kind).",
+      });
+    }
+    const projectId = uuid(ctx.args.projectId);
+    if (str(ctx.args.projectId) && !projectId) {
+      return ok({ error: "projectId must be a project uuid." });
+    }
+    return run(async () => {
+      const result = await convertEntityToGoal({
+        entityId,
+        ...(projectId ? { projectId } : {}),
+        ...(str(ctx.args.name) ? { name: str(ctx.args.name) } : {}),
+        actor: actorOf(ctx),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+        entityId: result.entityId,
+        notCarried: result.notCarried,
       };
     });
   },

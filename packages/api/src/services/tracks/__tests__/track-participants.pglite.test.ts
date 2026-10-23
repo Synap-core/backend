@@ -431,6 +431,45 @@ describe("a goal is born with its owner; the read shows who is on it", () => {
       view.participants!.find((p) => p.role === "judge")!.silentSince
     ).toBeNull();
   });
+
+  it("names every participant in the read — the roster's names, null when unknown (W5b)", async () => {
+    const id = await goal("Read their names");
+    await add(id, person(OWNER), JUDGE, "judge");
+    // An agent on a computer, and a principal no users row knows — both
+    // written as rows: this pins the READ's naming, not the add door.
+    const MACHINE = "machine-1";
+    const ON_DEVBOX = "agent-on-devbox";
+    await q(
+      `insert into users (id, email, name, user_type, agent_type) values ($1, $2, 'devbox', 'agent', 'machine')`,
+      [MACHINE, `${MACHINE}@example.test`]
+    );
+    await q(
+      `insert into users (id, email, name, user_type, host_user_id) values ($1, $2, 'Claude Code', 'agent', $3)`,
+      [ON_DEVBOX, `${ON_DEVBOX}@example.test`, MACHINE]
+    );
+    for (const [principal, kind] of [
+      [ON_DEVBOX, "agent"],
+      ["nobody-1", "person"],
+    ] as const) {
+      await q(
+        `insert into track_participants (track_id, principal_kind, principal_id, role, commitment, commitment_state, decided_by)
+         values ($1, $2, $3, 'delegate', 'Help', 'accepted', $4)`,
+        [id, kind, principal, OWNER]
+      );
+    }
+    const view = await loadTrackView(
+      (await getTrack(id, person(OWNER)))!,
+      person(OWNER)
+    );
+    const nameOf = (principalId: string) =>
+      view.participants!.find((p) => p.principalId === principalId)
+        ?.displayName;
+    expect(nameOf(OWNER)).toBe(OWNER);
+    expect(nameOf(JUDGE)).toBe(JUDGE);
+    expect(nameOf(ON_DEVBOX)).toBe("Claude Code on devbox");
+    // Unknown is null — never the id.
+    expect(nameOf("nobody-1")).toBeNull();
+  });
 });
 
 describe("only the judge closes the goal", () => {
