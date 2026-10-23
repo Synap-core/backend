@@ -19,6 +19,17 @@ import {
   toggle,
   toggleSection,
   withoutSpace,
+  defaultSpaces,
+  groupByObject,
+  isDecisionPermission,
+  objectLevel,
+  objectSpaces,
+  otherSpaces,
+  podWideNote,
+  scopeLabel,
+  setObjectLevel,
+  shownSpaces,
+  toggleObjectSpace,
   type OfferedPermission,
   type Selection,
 } from "./consent-model";
@@ -296,17 +307,15 @@ describe("consent space hint (order only, never a grant)", () => {
   it("never adds a space the offer does not hold", () => {
     const out = spaceHintFirst(OFFER, "someone-elses-space");
     expect(out).toEqual(OFFER);
-    const s = initialSelection(out, [], "someone-elses-space");
+    const s = initialSelection(out, []);
     expect(isTicked(s, "entity.post.read", "someone-elses-space")).toBe(false);
     expect(toApproved(s, out)).toHaveLength(3);
   });
 
   it("a re-consent keeps the current approval; the hint never adds to it", () => {
-    const s = initialSelection(
-      spaceHintFirst(OFFER, "shared"),
-      [{ permission: "entity.post.read", workspaceId: "brand" }],
-      "shared"
-    );
+    const s = initialSelection(spaceHintFirst(OFFER, "shared"), [
+      { permission: "entity.post.read", workspaceId: "brand" },
+    ]);
     expect(toApproved(s, OFFER)).toEqual([
       { permission: "entity.post.read", workspaceId: "brand" },
     ]);
@@ -327,7 +336,7 @@ describe("the consent card's width", () => {
 describe("Allow says why it is disabled", () => {
   it("nothing ticked: Allow is blocked, with a reason", () => {
     expect(allowBlockedReason(OFFER, new Set())).toBe(
-      "Pick at least one space."
+      "Turn on at least one thing it asks for."
     );
   });
 
@@ -345,7 +354,9 @@ describe("Allow says why it is disabled", () => {
   it("a section cleared at once blocks Allow, with the same reason", () => {
     const { grants } = splitOffer(OFFER);
     const s = toggleSection(initialSelection(OFFER, []), OFFER, grants);
-    expect(allowBlockedReason(OFFER, s)).toBe("Pick at least one space.");
+    expect(allowBlockedReason(OFFER, s)).toBe(
+      "Turn on at least one thing it asks for."
+    );
   });
 
   it("a ticked pair outside the offer does not unblock it", () => {
@@ -408,5 +419,352 @@ describe("the invalid-request hint fits the client", () => {
     for (const id of [POD_APP, "app_1a2b3c", "synap-desktop", "x"]) {
       expect(invalidRequestHint(id)).not.toContain("\u2014");
     }
+  });
+});
+
+// ─── Object-first rows (founder, 2026-10-23) ─────────────────────────────────
+
+/** The spaces of the render test: two from Content Studio's templates. */
+const CO = {
+  workspaceId: "co",
+  workspaceName: "Content OS",
+  templateSlug: "content-os",
+};
+const ECO = {
+  workspaceId: "eco",
+  workspaceName: "Ecosystem",
+  templateSlug: "ecosystem",
+};
+const BRAND_S = {
+  workspaceId: "brand",
+  workspaceName: "Brand",
+  templateSlug: null,
+};
+const BUILDER = {
+  workspaceId: "builder",
+  workspaceName: "Builder",
+  templateSlug: "builder-workspace",
+};
+const ALL4 = [BRAND_S, BUILDER, CO, ECO];
+const TEMPLATES = ["content-os", "ecosystem"];
+
+/**
+ * Content Studio's real ask (https://content-studio.synap.live/.well-known/
+ * synap-client.json, read 2026-10-23), every space readable and writable.
+ */
+const STUDIO_ASK = [
+  "entity.post.read",
+  "entity.pillar.read",
+  "entity.journey-stage.read",
+  "entity.series.read",
+  "entity.platform.read",
+  "entity.file.read",
+  "entity.content-composition.read",
+  "entity.content-asset.read",
+  "entity.inspiration.read",
+  "entity.signal_item.read",
+  "document.read",
+  "relation.read",
+  "session.read",
+  "proposal.read",
+  "entity.post.create",
+  "entity.post.update",
+  "entity.signal_item.update",
+  "entity.file.create",
+];
+const STUDIO: OfferedPermission[] = STUDIO_ASK.map((permission) => ({
+  permission,
+  workspaces: ALL4,
+}));
+
+const ids = (spaces: readonly { workspaceId: string }[]) =>
+  spaces.map((w) => w.workspaceId);
+const row = (offer: OfferedPermission[], key: string) => {
+  const r = groupByObject(offer).find((o) => o.key === key);
+  expect(r, `no row ${key}`).toBeDefined();
+  return r!;
+};
+
+describe("rows group the ask by object", () => {
+  it("one row per object, edits first, then views; words from the vocabulary door", () => {
+    const rows = groupByObject(STUDIO);
+    expect(rows.map((r) => [r.label, r.levels.join("/")])).toEqual([
+      ["Posts", "off/view/edit"],
+      ["Files", "off/view/edit"],
+      ["Signal items", "off/view/edit"],
+      ["Pillars", "off/view"],
+      ["Journey stages", "off/view"],
+      ["Series", "off/view"],
+      ["Platforms", "off/view"],
+      ["Content compositions", "off/view"],
+      ["Content assets", "off/view"],
+      ["Inspirations", "off/view"],
+      ["Documents", "off/view"],
+      ["Links", "off/view"],
+      ["Sessions", "off/view"],
+      ["Changes waiting for your review", "off/view"],
+    ]);
+    // Every permission sits in exactly one row.
+    expect(
+      rows.flatMap((r) => r.permissions.map((p) => p.permission)).sort()
+    ).toEqual([...STUDIO_ASK].sort());
+  });
+
+  it("approve and reject share ONE last row, On or Off; any other gate verb is an Edit", () => {
+    const offer: OfferedPermission[] = [
+      { permission: "proposal.approve", workspaces: [CO] },
+      { permission: "entity.post.read", workspaces: [CO] },
+      { permission: "entity.post.transition", workspaces: [CO] },
+      { permission: "proposal.reject", workspaces: [CO] },
+    ];
+    const rows = groupByObject(offer);
+    expect(rows.map((r) => [r.key, r.levels.join("/")])).toEqual([
+      ["entity.post", "off/view/edit"],
+      ["decisions", "off/on"],
+    ]);
+    expect(rows[1]!.permissions.map((p) => p.permission)).toEqual([
+      "proposal.approve",
+      "proposal.reject",
+    ]);
+    expect(isDecisionPermission("entity.post.transition")).toBe(false);
+    expect(isDecisionPermission("entity.post.archive")).toBe(false);
+  });
+
+  it("a row the app may only write offers Edit and Off, never View", () => {
+    const r = row(
+      [{ permission: "entity.file.create", workspaces: [CO] }],
+      "entity.file"
+    );
+    expect(r.levels).toEqual(["off", "edit"]);
+  });
+
+  it("`entity.read` is Everything; a bare kind is a write", () => {
+    const rows = groupByObject([
+      { permission: "entity.read", workspaces: [CO] },
+      { permission: "entity.note", workspaces: [CO] },
+    ]);
+    expect(rows.map((r) => [r.label, r.levels.join("/")])).toEqual([
+      ["Notes", "off/edit"],
+      ["Everything", "off/view"],
+    ]);
+  });
+});
+
+describe("default spaces come from the app's declared templates", () => {
+  it("the offered spaces made from a declared template", () => {
+    expect(ids(defaultSpaces(STUDIO[0]!, TEMPLATES))).toEqual(["co", "eco"]);
+  });
+
+  it("no template declared: every offered space (#133)", () => {
+    expect(ids(defaultSpaces(STUDIO[0]!, []))).toEqual(ids(ALL4));
+  });
+
+  it("no space from its templates for this permission: every offered space", () => {
+    const item = {
+      permission: "entity.post.create",
+      workspaces: [BRAND_S, BUILDER],
+    };
+    expect(ids(defaultSpaces(item, TEMPLATES))).toEqual(["brand", "builder"]);
+  });
+
+  it("a first consent ticks each permission in its default spaces only", () => {
+    const s = initialSelection(STUDIO, [], TEMPLATES);
+    const approved = toApproved(s, STUDIO);
+    expect(approved).toHaveLength(STUDIO_ASK.length * 2);
+    expect(new Set(approved.map((a) => a.workspaceId))).toEqual(
+      new Set(["co", "eco"])
+    );
+  });
+
+  it("a re-consent ignores the templates: exactly the current approval", () => {
+    const current = [{ permission: "entity.post.read", workspaceId: "brand" }];
+    expect(
+      toApproved(initialSelection(STUDIO, current, TEMPLATES), STUDIO)
+    ).toEqual(current);
+  });
+});
+
+describe("a row's level, both ways", () => {
+  const posts = () => row(STUDIO, "entity.post");
+
+  it("reads the level from the selection: Edit, View, Off", () => {
+    const s = initialSelection(STUDIO, [], TEMPLATES);
+    expect(objectLevel(s, posts())).toBe("edit");
+    expect(objectLevel(s, row(STUDIO, "entity.pillar"))).toBe("view");
+    let t = toggle(s, STUDIO, "entity.post.create", "co");
+    t = toggle(t, STUDIO, "entity.post.create", "eco");
+    t = toggle(t, STUDIO, "entity.post.update", "co");
+    expect(objectLevel(t, posts())).toBe("edit");
+    t = toggle(t, STUDIO, "entity.post.update", "eco");
+    expect(objectLevel(t, posts())).toBe("view");
+    t = toggle(t, STUDIO, "entity.post.read", "co");
+    t = toggle(t, STUDIO, "entity.post.read", "eco");
+    expect(objectLevel(t, posts())).toBe("off");
+  });
+
+  it("View keeps the row's spaces and gives its reads only", () => {
+    const s = initialSelection(STUDIO, [], TEMPLATES);
+    const v = setObjectLevel(s, STUDIO, posts(), "view", TEMPLATES);
+    expect(objectLevel(v, posts())).toBe("view");
+    expect(
+      toApproved(v, STUDIO).filter((a) =>
+        a.permission.startsWith("entity.post.")
+      )
+    ).toEqual([
+      { permission: "entity.post.read", workspaceId: "co" },
+      { permission: "entity.post.read", workspaceId: "eco" },
+    ]);
+  });
+
+  it("Off clears exactly this row's pairs, nothing else", () => {
+    const s = initialSelection(STUDIO, [], TEMPLATES);
+    const off = setObjectLevel(s, STUDIO, posts(), "off", TEMPLATES);
+    expect(objectLevel(off, posts())).toBe("off");
+    const left = toApproved(off, STUDIO);
+    expect(left.some((a) => a.permission.startsWith("entity.post."))).toBe(
+      false
+    );
+    expect(left).toEqual(
+      toApproved(s, STUDIO).filter(
+        (a) => !a.permission.startsWith("entity.post.")
+      )
+    );
+  });
+
+  it("from Off, Edit gives every permission in its default spaces", () => {
+    const off = setObjectLevel(
+      initialSelection(STUDIO, [], TEMPLATES),
+      STUDIO,
+      posts(),
+      "off",
+      TEMPLATES
+    );
+    const e = setObjectLevel(off, STUDIO, posts(), "edit", TEMPLATES);
+    expect(ids(objectSpaces(e, posts()))).toEqual(["co", "eco"]);
+    expect(
+      toApproved(e, STUDIO).filter((a) =>
+        a.permission.startsWith("entity.post.")
+      )
+    ).toHaveLength(6);
+  });
+
+  it("a space added by the person survives a level change", () => {
+    let s = initialSelection(STUDIO, [], TEMPLATES);
+    s = toggleObjectSpace(s, STUDIO, posts(), "brand");
+    // From Edit, a new space gets Edit there.
+    expect(isTicked(s, "entity.post.create", "brand")).toBe(true);
+    s = setObjectLevel(s, STUDIO, posts(), "view", TEMPLATES);
+    expect(ids(objectSpaces(s, posts()))).toEqual(["brand", "co", "eco"]);
+    expect(isTicked(s, "entity.post.create", "brand")).toBe(false);
+  });
+
+  it("a space untick clears that space only; from Off a tick gives the lowest level", () => {
+    let s = initialSelection(STUDIO, [], TEMPLATES);
+    s = toggleObjectSpace(s, STUDIO, posts(), "co");
+    expect(ids(objectSpaces(s, posts()))).toEqual(["eco"]);
+    const off = setObjectLevel(s, STUDIO, posts(), "off", TEMPLATES);
+    const t = toggleObjectSpace(off, STUDIO, posts(), "builder");
+    expect(objectLevel(t, posts())).toBe("view");
+    expect(ids(objectSpaces(t, posts()))).toEqual(["builder"]);
+  });
+
+  it("decisions: On gives approve and reject in the default spaces, Off by default", () => {
+    const offer: OfferedPermission[] = [
+      { permission: "entity.post.read", workspaces: ALL4 },
+      { permission: "proposal.approve", workspaces: ALL4 },
+      { permission: "proposal.reject", workspaces: [CO] },
+    ];
+    const decide = row(offer, "decisions");
+    const s = initialSelection(offer, [], TEMPLATES);
+    expect(objectLevel(s, decide)).toBe("off");
+    const on = setObjectLevel(s, offer, decide, "on", TEMPLATES);
+    expect(objectLevel(on, decide)).toBe("on");
+    expect(
+      toApproved(on, offer).filter((a) => a.permission.startsWith("proposal."))
+    ).toEqual([
+      { permission: "proposal.approve", workspaceId: "co" },
+      { permission: "proposal.approve", workspaceId: "eco" },
+      { permission: "proposal.reject", workspaceId: "co" },
+    ]);
+  });
+});
+
+describe("rows and Customize share ONE selection, inside the offer", () => {
+  it("a tick in the matrix moves the row's level; a row's level moves the matrix", () => {
+    const posts = row(STUDIO, "entity.post");
+    let s = setObjectLevel(
+      initialSelection(STUDIO, [], TEMPLATES),
+      STUDIO,
+      posts,
+      "view",
+      TEMPLATES
+    );
+    expect(isTicked(s, "entity.post.create", "co")).toBe(false);
+    s = toggle(s, STUDIO, "entity.post.create", "co");
+    expect(objectLevel(s, posts)).toBe("edit");
+    const { grants } = splitOffer(STUDIO);
+    s = toggleSection(s, STUDIO, grants); // some → all
+    s = toggleSection(s, STUDIO, grants); // all → none
+    expect(objectLevel(s, posts)).toBe("off");
+  });
+
+  it("never a pair outside the offer, whatever the level or space", () => {
+    const narrow: OfferedPermission[] = [
+      { permission: "entity.post.read", workspaces: [CO, BRAND_S] },
+      { permission: "entity.post.create", workspaces: [CO] },
+    ];
+    const posts = row(narrow, "entity.post");
+    let s: Selection = new Set();
+    s = setObjectLevel(s, narrow, posts, "edit", TEMPLATES);
+    s = toggleObjectSpace(s, narrow, posts, "brand");
+    s = toggleObjectSpace(s, narrow, posts, "elsewhere");
+    s = setObjectLevel(s, narrow, posts, "edit", TEMPLATES);
+    const offered = new Set(
+      narrow.flatMap((o) =>
+        o.workspaces.map((w) => `${o.permission}\u0000${w.workspaceId}`)
+      )
+    );
+    for (const k of s) expect(offered.has(k), k).toBe(true);
+    expect(toApproved(s, narrow)).toEqual([
+      { permission: "entity.post.read", workspaceId: "co" },
+      { permission: "entity.post.read", workspaceId: "brand" },
+      { permission: "entity.post.create", workspaceId: "co" },
+    ]);
+  });
+});
+
+describe("where a row is given", () => {
+  it("shows its own and default spaces; the rest wait behind the disclosure", () => {
+    const posts = row(STUDIO, "entity.post");
+    const s = initialSelection(STUDIO, [], TEMPLATES);
+    expect(ids(shownSpaces(s, posts, TEMPLATES))).toEqual(["co", "eco"]);
+    expect(ids(otherSpaces(s, posts, TEMPLATES))).toEqual(["brand", "builder"]);
+    // No template: every space shows, nothing waits.
+    expect(otherSpaces(initialSelection(STUDIO, []), posts, [])).toEqual([]);
+  });
+
+  it("in words, from the spaces it holds", () => {
+    expect(scopeLabel([])).toBeNull();
+    expect(scopeLabel([CO])).toBe("in Content OS");
+    expect(scopeLabel([CO, ECO])).toBe("in Content OS and Ecosystem");
+    expect(scopeLabel([BRAND_S, CO, ECO])).toBe(
+      "in Brand, Content OS and Ecosystem"
+    );
+    expect(
+      scopeLabel([...ALL4, { workspaceId: "x", workspaceName: "X" }])
+    ).toBe("in Brand, Builder and 3 more spaces");
+  });
+
+  it("a pod-wide kind's note says it reaches the app only through a role in a given space", () => {
+    expect(
+      podWideNote(
+        row(
+          [{ permission: "entity.person.read", workspaces: [CO] }],
+          "entity.person"
+        )
+      )
+    ).toBe(
+      "People kept across your whole pod, not in one space, reach it only through a role in a space you give it."
+    );
   });
 });

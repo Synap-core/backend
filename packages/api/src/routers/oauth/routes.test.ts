@@ -227,6 +227,7 @@ vi.mock("../../services/app-connect.js", () => ({
   isPodAppAgent: (id: string) => appConnect.isPodAppAgent(id),
   oauthAppOffer: async (_user: string, permissions: string[]) =>
     permissions.map((permission) => ({ permission, workspaces: [] })),
+  oauthAppPodWideKinds: async () => [],
   currentOAuthApproval: async () => [],
 }));
 

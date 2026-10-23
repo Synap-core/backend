@@ -9,14 +9,27 @@
  * re-derives the offer and refuses a wider selection anyway
  * (`connectOAuthApp`); this keeps the screen honest about what Allow sends.
  *
- * A DECISION permission (`proposal.approve` / `proposal.reject`: a grant-
- * grammar gate verb, `GRANT_GATE_ACTIONS`) is never folded into a write: the
- * screen shows it in its own section (`splitOffer`), and a first consent
- * pre-ticks it only if `PRESELECT_DECISIONS` says so. The person gives it,
- * space by space or the whole section at once (`toggleSection`).
+ * A DECISION permission (`proposal.approve` / `proposal.reject`: a review
+ * verb, `DECISION_ACTIONS`) is never folded into a write: the screen shows it
+ * in its own row and section (`groupByObject`, `splitOffer`), and a first
+ * consent pre-ticks it only if `PRESELECT_DECISIONS` says so.
+ *
+ * The screen reads OBJECT-FIRST (founder, 2026-10-23): one row per object the
+ * app asks about (`groupByObject`), each at one level (`objectLevel`: Edit,
+ * View or Off) in the spaces made from the app's declared templates
+ * (`defaultSpaces`). "Customize…" shows the full permission × space matrix.
+ * Both edit the ONE selection below; nothing new is sent on the wire.
  */
 
-import { GRANT_GATE_ACTIONS, grantActionLabel } from "@synap-core/types/grants";
+import {
+  GRANT_ACTIONS,
+  GRANT_GATE_ACTIONS,
+  grantActionLabel,
+  grantKindLabel,
+  grantSubjectLabel,
+  isQualifiedGrantSubject,
+  parsePermission,
+} from "@synap-core/types/grants";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import { FIRST_PARTY_CLIENT_NAMES } from "@synap-core/types/vocabulary";
 import type { ReceiverWidth } from "../../_lib/receiver-shell";
@@ -24,6 +37,12 @@ import type { ReceiverWidth } from "../../_lib/receiver-shell";
 export interface OfferedSpace {
   workspaceId: string;
   workspaceName: string;
+  /**
+   * The template the space was made from (`oauthAppOffer`), or null. A space
+   * from one of the app's declared templates starts ticked; it never changes
+   * what is on offer.
+   */
+  templateSlug?: string | null;
 }
 
 export interface OfferedPermission {
@@ -49,10 +68,60 @@ export type Selection = ReadonlySet<string>;
 const key = (permission: string, workspaceId: string) =>
   `${permission}\u0000${workspaceId}`;
 
-/** The permission's verb is a gate verb (approve, reject, …), not a write. */
+/**
+ * The review verbs: letting an app approve or reject a change for the person.
+ * Every other gate verb (archive, merge, transition, …) is a write on its
+ * object and reads as Edit (founder, 2026-10-23).
+ */
+export const DECISION_ACTIONS = [
+  "approve",
+  "reject",
+] as const satisfies readonly (typeof GRANT_GATE_ACTIONS)[number][];
+
+/** The permission lets the app decide for the person (approve, reject). */
 export function isDecisionPermission(permission: string): boolean {
   const action = permission.split(".").pop() ?? "";
-  return (GRANT_GATE_ACTIONS as readonly string[]).includes(action);
+  return (DECISION_ACTIONS as readonly string[]).includes(action);
+}
+
+/** The permission only reads (`…read`); a bare subject or kind is a write. */
+export function isReadOnlyPermission(permission: string): boolean {
+  return parts(permission).action === "read";
+}
+
+/**
+ * A permission's object and verb: `entity.post.read` → object `entity.post`,
+ * kind `post`, action `read`; `entity.read` → kind `*`; `document.update` →
+ * object `document`; a bare `entity.post` or `proposal` → action null (it
+ * grants read, create, update and delete).
+ */
+function parts(permission: string): {
+  object: string;
+  subject: string;
+  kind: string | null;
+  action: string | null;
+} {
+  let segs: string[];
+  try {
+    segs = parsePermission(permission);
+  } catch {
+    segs = permission.split(".");
+  }
+  const subject = segs[0] ?? "";
+  const verbs: readonly string[] = [...GRANT_ACTIONS, ...GRANT_GATE_ACTIONS];
+  const last = segs.length > 1 ? (segs[segs.length - 1] ?? null) : null;
+  const action = last !== null && verbs.includes(last) ? last : null;
+  const rest = action === null ? segs.slice(1) : segs.slice(1, -1);
+  if (isQualifiedGrantSubject(subject)) {
+    const kind = rest[0] ?? "*";
+    return { object: `${subject}.${kind}`, subject, kind, action };
+  }
+  return {
+    object: [subject, ...rest].join("."),
+    subject,
+    kind: null,
+    action,
+  };
 }
 
 /** The offer as the screen lists it: reads and writes, then decisions apart. */
@@ -87,21 +156,39 @@ function offered(
 export const PRESELECT_DECISIONS = false;
 
 /**
- * What starts ticked. A first consent: everything the app asks for, in every
- * space on offer (founder, 2026-10-23), the person unticks what they do not
- * give; a decision permission only if `PRESELECT_DECISIONS`.
+ * A permission's DEFAULT spaces: the offered spaces made from one of the
+ * app's declared templates (`synap_templates`). When the app declared none,
+ * or the person has no such space for this permission, every offered space
+ * (#133). Always a subset of the offer.
+ */
+export function defaultSpaces(
+  item: OfferedPermission,
+  templates: readonly string[]
+): OfferedSpace[] {
+  const fromTemplate = item.workspaces.filter(
+    (w) => !!w.templateSlug && templates.includes(w.templateSlug)
+  );
+  return fromTemplate.length > 0 ? fromTemplate : [...item.workspaces];
+}
+
+/**
+ * What starts ticked. A first consent: everything the app asks for, in its
+ * default spaces (`defaultSpaces`: the spaces from its declared templates,
+ * else every space on offer); the person narrows or widens from there. A
+ * decision permission only if `PRESELECT_DECISIONS`.
  *
  * A re-consent: exactly the person's current approval, within today's offer.
  * Nothing new is ticked for them, because the pod keeps what they approved,
  * not what they were asked: a pair missing from it may be a new ask or one
  * they unticked last time, and re-ticking a "no" is not theirs to have made.
+ *
+ * The launch's `space_hint` is not an input: it orders (`spaceHintFirst`),
+ * it never ticks.
  */
 export function initialSelection(
   offer: readonly OfferedPermission[],
   current: readonly ApprovedPair[],
-  // Ticks nothing: every offered space starts ticked, so select-all subsumes
-  // it. Kept so the launch's space reaches the model (`spaceHintFirst` orders).
-  _spaceHint?: string | null
+  templates: readonly string[] = []
 ): Selection {
   const out = new Set<string>();
   if (current.length > 0) {
@@ -114,7 +201,9 @@ export function initialSelection(
   }
   for (const o of offer) {
     if (!PRESELECT_DECISIONS && isDecisionPermission(o.permission)) continue;
-    for (const w of o.workspaces) out.add(key(o.permission, w.workspaceId));
+    for (const w of defaultSpaces(o, templates)) {
+      out.add(key(o.permission, w.workspaceId));
+    }
   }
   return out;
 }
@@ -208,7 +297,7 @@ export function allowBlockedReason(
   if (offer.every((o) => o.workspaces.length === 0)) {
     return "You have no space to give it yet.";
   }
-  return "Pick at least one space.";
+  return "Turn on at least one thing it asks for.";
 }
 
 /**
@@ -378,4 +467,296 @@ export function permissionLabel(permission: string): string {
   }
   const noun = kind && kind !== "*" ? `${subject} ${kind}` : subject;
   return `${verb} ${plural(noun.replace(/[_-]/g, " "))}`;
+}
+
+// ─── Object-first rows ───────────────────────────────────────────────────────
+
+/** A row's one level: what the app may do with that object. */
+export type AccessLevel = "off" | "view" | "edit" | "on";
+
+/** The words on a level's segment. */
+export const LEVEL_WORDS: Record<AccessLevel, string> = {
+  off: "Off",
+  view: "View",
+  edit: "Edit",
+  on: "On",
+};
+
+/** "Changes waiting for your review": what `proposal.*` reads as. */
+const REVIEW_QUEUE = "Changes waiting for your review";
+
+/** One object the app asks about, and every permission it asks on it. */
+export interface ConsentObject {
+  /** `entity.post`, `document`, … or `decisions` for the review verbs. */
+  key: string;
+  /** The object's name, from the grants' vocabulary door. */
+  label: string;
+  /** The kind, for an `entity.<kind>` row; null otherwise. */
+  kind: string | null;
+  /** The "decide for you" row (approve / reject), Off unless given. */
+  decisions: boolean;
+  /** The levels its control offers, lowest first: Off, then View / Edit. */
+  levels: AccessLevel[];
+  permissions: OfferedPermission[];
+}
+
+const isWrite = (permission: string) =>
+  !isDecisionPermission(permission) && !isReadOnlyPermission(permission);
+
+/**
+ * The offer as rows, one per object: `entity.<kind>.*` → that kind,
+ * `document.*` → Documents, `proposal.read` → changes waiting for review, …;
+ * every decision (approve / reject) in ONE last row. Rows the app may edit
+ * come first, then the rows it only views, each in offer order.
+ */
+export function groupByObject(
+  offer: readonly OfferedPermission[]
+): ConsentObject[] {
+  const rows = new Map<string, ConsentObject>();
+  for (const o of offer) {
+    const decision = isDecisionPermission(o.permission);
+    const p = parts(o.permission);
+    const rowKey = decision ? "decisions" : p.object;
+    let row = rows.get(rowKey);
+    if (!row) {
+      row = {
+        key: rowKey,
+        label: decision
+          ? "Decide for you"
+          : p.subject === "proposal"
+            ? REVIEW_QUEUE
+            : p.kind === "*"
+              ? "Everything"
+              : p.kind
+                ? grantKindLabel(p.kind)
+                : grantSubjectLabel(p.subject),
+        kind: decision || p.kind === "*" ? null : p.kind,
+        decisions: decision,
+        levels: [],
+        permissions: [],
+      };
+      rows.set(rowKey, row);
+    }
+    row.permissions.push(o);
+  }
+  const out = [...rows.values()];
+  for (const row of out) {
+    row.levels = row.decisions
+      ? ["off", "on"]
+      : [
+          "off",
+          ...(row.permissions.some((o) => isReadOnlyPermission(o.permission))
+            ? (["view"] as const)
+            : []),
+          ...(row.permissions.some((o) => isWrite(o.permission))
+            ? (["edit"] as const)
+            : []),
+        ];
+  }
+  const rank = (r: ConsentObject) =>
+    r.decisions ? 2 : r.levels.includes("edit") ? 0 : 1;
+  // A stable sort: offer order within each band.
+  return out.sort((a, b) => rank(a) - rank(b));
+}
+
+/** The permissions a level gives on a row. */
+function givesAt(level: AccessLevel, permission: string): boolean {
+  if (level === "on") return isDecisionPermission(permission);
+  if (level === "edit") return !isDecisionPermission(permission);
+  if (level === "view") return isReadOnlyPermission(permission);
+  return false;
+}
+
+/**
+ * A row's level, read from the selection: Edit when any write is ticked,
+ * View when only reads are, On for a decision ticked anywhere, else Off.
+ */
+export function objectLevel(
+  selection: Selection,
+  row: ConsentObject
+): AccessLevel {
+  let read = false;
+  for (const o of row.permissions) {
+    for (const w of o.workspaces) {
+      if (!selection.has(key(o.permission, w.workspaceId))) continue;
+      if (row.decisions) return "on";
+      if (isWrite(o.permission)) return "edit";
+      read = true;
+    }
+  }
+  return read ? "view" : "off";
+}
+
+/** The spaces a row holds at least one ticked pair in, in offer order. */
+export function objectSpaces(
+  selection: Selection,
+  row: ConsentObject
+): OfferedSpace[] {
+  const out: OfferedSpace[] = [];
+  for (const o of row.permissions) {
+    for (const w of o.workspaces) {
+      if (
+        selection.has(key(o.permission, w.workspaceId)) &&
+        !out.some((s) => s.workspaceId === w.workspaceId)
+      ) {
+        out.push(w);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The spaces a row shows a tick for: the ones it holds, then its default
+ * spaces. Every other space it is offered in sits behind "Also allow in
+ * another space…" (`otherSpaces`).
+ */
+export function shownSpaces(
+  selection: Selection,
+  row: ConsentObject,
+  templates: readonly string[]
+): OfferedSpace[] {
+  const out = objectSpaces(selection, row);
+  for (const o of row.permissions) {
+    for (const w of defaultSpaces(o, templates)) {
+      if (!out.some((s) => s.workspaceId === w.workspaceId)) out.push(w);
+    }
+  }
+  return out;
+}
+
+/** The spaces a row is offered in that `shownSpaces` leaves out. */
+export function otherSpaces(
+  selection: Selection,
+  row: ConsentObject,
+  templates: readonly string[]
+): OfferedSpace[] {
+  const shown = shownSpaces(selection, row, templates);
+  const out: OfferedSpace[] = [];
+  for (const o of row.permissions) {
+    for (const w of o.workspaces) {
+      if (
+        !shown.some((s) => s.workspaceId === w.workspaceId) &&
+        !out.some((s) => s.workspaceId === w.workspaceId)
+      ) {
+        out.push(w);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The level control pressed. Off clears exactly this row's pairs. View or
+ * Edit (On for decisions) gives the row's permissions at that level in the
+ * spaces the row already holds, or, from Off, in each permission's default
+ * spaces. Like `toggle`, it never adds a pair the offer does not hold.
+ */
+export function setObjectLevel(
+  selection: Selection,
+  offer: readonly OfferedPermission[],
+  row: ConsentObject,
+  level: AccessLevel,
+  templates: readonly string[]
+): Selection {
+  const held = new Set(objectSpaces(selection, row).map((s) => s.workspaceId));
+  const next = new Set(selection);
+  for (const o of row.permissions) {
+    for (const w of o.workspaces) next.delete(key(o.permission, w.workspaceId));
+  }
+  for (const o of row.permissions) {
+    if (!givesAt(level, o.permission)) continue;
+    const spaces =
+      held.size > 0
+        ? o.workspaces.filter((w) => held.has(w.workspaceId))
+        : defaultSpaces(o, templates);
+    for (const w of spaces) {
+      if (offered(offer, o.permission, w.workspaceId)) {
+        next.add(key(o.permission, w.workspaceId));
+      }
+    }
+  }
+  return next;
+}
+
+/**
+ * A row's space tick pressed. Held there → every pair of the row in that
+ * space is cleared. Not held → the row's level is given there (from Off, its
+ * lowest level: View, or Edit when it only writes, or On). Narrow-only.
+ */
+export function toggleObjectSpace(
+  selection: Selection,
+  offer: readonly OfferedPermission[],
+  row: ConsentObject,
+  workspaceId: string
+): Selection {
+  const next = new Set(selection);
+  const held = row.permissions.some((o) =>
+    selection.has(key(o.permission, workspaceId))
+  );
+  if (held) {
+    for (const o of row.permissions)
+      next.delete(key(o.permission, workspaceId));
+    return next;
+  }
+  const current = objectLevel(selection, row);
+  const level = current === "off" ? (row.levels[1] ?? "off") : current;
+  for (const o of row.permissions) {
+    if (
+      givesAt(level, o.permission) &&
+      offered(offer, o.permission, workspaceId)
+    ) {
+      next.add(key(o.permission, workspaceId));
+    }
+  }
+  return next;
+}
+
+/** A row holds at least one pair in this space. */
+export function holdsSpace(
+  selection: Selection,
+  row: ConsentObject,
+  workspaceId: string
+): boolean {
+  return row.permissions.some((o) =>
+    selection.has(key(o.permission, workspaceId))
+  );
+}
+
+/**
+ * Where a row is given, in words: "in Content OS", "in Content OS and
+ * Ecosystem", "in Brand, Builder and Content OS", "in Brand, Builder and 3
+ * more spaces". Null when it is given nowhere (its control says Off).
+ */
+export function scopeLabel(spaces: readonly OfferedSpace[]): string | null {
+  const names = spaces.map((s) => s.workspaceName);
+  if (names.length === 0) return null;
+  if (names.length === 1) return `in ${names[0]}`;
+  if (names.length <= 3) {
+    return `in ${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  }
+  return `in ${names.slice(0, 2).join(", ")} and ${names.length - 2} more spaces`;
+}
+
+/** The level control's accessible name: what it sets, for which object. */
+export function levelControlLabel(row: ConsentObject): string {
+  return row.decisions ? "Let it decide for you" : `${row.label}: access`;
+}
+
+/** A row's space tick's accessible name: the object AND the space. */
+export function objectSpaceLabel(row: ConsentObject, space: string): string {
+  return `${row.label} in ${space}`;
+}
+
+/** Under "Decide for you" while it is Off: what it would let the app do. */
+export const DECIDE_FOR_YOU_LINE =
+  "Approve or reject a change waiting for your review, as you";
+
+/**
+ * A pod-wide kind's note (SDK 1.5.1 reach rule): such an entity is in no
+ * single space, so the app reaches it only through a role in a space it was
+ * given. Grants stay (permission, space) pairs; nothing here is pod-wide.
+ */
+export function podWideNote(row: ConsentObject): string {
+  return `${row.label} kept across your whole pod, not in one space, reach it only through a role in a space you give it.`;
 }

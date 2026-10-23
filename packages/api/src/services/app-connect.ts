@@ -48,6 +48,7 @@ import {
   apiKeys,
   apps,
   oauthAuthorizationCodes,
+  profiles,
   users,
   webhookSubscriptions,
   workspaceMembers,
@@ -1137,7 +1138,16 @@ const APP_OAUTH_KEY_SWEEP_BATCH = 100;
 /** One permission a pod app asks for, and the spaces it may be given in. */
 export interface OAuthAppOfferItem {
   permission: string;
-  workspaces: Array<{ workspaceId: string; workspaceName: string }>;
+  workspaces: Array<{
+    workspaceId: string;
+    workspaceName: string;
+    /**
+     * The template the space was made from (`workspaces.package_slug`), or
+     * null. The consent screen starts with the spaces whose template the app
+     * declared (`synap_templates`); it never changes what is offered.
+     */
+    templateSlug: string | null;
+  }>;
 }
 
 /**
@@ -1155,7 +1165,11 @@ export async function oauthAppOffer(
   const rows =
     readable.length > 0
       ? await db
-          .select({ id: workspaces.id, name: workspaces.name })
+          .select({
+            id: workspaces.id,
+            name: workspaces.name,
+            templateSlug: workspaces.packageSlug,
+          })
           .from(workspaces)
           // An archived space is not offered: nothing works in it.
           .where(
@@ -1173,8 +1187,44 @@ export async function oauthAppOffer(
     permission,
     workspaces: rows
       .filter((r) => isReadPermission(permission) || writable.has(r.id))
-      .map((r) => ({ workspaceId: r.id, workspaceName: r.name })),
+      .map((r) => ({
+        workspaceId: r.id,
+        workspaceName: r.name,
+        templateSlug: r.templateSlug ?? null,
+      })),
   }));
+}
+
+/**
+ * The kinds a pod app asks for (`entity.<kind>[.<action>]`) whose profile is
+ * pod-wide: a system or shared profile with `entity_scope = 'pod'`. An entity
+ * kept pod-wide (in no single space) reaches an app only through a role in a
+ * space it was given, so the consent screen says so on that kind's row. A
+ * kind with no such profile is not listed: the screen claims nothing for it.
+ */
+export async function oauthAppPodWideKinds(
+  permissions: readonly string[]
+): Promise<string[]> {
+  const kinds: string[] = [];
+  for (const permission of permissions) {
+    const segs = parsePermission(permission);
+    const kind = segs[0] === "entity" ? segs[1] : undefined;
+    if (kind && kind !== "*" && !kinds.includes(kind)) kinds.push(kind);
+  }
+  if (kinds.length === 0) return [];
+  const rows = await db
+    .select({ slug: profiles.slug })
+    .from(profiles)
+    .where(
+      and(
+        inArray(profiles.slug, kinds),
+        eq(profiles.entityScope, "pod"),
+        isNull(profiles.workspaceId),
+        eq(profiles.isActive, true)
+      )
+    );
+  const podWide = new Set(rows.map((r) => r.slug));
+  return kinds.filter((k) => podWide.has(k));
 }
 
 /**
