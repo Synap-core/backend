@@ -56,13 +56,16 @@ UPDATE "project_tracks"
 -- The verdict matches the ending: a closed track has a done verdict, a
 -- dropped one a lost verdict or none (dropped before 0344), a live one none;
 -- impossible and replaced carry a reason. The status door enforces the same
--- rule first (`checkTrackClose`), with words an agent can act on.
+-- rule first (`checkTrackClose`), with words an agent can act on. Every
+-- `IN (...)` on the nullable verdict is guarded by `IS NOT NULL`: a CHECK
+-- passes on NULL, and `NULL IN (...)` is NULL, not false.
 ALTER TABLE "project_tracks" DROP CONSTRAINT IF EXISTS "project_tracks_verdict_check";
 ALTER TABLE "project_tracks"
   ADD CONSTRAINT "project_tracks_verdict_check"
   CHECK (
     (
       ("status" = 'completed'
+        AND "verdict" IS NOT NULL
         AND "verdict" IN ('met', 'partly_met', 'not_met'))
       OR ("status" = 'archived'
         AND ("verdict" IS NULL
