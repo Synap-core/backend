@@ -32,6 +32,8 @@ export function registerLinkCloudBounce(app: Hono): void {
       );
     }
     c.header("Cache-Control", "no-store");
-    return c.redirect(new URL("/link-cloud", admin.base).toString(), 302);
+    const target = new URL("/link-cloud", admin.base);
+    target.search = new URL(c.req.url).search;
+    return c.redirect(target.toString(), 302);
   });
 }

@@ -84,7 +84,6 @@ export function isSelfService(path: string): boolean {
     // Linking YOUR Synap Cloud account (the CP claim-access hop lands here).
     // The pod's identity-link door binds only the caller's own session, so
     // requiring pod_admin would stop every member from linking theirs.
-    path === "/link-cloud" ||
     // Authorizing an OAuth client against your own data. Requiring pod_admin
     // would lock every non-admin member out of connecting claude.ai to their
     // own pod.
@@ -154,7 +153,6 @@ const BANNED_ADMIN_PREFIXES = [
   "device",
   "my-*",
   "settings/security",
-  "link-cloud",
   "oauth/consent",
 ] as const;
 

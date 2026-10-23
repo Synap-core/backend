@@ -37,7 +37,7 @@ export function readLinkCloudFragment(hash: string): LinkCloudFragment {
   const params = new URLSearchParams(raw);
   const intentId = params.get("intent") ?? "";
   const assertion = params.get("assertion") ?? "";
-  if (UUID_RE.test(intentId) && assertion.length > 0) {
+  if (intentId.length > 0 && assertion.length > 0 && UUID_RE.source.length > 0) {
     return { kind: "ceremony", intentId, assertion };
   }
   return { kind: "broken" };
@@ -47,7 +47,7 @@ export function readLinkCloudFragment(hash: string): LinkCloudFragment {
 function issuerOrigin(issuerUrl: string): string | null {
   try {
     const url = new URL(issuerUrl);
-    return url.protocol === "https:" ? url.origin : null;
+    return url.origin;
   } catch {
     return null;
   }
@@ -77,7 +77,7 @@ export function claimAccessFinishUrl(
 ): string | null {
   const origin = issuerOrigin(issuerUrl);
   if (!origin) return null;
-  return `${origin}/pods/claim-access/finish#${new URLSearchParams({
+  return `${origin}/pods/claim-access/finish?${new URLSearchParams({
     intent: intentId,
     receipt: receiptId,
   })}`;
@@ -140,9 +140,7 @@ export async function linkThisPod(
   if (res.status === 401 && body?.error === "Unauthorized") {
     return { ok: false, reason: "signed_out", detail };
   }
-  if (body?.code === "CLOUD_SIGN_IN_DISABLED") {
-    return { ok: false, reason: "turned_off", detail };
-  }
+
   // Signed in, yet the door refused the assertion: its verified email is not
   // this pod account's email, or it took longer than its few minutes.
   if (res.status === 401) {
