@@ -31,6 +31,7 @@ import {
   db,
   getRequestGrant,
   inArray,
+  isNull,
   or,
   podSharedFacetForSpacesWhere,
   type KeyGrant,
@@ -92,8 +93,8 @@ import {
 } from "@synap/governance-policy/grants";
 import { grantRequestKey } from "@synap/governance-policy";
 import {
+  podSharedDocumentInSpacesWhere,
   projectLensWhere,
-  roleInSpacesDocumentWhere,
   roleInSpacesWhere,
 } from "../utils/project-scope.js";
 
@@ -142,10 +143,14 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
   [
     documents,
     spec("document", documents, {
-      // A document follows its entity: the pod-wide body of an entity the
-      // grant's spaces reach through a role.
+      // A document follows its entity, as for a member: the pod-wide body of
+      // a pod-shared entity of the spaces (decision B only, rv-security B-4).
       spaceReach: (spaces) =>
-        roleInSpacesDocumentWhere(documents.workspaceId, documents.id, spaces),
+        podSharedDocumentInSpacesWhere(
+          documents.workspaceId,
+          documents.id,
+          spaces
+        ),
     }),
   ],
   // Not widened: an edge between a space entity and a pod-wide one is stamped
@@ -156,8 +161,22 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
     entityFacets,
     spec("facet", entityFacets, {
       // The role rows that justify the entity reach: a pod-wide facet whose
-      // role is granted to a granted space (decision B, space-keyed).
-      spaceReach: (spaces) => podSharedFacetForSpacesWhere(spaces),
+      // role is granted to a granted space (decision B, space-keyed), on a
+      // POD-WIDE entity, as branch (b) requires (rv-security B-1). A shared
+      // role's facet is stored pod-wide whatever its entity's space, so
+      // without this an entity stored in another space would lend its role
+      // row (properties, status) to the reach.
+      spaceReach: (spaces) =>
+        and(
+          podSharedFacetForSpacesWhere(spaces),
+          inArray(
+            entityFacets.entityId,
+            db
+              .select({ id: entities.id })
+              .from(entities)
+              .where(isNull(entities.workspaceId))
+          )
+        )!,
     }),
   ],
   [views, spec("view", views)],

@@ -493,10 +493,9 @@ describe("the facets an app reads are those a member of its spaces reads (B7)", 
 
   it("GET /entities/:id/connections: the neighbour's facetSlugs carry no Brand role", async () => {
     const slugsOf = async (key: KeyName) => {
-      const res = await get(
-        key,
-        `/entities/${DEAL}/connections?workspaceId=${CRM}`
-      );
+      // No lens: a workspace lens drops pod-wide neighbours for everyone
+      // (entityConnectionVisibilityWhere has no role lens).
+      const res = await get(key, `/entities/${DEAL}/connections`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as {
         connections: Array<{
@@ -521,7 +520,7 @@ describe("the facets an app reads are those a member of its spaces reads (B7)", 
       const r = grant
         ? await runWithGrant(grantOfScope(grant), run)
         : await run();
-      return r.facets.map((f) => String(f.profile.slug)).sort();
+      return (r.facets ?? []).map((f) => String(f.profile.slug)).sort();
     };
     expect(await slugsOf()).toEqual(["client", "lead", "partner", "vip"]);
     expect(

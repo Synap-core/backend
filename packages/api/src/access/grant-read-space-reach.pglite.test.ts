@@ -79,6 +79,7 @@ const P_OTHER = randomUUID(); // person, facet in OTHER only
 const P_DETACHED = randomUUID(); // person, CRM facet detached
 const P_PARTNER = randomUUID(); // person, PARTNER facet (granted OTHER)
 const T_OTHER = randomUUID(); // a task stamped in OTHER, no role in CRM
+const C_FIN = randomUUID(); // a company STORED in OTHER, CLIENT facet (NULL)
 
 const F_CRM = randomUUID();
 const F_TEAM_CRM = randomUUID();
@@ -87,6 +88,7 @@ const F_OTHER_ROLED = randomUUID();
 const F_OTHER = randomUUID();
 const F_DETACHED = randomUUID();
 const F_PARTNER = randomUUID();
+const F_FIN = randomUUID(); // pod-wide CLIENT facet on the OTHER-stored C_FIN
 
 const D_CRM = randomUUID(); // body of P_CRM
 const D_CLIENT = randomUUID(); // body of C_CLIENT
@@ -101,6 +103,7 @@ const ALL = [
   P_DETACHED,
   P_PARTNER,
   T_OTHER,
+  C_FIN,
 ];
 
 const BASIC =
@@ -187,6 +190,7 @@ beforeAll(async () => {
   await entity(P_DETACHED, "person", PERSON, null);
   await entity(P_PARTNER, "person", PERSON, null, D_PARTNER);
   await entity(T_OTHER, "task", PERSON, OTHER);
+  await entity(C_FIN, "company", PERSON, OTHER);
 
   const facet = (
     id: string,
@@ -207,6 +211,7 @@ beforeAll(async () => {
   await facet(F_OTHER, P_OTHER, ROLE_LEAD, PERSON, OTHER);
   await facet(F_DETACHED, P_DETACHED, ROLE_LEAD, PERSON, CRM, true);
   await facet(F_PARTNER, P_PARTNER, ROLE_PARTNER, PERSON, null);
+  await facet(F_FIN, C_FIN, ROLE_CLIENT, PERSON, null);
 
   for (const d of [D_CRM, D_CLIENT, D_UNROLED, D_PARTNER]) {
     await q(
@@ -216,9 +221,13 @@ beforeAll(async () => {
   }
 }, 120_000);
 
-const read = async (table: object, grant?: GrantScope | KeyGrant) => {
+const read = async (
+  table: object,
+  grant?: GrantScope | KeyGrant,
+  userId = PERSON
+) => {
   const run = () =>
-    scopedDb(AccessContext.operator({ userId: PERSON })).findMany<{
+    scopedDb(AccessContext.operator({ userId })).findMany<{
       id: string;
     }>(table);
   const keyGrant =
@@ -236,7 +245,7 @@ describe("CONTROL — no grant: the person's floor admits every row", () => {
   it("entities, facets and bodies", async () => {
     expect(await read(entities)).toEqual(sorted(ALL));
     const facets = await read(entityFacets);
-    for (const f of [F_CRM, F_TEAM_CRM, F_CLIENT, F_OTHER, F_PARTNER])
+    for (const f of [F_CRM, F_TEAM_CRM, F_CLIENT, F_OTHER, F_PARTNER, F_FIN])
       expect(facets).toContain(f);
     expect(await read(documents)).toEqual(
       sorted([D_CRM, D_CLIENT, D_UNROLED, D_PARTNER])
@@ -334,12 +343,30 @@ describe("the role rows and the bodies follow (facets, documents)", () => {
     expect(facets).not.toContain(F_PARTNER);
   });
 
-  it("documents: the pod-wide body of an entity CRM reaches by a role, never another's", async () => {
+  it("facets: a pod-wide shared-role facet on an entity STORED in another space is not a CRM role row (rv-security B-1)", async () => {
+    // C_FIN lives in OTHER; its CLIENT facet is stored pod-wide (a shared
+    // role) with CLIENT granted to CRM. The entity is out of CRM's reach
+    // (branch (b) needs a pod-wide entity), so its role row is too.
+    expect(await read(entities, CRM_READ)).not.toContain(C_FIN);
     expect(
-      await read(documents, {
-        permissions: ["document.read"],
+      await read(entityFacets, {
+        permissions: ["facet.read"],
         workspaceIds: [CRM],
       })
-    ).toEqual(sorted([D_CRM, D_CLIENT]));
+    ).not.toContain(F_FIN);
+  });
+
+  it("documents: exactly the bodies a MEMBER of CRM reads — the pod-shared (b) body, not one reached only by a stamped role (rv-security B-4)", async () => {
+    const app = await read(documents, {
+      permissions: ["document.read"],
+      workspaceIds: [CRM],
+    });
+    // A member of CRM who is not the owner: the member document rule.
+    const member = await read(documents, undefined, TEAMMATE);
+    expect(member).toEqual([D_CLIENT]);
+    expect(app).toEqual(member);
+    // D_CRM is P_CRM's body: P_CRM is reached by a role STAMPED in CRM
+    // (branch (a)); the member door shares no body on that branch.
+    expect(app).not.toContain(D_CRM);
   });
 });

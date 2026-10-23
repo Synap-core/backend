@@ -424,10 +424,12 @@ export function podSharedDocumentWhere(
 
 /**
  * SPACE-KEYED twin of `podSharedDocumentWhere`: a pod-wide document that is
- * the body of a live entity in the ROLE reach of `spaces`
- * (`roleInSpacesWhere`). A document follows its entity.
+ * the body of a live POD-SHARED entity of `spaces` (decision B,
+ * `podSharedFacetInSpacesWhere`). Exactly the member document rule: a body is
+ * NOT shared on branch (a) (a facet stamped in the space), for a member or a
+ * key alike (rv-security B-4); widen both together if ever.
  */
-export function roleInSpacesDocumentWhere(
+export function podSharedDocumentInSpacesWhere(
   documentWorkspaceIdColumn: AnyPgColumn,
   documentIdColumn: AnyPgColumn,
   spaces: SpaceIds
@@ -435,7 +437,7 @@ export function roleInSpacesDocumentWhere(
   return podWideBodyOfWhere(
     documentWorkspaceIdColumn,
     documentIdColumn,
-    roleInSpacesWhere(entities.workspaceId, entities.id, spaces)
+    podSharedFacetInSpacesWhere(entities.workspaceId, entities.id, spaces)
   );
 }
 
