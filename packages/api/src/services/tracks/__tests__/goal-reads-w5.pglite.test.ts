@@ -36,6 +36,10 @@ const M0317 = migration("0317_project_tracks_live_name_unique.sql");
 const M0344 = migration("0344_track_lifecycle_and_verdict.sql");
 const M0345 = migration("0345_track_goal_content.sql");
 const M0348 = migration("0348_track_participants.sql");
+// The rest of the goal row as a pod holds it (W4 loop, R6 verdict): every
+// track read selects the whole row.
+const M0349 = migration("0349_track_verdict_retired.sql");
+const M0350 = migration("0350_track_goal_loop.sql");
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -248,6 +252,8 @@ beforeAll(async () => {
   await h.client!.exec(M0344);
   await h.client!.exec(M0345);
   await h.client!.exec(M0348);
+  await h.client!.exec(M0349);
+  await h.client!.exec(M0350);
   // The edge-uniqueness index the dependency door's insert conflicts on
   // (`idx_links_unique_edge`) — a reopen writes `new --replaces--> old`.
   await h.client!.exec(

@@ -532,7 +532,7 @@ describe("M1 stage stamping + M3 dedup by stage", () => {
     expect(row.track_id).toBe(trackId);
     expect(row.track_stage).toBeNull();
     expect(JSON.stringify(out), JSON.stringify(out)).toMatch(
-      /Track stage \\"bogus\\" was not applied/
+      /Goal step \\"bogus\\" was not applied/
     );
   });
 });

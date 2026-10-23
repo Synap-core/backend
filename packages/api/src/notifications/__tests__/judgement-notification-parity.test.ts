@@ -22,6 +22,10 @@ import { NOTIFICATION_REGISTRY, needsYouRole } from "../registry.js";
 const GOAL_NUDGES: Record<string, string> = {
   "track.kpi_reached":
     "a nudge to re-aim a number; reaching it never decides the goal",
+  "track.blocker_ended":
+    "news that a goal this one waited on closed or was dropped; nothing to judge",
+  "track.loop_stopped":
+    "the loop paused on a criterion that failed twice; the owner re-plans or regrades in the goal, the verdict stays the judge's",
 };
 
 describe("goal judgement types: client list ⇔ pod registry", () => {
