@@ -48,18 +48,18 @@ const APP: App = {
   permissions: [
     {
       permission: "entity.post.read",
-      reason: null,
       workspaces: [BRAND, SHARED],
+      reason: null,
     },
     {
       permission: "entity.post.create",
-      reason: null,
       workspaces: [BRAND, SHARED],
+      reason: null,
     },
     {
       permission: "proposal.approve",
-      reason: null,
       workspaces: [BRAND, SHARED],
+      reason: null,
     },
   ],
   approved: [],
