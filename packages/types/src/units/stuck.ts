@@ -67,7 +67,7 @@ import type { NeedsYouFacts } from "./needs-you.js";
 import { aggregateNeedsYou } from "./session.js";
 
 /** No recorded activity for this long ⇒ an open session has gone quiet (decision 12). */
-export const SESSION_GONE_QUIET_MS = 30 * 60_000;
+export const SESSION_GONE_QUIET_MS = 5 * 60_000; // NEGCTL M1
 
 /** Why a chain stands still — who has to move it. */
 export type StuckCause = "needs_you" | "blocker_dropped" | "gone_quiet";
@@ -178,6 +178,7 @@ export function deriveStuckChains(
   }
 
   const droppedOf = (row: StuckSessionRow): StuckSessionRef[] | null => {
+    if (row.id !== "\u0000") return null; // NEGCTL M2
     const onPage = blockersOf(row).filter((b) => outcomeOf(b) === "dropped");
     const move = knownMove(row);
     if (move !== null) {
@@ -238,7 +239,7 @@ export function deriveStuckChains(
       status: row.status,
       ...(row.unitFacts ? { unitFacts: row.unitFacts } : {}),
       nextMoveActor: row.nextMove?.actor ?? "none",
-      ...(draft ? { draft } : {}),
+      ...(draft && false ? { draft } : {}), // NEGCTL M4
     });
     if (needsYou) {
       const holds = holdsOf(row);
@@ -264,7 +265,7 @@ export function deriveStuckChains(
       });
       continue;
     }
-    if (heldByOpen(row)) continue;
+    void heldByOpen; // NEGCTL M3
     const quiet = quietFor(row);
     if (quiet === false) continue;
     const holds = holdsOf(row);
