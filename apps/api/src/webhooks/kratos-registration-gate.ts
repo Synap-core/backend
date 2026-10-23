@@ -10,29 +10,16 @@
  *     {@link POD_ACCESS_REQUIRED} and clients offer "Request access" (the
  *     request itself lives on the CP). A password sign-up is refused with
  *     {@link SELF_REGISTRATION_DISABLED}.
- *   - Join plan phase 4 (decision B2, Q3 (a)): an INVITED person may make
- *     their pod account with Synap Cloud or a passkey. The invite page starts
- *     the registration with `transient_payload.invite_token`; the gate lets it
- *     through only when that token opens an unexpired invite sent to this
- *     account's email (CP-verified for Synap Cloud), and `/complete` accepts
- *     the invite through the one accept door (`acceptInviteFor`). An invite
- *     for another email is refused with {@link INVITE_EMAIL_MISMATCH}; a
- *     passkey registration without an invite, like a password one, with
- *     {@link SELF_REGISTRATION_DISABLED}.
- *   - The owner's "Allow sign-in with Synap Cloud" switch (Cloud trust `off`,
- *     ADDENDUM 2026-10-23) refuses EVERY Synap Cloud registration here, owner
- *     claim and invite alike ({@link CLOUD_SIGN_IN_DISABLED}); the login hook
- *     (`kratos-cloud-trust.ts` `/login/cloud`) refuses Cloud sign-in.
  *
  * Two Kratos hooks call this router (see `generate_kratos_config` in `synap`):
  *
- *   POST /gate      — `registration.after.{password,passkey,oidc}` web_hook with
+ *   POST /gate      — `registration.after.{password,oidc}` web_hook with
  *                     `can_interrupt: true`. Kratos v1.3.1 runs it PRE-PERSIST
  *                     (selfservice/hook/web_hook.go
  *                     ExecutePostRegistrationPrePersistHook), so a 403 with a
  *                     `messages` body aborts the flow before any identity
  *                     exists. The identity has no id yet at this point.
- *   POST /complete  — `registration.after.{passkey,oidc}` web_hook WITHOUT
+ *   POST /complete  — `registration.after.oidc` web_hook WITHOUT
  *                     `can_interrupt`, ordered BEFORE the `session` hook (the
  *                     session hook ends the post-persist chain). Runs
  *                     post-persist, so the identity id exists: it seeds the pod
@@ -49,11 +36,6 @@
  * key; the issuer is re-checked here against the pod's configured federation
  * issuer, so another provider's mapper cannot impersonate it.
  *
- * The invite token travels in the flow's `transient_payload`: Kratos v1.3.1
- * keeps it across the OIDC round trip (the continuity container,
- * selfservice/strategy/oidc/strategy.go) and serialises it as
- * `ctx.flow.transient_payload`, which the hook bodies forward.
- *
  * Auth: the same `X-Webhook-Secret` / `KRATOS_WEBHOOK_SECRET` as the
  * identity-sync webhook.
  */
@@ -61,10 +43,7 @@
 import { timingSafeEqual } from "crypto";
 import { Hono, type Context } from "hono";
 import { createLogger } from "@synap-core/core";
-import type { CloudTrustMode } from "@synap-core/types/account-recovery";
 import {
-  CLOUD_SIGN_IN_DISABLED,
-  INVITE_EMAIL_MISMATCH,
   POD_ACCESS_REQUIRED,
   SELF_REGISTRATION_DISABLED,
 } from "@synap-core/types/kratos-messages";
@@ -77,15 +56,6 @@ import {
  *   - SELF_REGISTRATION_DISABLED (4000902): password/non-Cloud self sign-up.
  */
 export { POD_ACCESS_REQUIRED, SELF_REGISTRATION_DISABLED };
-
-/** Every refusal the gate answers, keyed by `GateDecision.reason`. */
-const REFUSALS = {
-  pod_access_required: POD_ACCESS_REQUIRED,
-  self_registration_disabled: SELF_REGISTRATION_DISABLED,
-  cloud_sign_in_disabled: CLOUD_SIGN_IN_DISABLED,
-  invite_email_mismatch: INVITE_EMAIL_MISMATCH,
-} as const;
-type RefusalReason = keyof typeof REFUSALS;
 
 /** A pod-defined Kratos message (`@synap-core/types/kratos-messages`). */
 export interface HookRefusal {
@@ -141,23 +111,13 @@ export interface RegistrationHookPayload {
   email: string | null;
   name: string | null;
   cloud: CloudClaims | null;
-  /** `transient_payload.invite_token`: a registration started on the invite page. */
-  inviteToken: string | null;
 }
 
 export type GateDecision =
-  | { allow: true; path: "owner_claim" | "invite" | "existing_account" }
-  | { allow: false; reason: RefusalReason };
-
-/** What the gate needs to know about an invite. */
-export interface GateInvite {
-  email: string;
-  expiresAt: Date;
-}
+  | { allow: true; path: "owner_claim" | "existing_account" }
+  | { allow: false; reason: string };
 
 export interface RegistrationGateDeps {
-  /** The owner's Cloud trust (`off` = no Synap Cloud sign-in). THROWS on a failed read. */
-  readCloudTrust(): Promise<CloudTrustMode>;
   /** The pod's configured CP federation issuer. THROWS on a failed read. */
   readFederationIssuer(): Promise<string | null>;
   normalizeIssuerUrl(url: string): string | null;
@@ -179,19 +139,6 @@ export interface RegistrationGateDeps {
     | { status: "failed"; error: unknown }
   >;
   deleteKratosIdentity(identityId: string): Promise<boolean>;
-  /** The pending invite this token opens, or null. THROWS on a failed read. */
-  findInvite(token: string): Promise<GateInvite | null>;
-  /**
-   * Accept the invite for the identity Kratos just persisted: the pod `users`
-   * row, then the one accept door (`acceptInviteFor`). `gone` = the invite was
-   * spent or withdrawn since `/gate`. THROWS on a failed write.
-   */
-  acceptInvite(input: {
-    token: string;
-    kratosIdentityId: string;
-    email: string;
-    name?: string;
-  }): Promise<"accepted" | "gone">;
 }
 
 const NIL_UUID = "00000000-0000-0000-0000-000000000000";
@@ -200,13 +147,12 @@ function str(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value : null;
 }
 
-/** Parse the body our jsonnet sends: `{ method, identity, transient_payload }`. */
+/** Parse the body our jsonnet sends: `{ method, identity }`. */
 export function parseRegistrationHookPayload(
   body: unknown
 ): RegistrationHookPayload {
   const root = (body ?? {}) as Record<string, unknown>;
   const identity = (root.identity ?? {}) as Record<string, unknown>;
-  const transient = (root.transient_payload ?? {}) as Record<string, unknown>;
   const traits = (identity.traits ?? {}) as Record<string, unknown>;
   const meta = (identity.metadata_public ?? {}) as Record<string, unknown>;
   const cp = meta.synap_cp as Record<string, unknown> | undefined;
@@ -229,32 +175,7 @@ export function parseRegistrationHookPayload(
             podOwner: cp.pod_owner === true,
           }
         : null,
-    inviteToken: str(transient.invite_token)?.trim() ?? null,
   };
-}
-
-/**
- * The claimed issuer, canonical, when it IS the pod's configured CP: another
- * provider's mapper cannot write `synap_cp` and pass as Synap Cloud.
- */
-async function configuredCloudIssuer(
-  cloud: CloudClaims,
-  deps: RegistrationGateDeps
-): Promise<string | null> {
-  const configured = await deps.readFederationIssuer();
-  if (!configured) return null;
-  const configuredUrl = deps.normalizeIssuerUrl(configured);
-  const claimedUrl = deps.normalizeIssuerUrl(cloud.iss);
-  if (!configuredUrl || configuredUrl !== claimedUrl) return null;
-  return configuredUrl;
-}
-
-/** A Synap Cloud registration on a pod whose owner turned Cloud sign-in off. */
-async function cloudSignInRefused(
-  payload: RegistrationHookPayload,
-  deps: RegistrationGateDeps
-): Promise<boolean> {
-  return payload.cloud !== null && (await deps.readCloudTrust()) === "off";
 }
 
 /**
@@ -269,78 +190,26 @@ async function ownerClaimIssuer(
   const cloud = payload.cloud;
   if (payload.method !== "oidc" || !cloud || !payload.email) return null;
   if (!cloud.podOwner || !cloud.emailVerified) return null;
-  const configuredUrl = await configuredCloudIssuer(cloud, deps);
-  if (!configuredUrl) return null;
+  const configured = await deps.readFederationIssuer();
+  if (!configured) return null;
+  const configuredUrl = deps.normalizeIssuerUrl(configured);
+  const claimedUrl = deps.normalizeIssuerUrl(cloud.iss);
+  if (!configuredUrl || configuredUrl !== claimedUrl) return null;
   if (await deps.hasDifferentHumanOwner(configuredUrl, cloud.sub)) return null;
   return configuredUrl;
-}
-
-/**
- * The invite-bound join, shared by `/gate` and `/complete` like
- * {@link ownerClaimIssuer}. `open`: the token opens an unexpired invite.
- * `bound`: that invite was sent to this account's email (Q3 (a): an invite is
- * for the address it was sent to, never for whoever shows up), where
- *   - `oidc` (Synap Cloud): the CP must have VERIFIED that email, through the
- *     pod's configured issuer;
- *   - `passkey`: the email is typed on the invite page, and holding the token
- *     (sent to that address) is the proof — the rule `/setup/accept-invite`
- *     applies to a password account.
- */
-async function inviteClaim(
-  payload: RegistrationHookPayload,
-  deps: RegistrationGateDeps
-): Promise<{ open: boolean; bound: boolean }> {
-  const none = { open: false, bound: false };
-  if (!payload.inviteToken) return none;
-  let emailProven: boolean;
-  if (payload.method === "oidc") {
-    const cloud = payload.cloud;
-    if (!cloud || !(await configuredCloudIssuer(cloud, deps))) return none;
-    emailProven = cloud.emailVerified;
-  } else if (payload.method === "passkey") {
-    emailProven = true;
-  } else {
-    return none;
-  }
-  const invite = await deps.findInvite(payload.inviteToken);
-  if (!invite || invite.expiresAt.getTime() <= Date.now()) return none;
-  const bound =
-    emailProven &&
-    payload.email !== null &&
-    invite.email.trim().toLowerCase() === payload.email;
-  return { open: true, bound };
 }
 
 export async function decideRegistration(
   payload: RegistrationHookPayload,
   deps: RegistrationGateDeps
 ): Promise<GateDecision> {
-  // A passkey account is made only on the invite page, for the invited email.
-  if (payload.method === "passkey") {
-    const invite = await inviteClaim(payload, deps);
-    if (invite.bound) return { allow: true, path: "invite" };
-    return {
-      allow: false,
-      reason: invite.open
-        ? "invite_email_mismatch"
-        : "self_registration_disabled",
-    };
-  }
-  // Password (and any other method) self-registration is closed outright:
-  // an invited password account is made by `/setup/accept-invite`.
+  // Password (and any non-oidc method) self-registration is closed outright.
   if (payload.method !== "oidc") {
     return { allow: false, reason: "self_registration_disabled" };
-  }
-  // The owner's switch governs HOW anyone signs in: off refuses every Synap
-  // Cloud registration, the owner's own claim and an invite included.
-  if (await cloudSignInRefused(payload, deps)) {
-    return { allow: false, reason: "cloud_sign_in_disabled" };
   }
   if (await ownerClaimIssuer(payload, deps)) {
     return { allow: true, path: "owner_claim" };
   }
-  const invite = await inviteClaim(payload, deps);
-  if (invite.bound) return { allow: true, path: "invite" };
   // Kratos v1.3.1 runs this hook BEFORE IdentityManager.Create
   // (selfservice/flow/registration/hook.go), i.e. before its own duplicate
   // detection. An existing pod account signing in with Cloud for the first
@@ -350,9 +219,6 @@ export async function decideRegistration(
   if (payload.email && (await deps.kratosEmailExists(payload.email))) {
     return { allow: true, path: "existing_account" };
   }
-  // An open invite for ANOTHER email (or an unverified one) is said as such,
-  // not as "no access": the person holds an invitation, not for this account.
-  if (invite.open) return { allow: false, reason: "invite_email_mismatch" };
   return { allow: false, reason: "pod_access_required" };
 }
 
@@ -404,7 +270,12 @@ export function createRegistrationGateRouter(deps: RegistrationGateDeps) {
       "[synap:auth] registration gate decision"
     );
     if (!decision.allow) {
-      return c.json(refusalBody(REFUSALS[decision.reason]), 403);
+      return c.json(
+        decision.reason === "self_registration_disabled"
+          ? selfRegistrationDisabledBody()
+          : podAccessRequiredBody(),
+        403
+      );
     }
     return c.body(null, 204);
   });
@@ -420,19 +291,8 @@ export function createRegistrationGateRouter(deps: RegistrationGateDeps) {
     }
     const identityId = payload.identityId;
     let issuerUrl: string | null;
-    let inviteBound = false;
     try {
-      // Re-checked post-persist: the switch may have moved since `/gate`.
-      if (await cloudSignInRefused(payload, deps)) {
-        logger.warn(
-          { identityId },
-          "[synap:auth] Cloud sign-in turned off after the gate — removing identity"
-        );
-        await deps.deleteKratosIdentity(identityId);
-        return c.json(refusalBody(CLOUD_SIGN_IN_DISABLED), 403);
-      }
       issuerUrl = await ownerClaimIssuer(payload, deps);
-      if (!issuerUrl) inviteBound = (await inviteClaim(payload, deps)).bound;
     } catch (err) {
       logger.error({ err }, "registration complete could not decide");
       await deps.deleteKratosIdentity(identityId);
@@ -459,39 +319,6 @@ export function createRegistrationGateRouter(deps: RegistrationGateDeps) {
       logger.warn(
         { status: result.status, identityId },
         "[synap:auth] Cloud owner claim refused after persist — removing identity"
-      );
-      await deps.deleteKratosIdentity(identityId);
-      return c.json(podAccessRequiredBody(), 403);
-    }
-
-    if (inviteBound && payload.inviteToken) {
-      let accepted: "accepted" | "gone";
-      try {
-        accepted = await deps.acceptInvite({
-          token: payload.inviteToken,
-          kratosIdentityId: identityId,
-          email: payload.email,
-          ...(payload.name ? { name: payload.name } : {}),
-        });
-      } catch (err) {
-        logger.error(
-          { err, identityId },
-          "[synap:auth] invite accept failed after Cloud sign-up — removing identity"
-        );
-        await deps.deleteKratosIdentity(identityId);
-        return c.json({ error: "Registration gate unavailable" }, 503);
-      }
-      if (accepted === "accepted") {
-        logger.info(
-          { identityId },
-          "[synap:auth] invite accepted via Cloud sign-up"
-        );
-        return c.json({ ok: true, path: "invite" });
-      }
-      // Spent or withdrawn between the gate and now: no access, no account.
-      logger.warn(
-        { identityId },
-        "[synap:auth] invite gone after the gate — removing identity"
       );
       await deps.deleteKratosIdentity(identityId);
       return c.json(podAccessRequiredBody(), 403);
