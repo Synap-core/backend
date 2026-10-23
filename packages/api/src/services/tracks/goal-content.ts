@@ -61,7 +61,6 @@ import {
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
-import { readDependencyFacts } from "../links/dependency-links.js";
 import { loadGoalJudge } from "./track-participant-store.js";
 
 // ── input ───────────────────────────────────────────────────────────────────
@@ -398,6 +397,12 @@ export async function loadTrackGoalFacts(
   );
   const openSessionIds = openSessions.map((s) => s.id);
 
+  // Loaded on first use, never at module init: `dependency-links` reaches the
+  // router layer and, through it, `permission-check`, which sits on an import
+  // cycle with the session services. Imported eagerly here, it changed the
+  // order every importer of the tracks service initialises in, and suites that
+  // stub `checkPermissionOrPropose` got the real ladder in the hand-off gate.
+  const { readDependencyFacts } = await import("../links/dependency-links.js");
   const [evaluations, pending, deps] = await Promise.all([
     gradedSessionIds.length > 0
       ? db

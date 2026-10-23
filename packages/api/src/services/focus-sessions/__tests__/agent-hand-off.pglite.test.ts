@@ -82,16 +82,8 @@ vi.mock("../block-guidelines.js", async (importOriginal) => ({
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-// ORDER MATTERS — `update-session` is imported BEFORE `create-session`. Both
-// reach `permission-check` (stubbed above) through an import cycle; whichever
-// module first pulls it in runs the stub's factory, and a module first loaded
-// INSIDE that factory (`importOriginal`) binds the REAL ladder. Through
-// `create-session` → tracks-service → goal-content → dependency-links → …,
-// the hand-off gate was loaded there and filed real proposals against a DB
-// the suite does not have (7 reds). Loading `update-session` first loads the
-// gate before the factory runs, so it binds the stub, as on main.
-import { updateFocusSession } from "../update-session.js";
 import { createFocusSession } from "../create-session.js";
+import { updateFocusSession } from "../update-session.js";
 import { registerFocusSessionExecutors } from "../../../routers/proposals/executors/focus-session.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
 
