@@ -538,6 +538,38 @@ export interface GovernanceWorkGuidelineProposalData {
   };
 }
 
+/**
+ * The composite `identityResolutionByRef` an approval applies: the approver's
+ * choices, over what the PROPOSAL proposed. A proposal may only propose
+ * `separate` (create a same-name row as a distinct subject — the create
+ * door's one weak-gate bypass, which a person accepts by approving); any
+ * other proposed verb, or a malformed map, is ignored. Only this human
+ * door reads it (`refuseAgentProposalApprover` above every apply).
+ */
+export function withProposedIdentityResolutions(
+  proposed: unknown,
+  chosen: Record<string, IdentityResolutionInput> | undefined
+): { identityResolutionByRef?: Record<string, IdentityResolutionInput> } {
+  const merged: Record<string, IdentityResolutionInput> = {};
+  if (proposed && typeof proposed === "object" && !Array.isArray(proposed)) {
+    for (const [ref, value] of Object.entries(
+      proposed as Record<string, unknown>
+    )) {
+      if (
+        value &&
+        typeof value === "object" &&
+        (value as { verb?: unknown }).verb === "separate"
+      ) {
+        merged[ref] = { verb: "separate" };
+      }
+    }
+  }
+  Object.assign(merged, chosen ?? {});
+  return Object.keys(merged).length > 0
+    ? { identityResolutionByRef: merged }
+    : {};
+}
+
 export async function applyProposalApproval(args: {
   proposal: NonNullable<
     Awaited<ReturnType<typeof db.query.proposals.findFirst>>
@@ -1018,7 +1050,10 @@ async function applyProposalApprovalInner(
             ? { source: normalizeProposalSource(payload.source) }
             : {}),
           // One entry applies only to that ref. A singular identityResolution
-          // is intentionally not forwarded here.
+          // is intentionally not forwarded here. The producer may PROPOSE
+          // `separate` for a same-name row backed by a different strong
+          // signal (an import, `planImportIdentities`); approving the proposal
+          // accepts it, and the approver's own choice for a ref wins.
           // The reviewer owns a same-name twin (B2b). An item with no verb
           // keeps both for the twins its card SHOWED (approve as proposed —
           // BLOCKER-2: no client could resolve a graph item, so a capture
@@ -1026,9 +1061,11 @@ async function applyProposalApprovalInner(
           // showed refuses with its candidates, so the card asks.
           askReviewerOnDuplicate: true,
           reviewedTwinIdsByRef: twinsShownOnCard(proposal.data).byRef,
-          ...(input.identityResolutionByRef
-            ? { identityResolutionByRef: input.identityResolutionByRef }
-            : {}),
+          ...withProposedIdentityResolutions(
+            (payload as unknown as Record<string, unknown>)
+              .proposedIdentityResolutionByRef,
+            input.identityResolutionByRef
+          ),
           entityRef: (op, index) =>
             entityRefByIndex.get(index) ?? op.ref ?? opRef(index),
         }
