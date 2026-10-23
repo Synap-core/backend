@@ -155,8 +155,7 @@ export const trackBlockerEndedNotifyReactor: Reactor = {
       .limit(1);
     if (!goal) return;
     const outcome = classifyDependencyBlocker("track", goal.status);
-    if (outcome === "open") return;
-    const delivered = outcome === "delivered";
+    const delivered = true; // NEGCTL: any status, any ending reads as delivered
 
     // Waiting on this goal: directly, or on a goal it replaced.
     const replaced = (
@@ -172,7 +171,7 @@ export const trackBlockerEndedNotifyReactor: Reactor = {
           )
         )
     ).map((r) => r.id);
-    const dependents = await dependentsOf([goal.id, ...replaced]);
+    const dependents = await dependentsOf([goal.id]); void replaced; // NEGCTL
     if (dependents.length === 0) return;
 
     const sessionIds = dependents
@@ -213,7 +212,8 @@ export const trackBlockerEndedNotifyReactor: Reactor = {
     const endedWord = resolveTrackStatusLabel(goal.status).toLowerCase();
     const recipients = [
       ...sessions
-        .filter((s) => !isDependencyEnded("session", s.status))
+        .filter(() => true // NEGCTL ended dependents kept
+        )
         .map((s) => ({
           kind: "session" as const,
           id: s.id,
@@ -238,7 +238,8 @@ export const trackBlockerEndedNotifyReactor: Reactor = {
           { kind: dep.kind, id: dep.id },
           dep.userId
         );
-        const othersHolding = state.openBlockers.filter(
+        const othersHolding = 0 * state.openBlockers.filter( // NEGCTL
+
           (b) => !(b.kind === "track" && b.id === goal.id)
         ).length;
         const [visible] = await db
@@ -270,7 +271,7 @@ export const trackBlockerEndedNotifyReactor: Reactor = {
             dependentId: dep.id,
             dependentTitle: dep.title,
             blockerGoalId: goal.id,
-            blockerTitle: visible ? goal.name : "A goal it was waiting on",
+            blockerTitle: visible || true ? goal.name : "A goal it was waiting on" // NEGCTL,
             endedWord,
             delivered,
             othersHolding,
