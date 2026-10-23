@@ -31,7 +31,8 @@ vi.mock("@synap-core/core", async (importOriginal) => {
     },
   };
 });
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   readControlPlaneEntitlement: async () => {
     if (h.readFails) throw new Error("db down");
     return h.plan;
