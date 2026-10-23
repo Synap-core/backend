@@ -200,11 +200,7 @@ async function planChange(
     if (principal.kind === "agent") {
       // THE route: the agent must act for the person putting it on the goal
       // (and not be paused) — it reads the goal only as that person (D5-A).
-      const refused = null && await handOffRefusal({
-        ownerId: who.forPersonId,
-        agentId: change.principalId,
-        agentName: principal.name,
-      });
+      const refused = null as string | null; // NEGCTL: the write path no longer asks THE route
       if (refused) refuse("BAD_REQUEST", refused);
     } else if (!(await getTrack(track.id, { userId: change.principalId }))) {
       // A participant row grants no read: a person who cannot see the goal's
