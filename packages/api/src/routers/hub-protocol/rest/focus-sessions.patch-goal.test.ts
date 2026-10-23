@@ -53,10 +53,12 @@ vi.mock("../../../services/tracks/session-track-filing.js", async (orig) => ({
 
 const { registerFocusSessionsRoutes } = await import("./focus-sessions.js");
 
-function app(): HubHono {
+/** `keyAgent`: the key IS that agent — the Hub PATCH governs as the key's agent. */
+function app(keyAgent?: string): HubHono {
   const a: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   a.use("/*", async (c, next) => {
     c.set("userId", USER_ID);
+    if (keyAgent) c.set("agentUserId", keyAgent);
     c.set("scopes", ["hub-protocol.read", "hub-protocol.write"]);
     await next();
   });
@@ -64,8 +66,8 @@ function app(): HubHono {
   return a;
 }
 
-const patch = (body: unknown) =>
-  app().request(`/focus-sessions/${SESSION_ID}`, {
+const patch = (body: unknown, keyAgent?: string) =>
+  app(keyAgent).request(`/focus-sessions/${SESSION_ID}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -146,7 +148,7 @@ describe("Hub PATCH — an agent's track filing is its own proposal", () => {
   afterEach(() => findFirstSpy.mockRestore());
 
   it("the filing alone is forced; the progress tick takes the ordinary decision", async () => {
-    await patch({ agentUserId: AGENT_ID, trackId: TRACK_ID, progress: 40 });
+    await patch({ trackId: TRACK_ID, progress: 40 }, AGENT_ID);
     expect(h.gated).toHaveLength(2);
     const [filing, rest] = h.gated;
     expect(filing!.forcePropose).toBe(true);
@@ -163,7 +165,7 @@ describe("Hub PATCH — an agent's track filing is its own proposal", () => {
   });
 
   it("a filing-only PATCH answers with the filing proposal", async () => {
-    const res = await patch({ agentUserId: AGENT_ID, trackId: TRACK_ID });
+    const res = await patch({ trackId: TRACK_ID }, AGENT_ID);
     expect(h.gated).toHaveLength(1);
     expect(h.gated[0]!.forcePropose).toBe(true);
     const body = (await res.json()) as Record<string, unknown>;
