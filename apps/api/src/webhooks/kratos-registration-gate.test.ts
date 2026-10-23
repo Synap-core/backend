@@ -499,6 +499,13 @@ describe("Passkey registration (gated since 2026-10-23: it had no hook)", () => 
     expect(deps.findInvite).not.toHaveBeenCalled();
   });
 
+  it("a passkey sign-up carrying forged Cloud owner claims is still refused", async () => {
+    const deps = makeDeps();
+    const res = await post(deps, "/gate", body({ method: "passkey" }));
+    expect(res.status).toBe(403);
+    expect(deps.hasDifferentHumanOwner).not.toHaveBeenCalled();
+  });
+
   it("refuses a passkey registration with an unknown or expired token", async () => {
     const deps = makeDeps();
     await expectRefusal(
