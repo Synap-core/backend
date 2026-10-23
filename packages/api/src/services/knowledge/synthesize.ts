@@ -12,6 +12,7 @@
  */
 
 import type { AskAnswer } from "./ask.js";
+import { describeQueue, type AskQueueBlock } from "./queue-question.js";
 import { createLogger } from "@synap-core/core";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import { isCallBudgetMs } from "@synap/intelligence-client";
@@ -704,7 +705,13 @@ export async function synthesizeAnswer(
    */
   degraded: string[] = [],
   /** See {@link AskDetail}. Default `full`, unchanged for every older caller. */
-  detail: AskDetail = "full"
+  detail: AskDetail = "full",
+  /**
+   * `AskResult.queue` — set only for a queue-type question. The IS composes
+   * from retrieved items and never sees the queue, so its sentence is written
+   * here and LEADS the answer.
+   */
+  queue?: AskQueueBlock
 ): Promise<SynthesisResult> {
   const { sources, context, truncated } = buildSynthesisContext(answers);
 
@@ -768,7 +775,8 @@ export async function synthesizeAnswer(
           workspaceId,
           pendingCount,
           degraded,
-          "full"
+          "full",
+          queue
         );
       }
       throw new EmptySynthesisError();
@@ -776,7 +784,10 @@ export async function synthesizeAnswer(
     const answer =
       typeof data.answer === "string"
         ? prependDegradedNotice(
-            prependPendingNotice(data.answer, pendingCount),
+            prependPendingNotice(
+              queue ? `${describeQueue(queue)}\n\n${data.answer}` : data.answer,
+              pendingCount
+            ),
             degraded
           )
         : null;

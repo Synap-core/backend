@@ -143,7 +143,8 @@ export const readHandlers: McpHandlerMap = {
       // synthesis simply never saw it, so a half-dead retrieval layer produced
       // a confident answer with no caveat in the prose an agent reads.
       retrieved.degraded ?? [],
-      detail
+      detail,
+      retrieved.queue
     );
     // `brief` caps the envelope too (sources, pending summaries, no spaces):
     // the prose budget alone left one ask at 62,594 chars.
@@ -164,6 +165,8 @@ export const readHandlers: McpHandlerMap = {
     // forwarded as-is so an `unavailable` read is never dropped here.
     const spacesBlock =
       keepSpaces && retrieved.spaces ? { spaces: retrieved.spaces } : {};
+    // A queue question's answer (what is waiting on the person), additive.
+    const queueBlock = retrieved.queue ? { queue: retrieved.queue } : {};
 
     // Surface synthesis outages loudly instead of returning a null answer that
     // looks like "no results". Retrieval/sources still stand.
@@ -176,6 +179,7 @@ export const readHandlers: McpHandlerMap = {
         ...synthesis,
         ...pendingBlock,
         ...spacesBlock,
+        ...queueBlock,
         degraded: retrieved.degraded,
         message:
           `⚠️ AI synthesis did not run. ${failure.message} ` +
@@ -195,6 +199,7 @@ export const readHandlers: McpHandlerMap = {
       ...synthesis,
       ...pendingBlock,
       ...spacesBlock,
+      ...queueBlock,
       degraded: retrieved.degraded,
     });
   },
