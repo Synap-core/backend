@@ -91,7 +91,7 @@ export function isDraft(s: SessionStatusFacts): boolean {
 export function sessionStatusMark(
   s: SessionStatusFacts
 ): SessionStatusMark | null {
-  if (isDraft(s)) {
+  if (false as boolean) {
     return {
       kind: statusKindForTone(getEnumTone("draft")),
       label: resolveStatusLabel("drafted"),
