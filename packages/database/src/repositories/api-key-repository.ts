@@ -8,7 +8,10 @@
 import { eq, and } from "drizzle-orm";
 import { createHash } from "crypto";
 import { apiKeys } from "../schema/index.js";
-import type { ApiKeyToolProfile } from "../schema/api-keys.js";
+import type {
+  APP_PERSON_KEY_TYPE,
+  ApiKeyToolProfile,
+} from "../schema/api-keys.js";
 import { BaseRepository } from "./base-repository.js";
 import { revokeApiKeys } from "../utils/api-key-revocation.js";
 import { GrantRepository } from "./grant-repository.js";
@@ -26,7 +29,13 @@ export interface CreateApiKeyInput {
   userId: string;
   /** Categorical label for what this key is used for. Keep in sync with the
    * `$type<>` union on `apiKeys.keyType` (schema/api-keys.ts). */
-  keyType?: "hub_inbound" | "user_pat" | "system" | "service" | "is_internal";
+  keyType?:
+    | "hub_inbound"
+    | "user_pat"
+    | "system"
+    | "service"
+    | "is_internal"
+    | typeof APP_PERSON_KEY_TYPE;
   /** Human-readable explanation of this key's purpose */
   description?: string;
   /** Workspace tag — set when minted via apiKeys.createForWorkspace. */

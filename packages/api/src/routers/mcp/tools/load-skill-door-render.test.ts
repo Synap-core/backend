@@ -49,7 +49,7 @@ import { DOOR_TOOL_NAMES } from "../door-tool-names.generated.js";
 import { renderSkillForDoor } from "../../../services/capability-briefs/door-tool-render.js";
 
 /** A pod tool this door does NOT carry — DERIVED, never a hand-picked name. */
-function absentFrom(door: "cp-connector" | "raycast"): string | undefined {
+function absentFrom(door: "cp-connector"): string | undefined {
   return Object.keys(DOOR_TOOL_NAMES)
     .sort()
     .find((tool) => DOOR_TOOL_NAMES[tool]![door] === null);
@@ -92,7 +92,7 @@ describe("synap_load_skill door rendering", () => {
     } else {
       // Full coverage today: every pod tool is curated on the CP connector, so
       // this door has nothing to mark. The dagger itself stays covered by the
-      // raycast case below — do not delete it because this branch is quiet.
+      // case below — do not delete it because this branch is quiet.
       expect(text).not.toContain("Door note");
     }
   });
@@ -110,16 +110,22 @@ describe("synap_load_skill door rendering", () => {
     expect(h.userReads).toBe(0);
   });
 
-  it("a door that LACKS a tool daggers it and explains — derived, on the raycast door", () => {
-    const absent = absentFrom("raycast");
-    expect(
-      absent,
-      "no pod tool is absent from the raycast door — if that is real, the dagger path is dead and this test should say so"
-    ).toBeTruthy();
-    const stem = absent!.replace(/^synap_/, "");
+  it("a door that LACKS a tool daggers it and explains — derived, on the CP connector", () => {
+    const absent = absentFrom("cp-connector");
+    if (!absent) {
+      // Every pod tool is curated on the CP connector, and pod MCP has them
+      // all: no door lacks a pod tool, so this path cannot fire today. Say so
+      // rather than pass silently; IS-only daggers stay covered in
+      // door-tool-render.test.ts.
+      expect(
+        Object.values(DOOR_TOOL_NAMES).every((r) => r["cp-connector"])
+      ).toBe(true);
+      return;
+    }
+    const stem = absent.replace(/^synap_/, "");
     const rendered = renderSkillForDoor(
       `Use \`${stem}\` for that step.`,
-      "raycast"
+      "cp-connector"
     );
     expect(rendered).toContain(`\`${absent}†\``);
     expect(rendered).toContain("Door note");

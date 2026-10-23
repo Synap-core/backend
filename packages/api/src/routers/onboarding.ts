@@ -18,6 +18,7 @@ import {
   projects,
   readTemplateState,
   workspaces,
+  listableEntityWhere,
 } from "@synap/database";
 import type {
   OnboardingJourney,
@@ -415,6 +416,14 @@ function meaningfulEntityWhere(userId: string, lens: OnboardingLens) {
       userId,
       workspaceLens,
       facetLens: true,
+    }),
+    // THE listing rule: demo (sample-project) and probe rows are not first
+    // value — unless the lens is that project (the demo toggle).
+    listableEntityWhere({
+      projectLens:
+        lens.kind === "project" || lens.kind === "project_workspace"
+          ? lens.projectId
+          : undefined,
     }),
     projectLens
   )!;

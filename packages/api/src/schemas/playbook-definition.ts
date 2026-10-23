@@ -13,7 +13,7 @@
  *
  * This object is the definition half of `playbooks.create`'s input
  * (`createInputSchema` in routers/playbooks.ts is `playbookDefinitionSchema`
- * `.extend(...)` with the caller-only fields: attribution, forceCreate,
+ * `.extend(...)` with the caller-only fields: attribution,
  * contextSkill, and its `draft` status default). Every package / capability /
  * loop door `.extend`s it with ONLY its door-specific shape (how grants are
  * written, a loop `ref`, a status default) — it never re-declares a field of

@@ -49,6 +49,7 @@ import {
   inArray,
   drizzleSql,
   isDelegationHeaders,
+  listableEntityWhere,
 } from "@synap/database";
 import type { CapabilityRendererPage } from "@synap/database";
 import { MessageAuthorType } from "@synap/database/schema";
@@ -1953,6 +1954,8 @@ export const capabilitiesRouter = router({
           .where(
             and(
               scopedDb(AccessContext.from(ctx)).predicate(entities),
+              // THE listing rule: counts leave probe and demo rows out.
+              listableEntityWhere(),
               inArray(entityExternalLinks.nangoConnectionId, linkIds),
               eq(entityExternalLinks.status, "active")
             )

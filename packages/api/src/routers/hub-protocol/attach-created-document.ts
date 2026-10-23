@@ -48,10 +48,10 @@ export async function attachCreatedDocument(
       attached: {
         entityId,
         status: "skipped",
-        // No MCP tool sets an entity's documentId (synap_update_entity does
-        // not take one), so this names no door; see fb1020-docs §1.
+        // The re-attach door (B9g): once the document exists, the agent
+        // attaches it with synap_update_entity({ entityId, documentId }).
         reason:
-          "The document itself is awaiting review, so nothing was attached, and approving it will not attach it.",
+          "The document itself is awaiting review, so nothing was attached yet. Once it is approved, attach it with synap_update_entity({ entityId, documentId }).",
       },
     };
   }

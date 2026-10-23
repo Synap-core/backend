@@ -157,7 +157,10 @@ import { actingAgentUserId, createHubProtocolCallerContext } from "../utils.js";
 import { revertSession } from "../../../services/focus-sessions/revert-session.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { canUserSeeChannel } from "../../../utils/channel-visibility.js";
-import { settleParentAutomationRunFromChild } from "@synap/jobs";
+import {
+  completeRunBodySchema,
+  settleRunTurnEnd,
+} from "../../../services/runs/run-turn-end.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -303,6 +306,9 @@ export function unsupportedUpdateFieldError(raw: unknown): string | null {
   if (typeof raw !== "object" || raw === null) return null;
   if ("completeOutput" in raw) {
     return "completeOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use the synap_update_session tool (MCP) to mark a declared deliverable done; it takes the row lock this door does not.";
+  }
+  if ("retireOutput" in raw) {
+    return "retireOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use the synap_update_session tool (MCP) to withdraw a declared deliverable; it takes the row lock this door does not.";
   }
   if ("stages" in raw) {
     return "stages is not supported on PATCH /focus-sessions/:id — nothing was changed. A session's own phase snapshot (focus_sessions.stages) is written through the tRPC focusSessions.update door.";
@@ -1713,6 +1719,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ...(patch.addAgentId !== undefined
             ? { addAgentId: patch.addAgentId }
             : {}),
+          // The caller's list AS SENT. An agent's list is add-or-update (C6):
+          // the executor re-applies that upsert against the row as it is at
+          // approval, and the review shows the list as it would land then
+          // (`session-before.ts`). Never a frozen copy of the stored slots —
+          // their server stamps go stale and refuse the approval, and a slot
+          // deleted meanwhile came back (FB1020 w2 review M5).
           ...(patch.expectedOutputs !== undefined
             ? { expectedOutputs: patch.expectedOutputs }
             : {}),
@@ -1808,10 +1820,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // Merge, never assign — the SAME merge the tRPC and MCP doors use, so a
       // caller that echoes back only the fields it knows about cannot erase a
       // delegation, a reviewer's return note, or an approval's lineage.
+      // An AGENT's list adds and updates, never deletes (C6) — the same mode
+      // the MCP door and the approval executor apply.
       if (patch.expectedOutputs !== undefined)
         set.expectedOutputs = mergeExpectedOutputs(
           (existing.expectedOutputs as typeof patch.expectedOutputs) ?? [],
-          patch.expectedOutputs
+          patch.expectedOutputs,
+          { keepUnlisted: !!agentUserId }
         );
       // Shallow-merge, exactly like the `metadata` bag below — `verificationReport`
       // is the SAME shape of thing: an open JSONB bag written by SEVERAL
@@ -3329,9 +3344,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   /**
    * POST /focus-sessions/:sessionId/complete-run
    *
-   * Fire-and-forget provenance: when an IS agent finishes working on a
-   * session-scoped channel, it calls this to close any running playbook_run
-   * for that session. Best-effort — if there's no running run, that's fine.
+   * The IS ends a turn on a session-scoped channel: settle the session's LIVE
+   * playbook_run from how the turn ended (`run-turn-end.ts`, B8 2026-10-21).
+   * No body / `outcome: 'completed'` → the run completes (the old behaviour).
+   * `outcome: 'stopped'` + `reason: 'turn_budget' | 'max_steps'` → the run stays LIVE: it
+   * continues on its own up to N times, then the person is asked. Best-effort
+   * on "no run": a session that is not a playbook run is a normal 200.
    */
   app.post("/focus-sessions/:sessionId/complete-run", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -3341,6 +3359,28 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const sessionId = c.req.param("sessionId");
     if (!isUuid(sessionId)) {
       return c.json({ error: `Focus session ${sessionId} not found` }, 404);
+    }
+
+    // An empty body is an IS that predates the report: `completed`.
+    const rawText = await c.req.text().catch(() => "");
+    let raw: unknown = {};
+    if (rawText.trim()) {
+      try {
+        raw = JSON.parse(rawText);
+      } catch {
+        return c.json({ error: "Body is not valid JSON" }, 400);
+      }
+    }
+    const parsed = completeRunBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        {
+          error: `Invalid complete-run body: ${parsed.error.issues
+            .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
+            .join("; ")}`,
+        },
+        400
+      );
     }
 
     try {
@@ -3374,15 +3414,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         return c.json({ status: "no-running-run" as const });
       }
 
-      // Mark as completed.
-      await db
-        .update(playbookRuns)
-        .set({ status: "completed", completedAt: new Date() })
-        .where(eq(playbookRuns.id, run.id));
-      // The parent automation run settles from its children (never throws).
-      await settleParentAutomationRunFromChild({ playbookRunId: run.id });
-
-      return c.json({ status: "completed" as const });
+      const status = await settleRunTurnEnd({
+        run,
+        session: {
+          id: session.id,
+          userId: session.userId,
+          channelId: session.channelId ?? null,
+        },
+        body: parsed.data,
+        askingAgentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+      });
+      return c.json({ status });
     } catch (err) {
       logger.error({ err, sessionId }, "focus-sessions.complete-run failed");
       return c.json(

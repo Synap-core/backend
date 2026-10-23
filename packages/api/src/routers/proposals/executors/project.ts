@@ -346,6 +346,9 @@ export function registerProjectExecutors(): void {
             ...("colorSlot" in innerData
               ? { colorSlot: innerData.colorSlot as number | null }
               : {}),
+            ...(typeof innerData.sample === "boolean"
+              ? { sample: innerData.sample }
+              : {}),
             ...("subjectEntityId" in innerData
               ? { subjectEntityId: innerData.subjectEntityId as string | null }
               : {}),

@@ -60,6 +60,7 @@ export * from "./utils/project-guardrails.js";
 export * from "./utils/reserved-profile-slugs.js";
 export * from "./utils/profile-slug-precedence.js";
 export * from "./utils/request-write-context.js";
+export * from "./utils/listable-entity.js";
 export * from "./utils/grant-read-hook.js";
 export * from "./utils/exposure-policy-settings.js";
 export * from "./utils/backup-status.js";
@@ -105,6 +106,7 @@ export * from "./utils/backfill-governance-rules.js";
 export * from "./utils/floor-covered-actions.js";
 export * from "./utils/governance-rule-provenance.js";
 export * from "./utils/reversible-default.js";
+export * from "./utils/own-fresh-work.js";
 export * from "./utils/connection-governance.js";
 export * from "./utils/knowledge-contract.js";
 // Message shape matcher (shared door) + the config-settings/guideline store.
