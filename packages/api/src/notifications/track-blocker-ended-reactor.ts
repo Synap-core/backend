@@ -62,15 +62,19 @@ import { NotificationService } from "./NotificationService.js";
 const logger = createLogger({ module: "track-blocker-ended-reactor" });
 
 /**
- * The registry types this reactor produces — lowercase `notificationType`
- * first, so the source-scan producer allowlist can see each literal (see the
+ * The registry types this reactor produces — each literal under a lowercase
+ * `notificationType:` key, so the source-scan producer allowlist sees it (see the
  * same note in `session-unblock-reactor.ts`). Two types because the
  * destination differs: the registry's `navigate-object` kind is fixed per type.
  */
-const notificationType = "session.blocker_goal_ended" as const;
-export const SESSION_BLOCKER_GOAL_ENDED_TYPE = notificationType;
-const trackNotificationType = "track.blocker_ended" as const;
-export const TRACK_BLOCKER_ENDED_TYPE = trackNotificationType;
+export const BLOCKER_ENDED_TYPES = {
+  session: { notificationType: "session.blocker_goal_ended" },
+  track: { notificationType: "track.blocker_ended" },
+} as const;
+export const SESSION_BLOCKER_GOAL_ENDED_TYPE =
+  BLOCKER_ENDED_TYPES.session.notificationType;
+export const TRACK_BLOCKER_ENDED_TYPE =
+  BLOCKER_ENDED_TYPES.track.notificationType;
 
 /** `(dependent, ended goal)` — the natural identity of this news. */
 export function blockerEndedGroupKey(

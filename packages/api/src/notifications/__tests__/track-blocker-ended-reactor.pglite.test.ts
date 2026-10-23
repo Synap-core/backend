@@ -105,8 +105,8 @@ async function session(
   const id = randomUUID();
   await q(
     `insert into focus_sessions (id, user_id, workspace_id, goal, title, status, created_at, updated_at)
-     values ($1, $2, 'ws-1', $3, $3, $4, now(), now())`,
-    [id, userId, title, status]
+     values ($1, $2, 'ws-1', $3, $4, $5, now(), now())`,
+    [id, userId, title, title, status]
   );
   return id;
 }
