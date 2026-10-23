@@ -193,6 +193,7 @@ const governedDependencyLinkMock = vi.fn(
   })
 );
 vi.mock("../../../services/links/dependency-links.js", () => ({
+  DEPENDENCY_CYCLE_ERROR: "cycle",
   governedDependencyLink: (i: Record<string, unknown>) =>
     governedDependencyLinkMock(i),
 }));

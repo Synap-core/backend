@@ -38,7 +38,10 @@ import { stampAutoApprovedCreate } from "../../../services/proposals/stamp-mater
 import type { LinkEndpointType, LinkType } from "@synap/playbooks";
 import { db } from "@synap/database";
 import { checkLinkEndpointsVisible } from "./link-endpoint-visibility.js";
-import { governedDependencyLink } from "../../../services/links/dependency-links.js";
+import {
+  DEPENDENCY_CYCLE_ERROR,
+  governedDependencyLink,
+} from "../../../services/links/dependency-links.js";
 import {
   isDependencyLinkType,
   type DependencyLinkType,
@@ -160,6 +163,7 @@ const HUMAN_DOOR_LINK_TYPES: Readonly<Record<string, string>> = {
 const BLOCKER_REFUSALS = {
   self_blocker: { status: 400, error: "A session cannot be blocked by itself" },
   not_found: { status: 404, error: "Session not found" },
+  cycle: { status: 400, error: DEPENDENCY_CYCLE_ERROR },
 } as const;
 
 const CreateLinkRequestSchema = z.object({

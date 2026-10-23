@@ -93,10 +93,20 @@ function sourceLabel(itemPaths: ReadonlyArray<string>): string {
  */
 export function buildImportTitle(
   operations: ReadonlyArray<ImportTitleOperation>,
-  itemPaths: ReadonlyArray<string> = []
+  itemPaths: ReadonlyArray<string> = [],
+  /** How many of the linked entities were matched on their NAME alone. */
+  opts: { matchedByName?: number } = {}
 ): string {
   const byKind = new Map<string, number>();
   let links = 0;
+  // Rows that LINK an entity the pod already holds: said, not hidden — the
+  // reviewer learns the import touches existing records.
+  const existing = operations.filter(
+    (op) =>
+      op.op === "create_entity" &&
+      typeof op.existingEntityId === "string" &&
+      op.existingEntityId !== ""
+  ).length;
   for (const op of operations) {
     const kind = createdKind(op);
     if (!kind) continue;
@@ -113,11 +123,19 @@ export function buildImportTitle(
   if (links > 0) parts.push(countedKind(links, "relation"));
 
   const source = sourceLabel(itemPaths);
-  return [
-    resolveActionLabel("import", "imperative"),
-    joinParts(parts),
-    source ? `from ${source}` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const byName = opts.matchedByName ?? 0;
+  const linking =
+    existing > 0
+      ? `, linking ${COUNT.format(existing)} already in your pod` +
+        (byName > 0 ? ` (${COUNT.format(byName)} matched by name only)` : "")
+      : "";
+  return (
+    [
+      resolveActionLabel("import", "imperative"),
+      joinParts(parts),
+      source ? `from ${source}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ") + linking
+  );
 }

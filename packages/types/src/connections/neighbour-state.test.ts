@@ -116,6 +116,16 @@ describe("deriveNodeNeighbourhood — blocked BY the focus", () => {
     expect(byId(nb, "task").state).toBeNull();
   });
 
+  // Rules out "a focus that ENDED clears its dependants" — the old rule, under
+  // which a cancelled focus read like a delivered one.
+  it("a CANCELLED focus with no replacement still holds its dependant (dropped)", () => {
+    const nb = deriveNodeNeighbourhood(
+      { kind: "session", id: "f", status: "cancelled", title: "Spec" },
+      [dependant]
+    );
+    expect(byId(nb, "task").state?.state).toBe("blocked");
+  });
+
   it("an UNREAD focus status claims nothing (rules out 'unread ⇒ open ⇒ blocked')", () => {
     const nb = deriveNodeNeighbourhood({ kind: "entity", id: "f" }, [
       dependant,
@@ -133,17 +143,19 @@ describe("deriveNodeNeighbourhood — blocked BY the focus", () => {
         via: "links",
         status,
       });
-    // The focus failed (cleared by its own status) but its replacement is open:
-    // the dependant now waits on the replacement.
+    // The focus failed (dropped) but its replacement is open: the dependant
+    // now waits on the replacement.
     const open = deriveNodeNeighbourhood(
       { kind: "session", id: "f", status: "failed" },
       [dependant, replacement("active")]
     );
     expect(byId(open, "task").state?.state).toBe("blocked");
-    // The focus is OPEN but replaced by a finished attempt: nobody waits.
+    // The focus is OPEN but replaced by a DELIVERED attempt: nobody waits.
+    // (`closed` — the session status that delivers; `completed` is a track's
+    // word, and an unknown session status now holds as open.)
     const done = deriveNodeNeighbourhood(
       { kind: "session", id: "f", status: "active" },
-      [dependant, replacement("completed")]
+      [dependant, replacement("closed")]
     );
     expect(byId(done, "task").state).toBeNull();
   });
