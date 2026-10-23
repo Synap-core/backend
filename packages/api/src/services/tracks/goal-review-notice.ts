@@ -30,7 +30,13 @@ import { loadGoalJudge } from "./track-participant-store.js";
 
 const logger = createLogger({ module: "goal-review-notice" });
 
-export const GOAL_REVIEW_NOTIFICATION_TYPE = "track.review_ready";
+/**
+ * Declared under the lowercase name first, deliberately: the producer
+ * allowlist tripwire finds a producer by the literal next to
+ * `(type|notificationType)\s*[:=?]` (as `evaluations/record.ts` does).
+ */
+const notificationType = "track.review_ready" as const;
+export const GOAL_REVIEW_NOTIFICATION_TYPE = notificationType;
 
 /** One open "ready for your verdict" row per goal. */
 export function goalReviewGroupKey(trackId: string): string {
