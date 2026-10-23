@@ -93,6 +93,10 @@ vi.mock("../../../../lib/trpc", () => ({
       reject: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },
     workspaces: { get: { useQuery: () => ({ data: undefined }) } },
+    // The record card's definition reads (`use-record-definitions.ts`).
+    useQueries: () => [],
+    profiles: { get: { useQuery: () => ({ data: undefined }) } },
+    entities: { get: { useQuery: () => ({ data: undefined }) } },
     governanceRules: {
       create: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },
@@ -171,16 +175,22 @@ describe.each([
     const seen = text(render());
     expect(seen).toMatch(/Kind Finding Issue/);
     expect(seen).not.toMatch(/ProfileSlug/);
-    expect(seen.indexOf("Finding")).toBeLessThan(seen.indexOf("Always asks"));
+    expect(seen.indexOf("Finding")).toBeLessThan(
+      seen.indexOf("Changes what it is")
+    );
   });
 
-  it("why: the policy as a mark + its sentence, and the proposer's own words", () => {
-    const seen = text(render());
+  it("why: the reason as ONE mark (its sentence behind it), the proposer's words as theirs", () => {
+    const html = render();
+    const seen = text(html);
+    expect(html).toContain('data-review-mark="Changes what it is"');
     // The sentence is read from its one home, so a rewording never reds this.
-    expect(seen).toContain(
-      `Always asks a person ${GOVERNANCE_POLICY_SENTENCES.SCOPE_IDENTITY_CHANGE}`
+    expect(seen).not.toContain(
+      GOVERNANCE_POLICY_SENTENCES.SCOPE_IDENTITY_CHANGE
     );
-    expect(seen).toContain("Product problems move from finding to issue.");
+    expect(seen).toContain(
+      "Note from Claude-code Product problems move from finding to issue."
+    );
   });
 
   it("the decision bar: the verbs, what approving does, who decides", () => {
