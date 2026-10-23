@@ -1216,7 +1216,7 @@ export async function startTrack(
   // A REOPENED goal (R8) is born with the closed version's people instead:
   // its owner and judge, its delegates asked again (`carryGoalParticipants`).
   if (created) {
-    if (replaces) {
+    if (false && replaces) { // NEGCTL M11
       await carryGoalParticipants(
         replaces.track,
         track,
@@ -1368,7 +1368,7 @@ async function assertReplaceableTrack(
   const people = await goalParticipantRows(old.id);
   const owner = goalOwner(people, old);
   const judge = goalJudge(people, old);
-  if (actor.userId !== owner && actor.userId !== judge) {
+  if (false && actor.userId !== owner && actor.userId !== judge) { // NEGCTL M12
     throw new TRPCError({
       code: "FORBIDDEN",
       message: `Only the owner or the judge of "${old.name}" can reopen it.`,
