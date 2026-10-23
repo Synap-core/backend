@@ -141,6 +141,11 @@ const APP_IN_WS = {
   scopes: [scope(["entity.read", "entity.update"], [WS])],
   clientId: null,
 };
+/** A lead-capture app: reads and creates persons in WS only (rv-security B-6). */
+const APP_CREATES_PERSONS_IN_WS = {
+  scopes: [scope(["entity.read", "entity.person.create"], [WS])],
+  clientId: null,
+};
 /** Reads entities anywhere; may only update NOTES. */
 const NOTE_UPDATE_ONLY = {
   scopes: [scope(["entity.read", "entity.note.update"], null)],
@@ -221,6 +226,11 @@ beforeAll(async () => {
     `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, properties)
      values (gen_random_uuid(), $1, $2, $3, $4, '{}')`,
     [POD_LEAD, LEAD_ROLE, USER, WS]
+  );
+  await q(
+    `insert into entity_identity_signals (id, entity_id, signal_type, signal_value, source)
+     values (gen_random_uuid(), $1, 'email', 'katherine@nasa.test', 'seed')`,
+    [POD_LEAD]
   );
   await q(
     `insert into entity_identity_signals (id, entity_id, signal_type, signal_value, source)
@@ -382,5 +392,46 @@ describe("a key pinned to W READS a pod-wide person roled in W, and still cannot
     expect(res.denied.map((d) => d.id)).toEqual([POD_LEAD]);
     expect(res.denied[0]?.reason).toMatch(/grant does not allow/);
     expect(res.applied).toEqual([]);
+  });
+});
+
+// rv-security B-6 — a FACT for the docs, not a behaviour change: what an app
+// that may only create persons in W answers when a contact it submits matches
+// an existing pod-wide person by email.
+describe("an app creating a person whose email matches a pod-wide person (B-6)", () => {
+  it("the match is roled in W (so the app reads it): refused FORBIDDEN by the grant (the merge would update a pod-wide row); nothing written", async () => {
+    const before = (await q(`select id from entities`)).rows.length;
+    await expect(
+      hub(APP_CREATES_PERSONS_IN_WS).entities.createEntity({
+        userId: USER,
+        profileSlug: "person",
+        title: "Katherine Johnson",
+        workspaceId: WS,
+        properties: { email: "katherine@nasa.test", phone: "555" },
+      })
+    ).rejects.toMatchObject(GRANT_DENIED);
+    expect((await q(`select id from entities`)).rows).toHaveLength(before);
+    const { rows } = await q<{ properties: Record<string, unknown> }>(
+      `select properties from entities where id = $1`,
+      [POD_LEAD]
+    );
+    expect(rows[0]?.properties).toEqual({});
+  });
+
+  it("the match is NOT roled in W (invisible to the app): a new person is created in W, a twin of the pod-wide one", async () => {
+    const res = await hub(APP_CREATES_PERSONS_IN_WS).entities.createEntity({
+      userId: USER,
+      profileSlug: "person",
+      title: "Grace Hopper",
+      workspaceId: WS,
+      properties: { email: "grace@navy.test" },
+    });
+    expect(res.status).toBe("created");
+    expect(res.id).not.toBe(POD_PERSON);
+    const { rows } = await q<{ workspace_id: string }>(
+      `select workspace_id from entities where id = $1`,
+      [res.id]
+    );
+    expect(rows[0]?.workspace_id).toBe(WS);
   });
 });
