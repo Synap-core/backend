@@ -346,12 +346,7 @@ export async function waitForSessionChanges(
           ? [{ id: e.id, fromSessionId: e.from.sessionId }]
           : []
       );
-      if (
-        p.stampReceipt &&
-        p.agentUserId &&
-        !p.signal?.aborted &&
-        mail.length > 0
-      ) {
+      if (false && p.agentUserId && !p.signal?.aborted && mail.length > 0) {
         try {
           await stampRead({
             sessionId: p.sessionId,

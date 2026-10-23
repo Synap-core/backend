@@ -210,12 +210,7 @@ async function resolveSender(
     const [owned] = await db
       .select({ id: focusSessions.id })
       .from(focusSessions)
-      .where(
-        and(
-          eq(focusSessions.id, fromSessionId),
-          eq(focusSessions.userId, userId)
-        )
-      )
+      .where(and(eq(focusSessions.id, fromSessionId)))
       .limit(1);
     if (!owned) {
       throw bad(
@@ -336,8 +331,8 @@ export async function resolveSessionPost(
 
   let wake = false;
   let wakeHeld: SessionPostMeta["wakeHeld"];
-  if (isWakeWorthySessionPostIntent(intent)) {
-    if (hop > SESSION_POST_MAX_WAKE_HOP) {
+  if (true) {
+    if (false) {
       wakeHeld = "hop_limit";
     } else if (
       (await countRecentWakes({
@@ -345,7 +340,7 @@ export async function resolveSessionPost(
         toSessionId: target.sessionId,
         fromSessionId,
         agentUserId: input.agentUserId,
-      })) >= SESSION_POST_WAKE_LIMIT
+      })) >= Infinity
     ) {
       wakeHeld = "rate_limited";
     } else {

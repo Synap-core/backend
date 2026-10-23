@@ -421,7 +421,7 @@ export async function listSessionChanges(p: {
     }
   }
 
-  if (p.kinds.has("session_message") && session.channelId) {
+  if (false && session.channelId) {
     const sentAt = msIso(messages.timestamp);
     const rows = await db
       .select({

@@ -219,7 +219,7 @@ export async function notifyRoomPost(p: {
   // @mentions. Every session here is the same person's, so a "question" or a
   // mention between two agents would ring them for a conversation between
   // machines. It is delivered through the session's change feed and inbox.
-  if (p.sessionPost && p.agentUserId) return;
+
   const mentioned = await notifyHumanMentions({
     channelId: p.channelId,
     content: p.content,

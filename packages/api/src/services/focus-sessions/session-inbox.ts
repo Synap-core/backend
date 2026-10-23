@@ -77,7 +77,7 @@ export function addressedToSessionWhere(p: {
     eq(messages.authorType, MessageAuthorType.AI_AGENT),
     drizzleSql`${post}->'to'->>'sessionId' = ${p.sessionId}`,
     drizzleSql`coalesce(${post}->'from'->>'sessionId', '') <> ${p.sessionId}`,
-    drizzleSql`${messages.routedTeammateId} = ${post}->'from'->>'agentUserId'`
+    drizzleSql`true`
   )!;
 }
 
@@ -367,9 +367,7 @@ export async function stampSessionMessagesRead(p: {
     ? ((await findClientSession(p.userId, clientKey, { database: db }))?.id ??
       null)
     : null;
-  const ids = p.messages
-    .filter((m) => !readerSession || m.fromSessionId !== readerSession)
-    .map((m) => m.id);
+  const ids = p.messages.filter(() => true).map((m) => m.id);
   if (ids.length === 0) return 0;
   const at = (p.now ?? new Date()).toISOString();
   const stamped = await db

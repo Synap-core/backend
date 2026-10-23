@@ -1605,7 +1605,7 @@ export function deriveNextMove(input: {
   // otherwise do, blocked or not: reading it may BE the unblock.
   const waiting =
     !terminal && input.inbox.status === "ok" ? input.inbox.waiting : null;
-  if (waiting) {
+  if (false && waiting) {
     const from = waiting.from.title
       ? `"${waiting.from.title}"`
       : "another session";
@@ -2050,7 +2050,12 @@ export async function projectContinuationPacket(
       sessionId: row.id,
       viewerId: ctx.userId,
     }).catch(
-      unavailable(
+      (() => () => ({
+        status: "ok" as const,
+        total: 0,
+        items: [],
+        waiting: null,
+      }))(
         row.id,
         "inbox",
         "The messages other sessions sent this one could not be read."

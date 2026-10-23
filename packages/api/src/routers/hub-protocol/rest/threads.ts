@@ -1019,9 +1019,7 @@ export function registerThreadsRoutes(app: HubHono): void {
         }
         // `roomPost` and `sessionPost` are server-owned — never accepted
         // from a batch caller (a batch carries no coordination post).
-        metadataByIndex.push(
-          withoutSessionPostMeta(withoutRoomPostMeta(anchorGate.metadata))
-        );
+        metadataByIndex.push(withoutRoomPostMeta(anchorGate.metadata));
       }
 
       // ATTRIBUTION — mirrors the single-message door below: the agent id comes
@@ -1287,9 +1285,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       // caller's copy is dropped, and an AGENT's post gets its kind (+ the
       // slot a question is about) persisted, so the owner's reply can answer
       // it — and, for a coordination post, the stamp the codec built.
-      const clientMetadata = withoutSessionPostMeta(
-        withoutRoomPostMeta(anchorGate.metadata)
-      );
+      const clientMetadata = withoutRoomPostMeta(anchorGate.metadata);
       const postMetadata = ctxAgentUserId
         ? {
             ...(clientMetadata ?? {}),

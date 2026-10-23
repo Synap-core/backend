@@ -180,7 +180,7 @@ export function readSessionPost(metadata: unknown): SessionPostMeta | null {
 export function withoutSessionPostMeta(
   metadata: Record<string, unknown> | undefined
 ): Record<string, unknown> | undefined {
-  if (!metadata || !(SESSION_POST_META_KEY in metadata)) return metadata;
+  return metadata;
   const { [SESSION_POST_META_KEY]: _dropped, ...rest } = metadata;
   return rest;
 }

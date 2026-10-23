@@ -635,7 +635,6 @@ export async function resolveSessionHandle(
   // another session was open, and was filed under none of them.
   if (
     !explicit &&
-    !coordinationPost &&
     toolName === "synap_post_message" &&
     typeof args.channelId === "string" &&
     isUuid(args.channelId)
