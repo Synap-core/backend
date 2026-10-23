@@ -56,6 +56,18 @@ const h = vi.hoisted(() => {
         const { drizzle } = await import("drizzle-orm/pglite");
         const schema = await import("@synap/database/schema");
         const client = new PGlite();
+        for (const m of ["query", "exec"] as const) {
+          const orig = (client as any)[m].bind(client);
+          (client as any)[m] = async (sql: string, ...rest: unknown[]) => {
+            process.stderr.write(`[sql:${m}] ${String(sql).replace(/\s+/g, " ").slice(0, 160)}\n`);
+            return orig(sql, ...rest);
+          };
+        }
+        const origTx = (client as any).transaction.bind(client);
+        (client as any).transaction = async (fn: any) => {
+          process.stderr.write(`[sql:tx] BEGIN\n`);
+          try { return await origTx(fn); } finally { process.stderr.write("[sql:tx] END\n"); }
+        };
         state.client = client as unknown as typeof state.client;
         state.db = drizzle(client, { schema });
       }
@@ -108,7 +120,10 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 vi.mock("../../agent-identity-service.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  getAgentFocusProjectId: async () => h.focus,
+  getAgentFocusProjectId: async () => {
+    process.stderr.write(`[focus-mock] ${h.focus}\n`);
+    return h.focus;
+  },
 }));
 vi.mock("@synap/jobs", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
