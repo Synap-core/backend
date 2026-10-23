@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  allowBlockedReason,
+  consentClientKind,
   initialSelection,
+  invalidRequestHint,
   isTicked,
   permissionLabel,
+  reasonOf,
+  spaceCheckboxLabel,
   toApproved,
   toggle,
   withoutSpace,
@@ -94,5 +99,114 @@ describe("permissionLabel", () => {
     ["document.read", "Read documents"],
   ])("%s → %s", (permission, label) => {
     expect(permissionLabel(permission)).toBe(label);
+  });
+});
+
+describe("consent space hint (preselect only)", () => {
+  it("a hint naming an offered space pre-ticks it where the person picks", () => {
+    const s = initialSelection(OFFER, [], "shared");
+    expect(isTicked(s, "entity.post.read", "shared")).toBe(true);
+    expect(isTicked(s, "entity.post.read", "brand")).toBe(false);
+    // A permission not offered in the hinted space keeps the one-space rule.
+    expect(isTicked(s, "entity.post.create", "brand")).toBe(true);
+  });
+
+  it("a hint the person cannot grant there is ignored", () => {
+    const s = initialSelection(OFFER, [], "someone-elses-space");
+    expect(toApproved(s, OFFER)).toEqual([
+      { permission: "entity.post.create", workspaceId: "brand" },
+    ]);
+  });
+
+  it("a re-consent keeps the current approval; the hint never adds to it", () => {
+    const s = initialSelection(
+      OFFER,
+      [{ permission: "entity.post.read", workspaceId: "brand" }],
+      "shared"
+    );
+    expect(toApproved(s, OFFER)).toEqual([
+      { permission: "entity.post.read", workspaceId: "brand" },
+    ]);
+  });
+});
+
+describe("Allow says why it is disabled", () => {
+  it("nothing ticked: Allow is blocked, with a reason", () => {
+    expect(allowBlockedReason(OFFER, new Set())).toBe(
+      "Pick at least one space."
+    );
+  });
+
+  it("no space at all on offer: a different reason", () => {
+    expect(
+      allowBlockedReason([{ permission: "x.read", workspaces: [] }], new Set())
+    ).toBe("You have no space to give it yet.");
+  });
+
+  it("one pair ticked: Allow may be pressed", () => {
+    const s = initialSelection(OFFER, []);
+    expect(allowBlockedReason(OFFER, s)).toBeNull();
+  });
+
+  it("a ticked pair outside the offer does not unblock it", () => {
+    const forged = new Set(["entity.post.read\u0000elsewhere"]);
+    expect(allowBlockedReason(OFFER, forged)).not.toBeNull();
+  });
+});
+
+describe("space checkbox names and reasons", () => {
+  it("names the permission AND the space", () => {
+    expect(spaceCheckboxLabel("entity.post.read", "Brand")).toBe(
+      "Read posts in Brand"
+    );
+  });
+
+  it("reads the developer's reason, or none", () => {
+    expect(
+      reasonOf({
+        permission: "a.read",
+        workspaces: [],
+        reason: "  To list posts. ",
+      })
+    ).toBe("To list posts.");
+    expect(
+      reasonOf({ permission: "a.read", workspaces: [], reason: " " })
+    ).toBeNull();
+    expect(reasonOf({ permission: "a.read", workspaces: [] })).toBeNull();
+  });
+});
+
+describe("the invalid-request hint fits the client", () => {
+  const POD_APP = "https://studio.example.com/synap/client.json";
+  it.each([
+    [POD_APP, "pod_app"],
+    ["app_1a2b3c", "sign_in"],
+    ["synap-desktop", "first_party"],
+    ["3f2c9a10-dcr-client", "mcp"],
+    // An inherited key is not a Synap app.
+    ["constructor", "mcp"],
+  ] as const)("%s is %s", (clientId, kind) => {
+    expect(consentClientKind(clientId)).toBe(kind);
+  });
+
+  it("a pod app or a sign-in is never told to go back to Claude", () => {
+    expect(invalidRequestHint(POD_APP)).not.toMatch(/claude/i);
+    expect(invalidRequestHint(POD_APP)).toMatch(/website/);
+    expect(invalidRequestHint("app_1a2b3c")).not.toMatch(/claude/i);
+  });
+
+  it("a Synap app is named, not Claude", () => {
+    expect(invalidRequestHint("synap-desktop")).toMatch(/from Synap Desktop/);
+    expect(invalidRequestHint("synap-desktop")).not.toMatch(/claude/i);
+  });
+
+  it("an MCP client keeps the Claude wording", () => {
+    expect(invalidRequestHint("3f2c9a10-dcr-client")).toMatch(/from Claude/);
+  });
+
+  it("no hint uses an em dash", () => {
+    for (const id of [POD_APP, "app_1a2b3c", "synap-desktop", "x"]) {
+      expect(invalidRequestHint(id)).not.toContain("\u2014");
+    }
   });
 });
