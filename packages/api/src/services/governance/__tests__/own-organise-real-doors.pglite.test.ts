@@ -137,7 +137,11 @@ vi.mock("../../../utils/split-brain-service.js", async (importOriginal) => ({
 
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { runWithActingAgent, runWithCallingKey } from "@synap/database";
+import {
+  runWithActingAgent,
+  runWithCallingKey,
+  runWithDerivedSession,
+} from "@synap/database";
 import { entitiesRouter } from "../../../routers/entities.js";
 import { fileEntitiesGoverned } from "../../projects/file-entities.js";
 import { moveStatus } from "../../lifecycle/move-status.js";
@@ -196,9 +200,20 @@ const KEY = randomUUID();
 const TASK_PROFILE = randomUUID();
 const STATUS_DEF = randomUUID();
 
-/** Inside the agent key's request, as the key-auth doors enter it. */
-const asAgent = <T>(fn: () => Promise<T>) =>
-  runWithActingAgent(AGENT, () => runWithCallingKey(KEY, fn));
+/** The agent's work session — the one the MCP door derives for its writes. */
+let WORK = "";
+
+/**
+ * Inside the agent key's request, as the key-auth doors enter it, with the
+ * session the MCP door DERIVED (guessed, not named) for this conversation.
+ * Every agent write carries a session, as on the live pod: without one the
+ * gate mints a receipt session inside the proposal transaction, which reads
+ * the module `db` and deadlocks PGlite's single connection (never Postgres).
+ */
+const asAgent = <T>(fn: () => Promise<T>, derived = WORK) =>
+  runWithActingAgent(AGENT, () =>
+    runWithCallingKey(KEY, () => runWithDerivedSession(derived, fn))
+  );
 
 const agentEntities = () =>
   entitiesRouter.createCaller({
@@ -207,6 +222,7 @@ const agentEntities = () =>
     userId: USER,
     agentUserId: AGENT,
     workspaceId: null,
+    sessionId: WORK,
   } as never);
 
 const personEntities = () =>
@@ -223,6 +239,19 @@ async function seedProject(): Promise<string> {
     `insert into projects (id, user_id, workspace_id, name, status, created_at, updated_at)
      values ($1, $2, null, 'Synap', 'active', now(), now())`,
     [id, USER]
+  );
+  return id;
+}
+
+/** An agent session bound to THIS key, in `projectId` (null = none). */
+async function seedSession(projectId: string | null): Promise<string> {
+  const id = randomUUID();
+  await q(
+    `insert into focus_sessions
+       (id, user_id, title, goal, status, origin, project_id, expected_outputs, criteria, metadata, agent_ids, started_at, created_at, updated_at)
+     values ($1, $2, 'Probe', 'Probe the organise doors', 'active', 'agent', $3,
+             '[]'::jsonb, '[]'::jsonb, $4::jsonb, '{}', now(), now(), now())`,
+    [id, USER, projectId, JSON.stringify({ clientKey: `key:${KEY}` })]
   );
   return id;
 }
@@ -245,6 +274,28 @@ async function agentCreatesTask(): Promise<string> {
   return id!;
 }
 
+const fileAsAgent = (projectId: string, taskId: string) =>
+  asAgent(() =>
+    fileEntitiesGoverned({
+      userId: USER,
+      agentUserId: AGENT,
+      projectId,
+      entityIds: [taskId],
+      sessionId: WORK,
+    })
+  );
+
+const closeAsAgent = (taskId: string) =>
+  asAgent(() =>
+    moveStatus({
+      entityId: taskId,
+      to: "done",
+      expectedFrom: "todo",
+      actor: { kind: "agent", userId: USER, agentUserId: AGENT },
+      sessionId: WORK,
+    })
+  );
+
 const filedInto = async (projectId: string) =>
   (
     await q<{ source_entity_id: string }>(
@@ -260,13 +311,12 @@ const statusOf = async (id: string) =>
     ])
   ).rows[0]?.status;
 
-const receiptsFor = async (targetId: string) =>
+const pendingCount = async () =>
   (
-    await q<{ status: string; proposal_type: string }>(
-      `select status, proposal_type from proposals where target_id = $1 order by created_at`,
-      [targetId]
+    await q<{ n: number }>(
+      `select count(*)::int as n from proposals where status = 'pending'`
     )
-  ).rows;
+  ).rows[0]!.n;
 
 beforeAll(async () => {
   await h.init();
@@ -320,93 +370,54 @@ beforeEach(async () => {
   await h.client!.exec(migration("0282_governance_reversible_default.sql"));
   await h.client!.exec(migration("0346b_governance_own_organise_default.sql"));
   h.focus = null;
+  WORK = await seedSession(null);
 });
 
 describe("ea47d64e: an agent organises its OWN fresh task through the real doors", () => {
-  it("files it into the project the person named and closes it, each on an applied receipt", async () => {
+  it("files it into the project the person named and closes it, nothing waiting", async () => {
+    const taskId = await agentCreatesTask();
+    // The person names the project AFTER the create (the live order:
+    // create, then set_project_focus, then file).
     const projectId = await seedProject();
     h.focus = projectId;
-    const taskId = await agentCreatesTask();
 
-    const filing = await asAgent(() =>
-      fileEntitiesGoverned({
-        userId: USER,
-        agentUserId: AGENT,
-        projectId,
-        entityIds: [taskId],
-      })
-    );
+    const filing = await fileAsAgent(projectId, taskId);
     expect(filing.status).toBe("filed");
     expect(await filedInto(projectId)).toEqual([taskId]);
 
-    const close = await asAgent(() =>
-      moveStatus({
-        entityId: taskId,
-        to: "done",
-        expectedFrom: "todo",
-        actor: { kind: "agent", userId: USER, agentUserId: AGENT },
-      })
-    );
+    const close = await closeAsAgent(taskId);
     expect(close.status).toBe("moved");
     expect(await statusOf(taskId)).toBe("done");
 
-    // Nothing waits for the person; every write has its receipt.
-    const rows = await receiptsFor(taskId);
-    expect(rows.filter((r) => r.status === "pending")).toEqual([]);
-    expect(
-      (
-        await q<{ n: number }>(
-          `select count(*)::int as n from proposals where status = 'pending'`
-        )
-      ).rows[0]!.n
-    ).toBe(0);
+    // Applied, each on its receipt; nothing waits for the person.
+    expect(await pendingCount()).toBe(0);
+    const receipts = await q<{ proposal_type: string }>(
+      `select proposal_type from proposals where status = 'auto_approved'`
+    );
+    expect(receipts.rows.map((r) => r.proposal_type)).toEqual(
+      expect.arrayContaining(["file_entities", "transition"])
+    );
   });
 
   it("a person edits it in between: filing and closing propose, nothing written", async () => {
+    const taskId = await agentCreatesTask();
     const projectId = await seedProject();
     h.focus = projectId;
-    const taskId = await agentCreatesTask();
 
     await personEntities().update({ id: taskId, title: "Mine now" });
 
-    const filing = await asAgent(() =>
-      fileEntitiesGoverned({
-        userId: USER,
-        agentUserId: AGENT,
-        projectId,
-        entityIds: [taskId],
-      })
-    );
+    const filing = await fileAsAgent(projectId, taskId);
     expect(filing.status).toBe("proposed");
     expect(await filedInto(projectId)).toEqual([]);
 
-    const close = await asAgent(() =>
-      moveStatus({
-        entityId: taskId,
-        to: "done",
-        expectedFrom: "todo",
-        actor: { kind: "agent", userId: USER, agentUserId: AGENT },
-      })
-    );
+    const close = await closeAsAgent(taskId);
     expect(close.status).toBe("proposed");
     expect(await statusOf(taskId)).toBe("todo");
   });
 });
 
 describe("ea47d64e: the project of the session the agent NAMES is a project the person named", () => {
-  async function seedSessionIn(projectId: string): Promise<string> {
-    const id = randomUUID();
-    await q(
-      `insert into focus_sessions
-         (id, user_id, title, goal, status, origin, project_id, expected_outputs, criteria, metadata, agent_ids, started_at, created_at, updated_at)
-       values ($1, $2, 'Probe', 'Probe the filing door', 'active', 'agent', $3,
-               '[]'::jsonb, '[]'::jsonb, $4::jsonb, '{}', now(), now(), now())`,
-      [id, USER, projectId, JSON.stringify({ clientKey: `key:${KEY}` })]
-    );
-    return id;
-  }
-
-  const projectsCaller = async (sessionId?: string) => {
+  const projectsCaller = async (sessionId: string) => {
     const { projectsRouter } = await import("../../../routers/projects.js");
     return projectsRouter.createCaller({
       db: h.db,
@@ -414,17 +425,17 @@ describe("ea47d64e: the project of the session the agent NAMES is a project the 
       userId: USER,
       agentUserId: AGENT,
       workspaceId: null,
-      ...(sessionId ? { sessionId } : {}),
+      sessionId,
     } as never);
   };
 
-  it("no focus, the session named: filed directly through the tRPC/MCP door", async () => {
-    const projectId = await seedProject();
-    const sessionId = await seedSessionIn(projectId);
+  it("no focus, the agent NAMES a session in the project: filed directly through the tRPC/MCP door", async () => {
     const taskId = await agentCreatesTask();
+    const projectId = await seedProject();
+    const named = await seedSession(projectId);
 
     const res = await asAgent(async () =>
-      (await projectsCaller(sessionId)).fileEntities({
+      (await projectsCaller(named)).fileEntities({
         projectId,
         entityIds: [taskId],
       })
@@ -433,15 +444,18 @@ describe("ea47d64e: the project of the session the agent NAMES is a project the 
     expect(await filedInto(projectId)).toEqual([taskId]);
   });
 
-  it("CONTROL: no focus and no session named — the same filing proposes", async () => {
-    const projectId = await seedProject();
+  it("CONTROL: the SAME session, guessed by the door instead of named — the filing proposes", async () => {
     const taskId = await agentCreatesTask();
+    const projectId = await seedProject();
+    const guessed = await seedSession(projectId);
 
-    const res = await asAgent(async () =>
-      (await projectsCaller()).fileEntities({
-        projectId,
-        entityIds: [taskId],
-      })
+    const res = await asAgent(
+      async () =>
+        (await projectsCaller(guessed)).fileEntities({
+          projectId,
+          entityIds: [taskId],
+        }),
+      guessed
     );
     expect(res.status).toBe("proposed");
     expect(await filedInto(projectId)).toEqual([]);
