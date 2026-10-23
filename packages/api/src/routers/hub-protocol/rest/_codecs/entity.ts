@@ -39,6 +39,39 @@ export const WireEntitySchema = z
   .openapi("Entity");
 export type WireEntity = z.infer<typeof WireEntitySchema>;
 
+/** One live role facet on a listed row — the tRPC `FacetRowAnnotation` shape. */
+export const WireFacetRowSchema = z
+  .object({
+    facetId: z.string(),
+    slug: z.string().describe("The role-profile slug, e.g. `lead`."),
+    properties: z
+      .record(z.string(), z.unknown())
+      .describe("The facet's overlay values, e.g. the `leadStage` of a lead."),
+    status: z.string().nullable(),
+  })
+  .openapi("EntityFacetRow");
+export type WireFacetRow = z.infer<typeof WireFacetRowSchema>;
+
+/**
+ * A `GET /entities` row: the entity wire shape, plus its role facets when the
+ * caller asked `includeFacets=true` and the row wears at least one.
+ */
+export const WireListedEntitySchema = WireEntitySchema.extend({
+  facetSlugs: z
+    .array(z.string())
+    .optional()
+    .describe(
+      "With `includeFacets=true`: the slugs of the role facets the row wears. Absent when it wears none."
+    ),
+  facets: z
+    .array(WireFacetRowSchema)
+    .optional()
+    .describe(
+      "With `includeFacets=true`: each role facet the row wears, with its overlay. Absent when it wears none."
+    ),
+}).openapi("ListedEntity");
+export type WireListedEntity = z.infer<typeof WireListedEntitySchema>;
+
 /**
  * Loose record schema for routes that return raw entity rows from the DB
  * (e.g. GET /entities/:id, GET /users/:userId/entities). DB rows have `type`
@@ -423,5 +456,24 @@ export function entityToWire(entity: unknown): WireEntity {
     version: typeof row.version === "number" ? row.version : undefined,
     createdAt: row.createdAt as string | Date | undefined,
     updatedAt: row.updatedAt as string | Date | undefined,
+  };
+}
+
+/**
+ * {@link entityToWire} keeping the role facets a list row was annotated with
+ * (`entities.list` with `includeFacets: true` sets `facetSlugs` + `facets`
+ * only on a row wearing ≥1). Only for a caller that asked for them: the
+ * default list already carries `facetSlugs` and must keep dropping them.
+ */
+export function entityToWireWithFacets(entity: unknown): WireListedEntity {
+  const wire = entityToWire(entity);
+  const { facetSlugs, facets } = entity as {
+    facetSlugs?: string[];
+    facets?: WireFacetRow[];
+  };
+  return {
+    ...wire,
+    ...(facetSlugs ? { facetSlugs } : {}),
+    ...(facets ? { facets } : {}),
   };
 }

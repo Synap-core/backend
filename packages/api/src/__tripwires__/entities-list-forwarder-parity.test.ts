@@ -30,7 +30,7 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  *   - It is a SOURCE scan of the forwarder body, not an execution. It proves the
  *     key is passed; it cannot prove the value is the right one.
  *   - It says nothing about params `list` declares that the forwarder does NOT —
- *     that set is large and deliberate (`edges`, `includeFacets`, …). The
+ *     that set is large and deliberate (`edges`, …). The
  *     invariant is one-directional: what the forwarder ACCEPTS, it must PASS ON.
  *   - The REST layer above (`hub-protocol/rest/entities.ts`) is a third door with
  *     its own query schema; the `q`/Typesense branch there applies almost none of
