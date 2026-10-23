@@ -14390,6 +14390,12 @@ export interface ShareListing {
 	 * so there is no single number; ask the anchor listing of each project.
 	 */
 	guestCount: number | null;
+	/**
+	 * Does this pod hand out a page people read a publication on
+	 * (`SYNAP_SHARE_PAGE_URL`)? False = a publication has only its developer
+	 * address, so a surface must not promise a page.
+	 */
+	publicPage: boolean;
 	/** True when any list hit {@link LIST_SHARES_CAP}. */
 	truncated: boolean;
 }
@@ -15058,6 +15064,11 @@ export type PublishResult = {
 } | {
 	/** False after an agent's approved publish: the owner publishes again to mint it. */
 	hasToken: boolean;
+	/**
+	 * The page a person opens for it (`SYNAP_SHARE_PAGE_URL` + `/d/<token>`),
+	 * with the token, so present ONCE too — and only when the pod has a page.
+	 */
+	pageUrl?: string;
 	pinned: boolean;
 	publishedAt: Date;
 	/** The keys the snapshot actually holds. */
