@@ -67,12 +67,7 @@ interface StoredRailPins {
   seededWorkspaceIds: string[];
 }
 
-export function railPinKey(
-  p:
-    | { trackId: string }
-    | { viewId?: string | null; profileSlug: string; trackId?: undefined }
-) {
-  if (p.trackId) return goalRailPinKey(p.trackId);
+export function railPinKey(p: { viewId?: string | null; profileSlug: string }) {
   return p.viewId ? `view:${p.viewId}` : `kind:${p.profileSlug}`;
 }
 
@@ -357,7 +352,8 @@ export async function writeRailPins(
     let pins = effective(stored, suggested);
 
     if (op.op === "pin") {
-      const pin: RailPin = op.trackId
+      // A goal pin carries no `profileSlug` key (the router builds it so).
+      const pin: RailPin = !("profileSlug" in op)
         ? {
             key: goalRailPinKey(op.trackId),
             profileSlug: null,

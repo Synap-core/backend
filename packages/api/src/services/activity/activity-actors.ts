@@ -18,8 +18,11 @@ export interface ActorUserRow {
   email: string;
   userType: string;
   agentMetadata: unknown;
-  /** The computer an agent runs on (`actorDisplayName`'s "… on devbox"). */
-  hostUserId: string | null;
+  /**
+   * The computer an agent runs on (`actorDisplayName`'s "… on devbox") —
+   * read by `loadActorRows`; a caller's own users select may omit it.
+   */
+  hostUserId?: string | null;
 }
 
 /**
