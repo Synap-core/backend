@@ -107,6 +107,20 @@ if gate:
     check(gate[0]["config"]["url"] == "http://backend:4000/api/webhooks/kratos/login/cloud", "login.oidc: mounted URL")
     check("identity_id: ctx.identity.id" in body(gate[0]), "login.oidc: body carries identity_id")
 
+# ADDENDUM 2026-10-23: Cloud sign-in off must leave password sign-in working,
+# so the Cloud gate hangs off login.after.oidc ONLY, never a shared or password hook.
+def cloud_gate_urls(o):
+    found = []
+    if isinstance(o, dict):
+        if o.get("hook") == "web_hook" and str(o.get("config", {}).get("url", "")).endswith("/login/cloud"):
+            found.append(o)
+        for v in o.values(): found += cloud_gate_urls(v)
+    elif isinstance(o, list):
+        for v in o: found += cloud_gate_urls(v)
+    return found
+login_after = flows["login"].get("after") or {}
+check(all(not cloud_gate_urls(v) for k, v in login_after.items() if k != "oidc"),
+      "login: the Cloud gate is on oidc only (a password sign-in never reaches it)")
 for name in ("login", "registration", "error"):
     check(flows[name]["ui_url"] == f"{ADMIN}/login", f"{name}.ui_url stays pod-admin /login")
 
