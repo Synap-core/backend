@@ -207,7 +207,12 @@ beforeAll(async () => {
     `insert into users (id, email, name, user_type) values ($1, 'h@x', 'Human', 'human'), ($2, 'a@x', 'Scout', 'agent')`,
     [HUMAN, AGENT]
   );
-  await q(`insert into workspaces (id, name) values ($1, 'Sales')`, [WS]);
+  // `ddlFor` defaults every `*_at` column to now(): a live space states its
+  // `archived_at` explicitly, or the gate reads it as archived (86b6faae).
+  await q(
+    `insert into workspaces (id, name, archived_at) values ($1, 'Sales', null)`,
+    [WS]
+  );
   registerWorkspaceExecutors();
 });
 
