@@ -14,6 +14,7 @@ import {
   isNull,
   drizzleSql,
   profileSlugScopeCondition,
+  entityIdentitySignals,
 } from "@synap/database";
 import {
   workspaceLensWhere,
@@ -43,6 +44,11 @@ import {
   findPriorCaptureGraphProposal,
 } from "../../utils/pending-capture-dedup.js";
 import type { OrchestratorContext } from "./types.js";
+import {
+  identitySignalsOf,
+  type PodIdentityCandidate,
+} from "../../import/import-identities.js";
+import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
 import type { ImportAnalysisPlan } from "@synap/intelligence-client";
 import { buildImportTitle } from "../../import/import-title.js";
 
@@ -190,6 +196,13 @@ export function buildImportGraphProposalData(input: {
   corpusMap?: unknown;
   /** Staged raw item documents (`recordImportIntake`). Empty ⇒ omitted. */
   sourceDocumentIds?: string[];
+  /** Who each row is — linked, matched by name, kept separate (the review). */
+  identities?: unknown;
+  /**
+   * `separate` resolutions the approval applies by op ref (a same-name row
+   * backed by a different strong signal). See `applyProposalApproval`.
+   */
+  proposedIdentityResolutionByRef?: Record<string, { verb: "separate" }>;
 }): Record<string, unknown> {
   const idempotencyKey = importGraphIdempotencyKey(input);
   return {
@@ -205,6 +218,13 @@ export function buildImportGraphProposalData(input: {
     ...(input.quality ? { quality: input.quality } : {}),
     ...(input.homes ? { homes: input.homes } : {}),
     ...(input.corpusMap ? { corpusMap: input.corpusMap } : {}),
+    ...(input.identities ? { identities: input.identities } : {}),
+    ...(input.proposedIdentityResolutionByRef
+      ? {
+          proposedIdentityResolutionByRef:
+            input.proposedIdentityResolutionByRef,
+        }
+      : {}),
   };
 }
 
@@ -653,6 +673,146 @@ export async function buildCsvTablePlan(
       scope: c.scope,
     })),
   };
+}
+
+/**
+ * The pod side of `planImportIdentities`: for every row the import would
+ * CREATE, the same-kind same-name entities and the strong-signal hits the
+ * create door itself will see at apply — the weak-gate scope
+ * (`ownerPrivateVisibleWhere`, exact case-insensitive title, plain `type`) and
+ * the strong-merge scope (`entityWriteVisibleWhere`) of `entities.create`. Not
+ * covered: the door's weak alias / `discord-handle` surface forms. A failed
+ * lookup THROWS — "nothing found" and "could not look" are different answers.
+ * One query per kind per chunk for names, one per signal type for signals.
+ */
+export async function lookupImportIdentityCandidates(
+  ctx: Pick<OrchestratorContext, "userId">,
+  operations: ReadonlyArray<CompositeProposalOperation>,
+  database: typeof db = db
+): Promise<{
+  podCandidates: Map<string, PodIdentityCandidate[]>;
+  signalHits: Map<string, PodIdentityCandidate>;
+}> {
+  const { userId } = ctx;
+  const rows = operations.filter(
+    (op): op is Extract<CompositeProposalOperation, { op: "create_entity" }> =>
+      op.op === "create_entity" &&
+      !op.existingEntityId &&
+      !!op.title &&
+      !!op.ref
+  );
+  const podCandidates = new Map<string, PodIdentityCandidate[]>();
+  const signalHits = new Map<string, PodIdentityCandidate>();
+  const select = {
+    id: entities.id,
+    type: entities.type,
+    title: entities.title,
+    properties: entities.properties,
+  };
+  const toCandidate = (r: {
+    id: string;
+    type: string;
+    title: string | null;
+    properties: unknown;
+  }): PodIdentityCandidate => ({
+    id: r.id,
+    type: r.type,
+    title: r.title,
+    properties:
+      r.properties && typeof r.properties === "object"
+        ? (r.properties as Record<string, unknown>)
+        : {},
+  });
+
+  // Names, per kind.
+  const namesByKind = new Map<string, Set<string>>();
+  for (const op of rows) {
+    const set = namesByKind.get(op.profileSlug) ?? new Set<string>();
+    set.add(normalizeLinkTargetName(op.title!));
+    namesByKind.set(op.profileSlug, set);
+  }
+  const normalizedTitle = drizzleSql<string>`lower(btrim(regexp_replace(${entities.title}, '[[:space:]]+', ' ', 'g')))`;
+  for (const [kind, set] of namesByKind) {
+    const names = [...set];
+    // The kind through THE polymorphic slug door (a primary kind is a plain
+    // type match, as in the create door's weak gate).
+    const kindMatch = await profileSlugScopeCondition(database, kind, {
+      userId,
+      workspaceId: null,
+    });
+    for (let i = 0; i < names.length; i += LINK_TARGET_LOOKUP_CHUNK) {
+      const found = await database
+        .select({ ...select, key: normalizedTitle })
+        .from(entities)
+        .where(
+          and(
+            kindMatch,
+            isNull(entities.deletedAt),
+            inArray(
+              normalizedTitle,
+              names.slice(i, i + LINK_TARGET_LOOKUP_CHUNK)
+            ),
+            ownerPrivateVisibleWhere(
+              entities.workspaceId,
+              entities.userId,
+              userId
+            )
+          )
+        )
+        .orderBy(entities.createdAt);
+      for (const r of found) {
+        const k = `${kind}|${r.key}`;
+        const list = podCandidates.get(k) ?? [];
+        list.push(toCandidate(r));
+        podCandidates.set(k, list);
+      }
+    }
+  }
+
+  // Strong signals, per type: the index the create door merges on.
+  const refsBySignal = new Map<string, string[]>();
+  const valuesByType = new Map<string, Set<string>>();
+  for (const op of rows) {
+    for (const [type, value] of identitySignalsOf(
+      op.properties,
+      op.profileSlug
+    )) {
+      const sk = `${type}|${value}`;
+      refsBySignal.set(sk, [...(refsBySignal.get(sk) ?? []), op.ref!]);
+      const set = valuesByType.get(type) ?? new Set<string>();
+      set.add(value);
+      valuesByType.set(type, set);
+    }
+  }
+  const kindOf = new Map(rows.map((op) => [op.ref!, op.profileSlug]));
+  for (const [type, set] of valuesByType) {
+    const values = [...set];
+    for (let i = 0; i < values.length; i += LINK_TARGET_LOOKUP_CHUNK) {
+      const found = await database
+        .select({ ...select, value: entityIdentitySignals.signalValue })
+        .from(entityIdentitySignals)
+        .innerJoin(entities, eq(entities.id, entityIdentitySignals.entityId))
+        .where(
+          and(
+            eq(entityIdentitySignals.signalType, type),
+            inArray(
+              entityIdentitySignals.signalValue,
+              values.slice(i, i + LINK_TARGET_LOOKUP_CHUNK)
+            ),
+            isNull(entities.deletedAt),
+            entityWriteVisibleWhere(userId)
+          )
+        );
+      for (const r of found) {
+        for (const ref of refsBySignal.get(`${type}|${r.value}`) ?? []) {
+          if (!signalHits.has(ref) && kindOf.get(ref) === r.type) {
+            signalHits.set(ref, toCandidate(r));
+          }
+        }
+      }
+    }
+  }
+  return { podCandidates, signalHits };
 }
 
 /** Titles per lookup query (bounded IN list). */

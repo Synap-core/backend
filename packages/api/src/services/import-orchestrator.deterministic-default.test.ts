@@ -32,6 +32,11 @@ vi.mock("@synap/database", async (importOriginal) => ({
 }));
 vi.mock("./import/structuring.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
+  // The pod holds nobody these rows could be (identity lookup reads the DB).
+  lookupImportIdentityCandidates: vi.fn(async () => ({
+    podCandidates: new Map(),
+    signalHits: new Map(),
+  })),
   resolveProfileHints: vi.fn(async () => ({
     availableProfiles: [],
     validSlugs: new Set(["note", "person"]),

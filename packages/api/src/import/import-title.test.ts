@@ -43,7 +43,9 @@ describe("buildImportTitle", () => {
         ],
         ["a/b/c.csv"]
       )
-    ).toBe("Import 1 person, 1 company and 1 link from c.csv");
+    ).toBe(
+      "Import 1 person, 1 company and 1 link from c.csv, linking 1 already in your pod"
+    );
   });
 
   it("folds kinds past three into a counted remainder and counts files", () => {
@@ -59,6 +61,27 @@ describe("buildImportTitle", () => {
         ["a.md", "b.md"]
       )
     ).toBe("Import 5 notes, 4 tasks, 3 people and 3 other items from 2 files");
+  });
+
+  it("says how many rows link entities the pod already holds, and how many by name only", () => {
+    expect(
+      buildImportTitle(
+        [
+          ...ents("person", 2),
+          { op: "create_entity", profileSlug: "person", existingEntityId: "a" },
+          { op: "create_entity", profileSlug: "person", existingEntityId: "b" },
+          {
+            op: "create_entity",
+            profileSlug: "company",
+            existingEntityId: "c",
+          },
+        ],
+        ["c.csv"],
+        { matchedByName: 1 }
+      )
+    ).toBe(
+      "Import 2 people from c.csv, linking 3 already in your pod (1 matched by name only)"
+    );
   });
 
   it("with no file and nothing created it still says what it is", () => {

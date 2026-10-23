@@ -18,6 +18,11 @@ import {
 } from "../import/import-adapters.js";
 import { refineCsvTablePlan } from "../import/csv-table-refine.js";
 import {
+  planImportIdentities,
+  summarizeIdentities,
+  type ImportIdentitiesSummary,
+} from "../import/import-identities.js";
+import {
   addLinkTargetItems,
   buildImportProposal,
   importProposalToComposite,
@@ -75,6 +80,7 @@ import {
   resolveProfileHints,
   linkExistingImportTargets,
   buildCsvTablePlan,
+  lookupImportIdentityCandidates,
   CsvTablePlanUnavailableError,
   buildImportSummary,
   buildImportGraphProposalData,
@@ -510,6 +516,9 @@ export class ImportOrchestrator {
     let operations: CompositeProposalOperation[] | undefined;
     let summary = "";
     let droppedReferences = 0;
+    let identities: ImportIdentitiesSummary | undefined;
+    let proposedIdentityResolutionByRef: Record<string, { verb: "separate" }> =
+      {};
     let stats: Record<string, unknown> = {};
     let mode: "deep" | "shallow" = "shallow";
 
@@ -633,8 +642,22 @@ export class ImportOrchestrator {
         validSlugs
       );
       const composite = importProposalToComposite(proposal);
+      // Who each row IS, decided the way the create door will decide it at
+      // apply: a strong-signal or name match links (and fills) the existing
+      // entity, a same-name row with a different strong signal is created as
+      // a distinct subject (`separate`). Otherwise one same-name row refuses
+      // the whole approval at the weak same-name gate.
+      const identityPlan = planImportIdentities({
+        operations: composite.operations as CompositeProposalOperation[],
+        ...(await lookupImportIdentityCandidates(
+          this.ctx,
+          composite.operations as CompositeProposalOperation[]
+        )),
+      });
+      identities = summarizeIdentities(identityPlan);
+      proposedIdentityResolutionByRef = identityPlan.identityResolutionByRef;
       // Containers still first even on shallow path.
-      operations = [...containerOps, ...composite.operations];
+      operations = [...containerOps, ...identityPlan.operations];
       droppedReferences = composite.droppedReferences;
       stats = {
         ...proposal.stats,
@@ -650,7 +673,8 @@ export class ImportOrchestrator {
       };
       summary = buildImportSummary(
         operations,
-        input.items.map((i) => i.path)
+        input.items.map((i) => i.path),
+        { matchedByName: identities?.matchedByName ?? 0 }
       );
     }
 
@@ -869,6 +893,10 @@ export class ImportOrchestrator {
           quality,
           homes,
           corpusMap: corpusMapMeta,
+          ...(identities ? { identities } : {}),
+          ...(Object.keys(proposedIdentityResolutionByRef).length > 0
+            ? { proposedIdentityResolutionByRef }
+            : {}),
         }),
       });
       proposalId = (created as { id?: string })?.id ?? null;
@@ -908,6 +936,7 @@ export class ImportOrchestrator {
         : {}),
       ...(intake ? { intake } : {}),
       tablePlan,
+      ...(identities ? { identities } : {}),
       ...(degradedReason
         ? { degraded: true as const, degradedReason, csvPlanFailures }
         : {}),
