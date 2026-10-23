@@ -267,62 +267,6 @@ export const PROTECTED_ENVELOPE_FIELDS = [
 ] as const;
 
 /**
- * PLACEMENT the create door RESOLVED and persisted (invariant I3), which the
- * approve executor and the jobs materializer replay VERBATIM:
- *   - `resolvedWorkspaceId` — the lens the row lands in;
- *   - `resolvedHomeWorkspaceId` — the space a pod-wide row is filed for
- *     (0355), whose members it is then shared with.
- * A revise that could change either would land (or SHARE) the row somewhere
- * the reviewer never saw and the create door never authorized — e.g. plant a
- * home so a pending pod-wide decision is published to a space on approval.
- * No revise flow sets them (the destination re-target moves the proposal's
- * own `workspaceId` COLUMN, never these). Pinned, not protected: the Studio's
- * "Save & Approve" resends the whole inner payload, so a patch may ECHO the
- * stored value — only a DIFFERENT value is refused.
- */
-export const PINNED_PLACEMENT_FIELDS = [
-  "resolvedWorkspaceId",
-  "resolvedHomeWorkspaceId",
-] as const;
-
-/** The pinned placement field a patch would CHANGE at either level, or null. */
-function patchChangesPinnedPlacement(
-  envelope: Record<string, unknown>,
-  patch: ProposalRevisionPatch
-): (typeof PINNED_PLACEMENT_FIELDS)[number] | null {
-  const asRecord = (v: unknown) =>
-    v && typeof v === "object" && !Array.isArray(v)
-      ? (v as Record<string, unknown>)
-      : undefined;
-  const storedInner = asRecord(envelope.data);
-  const same = (a: unknown, b: unknown) =>
-    JSON.stringify(a ?? null) === JSON.stringify(b ?? null) &&
-    (a === undefined) === (b === undefined);
-  // [patched level, stored level] pairs, the way the merge below applies them.
-  const levels: Array<
-    [Record<string, unknown> | undefined, Record<string, unknown> | undefined]
-  > =
-    patch.kind === "inner" && isNestedEnvelope(envelope)
-      ? [[patch.fields, storedInner]]
-      : [
-          [patch.fields, envelope],
-          [asRecord(patch.fields.data), storedInner],
-        ];
-  for (const key of PINNED_PLACEMENT_FIELDS) {
-    for (const [patched, stored] of levels) {
-      if (
-        patched &&
-        Object.hasOwn(patched, key) &&
-        !same(patched[key], stored?.[key])
-      ) {
-        return key;
-      }
-    }
-  }
-  return null;
-}
-
-/**
  * The protected field a patch would SET or ALTER at either level, or null.
  *
  * Returns the offending KEY rather than a boolean so the error can name the
@@ -423,18 +367,6 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
         `${PROTECTED_FIELD_REASON[protectedField]}.`,
     });
   }
-  const pinnedField = patch
-    ? patchChangesPinnedPlacement(envelope, patch)
-    : null;
-  if (pinnedField) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        `A revision cannot change \`${pinnedField}\` — it is where the create ` +
-        `door placed this write (and who it is shared with); reject it and ` +
-        `create it again where it belongs.`,
-    });
-  }
   const before: Record<string, unknown> = {};
   const historyPatch: Record<string, unknown> = {};
 
@@ -483,10 +415,7 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   // nested `sourceFile` and orphan the staged bytes: no terminal door would
   // ever see a reference to discard. Restoring is the whole fix; there is
   // nothing a reviewer legitimately expresses by removing it.
-  for (const key of [
-    ...PROTECTED_ENVELOPE_FIELDS,
-    ...PINNED_PLACEMENT_FIELDS,
-  ]) {
+  for (const key of PROTECTED_ENVELOPE_FIELDS) {
     if (envelope[key] !== undefined) merged[key] = envelope[key];
     const priorInner = envelope.data;
     if (
