@@ -228,7 +228,7 @@ async function resolveSender(
   if (!clientKey) return null;
   // A failed lookup THROWS (the post fails, the caller retries): "this client
   // has no session" and "could not look" are different facts.
-  const bound = await findClientSession(userId, clientKey);
+  const bound = await findClientSession(userId, clientKey, { database: db });
   return bound?.id ?? null;
 }
 

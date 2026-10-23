@@ -364,7 +364,8 @@ export async function stampSessionMessagesRead(p: {
   if (p.messages.length === 0) return 0;
   const clientKey = requestClientKey(p.agentUserId);
   const readerSession = clientKey
-    ? ((await findClientSession(p.userId, clientKey))?.id ?? null)
+    ? ((await findClientSession(p.userId, clientKey, { database: db }))?.id ??
+      null)
     : null;
   const ids = p.messages
     .filter((m) => !readerSession || m.fromSessionId !== readerSession)
