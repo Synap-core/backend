@@ -119,6 +119,16 @@ describe("AppConsent sections", () => {
     ]);
   });
 
+  it("every checkbox draws its unticked box in the visible token, not HeroUI's card-coloured one", () => {
+    const out = html(new Set());
+    const boxes = out.match(/type="checkbox"/g)?.length ?? 0;
+    // 3 permissions × 2 spaces, plus the two sections' "All".
+    expect(boxes).toBe(8);
+    expect(out.match(/before:border-default-500/g)?.length).toBe(boxes);
+    // twMerge replaced HeroUI's own border colour, not appended beside it.
+    expect(out).not.toMatch(/before:border-default(?![-\w])/);
+  });
+
   it("nothing ticked: Allow is disabled and says why", () => {
     const out = html(new Set());
     expect(out).toContain("Pick at least one space.");

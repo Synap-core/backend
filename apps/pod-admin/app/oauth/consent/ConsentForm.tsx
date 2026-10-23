@@ -735,6 +735,21 @@ type ConsentApp = NonNullable<
 >;
 
 /**
+ * Every checkbox on this screen (a space, a section's "All"):
+ * - base: a 40px row to tap, with no two rows' hit areas overlapping
+ *   (HeroUI's base is `p-2 -m-2`);
+ * - wrapper: an unticked box drawn in `default-500`. HeroUI's own
+ *   `before:border-default` is `default` (#1B1E22 dark, #F4F2EE light), the
+ *   card's colour, so an empty box all but vanished. `default-500` against the
+ *   card: 5.0:1 dark, 4.6:1 light (non-text needs 3:1). Here only: pod-admin
+ *   has no shared checkbox.
+ */
+export const CONSENT_CHECKBOX = {
+  base: "my-0 min-h-10 py-0",
+  wrapper: "before:border-default-500",
+} as const;
+
+/**
  * A section's heading and its one tri-state checkbox: every permission ×
  * space of the section ticked, some, or none. A section with no space to give
  * has nothing to select, so it gets no checkbox.
@@ -768,7 +783,7 @@ function SectionHeading({
       {permissions.some((p) => p.workspaces.length > 0) ? (
         <Checkbox
           size="sm"
-          classNames={{ base: "my-0 min-h-10 py-0" }}
+          classNames={CONSENT_CHECKBOX}
           aria-label={sectionCheckboxLabel(section)}
           isSelected={state === "all"}
           isIndeterminate={state === "some"}
@@ -829,9 +844,7 @@ function PermissionList({
                   <Checkbox
                     key={w.workspaceId}
                     size="sm"
-                    // A 40px row to tap, with no two rows' hit areas
-                    // overlapping (HeroUI's base is `p-2 -m-2`).
-                    classNames={{ base: "my-0 min-h-10 py-0" }}
+                    classNames={CONSENT_CHECKBOX}
                     aria-label={spaceCheckboxLabel(
                       p.permission,
                       w.workspaceName
