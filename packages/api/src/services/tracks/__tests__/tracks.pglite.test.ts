@@ -1891,12 +1891,12 @@ describe("what a goal holds (W2) — content, derived marks, acceptance, the clo
         actor: human,
       })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
-    // The goal now belongs to someone else: USER can still see and write the
-    // project, but is not the judge.
-    await q(`update project_tracks set user_id = $1 where id = $2`, [
-      STRANGER,
-      id,
-    ]);
+    // Someone else holds the goal's JUDGE seat (W3): USER still owns the goal
+    // and can see and write the project, but is not the judge.
+    await q(
+      `insert into track_participants (track_id, principal_kind, principal_id, role, decided_by) values ($1, 'person', $2, 'judge', $3)`,
+      [id, STRANGER, USER]
+    );
     await expect(
       acceptGoalCriterion({
         trackId: id,
@@ -1908,7 +1908,10 @@ describe("what a goal holds (W2) — content, derived marks, acceptance, the clo
       code: "FORBIDDEN",
       message: expect.stringMatching(/judge/),
     });
-    await q(`update project_tracks set user_id = $1 where id = $2`, [USER, id]);
+    await q(
+      `delete from track_participants where track_id = $1 and role = 'judge'`,
+      [id]
+    );
   });
 
   it("a rewrite keeps the judge's decision on an unchanged criterion, and drops it on a changed one", async () => {

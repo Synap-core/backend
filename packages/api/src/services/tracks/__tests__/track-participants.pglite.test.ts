@@ -42,6 +42,7 @@ const migration = (f: string) =>
   );
 const M0317 = migration("0317_project_tracks_live_name_unique.sql");
 const M0344 = migration("0344_track_lifecycle_and_verdict.sql");
+const M0345 = migration("0345_track_goal_content.sql");
 const M0346 = migration("0346_track_participants.sql");
 
 const h = vi.hoisted(() => ({
@@ -148,11 +149,13 @@ import {
   projectMembers,
   projects,
   proposals,
+  sessionEvaluations,
   users,
   workspaceMembers,
   workspaces,
 } from "@synap/database";
 import {
+  acceptGoalCriterion,
   getTrack,
   listTracks,
   loadTrackView,
@@ -306,6 +309,8 @@ beforeAll(async () => {
     channels,
     channelMembers,
     notifications,
+    // What a goal holds (W2): a goal's criteria are graded from these rows.
+    sessionEvaluations,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -332,6 +337,8 @@ beforeAll(async () => {
   `);
   await h.client!.exec(M0317);
   await h.client!.exec(M0344);
+  // What a goal holds (W2): every track read selects the whole row.
+  await h.client!.exec(M0345);
   // The REAL table: CHECKs, one owner / one judge, the upsert's target.
   await h.client!.exec(M0346);
 
@@ -510,6 +517,67 @@ describe("only the judge closes the goal", () => {
       )
     ).rows[0]!;
     expect(after).toEqual({ status: "completed", verdict_by: JUDGE });
+  });
+});
+
+describe("the acceptance door reads the same judge as the close", () => {
+  it("with a judge named, the OWNER cannot accept a criterion; the judge can", async () => {
+    const res = await startTrack({
+      projectId: PROJECT,
+      name: "Judge accepts",
+      criteria: [
+        {
+          key: "copy",
+          statement: "The copy is approved",
+          check: { kind: "human" },
+        },
+        {
+          key: "legal",
+          statement: "Legal signed off",
+          check: { kind: "human" },
+        },
+      ],
+      actor: person(OWNER),
+    });
+    if (res.status === "proposed") throw new Error("unexpected proposal");
+    const id = res.track.id;
+    // No judge named: the owner judges, so the owner accepts.
+    expect(
+      (
+        await acceptGoalCriterion({
+          trackId: id,
+          criterionKey: "copy",
+          decision: "accepted",
+          actor: person(OWNER),
+        })
+      ).status
+    ).toBe("updated");
+
+    await add(id, person(OWNER), JUDGE, "judge");
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "legal",
+        decision: "accepted",
+        actor: person(OWNER),
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/judge/),
+    });
+    const accepted = await acceptGoalCriterion({
+      trackId: id,
+      criterionKey: "legal",
+      decision: "accepted",
+      actor: person(JUDGE),
+    });
+    expect(accepted.status).toBe("updated");
+    const stored = (
+      await q<{
+        criteria: Array<{ key: string; acceptance?: { by: string } }>;
+      }>(`select criteria from project_tracks where id = $1`, [id])
+    ).rows[0]!.criteria;
+    expect(stored.find((c) => c.key === "legal")?.acceptance?.by).toBe(JUDGE);
   });
 });
 

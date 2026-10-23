@@ -2532,8 +2532,8 @@ export type AcceptGoalCriterionResult = {
  * THE acceptance door (R2): the goal's JUDGE accepts a claimed criterion,
  * sends it back (`changes_asked`, with what to change) or rejects it — the
  * one writer of a criterion's `acceptance`. An agent never may (R9), a person
- * only as the goal's judge (`isGoalJudge` — the goal's owner until the
- * participants wave gives the goal a judge seat). Not a governed write: the
+ * only as the goal's judge (`isGoalJudge` — the judge seat, else the owner:
+ * the same person who alone may close it). Not a governed write: the
  * judge's decision IS the review; nothing is proposed to anyone. Repeating
  * the same decision is `unchanged`.
  */
@@ -2561,7 +2561,10 @@ export async function acceptGoalCriterion(input: {
     criterion,
     input.actor.agentUserId
       ? { kind: "agent" }
-      : { kind: "person", isJudge: isGoalJudge(track, input.actor.userId) }
+      : {
+          kind: "person",
+          isJudge: await isGoalJudge(track, input.actor.userId),
+        }
   );
   if (refusal) throw new TRPCError({ code: "FORBIDDEN", message: refusal });
   if (isTrackClosed(track)) {

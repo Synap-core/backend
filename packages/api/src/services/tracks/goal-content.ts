@@ -15,8 +15,8 @@
  *     each criterion's mark, `inReview` and `waitingOn` — computed by the
  *     pure rules in `@synap-core/types/units` (`deriveGoalCriteria`,
  *     `goalInReview`, `deriveWaitingOn`), never stored;
- *   · WHO JUDGES a goal (`isGoalJudge`) — ONE function, so participants (W3)
- *     swap the answer in one place.
+ *   · WHO JUDGES a goal (`isGoalJudge`) — the participants' answer
+ *     (`loadGoalJudge`: the judge seat, else the owner), never re-derived.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -62,6 +62,7 @@ import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { readDependencyFacts } from "../links/dependency-links.js";
+import { loadGoalJudge } from "./track-participant-store.js";
 
 // ── input ───────────────────────────────────────────────────────────────────
 
@@ -334,17 +335,16 @@ function stripNullAcceptance(
 // ── who judges ──────────────────────────────────────────────────────────────
 
 /**
- * WHO JUDGES the goal — accepts its criteria (R2) — today: its OWNER, the
- * person who started it (`project_tracks.user_id`; for an agent key, its
- * operator). THE ONE place this is answered: the participants wave (W3)
- * swaps it for the goal's judge seat. A key acting as an agent is refused
+ * WHO JUDGES the goal — accepts its criteria (R2): the goal's judge seat,
+ * else its owner (`loadGoalJudge`, the SAME answer the close reads — only the
+ * judge closes, `assertGoalCloser`). A key acting as an agent is refused
  * before this is asked (`mayAcceptGoalCriterion`).
  */
-export function isGoalJudge(
-  track: Pick<ProjectTrack, "userId">,
+export async function isGoalJudge(
+  track: Pick<ProjectTrack, "id" | "userId">,
   userId: string
-): boolean {
-  return track.userId === userId;
+): Promise<boolean> {
+  return (await loadGoalJudge(track)) === userId;
 }
 
 // ── derived facts every track read returns ──────────────────────────────────
