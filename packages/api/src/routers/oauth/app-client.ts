@@ -377,16 +377,16 @@ export function describePodAppActsAs(
   if (podAppActsAs(clientId) === "agent") {
     return {
       kind: "agent",
-      note: "Every change it makes is sent to you for review first. It can never see other spaces, approve its own changes, or create keys.",
+      // No "see other spaces": a space grant reads what a member of the space
+      // reads, including records of other spaces with a role there (the
+      // consent screen's SPACE_REACH_NOTE, rv-ui U1).
+      note: "Every change it makes is sent to you for review first. It can never approve its own changes or create keys.",
     };
   }
   const canApprove = permissions.some((p) => patternGrants(p, "approve"));
   const canDelete = permissions.some((p) => patternGrants(p, "delete"));
-  const cannot = [
-    ...(canDelete ? [] : ["delete"]),
-    "see other spaces",
-    "create keys",
-  ];
+  // No "see other spaces" (rv-ui U1): see the agent note above.
+  const cannot = [...(canDelete ? [] : ["delete"]), "create keys"];
   return {
     kind: "person",
     lead: `${appName} will act as you in`,

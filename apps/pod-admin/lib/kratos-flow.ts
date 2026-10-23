@@ -536,6 +536,30 @@ export async function listOtherSessions(): Promise<KratosSessionListItem[]> {
   return readJsonResponse<KratosSessionListItem[]>(res, UNEXPECTED_RESPONSE);
 }
 
+/**
+ * Sign THIS browser out and stay on the page (the invite page's "Sign out and
+ * continue"): create the logout flow, then call its URL asking for JSON, which
+ * Kratos answers 204 instead of redirecting. Throws when either step fails, so
+ * the caller says so rather than pretending the account changed.
+ */
+export async function signOutInPlace(): Promise<void> {
+  const created = await fetch(`${kratosPublic()}/self-service/logout/browser`, {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!created.ok) throw new Error(`Could not sign out (${created.status})`);
+  const { logout_url } = await readJsonResponse<{ logout_url?: string }>(
+    created,
+    UNEXPECTED_RESPONSE
+  );
+  if (!logout_url) throw new Error("Could not sign out (no logout URL)");
+  const done = await fetch(resolveActionUrl(logout_url), {
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!done.ok) throw new Error(`Could not sign out (${done.status})`);
+}
+
 /** Sign out every OTHER session of yours (Kratos `DELETE /sessions`). Returns how many. */
 export async function revokeOtherSessions(): Promise<number> {
   const res = await fetch(`${kratosPublic()}/sessions`, {
@@ -551,6 +575,29 @@ export async function revokeOtherSessions(): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+/**
+ * The body of a password sign-in posted by code, not by the rendered form:
+ * the flow's hidden fields (CSRF token) + `method: "password"` + the
+ * credentials, and NOTHING else. A flow that also offers Synap Cloud or a
+ * passkey carries other method nodes (`provider`, passkey triggers) whose
+ * values must not ride along, or Kratos routes the submit to that method.
+ */
+export function passwordLoginBody(
+  flow: KratosFlow,
+  identifier: string,
+  password: string
+): Record<string, string> {
+  const hidden: Record<string, string> = {};
+  for (const n of flow.ui.nodes) {
+    const name = n.attributes?.name;
+    if (typeof name === "string" && n.attributes?.type === "hidden") {
+      const v = n.attributes.value;
+      hidden[name] = typeof v === "string" ? v : "";
+    }
+  }
+  return { ...hidden, method: "password", identifier, password };
 }
 
 export async function submitLoginFlow(

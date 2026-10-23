@@ -1399,6 +1399,22 @@ export interface PlaybookSchedule {
    * behaving exactly as it did.
    */
   mode?: PlaybookScheduleMode;
+  /**
+   * HAND-OFF — the agent (its agent user id, `users.id`, as `synap_list_agents`
+   * returns it; the same identity `synap_start_session` `agentIds` and
+   * `synap_update_session` `addAgentId` take) that each slot's session is handed
+   * to. The compiler writes it onto the `playbook_run` node
+   * (`PlaybookRunNodeDef.data.handToAgentId`); `runPlaybook` resolves it ONCE per
+   * run through THE route, before any session exists, and puts it on the
+   * session's roster INSTEAD of dispatching the playbook's own executor — the
+   * named agent does the work (a `pull` agent picks it up from its orient's
+   * `handedToYou`; a `dispatch` agent is pushed it through its binding). An
+   * unknown, paused or foreign agent fails the slot by name.
+   *
+   * Only meaningful for `mode: "run"`: an appointment waits for the HUMAN, so the
+   * write door refuses the pair. Absent ⇒ unchanged.
+   */
+  handToAgentId?: string;
 }
 
 /** @see PlaybookSchedule.mode */

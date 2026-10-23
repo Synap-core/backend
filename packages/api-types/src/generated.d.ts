@@ -2358,6 +2358,21 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * playbook's own goalTemplate.
 		 */
 		goalOverride?: string;
+		/**
+		 * HAND-OFF — the agent user id (`users.id`, the identity `synap_list_agents`
+		 * returns and `synap_start_session` `agentIds` / `synap_update_session`
+		 * `addAgentId` take) the spawned session is handed to. Forwarded to
+		 * `runPlaybook`, which resolves it ONCE through THE route
+		 * (`agent-dispatch/route.ts`, the hand-off reaches `dispatch` | `pull`)
+		 * before any session exists: an unknown, paused or foreign agent fails the
+		 * step by name. A handed run puts the agent on the session's roster and
+		 * does NOT dispatch the playbook's own executor — the named agent does the
+		 * work (`pull`: its orient's `handedToYou`; `dispatch`: its binding).
+		 * Run mode only: the step refuses it beside `appointment` / `propose`.
+		 * Producer: `buildPlaybookRunFlowDefinition` from the playbook's
+		 * `schedule.handToAgentId`. Absent ⇒ unchanged.
+		 */
+		handToAgentId?: string;
 		label: string;
 		/**
 		 * WHAT this node materializes (read through `readPlaybookRunMode`,
@@ -9658,6 +9673,26 @@ export interface NeedsYouAccessRequest {
 	from: string;
 }
 /**
+ * An invite to ANOTHER space of this pod, addressed to the viewer's email, on
+ * a `space-invite` row (founder, wave PQ 2026-10-22): joined IN the app, with
+ * Accept on the row and Decline beside it. Read from the pod's own `invites`
+ * table for this person only, so it needs no notification to exist.
+ *
+ * `token` is what `workspaces.acceptInvite` takes (the same value
+ * `workspaces.listMyInvites` already hands this person); `id` is what
+ * `workspaces.rejectInvite` takes.
+ */
+export interface NeedsYouInvite {
+	id: string;
+	token: string;
+	/** The role the invite grants (`editor`, `viewer`, …). */
+	role: string;
+	/** `workspace` = one space; `pod` = every space of the pod. */
+	scope: "pod" | "workspace";
+	/** The space's name; null for a pod-wide invite or an unnamed space. */
+	spaceName: string | null;
+}
+/**
  * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
  * event into a human line.
  *
@@ -14359,6 +14394,12 @@ export interface ShareListing {
 	 * so there is no single number; ask the anchor listing of each project.
 	 */
 	guestCount: number | null;
+	/**
+	 * Does this pod hand out a page people read a publication on
+	 * (`SYNAP_SHARE_PAGE_URL`)? False = a publication has only its developer
+	 * address, so a surface must not promise a page.
+	 */
+	publicPage: boolean;
 	/** True when any list hit {@link LIST_SHARES_CAP}. */
 	truncated: boolean;
 }
@@ -14989,6 +15030,15 @@ export interface ArchivedAutomationRef {
 	id: string;
 	name: string;
 }
+export type InviteAccepted = {
+	status: "accepted";
+	type: "workspace";
+	workspaceId: string;
+} | {
+	status: "accepted";
+	type: "pod";
+	workspacesJoined: number;
+};
 /**
  * Standard paginated response envelope.
  */
@@ -15018,6 +15068,11 @@ export type PublishResult = {
 } | {
 	/** False after an agent's approved publish: the owner publishes again to mint it. */
 	hasToken: boolean;
+	/**
+	 * The page a person opens for it (`SYNAP_SHARE_PAGE_URL` + `/d/<token>`),
+	 * with the token, so present ONCE too — and only when the pod has a page.
+	 */
+	pageUrl?: string;
 	pinned: boolean;
 	publishedAt: Date;
 	/** The keys the snapshot actually holds. */
@@ -19233,7 +19288,14 @@ export type SignalKind =
  * or an app's pending connection request (`target.kind:
  * "connection-request"`). Who asks and from where ride in `access`.
  */
- | "access-request";
+ | "access-request"
+/**
+ * One open INVITE to another space of this pod, addressed to the viewer's
+ * email (`space-invites.ts`; founder, wave PQ 2026-10-22): joined in the
+ * app — Accept on the row, Decline beside it. No door (not a member yet);
+ * what the two verbs act on rides in `invite`.
+ */
+ | "space-invite";
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
 export interface Signal {
@@ -19431,6 +19493,11 @@ export interface Signal {
 	 */
 	access?: NeedsYouAccessRequest;
 	/**
+	 * `space-invite` only: the invite Accept (`token`) and Decline (`id`) act
+	 * on, the role it grants and the space it opens (`NeedsYouInvite`).
+	 */
+	invite?: NeedsYouInvite;
+	/**
 	 * `proposal-cluster` only: the member proposal ids the cluster sampled
 	 * (`sampleProposalIds`, capped at 20 — `count` may exceed it). What a batch
 	 * decision over the row acts on; a surface batches a cluster only when
@@ -19535,7 +19602,7 @@ export interface LensPagePicks {
 	unreadable: string[];
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "captures" | "drafts" | "events" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "captures" | "drafts" | "events" | "invites" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -41712,6 +41779,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				distinct: number;
 				drafts: number;
 				draftsTruncated: boolean;
+				invites: number;
 				needsYou: number;
 				notifications: number;
 				requests: number;
@@ -41736,6 +41804,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					distinct: number;
 					drafts: number;
 					draftsTruncated: boolean;
+					invites: number;
 					needsYou: number;
 					notifications: number;
 					requests: number;
@@ -41764,6 +41833,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					distinct: number;
 					drafts: number;
 					draftsTruncated: boolean;
+					invites: number;
 					needsYou: number;
 					notifications: number;
 					requests: number;
@@ -41790,7 +41860,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposed?: number | undefined;
 				} | undefined;
 				cursor?: string | undefined;
-				kinds?: ("access-request" | "activity" | "capture" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-review")[] | undefined;
+				kinds?: ("access-request" | "activity" | "capture" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-review" | "space-invite")[] | undefined;
 				lens?: "happening" | "history" | "needs-you" | "page" | "produced" | "proposed" | "suggestions" | undefined;
 				limit?: number | undefined;
 				picks?: boolean | undefined;
@@ -45696,17 +45766,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				token: string;
 			};
 			meta: object;
-			output: {
-				status: "accepted";
-				type: "workspace";
-				workspaceId: string;
-				workspacesJoined?: undefined;
-			} | {
-				status: "accepted";
-				type: "pod";
-				workspaceId?: undefined;
-				workspacesJoined: number;
-			};
+			output: InviteAccepted;
 		}>;
 		addMember: import("@trpc/server").TRPCMutationProcedure<{
 			input: {

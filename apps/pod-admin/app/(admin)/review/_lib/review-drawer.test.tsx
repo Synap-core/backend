@@ -14,6 +14,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/review",
@@ -175,8 +176,9 @@ describe.each([
 
   it("why: the policy as a mark + its sentence, and the proposer's own words", () => {
     const seen = text(render());
-    expect(seen).toMatch(
-      /Always asks a person This change alters the record's scope or identity/
+    // The sentence is read from its one home, so a rewording never reds this.
+    expect(seen).toContain(
+      `Always asks a person ${GOVERNANCE_POLICY_SENTENCES.SCOPE_IDENTITY_CHANGE}`
     );
     expect(seen).toContain("Product problems move from finding to issue.");
   });

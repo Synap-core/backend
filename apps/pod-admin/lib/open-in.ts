@@ -417,6 +417,49 @@ export function publisherExit(url: string | null | undefined): Exit | null {
 }
 
 /**
+ * "Open in Synap" for a person who has just joined this pod (the invite's done
+ * screen): `synap://pair?v=1&pod=<pod origin>[&email=]`, the grammar of
+ * `buildPairLink` (`synap-app/packages/headless/src/deep-link-constants`,
+ * mirrored and pinned in `__tripwires__/cross-repo-parity.test.ts`). Both apps
+ * read it: the desktop app offers that pod's own sign-in with the email filled
+ * in, Relay the same on a phone. It carries hints only, never a secret: a
+ * forged link can at worst pre-fill an email field.
+ *
+ * `null` (no link at all) for a pod no app can reach from a link, as
+ * `buildPairLink` refuses it: not http(s), loopback, or plain http on a public
+ * host.
+ */
+export function pairExit(podUrl: string, email?: string): Exit | null {
+  let url: URL;
+  try {
+    url = new URL(podUrl);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "::1" ||
+    host === "0.0.0.0" ||
+    /^127\./.test(host)
+  ) {
+    return null;
+  }
+  // A pod's console is served over https; plain http only on a local network,
+  // which the console never names publicly. Refuse it rather than mirror the
+  // LAN list: no invite email links to a LAN console.
+  if (url.protocol === "http:") return null;
+  const params = new URLSearchParams({ v: "1", pod: url.origin });
+  if (email) params.set("email", email);
+  return desktop(
+    `synap://pair?${params.toString()}`,
+    phoneExit("relay", undefined)
+  );
+}
+
+/**
  * An exit as THIS device can follow it.
  *
  * `href: null` means there is nothing to click here: the reader is on a phone,

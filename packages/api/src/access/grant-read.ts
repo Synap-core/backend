@@ -16,13 +16,24 @@
  * Narrowing a table has no column for (a workspace-restricted grant on a
  * table with no workspace column, a project-restricted grant on a table with
  * no project path) also fails closed.
+ *
+ * SPACE REACH (founder "option 1", 2026-10-23). A grant restricted to spaces
+ * X reads what a MEMBER of X reads there, not only the rows stamped with X: a
+ * pod-wide person or company with a live role in X is X's data too. The
+ * tables whose member rule reaches past `workspace_id` say so in `spaceReach`
+ * (entities, their facets, their bodies), built from the SAME space-keyed
+ * builders the member floor uses (utils/project-scope.ts,
+ * @synap/database facet-visibility.ts). Reads only: the write gate
+ * (grant-write-check.ts) still checks the stored row's own workspace.
  */
 
 import {
   db,
   getRequestGrant,
   inArray,
+  isNull,
   or,
+  podSharedFacetForSpacesWhere,
   type KeyGrant,
 } from "@synap/database";
 // Its own subpath: a test that mocks the `@synap/database` barrel must still
@@ -81,7 +92,11 @@ import {
   type GrantScope,
 } from "@synap/governance-policy/grants";
 import { grantRequestKey } from "@synap/governance-policy";
-import { projectLensWhere } from "../utils/project-scope.js";
+import {
+  podSharedDocumentInSpacesWhere,
+  projectLensWhere,
+  roleInSpacesWhere,
+} from "../utils/project-scope.js";
 
 export interface GrantReadSpec {
   /** The grant subject (governance spelling): `entity`, `document`, … */
@@ -92,6 +107,12 @@ export interface GrantReadSpec {
   kind?: { typeColumn: AnyPgColumn; profileIdColumn: AnyPgColumn };
   /** How a project-restricted grant narrows this table (entity id column). */
   projectEntityColumn?: AnyPgColumn;
+  /**
+   * What a space-restricted grant reaches BEYOND `workspaceColumn ∈ spaces`:
+   * the rows a member of those spaces sees through a role (ORed with the
+   * workspace match). Unset = the workspace match alone.
+   */
+  spaceReach?: (spaces: string[]) => SQL;
 }
 
 /** `subject` is folded to the grammar spelling (`relationDef` → `relation_def`). */
@@ -113,11 +134,51 @@ export const GRANT_READ_SPECS = new Map<object, GrantReadSpec>([
     spec("entity", entities, {
       kind: { typeColumn: entities.type, profileIdColumn: entities.profileId },
       projectEntityColumn: entities.id,
+      // (a) a live facet stamped in a granted space, or (b) a pod-wide entity
+      // wearing a live pod-wide facet whose role is granted to one.
+      spaceReach: (spaces) =>
+        roleInSpacesWhere(entities.workspaceId, entities.id, spaces),
     }),
   ],
-  [documents, spec("document", documents)],
+  [
+    documents,
+    spec("document", documents, {
+      // A document follows its entity, as for a member: the pod-wide body of
+      // a pod-shared entity of the spaces (decision B only, rv-security B-4).
+      spaceReach: (spaces) =>
+        podSharedDocumentInSpacesWhere(
+          documents.workspaceId,
+          documents.id,
+          spaces
+        ),
+    }),
+  ],
+  // Not widened: an edge between a space entity and a pod-wide one is stamped
+  // with that space (lib/relation-workspace-inherit.ts), and a pod-wide edge
+  // is owner-only for members too (access/registry.ts).
   [relations, spec("relation", relations)],
-  [entityFacets, spec("facet", entityFacets)],
+  [
+    entityFacets,
+    spec("facet", entityFacets, {
+      // The role rows that justify the entity reach: a pod-wide facet whose
+      // role is granted to a granted space (decision B, space-keyed), on a
+      // POD-WIDE entity, as branch (b) requires (rv-security B-1). A shared
+      // role's facet is stored pod-wide whatever its entity's space, so
+      // without this an entity stored in another space would lend its role
+      // row (properties, status) to the reach.
+      spaceReach: (spaces) =>
+        and(
+          podSharedFacetForSpacesWhere(spaces),
+          inArray(
+            entityFacets.entityId,
+            db
+              .select({ id: entities.id })
+              .from(entities)
+              .where(isNull(entities.workspaceId))
+          )
+        )!,
+    }),
+  ],
   [views, spec("view", views)],
   [projects, spec("project", projects)],
   [projectTracks, spec("track", projectTracks)],
@@ -209,7 +270,9 @@ export function grantReadClause(
 
   if (grant.workspaceIds) {
     if (!s.workspaceColumn) return NONE;
-    parts.push(inArray(s.workspaceColumn, [...grant.workspaceIds]));
+    const spaces = [...grant.workspaceIds];
+    const stamped = inArray(s.workspaceColumn, spaces);
+    parts.push(s.spaceReach ? or(stamped, s.spaceReach(spaces)) : stamped);
   }
   if (grant.entityIds) {
     if (!s.idColumn) return NONE;
