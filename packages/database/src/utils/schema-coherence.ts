@@ -1755,6 +1755,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0342_session_runners.sql",
   },
 
+  // proposal_apply_runs — a large approval applied by the background job
+  // (0352). Absence means every approve at or above the background threshold
+  // would fail to record its run (42P01) and the progress read would throw.
+  {
+    table: "proposal_apply_runs",
+    column: "heartbeat_at",
+    addedBy: "0352_proposal_apply_runs.sql",
+  },
+  {
+    table: "proposal_apply_runs",
+    column: "revision",
+    addedBy: "0352_proposal_apply_runs.sql",
+  },
+
   // Kind + Facets Wave 3A (0175): the `_conversions` ledger — mirrors
   // `_migrations` for DATA ops. Absence means a pod is on a pre-0175 schema
   // where the conversion engine's applied-set read would hit a missing table.
