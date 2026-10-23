@@ -5,10 +5,11 @@
 # Usage: ARCHIVE_AGE_RECIPIENTS="age1… [age1…]" \
 #          archive-pod.sh <presigned-upload-url> <callback-url> <callback-jwt>
 #
-# Called by pod-agent when CP triggers the "archive" command. The archive
-# leaves this host ONLY age-encrypted (D15) to the recipients in the owner's
-# deploy/state/pod-agent-policy.json (`archiveRecipients`), which pod-agent
-# passes as ARCHIVE_AGE_RECIPIENTS. The Control Plane holds no private key:
+# Run ON THE HOST by `synap archive-request` (ARCHIVE_ON_HOST=1) when the CP
+# sends pod-agent the "archive" command: pod-agent only writes the request
+# (deploy/archive-request.sh). The archive leaves this host ONLY age-encrypted
+# (D15) to the recipients in the owner's deploy/state/pod-agent-policy.json
+# (`archiveRecipients`), which pod-agent puts in the request. The Control Plane holds no private key:
 # only a recipient's identity can open the archive. No recipient, or no `age`
 # binary, refuses BEFORE any service is stopped.
 # The script is intentionally defensive — it always reaches the callback step
@@ -111,7 +112,15 @@ case "$HELPER_IMAGE" in
   *) log "ERROR: ARCHIVE_HELPER_MISSING — no SYNAP_IMAGE_POD_AGENT digest pin in .env to read the volumes with; nothing stopped, nothing uploaded"
      report "failed" "\"ARCHIVE_HELPER_MISSING\""; exit 1 ;;
 esac
-if ! command -v age >/dev/null 2>&1; then
+# age: the binary here (pod-agent's image ships it), else — on the host, where
+# `synap archive-request` runs this script — the same binary from the pinned
+# helper image, reading the plaintext on stdin.
+encrypt() { # <in> <out>
+  # shellcheck disable=SC2086 # AGE_ARGS is "-r age1… -r age1…", validated above
+  if command -v age >/dev/null 2>&1; then age $AGE_ARGS -o "$2" "$1"
+  else docker run --rm -i --entrypoint age "$HELPER_IMAGE" $AGE_ARGS < "$1" > "$2"; fi
+}
+if ! command -v age >/dev/null 2>&1 && [ "${ARCHIVE_ON_HOST:-}" != 1 ]; then
   log "ERROR: ARCHIVE_AGE_UNAVAILABLE — the age binary is not installed; nothing stopped, nothing uploaded"
   report "failed" "\"ARCHIVE_AGE_UNAVAILABLE\""
   exit 1
@@ -124,7 +133,9 @@ log "=== Starting pod archive ==="
 
 # ── Step 1: Stop application services (keep postgres for dump, keep caddy + pod-agent) ──
 log "Stopping application services..."
-$COMPOSE stop backend realtime redis minio typesense kratos 2>&1 || true
+STOPPED="backend realtime redis minio typesense kratos"
+# shellcheck disable=SC2086
+$COMPOSE stop $STOPPED 2>&1 || true
 
 # ── Step 2: Dump database ──
 log "Dumping database..."
@@ -135,7 +146,14 @@ dump_failed() {
   log "ERROR: $1 — aborting archive (nothing uploaded, pod kept running)"
   cleanup
   # Step 1 stopped the app services; bring them back so the pod stays usable.
-  host_compose || log "WARN: could not restart services after failed dump"
+  # On the host (synap archive-request) they are started directly: the host
+  # door holds the update lock, so a compose request would wait on it.
+  if [ "${ARCHIVE_ON_HOST:-}" = 1 ]; then
+    # shellcheck disable=SC2086
+    $COMPOSE start $STOPPED 2>&1 || log "WARN: could not restart services after failed dump"
+  else
+    host_compose || log "WARN: could not restart services after failed dump"
+  fi
   trap - EXIT
   report "failed" "\"$1\""
   log "=== Pod archive finished (upload=false) ==="
@@ -196,8 +214,7 @@ rm -rf "$DB_DUMP" "$VOL_DIR" "$MANIFEST"
 
 # ── Step 4b: Encrypt (D15) — the plaintext never leaves this host ──
 log "Encrypting archive with age..."
-# shellcheck disable=SC2086 # AGE_ARGS is "-r age1… -r age1…", validated above
-if ! age $AGE_ARGS -o "$ARCHIVE_AGE" "$ARCHIVE" || [ ! -s "$ARCHIVE_AGE" ]; then
+if ! encrypt "$ARCHIVE" "$ARCHIVE_AGE" || [ ! -s "$ARCHIVE_AGE" ]; then
   dump_failed "archive encryption failed"
 fi
 rm -f "$ARCHIVE"

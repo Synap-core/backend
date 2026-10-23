@@ -81,38 +81,57 @@ def body(h):
     assert raw.startswith("base64://")
     return base64.b64decode(raw[len("base64://"):]).decode()
 
-# EVERY enabled method that can register must hit a BLOCKING gate first:
-# Kratos v1.3.1 looks registration hooks up per method, with the global list
-# used only when a method has none (driver/registry_default_registration.go),
-# and an enabled method with no hooks registers with no gate at all (passkey
-# did, until 2026-10-23). Derived from the enabled methods, not hand-listed.
-# `profile` only edits traits; `code` registers only with passwordless_enabled.
-NON_REGISTERING = {"profile", "link", "lookup_secret", "totp"}
+# EVERY enabled method that can register must hit a BLOCKING gate first.
+# Kratos v1.3.1 looks registration hooks up per method, the global list only
+# when a method has none (driver/registry_default_registration.go), so an
+# enabled method with no hooks registers with NO gate (passkey did until
+# 2026-10-23: an open sign-up on every pod). The method list is DERIVED from
+# the generated file, merged with Kratos v1.3.1's own defaults for a method
+# the file does not mention (embedx/config.schema.json: password, profile and
+# code are enabled by default; every other method is off unless enabled here).
+# Never registering: profile (the traits step of two-step registration; it
+# persists nothing), link (recovery/verification), totp and lookup_secret
+# (second factors); code registers only with passwordless_enabled.
+KRATOS_DEFAULT_ENABLED = {"password", "profile", "code"}
+NEVER_REGISTERS = {"profile", "link", "totp", "lookup_secret"}
+methods = sel.get("methods") or {}
+enabled = {}
+for name in set(methods) | KRATOS_DEFAULT_ENABLED:
+    m = methods.get(name) or {}
+    on = m.get("enabled", name in KRATOS_DEFAULT_ENABLED)
+    enabled[name] = (on is True, m)
 registering = []
-for name, m in sel["methods"].items():
-    if not isinstance(m, dict) or m.get("enabled") is not True or name in NON_REGISTERING:
+for name, (on, m) in sorted(enabled.items()):
+    if not on or name in NEVER_REGISTERS:
         continue
-    if name == "code" and (m.get("config") or {}).get("passwordless_enabled") is not True:
+    if name == "code" and (m.get("config") or {}).get("passwordless_enabled") is not True \
+            and m.get("passwordless_enabled") is not True:
         continue
     registering.append(name)
-check({"password", "passkey", "oidc"} <= set(registering), f"registering methods derived: {sorted(registering)}")
+check({"password", "passkey", "oidc"} <= set(registering), f"registering methods derived: {registering}")
 check(not (reg.get("after") or {}).get("hooks"), "registration: no global after.hooks (each method gates itself)")
 for name in registering:
     hs = ((reg.get("after") or {}).get(name) or {}).get("hooks") or []
     first = hs[0] if hs else {}
-    check(first.get("hook") == "web_hook" and (first.get("config") or {}).get("can_interrupt") is True
-          and first["config"]["url"].endswith("/registration/gate"),
-          f"{name}: registration's first hook is the BLOCKING gate")
-    if hs:
+    gated = (first.get("hook") == "web_hook"
+             and (first.get("config") or {}).get("can_interrupt") is True
+             and str((first.get("config") or {}).get("url", "")).endswith("/registration/gate"))
+    check(gated, f"{name}: registration's first hook is the BLOCKING gate")
+    if gated:
         check(f'method: "{name}"' in body(first), f"{name}: gate body declares method {name}")
+    check(bool(hs) and hs[-1].get("hook") == "session", f"{name}: session is the last hook")
 
-pk = reg["after"]["passkey"]["hooks"]
+pk = reg["after"].get("passkey", {}).get("hooks") or []
 check([h.get("hook") for h in pk] == ["web_hook", "web_hook", "session"], "passkey order gate, complete, session")
-check(not pk[1]["config"].get("can_interrupt") and pk[1]["config"]["url"].endswith("/registration/complete"),
-      "passkey: complete hook is post-persist (no can_interrupt)")
+if len(pk) == 3:
+    check(not pk[1]["config"].get("can_interrupt") and pk[1]["config"]["url"].endswith("/registration/complete"),
+          "passkey: complete hook is post-persist (no can_interrupt)")
+# Join plan phase 4: the invite page's invite_token rides the flow's
+# transient_payload; the oidc and passkey hooks forward it (guarded: the field
+# is omitempty, and a missing field is a jsonnet error, i.e. a broken hook).
+TRANSIENT = 'std.objectHas(ctx.flow, "transient_payload") then ctx.flow.transient_payload else null'
 for h in pk[:2]:
-    check('std.objectHas(ctx.flow, "transient_payload") then ctx.flow.transient_payload else null' in body(h),
-          "passkey: body forwards ctx.flow.transient_payload, guarded")
+    check(TRANSIENT in body(h), "passkey: body forwards ctx.flow.transient_payload, guarded")
 
 pw = reg["after"]["password"]["hooks"]
 check(pw[0].get("hook") == "web_hook" and pw[0]["config"].get("can_interrupt") is True,
@@ -129,11 +148,7 @@ check(not oidc[1]["config"].get("can_interrupt") and oidc[1]["config"]["url"].en
       "oidc: complete hook is post-persist (no can_interrupt)")
 for h in oidc[:2]:
     check('method: "oidc"' in body(h) and "identity: ctx.identity" in body(h), "oidc: body carries method + identity")
-    # Join plan phase 4: the invite page's invite_token rides the flow's
-    # transient_payload; both oidc hooks must forward it (guarded: the field is
-    # omitempty, and a missing field is a jsonnet error, i.e. a broken hook).
-    check('std.objectHas(ctx.flow, "transient_payload") then ctx.flow.transient_payload else null' in body(h),
-          "oidc: body forwards ctx.flow.transient_payload, guarded")
+    check(TRANSIENT in body(h), "oidc: body forwards ctx.flow.transient_payload, guarded")
 check("transient_payload" not in body(pw[0]), "password: body carries no transient_payload (password sign-up stays refused)")
 
 sys.exit(1 if errors else 0)

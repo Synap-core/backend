@@ -59,6 +59,8 @@ case "$*" in
     name="${*: -1}"; mkdir -p "$FAKE_VOLS/$name"; : > "$FAKE_VOLS/$name.labels"
     for a in "$@"; do case "$a" in com.docker.compose.project=*) echo "project=${a#*=}" >> "$FAKE_VOLS/$name.labels" ;;
       com.docker.compose.volume=*) echo "volume=${a#*=}" >> "$FAKE_VOLS/$name.labels" ;; esac; done ;;
+  "run --rm -i --entrypoint age "*)   # age from the helper image (the host has none)
+    { echo "age-encryption.org/v1"; echo "-> stub-helper"; cat; } ; exit 0 ;;
   "run "*)
     vol=""; prev=""; for a in "$@"; do [ "$prev" = "-v" ] && vol="${a%%:*}"; prev="$a"; done
     script="${*: -1}"
@@ -246,6 +248,17 @@ run_archive; rc=$?
 [ $rc -eq 0 ] && jq -e '.volumes[] | select(.name == "typesense_data") | .empty == true and .files == 0' <<<"$(sed -n 's/^ARCHIVE_MANIFEST //p' "$TMP/out")" >/dev/null \
   && ok "archive[empty volume]: completes and SAYS empty (\"empty\": true, 0 files)" || bad "archive[empty volume]: rc=$rc $(tail -2 "$TMP/out")"
 pod_vols
+
+# ── archive ON THE HOST (synap archive-request): age from the helper image,
+# services restarted directly (the host door holds the update lock) ──
+mkdir -p "$TMP/bin-noage"; for f in "$TMP/bin"/*; do [ "$(basename "$f")" = age ] || ln -sf "$f" "$TMP/bin-noage/"; done
+run_host_archive() { reset; ( PATH="$TMP/bin-noage:$(printf '%s' "$PATH" | tr ':' '\n' | while read -r d; do [ -x "$d/age" ] || printf '%s:' "$d"; done)"; ARCHIVE_ON_HOST=1 sh "$D/archive-pod.sh" http://up "" "" ) >"$TMP/out" 2>&1; }
+pod_vols; run_host_archive; rc=$?
+[ $rc -eq 0 ] && grep -q '^run --rm -i --entrypoint age ghcr.io/synap-core/pod-agent@sha256:' "$DOCKER_LOG" && grep -qE '^PUT [^ ]+\.tar\.gz\.age age-encryption\.org/v1$' "$UPLOAD_LOG" \
+  && grep -q '^ARCHIVE_MANIFEST ' "$TMP/out" && ok "archive[host]: with no age on the host, the pinned helper image encrypts; the age file is uploaded" || bad "archive[host]: rc=$rc $(tail -3 "$TMP/out")"
+DUMP_MODE=fail run_host_archive; rc=$?
+[ $rc -ne 0 ] && grep -qx 'compose -p testpod -f '"$D"'/docker-compose.yml start backend realtime redis minio typesense kratos' "$DOCKER_LOG" && ! grep -q '^host-compose' "$DOCKER_LOG" \
+  && ok "archive[host, dump fails]: the stopped services are started directly (no compose request against the held lock)" || bad "archive[host, dump fails]: rc=$rc $(grep -E 'start|host-compose' "$DOCKER_LOG" | tr '\n' '|')"
 
 # ── restore: the per-volume archive goes back into the pod's volumes ──
 cp "$TMP/with-volumes.age" "$FAKE_ARCHIVE"
