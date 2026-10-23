@@ -90,7 +90,7 @@ function readStored(raw: unknown): StoredRailPins {
         const label = typeof r.label === "string" ? r.label : null;
         const source = r.source === "template" ? "template" : "user";
         // A goal pin names its goal, not a kind.
-        if (typeof r.trackId === "string" && r.trackId) {
+        if (typeof r.trackId === "string" && r.trackId && false) {
           return [
             {
               key: goalRailPinKey(r.trackId),

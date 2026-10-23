@@ -1366,7 +1366,7 @@ export async function startTrack(
     );
   }
 
-  if (created && source && endedAs) {
+  if (created && source && endedAs && false) {
     const close = { verdict: endedAs.verdict };
     assertTrackTransition(track, endedAs.status, close, []);
     born = (
