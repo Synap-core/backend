@@ -23,9 +23,9 @@
  * that are not limited to spaces (`*`) or for a member.
  *
  * Mocked: the key lookup, the guest check, the sub-token mapping, the audit
- * log (captured: the approval's `.validated` event is replayed into the real
- * materializer, as its hook would), the event log (its own connection) and the
- * delivery side effects. Cannot see: production Postgres, a real minted app
+ * log, the event log (its own connection), the delivery side effects, and the
+ * proposal ROW write of a propose verdict (the verdict is the real gate's; see
+ * the permission-check mock). Cannot see: production Postgres, a real minted app
  * key (the identity a mint yields is pinned by pod-app.invariants I3).
  */
 import { OpenAPIHono } from "@hono/zod-openapi";
@@ -175,7 +175,6 @@ import {
   InvalidPermissionError,
   parsePermission,
 } from "@synap/governance-policy/grants";
-import { handleMaterialize } from "@synap/jobs/workers/materializer.js";
 import { hubAuthMiddleware } from "../_middleware/auth.js";
 import { applyProposalApproval } from "../../proposals/apply-approval.js";
 import { registerEntitiesRoutes } from "./entities.js";
@@ -581,31 +580,15 @@ describe("the CRM app attaches a role in CRM onto a pod-wide person in its reach
         };
       }
     ).query.proposals.findFirst({ where: eq(schema.proposals.id, proposalId) });
-    h.audits.length = 0;
+    // The `facet/attach` executor re-runs the attach door as the approver
+    // (no key grant), from the stored proposal data.
     const result = await applyProposalApproval({
       proposal: proposal as never,
       userId: OWNER,
       input: { proposalId },
       ctx: { authenticated: true, userId: OWNER } as never,
     });
-    expect(result.success).toBe(true);
-    // The approval hands the write to the materializer through its
-    // `.validated` event; replay it as the event hook would.
-    const validated = h.audits.find((a) => a.phase === "validated");
-    expect(validated, "a .validated event was appended").toBeDefined();
-    await handleMaterialize({
-      data: {
-        eventId: randomUUID(),
-        eventType: `${String(validated!.subjectType)}.${String(validated!.action)}.validated`,
-        subjectType: String(validated!.subjectType),
-        action: String(validated!.action),
-        subjectId: String(validated!.subjectId),
-        userId: String(validated!.userId),
-        workspaceId:
-          (validated!.workspaceId as string | undefined) ?? undefined,
-        data: validated!.data as Record<string, unknown>,
-      },
-    } as never);
+    expect(result.success, JSON.stringify(result)).toBe(true);
     const facets = await liveFacets(CONTACT, ROLE_LEAD);
     expect(facets).toHaveLength(1);
     expect(facets[0]!.workspace_id).toBe(CRM);
