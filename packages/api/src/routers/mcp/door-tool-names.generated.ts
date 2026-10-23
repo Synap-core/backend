@@ -89,7 +89,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_delete_entity: {
     "pod-mcp": "synap_delete_entity",
-    "cp-connector": "pod__delete_entity",
+    "cp-connector": null,
   },
   synap_detach_facet: {
     "pod-mcp": "synap_detach_facet",
@@ -347,7 +347,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_update_playbook: {
     "pod-mcp": "synap_update_playbook",
-    "cp-connector": "pod__update_playbook",
+    "cp-connector": null,
   },
   synap_update_project: {
     "pod-mcp": "synap_update_project",
@@ -355,7 +355,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_update_rule: {
     "pod-mcp": "synap_update_rule",
-    "cp-connector": "pod__update_rule",
+    "cp-connector": null,
   },
   synap_update_session: {
     "pod-mcp": "synap_update_session",
