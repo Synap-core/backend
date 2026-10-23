@@ -3936,6 +3936,43 @@ export const tools = {
         },
       },
       {
+        name: "synap_reopen_track",
+        annotations: {
+          title: "Reopen track",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Reopen a CLOSED or DROPPED track as a NEW version — a closed goal is final and never moves back. The new track carries the same name (or `name`), method, answers, direction and KPI definition (not its last stated value), starts active, and is linked to the old one (`replaces`); the old track keeps its status, its verdict and its sessions. Only the NEWEST version reopens: an old version a newer one already replaced is refused — reopen that one. A live track is refused (work in it instead). Idempotent: reopening again while the new version is live returns it with status='exists'. Governed like synap_start_track: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the new track.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            trackId: {
+              type: "string",
+              description:
+                "UUID of the closed or dropped track to reopen (synap_list_tracks with includeArchived lists dropped ones).",
+            },
+            name: {
+              type: "string",
+              description:
+                "Optional new name for the new version — omit it to keep the old one's (free once that track is not live).",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why the goal is reopened, in the person's words — shown to the reviewer. One line.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
+          },
+          required: ["trackId"],
+        },
+      },
+      {
         name: "synap_set_track_params",
         annotations: {
           title: "Set track params",

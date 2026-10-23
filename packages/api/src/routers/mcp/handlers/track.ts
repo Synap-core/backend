@@ -22,6 +22,7 @@ import {
   loadWrittenTrackView,
   setTrackParams,
   setTrackStatus,
+  reopenTrack,
   setTrackDirection,
   addTrackStage,
   startStageSession,
@@ -193,6 +194,37 @@ export const trackHandlers: McpHandlerMap = {
       return {
         status: result.status,
         track: await loadWrittenTrackView(result.track, ctx),
+      };
+    });
+  },
+
+  // R8 — the agent's door to "open a new version" of a closed goal: the SAME
+  // service the Hub REST reopen route calls (`reopenTrack` → `startTrack`),
+  // so an agent's reopen is governed exactly like an agent's start.
+  synap_reopen_track: async (ctx) => {
+    requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
+    const trackId = uuid(ctx.args.trackId);
+    if (!trackId) {
+      return ok({
+        error:
+          "trackId (uuid) is required — synap_list_tracks (includeArchived) lists the project's closed and dropped tracks.",
+      });
+    }
+    return run(async () => {
+      const result = await reopenTrack({
+        trackId,
+        ...(str(ctx.args.name) ? { name: str(ctx.args.name) } : {}),
+        actor: actorOf(ctx),
+      });
+      const domainsNote = missingStageDomainsNote(result.missingDomains);
+      if (result.status === "proposed") {
+        return { ...result, ...(domainsNote ? { domainsNote } : {}) };
+      }
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+        missingDomains: result.missingDomains,
+        ...(domainsNote ? { domainsNote } : {}),
       };
     });
   },

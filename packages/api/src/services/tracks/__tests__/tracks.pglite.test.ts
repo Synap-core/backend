@@ -471,6 +471,57 @@ describe("synap_start_track — the caller's session reaches the gate", () => {
       sessionId: SESSION,
     });
   });
+
+  it("synap_reopen_track: the agent's reopen goes through the start door as a proposal naming the version it replaces", async () => {
+    const started = await startTrack({
+      projectId: PROJECT,
+      name: "Reopened over MCP",
+      actor: human,
+    });
+    if (started.status === "proposed") throw new Error("unreachable");
+    await setTrackStatus({
+      trackId: started.track.id,
+      status: "completed",
+      verdict: "met",
+      actor: human,
+    });
+    h.permCalls.length = 0;
+    const ctx = {
+      toolName: "synap_reopen_track",
+      userId: USER,
+      apiKeyScopes: ["mcp.write"],
+      agentUserId: AGENT,
+      caller: undefined as never,
+      lensCaller: undefined as never,
+      workspaceAccessible: false,
+    };
+    const bad = await trackHandlers.synap_reopen_track!({
+      ...ctx,
+      args: { trackId: "not-a-uuid" },
+    });
+    expect(JSON.stringify(bad)).toContain("trackId (uuid) is required");
+    expect(h.permCalls).toHaveLength(0);
+
+    const res = await trackHandlers.synap_reopen_track!({
+      ...ctx,
+      args: { trackId: started.track.id, reasoning: "The launch slipped" },
+    });
+    expect(JSON.stringify(res)).toContain("proposed");
+    expect(h.permCalls).toHaveLength(1);
+    expect(h.permCalls[0]).toMatchObject({
+      subjectType: "track",
+      action: "create",
+      agentUserId: AGENT,
+      source: "mcp",
+      reasoning: "The launch slipped",
+      data: expect.objectContaining({
+        name: "Reopened over MCP",
+        replacesTrackId: started.track.id,
+      }),
+    });
+    // Nothing written: the closed track stays closed, no new version yet.
+    expect((await getTrack(started.track.id, human))!.status).toBe("completed");
+  });
 });
 
 describe("visibility — a track is exactly as visible as its project", () => {

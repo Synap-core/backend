@@ -133,6 +133,7 @@ export const TOOL_GROUPS = {
     "synap_start_stage_session",
     "synap_advance_track",
     "synap_set_track_status",
+    "synap_reopen_track",
     "synap_set_track_params",
     "synap_update_track",
     "synap_add_track_stage",
