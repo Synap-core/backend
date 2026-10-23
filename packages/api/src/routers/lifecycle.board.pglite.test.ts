@@ -80,6 +80,7 @@ import {
   entityFacets,
   events,
   links,
+  projects,
   workspaces,
   workspaceMembers,
   projectMembers,
@@ -128,6 +129,8 @@ async function freshDb() {
     entityFacets,
     events,
     links,
+    // The listing rule (`listableEntityWhere`) joins live `projects` rows.
+    projects,
     workspaces,
     workspaceMembers,
     projectMembers,

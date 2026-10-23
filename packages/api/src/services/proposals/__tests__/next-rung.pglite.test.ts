@@ -77,6 +77,7 @@ import {
 } from "@synap/database";
 import { resolveGovernanceRule } from "@synap/database/agent-governance";
 import {
+  OWN_ORGANISE_CLASS_PATTERN,
   REVERSIBLE_CLASS_PATTERN,
   decideAgentPolicy,
 } from "@synap/governance-policy";
@@ -389,6 +390,24 @@ describe("proposeNextRung — the owner on their own agent's card", () => {
     expect(byId.get(underDefault)!.offer).toBeNull();
     expect(byId.get(underOwnRule)!.rung).toBe("quiet");
     expect(byId.get(underOwnRule)!.offer).toBeNull();
+
+    // FB1020 w2 FBD-3: the pod's OTHER default class row (an agent tidying
+    // its own fresh work) is a default too — do+tell, never "a rule you set".
+    const ownOrganiseRow = await insertRule({
+      targetPattern: OWN_ORGANISE_CLASS_PATTERN,
+      verdict: "auto",
+      principalKind: "any",
+    });
+    // Same receipt shape as `underDefault`: only the deciding row differs.
+    const underOwnOrganise = await receipt({
+      eventKey: "entity.create",
+      profileSlug: "note",
+      governanceRuleId: ownOrganiseRow,
+    });
+    const { rungs: organiseRungs } = await caller(OWNER).nextRungs({
+      proposalIds: [underOwnOrganise],
+    });
+    expect(organiseRungs[0]!.rung).toBe("do_tell");
 
     // do_tell → quiet is DEFERRED: the door refuses and writes nothing.
     const before = await ruleCount();

@@ -11,9 +11,13 @@ import {
   liveRunStatusWhere,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import { mergeSessionMetadata } from "../../../services/focus-sessions/session-metadata.js";
+import {
+  DEV_LOOP_METADATA_KEY,
+  mergeSessionMetadata,
+} from "../../../services/focus-sessions/session-metadata.js";
 import {
   DEV_DEPLOY_APPROVAL_TYPE,
+  DEV_GATE_LEGACY_STAGES,
   DEV_PLAN_APPROVAL_TYPE,
   stageAfterDevGate,
 } from "../../../services/proposals/dev-approval.js";
@@ -76,15 +80,8 @@ interface DevLoopStamp {
   };
 }
 
-/**
- * The LEGACY stage a session sits at once a gate clears — used only when the
- * session follows no staged playbook that names the gate (`stageAfterDevGate`
- * decides otherwise). Read by the polling CLI agent as "you may proceed".
- */
-const STAGE_AFTER = {
-  [DEV_PLAN_APPROVAL_TYPE]: "plan_approved",
-  [DEV_DEPLOY_APPROVAL_TYPE]: "deploy_approved",
-} as const;
+/** The legacy stamp per gate — see `DEV_GATE_LEGACY_STAGES`. */
+const STAGE_AFTER = DEV_GATE_LEGACY_STAGES;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -201,13 +198,17 @@ async function applyDevApproval(
   // `mergeSessionMetadata` is a SHALLOW JSONB merge, so the `devLoop` key is
   // REPLACED, not deep-merged. Fold the existing sub-object in here or the
   // deploy gate erases the plan gate's stamp (and vice versa).
-  const existingDevLoop = asRecord(asRecord(session.metadata).devLoop);
+  const existingDevLoop = asRecord(
+    asRecord(session.metadata)[DEV_LOOP_METADATA_KEY]
+  );
   const mergedDevLoop = { ...existingDevLoop, ...stamp };
 
   const updated = await db
     .update(focusSessions)
     .set({
-      metadata: mergeSessionMetadata({ devLoop: mergedDevLoop }),
+      metadata: mergeSessionMetadata({
+        [DEV_LOOP_METADATA_KEY]: mergedDevLoop,
+      }),
       currentStage: await stageAfterApproval(session, type),
       updatedAt: approvedAt,
     })

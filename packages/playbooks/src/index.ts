@@ -279,6 +279,10 @@ export const OUTPUT_RETIRED_REASONS = [
   // (accepted / rejected / superseded on the entity itself) — the question is
   // moot (api `services/decisions/decision-ask-reactor.ts`).
   "decision_resolved",
+  // The agent WITHDREW a slot it declared (`retireOutput` on
+  // `synap_update_session`) — the one removal verb, since an agent's
+  // `expectedOutputs` list only adds and updates (api `update-session.ts`).
+  "withdrawn",
 ] as const;
 
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
@@ -1499,8 +1503,9 @@ export type LinkType =
   // "branched from", and with no "merged_into" twin — nothing merges work.
   | "spawned_from"
   // X --blocked_by--> Y. THE dependency edge between units of work, across
-  // kinds (session · entity · track): X cannot proceed until Y clears.
-  // Blocked-ness is DERIVED from the edges whose target is still open — there
+  // kinds (session · entity · track): X cannot proceed until Y DELIVERS (a Y
+  // that ended without delivering stays a blocker, marked dropped).
+  // Blocked-ness is DERIVED from the edges whose target has not delivered — there
   // is no stored `blocked` status, deliberately (`@synap-core/types/connections`
   // `deriveOpenBlockers`; producer `services/links/dependency-links.ts`).
   | "blocked_by"

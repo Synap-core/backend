@@ -66,7 +66,7 @@ function bundle(
     infra,
     workspaceId: WS,
     dominantKind: "note",
-    ...(prior ? { prior } : {}),
+    ...(prior ? { prior } : { toolSkillSlug: "library/run-1/recipes" }),
   });
 }
 

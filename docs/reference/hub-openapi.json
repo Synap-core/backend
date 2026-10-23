@@ -1101,10 +1101,6 @@
             },
             "description": "Kind + Facets: role-profiles to attach to the new entity in the same call (each via the governed attachFacet door). Applied only when the entity materializes. `slug` is canonical; `profileSlug` is accepted as an alias for parity with the /structure and tRPC facet shapes."
           },
-          "forceCreate": {
-            "type": "boolean",
-            "description": "Bypass the weak same-name create gate when a same-profile entity with this title already exists. Prefer reusing the existing id. Does not bypass strong-signal auto-merge (email/phone/url)."
-          },
           "externalId": {
             "type": "string",
             "description": "Strong cross-source identity anchor for this subject, as `provider:id` (e.g. `discord:123456789012345678`). Registered as an `external_id` identity signal so a later create with the SAME value auto-resolves to the same entity (dedup) instead of minting a duplicate — the strong atom that the weak email/phone/url auto-extraction cannot express for opaque connector ids. Opaque and case-sensitive; the provider prefix namespaces the id."
@@ -1134,6 +1130,40 @@
           "ref": {
             "type": "string",
             "description": "With `deferred`: the kept write's ref on the join proposal."
+          },
+          "entityId": { "type": "string" },
+          "title": {
+            "type": ["string", "null"],
+            "description": "The entity's title as the write left it."
+          },
+          "written": {
+            "type": "object",
+            "properties": {
+              "title": { "type": ["string", "null"] },
+              "description": { "type": ["string", "null"] },
+              "properties": {},
+              "documentId": { "type": ["string", "null"] }
+            },
+            "required": ["title", "description", "documentId"],
+            "description": "The stored values after the write."
+          },
+          "statusMove": {
+            "type": "object",
+            "properties": { "status": { "type": "string" } },
+            "required": ["status"],
+            "additionalProperties": {},
+            "description": "The status move this call carried: moved, unchanged or proposed (then `proposalId`)."
+          },
+          "writeReceipt": {
+            "type": "object",
+            "properties": {
+              "state": { "type": "string", "enum": ["applied", "partial"] },
+              "entityId": { "type": "string" },
+              "landed": { "type": "array", "items": { "type": "string" } },
+              "proposed": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["state", "entityId", "landed"],
+            "description": "Applied answer only: the fields written (`landed`) and those filed for review instead (`proposed`, the status move)."
           }
         },
         "required": ["status"]
@@ -1177,6 +1207,15 @@
           "expectedStatus": {
             "type": ["string", "null"],
             "description": "Compare-and-set on the status: the status you SAW. If it moved meanwhile the call answers 409 with the current status and writes nothing."
+          },
+          "documentId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Attach an existing document as the entity's body (e.g. re-attach an orphaned one). Replacing a body the entity already has needs replaceBody: true; an agent's replacement is always a proposal. Undo puts the previous body back."
+          },
+          "replaceBody": {
+            "type": "boolean",
+            "description": "Required with documentId when the entity already has a body; without it the call is refused (409) naming that body."
           }
         }
       },
@@ -7002,7 +7041,7 @@
             }
           },
           "409": {
-            "description": "Weak same-name conflict — a same-profile entity with this title already exists (pass forceCreate or reuse the candidate id)",
+            "description": "Conflict — the write cannot land as sent; the message names why. A same-name twin is NOT a conflict: an agent's create is filed for review with `duplicateCheck`.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -7608,7 +7647,7 @@
       "patch": {
         "tags": ["Entities"],
         "summary": "Update an entity",
-        "description": "Patch entity title / preview / metadata. Supports `Idempotency-Key`.",
+        "description": "Patch entity title / preview / metadata, or attach an existing document as its body (`documentId`, `replaceBody`). Supports `Idempotency-Key`.",
         "parameters": [
           {
             "schema": {
@@ -8195,7 +8234,7 @@
       "post": {
         "tags": ["Capture"],
         "summary": "AI-structure raw input into entity proposals",
-        "description": "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A HUMAN caller (no agent key) instead gets CONFIRM MODE: the plan is persisted as a pending composite proposal and the response is the submit result — status/proposalId/reviewUrl/summary/entityCount/relationCount/bindingCount/applied/writeReceipt, plus (only when non-empty) pendingDuplicateCandidates, relationsFailed, unmodeledProperties, project and projectCandidate. Two dissimilar payloads share this route, so the 200 schema stays LOOSE — but it now DECLARES the honesty triple (`degraded`, `degradedReason`, `extraction`) that the tRPC door has always forwarded and this one published nowhere. `degradedReason` may be a pod plumbing reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service extraction reason (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type, …) — the latter are CONFIGURATION states, not outages, and must not be reported to a user as something to retry.",
+        "description": "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A human caller (no agent key) instead gets the result of filing the plan as a pending composite proposal: status, proposalId, reviewUrl, summary, entityCount, relationCount, bindingCount, applied, writeReceipt, plus (only when non-empty) duplicateCheck, relationsFailed, unmodeledProperties and project. Fields degraded, degradedReason and extraction report a degraded extraction. degradedReason is a pod reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service configuration state (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type). The latter are configuration states, not outages; do not tell a user to retry.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -17578,7 +17617,11 @@
                   "question": { "type": "string", "minLength": 1 },
                   "workspaceId": { "type": "string" },
                   "projectId": { "type": "string" },
-                  "limit": { "type": "integer", "minimum": 1, "maximum": 100 }
+                  "limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+                  "detail": {
+                    "type": "string",
+                    "enum": ["sources", "brief", "full"]
+                  }
                 }
               }
             }
@@ -17593,6 +17636,10 @@
                   "type": "object",
                   "properties": {
                     "answer": { "type": ["string", "null"] },
+                    "detail": {
+                      "type": "string",
+                      "enum": ["sources", "brief", "full"]
+                    },
                     "sources": {
                       "type": "array",
                       "items": {
@@ -20418,10 +20465,6 @@
                     "type": "string",
                     "format": "uuid",
                     "description": "The playbook's home workspace."
-                  },
-                  "forceCreate": {
-                    "type": "boolean",
-                    "description": "Only after a CONFLICT naming an overlapping playbook. Creates anyway."
                   },
                   "agentUserId": { "type": "string" }
                 },
@@ -25885,7 +25928,11 @@
                         "retiredAt": { "type": "string" },
                         "retiredReason": {
                           "type": "string",
-                          "enum": ["session_cancelled", "decision_resolved"]
+                          "enum": [
+                            "session_cancelled",
+                            "decision_resolved",
+                            "withdrawn"
+                          ]
                         },
                         "ref": {
                           "anyOf": [
@@ -27465,7 +27512,11 @@
                         "retiredAt": { "type": "string" },
                         "retiredReason": {
                           "type": "string",
-                          "enum": ["session_cancelled", "decision_resolved"]
+                          "enum": [
+                            "session_cancelled",
+                            "decision_resolved",
+                            "withdrawn"
+                          ]
                         },
                         "ref": {
                           "anyOf": [
@@ -29497,7 +29548,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "Wait (bounded long-poll) for the session owner's next answer",
-        "description": "Returns as soon as an answer newer than `since` exists (`status: 'answered'`, the same page shape as GET /answers), or after `timeoutSeconds` (default 50, max 90) with `status: 'timeout'` and `nextSince` to wait on again. Without `since`, only UNREAD answers: slot answers not yet picked up, and room answers newer than the call. An agent key's read stamps the slot answer's `answerPickedUpAt` receipt.",
+        "description": "Returns as soon as an answer newer than `since` exists (`status: 'answered'`, the same page shape as GET /answers), or after `timeoutSeconds` (default 50, max 90) with `status: 'timeout'` and `nextSince` to wait on again. Without `since`, only UNREAD answers: slot answers not yet picked up, and room answers newer than the call. An agent key's read stamps the slot answer's `answerPickedUpAt` receipt (`stamp=false`: a peek that never does). With `events` (a comma list of answer, proposal_decided, stage_moved, owner_message, or `all`) it is the session CHANGE FEED: `status: 'changed'` with typed `events[]` and `state` (pass `state.currentStage` back as `knownStage`).",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -29523,6 +29574,24 @@
             "required": false,
             "name": "limit",
             "in": "query"
+          },
+          {
+            "schema": { "type": "string", "maxLength": 200 },
+            "required": false,
+            "name": "events",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "maxLength": 200 },
+            "required": false,
+            "name": "knownStage",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "enum": ["true", "false"] },
+            "required": false,
+            "name": "stamp",
+            "in": "query"
           }
         ],
         "responses": {
@@ -29535,11 +29604,20 @@
                   "properties": {
                     "status": {
                       "type": "string",
-                      "enum": ["answered", "timeout"]
+                      "enum": ["answered", "changed", "timeout"]
                     },
                     "sessionId": { "type": "string" },
                     "since": { "type": ["string", "null"] },
                     "answers": { "type": "array", "items": {} },
+                    "events": { "type": "array", "items": {} },
+                    "state": {
+                      "type": "object",
+                      "properties": {
+                        "currentStage": { "type": ["string", "null"] },
+                        "status": { "type": "string" }
+                      },
+                      "required": ["currentStage", "status"]
+                    },
                     "nextSince": { "type": ["string", "null"] },
                     "hasMore": { "type": "boolean" },
                     "waitedSeconds": { "type": "number" }

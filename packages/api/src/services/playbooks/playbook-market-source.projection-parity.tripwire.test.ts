@@ -27,7 +27,7 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 /** Keys of the create call that are not definition fields at all. */
-const CALLER_KEYS = ["agentUserId", "source", "forceCreate"];
+const CALLER_KEYS = ["agentUserId", "source"];
 
 function applierCreateLiteral(): string {
   const src = readFileSync(

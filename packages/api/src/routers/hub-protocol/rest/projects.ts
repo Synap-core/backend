@@ -23,6 +23,7 @@ import {
   inArray,
   desc,
   drizzleSql,
+  listableEntityWhere,
 } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { storage } from "@synap/storage";
@@ -41,7 +42,6 @@ import { getConfinedWorkspace } from "../confine-workspace.js";
 import { getProjectPath } from "../../../services/projects/project-path.js";
 import {
   createProjectGoverned,
-  ProjectNearDuplicateError,
   type CreateProjectGovernedOutcome,
 } from "../../../services/projects/create-project.js";
 import { updateProjectGoverned } from "../../../services/projects/update-project.js";
@@ -117,6 +117,8 @@ const UpdateProjectSchema = z.object({
   colorSlot: z.number().int().min(1).max(12).nullable().optional(),
   /** The place's mark (0328). `null` clears it (parity with tRPC). */
   icon: ProjectIconSchema,
+  /** SAMPLE (demo) data (0347) — parity with tRPC `projects.update`. */
+  sample: z.boolean().optional(),
   /** Rebind the subject entity; `null` unbinds (parity with tRPC). */
   subjectEntityId: z.string().uuid().nullable().optional(),
   /**
@@ -205,7 +207,9 @@ export function registerProjectsRoutes(app: HubHono): void {
         ownerColumn: entities.userId,
         userId,
       }),
-      projectLensWhere(entities.id, projectId)
+      projectLensWhere(entities.id, projectId),
+      // THE listing rule (probe rows); the project lens keeps demo rows.
+      listableEntityWhere({ projectLens: projectId })
     );
 
     const [countRows, byWorkspaceRows, recentRows] = await Promise.all([
@@ -864,14 +868,6 @@ export function registerProjectsRoutes(app: HubHono): void {
         evidenceEntityIds: body.evidenceEntityIds,
       });
     } catch (err) {
-      // A near-duplicate hands its candidates back — `HubRestClient
-      // .createProject` turns this body into `{ status: "near_duplicate" }`.
-      if (err instanceof ProjectNearDuplicateError) {
-        return c.json(
-          { error: err.message, dedupCandidates: err.dedupCandidates },
-          409
-        );
-      }
       const status = httpStatusForTrpcError(err);
       if (status === 500) throw err;
       return c.json({ error: (err as Error).message }, status);
@@ -895,6 +891,9 @@ export function registerProjectsRoutes(app: HubHono): void {
         proposalId: outcome.proposalId,
         ...(outcome.reviewPath ? { reviewPath: outcome.reviewPath } : {}),
         ...(outcome.reviewUrl ? { reviewUrl: outcome.reviewUrl } : {}),
+        ...(outcome.duplicateCheck
+          ? { duplicateCheck: outcome.duplicateCheck }
+          : {}),
       });
     }
 

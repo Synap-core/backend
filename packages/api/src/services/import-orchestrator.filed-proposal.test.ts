@@ -44,6 +44,11 @@ vi.mock("@synap/database", async (importOriginal) => ({
 }));
 vi.mock("./import/structuring.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
+  // The pod holds nobody these rows could be (identity lookup reads the DB).
+  lookupImportIdentityCandidates: vi.fn(async () => ({
+    podCandidates: new Map(),
+    signalHits: new Map(),
+  })),
   resolveProfileHints: vi.fn(async () => ({
     availableProfiles: [],
     validSlugs: new Set(["person", "contact", "company"]),
@@ -171,7 +176,7 @@ describe("the filed import proposal names what it creates and who ran it", () =>
   it("is titled by counted kinds from the file; a linked employer is not counted", async () => {
     const args = await filedBy({ agentUserId: AGENT });
     expect(args.summary).toBe(
-      "Import 2 people, 1 company and 2 links from Connections.csv"
+      "Import 2 people, 1 company and 2 links from Connections.csv, linking 1 already in your pod"
     );
   });
 

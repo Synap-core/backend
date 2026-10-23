@@ -13,7 +13,8 @@
 #   • on the host side of the configure (synap compose-request), the settings
 #     derived from the names follow: SYNAP_BASE_DOMAIN becomes
 #     <name>.pod.synap.live, the old origins in ALLOWED_ORIGINS the new ones,
-#     every other entry kept; and the same through the operator's door
+#     every other entry kept, FRONTEND_URL / CORS_ORIGIN too when they name an
+#     old origin; and the same through the operator's door
 #     (`synap config set` + `synap apply`) for a pod moved by hand.
 # Not covered: what a running Caddy serves (no daemon in CI; the rendered blocks
 # were checked with `caddy adapt` when written), the Control Plane's side.
@@ -140,6 +141,17 @@ moved 'ALLOWED_ORIGINS=https://alice.pod.synap.live,https://pod.alice.synap.live
 moved 'ALLOWED_ORIGINS=https://crm.example.com'
 [ "$(envval ALLOWED_ORIGINS)" = "https://crm.example.com" ] && ! ls "$D"/.env.bak.* >/dev/null 2>&1 \
   && ok "ALLOWED_ORIGINS without the old origins: left alone, nothing added" || bad "untouched: $(envval ALLOWED_ORIGINS)"
+# FRONTEND_URL / CORS_ORIGIN: realtime's allowlist, set to the pod URL by the
+# installer. They follow the move whether or not ALLOWED_ORIGINS is set; a value
+# that names anything else (the Studio, `*`) is the operator's and stays.
+moved 'FRONTEND_URL=https://pod.alice.synap.live' 'CORS_ORIGIN=https://pod.alice.synap.live/'
+[ "$(envval FRONTEND_URL)" = "https://alice.pod.synap.live" ] && [ "$(envval CORS_ORIGIN)" = "https://alice.pod.synap.live" ] \
+  && ok "FRONTEND_URL and CORS_ORIGIN on the old pod URL become the new one (no ALLOWED_ORIGINS needed)" \
+  || bad "frontend/cors: $(envval FRONTEND_URL) $(envval CORS_ORIGIN) $(cat "$TMP/out")"
+moved 'FRONTEND_URL=https://studio.synap.live' 'CORS_ORIGIN=*'
+[ "$(envval FRONTEND_URL)" = "https://studio.synap.live" ] && [ "$(envval CORS_ORIGIN)" = "*" ] \
+  && ok "FRONTEND_URL / CORS_ORIGIN set to anything else: left as the operator set them" \
+  || bad "frontend/cors kept: $(envval FRONTEND_URL) $(envval CORS_ORIGIN)"
 grep -n 'reconcile_moved_origins$' "$HERE/synap" | grep -q . && grep -q "grep -qxE 'kratos|backend|realtime'" "$HERE/synap" \
   && ok "compose-request reconciles before recreating kratos, backend or realtime" || bad "compose-request does not call the reconcile"
 
@@ -155,6 +167,7 @@ printf '%s\n' 'DOMAIN=antoinesrvt.pod.synap.live' 'POD_ADMIN_DOMAIN=admin.antoin
   'SYNAP_BASE_DOMAIN=antoinesrvt.synap.live' 'SYNAP_LEGACY_DOMAIN=pod.antoinesrvt.synap.live' \
   'SYNAP_LEGACY_POD_ADMIN_DOMAIN=pod-admin.antoinesrvt.synap.live' \
   'ALLOWED_ORIGINS=https://studio.staging.synap.live,https://pod-admin.antoinesrvt.synap.live' \
+  'FRONTEND_URL=https://pod.antoinesrvt.synap.live' 'CORS_ORIGIN=https://pod.antoinesrvt.synap.live' \
   'POSTGRES_PASSWORD=pw0test' 'JWT_SECRET=jwt0test' 'KRATOS_SECRETS_COOKIE=cookie0test' > "$D/.env"
 ( cd "$D" && SYNAP_DEPLOY_DIR="$D" && . ./env-config.sh && . "$TMP/lib.sh" \
     && get_deploy_dir() { echo "$D"; } && docker() { :; } \
@@ -164,5 +177,8 @@ printf '%s\n' 'DOMAIN=antoinesrvt.pod.synap.live' 'POD_ADMIN_DOMAIN=admin.antoin
   || bad "apply base (rc=$rc): $(envval SYNAP_BASE_DOMAIN) $(cat "$TMP/out")"
 [ "$(envval ALLOWED_ORIGINS)" = "https://studio.staging.synap.live,https://admin.antoinesrvt.pod.synap.live" ] \
   && ok "synap apply: the old console origin in ALLOWED_ORIGINS becomes the new one" || bad "apply allowed: $(envval ALLOWED_ORIGINS)"
+[ "$(envval FRONTEND_URL)" = "https://antoinesrvt.pod.synap.live" ] && [ "$(envval CORS_ORIGIN)" = "https://antoinesrvt.pod.synap.live" ] \
+  && ok "synap apply: FRONTEND_URL and CORS_ORIGIN follow a move made by hand" \
+  || bad "apply frontend/cors: $(envval FRONTEND_URL) $(envval CORS_ORIGIN)"
 
 exit $fail
