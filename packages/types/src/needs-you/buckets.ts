@@ -18,9 +18,11 @@
  *                   them in (`intentOf`); no intent, an unmeasured
  *                   revertability, or a "×N" cluster (one sample id standing
  *                   for N) is a `decision`, never routine.
- *   3. `decision` — a verdict only the person can give: any other pending
- *                   proposal, an access request, an owed slot blocked on a
- *                   person's choice (`blockedReason: decision`).
+ *   3. `decision` — a verdict only the person can give: a GOAL JUDGEMENT
+ *                   ({@link isJudgementSignal}: a goal in review waiting on
+ *                   its judge, an unacknowledged impossible report), any other
+ *                   pending proposal, an access request, an owed slot blocked
+ *                   on a person's choice (`blockedReason: decision`).
  *   4. `question` — everything else that asks the person something: an owed
  *                   slot (an answer, a credential, an action), a session
  *                   awaiting review, a capture, any other notification. The
@@ -28,11 +30,16 @@
  *                   batches and never reads as broken.
  *
  * The triage ORDER ("sorted by what blocks the most") is
- * {@link orderNeedsYouByBlocking}. It is the Inbox's reading only: a lens
- * section keeps the server's order (`needsYouRows` never sorts).
+ * {@link orderNeedsYouByBlocking}: JUDGEMENTS FIRST (a rank inside the
+ * `decision` bucket, never a fifth filter — the four counts stay the Inbox's
+ * four), then the buckets. It is the Inbox's reading only: a lens section
+ * keeps the server's order (`needsYouRows` never sorts).
  */
 
-import { FAILURE_NOTIFICATION_TYPES } from "../lens/classes.js";
+import {
+  FAILURE_NOTIFICATION_TYPES,
+  JUDGEMENT_NOTIFICATION_TYPES,
+} from "../lens/classes.js";
 import { isSwipeSafe, type ProposalIntentInput } from "../proposals/intent.js";
 
 /** The four Inbox filters, in the order the filter control lists them. */
@@ -69,6 +76,21 @@ export function isFailureSignal(
     s.kind === "notification" &&
     s.notificationType != null &&
     FAILURE_NOTIFICATION_TYPES.has(s.notificationType)
+  );
+}
+
+/**
+ * A goal JUDGEMENT ({@link JUDGEMENT_NOTIFICATION_TYPES}): the goal's judge or
+ * owner owes a verdict the goal's whole run waits on. A `decision`, ranked
+ * first. Never routine: it is a notification, and only a proposal batches.
+ */
+export function isJudgementSignal(
+  s: Pick<BucketableSignal, "kind" | "notificationType">
+): boolean {
+  return (
+    s.kind === "notification" &&
+    s.notificationType != null &&
+    JUDGEMENT_NOTIFICATION_TYPES.has(s.notificationType)
   );
 }
 
@@ -112,6 +134,7 @@ export function needsYouBucketOf<T extends BucketableSignal>(
     return single && intent && isSwipeSafe(intent) ? "routine" : "decision";
   }
   if (signal.kind === "access-request") return "decision";
+  if (isJudgementSignal(signal)) return "decision";
   if (
     signal.kind === "owed-slot" &&
     signal.blockedReason?.trim().toLowerCase() === PERSON_DECISION_REASON
@@ -148,10 +171,21 @@ export interface NeedsYouBucketed<T> {
 }
 
 /**
- * Sort by what blocks the most: bucket rank, then rows that stop a session's
- * work before free-standing ones, then the SERVER's order (newest first) —
- * a STABLE sort, so two rows the rule cannot tell apart keep the order the
- * pod gave them.
+ * A row's rank in the triage order: a goal JUDGEMENT before everything (even
+ * another decision — a goal's whole run waits on it, north star v2 "judgements
+ * first"), then the bucket's rank.
+ */
+function triageRank<T extends BucketableSignal>(
+  row: NeedsYouBucketed<T>
+): number {
+  return isJudgementSignal(row.signal) ? -1 : BUCKET_RANK[row.bucket];
+}
+
+/**
+ * Sort by what blocks the most: judgements first, then bucket rank, then rows
+ * that stop a session's work before free-standing ones, then the SERVER's
+ * order (newest first) — a STABLE sort, so two rows the rule cannot tell
+ * apart keep the order the pod gave them.
  */
 export function orderNeedsYouByBlocking<T extends BucketableSignal>(
   rows: readonly NeedsYouBucketed<T>[]
@@ -160,7 +194,7 @@ export function orderNeedsYouByBlocking<T extends BucketableSignal>(
     .map((row, index) => ({ row, index }))
     .sort(
       (a, b) =>
-        BUCKET_RANK[a.row.bucket] - BUCKET_RANK[b.row.bucket] ||
+        triageRank(a.row) - triageRank(b.row) ||
         Number(blocksASession(b.row.signal)) -
           Number(blocksASession(a.row.signal)) ||
         a.index - b.index
@@ -215,14 +249,15 @@ export function orderNeedsYouSignals<T extends BucketableSignal>(
 }
 
 /**
- * The REASON a row carries as its glyph (decision · ask · review · failure,
- * or the owed slot's own blocker). Its own key set, not `needsYouItemKind`:
+ * The REASON a row carries as its glyph (judgement · decision · ask · review ·
+ * failure, or the owed slot's own blocker). Its own key set, not `needsYouItemKind`:
  * that one is the session card's COUNT unit and keeps a notification as
  * `notification`. Resolve the glyph with `resolveNeedsYouReasonIcon`
  * (`@synap-core/types/vocabulary`).
  */
 export function needsYouReasonOf(signal: BucketableSignal): string {
   if (isFailureSignal(signal)) return "failure";
+  if (isJudgementSignal(signal)) return "judgement";
   switch (signal.kind) {
     case "proposal-cluster":
     case "access-request":

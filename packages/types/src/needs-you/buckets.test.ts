@@ -162,6 +162,27 @@ const TABLE: Array<[Row, NeedsYouBucket, string]> = [
     "question",
     "a capture's filing choice is a decision",
   ],
+  // W5 (2026-10-23): a goal's verdict owed by its judge or owner.
+  [
+    {
+      id: "goal-in-review",
+      kind: "notification",
+      count: 1,
+      notificationType: "track.review_ready",
+    },
+    "decision",
+    "a notification is always a question (a goal in review is a verdict)",
+  ],
+  [
+    {
+      id: "goal-report",
+      kind: "notification",
+      count: 1,
+      notificationType: "track.report_unacknowledged",
+    },
+    "decision",
+    "an impossible report is broken work (it is the owner's call)",
+  ],
   [
     { id: "future-kind", kind: "something-new", count: 1 },
     "question",
@@ -195,7 +216,7 @@ describe("needsYouBuckets — a partition, ordered by what blocks the most", () 
     const sum = NEEDS_YOU_BUCKETS.reduce((n, b) => n + counts[b], 0);
     expect(sum).toBe(rows.length);
     expect(counts).toEqual({
-      decision: 10,
+      decision: 12,
       question: 5,
       routine: 1,
       broken: 2,
@@ -223,6 +244,40 @@ describe("needsYouBuckets — a partition, ordered by what blocks the most", () 
       "fail",
       "routine-1",
     ]);
+  });
+
+  it("judgements first: a goal's verdict leads every other decision (W5)", () => {
+    // Server order puts the judgements LAST, and a decision that stops a
+    // session's work would otherwise lead (rival: judgement = a plain
+    // decision, ordered like the others).
+    const page: Row[] = [
+      proposal("decide-in-session", { count: 2, groupKey: "session:s1" }),
+      { id: "access", kind: "access-request", count: 1 },
+      { id: "ask", kind: "owed-slot", count: 1, blockedReason: "credential" },
+      {
+        id: "report",
+        kind: "notification",
+        count: 1,
+        notificationType: "track.report_unacknowledged",
+      },
+      {
+        id: "in-review",
+        kind: "notification",
+        count: 1,
+        notificationType: "track.review_ready",
+      },
+    ];
+    const { rows, counts } = needsYouBuckets(page, { intentOf });
+    expect(rows.map((r) => r.signal.id)).toEqual([
+      "report",
+      "in-review",
+      "decide-in-session",
+      "access",
+      "ask",
+    ]);
+    // A rank, never a fifth filter: the four counts still add up.
+    expect(Object.keys(counts).sort()).toEqual([...NEEDS_YOU_BUCKETS].sort());
+    expect(counts.decision).toBe(4);
   });
 
   it("inside a bucket, a row that stops a session's work leads; then server order", () => {
@@ -316,6 +371,15 @@ describe("the reason glyph", () => {
         notificationType: "automation.broken",
       },
       "failure",
+    ],
+    [
+      {
+        id: "j",
+        kind: "notification",
+        count: 1,
+        notificationType: "track.review_ready",
+      },
+      "judgement",
     ],
   ];
 
