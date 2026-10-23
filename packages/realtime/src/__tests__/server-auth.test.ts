@@ -140,6 +140,44 @@ describe("validateRealtimeApiKey — Phase 3A handshake", () => {
     });
   });
 
+  it("carries the key's owner (its linked human) and its bound workspace — the room gate's inputs", async () => {
+    mockSelect.mockResolvedValueOnce([
+      {
+        id: "k4",
+        userId: "agent-uuid",
+        linkedUserId: "human-uuid",
+        workspaceId: "ws-a",
+        keyHash: "h4",
+        keyName: "Agent Key",
+        scope: ["realtime:observe"],
+      },
+    ]);
+    vi.mocked(bcrypt.compare).mockResolvedValueOnce(true as never);
+    expect(await validateRealtimeApiKey("synap_hub_live_agent")).toMatchObject({
+      userId: "agent-uuid",
+      ownerUserId: "human-uuid",
+      workspaceId: "ws-a",
+    });
+
+    mockSelect.mockResolvedValueOnce([
+      {
+        id: "k5",
+        userId: "human-uuid",
+        linkedUserId: null,
+        workspaceId: null,
+        keyHash: "h5",
+        keyName: "Personal Key",
+        scope: ["realtime:observe"],
+      },
+    ]);
+    vi.mocked(bcrypt.compare).mockResolvedValueOnce(true as never);
+    expect(await validateRealtimeApiKey("synap_user_personal")).toMatchObject({
+      userId: "human-uuid",
+      ownerUserId: "human-uuid",
+      workspaceId: null,
+    });
+  });
+
   it("only bcrypt-compares against candidates with the matching prefix", async () => {
     // Single candidate but a longer scope list — verifies we read scopes
     // straight off the row and don't filter them

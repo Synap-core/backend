@@ -24,7 +24,7 @@ import {
   federatedApplicationConnections,
 } from "@synap/database";
 import { workspaceMembers } from "@synap/database/schema";
-import { canUserJoinRoom } from "./room-authz.js";
+import { canPrincipalJoinRoom, type RealtimePrincipal } from "./room-authz.js";
 import { realtimeFirstPartyBase } from "./first-party-base.js";
 
 const PORT = parseInt(process.env.REALTIME_PORT || "4001", 10);
@@ -179,19 +179,16 @@ yjsServerRef = yjsServer; // Make available to bridge for /yjs/state and /yjs/re
  *   • `apiKey` (new path)      — a service-account API key with the
  *     `realtime:observe` scope. The key is bcrypt-validated against
  *     `api_keys` and the resolved row's `userId` is used as the socket's
- *     principal. The key holder may join any `workspace:${id}` room — see
- *     §"Room authorization" below for the rationale.
+ *     principal.
  *
  * Both paths converge on the same downstream behavior (room joins, presence
  * tracking). The only observable difference is the principal type, exposed
  * to the rest of the server via `socket.data.principal`.
  *
- * Room authorization (Phase 3A):
- *   A service account with `realtime:observe` may join any `workspace:${id}`
- *   room. This is intentional — the v1 consumer (Eve dashboard) runs locally
- *   on the operator's own pod and observes the operator's own data. Per-
- *   workspace ACLs are deferred to Phase 4+ when third-party realtime
- *   observers become a concern. See `eve-os-vision.mdx` §9 / §10.
+ * Room authorization: every room a socket joins — the handshake's
+ * `workspaceId` / `viewId` and every `join-room` — passes ONE gate,
+ * `canPrincipalJoinRoom` (room-authz.ts). A key gets no bypass: it joins what
+ * its owner may join, narrowed by its bound workspace and grant.
  */
 presenceNamespace.use(async (socket, next) => {
   // Extract auth from handshake — exactly one of (userId, apiKey) must be present.
@@ -209,13 +206,28 @@ presenceNamespace.use(async (socket, next) => {
       );
       return next(new Error("Realtime auth: invalid api key"));
     }
-    socket.data.principal = {
-      kind: "service",
+    const principal = {
+      kind: "service" as const,
       userId: validated.userId,
+      ownerUserId: validated.ownerUserId,
+      workspaceId: validated.workspaceId,
       apiKeyId: validated.apiKeyId,
       keyName: validated.keyName,
       scopes: validated.scopes,
     };
+    // The connection handler joins the handshake's workspace and view rooms
+    // unasked; they pass the same gate as a `join-room`.
+    const viewId = typeof auth.viewId === "string" ? auth.viewId : null;
+    for (const room of [
+      workspaceId ? `workspace:${workspaceId}` : null,
+      viewId ? `view:${viewId}` : null,
+    ]) {
+      if (room && !(await canPrincipalJoinRoom(room, principal))) {
+        console.error(`[Presence] API key may not join ${room}`);
+        return next(new Error("Realtime auth: workspace access denied"));
+      }
+    }
+    socket.data.principal = principal;
     return next();
   }
 
@@ -255,16 +267,7 @@ presenceNamespace.on("connection", (socket) => {
   console.log(`[Presence] Client connected: ${socket.id}`);
 
   // The middleware above guarantees one of these two principal shapes.
-  const principal = socket.data.principal as
-    | { kind: "user"; userId: string }
-    | {
-        kind: "service";
-        userId: string;
-        apiKeyId: string;
-        keyName: string;
-        scopes: string[];
-      }
-    | undefined;
+  const principal = socket.data.principal as RealtimePrincipal | undefined;
 
   if (!principal) {
     // Defense in depth — should never happen given the middleware.
@@ -436,10 +439,9 @@ presenceNamespace.on("connection", (socket) => {
   // Event: Dynamic room join/leave (so clients can subscribe to extra rooms after connection)
   socket.on("join-room", async (roomId: string) => {
     if (typeof roomId !== "string" || roomId.length === 0) return;
-    // Service-account observers (realtime:observe) keep their documented broad
-    // allowance; user principals must be authorized for the room — otherwise
-    // any socket could join channel:<id>/workspace:<id> and read its stream.
-    if (isServiceAccount || (await canUserJoinRoom(roomId, userId))) {
+    // Every principal must be authorized for the room — otherwise any socket
+    // could join channel:<id>/workspace:<id> and read its stream.
+    if (await canPrincipalJoinRoom(roomId, principal)) {
       socket.join(roomId);
     } else {
       console.error(`[Presence] join-room denied: ${userId} → ${roomId}`);
