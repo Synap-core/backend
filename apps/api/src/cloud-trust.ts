@@ -16,14 +16,36 @@ import {
 } from "@synap-core/types/account-recovery";
 
 export async function readCloudTrust(): Promise<CloudTrustMode> {
+  return (await readCloudSignInSettings()).trust;
+}
+
+/**
+ * The Cloud trust and the pod's Synap Cloud issuer (the CP-pushed
+ * `federationOidcClient.issuer`), from ONE read of the settings row: a door
+ * that takes a Synap Cloud assertion (the identity-link ceremony) refuses it
+ * when the owner turned Synap Cloud off. A failed read THROWS.
+ */
+export async function readCloudSignInSettings(): Promise<{
+  trust: CloudTrustMode;
+  federationIssuer: string | null;
+}> {
   const db = await getDb();
   const [row] = await db
     .select({ settings: podSettings.settings })
     .from(podSettings)
     .orderBy(podSettings.createdAt)
     .limit(1);
-  const value = (
-    row?.settings as { accountRecovery?: { cloudTrust?: unknown } } | undefined
-  )?.accountRecovery?.cloudTrust;
-  return isCloudTrustMode(value) ? value : DEFAULT_CLOUD_TRUST;
+  const settings = row?.settings as
+    | {
+        accountRecovery?: { cloudTrust?: unknown };
+        federationOidcClient?: { issuer?: unknown };
+      }
+    | undefined;
+  const value = settings?.accountRecovery?.cloudTrust;
+  const issuer = settings?.federationOidcClient?.issuer;
+  return {
+    trust: isCloudTrustMode(value) ? value : DEFAULT_CLOUD_TRUST,
+    federationIssuer:
+      typeof issuer === "string" && issuer.trim() ? issuer : null,
+  };
 }
