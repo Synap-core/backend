@@ -1055,7 +1055,8 @@ function ObjectRow({
       <div
         id={`${id}-detail`}
         hidden={!open}
-        className="flex flex-col gap-2 pb-2 pl-6 pt-1"
+        // A class's `display` beats the `hidden` attribute: keep both.
+        className={`${open ? "flex" : "hidden"} flex-col gap-2 pb-2 pl-6 pt-1`}
       >
         <ul className="flex flex-col gap-1.5">
           {row.permissions.map((p) => {
@@ -1109,7 +1110,7 @@ function ObjectRow({
               hidden={!more}
               role="group"
               aria-label={`${row.label}: other spaces`}
-              className="flex flex-wrap gap-x-4"
+              className={`${more ? "flex" : "hidden"} flex-wrap gap-x-4`}
             >
               {others.map(tick)}
             </div>
