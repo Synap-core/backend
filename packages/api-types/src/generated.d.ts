@@ -9791,6 +9791,26 @@ export interface NeedsYouAccessRequest {
 	from: string;
 }
 /**
+ * An invite to ANOTHER space of this pod, addressed to the viewer's email, on
+ * a `space-invite` row (founder, wave PQ 2026-10-22): joined IN the app, with
+ * Accept on the row and Decline beside it. Read from the pod's own `invites`
+ * table for this person only, so it needs no notification to exist.
+ *
+ * `token` is what `workspaces.acceptInvite` takes (the same value
+ * `workspaces.listMyInvites` already hands this person); `id` is what
+ * `workspaces.rejectInvite` takes.
+ */
+export interface NeedsYouInvite {
+	id: string;
+	token: string;
+	/** The role the invite grants (`editor`, `viewer`, …). */
+	role: string;
+	/** `workspace` = one space; `pod` = every space of the pod. */
+	scope: "pod" | "workspace";
+	/** The space's name; null for a pod-wide invite or an unnamed space. */
+	spaceName: string | null;
+}
+/**
  * CONNECTION EVENT LINES — the ONE rule that turns a connection's lifecycle
  * event into a human line.
  *
@@ -19518,7 +19538,14 @@ export type SignalKind =
  * or an app's pending connection request (`target.kind:
  * "connection-request"`). Who asks and from where ride in `access`.
  */
- | "access-request";
+ | "access-request"
+/**
+ * One open INVITE to another space of this pod, addressed to the viewer's
+ * email (`space-invites.ts`; founder, wave PQ 2026-10-22): joined in the
+ * app — Accept on the row, Decline beside it. No door (not a member yet);
+ * what the two verbs act on rides in `invite`.
+ */
+ | "space-invite";
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
 export interface Signal {
@@ -19716,6 +19743,11 @@ export interface Signal {
 	 */
 	access?: NeedsYouAccessRequest;
 	/**
+	 * `space-invite` only: the invite Accept (`token`) and Decline (`id`) act
+	 * on, the role it grants and the space it opens (`NeedsYouInvite`).
+	 */
+	invite?: NeedsYouInvite;
+	/**
 	 * `proposal-cluster` only: the member proposal ids the cluster sampled
 	 * (`sampleProposalIds`, capped at 20 — `count` may exceed it). What a batch
 	 * decision over the row acts on; a surface batches a cluster only when
@@ -19820,7 +19852,7 @@ export interface LensPagePicks {
 	unreadable: string[];
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "captures" | "drafts" | "events" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "captures" | "drafts" | "events" | "invites" | "issuers" | "liveness" | "notifications" | "outputs" | "owed" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -42009,6 +42041,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				distinct: number;
 				drafts: number;
 				draftsTruncated: boolean;
+				invites: number;
 				needsYou: number;
 				notifications: number;
 				requests: number;
@@ -42033,6 +42066,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					distinct: number;
 					drafts: number;
 					draftsTruncated: boolean;
+					invites: number;
 					needsYou: number;
 					notifications: number;
 					requests: number;
@@ -42061,6 +42095,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					distinct: number;
 					drafts: number;
 					draftsTruncated: boolean;
+					invites: number;
 					needsYou: number;
 					notifications: number;
 					requests: number;
@@ -42087,7 +42122,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposed?: number | undefined;
 				} | undefined;
 				cursor?: string | undefined;
-				kinds?: ("access-request" | "activity" | "capture" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-review")[] | undefined;
+				kinds?: ("access-request" | "activity" | "capture" | "draft-asks" | "event" | "live-session" | "notification" | "output" | "owed-slot" | "proposal-cluster" | "rule-run" | "session-review" | "space-invite")[] | undefined;
 				lens?: "happening" | "history" | "needs-you" | "page" | "produced" | "proposed" | "suggestions" | undefined;
 				limit?: number | undefined;
 				picks?: boolean | undefined;
