@@ -5,10 +5,18 @@
  * belongs to, and silently filter a requested list to accessible IDs only.
  */
 
-import { eq, inArray, and, or, memberWorkspaceIds } from "@synap/database";
+import {
+  eq,
+  inArray,
+  and,
+  or,
+  memberWorkspaceIds,
+  getRequestGrant,
+} from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 import { db } from "@synap/database";
 import { podVisibleWorkspaceWhere } from "./user-visible-where.js";
+import { grantedWorkspaceIdsOf } from "../services/intake/capture-schema-linking.js";
 
 /**
  * The workspaces `userId` may read — the SAME floor as `userVisibleWhere`:
@@ -65,6 +73,11 @@ export async function validateWorkspaceAccess(
  * Explicit workspace lenses are silently intersected with the caller's access;
  * no-lens reads receive the complete user floor. `null` deliberately means the
  * caller's pod-wide roles only.
+ *
+ * A request made with a key grant limited to spaces also carries those spaces
+ * (`grantSpaces`): the facet loaders read `entity_facets` with raw `db`, so the
+ * grant seam (`grantReadPredicate`) never reaches them, and without this a key
+ * granted one space read the facets of every space its person can read.
  */
 export async function resolveFacetVisibilityScope(
   userId: string,
@@ -73,21 +86,26 @@ export async function resolveFacetVisibilityScope(
   userId: string;
   workspaceId?: string | null;
   allowedWorkspaceIds?: string[];
+  grantSpaces?: string[];
 }> {
-  if (workspaceId === null) return { userId, workspaceId: null };
+  const granted = grantedWorkspaceIdsOf(getRequestGrant());
+  const grant = granted ? { grantSpaces: [...granted] } : {};
+
+  if (workspaceId === null) return { userId, workspaceId: null, ...grant };
 
   if (workspaceId !== undefined) {
     const allowedWorkspaceIds = await validateWorkspaceAccess(userId, [
       workspaceId,
     ]);
     return allowedWorkspaceIds.includes(workspaceId)
-      ? { userId, workspaceId }
-      : { userId, allowedWorkspaceIds: [] };
+      ? { userId, workspaceId, ...grant }
+      : { userId, allowedWorkspaceIds: [], ...grant };
   }
 
   return {
     userId,
     allowedWorkspaceIds: await validateWorkspaceAccess(userId),
+    ...grant,
   };
 }
 
@@ -113,4 +131,20 @@ export async function listMemberWorkspaces(
     .from(workspaceMembers)
     .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
     .where(eq(workspaceMembers.userId, userId));
+}
+
+/**
+ * A HAND-BUILT facet scope (one not made by `resolveFacetVisibilityScope`)
+ * with the request's key-grant spaces, exactly as `resolveFacetVisibilityScope`
+ * sets them (`grantSpaces`). No grant, or one without a space list: the scope
+ * unchanged, so a member's read is untouched. For READ doors a scoped key can
+ * reach (MCP `synap_get_entity` → `entities.get`, the capability verbs).
+ */
+export function withRequestGrantSpaces<T extends object>(
+  scope: T
+): T & { grantSpaces?: string[] } {
+  const granted = grantedWorkspaceIdsOf(getRequestGrant());
+  return granted
+    ? { ...scope, grantSpaces: [...granted] }
+    : (scope as T & { grantSpaces?: string[] });
 }
