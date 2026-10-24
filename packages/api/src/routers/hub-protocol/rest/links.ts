@@ -38,6 +38,7 @@ import { stampAutoApprovedCreate } from "../../../services/proposals/stamp-mater
 import type { LinkEndpointType, LinkType } from "@synap/playbooks";
 import { db } from "@synap/database";
 import { checkLinkEndpointsVisible } from "./link-endpoint-visibility.js";
+import { linkProposalTitle } from "../../../services/links/link-proposal-title.js";
 import {
   DEPENDENCY_CYCLE_ERROR,
   governedDependencyLink,
@@ -404,8 +405,11 @@ export function registerLinksRoutes(app: HubHono): void {
           : {}),
         data: {
           // Human title so the proposal inbox shows a meaningful label
-          // (e.g. "entity --about--> tool") instead of "Untitled".
-          title: `${parsed.data.fromType} --${parsed.data.linkType}--> ${parsed.data.toType}`,
+          // ("Session blocked by session") instead of "Untitled". Words from
+          // the vocabulary door, never the edge's machine form ("session
+          // --blocked_by--> session"), which the receipt session it names
+          // read as "session session" (dogfood e3c39721 §4).
+          title: linkProposalTitle(parsed.data),
           fromType: parsed.data.fromType,
           fromId: parsed.data.fromId,
           toType: parsed.data.toType,

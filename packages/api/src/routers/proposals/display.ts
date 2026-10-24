@@ -92,6 +92,7 @@ import {
   readRunSubjectIds,
   isSystemReasoning,
   GOVERNANCE_POLICY_SENTENCES,
+  defaultAskSentence,
   updateOperationTargetId,
 } from "@synap-core/types/proposals";
 import {
@@ -1753,7 +1754,12 @@ export async function enrichProposalsForDisplay(
     const policyReason =
       stringProp(envelope, "policyReason") ??
       systemReasoning ??
-      governancePolicySentence(row.governanceReason);
+      governancePolicySentence(row.governanceReason) ??
+      // The plain default ask, for a write whose title alone says nothing
+      // about why it waits (a playbook run, dogfood e3c39721 §1).
+      (row.governanceReason
+        ? undefined
+        : defaultAskSentence(row.targetType, row.proposalType));
     const reasoning = systemReasoning ? undefined : request.reasoning;
     // A SECRET install param's VALUE never reaches a reviewer — not in `data`,
     // not in `request.data`, and not in the review model built from it. An
