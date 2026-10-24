@@ -29,6 +29,8 @@ vi.mock("@synap/database", async (importOriginal) => ({
   ProfileResolutionService: class {
     getEntityScope = async () => "pod";
   },
+  // The home-space lookup (0355) — not under test: no membership, no home.
+  getWorkspaceMembership: async () => null,
 }));
 vi.mock("../../file-upload.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),

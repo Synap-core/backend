@@ -1725,6 +1725,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "status_category",
     addedBy: "0319_lifecycle_columns.sql",
   },
+  // The space a pod-wide entity was filed for (0355). Every entity read selects
+  // it and the read floor filters on it — absence 500s every entity read.
+  {
+    table: "entities",
+    column: "home_workspace_id",
+    addedBy: "0355_entities_home_workspace.sql",
+  },
   {
     table: "entity_facets",
     column: "status_category",
