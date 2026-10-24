@@ -26,6 +26,7 @@ import {
   readPodUserAccess,
   hasActivePodAccess,
   PodOwnerAlreadyClaimedError,
+  PodOwnerNotClaimedError,
   FederatedApplicationConnectionService,
   seedAdminUser,
   type PodUserAccess,
@@ -194,6 +195,28 @@ const bootstrapClaimsSchema = z.object({
   purpose: z.literal("initial-owner-bootstrap"),
   commandId: z.string().min(1).max(512),
 });
+
+/**
+ * A lab's confirming admin, bound at install time next to the owner (A4). The
+ * install secret authorizes it like the owner; the CP then reads the admin's
+ * access through the identity-link receipt this command writes (`receiptId`,
+ * chosen by the issuer: no browser carries a pod-minted id back).
+ */
+const initialAdminClaimsSchema = z.object({
+  ...shortLivedAssertionClaims,
+  iss: z.string().url(),
+  sub: z.string().min(1).max(512),
+  email: z.string().email(),
+  name: z.string().max(500).optional(),
+  type: z.literal("federated_assertion"),
+  purpose: z.literal("initial-admin-bootstrap"),
+  commandId: z.string().min(1).max(512),
+  intentId: z.string().min(1).max(512),
+  nonce: z.string().min(16).max(1024),
+  receiptId: z.string().uuid(),
+});
+/** Long enough for the CP's post-registration read; the receipt is single-use. */
+const INSTALL_TIME_RECEIPT_TTL_MS = 30 * 60_000;
 
 type Assertion = Record<string, unknown> & { iss?: unknown };
 
@@ -2041,6 +2064,9 @@ federationRouter.post("/bootstrap", async (c) => {
     audience,
     { consumeJti: false }
   );
+  if (payload?.purpose === "initial-admin-bootstrap") {
+    return bootstrapInitialAdmin(c, payload, issuerUrl);
+  }
   const claims = bootstrapClaimsSchema.safeParse(payload);
   if (!claims.success || canonicalIssuerUrl(claims.data.iss) !== issuerUrl) {
     return c.json({ error: "Invalid initial owner assertion" }, 401);
@@ -2168,3 +2194,133 @@ federationRouter.post("/bootstrap", async (c) => {
     access,
   });
 });
+
+/**
+ * Install-time initial ADMIN (A4: a lab's confirming admin), through the same
+ * door and the same install secret as the owner. Never a CP grant on the
+ * pod-admin workspace: `/access-grants` still refuses every system workspace.
+ * Only after the owner is bound (the issuer is approved by then), never for the
+ * owner's own identity. Writes the identity-link receipt the issuer consumes
+ * at `/identity-links/consume` to record this access on its side.
+ */
+async function bootstrapInitialAdmin(
+  c: Context,
+  payload: Assertion,
+  issuerUrl: string
+): Promise<Response> {
+  const claims = initialAdminClaimsSchema.safeParse(payload);
+  if (!claims.success || canonicalIssuerUrl(claims.data.iss) !== issuerUrl) {
+    return c.json({ error: "Invalid initial admin assertion" }, 401);
+  }
+  const issuer = await new TrustedIssuerService().getByUrl(issuerUrl);
+  if (!issuer || issuer.status !== "approved") {
+    return c.json(
+      { error: "Bootstrap the Pod owner before an initial admin" },
+      409
+    );
+  }
+  const assertionResult = await consumeFederatedAssertion(
+    c,
+    issuer.id,
+    claims.data
+  );
+  if (assertionResult) return assertionResult;
+
+  const email = claims.data.email.trim().toLowerCase();
+  const kratosIdentity = await resolveOrCreateKratosIdentity({
+    email,
+    name: claims.data.name,
+    createdVia: "federated-initial-admin-bootstrap",
+  });
+  if (kratosIdentity.status === "unavailable") {
+    return c.json({ error: "Pod auth service is unavailable" }, 503);
+  }
+  if (kratosIdentity.status !== "resolved") {
+    return c.json({ error: "Could not create Pod identity" }, 502);
+  }
+
+  let seeded: Awaited<ReturnType<typeof seedAdminUser>>;
+  try {
+    seeded = await seedAdminUser({
+      kratosIdentityId: kratosIdentity.identityId,
+      email,
+      name: claims.data.name,
+      federatedIdentity: {
+        issuerId: issuer.id,
+        issuerSubject: claims.data.sub,
+      },
+      initialPodAdmin: true,
+    });
+  } catch (error) {
+    const compensationSucceeded =
+      !kratosIdentity.created ||
+      (await deleteKratosIdentity(
+        process.env.KRATOS_ADMIN_URL || "http://localhost:4434",
+        kratosIdentity.identityId
+      ));
+    logger.warn(
+      {
+        error,
+        issuerId: issuer.id,
+        kratosIdentityCreated: kratosIdentity.created,
+        compensationSucceeded,
+      },
+      "Initial federated Pod admin bootstrap failed"
+    );
+    if (!compensationSucceeded) {
+      return c.json(
+        {
+          error:
+            "Initial admin bootstrap failed and the newly-created Pod identity could not be rolled back",
+        },
+        502
+      );
+    }
+    if (error instanceof PodOwnerNotClaimedError) {
+      return c.json(
+        { error: "Bootstrap the Pod owner before an initial admin" },
+        409
+      );
+    }
+    return c.json({ error: "Could not bootstrap Pod admin" }, 409);
+  }
+
+  await attachCpOidcCredentialBestEffort({
+    issuerUrl,
+    issuerSubject: claims.data.sub,
+    kratosIdentityId: kratosIdentity.identityId,
+  });
+  let receipt: Awaited<ReturnType<typeof createIssuerIdentityLinkReceipt>>;
+  try {
+    receipt = await createIssuerIdentityLinkReceipt({
+      issuerId: issuer.id,
+      issuerSubject: claims.data.sub,
+      userId: seeded.userId,
+      intentId: claims.data.intentId,
+      nonce: claims.data.nonce,
+      receiptId: claims.data.receiptId,
+      expiresAt: new Date(Date.now() + INSTALL_TIME_RECEIPT_TTL_MS),
+    });
+  } catch (error) {
+    // The admin exists; only the issuer's record of it is missing. Said, not
+    // swallowed: the issuer reports the access as not projected.
+    logger.warn(
+      { error, issuerId: issuer.id },
+      "Initial admin bound but its identity-link receipt was refused"
+    );
+    return c.json(
+      {
+        error: "Initial admin bound, but its identity-link receipt was refused",
+      },
+      409
+    );
+  }
+  const access = await readPodUserAccess(seeded.userId);
+  return c.json({
+    success: true,
+    userId: seeded.userId,
+    workspaceId: seeded.workspaceId,
+    receiptId: receipt.receiptId,
+    access,
+  });
+}

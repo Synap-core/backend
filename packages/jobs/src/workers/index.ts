@@ -205,6 +205,10 @@ import {
   CP_PROJECT_SYNC_QUEUE,
 } from "./cp-project-sync.js";
 import {
+  handleCpEntitlementSync,
+  CP_ENTITLEMENT_SYNC_QUEUE,
+} from "./cp-entitlement-sync.js";
+import {
   ensureSystemProfiles,
   reportEnsureSystemProfilesResult,
   ensureDefaultRelationDefs,
@@ -367,6 +371,7 @@ const ALL_QUEUES = [
   CAPABILITY_TEMPLATE_SYNC_QUEUE,
   CP_CATALOG_SYNC_QUEUE,
   CP_PROJECT_SYNC_QUEUE,
+  CP_ENTITLEMENT_SYNC_QUEUE,
   TOOL_DEMAND_FORWARD_QUEUE,
   // Was MISSING while its worker+schedule existed — pg-boss v10 schedule() FK
   // violated → registerCronSchedules aborted → every cron after cal-backfill
@@ -1027,6 +1032,13 @@ export async function registerAllWorkers(): Promise<void> {
   // the Control Plane `pod_projects` mirror (P4-lite W1). The IoC slot below is
   // how @synap/database (which cannot import @synap/events) enqueues the
   // one-offs — ProjectRepository.create/update/delete is the ONE trigger door.
+  // CP plan sync (cron: every 15min + on startup): pulls this pod's tier and
+  // trial into pod_settings for tier-check and the trial guard.
+  await boss.work(CP_ENTITLEMENT_SYNC_QUEUE, async () =>
+    handleCpEntitlementSync()
+  );
+  logger.info("Registered worker: cp-entitlement-sync");
+
   await boss.work(CP_PROJECT_SYNC_QUEUE, async () => handleCpProjectSync());
   registerCpProjectSyncTrigger(() => {
     // singletonKey debounces mutation bursts: N project writes within the
