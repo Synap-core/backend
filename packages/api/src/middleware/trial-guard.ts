@@ -1,67 +1,67 @@
 /**
  * Trial Guard Middleware
  *
- * tRPC middleware that blocks write operations when a workspace's trial
- * has expired. Only activates on shared pods (SHARED_POD_MODE=true).
+ * tRPC middleware that refuses write operations once the pod's trial has
+ * ended. Pod-level: it reads the pod's PLAN (`readControlPlaneEntitlement`,
+ * `@synap/database` utils/control-plane-link.ts — pulled from the Control
+ * Plane by `@synap/jobs` `cp-entitlement-sync`), on every CP-linked pod.
  *
- * Reads `workspace.settings.controlPlane.trialEnd` — if the date is in
- * the past, throws FORBIDDEN with message "TRIAL_EXPIRED".
+ * The mildest block (lane cp-link D1, NEEDS-FOUNDER-CONFIRM): only mutations
+ * behind this middleware are refused, with `reasonCode: "TRIAL_EXPIRED"` and a
+ * sentence that names the fix; reads and exports stay open. It blocks ONLY on a
+ * plan the CP stated as `trialing` whose `trialEnd` has passed. No plan record,
+ * a failed pull or a failed read is unknown, never expired: it never blocks.
  *
  * Usage:
- *   Apply to mutation procedures that should be gated by trial status.
- *
  *   export const trialProtectedProcedure = workspaceProcedure.use(trialGuardMiddleware);
  */
 
 import { TRPCError } from "@trpc/server";
 import { config, createLogger } from "@synap-core/core";
 import { t } from "../init-trpc.js";
-import { db, eq } from "@synap/database";
-import { workspaces } from "@synap/database/schema";
+import { readControlPlaneEntitlement } from "@synap/database";
 
 const logger = createLogger({ module: "trial-guard" });
+
+export const TRIAL_EXPIRED_REASON = "TRIAL_EXPIRED";
+export const TRIAL_EXPIRED_MESSAGE =
+  "Your trial ended. Choose a plan to keep editing.";
 
 export const trialGuardMiddleware = t.middleware(async (opts) => {
   const { ctx, next } = opts;
 
-  // Only enforce on shared pods
-  if (!config.server.sharedPodMode) {
+  // Only a pod linked to a Control Plane has a plan to enforce.
+  if (!config.server.controlPlaneUrl) {
     return next({ ctx });
   }
 
-  const workspaceId = (ctx as { workspaceId?: string }).workspaceId;
-  if (!workspaceId) {
-    // No workspace in context — let other middleware handle this
-    return next({ ctx });
-  }
-
+  let plan: Awaited<ReturnType<typeof readControlPlaneEntitlement>>;
   try {
-    const ws = await db.query.workspaces.findFirst({
-      where: eq(workspaces.id, workspaceId),
-      columns: { settings: true },
-    });
-
-    const settings = (ws?.settings as Record<string, unknown>) ?? {};
-    const cp = settings.controlPlane as { trialEnd?: string } | undefined;
-    const trialEnd = cp?.trialEnd;
-
-    if (trialEnd && new Date(trialEnd) < new Date()) {
-      const userId = (ctx as { userId?: string }).userId;
-      logger.warn(
-        { userId, workspaceId, trialEnd },
-        "Trial expired — blocking mutation"
-      );
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "TRIAL_EXPIRED",
-      });
-    }
+    plan = await readControlPlaneEntitlement();
   } catch (err) {
-    // Re-throw TRPCErrors (including our own TRIAL_EXPIRED)
-    if (err instanceof TRPCError) throw err;
+    // Unknown is not expired — never block on a read we could not make.
+    logger.warn(
+      { err },
+      "Trial guard could not read the pod's plan — allowing"
+    );
+    return next({ ctx });
+  }
 
-    // Non-fatal DB errors — don't block the user on trial-check failures
-    logger.warn({ err, workspaceId }, "Trial guard DB read failed — allowing");
+  if (
+    plan?.status === "trialing" &&
+    plan.trialEnd &&
+    new Date(plan.trialEnd).getTime() < Date.now()
+  ) {
+    const userId = (ctx as { userId?: string }).userId;
+    logger.warn(
+      { userId, trialEnd: plan.trialEnd },
+      "Trial ended — refusing mutation"
+    );
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: TRIAL_EXPIRED_MESSAGE,
+      cause: { reasonCode: TRIAL_EXPIRED_REASON },
+    });
   }
 
   return next({ ctx });

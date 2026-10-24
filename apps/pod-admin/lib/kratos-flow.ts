@@ -401,11 +401,13 @@ export type CreateFlowResult =
   { flow: KratosFlow } | { existingSession: true } | { signInRequired: true };
 
 /**
- * Start a recovery or settings BROWSER flow. Recovery refuses while signed in
- * (`session_already_available`); settings needs a session (401).
+ * Start a recovery, settings or registration BROWSER flow. Recovery and
+ * registration refuse while signed in (`session_already_available`); settings
+ * needs a session (401). Registration is the invite page's: the pod's gate
+ * refuses any registration that does not carry an open invite.
  */
 export async function createBrowserFlow(
-  kind: "recovery" | "settings",
+  kind: "recovery" | "settings" | "registration",
   returnTo?: string
 ): Promise<CreateFlowResult> {
   const url = new URL(`${kratosPublic()}/self-service/${kind}/browser`);
@@ -715,6 +717,15 @@ export function collectErrorMessages(
     .filter(keep)
     .map((m) => m.text);
   return [...ui, ...node];
+}
+
+/** The value of the input node named `name`, or null when the flow has none. */
+export function nodeValue(flow: KratosFlow, name: string): string | null {
+  const node = flow.ui.nodes.find(
+    (n) => n.type === "input" && n.attributes?.name === name
+  );
+  const v = node?.attributes?.value;
+  return typeof v === "string" ? v : null;
 }
 
 export function extractInitialValues(flow: KratosFlow): Record<string, string> {
