@@ -69,6 +69,11 @@ export const entitiesRouter = router({
          * regular `list` procedure.
          */
         includePodWide: z.boolean().optional(),
+        /**
+         * Pod-wide (workspaceId IS NULL) rows only — the REST `scope=pod`.
+         * Forwarded to the regular `list`, which applies it before any lens.
+         */
+        globalOnly: z.boolean().optional(),
         /** Kind + Facets filter — only entities carrying a live facet of this role-profile. */
         facetSlug: z.string().optional(),
         facetProfileId: z.string().uuid().optional(),
@@ -120,6 +125,7 @@ export const entitiesRouter = router({
         ...(input.includePodWide !== undefined
           ? { includePodWide: input.includePodWide }
           : {}),
+        ...(input.globalOnly ? { globalOnly: true } : {}),
         ...(input.facetSlug ? { facetSlug: input.facetSlug } : {}),
         ...(input.facetProfileId
           ? { facetProfileId: input.facetProfileId }
