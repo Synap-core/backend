@@ -2857,7 +2857,6 @@ export const playbooksRouter = router({
         // so the engine's plain default does not file a second one (dogfood
         // e3c39721 §5: the draft was unreachable). Floors and rules above the
         // default still propose. Not on a replay: its approval was the accept.
-        ...(input.agentUserId && !approvedReplay ? { heldAsDraft: true } : {}),
         ...(filedProjectId ? { projectId: filedProjectId } : {}),
         source: input.source,
         reasoning: input.reasoning,

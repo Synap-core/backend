@@ -6,22 +6,11 @@
  * it; the machine form came out of the receipt's title builder as "session
  * session" (dogfood e3c39721 §4). ONE spelling for every link door.
  */
-import {
-  nounInSentence,
-  resolveLineageEdgeLabel,
-  resolveObjectNoun,
-} from "@synap-core/types/vocabulary";
 
 export function linkProposalTitle(edge: {
   fromType: string;
   linkType: string;
   toType: string;
 }): string {
-  return [
-    resolveObjectNoun(edge.fromType),
-    nounInSentence(resolveLineageEdgeLabel(edge.linkType, "outgoing")),
-    nounInSentence(resolveObjectNoun(edge.toType)),
-  ]
-    .filter(Boolean)
-    .join(" ");
+  return `${edge.fromType} --${edge.linkType}--> ${edge.toType}`;
 }

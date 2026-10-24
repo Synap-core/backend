@@ -84,7 +84,6 @@ import { buildProjectFilingSummary } from "../services/projects/project-filing-s
 import { buildTrackStartSummary } from "../services/tracks/track-start-summary.js";
 import { buildDescriptiveProfileUpdateSummary } from "../services/profiles/profile-descriptive-update.js";
 import {
-  defaultApprovalSentence,
   isLikelyUUID,
   isCompositeProposalData,
   roleExceedSentence,
@@ -3354,7 +3353,9 @@ export function buildProposalResponseFields(opts: {
   );
   return {
     summary,
-    reasoning: opts.reasoning ?? defaultApprovalSentence(),
+    reasoning:
+      opts.reasoning ??
+      `${opts.action} ${opts.subjectType} requires your approval`,
     reviewPath: openPath(opts.proposalId),
     reviewUrl: openLink(opts.proposalId),
   };
@@ -4223,7 +4224,10 @@ async function createProposal(args: {
         proposalId: existing.id,
         proposalType: `${subjectType}.${action}`,
         summary,
-        reasoning: reasoning || policyReason || defaultApprovalSentence(),
+        reasoning:
+          reasoning ||
+          policyReason ||
+          `${action} ${singularType} requires your approval`,
         reviewPath: openPath(existing.id),
         reviewUrl: openLink(existing.id),
         deduped: true,
@@ -4308,7 +4312,10 @@ async function createProposal(args: {
     proposalId: proposal.id,
     proposalType: `${subjectType}.${action}`,
     summary,
-    reasoning: reasoning ?? policyReason ?? defaultApprovalSentence(),
+    reasoning:
+      reasoning ??
+      policyReason ??
+      `${action} ${singularType} requires your approval`,
     reviewPath: openPath(proposal.id),
     reviewUrl: openLink(proposal.id),
     ...(deduped ? { deduped: true } : {}),

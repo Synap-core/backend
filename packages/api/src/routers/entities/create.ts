@@ -732,16 +732,9 @@ export const createProcs = {
             // not a write. Sending it filed a no-op update receipt
             // (`propertyDiffs: []`) and claimed the existing record as this
             // session's output (dogfood e3c39721 §2).
-            const matchedProperties = ((
-              visibleMatch as { properties?: Record<string, unknown> | null }
-            ).properties ?? {}) as Record<string, unknown>;
             const nonEmptyProperties = Object.fromEntries(
               Object.entries(input.properties ?? {}).filter(
-                ([key, v]) =>
-                  v !== undefined &&
-                  v !== null &&
-                  v !== "" &&
-                  JSON.stringify(v) !== JSON.stringify(matchedProperties[key])
+                ([, v]) => v !== undefined && v !== null && v !== ""
               )
             );
             // What this merge actually wrote onto the matched entity — reported
