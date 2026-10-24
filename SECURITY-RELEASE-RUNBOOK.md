@@ -150,6 +150,11 @@ Ruleset **"base branch security"** on the default branch. After §5.4 it holds:
 - **Bypass list**: organization admins (always) and the Synap Release App
   (always). Nothing else.
 
-To undo, edit the ruleset in **Settings → Rules → Rulesets** or re-run the
-script from a previous commit; `--apply` prints the ruleset as it was before
-writing, so the previous state is in the terminal.
+`Full suite` includes `pnpm audit --prod --audit-level=high`. Once it is
+required, a new high advisory in a production dependency blocks every merge
+until it is fixed or ignored with a written reason (`auditConfig` in
+`pnpm-workspace.yaml`). That is the point: it is how a vulnerable dependency
+stops reaching a release.
+
+To undo, edit the ruleset in **Settings → Rules → Rulesets**. The script prints
+the ruleset as it was before writing, so the previous state is in the terminal.
