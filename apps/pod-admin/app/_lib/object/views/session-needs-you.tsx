@@ -66,7 +66,7 @@ function sessionAskRows(
 
 export function NeedsYouSection({ sessionId }: { sessionId: string }) {
   const signals = trpc.signals.list.useQuery(
-    { lens: "needs-you", sessionId, limit: NEEDS_YOU_LIMIT },
+    { lens: "needs-you", limit: NEEDS_YOU_LIMIT },
     { staleTime: 15_000, refetchInterval: 60_000, retry: false }
   );
   // Answered here: gone at once, until a read newer than the answer says
@@ -169,7 +169,7 @@ function OwedRow({ row, sessionId }: { row: ReviewRow; sessionId: string }) {
 
 export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
   const list = trpc.proposals.list.useQuery(
-    { sessionId, status: "pending", limit: PROPOSALS_LIMIT },
+    { status: "pending", limit: PROPOSALS_LIMIT },
     { staleTime: 15_000, retry: false }
   );
   const [all, setAll] = useState(false);
