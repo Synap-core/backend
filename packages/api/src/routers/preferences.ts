@@ -45,10 +45,20 @@ export const preferencesRouter = router({
    * (surfaces W1.7, `services/preferences/rail-pins.ts`). Per user, across
    * spaces; a space's template `sidebarItems` pipeline views are folded in as
    * suggestions until the person first edits their pins.
+   *
+   * GOAL pins ("This week", `trackId`, `profileSlug: null`) come back only
+   * when asked — `{ includeGoals: true }` (code.md, 2026-10-24): a shipped
+   * desktop build reads every pin as a surface and lost every rail badge on
+   * a pin with no kind. Without the flag: surface pins only.
    */
-  railPins: protectedProcedure.query(async ({ ctx }) => ({
-    pins: await readRailPins(ctx.userId),
-  })),
+  railPins: protectedProcedure
+    .input(z.object({ includeGoals: z.boolean().optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const pins = await readRailPins(ctx.userId);
+      return {
+        pins: input?.includeGoals ? pins : pins.filter((p) => !p.trackId),
+      };
+    }),
 
   /**
    * Pin a surface: a kind/role (`profileSlug`), a saved pipeline view of it

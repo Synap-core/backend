@@ -523,6 +523,32 @@ describe("only the judge closes the goal", () => {
     expect(res.status).toBe("updated");
   });
 
+  it("a judge who can only READ the space closes it — the seat is the right (code.md)", async () => {
+    const id = await goal("Viewer judges");
+    // DELEGATE is a VIEWER of the space: no write on the project.
+    await add(id, person(OWNER), DELEGATE, "judge");
+    const res = await setTrackStatus({
+      trackId: id,
+      status: "completed",
+      verdict: "met",
+      actor: person(DELEGATE),
+    });
+    expect(res.status).toBe("updated");
+    // The seat, not read access, is what admits: another viewer is refused.
+    const other = await goal("Viewer without the seat");
+    await expect(
+      setTrackStatus({
+        trackId: other,
+        status: "completed",
+        verdict: "met",
+        actor: person(DELEGATE),
+      })
+    ).rejects.toMatchObject({
+      // The write floor answers: refused, or not found for a writer.
+      code: expect.stringMatching(/^(FORBIDDEN|NOT_FOUND)$/),
+    });
+  });
+
   it("F7 — a drop is the owner's or the judge's: an editor who only works on it is refused", async () => {
     const id = await goal("Owner drops");
     await add(id, person(OWNER), JUDGE, "judge");

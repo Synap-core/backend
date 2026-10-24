@@ -189,6 +189,7 @@ import {
   toTrackView,
   setTrackDirection,
   acceptGoalCriterion,
+  applyTrackDirection,
   loadTrackViews,
 } from "../tracks-service.js";
 import { getProjectPath } from "../../projects/project-path.js";
@@ -1808,6 +1809,43 @@ describe("what a goal holds (W2) — content, derived marks, acceptance, the clo
       uncertainty: "clear",
       kindConfirmedBy: USER,
     });
+  });
+
+  it("an edit of the criteria never drops a decision recorded after it read them (compare-and-set)", async () => {
+    const id = await goal("Raced", { criteria: [crit("a"), crit("b")] });
+    const stale = (await getTrack(id, human))!;
+    // The judge's decision lands between the editor's read and its write.
+    await q(
+      `update project_tracks
+          set criteria = jsonb_set(criteria, '{0,acceptance}',
+                '{"decision":"accepted","by":"user-1","at":"2026-10-24T10:00:00.000Z"}'::jsonb)
+        where id = $1`,
+      [id]
+    );
+    const project = { id: GOALS2, workspaceId: null, userId: USER };
+    const edit = { criteria: [crit("a"), crit("b"), crit("c")] };
+    const who = { userId: USER, statedBy: USER, confirmedBy: USER };
+    await expect(
+      applyTrackDirection(stale, project, edit, who)
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const decided = () =>
+      q<{ acceptance: unknown }>(
+        `select criteria->0->'acceptance' as acceptance from project_tracks where id = $1`,
+        [id]
+      );
+    expect((await decided()).rows[0]!.acceptance).toMatchObject({
+      decision: "accepted",
+    });
+    // Read again: the edit lands and the decision rides along (same contract).
+    await applyTrackDirection((await getTrack(id, human))!, project, edit, who);
+    expect((await decided()).rows[0]!.acceptance).toMatchObject({
+      decision: "accepted",
+    });
+    expect((await view(id)).criteria.map((c) => c.key)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
   });
 
   it("a person confirms the AI's kind as it stands — the header's 'to confirm' door (confirmKind)", async () => {

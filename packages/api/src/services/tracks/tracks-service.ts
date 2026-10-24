@@ -786,23 +786,18 @@ export async function listTracks(params: {
   // the order its tracks were started in.
   const newestFirst = !projectId;
   const cursor = params.page?.cursor ?? null;
-  const after = cursor
-    ? newestFirst
-      ? or(
-          lt(projectTracks.createdAt, new Date(cursor.createdAt)),
-          and(
-            eq(projectTracks.createdAt, new Date(cursor.createdAt)),
-            lt(projectTracks.id, cursor.id)
-          )
-        )
-      : or(
-          gt(projectTracks.createdAt, new Date(cursor.createdAt)),
-          and(
-            eq(projectTracks.createdAt, new Date(cursor.createdAt)),
-            gt(projectTracks.id, cursor.id)
-          )
-        )
-    : undefined;
+  // The keyset is `created_at` AT THE PRECISION THE CURSOR CARRIES (ms, an
+  // ISO string) then the id — in the order AND the comparison (code.md): the
+  // column keeps microseconds, so comparing it with a millisecond cursor
+  // repeated or skipped rows started within the same millisecond.
+  const createdMs = drizzleSql`date_trunc('milliseconds', ${projectTracks.createdAt})`;
+  const at = cursor ? new Date(cursor.createdAt).toISOString() : null;
+  const after =
+    cursor && at
+      ? newestFirst
+        ? drizzleSql`(${createdMs} < ${at}::timestamptz OR (${createdMs} = ${at}::timestamptz AND ${projectTracks.id} < ${cursor.id}))`
+        : drizzleSql`(${createdMs} > ${at}::timestamptz OR (${createdMs} = ${at}::timestamptz AND ${projectTracks.id} > ${cursor.id}))`
+      : undefined;
   return scopedDb(access).findMany<ProjectTrack>(projectTracks, {
     where: and(
       projectId ? eq(projectTracks.projectId, projectId) : undefined,
@@ -810,8 +805,8 @@ export async function listTracks(params: {
       after
     ),
     orderBy: newestFirst
-      ? [desc(projectTracks.createdAt), desc(projectTracks.id)]
-      : [asc(projectTracks.createdAt), asc(projectTracks.id)],
+      ? [drizzleSql`${createdMs} desc`, desc(projectTracks.id)]
+      : [drizzleSql`${createdMs} asc`, asc(projectTracks.id)],
     ...(params.page ? { limit: params.page.limit } : {}),
   });
 }
@@ -1839,6 +1834,37 @@ export async function loadTrackForWrite(
   return { track, project };
 }
 
+/**
+ * The goal and its project for a PERSON ending it from the seat that may
+ * (`assertGoalEnder`: the judge closes; the owner or judge drops), read
+ * through the READ floors only — `null` for anything else (an agent, another
+ * move, someone without the seat), which then takes {@link loadTrackForWrite}.
+ */
+async function loadTrackForEnding(
+  trackId: string,
+  to: ProjectTrackStatus,
+  actor: TrackActor
+): Promise<{ track: ProjectTrack; project: GateProject } | null> {
+  const category = trackStatusCategory(to);
+  if ((category !== "done" && category !== "lost") || actor.agentUserId) {
+    return null;
+  }
+  const track = await getTrack(trackId, actor);
+  if (!track) return null;
+  try {
+    await assertGoalEnder(track, to, actor.userId);
+  } catch {
+    return null;
+  }
+  const project = await scopedDb(
+    AccessContext.from(actor)
+  ).findFirst<GateProject>(projects, {
+    where: eq(projects.id, track.projectId),
+    columns: { id: true, workspaceId: true, userId: true },
+  });
+  return project ? { track, project } : null;
+}
+
 /** How a goal ended, as a status move carries it (R1). */
 export interface TrackCloseInput {
   verdict?: string | null;
@@ -1933,10 +1959,17 @@ export async function setTrackStatus(input: {
   verdictReason?: string | null;
   actor: TrackActor;
 }): Promise<SetTrackStatusResult> {
-  const { track, project } = await loadTrackForWrite(
+  // THE JUDGE'S OWN ENDING (code.md): the judge seat IS the right to close
+  // (the owner's or judge's, to drop) — a person who holds it ends the goal
+  // with read access alone, never also needing write on the project, and no
+  // rule stands between them and their own decision. Anyone else writes.
+  const ender = await loadTrackForEnding(
     input.trackId,
+    input.status,
     input.actor
   );
+  const { track, project } =
+    ender ?? (await loadTrackForWrite(input.trackId, input.actor));
   if (track.status === input.status) return { status: "unchanged", track };
   const close = {
     verdict: input.verdict ?? null,
@@ -1952,6 +1985,15 @@ export async function setTrackStatus(input: {
     await loadGoalCloseCriteria(track, input.status, input.actor.userId)
   );
 
+  if (ender) {
+    return applyTrackStatus(
+      track,
+      project,
+      input.status,
+      input.actor.userId,
+      close
+    );
+  }
   const perm = await checkPermissionOrPropose({
     userId: input.actor.userId,
     agentUserId: input.actor.agentUserId ?? undefined,
@@ -2928,10 +2970,28 @@ export async function applyTrackDirection(
       ...(patch.direction !== undefined ? { direction: patch.direction } : {}),
       ...(kpi !== undefined ? { kpi } : {}),
       ...(goal ? { goal } : {}),
+      // The acceptances were merged onto the criteria AS READ: the write
+      // lands only while they still are (code.md — an edit never drops a
+      // decision the judge made a moment ago).
+      ...(goal?.criteria !== undefined
+        ? { expectedCriteria: track.criteria ?? null }
+        : {}),
     },
     who.userId
   );
   if (!updated) {
+    const db = await getDb();
+    const [still] = await db
+      .select({ id: projectTracks.id })
+      .from(projectTracks)
+      .where(eq(projectTracks.id, track.id))
+      .limit(1);
+    if (goal?.criteria !== undefined && still) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: `The criteria of "${track.name}" changed while you edited them (a decision was recorded) — read the goal again and redo the edit.`,
+      });
+    }
     throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   const after = readTrackKpi(updated.kpi);

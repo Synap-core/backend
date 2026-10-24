@@ -544,6 +544,50 @@ describe("the pod-wide goals list (W5)", () => {
     expect(seen).toEqual(all.map((r) => r.id));
   });
 
+  it("rows started in the SAME millisecond page cleanly, in both orders (microseconds apart)", async () => {
+    // Four goals one millisecond apart at most, a few microseconds apart —
+    // the column keeps microseconds, the cursor carries milliseconds.
+    const ids: string[] = [];
+    for (const n of ["µ one", "µ two", "µ three", "µ four"]) {
+      ids.push(await goal(n, OTHER_PROJECT));
+    }
+    await q(
+      `update project_tracks
+          set created_at = timestamptz '2030-01-01 00:00:00.123000+00'
+                           + (array_position($1::uuid[], id) * interval '1 microsecond')
+        where id = any($1::uuid[])`,
+      [ids]
+    );
+    const walk = async (projectId: string | null) => {
+      const seen: string[] = [];
+      let cursor = null as ReturnType<typeof decodeTrackListCursor>;
+      for (let i = 0; i < 50; i++) {
+        const page = (await listTracksPage({
+          ...(projectId ? { projectId } : {}),
+          actor: person(OWNER),
+          limit: 1,
+          cursor,
+        }))!;
+        seen.push(...page.rows.map((r) => r.id));
+        if (!page.nextCursor) break;
+        cursor = decodeTrackListCursor(page.nextCursor);
+      }
+      return seen;
+    };
+    for (const projectId of [OTHER_PROJECT, null]) {
+      const all = (await listTracksPage({
+        ...(projectId ? { projectId } : {}),
+        actor: person(OWNER),
+        limit: 100,
+      }))!.rows.map((r) => r.id);
+      const seen = await walk(projectId);
+      // Rules out the ms cursor against µs rows: a repeat or a skip here.
+      expect(seen, String(projectId)).toEqual(all);
+      expect(new Set(seen).size).toBe(seen.length);
+      for (const id of ids) expect(seen).toContain(id);
+    }
+  });
+
   it("a project the caller cannot see is null, not an empty page", async () => {
     expect(
       await listTracksPage({
