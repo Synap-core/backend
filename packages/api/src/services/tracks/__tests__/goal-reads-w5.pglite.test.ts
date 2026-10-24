@@ -89,8 +89,28 @@ vi.mock("../../../utils/permission-check.js", () => ({
   proposedMessageFor: (_t: string, fallback: string) => fallback,
 }));
 
+// The link writer, kept to the rows a start writes (`spawned_from` is read
+// back by "keep watching it"): inserted as is, nothing else of the door.
 vi.mock("../../links/links-service.js", () => ({
-  createLinks: async () => [],
+  createLinks: async (
+    inputs: Array<{
+      workspaceId: string | null;
+      fromType: string;
+      fromId: string;
+      toType: string;
+      toId: string;
+      linkType: string;
+    }>
+  ) => {
+    for (const l of inputs) {
+      await h.client!.query(
+        `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+         values (gen_random_uuid(), $1, $2, $3, $4, $5, $6, '{}'::jsonb, now())`,
+        [l.workspaceId, l.fromType, l.fromId, l.toType, l.toId, l.linkType]
+      );
+    }
+    return [];
+  },
 }));
 
 vi.mock("@synap/events", () => ({
