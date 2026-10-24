@@ -7,9 +7,10 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
  * network round-trip) — the CP receiver is built against this same contract.
  */
 
-const { loggerMock, selectMock } = vi.hoisted(() => ({
+const { loggerMock, selectMock, linkMock } = vi.hoisted(() => ({
   loggerMock: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   selectMock: vi.fn(),
+  linkMock: vi.fn(),
 }));
 
 // Chainable, awaitable query builder: every builder method returns itself and
@@ -33,6 +34,9 @@ vi.mock("@synap/database", () => {
   return {
     db: { select: selectMock },
     drizzleSql,
+    // The pod's Control Plane link (its own suite: database
+    // control-plane-link.test.ts).
+    readControlPlaneLink: linkMock,
     // The pod's one pod→CP credential door on its legacy internal-key branch
     // (the pod-JWT branch has its own suite: database pod-cp-auth.test.ts).
     podCpAuthHeaders: async () =>
@@ -75,6 +79,8 @@ const POD_ID = "pod-123";
 
 beforeEach(() => {
   selectMock.mockReset();
+  linkMock.mockReset();
+  linkMock.mockResolvedValue({ podId: POD_ID, source: "enrollment" });
   fetchMock.mockReset();
   loggerMock.info.mockClear();
   loggerMock.warn.mockClear();
@@ -169,16 +175,14 @@ describe("handleCpProjectSync", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("skips when the pod has no CP identity (no controlPlane.podId)", async () => {
-    selectMock.mockReturnValueOnce(queryResult([])); // resolveCpPodId → none
+  it("skips when the pod has no CP identity (no Control Plane link)", async () => {
+    linkMock.mockResolvedValueOnce(null);
     await handleCpProjectSync();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("POSTs the contract payload to /internal/projects/sync with X-Internal-Key", async () => {
-    selectMock
-      .mockReturnValueOnce(queryResult([{ podId: POD_ID }])) // resolveCpPodId
-      .mockReturnValueOnce(queryResult([row(1)])); // project list
+    selectMock.mockReturnValueOnce(queryResult([row(1)])); // project list
     fetchMock.mockResolvedValueOnce({ ok: true, status: 200 });
 
     await handleCpProjectSync();
@@ -207,9 +211,7 @@ describe("handleCpProjectSync", () => {
   });
 
   it("defers quietly (warn, no throw) when the CP rejects or is unreachable", async () => {
-    selectMock
-      .mockReturnValueOnce(queryResult([{ podId: POD_ID }]))
-      .mockReturnValueOnce(queryResult([row(1)]));
+    selectMock.mockReturnValueOnce(queryResult([row(1)]));
     fetchMock.mockResolvedValueOnce({ ok: false, status: 503 });
     await expect(handleCpProjectSync()).resolves.toBeUndefined();
     expect(loggerMock.warn).toHaveBeenCalled();

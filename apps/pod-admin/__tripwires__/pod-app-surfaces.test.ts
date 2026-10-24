@@ -61,6 +61,21 @@ describe("pod-app surfaces", () => {
     expect(src).toMatch(/width=\{consentWidth\(params\.clientId\)\}/);
   });
 
+  it("consent: rows set a level and a space through the shared narrow-only rules, from the app's templates", () => {
+    const src = read(CONSENT);
+    expect(src).toMatch(
+      /initialSelection\(\s*app\.permissions,\s*app\.approved,\s*app\.templates\s*\)/
+    );
+    expect(src).toMatch(
+      /setObjectLevel\(\s*s,\s*app\.permissions,\s*row,\s*level,\s*app\.templates\s*\)/
+    );
+    expect(src).toMatch(
+      /toggleObjectSpace\(\s*s,\s*app\.permissions,\s*row,\s*workspaceId\s*\)/
+    );
+    // The pod-wide note is the server's list, never a hand list of kinds.
+    expect(src).toMatch(/app\.podWideKinds\.includes\(row\.kind\)/);
+  });
+
   it("consent: the invalid-request hint comes from the client kind", () => {
     const src = read(CONSENT);
     expect(src).toMatch(/hint=\{invalidRequestHint\(params\.clientId\)\}/);

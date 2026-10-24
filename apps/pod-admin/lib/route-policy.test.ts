@@ -72,6 +72,7 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
     "/my-computers/c1",
     "/my-notifications",
     "/settings/security",
+    "/link-cloud",
     "/oauth/consent",
     "/approve-agent",
     "/approve-agents",
@@ -94,6 +95,7 @@ describe("isSelfService (moved verbatim from proxy.ts)", () => {
     "/my-connections/x",
     "/my-notifications/x",
     "/settings",
+    "/link-cloud/x",
     "/device/x",
     "/proposal",
     "/open",
@@ -143,6 +145,7 @@ describe("isBannedAdminPath", () => {
     "/device",
     "/my-anything",
     "/settings/security",
+    "/link-cloud",
   ])("%s is banned for admin pages", (path) => {
     expect(isBannedAdminPath(path)).toBe(true);
   });

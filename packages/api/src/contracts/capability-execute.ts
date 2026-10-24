@@ -42,7 +42,7 @@
  * (`__tripwires__/cross-door-input-parity.test.ts`, T5) holds every door to.
  *
  * ── ZOD 4, AND THE DOOR THAT CANNOT HAVE IT ─────────────────────────────────
- * This is zod 4.3.6. tRPC, Hub REST and MCP all import it directly. The
+ * This is zod 4.6.7. tRPC, Hub REST and MCP all import it directly. The
  * Intelligence Service is pinned to zod 3 and cannot, so it consumes the
  * COMMITTED JSON Schema artifact emitted from this same schema
  * (`generated/capability-execute.schema.json`), kept honest by
