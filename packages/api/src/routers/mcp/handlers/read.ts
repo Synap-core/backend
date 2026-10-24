@@ -133,7 +133,7 @@ export const readHandlers: McpHandlerMap = {
     // Build context + sources, then synthesize via IS. Pass the pending count
     // so the composed NL answer can acknowledge matching pending proposals
     // instead of contradicting the pendingBlock surfaced right below it.
-    const synthesized = await synthesizeAnswer(
+    const synthesis = await synthesizeAnswer(
       retrieved.answers,
       args.query as string,
       retrieved.routedTo,
@@ -149,11 +149,19 @@ export const readHandlers: McpHandlerMap = {
     );
     // `brief` caps the envelope too (sources, pending summaries, no spaces):
     // the prose budget alone left one ask at 62,594 chars.
-    const { synthesis, pending, keepSpaces } = capBriefEnvelope(
-      detail,
-      synthesized,
-      retrieved.pending
-    );
+    // The service result stays `synthesis` and is spread whole below; the cap
+    // only overrides `sources` (+ `sourcesOmitted`) on top of it.
+    const {
+      synthesis: capped,
+      pending,
+      keepSpaces,
+    } = capBriefEnvelope(detail, synthesis, retrieved.pending);
+    const sourcesBlock = {
+      sources: capped.sources,
+      ...(capped.sourcesOmitted
+        ? { sourcesOmitted: capped.sourcesOmitted }
+        : {}),
+    };
     // The PENDING block (`ask`'s Wave-3 lane): the caller's own pending
     // proposals whose content matches this query — surfaced SEPARATELY from the
     // synthesized answer so recall never presents unvalidated work as fact.
@@ -178,6 +186,7 @@ export const readHandlers: McpHandlerMap = {
       const failure = describeAiFailure(synthesis.failureClass ?? "unknown");
       return ok({
         ...synthesis,
+        ...sourcesBlock,
         ...pendingBlock,
         ...spacesBlock,
         ...queueBlock,
@@ -198,6 +207,7 @@ export const readHandlers: McpHandlerMap = {
     // degraded one. `truncated` rides along inside `...synthesis`.
     return ok({
       ...synthesis,
+      ...sourcesBlock,
       ...pendingBlock,
       ...spacesBlock,
       ...queueBlock,
