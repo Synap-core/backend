@@ -1810,6 +1810,27 @@ describe("what a goal holds (W2) — content, derived marks, acceptance, the clo
     });
   });
 
+  it("a person confirms the AI's kind as it stands — the header's 'to confirm' door (confirmKind)", async () => {
+    const id = await goal("Keep the site up");
+    // The AI's proposal as stored: a kind nobody confirmed yet.
+    await q(
+      `update project_tracks set work_kind = 'operation', uncertainty = 'clear', kind_confirmed_by = null, kind_confirmed_at = null where id = $1`,
+      [id]
+    );
+    expect(await view(id)).toMatchObject({ kindConfirmedBy: null });
+    const r = await setTrackDirection({
+      trackId: id,
+      confirmKind: true,
+      actor: human,
+    });
+    expect(r.status).toBe("updated");
+    expect(await view(id)).toMatchObject({
+      workKind: "operation",
+      uncertainty: "clear",
+      kindConfirmedBy: USER,
+    });
+  });
+
   it("marks come from the sessions filed into the goal: claimed → in review; waiting on what its runs owe", async () => {
     const id = await goal("Ship the pricing page", {
       criteria: [crit("copy"), crit("legal", "human")],
