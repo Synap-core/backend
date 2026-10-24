@@ -65,7 +65,7 @@ vi.mock("./_shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./_shared.js")>()),
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
   hasScope: (scopes: string[], scope: string) => scopes.includes(scope),
-  verifyWorkspaceAccess: async () => true,
+  verifyWorkspaceWriteAccess: async () => true,
   verifyWorkspaceReadAccess: async () => true,
 }));
 

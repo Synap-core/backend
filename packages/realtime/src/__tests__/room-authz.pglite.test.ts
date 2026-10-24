@@ -42,7 +42,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { canUserJoinRoom } from "../room-authz.js";
+import { canPrincipalJoinRoom, canUserJoinRoom } from "../room-authz.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -96,7 +96,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    `delete from channel_members; delete from channels;
+    `delete from channel_members; delete from channels; delete from grants;
      delete from workspace_members; delete from workspaces; delete from users;`
   );
 });
@@ -190,5 +190,124 @@ describe("canUserJoinRoom('channel:…') = the channel read predicate", () => {
 
   it("a non-uuid channel id is denied, not thrown", async () => {
     expect(await canUserJoinRoom("channel:not-a-uuid", OWNER)).toBe(false);
+  });
+});
+
+/**
+ * 73a20ec2 — an API-key socket (realtime:observe) used to skip the gate and
+ * join ANY room. It now joins what its OWNER may join, narrowed by the key's
+ * bound workspace and its grant. OWNER is an editor of A and of B; every key
+ * below acts for OWNER, so the owner's check alone would admit B everywhere.
+ */
+describe("canPrincipalJoinRoom(service) — the key's owner, narrowed to its workspace and grant", () => {
+  const AGENT = randomUUID(); // the key's own (agent) user
+
+  async function twoSpaces() {
+    const a = await world();
+    const b = randomUUID();
+    await q(
+      `insert into workspaces (id, owner_id, name) values ($1, $2, 'B')`,
+      [b, OWNER]
+    );
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role)
+       values (gen_random_uuid(), $1, $2, 'editor')`,
+      [b, OWNER]
+    );
+    return { a, b };
+  }
+
+  async function key(args: {
+    grants: Array<{ permissions: string[]; workspaceIds?: string[] }>;
+    bound?: string;
+  }) {
+    const apiKeyId = randomUUID();
+    for (const g of args.grants) {
+      await q(
+        `insert into grants (api_key_id, principal_user_id, on_behalf_of, permissions, workspace_ids, created_by)
+         values ($1, $2, $3, $4::text[], $5::uuid[], $3)`,
+        [
+          apiKeyId,
+          AGENT,
+          OWNER,
+          `{${g.permissions.join(",")}}`,
+          g.workspaceIds ? `{${g.workspaceIds.join(",")}}` : null,
+        ]
+      );
+    }
+    return {
+      kind: "service" as const,
+      apiKeyId,
+      userId: AGENT,
+      ownerUserId: OWNER,
+      workspaceId: args.bound ?? null,
+    };
+  }
+
+  async function objectRoom(ws: string) {
+    const id = randomUUID();
+    await q(
+      `insert into channels (id, user_id, workspace_id, channel_type, scope, status, title, context_object_type, context_object_id)
+       values ($1, $2, $3, 'group', 'workspace', 'active', 'doc', 'document', $4)`,
+      [id, OWNER, ws, randomUUID()]
+    );
+    return id;
+  }
+
+  it("a grant pinned to A joins A's workspace and channels — not B's workspace, channel or document room", async () => {
+    const { a, b } = await twoSpaces();
+    const k = await key({
+      grants: [{ permissions: ["*"], workspaceIds: [a] }],
+    });
+    const chanA = await channel({ ws: a, type: "group" });
+    const chanB = await channel({ ws: b, type: "group" });
+    const docB = await objectRoom(b);
+    // Control: the owner alone may join every one of B's rooms.
+    expect(await canUserJoinRoom(`workspace:${b}`, OWNER)).toBe(true);
+    expect(await canUserJoinRoom(`channel:${chanB}`, OWNER)).toBe(true);
+    expect(await canUserJoinRoom(`channel:${docB}`, OWNER)).toBe(true);
+
+    expect(await canPrincipalJoinRoom(`workspace:${a}`, k)).toBe(true);
+    expect(await canPrincipalJoinRoom(`channel:${chanA}`, k)).toBe(true);
+    expect(await canPrincipalJoinRoom(`workspace:${b}`, k)).toBe(false);
+    expect(await canPrincipalJoinRoom(`channel:${chanB}`, k)).toBe(false);
+    expect(await canPrincipalJoinRoom(`channel:${docB}`, k)).toBe(false);
+  });
+
+  it("a key BOUND to A (api_keys.workspace_id) with a pod-wide grant joins A only", async () => {
+    const { a, b } = await twoSpaces();
+    const k = await key({ grants: [{ permissions: ["*"] }], bound: a });
+    const chanB = await channel({ ws: b, type: "group" });
+    expect(await canPrincipalJoinRoom(`workspace:${a}`, k)).toBe(true);
+    expect(await canPrincipalJoinRoom(`workspace:${b}`, k)).toBe(false);
+    expect(await canPrincipalJoinRoom(`channel:${chanB}`, k)).toBe(false);
+  });
+
+  it("a pod-wide key joins what its owner joins, and no space its owner is not in", async () => {
+    const { b } = await twoSpaces();
+    const k = await key({ grants: [{ permissions: ["*"] }] });
+    const elsewhere = randomUUID();
+    await q(
+      `insert into workspaces (id, owner_id, name) values ($1, $2, 'C')`,
+      [elsewhere, WS_MEMBER]
+    );
+    expect(await canPrincipalJoinRoom(`workspace:${b}`, k)).toBe(true);
+    expect(await canPrincipalJoinRoom(`workspace:${elsewhere}`, k)).toBe(false);
+  });
+
+  it("a key with no live grant joins only its own user room — never its owner's", async () => {
+    const { a } = await twoSpaces();
+    const k = await key({ grants: [] });
+    expect(await canPrincipalJoinRoom(`workspace:${a}`, k)).toBe(false);
+    expect(await canPrincipalJoinRoom(`user:${AGENT}`, k)).toBe(true);
+    expect(await canPrincipalJoinRoom(`user:${OWNER}`, k)).toBe(false);
+  });
+
+  it("a channel-only grant reads channels, not the space's whole event feed", async () => {
+    const { a } = await twoSpaces();
+    const k = await key({ grants: [{ permissions: ["channel.read"] }] });
+    const chanA = await channel({ ws: a, type: "group" });
+    expect(await canPrincipalJoinRoom(`channel:${chanA}`, k)).toBe(true);
+    expect(await canPrincipalJoinRoom(`workspace:${a}`, k)).toBe(false);
   });
 });

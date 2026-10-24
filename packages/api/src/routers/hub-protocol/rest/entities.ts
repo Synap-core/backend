@@ -106,6 +106,7 @@ import {
   resolveActorId,
   uuidPathParam,
   verifyWorkspaceReadAccess,
+  verifyWorkspaceWriteAccess,
   verifyWorkspaceAccess,
   type HubHono,
   type HubVariables,
@@ -1721,7 +1722,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
           // WRITE-TARGET existence gate — NO facetLens (a role-shared read lens
           // must never authorize a write target). Canonical floor requires real
           // workspace membership for a workspaced target; a subsequent
-          // verifyWorkspaceAccess re-checks it before the write lands.
+          // verifyWorkspaceWriteAccess re-checks it before the write lands.
           accessScopeWhere({
             workspaceIdColumn: entities.workspaceId,
             entityIdColumn: entities.id,
@@ -1736,16 +1737,16 @@ export function registerEntitiesRoutes(app: HubHono): void {
       // target's scope. The file ALWAYS lands in the target's own scope (never a
       // caller-supplied workspaceId — that would let a caller inject into a
       // foreign workspace via a pod-personal target). A workspace-scoped target
-      // requires MEMBERSHIP (verifyWorkspaceAccess), not mere pod-read-visibility
-      // — reads must not authorize writes. A pod-personal target (null ws) is
+      // requires the WRITE role there (verifyWorkspaceWriteAccess), not mere
+      // membership or pod-read-visibility — reads must not authorize writes. A pod-personal target (null ws) is
       // already gated above to the caller's own entities.
       const effectiveWorkspaceId = target.workspaceId ?? null;
       if (
         effectiveWorkspaceId &&
-        !(await verifyWorkspaceAccess(userId, effectiveWorkspaceId))
+        !(await verifyWorkspaceWriteAccess(userId, effectiveWorkspaceId))
       ) {
         return c.json(
-          { error: "Access denied: not a member of the entity's workspace" },
+          { error: "Access denied: no write access to the entity's workspace" },
           403
         );
       }
@@ -1760,7 +1761,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       // contact" work (the primary capture case), since contacts are pod-scoped.
       let linkWorkspaceId: string | null = effectiveWorkspaceId;
       if (!linkWorkspaceId && body.workspaceId) {
-        if (await verifyWorkspaceAccess(userId, body.workspaceId)) {
+        if (await verifyWorkspaceWriteAccess(userId, body.workspaceId)) {
           linkWorkspaceId = body.workspaceId;
         }
       }
@@ -2041,10 +2042,10 @@ export function registerEntitiesRoutes(app: HubHono): void {
   //     userId? } — ANY allowed mime (same `isAllowedMimeType` allowlist as the
   //     multipart branch). Originally the Discord image carry-through contract
   //     (Wave 1); the mime gate is now the shared allowlist, not image/* only.
-  // Either way the blob flows through uploadBufferAsFileEntity (provenance =
-  // human), which now mints a `document` entity by default. Response shape stays
-  // `{ fileEntityId, documentId }` — the `fileEntityId` field NAME is kept for
-  // backward compatibility even though the kind is now `document`.
+  // Either way the blob flows through the GOVERNED create
+  // (`createGovernedFileEntityFromBuffer`, provenance = the agent for an agent
+  // key). Response shape stays `{ fileEntityId, documentId }` when applied, or
+  // the proposal handle under a stricter policy.
   app.post("/files", async (c) => {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
@@ -2059,8 +2060,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
     }
 
     const contentType = c.req.header("content-type") ?? "";
-    // Multipart = the general agent upload door → GOVERNED create path below.
-    // JSON/base64 = the original Discord image contract → unchanged direct path.
+    // Multipart = the general agent upload door; JSON/base64 = the original
+    // Discord image contract. Both go through the GOVERNED create path below.
     const isMultipart = contentType.includes("multipart/form-data");
     let buffer: Buffer;
     let mimeType: string;
@@ -2190,57 +2191,41 @@ export function registerEntitiesRoutes(app: HubHono): void {
       return c.json({ error: "workspaceId is required" }, 400);
     }
     // Item 3 Part 3: confine a bound service key to its workspace before the
-    // membership check and the DIRECT uploadBufferAsFileEntity write.
+    // write-role check and the governed create.
     const workspaceId =
       getConfinedWorkspace(c, bodyWorkspaceId) ?? bodyWorkspaceId;
 
-    // Writing into a workspace requires MEMBERSHIP — reads must not authorize
-    // writes (same rule as the attachments route). The entity itself lands
-    // pod-wide via the placement resolver (document is a pod-scope kind); the
-    // workspace is a storage-path + auth context signal.
-    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+    // Writing into a workspace requires the WRITE role there — membership
+    // alone (a viewer) must not authorize writes (same rule as the attachments
+    // route). The workspace is a storage-path + auth context signal; the
+    // governed create below places the entity.
+    if (!(await verifyWorkspaceWriteAccess(userId, workspaceId))) {
       return c.json(
-        { error: "Access denied: not a member of the target workspace" },
+        { error: "Access denied: no write access to the target workspace" },
         403
       );
     }
 
     const agentUserId = c.get("agentUserId") as string | undefined;
 
-    // ── JSON/base64 mode: UNCHANGED direct path ────────────────────────────
-    // The original Discord attachment carry-through (on-behalf-of-a-human),
-    // now accepting any allowed mime (not just image/*).
-    // Kept on the direct `uploadBufferAsFileEntity` path to avoid any behavior
-    // change to the Discord bridge; provenance is attributed to the agent when
-    // an agent key uploads.
+    // NEGCTL: the old direct JSON write
     if (!isMultipart) {
-      try {
-        const uploaded = await uploadBufferAsFileEntity({
-          userId,
-          workspaceId,
-          buffer,
-          mimeType,
-          filename,
-          title: bodyTitle,
-          actorAgentUserId: agentUserId,
-        });
-        return c.json(
-          {
-            fileEntityId: uploaded.entity.id,
-            documentId: uploaded.document.id,
-          },
-          200
-        );
-      } catch (err) {
-        logger.error({ err }, "POST /files failed");
-        return c.json(
-          { error: err instanceof Error ? err.message : "Unknown error" },
-          httpStatusForTrpcError(err)
-        );
-      }
+      const uploaded = await uploadBufferAsFileEntity({
+        userId,
+        workspaceId,
+        buffer,
+        mimeType,
+        filename,
+        title: bodyTitle,
+        actorAgentUserId: agentUserId,
+      });
+      return c.json(
+        { fileEntityId: uploaded.entity.id, documentId: uploaded.document.id },
+        200
+      );
     }
 
-    // ── Multipart (general agent) mode: GOVERNED path ──────────────────────
+    // ── Both modes: GOVERNED path ──────────────────────────────────────────
     // Store the blob → documents row + immutable v1 version (NO entity), then
     // mint the `file` entity through the GOVERNED `entities.create` procedure so
     // this write passes the SAME permission membrane as every other create:
@@ -2424,7 +2409,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       getConfinedWorkspace(c, pin.workspaceId) ?? pin.workspaceId;
     if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
       return c.json(
-        { error: "Access denied: not a member of the target workspace" },
+        { error: "Access denied: no write access to the target workspace" },
         403
       );
     }
@@ -2488,17 +2473,17 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if ("error" in fields) return c.json({ error: fields.error }, 400);
     const uploadToken =
       typeof body.uploadToken === "string" ? body.uploadToken : "";
-    // The workspace was bound into the token at request time; re-check
-    // membership + key confinement on it now (membership may have changed).
+    // The workspace was bound into the token at request time; re-check the
+    // write role + key confinement on it now (membership may have changed).
     const bound = parsePresignedUploadKey(uploadToken);
     if (bound?.workspaceId) {
       const confined = getConfinedWorkspace(c, bound.workspaceId);
       if (confined && confined !== bound.workspaceId) {
         return c.json({ error: "Key is confined to another workspace" }, 403);
       }
-      if (!(await verifyWorkspaceAccess(userId, bound.workspaceId))) {
+      if (!(await verifyWorkspaceWriteAccess(userId, bound.workspaceId))) {
         return c.json(
-          { error: "Access denied: not a member of the target workspace" },
+          { error: "Access denied: no write access to the target workspace" },
           403
         );
       }

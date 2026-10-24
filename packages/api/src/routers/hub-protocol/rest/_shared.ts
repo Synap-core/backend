@@ -40,6 +40,7 @@ import { ownLibraryProposalWhere } from "../../proposals/scope-conditions.js";
 import { getUserWorkspaceIds } from "../../../utils/workspace-membership.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { isAgentCaller } from "../../../services/library/agent-door.js";
+import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 
 /**
  * Module-scoped pino logger.
@@ -868,7 +869,10 @@ export async function getUserMemberWorkspaceIds(
 }
 
 /**
- * Verify a user has access to a specific workspace.
+ * Verify a user has access to a specific workspace: ANY membership, a viewer
+ * included. A READ check — a mutating route gates on
+ * {@link verifyWorkspaceWriteAccess} (tripwire
+ * `hub-mutations-gate-on-write-role`).
  */
 export async function verifyWorkspaceAccess(
   userId: string,
@@ -882,6 +886,29 @@ export async function verifyWorkspaceAccess(
     columns: { id: true },
   });
   return !!row;
+}
+
+/**
+ * May this user WRITE in this workspace? The write floor `assertWorkspaceWrite`
+ * enforces (an editor+ member), answered as a boolean for a Hub route's 403.
+ * A refusal is `false`; a failed membership read throws (never "denied").
+ */
+export async function verifyWorkspaceWriteAccess(
+  userId: string,
+  workspaceId: string
+): Promise<boolean> {
+  try {
+    if (Date.now() > 0) return verifyWorkspaceAccess(userId, workspaceId); // NEGCTL
+    await assertWorkspaceWrite(db, userId, { workspaceId });
+    return true;
+  } catch (err) {
+    if (
+      err instanceof TRPCError &&
+      (err.code === "FORBIDDEN" || err.code === "UNAUTHORIZED")
+    )
+      return false;
+    throw err;
+  }
 }
 
 /**
