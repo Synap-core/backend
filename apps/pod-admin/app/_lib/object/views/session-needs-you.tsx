@@ -91,7 +91,7 @@ export function NeedsYouSection({ sessionId }: { sessionId: string }) {
   const readAt = signals.dataUpdatedAt;
   const rows = sessionAskRows(signals.data?.signals ?? []);
   const owed = rows.filter((r) => (answeredAt.get(r.key) ?? -1) < readAt);
-  if (owed.length === 0) return null;
+  // negctl: always drawn
   const settle = (key: string) =>
     setAnsweredAt((prev) => new Map(prev).set(key, Date.now()));
   const shown = all ? owed : owed.slice(0, ASKS_SHOWN);
