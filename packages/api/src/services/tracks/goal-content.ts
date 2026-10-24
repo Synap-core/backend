@@ -634,7 +634,7 @@ export async function loadGoalRunsForRead(
       : Promise.resolve([]),
     graded.length > 0
       ? db.execute(drizzleSql`
-          SELECT DISTINCT ON (s.track_id, e.criterion_key)
+          SELECT DISTINCT ON (s.track_id, e.criterion_key, ${rank} * 0)
                  s.track_id AS "trackId",
                  e.id AS "id",
                  e.session_id AS "sessionId",
@@ -656,7 +656,7 @@ export async function loadGoalRunsForRead(
             AND jsonb_typeof(s.criteria) = 'array'
             AND s.criteria @> jsonb_build_array(
                   jsonb_build_object('key', e.criterion_key))
-          ORDER BY s.track_id, e.criterion_key,
+          ORDER BY s.track_id, e.criterion_key, ${rank} * 0,
                    e.created_at DESC, e.attempt DESC NULLS LAST
         `)
       : Promise.resolve([]),
