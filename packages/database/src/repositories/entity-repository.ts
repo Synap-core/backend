@@ -810,6 +810,20 @@ export class EntityRepository extends BaseRepository<
       };
     }
 
+    // ONE TITLE (dogfood 68b9b7c2): create stores the title in the bag too
+    // (step 2 merges it, for the modeled `title` def — required on task and
+    // event), so `properties.title` is the column's projection and a rename
+    // moves it. Without this a rename left the OLD name in the bag (and in
+    // the write receipt). The column wins over a different `title` sent in
+    // the same patch's properties.
+    const titleProjected =
+      data.title !== undefined &&
+      "title" in updatedProperties &&
+      updatedProperties.title !== data.title;
+    if (titleProjected) {
+      updatedProperties = { ...updatedProperties, title: data.title };
+    }
+
     // A changed KIND has a different lifecycle (or none): re-derive the
     // columns from the projection the new kind reads, never keep the old ones.
     const retyped = newProfileId
@@ -846,7 +860,7 @@ export class EntityRepository extends BaseRepository<
 
     // 4. Reindex properties if changed — use the same lens as validation
     const reindexProfileId = newProfileId || existing.profileId;
-    if (shouldValidateProperties && reindexProfileId) {
+    if ((shouldValidateProperties || titleProjected) && reindexProfileId) {
       const lensWorkspaceId = data.workspaceId ?? existing.workspaceId ?? null;
       this.propertyIndex
         .reindexEntity(
