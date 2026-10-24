@@ -12,7 +12,7 @@
  *   • Proposed changes lists only this session's pending proposals, each a
  *     door to its review.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { askFingerprint, type Ask } from "@synap-core/types/ask";
@@ -102,6 +102,11 @@ const {
     seen: {
       signals: [] as unknown[],
       proposals: [] as unknown[],
+      /** A read that failed: with no data yet, or a poll after a good read. */
+      failed: { signals: null, proposals: null } as Record<
+        "signals" | "proposals",
+        null | "first-read" | "poll"
+      >,
     },
   };
 });
@@ -150,18 +155,23 @@ vi.mock("../../../../lib/trpc", () => {
             const all = seen.signals as Array<{
               target?: { id?: string } | null;
             }>;
+            const failed = seen.failed.signals;
             return {
-              data: {
-                signals: input.sessionId
-                  ? all.filter(
-                      (s) =>
-                        s.target?.id === input.sessionId ||
-                        (s as { kind?: string }).kind === "proposal-cluster"
-                    )
-                  : all,
-              },
+              data:
+                failed === "first-read"
+                  ? undefined
+                  : {
+                      signals: input.sessionId
+                        ? all.filter(
+                            (s) =>
+                              s.target?.id === input.sessionId ||
+                              (s as { kind?: string }).kind ===
+                                "proposal-cluster"
+                          )
+                        : all,
+                    },
               isLoading: false,
-              error: null,
+              error: failed ? new Error("pod unreachable") : null,
               dataUpdatedAt: 1,
               refetch() {},
             };
@@ -173,15 +183,19 @@ vi.mock("../../../../lib/trpc", () => {
           useQuery: (input: { sessionId?: string }) => {
             calls.push(["proposals.list", input]);
             const all = seen.proposals as Array<{ id: string }>;
+            const failed = seen.failed.proposals;
             return {
-              data: {
-                items: input.sessionId
-                  ? all.filter((p) => p.id === proposalHere.id)
-                  : all,
-                pagination: { hasMore: false },
-              },
+              data:
+                failed === "first-read"
+                  ? undefined
+                  : {
+                      items: input.sessionId
+                        ? all.filter((p) => p.id === proposalHere.id)
+                        : all,
+                      pagination: { hasMore: false },
+                    },
               isLoading: false,
-              error: null,
+              error: failed ? new Error("pod unreachable") : null,
               refetch() {},
             };
           },
@@ -212,6 +226,11 @@ const text = (html: string) =>
     .replace(/&quot;/g, '"')
     .replace(/&amp;/g, "&")
     .replace(/\s+/g, " ");
+
+afterEach(() => {
+  seen.failed.signals = null;
+  seen.failed.proposals = null;
+});
 
 function render(node: ReactElement): string {
   calls.length = 0;
@@ -273,6 +292,23 @@ describe("Needs you — the session's own asks, answered in place", () => {
     seen.signals = [cluster];
     expect(render(<NeedsYouSection sessionId={SESSION_ID} />)).toBe("");
   });
+
+  it("a read that failed says so, with a retry — never drawn as nothing owed", () => {
+    seen.signals = [];
+    seen.failed.signals = "first-read";
+    const seenText = text(render(<NeedsYouSection sessionId={SESSION_ID} />));
+    expect(seenText).toContain("couldn’t be read");
+    expect(seenText).toContain("Retry");
+  });
+
+  it("a poll that fails after a good read keeps the ask (and its answer) on screen", () => {
+    seen.signals = [owedHere];
+    seen.failed.signals = "poll";
+    const seenText = text(render(<NeedsYouSection sessionId={SESSION_ID} />));
+    expect(seenText).toContain("Which day do we ship?");
+    expect(buttons.some((b) => b.children === "Send answer")).toBe(true);
+    expect(seenText).toContain("couldn’t be read");
+  });
 });
 
 describe("Proposed changes — this session's pending proposals", () => {
@@ -298,5 +334,24 @@ describe("Proposed changes — this session's pending proposals", () => {
   it("draws nothing when the session proposed nothing", () => {
     seen.proposals = [];
     expect(render(<ProposedChangesSection sessionId={SESSION_ID} />)).toBe("");
+  });
+
+  it("a read that failed says so — never drawn as nothing proposed", () => {
+    seen.proposals = [];
+    seen.failed.proposals = "first-read";
+    const seenText = text(
+      render(<ProposedChangesSection sessionId={SESSION_ID} />)
+    );
+    expect(seenText).toContain("couldn’t be read");
+  });
+
+  it("a poll that fails after a good read keeps the proposals listed", () => {
+    seen.proposals = [proposalHere];
+    seen.failed.proposals = "poll";
+    const seenText = text(
+      render(<ProposedChangesSection sessionId={SESSION_ID} />)
+    );
+    expect(seenText).toContain("Draft the launch post");
+    expect(seenText).toContain("couldn’t be read");
   });
 });

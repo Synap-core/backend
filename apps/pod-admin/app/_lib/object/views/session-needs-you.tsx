@@ -18,7 +18,9 @@
  *     is where a twin or a removal is shown before anyone decides.
  *
  * Both are OMITTED when nothing waits; a read that failed says so, with a
- * retry, and is never drawn as "nothing waits".
+ * retry, and is never drawn as "nothing waits". A poll that fails after a
+ * good read keeps the rows on screen (and any half-made answer in them) and
+ * says beside them that the refresh failed.
  */
 
 import { useState } from "react";
@@ -78,20 +80,23 @@ export function NeedsYouSection({ sessionId }: { sessionId: string }) {
   useReauthOnUnauthorized(signals.error);
 
   if (signals.isLoading) return null;
-  if (signals.error) {
-    return (
-      <SectionCard variant="flat" title="Needs you">
-        <ResourceRowError
-          message="What this session is waiting on you for couldn’t be read."
-          onRetry={() => void signals.refetch()}
-        />
-      </SectionCard>
-    );
-  }
+  // A failed poll must never swap the rows (and a half-made answer) away.
+  const failure = signals.error ? (
+    <ResourceRowError
+      message="What this session is waiting on you for couldn’t be read."
+      onRetry={() => void signals.refetch()}
+    />
+  ) : null;
   const readAt = signals.dataUpdatedAt;
   const rows = sessionAskRows(signals.data?.signals ?? []);
   const owed = rows.filter((r) => (answeredAt.get(r.key) ?? -1) < readAt);
-  if (owed.length === 0) return null;
+  if (owed.length === 0) {
+    return failure ? (
+      <SectionCard variant="flat" title="Needs you">
+        {failure}
+      </SectionCard>
+    ) : null;
+  }
   const settle = (key: string) =>
     setAnsweredAt((prev) => new Map(prev).set(key, Date.now()));
   const shown = all ? owed : owed.slice(0, ASKS_SHOWN);
@@ -102,6 +107,7 @@ export function NeedsYouSection({ sessionId }: { sessionId: string }) {
       title="Needs you"
       hint={`${owed.length} waiting on you`}
     >
+      {failure}
       <ul className="flex flex-col gap-3">
         {shown.map((row) => (
           <li key={row.key} className={`${BOX} px-4 pt-4`}>
@@ -176,18 +182,20 @@ export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
   useReauthOnUnauthorized(list.error);
 
   if (list.isLoading) return null;
-  if (list.error) {
-    return (
-      <SectionCard variant="flat" title="Proposed changes">
-        <ResourceRowError
-          message="The changes this session proposed couldn’t be read."
-          onRetry={() => void list.refetch()}
-        />
-      </SectionCard>
-    );
-  }
+  const failure = list.error ? (
+    <ResourceRowError
+      message="The changes this session proposed couldn’t be read."
+      onRetry={() => void list.refetch()}
+    />
+  ) : null;
   const items = list.data?.items ?? [];
-  if (items.length === 0) return null;
+  if (items.length === 0) {
+    return failure ? (
+      <SectionCard variant="flat" title="Proposed changes">
+        {failure}
+      </SectionCard>
+    ) : null;
+  }
   const more = list.data?.pagination.hasMore ? "+" : "";
   const shown = all ? items : items.slice(0, PROPOSALS_SHOWN);
 
@@ -197,6 +205,7 @@ export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
       title="Proposed changes"
       hint={`${items.length}${more} waiting for review`}
     >
+      {failure}
       <ul className="flex flex-col">
         {shown.map((p) => {
           const { heading } = proposalHeading(p, p.request?.data ?? p.data);
