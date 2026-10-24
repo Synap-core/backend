@@ -14,7 +14,6 @@ import type {
 } from "../utils/create-unified-event.js";
 import { createUnifiedEvent } from "../utils/create-unified-event.js";
 import { unifiedEventToSynapEvent } from "../utils/unified-event-to-synap-event.js";
-import { getActingAgentUserId } from "../utils/request-write-context.js";
 
 export interface RepositoryConfig {
   subjectType: SubjectType | string;
@@ -69,8 +68,6 @@ export abstract class BaseRepository<TEntity, TCreateInput, TUpdateInput> {
     // `agentUserId` only, never `isAgent`: `is_agent AND proposal_id IS NULL`
     // is the "ungoverned AI write" the daily ceiling counts, and this echo
     // cannot know the proposal its write went through.
-    const actingAgentUserId = getActingAgentUserId();
-    if (actingAgentUserId) synapEvent.agentUserId = actingAgentUserId;
 
     // Store in event repository (database).
     //

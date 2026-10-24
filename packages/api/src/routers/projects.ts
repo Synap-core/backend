@@ -692,7 +692,6 @@ export const projectsRouter = router({
         // person named (FB1020 B3, `own-organise.ts`); a derived one names
         // nothing. Without it only `set_project_focus` could name the project
         // (dogfood ea47d64e).
-        sessionId: ctx.sessionId ?? null,
       })
     ),
 
