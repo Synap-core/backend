@@ -396,6 +396,38 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   },
   {
     /**
+     * A delegate COUNTERED the commitment they were asked for (W3, review
+     * fixes 2026-10-24): the goal's owner — and its judge, when that is
+     * someone else — decides whether to ask again with the counter-offer or
+     * keep the ask. Producer: `applyTrackParticipantChange`
+     * (`services/tracks/track-participants.ts`), on the counter itself.
+     * `sourceId` is the goal; `groupKey` the delegate on that goal
+     * (`trackCounterGroupKey`). An ITEM in Needs you; settled when that
+     * delegate's commitment changes again (asked again, answered, removed)
+     * or the goal ends (`goal-end.ts`). A nudge, never a verdict.
+     */
+    type: "track.commitment_countered",
+    category: "data",
+    label: "Counter-offer",
+    icon: "message-square",
+    priority: "normal",
+    titleTemplate: "{{delegateName}} counters on {{trackName}}",
+    bodyTemplate:
+      "Asked for “{{commitment}}”, they would commit to: {{counterText}}. Ask again with it, or keep the ask.",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Review",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
+  {
+    /**
      * A goal this goal waited on (`blocked_by`) ENDED, and that is news:
      * closed and NOTHING else holds it now (the last-open-blocker rule), or
      * dropped (it did not deliver: the goal waits until its owner re-plans).

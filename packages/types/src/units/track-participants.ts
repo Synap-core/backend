@@ -106,6 +106,18 @@ export const TRACK_REPORT_ESCALATE_AFTER_HOURS = 48;
  * and when it reported, so a second report after a re-ask is news again.
  * Acknowledging marks every row under the participant's prefix actioned.
  */
+/**
+ * One open "counter-offer" item per delegate on a goal
+ * (`track.commitment_countered`) — keyed by the person, so asking again
+ * (which keeps their row) and the goal ending can both settle it.
+ */
+export function trackCounterGroupKey(
+  trackId: string,
+  principalId: string
+): string {
+  return `track-counter:${trackId}:${principalId}`;
+}
+
 export function trackReportGroupKeyPrefix(participantId: string): string {
   return `track-report:${participantId}:`;
 }

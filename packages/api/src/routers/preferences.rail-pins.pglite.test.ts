@@ -262,7 +262,10 @@ describe("goal pins — This week (D4)", () => {
   });
 
   it("pins a goal under its track: key, with no kind", async () => {
-    const { pins } = await as(U).pinSurface({ trackId: goals[0]! });
+    const { pins } = await as(U).pinSurface({
+      trackId: goals[0]!,
+      includeGoals: true,
+    });
     expect(pins).toContainEqual({
       key: `track:${goals[0]}`,
       profileSlug: null,
@@ -325,6 +328,21 @@ describe("goal pins — This week (D4)", () => {
         withGoals.filter((p) => !p.trackId).map((p) => p.key)
       );
     }
+    // The WRITE doors answer the same way: no goal pin unless asked.
+    const surfaceOnly = (pins: Array<{ trackId: string | null }>) =>
+      pins.every((p) => p.trackId === null);
+    const goalKey = withGoals.find((p) => p.trackId)!.key;
+    const written = [
+      await as(U).pinSurface({ profileSlug: "post" }),
+      await as(U).reorderRailPins({ keys: [goalKey] }),
+      await as(U).unpinSurface({ key: "kind:post" }),
+    ];
+    for (const w of written) expect(surfaceOnly(w.pins)).toBe(true);
+    const asked = await as(U).reorderRailPins({
+      keys: [goalKey],
+      includeGoals: true,
+    });
+    expect(asked.pins.some((p) => p.key === goalKey)).toBe(true);
   });
 
   it("a pinned goal that is no longer readable leaves the read and frees its place", async () => {

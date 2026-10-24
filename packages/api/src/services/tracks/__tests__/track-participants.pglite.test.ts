@@ -922,6 +922,47 @@ describe("a delegate answers their OWN commitment", () => {
     expect(res.status).toBe("updated");
   });
 
+  it("a COUNTER reaches the owner and the judge as a counter-offer; asking again settles it", async () => {
+    const id = await goal("Countered");
+    await add(id, person(OWNER), JUDGE, "judge");
+    await add(id, person(OWNER), DELEGATE, "delegate", "Write the brief");
+    const row = (await rowOf(id, DELEGATE, "delegate"))!;
+    await changeTrackParticipants({
+      trackId: id,
+      actor: person(DELEGATE),
+      change: {
+        op: "move",
+        participantId: row.id,
+        move: "counter",
+        text: "An outline, not the brief",
+      },
+    });
+    const items = async () =>
+      (
+        await q<{ user_id: string; status: string; title: string }>(
+          `select user_id, status, title from notifications
+            where type = 'track.commitment_countered' and source_id = $1
+            order by user_id`,
+          [id]
+        )
+      ).rows;
+    expect((await items()).map((r) => [r.user_id, r.status])).toEqual(
+      [
+        [JUDGE, "unread"],
+        [OWNER, "unread"],
+      ].sort()
+    );
+    // Asked again with the counter-offer: answered, it leaves Needs you.
+    await add(
+      id,
+      person(OWNER),
+      DELEGATE,
+      "delegate",
+      "An outline, not the brief"
+    );
+    expect((await items()).every((r) => r.status === "actioned")).toBe(true);
+  });
+
   it("counter needs words; impossible only after accepting; the report is acknowledged by the owner, never by an agent", async () => {
     const id = await goal("Report");
     await add(id, person(OWNER), DELEGATE, "delegate", "Review it");

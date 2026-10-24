@@ -9,7 +9,8 @@
  *     commitments stop measuring silence (`loadTrackParticipantViews`), so
  *     "Silent 3 d" never shows on a closed goal;
  *   · its notifications (code.md): an escalated "impossible" report
- *     (`track.report_unacknowledged`) and a loop stop (`track.loop_stopped`)
+ *     (`track.report_unacknowledged`), a counter-offer
+ *     (`track.commitment_countered`) and a loop stop (`track.loop_stopped`)
  *     are settled — the judge's items are settled by `refreshGoalJudgements`;
  *   · its loop's pending proposals (plan.md): EXPIRED — the moment passed,
  *     nobody decided — with their bell rows (`markProposalNotificationsActioned`).
@@ -83,6 +84,16 @@ export async function settleEndedGoal(input: {
           )
         );
     }
+    // A counter-offer on an ended goal asks nobody anything either.
+    await db
+      .update(notifications)
+      .set({ status: "actioned", readAt: now })
+      .where(
+        and(
+          eq(notifications.type, "track.commitment_countered"),
+          like(notifications.groupKey, `track-counter:${trackId}:%`)
+        )
+      );
     await db
       .update(notifications)
       .set({ status: "actioned", readAt: now })
