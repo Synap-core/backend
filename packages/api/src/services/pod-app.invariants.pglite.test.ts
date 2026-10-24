@@ -112,13 +112,15 @@ import { previewPermissionDecision } from "../utils/permission-check.js";
 import { resolveKeyIdentity } from "../access/key-identity.js";
 import { apiKeyService } from "./api-keys.js";
 import { reapplyAgentKeyGrants } from "./agent-identity-service.js";
-import { revokeApp } from "./app-connect.js";
+import { oauthAppPodWideKinds, revokeApp } from "./app-connect.js";
 
 const ISSUER = "https://pod.test.synap.live";
 const STUDIO = "https://studio.example.com/.well-known/synap-client.json";
 const STUDIO_CB = "https://studio.example.com/api/synap/callback";
 const NOTES = "https://notes.example.com/.well-known/synap-client.json";
 const NOTES_CB = "https://notes.example.com/cb";
+const TEMPLATED = "https://templated.example.com/.well-known/synap-client.json";
+const TEMPLATED_CB = "https://templated.example.com/cb";
 const SYNAP_APP =
   "https://content-studio.synap.live/.well-known/synap-client.json";
 const SYNAP_APP_CB = "https://content-studio.synap.live/cb";
@@ -225,6 +227,10 @@ beforeAll(async () => {
     `insert into workspaces (id, name, owner_id, archived_at) values ($1, 'Archived', $2, now())`,
     [ARCHIVED, OWNER]
   );
+  // Brand was made from the Content OS template; the others from none.
+  await q(`update workspaces set package_slug = 'content-os' where id = $1`, [
+    BRAND,
+  ]);
   for (const [ws, role] of [
     [SHARED, "editor"],
     [VIEWING, "viewer"],
@@ -249,6 +255,7 @@ beforeAll(async () => {
   await cacheApp(STUDIO, STUDIO_CB, "Content Studio", ["content-studio"]);
   await cacheApp(NOTES, NOTES_CB, "Content Studio");
   await cacheApp(SYNAP_APP, SYNAP_APP_CB, "Content Studio");
+  await cacheApp(TEMPLATED, TEMPLATED_CB, "Templated", ["content-os"]);
 }, 120_000);
 
 const HUMAN_CTX = (userId: string, extra: Record<string, unknown> = {}) =>
@@ -417,6 +424,60 @@ describe("the consent screen shows the app as its domain, and what it may be giv
     expect(ctx.app?.verified).toBe(true);
   });
 
+  it("each offered space carries its template; a declared template never narrows the offer", async () => {
+    const ctx = await getOAuthConsentContext(
+      params(TEMPLATED, TEMPLATED_CB, `${READ} ${CREATE}`),
+      OWNER
+    );
+    expect(ctx.app!.templates).toEqual(["content-os"]);
+    const offer = Object.fromEntries(
+      ctx.app!.permissions.map((p) => [
+        p.permission,
+        p.workspaces.map((w) => [w.workspaceName, w.templateSlug]),
+      ])
+    );
+    // The upper bound is the person's reach, exactly as without a template:
+    // the spaces from no template stay on offer (the screen only starts
+    // with Brand ticked).
+    expect(offer[READ]).toEqual([
+      ["Brand", "content-os"],
+      ["Shared", null],
+      ["Viewing", null],
+    ]);
+    expect(offer[CREATE]).toEqual([
+      ["Brand", "content-os"],
+      ["Shared", null],
+    ]);
+  });
+
+  it("names the pod-wide kinds it asks for, and only those", async () => {
+    const ctx = await getOAuthConsentContext(
+      params(TEMPLATED, TEMPLATED_CB, READ),
+      OWNER
+    );
+    // `post` is a system profile, pod-wide by the column default.
+    expect(ctx.app!.podWideKinds).toEqual(["post"]);
+    await q(
+      `insert into profiles (id, slug, scope, is_active, origin, entity_scope) values ($1, 'brief', 'system', true, 'system', 'workspace')`,
+      [randomUUID()]
+    );
+    await q(
+      `insert into profiles (id, slug, scope, is_active, origin, workspace_id) values ($1, 'pitch', 'workspace', true, 'system', $2)`,
+      [randomUUID(), BRAND]
+    );
+    expect(
+      await oauthAppPodWideKinds([
+        "entity.post.read",
+        "entity.post.create",
+        "entity.brief.read",
+        "entity.pitch.read",
+        "entity.ghost.read",
+        "entity.read",
+        "document.read",
+      ])
+    ).toEqual(["post"]);
+  });
+
   it("a person with no space to give a write sees an empty offer for it (the screen states it)", async () => {
     const ctx = await getOAuthConsentContext(
       params(STUDIO, STUDIO_CB, CREATE),
@@ -439,8 +500,14 @@ describe("I2 — the key is exactly the consented subset; narrowing works, widen
     ]);
     expect(record.scope).toEqual(["hub-protocol.read"]);
     expect(body.scope).toBe(READ);
+    // Brand was made from Content OS: the token names its template.
     expect(body.synap_grant).toEqual([
-      { permission: READ, workspaceId: BRAND, workspaceName: "Brand" },
+      {
+        permission: READ,
+        workspaceId: BRAND,
+        workspaceName: "Brand",
+        templateSlug: "content-os",
+      },
     ]);
     expect(body.synap_user).toEqual({ id: OWNER, name: "Ada" });
     const ttl = (new Date(record.expiresAt!).getTime() - Date.now()) / 1000;

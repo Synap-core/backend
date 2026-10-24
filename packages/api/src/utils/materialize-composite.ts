@@ -98,10 +98,18 @@ export async function createRelationsFromRefs(
       targetEntityId: string,
       type: string
     ) => Promise<string | null>;
+    /**
+     * Called once per relation op, after it settled: `created` (a new edge),
+     * `linked` (the edge was already there), `failed` (reported through
+     * `onError`), `skipped` (a self-relation, dropped). What a background
+     * approval counts its progress from.
+     */
+    onSettled?: (outcome: MaterializeOpOutcome) => void | Promise<void>;
   }
 ): Promise<MaterializeRelationResult[]> {
   const relations: MaterializeRelationResult[] = [];
   for (const op of relationOps) {
+    let outcome: MaterializeOpOutcome = "skipped";
     try {
       const sourceEntityId = resolveCompositeRef(refToRealId, op.sourceRef);
       const targetEntityId = resolveCompositeRef(refToRealId, op.targetRef);
@@ -133,6 +141,7 @@ export async function createRelationsFromRefs(
             relationId: ownRelationId,
           });
         }
+        outcome = "linked";
         continue;
       }
       // A door that can answer "proposed" must never be counted as "linked".
@@ -179,14 +188,40 @@ export async function createRelationsFromRefs(
         ...(hasId && storedAsLink ? { linkId: createdId } : {}),
         ...(preExisting ? { preExisting: true as const } : {}),
       });
+      outcome = preExisting ? "linked" : "created";
     } catch (err) {
+      outcome = "failed";
       opts?.onError?.(err, op.type, {
         sourceRef: op.sourceRef,
         targetRef: op.targetRef,
       });
+    } finally {
+      await opts?.onSettled?.(outcome);
     }
   }
   return relations;
+}
+
+/** How one operation settled — what progress counts. */
+export type MaterializeOpOutcome = "created" | "linked" | "failed" | "skipped";
+
+/**
+ * How far a materialize has got. `done` of `total` operations have settled
+ * (`total` = every operation handed in). Records and their connections are
+ * counted one by one as they land; the few config / plan / update operations
+ * settle together when the materialize returns (phase `finishing`), so `done`
+ * reaches `total` exactly once, at the end.
+ */
+export interface MaterializeProgress {
+  phase: "entities" | "relations" | "finishing";
+  done: number;
+  total: number;
+  /** New rows this run created (records and connections). */
+  created: number;
+  /** Operations resolved onto rows that already existed. */
+  linked: number;
+  /** Operations that did not land. */
+  failed: number;
 }
 
 /** One relation op that was submitted but never created — the honest detail
@@ -677,6 +712,14 @@ export interface PlanCallers {
 
 export interface MaterializeOptions {
   /**
+   * Progress, for an approval applied in the background
+   * (`services/proposals/approval-runs.ts`). Awaited after every record and
+   * every connection settles, so the caller decides how often it writes —
+   * throttle inside the callback, never by skipping calls. Absent ⇒ nothing
+   * is counted, byte-identical to before.
+   */
+  onProgress?: (progress: MaterializeProgress) => void | Promise<void>;
+  /**
    * Pin every created entity to the caller's active workspace, OVERRIDING any
    * profile pod-default `entityScope`. Imports set this so their data is
    * isolated to the target workspace (and is later purgeable on workspace
@@ -943,6 +986,27 @@ export async function materializeCompositeGraph(
   // in a prior call, absent here) still link correctly. `applyLarge` passes a
   // shared Set so the guard spans every chunk of one apply (see `idemSeen`).
   const idemSeenThisCall = options?.idemSeen ?? new Set<string>();
+  // Progress (background approval). One counter set for the whole call.
+  const progress: MaterializeProgress = {
+    phase: "entities",
+    done: 0,
+    total: operations.length,
+    created: 0,
+    linked: 0,
+    failed: 0,
+  };
+  const settle = async (
+    phase: MaterializeProgress["phase"],
+    outcome: MaterializeOpOutcome
+  ): Promise<void> => {
+    if (!options?.onProgress) return;
+    progress.phase = phase;
+    progress.done = Math.min(progress.done + 1, progress.total);
+    if (outcome === "created") progress.created++;
+    else if (outcome === "linked") progress.linked++;
+    else if (outcome === "failed") progress.failed++;
+    await options.onProgress({ ...progress });
+  };
   // Facet-attach ops deferred to pass 1.5 (see below) — collected here so a
   // facet's `contextRef` can resolve against the FULL refToRealId map, not
   // just the entities created before it in operations[].
@@ -1184,6 +1248,7 @@ export async function materializeCompositeGraph(
           i,
           `"${op.title ?? op.profileSlug}" collides with a relation type name and cannot be created as an entity`
         );
+        await settle("entities", "failed");
         continue;
       }
 
@@ -1464,6 +1529,7 @@ export async function materializeCompositeGraph(
           facets: op.facets,
         });
       }
+      await settle("entities", linkedExisting ? "linked" : "created");
     }
 
     // Pass 1.5 — declared facets (Kind + Facets), after every create_entity op
@@ -1629,6 +1695,12 @@ export async function materializeCompositeGraph(
         },
         relationExists: options?.idempotency?.relationExists,
         ownedRelationId: options?.idempotency?.ownedRelationId,
+        ...(options?.onProgress
+          ? {
+              onSettled: (outcome: MaterializeOpOutcome) =>
+                settle("relations", outcome),
+            }
+          : {}),
       }
     );
     if (planMode && relationsFailed.length > 0) {
@@ -1937,5 +2009,12 @@ export async function materializeCompositeGraph(
     throw new CompositePlanApplyError([failure], compensation);
   }
 
+  // Every remaining operation (config, plan, updates) has settled with the
+  // call: `done` reaches `total` once, here.
+  if (options?.onProgress) {
+    progress.phase = "finishing";
+    progress.done = progress.total;
+    await options.onProgress({ ...progress });
+  }
   return buildResult();
 }

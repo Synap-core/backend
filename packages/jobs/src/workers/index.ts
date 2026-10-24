@@ -103,6 +103,11 @@ import {
   IMPORT_CORPUS_QUEUE,
 } from "./import-corpus-worker.js";
 import {
+  handleProposalApprove,
+  PROPOSAL_APPROVE_EXPIRE_SECONDS,
+  PROPOSAL_APPROVE_QUEUE,
+} from "./proposal-approve-worker.js";
+import {
   handleLibraryLightRead,
   handleLibraryLightReadSweep,
   LIBRARY_LIGHT_READ_QUEUE,
@@ -334,6 +339,8 @@ const ALL_QUEUES = [
   FEED_SOURCE_ITEMS_QUEUE,
   LINKEDIN_BULK_IMPORT_QUEUE,
   IMPORT_CORPUS_QUEUE,
+  // A large approved proposal, applied in the background (handler slot, IoC).
+  PROPOSAL_APPROVE_QUEUE,
   // The Library light read (one item) + its hourly re-enqueue sweep.
   LIBRARY_LIGHT_READ_QUEUE,
   LIBRARY_LIGHT_READ_SWEEP_QUEUE,
@@ -468,6 +475,11 @@ const NO_RETRY_QUEUES = new Set<string>([]);
  */
 const LONG_WALK_QUEUES = new Map<string, number>([
   ["automation-execute", 2400],
+  // A large approval (proposal-approve-worker.ts): one delivery applies the
+  // whole graph, so a redelivery while it runs would apply it twice at once.
+  // No reaper: a dead worker's run is read as `stalled` once its heartbeat
+  // stops (services/proposals/approval-runs.ts), and resuming is idempotent.
+  [PROPOSAL_APPROVE_QUEUE, PROPOSAL_APPROVE_EXPIRE_SECONDS],
 ]);
 
 /**
@@ -800,6 +812,15 @@ export async function registerAllWorkers(): Promise<void> {
     handleImportCorpus(job)
   );
   logger.info("Registered worker: import-corpus");
+
+  // Large approved proposal (on-demand — the approve door hands a composite
+  // at or above the background threshold here). Handler slot filled by the
+  // api layer at boot (IoC). One worker: two large applies run one after the
+  // other, the second reads `queued` meanwhile.
+  await boss.work(PROPOSAL_APPROVE_QUEUE, async ([job]: any[]) =>
+    handleProposalApprove(job)
+  );
+  logger.info("Registered worker: proposal-approve");
 
   // Library light read (on save — text, summary, action chips; handler slot
   // filled by the api layer at boot, IoC) + the hourly sweep that re-enqueues
