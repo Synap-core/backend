@@ -56,10 +56,9 @@ export const TRACK_REPORT_IS_DUE = and(
   isNull(trackParticipants.acknowledgedAt),
   isNull(trackParticipants.escalatedAt),
   drizzleSql`${trackParticipants.reportedAt} < now() - (${TRACK_REPORT_ESCALATE_AFTER_HOURS}::int * interval '1 hour')`,
-  drizzleSql`EXISTS (SELECT 1 FROM ${projectTracks} WHERE ${projectTracks.id} = ${trackParticipants.trackId} AND ${projectTracks.status} IN (${drizzleSql.join(
-    LIVE_PROJECT_TRACK_STATUSES.map((s) => drizzleSql`${s}`),
-    drizzleSql`, `
-  )}))`
+  // No `drizzleSql.join` here: this is built at module load, and suites that
+  // stub `@synap/database` import it through the cron graph.
+  drizzleSql`EXISTS (SELECT 1 FROM ${projectTracks} WHERE ${projectTracks.id} = ${trackParticipants.trackId} AND ${projectTracks.status} IN ${[...LIVE_PROJECT_TRACK_STATUSES]})`
 );
 
 /** Tell each due report's goal owner, once. Returns how many were told. */

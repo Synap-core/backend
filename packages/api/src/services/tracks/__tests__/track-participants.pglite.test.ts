@@ -323,6 +323,11 @@ beforeAll(async () => {
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
+  // The column default the pod has (a new notification is `unread`): the
+  // settles compare `status <> 'actioned'`, which a NULL never satisfies.
+  await h.client!.exec(
+    `alter table notifications alter column status set default 'unread'`
+  );
   await h.client!.exec(`
     create table project_tracks (
       id uuid primary key default gen_random_uuid(),
