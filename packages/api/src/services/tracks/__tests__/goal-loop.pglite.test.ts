@@ -338,7 +338,7 @@ describe("runGoalLoop — proposes the next run", () => {
     );
     // The goal's end state rides as the run's brief.
     expect(String(data.goal)).toContain(
-      "Done looks like: The new site is live"
+      "What done looks like: The new site is live"
     );
     expect(String(data.goal)).toContain("- No broken links");
     // No session was written: a proposal only.

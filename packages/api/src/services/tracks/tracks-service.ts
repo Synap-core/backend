@@ -1672,7 +1672,7 @@ export function assertTrackTransition(
       code: "BAD_REQUEST",
       message: isTrackClosed(track)
         ? `Goal "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — that is final. Reopen it as a new version to work on it again.`
-        : `A ${track.status} track cannot move to ${to}.`,
+        : `Goal "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — it cannot move to ${resolveTrackStatusLabel(to).toLowerCase()}.`,
     });
   }
   const refusal = checkTrackClose(to, close, criteria, track.workKind);

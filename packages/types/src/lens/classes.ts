@@ -15,6 +15,8 @@
  * neither: it is ONE deduplicated status banner ({@link placeSignal} → `banner`).
  */
 
+import { GOAL_FIELD_LABELS } from "../vocabulary/index.js";
+
 /** In SECTION order (the order {@link LENS_SECTION_ORDER} draws them). */
 export const ATTENTION_CLASSES = [
   "blocking",
@@ -53,7 +55,8 @@ export type LensSection = (typeof LENS_SECTION_ORDER)[number];
 
 /** The section headings — one spelling for the header's count doors AND the sections. */
 export const LENS_SECTION_LABELS = {
-  doneWhen: "Done when",
+  // A goal's criteria — the goal field's own word (vocabulary door).
+  doneWhen: GOAL_FIELD_LABELS.criteria,
   blocking: "Needs you",
   participants: "Who's on it",
   happening: "Happening",

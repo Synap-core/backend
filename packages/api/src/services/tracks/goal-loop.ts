@@ -63,6 +63,7 @@ import {
   type GoalLoopStop,
 } from "@synap-core/types/units";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
+import { GOAL_FIELD_LABELS } from "@synap-core/types/vocabulary";
 import type { SessionCriterion } from "@synap/playbooks";
 import {
   goalOwnerToAsk,
@@ -117,7 +118,9 @@ export function goalNextRunBrief(input: {
 }): string {
   return [
     `Move the goal "${input.goalName.trim()}" closer to done.`,
-    ...(input.endState ? [`Done looks like: ${input.endState}`] : []),
+    ...(input.endState
+      ? [`${GOAL_FIELD_LABELS.endState}: ${input.endState}`]
+      : []),
     "Not met yet:",
     ...input.unmet.map((c) => `- ${c.statement}`),
   ].join("\n");

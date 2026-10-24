@@ -353,6 +353,13 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // a row `resolveActionLabel("reopen", …)` fell through to `humanizeToken`,
   // which has no tense and only spelled "Reopen" by luck.
   reopen: { imperative: "Reopen", past: "Reopened" },
+  // Reopening a closed GOAL is a new version (`reopenTrack`, linked by
+  // `replaces`), never the governance reopen above, nor a move back: its own
+  // dotted key, so bare `reopen` keeps both its readers (2026-10-24).
+  "track.reopen": {
+    imperative: "Open a new version",
+    past: "Opened a new version",
+  },
   // Pod hygiene (`profile/retire`, the cleanup pack). `retire` is a SOFT,
   // reversible hide of a kind — not a delete, so it never reads "Deleted".
   // `close` ends an idle session through the close door; `expire` takes a
@@ -463,6 +470,16 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // `accept`); a working agent is MESSAGED from its room; a finished track step
   // MOVES ON. Humanized, the receipts would read "Send back" / "Move on".
   send_back: { imperative: "Send back", past: "Sent back" },
+  // A DELEGATE's answer to a goal commitment (`TRACK_COMMITMENT_MOVES`,
+  // `@synap-core/types/units`: accept · counter · decline · report_impossible
+  // — accept and decline are rows above), and the owner's ACKNOWLEDGE of a
+  // report. `track-participant-words` tests hold every move to a row here.
+  counter: { imperative: "Counter", past: "Countered" },
+  report_impossible: {
+    imperative: "Report impossible",
+    past: "Reported impossible",
+  },
+  acknowledge: { imperative: "Acknowledge", past: "Acknowledged" },
   message: { imperative: "Message", past: "Messaged" },
   move_on: { imperative: "Move on", past: "Moved on" },
   // CONNECTION lifecycle (`@synap-core/types/membrane`, the Connected page).
@@ -1694,6 +1711,53 @@ export function resolveGoalAcceptanceLabel(v: string | null | undefined) {
 export function resolveWaitingOnReasonLabel(v: string | null | undefined) {
   return resolveFrom(WAITING_ON_REASON_LABELS, v);
 }
+
+/**
+ * A plain move of a goal between two statuses names where it goes — "Move to
+ * agreed" — because three bare "Move" items say nothing (code-core F8). The
+ * one door for that label; a close, a drop or a pause keep their own verb
+ * (`resolveActionLabel(move.verb)`).
+ */
+export function resolveTrackMoveLabel(
+  status: string | null | undefined
+): string {
+  const word = resolveTrackStatusLabel(status);
+  return word
+    ? `${ACTION_VERBS.move!.imperative} to ${word.toLowerCase()}`
+    : "";
+}
+
+/**
+ * A GOAL'S FIELDS as a person reads them — on the New goal forms, the goal
+ * page, the CLI (slop.md must-fix, 2026-10-24). Keyed by the stored field
+ * (`project_tracks`, 0345). The end state is "What done looks like": "Success
+ * looks like" stays the space brief's interview field
+ * ({@link SPACE_BRIEF_FIELD_LABELS}), so no two fields share a name.
+ * "Done when" is the goal page's criteria section, spelled once
+ * (`LENS_SECTION_LABELS.doneWhen` reads it from here).
+ */
+export const GOAL_FIELD_LABELS = {
+  endState: "What done looks like",
+  criteria: "Done when",
+  workKind: "Kind of work",
+  uncertainty: "How well the way is known",
+  dropConditions: "Drop it if",
+} as const satisfies Readonly<Record<string, string>>;
+
+/** The label for a goal field; an unknown key humanizes rather than leaks. */
+export function resolveGoalFieldLabel(field: string | null | undefined) {
+  if (!field) return "";
+  return Object.hasOwn(GOAL_FIELD_LABELS, field)
+    ? GOAL_FIELD_LABELS[field as keyof typeof GOAL_FIELD_LABELS]
+    : humanizeToken(field);
+}
+
+/** A run's crumb to the goal it works for ("Serves · Launch the site"). */
+export const SERVES_LABEL = "Serves";
+/** The person's pinned goals for the week (D4) — the rail group's name. */
+export const THIS_WEEK_LABEL = "This week";
+/** The goal's close-with-a-verdict review (the judge's page and its door). */
+export const DECLARE_DONE_LABEL = "Declare done";
 
 /**
  * Where an import was STARTED (`ImportSessionCuration.origin`), as the end of
