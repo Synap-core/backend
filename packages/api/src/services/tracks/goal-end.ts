@@ -31,6 +31,7 @@ import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { trackReportGroupKeyPrefix } from "@synap-core/types/units";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
+import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
 import { GOAL_LOOP_AUTHOR } from "../focus-sessions/create-session.js";
 import { GOAL_LOOP_STOPPED_TYPE } from "./goal-loop.js";
 
@@ -102,7 +103,17 @@ export async function settleEndedGoal(input: {
           drizzleSql`${proposals.data}->'data'->>'goalLoopOf' = ${trackId}`
         )
       )
-      .returning({ id: proposals.id });
+      .returning({ id: proposals.id, data: proposals.data });
+    // A terminal proposal state discards its staged source blob (the
+    // terminal-discard tripwire) — a loop's run carries none; the door is
+    // the expiry scanners' own.
+    for (const p of expired) {
+      await discardProposalSourceBlob({
+        database: db,
+        userId: null,
+        proposalData: p.data,
+      });
+    }
     markProposalNotificationsActioned(expired.map((p) => p.id));
   } catch (err) {
     logger.error({ err, trackId }, "an ended goal could not be settled");

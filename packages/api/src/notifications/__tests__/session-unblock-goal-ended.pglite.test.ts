@@ -181,6 +181,13 @@ beforeAll(async () => {
       ($3, $4, null, 'Theirs', 'active')`,
     [PROJECT, OWNER, STRANGERS_PROJECT, STRANGER]
   );
+  // The waiter can SEE the goals of "Launch": by the dependency rule a
+  // blocker the reader cannot see still holds them (`hidden`), so only a
+  // visible closed goal can free them.
+  await q(
+    `insert into project_members (id, project_id, user_id, role) values (gen_random_uuid(), $1, $2, 'viewer')`,
+    [PROJECT, WAITER]
+  );
 });
 
 beforeEach(() => {
@@ -303,11 +310,24 @@ describe("a goal ending — the one 'a blocker ended' rule", () => {
     expect(h.created.map((c) => c.sourceId)).toContain(waiting);
   });
 
-  it("never names a goal the recipient cannot see", async () => {
-    // Rules out: leaking a private goal's name through a dependency.
+  it("a goal the recipient cannot see: closed, it still holds them (silent); dropped, they are told without its name", async () => {
+    // Rules out: leaking a private goal's name through a dependency — and
+    // telling someone they are free while the one dependency rule (`hidden`
+    // still holds) keeps them blocked.
+    const closedHidden = await goal(
+      "Secret merger",
+      "completed",
+      STRANGER,
+      STRANGERS_PROJECT
+    );
+    const waitsOnClosed = await session("Plan around the merger", "active");
+    await edge("session", waitsOnClosed, "track", closedHidden);
+    await fire(closedHidden);
+    expect(h.created).toHaveLength(0);
+
     const hidden = await goal(
       "Secret acquisition",
-      "completed",
+      "archived",
       STRANGER,
       STRANGERS_PROJECT
     );

@@ -823,18 +823,20 @@ describe("F4 — the list read of a goal's runs is bounded, and derives the same
 describe("R6 — keep watching it, and an operation's week", () => {
   it("a goal closed as met starts an OPERATION linked spawned_from it, read per week; a repeat hands it back", async () => {
     const id = await goal("Site is live", PROJECT, person(OWNER), {
-      criteria: [crit("up")],
+      criteria: [crit("up"), crit("fast")],
     });
-    const run = await fileRun(id, ["up"]);
+    const run = await fileRun(id, ["up", "fast"]);
     // The owner judges: their own grade is the acceptance.
-    await recordSessionEvaluation({
-      sessionId: run,
-      userId: OWNER,
-      criterionKey: "up",
-      verdict: "pass",
-      evaluatorKind: "human",
-      evaluatorId: OWNER,
-    });
+    for (const key of ["up", "fast"]) {
+      await recordSessionEvaluation({
+        sessionId: run,
+        userId: OWNER,
+        criterionKey: key,
+        verdict: "pass",
+        evaluatorKind: "human",
+        evaluatorId: OWNER,
+      });
+    }
     await setTrackStatus({
       trackId: id,
       status: "completed",
@@ -863,8 +865,11 @@ describe("R6 — keep watching it, and an operation's week", () => {
         person(OWNER)
       );
     expect((await view()).periodReading).toMatchObject({ mark: "unmeasured" });
-    const opRun = await fileRun(res.track.id, ["up"]);
+    const opRun = await fileRun(res.track.id, ["up", "fast"]);
     await claim(opRun, "up");
+    // One required criterion still ungraded this week: not yet met.
+    expect((await view()).periodReading).toMatchObject({ mark: "unmeasured" });
+    await claim(opRun, "fast");
     expect((await view()).periodReading).toMatchObject({ mark: "met" });
     // Any other kind of work reads no period.
     expect(
