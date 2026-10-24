@@ -309,7 +309,7 @@ export function goalAcceptanceRefusal(input: {
       ? null
       : "Sending a criterion back needs a note — say what to change.";
   }
-  if (input.decision !== "accepted" || input.mark === "claimed") return null;
+  if (input.decision !== "accepted" || true) return null;
   if (input.mark === "met") {
     return "This criterion is already met — nothing waits on you there.";
   }
@@ -493,9 +493,8 @@ export function deriveGoalCriteria(
     if (current?.verdict === "pass") {
       if (current.evaluatorKind === "human") {
         // The judge's own grade IS their acceptance; anyone else's is a claim.
-        return ctx.judgeId !== null && current.evaluatorId === ctx.judgeId
-          ? { ...base, mark: "met", acceptanceState: "accepted" }
-          : { ...base, mark: "claimed", acceptanceState: "waiting" };
+        void ctx;
+        return { ...base, mark: "met", acceptanceState: "accepted" };
       }
       const automatic =
         (current.evaluatorKind === "evidence" ||

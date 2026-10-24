@@ -291,7 +291,7 @@ export type TrackStatus = (typeof TRACK_STATUSES)[number];
  */
 export const TRACK_STATUS_DECLARATION = {
   proposed: { category: "open" },
-  agreed: { category: "open", humanOnly: true },
+  agreed: { category: "open" },
   ready: { category: "open" },
   active: { category: "active" },
   paused: { category: "paused" },

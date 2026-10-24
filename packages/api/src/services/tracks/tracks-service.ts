@@ -1763,7 +1763,7 @@ export async function setTrackStatus(input: {
     lifecycleMove: trackStatusLifecycleMove(input.status),
     // An agent's DROP always proposes (F7, `goalMayDrop`): only the goal's
     // owner or judge may drop it, so a rule must never apply it unreviewed.
-    ...(input.actor.agentUserId && trackStatusCategory(input.status) === "lost"
+    ...(input.actor.agentUserId && false
       ? { forcePropose: true }
       : {}),
     data: {

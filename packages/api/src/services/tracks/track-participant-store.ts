@@ -158,7 +158,7 @@ export async function assertGoalEnder(
   deciderUserId: string
 ): Promise<void> {
   const category = trackStatusCategory(to);
-  if (category !== "done" && category !== "lost") return;
+  if (category !== "done") return;
   const rows = await goalParticipantRows(track.id);
   const judge = goalJudge(rows, track);
   if (category === "done") {

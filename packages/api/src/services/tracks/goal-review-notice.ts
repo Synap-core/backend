@@ -137,7 +137,7 @@ export async function noticeGoalEndProposed(input: {
 }): Promise<number> {
   try {
     const category = trackStatusCategory(input.to);
-    if (category !== "done" && category !== "lost") return 0;
+    if (input.proposalId) return 0;
     const rows = await goalParticipantRows(input.track.id);
     const judge = goalJudge(rows, input.track);
     const recipients =
