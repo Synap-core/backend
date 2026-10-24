@@ -1279,15 +1279,18 @@ $oidc_block
       # Cloud user without pod access (message id 4000901,
       # apps/api/src/webhooks/kratos-registration-gate.ts).
       # EVERY registration-capable method enabled above needs its own gate:
-      # Kratos v1.3.1 looks hooks up per method, with the global list used only
-      # when a method has none (driver/registry_default_registration.go), so an
-      # enabled method without hooks registers with NO gate. Passkey did, until
-      # 2026-10-23 (an open sign-up on every pod). Tripwire:
-      # deploy/__tests__/kratos-registration-gate.test.sh.
-      # Bodies (decoded): function(ctx) { method: "password"|"oidc", identity: ctx.identity }
-      # and for passkey function(ctx) { method: "passkey", identity: ctx.identity,
-      #   transient_payload: if std.objectHas(ctx, "flow") && std.objectHas(ctx.flow,
-      #   "transient_payload") then ctx.flow.transient_payload else null }
+      # Kratos v1.3.1 looks hooks up per method and has no global fallback
+      # once any method defines hooks (driver/registry_default_registration.go),
+      # so an enabled method without one (passkey, until 2026-10-23) registers
+      # with NO gate (tripwire: deploy/__tests__/kratos-registration-gate.test.sh).
+      # Bodies (decoded): function(ctx) { method: "password", identity: ctx.identity }
+      # and, for oidc and passkey, function(ctx) { method: "oidc"|"passkey",
+      #   identity: ctx.identity, transient_payload: if std.objectHas(ctx, "flow")
+      #   && std.objectHas(ctx.flow, "transient_payload") then
+      #   ctx.flow.transient_payload else null }
+      # (the invite page's invite_token, join plan phase 4: an invite-bound
+      # Synap Cloud or passkey sign-up; Kratos keeps transient_payload across
+      # the OIDC trip).
       after:
         password:
           hooks:
@@ -1313,8 +1316,8 @@ $oidc_block
                   Content-Type: application/json
                   X-Webhook-Secret: ${webhook_secret}
                 can_interrupt: true
-            # Post-persist: removes any persisted identity with no pod access
-            # (the gate refuses a passkey sign-up, so none should exist).
+            # Post-persist: accepts the invite for the new identity, or removes
+            # an identity with no pod access (same route as oidc).
             - hook: web_hook
               config:
                 url: http://backend:4000/api/webhooks/kratos/registration/complete
@@ -1330,7 +1333,7 @@ $oidc_block
               config:
                 url: http://backend:4000/api/webhooks/kratos/registration/gate
                 method: POST
-                body: base64://ZnVuY3Rpb24oY3R4KSB7IG1ldGhvZDogIm9pZGMiLCBpZGVudGl0eTogY3R4LmlkZW50aXR5IH0K
+                body: base64://ZnVuY3Rpb24oY3R4KSB7IG1ldGhvZDogIm9pZGMiLCBpZGVudGl0eTogY3R4LmlkZW50aXR5LCB0cmFuc2llbnRfcGF5bG9hZDogaWYgc3RkLm9iamVjdEhhcyhjdHgsICJmbG93IikgJiYgc3RkLm9iamVjdEhhcyhjdHguZmxvdywgInRyYW5zaWVudF9wYXlsb2FkIikgdGhlbiBjdHguZmxvdy50cmFuc2llbnRfcGF5bG9hZCBlbHNlIG51bGwgfQo=
                 headers:
                   Content-Type: application/json
                   X-Webhook-Secret: ${webhook_secret}
@@ -1342,7 +1345,7 @@ $oidc_block
               config:
                 url: http://backend:4000/api/webhooks/kratos/registration/complete
                 method: POST
-                body: base64://ZnVuY3Rpb24oY3R4KSB7IG1ldGhvZDogIm9pZGMiLCBpZGVudGl0eTogY3R4LmlkZW50aXR5IH0K
+                body: base64://ZnVuY3Rpb24oY3R4KSB7IG1ldGhvZDogIm9pZGMiLCBpZGVudGl0eTogY3R4LmlkZW50aXR5LCB0cmFuc2llbnRfcGF5bG9hZDogaWYgc3RkLm9iamVjdEhhcyhjdHgsICJmbG93IikgJiYgc3RkLm9iamVjdEhhcyhjdHguZmxvdywgInRyYW5zaWVudF9wYXlsb2FkIikgdGhlbiBjdHguZmxvdy50cmFuc2llbnRfcGF5bG9hZCBlbHNlIG51bGwgfQo=
                 headers:
                   Content-Type: application/json
                   X-Webhook-Secret: ${webhook_secret}

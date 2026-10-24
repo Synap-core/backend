@@ -114,6 +114,9 @@ describe("tripwire: a pod invite never fans out over every space", () => {
       .map((f) => f.rel)
       .sort();
     expect(callers).toEqual([
+      // The invite-bound Synap Cloud sign-up (Kratos registration gate,
+      // join plan phase 4): it accepts through the same door.
+      "apps/api/src/webhooks/kratos.ts",
       "packages/api/src/routers/hub-protocol/rest/setup.ts",
       "packages/api/src/routers/workspaces/accept-invite-for.ts",
       "packages/api/src/routers/workspaces/invites.ts",
