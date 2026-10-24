@@ -10,6 +10,7 @@ import {
   automationProposedSentence,
   automationWriteSentence,
   defaultApprovalSentence,
+  defaultAskSentence,
   isSystemReasoning,
   roleExceedSentence,
   ruleBatchRunSentence,
@@ -18,11 +19,13 @@ import {
 
 describe("isSystemReasoning", () => {
   it("recognises the placeholder and both role-exceed sentences", () => {
-    expect(isSystemReasoning(defaultApprovalSentence("create", "entity"))).toBe(
+    expect(isSystemReasoning(defaultApprovalSentence())).toBe(true);
+    // The spelling rows written before 2026-10-23 carry.
+    expect(isSystemReasoning("create entity requires your approval")).toBe(
       true
     );
     expect(
-      isSystemReasoning(defaultApprovalSentence("renderer.set", "profile"))
+      isSystemReasoning("renderer.set profile requires your approval")
     ).toBe(true);
     for (const proposer of ["agent", "person"] as const) {
       expect(
@@ -36,6 +39,15 @@ describe("isSystemReasoning", () => {
         )
       ).toBe(true);
     }
+  });
+
+  it("the default ask names a run, and only the writes it lists", () => {
+    const run = defaultAskSentence("playbook", "run");
+    expect(run).toBeTruthy();
+    expect(defaultAskSentence("playbook", "playbook.run")).toBe(run);
+    expect(isSystemReasoning(run)).toBe(true);
+    expect(defaultAskSentence("entity", "update")).toBeUndefined();
+    expect(defaultAskSentence(null, "run")).toBeUndefined();
   });
 
   it("recognises every governance policy sentence", () => {

@@ -24,6 +24,8 @@ export * from "./session-start.js";
 export * from "./action.js";
 // The duplicate door's answer, persisted on the proposal (B2) + its accessor.
 export * from "./duplicate-check.js";
+// How a review card reads that answer: the twins, the approve verbs (B2).
+export * from "./duplicate-review.js";
 
 /**
  * The pod's cap on one batch decision (`proposals.batchApprove` /

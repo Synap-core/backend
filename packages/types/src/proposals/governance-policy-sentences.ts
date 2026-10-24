@@ -54,6 +54,68 @@ export const GOVERNANCE_POLICY_SENTENCES = {
     "An agent wants to create or switch on a workspace, cell, playbook or automation, which changes what your pod does, so you approve it, and no rule can skip that.",
 } as const;
 
+/** A governance reason code: a key of {@link GOVERNANCE_POLICY_SENTENCES}. */
+export type GovernanceReasonCode = keyof typeof GOVERNANCE_POLICY_SENTENCES;
+
+/**
+ * The SHORT form of each reason, for the one mark a review card draws (its
+ * sentence above sits behind it, on press). Two or three words that say what
+ * is particular about THIS change — "Possible duplicate", "Removes something".
+ *
+ * `null` = the reason only restates that the change waits for a person (the
+ * default "this agent asks first", a rule of yours that says ask, a human
+ * gate). A pending proposal is by definition waiting on the person, so such a
+ * mark tells them nothing and NO mark is drawn (founder, 2026-10-23: "Asks by
+ * default" / "Always asks a person" are useless info). Deciding that here, at
+ * the label's one home, is what keeps every card from drawing them.
+ *
+ * Typed by the sentences' own keys, so a code added to the engine (and so to
+ * the mirror above) does not compile until it is classified here: a label, or
+ * an explicit `null`.
+ */
+export const GOVERNANCE_REASON_SHORT_LABELS: Readonly<
+  Record<GovernanceReasonCode, string | null>
+> = {
+  ADMIN: "Pod setting",
+  WRITES_REQUIRE_PROPOSAL: null,
+  AGENT_OWNED_DESTRUCTIVE: "Removes agent work",
+  CHANNEL_PROPOSE: "Teammate suggestion",
+  USER_OBSERVATION_INFERENCE: "A guess about you",
+  CAPABILITY_PROPOSE: "Runs a tool",
+  SCOPE_IDENTITY_CHANGE: "Changes what it is",
+  PROJECT_FILING: "Shares with a project",
+  CRITERIA_CHANGE: "Changes its own criteria",
+  POSSIBLE_DUPLICATE: "Possible duplicate",
+  DESTRUCTIVE_HARD_FLOOR: "Removes something",
+  GOVERNANCE_RULE: null,
+  UNTRUSTED_ORIGIN: "From outside",
+  DAILY_WRITE_CEILING: "Daily limit reached",
+  HUMAN_GATE: null,
+  ARBITRARY_EXECUTION: "Runs a command",
+  POD_ADMIN_SCHEMA_CHANGE: "Changes a built-in kind",
+  AGENT_SCHEMA_DEFINITION: "New kind",
+  HUMAN_ONLY_STATUS: "Only you can move it",
+  LIFECYCLE_TERMINAL: "Closes it",
+  AGENT_STRUCTURE_WRITE: "Changes what your pod does",
+};
+
+/**
+ * A reason's mark: its short label and its sentence, or `null` when there is
+ * nothing particular to say — a code that only restates "this waits for you"
+ * (a `null` label above), or a code that is not a governance reason (absent,
+ * legacy, unknown). `Object.hasOwn`, not `in`: a code is stored text, and
+ * "toString" is not a reason.
+ */
+export function governanceReasonMark(
+  code: string | null | undefined
+): { code: GovernanceReasonCode; label: string; sentence: string } | null {
+  if (!code || !Object.hasOwn(GOVERNANCE_POLICY_SENTENCES, code)) return null;
+  const key = code as GovernanceReasonCode;
+  const label = GOVERNANCE_REASON_SHORT_LABELS[key];
+  if (!label) return null;
+  return { code: key, label, sentence: GOVERNANCE_POLICY_SENTENCES[key] };
+}
+
 /**
  * The engine's sentences as they read until 2026-10-21. Proposals written
  * before the rewording still carry one of these as `data.reasoning`, so the
@@ -84,9 +146,36 @@ const LEGACY_GOVERNANCE_POLICY_SENTENCES: readonly string[] = [
   "An agent is creating a workspace, cell, playbook or automation (or switching one on), which changes what the pod does; a person must approve it, and no governance rule can widen it.",
 ];
 
+// ─── The default ask, said for the writes that need words of their own ───────
+//
+// The engine's plain default (rung 9: nothing above it fired) carries no
+// reason code — "nothing special, an agent asks by default". For most writes
+// the title says enough. A playbook run does not: the card read only "Run
+// Playbook" with no reason why it waits (dogfood e3c39721 §1). Keyed by the
+// stored `<target_type>.<proposal_type>`; read only when the row carries no
+// reason of its own.
+
+const DEFAULT_ASK_SENTENCES: Readonly<Record<string, string>> = {
+  "playbook.run":
+    "Running a playbook starts work that carries on by itself, so it waits for you.",
+};
+
+/** The default ask's sentence for this write, or undefined when none. */
+export function defaultAskSentence(
+  targetType: string | null | undefined,
+  proposalType: string | null | undefined
+): string | undefined {
+  if (!targetType || !proposalType) return undefined;
+  const action = proposalType.includes(".")
+    ? proposalType.slice(proposalType.lastIndexOf(".") + 1)
+    : proposalType;
+  return DEFAULT_ASK_SENTENCES[`${targetType}.${action}`];
+}
+
 const SENTENCES: ReadonlySet<string> = new Set([
   ...Object.values(GOVERNANCE_POLICY_SENTENCES),
   ...LEGACY_GOVERNANCE_POLICY_SENTENCES,
+  ...Object.values(DEFAULT_ASK_SENTENCES),
 ]);
 
 /** True when `text` is one of the policy's own sentences, not a proposer's words. */
@@ -106,9 +195,16 @@ export function isGovernancePolicySentence(
 // The builders below are the ONE spelling — `permission-check.ts` composes its
 // sentences with them, so the recognizer cannot drift from the writer.
 
-/** "<action> <type> requires your approval" — the gate's no-reason placeholder. */
-export function defaultApprovalSentence(action: string, type: string): string {
-  return `${action} ${type} requires your approval`;
+/**
+ * The gate's no-reason placeholder: what a caller is told when a write waits
+ * and neither the proposer nor a policy said why. Plain words — it reaches
+ * agents' replies and people verbatim. It used to be `"<action> <type>
+ * requires your approval"` ("update entity requires your approval", machine
+ * tokens; dogfood e3c39721 §3); rows written before still carry that
+ * spelling, which {@link isSystemReasoning} keeps recognising.
+ */
+export function defaultApprovalSentence(): string {
+  return "This waits for your approval.";
 }
 
 /**
@@ -175,7 +271,8 @@ const AUTOMATION_FIXED: ReadonlySet<string> = new Set([
   automationWriteSentence(),
 ]);
 
-// Tokens are single words (`create`, `focus_session`, `renderer.set`) — no space.
+// The placeholder's spelling before 2026-10-23. Tokens are single words
+// (`create`, `focus_session`, `renderer.set`) — no space.
 const DEFAULT_APPROVAL_RE = /^\S+ \S+ requires your approval\.?$/;
 const ROLE_EXCEED_RE =
   /^\S+ \S+ exceeds (?:the agent's|your) workspace role \([^)]*\) — proposed for (?:your|a reviewer's) approval$/;
@@ -192,6 +289,7 @@ export function isSystemReasoning(text: string | null | undefined): boolean {
   const t = text.trim();
   return (
     isGovernancePolicySentence(t) ||
+    t === defaultApprovalSentence() ||
     DEFAULT_APPROVAL_RE.test(t) ||
     ROLE_EXCEED_RE.test(t) ||
     AUTOMATION_FIXED.has(t) ||

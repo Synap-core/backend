@@ -65,7 +65,7 @@
       "@trpc/server": "^11.16.0",
       "drizzle-orm": "^0.45.2",
       "drizzle-zod": "0.8.3",
-      "zod": "4.3.6",
+      "zod": "4.6.7",
       "zod-to-json-schema": "3.23.2",
       "axios": ">=1.20.0",
       "fast-xml-parser": ">=5.5.6",
