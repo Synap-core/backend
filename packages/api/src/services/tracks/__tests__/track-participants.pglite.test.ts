@@ -1032,3 +1032,90 @@ describe("D5-A — being on a goal grants no read", () => {
     ).toBeTruthy();
   });
 });
+
+describe("an ENDED goal leaves nothing behind", () => {
+  it("a close marks accepted commitments done, silences no one, settles its escalations and loop stops, and expires its loop's proposals", async () => {
+    const id = await goal("Ends clean");
+    await add(id, person(OWNER), STAFFER, "delegate", "Ship the page");
+    await add(id, person(OWNER), DELEGATE, "delegate", "Review it");
+    await q(
+      `update track_participants set commitment_state = 'accepted' where track_id = $1 and principal_id = $2`,
+      [id, STAFFER]
+    );
+    const staffer = (await rowOf(id, STAFFER, "delegate"))!;
+    // What the goal still asks of people: an escalated report, a loop stop,
+    // and a pending run its loop proposed.
+    for (const [type, groupKey] of [
+      [
+        "track.report_unacknowledged",
+        `track-report:${staffer.id}:${new Date().toISOString()}`,
+      ],
+      ["track.loop_stopped", `track.loop_stopped:${id}:copy:run-1`],
+    ]) {
+      await q(
+        `insert into notifications (id, user_id, type, category, title, status, group_key, source_type, source_id, created_at)
+         values (gen_random_uuid(), $1, $2, 'data', 't', 'unread', $3, 'track', $4, now())`,
+        [OWNER, type, groupKey, id]
+      );
+    }
+    const loopProposal = randomUUID();
+    await q(
+      `insert into proposals (id, status, target_type, target_id, proposal_type, data, created_by, created_at)
+       values ($1, 'pending', 'focus_session', $2, 'create', $3::jsonb, 'system:goal-loop', now())`,
+      [loopProposal, randomUUID(), JSON.stringify({ data: { goalLoopOf: id } })]
+    );
+
+    const res = await setTrackStatus({
+      trackId: id,
+      status: "completed",
+      verdict: "met",
+      actor: person(OWNER),
+    });
+    expect(res.status).toBe("updated");
+
+    expect((await rowOf(id, STAFFER, "delegate"))!.commitment_state).toBe(
+      "done"
+    );
+    // Asked, never answered: nothing to mark done — but never "silent" either.
+    expect((await rowOf(id, DELEGATE, "delegate"))!.commitment_state).toBe(
+      "proposed"
+    );
+    const view = await loadTrackView(
+      (await getTrack(id, person(OWNER)))!,
+      person(OWNER)
+    );
+    expect(view.participants!.map((p) => p.silentSince)).toEqual(
+      view.participants!.map(() => null)
+    );
+    const open = await q<{ type: string }>(
+      `select type from notifications where source_id = $1 and status <> 'actioned'`,
+      [id]
+    );
+    expect(open.rows).toEqual([]);
+    const [p] = (
+      await q<{ status: string }>(
+        `select status from proposals where id = $1`,
+        [loopProposal]
+      )
+    ).rows;
+    expect(p!.status).toBe("expired");
+  });
+
+  it("a DROP marks nothing done (nothing was delivered)", async () => {
+    const id = await goal("Dropped clean");
+    await add(id, person(OWNER), STAFFER, "delegate", "Ship the page");
+    await q(
+      `update track_participants set commitment_state = 'accepted' where track_id = $1 and principal_id = $2`,
+      [id, STAFFER]
+    );
+    await setTrackStatus({
+      trackId: id,
+      status: "archived",
+      verdict: "no_longer_needed",
+      actor: person(OWNER),
+    });
+    expect((await rowOf(id, STAFFER, "delegate"))!.commitment_state).toBe(
+      "accepted"
+    );
+  });
+});

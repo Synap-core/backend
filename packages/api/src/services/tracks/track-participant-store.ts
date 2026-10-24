@@ -407,7 +407,7 @@ export async function participantDisplayNames(
  * `null` — never its id.
  */
 export async function loadTrackParticipantViews(
-  tracks: ReadonlyArray<Pick<ProjectTrack, "id">>
+  tracks: ReadonlyArray<Pick<ProjectTrack, "id" | "status">>
 ): Promise<Map<string, TrackParticipant[]>> {
   const out = new Map<string, TrackParticipant[]>(
     tracks.map((t) => [t.id, []])
@@ -420,8 +420,20 @@ export async function loadTrackParticipantViews(
     .from(trackParticipants)
     .where(inArray(trackParticipants.trackId, ids));
   const names = await participantDisplayNames(rows.map((r) => r.principalId));
+  // An ENDED goal owes nothing more: its delegates are never "silent".
+  const ended = new Set(
+    tracks
+      .filter((t) => {
+        const c = trackStatusCategory(t.status);
+        return c === "done" || c === "lost";
+      })
+      .map((t) => t.id)
+  );
   const owing = rows.filter(
-    (r) => r.role === "delegate" && isOpenCommitment(r.commitmentState)
+    (r) =>
+      r.role === "delegate" &&
+      isOpenCommitment(r.commitmentState) &&
+      !ended.has(r.trackId)
   );
   // Only the TIMES of the goal's sessions are read, for "silent since" — never
   // their content, which keeps its own floor (`session-visibility.ts`).
@@ -450,10 +462,12 @@ export async function loadTrackParticipantViews(
     list.push(
       toTrackParticipant(
         row,
-        silentSinceOf(
-          row,
-          sessions.filter((s) => s.trackId === row.trackId)
-        ),
+        ended.has(row.trackId)
+          ? null
+          : silentSinceOf(
+              row,
+              sessions.filter((s) => s.trackId === row.trackId)
+            ),
         names.get(row.principalId) ?? null
       )
     );

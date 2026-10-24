@@ -25,12 +25,15 @@
  *     forces a proposal — it never starts a run, whoever switched the loop on.
  *     The run is filed into the goal, carries every unmet criterion by the
  *     SAME key (so the goal's marks count its grades) and the goal's end
- *     state as its brief, in the name of the goal's owner (`goalOwnerToAsk`).
+ *     state as its brief, for the goal's owner to decide (`goalOwnerToAsk`)
+ *     and authored by the pod (`GOAL_LOOP_AUTHOR`, code-core F3) — never
+ *     the owner's own act.
  *   · Or HOLDS, saying why. One hold acts: `stopped` — a required criterion
  *     failed in two runs — asks the owner once per stop
  *     (`track.loop_stopped`, see {@link askOwnerLoopStopped}).
  *
- * Budget: the proposals carrying `goalLoopOf` = this goal, filed in the last
+ * Budget: the proposals the loop authored (`created_by`, indexed — F5) that
+ * carry `goalLoopOf` = this goal, filed in the last
  * {@link GOAL_LOOP_WINDOW_DAYS} days, whatever became of them; one pending
  * at a time. KNOWN LIMIT: two triggers racing on the same goal in the same
  * instant can both pass the one-pending check (no lock is held across the
@@ -43,6 +46,7 @@ import {
   db,
   and,
   eq,
+  gt,
   or,
   notifications,
   projectTracks,
@@ -73,7 +77,10 @@ import {
   type GoalCriterion,
 } from "./goal-content.js";
 import { loadGoalJudge } from "./track-participant-store.js";
-import { createFocusSession } from "../focus-sessions/create-session.js";
+import {
+  GOAL_LOOP_AUTHOR,
+  createFocusSession,
+} from "../focus-sessions/create-session.js";
 import { NotificationService } from "../../notifications/NotificationService.js";
 
 const logger = createLogger({ module: "goal-loop" });
@@ -132,7 +139,11 @@ function asRunCriterion(c: GoalCriterion): SessionCriterion {
   return criterion;
 }
 
-/** The proposals this goal's loop filed: still pending, and in the window. */
+/**
+ * The proposals this goal's loop filed: still pending, and in the window.
+ * Narrowed by the indexed author column first (`idx_proposals_created_by`:
+ * only the loop's own rows), then by the goal in their payload (F5).
+ */
 async function loopProposalCounts(
   goalId: string
 ): Promise<{ pending: number; recent: number }> {
@@ -143,6 +154,7 @@ async function loopProposalCounts(
     .from(proposals)
     .where(
       and(
+        eq(proposals.createdBy, GOAL_LOOP_AUTHOR),
         drizzleSql`${loopOf} = ${goalId}`,
         or(eq(proposals.status, ProposalStatus.PENDING), recentSql)
       )
@@ -155,8 +167,9 @@ async function loopProposalCounts(
 
 /**
  * THE loop, for one goal: decide, then propose the next run or hold. Acts as
- * the pod (no caller): the proposal is filed in the owner's name and waits on
- * a person. Never throws for a hold; a failed read or write throws.
+ * the pod (no caller): the proposal is the pod's (`GOAL_LOOP_AUTHOR`), filed
+ * for the owner, and waits on a person. Never throws for a hold; a failed
+ * read or write throws.
  */
 export async function runGoalLoop(goalId: string): Promise<GoalLoopRunResult> {
   const [row] = await db
@@ -296,43 +309,56 @@ export async function askOwnerLoopStopped(
   }
 }
 
-/** Goals one sweep looks at, at most — the rest wait for the next tick. */
-export const GOAL_LOOP_SWEEP_LIMIT = 200;
+/** Goals one sweep reads per page — it pages on until every goal is seen. */
+export const GOAL_LOOP_SWEEP_PAGE = 200;
 
 /**
  * The hourly re-check (the focus-session reaper's tick): every ACTIVE goal
  * whose loop is on and that has criteria — an open run is `runGoalLoop`'s
  * own hold (`run_open`, the shared terminal-status rule), never re-spelled
- * here. One goal's failure
- * never stops the others. Returns what it did, for the reaper's log.
+ * here. Pages through them by id (code-core F5): ordered by `updated_at` and
+ * capped, the same oldest goals came back every hour — `runGoalLoop` never
+ * touches `updated_at` — and the rest were never re-checked. One goal's
+ * failure never stops the others. Returns what it did, for the reaper's log.
  */
-export async function sweepGoalLoops(): Promise<{
+export async function sweepGoalLoops(
+  opts: { pageSize?: number } = {}
+): Promise<{
   checked: number;
   proposed: number;
   failed: number;
 }> {
-  const goals = await db
-    .select({ id: projectTracks.id })
-    .from(projectTracks)
-    .where(
-      and(
-        eq(projectTracks.status, "active"),
-        drizzleSql`(${projectTracks.loop} ->> 'on') = 'true'`,
-        drizzleSql`jsonb_typeof(${projectTracks.criteria}) = 'array' AND jsonb_array_length(${projectTracks.criteria}) > 0`
-      )
-    )
-    .orderBy(projectTracks.updatedAt)
-    .limit(GOAL_LOOP_SWEEP_LIMIT);
+  let checked = 0;
   let proposed = 0;
   let failed = 0;
-  for (const g of goals) {
-    try {
-      const r = await runGoalLoop(g.id);
-      if (r.status === "proposed") proposed++;
-    } catch (err) {
-      failed++;
-      logger.error({ err, goalId: g.id }, "goal loop sweep: one goal failed");
+  const pageSize = opts.pageSize ?? GOAL_LOOP_SWEEP_PAGE;
+  let after: string | null = null;
+  for (;;) {
+    const page: Array<{ id: string }> = await db
+      .select({ id: projectTracks.id })
+      .from(projectTracks)
+      .where(
+        and(
+          eq(projectTracks.status, "active"),
+          drizzleSql`(${projectTracks.loop} ->> 'on') = 'true'`,
+          drizzleSql`jsonb_typeof(${projectTracks.criteria}) = 'array' AND jsonb_array_length(${projectTracks.criteria}) > 0`,
+          after ? gt(projectTracks.id, after) : undefined
+        )
+      )
+      .orderBy(projectTracks.id)
+      .limit(pageSize);
+    for (const g of page) {
+      try {
+        const r = await runGoalLoop(g.id);
+        if (r.status === "proposed") proposed++;
+      } catch (err) {
+        failed++;
+        logger.error({ err, goalId: g.id }, "goal loop sweep: one goal failed");
+      }
     }
+    checked += page.length;
+    if (page.length < pageSize) break;
+    after = page[page.length - 1]!.id;
   }
-  return { checked: goals.length, proposed, failed };
+  return { checked, proposed, failed };
 }

@@ -126,6 +126,12 @@ import {
   type TrackActor,
 } from "../tracks-service.js";
 import { changeTrackParticipants } from "../track-participants.js";
+import {
+  loadGoalRuns,
+  loadGoalRunsForRead,
+  readGoalCriteria,
+} from "../goal-content.js";
+import { deriveGoalCriteria } from "@synap-core/types/units";
 import { recordSessionEvaluation } from "../../focus-sessions/evaluations/record.js";
 import {
   GOAL_CLAIM_NOTIFICATION_TYPE,
@@ -667,5 +673,104 @@ describe("a reopened goal keeps its people (R8, W5)", () => {
     });
     const res = await reopenTrack({ trackId: old, actor: person(OWNER) });
     expect(res.status).not.toBe("proposed");
+  });
+});
+
+describe("F4 — the list read of a goal's runs is bounded, and derives the same marks", () => {
+  /** A closed run carrying `keys`, at `minutesAgo`. */
+  async function closedRun(trackId: string, keys: string[]): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, track_id, project_id, status, goal, criteria, expected_outputs, agent_ids, metadata, created_at, updated_at)
+       values ($1, $2, $3, $4, $5, 'closed', 'work', $6::jsonb, '[]'::jsonb, '{agent-9}', '{"modelId":"model-x"}'::jsonb, now(), now())`,
+      [id, OWNER, WS, trackId, PROJECT, JSON.stringify(keys.map(crit))]
+    );
+    return id;
+  }
+  async function grade(
+    sessionId: string,
+    key: string,
+    verdict: "pass" | "fail",
+    kind: string,
+    by: string,
+    minutesAgo: number,
+    rationale: string | null = null
+  ) {
+    await q(
+      `insert into session_evaluations (id, session_id, user_id, criterion_key, attempt, verdict, evaluator_kind, evaluator_id, rationale, evidence, created_at)
+       values (gen_random_uuid(), $1, $2, $3, 1, $4, $5, $6, $7, '{}'::jsonb, now() - ($8::int * interval '1 minute'))`,
+      [sessionId, OWNER, key, verdict, kind, by, rationale, minutesAgo]
+    );
+  }
+
+  it("equal to the whole-history derivation, from fewer runs", async () => {
+    const id = await goal("Bounded", PROJECT, person(OWNER), {
+      criteria: [
+        crit("tone"),
+        {
+          ...crit("pages"),
+          check: { kind: "evidence", evidenceKey: "pages" },
+          checkKind: "measured",
+        },
+        crit("legal"),
+        crit("press"),
+      ],
+    });
+    // Many closed attempts on "tone": only the latest of each kind matters.
+    for (let i = 0; i < 5; i++) {
+      const r = await closedRun(id, ["tone", "pages"]);
+      await grade(r, "tone", "fail", "judge", "model-x", 100 - i);
+      await grade(
+        r,
+        "pages",
+        "pass",
+        "evidence",
+        "ci-bot",
+        90 - i,
+        `${i} of 9 pages`
+      );
+    }
+    // An OLDER person's grade still wins over every later AI row.
+    const human = await closedRun(id, ["tone"]);
+    await grade(human, "tone", "pass", "human", "user-7", 200);
+    // The latest measured row is a fail with its own value.
+    const last = await closedRun(id, ["pages"]);
+    await grade(
+      last,
+      "pages",
+      "fail",
+      "evidence",
+      "ci-bot",
+      10,
+      "8 of 9 pages"
+    );
+    // "legal" was carried by a closed run that nobody graded: not met.
+    await closedRun(id, ["legal"]);
+    // An open run on "tone" with a newer AI pass — under way, not the winner.
+    const open = await fileRun(id, ["tone"]);
+    await grade(open, "tone", "pass", "judge", "model-x", 1);
+
+    const track = (await getTrack(id, person(OWNER)))!;
+    const criteria = readGoalCriteria(track.criteria);
+    const ctx = { judgeId: OWNER };
+    const full = (await loadGoalRuns([track])).runsOf.get(id)!;
+    const bounded = (await loadGoalRunsForRead([track])).runsOf.get(id)!;
+    const derived = (runs: typeof full) =>
+      deriveGoalCriteria(criteria, runs, ctx);
+    expect(derived(bounded)).toEqual(derived(full));
+    // Non-vacuity: the fixture exercises each rule the bounded read keeps.
+    expect(derived(full).map((c) => [c.key, c.mark, c.currentValue])).toEqual([
+      ["tone", "claimed", null],
+      ["pages", "not_met", "8 of 9 pages"],
+      ["legal", "not_met", null],
+      ["press", "not_started", null],
+    ]);
+    expect(derived(full)[0]!.claim).toMatchObject({
+      by: "user-7",
+      sessionId: human,
+    });
+    // …and it read fewer runs than the goal has.
+    expect(full.length).toBe(9);
+    expect(bounded.length).toBeLessThan(full.length);
   });
 });

@@ -311,6 +311,26 @@ export interface ReopenTrackInput {
   reasoning?: string;
 }
 
+/** "Make it a goal" (D2) — a goal / objective / okr entity becomes a goal, once. */
+export interface ConvertToGoalInput {
+  entityId: string;
+  /** Required when the entity is filed in no project, or in several. */
+  projectId?: string;
+  /** A name other than the entity's title. */
+  name?: string;
+  reasoning?: string;
+}
+
+export type HubConvertToGoalResult =
+  | {
+      status: "started" | "exists";
+      track: HubTrack;
+      entityId: string;
+      /** The entity's fields the goal does not hold (to tell the person). */
+      notCarried: string[];
+    }
+  | HubTrackProposed;
+
 export type HubTrackWriteResult =
   { status: "updated" | "unchanged"; track: HubTrack } | HubTrackProposed;
 

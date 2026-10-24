@@ -32,6 +32,7 @@ import {
   projectTracks,
   projects,
   users,
+  LIVE_PROJECT_TRACK_STATUSES,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -44,16 +45,21 @@ import { createNotificationViaService } from "../utils/notification-creator.js";
 const logger = createLogger({ module: "track-report-escalation" });
 
 /**
- * A report that is due: impossible, unacknowledged, not yet escalated, and
- * older than the timer. Exported so a test can lock its shape. The cutoff is
- * computed in SQL (no Date bind — postgres.js 3.4.8 on the pod image, see
- * the reaper).
+ * A report that is due: impossible, unacknowledged, not yet escalated, older
+ * than the timer, on a goal that is still LIVE — a closed or dropped goal
+ * asks nobody for anything (code.md, 2026-10-24). Exported so a test can lock
+ * its shape. The cutoff is computed in SQL (no Date bind — postgres.js 3.4.8
+ * on the pod image, see the reaper).
  */
 export const TRACK_REPORT_IS_DUE = and(
   eq(trackParticipants.commitmentState, "reported_impossible"),
   isNull(trackParticipants.acknowledgedAt),
   isNull(trackParticipants.escalatedAt),
-  drizzleSql`${trackParticipants.reportedAt} < now() - (${TRACK_REPORT_ESCALATE_AFTER_HOURS}::int * interval '1 hour')`
+  drizzleSql`${trackParticipants.reportedAt} < now() - (${TRACK_REPORT_ESCALATE_AFTER_HOURS}::int * interval '1 hour')`,
+  drizzleSql`EXISTS (SELECT 1 FROM ${projectTracks} WHERE ${projectTracks.id} = ${trackParticipants.trackId} AND ${projectTracks.status} IN (${drizzleSql.join(
+    LIVE_PROJECT_TRACK_STATUSES.map((s) => drizzleSql`${s}`),
+    drizzleSql`, `
+  )}))`
 );
 
 /** Tell each due report's goal owner, once. Returns how many were told. */

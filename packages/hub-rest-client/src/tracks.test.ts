@@ -232,6 +232,35 @@ describe("advance / status / params", () => {
   });
 });
 
+describe("make it a goal", () => {
+  it("posts the entity to the convert route — static, before /tracks/:id", async () => {
+    replies.push({
+      status: 200,
+      body: {
+        status: "started",
+        track: TRACK,
+        entityId: "ent-1",
+        notCarried: ["okr-quarter"],
+      },
+    });
+    const res = await client.convertToGoal({
+      entityId: "ent-1",
+      projectId: "proj-1",
+    });
+    expect(res).toMatchObject({
+      status: "started",
+      notCarried: ["okr-quarter"],
+    });
+    expect(calls.map((c) => [c.method, c.url, c.body])).toEqual([
+      [
+        "POST",
+        "https://pod.example.test/api/hub/tracks/convert",
+        { entityId: "ent-1", projectId: "proj-1" },
+      ],
+    ]);
+  });
+});
+
 describe("close / reopen (a goal can finish)", () => {
   it("sends the verdict with a close, and reopens on its own route", async () => {
     replies.push({

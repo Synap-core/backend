@@ -1284,25 +1284,86 @@ export async function startTrack(
   // A concurrent start of ANOTHER method under the same name won the insert.
   if (!created) assertNameHeldBySameMethod(track, playbook);
 
+  // A NEW goal is born whole or not at all (code-core F9): its people, its
+  // edges (method, the version it reopens, the entity it is made from) and a
+  // born-closed close. The track row is written first — the dependency door
+  // validates the edge against it — so a later step that fails UNDOES the
+  // birth (`undoTrackBirth`) before the error surfaces. A retried reopen or
+  // conversion then starts clean, and never meets a half-made goal holding
+  // the name with no lineage.
+  let born = track;
+  if (created) {
+    try {
+      born = await completeTrackBirth({
+        input,
+        track,
+        project,
+        playbook,
+        replaces,
+        source,
+        endedAs,
+      });
+    } catch (err) {
+      await undoTrackBirth(track.id, actor.userId);
+      throw err;
+    }
+    void emitSideEffects({
+      subjectType: "track",
+      action: "create",
+      subjectId: track.id,
+      userId: actor.userId,
+      workspaceId: project.workspaceId,
+      data: {
+        trackId: track.id,
+        projectId: project.id,
+        playbookId: playbook?.id ?? null,
+        methodVersion: track.methodVersion,
+      },
+    }).catch((err) =>
+      logger.warn({ err, trackId: track.id }, "track.create emit failed")
+    );
+  }
+
+  return {
+    status: created ? "started" : "exists",
+    track: born,
+    playbook: playbookRef,
+    missingDomains,
+  };
+}
+
+/**
+ * Everything a NEW goal is born with after its row (`startTrack`): any step
+ * that fails throws, and the caller undoes the birth.
+ */
+async function completeTrackBirth(p: {
+  input: StartTrackInput;
+  track: ProjectTrack;
+  project: GateProject;
+  playbook: Awaited<ReturnType<typeof loadTrackMethod>> | null;
+  replaces: Awaited<ReturnType<typeof assertReplaceableTrack>> | null;
+  source: Awaited<ReturnType<typeof assertGoalSource>> | null;
+  endedAs: TrackFromEntity["ended"] | null;
+}): Promise<ProjectTrack> {
+  const { input, track, project, playbook, replaces, source, endedAs } = p;
+  const { actor } = input;
   // WHO IS ON IT (W3): a goal is born with its owner — the person who started
   // it (an agent's start is approved by a person, who is `actor.userId` then).
   // A REOPENED goal (R8) is born with the closed version's people instead:
   // its owner and judge, its delegates asked again (`carryGoalParticipants`).
-  if (created) {
-    if (replaces) {
-      await carryGoalParticipants(
-        replaces.track,
-        track,
-        actor.userId,
-        project.userId
-      );
-    } else {
-      // A conversion's goal is owned by the person behind the entity.
-      await seedGoalOwner(track, project.userId, source?.ownerPersonId);
-    }
+  if (replaces) {
+    await carryGoalParticipants(
+      replaces.track,
+      track,
+      actor.userId,
+      project.userId
+    );
+  } else {
+    // A conversion's goal is owned by the person behind the entity.
+    await seedGoalOwner(track, project.userId, source?.ownerPersonId);
   }
 
-  if (created && playbook) {
+  if (playbook) {
     // Provenance edge — the same `instantiated_from` shape the proto-track
     // wrote, so every reader of `project --instantiated_from--> playbook`
     // keeps working. Idempotent on the unique edge.
@@ -1317,11 +1378,11 @@ export async function startTrack(
       },
     ]);
   }
-  if (created && replaces) {
+  if (replaces) {
     // `new --replaces--> old` through THE dependency door (validated, one
     // producer, `link.create.completed` emitted). The start is already
-    // authorized, so the ungoverned write is the right one. A failure is
-    // SURFACED: a new version that silently lost its lineage would read as an
+    // authorized, so the ungoverned write is the right one. A failure undoes
+    // the birth: a new version that lost its lineage would read as an
     // unrelated goal, and the old one's dependents would stay held.
     const linked = await writeDependencyLink({
       edge: {
@@ -1341,7 +1402,7 @@ export async function startTrack(
     if (!linked.ok) {
       throw new TRPCError({
         code: "INTERNAL_SERVER_ERROR",
-        message: `Goal "${track.name}" was started but not linked to the version it reopens: ${linked.error}`,
+        message: `Goal "${track.name}" could not be linked to the version it reopens, so it was not started: ${linked.error}`,
       });
     }
   }
@@ -1349,32 +1410,11 @@ export async function startTrack(
   // ended — the close or drop, through THE status write (`applyTrackStatus`:
   // the judge rule, the verdict stamp), as the person deciding (the approver
   // on a replay), who `assertGoalSource` checked owns it when it is a close.
-  let born = track;
-  if (created && source) {
-    await writeGoalLineage(source.entity, track.id);
-  }
-  if (created) {
-    void emitSideEffects({
-      subjectType: "track",
-      action: "create",
-      subjectId: track.id,
-      userId: actor.userId,
-      workspaceId: project.workspaceId,
-      data: {
-        trackId: track.id,
-        projectId: project.id,
-        playbookId: playbook?.id ?? null,
-        methodVersion: track.methodVersion,
-      },
-    }).catch((err) =>
-      logger.warn({ err, trackId: track.id }, "track.create emit failed")
-    );
-  }
-
-  if (created && source && endedAs) {
+  if (source) await writeGoalLineage(source.entity, track.id);
+  if (source && endedAs) {
     const close = { verdict: endedAs.verdict };
     assertTrackTransition(track, endedAs.status, close, []);
-    born = (
+    return (
       await applyTrackStatus(
         track,
         project,
@@ -1384,13 +1424,31 @@ export async function startTrack(
       )
     ).track;
   }
+  return track;
+}
 
-  return {
-    status: created ? "started" : "exists",
-    track: born,
-    playbook: playbookRef,
-    missingDomains,
-  };
+/**
+ * UNDO A BIRTH that failed half-way (`startTrack`): the new goal's edges, on
+ * either end, then its row — its participants go with it (FK cascade), and
+ * the repository records the delete beside the create it recorded. Never
+ * throws over the original error: a failure here is logged, the start's own
+ * error is what the caller sees.
+ */
+async function undoTrackBirth(trackId: string, userId: string): Promise<void> {
+  try {
+    const db = await getDb();
+    await db
+      .delete(links)
+      .where(
+        or(
+          and(eq(links.fromType, "track"), eq(links.fromId, trackId)),
+          and(eq(links.toType, "track"), eq(links.toId, trackId))
+        )
+      );
+    await (await repo()).delete(trackId, userId);
+  } catch (err) {
+    logger.error({ err, trackId }, "a goal's failed birth could not be undone");
+  }
 }
 
 /**
@@ -1900,6 +1958,17 @@ export async function applyTrackStatus(
   // A goal no longer being worked waits on no judgement; one being worked
   // again shows its judge the claims still waiting.
   await refreshGoalJudgements(track.id);
+  // An ENDED goal leaves nothing asking anyone for anything: commitments,
+  // escalations, loop stops, its loop's pending proposals. Loaded on use:
+  // it reaches the loop and the session start door.
+  if (terminal) {
+    const { settleEndedGoal } = await import("./goal-end.js");
+    await settleEndedGoal({
+      trackId: track.id,
+      ending: ending as "done" | "lost",
+      userId,
+    });
+  }
   return { status: "updated", track: updated };
 }
 

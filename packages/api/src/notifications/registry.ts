@@ -396,14 +396,14 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   },
   {
     /**
-     * A goal this goal waited on (`blocked_by`) ENDED — closed (it delivered:
-     * "nothing else holds it up" or "still waits on N other things") or
-     * dropped (it did not: the goal waits until its owner re-plans). Producer:
-     * the `track-blocker-ended-notify` reactor
-     * (`notifications/track-blocker-ended-reactor.ts`), off the status door's
-     * `track.update` emit; the outcome is re-derived from the rows. `sourceId`
-     * is the WAITING goal — where its owner acts. Its twin for a waiting
-     * session is `session.blocker_goal_ended`.
+     * A goal this goal waited on (`blocked_by`) ENDED, and that is news:
+     * closed and NOTHING else holds it now (the last-open-blocker rule), or
+     * dropped (it did not deliver: the goal waits until its owner re-plans).
+     * Producer: the `session-unblock-notify` reactor
+     * (`notifications/session-unblock-reactor.ts`, code-core F6 — one rule
+     * for "a blocker ended"), off the status door's `track.update` status
+     * move; re-derived from the rows. `sourceId` is the WAITING goal — where
+     * its owner acts.
      */
     type: "track.blocker_ended",
     category: "data",
@@ -1345,7 +1345,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
      * Fires once per unblocking, not once per closed blocker — a session
      * waiting on three things is not "unblocked" twice while two remain
      * (Asana's rule, and the reason the reactor re-derives `openBlockerIds`
-     * instead of reacting to the close alone). Producer: the
+     * instead of reacting to the close alone). A blocker is a session that
+     * closed or a GOAL that closed (code-core F6). Producer: the
      * `session-unblock-notify` reactor (`session-unblock-reactor.ts`).
      */
     type: "session.unblocked",
@@ -1370,12 +1371,11 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   },
   {
     /**
-     * A GOAL this session waited on (`blocked_by`) ended — closed or dropped.
-     * The goal twin of `session.unblocked` (whose producer reacts to a
-     * SESSION closing only), with the dropped case said too: a dropped goal
-     * holds the session until its owner re-plans. Producer: the
-     * `track-blocker-ended-notify` reactor
-     * (`notifications/track-blocker-ended-reactor.ts`). `sourceId` is the
+     * A GOAL this session waited on (`blocked_by`) was DROPPED: it did not
+     * deliver, so the session waits until its owner re-plans. A goal that
+     * closed is `session.unblocked` instead, once nothing else holds the
+     * session (code-core F6). Producer: the `session-unblock-notify` reactor
+     * (`notifications/session-unblock-reactor.ts`). `sourceId` is the
      * waiting session.
      */
     type: "session.blocker_goal_ended",

@@ -1,8 +1,9 @@
 /**
- * "A goal you were waiting on has ended" on PGlite — the REAL reactor, the
- * REAL dependency read (`readDependencyState` → `deriveOpenBlockers`), the
- * REAL access predicate for the blocker goal's name. Only the notification
- * write is captured (its own suite covers the door).
+ * A GOAL ending is one more blocker ending (code-core F6) — on PGlite: the
+ * REAL `session-unblock-notify` reactor, the REAL dependency reads
+ * (`openBlockerIds`, `readDependencyState` → `deriveOpenBlockers`), the REAL
+ * access predicate for the blocker goal's name. Only the notification write
+ * is captured (its own suite covers the door).
  *
  * Each case names the WRONG rule it rules out.
  */
@@ -54,7 +55,7 @@ import {
   projectMembers,
   trackParticipants,
 } from "@synap/database";
-import { trackBlockerEndedNotifyReactor } from "../track-blocker-ended-reactor.js";
+import { sessionUnblockNotifyReactor } from "../session-unblock-reactor.js";
 
 const OWNER = "user-owner";
 const WAITER = "user-waiter";
@@ -126,16 +127,26 @@ async function edge(
   );
 }
 
+/** The status door's emit for a move to `toStatus`. */
+const moved = (goalId: string, toStatus: string) =>
+  ({
+    subjectType: "track",
+    action: "update",
+    subjectId: goalId,
+    userId: OWNER,
+    workspaceId: null,
+    data: { trackId: goalId, fromStatus: "active", toStatus },
+  }) as never;
+
 async function fire(goalId: string) {
-  await trackBlockerEndedNotifyReactor.handler(
-    {
-      subjectType: "track",
-      action: "update",
-      subjectId: goalId,
-      userId: OWNER,
-      workspaceId: null,
-      data: { trackId: goalId },
-    } as never,
+  const [row] = (
+    await q<{ status: string }>(
+      `select status from project_tracks where id = $1`,
+      [goalId]
+    )
+  ).rows;
+  await sessionUnblockNotifyReactor.handler(
+    moved(goalId, row!.status),
     {} as never
   );
 }
@@ -172,8 +183,24 @@ beforeEach(() => {
   h.created.length = 0;
 });
 
-describe("track-blocker-ended-notify", () => {
-  it("a CLOSED goal frees a waiting session — its owner is told nothing else holds it up", async () => {
+describe("a goal ending — the one 'a blocker ended' rule", () => {
+  it("matches only a status move that ENDS a goal", () => {
+    // Rules out: reacting to every `track.update` (direction, loop, a stage).
+    const m = sessionUnblockNotifyReactor.match;
+    expect(m(moved("g", "completed"))).toBe(true);
+    expect(m(moved("g", "archived"))).toBe(true);
+    expect(m(moved("g", "paused"))).toBe(false);
+    expect(
+      m({
+        subjectType: "track",
+        action: "update",
+        subjectId: "g",
+        data: { trackId: "g" },
+      } as never)
+    ).toBe(false);
+  });
+
+  it("a CLOSED goal that was the last blocker unblocks the session — session.unblocked", async () => {
     const blocker = await goal("Price the plans", "completed");
     const waiting = await session("Write the launch post", "active");
     await edge("session", waiting, "track", blocker);
@@ -182,15 +209,13 @@ describe("track-blocker-ended-notify", () => {
 
     expect(h.created).toHaveLength(1);
     expect(h.created[0]).toMatchObject({
-      type: "session.blocker_goal_ended",
+      type: "session.unblocked",
       userId: WAITER,
-      sourceType: "session",
       sourceId: waiting,
       data: {
-        delivered: true,
-        othersHolding: 0,
-        endedWord: "closed",
-        outcome: "nothing else holds it up.",
+        sessionId: waiting,
+        blockerGoalId: blocker,
+        blockerTitle: "Price the plans",
       },
     });
   });
@@ -205,6 +230,7 @@ describe("track-blocker-ended-notify", () => {
 
     expect(h.created).toHaveLength(1);
     expect(h.created[0]).toMatchObject({
+      type: "session.blocker_goal_ended",
       data: { delivered: false, endedWord: "dropped" },
     });
     expect(String((h.created[0]!.data as { outcome: string }).outcome)).toMatch(
@@ -212,8 +238,9 @@ describe("track-blocker-ended-notify", () => {
     );
   });
 
-  it("counts the OTHER blockers still holding the dependent", async () => {
-    // Rules out: "nothing else holds it up" read off the event alone.
+  it("stays SILENT while another blocker still holds the dependent; tells it when the last one closes", async () => {
+    // Rules out: the second rule F6 removed — "it still waits on 1 other
+    // thing", told on every blocker that ends.
     const blocker = await goal("Brand kit", "completed");
     const other = await goal("Legal review", "active");
     const waiting = await goal("Public launch", "active", WAITER);
@@ -221,7 +248,12 @@ describe("track-blocker-ended-notify", () => {
     await edge("track", waiting, "track", other);
 
     await fire(blocker);
+    expect(h.created).toHaveLength(0);
 
+    await q(`update project_tracks set status = 'completed' where id = $1`, [
+      other,
+    ]);
+    await fire(other);
     expect(h.created).toHaveLength(1);
     expect(h.created[0]).toMatchObject({
       type: "track.blocker_ended",
@@ -229,13 +261,12 @@ describe("track-blocker-ended-notify", () => {
       userId: WAITER,
       sourceType: "track",
       sourceId: waiting,
-      data: { othersHolding: 1, outcome: "it still waits on 1 other thing." },
+      data: { delivered: true, outcome: "nothing else holds it up." },
     });
   });
 
   it("stays silent while the goal is still live", async () => {
-    // Rules out: trusting the event instead of the row (a stage move emits
-    // the same `track.update`).
+    // Rules out: trusting the event instead of the row.
     const blocker = await goal("Still going", "active");
     const waiting = await session("Waits", "active");
     await edge("session", waiting, "track", blocker);

@@ -268,6 +268,8 @@ export type {
   AcceptTrackCriterionInput,
   TrackCloseInput,
   ReopenTrackInput,
+  ConvertToGoalInput,
+  HubConvertToGoalResult,
   HubTrackProposed,
   ListTracksOptions,
   ListAllTracksOptions,
