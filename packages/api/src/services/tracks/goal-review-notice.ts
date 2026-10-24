@@ -147,7 +147,7 @@ export async function refreshGoalJudgements(
     // The review item leaves only when NO claim is left (F1) — or at once on
     // an operation, which is never "ready for your verdict" (R6); a former
     // judge's leaves too.
-    const review = facts.inReview && track.workKind !== "operation";
+    const review = facts.inReview;
     if (claimedKeys.length === 0 || track.workKind === "operation") {
       await settleByType(track.id, GOAL_REVIEW_NOTIFICATION_TYPE);
     } else {
@@ -191,6 +191,8 @@ export async function refreshGoalJudgements(
       ).flatMap((n) => (n.groupKey ? [n.groupKey] : []))
     );
 
+    held.clear();
+    held.clear();
     const { NotificationService } =
       await import("../../notifications/NotificationService.js");
     for (const c of claimed) {

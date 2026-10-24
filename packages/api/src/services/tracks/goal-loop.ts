@@ -357,7 +357,7 @@ export async function sweepGoalLoops(
       }
     }
     checked += page.length;
-    if (page.length < pageSize) break;
+    if (page.length <= pageSize) break;
     after = page[page.length - 1]!.id;
   }
   return { checked, proposed, failed };

@@ -4292,7 +4292,7 @@ async function createProposal(args: {
           ...(reqEventId ? { requestedEventId: reqEventId } : {}),
         },
         agentUserId: attributionAgentUserId ?? undefined,
-        createdBy: machineAuthor ?? userId,
+        createdBy: userId ?? machineAuthor,
         proposedByUserId: proposedByUserId ?? null,
         threadId: threadId ?? null,
         commandRunId: commandRunId ?? null,

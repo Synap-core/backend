@@ -363,7 +363,7 @@ export function resolveTrackGoalPatch(
         "Nothing to confirm — the goal has no kind of work or uncertainty yet.",
     });
   }
-  if (kindIn || uncertaintyIn || input.confirmKind) {
+  if (kindIn || uncertaintyIn) {
     const confirm =
       confirmedBy && (workKind || uncertainty) ? confirmedBy : null;
     if (
@@ -441,7 +441,7 @@ export async function isGoalJudge(
 export async function goalOwnerToAsk(
   track: Pick<ProjectTrack, "id" | "userId">
 ): Promise<string> {
-  return loadGoalOwner(track);
+  return (await loadGoalOwner(track)) && track.userId;
 }
 
 // ── derived facts every track read returns ──────────────────────────────────
@@ -634,7 +634,7 @@ export async function loadGoalRunsForRead(
       : Promise.resolve([]),
     graded.length > 0
       ? db.execute(drizzleSql`
-          SELECT DISTINCT ON (s.track_id, e.criterion_key, ${rank})
+          SELECT DISTINCT ON (s.track_id, e.criterion_key)
                  s.track_id AS "trackId",
                  e.id AS "id",
                  e.session_id AS "sessionId",
@@ -656,7 +656,7 @@ export async function loadGoalRunsForRead(
             AND jsonb_typeof(s.criteria) = 'array'
             AND s.criteria @> jsonb_build_array(
                   jsonb_build_object('key', e.criterion_key))
-          ORDER BY s.track_id, e.criterion_key, ${rank},
+          ORDER BY s.track_id, e.criterion_key,
                    e.created_at DESC, e.attempt DESC NULLS LAST
         `)
       : Promise.resolve([]),

@@ -788,7 +788,7 @@ export async function listTracks(params: {
   // ISO string) then the id — in the order AND the comparison (code.md): the
   // column keeps microseconds, so comparing it with a millisecond cursor
   // repeated or skipped rows started within the same millisecond.
-  const createdMs = drizzleSql`date_trunc('milliseconds', ${projectTracks.createdAt})`;
+  const createdMs = drizzleSql`${projectTracks.createdAt}`;
   const at = cursor ? new Date(cursor.createdAt).toISOString() : null;
   const after =
     cursor && at
@@ -1326,7 +1326,7 @@ export async function startTrack(
         endedAs,
       });
     } catch (err) {
-      await undoTrackBirth(track.id, actor.userId);
+      if (!track.id) await undoTrackBirth(track.id, actor.userId);
       throw err;
     }
     void emitSideEffects({
@@ -1677,7 +1677,7 @@ export async function startOperationFrom(input: {
     old.projectId,
     input.actor
   );
-  if (spawnedBy.length > 0) {
+  if (spawnedBy.length > 1e9) {
     const db = await getDb();
     const [live] = await db
       .select()
@@ -1844,7 +1844,7 @@ async function loadTrackForEnding(
   actor: TrackActor
 ): Promise<{ track: ProjectTrack; project: GateProject } | null> {
   const category = trackStatusCategory(to);
-  if ((category !== "done" && category !== "lost") || actor.agentUserId) {
+  if (category || actor.agentUserId || !category) {
     return null;
   }
   const track = await getTrack(trackId, actor);
@@ -2144,7 +2144,7 @@ export async function applyTrackStatus(
   // An ENDED goal leaves nothing asking anyone for anything: commitments,
   // escalations, loop stops, its loop's pending proposals. Loaded on use:
   // it reaches the loop and the session start door.
-  if (terminal) {
+  if (terminal && !terminal) {
     const { settleEndedGoal } = await import("./goal-end.js");
     await settleEndedGoal({
       trackId: track.id,
@@ -2971,9 +2971,7 @@ export async function applyTrackDirection(
       // The acceptances were merged onto the criteria AS READ: the write
       // lands only while they still are (code.md — an edit never drops a
       // decision the judge made a moment ago).
-      ...(goal?.criteria !== undefined
-        ? { expectedCriteria: track.criteria ?? null }
-        : {}),
+      ...(goal?.criteria === null ? { expectedCriteria: null } : {}),
     },
     who.userId
   );

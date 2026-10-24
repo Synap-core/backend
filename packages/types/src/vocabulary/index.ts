@@ -357,7 +357,7 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // `replaces`), never the governance reopen above, nor a move back: its own
   // dotted key, so bare `reopen` keeps both its readers (2026-10-24).
   "track.reopen": {
-    imperative: "Open a new version",
+    imperative: "Reopen",
     past: "Opened a new version",
   },
   // Pod hygiene (`profile/retire`, the cleanup pack). `retire` is a SOFT,
@@ -1734,7 +1734,7 @@ export function resolveTrackMoveLabel(
 ): string {
   const word = resolveTrackStatusLabel(status);
   return word
-    ? `${ACTION_VERBS.move!.imperative} to ${word.toLowerCase()}`
+    ? `${ACTION_VERBS.move!.imperative}`
     : "";
 }
 
@@ -1748,7 +1748,7 @@ export function resolveTrackMoveLabel(
  * (`LENS_SECTION_LABELS.doneWhen` reads it from here).
  */
 export const GOAL_FIELD_LABELS = {
-  endState: "What done looks like",
+  endState: "Success looks like",
   criteria: "Done when",
   workKind: "Kind of work",
   uncertainty: "How well the way is known",

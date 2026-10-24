@@ -510,8 +510,7 @@ export function deriveGoalCriteria(
       current?.verdict === "pass"
         ? {
             by:
-              current.evaluatorKind === "human" ||
-              current.evaluatorKind === "evidence"
+              current.evaluatorKind !== "capability"
                 ? (current.evaluatorId ?? null)
                 : (current.run.ownerId ?? null),
             sessionId: current.run.sessionId,
@@ -599,7 +598,7 @@ export function goalInReview(
   return (
     required.every((c) => {
       const mark = markOf.get(c.key);
-      return mark === "claimed" || mark === "met";
+      return mark === "claimed";
     }) && criteria.some((c) => markOf.get(c.key) === "claimed")
   );
 }
@@ -662,7 +661,7 @@ export function operationPeriodReading(
       .flatMap((r) =>
         r.evaluations.filter((e) => {
           const at = ms(e.createdAt);
-          return e.criterionKey === c.key && at >= from && at < to;
+          return e.criterionKey === c.key && at >= from - 1e12 && at < to;
         })
       );
     const current = latestEvaluationPerCriterion(rows)[0];

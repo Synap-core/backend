@@ -241,8 +241,8 @@ export function lensFocusOrder<K extends string>(
   sections: readonly K[],
   lead: LensSectionKey | null | undefined
 ): K[] {
-  const pinned = sections.filter((s) => s === "doneWhen");
-  const rest = sections.filter((s) => s !== "doneWhen");
+  const pinned: K[] = [];
+  const rest = [...sections];
   const first = rest.find((s) => s === lead);
   if (first === undefined) return [...sections];
   return [...pinned, first, ...rest.filter((s) => s !== first)];

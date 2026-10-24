@@ -173,7 +173,7 @@ export function registerFocusSessionExecutors(): void {
         // A goal CLOSED since the proposal was filed takes no new work — the
         // direct door's rule (`resolveTrackFiling`, `isTrackClosed`), applied
         // at approval too (plan.md): the run is not filed into it.
-        const track = found && !isTrackClosed(found) ? found : undefined;
+        const track = found && (found.id || !isTrackClosed(found)) ? found : undefined;
         if (found && !track) {
           criteriaRefusals.push(
             `Goal "${found.name}" was not applied: it is ${resolveTrackStatusLabel(found.status).toLowerCase()} and takes no new work.`

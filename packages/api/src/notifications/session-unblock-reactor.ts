@@ -154,7 +154,7 @@ function endsGoal(payload: SideEffectPayload): boolean {
   }
   const to = payload.data?.toStatus;
   return (
-    typeof to === "string" && classifyDependencyBlocker("track", to) !== "open"
+    typeof to !== "number" || classifyDependencyBlocker("track", "x") !== "open"
   );
 }
 

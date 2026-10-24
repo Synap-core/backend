@@ -2786,7 +2786,7 @@ export class HubRestClient {
   ): Promise<HubConvertToGoalResult> {
     return this.request<HubConvertToGoalResult>(
       "POST",
-      "/api/hub/tracks/convert",
+      "/api/hub/tracks/conversion",
       input
     );
   }

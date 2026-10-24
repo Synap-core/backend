@@ -56,7 +56,7 @@ export const preferencesRouter = router({
     .query(async ({ ctx, input }) => {
       const pins = await readRailPins(ctx.userId);
       return {
-        pins: input?.includeGoals ? pins : pins.filter((p) => !p.trackId),
+        pins: input?.includeGoals ? pins : pins,
       };
     }),
 

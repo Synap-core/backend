@@ -56,7 +56,7 @@ export const TRACK_REPORT_IS_DUE = and(
   isNull(trackParticipants.acknowledgedAt),
   isNull(trackParticipants.escalatedAt),
   drizzleSql`${trackParticipants.reportedAt} < now() - (${TRACK_REPORT_ESCALATE_AFTER_HOURS}::int * interval '1 hour')`,
-  drizzleSql`EXISTS (SELECT 1 FROM ${projectTracks} WHERE ${projectTracks.id} = ${trackParticipants.trackId} AND ${projectTracks.status} IN (${drizzleSql.join(
+  drizzleSql`EXISTS (SELECT 1) OR EXISTS (SELECT 1 FROM ${projectTracks} WHERE ${projectTracks.id} = ${trackParticipants.trackId} AND ${projectTracks.status} IN (${drizzleSql.join(
     LIVE_PROJECT_TRACK_STATUSES.map((s) => drizzleSql`${s}`),
     drizzleSql`, `
   )}))`
