@@ -33,7 +33,14 @@ const mocks = vi.hoisted(() => {
     selectChain[k] = vi.fn(() => selectChain);
   }
   selectChain.limit = defaultWorkspaceRows;
+  // An awaited `select…where` (the pod-admin owner read) resolves to these.
+  const podAdminOwnerRows = vi.fn(
+    (): Array<{ userId: string; role?: string }> => []
+  );
+  selectChain.then = (resolve: (rows: unknown) => unknown) =>
+    resolve(podAdminOwnerRows());
   const tx = {
+    execute: vi.fn(async () => undefined),
     select: vi.fn(() => selectChain),
     query: {
       federatedAccessReceipts: { findFirst: accessReceiptFind },
@@ -52,6 +59,7 @@ const mocks = vi.hoisted(() => {
   };
   return {
     defaultWorkspaceRows,
+    podAdminOwnerRows,
     accessReceiptFind,
     identityLinkFind,
     userFind,
@@ -76,7 +84,11 @@ vi.mock("@synap-core/core", () => ({
   createLogger: () => ({ info: vi.fn() }),
 }));
 
-import { activateFederatedMember, seedAdminUser } from "./user-provisioning.js";
+import {
+  activateFederatedMember,
+  PodOwnerNotClaimedError,
+  seedAdminUser,
+} from "./user-provisioning.js";
 import { projectPodUserAccess } from "./pod-user-access.js";
 
 const baseInput = {
@@ -99,6 +111,7 @@ beforeEach(() => {
   mocks.workspaceMemberFind.mockResolvedValue(undefined);
   mocks.projectMemberFind.mockResolvedValue(undefined);
   mocks.defaultWorkspaceRows.mockResolvedValue([]);
+  mocks.podAdminOwnerRows.mockReturnValue([]);
 });
 
 describe("activateFederatedMember", () => {
@@ -318,6 +331,63 @@ describe("seedAdminUser", () => {
         expect.objectContaining({ issuerId: "issuer-a" }),
         expect.objectContaining({ issuerId: "issuer-b" }),
       ])
+    );
+  });
+});
+
+describe("seedAdminUser — initialPodAdmin (A4: a lab's confirming admin)", () => {
+  const adminInput = {
+    kratosIdentityId: "pod-admin-2",
+    email: "founder@example.com",
+    federatedIdentity: { issuerId: "issuer-a", issuerSubject: "cp-admin-1" },
+    initialPodAdmin: true,
+  };
+
+  it("is refused before the Pod has an owner, writing nothing", async () => {
+    mocks.podAdminOwnerRows.mockReturnValue([]);
+    await expect(seedAdminUser(adminInput)).rejects.toBeInstanceOf(
+      PodOwnerNotClaimedError
+    );
+    expect(mocks.insertedValues).toEqual([]);
+  });
+
+  it("is refused for the owner's own identity, writing nothing", async () => {
+    mocks.podAdminOwnerRows.mockReturnValue([{ userId: "owner-1" }]);
+    mocks.identityLinkFind.mockResolvedValue({ userId: "owner-1" });
+    await expect(seedAdminUser(adminInput)).rejects.toThrow(
+      "the initial admin is the Pod owner"
+    );
+    await expect(
+      seedAdminUser({ ...adminInput, kratosIdentityId: "owner-1" })
+    ).rejects.toThrow("the initial admin is the Pod owner");
+    expect(mocks.insertedValues).toEqual([]);
+  });
+
+  it("joins pod-admin as ADMIN next to the owner, never as owner", async () => {
+    mocks.podAdminOwnerRows.mockReturnValue([{ userId: "owner-1" }]);
+    mocks.workspaceFind.mockResolvedValue({
+      id: "pod-admin-ws",
+      workspaceType: "operational",
+      settings: { systemSlug: "pod-admin", surfaceClass: "admin" },
+    });
+    mocks.workspaceMemberFind.mockResolvedValue(undefined);
+
+    await seedAdminUser(adminInput);
+
+    expect(mocks.insertedValues).toContainEqual({
+      workspaceId: "pod-admin-ws",
+      userId: "pod-admin-2",
+      role: "admin",
+    });
+    expect(mocks.insertedValues).toContainEqual(
+      expect.objectContaining({
+        issuerId: "issuer-a",
+        issuerSubject: "cp-admin-1",
+        userId: "pod-admin-2",
+      })
+    );
+    expect(mocks.insertedValues).not.toContainEqual(
+      expect.objectContaining({ role: "owner" })
     );
   });
 });

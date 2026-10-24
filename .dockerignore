@@ -1,4 +1,8 @@
-node_modules
+# Every node_modules, not only the root one: a stale package-level
+# node_modules in the build context (a checkout that once ran pnpm install)
+# is copied by `COPY . .` over the links the image's install just made
+# (a dangling zod -> zod@4.3.6 link broke the 2026-10-24 build).
+**/node_modules
 .turbo
 dist
 build
