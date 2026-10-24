@@ -143,8 +143,14 @@ export interface HubTrack {
   /** The person who confirmed kind + uncertainty — `null` while proposed. */
   kindConfirmedBy?: string | null;
   kindConfirmedAt?: string | null;
-  /** Every required criterion claimed, none accepted yet — derived. */
+  /** Every required criterion met or claimed, one at least claimed — derived. */
   inReview?: boolean | null;
+  /** An operation's reading for this week (R6); `null` for other kinds. */
+  periodReading?: {
+    from: string;
+    to: string;
+    mark: "met" | "not_met" | "unmeasured";
+  } | null;
   /** What the goal waits on — derived; `[]` = nothing. */
   waitingOn?: Array<{ reason: HubWaitingOnReason; count: number }> | null;
   /**

@@ -48,6 +48,8 @@ import {
   deriveGoalCriteria,
   deriveWaitingOn,
   goalInReview,
+  operationPeriodReading,
+  operationWeekStart,
   isTrackUncertainty,
   isTrackWorkKind,
   owedSlotWaitingSources,
@@ -56,6 +58,7 @@ import {
   type GoalCriterionClaim,
   type GoalCriterionView,
   type GoalRunFacts,
+  type OperationPeriodReading,
   type TrackUncertainty,
   type TrackWorkKind,
   type WaitingOnMark,
@@ -445,6 +448,8 @@ export async function goalOwnerToAsk(
 
 /** What every track read adds about the goal's content — DERIVED, never stored. */
 export interface TrackGoalFacts {
+  /** R6: an operation's reading for this week; `null` for any other kind. */
+  periodReading: OperationPeriodReading | null;
   criteria: GoalCriterionView[];
   inReview: boolean;
   waitingOn: WaitingOnMark[];
@@ -751,7 +756,9 @@ export async function loadGoalRunsForRead(
  * THROWS — never folded into "nothing claimed, waiting on nothing".
  */
 export async function loadTrackGoalFacts(
-  tracks: ReadonlyArray<Pick<ProjectTrack, "id" | "userId" | "criteria">>,
+  tracks: ReadonlyArray<
+    Pick<ProjectTrack, "id" | "userId" | "criteria" | "workKind">
+  >,
   userId: string
 ): Promise<Map<string, TrackGoalFacts>> {
   const out = new Map<string, TrackGoalFacts>();
@@ -850,6 +857,13 @@ export async function loadTrackGoalFacts(
     at: c.at,
   });
 
+  // R6: the period an operation is read over — this week.
+  const weekFrom = operationWeekStart(new Date());
+  const week = {
+    from: weekFrom,
+    to: new Date(weekFrom.getTime() + 7 * 24 * 60 * 60 * 1000),
+  };
+
   for (const track of tracks) {
     const criteria = readGoalCriteria(track.criteria);
     const filed = openSessions.filter((s) => s.trackId === track.id);
@@ -895,6 +909,12 @@ export async function loadTrackGoalFacts(
         };
       }),
       inReview: goalInReview(criteria, states),
+      // R6: the bounded runs carry the latest row of each kind, so the latest
+      // one inside the week is among them — the same answer as every row.
+      periodReading:
+        track.workKind === "operation"
+          ? operationPeriodReading(criteria, runsOf.get(track.id) ?? [], week)
+          : null,
       waitingOn: deriveWaitingOn(sources),
     });
   }

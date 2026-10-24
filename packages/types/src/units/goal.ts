@@ -22,6 +22,7 @@ import type {
   CRITERION_CHECK_MEANING_LABELS,
   GOAL_ACCEPTANCE_LABELS,
   GOAL_CRITERION_MARK_LABELS,
+  OPERATION_PERIOD_MARK_LABELS,
   TRACK_UNCERTAINTY_LABELS,
   TRACK_WORK_KIND_LABELS,
   WAITING_ON_REASON_LABELS,
@@ -614,6 +615,68 @@ export function goalClaimedKeys(
     .map((c) => c.key);
 }
 
+// ── R6: an operation, read per period ─────────────────────────────────────
+
+/**
+ * How an OPERATION's period reads (R6): it is never "done" — it is kept
+ * running, and each period is met or not. Read from its required criteria's
+ * grades IN the period (no new store): every one passing → `met`; one failing
+ * → `not_met`; else (one not graded this period, or no required criterion)
+ * `unmeasured`. The run's grade counts as it stands — a period is assessed,
+ * never a claim waiting on the judge.
+ */
+export const OPERATION_PERIOD_MARKS = ["met", "not_met", "unmeasured"] as const;
+export type OperationPeriodMark = (typeof OPERATION_PERIOD_MARKS)[number];
+
+export interface OperationPeriodReading {
+  /** ISO-8601, inclusive. */
+  from: string;
+  /** ISO-8601, exclusive. */
+  to: string;
+  mark: OperationPeriodMark;
+}
+
+/** Monday 00:00 UTC of `now`'s week — the period an operation is read over. */
+export function operationWeekStart(now: Date): Date {
+  const d = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+  );
+  const sinceMonday = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - sinceMonday);
+  return d;
+}
+
+export function operationPeriodReading(
+  criteria: ReadonlyArray<Pick<GoalCriterionLike, "key" | "required">>,
+  runs: readonly GoalRunFacts[],
+  period: { from: Date; to: Date }
+): OperationPeriodReading {
+  const from = period.from.getTime();
+  const to = period.to.getTime();
+  const required = criteria.filter((c) => c.required !== false);
+  let failing = false;
+  let unmeasured = required.length === 0;
+  for (const c of required) {
+    const rows = runs
+      .filter((r) => r.criterionKeys.includes(c.key))
+      .flatMap((r) =>
+        r.evaluations.filter((e) => {
+          const at = ms(e.createdAt);
+          return e.criterionKey === c.key && at >= from && at < to;
+        })
+      );
+    const current = latestEvaluationPerCriterion(rows)[0];
+    // `unmeasured` is not a fail (the session rule, `computeSessionVerdict`).
+    if (current?.verdict === "fail") failing = true;
+    else if (current?.verdict !== "pass") unmeasured = true;
+  }
+  return {
+    from: period.from.toISOString(),
+    to: period.to.toISOString(),
+    mark: failing ? "not_met" : unmeasured ? "unmeasured" : "met",
+  };
+}
+
 // ── R4: waiting on ─────────────────────────────────────────────────────────
 
 /**
@@ -745,5 +808,10 @@ void _workKindWords;
 void _uncertaintyWords;
 void _meaningWords;
 void _markWords;
+const _periodWords: _SameKeys<
+  OperationPeriodMark,
+  keyof typeof OPERATION_PERIOD_MARK_LABELS
+> = true;
+void _periodWords;
 void _acceptanceWords;
 void _waitingWords;

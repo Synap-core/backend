@@ -2791,6 +2791,21 @@ export class HubRestClient {
     );
   }
 
+  /**
+   * "Keep watching it": from a goal closed as met, a new goal of kind
+   * operation that keeps its result alive (linked `spawned_from`).
+   */
+  async startOperationFrom(
+    trackId: string,
+    input?: ReopenTrackInput
+  ): Promise<HubStartTrackResult> {
+    return this.request<HubStartTrackResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/operation`,
+      input ?? {}
+    );
+  }
+
   /** Reopen a closed or dropped goal as a NEW version (linked `replaces`). */
   async reopenTrack(
     trackId: string,

@@ -84,12 +84,13 @@ import type {
   ProjectTrackVerdict,
   ProjectTrackWorkKind,
 } from "@synap/database/schema";
-import { type LIVE_PROJECT_TRACK_STATUSES } from "@synap/database/schema";
+import { LIVE_PROJECT_TRACK_STATUSES } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import {
   buildObjectActionTitle,
   resolveTrackStatusLabel,
+  resolveTrackVerdictLabel,
 } from "@synap-core/types/vocabulary";
 import { formatKpiFraction } from "@synap-core/types/lens";
 import {
@@ -126,6 +127,7 @@ import {
   type GoalAcceptanceDecision,
   type GoalCriterionView,
   type TrackUncertainty,
+  type OperationPeriodReading,
   type TrackWorkKind,
   type WaitingOnMark,
   readGoalLoop,
@@ -415,11 +417,17 @@ export interface TrackView {
   kindConfirmedBy: string | null;
   kindConfirmedAt: string | null;
   /**
-   * DERIVED — every required criterion claimed and none accepted yet (a
-   * mark inside the active category, never a status). `null` on a write's
-   * fallback view.
+   * DERIVED — every required criterion met or claimed and one at least
+   * claimed (a mark inside the active category, never a status). `null` on a
+   * write's fallback view.
    */
   inReview: boolean | null;
+  /**
+   * DERIVED (R6) — an OPERATION's reading for THIS week (Monday 00:00 UTC):
+   * met / not met / unmeasured from its required criteria's grades in the
+   * week. `null` for any other kind of work, and on a write's fallback view.
+   */
+  periodReading: OperationPeriodReading | null;
   /**
    * DERIVED (R4) — what the goal waits on, one mark per reason present
    * (input · approval · access · another_work · outside_world) with how many.
@@ -502,6 +510,7 @@ export function toTrackView(
       ? new Date(track.kindConfirmedAt).toISOString()
       : null,
     inReview: goal ? goal.inReview : null,
+    periodReading: goal ? goal.periodReading : null,
     waitingOn: goal ? goal.waitingOn : null,
     createdAt: new Date(track.createdAt).toISOString(),
     updatedAt: new Date(track.updatedAt).toISOString(),
@@ -948,6 +957,12 @@ export interface StartTrackInput {
    */
   replacesTrackId?: string | null;
   /**
+   * KEEP WATCHING IT (R6): the goal closed as MET that this new goal — an
+   * operation — keeps alive. Same project; linked `new --spawned_from-->
+   * old`. Set by `startOperationFrom` and by its `track/create` replay.
+   */
+  spawnedFromTrackId?: string | null;
+  /**
    * The METHOD — optional (work model W1, 2026-10-11): a track is a goal;
    * stages are optional. Absent/null ⇒ a stage-less track,
    * and `name` is then required (there is no method name to default to).
@@ -1083,6 +1098,9 @@ export async function startTrack(
   const source = input.fromEntity
     ? await assertGoalSource(input.fromEntity, project, actor)
     : null;
+  const spawnedFrom = input.spawnedFromTrackId
+    ? await assertOperationSource(input.spawnedFromTrackId, project.id, actor)
+    : null;
 
   // Advisory, computed from the method AS IT STANDS (what would be pinned).
   const missingDomains = playbook
@@ -1112,6 +1130,14 @@ export async function startTrack(
     assertNameHeldBySameMethod(live, playbook);
     // Reopening: the live track holding the name must BE the new version (a
     // repeated reopen), never an unrelated goal handed back as if it were.
+    // Keeping a goal running: the live goal holding the name must be the
+    // operation already spawned from it, never an unrelated one.
+    if (spawnedFrom && !spawnedFrom.spawnedBy.includes(live.id)) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: `A live goal on this project is already named "${live.name}" — keep "${spawnedFrom.track.name}" running under another name.`,
+      });
+    }
     if (replaces && !replaces.replacedBy.includes(live.id)) {
       throw new TRPCError({
         code: "CONFLICT",
@@ -1230,6 +1256,8 @@ export async function startTrack(
       ...pickTrackGoalInput(goalInput),
       // The closed version this one reopens (R8) — re-checked at approval.
       ...(replaces ? { replacesTrackId: replaces.track.id } : {}),
+      // The goal this operation keeps running (R6) — re-checked at approval.
+      ...(spawnedFrom ? { spawnedFromTrackId: spawnedFrom.track.id } : {}),
       // The entity this goal is made from (D2) — re-checked at approval.
       ...(input.fromEntity ? { fromEntity: input.fromEntity } : {}),
       // The consent the summary states ("…and let <agent> work in …").
@@ -1300,6 +1328,7 @@ export async function startTrack(
         project,
         playbook,
         replaces,
+        spawnedFrom,
         source,
         endedAs,
       });
@@ -1342,10 +1371,12 @@ async function completeTrackBirth(p: {
   project: GateProject;
   playbook: Awaited<ReturnType<typeof loadTrackMethod>> | null;
   replaces: Awaited<ReturnType<typeof assertReplaceableTrack>> | null;
+  spawnedFrom: Awaited<ReturnType<typeof assertOperationSource>> | null;
   source: Awaited<ReturnType<typeof assertGoalSource>> | null;
   endedAs: TrackFromEntity["ended"] | null;
 }): Promise<ProjectTrack> {
-  const { input, track, project, playbook, replaces, source, endedAs } = p;
+  const { input, track, project, playbook, replaces, spawnedFrom } = p;
+  const { source, endedAs } = p;
   const { actor } = input;
   // WHO IS ON IT (W3): a goal is born with its owner — the person who started
   // it (an agent's start is approved by a person, who is `actor.userId` then).
@@ -1405,6 +1436,20 @@ async function completeTrackBirth(p: {
         message: `Goal "${track.name}" could not be linked to the version it reopens, so it was not started: ${linked.error}`,
       });
     }
+  }
+  if (spawnedFrom) {
+    // R6: the operation says where it came from (the neighbourhood reads
+    // `spawned_from` as "came from" / "became"). Idempotent on the edge.
+    await createLinks([
+      {
+        workspaceId: project.workspaceId,
+        fromType: "track",
+        fromId: track.id,
+        toType: "track",
+        toId: spawnedFrom.track.id,
+        linkType: "spawned_from",
+      },
+    ]);
   }
   // MAKE IT A GOAL (D2): the lineage edge, then — for an entity that had
   // ended — the close or drop, through THE status write (`applyTrackStatus`:
@@ -1574,6 +1619,104 @@ export async function reopenTrack(input: {
     // the judge's decisions (they were about the closed version's work).
     ...goalContentOf(old),
     replacesTrackId: old.id,
+    actor: input.actor,
+  });
+}
+
+/**
+ * The goal an operation keeps running (R6): visible to the actor, on THIS
+ * project, closed as MET (an operation keeps a delivered result alive; a
+ * goal that was not met is reopened instead). `spawnedBy` lists the goals
+ * already started from it, so a repeat hands the live one back.
+ */
+async function assertOperationSource(
+  trackId: string,
+  projectId: string,
+  actor: TrackActor
+): Promise<{ track: ProjectTrack; spawnedBy: string[] }> {
+  const old = await getTrack(trackId, actor);
+  if (!old || old.projectId !== projectId) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "The goal to keep running was not found on this project.",
+    });
+  }
+  if (old.status !== "completed" || old.verdict !== "met") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Only a goal closed as met can be kept running — "${old.name}" is ${resolveTrackStatusLabel(old.status).toLowerCase()}${old.verdict ? ` (${resolveTrackVerdictLabel(old.verdict).toLowerCase()})` : ""}. Reopen it as a new version instead.`,
+    });
+  }
+  const db = await getDb();
+  const rows = await db
+    .select({ fromId: links.fromId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "track"),
+        eq(links.toType, "track"),
+        eq(links.toId, old.id),
+        eq(links.linkType, "spawned_from")
+      )
+    );
+  return { track: old, spawnedBy: rows.map((r) => r.fromId) };
+}
+
+/**
+ * "KEEP WATCHING IT" (R6): from a goal closed as MET, start a new goal of
+ * kind OPERATION that keeps its result alive — the same name (free once the
+ * old one closed) unless given, its end state, criteria and direction, linked
+ * `new --spawned_from--> old`. Through `startTrack`: governance, idempotency
+ * and the consent are the start's own (an agent's start is a proposal). A
+ * live operation already spawned from it comes back as `exists`.
+ */
+export async function startOperationFrom(input: {
+  trackId: string;
+  name?: string;
+  actor: TrackActor;
+}): Promise<StartTrackResult> {
+  const old = await getTrack(input.trackId, input.actor);
+  if (!old) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
+  }
+  const { spawnedBy } = await assertOperationSource(
+    old.id,
+    old.projectId,
+    input.actor
+  );
+  if (spawnedBy.length > 0) {
+    const db = await getDb();
+    const [live] = await db
+      .select()
+      .from(projectTracks)
+      .where(
+        and(
+          inArray(projectTracks.id, spawnedBy),
+          inArray(projectTracks.status, [...LIVE_PROJECT_TRACK_STATUSES])
+        )
+      )
+      .limit(1);
+    if (live) {
+      return {
+        status: "exists",
+        track: live as ProjectTrack,
+        playbook: null,
+        missingDomains: [],
+      };
+    }
+  }
+  const content = goalContentOf(old);
+  return startTrack({
+    projectId: old.projectId,
+    name: input.name?.trim() || old.name,
+    ...(old.direction ? { direction: old.direction } : {}),
+    ...(content.endState ? { endState: content.endState } : {}),
+    ...(content.criteria ? { criteria: content.criteria } : {}),
+    ...(content.dropConditions
+      ? { dropConditions: content.dropConditions }
+      : {}),
+    workKind: "operation",
+    spawnedFromTrackId: old.id,
     actor: input.actor,
   });
 }

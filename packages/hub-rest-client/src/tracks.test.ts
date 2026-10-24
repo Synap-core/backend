@@ -261,6 +261,23 @@ describe("make it a goal", () => {
   });
 });
 
+describe("keep watching it", () => {
+  it("posts to the operation route of the closed goal", async () => {
+    replies.push({
+      status: 200,
+      body: { status: "started", track: TRACK, missingDomains: [] },
+    });
+    await client.startOperationFrom(TRACK.id);
+    expect(calls.map((c) => [c.method, c.url, c.body])).toEqual([
+      [
+        "POST",
+        `https://pod.example.test/api/hub/tracks/${TRACK.id}/operation`,
+        {},
+      ],
+    ]);
+  });
+});
+
 describe("close / reopen (a goal can finish)", () => {
   it("sends the verdict with a close, and reopens on its own route", async () => {
     replies.push({

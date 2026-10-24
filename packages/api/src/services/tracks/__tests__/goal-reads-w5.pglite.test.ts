@@ -122,6 +122,7 @@ import {
   loadTrackView,
   reopenTrack,
   setTrackStatus,
+  startOperationFrom,
   startTrack,
   type TrackActor,
 } from "../tracks-service.js";
@@ -772,5 +773,74 @@ describe("F4 — the list read of a goal's runs is bounded, and derives the same
     // …and it read fewer runs than the goal has.
     expect(full.length).toBe(9);
     expect(bounded.length).toBeLessThan(full.length);
+  });
+});
+
+describe("R6 — keep watching it, and an operation's week", () => {
+  it("a goal closed as met starts an OPERATION linked spawned_from it, read per week; a repeat hands it back", async () => {
+    const id = await goal("Site is live", PROJECT, person(OWNER), {
+      criteria: [crit("up")],
+    });
+    const run = await fileRun(id, ["up"]);
+    // The owner judges: their own grade is the acceptance.
+    await recordSessionEvaluation({
+      sessionId: run,
+      userId: OWNER,
+      criterionKey: "up",
+      verdict: "pass",
+      evaluatorKind: "human",
+      evaluatorId: OWNER,
+    });
+    await setTrackStatus({
+      trackId: id,
+      status: "completed",
+      verdict: "met",
+      actor: person(OWNER),
+    });
+
+    const res = await startOperationFrom({ trackId: id, actor: person(OWNER) });
+    if (res.status === "proposed") throw new Error("unexpected proposal");
+    expect(res.status).toBe("started");
+    expect(res.track).toMatchObject({
+      name: "Site is live",
+      workKind: "operation",
+      status: "active",
+    });
+    const edges = await q<{ to_id: string }>(
+      `select to_id from links where from_type = 'track' and from_id = $1 and link_type = 'spawned_from'`,
+      [res.track.id]
+    );
+    expect(edges.rows).toEqual([{ to_id: id }]);
+
+    // Its week: unmeasured until a run of it is graded this week, then met.
+    const view = async () =>
+      loadTrackView(
+        (await getTrack(res.track.id, person(OWNER)))!,
+        person(OWNER)
+      );
+    expect((await view()).periodReading).toMatchObject({ mark: "unmeasured" });
+    const opRun = await fileRun(res.track.id, ["up"]);
+    await claim(opRun, "up");
+    expect((await view()).periodReading).toMatchObject({ mark: "met" });
+    // Any other kind of work reads no period.
+    expect(
+      (await loadTrackView((await getTrack(id, person(OWNER)))!, person(OWNER)))
+        .periodReading
+    ).toBeNull();
+
+    const again = await startOperationFrom({
+      trackId: id,
+      name: "Another name",
+      actor: person(OWNER),
+    });
+    expect(again).toMatchObject({ status: "exists" });
+    if (again.status !== "proposed") expect(again.track.id).toBe(res.track.id);
+  });
+
+  it("refuses a goal that was not closed as met", async () => {
+    const id = await goal("Still running", PROJECT, person(OWNER));
+    await expect(
+      startOperationFrom({ trackId: id, actor: person(OWNER) })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });

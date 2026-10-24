@@ -12,6 +12,8 @@ import {
   goalAcceptanceRefusal,
   goalInReview,
   mayAcceptGoalCriterion,
+  operationPeriodReading,
+  operationWeekStart,
   owedSlotWaitingSources,
   readGoalCriterionAcceptance,
   type GoalCriterionAcceptance,
@@ -485,5 +487,72 @@ describe("the close rule with criteria (checkTrackClose)", () => {
   it("a lasting goal (no criteria) closes on its judge's word", () => {
     expect(checkTrackClose("completed", { verdict: "met" }, [])).toBeNull();
     expect(checkTrackClose("completed", { verdict: "met" })).toBeNull();
+  });
+});
+
+describe("R6 — an operation is read per period", () => {
+  // T1/T2 fall in the week of Mon 19 Oct; a Sunday-night row is last week's.
+  const SUNDAY = "2026-10-18T22:00:00.000Z";
+  const week = {
+    from: operationWeekStart(new Date(T2)),
+    to: new Date("2026-10-26T00:00:00.000Z"),
+  };
+  const criteria = [judged, { ...byPerson, required: false }];
+
+  it("the week starts Monday 00:00 UTC", () => {
+    expect(operationWeekStart(new Date(T2)).toISOString()).toBe(
+      "2026-10-19T00:00:00.000Z"
+    );
+    expect(
+      operationWeekStart(new Date("2026-10-19T00:00:00.000Z")).toISOString()
+    ).toBe("2026-10-19T00:00:00.000Z");
+  });
+
+  it("met when every required criterion's grade IN the period passes", () => {
+    const r = operationPeriodReading(
+      criteria,
+      [run({ evaluations: [row("tone", "pass", "judge", T1)] })],
+      week
+    );
+    expect(r).toEqual({
+      from: "2026-10-19T00:00:00.000Z",
+      to: "2026-10-26T00:00:00.000Z",
+      mark: "met",
+    });
+  });
+
+  it("a pass from LAST week does not make this week met — unmeasured", () => {
+    // Rules out reading the latest grade regardless of the period.
+    expect(
+      operationPeriodReading(
+        criteria,
+        [run({ evaluations: [row("tone", "pass", "judge", SUNDAY)] })],
+        week
+      ).mark
+    ).toBe("unmeasured");
+  });
+
+  it("the latest grade in the period wins: a later fail is not met; unmeasured is not a fail", () => {
+    expect(
+      operationPeriodReading(
+        criteria,
+        [
+          run({
+            evaluations: [
+              row("tone", "pass", "judge", T1),
+              row("tone", "fail", "judge", T2),
+            ],
+          }),
+        ],
+        week
+      ).mark
+    ).toBe("not_met");
+    expect(
+      operationPeriodReading(
+        criteria,
+        [run({ evaluations: [row("tone", "unmeasured", "judge", T1)] })],
+        week
+      ).mark
+    ).toBe("unmeasured");
   });
 });

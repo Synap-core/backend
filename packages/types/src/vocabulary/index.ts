@@ -1657,6 +1657,13 @@ export const GOAL_CRITERION_MARK_LABELS = {
   not_started: "Not started",
 } as const satisfies Readonly<Record<string, string>>;
 
+/** How an operation's period reads (R6, `OPERATION_PERIOD_MARKS`). */
+export const OPERATION_PERIOD_MARK_LABELS = {
+  met: "Met",
+  not_met: "Not met",
+  unmeasured: "Not checked",
+} as const satisfies Readonly<Record<string, string>>;
+
 /** The judge's acceptance of a claimed criterion (R2, `GOAL_ACCEPTANCE_STATES`). */
 export const GOAL_ACCEPTANCE_LABELS = {
   waiting: "Waiting",
@@ -1702,6 +1709,10 @@ export function resolveCriterionCheckMeaningLabel(
 /** The words for a goal criterion's mark; unknown values humanize. */
 export function resolveGoalCriterionMarkLabel(v: string | null | undefined) {
   return resolveFrom(GOAL_CRITERION_MARK_LABELS, v);
+}
+/** The words for an operation's period mark; unknown values humanize. */
+export function resolveOperationPeriodMarkLabel(v: string | null | undefined) {
+  return resolveFrom(OPERATION_PERIOD_MARK_LABELS, v);
 }
 /** The words for a criterion's acceptance; unknown values humanize. */
 export function resolveGoalAcceptanceLabel(v: string | null | undefined) {

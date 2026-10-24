@@ -13,6 +13,9 @@
  *   POST  /tracks/:id/advance           { toStage } — any declared stage
  *   POST  /tracks/:id/reopen            { name? } — a closed goal as a NEW
  *                                       version, linked `replaces` (R8)
+ *   POST  /tracks/:id/operation         { name? } — keep a goal closed as met
+ *                                       running: a new operation, linked
+ *                                       `spawned_from` (R6)
  *   PATCH /tracks/:id                   { status, verdict?, verdictReason? } —
  *                                       any move of the track lifecycle; a
  *                                       close/drop carries its verdict
@@ -67,6 +70,7 @@ import {
   setTrackParams,
   setTrackStatus,
   reopenTrack,
+  startOperationFrom,
   setTrackDirection,
   addTrackStage,
   trackKpiInputSchema,
@@ -368,6 +372,39 @@ export function registerTracksRoutes(app: HubHono): void {
       });
     } catch (err) {
       return fail(c, err, "POST /tracks/:id/reopen");
+    }
+  });
+
+  app.post("/tracks/:id/operation", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = Uuid.safeParse(c.req.param("id"));
+    if (!id.success) return c.json({ error: "Invalid goal id" }, 400);
+    // Optional body (the operation keeps the goal's name), as for a reopen.
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const body = ReopenSchema.safeParse(jsonRead.body);
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const result = await startOperationFrom({
+        trackId: id.data,
+        name: body.data.name,
+        actor: actorOf(c, body.data.reasoning),
+      });
+      if (result.status === "proposed") return jsonGoverned(c, result);
+      return jsonGoverned(c, {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, actorOf(c)),
+        missingDomains: result.missingDomains,
+      });
+    } catch (err) {
+      return fail(c, err, "POST /tracks/:id/operation");
     }
   });
 

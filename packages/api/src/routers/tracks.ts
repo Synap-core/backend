@@ -34,6 +34,7 @@ import {
   addTrackStageInputSchema,
   setTrackStatus,
   reopenTrack,
+  startOperationFrom,
   acceptGoalCriterion,
   startStageSession,
   startTrack,
@@ -281,6 +282,33 @@ export const tracksRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const result = await reopenTrack({
+        trackId: input.id,
+        name: input.name,
+        actor: actorOf(ctx, input.reasoning),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
+    }),
+
+  /**
+   * "Keep watching it" (R6): from a goal closed as MET, a new goal of kind
+   * operation that keeps its result alive, linked `spawned_from` it. Governed
+   * like a start (`track/create`); a live one already spawned comes back
+   * `exists`.
+   */
+  startOperationFrom: podProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().trim().min(1).max(200).optional(),
+        reasoning,
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await startOperationFrom({
         trackId: input.id,
         name: input.name,
         actor: actorOf(ctx, input.reasoning),
