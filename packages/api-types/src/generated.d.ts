@@ -9795,6 +9795,19 @@ export interface GoalCriterionView {
 	 */
 	claim: GoalCriterionClaim | null;
 }
+declare const OPERATION_PERIOD_MARKS: readonly [
+	"met",
+	"not_met",
+	"unmeasured"
+];
+export type OperationPeriodMark = (typeof OPERATION_PERIOD_MARKS)[number];
+export interface OperationPeriodReading {
+	/** ISO-8601, inclusive. */
+	from: string;
+	/** ISO-8601, exclusive. */
+	to: string;
+	mark: OperationPeriodMark;
+}
 declare const WAITING_ON_REASONS: readonly [
 	"input",
 	"approval",
@@ -18866,11 +18879,17 @@ export interface TrackView {
 	kindConfirmedBy: string | null;
 	kindConfirmedAt: string | null;
 	/**
-	 * DERIVED — every required criterion claimed and none accepted yet (a
-	 * mark inside the active category, never a status). `null` on a write's
-	 * fallback view.
+	 * DERIVED — every required criterion met or claimed and one at least
+	 * claimed (a mark inside the active category, never a status). `null` on a
+	 * write's fallback view.
 	 */
 	inReview: boolean | null;
+	/**
+	 * DERIVED (R6) — an OPERATION's reading for THIS week (Monday 00:00 UTC):
+	 * met / not met / unmeasured from its required criteria's grades in the
+	 * week. `null` for any other kind of work, and on a write's fallback view.
+	 */
+	periodReading: OperationPeriodReading | null;
 	/**
 	 * DERIVED (R4) — what the goal waits on, one mark per reason present
 	 * (input · approval · access · another_work · outside_world) with how many.
@@ -38071,6 +38090,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		pinSurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeGoals?: boolean | undefined;
 				label?: string | undefined;
 				profileSlug?: string | undefined;
 				trackId?: string | undefined;
@@ -38082,7 +38102,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 		}>;
 		railPins: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+			input: {
+				includeGoals?: boolean | undefined;
+			} | undefined;
 			meta: object;
 			output: {
 				pins: RailPin[];
@@ -38090,6 +38112,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		reorderRailPins: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeGoals?: boolean | undefined;
 				keys: string[];
 			};
 			meta: object;
@@ -38136,6 +38159,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		unpinSurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeGoals?: boolean | undefined;
 				key: string;
 			};
 			meta: object;
@@ -44841,6 +44865,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasoning?: string | undefined;
 				uncertainty?: "chaotic" | "clear" | "complex" | "complicated" | "unknown" | null | undefined;
 				workKind?: "commission" | "flow" | "incident" | "investigation" | "operation" | "pathway" | "project" | null | undefined;
+			};
+			meta: object;
+			output: (ProposedOutcome & {
+				missingDomains: string[];
+			}) | {
+				status: "exists" | "started";
+				track: TrackView;
+			};
+		}>;
+		startOperationFrom: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				name?: string | undefined;
+				reasoning?: string | undefined;
 			};
 			meta: object;
 			output: (ProposedOutcome & {
