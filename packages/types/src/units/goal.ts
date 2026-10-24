@@ -278,13 +278,58 @@ export function mayAcceptGoalCriterion(
     : null;
 }
 
+/**
+ * The check kinds an OUTSIDE party decides (R5): the judge records their
+ * decision with its source, with or without a claim on a run (plan §3:
+ * "recorded through the Declare done review, as a person's grade with the
+ * source attached").
+ */
+export const OUTSIDE_DECIDED_MEANINGS = [
+  "decided_outside",
+  "certified",
+] as const satisfies readonly CriterionCheckMeaning[];
+
+/**
+ * May the judge record `decision` on a criterion that stands at `mark`
+ * (code-core F14)? Accepting needs a CLAIM — a run passed it and waits on the
+ * judge — except a criterion an outside party decides or a third party
+ * certifies, which the judge records with a note naming the source. Sending
+ * back and rejecting stay open (a send-back needs its note). `null` =
+ * allowed; otherwise why not, in words a person or an agent can act on.
+ */
+export function goalAcceptanceRefusal(input: {
+  decision: GoalAcceptanceDecision;
+  mark: GoalCriterionMark | null;
+  meaning: CriterionCheckMeaning;
+  note: string | null | undefined;
+}): string | null {
+  const note = input.note?.trim() || null;
+  if (input.decision === "changes_asked") {
+    return note
+      ? null
+      : "Sending a criterion back needs a note — say what to change.";
+  }
+  if (input.decision !== "accepted" || input.mark === "claimed") return null;
+  if (input.mark === "met") {
+    return "This criterion is already met — nothing waits on you there.";
+  }
+  if ((OUTSIDE_DECIDED_MEANINGS as readonly string[]).includes(input.meaning)) {
+    return note
+      ? null
+      : "Recording an outside decision needs its source — say who decided or certified it, and where it is written.";
+  }
+  return "Nothing claims this criterion yet — accept it once a run passes it.";
+}
+
 // ── derived marks per criterion ────────────────────────────────────────────
 
 /**
  * Where one goal criterion stands — DERIVED, never stored:
- *   met         — passed and accepted (by the judge, a person's grade, or a
- *                 measured check that is not the author's own work);
- *   claimed     — passed, waiting on the judge;
+ *   met         — passed and accepted (by the judge — their decision or their
+ *                 own grade on a run — or a measured check that is not the
+ *                 author's own work);
+ *   claimed     — passed, waiting on the judge (any other person's grade is a
+ *                 claim: the one who did the work never accepts it — R2, R9);
  *   under_way   — not passing yet, and an open run is working on it;
  *   not_met     — worked on, not passing, nothing open on it (or sent back);
  *   not_started — no run has ever carried it.
@@ -366,18 +411,32 @@ function ms(at: Date | string): number {
   return Number.isNaN(t) ? 0 : t;
 }
 
+/** Who the derivation must know to tell an acceptance from a claim. */
+export interface GoalDerivationContext {
+  /**
+   * The goal's JUDGE (`goalJudge`: the judge seat, else the owner). A person's
+   * passing grade on a run accepts the criterion only when it is THEIRS; any
+   * other person's pass is a claim waiting on them (code-core F2). `null` —
+   * the judge is not known: every person's pass reads as a claim, never as
+   * an acceptance nobody gave.
+   */
+  judgeId: string | null;
+}
+
 /**
  * THE derivation of a goal's criteria — every reader (the pod's track read,
  * the close rule, Relay, the browser) uses this one. For each criterion: the
  * current row across every run that carries its key (a person's grade wins,
  * as for a session — `latestEvaluationPerCriterion`), then the judge's
- * decision, then whether a run is still open on it.
+ * decision, then whether a run is still open on it. A person's pass accepts
+ * only when that person is the goal's judge (`ctx.judgeId`).
  */
 export function deriveGoalCriteria(
   criteria: ReadonlyArray<
     GoalCriterionLike & { acceptance?: GoalCriterionAcceptance | null }
   >,
-  runs: readonly GoalRunFacts[]
+  runs: readonly GoalRunFacts[],
+  ctx: GoalDerivationContext
 ): GoalCriterionState[] {
   return criteria.map((c) => {
     const carrying = runs.filter((r) => r.criterionKeys.includes(c.key));
@@ -433,7 +492,10 @@ export function deriveGoalCriteria(
 
     if (current?.verdict === "pass") {
       if (current.evaluatorKind === "human") {
-        return { ...base, mark: "met", acceptanceState: "accepted" };
+        // The judge's own grade IS their acceptance; anyone else's is a claim.
+        return ctx.judgeId !== null && current.evaluatorId === ctx.judgeId
+          ? { ...base, mark: "met", acceptanceState: "accepted" }
+          : { ...base, mark: "claimed", acceptanceState: "waiting" };
       }
       const automatic =
         (current.evaluatorKind === "evidence" ||

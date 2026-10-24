@@ -196,7 +196,9 @@ export const FAILURE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
  *   - `track.review_ready` — every required criterion of a goal is claimed,
  *     waiting on its judge (decision 2: "in review");
  *   - `track.report_unacknowledged` — a delegate reported their part
- *     impossible and nobody acknowledged it for 48 h (R10), to the owner.
+ *     impossible and nobody acknowledged it for 48 h (R10), to the owner;
+ *   - `track.close_proposed` — an agent proposed to close (or drop) a goal,
+ *     and only its judge's (or owner's) approval applies.
  *
  * The api registry declares both types; `api/src/notifications/__tests__/
  * judgement-notification-parity.test.ts` holds this set to the registry.
@@ -204,6 +206,7 @@ export const FAILURE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
 export const JUDGEMENT_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   "track.review_ready",
   "track.report_unacknowledged",
+  "track.close_proposed",
 ]);
 
 /**

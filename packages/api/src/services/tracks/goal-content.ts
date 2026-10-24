@@ -66,7 +66,11 @@ import {
 } from "@synap-core/types/units";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
-import { loadGoalJudge, loadGoalOwner } from "./track-participant-store.js";
+import {
+  loadGoalJudge,
+  loadGoalJudges,
+  loadGoalOwner,
+} from "./track-participant-store.js";
 
 // ── input ───────────────────────────────────────────────────────────────────
 
@@ -407,7 +411,7 @@ function stripNullAcceptance(
 /**
  * WHO JUDGES the goal — accepts its criteria (R2): the goal's judge seat,
  * else its owner (`loadGoalJudge`, the SAME answer the close reads — only the
- * judge closes, `assertGoalCloser`). A key acting as an agent is refused
+ * judge closes, `assertGoalEnder`). A key acting as an agent is refused
  * before this is asked (`mayAcceptGoalCriterion`).
  */
 export async function isGoalJudge(
@@ -535,7 +539,7 @@ async function selectGoalSessions(trackIds: string[]) {
  * THROWS — never folded into "nothing claimed, waiting on nothing".
  */
 export async function loadTrackGoalFacts(
-  tracks: ReadonlyArray<Pick<ProjectTrack, "id" | "criteria">>,
+  tracks: ReadonlyArray<Pick<ProjectTrack, "id" | "userId" | "criteria">>,
   userId: string
 ): Promise<Map<string, TrackGoalFacts>> {
   const out = new Map<string, TrackGoalFacts>();
@@ -543,7 +547,10 @@ export async function loadTrackGoalFacts(
   const db = await getDb();
   const trackIds = tracks.map((t) => t.id);
 
-  const { sessions, runsOf } = await loadGoalRuns(tracks);
+  const [{ sessions, runsOf }, judges] = await Promise.all([
+    loadGoalRuns(tracks),
+    loadGoalJudges(tracks),
+  ]);
   const openSessions = sessions.filter(
     (s) => !isTerminalSessionStatus(s.status)
   );
@@ -592,7 +599,9 @@ export async function loadTrackGoalFacts(
   for (const track of tracks) {
     const criteria = readGoalCriteria(track.criteria);
     const filed = sessions.filter((s) => s.trackId === track.id);
-    const states = deriveGoalCriteria(criteria, runsOf.get(track.id) ?? []);
+    const states = deriveGoalCriteria(criteria, runsOf.get(track.id) ?? [], {
+      judgeId: judges.get(track.id) ?? null,
+    });
     const stateOf = new Map(states.map((s) => [s.key, s]));
 
     const sources: WaitingOnSource[] = [];

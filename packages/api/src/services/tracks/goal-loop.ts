@@ -71,6 +71,7 @@ import {
   readGoalCriteria,
   type GoalCriterion,
 } from "./goal-content.js";
+import { loadGoalJudge } from "./track-participant-store.js";
 import { createFocusSession } from "../focus-sessions/create-session.js";
 import { NotificationService } from "../../notifications/NotificationService.js";
 
@@ -168,9 +169,12 @@ export async function runGoalLoop(goalId: string): Promise<GoalLoopRunResult> {
   if (!loop.on) return { status: "held", hold: "loop_off" };
 
   const criteria = readGoalCriteria(track.criteria);
-  const { runsOf } = await loadGoalRuns([track]);
+  const [{ runsOf }, judgeId] = await Promise.all([
+    loadGoalRuns([track]),
+    loadGoalJudge(track),
+  ]);
   const runs = runsOf.get(track.id) ?? [];
-  const states = deriveGoalCriteria(criteria, runs);
+  const states = deriveGoalCriteria(criteria, runs, { judgeId });
   const counts = await loopProposalCounts(track.id);
   const decision = decideGoalNextRun({
     loop,

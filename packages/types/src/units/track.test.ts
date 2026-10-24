@@ -262,7 +262,7 @@ describe("TRACK_LIFECYCLE — the track's system lifecycle", () => {
     });
     expect(
       TRACK_LIFECYCLE.options.filter((o) => o.humanOnly).map((o) => o.key)
-    ).toEqual(["completed"]);
+    ).toEqual(["agreed", "completed"]);
   });
 
   it("reads its words from the vocabulary: completed is Closed, archived is Dropped", () => {

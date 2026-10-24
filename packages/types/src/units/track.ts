@@ -277,7 +277,9 @@ export type TrackStatus = (typeof TRACK_STATUSES)[number];
  * stops the build.
  *
  *   open    proposed → agreed (criteria and bounds agreed with the doers) →
- *           ready (prerequisites clear) — R3, before work starts;
+ *           ready (prerequisites clear) — R3, before work starts. `agreed`
+ *           is HUMAN-ONLY: agreeing is a person's act; an agent's move into
+ *           it is always a proposal (code-core F11);
  *   active  active (a new track's default);
  *   paused  paused (chosen; a check gate may also hold it);
  *   done    completed — "Closed": HUMAN-ONLY, an agent's close always
@@ -289,7 +291,7 @@ export type TrackStatus = (typeof TRACK_STATUSES)[number];
  */
 export const TRACK_STATUS_DECLARATION = {
   proposed: { category: "open" },
-  agreed: { category: "open" },
+  agreed: { category: "open", humanOnly: true },
   ready: { category: "open" },
   active: { category: "active" },
   paused: { category: "paused" },
@@ -410,8 +412,9 @@ function verbFor(
 
 /**
  * The status moves a surface offers from `status`, in table order. Dropping
- * is final and frees the live name — a workbench act, not a supervising one —
- * so it is offered only with `includeArchive: true` (Relay omits it). Closing
+ * is final and frees the live name, so it is offered only with
+ * `includeArchive: true` — both surfaces ask for it: Relay KEEPS Drop (a
+ * decision, 2026-10-24), and who may drop is `goalMayDrop`. Closing
  * IS offered: a goal can stay open as long as it matters, or finish — a
  * person closes it with a verdict ({@link checkTrackClose}). A done or lost
  * track offers nothing; an unknown status offers nothing.

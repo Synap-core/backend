@@ -23,10 +23,20 @@
 
 import { and, eq, getDb, projects, projectTracks } from "@synap/database";
 import { notifications, type ProjectTrack } from "@synap/database/schema";
-import { trackStatusCategory } from "@synap-core/types/units";
+import {
+  goalJudge,
+  goalOwner,
+  isTrackVerdict,
+  trackStatusCategory,
+} from "@synap-core/types/units";
+import { resolveTrackVerdictLabel } from "@synap-core/types/vocabulary";
 import { createLogger } from "@synap-core/core";
 import { loadTrackGoalFacts } from "./goal-content.js";
-import { loadGoalJudge } from "./track-participant-store.js";
+import {
+  goalParticipantRows,
+  loadGoalJudge,
+  personName,
+} from "./track-participant-store.js";
 
 const logger = createLogger({ module: "goal-review-notice" });
 
@@ -103,5 +113,68 @@ export async function settleGoalReviewNotice(trackId: string): Promise<void> {
       );
   } catch (err) {
     logger.warn({ err, trackId }, "goal review notice could not be settled");
+  }
+}
+
+export const GOAL_END_PROPOSED_NOTIFICATION_TYPE = "track.close_proposed";
+
+/**
+ * An agent PROPOSED to end a goal (code-core F12): a close waits on the
+ * goal's JUDGE, a drop on its owner or judge — the only people whose approval
+ * applies (`assertGoalEnder`). The proposal itself reaches every reviewer of
+ * the space; this puts it in the RIGHT person's Needs you as a judgement.
+ * `sourceType: "proposal"`: deciding the proposal (approve, reject, expire)
+ * settles the row through the one door (`markProposalNotificationsActioned`).
+ * Never throws: the proposal is already filed.
+ */
+export async function noticeGoalEndProposed(input: {
+  track: Pick<ProjectTrack, "id" | "name" | "userId">;
+  workspaceId: string | null;
+  proposalId: string;
+  to: string;
+  verdict: string | null;
+  proposerUserId: string;
+}): Promise<number> {
+  try {
+    const category = trackStatusCategory(input.to);
+    if (category !== "done" && category !== "lost") return 0;
+    const rows = await goalParticipantRows(input.track.id);
+    const judge = goalJudge(rows, input.track);
+    const recipients =
+      category === "done"
+        ? [judge]
+        : [...new Set([goalOwner(rows, input.track), judge])];
+    const proposerName = (await personName(input.proposerUserId)) ?? "An agent";
+    const { NotificationService } =
+      await import("../../notifications/NotificationService.js");
+    let written = 0;
+    for (const userId of recipients) {
+      const id = await NotificationService.create({
+        // The literal, for the producer allowlist's source scan.
+        type: "track.close_proposed",
+        userId,
+        workspaceId: input.workspaceId,
+        sourceType: "proposal",
+        sourceId: input.proposalId,
+        groupKey: `track-end:${input.proposalId}`,
+        data: {
+          trackId: input.track.id,
+          trackName: input.track.name,
+          proposerName,
+          endingVerb: category === "done" ? "close" : "drop",
+          verdictLabel: isTrackVerdict(input.verdict)
+            ? resolveTrackVerdictLabel(input.verdict)
+            : "none given",
+        },
+      });
+      if (id) written++;
+    }
+    return written;
+  } catch (err) {
+    logger.warn(
+      { err, trackId: input.track.id, proposalId: input.proposalId },
+      "goal end proposal notice failed"
+    );
+    return 0;
   }
 }

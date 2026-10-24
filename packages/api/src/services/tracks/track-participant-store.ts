@@ -7,11 +7,13 @@
  *   loadGoalJudge             — THE judge of a goal (`goalJudge`,
  *                               @synap-core/types/units): the judge row, else
  *                               the owner. Every authority check reads it.
- *   assertGoalCloser          — only the judge applies a move into done. Called
- *                               by `applyTrackStatus` — the one status write
- *                               both `setTrackStatus` and the `track/update`
- *                               approval replay run (a replay acts as the
- *                               APPROVER, so the approver must be the judge).
+ *   assertGoalEnder           — only the judge applies a move into done, only
+ *                               the owner or the judge one into lost
+ *                               (`goalMayDrop`). Called by `applyTrackStatus`
+ *                               — the one status write both `setTrackStatus`
+ *                               and the `track/update` approval replay run (a
+ *                               replay acts as the APPROVER, so the approver
+ *                               must hold the seat).
  *   seedGoalOwner             — the owner row a new goal is born with.
  *
  * Kept apart from the doors (`track-participants.ts`) so `tracks-service.ts`
@@ -43,6 +45,7 @@ import { loadActorRows } from "../activity/activity-actors.js";
 import { loadMachineNames } from "../machine-roster.js";
 import {
   goalJudge,
+  goalMayDrop,
   goalOwner,
   isOpenCommitment,
   trackStatusCategory,
@@ -81,6 +84,46 @@ export async function loadGoalJudge(
   return goalJudge(await goalParticipantRows(track.id), track);
 }
 
+/**
+ * THE judges of many goals in ONE read — `goalJudge` per goal, keyed by its
+ * id (every goal has an entry). What a list's derivation passes to
+ * `deriveGoalCriteria`, so a person's grade accepts only when it is the
+ * judge's (code-core F2).
+ */
+export async function loadGoalJudges(
+  tracks: ReadonlyArray<Pick<ProjectTrack, "id" | "userId">>
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (tracks.length === 0) return out;
+  const db = await getDb();
+  const rows = await db
+    .select({
+      trackId: trackParticipants.trackId,
+      role: trackParticipants.role,
+      principalId: trackParticipants.principalId,
+    })
+    .from(trackParticipants)
+    .where(
+      and(
+        inArray(
+          trackParticipants.trackId,
+          tracks.map((t) => t.id)
+        ),
+        inArray(trackParticipants.role, ["owner", "judge"])
+      )
+    );
+  for (const t of tracks) {
+    out.set(
+      t.id,
+      goalJudge(
+        rows.filter((r) => r.trackId === t.id),
+        t
+      )
+    );
+  }
+  return out;
+}
+
 /** THE owner of `track` — its owner row, else its starter (`goalOwner`). */
 export async function loadGoalOwner(
   track: Pick<ProjectTrack, "id" | "userId">
@@ -100,25 +143,46 @@ export async function personName(userId: string): Promise<string | null> {
 }
 
 /**
- * Only the goal's JUDGE applies a move into done (a close). `deciderUserId`
- * is the person whose act it is: the actor on the direct path, the APPROVER on
- * an approval replay. A drop (lost) and every other move keep W1's rule (a
- * person with write access). An agent's close never reaches here unreviewed:
- * it is a proposal (`lifecycleMove` humanOnly), and its approval is checked
- * here against the approver.
+ * Who may END a goal. Only its JUDGE applies a move into done (a close); only
+ * its OWNER or JUDGE one into lost (a drop — `goalMayDrop`, the rule every
+ * surface's Drop reads). `deciderUserId` is the person whose act it is: the
+ * actor on the direct path, the APPROVER on an approval replay. Every other
+ * move keeps W1's rule (a person with write access). An agent's close or drop
+ * never reaches here unreviewed: it is a proposal (`lifecycleMove` humanOnly
+ * for a close, `forcePropose` for a drop), and its approval is checked here
+ * against the approver.
  */
-export async function assertGoalCloser(
+export async function assertGoalEnder(
   track: Pick<ProjectTrack, "id" | "userId" | "name">,
   to: string,
   deciderUserId: string
 ): Promise<void> {
-  if (trackStatusCategory(to) !== "done") return;
-  const judge = await loadGoalJudge(track);
-  if (judge === deciderUserId) return;
-  const who = (await personName(judge)) ?? "Its judge";
+  const category = trackStatusCategory(to);
+  if (category !== "done" && category !== "lost") return;
+  const rows = await goalParticipantRows(track.id);
+  const judge = goalJudge(rows, track);
+  if (category === "done") {
+    if (judge === deciderUserId) return;
+    const who = (await personName(judge)) ?? "Its judge";
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Only this goal's judge can close it. ${who} judges "${track.name}" — ask them to close it, or to approve the close.`,
+    });
+  }
+  const may = goalMayDrop({
+    track,
+    participants: rows,
+    viewerId: deciderUserId,
+    viewerIsAgent: false,
+  });
+  if (may === "allowed") return;
+  const owner = goalOwner(rows, track);
+  const ownerName = (await personName(owner)) ?? "its owner";
+  const judgeName =
+    judge === owner ? null : ((await personName(judge)) ?? "its judge");
   throw new TRPCError({
     code: "FORBIDDEN",
-    message: `Only this goal's judge can close it. ${who} judges "${track.name}" — ask them to close it, or to approve the close.`,
+    message: `Only this goal's owner or judge can drop it. Ask ${ownerName}${judgeName ? ` or ${judgeName}` : ""} to drop "${track.name}", or to approve the drop.`,
   });
 }
 

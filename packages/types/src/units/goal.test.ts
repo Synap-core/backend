@@ -9,6 +9,7 @@ import {
   criterionMeaning,
   deriveGoalCriteria,
   deriveWaitingOn,
+  goalAcceptanceRefusal,
   goalInReview,
   mayAcceptGoalCriterion,
   owedSlotWaitingSources,
@@ -67,10 +68,13 @@ const row = (
   rationale,
 });
 
+/** The goal's judge in these fixtures (the owner, who also ran "a"). */
+const JUDGE = "user-1";
 const markOf = (
   c: Parameters<typeof deriveGoalCriteria>[0][number],
-  runs: GoalRunFacts[]
-) => deriveGoalCriteria([c], runs)[0]!;
+  runs: GoalRunFacts[],
+  judgeId: string | null = JUDGE
+) => deriveGoalCriteria([c], runs, { judgeId })[0]!;
 
 describe("deriveGoalCriteria — one mark per criterion", () => {
   it("no run ever carried it → not_started; an open run carries it → under_way; a closed one → not_met", () => {
@@ -102,6 +106,32 @@ describe("deriveGoalCriteria — one mark per criterion", () => {
       }),
     ]);
     expect(s).toMatchObject({ mark: "met", acceptanceState: "accepted" });
+  });
+
+  it("ANOTHER person's pass is a claim waiting on the judge, never their own acceptance (F2)", () => {
+    // Rules out "any person's grade accepts": a delegate grading their own
+    // run would accept their own work and bypass the judge.
+    const delegates = markOf(byPerson, [
+      run({ evaluations: [row("signoff", "pass", "human", T1, "delegate-9")] }),
+    ]);
+    expect(delegates).toMatchObject({
+      mark: "claimed",
+      acceptanceState: "waiting",
+    });
+    // The judge's own grade is their acceptance.
+    expect(
+      markOf(byPerson, [
+        run({ evaluations: [row("signoff", "pass", "human", T1, JUDGE)] }),
+      ]).mark
+    ).toBe("met");
+    // An unknown judge accepts nothing on anyone's behalf.
+    expect(
+      markOf(
+        byPerson,
+        [run({ evaluations: [row("signoff", "pass", "human", T1, JUDGE)] })],
+        null
+      ).mark
+    ).toBe("claimed");
   });
 
   it("a MEASURED pass by a capability is accepted automatically", () => {
@@ -223,6 +253,35 @@ describe("goalInReview — every REQUIRED criterion claimed, none accepted", () 
       )
     ).toBe(false);
     expect(goalInReview([], [])).toBe(false);
+  });
+});
+
+describe("goalAcceptanceRefusal — F14, the judge decides about CLAIMS", () => {
+  const ask = (
+    decision: "accepted" | "changes_asked" | "rejected",
+    mark: Parameters<typeof goalAcceptanceRefusal>[0]["mark"],
+    meaning: Parameters<typeof goalAcceptanceRefusal>[0]["meaning"],
+    note: string | null = null
+  ) => goalAcceptanceRefusal({ decision, mark, meaning, note });
+  it("accepting needs a claim — not a criterion nobody worked or already met", () => {
+    expect(ask("accepted", "claimed", "judged")).toBeNull();
+    expect(ask("accepted", "not_started", "judged")).toMatch(/Nothing claims/);
+    expect(ask("accepted", "under_way", "handed_over")).toMatch(
+      /Nothing claims/
+    );
+    expect(ask("accepted", "met", "judged")).toMatch(/already met/);
+  });
+  it("an outside party's decision or a certificate: recorded with its source, claim or not", () => {
+    expect(ask("accepted", "not_started", "decided_outside")).toMatch(/source/);
+    expect(
+      ask("accepted", "not_started", "decided_outside", "Board vote, 3 Oct")
+    ).toBeNull();
+    expect(ask("accepted", "not_met", "certified", "ISO cert #42")).toBeNull();
+  });
+  it("sending back needs a note; rejecting stays open", () => {
+    expect(ask("changes_asked", "claimed", "judged")).toMatch(/needs a note/);
+    expect(ask("changes_asked", "claimed", "judged", "Warmer")).toBeNull();
+    expect(ask("rejected", "not_started", "judged")).toBeNull();
   });
 });
 

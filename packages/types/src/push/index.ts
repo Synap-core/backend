@@ -200,6 +200,9 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   // A goal is in review: every required criterion is claimed and the work
   // waits on its judge's verdict (W5, 2026-10-23).
   "track.review_ready": "decision-blocking",
+  // An agent proposed to end a goal; only its judge's (or owner's) approval
+  // applies (code-core F12).
+  "track.close_proposed": "decision-blocking",
   // Something you own broke; the fix needs you.
   "agent.task_failed": "work-broke",
   "session.closed.criteria_unmet": "work-broke",

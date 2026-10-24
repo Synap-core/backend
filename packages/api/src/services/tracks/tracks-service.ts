@@ -120,6 +120,7 @@ import {
   type TrackStage,
   type TrackStageHistoryEntry,
   type TrackStatus,
+  goalAcceptanceRefusal,
   mayAcceptGoalCriterion,
   criterionMeaning,
   type GoalAcceptanceDecision,
@@ -152,9 +153,12 @@ import {
   withBirthLoopDefault,
   type TrackGoalFacts,
 } from "./goal-content.js";
-import { settleGoalReviewNotice } from "./goal-review-notice.js";
 import {
-  assertGoalCloser,
+  noticeGoalEndProposed,
+  settleGoalReviewNotice,
+} from "./goal-review-notice.js";
+import {
+  assertGoalEnder,
   carryGoalParticipants,
   goalParticipantRows,
   loadTrackParticipantViews,
@@ -1757,6 +1761,11 @@ export async function setTrackStatus(input: {
     source: input.actor.source,
     reasoning: input.actor.reasoning,
     lifecycleMove: trackStatusLifecycleMove(input.status),
+    // An agent's DROP always proposes (F7, `goalMayDrop`): only the goal's
+    // owner or judge may drop it, so a rule must never apply it unreviewed.
+    ...(input.actor.agentUserId && trackStatusCategory(input.status) === "lost"
+      ? { forcePropose: true }
+      : {}),
     data: {
       id: track.id,
       name: track.name,
@@ -1769,6 +1778,16 @@ export async function setTrackStatus(input: {
     throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
   }
   if ("proposalId" in perm) {
+    // Only the judge's (a drop: the owner's or judge's) approval applies, so
+    // the proposal goes to THEIR Needs you as a judgement (F12).
+    await noticeGoalEndProposed({
+      track,
+      workspaceId: project.workspaceId ?? null,
+      proposalId: perm.proposalId,
+      to: input.status,
+      verdict: close.verdict,
+      proposerUserId: input.actor.agentUserId ?? input.actor.userId,
+    });
     return proposed(
       perm,
       buildObjectActionTitle({
@@ -1805,9 +1824,10 @@ export async function applyTrackStatus(
   userId: string,
   close: TrackCloseInput = {}
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
-  // Only the goal's JUDGE closes it (W3) — the person acting here, or the
-  // APPROVER on a replay. ONE place: both callers reach the write through it.
-  await assertGoalCloser(track, status, userId);
+  // Only the goal's JUDGE closes it (W3), only its owner or judge drops it
+  // (F7) — the person acting here, or the APPROVER on a replay. ONE place:
+  // both callers reach the write through it.
+  await assertGoalEnder(track, status, userId);
   const ending = trackStatusCategory(status);
   const terminal = ending === "done" || ending === "lost";
   const verdict = isTrackVerdict(close.verdict) ? close.verdict : null;
@@ -2842,18 +2862,32 @@ export async function acceptGoalCriterion(input: {
     });
   }
   const note = input.note?.trim() || null;
-  if (input.decision === "changes_asked" && !note) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Sending a criterion back needs a note — say what to change.",
-    });
-  }
   if (
     criterion.acceptance?.decision === input.decision &&
     (criterion.acceptance.note ?? null) === note
   ) {
     return { status: "unchanged", track };
   }
+  // What the judge may record depends on where the criterion stands NOW —
+  // derived by the read every goal view uses (F14): accepting needs a claim,
+  // or, for an outside party's decision, a note naming its source (stored on
+  // the acceptance).
+  const view = (await loadTrackGoalFacts([track], input.actor.userId))
+    .get(track.id)
+    ?.criteria.find((c) => c.key === criterion.key);
+  if (!view) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `The criterion "${criterion.key}" could not be read — try again.`,
+    });
+  }
+  const stand = goalAcceptanceRefusal({
+    decision: input.decision,
+    mark: view.mark,
+    meaning: view.meaning,
+    note,
+  });
+  if (stand) throw new TRPCError({ code: "BAD_REQUEST", message: stand });
   const updated = await (
     await repo()
   ).setCriterionAcceptance(

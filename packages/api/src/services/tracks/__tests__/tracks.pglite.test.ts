@@ -1436,8 +1436,24 @@ describe("closing a goal — the verdict rule and the person's act", () => {
       intoTerminal: true,
       humanOnly: false,
     });
+    // An agent's drop is ALWAYS a proposal (F7): only the owner or judge may.
+    expect(h.permCalls.at(-1)!.forcePropose).toBe(true);
     await setTrackStatus({ trackId: id, status: "paused", actor: agent });
     expect(h.permCalls.at(-1)!.lifecycleMove).toBeUndefined();
+    expect(h.permCalls.at(-1)!.forcePropose).toBeUndefined();
+  });
+
+  it("F11 — agreeing is a person's act: an agent's move into agreed is human-only, a person's applies", async () => {
+    const id = await goal("Agree first");
+    await setTrackStatus({ trackId: id, status: "agreed", actor: agent });
+    expect(h.permCalls.at(-1)!.lifecycleMove).toEqual({
+      intoTerminal: false,
+      humanOnly: true,
+    });
+    expect(
+      (await setTrackStatus({ trackId: id, status: "agreed", actor: human }))
+        .status
+    ).toBe("updated");
   });
 
   it("the open statuses are reachable by explicit moves, and a shaped goal takes work; a closed one does not", async () => {
@@ -1940,10 +1956,88 @@ describe("what a goal holds (W2) — content, derived marks, acceptance, the clo
     );
   });
 
+  it("F14 — the judge accepts a CLAIM; an outside party's decision only with its source", async () => {
+    const id = await goal("Outside decides", {
+      criteria: [
+        crit("ours"),
+        crit("legal", "human", { checkKind: "decided_outside" }),
+      ],
+    });
+    // Nothing claims "ours": accepting it would be a grade with no run.
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "ours",
+        decision: "accepted",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/Nothing claims/),
+    });
+    // Sending back and rejecting stay open on an unclaimed criterion.
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "ours",
+        decision: "rejected",
+        actor: human,
+      })
+    ).resolves.toMatchObject({ status: "updated" });
+    // An outside party's decision: refused with no source…
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "legal",
+        decision: "accepted",
+        actor: human,
+      })
+    ).rejects.toMatchObject({ message: expect.stringMatching(/source/) });
+    // …recorded with one, and the note stays on the acceptance.
+    await acceptGoalCriterion({
+      trackId: id,
+      criterionKey: "legal",
+      decision: "accepted",
+      note: "Signed by ACME counsel, contract v3 (Drive)",
+      actor: human,
+    });
+    const legal = (await view(id)).criteria.find((c) => c.key === "legal")!;
+    expect(legal).toMatchObject({
+      mark: "met",
+      acceptance: {
+        decision: "accepted",
+        note: "Signed by ACME counsel, contract v3 (Drive)",
+      },
+    });
+  });
+
+  it("F2 — a person's pass accepts only when it is the judge's; anyone else's is a claim", async () => {
+    const id = await goal("Delegate grades", {
+      criteria: [crit("copy", "human"), crit("legal", "human")],
+    });
+    const run = await fileSession(id, {
+      status: "closed",
+      keys: ["copy", "legal"],
+    });
+    // A delegate (not the judge) grades their own run: a CLAIM.
+    await grade(run, "copy", "pass", "human", STRANGER, "2026-10-21T10:00:00Z");
+    // The judge (the owner, no judge row) grades: that IS their acceptance.
+    await grade(run, "legal", "pass", "human", USER, "2026-10-21T10:00:00Z");
+    const v = await view(id);
+    expect(v.criteria.map((c) => [c.key, c.mark, c.acceptanceState])).toEqual([
+      ["copy", "claimed", "waiting"],
+      ["legal", "met", "accepted"],
+    ]);
+  });
+
   it("a rewrite keeps the judge's decision on an unchanged criterion, and drops it on a changed one", async () => {
     const id = await goal("Rewritten criteria", {
       criteria: [crit("a"), crit("b")],
     });
+    // Both CLAIMED first: the judge decides about claims (F14).
+    const run = await fileSession(id, { status: "closed", keys: ["a", "b"] });
+    await grade(run, "a", "pass", "judge", "model-x", "2026-10-21T10:00:00Z");
+    await grade(run, "b", "pass", "judge", "model-x", "2026-10-21T10:00:00Z");
     await acceptGoalCriterion({
       trackId: id,
       criterionKey: "a",

@@ -1,7 +1,7 @@
 /**
  * WHO IS ON A GOAL on PGlite (work model W3, 0348) — the REAL participants
  * door (`changeTrackParticipants` → `applyTrackParticipantChange`), the REAL
- * close door (`setTrackStatus` → `applyTrackStatus` → `assertGoalCloser`), the
+ * close door (`setTrackStatus` → `applyTrackStatus` → `assertGoalEnder`), the
  * REAL `track/update` and `track/assign_agent` approval replays, the REAL
  * access registry, and the REAL 0348 migration (CHECKs, one-owner / one-judge
  * indexes, the upsert's conflict target).
@@ -12,6 +12,9 @@
  *     named (a rule "owner or judge" would admit them);
  *   - an approver who is not the judge is refused on replay, the judge's
  *     approval applies and stamps the judge as `verdictBy`;
+ *   - a DROP is the owner's or the judge's (F7): an editor of the space who
+ *     only works on the goal is refused; an agent's drop always proposes, and
+ *     the owner and judge are told (F12), as the judge is of an agent's close;
  *   - a delegate WITH WRITE ACCESS (an editor) cannot add participants — the
  *     project write floor alone would admit them;
  *   - an agent's acceptance of its own commitment applies; an agent cannot
@@ -516,9 +519,24 @@ describe("only the judge closes the goal", () => {
     expect(res.status).toBe("updated");
   });
 
-  it("a drop stays W1's rule: any person with write access, the judge not required", async () => {
+  it("F7 — a drop is the owner's or the judge's: an editor who only works on it is refused", async () => {
     const id = await goal("Owner drops");
     await add(id, person(OWNER), JUDGE, "judge");
+    await add(id, person(OWNER), STAFFER, "delegate", "Ship the page");
+    // STAFFER can write the space (the old floor would admit them).
+    await expect(
+      setTrackStatus({
+        trackId: id,
+        status: "archived",
+        verdict: "no_longer_needed",
+        actor: person(STAFFER),
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining(
+        "Only this goal's owner or judge can drop it"
+      ),
+    });
     const res = await setTrackStatus({
       trackId: id,
       status: "archived",
@@ -526,6 +544,55 @@ describe("only the judge closes the goal", () => {
       actor: person(OWNER),
     });
     expect(res.status).toBe("updated");
+    const byJudge = await goal("Judge drops");
+    await add(byJudge, person(OWNER), JUDGE, "judge");
+    expect(
+      (
+        await setTrackStatus({
+          trackId: byJudge,
+          status: "archived",
+          verdict: "mistake",
+          actor: person(JUDGE),
+        })
+      ).status
+    ).toBe("updated");
+  });
+
+  it("F7 — an agent's drop always proposes; only the owner's or judge's approval applies; F12 — they are told", async () => {
+    const id = await goal("Agent proposes the drop");
+    await add(id, person(OWNER), JUDGE, "judge");
+    const res = await setTrackStatus({
+      trackId: id,
+      status: "archived",
+      verdict: "no_longer_needed",
+      actor: agentOf(OWNER, AGENT_A),
+    });
+    expect(res.status).toBe("proposed");
+    expect(h.permCalls.at(-1)!.forcePropose).toBe(true);
+    const told = (
+      await q<{ user_id: string; source_type: string; source_id: string }>(
+        `select user_id, source_type, source_id from notifications where type = 'track.close_proposed' and group_key = $1 order by user_id`,
+        [`track-end:${(res as { proposalId: string }).proposalId}`]
+      )
+    ).rows;
+    // A drop waits on the owner or the judge: both are told, as judgements
+    // settled by the proposal's own decision (sourceType proposal).
+    expect(told.map((r) => r.user_id).sort()).toEqual([JUDGE, OWNER].sort());
+    expect(told.every((r) => r.source_type === "proposal")).toBe(true);
+
+    const data = h.permCalls.at(-1)!.data as Record<string, unknown>;
+    await expect(
+      replay("track/update", id, data, STAFFER, AGENT_A)
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await replay("track/update", id, data, JUDGE, AGENT_A);
+    expect(
+      (
+        await q<{ status: string }>(
+          `select status from project_tracks where id = $1`,
+          [id]
+        )
+      ).rows[0]!.status
+    ).toBe("archived");
   });
 
   it("an agent's close is a proposal; an approver who is not the judge is refused on replay, the judge's approval applies", async () => {
@@ -538,6 +605,15 @@ describe("only the judge closes the goal", () => {
       actor: agentOf(OWNER, AGENT_A),
     });
     expect(res.status).toBe("proposed");
+    // F12 — the close waits on the JUDGE alone: it is in their Needs you.
+    expect(
+      (
+        await q<{ user_id: string }>(
+          `select user_id from notifications where type = 'track.close_proposed' and source_id = $1`,
+          [(res as { proposalId: string }).proposalId]
+        )
+      ).rows.map((r) => r.user_id)
+    ).toEqual([JUDGE]);
     const data = h.permCalls.at(-1)!.data as Record<string, unknown>;
 
     await expect(
@@ -583,6 +659,38 @@ describe("the acceptance door reads the same judge as the close", () => {
     });
     if (res.status === "proposed") throw new Error("unexpected proposal");
     const id = res.track.id;
+    // Both CLAIMED by an AI judge on a run: the judge decides about claims.
+    const run = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, project_id, track_id, status, goal, criteria, agent_ids, started_at, updated_at)
+       values ($1, $2, $3, $4, $5, 'closed', 'work', $6::jsonb, '{}', now(), now())`,
+      [
+        run,
+        OWNER,
+        WS,
+        PROJECT,
+        id,
+        JSON.stringify([
+          {
+            key: "copy",
+            statement: "The copy is approved",
+            check: { kind: "human" },
+          },
+          {
+            key: "legal",
+            statement: "Legal signed off",
+            check: { kind: "human" },
+          },
+        ]),
+      ]
+    );
+    for (const key of ["copy", "legal"]) {
+      await q(
+        `insert into session_evaluations (id, session_id, user_id, criterion_key, attempt, verdict, evaluator_kind, evaluator_id, evidence, created_at)
+         values (gen_random_uuid(), $1, $2, $3, 1, 'pass', 'judge', 'model-x', '{}'::jsonb, now())`,
+        [run, OWNER, key]
+      );
+    }
     // No judge named: the owner judges, so the owner accepts.
     expect(
       (

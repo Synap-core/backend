@@ -297,6 +297,40 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   },
   {
     /**
+     * An AGENT proposed to END a goal (code-core F12, 2026-10-24): a close
+     * applies only when the goal's JUDGE approves it, a drop only when its
+     * owner or judge does (`assertGoalEnder`) — so the proposal is put in
+     * THEIR Needs you, not only in every reviewer's queue. Producer:
+     * `noticeGoalEndProposed` (services/tracks/goal-review-notice.ts), from
+     * the status door (`setTrackStatus`) when governance filed the move.
+     * `sourceType: "proposal"`, `sourceId` the proposal: approving, rejecting
+     * or expiring it settles the row (`markProposalNotificationsActioned`).
+     *
+     * A JUDGEMENT (`JUDGEMENT_NOTIFICATION_TYPES`): the goal's ending is
+     * theirs to decide.
+     */
+    type: "track.close_proposed",
+    category: "governance",
+    label: "Goal end proposed",
+    icon: "scale",
+    priority: "high",
+    titleTemplate: "{{proposerName}} proposes to {{endingVerb}} {{trackName}}",
+    bodyTemplate:
+      "Verdict: {{verdictLabel}}. Only your approval applies — review the proposal.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "review",
+        label: "Review",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "proposal" },
+      },
+    ],
+  },
+  {
+    /**
      * R10 (work model W3, 2026-10-23): a delegate reported their commitment
      * on a goal IMPOSSIBLE and neither the owner nor the judge acknowledged
      * it for 48 h. Producer: `escalateUnacknowledgedReports`
