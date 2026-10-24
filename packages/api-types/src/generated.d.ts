@@ -43493,7 +43493,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				name: string;
 				schema: {
-					properties: Record<string, import("zod").ZodType<unknown, unknown, import("zod/v4/core/schemas.js").$ZodTypeInternals<unknown, unknown>>>;
+					properties: Record<string, import("zod").ZodTypeAny<unknown, unknown, import("zod/v4/core/schemas.js").$ZodTypeInternals<unknown, unknown>>>;
 					required: string[];
 					type: string;
 				};
