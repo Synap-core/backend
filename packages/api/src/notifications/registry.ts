@@ -261,19 +261,19 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   },
   {
     /**
-     * A goal is IN REVIEW (decision 2, W5 2026-10-23): every required
-     * criterion is claimed and the judge has not decided yet. Producer:
-     * `noticeGoalReviewReady` (services/tracks/goal-review-notice.ts), after a
-     * passing evaluation is recorded on a run filed into the goal
-     * (`recordSessionEvaluation`). To the goal's JUDGE (the owner when none is
-     * named). `sourceId` is the goal; `groupKey` one per goal, so a goal in
-     * review is ONE open row however many claims land.
+     * A goal is IN REVIEW (decision 2, W5 2026-10-23; F1 2026-10-24): every
+     * required criterion is met or claimed and at least one claim waits on
+     * the judge. Never for an operation (R6). Producer:
+     * `refreshGoalJudgements` (services/tracks/goal-review-notice.ts), after
+     * a grade on a run filed into the goal, a judge's decision, or a change
+     * of judge. To the goal's JUDGE (the owner when none is named).
+     * `sourceId` is the goal; `groupKey` one per goal, so a goal in review is
+     * ONE open row however many claims land.
      *
      * A JUDGEMENT (`JUDGEMENT_NOTIFICATION_TYPES`, @synap-core/types/lens):
-     * a `decision` in the Inbox, ranked first. The judge's decision on any
-     * criterion, or the goal closing, marks it actioned
-     * (`settleGoalReviewNotice`) — a later claim after a send-back raises it
-     * again.
+     * a `decision` in the Inbox, ranked first. Settled only when no claim is
+     * left (never on a single decision while others wait), when the judge
+     * changes, or when the goal leaves the active category.
      */
     type: "track.review_ready",
     category: "data",
@@ -282,8 +282,39 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     priority: "high",
     titleTemplate: "{{trackName}} is ready for your verdict",
     bodyTemplate:
-      "Every required criterion is claimed. Accept them, send one back, or close the goal with a verdict.",
+      "Every required criterion is met or claimed. Accept the claims, send one back, or close the goal with a verdict.",
     defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open goal",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
+  {
+    /**
+     * ONE CLAIMED CRITERION waits on the goal's judge (2026-10-24): a run
+     * passed it and nobody with the judge's seat accepted it yet — an item on
+     * its own, whether or not the whole goal is in review. Producer:
+     * `refreshGoalJudgements` (services/tracks/goal-review-notice.ts). To the
+     * JUDGE; `sourceId` the goal; `groupKey` one per goal and criterion.
+     * Settled when the criterion stops being claimed (accepted, sent back,
+     * rejected, regressed), when the judge changes, or when the goal leaves
+     * the active category. A JUDGEMENT, ranked first.
+     */
+    type: "track.criterion_claimed",
+    category: "data",
+    label: "Claim waiting on your decision",
+    icon: "scale",
+    priority: "high",
+    titleTemplate: "{{claimedBy}} claims “{{criterionStatement}}”",
+    bodyTemplate:
+      "On {{trackName}}. Accept it, send it back with what to change, or reject it.",
+    defaultChannels: ["in_app"],
     ttl: 0,
     dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
     actions: [

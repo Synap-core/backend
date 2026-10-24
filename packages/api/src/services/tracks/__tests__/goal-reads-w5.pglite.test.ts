@@ -126,8 +126,11 @@ import {
 import { changeTrackParticipants } from "../track-participants.js";
 import { recordSessionEvaluation } from "../../focus-sessions/evaluations/record.js";
 import {
+  GOAL_CLAIM_NOTIFICATION_TYPE,
   GOAL_REVIEW_NOTIFICATION_TYPE,
+  goalClaimGroupKey,
   goalReviewGroupKey,
+  refreshGoalJudgements,
 } from "../goal-review-notice.js";
 
 const OWNER = "owner-1";
@@ -345,32 +348,149 @@ describe("a goal in review reaches its judge (W5)", () => {
     expect(reviewNotices()).toEqual([]);
   });
 
-  it("the judge's decision settles the open notice", async () => {
+  it("F1 — the judge's decision settles THAT claim's item; the review item stays while another claim waits", async () => {
     const id = await goal("Settle me", PROJECT, person(OWNER), {
       criteria: [crit("a"), crit("b")],
     });
-    await q(
-      `insert into notifications (id, user_id, type, category, title, status, group_key, source_type, source_id, created_at)
-       values (gen_random_uuid(), $1, $2, 'data', 'Settle me is ready for your verdict', 'unread', $3, 'track', $4, now())`,
-      [OWNER, GOAL_REVIEW_NOTIFICATION_TYPE, goalReviewGroupKey(id), id]
-    );
     const run = await fileRun(id, ["a", "b"]);
     await claim(run, "a");
     await claim(run, "b");
-    const r = await acceptGoalCriterion({
-      trackId: id,
-      criterionKey: "a",
-      decision: "accepted",
-      actor: person(OWNER),
+    // The open rows the notification door would hold (it is stubbed here).
+    for (const [type, groupKey] of [
+      [GOAL_REVIEW_NOTIFICATION_TYPE, goalReviewGroupKey(id)],
+      [GOAL_CLAIM_NOTIFICATION_TYPE, goalClaimGroupKey(id, "a")],
+      [GOAL_CLAIM_NOTIFICATION_TYPE, goalClaimGroupKey(id, "b")],
+    ]) {
+      await q(
+        `insert into notifications (id, user_id, type, category, title, status, group_key, source_type, source_id, created_at)
+         values (gen_random_uuid(), $1, $2, 'data', 't', 'unread', $3, 'track', $4, now())`,
+        [OWNER, type, groupKey, id]
+      );
+    }
+    const statusOf = async (groupKey: string) =>
+      (
+        await q<{ status: string }>(
+          `select status from notifications where group_key = $1`,
+          [groupKey]
+        )
+      ).rows[0]?.status;
+    const accept = (key: string) =>
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: key,
+        decision: "accepted",
+        actor: person(OWNER),
+      });
+    expect((await accept("a")).status).toBe("updated");
+    expect(await statusOf(goalClaimGroupKey(id, "a"))).toBe("actioned");
+    // Rules out "any decision settles the review": "b" still waits.
+    expect(await statusOf(goalReviewGroupKey(id))).toBe("unread");
+    expect(await statusOf(goalClaimGroupKey(id, "b"))).toBe("unread");
+    await accept("b");
+    expect(await statusOf(goalReviewGroupKey(id))).toBe("actioned");
+    expect(await statusOf(goalClaimGroupKey(id, "b"))).toBe("actioned");
+  });
+
+  it("each claimed criterion is a judgement on its own, before the goal is in review", async () => {
+    const id = await goal("One at a time", PROJECT, person(OWNER), {
+      criteria: [crit("copy"), crit("legal")],
     });
-    expect(r.status).toBe("updated");
-    const [row] = (
-      await q<{ status: string }>(
-        `select status from notifications where group_key = $1`,
-        [goalReviewGroupKey(id)]
-      )
-    ).rows;
-    expect(row?.status).toBe("actioned");
+    const run = await fileRun(id, ["copy", "legal"]);
+    await claim(run, "copy");
+    expect(reviewNotices()).toEqual([]);
+    expect(
+      h.notices.filter((n) => n.type === GOAL_CLAIM_NOTIFICATION_TYPE)
+    ).toEqual([
+      expect.objectContaining({
+        userId: OWNER,
+        sourceId: id,
+        groupKey: goalClaimGroupKey(id, "copy"),
+        data: expect.objectContaining({
+          criterionKey: "copy",
+          criterionStatement: "Criterion copy",
+        }),
+      }),
+    ]);
+  });
+
+  it("F1 — a goal mixing a MET measured criterion and a claimed one is in review, and its judge told", async () => {
+    const id = await goal("Mixed", PROJECT, person(OWNER), {
+      criteria: [
+        {
+          ...crit("pages"),
+          check: { kind: "evidence" },
+          checkKind: "measured",
+        },
+        crit("tone"),
+      ],
+    });
+    const run = await fileRun(id, ["pages", "tone"]);
+    // A machine check that is not the run's author passes "pages": met.
+    await q(
+      `insert into session_evaluations (id, session_id, user_id, criterion_key, attempt, verdict, evaluator_kind, evaluator_id, evidence, created_at)
+       values (gen_random_uuid(), $1, $2, 'pages', 1, 'pass', 'evidence', 'ci-bot', '{"url":"https://ci/run/9"}'::jsonb, now())`,
+      [run, OWNER]
+    );
+    await claim(run, "tone");
+    const v = await loadTrackView(
+      (await getTrack(id, person(OWNER)))!,
+      person(OWNER)
+    );
+    expect(v.criteria.map((c) => [c.key, c.mark])).toEqual([
+      ["pages", "met"],
+      ["tone", "claimed"],
+    ]);
+    expect(v.inReview).toBe(true);
+    expect(reviewNotices().map((n) => n.userId)).toEqual([OWNER]);
+    // The claim names who, which run, what backs it.
+    expect(v.criteria[0]!.claim).toMatchObject({
+      by: "ci-bot",
+      sessionId: run,
+      evidence: { url: "https://ci/run/9" },
+    });
+    expect(v.criteria[1]!.claim).toMatchObject({
+      by: OWNER,
+      byName: OWNER,
+      sessionId: run,
+    });
+  });
+
+  it("a claim the judge already READ is not raised a second time by a later grade", async () => {
+    const id = await goal("Read once", PROJECT, person(OWNER), {
+      criteria: [crit("a"), crit("b")],
+    });
+    const run = await fileRun(id, ["a", "b"]);
+    // The judge read "a"'s item (the door's dedupe only holds UNREAD rows).
+    await q(
+      `insert into notifications (id, user_id, type, category, title, status, group_key, source_type, source_id, created_at)
+       values (gen_random_uuid(), $1, $2, 'data', 't', 'read', $3, 'track', $4, now())`,
+      [OWNER, GOAL_CLAIM_NOTIFICATION_TYPE, goalClaimGroupKey(id, "a"), id]
+    );
+    await claim(run, "a");
+    await claim(run, "b");
+    expect(
+      h.notices
+        .filter(
+          (n) => n.type === GOAL_CLAIM_NOTIFICATION_TYPE && n.sourceId === id
+        )
+        .map((n) => n.groupKey)
+    ).toEqual([goalClaimGroupKey(id, "b")]);
+  });
+
+  it("an OPERATION is never 'ready for your verdict' — its claims still reach the judge", async () => {
+    const id = await goal("Keep it running", PROJECT, person(OWNER), {
+      criteria: [crit("a"), crit("b")],
+      workKind: "operation",
+    });
+    const run = await fileRun(id, ["a", "b"]);
+    await claim(run, "a");
+    await claim(run, "b");
+    const refreshed = await refreshGoalJudgements(id);
+    expect(refreshed).toEqual({ claimed: ["a", "b"], inReview: false });
+    expect(reviewNotices()).toEqual([]);
+    expect(
+      h.notices.filter((n) => n.type === GOAL_CLAIM_NOTIFICATION_TYPE).length
+    ).toBeGreaterThan(0);
   });
 });
 

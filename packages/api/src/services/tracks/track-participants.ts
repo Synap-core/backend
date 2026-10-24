@@ -82,6 +82,7 @@ import {
   goalParticipantRows,
   loadTrackParticipantViews,
 } from "./track-participant-store.js";
+import { refreshGoalJudgements } from "./goal-review-notice.js";
 
 const Text = z.string().trim().min(1).max(2000);
 
@@ -498,6 +499,9 @@ export async function applyTrackParticipantChange(p: {
           set: fresh,
         });
     });
+    // A new judge: the old one's judgement items leave, the new one is told
+    // of every claim waiting on them.
+    if (change.role === "judge") await refreshGoalJudgements(track.id);
     return;
   }
 
@@ -511,6 +515,19 @@ export async function applyTrackParticipantChange(p: {
           eq(trackParticipants.trackId, track.id)
         )
       );
+    // Nothing about a participant who left stays in anyone's Needs you: an
+    // escalated report of theirs is settled.
+    await db
+      .update(notifications)
+      .set({ status: "actioned", readAt: now })
+      .where(
+        and(
+          eq(notifications.type, "track.report_unacknowledged"),
+          drizzleSql`${notifications.groupKey} LIKE ${`${trackReportGroupKeyPrefix(row.id)}%`}`
+        )
+      );
+    // The judge left: the owner judges now.
+    if (row.role === "judge") await refreshGoalJudgements(track.id);
     return;
   }
 

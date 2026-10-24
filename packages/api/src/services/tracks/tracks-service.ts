@@ -155,7 +155,7 @@ import {
 } from "./goal-content.js";
 import {
   noticeGoalEndProposed,
-  settleGoalReviewNotice,
+  refreshGoalJudgements,
 } from "./goal-review-notice.js";
 import {
   assertGoalEnder,
@@ -491,6 +491,7 @@ export function toTrackView(
         acceptanceState: null,
         meaning: criterionMeaning(c),
         currentValue: null,
+        claim: null,
       })),
     dropConditions: readDropConditions(track.dropConditions),
     loop: readGoalLoop(track.loop),
@@ -1896,10 +1897,9 @@ export async function applyTrackStatus(
   }).catch((err) =>
     logger.warn({ err, trackId: track.id }, "track.update emit failed")
   );
-  // A goal no longer being worked is not "in review" any more.
-  if (trackStatusCategory(status) !== "active") {
-    await settleGoalReviewNotice(track.id);
-  }
+  // A goal no longer being worked waits on no judgement; one being worked
+  // again shows its judge the claims still waiting.
+  await refreshGoalJudgements(track.id);
   return { status: "updated", track: updated };
 }
 
@@ -2907,8 +2907,9 @@ export async function acceptGoalCriterion(input: {
       message: `The criterion "${criterion.key}" was removed while you decided — read the goal again.`,
     });
   }
-  // The judge decided: "ready for your verdict" leaves their Needs you.
-  await settleGoalReviewNotice(track.id);
+  // The judge decided: that claim's item leaves their Needs you; "ready for
+  // your verdict" stays while another claim still waits (F1).
+  await refreshGoalJudgements(track.id);
   return { status: "updated", track: updated };
 }
 

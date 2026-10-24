@@ -345,6 +345,8 @@ export type GoalCriterionMark = (typeof GOAL_CRITERION_MARKS)[number];
 
 /** One evaluation row as the goal derivation reads it. */
 export interface GoalEvaluationRowLike extends EvaluationRowLike {
+  /** The row's id — what a claim names, so its evidence can be read. */
+  id?: string;
   evaluatorId?: string | null;
   rationale?: string | null;
 }
@@ -352,6 +354,8 @@ export interface GoalEvaluationRowLike extends EvaluationRowLike {
 /** One run (session) filed into the goal, as the derivation reads it. */
 export interface GoalRunFacts {
   sessionId: string;
+  /** The person who owns the run — who claims what it passed. */
+  ownerId?: string | null;
   /** Not closed, cancelled or failed. */
   open: boolean;
   /** The keys of the criteria this run carries. */
@@ -362,6 +366,42 @@ export interface GoalRunFacts {
    */
   authors: readonly string[];
   evaluations: readonly GoalEvaluationRowLike[];
+}
+
+/**
+ * WHAT CLAIMS a criterion, as the derivation finds it: the passing row that
+ * is the criterion's current one. `by` — who claims it: the person who graded
+ * it, or the agent that posted the evidence; for a check run by a model or a
+ * capability, the run's owner (their run claims it). `null` when no
+ * principal is known.
+ */
+export interface GoalCriterionClaimFacts {
+  by: string | null;
+  sessionId: string;
+  /** The evaluation row — its evidence is read by the pod for the view. */
+  evaluationId: string | null;
+  evaluatorKind: EvaluatorKind;
+  /** The check's own words (its rationale). */
+  note: string | null;
+  /** ISO-8601. */
+  at: string;
+}
+
+/**
+ * A claim as every goal read returns it (`GoalCriterionView.claim`): who
+ * claimed, in which run, and what backs it — names resolved by the pod,
+ * never looked up by a page (`null` = not known, never an id).
+ */
+export interface GoalCriterionClaim {
+  by: string | null;
+  byName: string | null;
+  sessionId: string;
+  sessionTitle: string | null;
+  /** The evaluation's evidence (links, files, numbers) — `null` when none. */
+  evidence: Record<string, unknown> | null;
+  note: string | null;
+  /** ISO-8601. */
+  at: string;
 }
 
 /** What the derivation adds to each goal criterion. */
@@ -376,6 +416,8 @@ export interface GoalCriterionState {
    * gave (`"9 of 12 pages migrated"`); `null` when none was recorded.
    */
   currentValue: string | null;
+  /** The pass that claims it — `null` when no pass is current. */
+  claim: GoalCriterionClaimFacts | null;
 }
 
 /**
@@ -404,6 +446,12 @@ export interface GoalCriterionView {
   acceptanceState: GoalAcceptanceState | null;
   meaning: CriterionCheckMeaning;
   currentValue: string | null;
+  /**
+   * Who claimed it, in which run, what backs it — the current passing
+   * evaluation (`null` when none: never claimed, or accepted from an outside
+   * decision with no run). `undefined` never: a write's fallback reads `null`.
+   */
+  claim: GoalCriterionClaim | null;
 }
 
 function ms(at: Date | string): number {
@@ -457,7 +505,22 @@ export function deriveGoalCriteria(
       meaning === "measured" && measured?.rationale?.trim()
         ? measured.rationale.trim()
         : null;
-    const base = { key: c.key, meaning, currentValue };
+    const claim: GoalCriterionClaimFacts | null =
+      current?.verdict === "pass"
+        ? {
+            by:
+              current.evaluatorKind === "human" ||
+              current.evaluatorKind === "evidence"
+                ? (current.evaluatorId ?? null)
+                : (current.run.ownerId ?? null),
+            sessionId: current.run.sessionId,
+            evaluationId: current.id ?? null,
+            evaluatorKind: current.evaluatorKind,
+            note: current.rationale?.trim() || null,
+            at: new Date(ms(current.createdAt)).toISOString(),
+          }
+        : null;
+    const base = { key: c.key, meaning, currentValue, claim };
 
     const notPassing = (): GoalCriterionMark =>
       carrying.some((r) => r.open)
@@ -516,9 +579,14 @@ export function deriveGoalCriteria(
 }
 
 /**
- * IN REVIEW (decision 2) — every REQUIRED criterion claimed and none accepted
- * yet. A derived mark inside the active category, never a status. A goal with
- * no required criterion is never in review.
+ * IN REVIEW (decision 2) — every REQUIRED criterion is met or claimed, and at
+ * least one criterion is claimed: the work is done as far as the doers can
+ * tell, and something waits on the judge. A criterion already met (accepted
+ * by the judge, or a measured check that passed) does not take a goal out of
+ * review — code-core F1: the most common goal mixes measured and judged
+ * criteria, and the judge's first acceptance must not hide the rest. A
+ * derived mark inside the active category, never a status. A goal with no
+ * required criterion is never in review.
  */
 export function goalInReview(
   criteria: ReadonlyArray<Pick<GoalCriterionLike, "key" | "required">>,
@@ -527,7 +595,23 @@ export function goalInReview(
   const required = criteria.filter((c) => c.required !== false);
   if (required.length === 0) return false;
   const markOf = new Map(states.map((s) => [s.key, s.mark]));
-  return required.every((c) => markOf.get(c.key) === "claimed");
+  return (
+    required.every((c) => {
+      const mark = markOf.get(c.key);
+      return mark === "claimed" || mark === "met";
+    }) && criteria.some((c) => markOf.get(c.key) === "claimed")
+  );
+}
+
+/** The keys of the criteria a claim waits on the judge for — in criteria order. */
+export function goalClaimedKeys(
+  criteria: ReadonlyArray<Pick<GoalCriterionLike, "key">>,
+  states: ReadonlyArray<Pick<GoalCriterionState, "key" | "mark">>
+): string[] {
+  const markOf = new Map(states.map((s) => [s.key, s.mark]));
+  return criteria
+    .filter((c) => markOf.get(c.key) === "claimed")
+    .map((c) => c.key);
 }
 
 // ── R4: waiting on ─────────────────────────────────────────────────────────

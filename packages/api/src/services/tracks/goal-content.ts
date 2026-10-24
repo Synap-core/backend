@@ -51,6 +51,7 @@ import {
   owedSlotWaitingSources,
   readGoalCriterionAcceptance,
   type GoalCriterionAcceptance,
+  type GoalCriterionClaim,
   type GoalCriterionView,
   type GoalRunFacts,
   type TrackUncertainty,
@@ -70,6 +71,7 @@ import {
   loadGoalJudge,
   loadGoalJudges,
   loadGoalOwner,
+  participantDisplayNames,
 } from "./track-participant-store.js";
 
 // ── input ───────────────────────────────────────────────────────────────────
@@ -471,6 +473,7 @@ export async function loadGoalRuns(
     gradedSessionIds.length > 0
       ? await db
           .select({
+            id: sessionEvaluations.id,
             sessionId: sessionEvaluations.sessionId,
             criterionKey: sessionEvaluations.criterionKey,
             verdict: sessionEvaluations.verdict,
@@ -498,6 +501,7 @@ export async function loadGoalRuns(
           const modelId = (s.metadata as { modelId?: unknown } | null)?.modelId;
           return {
             sessionId: s.id,
+            ownerId: s.userId,
             open: !isTerminalSessionStatus(s.status),
             criterionKeys: readCriteria(s.criteria).map((c) => c.key),
             authors: [
@@ -519,6 +523,7 @@ async function selectGoalSessions(trackIds: string[]) {
     .select({
       id: focusSessions.id,
       trackId: focusSessions.trackId,
+      title: focusSessions.title,
       status: focusSessions.status,
       userId: focusSessions.userId,
       criteria: focusSessions.criteria,
@@ -595,13 +600,57 @@ export async function loadTrackGoalFacts(
   ]);
 
   const trackOfSession = new Map(sessions.map((s) => [s.id, s.trackId]));
+  const titleOfSession = new Map(sessions.map((s) => [s.id, s.title]));
+
+  const statesOf = new Map(
+    tracks.map((track) => [
+      track.id,
+      deriveGoalCriteria(
+        readGoalCriteria(track.criteria),
+        runsOf.get(track.id) ?? [],
+        { judgeId: judges.get(track.id) ?? null }
+      ),
+    ])
+  );
+  // What backs each claim (its evidence) and who made it, by name — read
+  // once for the whole list, only for the rows that claim something.
+  const claims = [...statesOf.values()].flatMap((states) =>
+    states.flatMap((st) => (st.claim ? [st.claim] : []))
+  );
+  const claimEvaluationIds = claims.flatMap((c) =>
+    c.evaluationId ? [c.evaluationId] : []
+  );
+  const [evidenceRows, claimNames] = await Promise.all([
+    claimEvaluationIds.length > 0
+      ? db
+          .select({
+            id: sessionEvaluations.id,
+            evidence: sessionEvaluations.evidence,
+          })
+          .from(sessionEvaluations)
+          .where(inArray(sessionEvaluations.id, claimEvaluationIds))
+      : Promise.resolve([]),
+    participantDisplayNames(claims.flatMap((c) => (c.by ? [c.by] : []))),
+  ]);
+  const evidenceOf = new Map(
+    evidenceRows.map((r) => [r.id, readClaimEvidence(r.evidence)])
+  );
+  const claimView = (
+    c: NonNullable<ReturnType<typeof deriveGoalCriteria>[number]["claim"]>
+  ): GoalCriterionClaim => ({
+    by: c.by,
+    byName: c.by ? (claimNames.get(c.by) ?? null) : null,
+    sessionId: c.sessionId,
+    sessionTitle: titleOfSession.get(c.sessionId)?.trim() || null,
+    evidence: c.evaluationId ? (evidenceOf.get(c.evaluationId) ?? null) : null,
+    note: c.note,
+    at: c.at,
+  });
 
   for (const track of tracks) {
     const criteria = readGoalCriteria(track.criteria);
     const filed = sessions.filter((s) => s.trackId === track.id);
-    const states = deriveGoalCriteria(criteria, runsOf.get(track.id) ?? [], {
-      judgeId: judges.get(track.id) ?? null,
-    });
+    const states = statesOf.get(track.id)!;
     const stateOf = new Map(states.map((s) => [s.key, s]));
 
     const sources: WaitingOnSource[] = [];
@@ -639,6 +688,7 @@ export async function loadTrackGoalFacts(
           acceptanceState: s.acceptanceState,
           meaning: s.meaning,
           currentValue: s.currentValue,
+          claim: s.claim ? claimView(s.claim) : null,
         };
       }),
       inReview: goalInReview(criteria, states),
@@ -646,6 +696,16 @@ export async function loadTrackGoalFacts(
     });
   }
   return out;
+}
+
+/** A claim's evidence — an object with something in it, else none. */
+function readClaimEvidence(raw: unknown): Record<string, unknown> | null {
+  return raw &&
+    typeof raw === "object" &&
+    !Array.isArray(raw) &&
+    Object.keys(raw).length > 0
+    ? (raw as Record<string, unknown>)
+    : null;
 }
 
 /** The kind of work, read tolerantly (a value no option declares reads as none). */

@@ -373,7 +373,7 @@ export function silentSinceOf(
  * session roster and the proposals use. An id with no users row, or a row
  * with nothing to name it by, is absent — never its id.
  */
-async function participantDisplayNames(
+export async function participantDisplayNames(
   principalIds: Iterable<string>
 ): Promise<Map<string, string>> {
   const rows = await loadActorRows(principalIds);

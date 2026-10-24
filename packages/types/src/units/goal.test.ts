@@ -212,6 +212,37 @@ describe("deriveGoalCriteria — one mark per criterion", () => {
     ).toMatchObject({ mark: "claimed", acceptanceState: "waiting" });
   });
 
+  it("the claim names who, which run and the check's words; null when nothing passes", () => {
+    const s = markOf(judged, [
+      run({
+        sessionId: "run-7",
+        ownerId: "user-3",
+        evaluations: [
+          {
+            ...row("tone", "pass", "judge", T1, "model-x", "Warm, on brand"),
+            id: "ev-1",
+          },
+        ],
+      }),
+    ]);
+    // An AI judge's pass: the RUN claims it (its owner), not the model.
+    expect(s.claim).toEqual({
+      by: "user-3",
+      sessionId: "run-7",
+      evaluationId: "ev-1",
+      evaluatorKind: "judge",
+      note: "Warm, on brand",
+      at: T1,
+    });
+    // An agent's evidence: the agent claims it.
+    expect(
+      markOf(measured, [
+        run({ evaluations: [row("pages", "pass", "evidence", T1, "agent-1")] }),
+      ]).claim?.by
+    ).toBe("agent-1");
+    expect(markOf(judged, [run({ open: true })]).claim).toBeNull();
+  });
+
   it("a measured criterion carries its latest measured value; others never do", () => {
     const s = markOf(measured, [
       run({
@@ -232,7 +263,7 @@ describe("deriveGoalCriteria — one mark per criterion", () => {
   });
 });
 
-describe("goalInReview — every REQUIRED criterion claimed, none accepted", () => {
+describe("goalInReview — every REQUIRED criterion met or claimed, one at least claimed", () => {
   const criteria = [judged, { ...byPerson, required: false }];
   it("all required claimed → in review; an optional one does not hold it back", () => {
     expect(
@@ -242,7 +273,9 @@ describe("goalInReview — every REQUIRED criterion claimed, none accepted", () 
       ])
     ).toBe(true);
   });
-  it("one required accepted (met) or not claimed → not in review; no criteria → never", () => {
+  it("one required met and one claimed → STILL in review (F1: mixed goals, a first acceptance)", () => {
+    // Rules out "every required claimed": a measured criterion that passed,
+    // or the judge's first acceptance, would hide the claim still waiting.
     expect(
       goalInReview(
         [judged, byPerson],
@@ -251,8 +284,36 @@ describe("goalInReview — every REQUIRED criterion claimed, none accepted", () 
           { key: "signoff", mark: "met" },
         ]
       )
+    ).toBe(true);
+  });
+  it("all met (nothing waits on the judge), or one required not claimed → not in review; no criteria → never", () => {
+    expect(
+      goalInReview(
+        [judged, byPerson],
+        [
+          { key: "tone", mark: "met" },
+          { key: "signoff", mark: "met" },
+        ]
+      )
+    ).toBe(false);
+    expect(
+      goalInReview(
+        [judged, byPerson],
+        [
+          { key: "tone", mark: "claimed" },
+          { key: "signoff", mark: "under_way" },
+        ]
+      )
     ).toBe(false);
     expect(goalInReview([], [])).toBe(false);
+  });
+  it("an optional claimed criterion counts as the one waiting", () => {
+    expect(
+      goalInReview(criteria, [
+        { key: "tone", mark: "met" },
+        { key: "signoff", mark: "claimed" },
+      ])
+    ).toBe(true);
   });
 });
 
