@@ -118,6 +118,11 @@ export {
   resolveWorkspaceTemplate,
   type ResolvedWorkspaceTemplate,
 } from "./services/capabilities/resolve-workspace-template.js";
+// Invite accept door + token lookup, for the Kratos registration gate's
+// invite-bound Synap Cloud sign-up (apps/api webhooks/kratos.ts).
+export { acceptInviteFor } from "./routers/workspaces/accept-invite-for.js";
+export { findInviteByToken } from "./routers/workspaces/invite-token.js";
+export { ensureUserRow } from "./scripts/create-admin-user.js";
 export { healthRouter } from "./routers/health.js";
 export { projectsRouter } from "./routers/projects.js";
 export { sourceConfigsRouter } from "./routers/source-configs.js";
