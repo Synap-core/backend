@@ -9747,6 +9747,22 @@ declare const GOAL_CRITERION_MARKS: readonly [
 ];
 export type GoalCriterionMark = (typeof GOAL_CRITERION_MARKS)[number];
 /**
+ * A claim as every goal read returns it (`GoalCriterionView.claim`): who
+ * claimed, in which run, and what backs it — names resolved by the pod,
+ * never looked up by a page (`null` = not known, never an id).
+ */
+export interface GoalCriterionClaim {
+	by: string | null;
+	byName: string | null;
+	sessionId: string;
+	sessionTitle: string | null;
+	/** The evaluation's evidence (links, files, numbers) — `null` when none. */
+	evidence: Record<string, unknown> | null;
+	note: string | null;
+	/** ISO-8601. */
+	at: string;
+}
+/**
  * One goal criterion as every track read returns it (`TrackView.criteria`):
  * the stored criterion (the session criterion shape), the judge's stored
  * decision, and the derived state. `mark` is `null` only on a view that could
@@ -9772,6 +9788,12 @@ export interface GoalCriterionView {
 	acceptanceState: GoalAcceptanceState | null;
 	meaning: CriterionCheckMeaning;
 	currentValue: string | null;
+	/**
+	 * Who claimed it, in which run, what backs it — the current passing
+	 * evaluation (`null` when none: never claimed, or accepted from an outside
+	 * decision with no run). `undefined` never: a write's fallback reads `null`.
+	 */
+	claim: GoalCriterionClaim | null;
 }
 declare const WAITING_ON_REASONS: readonly [
 	"input",
