@@ -214,6 +214,7 @@ describe("a link is found by its token's digest", () => {
     expect(preview).toMatchObject({ expired: false, email: "bob@example.com" });
     const accepted = await as(BOB).acceptInvite({ token: created.token });
     expect(accepted).toMatchObject({ status: "accepted", workspaceId: WS });
+    expect(await memberOf(BOB)).toBe(true);
   });
 
   it("a row WITH a digest is never opened by its plaintext alone", async () => {

@@ -155,7 +155,9 @@ ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "token" text;
 ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "invited_by" text;
 ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "expires_at" timestamp with time zone;
 ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
--- 0353: the token's SHA-256 (hex), the one lookup key (decision B2).
+-- token_digest (migration 0353): the token's SHA-256 (hex), the one lookup
+-- key (decision B2). Not written "-- 0353:": that prefix opens a NEW block at
+-- the end of this file (the migrations-0339/0340 tests slice on it).
 ALTER TABLE "invites" ADD COLUMN IF NOT EXISTS "token_digest" text;
 CREATE UNIQUE INDEX IF NOT EXISTS "invites_token_digest_key" ON "invites" ("token_digest");
 
