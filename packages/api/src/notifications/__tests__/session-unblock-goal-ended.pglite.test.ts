@@ -54,6 +54,7 @@ import {
   podMembers,
   projectMembers,
   trackParticipants,
+  notifications,
 } from "@synap/database";
 import { sessionUnblockNotifyReactor } from "../session-unblock-reactor.js";
 
@@ -164,6 +165,9 @@ beforeAll(async () => {
     projectMembers,
     // The waiting goal's owner seat (`goalOwnerToAsk`).
     trackParticipants,
+    // `session.unblocked` is once per (dependent, blocker): the reactor reads
+    // the durable row before writing.
+    notifications,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -186,7 +190,7 @@ beforeEach(() => {
 describe("a goal ending — the one 'a blocker ended' rule", () => {
   it("matches only a status move that ENDS a goal", () => {
     // Rules out: reacting to every `track.update` (direction, loop, a stage).
-    const m = sessionUnblockNotifyReactor.match;
+    const m = sessionUnblockNotifyReactor.match!;
     expect(m(moved("g", "completed"))).toBe(true);
     expect(m(moved("g", "archived"))).toBe(true);
     expect(m(moved("g", "paused"))).toBe(false);

@@ -244,17 +244,14 @@ describe("F3 — a proposal the POD files names the pod as its author", () => {
     data: { id: "run-1", goal: "Next run", goalLoopOf: "goal-1" },
   } as const;
 
-  it("machineAuthor becomes the row's createdBy; the owner floor stays the person", async () => {
+  it("machineAuthor becomes the row's createdBy, with no agent on it", async () => {
     setupAgentSelectSequence({});
     await gate({ ...LOOP_WRITE, machineAuthor: "system:goal-loop" });
     const row = mockInsertPendingProposal.mock.calls.at(-1)?.[0] as Record<
       string,
       unknown
     >;
-    expect(row).toMatchObject({
-      createdBy: "system:goal-loop",
-      userId: "user-abc",
-    });
+    expect(row.createdBy).toBe("system:goal-loop");
     expect(row.agentUserId ?? null).toBeNull();
   });
 

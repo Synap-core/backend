@@ -349,26 +349,39 @@ describe("convertEntityToGoal — an OKR", () => {
       create trigger refuse_promoted_to before insert on links
         for each row execute function refuse_promoted_to();
     `);
-    await expect(
-      convertEntityToGoal({ entityId: id, actor: human })
-    ).rejects.toThrow(/lineage refused/);
     const goalsNamed = async () =>
       (
         await q<{ id: string }>(
           `select id from project_tracks where name = 'Born whole'`
         )
       ).rows;
-    // Nothing half-made: no goal holds the name, no owner row is left.
-    expect(await goalsNamed()).toEqual([]);
-    expect(
-      (
-        await q(
-          `select 1 from track_participants tp left join project_tracks t on t.id = tp.track_id where t.id is null`
-        )
-      ).rows
-    ).toEqual([]);
-
-    await h.client!.exec(`drop trigger refuse_promoted_to on links`);
+    try {
+      // The driver wraps it ("Failed query: insert into links…"); the
+      // trigger's own words ride the cause.
+      const err = await convertEntityToGoal({
+        entityId: id,
+        actor: human,
+      }).then(
+        () => null,
+        (e: unknown) => e as { message?: string; cause?: { message?: string } }
+      );
+      expect(err).not.toBeNull();
+      expect(`${err?.message} ${err?.cause?.message}`).toMatch(
+        /lineage refused|promoted_to/
+      );
+      // Nothing half-made: no goal holds the name, no owner row is left.
+      expect(await goalsNamed()).toEqual([]);
+      expect(
+        (
+          await q(
+            `select 1 from track_participants tp left join project_tracks t on t.id = tp.track_id where t.id is null`
+          )
+        ).rows
+      ).toEqual([]);
+    } finally {
+      // Never leak the refusal into the suite's other conversions.
+      await h.client!.exec(`drop trigger refuse_promoted_to on links`);
+    }
     const res = await convertEntityToGoal({ entityId: id, actor: human });
     if (res.status === "proposed") throw new Error("unexpected proposal");
     expect(res.status).toBe("started");
