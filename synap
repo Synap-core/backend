@@ -1851,6 +1851,8 @@ _swap_backend_canary() {
 #                 (X-Pod-Bootstrap-Token = this pod's PROVISIONING_TOKEN; that
 #                 secret never leaves the host). This also approves the CP issuer
 #                 the next two doors verify against, so it runs first.
+#   1b. admins    adminAssertions[] (a lab's confirming admin, A4) → the same
+#                 door, same secret, BEFORE the secret is retired. Absent = none.
 #   2. sign-in    oidc.assertion → POST /api/hub/federation/oidc-config, then
 #                 kratos.yml is re-rendered from pod_settings and kratos restarted.
 #   3. AI service intelligence {url, apiKey, provisionToken} →
@@ -1921,6 +1923,9 @@ _reg_response_errors() { # <file>
         (if (.issuer|str) then empty else "issuer is missing" end),
         (if (.ownerAssertion|str) then empty else "ownerAssertion is missing" end),
         (if (.catalogUrl|str) then empty else "catalogUrl is missing" end),
+        (if has("adminAssertions") | not then empty
+         elif (.adminAssertions|type) != "array" or any(.adminAssertions[]; (str)|not)
+         then "adminAssertions is present but not a list of assertions" else empty end),
         (if has("oidc") | not then "oidc is missing (object or null)"
          elif .oidc == null then empty
          elif (.oidc|type) != "object" or ((.oidc.assertion|str)|not) then "oidc is present without an assertion"
@@ -1998,6 +2003,23 @@ _reg_apply() {
         _reg_step_mark owner
         _reg_ok "owner bootstrapped (${out%% *})"
     fi
+    # 1b. initial admins (A4) — through the owner's door, while the secret lives.
+    # Not fatal: an admin assertion lives 5 minutes, so a re-run could never
+    # apply it; the owner is bound and the pod is usable. The Control Plane
+    # reports the admin as not projected and the person signs in at the pod.
+    local i n
+    n="$(jq -r '(.adminAssertions // []) | length' "$r")"
+    for ((i = 0; i < n; i++)); do
+        if _reg_step_done "admin-$i"; then continue; fi
+        if out="$(jq -c --argjson i "$i" '{assertion: .adminAssertions[$i]}' "$r" \
+            | SYNAP_REG_AUTH_VALUE="$(_ue_env_get PROVISIONING_TOKEN)" \
+              _reg_pod_post /api/federation/bootstrap X-Pod-Bootstrap-Token)"; then
+            _reg_ok "initial admin $((i + 1))/${n} bound (${out%% *})"
+        else
+            _reg_warn "initial admin $((i + 1))/${n} not bound: ${out} — the owner can invite them from the console"
+        fi
+        _reg_step_mark "admin-$i"
+    done
     # The pod has an owner now: the bootstrap-only token has no job left. Retired
     # BEFORE step 4 so the backend recreate below drops it from its environment.
     _bootstrap_token_retire || _reg_warn "could not retire PROVISIONING_TOKEN from .env — run: synap setup admin --retire-token"

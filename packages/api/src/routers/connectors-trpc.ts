@@ -37,6 +37,8 @@ import {
   getServiceSecret,
   isServerVaultAvailable,
   getWorkspaceMembership,
+  readControlPlaneEntitlement,
+  readControlPlaneLink,
 } from "@synap/database";
 import { secrets, tools, workspaces } from "@synap/database/schema";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
@@ -360,52 +362,6 @@ async function getEnrichmentKeys(): Promise<{
 }
 
 const logger = createLogger({ module: "connectors-trpc" });
-
-// ─── Cached workspace controlPlane settings ──────────────────────────────────
-
-const CACHE_TTL = 5 * 60_000; // 5 min
-
-interface ControlPlaneSettings {
-  url?: string;
-  podId?: string;
-  tier?: string;
-  allowedUrls?: string[];
-}
-
-interface CacheEntry<T> {
-  value: T;
-  resolvedAt: number;
-}
-
-let cpSettingsCache: CacheEntry<ControlPlaneSettings> | null = null;
-
-/**
- * Read workspace.settings.controlPlane from the DB (cached 5 min).
- * This block is written by the provision flow (ES256 JWT from CP).
- */
-async function getControlPlaneSettings(): Promise<ControlPlaneSettings> {
-  if (cpSettingsCache && Date.now() - cpSettingsCache.resolvedAt < CACHE_TTL) {
-    return cpSettingsCache.value;
-  }
-
-  try {
-    const database = await getDb();
-    const ws = await database.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const settings = (ws?.settings as Record<string, unknown>) ?? {};
-    const cp = (settings.controlPlane as ControlPlaneSettings) ?? {};
-
-    cpSettingsCache = { value: cp, resolvedAt: Date.now() };
-    return cp;
-  } catch (err) {
-    logger.error(
-      { err },
-      "Failed to read controlPlane settings from workspace"
-    );
-    return {};
-  }
-}
 
 // ─── Shared input schema ──────────────────────────────────────────────────────
 
@@ -1138,9 +1094,6 @@ export const connectorsRouter = router({
         merged
       );
 
-      // Bust the local nango cache so next call re-resolves
-      cpSettingsCache = null;
-
       return { success: true };
     }),
 
@@ -1411,18 +1364,22 @@ export const connectorsRouter = router({
    * Helps debug provisioning issues.
    */
   status: protectedProcedure.query(async () => {
-    const cp = await getControlPlaneSettings();
+    // The pod's Control Plane link and plan — pod-level records
+    // (`@synap/database` utils/control-plane-link.ts), never a workspace's.
+    const [link, plan] = await Promise.all([
+      readControlPlaneLink(),
+      readControlPlaneEntitlement(),
+    ]);
     const allowedUrls: string[] = [];
-    if (cp.url) allowedUrls.push(cp.url);
-    if (Array.isArray(cp.allowedUrls)) allowedUrls.push(...cp.allowedUrls);
+    if (link?.url) allowedUrls.push(link.url);
     if (config.server.controlPlaneUrl)
       allowedUrls.push(config.server.controlPlaneUrl);
     return {
       controlPlane: {
-        url: cp.url ?? null,
-        podId: cp.podId ?? null,
-        tier: cp.tier ?? null,
-        hasSettings: !!(cp.url || cp.podId),
+        url: link?.url ?? null,
+        podId: link?.podId ?? null,
+        tier: plan?.tier ?? null,
+        hasSettings: !!link,
       },
       allowedCpUrls: allowedUrls,
       envVar: config.server.controlPlaneUrl ?? null,

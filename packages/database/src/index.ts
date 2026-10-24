@@ -97,6 +97,7 @@ export * from "./utils/official-catalog-digests.js";
 export * from "./utils/cp-relay-credential.js";
 export * from "./utils/pod-identity.js";
 export * from "./utils/pod-cp-auth.js";
+export * from "./utils/control-plane-link.js";
 export * from "./utils/is-delegation.js";
 export * from "./utils/agent-turn-overrides.js";
 export * from "./utils/workspace-client-projection.js";
