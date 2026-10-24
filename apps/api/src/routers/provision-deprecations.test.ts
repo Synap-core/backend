@@ -14,6 +14,7 @@ describe("retired provision identity routes", () => {
 
   const retiredRoutes = [
     ["/connect", undefined],
+    ["/disconnect", undefined],
     ["/authorize-issuer", "/api/federation/identity-links"],
     ["/seed-trust", "/api/federation/identity-links"],
     ["/seed-admin", "/api/federation/access-grants"],

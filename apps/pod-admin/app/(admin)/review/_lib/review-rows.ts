@@ -29,6 +29,10 @@ import {
   type LensNeedsYouSignal,
 } from "@synap-core/types/lens";
 import { isObjectNavView } from "@synap-core/types/navigation";
+import {
+  deriveDuplicateReview,
+  needsIdentityChoice,
+} from "@synap-core/types/proposals";
 import type { Ask } from "@synap-core/types/ask";
 import { openIn, type Exit } from "../../../../lib/open-in";
 import { askSlotOf, type AskSlot } from "./ask-detail";
@@ -187,6 +191,18 @@ function iso(at: string | Date | null | undefined): string | null {
   return Number.isFinite(d.getTime()) ? d.toISOString() : null;
 }
 
+/**
+ * A create whose twin is a record waits for the person's choice on its page
+ * (`needsIdentityChoice`): an inline or batch approve would keep both without
+ * showing the twin.
+ */
+function needsTwinChoice(f: ProposalFacts | undefined): boolean {
+  if (!f) return false;
+  return needsIdentityChoice({
+    duplicate: deriveDuplicateReview(f.data, { singleEntityCreate: true }),
+  });
+}
+
 /** The members a cluster row decides, when the sample IS the whole cluster. */
 function wholeCluster(s: ReviewSignal): string[] | null {
   const ids = s.proposalIds?.length
@@ -210,6 +226,9 @@ function proposalRow(
     members !== null &&
     members.every((id) => facts.get(id)?.viewerCanReview === true);
   const changes = group === "changes";
+  const twin = (members ?? (sampleId ? [sampleId] : [])).some((id) =>
+    needsTwinChoice(facts.get(id))
+  );
   return {
     nounKind: sample?.targetType || "proposal",
     who: (sample && proposalRequester(sample)) || sample?.agentName || null,
@@ -218,8 +237,12 @@ function proposalRow(
     expiresAt: null,
     detail: sampleId ? { kind: "proposal", proposalId: sampleId } : null,
     inlineApprove:
-      changes && approvable && sample !== undefined && !isRemoval(sample),
-    batchIds: changes && approvable ? members : null,
+      changes &&
+      approvable &&
+      !twin &&
+      sample !== undefined &&
+      !isRemoval(sample),
+    batchIds: changes && approvable && !twin ? members : null,
     ids: [s.id, ...(s.proposalIds ?? (sampleId ? [sampleId] : []))],
   };
 }

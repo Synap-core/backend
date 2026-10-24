@@ -34,6 +34,12 @@ describe("buildProposalChanges — uncovered keys always render, plumbing never"
         policyReason: "Auto-approved by rule",
         governanceReason: "rule",
         entityId: "e1",
+        resolvedWorkspaceId: null,
+        duplicateCheck: {
+          status: "possible",
+          subject: "entity",
+          candidates: [],
+        },
       },
       "update"
     ).map((c) => c.path);

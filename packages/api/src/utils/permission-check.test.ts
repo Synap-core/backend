@@ -209,6 +209,7 @@ import {
 import { checkPermissionOrPropose as checkPermissionOrProposeStrict } from "./permission-check.js";
 import type { PermissionCheckOpts } from "./permission-check.js";
 import { previewPermissionDecision } from "./permission-check.js";
+import { defaultApprovalSentence } from "@synap-core/types/proposals";
 const previewPermissionDecisionForTest = (opts: OffVocabularyOptsForPreview) =>
   previewPermissionDecision(opts as unknown as PermissionCheckOpts);
 type OffVocabularyOptsForPreview = Omit<
@@ -507,7 +508,9 @@ describe("buildProposalResponseFields", () => {
       action: "create",
       data: {},
     });
-    expect(result.reasoning).toMatch(/entity|create/i);
+    // Plain words, never "<action> <type> requires your approval" (e3c39721 §3).
+    expect(result.reasoning).toBe(defaultApprovalSentence());
+    expect(result.reasoning).not.toMatch(/entity|create/i);
   });
 });
 

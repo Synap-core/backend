@@ -1,20 +1,22 @@
 /**
- * What the proposal review reads at a glance — pure, so each mark is tested
- * apart from the markup that draws it.
+ * The review's marks — pure, so each is tested apart from the markup.
  *
- *   `fieldChangeRows`  — the change itself: the pod's before → after diff
- *                        (`review.changes`, `routers/proposals/changes.ts`),
- *                        one row per field, values in words.
- *   `governanceMark`   — the policy's WHY as a mark: can one of your rules
- *                        ever let this through, or does it always ask?
- *                        Read from the ladder's ONE table
- *                        (`GOVERNANCE_REASON_RULE_REACH`).
- *   `approveConsequence` — what approving does, as a mark: undoable or not
- *                        (the pod's own `revertable`, never a guess).
+ *   `reasonMark` — WHY the write waits, as ONE mark, and only when the reason
+ *                  is particular to this change: its short label ("Possible
+ *                  duplicate"), its sentence behind it (on press), toned by
+ *                  the ladder's ONE table (`GOVERNANCE_REASON_RULE_REACH`).
+ *                  "Asks by default" / "Always asks a person" are gone: a
+ *                  pending proposal already waits on the person.
+ *   `undoMark`   — what approving cannot take back. Undo is the default, so
+ *                  an undoable change draws NOTHING (founder, 2026-10-23: "Can
+ *                  be undone … we will not need to showcase that"); only the
+ *                  pod's own `revertable: false` earns a mark.
+ *
+ * The change itself is `proposal-record-model.ts`.
  */
 
+import { governanceReasonMark } from "@synap-core/types/proposals";
 import { GOVERNANCE_REASON_RULE_REACH } from "@synap-core/types/trust-ladder";
-import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 
 /** One field of the pod's diff, read structurally. */
 export interface ProposalChangeInput {
@@ -26,141 +28,51 @@ export interface ProposalChangeInput {
   drift?: "unchanged" | "changed_since" | "unknown";
 }
 
-export interface FieldChangeRow {
-  key: string;
-  label: string;
-  op: "add" | "change" | "remove";
-  /**
-   * `undefined` = not recorded (draw no "before"); `null` = recorded empty
-   * ("was empty"); a string = the value in words.
-   */
-  before: string | null | undefined;
-  after: string | null | undefined;
-  /** The field moved after this was proposed: the `before` shown is stale. */
-  stale: boolean;
-}
-
-/** The longest value drawn inline; the whole value stays in Advanced. */
-const MAX_VALUE_CHARS = 160;
-
-function clip(text: string): string {
-  return text.length > MAX_VALUE_CHARS
-    ? `${text.slice(0, MAX_VALUE_CHARS - 1)}…`
-    : text;
-}
-
-/**
- * A value in words. A kind slug reads as its noun ("finding" → "Finding"),
- * through the vocabulary door.
- */
-function valueText(path: string, value: unknown): string | null {
-  if (value === null || value === undefined || value === "") return null;
-  if (path === "profileSlug" && typeof value === "string")
-    return resolveObjectNoun(value);
-  if (typeof value === "string") return clip(value);
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (typeof value === "number") return String(value);
-  if (Array.isArray(value)) {
-    const parts = value
-      .map((v) => valueText(path, v))
-      .filter((v): v is string => !!v);
-    return parts.length > 0 ? clip(parts.join(", ")) : null;
-  }
-  try {
-    return clip(JSON.stringify(value));
-  } catch {
-    return clip(String(value));
-  }
-}
-
-/**
- * The field's name. The pod labels a path by capitalising it
- * (`labelFromPath`), which turns the one camelCase entity column a reviewer
- * meets — `profileSlug` — into "ProfileSlug". That column IS the record's
- * kind; say so.
- */
-function fieldLabel(change: ProposalChangeInput): string {
-  if (change.path === "profileSlug") return "Kind";
-  return change.label || change.path;
-}
-
-export function fieldChangeRows(
-  changes: readonly ProposalChangeInput[] | null | undefined
-): FieldChangeRow[] {
-  if (!Array.isArray(changes)) return [];
-  return changes.map((c) => {
-    const op: FieldChangeRow["op"] =
-      c.operation === "delete"
-        ? "remove"
-        : c.operation === "update"
-          ? "change"
-          : "add";
-    return {
-      key: c.path,
-      label: fieldLabel(c),
-      op,
-      before:
-        op === "change" && c.before !== undefined
-          ? valueText(c.path, c.before)
-          : op === "remove"
-            ? valueText(c.path, c.before ?? null)
-            : undefined,
-      after: op === "remove" ? undefined : valueText(c.path, c.after),
-      stale: c.drift === "changed_since",
-    };
-  });
-}
-
 export type ReviewTone = "warning" | "primary" | "default" | "success";
 
+/** A state, said as a short label; its sentence is disclosed on press. */
 export interface ReviewMark {
   tone: ReviewTone;
   label: string;
-}
-
-/**
- * Can one of the reviewer's own rules ever let this kind of write through?
- *
- *   floor / ambiguous → it always asks a person (fail closed, as the ladder
- *                       does for an ambiguous code);
- *   rule              → one of your rules asked for it;
- *   below             → the default: no rule says anything yet.
- *
- * An unknown or absent code draws no mark — the sentence alone says why.
- */
-export function governanceMark(
-  code: string | null | undefined
-): ReviewMark | null {
-  if (!code || !Object.hasOwn(GOVERNANCE_REASON_RULE_REACH, code)) return null;
-  const reach =
-    GOVERNANCE_REASON_RULE_REACH[
-      code as keyof typeof GOVERNANCE_REASON_RULE_REACH
-    ];
-  if (reach === "rule") return { tone: "primary", label: "Your rule" };
-  if (reach === "below") return { tone: "default", label: "Asks by default" };
-  return { tone: "warning", label: "Always asks a person" };
-}
-
-/**
- * What approving does. `revertable` is the pod's answer for this proposal
- * (`revertableForRow`: for a pending one, "could it be undone once
- * applied"); absent = unknown, and no promise is drawn.
- */
-export function approveConsequence(revertable: boolean | null | undefined): {
-  mark: ReviewMark | null;
   sentence: string;
-} {
-  if (revertable === true) {
-    return {
-      mark: { tone: "success", label: "Can be undone" },
-      sentence: "Approving applies it now; you can undo it from its history.",
-    };
-  }
-  if (revertable === false) {
-    return {
-      mark: { tone: "warning", label: "Can't be undone" },
-      sentence: "Approving applies it now, and it cannot be undone from here.",
-    };
-  }
-  return { mark: null, sentence: "Approving applies it now." };
+}
+
+/**
+ * The reason a person decides, as one mark — only when it says something
+ * particular about THIS change. A reason that only restates "this waits for
+ * you" (the default, a rule of yours that asks, a human gate) has no label at
+ * its one home (`GOVERNANCE_REASON_SHORT_LABELS`), and no mark is drawn: a
+ * pending proposal is already waiting on the person. A stored sentence with no
+ * code cannot be told apart either way, so it draws nothing.
+ *
+ * Tone: a floor the ladder never lets a rule widen (or an ambiguous code,
+ * failing closed) is a warning; anything else is quiet.
+ */
+export function reasonMark(code: string | null | undefined): ReviewMark | null {
+  const named = governanceReasonMark(code);
+  if (!named) return null;
+  const reach = Object.hasOwn(GOVERNANCE_REASON_RULE_REACH, named.code)
+    ? GOVERNANCE_REASON_RULE_REACH[
+        named.code as keyof typeof GOVERNANCE_REASON_RULE_REACH
+      ]
+    : undefined;
+  const tone: ReviewTone =
+    reach === "rule" || reach === "below" ? "default" : "warning";
+  return { tone, label: named.label, sentence: named.sentence };
+}
+
+/**
+ * The one consequence worth a mark: approving cannot be undone. `revertable`
+ * is the pod's answer for this proposal (`revertableForRow`); `true` and
+ * unknown draw nothing — undo is the default, and an unknown is not promised.
+ */
+export function undoMark(
+  revertable: boolean | null | undefined
+): ReviewMark | null {
+  if (revertable !== false) return null;
+  return {
+    tone: "warning",
+    label: "Can't be undone",
+    sentence: "Approving applies it now, and it cannot be undone from here.",
+  };
 }
