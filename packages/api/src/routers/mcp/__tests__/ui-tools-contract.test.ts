@@ -160,6 +160,38 @@ describe("structuredContent — tagged tools only, same payload as the text", ()
     expect(res.structuredContent).toEqual(text);
   });
 
+  it("synap_get_proposal: lean by default (one payload copy), full keeps request.data", async () => {
+    h.row = {
+      id: PROPOSAL_ID,
+      status: "pending",
+      data: { op: "x" },
+      request: { data: { op: "x" }, summary: "S" },
+      revisionHistory: [
+        { at: "t", by: "u", before: { a: 1 }, patch: { b: 2 } },
+      ],
+    };
+    const read = async (args: Record<string, unknown>) =>
+      JSON.parse(
+        (
+          (
+            await call("synap_get_proposal", {
+              proposalId: PROPOSAL_ID,
+              ...args,
+            })
+          ).content[0] as { type: "text"; text: string }
+        ).text
+      );
+    const lean = await read({});
+    expect(lean.data).toEqual({ op: "x" });
+    expect(lean.request).toEqual({ summary: "S" });
+    expect(lean.revisionHistory).toEqual([
+      { at: "t", by: "u", patchedFields: ["b"] },
+    ]);
+    const full = await read({ detail: "full" });
+    expect(full.request.data).toEqual({ op: "x" });
+    expect(full.revisionHistory[0].before).toEqual({ a: 1 });
+  });
+
   it("attribution stamped onto the text is in structuredContent too (they never diverge)", async () => {
     h.attribution = { session: "none", ambiguous: false, openCount: 0 };
     const res = await call("synap_get_proposal", { proposalId: PROPOSAL_ID });
