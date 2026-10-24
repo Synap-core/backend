@@ -82,6 +82,7 @@ import {
 } from "@synap-core/types/vocabulary";
 import { buildProjectFilingSummary } from "../services/projects/project-filing-summary.js";
 import { buildTrackStartSummary } from "../services/tracks/track-start-summary.js";
+import { buildTrackParticipantSummary } from "../services/tracks/track-participant-summary.js";
 import { buildDescriptiveProfileUpdateSummary } from "../services/profiles/profile-descriptive-update.js";
 import {
   defaultApprovalSentence,
@@ -229,10 +230,17 @@ function isFocusSessionCriteriaUpdate(
   action: string,
   data: Record<string, unknown> | undefined
 ): boolean {
+  const carriesCriteria =
+    data !== undefined && "criteria" in data && data.criteria !== undefined;
+  // A GOAL's criteria (work model W2, 0345) are the same contract one level
+  // up: the standard the goal is judged done against. An agent writing them
+  // — when it starts the goal or later — proposes, and the person validates.
+  // The track doors carry `criteria` only when the caller sent them.
+  if (subjectType === "track") {
+    return (action === "create" || action === "update") && carriesCriteria;
+  }
   if (subjectType !== "focus_session" || action !== "update") return false;
-  return (
-    data !== undefined && "criteria" in data && data.criteria !== undefined
-  );
+  return carriesCriteria;
 }
 
 /**
@@ -3067,6 +3075,15 @@ export function buildProposalSummary(
       ? `Hand session "${name}" to ${agent}`
       : `Hand a session to ${agent}`;
   }
+  // WHO IS ON A GOAL (W3) — the goal hand-off (`track/assign_agent`) and an
+  // agent's participant change under `track/update`: names the goal, who, and
+  // what changes for them.
+  const participantSentence = buildTrackParticipantSummary(
+    subjectType,
+    action,
+    data
+  );
+  if (participantSentence) return participantSentence;
   // focus_session FILING — where a session belongs (its track step, its
   // project, its space) is the person's call, so the title says it is a move
   // and names EVERY place it changes, never the generic "Update session"

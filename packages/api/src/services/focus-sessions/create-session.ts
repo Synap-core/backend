@@ -266,6 +266,13 @@ export interface CreateFocusSessionParams {
    * ride back on `playbooks` for the caller to choose from.
    */
   matchTemplate?: boolean;
+  /**
+   * The GOAL whose loop proposes this run (work model W4, `runGoalLoop`):
+   * the start is ALWAYS a proposal a person approves (the gate's
+   * `forcePropose`, whoever switched the loop on), and the proposal carries
+   * `goalLoopOf` — what the loop's budget and its one-pending rule count.
+   */
+  goalLoopOf?: string;
 }
 
 /** What happened to the create-time `spawned_from` edge. */
@@ -662,6 +669,8 @@ export async function createFocusSession(
     subjectType: "focus_session",
     action: "create",
     source: "intelligence",
+    // A goal's loop never starts a run: it proposes one (W4).
+    ...(params.goalLoopOf ? { forcePropose: true } : {}),
     // Carry the non-goal fields through the proposal so the approve executor
     // (proposals/approve-executors.ts, focus_session/create) can materialize a
     // full session — otherwise they'd be lost on the PROPOSED path. Only include
@@ -717,6 +726,9 @@ export async function createFocusSession(
       ...(trackId ? { trackId } : {}),
       // …at the stage it was filed at — re-validated at approval.
       ...(trackId && trackStage ? { trackStage } : {}),
+      // The goal whose loop proposed it — counted by the loop, ignored by
+      // the approval replay.
+      ...(params.goalLoopOf ? { goalLoopOf: params.goalLoopOf } : {}),
     },
   });
 

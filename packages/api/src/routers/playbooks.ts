@@ -2817,7 +2817,7 @@ export const playbooksRouter = router({
       if (input.trackStage && !input.trackId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "trackStage needs trackId — a stage belongs to a track.",
+          message: "trackStage needs trackId — a stage belongs to a goal.",
         });
       }
       if (input.trackId) {

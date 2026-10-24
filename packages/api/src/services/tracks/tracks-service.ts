@@ -11,7 +11,14 @@
  *   startTrack        — the ONE way a track is born. The proto-track door
  *                       `projects.instantiateFromPlaybook` was retired (W5c);
  *                       its legacy approval executor calls startTrack directly.
- *   setTrackStatus    — pause / resume / complete / archive.
+ *   setTrackStatus    — any move of the track's SYSTEM LIFECYCLE
+ *                       (`TRACK_LIFECYCLE`, @synap-core/types/units): open
+ *                       (proposed · agreed · ready) · active · paused · done
+ *                       (completed, "Closed") · lost (archived, "Dropped").
+ *                       Governed through the SAME classifier as a kind's
+ *                       status move; closing carries a verdict (R1).
+ *   reopenTrack       — a closed goal comes back as a NEW version (R8),
+ *                       linked `new --replaces--> old`, through startTrack.
  *   advanceTrackStage — the ONE writer of `project_tracks.current_stage` after
  *                       birth. Gate evaluation is the subject-agnostic core in
  *                       `services/playbooks/stage-gate.ts` (`applyStageGate`),
@@ -21,7 +28,7 @@
  *   setTrackParams    — the method's param answers (0274), governed `track/update`.
  *   setTrackDirection — the track's direction + KPI (0302), governed
  *                       `track/update`. Reaching the KPI target NUDGES
- *                       (`track.kpi_reached`); completion stays a person's act.
+ *                       (`track.kpi_reached`); closing stays a person's act.
  *   addTrackStage     — append an EMERGENT stage to the pinned stage list,
  *                       governed `track/update`. The one writer of
  *                       `definition_snapshot.stages` after birth.
@@ -46,8 +53,10 @@ import {
   desc,
   eq,
   getDb,
+  gt,
   inArray,
   isNotNull,
+  lt,
   ne,
   or,
   focusSessions,
@@ -55,11 +64,13 @@ import {
   projects,
   projectTracks,
   users,
+  links,
   drizzleSql,
-  isUniqueViolation,
+  classifyLifecycleMove,
 } from "@synap/database";
 import {
   DEFAULT_PLAYBOOK_STAGE_CATEGORY,
+  readCriteria,
   describeParamTypeError,
   readPlaybookParams,
   validatePlaybookParams,
@@ -69,17 +80,27 @@ import type {
   ProjectTrack,
   ProjectTrackKpi,
   ProjectTrackStatus,
+  ProjectTrackUncertainty,
+  ProjectTrackVerdict,
+  ProjectTrackWorkKind,
 } from "@synap/database/schema";
 import { type LIVE_PROJECT_TRACK_STATUSES } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import {
   buildObjectActionTitle,
-  resolveStatusLabel,
+  resolveTrackStatusLabel,
 } from "@synap-core/types/vocabulary";
 import { formatKpiFraction } from "@synap-core/types/lens";
 import {
   canTransitionTrack,
+  checkTrackClose,
+  isTrackClosed,
+  isTrackVerdict,
+  TRACK_LIFECYCLE,
+  trackStatusCategory,
+  type TrackStatusIn,
+  type TrackVerdict,
   deriveTrackStages,
   readTrackDirection,
   readTrackKpi,
@@ -99,6 +120,15 @@ import {
   type TrackStage,
   type TrackStageHistoryEntry,
   type TrackStatus,
+  mayAcceptGoalCriterion,
+  criterionMeaning,
+  type GoalAcceptanceDecision,
+  type GoalCriterionView,
+  type TrackUncertainty,
+  type TrackWorkKind,
+  type WaitingOnMark,
+  readGoalLoop,
+  type GoalLoopSettings,
 } from "@synap-core/types/units";
 import { z } from "zod";
 import {
@@ -107,13 +137,48 @@ import {
 } from "@synap-core/types/focus-sessions";
 import type { ActivityActor } from "@synap-core/types/activity";
 import { trackRepository } from "./track-repo.js";
+import {
+  agentSwitchesLoopOn,
+  isGoalJudge,
+  loadTrackGoalFacts,
+  parseTrackGoalInput,
+  pickTrackGoalInput,
+  readDropConditions,
+  readEndState,
+  readGoalCriteria,
+  readTrackUncertainty,
+  readTrackWorkKind,
+  resolveTrackGoalPatch,
+  withBirthLoopDefault,
+  type TrackGoalFacts,
+} from "./goal-content.js";
+import { settleGoalReviewNotice } from "./goal-review-notice.js";
+import {
+  assertGoalCloser,
+  carryGoalParticipants,
+  goalParticipantRows,
+  loadTrackParticipantViews,
+  seedGoalOwner,
+} from "./track-participant-store.js";
 import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
+import {
+  assertGoalSource,
+  writeGoalLineage,
+  type TrackFromEntity,
+} from "./goal-source-entity.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
 import { projectPathConditions } from "../projects/project-path.js";
 import type { CreateFocusSessionParams } from "../focus-sessions/create-session.js";
+import {
+  goalJudge,
+  goalOwner,
+  type TrackParticipant,
+} from "@synap-core/types/units";
+import { REPLACES_LINK_TYPE } from "@synap-core/types/connections";
 import { createLinks } from "../links/links-service.js";
+import { writeDependencyLink } from "../links/dependency-links.js";
 import { requestClientKey } from "../focus-sessions/resolve-work-session.js";
 import { linkProjectToWorkspace } from "../../utils/project-workspace.js";
 import {
@@ -184,7 +249,7 @@ const _sameStatuses: _SameStatuses = true;
 void _sameStatuses;
 
 // LIVE (`LIVE_PROJECT_TRACK_STATUSES`, @synap/database — the statuses that
-// hold a name, 0317's index predicate) and CLOSED (`CLOSED_TRACK_STATUSES`,
+// hold a name, 0317/0344's index predicate) and CLOSED (`CLOSED_TRACK_STATUSES`,
 // @synap-core/types/units — `isTrackClosed`) partition the statuses: their
 // union is every status and they share none. A status added to the enum and
 // classified in neither list, or in both, stops the build.
@@ -199,6 +264,48 @@ type _LiveClosedPartition = [
   : never;
 const _liveClosedPartition: _LiveClosedPartition = true;
 void _liveClosedPartition;
+
+// …and the pod's LIVE list is EXACTLY the lifecycle's open, active and paused
+// categories (`TRACK_STATUS_DECLARATION`, @synap-core/types/units): a status
+// moved to another category on one side only stops the build.
+type _LiveIsCategories = [
+  Exclude<_LiveStatus, TrackStatusIn<"open" | "active" | "paused">>,
+] extends [never]
+  ? [
+      Exclude<TrackStatusIn<"open" | "active" | "paused">, _LiveStatus>,
+    ] extends [never]
+    ? true
+    : never
+  : never;
+const _liveIsCategories: _LiveIsCategories = true;
+void _liveIsCategories;
+
+// The verdict mirror (`PROJECT_TRACK_VERDICTS`, @synap/database) is EXACTLY
+// the shared set (`TRACK_VERDICTS`, @synap-core/types/units).
+type _SameVerdicts = [ProjectTrackVerdict] extends [TrackVerdict]
+  ? [TrackVerdict] extends [ProjectTrackVerdict]
+    ? true
+    : never
+  : never;
+const _sameVerdicts: _SameVerdicts = true;
+void _sameVerdicts;
+
+// The kind-of-work and uncertainty mirrors (0345, `@synap/database`) are
+// EXACTLY the shared sets (`TRACK_WORK_KINDS`, `TRACK_UNCERTAINTY_LEVELS`).
+type _SameWorkKinds = [ProjectTrackWorkKind] extends [TrackWorkKind]
+  ? [TrackWorkKind] extends [ProjectTrackWorkKind]
+    ? true
+    : never
+  : never;
+const _sameWorkKinds: _SameWorkKinds = true;
+void _sameWorkKinds;
+type _SameUncertainty = [ProjectTrackUncertainty] extends [TrackUncertainty]
+  ? [TrackUncertainty] extends [ProjectTrackUncertainty]
+    ? true
+    : never
+  : never;
+const _sameUncertainty: _SameUncertainty = true;
+void _sameUncertainty;
 
 // The same pin for the KPI (0302): `ProjectTrackKpi` (@synap/database) and
 // `TrackKpi` (@synap-core/types/units) must describe ONE shape.
@@ -262,6 +369,66 @@ export interface TrackView {
    * (with `updatedAt` / `updatedBy`), never measured.
    */
   kpi: TrackKpi | null;
+  /**
+   * How the track ENDED (0344, R1) — `null` while it is live, and on a track
+   * dropped before verdicts existed. Read with its category: done verdicts
+   * (met · partly_met · not_met, or retired for an operation) on a closed
+   * track, lost ones on a dropped one.
+   */
+  verdict: TrackVerdict | null;
+  /** Why, in words — always present for `impossible` and `replaced`. */
+  verdictReason: string | null;
+  /** The person who closed it (the approver when an agent proposed it). */
+  verdictBy: string | null;
+  /** ISO-8601 — when it was closed; `null` when not recorded (before 0344). */
+  verdictAt: string | null;
+  /** What "done" looks like, in words (0345) — `null` when unsaid. */
+  endState: string | null;
+  /**
+   * The goal's criteria (0345): none (a lasting goal) or 2–5, each with the
+   * judge's stored decision and its DERIVED state — `mark` (met · claimed ·
+   * under_way · not_met · not_started), `acceptanceState`, `meaning` (R5) and
+   * a measured criterion's `currentValue`. `mark` is `null` only on a write's
+   * fallback view (the goal's runs could not be read) — never a guess.
+   */
+  criteria: GoalCriterionView[];
+  /** When to stop (0345) — `[]` when none said. */
+  dropConditions: string[];
+  /**
+   * The goal's loop (0350, W4): whether it proposes its next run while a
+   * required criterion is unmet, its weekly budget, when a person last
+   * switched it on and who. Never set reads as OFF.
+   */
+  loop: GoalLoopSettings;
+  /** The kind of work (decision 4) — `null` when not set. */
+  workKind: TrackWorkKind | null;
+  /** How well the way is known (decision 4) — `null` when not set. */
+  uncertainty: TrackUncertainty | null;
+  /**
+   * The person who confirmed kind + uncertainty, and when (ISO-8601). Both
+   * `null` while they are the AI's proposal, not yet confirmed.
+   */
+  kindConfirmedBy: string | null;
+  kindConfirmedAt: string | null;
+  /**
+   * DERIVED — every required criterion claimed and none accepted yet (a
+   * mark inside the active category, never a status). `null` on a write's
+   * fallback view.
+   */
+  inReview: boolean | null;
+  /**
+   * DERIVED (R4) — what the goal waits on, one mark per reason present
+   * (input · approval · access · another_work · outside_world) with how many.
+   * `[]` = waiting on nothing; `null` on a write's fallback view.
+   */
+  waitingOn: WaitingOnMark[] | null;
+  /**
+   * WHO IS ON IT (0348, W3): owner, judge, delegates with their commitment
+   * and its state ("silent since" for a delegate who still owes something),
+   * integrator. Absent when not read (a write's fallback view) — never a
+   * fabricated empty list. Owner first, then judge, delegates, integrator.
+   */
+  participants?: TrackParticipant[];
   createdAt: string;
   updatedAt: string;
 }
@@ -275,7 +442,12 @@ export function toTrackView(
   track: ProjectTrack,
   sessionsByStage?: Readonly<Record<string, number>>,
   /** Names the stage-history movers — absent ⇒ `enteredBy` absent. */
-  actorOf?: (actorId: string) => ActivityActor
+  actorOf?: (actorId: string) => ActivityActor,
+  /**
+   * The goal's DERIVED facts (`loadTrackGoalFacts`) — absent ⇒ marks,
+   * `inReview` and `waitingOn` read `null` ("not read"), never a guess.
+   */
+  goal?: TrackGoalFacts
 ): TrackView {
   return {
     id: track.id,
@@ -302,6 +474,30 @@ export function toTrackView(
     checkGate: readTrackCheckGate(track),
     direction: readTrackDirection(track.direction),
     kpi: readTrackKpi(track.kpi),
+    verdict: isTrackVerdict(track.verdict) ? track.verdict : null,
+    verdictReason: track.verdictReason ?? null,
+    verdictBy: track.verdictBy ?? null,
+    verdictAt: track.verdictAt ? new Date(track.verdictAt).toISOString() : null,
+    endState: readEndState(track.endState),
+    criteria:
+      goal?.criteria ??
+      readGoalCriteria(track.criteria).map((c) => ({
+        ...c,
+        mark: null,
+        acceptanceState: null,
+        meaning: criterionMeaning(c),
+        currentValue: null,
+      })),
+    dropConditions: readDropConditions(track.dropConditions),
+    loop: readGoalLoop(track.loop),
+    workKind: readTrackWorkKind(track.workKind),
+    uncertainty: readTrackUncertainty(track.uncertainty),
+    kindConfirmedBy: track.kindConfirmedBy ?? null,
+    kindConfirmedAt: track.kindConfirmedAt
+      ? new Date(track.kindConfirmedAt).toISOString()
+      : null,
+    inReview: goal ? goal.inReview : null,
+    waitingOn: goal ? goal.waitingOn : null,
     createdAt: new Date(track.createdAt).toISOString(),
     updatedAt: new Date(track.updatedAt).toISOString(),
   };
@@ -371,17 +567,22 @@ export async function loadTrackViews(
   tracks: ProjectTrack[],
   actor: Pick<TrackActor, "userId">
 ): Promise<TrackView[]> {
-  const [counts, movers] = await Promise.all([
+  const [counts, movers, goals, participants] = await Promise.all([
     countTrackSessionsByStage(tracks, actor.userId),
     loadActorRows(
       tracks.flatMap((t) =>
         readTrackStageHistory(t.stageHistory).map((e) => e.actor)
       )
     ),
+    loadTrackGoalFacts(tracks, actor.userId),
+    loadTrackParticipantViews(tracks),
   ]);
   const actorOf = (id: string) =>
     activityActorOf(id || null, movers.get(id), actor.userId);
-  return tracks.map((t) => toTrackView(t, counts.get(t.id) ?? {}, actorOf));
+  return tracks.map((t) => ({
+    ...toTrackView(t, counts.get(t.id) ?? {}, actorOf, goals.get(t.id)),
+    participants: participants.get(t.id) ?? [],
+  }));
 }
 
 /**
@@ -537,14 +738,21 @@ export async function getTrack(
 }
 
 /**
- * The project's tracks, oldest first (the order they were started in). Returns
- * `null` when the project itself is not visible — NOT `[]`: "no tracks" and
- * "no such project for you" are different facts.
+ * THE track list read. With a `projectId`: that project's tracks, oldest
+ * first (the order they were started in) — `null` when the project itself is
+ * not visible, NOT `[]`: "no tracks" and "no such project for you" are
+ * different facts. Without one: EVERY goal the caller can see, pod-wide (the
+ * Goals collection, W5), newest first — floored on the same `project_tracks`
+ * VisibilityRule (visible iff its project is), so it can never list a goal
+ * the per-project read would hide. `page` bounds the read (a keyset cursor
+ * over `created_at, id` in the read's own order); without it every row comes
+ * back, as before.
  */
 export async function listTracks(params: {
-  projectId: string;
+  projectId?: string | null;
   actor: TrackActor;
   includeArchived?: boolean;
+  page?: { limit: number; cursor?: TrackListCursor | null };
 }): Promise<ProjectTrack[] | null> {
   // A READ: the project is checked through the SAME `projects` VisibilityRule
   // the tracks below are floored on — member branch included (Sites W2 S2: a
@@ -552,18 +760,122 @@ export async function listTracks(params: {
   // `loadVisibleProject`: that floor also gates WRITES, so it deliberately has
   // no member branch.
   const access = AccessContext.from(params.actor);
-  const project = await scopedDb(access).findFirst<{ id: string }>(projects, {
-    where: eq(projects.id, params.projectId),
-    columns: { id: true },
-  });
-  if (!project) return null;
+  const projectId = params.projectId ?? null;
+  if (projectId) {
+    const project = await scopedDb(access).findFirst<{ id: string }>(projects, {
+      where: eq(projects.id, projectId),
+      columns: { id: true },
+    });
+    if (!project) return null;
+  }
+  // Pod-wide reads newest first (a collection); a project's own list keeps
+  // the order its tracks were started in.
+  const newestFirst = !projectId;
+  const cursor = params.page?.cursor ?? null;
+  const after = cursor
+    ? newestFirst
+      ? or(
+          lt(projectTracks.createdAt, new Date(cursor.createdAt)),
+          and(
+            eq(projectTracks.createdAt, new Date(cursor.createdAt)),
+            lt(projectTracks.id, cursor.id)
+          )
+        )
+      : or(
+          gt(projectTracks.createdAt, new Date(cursor.createdAt)),
+          and(
+            eq(projectTracks.createdAt, new Date(cursor.createdAt)),
+            gt(projectTracks.id, cursor.id)
+          )
+        )
+    : undefined;
   return scopedDb(access).findMany<ProjectTrack>(projectTracks, {
     where: and(
-      eq(projectTracks.projectId, params.projectId),
-      params.includeArchived ? undefined : ne(projectTracks.status, "archived")
+      projectId ? eq(projectTracks.projectId, projectId) : undefined,
+      params.includeArchived ? undefined : ne(projectTracks.status, "archived"),
+      after
     ),
-    orderBy: [asc(projectTracks.createdAt), asc(projectTracks.id)],
+    orderBy: newestFirst
+      ? [desc(projectTracks.createdAt), desc(projectTracks.id)]
+      : [asc(projectTracks.createdAt), asc(projectTracks.id)],
+    ...(params.page ? { limit: params.page.limit } : {}),
   });
+}
+
+/** Where a paged track list resumes: the last row's `created_at` and id. */
+export interface TrackListCursor {
+  createdAt: string;
+  id: string;
+}
+
+/** The opaque cursor a client hands back — never parsed outside this file. */
+export function encodeTrackListCursor(row: {
+  createdAt: Date | string;
+  id: string;
+}): string {
+  return Buffer.from(
+    JSON.stringify({
+      createdAt: new Date(row.createdAt).toISOString(),
+      id: row.id,
+    })
+  ).toString("base64url");
+}
+
+/** `null` for a cursor that does not decode — a refused input, never page 1. */
+export function decodeTrackListCursor(
+  raw: string | null | undefined
+): TrackListCursor | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as {
+      createdAt?: unknown;
+      id?: unknown;
+    };
+    if (
+      typeof v.createdAt === "string" &&
+      Number.isFinite(Date.parse(v.createdAt)) &&
+      typeof v.id === "string" &&
+      v.id.length > 0
+    ) {
+      return { createdAt: v.createdAt, id: v.id };
+    }
+  } catch {
+    // Not base64url JSON: the caller refuses it (400).
+  }
+  return null;
+}
+
+/** The default and the ceiling of a page of the pod-wide goals read. */
+export const TRACK_LIST_PAGE_DEFAULT = 50;
+export const TRACK_LIST_PAGE_MAX = 100;
+
+/**
+ * One PAGE of {@link listTracks} — the same read, asked for one row more than
+ * the page so the next cursor exists only when a next page does. `null` as
+ * the read's own `null` (an invisible project).
+ */
+export async function listTracksPage(params: {
+  projectId?: string | null;
+  actor: TrackActor;
+  includeArchived?: boolean;
+  limit: number;
+  cursor?: TrackListCursor | null;
+}): Promise<{ rows: ProjectTrack[]; nextCursor: string | null } | null> {
+  const limit = Math.max(1, Math.min(TRACK_LIST_PAGE_MAX, params.limit));
+  const rows = await listTracks({
+    projectId: params.projectId,
+    actor: params.actor,
+    includeArchived: params.includeArchived,
+    page: { limit: limit + 1, cursor: params.cursor ?? null },
+  });
+  if (!rows) return null;
+  const page = rows.slice(0, limit);
+  const last = page[page.length - 1];
+  return {
+    rows: page,
+    nextCursor:
+      rows.length > limit && last ? encodeTrackListCursor(last) : null,
+  };
 }
 
 /**
@@ -622,8 +934,17 @@ export async function countProjectsUsingMethod(
 export interface StartTrackInput {
   projectId: string;
   /**
-   * The METHOD — optional (work model W1, 2026-10-11): a track is a lasting
-   * intent with a goal; stages are optional. Absent/null ⇒ a stage-less track,
+   * REOPEN (R8): the closed or dropped track this one is the NEW VERSION of —
+   * same project, not already replaced by a newer version. The new track is
+   * linked `new --replaces--> old` (the dependency door), the old one stays
+   * closed with its verdict, and the old one's dependents follow the new one
+   * (`deriveOpenBlockers` follows `replaces`). Set by `reopenTrack` and by
+   * its `track/create` approval replay.
+   */
+  replacesTrackId?: string | null;
+  /**
+   * The METHOD — optional (work model W1, 2026-10-11): a track is a goal;
+   * stages are optional. Absent/null ⇒ a stage-less track,
    * and `name` is then required (there is no method name to default to).
    */
   playbookId?: string | null;
@@ -640,6 +961,30 @@ export interface StartTrackInput {
   direction?: string | null;
   /** The number it steers by (0302): `{ label, unit?, target, current? }`. */
   kpi?: unknown;
+  /**
+   * What the goal holds (0345) — end state, 0 or 2–5 criteria, drop
+   * conditions, kind of work, uncertainty (`trackGoalInputSchema`, parsed
+   * here). A person starting with a kind confirms it; an agent's is the AI's
+   * proposal until a person confirms.
+   */
+  endState?: unknown;
+  criteria?: unknown;
+  dropConditions?: unknown;
+  workKind?: unknown;
+  uncertainty?: unknown;
+  /** The goal's loop (0350, W4): `{ on, perWeek? }`; absent = the birth default. */
+  loop?: unknown;
+  /**
+   * "MAKE IT A GOAL" (D2): the `goal` / `objective` / `okr` entity this goal
+   * is made from (`convertEntityToGoal` maps its fields onto the input above).
+   * Re-checked on every start, the replay included (`assertGoalSource`); the
+   * goal's owner is the person behind the entity; the new goal is linked
+   * `entity --promoted_to--> track`, and an entity that had ended arrives
+   * closed (`met`) or dropped (`no_longer_needed`) by the person deciding.
+   * Never set by the plain start doors — only by the convert door and the
+   * `track/create` replay of its proposal.
+   */
+  fromEntity?: TrackFromEntity | null;
   actor: TrackActor;
   /**
    * Pre-minted id — ONLY the approval replay passes it (the id the proposal
@@ -678,14 +1023,15 @@ export type StartTrackResult = (
 };
 
 /**
- * Start a track on a project — a LASTING intent with a goal (W1). The method
+ * Start a track on a project — a goal, open as long as it matters, closed by
+ * a person with a verdict once its criteria are met. The method
  * (a project-scoped playbook, with stages) is optional; with none, `name` is
  * required and the track has no stages: work in it is `start_session` +
  * `trackId`. A LIVE track's identity on its project is its NAME (0317), and
  * the name defaults to the method's: starting the same method (or no method)
  * again under the same name returns the live track as `exists`, and nothing
- * is filed or written; under another name it starts a second track. Completed
- * and archived tracks hold no name. A live track of ANOTHER method (or of a
+ * is filed or written; under another name it starts a second track. Closed
+ * and dropped tracks hold no name (`replacesTrackId` reopens one). A live track of ANOTHER method (or of a
  * method, when none was asked for) already holding the name is refused
  * (CONFLICT) — never handed back as if it were this one.
  */
@@ -700,8 +1046,7 @@ export async function startTrack(
     throw new TRPCError({ code: "NOT_FOUND", message: "Project not found" });
   }
 
-  // The method — OPTIONAL (W1): a track is a lasting intent with a goal, and
-  // stages are optional. With one, its own visibility floor applies
+  // The method — OPTIONAL (W1): a track is a goal, and stages are optional. With one, its own visibility floor applies
   // (`scopedDb` + the `playbooks` rule) and only `scope: "project"` is a method.
   const playbook = input.playbookId
     ? await loadTrackMethod(input.playbookId, actor)
@@ -723,6 +1068,17 @@ export async function startTrack(
 
   await assertProjectWrite(project, actor.userId);
 
+  // Re-checked on every call, the approval replay included: the old version
+  // must still be closed and still unreplaced when the new one is born.
+  const replaces = input.replacesTrackId
+    ? await assertReplaceableTrack(input.replacesTrackId, project.id, actor)
+    : null;
+  // A conversion — re-checked here, so a replay approved after the entity
+  // became a goal (or after its owner lost the project) applies nothing.
+  const source = input.fromEntity
+    ? await assertGoalSource(input.fromEntity, project, actor)
+    : null;
+
   // Advisory, computed from the method AS IT STANDS (what would be pinned).
   const missingDomains = playbook
     ? await listMissingStageDomains(db, playbook.stages, actor.userId)
@@ -740,13 +1096,39 @@ export async function startTrack(
   // predicate.
   const live = await (await repo()).findLiveByName(project.id, trackName);
   if (live) {
+    // A conversion never hands back an unrelated live goal as if it were the
+    // entity's: it would read "made a goal" with nothing linked.
+    if (source) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: `A live goal on this project is already named "${live.name}" — make "${input.fromEntity!.title}" a goal under another name.`,
+      });
+    }
     assertNameHeldBySameMethod(live, playbook);
+    // Reopening: the live track holding the name must BE the new version (a
+    // repeated reopen), never an unrelated goal handed back as if it were.
+    if (replaces && !replaces.replacedBy.includes(live.id)) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message:
+          `A live track on this project is already named "${live.name}" — ` +
+          "work in it, or reopen this goal under another name.",
+      });
+    }
     return {
       status: "exists",
       track: live,
       playbook: playbookRef,
       missingDomains,
     };
+  }
+  // No live version holds the name, yet a newer version exists (closed since):
+  // the line continues from the newest one, so a goal's versions stay one line.
+  if (replaces && replaces.replacedBy.length > 0) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Goal "${replaces.track.name}" was already reopened as a newer version — reopen that one instead.`,
+    });
   }
   const trackId = input.id ?? randomUUID();
 
@@ -781,6 +1163,34 @@ export async function startTrack(
   // stamp is applied at the write, so a replay stamps the approval moment.
   const kpiInput = input.kpi ? parseTrackKpiInput(input.kpi) : null;
   if (kpiInput) resolveTrackKpi(null, kpiInput, actor.userId);
+  // What the goal holds (0345) — the 2–5 rule and the meanings refused here,
+  // to the author. The parsed input rides the proposal; the replay resolves
+  // it again, as the approving person (who thereby confirms the kind).
+  // A loop the start does not name takes the birth default (W4, OFF).
+  const goalInput = withBirthLoopDefault(
+    parseTrackGoalInput(
+      pickTrackGoalInput(input as unknown as Record<string, unknown>)
+    )
+  );
+  const goalPatch = resolveTrackGoalPatch(
+    null,
+    goalInput,
+    actor.agentUserId ? null : actor.userId
+  );
+  // An entity that was ACHIEVED arrives closed as met, and `met` needs every
+  // required criterion met — none can be yet, so its criteria ride the end
+  // state instead (`goalFromEntity`). Refused here, before anything is filed.
+  const endedAs = input.fromEntity?.ended ?? null;
+  if (
+    endedAs?.status === "completed" &&
+    (goalInput.criteria?.length ?? 0) > 0
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A goal made from an achieved entity is born closed as met — it carries no criteria to judge (put them in the end state).",
+    });
+  }
 
   const perm = await checkPermissionOrPropose({
     userId: actor.userId,
@@ -790,6 +1200,13 @@ export async function startTrack(
     projectId: project.id,
     subjectType: "track",
     action: "create",
+    // An agent switching the loop on is always reviewed (W4). So is an
+    // agent's conversion of an entity that had ended: the goal is born closed
+    // or dropped, and a close is a person's act.
+    ...(agentSwitchesLoopOn(goalInput, actor.agentUserId) ||
+    (actor.agentUserId && endedAs)
+      ? { forcePropose: true }
+      : {}),
     source: actor.source,
     reasoning: actor.reasoning,
     // EVERYTHING the replay needs. Nothing DERIVED (the snapshot) is stored:
@@ -805,6 +1222,11 @@ export async function startTrack(
       ...(Object.keys(trackParams).length > 0 ? { params: trackParams } : {}),
       ...(direction ? { direction } : {}),
       ...(kpiInput ? { kpi: kpiInput } : {}),
+      ...pickTrackGoalInput(goalInput),
+      // The closed version this one reopens (R8) — re-checked at approval.
+      ...(replaces ? { replacesTrackId: replaces.track.id } : {}),
+      // The entity this goal is made from (D2) — re-checked at approval.
+      ...(input.fromEntity ? { fromEntity: input.fromEntity } : {}),
       // The consent the summary states ("…and let <agent> work in …").
       ...(spaceGrantConsent
         ? { [TRACK_SPACE_GRANT_KEY]: spaceGrantConsent }
@@ -848,6 +1270,7 @@ export async function startTrack(
       kpi: kpiInput
         ? resolveTrackKpi(null, kpiInput, actor.agentUserId ?? actor.userId)
         : null,
+      ...(goalPatch ? { goal: goalPatch } : {}),
       ...trackSpaceGrantMetadata(input, stepSpaces),
     },
     actor.userId
@@ -855,6 +1278,24 @@ export async function startTrack(
 
   // A concurrent start of ANOTHER method under the same name won the insert.
   if (!created) assertNameHeldBySameMethod(track, playbook);
+
+  // WHO IS ON IT (W3): a goal is born with its owner — the person who started
+  // it (an agent's start is approved by a person, who is `actor.userId` then).
+  // A REOPENED goal (R8) is born with the closed version's people instead:
+  // its owner and judge, its delegates asked again (`carryGoalParticipants`).
+  if (created) {
+    if (replaces) {
+      await carryGoalParticipants(
+        replaces.track,
+        track,
+        actor.userId,
+        project.userId
+      );
+    } else {
+      // A conversion's goal is owned by the person behind the entity.
+      await seedGoalOwner(track, project.userId, source?.ownerPersonId);
+    }
+  }
 
   if (created && playbook) {
     // Provenance edge — the same `instantiated_from` shape the proto-track
@@ -870,6 +1311,42 @@ export async function startTrack(
         linkType: "instantiated_from",
       },
     ]);
+  }
+  if (created && replaces) {
+    // `new --replaces--> old` through THE dependency door (validated, one
+    // producer, `link.create.completed` emitted). The start is already
+    // authorized, so the ungoverned write is the right one. A failure is
+    // SURFACED: a new version that silently lost its lineage would read as an
+    // unrelated goal, and the old one's dependents would stay held.
+    const linked = await writeDependencyLink({
+      edge: {
+        fromType: "track",
+        fromId: track.id,
+        toType: "track",
+        toId: replaces.track.id,
+        linkType: REPLACES_LINK_TYPE,
+      },
+      userId: actor.userId,
+      attribution: {
+        agentUserId: input.approvedSpaceGrant?.agentUserId ?? actor.agentUserId,
+        proposalId: input.approvedSpaceGrant?.proposalId ?? null,
+        sessionId: actor.sessionId ?? null,
+      },
+    });
+    if (!linked.ok) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: `Goal "${track.name}" was started but not linked to the version it reopens: ${linked.error}`,
+      });
+    }
+  }
+  // MAKE IT A GOAL (D2): the lineage edge, then — for an entity that had
+  // ended — the close or drop, through THE status write (`applyTrackStatus`:
+  // the judge rule, the verdict stamp), as the person deciding (the approver
+  // on a replay), who `assertGoalSource` checked owns it when it is a close.
+  let born = track;
+  if (created && source) {
+    await writeGoalLineage(source.entity, track.id);
   }
   if (created) {
     void emitSideEffects({
@@ -889,9 +1366,23 @@ export async function startTrack(
     );
   }
 
+  if (created && source && endedAs) {
+    const close = { verdict: endedAs.verdict };
+    assertTrackTransition(track, endedAs.status, close, []);
+    born = (
+      await applyTrackStatus(
+        track,
+        project,
+        endedAs.status,
+        actor.userId,
+        close
+      )
+    ).track;
+  }
+
   return {
     status: created ? "started" : "exists",
-    track,
+    track: born,
     playbook: playbookRef,
     missingDomains,
   };
@@ -916,6 +1407,128 @@ function assertNameHeldBySameMethod(
       : `A live track on this project is already named "${live.name}" and ` +
         `runs a method — pass another name to start a new track.`,
   });
+}
+
+/** The tracks that already replace `trackId` (newer versions of it). */
+async function replacingTrackIds(trackId: string): Promise<string[]> {
+  const db = await getDb();
+  const rows = await db
+    .select({ fromId: links.fromId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "track"),
+        eq(links.toType, "track"),
+        eq(links.toId, trackId),
+        eq(links.linkType, REPLACES_LINK_TYPE)
+      )
+    );
+  return rows.map((r) => r.fromId);
+}
+
+/**
+ * The track a reopen replaces: visible to the actor, on THIS project, and
+ * closed or dropped (a live goal needs no reopening). `replacedBy` lists the
+ * newer versions already linked to it: `startTrack` hands back the live one
+ * (a repeated reopen is idempotent) and refuses a reopen of an old version
+ * whose newer one has closed since — reopen the newest, so a goal's versions
+ * stay one line.
+ */
+async function assertReplaceableTrack(
+  trackId: string,
+  projectId: string,
+  actor: TrackActor
+): Promise<{ track: ProjectTrack; replacedBy: string[] }> {
+  const old = await getTrack(trackId, actor);
+  if (!old || old.projectId !== projectId) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "The goal to reopen was not found on this project.",
+    });
+  }
+  if (!isTrackClosed(old)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Goal "${old.name}" is ${resolveTrackStatusLabel(old.status).toLowerCase()}, not closed — work in it instead of reopening it.`,
+    });
+  }
+  // Only the closed goal's OWNER or JUDGE reopens it (R8, W5): the new
+  // version carries their goal, its judge and its delegates. `actor.userId`
+  // is the person — an agent's linked person on its proposal, the approver
+  // on the replay.
+  const people = await goalParticipantRows(old.id);
+  const owner = goalOwner(people, old);
+  const judge = goalJudge(people, old);
+  if (actor.userId !== owner && actor.userId !== judge) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Only the owner or the judge of "${old.name}" can reopen it.`,
+    });
+  }
+  return { track: old, replacedBy: await replacingTrackIds(old.id) };
+}
+
+/**
+ * REOPEN a closed or dropped goal (R8) — as a NEW version, never in place:
+ * the closed track keeps its status and verdict, and its sessions stay filed
+ * on it. The new track carries the same name (free once the old one is not
+ * live), method, answers and direction, and the KPI's definition (not its last
+ * stated value), starts `active`, and is linked `new --replaces--> old`.
+ * Through `startTrack`, so governance, idempotency and the space-grant consent
+ * are the start's own: an agent's reopen is a proposal.
+ */
+export async function reopenTrack(input: {
+  trackId: string;
+  /** A new name — absent ⇒ the closed track's. */
+  name?: string;
+  actor: TrackActor;
+}): Promise<StartTrackResult> {
+  const old = await getTrack(input.trackId, input.actor);
+  if (!old) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
+  }
+  const kpi = readTrackKpi(old.kpi);
+  const params =
+    old.playbookId && old.params && Object.keys(old.params).length > 0
+      ? old.params
+      : undefined;
+  return startTrack({
+    projectId: old.projectId,
+    playbookId: old.playbookId,
+    name: input.name?.trim() || old.name,
+    ...(params ? { params } : {}),
+    ...(old.direction ? { direction: old.direction } : {}),
+    ...(kpi
+      ? {
+          kpi: {
+            label: kpi.label,
+            target: kpi.target,
+            ...(kpi.unit ? { unit: kpi.unit } : {}),
+          },
+        }
+      : {}),
+    // What the goal holds carries to the new version — the criteria WITHOUT
+    // the judge's decisions (they were about the closed version's work).
+    ...goalContentOf(old),
+    replacesTrackId: old.id,
+    actor: input.actor,
+  });
+}
+
+/** A track's stored goal content as start input (no acceptance, no confirmation). */
+function goalContentOf(track: ProjectTrack): Partial<StartTrackInput> {
+  const endState = readEndState(track.endState);
+  const criteria = readCriteria(track.criteria);
+  const dropConditions = readDropConditions(track.dropConditions);
+  const workKind = readTrackWorkKind(track.workKind);
+  const uncertainty = readTrackUncertainty(track.uncertainty);
+  return {
+    ...(endState ? { endState } : {}),
+    ...(criteria.length > 0 ? { criteria } : {}),
+    ...(dropConditions.length > 0 ? { dropConditions } : {}),
+    ...(workKind ? { workKind } : {}),
+    ...(uncertainty ? { uncertainty } : {}),
+  };
 }
 
 /**
@@ -1003,43 +1616,103 @@ function trackSpaceGrantMetadata(
 // ── writes on an existing track ─────────────────────────────────────────────
 
 /** Load a track the actor can SEE, and its project, for a write. */
-async function loadTrackForWrite(
+export async function loadTrackForWrite(
   trackId: string,
   actor: TrackActor
 ): Promise<{ track: ProjectTrack; project: GateProject }> {
   const track = await getTrack(trackId, actor);
   if (!track) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   const db = await getDb();
   const project = await loadVisibleProject(db, track.projectId, actor.userId);
   if (!project) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   await assertProjectWrite(project, actor.userId);
   return { track, project };
 }
 
+/** How a goal ended, as a status move carries it (R1). */
+export interface TrackCloseInput {
+  verdict?: string | null;
+  verdictReason?: string | null;
+}
+
 /**
- * Refuse a status move the shared table (`TRACK_STATUS_TRANSITIONS`,
- * @synap-core/types/units) does not allow. Called by `setTrackStatus` AND by
- * the `track/update` approval replay: a proposal filed while the move was
- * legal can be approved after the track moved on (archived, say) — replaying
- * it unchecked would revive an archived track and collide with a newer live
- * track of the same name.
+ * Refuse a status move the shared lifecycle does not allow — the transition
+ * (`TRACK_STATUS_TRANSITIONS`, derived from the categories: done and lost are
+ * final) and the verdict (`checkTrackClose`: closing needs a done verdict;
+ * a drop may come without one — shipped clients — but a verdict sent is
+ * validated; impossible / replaced need a reason; an operation closes only
+ * `retired`, and only an operation may — R6; nothing else carries one).
+ * Called by `setTrackStatus` AND by the `track/update` approval
+ * replay: a proposal filed while the move was legal can be approved after the
+ * track moved on (dropped, say) — replaying it unchecked would revive a
+ * closed track.
  */
 export function assertTrackTransition(
-  track: Pick<ProjectTrack, "name" | "status">,
-  to: ProjectTrackStatus
+  track: Pick<ProjectTrack, "name" | "status" | "workKind">,
+  to: ProjectTrackStatus,
+  close: TrackCloseInput = {},
+  /**
+   * The goal's criteria with their DERIVED marks (`loadGoalCloseCriteria`):
+   * `met` needs every required one met, `partly_met` / `not_met` at least
+   * one not met. Every caller that closes passes them.
+   */
+  criteria?: ReadonlyArray<{ key: string; required?: boolean; mark: string }>
 ): void {
-  if (canTransitionTrack(track.status, to)) return;
-  throw new TRPCError({
-    code: "BAD_REQUEST",
-    message:
-      track.status === "archived"
-        ? `Track "${track.name}" is archived — start the method again to run it anew.`
+  if (!canTransitionTrack(track.status, to)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: isTrackClosed(track)
+        ? `Goal "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — that is final. Reopen it as a new version to work on it again.`
         : `A ${track.status} track cannot move to ${to}.`,
-  });
+    });
+  }
+  const refusal = checkTrackClose(to, close, criteria, track.workKind);
+  if (refusal) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: refusal });
+  }
+}
+
+/**
+ * The criteria a close is judged against — the goal's criteria with their
+ * marks DERIVED now (`loadTrackGoalFacts`, the read every track view uses).
+ * Read only for a move into done: a drop's verdict is about why it stopped
+ * mattering, not about its criteria. A failed read THROWS: a close is never
+ * judged against criteria it could not see.
+ */
+export async function loadGoalCloseCriteria(
+  track: ProjectTrack,
+  to: ProjectTrackStatus,
+  userId: string
+): Promise<Array<{ key: string; required?: boolean; mark: string }>> {
+  if (trackStatusCategory(to) !== "done") return [];
+  if (readCriteria(track.criteria).length === 0) return [];
+  const facts = (await loadTrackGoalFacts([track], userId)).get(track.id);
+  return (facts?.criteria ?? []).map((c) => ({
+    key: c.key,
+    ...(c.required === false ? { required: false } : {}),
+    mark: c.mark ?? "not_started",
+  }));
+}
+
+/**
+ * What a move INTO `to` means for governance — the SAME classifier every
+ * kind's status move goes through (`classifyLifecycleMove`, read on the
+ * track's system lifecycle). Handed to `checkPermissionOrPropose` only for a
+ * move into done/lost or a person-only status: there it lifts the floors
+ * (a person-only status always proposes for an agent, whatever rule the pod
+ * has; into lost proposes unless a rule names the write). Every other move
+ * keeps the classification `track/update` already had.
+ */
+export function trackStatusLifecycleMove(
+  to: ProjectTrackStatus
+): { intoTerminal: boolean; humanOnly: boolean } | undefined {
+  const move = classifyLifecycleMove(TRACK_LIFECYCLE, to);
+  if (!move || (!move.intoTerminal && !move.humanOnly)) return undefined;
+  return { intoTerminal: move.intoTerminal, humanOnly: move.humanOnly };
 }
 
 export type SetTrackStatusResult =
@@ -1048,6 +1721,10 @@ export type SetTrackStatusResult =
 export async function setTrackStatus(input: {
   trackId: string;
   status: ProjectTrackStatus;
+  /** Required to close (done); optional, but validated, to drop (lost). */
+  verdict?: string | null;
+  /** Required for the verdicts `impossible` and `replaced`. */
+  verdictReason?: string | null;
   actor: TrackActor;
 }): Promise<SetTrackStatusResult> {
   const { track, project } = await loadTrackForWrite(
@@ -1055,7 +1732,19 @@ export async function setTrackStatus(input: {
     input.actor
   );
   if (track.status === input.status) return { status: "unchanged", track };
-  assertTrackTransition(track, input.status);
+  const close = {
+    verdict: input.verdict ?? null,
+    verdictReason: input.verdictReason?.trim() || null,
+  };
+  // Refused BEFORE governance, so a close with no verdict — or a "met" with
+  // criteria still open — is told to its author rather than filed for a
+  // person to approve.
+  assertTrackTransition(
+    track,
+    input.status,
+    close,
+    await loadGoalCloseCriteria(track, input.status, input.actor.userId)
+  );
 
   const perm = await checkPermissionOrPropose({
     userId: input.actor.userId,
@@ -1067,7 +1756,14 @@ export async function setTrackStatus(input: {
     action: "update",
     source: input.actor.source,
     reasoning: input.actor.reasoning,
-    data: { id: track.id, name: track.name, status: input.status },
+    lifecycleMove: trackStatusLifecycleMove(input.status),
+    data: {
+      id: track.id,
+      name: track.name,
+      status: input.status,
+      ...(close.verdict ? { verdict: close.verdict } : {}),
+      ...(close.verdictReason ? { verdictReason: close.verdictReason } : {}),
+    },
   });
   if ("denied" in perm && perm.denied) {
     throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
@@ -1082,55 +1778,86 @@ export async function setTrackStatus(input: {
       }) + " — proposed for review"
     );
   }
-  return applyTrackStatus(track, project, input.status, input.actor.userId);
+  return applyTrackStatus(
+    track,
+    project,
+    input.status,
+    input.actor.userId,
+    close
+  );
 }
 
 /**
  * The status write itself. Callers: `setTrackStatus` and the approval replay —
- * BOTH have run `assertTrackTransition` first. Compare-and-set on the status
- * it was decided from: a track moved by someone else in between is a
- * CONFLICT, never a silent overwrite. Every status change clears the check
- * gate's `metadata.checkGate` marker — a person has now decided the track's
- * state, so the hold it recorded no longer describes it.
+ * BOTH have run `assertTrackTransition` first (transition AND verdict).
+ * Compare-and-set on the status it was decided from: a track moved by someone
+ * else in between is a CONFLICT, never a silent overwrite. Every status change
+ * clears the check gate's `metadata.checkGate` marker — a person has now
+ * decided the track's state, so the hold it recorded no longer describes it.
+ * A move into done (or into lost WITH a verdict) stamps the verdict, its
+ * reason and who closed it (`userId` — the person; on a replay, the
+ * approver) in the same statement. A drop without one stamps nothing.
  */
 export async function applyTrackStatus(
   track: ProjectTrack,
   project: GateProject,
   status: ProjectTrackStatus,
-  userId: string
+  userId: string,
+  close: TrackCloseInput = {}
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
-  let updated: ProjectTrack | null;
-  try {
-    updated = await (
-      await repo()
-    ).transitionStatus(
-      track.id,
-      {
-        from: track.status,
-        to: status,
-        dropMetadataKey: CHECK_GATE_METADATA_KEY,
-        // Decision 2a: completing/archiving ENDS the track's space grant — a
-        // stamp, so a later reopen does not revive it. Pausing needs no stamp:
-        // the gate admits only an ACTIVE track (W5), so resuming restores it.
-        ...(status === "completed" || status === "archived"
-          ? { metadataPatch: endTrackSpaceGrant(track.metadata, status) }
-          : {}),
-      },
-      userId
-    );
-  } catch (err) {
-    // Reopening a completed track makes it LIVE again, and a completed track
-    // holds no name (0317) — a newer live track may have taken it since.
-    if (!isUniqueViolation(err)) throw err;
+  // Only the goal's JUDGE closes it (W3) — the person acting here, or the
+  // APPROVER on a replay. ONE place: both callers reach the write through it.
+  await assertGoalCloser(track, status, userId);
+  const ending = trackStatusCategory(status);
+  const terminal = ending === "done" || ending === "lost";
+  const verdict = isTrackVerdict(close.verdict) ? close.verdict : null;
+  if (ending === "done" && !verdict) {
+    // Unreachable past `assertTrackTransition`; refused rather than written.
     throw new TRPCError({
-      code: "CONFLICT",
-      message: `Another live track on this project is named "${track.name}" — complete or archive it before reopening this one.`,
+      code: "BAD_REQUEST",
+      message:
+        checkTrackClose(status, close, undefined, track.workKind) ??
+        "A verdict is required.",
     });
   }
+  const updated = await (
+    await repo()
+  ).transitionStatus(
+    track.id,
+    {
+      from: track.status,
+      to: status,
+      dropMetadataKey: CHECK_GATE_METADATA_KEY,
+      // Decision 2a: closing/dropping ENDS the track's space grant — a stamp,
+      // so nothing revives it (a reopened goal is a NEW track with its own).
+      // Pausing needs no stamp: the gate admits only an ACTIVE track (W5), so
+      // resuming restores it.
+      ...(terminal
+        ? {
+            metadataPatch: endTrackSpaceGrant(
+              track.metadata,
+              status as TrackStatusIn<"done" | "lost">
+            ),
+            // A drop with no verdict (a client shipped before verdicts)
+            // stamps nothing: it reads like a track dropped before 0344.
+            ...(verdict
+              ? {
+                  close: {
+                    verdict: verdict as ProjectTrackVerdict,
+                    reason: close.verdictReason?.trim() || null,
+                    by: userId,
+                  },
+                }
+              : {}),
+          }
+        : {}),
+    },
+    userId
+  );
   if (!updated) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: `Track "${track.name}" changed while this was being decided — reload it and try again.`,
+      message: `Goal "${track.name}" changed while this was being decided — reload it and try again.`,
     });
   }
   void emitSideEffects({
@@ -1144,10 +1871,15 @@ export async function applyTrackStatus(
       projectId: project.id,
       fromStatus: track.status,
       toStatus: status,
+      ...(terminal ? { verdict } : {}),
     },
   }).catch((err) =>
     logger.warn({ err, trackId: track.id }, "track.update emit failed")
   );
+  // A goal no longer being worked is not "in review" any more.
+  if (trackStatusCategory(status) !== "active") {
+    await settleGoalReviewNotice(track.id);
+  }
   return { status: "updated", track: updated };
 }
 
@@ -1244,10 +1976,10 @@ export async function advanceTrackStage(input: {
 
 /** Refuses a stage the pinned method does not declare, or a closed track. */
 export function assertStageAdvanceable(track: ProjectTrack, toStage: string) {
-  if (track.status === "archived" || track.status === "completed") {
+  if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" is ${track.status} — resume it before moving its stage.`,
+      message: `Goal "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — reopen it as a new version before moving its stage.`,
     });
   }
   const keys = stageKeys(track.definitionSnapshot?.stages);
@@ -1256,7 +1988,7 @@ export function assertStageAdvanceable(track: ProjectTrack, toStage: string) {
       code: "BAD_REQUEST",
       message:
         keys.length === 0
-          ? `Track "${track.name}" follows a method with no stages.`
+          ? `Goal "${track.name}" follows a method with no stages.`
           : `"${toStage}" is not a stage of "${track.name}". Stages: ${keys.join(", ")}.`,
     });
   }
@@ -1309,7 +2041,7 @@ export async function applyTrackStageAdvance(params: {
   if (!updated) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: `Track "${track.name}" moved stage while this was being decided — reload it and try again.`,
+      message: `Goal "${track.name}" moved stage while this was being decided — reload it and try again.`,
     });
   }
 
@@ -1492,7 +2224,8 @@ export interface TrackFiling {
 /**
  * Validate a session/run being filed into a track. Returns the project the
  * session must carry: the TRACK's project. A `projectId` that disagrees is a
- * refusal, never a silent correction; an archived track takes no new work.
+ * refusal, never a silent correction; a closed or dropped track takes no new
+ * work.
  * An explicit `trackStage` naming a stage the method does not declare is a
  * refusal too.
  */
@@ -1505,18 +2238,23 @@ export async function resolveTrackFiling(params: {
 }): Promise<TrackFiling> {
   const track = await getTrack(params.trackId, params.actor);
   if (!track) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   if (params.projectId && params.projectId !== track.projectId) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" belongs to another project — pass that project, or omit projectId.`,
+      message: `Goal "${track.name}" belongs to another project — pass that project, or omit projectId.`,
     });
   }
-  if (track.status === "archived") {
+  // A closed or dropped goal takes no new work (both are final — reopen it as
+  // a new version). A goal still being SHAPED (proposed · agreed · ready)
+  // does: agreeing its criteria and clearing its prerequisites is work, and a
+  // session filed there is how it gets done. Its agent is not admitted to the
+  // project's spaces until it is active (`track-space-grant.ts`).
+  if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" is archived and takes no new work.`,
+      message: `Goal "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} and takes no new work — reopen it as a new version.`,
     });
   }
   return {
@@ -1546,7 +2284,7 @@ export function resolveFilingStage(
       code: "BAD_REQUEST",
       message:
         keys.length === 0
-          ? `Track "${track.name}" follows a method with no stages — omit trackStage.`
+          ? `Goal "${track.name}" follows a method with no stages — omit trackStage.`
           : `"${explicit}" is not a stage of "${track.name}". Stages: ${keys.join(", ")}.`,
     });
   }
@@ -1642,7 +2380,7 @@ export async function applyTrackParams(
     await repo()
   ).patchParams(track.id, { set, clear }, userId);
   if (!updated) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   return { status: "updated", track: updated };
 }
@@ -1688,7 +2426,7 @@ export function resolveTrackDirection(
   if (direction && direction.length > TRACK_DIRECTION_MAX) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `A track's direction is one line — at most ${TRACK_DIRECTION_MAX} characters.`,
+      message: `A goal's direction is one line — at most ${TRACK_DIRECTION_MAX} characters.`,
     });
   }
   return direction;
@@ -1738,25 +2476,54 @@ export async function setTrackDirection(input: {
   direction?: string | null;
   /** A KPI patch (`{ label?, unit?, target?, current? }`) or `null` to clear. */
   kpi?: unknown;
+  /**
+   * What the goal holds (0345) — each field WHOLE (`null` clears):
+   * `endState`, `criteria` (none, or 2–5), `dropConditions`, `workKind`,
+   * `uncertainty`, and `confirmKind` (a person confirming the AI's kind).
+   */
+  endState?: unknown;
+  criteria?: unknown;
+  dropConditions?: unknown;
+  workKind?: unknown;
+  uncertainty?: unknown;
+  confirmKind?: unknown;
+  /** The goal's loop (0350, W4): `{ on, perWeek? }` or `null` (off). */
+  loop?: unknown;
   actor: TrackActor;
 }): Promise<SetTrackDirectionResult> {
   const { track, project } = await loadTrackForWrite(
     input.trackId,
     input.actor
   );
-  if (input.direction === undefined && input.kpi === undefined) {
+  const goalRaw = pickTrackGoalInput(
+    input as unknown as Record<string, unknown>
+  );
+  if (
+    input.direction === undefined &&
+    input.kpi === undefined &&
+    Object.keys(goalRaw).length === 0
+  ) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Nothing to change — pass a direction and/or a kpi.",
+      message:
+        "Nothing to change — pass a direction, a kpi, or what the goal holds (endState, criteria, dropConditions, workKind, uncertainty, loop).",
     });
   }
   const patch = normalizeDirectionPatch(input);
-  // Refused BEFORE governance: a malformed KPI is told to its author, never
-  // filed for a person to approve.
+  // Refused BEFORE governance: a malformed KPI or goal (the 2–5 rule, a
+  // meaning its check cannot carry, an agent confirming a kind) is told to
+  // its author, never filed for a person to approve.
   const next = previewDirection(track, patch, input.actor.userId);
+  const goalInput = parseTrackGoalInput(goalRaw);
+  const goalPatch = resolveTrackGoalPatch(
+    track,
+    goalInput,
+    input.actor.agentUserId ? null : input.actor.userId
+  );
   if (
     next.direction === readTrackDirection(track.direction) &&
-    sameKpiValue(next.kpi, readTrackKpi(track.kpi))
+    sameKpiValue(next.kpi, readTrackKpi(track.kpi)) &&
+    goalPatch === null
   ) {
     return { status: "unchanged", track };
   }
@@ -1771,6 +2538,10 @@ export async function setTrackDirection(input: {
     action: "update",
     source: input.actor.source,
     reasoning: input.actor.reasoning,
+    // An agent switching the loop on is always reviewed (W4).
+    ...(agentSwitchesLoopOn(goalInput, input.actor.agentUserId)
+      ? { forcePropose: true }
+      : {}),
     // The PATCH, never the merged result: the replay merges onto the KPI as it
     // stands at approval, so a value stated in between is not reverted.
     data: {
@@ -1778,6 +2549,10 @@ export async function setTrackDirection(input: {
       name: track.name,
       ...(patch.direction !== undefined ? { direction: patch.direction } : {}),
       ...(patch.kpi !== undefined ? { kpi: patch.kpi } : {}),
+      // The goal fields as the caller wrote them (parsed) — the replay
+      // resolves them against the goal as it stands at approval. `criteria`
+      // here is what floors an agent's criteria change to a proposal.
+      ...pickTrackGoalInput(goalInput),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -1793,10 +2568,16 @@ export async function setTrackDirection(input: {
       }) + " — proposed for review"
     );
   }
-  return applyTrackDirection(track, project, patch, {
-    userId: input.actor.userId,
-    statedBy: input.actor.agentUserId ?? input.actor.userId,
-  });
+  return applyTrackDirection(
+    track,
+    project,
+    { ...patch, ...pickTrackGoalInput(goalInput) },
+    {
+      userId: input.actor.userId,
+      statedBy: input.actor.agentUserId ?? input.actor.userId,
+      confirmedBy: input.actor.agentUserId ? null : input.actor.userId,
+    }
+  );
 }
 
 interface DirectionPatch {
@@ -1808,6 +2589,15 @@ interface DirectionPatch {
 interface RawDirectionPatch {
   direction?: string | null;
   kpi?: unknown;
+  /** What the goal holds — parsed and resolved at the write (0345). */
+  endState?: unknown;
+  criteria?: unknown;
+  dropConditions?: unknown;
+  workKind?: unknown;
+  uncertainty?: unknown;
+  confirmKind?: unknown;
+  /** The goal's loop (0350, W4): `{ on, perWeek? }` or `null` (off). */
+  loop?: unknown;
 }
 
 function normalizeDirectionPatch(input: RawDirectionPatch): DirectionPatch {
@@ -1864,9 +2654,28 @@ export async function applyTrackDirection(
   track: ProjectTrack,
   project: GateProject,
   rawPatch: RawDirectionPatch,
-  who: { userId: string; statedBy: string }
+  who: {
+    userId: string;
+    statedBy: string;
+    /**
+     * The PERSON whose write this is — a kind of work or uncertainty they
+     * write (or approve) is confirmed by them. `null`: an agent's write
+     * applied without review, which leaves (or makes) the kind unconfirmed.
+     * Absent ⇒ `null`: a write never confirms by omission.
+     */
+    confirmedBy?: string | null;
+  }
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
   const patch = normalizeDirectionPatch(rawPatch);
+  // Re-parsed and resolved against the goal as it stands NOW (a replay's
+  // goal may have moved since the proposal was filed).
+  const goal = resolveTrackGoalPatch(
+    track,
+    parseTrackGoalInput(
+      pickTrackGoalInput(rawPatch as unknown as Record<string, unknown>)
+    ),
+    who.confirmedBy ?? null
+  );
   const before = readTrackKpi(track.kpi);
   const kpi =
     patch.kpi === undefined
@@ -1886,15 +2695,30 @@ export async function applyTrackDirection(
     {
       ...(patch.direction !== undefined ? { direction: patch.direction } : {}),
       ...(kpi !== undefined ? { kpi } : {}),
+      ...(goal ? { goal } : {}),
     },
     who.userId
   );
   if (!updated) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   const after = readTrackKpi(updated.kpi);
   if (trackKpiJustReached(before, after)) {
     await notifyTrackKpiReached(updated, project, after!);
+  }
+  if (goal?.loop && readGoalLoop(goal.loop).on) {
+    // Switched on (or on again): the loop looks now, through its one seam —
+    // the `track.update` reactor (`goal-loop-reactor.ts`) — not a call here.
+    void emitSideEffects({
+      subjectType: "track",
+      action: "update",
+      subjectId: updated.id,
+      userId: who.userId,
+      workspaceId: project.workspaceId,
+      data: { trackId: updated.id, projectId: project.id, loop: "on" },
+    }).catch((err) =>
+      logger.warn({ err, trackId: updated.id }, "track.update emit failed")
+    );
   }
   return { status: "updated", track: updated };
 }
@@ -1925,8 +2749,10 @@ function kpiWritePatch(
 
 /**
  * The nudge: the KPI just reached its target, so the person may want to
- * RE-AIM it (a new target) — a track is lasting (W1), it is not completed
- * for reaching a number. Never changes the track. Through the ONE notification door
+ * re-aim it (a new target) or close the goal with a verdict. A goal can stay
+ * open as long as it matters, or finish: a person closes it with a verdict
+ * once its criteria are met — a number reached never closes it. Never changes
+ * the track. Through the ONE notification door
  * (`NotificationService.create`), to the person the track belongs to (its
  * starter — for an agent key, its operator). Non-fatal: a failed nudge never
  * fails the write it follows.
@@ -1961,6 +2787,95 @@ async function notifyTrackKpiReached(
   } catch (err) {
     logger.warn({ err, trackId: track.id }, "track.kpi_reached nudge failed");
   }
+}
+
+// ── acceptance of a goal criterion (R2) ─────────────────────────────────────
+
+export type AcceptGoalCriterionResult = {
+  status: "updated" | "unchanged";
+  track: ProjectTrack;
+};
+
+/**
+ * THE acceptance door (R2): the goal's JUDGE accepts a claimed criterion,
+ * sends it back (`changes_asked`, with what to change) or rejects it — the
+ * one writer of a criterion's `acceptance`. An agent never may (R9), a person
+ * only as the goal's judge (`isGoalJudge` — the judge seat, else the owner:
+ * the same person who alone may close it). Not a governed write: the
+ * judge's decision IS the review; nothing is proposed to anyone. Repeating
+ * the same decision is `unchanged`.
+ */
+export async function acceptGoalCriterion(input: {
+  trackId: string;
+  criterionKey: string;
+  decision: GoalAcceptanceDecision;
+  note?: string | null;
+  actor: TrackActor;
+}): Promise<AcceptGoalCriterionResult> {
+  const track = await getTrack(input.trackId, input.actor);
+  if (!track) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
+  }
+  const criterion = readGoalCriteria(track.criteria).find(
+    (c) => c.key === input.criterionKey
+  );
+  if (!criterion) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `This goal has no criterion "${input.criterionKey}".`,
+    });
+  }
+  const refusal = mayAcceptGoalCriterion(
+    criterion,
+    input.actor.agentUserId
+      ? { kind: "agent" }
+      : {
+          kind: "person",
+          isJudge: await isGoalJudge(track, input.actor.userId),
+        }
+  );
+  if (refusal) throw new TRPCError({ code: "FORBIDDEN", message: refusal });
+  if (isTrackClosed(track)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Goal "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — its criteria were judged when it closed.`,
+    });
+  }
+  const note = input.note?.trim() || null;
+  if (input.decision === "changes_asked" && !note) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Sending a criterion back needs a note — say what to change.",
+    });
+  }
+  if (
+    criterion.acceptance?.decision === input.decision &&
+    (criterion.acceptance.note ?? null) === note
+  ) {
+    return { status: "unchanged", track };
+  }
+  const updated = await (
+    await repo()
+  ).setCriterionAcceptance(
+    track.id,
+    criterion.key,
+    {
+      decision: input.decision,
+      by: input.actor.userId,
+      at: new Date().toISOString(),
+      ...(note ? { note } : {}),
+    },
+    input.actor.userId
+  );
+  if (!updated) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `The criterion "${criterion.key}" was removed while you decided — read the goal again.`,
+    });
+  }
+  // The judge decided: "ready for your verdict" leaves their Needs you.
+  await settleGoalReviewNotice(track.id);
+  return { status: "updated", track: updated };
 }
 
 // ── emergent stages (0302) ──────────────────────────────────────────────────
@@ -2076,10 +2991,10 @@ function resolveEmergentStageKey(
   track: ProjectTrack,
   stage: AddTrackStageInput
 ): string {
-  if (track.status === "archived" || track.status === "completed") {
+  if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `"${track.name}" is ${resolveStatusLabel(track.status).toLowerCase()} — reopen it to add a step.`,
+      message: `"${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — reopen it as a new version to add a step.`,
     });
   }
   const taken = new Set(stageKeys(track.definitionSnapshot?.stages));
@@ -2129,7 +3044,7 @@ export async function applyTrackStageAdd(
   if (!updated) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: `Track "${track.name}"'s stages changed while this was being decided — reload it and try again.`,
+      message: `Goal "${track.name}"'s stages changed while this was being decided — reload it and try again.`,
     });
   }
   return { status: "added", track: updated, stageKey: key };
@@ -2201,7 +3116,7 @@ async function startTrackSession(
   const db = await getDb();
   const project = await loadVisibleProject(db, track.projectId, actor.userId);
   if (!project) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
   // Dynamic: `create-session.ts` imports this module (resolveTrackFiling).
   const { createFocusSession } =
@@ -2262,17 +3177,17 @@ export async function startStageSession(input: {
   const { actor } = input;
   const track = await getTrack(input.trackId, actor);
   if (!track) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
-  if (track.status === "archived" || track.status === "completed") {
+  if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" is ${track.status} — reopen it before starting work in it.`,
+      message: `Goal "${track.name}" is ${resolveTrackStatusLabel(track.status).toLowerCase()} — reopen it as a new version before starting work in it.`,
     });
   }
   const stageKey = resolveFilingStage(track, input.stageKey);
   if (!stageKey) {
-    // A STAGE-LESS track (W1) is a lasting intent: its work is a session
+    // A STAGE-LESS track (W1) is a goal: its work is a session
     // filed into it — `start_session` + `trackId`. This door ALIASES that
     // during the transition, never refuses it.
     if (stageKeys(track.definitionSnapshot?.stages).length === 0) {
@@ -2280,7 +3195,7 @@ export async function startStageSession(input: {
     }
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Track "${track.name}" stands on no stage — pass stageKey.`,
+      message: `Goal "${track.name}" stands on no stage — pass stageKey.`,
     });
   }
   const stage = readTrackStage(track.definitionSnapshot?.stages, stageKey);
@@ -2318,7 +3233,7 @@ export async function startStageSession(input: {
 
   const project = await loadVisibleProject(db, track.projectId, actor.userId);
   if (!project) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
   }
 
   // PER-STEP DOMAIN (W2a): the stage names a workspace TEMPLATE; work it in a

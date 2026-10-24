@@ -30,9 +30,18 @@ export type AttentionClass = (typeof ATTENTION_CLASSES)[number];
  * Happened because outcomes outrank process; Proposed sits below the work
  * because ignoring it is free. `structure` (Map | Steps | Zoom) exists only on
  * a project / track lens; `data` only where the scope owns data.
+ *
+ * A GOAL (track) page answers, in order (experience north star v2, W5
+ * 2026-10-23): how close — `doneWhen` (its criteria) · what waits on you —
+ * `blocking` · who is on it — `participants` · what it made — `produced`.
+ * Those two keys exist only on a track lens ({@link lensSections}); every
+ * other scope keeps the order it had. A session keeps its own criteria
+ * section ("Done means", `SESSION_STEP_SECTIONS`) after Produced.
  */
 export const LENS_SECTION_ORDER = [
+  "doneWhen",
   "blocking",
+  "participants",
   "happening",
   "produced",
   "structure",
@@ -44,7 +53,9 @@ export type LensSection = (typeof LENS_SECTION_ORDER)[number];
 
 /** The section headings — one spelling for the header's count doors AND the sections. */
 export const LENS_SECTION_LABELS = {
+  doneWhen: "Done when",
   blocking: "Needs you",
+  participants: "Who's on it",
   happening: "Happening",
   produced: "Produced",
   // The work-structure slot (Map | Steps | Zoom) is the PLAN (founder default,
@@ -65,6 +76,7 @@ export function lensSections(
   opts: { ownsData?: boolean } = {}
 ): LensSection[] {
   return LENS_SECTION_ORDER.filter((s) => {
+    if (s === "doneWhen" || s === "participants") return scopeKind === "track";
     if (s === "structure")
       return scopeKind === "project" || scopeKind === "track";
     if (s === "data") return opts.ownsData === true;
@@ -172,6 +184,26 @@ export const STATUS_BANNER_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
 export const FAILURE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   "agent.task_failed",
   "automation.broken",
+]);
+
+/**
+ * THE list of GOAL JUDGEMENT notification types — a verdict on a goal that
+ * only its judge or owner can give (work model, W5 2026-10-23). Blocking, a
+ * `decision` in the Inbox, and ranked FIRST in its order — before any other
+ * decision — because a goal's whole run of work waits on it
+ * (`needs-you/buckets.ts` `isJudgementSignal`):
+ *
+ *   - `track.review_ready` — every required criterion of a goal is claimed,
+ *     waiting on its judge (decision 2: "in review");
+ *   - `track.report_unacknowledged` — a delegate reported their part
+ *     impossible and nobody acknowledged it for 48 h (R10), to the owner.
+ *
+ * The api registry declares both types; `api/src/notifications/__tests__/
+ * judgement-notification-parity.test.ts` holds this set to the registry.
+ */
+export const JUDGEMENT_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
+  "track.review_ready",
+  "track.report_unacknowledged",
 ]);
 
 /**

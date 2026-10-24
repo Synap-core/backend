@@ -1375,6 +1375,19 @@ export interface HubSessionCriterion {
     hint?: string;
   };
   stageKey?: string;
+  /**
+   * R5 — what kind of check this is, in people's words: measured · judged ·
+   * handed_over · learning · decided_outside · certified.
+   */
+  checkKind?:
+    | "measured"
+    | "judged"
+    | "handed_over"
+    | "learning"
+    | "decided_outside"
+    | "certified";
+  /** R7 — about the result (default) or the method. */
+  about?: "result" | "method";
 }
 
 /**

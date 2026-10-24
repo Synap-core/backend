@@ -5191,6 +5191,9 @@ export interface PlaybookRunExternalAgent {
 	startedAt: string;
 }
 declare const PROJECT_TRACK_STATUSES: readonly [
+	"proposed",
+	"agreed",
+	"ready",
 	"active",
 	"paused",
 	"completed",
@@ -9540,6 +9543,14 @@ export interface UnitStateView {
 	glyph: UnitGlyph;
 	rail: UnitRail;
 }
+declare const LIFECYCLE_CATEGORIES$1: readonly [
+	"open",
+	"active",
+	"paused",
+	"done",
+	"lost"
+];
+type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 declare const TRACK_STAGE_POSITIONS: readonly [
 	"done",
 	"active",
@@ -9606,6 +9617,17 @@ export interface TrackStageCheckVerdict {
 	failing: string[];
 	reason?: string;
 }
+declare const TRACK_VERDICTS: readonly [
+	"met",
+	"partly_met",
+	"not_met",
+	"retired",
+	"no_longer_needed",
+	"impossible",
+	"replaced",
+	"mistake"
+];
+export type TrackVerdict = (typeof TRACK_VERDICTS)[number];
 /**
  * WHY a paused track is paused — projected by the pod on every track read.
  *   - `check` — a check stage gate held it (the gate's `metadata.checkGate`
@@ -9651,6 +9673,117 @@ export interface TrackKpi {
 	updatedAt?: string;
 	/** The user (or agent) id that stated `current`. */
 	updatedBy?: string;
+}
+/** A session's deliverables, counted — the progress rail and the owed badge. */
+export interface DeliverableCounts {
+	/** Stamped done. */
+	done: number;
+	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
+	total: number;
+	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
+	owedByYou: number;
+}
+declare const TRACK_WORK_KINDS: readonly [
+	"project",
+	"flow",
+	"operation",
+	"investigation",
+	"incident",
+	"commission",
+	"pathway"
+];
+export type TrackWorkKind = (typeof TRACK_WORK_KINDS)[number];
+declare const TRACK_UNCERTAINTY_LEVELS: readonly [
+	"clear",
+	"complicated",
+	"complex",
+	"chaotic",
+	"unknown"
+];
+export type TrackUncertainty = (typeof TRACK_UNCERTAINTY_LEVELS)[number];
+declare const CRITERION_CHECK_MEANINGS: readonly [
+	"measured",
+	"judged",
+	"handed_over",
+	"learning",
+	"decided_outside",
+	"certified"
+];
+export type CriterionCheckMeaning = (typeof CRITERION_CHECK_MEANINGS)[number];
+declare const CRITERION_ABOUT: readonly [
+	"result",
+	"method"
+];
+export type CriterionAbout = (typeof CRITERION_ABOUT)[number];
+declare const GOAL_ACCEPTANCE_DECISIONS: readonly [
+	"accepted",
+	"changes_asked",
+	"rejected"
+];
+export type GoalAcceptanceDecision = (typeof GOAL_ACCEPTANCE_DECISIONS)[number];
+declare const GOAL_ACCEPTANCE_STATES: readonly [
+	"waiting",
+	"accepted",
+	"changes_asked",
+	"rejected"
+];
+export type GoalAcceptanceState = (typeof GOAL_ACCEPTANCE_STATES)[number];
+/** The stored record of a judge's decision on one goal criterion. */
+export interface GoalCriterionAcceptance {
+	decision: GoalAcceptanceDecision;
+	/** The person who decided. */
+	by: string;
+	/** ISO-8601. */
+	at: string;
+	/** Why, in words — what to change, or why it was rejected. */
+	note?: string;
+}
+declare const GOAL_CRITERION_MARKS: readonly [
+	"met",
+	"claimed",
+	"under_way",
+	"not_met",
+	"not_started"
+];
+export type GoalCriterionMark = (typeof GOAL_CRITERION_MARKS)[number];
+/**
+ * One goal criterion as every track read returns it (`TrackView.criteria`):
+ * the stored criterion (the session criterion shape), the judge's stored
+ * decision, and the derived state. `mark` is `null` only on a view that could
+ * not read the goal's runs (a write's fallback) — never a guessed
+ * `not_started`.
+ */
+export interface GoalCriterionView {
+	key: string;
+	statement: string;
+	required?: boolean;
+	check: {
+		capability?: string;
+		evidenceKey?: string;
+		hint?: string;
+		kind: EvaluatorKind;
+	};
+	stageKey?: string;
+	checkKind?: CriterionCheckMeaning;
+	about?: CriterionAbout;
+	/** The judge's stored decision — `null` until one is made. */
+	acceptance: GoalCriterionAcceptance | null;
+	mark: GoalCriterionMark | null;
+	acceptanceState: GoalAcceptanceState | null;
+	meaning: CriterionCheckMeaning;
+	currentValue: string | null;
+}
+declare const WAITING_ON_REASONS: readonly [
+	"input",
+	"approval",
+	"access",
+	"another_work",
+	"outside_world"
+];
+export type WaitingOnReason = (typeof WAITING_ON_REASONS)[number];
+export interface WaitingOnMark {
+	reason: WaitingOnReason;
+	count: number;
 }
 /**
  * WHO is asking for access, on an `access-request` row — a pod-level request
@@ -10563,6 +10696,20 @@ declare const CRITERION_CHECK_KINDS: readonly [
 	"human"
 ];
 export type CriterionCheckKind = (typeof CRITERION_CHECK_KINDS)[number];
+declare const CRITERION_CHECK_MEANINGS$1: readonly [
+	"measured",
+	"judged",
+	"handed_over",
+	"learning",
+	"decided_outside",
+	"certified"
+];
+type CriterionCheckMeaning$1 = (typeof CRITERION_CHECK_MEANINGS$1)[number];
+declare const CRITERION_ABOUT$1: readonly [
+	"result",
+	"method"
+];
+type CriterionAbout$1 = (typeof CRITERION_ABOUT$1)[number];
 /**
  * One BINARY, observable acceptance criterion ("Typecheck passes with 0
  * errors"). Stored on `playbooks.criteria`, `PlaybookStage.criteria` and
@@ -10585,6 +10732,13 @@ export interface SessionCriterion {
 	};
 	/** Set when copied from a stage. */
 	stageKey?: string;
+	/**
+	 * R5 — what kind of check this is, in people's words. Absent ⇒ derived
+	 * from `check.kind` (`criterionMeaning`, `@synap-core/types/units`).
+	 */
+	checkKind?: CriterionCheckMeaning$1;
+	/** R7 — about the result (absent = result) or the method. */
+	about?: CriterionAbout$1;
 }
 /**
  * The normalized shape the Phase-1 adapters produce from builtin IS tools,
@@ -14260,14 +14414,6 @@ export type ExecuteCapabilityResult = {
 	kind: "not_found";
 	message: string;
 };
-declare const LIFECYCLE_CATEGORIES$1: readonly [
-	"open",
-	"active",
-	"paused",
-	"done",
-	"lost"
-];
-type LifecycleCategory$1 = (typeof LIFECYCLE_CATEGORIES$1)[number];
 export interface DependencyNodeRef {
 	kind: string;
 	id: string;
@@ -15098,12 +15244,15 @@ export type PaginatedResponse<T> = {
 	};
 };
 export interface RailPin {
-	/** `view:<viewId>` or `kind:<profileSlug>` — one pin per surface. */
+	/** `view:<viewId>`, `kind:<profileSlug>` or `track:<trackId>` — one pin per surface. */
 	key: string;
-	profileSlug: string;
+	/** The kind the surface lists — `null` on a goal pin. */
+	profileSlug: string | null;
 	/** The saved pipeline view, when the pin is one. */
 	viewId: string | null;
-	/** The name the person (or the template) gave it; null = the kind's name. */
+	/** The goal, when the pin is one ("This week", D4) — then `profileSlug` is null. */
+	trackId: string | null;
+	/** The name the person (or the template) gave it; null = the kind's (or the goal's) name. */
 	label: string | null;
 	/** `template` = suggested by a space's sidebar; `user` = pinned by hand. */
 	source: "template" | "user";
@@ -16618,6 +16767,19 @@ export interface SessionOutputDependencies {
 	/** Sessions waiting on THIS session's outputs (only while it is open). */
 	outputsWaitedOnBy: OutputWaitedOnBy[];
 }
+/** The loop as stored on the goal (`project_tracks.loop`, 0350). */
+export interface GoalLoopSettings {
+	on: boolean;
+	/** Proposals per rolling week, 1 to {@link GOAL_LOOP_MAX_PER_WEEK}. */
+	perWeek: number;
+	/**
+	 * When a person last switched it on (ISO-8601) — failures before it no
+	 * longer count: switching the loop on again is "try again".
+	 */
+	onAt: string | null;
+	/** Who set it last: the person (the approver, for an agent's proposal). */
+	by: string | null;
+}
 /** Doors the event names — each opens that object's own page. */
 export interface TrackHistoryRefs {
 	sessionId?: string;
@@ -16694,14 +16856,65 @@ export interface TrackHistoryWire {
 	/** A source hit its scan cap — older events exist and are not listed. */
 	truncated: boolean;
 }
-/** A session's deliverables, counted — the progress rail and the owed badge. */
-export interface DeliverableCounts {
-	/** Stamped done. */
-	done: number;
-	/** Done + still owed. A RETIRED slot is in neither: it was let go, not delivered. */
-	total: number;
-	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
-	owedByYou: number;
+declare const TRACK_PARTICIPANT_ROLES: readonly [
+	"owner",
+	"judge",
+	"delegate",
+	"integrator"
+];
+export type TrackParticipantRole = (typeof TRACK_PARTICIPANT_ROLES)[number];
+declare const TRACK_PRINCIPAL_KINDS: readonly [
+	"person",
+	"agent"
+];
+export type TrackPrincipalKind = (typeof TRACK_PRINCIPAL_KINDS)[number];
+declare const TRACK_COMMITMENT_STATES: readonly [
+	"proposed",
+	"accepted",
+	"countered",
+	"declined",
+	"reported_impossible",
+	"done"
+];
+export type TrackCommitmentState = (typeof TRACK_COMMITMENT_STATES)[number];
+/** One participant as every read returns it (`TrackView.participants`). */
+export interface TrackParticipant {
+	id: string;
+	principalKind: TrackPrincipalKind;
+	/** A user id: the person's, or the agent's own user row. */
+	principalId: string;
+	/**
+	 * The name a person reads — resolved by the pod (the session roster's and
+	 * the proposals' `actorDisplayName`: "Claude Code on devbox" for an agent on
+	 * a computer), never looked up by a page. `null` = unknown, never invented.
+	 */
+	displayName: string | null;
+	role: TrackParticipantRole;
+	/** What the delegate commits to — `null` for owner and judge. */
+	commitment: string | null;
+	/** `null` for every role but delegate. */
+	commitmentState: TrackCommitmentState | null;
+	/** The delegate's counter-offer, in words (state `countered`). */
+	counterText: string | null;
+	/** Why it cannot be done (state `reported_impossible`). */
+	reportedReason: string | null;
+	/** ISO-8601 — when it was reported impossible. */
+	reportedAt: string | null;
+	/** ISO-8601 — when the owner or judge acknowledged the report. */
+	acknowledgedAt: string | null;
+	/** Who made the last decision on this row (added it, or answered it). */
+	decidedBy: string;
+	/** ISO-8601. */
+	decidedAt: string;
+	/** ISO-8601 — when the participant was added. */
+	createdAt: string;
+	/**
+	 * ISO-8601 — a delegate with an OPEN commitment: the last time they did
+	 * anything on this goal (answered the commitment, or a session of the goal
+	 * they work in moved), else when they were added. `null` for every other
+	 * row. Words: `trackSilenceLabel` ("Silent 6 h").
+	 */
+	silentSince: string | null;
 }
 /**
  * One produced item (`SessionOutput` from the pod's three-ledger join).
@@ -17791,7 +18004,7 @@ export interface PlaybookCandidate {
 	reason: string;
 	/** `project` = a method run as a TRACK; `session` = one sitting of work. */
 	scope: PlaybookScope;
-	/** The user noun for that scope ("Track template" / "Work template"). */
+	/** The user noun for that scope ("Goal template" / "Work template"). */
 	templateKind: string;
 }
 /**
@@ -18589,6 +18802,66 @@ export interface TrackView {
 	 * (with `updatedAt` / `updatedBy`), never measured.
 	 */
 	kpi: TrackKpi | null;
+	/**
+	 * How the track ENDED (0344, R1) — `null` while it is live, and on a track
+	 * dropped before verdicts existed. Read with its category: done verdicts
+	 * (met · partly_met · not_met, or retired for an operation) on a closed
+	 * track, lost ones on a dropped one.
+	 */
+	verdict: TrackVerdict | null;
+	/** Why, in words — always present for `impossible` and `replaced`. */
+	verdictReason: string | null;
+	/** The person who closed it (the approver when an agent proposed it). */
+	verdictBy: string | null;
+	/** ISO-8601 — when it was closed; `null` when not recorded (before 0344). */
+	verdictAt: string | null;
+	/** What "done" looks like, in words (0345) — `null` when unsaid. */
+	endState: string | null;
+	/**
+	 * The goal's criteria (0345): none (a lasting goal) or 2–5, each with the
+	 * judge's stored decision and its DERIVED state — `mark` (met · claimed ·
+	 * under_way · not_met · not_started), `acceptanceState`, `meaning` (R5) and
+	 * a measured criterion's `currentValue`. `mark` is `null` only on a write's
+	 * fallback view (the goal's runs could not be read) — never a guess.
+	 */
+	criteria: GoalCriterionView[];
+	/** When to stop (0345) — `[]` when none said. */
+	dropConditions: string[];
+	/**
+	 * The goal's loop (0350, W4): whether it proposes its next run while a
+	 * required criterion is unmet, its weekly budget, when a person last
+	 * switched it on and who. Never set reads as OFF.
+	 */
+	loop: GoalLoopSettings;
+	/** The kind of work (decision 4) — `null` when not set. */
+	workKind: TrackWorkKind | null;
+	/** How well the way is known (decision 4) — `null` when not set. */
+	uncertainty: TrackUncertainty | null;
+	/**
+	 * The person who confirmed kind + uncertainty, and when (ISO-8601). Both
+	 * `null` while they are the AI's proposal, not yet confirmed.
+	 */
+	kindConfirmedBy: string | null;
+	kindConfirmedAt: string | null;
+	/**
+	 * DERIVED — every required criterion claimed and none accepted yet (a
+	 * mark inside the active category, never a status). `null` on a write's
+	 * fallback view.
+	 */
+	inReview: boolean | null;
+	/**
+	 * DERIVED (R4) — what the goal waits on, one mark per reason present
+	 * (input · approval · access · another_work · outside_world) with how many.
+	 * `[]` = waiting on nothing; `null` on a write's fallback view.
+	 */
+	waitingOn: WaitingOnMark[] | null;
+	/**
+	 * WHO IS ON IT (0348, W3): owner, judge, delegates with their commitment
+	 * and its state ("silent since" for a delegate who still owes something),
+	 * integrator. Absent when not read (a write's fallback view) — never a
+	 * fabricated empty list. Owner first, then judge, delegates, integrator.
+	 */
+	participants?: TrackParticipant[];
 	createdAt: string;
 	updatedAt: string;
 }
@@ -18651,6 +18924,11 @@ export type StartStageSessionResult = ({
 	reviewUrl?: string;
 	stageKey: string | null;
 })) & StageSessionDomainOutcome;
+export type ChangeTrackParticipantsResult = {
+	participants: TrackParticipant[];
+	status: "updated";
+	trackId: string;
+} | ProposedOutcome;
 export interface ActionDescriptor {
 	id: string;
 	kind: "browse_marketplace" | "capture" | "connect_source" | "import_data" | "link_website" | "open_primary_surface" | "resume_guided_setup" | "start_empty" | "start_guided_setup";
@@ -30839,12 +31117,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelId?: string | undefined;
 				correlationId?: string | undefined;
 				criteria?: {
+					about?: "method" | "result" | undefined;
 					check: {
 						capability?: string | undefined;
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
 					};
+					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
@@ -31186,12 +31466,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						proposalType: "dev.deploy_approval" | "dev.plan_approval";
 					} | undefined;
 					criteria?: {
+						about?: "method" | "result" | undefined;
 						check: {
 							capability?: string | undefined;
 							evidenceKey?: string | undefined;
 							hint?: string | undefined;
 							kind: "capability" | "evidence" | "human" | "judge";
 						};
+						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
 						required?: boolean | undefined;
 						stageKey?: string | undefined;
@@ -36604,12 +36886,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name?: string | undefined;
 				} | undefined;
 				criteria?: {
+					about?: "method" | "result" | undefined;
 					check: {
 						capability?: string | undefined;
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
 					};
+					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
@@ -36811,12 +37095,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						proposalType: "dev.deploy_approval" | "dev.plan_approval";
 					} | undefined;
 					criteria?: {
+						about?: "method" | "result" | undefined;
 						check: {
 							capability?: string | undefined;
 							evidenceKey?: string | undefined;
 							hint?: string | undefined;
 							kind: "capability" | "evidence" | "human" | "judge";
 						};
+						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
 						required?: boolean | undefined;
 						stageKey?: string | undefined;
@@ -37409,12 +37695,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentUserId?: string | undefined;
 				channelSpec?: Record<string, unknown> | undefined;
 				criteria?: {
+					about?: "method" | "result" | undefined;
 					check: {
 						capability?: string | undefined;
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
 					};
+					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
@@ -37608,12 +37896,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						proposalType: "dev.deploy_approval" | "dev.plan_approval";
 					} | undefined;
 					criteria?: {
+						about?: "method" | "result" | undefined;
 						check: {
 							capability?: string | undefined;
 							evidenceKey?: string | undefined;
 							hint?: string | undefined;
 							kind: "capability" | "evidence" | "human" | "judge";
 						};
+						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
 						required?: boolean | undefined;
 						stageKey?: string | undefined;
@@ -37760,7 +38050,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		pinSurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				label?: string | undefined;
-				profileSlug: string;
+				profileSlug?: string | undefined;
+				trackId?: string | undefined;
 				viewId?: string | undefined;
 			};
 			meta: object;
@@ -44286,6 +44577,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		acceptCriterion: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				criterionKey: string;
+				decision: "accepted" | "changes_asked" | "rejected";
+				id: string;
+				note?: string | undefined;
+			};
+			meta: object;
+			output: {
+				status: "unchanged" | "updated";
+				track: TrackView;
+			};
+		}>;
 		addStage: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
@@ -44325,6 +44629,51 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				track: TrackView;
 			};
 		}>;
+		changeParticipants: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				change: {
+					commitment?: string | undefined;
+					op: "add";
+					principalId: string;
+					role: "delegate" | "integrator" | "judge";
+				} | {
+					op: "remove";
+					participantId: string;
+				} | {
+					move: "accept" | "counter" | "decline" | "report_impossible";
+					op: "move";
+					participantId: string;
+					text?: string | undefined;
+				} | {
+					op: "acknowledge";
+					participantId: string;
+				};
+				id: string;
+				reasoning?: string | undefined;
+			};
+			meta: object;
+			output: ChangeTrackParticipantsResult;
+		}>;
+		convertFromEntity: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entityId: string;
+				name?: string | undefined;
+				projectId?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			meta: object;
+			output: (ProposedOutcome & {
+				missingDomains: string[];
+			} & {
+				entityId: string;
+				notCarried: string[];
+			}) | {
+				entityId: string;
+				notCarried: string[];
+				status: "exists" | "started";
+				track: TrackView;
+			};
+		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
@@ -44341,17 +44690,51 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
+				cursor?: string | undefined;
 				includeArchived?: boolean | undefined;
-				projectId: string;
+				limit?: number | undefined;
+				projectId?: string | undefined;
 			};
 			meta: object;
 			output: {
 				items: TrackView[];
+				nextCursor: string | null;
+			};
+		}>;
+		reopen: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				name?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			meta: object;
+			output: (ProposedOutcome & {
+				missingDomains: string[];
+			}) | {
+				status: "exists" | "started";
+				track: TrackView;
 			};
 		}>;
 		setDirection: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				confirmKind?: boolean | undefined;
+				criteria?: {
+					about?: "method" | "result" | undefined;
+					check: {
+						capability?: string | undefined;
+						evidenceKey?: string | undefined;
+						hint?: string | undefined;
+						kind: "capability" | "evidence" | "human" | "judge";
+					};
+					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
+					key: string;
+					required?: boolean | undefined;
+					stageKey?: string | undefined;
+					statement: string;
+				}[] | null | undefined;
 				direction?: string | null | undefined;
+				dropConditions?: string[] | null | undefined;
+				endState?: string | null | undefined;
 				id: string;
 				kpi?: {
 					current?: number | undefined;
@@ -44359,7 +44742,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					target?: number | undefined;
 					unit?: string | undefined;
 				} | null | undefined;
+				loop?: {
+					on: boolean;
+					perWeek?: number | undefined;
+				} | null | undefined;
 				reasoning?: string | undefined;
+				uncertainty?: "chaotic" | "clear" | "complex" | "complicated" | "unknown" | null | undefined;
+				workKind?: "commission" | "flow" | "incident" | "investigation" | "operation" | "pathway" | "project" | null | undefined;
 			};
 			meta: object;
 			output: ProposedOutcome | {
@@ -44383,7 +44772,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				id: string;
 				reasoning?: string | undefined;
-				status: "active" | "archived" | "completed" | "paused";
+				status: "active" | "agreed" | "archived" | "completed" | "paused" | "proposed" | "ready";
+				verdict?: "impossible" | "met" | "mistake" | "no_longer_needed" | "not_met" | "partly_met" | "replaced" | "retired" | undefined;
+				verdictReason?: string | undefined;
 			};
 			meta: object;
 			output: ProposedOutcome | {
@@ -44393,18 +44784,41 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		start: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				confirmKind?: boolean | undefined;
+				criteria?: {
+					about?: "method" | "result" | undefined;
+					check: {
+						capability?: string | undefined;
+						evidenceKey?: string | undefined;
+						hint?: string | undefined;
+						kind: "capability" | "evidence" | "human" | "judge";
+					};
+					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
+					key: string;
+					required?: boolean | undefined;
+					stageKey?: string | undefined;
+					statement: string;
+				}[] | null | undefined;
 				direction?: string | undefined;
+				dropConditions?: string[] | null | undefined;
+				endState?: string | null | undefined;
 				kpi?: {
 					current?: number | undefined;
 					label?: string | undefined;
 					target?: number | undefined;
 					unit?: string | undefined;
 				} | undefined;
+				loop?: {
+					on: boolean;
+					perWeek?: number | undefined;
+				} | null | undefined;
 				name?: string | undefined;
 				params?: Record<string, unknown> | undefined;
 				playbookId?: string | undefined;
 				projectId: string;
 				reasoning?: string | undefined;
+				uncertainty?: "chaotic" | "clear" | "complex" | "complicated" | "unknown" | null | undefined;
+				workKind?: "commission" | "flow" | "incident" | "investigation" | "operation" | "pathway" | "project" | null | undefined;
 			};
 			meta: object;
 			output: (ProposedOutcome & {
@@ -46307,12 +46721,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						}[] | undefined;
 						channelSpec?: Record<string, unknown> | undefined;
 						criteria?: {
+							about?: "method" | "result" | undefined;
 							check: {
 								capability?: string | undefined;
 								evidenceKey?: string | undefined;
 								hint?: string | undefined;
 								kind: "capability" | "evidence" | "human" | "judge";
 							};
+							checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 							key: string;
 							required?: boolean | undefined;
 							stageKey?: string | undefined;
@@ -46515,12 +46931,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								proposalType: "dev.deploy_approval" | "dev.plan_approval";
 							} | undefined;
 							criteria?: {
+								about?: "method" | "result" | undefined;
 								check: {
 									capability?: string | undefined;
 									evidenceKey?: string | undefined;
 									hint?: string | undefined;
 									kind: "capability" | "evidence" | "human" | "judge";
 								};
+								checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 								key: string;
 								required?: boolean | undefined;
 								stageKey?: string | undefined;

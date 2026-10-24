@@ -255,8 +255,23 @@ export type {
   HubTrack,
   HubTrackStage,
   HubTrackStatus,
+  HubTrackVerdict,
+  HubTrackWorkKind,
+  HubTrackUncertainty,
+  HubGoalLoop,
+  HubGoalLoopInput,
+  HubGoalCriterion,
+  HubGoalCriterionMark,
+  HubGoalAcceptanceDecision,
+  HubWaitingOnReason,
+  UpdateTrackInput,
+  AcceptTrackCriterionInput,
+  TrackCloseInput,
+  ReopenTrackInput,
   HubTrackProposed,
   ListTracksOptions,
+  ListAllTracksOptions,
+  HubTrackPage,
   StartTrackInput,
   HubStartTrackResult,
   HubStageSessionOffer,
@@ -268,6 +283,18 @@ export type {
   HubStartStageSessionResult,
   FocusSessionTrackScope,
 } from "./tracks.js";
+
+// Who is on a goal (Hub /tracks/:id/participants)
+export type {
+  HubTrackParticipant,
+  HubTrackParticipantRole,
+  HubTrackPrincipalKind,
+  HubTrackCommitmentState,
+  HubTrackCommitmentMove,
+  AddTrackParticipantInput,
+  AnswerTrackCommitmentInput,
+  HubTrackParticipantsResult,
+} from "./track-participants.js";
 
 // Space operations — archive/restore/rename a space, move entities, share a kind
 export type {

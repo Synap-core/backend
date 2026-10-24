@@ -156,6 +156,7 @@ import {
   podMembers,
   projectMembers,
   runWithClientKey,
+  trackParticipants,
 } from "@synap/database";
 import {
   addTrackStage,
@@ -305,6 +306,8 @@ beforeAll(async () => {
     sessionEvaluations,
     podMembers,
     projectMembers,
+    // Who is on a goal (0348): `startTrack` seeds the owner row.
+    trackParticipants,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -330,6 +333,20 @@ beforeAll(async () => {
       stage_history jsonb not null default '[]'::jsonb,
       direction text,
       kpi jsonb,
+      verdict text,
+      verdict_reason text,
+      verdict_by text,
+      verdict_at timestamptz,
+      -- 0345 — what a goal holds.
+      end_state text,
+      criteria jsonb,
+      drop_conditions jsonb,
+      work_kind text,
+      uncertainty text,
+      kind_confirmed_by text,
+      kind_confirmed_at timestamptz,
+      -- 0350 — the goal's loop (W4).
+      loop jsonb,
       metadata jsonb not null default '{}'::jsonb,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
@@ -515,7 +532,7 @@ describe("M1 stage stamping + M3 dedup by stage", () => {
     expect(row.track_id).toBe(trackId);
     expect(row.track_stage).toBeNull();
     expect(JSON.stringify(out), JSON.stringify(out)).toMatch(
-      /Track stage \\"bogus\\" was not applied/
+      /Goal step \\"bogus\\" was not applied/
     );
   });
 });
@@ -1261,13 +1278,14 @@ describe("0302 emergent stages", () => {
     });
   });
 
-  it("a completed track takes no new stage", async () => {
+  it("a closed (completed) track takes no new stage", async () => {
     await q(`update project_tracks set status = 'completed' where id = $1`, [
       emTrack,
     ]);
+    // The track lifecycle's word ("Closed"), and the way back: a new version.
     await expect(
       addTrackStage({ trackId: emTrack, stage: { name: "Late" }, actor: human })
-    ).rejects.toThrow(/completed — reopen it/);
+    ).rejects.toThrow(/is closed — reopen it as a new version/);
   });
 });
 

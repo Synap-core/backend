@@ -5,8 +5,13 @@
  * happens (`__tripwires__/governed-writes-have-approval-half.test.ts`).
  *
  *   track/create               → `startTrack` (the SAME service the direct door
- *                                runs), with the id the proposal was filed under.
- *   track/update               → a status change (`applyTrackStatus`), a stage
+ *                                runs), with the id the proposal was filed under
+ *                                — a reopen too (`replacesTrackId`, R8), and
+ *                                "Make it a goal" (`fromEntity`, D2: the link
+ *                                and an ended entity's close ride the start).
+ *   track/update               → a status change (`applyTrackStatus`, with the
+ *                                verdict a close carries — the approver is who
+ *                                closed it), a stage
  *                                advance (`applyTrackStageAdvance`, gate OFF —
  *                                the reviewer just answered for this advance),
  *                                a params patch (`applyTrackParams`, re-validated
@@ -48,11 +53,21 @@ import {
   parseAddTrackStage,
   assertStageAdvanceable,
   assertTrackTransition,
+  loadGoalCloseCriteria,
 } from "../../../services/tracks/tracks-service.js";
+import {
+  hasTrackGoalInput,
+  pickTrackGoalInput,
+} from "../../../services/tracks/goal-content.js";
 import { trackRepository } from "../../../services/tracks/track-repo.js";
 import { readListedStepSpaces } from "../../../services/tracks/track-space-grant.js";
+import { readTrackFromEntity } from "../../../services/tracks/goal-source-entity.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
+import {
+  applyTrackParticipantProposal,
+  registerTrackParticipantExecutors,
+} from "./track-participants.js";
 
 function innerData(proposal: { data: unknown }): Record<string, unknown> {
   return ((proposal.data as Record<string, unknown>)?.data ?? {}) as Record<
@@ -61,7 +76,7 @@ function innerData(proposal: { data: unknown }): Record<string, unknown> {
   >;
 }
 
-async function alreadyApproved(proposalId: string): Promise<boolean> {
+export async function alreadyApproved(proposalId: string): Promise<boolean> {
   const [row] = await db
     .select({ status: proposals.status })
     .from(proposals)
@@ -69,7 +84,7 @@ async function alreadyApproved(proposalId: string): Promise<boolean> {
   return row?.status === ProposalStatus.APPROVED;
 }
 
-async function markApproved(proposalId: string, userId: string) {
+export async function markApproved(proposalId: string, userId: string) {
   await db
     .update(proposals)
     .set({
@@ -82,6 +97,9 @@ async function markApproved(proposalId: string, userId: string) {
 }
 
 export function registerTrackExecutors(): void {
+  // The goal hand-off (`track/assign_agent`, W3) — its own file.
+  registerTrackParticipantExecutors();
+
   registerProposalExecutor({
     key: "track/create",
     async execute({ proposal, userId, input, deps }) {
@@ -93,7 +111,7 @@ export function registerTrackExecutors(): void {
       if (!projectId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Track proposal is missing its project",
+          message: "Goal proposal is missing its project",
         });
       }
       if (await alreadyApproved(input.proposalId)) {
@@ -119,6 +137,19 @@ export function registerTrackExecutors(): void {
           ? { direction: data.direction }
           : {}),
         ...(data.kpi && typeof data.kpi === "object" ? { kpi: data.kpi } : {}),
+        // What the goal holds (0345) — re-parsed by the same door; the
+        // approver's start confirms the kind of work it carries.
+        ...pickTrackGoalInput(data),
+        // A reopen (R8): re-checked by the same door (still closed, still the
+        // newest version), then linked `new --replaces--> old`.
+        ...(typeof data.replacesTrackId === "string"
+          ? { replacesTrackId: data.replacesTrackId }
+          : {}),
+        // "Make it a goal" (D2): re-checked by the same door (still visible,
+        // never converted twice), then linked `entity --promoted_to--> track`
+        // and, for an entity that had ended, closed or dropped — as the
+        // approver.
+        fromEntity: readTrackFromEntity(data.fromEntity),
         // Decision 2a: this approval IS the consent to the spaces the
         // proposal listed, for the agent the proposal's COLUMN names.
         approvedSpaceGrant: {
@@ -150,7 +181,7 @@ export function registerTrackExecutors(): void {
       if (!trackId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Track update proposal is missing its track",
+          message: "Goal update proposal is missing its goal",
         });
       }
       if (await alreadyApproved(input.proposalId)) {
@@ -162,19 +193,27 @@ export function registerTrackExecutors(): void {
       if (!track) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Track to update no longer exists",
+          message: "Goal to update no longer exists",
         });
       }
       const project = await loadVisibleProject(db, track.projectId, userId);
       if (!project) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+        throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
       }
       await assertWorkspaceWrite(db, userId, {
         workspaceId: project.workspaceId,
         ownerId: project.workspaceId ? undefined : project.userId,
       });
 
-      if (typeof data.currentStage === "string") {
+      if (data.participant && typeof data.participant === "object") {
+        // WHO IS ON IT (W3): an agent's participant change, re-checked with
+        // the APPROVER as the deciding person (`track-participants.ts`).
+        await applyTrackParticipantProposal({
+          track,
+          proposal,
+          approverId: userId,
+        });
+      } else if (typeof data.currentStage === "string") {
         assertStageAdvanceable(track, data.currentStage);
         await applyTrackStageAdvance({
           track,
@@ -212,10 +251,16 @@ export function registerTrackExecutors(): void {
           { ...stage, key: stage.key ?? "" },
           { userId, addedBy: proposal.agentUserId ?? userId }
         );
-      } else if ("direction" in data || "kpi" in data) {
+      } else if (
+        "direction" in data ||
+        "kpi" in data ||
+        hasTrackGoalInput(data)
+      ) {
         // Direction / KPI (0302): the PATCH, merged onto the KPI as it stands
         // at approval and re-validated; `current` is stamped as stated by the
-        // proposing agent at the approval moment.
+        // proposing agent at the approval moment. What the goal holds (0345)
+        // rides along, re-resolved against the goal as it stands now — and
+        // the APPROVER confirms the kind of work it carries.
         await applyTrackDirection(
           track,
           project,
@@ -234,32 +279,55 @@ export function registerTrackExecutors(): void {
                       : null,
                 }
               : {}),
+            ...pickTrackGoalInput(data),
           },
-          { userId, statedBy: proposal.agentUserId ?? userId }
+          {
+            userId,
+            statedBy: proposal.agentUserId ?? userId,
+            confirmedBy: userId,
+          }
         );
       } else if (
         typeof data.status === "string" &&
         (PROJECT_TRACK_STATUSES as readonly string[]).includes(data.status)
       ) {
         if (track.status !== data.status) {
-          // The table is re-checked at APPROVAL time: the proposal was legal
-          // when filed, but the track may have moved since (archived, say).
-          // Replaying unchecked would revive it — and a revived live track
-          // can collide with `uniq_project_tracks_live_name` (a newer live
-          // track of the same name; `applyTrackStatus` refuses that CONFLICT).
-          assertTrackTransition(track, data.status as ProjectTrackStatus);
+          // The lifecycle is re-checked at APPROVAL time: the proposal was
+          // legal when filed, but the track may have moved since (dropped,
+          // say) — and a closed track is final. The verdict rides the
+          // proposal and is re-checked by the same rule.
+          const close = {
+            verdict: typeof data.verdict === "string" ? data.verdict : null,
+            verdictReason:
+              typeof data.verdictReason === "string"
+                ? data.verdictReason
+                : null,
+          };
+          // …and so is the criteria rule (W2): a "met" approved after a
+          // criterion was sent back no longer holds.
+          assertTrackTransition(
+            track,
+            data.status as ProjectTrackStatus,
+            close,
+            await loadGoalCloseCriteria(
+              track,
+              data.status as ProjectTrackStatus,
+              userId
+            )
+          );
           await applyTrackStatus(
             track,
             project,
             data.status as ProjectTrackStatus,
-            userId
+            userId,
+            close
           );
         }
       } else {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
-            "Track update proposal carries no stage, status, params, direction, kpi or added stage",
+            "Goal update proposal carries no stage, status, params, direction, kpi, goal content, added stage or participant change",
         });
       }
 
@@ -282,7 +350,7 @@ export function registerTrackExecutors(): void {
       if (!trackId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Stage-gate proposal is missing its track target",
+          message: "Stage-gate proposal is missing its goal",
         });
       }
       // Resume ONLY from `paused`, guarded in the WHERE so the decision and the
@@ -313,8 +381,8 @@ export function registerTrackExecutors(): void {
           : {
               applied: "none",
               reason:
-                "Track was not paused at approval time — it had already been " +
-                "resumed, completed or archived. The gate is answered; the track " +
+                "Goal was not paused at approval time — it had already been " +
+                "resumed, closed or dropped. The gate is answered; the goal " +
                 "keeps the state its owner left it in.",
             };
 

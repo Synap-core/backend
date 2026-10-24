@@ -138,7 +138,7 @@ describe("trackHistoryAct", () => {
     });
   });
 
-  it("a status move's verb is the shared transition table's", () => {
+  it("a status move's verb is the shared track lifecycle's", () => {
     expect(
       trackHistoryAct(
         ev({
@@ -148,7 +148,7 @@ describe("trackHistoryAct", () => {
         }),
         ctx
       ).action
-    ).toBe("complete");
+    ).toBe("close");
     expect(
       trackHistoryAct(
         ev({
@@ -159,6 +159,16 @@ describe("trackHistoryAct", () => {
         ctx
       ).action
     ).toBe("reopen");
+    expect(
+      trackHistoryAct(
+        ev({
+          kind: "status_changed",
+          fromStatus: "active",
+          toStatus: "archived",
+        }),
+        ctx
+      ).action
+    ).toBe("drop");
   });
 
   it("a step the track no longer declares reads as its key, humanized", () => {

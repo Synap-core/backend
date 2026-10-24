@@ -75,6 +75,26 @@ describe("listTracks", () => {
   });
 });
 
+describe("listAllTracks (W5 — every goal the caller can see)", () => {
+  it("GETs /tracks with NO projectId, pages by cursor, returns nextCursor", async () => {
+    replies.push({ status: 200, body: { items: [TRACK], nextCursor: "c2" } });
+    const page = await client.listAllTracks({ limit: 20, cursor: "c1" });
+    expect(page).toEqual({ items: [TRACK], nextCursor: "c2" });
+    expect(calls[0].url).toBe(
+      "https://pod.example.test/api/hub/tracks?limit=20&cursor=c1"
+    );
+  });
+
+  it("the last page reads nextCursor null; no options sends no query", async () => {
+    replies.push({ status: 200, body: { items: [], nextCursor: null } });
+    await expect(client.listAllTracks()).resolves.toEqual({
+      items: [],
+      nextCursor: null,
+    });
+    expect(calls[0].url).toBe("https://pod.example.test/api/hub/tracks");
+  });
+});
+
 describe("startTrack", () => {
   it("returns missingDomains + domainsNote untouched on a started track", async () => {
     const body = {
@@ -207,6 +227,45 @@ describe("advance / status / params", () => {
         "PATCH",
         `https://pod.example.test/api/hub/tracks/${TRACK.id}/params`,
         { params: { market: null } },
+      ],
+    ]);
+  });
+});
+
+describe("close / reopen (a goal can finish)", () => {
+  it("sends the verdict with a close, and reopens on its own route", async () => {
+    replies.push({
+      status: 202,
+      body: { status: "proposed", proposalId: "p" },
+    });
+    replies.push({
+      status: 200,
+      body: { status: "started", track: TRACK, missingDomains: [] },
+    });
+    const closed = await client.setTrackStatus(
+      TRACK.id,
+      "archived",
+      "the market moved",
+      { verdict: "impossible", verdictReason: "the API was shut down" }
+    );
+    const reopened = await client.reopenTrack(TRACK.id, { name: "Again" });
+    expect(closed).toMatchObject({ status: "proposed" });
+    expect(reopened).toMatchObject({ status: "started" });
+    expect(calls.map((c) => [c.method, c.url, c.body])).toEqual([
+      [
+        "PATCH",
+        `https://pod.example.test/api/hub/tracks/${TRACK.id}`,
+        {
+          status: "archived",
+          reasoning: "the market moved",
+          verdict: "impossible",
+          verdictReason: "the API was shut down",
+        },
+      ],
+      [
+        "POST",
+        `https://pod.example.test/api/hub/tracks/${TRACK.id}/reopen`,
+        { name: "Again" },
       ],
     ]);
   });

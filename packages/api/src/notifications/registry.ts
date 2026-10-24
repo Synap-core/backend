@@ -231,20 +231,21 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
      * (`trackKpiJustReached`) — a re-statement of a reached value never
      * re-nudges. `sourceId` is the track id.
      *
-     * A NUDGE, never an act: a track is LASTING (work model W1, 2026-10-11),
-     * so reaching the target asks the person to RE-AIM it (a new target),
-     * never to complete the track. It is an ITEM in needs-you because the
-     * decision is theirs to make; the door opens the track.
+     * A NUDGE, never an act: reaching the target asks the person to re-aim
+     * it (a new target) or to close the goal with a verdict if its criteria
+     * are met (work model D1, 2026-10-23) — a number reached never closes it.
+     * It is an ITEM in needs-you because the decision is theirs to make; the
+     * door opens the track.
      * The KPI value is STATED, so the body says "stated", never "measured".
      */
     type: "track.kpi_reached",
     category: "data",
-    label: "Track target reached",
+    label: "Goal target reached",
     icon: "target",
     priority: "normal",
     titleTemplate: "{{trackName}} reached its target",
     bodyTemplate:
-      "{{kpiLabel}}: {{kpiValue}} (stated). Re-aim the target — the track keeps going.",
+      "{{kpiLabel}}: {{kpiValue}} (stated). Re-aim the target, or close the goal with a verdict if its criteria are met.",
     defaultChannels: ["in_app"],
     ttl: 0,
     groupBy: "trackId",
@@ -252,7 +253,138 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     actions: [
       {
         id: "view",
-        label: "Open track",
+        label: "Open goal",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
+  {
+    /**
+     * A goal is IN REVIEW (decision 2, W5 2026-10-23): every required
+     * criterion is claimed and the judge has not decided yet. Producer:
+     * `noticeGoalReviewReady` (services/tracks/goal-review-notice.ts), after a
+     * passing evaluation is recorded on a run filed into the goal
+     * (`recordSessionEvaluation`). To the goal's JUDGE (the owner when none is
+     * named). `sourceId` is the goal; `groupKey` one per goal, so a goal in
+     * review is ONE open row however many claims land.
+     *
+     * A JUDGEMENT (`JUDGEMENT_NOTIFICATION_TYPES`, @synap-core/types/lens):
+     * a `decision` in the Inbox, ranked first. The judge's decision on any
+     * criterion, or the goal closing, marks it actioned
+     * (`settleGoalReviewNotice`) — a later claim after a send-back raises it
+     * again.
+     */
+    type: "track.review_ready",
+    category: "data",
+    label: "Goal ready for your verdict",
+    icon: "scale",
+    priority: "high",
+    titleTemplate: "{{trackName}} is ready for your verdict",
+    bodyTemplate:
+      "Every required criterion is claimed. Accept them, send one back, or close the goal with a verdict.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open goal",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
+  {
+    /**
+     * R10 (work model W3, 2026-10-23): a delegate reported their commitment
+     * on a goal IMPOSSIBLE and neither the owner nor the judge acknowledged
+     * it for 48 h. Producer: `escalateUnacknowledgedReports`
+     * (jobs `workers/track-report-escalation.ts`, on the reaper's hourly
+     * tick), ONCE per report (`track_participants.escalated_at`). `sourceId`
+     * is the goal; `groupKey` the report (participant + when it reported).
+     *
+     * An ITEM in the owner's Needs you — the acknowledgement is theirs to
+     * give; acknowledging the report marks the row actioned
+     * (`services/tracks/track-participants.ts`). The report is never the
+     * goal's verdict: the body says so.
+     */
+    type: "track.report_unacknowledged",
+    category: "data",
+    label: "Goal report waiting on you",
+    icon: "alert-triangle",
+    priority: "high",
+    titleTemplate: "{{delegateName}} says part of {{trackName}} cannot be done",
+    bodyTemplate:
+      "“{{commitment}}” was reported impossible more than {{hours}} h ago: {{reason}}. Acknowledge it on the goal, ask again, or decide the goal.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open goal",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
+  {
+    /**
+     * A goal this goal waited on (`blocked_by`) ENDED — closed (it delivered:
+     * "nothing else holds it up" or "still waits on N other things") or
+     * dropped (it did not: the goal waits until its owner re-plans). Producer:
+     * the `track-blocker-ended-notify` reactor
+     * (`notifications/track-blocker-ended-reactor.ts`), off the status door's
+     * `track.update` emit; the outcome is re-derived from the rows. `sourceId`
+     * is the WAITING goal — where its owner acts. Its twin for a waiting
+     * session is `session.blocker_goal_ended`.
+     */
+    type: "track.blocker_ended",
+    category: "data",
+    label: "Goal it waited on ended",
+    icon: "unlink",
+    priority: "normal",
+    titleTemplate: "{{blockerTitle}} is {{endedWord}}",
+    bodyTemplate: "{{dependentTitle}} was waiting on it — {{outcome}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open goal",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
+  {
+    /**
+     * The goal's LOOP stopped (work model W4): a required criterion failed in
+     * two runs of the goal since a person last graded it, so the goal stops
+     * proposing its next run and asks its owner — grade it, change it, or
+     * switch the loop on again to retry. Producer: `askOwnerLoopStopped`
+     * (`services/tracks/goal-loop.ts`), ONCE per stop (its groupKey names the
+     * goal, the criterion and the second failing run; the producer checks the
+     * row exists — the hourly re-check re-reads a stopped goal). An ITEM in
+     * the owner's Needs you: the loop waits on their call. `sourceId` is the
+     * goal.
+     */
+    type: "track.loop_stopped",
+    category: "ai",
+    label: "Goal stopped proposing runs",
+    icon: "user-check",
+    priority: "high",
+    titleTemplate: "Needs your call: {{trackName}}",
+    bodyTemplate:
+      "{{criterionStatement}} — failed in {{runs}} runs, so the goal stopped proposing new ones. Grade it, change it, or switch the loop on again to retry.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    actions: [
+      {
+        id: "view",
+        label: "Open goal",
         variant: "primary",
         handler: { type: "navigate-object", kind: "track" },
       },
@@ -1167,6 +1299,35 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
         variant: "primary",
         // `sourceId` is the UNBLOCKED session's id (see the reactor), so no
         // explicit id is needed — the route table resolves it.
+        handler: { type: "navigate-object", kind: "session" },
+      },
+    ],
+  },
+  {
+    /**
+     * A GOAL this session waited on (`blocked_by`) ended — closed or dropped.
+     * The goal twin of `session.unblocked` (whose producer reacts to a
+     * SESSION closing only), with the dropped case said too: a dropped goal
+     * holds the session until its owner re-plans. Producer: the
+     * `track-blocker-ended-notify` reactor
+     * (`notifications/track-blocker-ended-reactor.ts`). `sourceId` is the
+     * waiting session.
+     */
+    type: "session.blocker_goal_ended",
+    category: "system",
+    label: "Goal it waited on ended",
+    icon: "unlink",
+    priority: "normal",
+    titleTemplate: "{{blockerTitle}} is {{endedWord}}",
+    bodyTemplate: "{{dependentTitle}} was waiting on it — {{outcome}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open Session",
+        variant: "primary",
         handler: { type: "navigate-object", kind: "session" },
       },
     ],

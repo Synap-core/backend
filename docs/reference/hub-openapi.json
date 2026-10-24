@@ -12801,6 +12801,21 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 120
+                                        },
+                                        "checkKind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "measured",
+                                            "judged",
+                                            "handed_over",
+                                            "learning",
+                                            "decided_outside",
+                                            "certified"
+                                          ]
+                                        },
+                                        "about": {
+                                          "type": "string",
+                                          "enum": ["result", "method"]
                                         }
                                       },
                                       "required": ["key", "statement", "check"],
@@ -12896,6 +12911,21 @@
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 120
+                                  },
+                                  "checkKind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "measured",
+                                      "judged",
+                                      "handed_over",
+                                      "learning",
+                                      "decided_outside",
+                                      "certified"
+                                    ]
+                                  },
+                                  "about": {
+                                    "type": "string",
+                                    "enum": ["result", "method"]
                                   }
                                 },
                                 "required": ["key", "statement", "check"],
@@ -15509,6 +15539,21 @@
                                           "type": "string",
                                           "minLength": 1,
                                           "maxLength": 120
+                                        },
+                                        "checkKind": {
+                                          "type": "string",
+                                          "enum": [
+                                            "measured",
+                                            "judged",
+                                            "handed_over",
+                                            "learning",
+                                            "decided_outside",
+                                            "certified"
+                                          ]
+                                        },
+                                        "about": {
+                                          "type": "string",
+                                          "enum": ["result", "method"]
                                         }
                                       },
                                       "required": ["key", "statement", "check"],
@@ -15604,6 +15649,21 @@
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 120
+                                  },
+                                  "checkKind": {
+                                    "type": "string",
+                                    "enum": [
+                                      "measured",
+                                      "judged",
+                                      "handed_over",
+                                      "learning",
+                                      "decided_outside",
+                                      "certified"
+                                    ]
+                                  },
+                                  "about": {
+                                    "type": "string",
+                                    "enum": ["result", "method"]
                                   }
                                 },
                                 "required": ["key", "statement", "check"],
@@ -20275,6 +20335,21 @@
                                 "type": "string",
                                 "minLength": 1,
                                 "maxLength": 120
+                              },
+                              "checkKind": {
+                                "type": "string",
+                                "enum": [
+                                  "measured",
+                                  "judged",
+                                  "handed_over",
+                                  "learning",
+                                  "decided_outside",
+                                  "certified"
+                                ]
+                              },
+                              "about": {
+                                "type": "string",
+                                "enum": ["result", "method"]
                               }
                             },
                             "required": ["key", "statement", "check"],
@@ -20454,6 +20529,21 @@
                           "type": "string",
                           "minLength": 1,
                           "maxLength": 120
+                        },
+                        "checkKind": {
+                          "type": "string",
+                          "enum": [
+                            "measured",
+                            "judged",
+                            "handed_over",
+                            "learning",
+                            "decided_outside",
+                            "certified"
+                          ]
+                        },
+                        "about": {
+                          "type": "string",
+                          "enum": ["result", "method"]
                         }
                       },
                       "required": ["key", "statement", "check"],
@@ -28407,6 +28497,21 @@
                           "type": "string",
                           "minLength": 1,
                           "maxLength": 120
+                        },
+                        "checkKind": {
+                          "type": "string",
+                          "enum": [
+                            "measured",
+                            "judged",
+                            "handed_over",
+                            "learning",
+                            "decided_outside",
+                            "certified"
+                          ]
+                        },
+                        "about": {
+                          "type": "string",
+                          "enum": ["result", "method"]
                         }
                       },
                       "required": ["key", "statement", "check"],
