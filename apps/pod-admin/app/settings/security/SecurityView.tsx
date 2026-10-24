@@ -5,12 +5,15 @@
  *
  *   1. Recovery codes — the pod-held way back in (shown once, copy/download).
  *   2. Password — the Kratos settings flow's password group.
- *   3. Signed-in devices — your other sessions; "Sign out other devices".
- *   4. Synap Cloud — what Cloud may do here (owner only; OMITTED when Cloud
+ *   3. Passkeys — the settings flow's passkey group; "Add a passkey" runs the
+ *      ceremony (`lib/passkey.ts`). The invite page's Done screen sends a
+ *      Synap-Cloud-only joiner here (`#passkeys`).
+ *   4. Your Synap Cloud account — "Link Synap Cloud" (`/link-cloud`, the CP's
+ *      claim-access hop), for a member who joined another way. OMITTED when
+ *      Cloud sign-in is not wired here or the owner turned it off.
+ *   5. Signed-in devices — your other sessions; "Sign out other devices".
+ *   6. Synap Cloud — what Cloud may do here (owner only; OMITTED when Cloud
  *      sign-in is not wired on this pod).
- *
- * Passkeys are not here yet: the shared ceremony lives in synap-app's
- * `@synap-core/auth-ui`, which this app does not depend on (wave 2).
  *
  * Every refusal is shown as what it is: a sign-in that is too old
  * (`reauth_required` → "Sign in again"), a Cloud-only session that may not
@@ -37,6 +40,7 @@ import {
   type CloudTrustMode,
   type GeneratedRecoveryCodes,
 } from "@synap-core/types/account-recovery";
+import { resolveSignInWayLabel } from "@synap-core/types/vocabulary";
 import { SectionCard } from "../../(admin)/components/section-card";
 import {
   StatusPill,
@@ -45,13 +49,20 @@ import {
 import { invalidateRecoveryCodesState } from "../../(admin)/components/recovery-codes-nudge";
 import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import {
+  collectErrorMessages,
   createBrowserFlow,
   fetchFlow,
   listOtherSessions,
+  nodeValue,
   revokeOtherSessions,
   submitSelfServiceFlow,
   type KratosFlow,
 } from "../../../lib/kratos-flow";
+import {
+  createPasskey,
+  isPasskeySupported,
+  PasskeyCancelled,
+} from "../../../lib/passkey";
 import {
   recoveryApi,
   recoveryCallDetail,
@@ -66,6 +77,7 @@ const REAUTH_HREF = `/login?refresh=1&return=${encodeURIComponent("/settings/sec
 /** Kratos v1.3.1 `text.NewRecoverySuccessful` (InfoSelfServiceSettingsRecoverySuccessful). */
 const KRATOS_RECOVERY_SUCCESSFUL = 1060001;
 const PASSWORD_GROUPS = ["password"] as const;
+const CLOUD = resolveSignInWayLabel("synap_cloud");
 
 type Load<T> =
   | { kind: "loading" }
@@ -172,6 +184,10 @@ export function SecurityView({
             />
           )
         )}
+        <PasskeysCard />
+        {s && s.cloud.available && s.cloud.trust !== "off" ? (
+          <LinkCloudCard />
+        ) : null}
         <DevicesCard />
         {s && s.cloud.available ? (
           <CloudTrustCard
@@ -589,7 +605,192 @@ function PasswordCard({
   );
 }
 
-// ─── 3. Devices ──────────────────────────────────────────────────────────
+// ─── 3. Passkeys ─────────────────────────────────────────────────────────
+
+/** Existing passkeys = the flow's remove buttons (one per credential). */
+export function passkeyCount(flow: KratosFlow): number {
+  return flow.ui.nodes.filter(
+    (n) => n.group === "passkey" && n.attributes?.name === "passkey_remove"
+  ).length;
+}
+
+function PasskeysCard() {
+  const [load, setLoad] = useState<FlowLoad>({ kind: "loading" });
+  const [busy, setBusy] = useState(false);
+  /** A fixed sentence; a caught error's own text goes behind "Copy details". */
+  const [error, setError] = useState<{
+    message: string;
+    detail?: string;
+  } | null>(null);
+  const [needsReauth, setNeedsReauth] = useState(false);
+
+  const start = useCallback(async () => {
+    setLoad({ kind: "loading" });
+    try {
+      const r = await createBrowserFlow("settings");
+      if ("flow" in r) setLoad({ kind: "ready", flow: r.flow });
+      else
+        window.location.assign(
+          `/login?return=${encodeURIComponent("/settings/security#passkeys")}`
+        );
+    } catch (err) {
+      setLoad({ kind: "failed", detail: errorDetail(err) });
+    }
+  }, []);
+
+  useEffect(() => {
+    void start();
+  }, [start]);
+
+  const add = async () => {
+    if (load.kind !== "ready") return;
+    const flow = load.flow;
+    const createData = nodeValue(flow, "passkey_create_data");
+    if (!createData) return;
+    setBusy(true);
+    setError(null);
+    setNeedsReauth(false);
+    try {
+      const register = await createPasskey(createData);
+      const r = await submitSelfServiceFlow(flow, {
+        method: "passkey",
+        csrf_token: nodeValue(flow, "csrf_token") ?? "",
+        passkey_settings_register: register,
+      });
+      if (r.kind === "refresh_required") setNeedsReauth(true);
+      else if (r.kind === "flow") {
+        setLoad({ kind: "ready", flow: r.flow });
+        const errors = collectErrorMessages(r.flow);
+        if (errors.length) setError({ message: errors.join(" ") });
+        else if (r.flow.state === "success")
+          addToast({ title: "Passkey added", color: "default" });
+      } else if (r.kind === "redirect") window.location.assign(r.to);
+      else setError({ message: "Couldn't add the passkey. Try again." });
+    } catch (err) {
+      if (!(err instanceof PasskeyCancelled)) {
+        setError({
+          message: "Couldn't add the passkey. Try again.",
+          detail: errorDetail(err),
+        });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const count = load.kind === "ready" ? passkeyCount(load.flow) : 0;
+  const canAdd =
+    load.kind === "ready" &&
+    nodeValue(load.flow, "passkey_create_data") !== null &&
+    isPasskeySupported();
+
+  return (
+    <div id="passkeys" className="scroll-mt-6">
+      <SectionCard
+        title="Passkeys"
+        hint="Sign in with this device's lock, no password"
+        actions={
+          load.kind === "ready" ? (
+            <StatusPill
+              kind={count > 0 ? "healthy" : "unknown"}
+              label={
+                count === 0
+                  ? "None"
+                  : count === 1
+                    ? "1 passkey"
+                    : `${count} passkeys`
+              }
+            />
+          ) : null
+        }
+      >
+        {load.kind === "loading" ? (
+          <div className="h-12 rounded-medium bg-foreground/[0.05] shimmer-pulse" />
+        ) : load.kind === "failed" ? (
+          <LoadFailed
+            message="Couldn't load passkey settings."
+            detail={load.detail}
+            onRetry={() => void start()}
+          />
+        ) : nodeValue(load.flow, "passkey_create_data") === null ? (
+          <p className="text-[12.5px] text-foreground/65">
+            Passkeys aren&apos;t enabled on this pod.
+          </p>
+        ) : (
+          <div className="flex flex-col items-start gap-3">
+            {needsReauth ? <Refusal error="reauth_required" /> : null}
+            {error ? (
+              <div className="flex flex-col items-start gap-1">
+                <p
+                  role="alert"
+                  className="flex items-start gap-2 text-[12.5px] text-status-down"
+                >
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  {error.message}
+                </p>
+                {error.detail ? (
+                  <CopyButton
+                    text={error.detail}
+                    label="Copy details"
+                    variant="light"
+                    ariaLabel="Copy the technical details of this error"
+                  />
+                ) : null}
+              </div>
+            ) : null}
+            {canAdd ? (
+              <Button
+                size="sm"
+                radius="md"
+                variant={count > 0 ? "flat" : "solid"}
+                color={count > 0 ? "default" : "primary"}
+                startContent={<KeyRound className="h-3.5 w-3.5" />}
+                isLoading={busy}
+                onPress={() => void add()}
+              >
+                Add a passkey
+              </Button>
+            ) : (
+              <p className="text-[12.5px] text-foreground/65">
+                This browser can&apos;t create a passkey. Open this page on a
+                device that can.
+              </p>
+            )}
+          </div>
+        )}
+      </SectionCard>
+    </div>
+  );
+}
+
+// ─── 4. Devices ──────────────────────────────────────────────────────────
+
+/**
+ * Link this pod account to a Synap Cloud account: then the person can sign in
+ * here with Synap Cloud, and the pod shows in their Synap account. The work is
+ * on `/link-cloud` (Synap Cloud asks, this pod's identity-link door binds);
+ * linking an account already linked to the same one changes nothing.
+ */
+function LinkCloudCard() {
+  return (
+    <SectionCard
+      title={`Your ${CLOUD} account`}
+      hint={`Sign in here with ${CLOUD}, and see this pod in your ${CLOUD} account`}
+    >
+      <Button
+        as="a"
+        href="/link-cloud"
+        size="sm"
+        radius="md"
+        variant="flat"
+        startContent={<Cloud className="h-3.5 w-3.5" />}
+        className="self-start"
+      >
+        Link {CLOUD}
+      </Button>
+    </SectionCard>
+  );
+}
 
 function DevicesCard() {
   const [load, setLoad] = useState<Load<number>>({ kind: "loading" });
@@ -670,7 +871,7 @@ function DevicesCard() {
   );
 }
 
-// ─── 4. Synap Cloud trust ────────────────────────────────────────────────
+// ─── 5. Synap Cloud trust ────────────────────────────────────────────────
 
 function CloudTrustCard({
   status,

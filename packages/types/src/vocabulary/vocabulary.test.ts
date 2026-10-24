@@ -1103,6 +1103,12 @@ describe("resolveObjectNounPlural", () => {
     expect(resolveObjectNounPlural("some_class")).toBe("Some classes");
   });
 
+  it('"series" is the same in the plural (consent: "Serieses")', () => {
+    expect(resolveObjectNounPlural("series")).toBe("Series");
+    expect(resolveObjectNounPlural("video_series")).toBe("Video series");
+    expect(pluralizeNoun("Series")).toBe("Series");
+  });
+
   it('a Greek -sis / -xis noun takes -ses / -xes (homes: "Hypothesises")', () => {
     expect(resolveObjectNounPlural("hypothesis")).toBe("Hypotheses");
     expect(resolveObjectNounPlural("some_analysis")).toBe("Some analyses");

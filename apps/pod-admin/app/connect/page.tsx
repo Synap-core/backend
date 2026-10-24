@@ -39,9 +39,7 @@ import {
   approvedIssuerRedirectPrefix,
   toOriginPrefix,
 } from "../../lib/connect-redirect";
-import { podCallerHeaders } from "../../lib/pod-caller-headers";
-
-const INTERNAL_POD_URL = process.env.POD_URL ?? "http://localhost:4000";
+import { readCloudSignIn } from "../../lib/cloud-sign-in";
 
 interface ConnectPageProps {
   searchParams: Promise<{
@@ -77,22 +75,8 @@ function readAllowedHttpsOrigins(): string[] {
 async function readApprovedIssuerUrl(
   incoming: Headers
 ): Promise<string | null> {
-  try {
-    const res = await fetch(`${INTERNAL_POD_URL}/api/federation/discovery`, {
-      headers: podCallerHeaders(incoming),
-      cache: "no-store",
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!res.ok) return null;
-    const body = (await res.json()) as {
-      cloudSignIn?: { available?: boolean; issuerUrl?: string | null };
-    };
-    return body.cloudSignIn?.available
-      ? (body.cloudSignIn.issuerUrl ?? null)
-      : null;
-  } catch {
-    return null;
-  }
+  const cloud = await readCloudSignIn(incoming);
+  return cloud?.available ? cloud.issuerUrl : null;
 }
 
 export default async function ConnectPage({ searchParams }: ConnectPageProps) {

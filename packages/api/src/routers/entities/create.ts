@@ -732,9 +732,20 @@ export const createProcs = {
               input.source === "user"
                 ? input.source
                 : "user";
+            // Only what the merge CHANGES: a value the match already holds is
+            // not a write. Sending it filed a no-op update receipt
+            // (`propertyDiffs: []`) and claimed the existing record as this
+            // session's output (dogfood e3c39721 §2).
+            const matchedProperties = ((
+              visibleMatch as { properties?: Record<string, unknown> | null }
+            ).properties ?? {}) as Record<string, unknown>;
             const nonEmptyProperties = Object.fromEntries(
               Object.entries(input.properties ?? {}).filter(
-                ([, v]) => v !== undefined && v !== null && v !== ""
+                ([key, v]) =>
+                  v !== undefined &&
+                  v !== null &&
+                  v !== "" &&
+                  JSON.stringify(v) !== JSON.stringify(matchedProperties[key])
               )
             );
             // What this merge actually wrote onto the matched entity — reported

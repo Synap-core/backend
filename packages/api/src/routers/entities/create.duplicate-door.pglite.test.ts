@@ -428,6 +428,50 @@ describe("entities.create: the one duplicate door", () => {
     expect(res.id).toBe(RHEA);
   });
 
+  it("a strong merge that changes NOTHING writes nothing: no update, no receipt (e3c39721 §2)", async () => {
+    // The live case: a company created with the website the record already
+    // holds. The merge's enrich used to re-send it — a no-op update receipt
+    // that claimed the record as the agent's session output.
+    const VIC = randomUUID();
+    await q(
+      `insert into entities (id, user_id, type, profile_id, title, properties, workspace_id, created_at)
+       select $1,$2,'person',profile_id,'Vic Same','{"email":"vic@real.test","city":"Oslo"}'::jsonb,null, now() - interval '1 day'
+       from entities where id = $3`,
+      [VIC, USER, RHEA]
+    );
+    await q(
+      `insert into entity_identity_signals (id, entity_id, signal_type, signal_value, source)
+       values (gen_random_uuid(),$1,'email','vic@real.test','seed')`,
+      [VIC]
+    );
+    const same = await create({
+      title: "V. Same",
+      properties: { email: "vic@real.test", city: "Oslo" },
+      agentUserId: AGENT,
+      source: "ai",
+    });
+    expect(same.deduplicated).toBe(true);
+    expect(same.id).toBe(VIC);
+    expect(same).not.toHaveProperty("propertyDiff");
+    const actions = () => h.gate.mock.calls.map((c) => c[0].action);
+    expect(actions()).not.toContain("update");
+
+    // CONTROL: a value the record does not hold yet is still merged in.
+    h.gate.mockClear();
+    const changed = await create({
+      title: "V. Same",
+      properties: { email: "vic@real.test", city: "Bergen" },
+      agentUserId: AGENT,
+      source: "ai",
+    });
+    expect(changed.id).toBe(VIC);
+    const update = h.gate.mock.calls
+      .map((c) => c[0])
+      .find((a) => a.action === "update");
+    expect(update?.data).toMatchObject({ properties: { city: "Bergen" } });
+    expect(update?.data?.properties).not.toHaveProperty("email");
+  });
+
   it("a strong merge that FAILS names the record and floors the agent's twin (S2)", async () => {
     h.failMergeOnce = true;
     await create({
