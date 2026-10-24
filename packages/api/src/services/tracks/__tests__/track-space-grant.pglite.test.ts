@@ -841,7 +841,7 @@ describe("D1 closing a goal is a person's act, whatever the pod's rules", () => 
     });
   });
 
-  it("even a rule NAMING the write cannot widen the close (human-only); it does widen a drop", async () => {
+  it("even a rule NAMING the write cannot widen a close (human-only) nor a drop (F7)", async () => {
     await insertRule("track.update", AGENT);
     const closing = await personTrack();
     expect(
@@ -854,8 +854,8 @@ describe("D1 closing a goal is a person's act, whatever the pod's rules", () => 
         })
       ).status
     ).toBe("proposed");
-    // A drop is a lost move: proposed by default, widened only by a rule that
-    // names the write — exactly as for a kind.
+    // An agent's drop always proposes (code-core F7, `goalMayDrop`): only the
+    // goal's owner or judge drops it — no rule widens that.
     const dropping = await personTrack();
     expect(
       (
@@ -866,7 +866,7 @@ describe("D1 closing a goal is a person's act, whatever the pod's rules", () => 
           actor: agent,
         })
       ).status
-    ).toBe("updated");
+    ).toBe("proposed");
   });
 
   it("under the class rule alone, an agent's DROP proposes too", async () => {

@@ -418,7 +418,7 @@ describe("a goal in review reaches its judge (W5)", () => {
       criteria: [
         {
           ...crit("pages"),
-          check: { kind: "evidence" },
+          check: { kind: "evidence", evidenceKey: "pages_migrated" },
           checkKind: "measured",
         },
         crit("tone"),
