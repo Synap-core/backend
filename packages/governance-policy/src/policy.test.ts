@@ -93,6 +93,7 @@ describe("capabilityVerbAllowsRuleWiden", () => {
     expect(capabilityVerbAllowsRuleWiden("postiz_schedule")).toBe(false);
     expect(capabilityVerbAllowsRuleWiden("postiz_draft")).toBe(false);
     expect(capabilityVerbAllowsRuleWiden("postiz_schedule_post")).toBe(false);
+    expect(capabilityVerbAllowsRuleWiden("launch_site")).toBe(false);
     expect(capabilityVerbAllowsRuleWiden("postiz_upload_from_url")).toBe(true);
     expect(capabilityVerbAllowsRuleWiden("gmail_send")).toBe(true);
     expect(capabilityVerbAllowsRuleWiden(null)).toBe(true);

@@ -66,6 +66,10 @@ import {
   redactSecretKeys,
 } from "../utils/redact-secrets.js";
 import { recordDomainMutation } from "../utils/domain-mutation.js";
+import {
+  materializeGeneratedSecrets,
+  scrubGeneratedValues,
+} from "./generated-secrets.js";
 import { isConnectionAuthError } from "../services/connection-health/notify-connector-unhealthy.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
 import { createLogger } from "@synap-core/core";
@@ -1613,11 +1617,27 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   if (!resolved.ok) return resolved.result;
   const secret = resolved.secret;
 
+  // Generated secrets (`vault://generate?name=…` body values, opt-in per tool
+  // via `config.generatedSecrets`): minted, vaulted and substituted HERE — past
+  // the capability gate, so a proposal only ever stored the placeholder — and
+  // scrubbed from whatever the provider sends back. See generated-secrets.ts.
+  const generated = await materializeGeneratedSecrets(body, {
+    userId,
+    tool: { name: tool.name, config: tool.config },
+  });
+  if (!generated.ok) return generated.result;
+  const callInput =
+    generated.values.length > 0 ? { ...input, body: generated.body } : input;
+  const callBody = callInput.body;
+
   // Opt-in "sign in, then call" mode (`config.auth.type: "session"`). A tool
   // without that `type` never enters this branch, so every legacy static-key
   // tool below runs byte-identically (pinned by session-auth.vault.test.ts).
   if (isSessionAuth(toolConfig.auth)) {
-    return sessionAuthCall({ vaultId, secret, toolConfig, input });
+    return scrubGeneratedValues(
+      await sessionAuthCall({ vaultId, secret, toolConfig, input: callInput }),
+      generated.values
+    );
   }
 
   // (b) Build the outbound URL. SECURITY: when `config.baseUrl` is configured
@@ -1637,7 +1657,7 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   // Content-Type and the auth header set below always WIN — a custom header can
   // never override auth or the structural Content-Type.
   const headers: Record<string, string> = { ...(input.headers ?? {}) };
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (callBody !== undefined) headers["Content-Type"] = "application/json";
 
   // Inject the secret per config — header or query. Never logged.
   if (auth.in === "query") {
@@ -1649,9 +1669,9 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   const sent = await sendVaultRequest(url, {
     method: method.toUpperCase(),
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: callBody !== undefined ? JSON.stringify(callBody) : undefined,
   });
-  return sent.result;
+  return scrubGeneratedValues(sent.result, generated.values);
 };
 
 /**

@@ -342,3 +342,50 @@ describe("propose decisions carry a structured cause", () => {
     ).toBeTruthy();
   });
 });
+
+describe("launch_site stays a proposal above every rule and grant", () => {
+  // The site-launch verb's ONE approval is the whole governance of a launch
+  // (the "Launch a site" playbook has no stage gate because of it), so neither
+  // a stored `auto` rule (rung 2.8) nor an `auto` grant may run it for an
+  // agent. The same inputs on another verb name run — the positive control
+  // that the rule and the grant really were in play.
+  const SKILL = (name: string) => ({
+    capabilityKind: "skill" as const,
+    capabilityId: "skill-launch",
+    skill: { id: "skill-launch", approved: true, userId: "owner-1", name },
+    actorUserId: "agent-1",
+    agentUserId: "agent-1",
+    workspaceId: "ws-1",
+  });
+  beforeEach(() => {
+    findCapabilityGrantMock.mockReset();
+    resolveGovernanceRuleMock.mockReset();
+    resolveOriginTrustMock.mockReset();
+    resolveOriginTrustMock.mockResolvedValue(undefined);
+  });
+
+  it("an auto governance rule for the agent and verb still files a proposal", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+    resolveGovernanceRuleMock.mockResolvedValue({
+      verdict: "auto",
+      matchedPattern: "launch_site",
+    });
+    expect((await gateCapabilityExecution(SKILL("launch_site"))).decision).toBe(
+      "propose"
+    );
+    expect((await gateCapabilityExecution(SKILL("other_verb"))).decision).toBe(
+      "run"
+    );
+  });
+
+  it("an auto grant still files a proposal", async () => {
+    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
+    resolveGovernanceRuleMock.mockResolvedValue(undefined);
+    expect((await gateCapabilityExecution(SKILL("launch_site"))).decision).toBe(
+      "propose"
+    );
+    expect((await gateCapabilityExecution(SKILL("other_verb"))).decision).toBe(
+      "run"
+    );
+  });
+});
