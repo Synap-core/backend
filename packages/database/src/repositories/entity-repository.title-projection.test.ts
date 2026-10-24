@@ -17,7 +17,9 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 //  - a bag with NO title key gains none (rules out "always write title");
 //  - a patch sending a different `properties.title` beside `title`: the
 //    column wins (one value, never two);
-//  - a patch with no `title` leaves the bag's title alone.
+//  - a patch with no `title` leaves the bag's title alone;
+//  - a patch sending ONLY `properties.title` renames the column too (rules
+//    out "the bag follows the column, never the other way").
 // ---------------------------------------------------------------------------
 
 import { EntityRepository } from "./entity-repository.js";
@@ -161,5 +163,12 @@ describe("EntityRepository — the title is one value", () => {
     await repo.update("e1", { properties: { note: "y" } }, "u1");
     expect(written).not.toHaveProperty("title");
     expect(written?.properties).toEqual({ title: "Old name", note: "y" });
+  });
+
+  it("a rename sent only as properties.title moves the column too", async () => {
+    await created("Old name");
+    await repo.update("e1", { properties: { title: "New name" } }, "u1");
+    expect(written?.title).toBe("New name");
+    expect(written?.properties).toEqual({ title: "New name", note: "x" });
   });
 });

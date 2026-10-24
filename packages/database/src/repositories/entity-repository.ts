@@ -677,6 +677,20 @@ export class EntityRepository extends BaseRepository<
       throw new Error("Entity not found");
     }
 
+    // ONE TITLE, the other door (dogfood 68b9b7c2): a rename sent only as
+    // `properties.title` (a field editor writing the modeled `title` def)
+    // renames the column too, so the bag and the column never disagree,
+    // whichever of the two a writer used.
+    const bagTitle = data.properties?.title;
+    if (
+      data.title === undefined &&
+      typeof bagTitle === "string" &&
+      bagTitle.trim() !== "" &&
+      bagTitle !== existing.title
+    ) {
+      data = { ...data, title: bagTitle };
+    }
+
     // 2. Validate and merge properties if they change. A deletion is a
     // property mutation too: validating only an explicit merge lets callers
     // remove a required/canonical property without ever passing the profile
