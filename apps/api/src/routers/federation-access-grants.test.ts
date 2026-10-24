@@ -3,16 +3,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   class PodOwnerAlreadyClaimedError extends Error {}
+  class PodOwnerNotClaimedError extends Error {}
 
   return {
     activateFederatedMember: vi.fn(),
     assertFederatedAccessTarget: vi.fn(),
     consumeFederatedAssertionReceipt: vi.fn(),
+    createIssuerIdentityLinkReceipt: vi.fn(),
     getByUrl: vi.fn(),
     getDb: vi.fn(),
     loggerError: vi.fn(),
     loggerWarn: vi.fn(),
     PodOwnerAlreadyClaimedError,
+    PodOwnerNotClaimedError,
+    readPodUserAccess: vi.fn(),
     seedAdminUser: vi.fn(),
     verifyIssuerJwt: vi.fn(),
     verifyTrustedIssuerJwt: vi.fn(),
@@ -39,13 +43,14 @@ vi.mock("@synap/database", () => ({
   bindExistingFederatedIdentity: vi.fn(),
   consumeFederatedAssertionReceipt: mocks.consumeFederatedAssertionReceipt,
   consumeIssuerIdentityLinkReceipt: vi.fn(),
-  createIssuerIdentityLinkReceipt: vi.fn(),
+  createIssuerIdentityLinkReceipt: mocks.createIssuerIdentityLinkReceipt,
   FederatedApplicationConnectionService: class FederatedApplicationConnectionService {},
   and: vi.fn(),
   eq: vi.fn(),
   getDb: mocks.getDb,
   PodOwnerAlreadyClaimedError: mocks.PodOwnerAlreadyClaimedError,
-  readPodUserAccess: vi.fn(),
+  PodOwnerNotClaimedError: mocks.PodOwnerNotClaimedError,
+  readPodUserAccess: mocks.readPodUserAccess,
   hasActivePodAccess: vi.fn(),
   seedAdminUser: mocks.seedAdminUser,
   TrustedIssuerService: class TrustedIssuerService {
@@ -331,5 +336,144 @@ describe("POST /bootstrap", () => {
       expect.objectContaining({ identityId: "new-owner-identity" }),
       expect.stringContaining("compensation")
     );
+  });
+});
+
+describe("POST /bootstrap — initial admin (A4: a lab's confirming admin)", () => {
+  const fetchMock = vi.fn();
+  const receiptId = "22222222-2222-4222-8222-222222222222";
+  const adminClaims = {
+    commandId: "admin-command-1",
+    email: "Founder@Example.test",
+    exp: now + 300,
+    iat: now,
+    intentId: "intent-1",
+    iss: issuerUrl,
+    jti: "admin-assertion-1",
+    nonce: "n".repeat(32),
+    purpose: "initial-admin-bootstrap" as const,
+    receiptId,
+    sub: "cp-admin-1",
+    type: "federated_assertion" as const,
+  };
+  const adminAccess = {
+    podRole: "admin",
+    workspaceScopes: [],
+    projectScopes: [],
+  };
+  const post = (token: string) =>
+    federationRouter.request("/bootstrap", {
+      body: JSON.stringify({
+        assertion: jwt.sign(adminClaims, "test-secret", { algorithm: "HS256" }),
+      }),
+      headers: {
+        "Content-Type": "application/json",
+        "X-Pod-Bootstrap-Token": token,
+      },
+      method: "POST",
+    });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.PROVISIONING_TOKEN = "pod-bootstrap-token";
+    process.env.PUBLIC_URL = "https://pod.example.test";
+    mocks.getByUrl.mockResolvedValue({
+      allowedScopes: ["identity:link-user"],
+      id: "issuer-1",
+      status: "approved",
+    });
+    mocks.consumeFederatedAssertionReceipt.mockResolvedValue("consumed");
+    mocks.verifyIssuerJwt.mockResolvedValue(adminClaims);
+    mocks.seedAdminUser.mockResolvedValue({
+      userId: "pod-admin-identity",
+      workspaceId: null,
+      alreadyExisted: false,
+    });
+    mocks.createIssuerIdentityLinkReceipt.mockResolvedValue({
+      receiptId,
+      expiresAt: new Date(),
+    });
+    mocks.readPodUserAccess.mockResolvedValue(adminAccess);
+    fetchMock.mockResolvedValue(kratosResponse([{ id: "pod-admin-identity" }]));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.PROVISIONING_TOKEN;
+  });
+
+  it("is refused without the pod's install secret, before any work", async () => {
+    const response = await post("not-the-install-secret");
+
+    expect(response.status).toBe(401);
+    expect(mocks.verifyIssuerJwt).not.toHaveBeenCalled();
+    expect(mocks.seedAdminUser).not.toHaveBeenCalled();
+    expect(mocks.createIssuerIdentityLinkReceipt).not.toHaveBeenCalled();
+  });
+
+  it("is refused before the owner bound the issuer, spending nothing", async () => {
+    mocks.getByUrl.mockResolvedValue({
+      allowedScopes: [],
+      id: "issuer-1",
+      status: "pending",
+    });
+
+    const response = await post("pod-bootstrap-token");
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      error: "Bootstrap the Pod owner before an initial admin",
+    });
+    expect(mocks.consumeFederatedAssertionReceipt).not.toHaveBeenCalled();
+    expect(mocks.seedAdminUser).not.toHaveBeenCalled();
+  });
+
+  it("answers 409 when the pod has no owner yet (seed refuses)", async () => {
+    mocks.seedAdminUser.mockRejectedValue(new mocks.PodOwnerNotClaimedError());
+
+    const response = await post("pod-bootstrap-token");
+
+    expect(response.status).toBe(409);
+    expect(mocks.createIssuerIdentityLinkReceipt).not.toHaveBeenCalled();
+  });
+
+  it("binds a pod ADMIN for the issuer subject and writes the issuer-chosen receipt", async () => {
+    const before = Date.now();
+    const response = await post("pod-bootstrap-token");
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      success: true,
+      userId: "pod-admin-identity",
+      workspaceId: null,
+      receiptId,
+      access: adminAccess,
+    });
+    expect(mocks.seedAdminUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kratosIdentityId: "pod-admin-identity",
+        email: "founder@example.test",
+        federatedIdentity: {
+          issuerId: "issuer-1",
+          issuerSubject: "cp-admin-1",
+        },
+        initialPodAdmin: true,
+      })
+    );
+    expect(mocks.seedAdminUser).not.toHaveBeenCalledWith(
+      expect.objectContaining({ requireUnclaimedPodOwner: true })
+    );
+    const receipt = mocks.createIssuerIdentityLinkReceipt.mock.calls[0]![0];
+    expect(receipt).toMatchObject({
+      issuerId: "issuer-1",
+      issuerSubject: "cp-admin-1",
+      userId: "pod-admin-identity",
+      intentId: "intent-1",
+      nonce: adminClaims.nonce,
+      receiptId,
+    });
+    // Outlives the CP's post-registration read (≥ 25 min), single-use anyway.
+    expect(receipt.expiresAt.getTime() - before).toBeGreaterThan(25 * 60_000);
   });
 });

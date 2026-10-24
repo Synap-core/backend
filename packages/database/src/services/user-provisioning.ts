@@ -56,6 +56,13 @@ export interface SeedAdminUserInput {
    * identity. Used only by the install/bootstrap boundary.
    */
   requireUnclaimedPodOwner?: boolean;
+  /**
+   * Add this issuer-qualified identity as a Pod ADMIN next to an owner that is
+   * already claimed (a lab's confirming admin, A4). Used only by the
+   * install/bootstrap boundary; refused before an owner exists and for the
+   * owner's own identity. Exclusive with `requireUnclaimedPodOwner`.
+   */
+  initialPodAdmin?: boolean;
 }
 
 export interface SeedAdminUserResult {
@@ -74,6 +81,14 @@ export class PodOwnerAlreadyClaimedError extends Error {
   constructor() {
     super("Pod already has a different human owner");
     this.name = "PodOwnerAlreadyClaimedError";
+  }
+}
+
+/** An initial admin was asked for before the Pod's owner was claimed. */
+export class PodOwnerNotClaimedError extends Error {
+  constructor() {
+    super("Pod has no owner yet; an initial admin comes after the owner");
+    this.name = "PodOwnerNotClaimedError";
   }
 }
 
@@ -301,6 +316,11 @@ export async function createIssuerIdentityLinkReceipt(input: {
   intentId: string;
   nonce: string;
   expiresAt?: Date;
+  /**
+   * Issuer-chosen receipt id, only for an install-time receipt (the issuer
+   * consumes it server→server; no browser carries a pod-minted id back).
+   */
+  receiptId?: string;
 }): Promise<{ receiptId: string; expiresAt: Date }> {
   const issuerId = input.issuerId.trim();
   const issuerSubject = input.issuerSubject.trim();
@@ -314,6 +334,7 @@ export async function createIssuerIdentityLinkReceipt(input: {
   }
   const nonceHash = hashNonce(nonce);
   const expiresAt = input.expiresAt ?? new Date(Date.now() + 5 * 60_000);
+  const receiptId = input.receiptId?.trim() || undefined;
 
   return db.transaction(async (tx) => {
     // A receipt is proof of a binding that exists *now*. Do not issue one from
@@ -343,6 +364,7 @@ export async function createIssuerIdentityLinkReceipt(input: {
       if (
         existing.issuerSubject !== issuerSubject ||
         existing.userId !== userId ||
+        (receiptId && existing.receiptId !== receiptId) ||
         existing.consumedAt ||
         existing.expiresAt <= new Date()
       ) {
@@ -357,6 +379,7 @@ export async function createIssuerIdentityLinkReceipt(input: {
         issuerId,
         issuerSubject,
         userId,
+        ...(receiptId ? { receiptId } : {}),
         intentId,
         nonceHash,
         expiresAt,
@@ -383,6 +406,7 @@ export async function createIssuerIdentityLinkReceipt(input: {
       !concurrent ||
       concurrent.issuerSubject !== issuerSubject ||
       concurrent.userId !== userId ||
+      (receiptId && concurrent.receiptId !== receiptId) ||
       concurrent.consumedAt ||
       concurrent.expiresAt <= new Date()
     ) {
@@ -768,7 +792,55 @@ export async function seedAdminUser(
   const name = input.name?.trim() || undefined;
   const emailVerified = input.emailVerified ?? true;
 
+  if (input.requireUnclaimedPodOwner && input.initialPodAdmin) {
+    throw new Error(
+      "seedAdminUser: an initial owner and an initial admin are exclusive"
+    );
+  }
+
   const result = await db.transaction(async (tx) => {
+    if (input.initialPodAdmin) {
+      if (!federatedIdentity) {
+        throw new Error(
+          "seedAdminUser: initial admin bootstrap requires a federated identity"
+        );
+      }
+      // Same lock as the first-owner claim: the owner set cannot change
+      // between this read and the membership write below.
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext('synap:initial-federated-owner-bootstrap'))`
+      );
+      const ownerRows = await tx
+        .select({ userId: workspaceMembers.userId })
+        .from(workspaceMembers)
+        .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
+        .innerJoin(users, eq(users.id, workspaceMembers.userId))
+        .where(
+          and(
+            eq(workspaces.systemSlug, "pod-admin"),
+            eq(workspaceMembers.role, "owner"),
+            eq(users.userType, "human")
+          )
+        );
+      const ownerIds = new Set(ownerRows.map((owner) => owner.userId));
+      if (ownerIds.size === 0) throw new PodOwnerNotClaimedError();
+      const subjectLink = await tx.query.federatedIdentityLinks.findFirst({
+        where: and(
+          eq(federatedIdentityLinks.issuerId, federatedIdentity.issuerId),
+          eq(
+            federatedIdentityLinks.issuerSubject,
+            federatedIdentity.issuerSubject
+          )
+        ),
+        columns: { userId: true },
+      });
+      if (
+        ownerIds.has(identityId) ||
+        (subjectLink && ownerIds.has(subjectLink.userId))
+      ) {
+        throw new Error("seedAdminUser: the initial admin is the Pod owner");
+      }
+    }
     if (input.requireUnclaimedPodOwner) {
       if (!federatedIdentity) {
         throw new Error(
@@ -969,11 +1041,12 @@ export async function seedAdminUser(
       ),
       columns: { role: true },
     });
+    const seededRole = input.initialPodAdmin ? "admin" : "owner";
     if (!podAdminMembership) {
       await tx.insert(workspaceMembers).values({
         workspaceId: podAdminWorkspace.id,
         userId: identityId,
-        role: "owner",
+        role: seededRole,
       });
     } else if (
       podAdminMembership.role !== "owner" &&
@@ -981,7 +1054,7 @@ export async function seedAdminUser(
     ) {
       await tx
         .update(workspaceMembers)
-        .set({ role: "owner" })
+        .set({ role: seededRole })
         .where(
           and(
             eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
