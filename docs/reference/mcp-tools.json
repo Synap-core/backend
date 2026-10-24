@@ -8982,7 +8982,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "File EXISTING records into a project (entity --belongs_to_project--> project), so the project's members see them. Use this — not link_entities (refused for this edge) and not a projectId property (it files nothing). You must be able to write every record; one refused record refuses the batch. Always a proposal for an agent, one for the whole batch — `proposed` is success, surface reviewUrl. remove:true un-files them instead.",
+      "description": "File EXISTING records into a project (entity --belongs_to_project--> project), so the project's members see them. Use this — not link_entities (refused for this edge) and not a projectId property (it files nothing). You must be able to write every record; one refused record refuses the batch. A proposal for an agent, one for the whole batch — `proposed` is success, surface reviewUrl — EXCEPT your own records from the last 24 hours, untouched by a person, filed into a project the person named (your project focus, or the project of the session you name in `sessionId`): those are filed directly, with a receipt and Undo, unless the person switched that off in Approvals. remove:true un-files them instead.",
       "parameters": [
         {
           "name": "projectId",
@@ -9007,6 +9007,12 @@
           "type": "string",
           "required": false,
           "description": "Why they belong to this project, in the person's words — shown to the reviewer. One line."
+        },
+        {
+          "name": "sessionId",
+          "type": "string",
+          "required": false,
+          "description": "OPTIONAL: the focus session this filing belongs to. Leave it out and the write is attributed automatically. Name it when you file your own fresh records into THAT session's project: a session you name says which project the person asked for, so the filing applies directly instead of waiting for approval. A session that isn't yours is ignored, not an error."
         }
       ],
       "inputSchema": {
@@ -9028,6 +9034,10 @@
           "reasoning": {
             "type": "string",
             "description": "Why they belong to this project, in the person's words — shown to the reviewer. One line."
+          },
+          "sessionId": {
+            "type": "string",
+            "description": "OPTIONAL: the focus session this filing belongs to. Leave it out and the write is attributed automatically. Name it when you file your own fresh records into THAT session's project: a session you name says which project the person asked for, so the filing applies directly instead of waiting for approval. A session that isn't yours is ignored, not an error."
           }
         },
         "required": ["projectId", "entityIds"]

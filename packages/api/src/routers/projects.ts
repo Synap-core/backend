@@ -687,6 +687,12 @@ export const projectsRouter = router({
         entityIds: input.entityIds,
         remove: input.remove === true,
         reasoning: input.reasoning,
+        // The session the caller works in (MCP: the one it named, or the one
+        // its door derived). A NAMED session's project is a project the
+        // person named (FB1020 B3, `own-organise.ts`); a derived one names
+        // nothing. Without it only `set_project_focus` could name the project
+        // (dogfood ea47d64e).
+        sessionId: ctx.sessionId ?? null,
       })
     ),
 
