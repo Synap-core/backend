@@ -21,6 +21,11 @@
  *   - An agent's `kind: 'update'` (the default) in a session room produces NO
  *     notification (founder decision F, 2026-09-25) — it lives only in the
  *     room and the session's state mark.
+ *   - An agent's COORDINATION POST (`metadata.sessionPost`: a typed message
+ *     to another session's agent) notifies NOBODY — not its question, not its
+ *     @mentions (founder decision 2026-10-23: an agent message never pushes
+ *     the person's phone). It is delivered by the target session's change
+ *     feed and inbox (`focus-sessions/session-inbox.ts`).
  *   - Someone already @mentioned is not told twice about the same post.
  *   - A human's own post notifies only the humans it @mentions (never themself).
  *
@@ -189,7 +194,8 @@ async function agentDisplayName(agentUserId: string): Promise<string> {
  * Everything a room post owes the people in the room: mentions for any
  * author, and — for an AGENT's `question` post in a session room — the
  * `session.needs_you` push. A plain `update` owes nothing (founder decision
- * F, 2026-09-25). Call AFTER the message row landed (a duplicate/replayed
+ * F, 2026-09-25), and neither does an agent's coordination post to another
+ * session (`sessionPost`). Call AFTER the message row landed (a duplicate/replayed
  * post must not notify again).
  */
 export async function notifyRoomPost(p: {
@@ -202,7 +208,18 @@ export async function notifyRoomPost(p: {
   kind?: RoomPostKind;
   /** The channel's workspace; `undefined` ⇒ read from the channel row. */
   workspaceId?: string | null;
+  /**
+   * The post is an agent's COORDINATION POST (`metadata.sessionPost`): it is
+   * addressed to another session's agent, never to a person.
+   */
+  sessionPost?: boolean;
 }): Promise<void> {
+  // An agent's message to another session NEVER pushes the person's phone
+  // (founder decision, 2026-10-23) — whatever its `kind`, whatever it
+  // @mentions. Every session here is the same person's, so a "question" or a
+  // mention between two agents would ring them for a conversation between
+  // machines. It is delivered through the session's change feed and inbox.
+
   const mentioned = await notifyHumanMentions({
     channelId: p.channelId,
     content: p.content,

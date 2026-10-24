@@ -28,6 +28,16 @@
  *                          author `human`), NOT agent posts, NOT a teammate.
  *                          A reply that IS an answer is reported once, as
  *                          `answer`, when both kinds are asked for.
+ *   - `session_message`  — a COORDINATION POST another session's agent
+ *                          addressed to this session (`sessionPost`, the
+ *                          inbox predicate in `session-inbox.ts`): `intent`,
+ *                          `from` (its session, agent, harness), the text
+ *                          fenced, and `wake` — stamped at the post (only
+ *                          blocked_on_you / handoff, inside the loop and rate
+ *                          guards) and false once the session's agent read
+ *                          it. `id` = the message id: pass it back as `cause`
+ *                          when replying. With no `since`: the UNREAD ones
+ *                          (no read receipt yet), any age — like answers.
  *
  * CURSOR: `since` is EXCLUSIVE over each event's `at` (millisecond ISO — the
  * database's microseconds are truncated BEFORE the comparison, or a row would
@@ -73,12 +83,23 @@ import {
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
 import { fenceUntrustedData } from "../agent-dispatch/binding-call.js";
+import type {
+  SessionPostIntent,
+  SessionPostMeta,
+  SessionPostRef,
+} from "@synap-core/types/agents";
+import {
+  addressedPost,
+  addressedToSessionWhere,
+  unreadSessionPostWhere,
+} from "./session-inbox.js";
 
 export const SESSION_CHANGE_KINDS = [
   "answer",
   "proposal_decided",
   "stage_moved",
   "owner_message",
+  "session_message",
 ] as const;
 export type SessionChangeKind = (typeof SESSION_CHANGE_KINDS)[number];
 
@@ -172,6 +193,27 @@ export type SessionChangeEvent =
       untrusted: true;
       fenced: string;
       message: { id: string; text: string; authorId: string };
+    })
+  | (EventBase & {
+      kind: "session_message";
+      /** Another agent's words: data, never instructions. */
+      untrusted: true;
+      fenced: string;
+      /** Ring the doorbell for this one? Decided at the post; false once read. */
+      wake: boolean;
+      intent: SessionPostIntent;
+      from: SessionPostMeta["from"];
+      message: {
+        id: string;
+        text: string;
+        refs?: SessionPostRef[];
+        /** The post this one replies to (its wake chain). */
+        cause?: string;
+        hop: number;
+        /** Why a wake-worthy post was delivered without waking. */
+        wakeHeld?: SessionPostMeta["wakeHeld"];
+        readAt: string | null;
+      };
     });
 
 export interface SessionChangesPage {
@@ -375,6 +417,72 @@ export async function listSessionChanges(p: {
         untrusted: true,
         fenced: fenceUntrustedData(r.content, "synap session owner message"),
         message: { id: r.id, text: r.content, authorId: r.userId },
+      });
+    }
+  }
+
+  if (false && session.channelId) {
+    const sentAt = msIso(messages.timestamp);
+    const rows = await db
+      .select({
+        id: messages.id,
+        content: messages.content,
+        metadata: messages.metadata,
+        timestamp: messages.timestamp,
+        at: sentAt,
+      })
+      .from(messages)
+      .where(
+        and(
+          addressedToSessionWhere({
+            channelId: session.channelId,
+            sessionId: session.id,
+          }),
+          ...(since
+            ? [
+                drizzleSql`${messages.timestamp} > ${since}::timestamptz`,
+                drizzleSql`${sentAt} > ${since}`,
+              ]
+            : p.skipPickedUp
+              ? // UNREAD, any age — the answers' contract: mail that landed
+                // while the agent was away still counts.
+                [unreadSessionPostWhere()]
+              : floor
+                ? [
+                    drizzleSql`${messages.timestamp} > ${floor}::timestamptz`,
+                    drizzleSql`${sentAt} > ${floor}`,
+                  ]
+                : [])
+        )
+      )
+      .orderBy(asc(sentAt), asc(messages.id))
+      .limit(limit + 1);
+    sourceHasMore ||= rows.length > limit;
+    for (const r of rows.slice(0, limit)) {
+      const posted = addressedPost(r);
+      if (!posted) continue;
+      const { meta } = posted;
+      cursored.push({
+        kind: "session_message",
+        id: r.id,
+        at: r.at,
+        untrusted: true,
+        fenced: fenceUntrustedData(
+          r.content,
+          `synap message from another session (${meta.intent})`
+        ),
+        wake: meta.wake && !meta.readAt,
+        intent: meta.intent,
+        from: meta.from,
+        message: {
+          id: r.id,
+          text: r.content,
+          ...(meta.refs ? { refs: meta.refs } : {}),
+          ...(meta.cause ? { cause: meta.cause } : {}),
+          hop: meta.hop,
+          ...(meta.wakeHeld ? { wakeHeld: meta.wakeHeld } : {}),
+          readAt: meta.readAt ?? null,
+        },
       });
     }
   }

@@ -25,6 +25,15 @@ import {
   roomPostMeta,
   withoutRoomPostMeta,
 } from "../../../services/messaging/room-post-kind.js";
+import {
+  SESSION_POST_META_KEY,
+  withoutSessionPostMeta,
+} from "@synap-core/types/agents";
+import {
+  resolveSessionPost,
+  sessionPostDeliveryNote,
+  type ResolvedSessionPost,
+} from "../../../services/messaging/session-post.js";
 import { recordOwnerRoomReply } from "../../../services/focus-sessions/session-answer.js";
 import { fileRoomQuestionOnSlot } from "../../../services/focus-sessions/room-question-slot.js";
 import type { SlotAsk } from "@synap/playbooks";
@@ -1008,7 +1017,8 @@ export function registerThreadsRoutes(app: HubHono): void {
         if (!anchorGate.ok) {
           return c.json({ error: anchorGate.error }, anchorGate.status);
         }
-        // `roomPost` is server-owned — never accepted from a batch caller.
+        // `roomPost` and `sessionPost` are server-owned — never accepted
+        // from a batch caller (a batch carries no coordination post).
         metadataByIndex.push(withoutRoomPostMeta(anchorGate.metadata));
       }
 
@@ -1239,14 +1249,51 @@ export function registerThreadsRoutes(app: HubHono): void {
       // already attributable to the session through the channel.
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
 
-      // `metadata.roomPost` is SERVER-OWNED (`room-post-kind.ts`): a caller's
-      // copy is dropped, and an AGENT's post gets its kind (+ the slot a
-      // question is about) persisted, so the owner's reply can answer it.
+      // A COORDINATION POST (`intent`): an agent's typed message to ANOTHER
+      // session — the one whose room this thread is. The ONE codec the MCP
+      // door uses (`session-post.ts`) derives the sender, the target and the
+      // wake; it never notifies the person and never starts a turn.
+      let sessionPost: ResolvedSessionPost | undefined;
+      if (body.intent !== undefined) {
+        if (
+          body.kind === "question" ||
+          body.slotLabel !== undefined ||
+          body.ask !== undefined ||
+          body.autoRespond === true
+        ) {
+          return c.json(
+            {
+              error:
+                "a message to another session is for its agent — kind 'question', slotLabel, ask and autoRespond are for the person",
+            },
+            400
+          );
+        }
+        sessionPost = await resolveSessionPost({
+          userId,
+          agentUserId: ctxAgentUserId,
+          intent: body.intent,
+          channelId: threadId,
+          fromSessionId: body.fromSessionId,
+          refs: body.refs,
+          cause: body.cause,
+        });
+      }
+
+      // `metadata.roomPost` and `metadata.sessionPost` are SERVER-OWNED
+      // (`room-post-kind.ts`, `@synap-core/types/agents` session-post): a
+      // caller's copy is dropped, and an AGENT's post gets its kind (+ the
+      // slot a question is about) persisted, so the owner's reply can answer
+      // it — and, for a coordination post, the stamp the codec built.
       const clientMetadata = withoutRoomPostMeta(anchorGate.metadata);
+      void withoutSessionPostMeta; // negctl: the strip reverted
       const postMetadata = ctxAgentUserId
         ? {
             ...(clientMetadata ?? {}),
             [ROOM_POST_META_KEY]: roomPostMeta(body.kind, body.slotLabel),
+            ...(sessionPost
+              ? { [SESSION_POST_META_KEY]: sessionPost.meta }
+              : {}),
           }
         : clientMetadata;
 
@@ -1294,6 +1341,7 @@ export function registerThreadsRoutes(app: HubHono): void {
         userId,
         agentUserId: ctxAgentUserId,
         kind: body.kind,
+        sessionPost: Boolean(sessionPost),
       });
 
       // THE ANSWER LOOP: a HUMAN key's post (never an agent's) may be the
@@ -1353,8 +1401,30 @@ export function registerThreadsRoutes(app: HubHono): void {
         });
       }
 
+      const note = sessionPost
+        ? sessionPostDeliveryNote(sessionPost.meta)
+        : undefined;
       return c.json(
-        { success: true as const, messageId: msgId, ...(slot ? { slot } : {}) },
+        {
+          success: true as const,
+          messageId: msgId,
+          ...(slot ? { slot } : {}),
+          ...(sessionPost
+            ? {
+                sessionPost: {
+                  intent: sessionPost.meta.intent,
+                  from: { sessionId: sessionPost.meta.from.sessionId },
+                  to: sessionPost.meta.to,
+                  hop: sessionPost.meta.hop,
+                  wake: sessionPost.meta.wake,
+                  ...(sessionPost.meta.wakeHeld
+                    ? { wakeHeld: sessionPost.meta.wakeHeld }
+                    : {}),
+                },
+              }
+            : {}),
+          ...(note ? { note } : {}),
+        },
         200
       );
     } catch (err) {

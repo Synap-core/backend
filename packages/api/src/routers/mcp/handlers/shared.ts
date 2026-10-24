@@ -613,6 +613,22 @@ export async function resolveSessionHandle(
     typeof args.sessionId === "string" && args.sessionId.trim() !== ""
       ? args.sessionId
       : undefined;
+  // A COORDINATION POST (`intent` / `toSessionId`) is written FROM the
+  // caller's session INTO another session's room: the room names the TARGET,
+  // so it must never become this call's session — that filed "A wrote to B"
+  // as "B wrote in B". Its own session is the explicit `fromSessionId`, else
+  // the client's bound one (the rungs below), as `session-post.ts` derives it.
+  const coordinationPost =
+    toolName === "synap_post_message" &&
+    (args.intent !== undefined || args.toSessionId !== undefined);
+  if (
+    !explicit &&
+    coordinationPost &&
+    typeof args.fromSessionId === "string" &&
+    args.fromSessionId.trim() !== ""
+  ) {
+    explicit = args.fromSessionId;
+  }
   // A post into a session's OWN room names that session: the channel identifies
   // it as surely as a `sessionId` would. Without this, a post to the room the
   // caller was handed by start_session fell to the ambiguous rung whenever
