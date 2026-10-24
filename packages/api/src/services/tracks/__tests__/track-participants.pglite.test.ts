@@ -74,6 +74,8 @@ vi.mock("@synap/database", async (importOriginal) => {
       projects: actual.projects as never,
       workspaceMembers: actual.workspaceMembers as never,
       trackParticipants: actual.trackParticipants as never,
+      // The one notification door reads the recipient's preferences (F12).
+      notificationPreferences: actual.notificationPreferences as never,
     },
   });
   return {
@@ -148,6 +150,7 @@ import {
   channelMembers,
   focusSessions,
   links,
+  notificationPreferences,
   notifications,
   playbooks,
   podMembers,
@@ -314,6 +317,7 @@ beforeAll(async () => {
     channels,
     channelMembers,
     notifications,
+    notificationPreferences,
     // What a goal holds (W2): a goal's criteria are graded from these rows.
     sessionEvaluations,
   ]) {
