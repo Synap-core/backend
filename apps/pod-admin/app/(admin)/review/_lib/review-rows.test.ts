@@ -179,6 +179,33 @@ describe("reviewRows", () => {
     expect(row!.batchIds).toEqual(["c1-p1"]);
   });
 
+  it("a create whose twin is a record is decided on its page, never inline or batched", () => {
+    const twinData = {
+      duplicateCheck: {
+        status: "possible",
+        subject: "entity",
+        candidates: [
+          {
+            ref: "record",
+            id: "e-1",
+            kind: "person",
+            title: "Léa",
+            why: "same_name",
+          },
+        ],
+      },
+    };
+    const [twin, plain] = reviewRows(
+      [cluster("c1"), cluster("c2")],
+      new Map([
+        facts("c1-p1", { targetType: "entity", data: twinData }),
+        facts("c2-p1", { targetType: "entity", data: {} }),
+      ])
+    );
+    expect(twin).toMatchObject({ inlineApprove: false, batchIds: null });
+    expect(plain).toMatchObject({ inlineApprove: true, batchIds: ["c2-p1"] });
+  });
+
   it("a member the viewer may not approve keeps the whole row out of inline and batch", () => {
     const [row] = reviewRows(
       [cluster("c1", { count: 2, proposalIds: ["a", "b"] })],
