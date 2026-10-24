@@ -38,7 +38,7 @@ import {
 } from "./cp-relay-credential.js";
 
 export type PodCpPurpose =
-  "invites" | "projects" | "capabilities" | "relay" | "broker";
+  "invites" | "projects" | "capabilities" | "relay" | "broker" | "entitlement";
 
 /** The credential a call site used before R1-b (its transition fallback). */
 export type PodCpLegacyCredential = "internal-key" | "relay-key";
@@ -65,6 +65,10 @@ export interface PodEnrollment {
   kid: string | null;
   /** The CP issuer origin = the audience of every pod token (if recorded). */
   issuer: string | null;
+  /** The CP transport URL the door registered or enrolled against. */
+  controlPlaneUrl: string | null;
+  /** When the CP accepted this pod's key (ISO), if recorded. */
+  enrolledAt: string | null;
 }
 
 export function podEnrollmentFile(): string {
@@ -110,6 +114,14 @@ export function readPodEnrollment(): PodEnrollment | null {
     kid: typeof parsed.kid === "string" && parsed.kid ? parsed.kid : null,
     issuer:
       typeof parsed.issuer === "string" && parsed.issuer ? parsed.issuer : null,
+    controlPlaneUrl:
+      typeof parsed.controlPlaneUrl === "string" && parsed.controlPlaneUrl
+        ? parsed.controlPlaneUrl
+        : null,
+    enrolledAt:
+      typeof parsed.enrolledAt === "string" && parsed.enrolledAt
+        ? parsed.enrolledAt
+        : null,
   };
 }
 

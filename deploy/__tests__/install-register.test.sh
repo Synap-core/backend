@@ -89,6 +89,9 @@ class H(http.server.BaseHTTPRequestHandler):
         fail = rd("pod-fail")
         if fail and fail in self.path:
             os.remove(os.path.join(D, "pod-fail")); return self.send(500, '{"error":"injected pod failure"}')
+        fail_body = rd("pod-fail-body")
+        if fail_body and fail_body in body:
+            return self.send(409, '{"error":"injected admin refusal"}')
         self.send(200, '{"ok":true}')
 s = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
 open(os.path.join(D, "port"), "w").write(str(s.server_address[1]))
@@ -163,7 +166,7 @@ setup() {
   cp "$HERE/synap" "$ROOT/synap"
   cp "$HERE/deploy/"*.sh "$HERE/deploy/env.schema" "$HERE/deploy/docker-compose.yml" "$HERE/deploy/Caddyfile" "$DEPLOY/"
   cp -R "$HERE/kratos" "$ROOT/kratos"
-  rm -f "$TMP"/req-*.json "$TMP/calls.log" "$TMP/nonce-seen" "$TMP/pod-fail"
+  rm -f "$TMP"/req-*.json "$TMP/calls.log" "$TMP/nonce-seen" "$TMP/pod-fail" "$TMP/pod-fail-body"
   echo 200 > "$TMP/cp-mode"
   echo "$DEPLOY/state/registration-nonce/nonce.json" > "$TMP/nonce-path"
   export FAKE
@@ -349,6 +352,29 @@ run_install "${REG[@]}"; rc=$?
 calls="$(grep -v '^/pods/register$' "$TMP/calls.log" | tr '\n' ' ')"
 [ "$rc" = 0 ] && [ "$calls" = "/api/federation/bootstrap " ] && grep -q 'Synap sign-in stays off' "$S/out" && grep -q 'not included with this pod' "$S/out" \
   && ok "nulls: oidc + intelligence null → only the owner step, both named, success" || { bad "nulls: rc=$rc calls='$calls'"; show; }
+
+# ── lab (A4): the confirming admin is bound through the owner's door, before the secret retires ──
+with_admins() { jq --argjson a "$1" '. + {adminAssertions: $a}' "$TMP/cp-response.json" > "$TMP/cp.tmp" && mv "$TMP/cp.tmp" "$TMP/cp-response.json"; }
+setup lab; cp_response "$OIDC" "$INTEL"; with_admins '["eyJadmin.assertion.jwt"]'
+run_install "${REG[@]}"; rc=$?
+calls="$(grep -v '^/pods/register$' "$TMP/calls.log" | tr '\n' ' ')"
+[ "$rc" = 0 ] && [ "$calls" = "/api/federation/bootstrap /api/federation/bootstrap /api/hub/federation/oidc-config /api/provision/register-intelligence " ] \
+  && ok "lab: owner → initial admin → oidc → AI, in order" || { bad "lab: rc=$rc calls='$calls'"; show; }
+BT="$(cat "$FAKE/token-at-bootstrap" 2>/dev/null)"
+[ -n "$BT" ] && [ "$(req api_federation_bootstrap '.headers["x-pod-bootstrap-token"]')" = "$BT" ] \
+  && [ "$(req api_federation_bootstrap '.body|fromjson|.assertion')" = "eyJadmin.assertion.jwt" ] \
+  && ok "lab: the admin assertion reached the bootstrap door WITH the install secret (before retirement)" || bad "lab: admin bootstrap request $(cat "$TMP/req-api_federation_bootstrap.json" 2>/dev/null)"
+[ -z "$(env_of PROVISIONING_TOKEN)" ] && [ -f "$DEPLOY/state/bootstrap-token.retired" ] \
+  && ok "lab: the secret is still retired after the admin step" || bad "lab: PROVISIONING_TOKEN not retired"
+setup labfail; cp_response "$OIDC" "$INTEL"; with_admins '["eyJadmin.assertion.jwt"]'; echo eyJadmin > "$TMP/pod-fail-body"
+run_install "${REG[@]}"; rc=$?
+[ "$rc" = 0 ] && grep -q 'initial admin 1/1 not bound' "$S/out" && grep -q '/api/provision/register-intelligence' "$TMP/calls.log" \
+  && [ -f "$DEPLOY/state/registration.json" ] && [ -f "$DEPLOY/state/bootstrap-token.retired" ] \
+  && ok "lab: a refused admin is named, never wedges the registration (its assertion could not be replayed)" || { bad "lab: refused admin rc=$rc"; show; }
+setup labshape; cp_response "$OIDC" "$INTEL"; with_admins '"eyJnot-a-list"'
+run_install "${REG[@]}"; rc=$?
+[ "$rc" != 0 ] && grep -q 'adminAssertions is present but not a list' "$S/out" && ! grep -q '^/api/' "$TMP/calls.log" \
+  && ok "lab: a malformed adminAssertions fails loudly before any pod call" || { bad "lab: malformed rc=$rc"; show; }
 
 # ── policy: the pod-agent's owner-consent file is seeded from deploymentMode ──
 POLF="state/pod-agent-policy.json"

@@ -14,7 +14,7 @@
  *
  * CONTRACT (the CP receiver implements this exact shape — do not drift):
  *   {
- *     "podId": string,           // this pod's CP pod id (workspace settings)
+ *     "podId": string,           // this pod's CP pod id (its Control Plane link)
  *     "full": true,              // full-snapshot semantics → CP tombstones absentees
  *     "projects": [ {
  *       "id": uuid, "slug": string|null, "name": string,
@@ -27,16 +27,16 @@
  *
  * Skips silently (one info log) when CONTROL_PLANE_URL is unset or the pod
  * holds no CP credential — absence is normal for self-hosted pods —
- * or when the pod has no CP identity (no workspace settings controlPlane.podId,
- * written by the provision flow).
+ * or when the pod has no CP identity (no Control Plane link: the enrollment
+ * record the registration / enroll door writes — `readControlPlaneLink`).
  *
  * postgres.js gotchas honored: timestamps are serialized via toISOString()
  * (never a raw Date in the JSON body) and computed/driver values that arrive
  * as strings are normalized through new Date().
  */
 
-import { db, drizzleSql, podCpAuthHeaders } from "@synap/database";
-import { projects, workspaces } from "@synap/database/schema";
+import { db, podCpAuthHeaders, readControlPlaneLink } from "@synap/database";
+import { projects } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "cp-project-sync" });
@@ -114,23 +114,12 @@ export function buildProjectSyncPayloads(
 }
 
 /**
- * The pod's CP identity: workspace settings `controlPlane.podId`, written by
- * the ES256 provision flow (same source connectors-trpc's
- * getControlPlaneSettings reads). Null = pod never provisioned against a CP.
+ * The pod's CP identity: its Control Plane link (`readControlPlaneLink`,
+ * `@synap/database` utils/control-plane-link.ts — the same reader
+ * cp-template-client uses). Null = the pod has no CP link.
  */
 async function resolveCpPodId(): Promise<string | null> {
-  const rows = await db
-    .select({
-      podId: drizzleSql<
-        string | null
-      >`${workspaces.settings} -> 'controlPlane' ->> 'podId'`,
-    })
-    .from(workspaces)
-    .where(
-      drizzleSql`${workspaces.settings} -> 'controlPlane' ->> 'podId' IS NOT NULL`
-    )
-    .limit(1);
-  return rows[0]?.podId ?? null;
+  return (await readControlPlaneLink())?.podId ?? null;
 }
 
 // One-shot skip logs — absence of CP config is normal, don't spam every 30min.
@@ -157,7 +146,7 @@ export async function handleCpProjectSync(): Promise<void> {
   if (!podId) {
     if (!loggedPodIdSkip) {
       logger.info(
-        "No controlPlane.podId in workspace settings — pod has no CP identity yet; skipping project directory sync"
+        "No Control Plane link — pod has no CP identity yet; skipping project directory sync"
       );
       loggedPodIdSkip = true;
     }

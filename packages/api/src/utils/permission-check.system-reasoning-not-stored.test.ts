@@ -6,7 +6,8 @@
  * on the review page as the proposer's own WHY:
  *   - the RBAC role-exceed line ("delete entity exceeds your workspace role
  *     (editor) — proposed for a reviewer's approval"), agent and person forms;
- *   - the gate's placeholder ("create playbook requires your approval").
+ *   - the gate's placeholder ("This waits for your approval."; machine
+ *     tokens before 2026-10-23: "create playbook requires your approval").
  * The fix stores only the caller's words; the sentence still answers the
  * CALLER (`perm.reasoning`) and the notification.
  *
@@ -186,8 +187,10 @@ describe("system-written reasoning is not stored as the proposer's", () => {
     );
     expect(mockInsertPendingProposal).toHaveBeenCalledTimes(1);
     expect(storedRow()!.data.reasoning).toBeUndefined();
+    // The caller is told in plain words — never the machine tokens
+    // ("create playbook requires your approval", dogfood e3c39721 §3).
     expect(perm).toMatchObject({
-      reasoning: "create playbook requires your approval",
+      reasoning: "This waits for your approval.",
     });
   });
 });
