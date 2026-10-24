@@ -2453,6 +2453,31 @@ export function resolveAgentReachLabel(
 }
 
 /**
+ * What a COORDINATION POST says — one agent's typed message to another
+ * session (`sessionPost.intent`, `@synap-core/types/agents` session-post).
+ * A MARK, never a sentence: the change feed, the packet inbox and the room
+ * render it beside the sender session. `agents/index.ts` holds the
+ * compile-time floor that a new intent cannot ship without its words.
+ */
+export const SESSION_POST_INTENT_LABELS = {
+  blocked_on_you: "Blocked on you",
+  handoff: "Handoff",
+  done: "Done",
+  fyi: "FYI",
+} as const;
+
+/** An intent's words; an unknown intent humanizes rather than leaks. */
+export function resolveSessionPostIntentLabel(
+  intent: string | null | undefined
+): string {
+  if (!intent) return "";
+  return (
+    (SESSION_POST_INTENT_LABELS as Readonly<Record<string, string>>)[intent] ??
+    humanizeToken(intent)
+  );
+}
+
+/**
  * WHO runs a playbook's work — its `executor` (`playbooks.executor`,
  * `playbook_runs.executor`: `is-agent` | `external-agent` | `hybrid`). The
  * Processes card, its service row and the playbook dashboard each kept a local
