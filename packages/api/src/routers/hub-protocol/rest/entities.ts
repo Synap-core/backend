@@ -98,13 +98,13 @@ import {
   uuidQueryParam,
 } from "./_codecs/_openapi.js";
 import {
+  actingUserIdFor,
   getCaller,
   getUserAccessibleWorkspaceIds,
   httpStatusForTrpcError,
   hasScope,
   isUuid,
   logger,
-  mayActAsUser,
   resolveActingContext,
   resolveActorId,
   uuidPathParam,
@@ -1040,13 +1040,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // (the access check below verifies THIS user against the entity's workspace).
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, query.userId)) {
+    const userId = actingUserIdFor(c, query.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = query.userId ?? authUserId;
     try {
       const result = await db.query.entities.findFirst({
         where: and(
@@ -1434,13 +1434,14 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (isPodWide && !body.workspaceId) {
       const authUserId = c.get("userId") as string | undefined;
       if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-      if (!mayActAsUser(c, body.userId)) {
+      const actingUserId = actingUserIdFor(c, body.userId);
+      if (!actingUserId) {
         return c.json(
           { error: "userId does not match the authenticated session" },
           403
         );
       }
-      userId = body.userId ?? authUserId;
+      userId = actingUserId;
       effectiveWorkspaceId = null;
     } else {
       // Reached when an explicit body.workspaceId is present, or the profile is
@@ -1751,13 +1752,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // route below.
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, body.userId)) {
+    const userId = actingUserIdFor(c, body.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = body.userId ?? authUserId;
 
     try {
       // Resolve + verify the TARGET entity is visible to the acting user, and
@@ -2228,13 +2229,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // attachments route.
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, bodyUserId)) {
+    const userId = actingUserIdFor(c, bodyUserId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = bodyUserId ?? authUserId;
 
     if (!bodyWorkspaceId) {
       return c.json({ error: "workspaceId is required" }, 400);
@@ -2453,13 +2454,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
     const bodyUserId =
       typeof body.userId === "string" ? body.userId : undefined;
-    if (!mayActAsUser(c, bodyUserId)) {
+    const userId = actingUserIdFor(c, bodyUserId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = bodyUserId ?? authUserId;
     const pin = resolveWorkspacePin(
       body,
       typeof body.workspaceId === "string" && body.workspaceId
@@ -2527,13 +2528,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
     const bodyUserId =
       typeof body.userId === "string" ? body.userId : undefined;
-    if (!mayActAsUser(c, bodyUserId)) {
+    const userId = actingUserIdFor(c, bodyUserId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = bodyUserId ?? authUserId;
     const fields = parseUploadEntityFields(body);
     if ("error" in fields) return c.json({ error: fields.error }, 400);
     const uploadToken =
@@ -2662,13 +2663,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const body = c.req.valid("json");
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, body.userId)) {
+    const userId = actingUserIdFor(c, body.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = body.userId ?? authUserId;
     try {
       const caller = await getCaller(c, {
         workspaceId: getConfinedWorkspace(c, body.workspaceId ?? null) ?? null,
@@ -2758,13 +2759,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, body.userId)) {
+    const userId = actingUserIdFor(c, body.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = body.userId ?? authUserId;
 
     try {
       const target = await db.query.entities.findFirst({
@@ -2936,13 +2937,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, q.userId)) {
+    const userId = actingUserIdFor(c, q.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = q.userId ?? authUserId;
 
     try {
       const target = await db.query.entities.findFirst({
@@ -3204,13 +3205,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const body = c.req.valid("json");
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, body.userId)) {
+    const userId = actingUserIdFor(c, body.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = body.userId ?? authUserId;
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
@@ -3312,13 +3313,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const body = c.req.valid("json");
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, body.userId)) {
+    const userId = actingUserIdFor(c, body.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = body.userId ?? authUserId;
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
@@ -3392,13 +3393,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const q = c.req.valid("query");
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    if (!mayActAsUser(c, q.userId)) {
+    const userId = actingUserIdFor(c, q.userId);
+    if (!userId) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = q.userId ?? authUserId;
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = q.agentUserId ?? ctxAgentUserId;
