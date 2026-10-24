@@ -106,15 +106,7 @@ export function NeedsYouSection({ sessionId }: { sessionId: string }) {
         {shown.map((row) => (
           <li key={row.key} className={`${BOX} px-4 pt-4`}>
             {row.detail?.kind === "ask" ? (
-              <AskAnswer
-                key={`${row.detail.sessionId}:${row.detail.label}`}
-                slot={row.detail.slot}
-                live={liveAskSlot(rows, row.detail)}
-                occurredAt={row.occurredAt}
-                onSettled={() => settle(row.key)}
-                onClose={() => settle(row.key)}
-                sessionDoor={false}
-              />
+              <p>{row.detail.slot.label}</p>
             ) : (
               <OwedRow row={row} sessionId={sessionId} />
             )}
