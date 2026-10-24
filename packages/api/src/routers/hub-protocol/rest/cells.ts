@@ -31,7 +31,7 @@ import {
 import {
   hasScope,
   logger,
-  verifyWorkspaceAccess,
+  verifyWorkspaceWriteAccess,
   verifyWorkspaceReadAccess,
   type HubHono,
   httpStatusForTrpcError,
@@ -155,7 +155,7 @@ export function registerCellsRoutes(app: HubHono): void {
     }
 
     const userId = c.get("userId");
-    if (!(await verifyWorkspaceAccess(userId, workspaceId))) {
+    if (!(await verifyWorkspaceWriteAccess(userId, workspaceId))) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
 
@@ -361,13 +361,13 @@ export function registerCellsRoutes(app: HubHono): void {
     // Only gate workspace access when a specific workspace is targeted — and
     // only on the OPERATOR path. An agent routes through the governance gate
     // below, which owns RBAC (including turning a non-member agent into a
-    // `workspace.join` proposal); a manual verifyWorkspaceAccess here would
+    // `workspace.join` proposal); a manual write check here would
     // hard-deny what the gate would otherwise let PROPOSE. Same reasoning as the
     // MCP `synap_create_cell` door.
     if (
       !agentUserId &&
       workspaceId &&
-      !(await verifyWorkspaceAccess(userId, workspaceId))
+      !(await verifyWorkspaceWriteAccess(userId, workspaceId))
     ) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
@@ -502,7 +502,10 @@ export function registerCellsRoutes(app: HubHono): void {
     const typeKey = c.req.param("typeKey");
     const workspaceId = c.req.query("workspaceId");
     const userId = c.get("userId");
-    if (workspaceId && !(await verifyWorkspaceAccess(userId, workspaceId))) {
+    if (
+      workspaceId &&
+      !(await verifyWorkspaceWriteAccess(userId, workspaceId))
+    ) {
       return c.json({ error: "Access denied to workspace" }, 403);
     }
     try {
