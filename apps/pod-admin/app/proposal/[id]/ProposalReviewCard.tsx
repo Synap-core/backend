@@ -9,11 +9,17 @@
  *   `ProposalReviewBody` — the Review template (page-grammar §1), top → down:
  *       who is asking, as ONE line of chips (agent · for whom · space ·
  *         session · when), each a door to its own page;
- *       the change first (before → after per field, a document's diff, an
- *         app's access lines);
- *       why (the policy as a mark + its sentence, the proposer's own words);
- *       what approving does (undoable or not, as a mark);
- *       the decision bar, pinned to the bottom, with who decides;
+ *       the change first: the RECORD approving creates or changes (its name
+ *         as the heading, its kind beside it, its fields in a grid —
+ *         `proposal-record-model.ts`), a document's diff, an app's access
+ *         lines; a possible twin under it, each a door ("Looks like");
+ *       why, as ONE mark (the reason's short label, its sentence on press),
+ *         then the requester's own note, labelled as theirs and clamped;
+ *       the decision bar, pinned to the bottom, with who decides. A create
+ *         with a record twin has no plain Approve: its verbs ARE the approve
+ *         (Fill empty fields · Use existing · Overwrite · Keep both); a
+ *         capture graph's Approve sends one choice per item. "Can't be undone"
+ *         is the one consequence marked — undo is the default;
  *       Advanced (ids + raw request), collapsed, last.
  *
  * This file owns provenance and the ONE "Advanced". Hosts draw only their
@@ -21,17 +27,27 @@
  * the drawer drew its own "who / when / where" rows AND embedded the decision,
  * which drew a second provenance box and a second "Advanced" — provenance
  * three times, Advanced twice, in one panel.
+ *
+ * Founder dogfood of v1 (2026-10-23, proposal "Create Léa Dogfoodprobe"): the
+ * change was one narrow column of chipped values with `ResolvedWorkspaceId`
+ * among them; "Always asks a person" and "Can be undone" each came with a
+ * paragraph; the agent's words sat unlabelled; and the twin the pod had found
+ * was never shown — the plain Approve kept both without asking.
  */
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Button, Textarea, addToast } from "@heroui/react";
+import {
+  Button,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+  Textarea,
+} from "@heroui/react";
 import {
   AppWindow,
-  ArrowRight,
   Check,
   Clock,
   Layers,
-  RotateCcw,
   ShieldAlert,
   ShieldCheck,
   TriangleAlert,
@@ -39,6 +55,14 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import {
+  deriveDuplicateReview,
+  identityResolutionByRefFor,
+  needsIdentityChoice,
+  resolveProposalAction,
+  type DuplicateItemChoice,
+  type ProposalDuplicateReview,
+} from "@synap-core/types/proposals";
 import {
   resolveObjectNoun,
   resolveProvenanceLabel,
@@ -63,13 +87,24 @@ import {
 import { DocumentChanges } from "../../_lib/object/content/document-changes";
 import { documentChanges } from "../../_lib/object/content/document-changes-model";
 import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
+import {
+  DuplicateUnchecked,
+  ItemTwinChoice,
+  TwinDoors,
+  TwinVerbs,
+} from "./DuplicateChoice";
+import { ProposedRecordCard } from "./ProposedRecordCard";
 import { proposalHeading } from "./proposal-heading";
 import { proposalRequesterParts } from "./proposal-requester";
 import {
-  approveConsequence,
-  fieldChangeRows,
-  governanceMark,
-  type FieldChangeRow,
+  graphRecords,
+  proposedRecord,
+  type ProposedRecord,
+  type ResolvedRef,
+} from "./proposal-record-model";
+import {
+  reasonMark,
+  undoMark,
   type ProposalChangeInput,
   type ReviewMark,
 } from "./proposal-review-model";
@@ -85,6 +120,11 @@ import {
   progressUnavailable,
   type ApprovalRun,
 } from "../../_lib/approval-progress/approval-progress-model";
+import {
+  useProposalDecision,
+  type ApproveChoice,
+} from "./use-proposal-decision";
+import { useRecordDefinitions } from "./use-record-definitions";
 
 /**
  * `pending` and `approval_failed` are the two states a reviewer can still decide;
@@ -151,8 +191,12 @@ const MARK_TONE: Record<ReviewMark["tone"], string> = {
   default: "bg-foreground/[0.05] text-foreground/75 ring-foreground/15",
 };
 
-/** A state, said by colour + icon first and four words second. */
-function MarkChip({
+/**
+ * A state as ONE mark: colour + icon + a few words. Its sentence is disclosed
+ * on press (a popover, so it reaches touch and keyboard, not only hover) —
+ * never a chip with a paragraph beside it.
+ */
+function DisclosedMark({
   mark,
   icon: Icon,
 }: {
@@ -160,12 +204,24 @@ function MarkChip({
   icon: LucideIcon;
 }) {
   return (
-    <span
-      className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium ring-1 ring-inset ${MARK_TONE[mark.tone]}`}
-    >
-      <Icon aria-hidden className="h-3.5 w-3.5" strokeWidth={2} />
-      {mark.label}
-    </span>
+    <Popover placement="bottom-start">
+      <PopoverTrigger>
+        <button
+          type="button"
+          data-review-mark={mark.label}
+          aria-label={`${mark.label}: why`}
+          className={`inline-flex h-6 shrink-0 items-center gap-1 rounded-full px-2 text-[11.5px] font-medium ring-1 ring-inset transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${MARK_TONE[mark.tone]}`}
+        >
+          <Icon aria-hidden className="h-3.5 w-3.5" strokeWidth={2} />
+          {mark.label}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="max-w-[300px] px-3 py-2">
+        <p className="text-[12.5px] leading-relaxed text-foreground/80">
+          {mark.sentence}
+        </p>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -291,67 +347,6 @@ function ProvenanceLine({
   );
 }
 
-// ─── The change ──────────────────────────────────────────────────────────────
-
-function FieldValue({
-  value,
-  tone,
-}: {
-  value: string | null;
-  tone: "before" | "after";
-}) {
-  if (value === null) {
-    return <span className="text-[13px] italic text-foreground/50">empty</span>;
-  }
-  return (
-    <span
-      className={
-        tone === "before"
-          ? "rounded-md bg-status-down/[0.06] px-1.5 py-0.5 text-[13px] text-foreground/60 line-through decoration-status-down/50 ring-1 ring-inset ring-status-down/20"
-          : "rounded-md bg-status-healthy/[0.08] px-1.5 py-0.5 text-[13px] font-medium text-foreground ring-1 ring-inset ring-status-healthy/30"
-      }
-    >
-      {value}
-    </span>
-  );
-}
-
-function FieldChanges({ rows }: { rows: FieldChangeRow[] }) {
-  return (
-    <ul className="flex flex-col gap-2.5">
-      {rows.map((row) => (
-        <li key={row.key} className="flex flex-col gap-1">
-          <span className="text-[12px] text-foreground/60">{row.label}</span>
-          <span className="flex flex-wrap items-center gap-1.5 break-words">
-            {row.before !== undefined && (
-              <>
-                <FieldValue value={row.before} tone="before" />
-                {row.op === "change" && (
-                  <ArrowRight
-                    aria-label="becomes"
-                    className="h-3.5 w-3.5 shrink-0 text-foreground/45"
-                  />
-                )}
-              </>
-            )}
-            {row.after !== undefined && (
-              <FieldValue value={row.after} tone="after" />
-            )}
-            {row.op === "remove" && (
-              <span className="text-[12px] text-status-down">removed</span>
-            )}
-          </span>
-          {row.stale && (
-            <span className="text-[11.5px] text-warning">
-              Edited since this was proposed — the value before is out of date.
-            </span>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
     <section
@@ -360,6 +355,46 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
     >
       {children}
     </section>
+  );
+}
+
+// ─── The requester's note ────────────────────────────────────────────────────
+
+/** A note past this length (or this many lines) clamps, with "Show more". */
+const NOTE_CLAMP_CHARS = 220;
+const NOTE_CLAMP_LINES = 3;
+
+/**
+ * The requester's own words — theirs, not the system's: labelled with who
+ * wrote them, quiet, clamped to three lines.
+ */
+function RequesterNote({ who, text }: { who: string | null; text: string }) {
+  const [open, setOpen] = useState(false);
+  const long =
+    text.length > NOTE_CLAMP_CHARS ||
+    text.split("\n").length > NOTE_CLAMP_LINES;
+  return (
+    <figure data-review-note="" className="flex flex-col gap-1">
+      <figcaption className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/55">
+        {who ? `Note from ${who}` : "Their note"}
+      </figcaption>
+      <blockquote
+        className={`whitespace-pre-line border-l-2 border-foreground/10 pl-3 text-[12.5px] leading-relaxed text-foreground/65 ${
+          long && !open ? "line-clamp-3" : ""
+        }`}
+      >
+        {text}
+      </blockquote>
+      {long && (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="self-start pl-3 text-[12px] text-foreground/55 underline decoration-foreground/20 underline-offset-2 hover:text-foreground"
+        >
+          {open ? "Show less" : "Show more"}
+        </button>
+      )}
+    </figure>
   );
 }
 
@@ -448,58 +483,44 @@ function Outcome({ status }: { status: string }) {
   );
 }
 
-/** Approve / Reject-with-reason / "always approve" — the verbs, nothing else. */
+/** What the decision bar offers: the verbs a twin needs, or a plain Approve. */
+type DecisionMode =
+  | { kind: "plain" }
+  | { kind: "twin-verbs"; review: ProposalDuplicateReview }
+  | {
+      kind: "graph-choices";
+      review: ProposalDuplicateReview;
+      choices: Readonly<Record<string, DuplicateItemChoice | undefined>>;
+    };
+
+/**
+ * The verbs, nothing else. While the pod found a record twin
+ * (`needsIdentityChoice`) there is no plain Approve and no "Approve &
+ * always…": each would approve without the reviewer choosing, and the pod
+ * then keeps both. A single create's twin verbs ARE the approve; a graph's
+ * Approve sends one choice per item and waits while one still needs a pick.
+ */
 function DecisionButtons({
   proposal: p,
+  mode,
+  undo,
   onDecided,
   resume = false,
 }: {
   proposal: ProposalReviewData;
+  mode: DecisionMode;
+  undo: ReviewMark | null;
   onDecided: () => void;
   /** A background attempt stopped part-way: approving again finishes it. */
   resume?: boolean;
 }) {
-  const proposalId = p.id;
   const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
-
-  const utils = trpc.useUtils();
-  const approve = trpc.proposals.approve.useMutation({
-    onSuccess: (result) => {
-      void utils.proposals.approvalProgress.invalidate({ proposalId });
-      // A LARGE graph is applied in the background: the request returned as
-      // soon as the gates passed, so "approved" would be a lie. The live
-      // toast carries the real count until it finishes or fails.
-      if ((result as { queued?: boolean }).queued) {
-        showApprovalProgressToast(proposalId);
-      } else {
-        addToast({ title: "Proposal approved", color: "success" });
-      }
-      onDecided();
-    },
-    onError: (e) =>
-      addToast({
-        title: "Could not approve",
-        description: e.message,
-        color: "danger",
-      }),
+  const [pickedId, setPickedId] = useState<string | null>(null);
+  const decision = useProposalDecision(p.id, onDecided, {
+    onRejected: () => setRejecting(false),
   });
-
-  const reject = trpc.proposals.reject.useMutation({
-    onSuccess: () => {
-      addToast({ title: "Proposal rejected", color: "success" });
-      setRejecting(false);
-      onDecided();
-    },
-    onError: (e) =>
-      addToast({
-        title: "Could not reject",
-        description: e.message,
-        color: "danger",
-      }),
-  });
-
-  const busy = approve.isPending || reject.isPending;
+  const { busy } = decision;
 
   if (rejecting) {
     return (
@@ -515,20 +536,15 @@ function DecisionButtons({
           <Button
             color="danger"
             className="min-h-10"
-            isLoading={reject.isPending}
-            onPress={() =>
-              reject.mutate({
-                proposalId,
-                reason: reason.trim() || undefined,
-              })
-            }
+            isLoading={decision.rejecting}
+            onPress={() => decision.reject(reason)}
           >
             Confirm reject
           </Button>
           <Button
             variant="light"
             className="min-h-10"
-            isDisabled={reject.isPending}
+            isDisabled={decision.rejecting}
             onPress={() => setRejecting(false)}
           >
             Cancel
@@ -537,29 +553,74 @@ function DecisionButtons({
       </div>
     );
   }
+
+  const rejectButton = (
+    <Button
+      color="danger"
+      variant="flat"
+      className="min-h-10"
+      startContent={<X size={16} />}
+      isDisabled={busy}
+      onPress={() => setRejecting(true)}
+    >
+      Reject…
+    </Button>
+  );
+  const undoChip = undo && <DisclosedMark mark={undo} icon={TriangleAlert} />;
+
+  if (mode.kind === "twin-verbs") {
+    return (
+      <div className="flex flex-col gap-2.5">
+        <TwinVerbs
+          twins={mode.review.resolvable}
+          pickedId={pickedId}
+          onPick={setPickedId}
+          onResolve={(identityResolution) =>
+            decision.approve({ identityResolution })
+          }
+          busy={busy}
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          {rejectButton}
+          {undoChip}
+        </div>
+      </div>
+    );
+  }
+
+  let choice: ApproveChoice = {};
+  let waiting = false;
+  if (mode.kind === "graph-choices") {
+    const { byRef, missing } = identityResolutionByRefFor(
+      mode.review.items,
+      mode.choices
+    );
+    choice = { identityResolutionByRef: byRef };
+    waiting = missing.length > 0;
+  }
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button
         color="success"
         className="min-h-10"
         startContent={<Check size={16} />}
-        isLoading={approve.isPending}
-        isDisabled={busy}
-        onPress={() => approve.mutate({ proposalId })}
+        isLoading={decision.approving}
+        isDisabled={busy || waiting}
+        onPress={() => decision.approve(choice)}
       >
         {resume ? "Resume" : "Approve"}
       </Button>
-      <Button
-        color="danger"
-        variant="flat"
-        className="min-h-10"
-        startContent={<X size={16} />}
-        isDisabled={busy}
-        onPress={() => setRejecting(true)}
-      >
-        Reject…
-      </Button>
-      <AlwaysApproveMenu proposal={p} disabled={busy} onDone={onDecided} />
+      {rejectButton}
+      {mode.kind === "plain" && (
+        <AlwaysApproveMenu proposal={p} disabled={busy} onDone={onDecided} />
+      )}
+      {undoChip}
+      {waiting && (
+        <span className="text-[12px] text-foreground/60">
+          Pick the record for each item first.
+        </span>
+      )}
     </div>
   );
 }
@@ -613,6 +674,27 @@ function WhoDecides({ identity }: { identity?: string }) {
 
 // ─── The review ──────────────────────────────────────────────────────────────
 
+/** The stored payload's capture-graph operations, when it is a graph. */
+function isGraphPayload(payload: unknown): boolean {
+  return (
+    !!payload &&
+    typeof payload === "object" &&
+    Array.isArray((payload as { operations?: unknown }).operations)
+  );
+}
+
+function graphKindsOf(payload: unknown): string[] {
+  if (!isGraphPayload(payload)) return [];
+  const kinds = new Set<string>();
+  for (const op of (payload as { operations: unknown[] }).operations) {
+    const o = op as { op?: unknown; profileSlug?: unknown };
+    if (o?.op === "create_entity" && typeof o.profileSlug === "string") {
+      kinds.add(o.profileSlug);
+    }
+  }
+  return [...kinds];
+}
+
 /**
  * The whole review of one proposal. `onDecided` fires after an approve or
  * reject lands (the page refetches; the drawer refreshes Review).
@@ -641,16 +723,67 @@ export function ProposalReviewBody({
   // A document edit carries its own before / after: the reviewer reads the
   // change, not the request's JSON.
   const docChanges = appConnect ? null : documentChanges(payload);
-  const fields = appConnect
-    ? []
-    : fieldChangeRows(
-        (p.review as { changes?: readonly ProposalChangeInput[] }).changes
-      );
-  const why = proposalWhy({
-    governanceReason: p.governanceReason,
-    reasoning: p.review.reasoning,
+  const action = resolveProposalAction({
+    proposalType: p.proposalType,
+    data: p.data,
   });
-  const policyMark = governanceMark(p.governanceReason);
+  const graph = isGraphPayload(payload);
+  const createKind =
+    !graph && action === "create" && payload && typeof payload === "object"
+      ? (() => {
+          const slug = (payload as { profileSlug?: unknown }).profileSlug;
+          return typeof slug === "string" && slug.trim() ? slug.trim() : null;
+        })()
+      : null;
+  const graphKinds = graphKindsOf(payload);
+  const defs = useRecordDefinitions({
+    createKind,
+    targetEntityId:
+      !graph && action !== "create" && p.targetType === "entity"
+        ? (p.targetId ?? null)
+        : null,
+    graphKinds,
+  });
+
+  /* The record(s) approving creates or changes. A graph: one card per new
+     item. Otherwise the pod's diff as one record — absent when it has nothing
+     readable (the raw request is still in Advanced). */
+  const objectRefs = (p as { objectRefs?: Record<string, ResolvedRef> })
+    .objectRefs;
+  const records: ProposedRecord[] =
+    appConnect || docChanges
+      ? []
+      : graph
+        ? graphRecords(payload, defs.definitionsFor)
+        : (() => {
+            const record = proposedRecord({
+              changes: (
+                p.review as { changes?: readonly ProposalChangeInput[] }
+              ).changes,
+              action,
+              targetName: p.targetName ? String(p.targetName) : null,
+              kind:
+                p.targetType === "entity"
+                  ? defs.targetKind
+                  : p.targetType
+                    ? String(p.targetType)
+                    : null,
+              definitions: defs.definitions,
+              objectRefs,
+            });
+            return record ? [record] : [];
+          })();
+
+  /* The twin(s) the pod's duplicate door found, read with the ONE derivation.
+     `duplicateCheck` rides the TOP of the stored payload (`p.data`), beside
+     the request envelope. */
+  const duplicate = deriveDuplicateReview(p.data, {
+    singleEntityCreate:
+      !graph && p.targetType === "entity" && action === "create",
+  });
+  const [itemChoices, setItemChoices] = useState<
+    Record<string, DuplicateItemChoice | undefined>
+  >({});
   const actionable = isActionable(status);
   // A large approval applies in the background: while it runs, the bar shows
   // its progress instead of the verbs, for anyone who opens the proposal.
@@ -662,8 +795,33 @@ export function ProposalReviewBody({
   useEffect(() => {
     if (applying) showApprovalProgressToast(p.id);
   }, [applying, p.id]);
-  const consequence = approveConsequence(
-    (p as { revertable?: boolean | null }).revertable
+  const mode: DecisionMode =
+    duplicate && needsIdentityChoice({ duplicate })
+      ? duplicate.resolvable.length > 0
+        ? { kind: "twin-verbs", review: duplicate }
+        : { kind: "graph-choices", review: duplicate, choices: itemChoices }
+      : { kind: "plain" };
+  const itemByRef = new Map(
+    (duplicate?.items ?? []).map((item) => [item.forRef, item])
+  );
+  // Twins drawn under their graph item are not repeated in the flat list.
+  const flatTwins = (duplicate?.candidates ?? []).filter(
+    (c) => !(c.ref === "record" && c.forRef && itemByRef.has(c.forRef))
+  );
+
+  const why = proposalWhy({
+    governanceReason: p.governanceReason,
+    reasoning: p.review.reasoning,
+  });
+  const reason = reasonMark(p.governanceReason);
+  const undo = undoMark((p as { revertable?: boolean | null }).revertable);
+  const { actor } = proposalRequesterParts(p);
+
+  /* A single create's twins sit under its own card; a graph item's sit inside
+     that item's card, with its choice. */
+  const twinsUnderCard = flatTwins.length > 0 && records.length === 1;
+  const orphanItems = (duplicate?.items ?? []).filter(
+    (item) => !records.some((r) => r.ref === item.forRef)
   );
 
   return (
@@ -674,8 +832,7 @@ export function ProposalReviewBody({
         workspaceName={workspaceName}
       />
 
-      {/* The change first. Absent when the pod sent nothing readable — the
-          raw request is still in Advanced. */}
+      {/* The change first. */}
       {appConnect ? (
         <Section label="What it asks for">
           <ul className="flex flex-col gap-1">
@@ -697,54 +854,99 @@ export function ProposalReviewBody({
         <Section label="What changes">
           <DocumentChanges changes={docChanges} />
         </Section>
-      ) : fields.length > 0 ? (
-        <Section label="What changes">
-          <FieldChanges rows={fields} />
-        </Section>
+      ) : records.length > 0 ? (
+        <div className="flex flex-col gap-3">
+          {records.map((record) => {
+            const item = itemByRef.get(record.ref);
+            return (
+              <ProposedRecordCard key={record.ref} record={record}>
+                {twinsUnderCard && (
+                  <div className="border-t border-foreground/[0.06] pt-3">
+                    <TwinDoors
+                      candidates={flatTwins}
+                      truncated={duplicate?.check.truncated}
+                    />
+                  </div>
+                )}
+                {item &&
+                  (actionable ? (
+                    <ItemTwinChoice
+                      item={item}
+                      choice={itemChoices[item.forRef]}
+                      onChoice={(choice) =>
+                        setItemChoices((prev) => ({
+                          ...prev,
+                          [item.forRef]: choice,
+                        }))
+                      }
+                      busy={false}
+                    />
+                  ) : (
+                    <div className="border-t border-foreground/[0.06] pt-3">
+                      <TwinDoors candidates={item.resolvable} withFor={false} />
+                    </div>
+                  ))}
+              </ProposedRecordCard>
+            );
+          })}
+        </div>
       ) : null}
+      {/* A graph item whose card is not drawn still owes its choice: it is
+          never sent on a default nobody saw. */}
+      {orphanItems.map((item) => (
+        <ProposedRecordCard
+          key={item.forRef}
+          record={{
+            ref: item.forRef,
+            title: item.forTitle,
+            kind: item.resolvable[0]?.kind ?? null,
+            op: "create",
+            fields: [],
+          }}
+        >
+          {actionable ? (
+            <ItemTwinChoice
+              item={item}
+              choice={itemChoices[item.forRef]}
+              onChoice={(choice) =>
+                setItemChoices((prev) => ({ ...prev, [item.forRef]: choice }))
+              }
+              busy={false}
+            />
+          ) : (
+            <TwinDoors candidates={item.resolvable} withFor={false} />
+          )}
+        </ProposedRecordCard>
+      ))}
+      {flatTwins.length > 0 && !twinsUnderCard && (
+        <TwinDoors
+          candidates={flatTwins}
+          truncated={duplicate?.check.truncated}
+        />
+      )}
 
-      {/* Why: the policy's reason as a mark + its own sentence, never voiced
-          as the proposer's; then the proposer's words, as theirs. Worded for
-          every status: an approved proposal still needed approval. */}
-      {(why.policy || why.proposer) && (
-        <section aria-label="Why" className="flex flex-col gap-2.5">
-          {why.policy && (
-            <div className="flex flex-wrap items-start gap-2">
-              {policyMark && (
-                <MarkChip
-                  mark={policyMark}
-                  icon={
-                    policyMark.tone === "warning" ? ShieldAlert : ShieldCheck
-                  }
+      {/* Why: ONE mark (its sentence on press), then the requester's own
+          words, as theirs. Worded for every status: an approved proposal
+          still needed approval. */}
+      {(reason || why.proposer || duplicate?.check.status === "unchecked") && (
+        <section aria-label="Why" className="flex flex-col gap-3">
+          {(reason || duplicate?.check.status === "unchecked") && (
+            <div className="flex flex-wrap items-center gap-2">
+              {reason && (
+                <DisclosedMark
+                  mark={reason}
+                  icon={reason.tone === "warning" ? ShieldAlert : ShieldCheck}
                 />
               )}
-              <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-foreground/70">
-                {why.policy}
-              </p>
+              {duplicate?.check.status === "unchecked" && (
+                <DuplicateUnchecked />
+              )}
             </div>
           )}
           {why.proposer && (
-            <blockquote className="border-l-2 border-foreground/15 pl-3 text-[13px] leading-relaxed text-foreground/80">
-              {why.proposer}
-            </blockquote>
+            <RequesterNote who={actor?.name ?? null} text={why.proposer} />
           )}
         </section>
-      )}
-
-      {actionable && (
-        <div className="flex flex-wrap items-center gap-2">
-          {consequence.mark && (
-            <MarkChip
-              mark={consequence.mark}
-              icon={
-                consequence.mark.tone === "success" ? RotateCcw : TriangleAlert
-              }
-            />
-          )}
-          <span className="text-[12.5px] text-foreground/65">
-            {consequence.sentence}
-          </span>
-        </div>
       )}
 
       <div
@@ -769,6 +971,8 @@ export function ProposalReviewBody({
             {stopped && run && <ApplyingNow run={run} />}
             <DecisionButtons
               proposal={p}
+              mode={mode}
+              undo={undo}
               onDecided={onDecided}
               resume={stopped}
             />
