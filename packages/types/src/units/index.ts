@@ -6,6 +6,7 @@ export * from "./session.js";
 export * from "./track.js";
 export * from "./goal.js";
 export * from "./goal-loop.js";
+export * from "./goal-entry.js";
 export * from "./track-step.js";
 export * from "./track-history.js";
 export * from "./track-participants.js";

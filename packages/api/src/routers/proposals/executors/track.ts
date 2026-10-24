@@ -6,7 +6,9 @@
  *
  *   track/create               → `startTrack` (the SAME service the direct door
  *                                runs), with the id the proposal was filed under
- *                                — a reopen too (`replacesTrackId`, R8).
+ *                                — a reopen too (`replacesTrackId`, R8), and
+ *                                "Make it a goal" (`fromEntity`, D2: the link
+ *                                and an ended entity's close ride the start).
  *   track/update               → a status change (`applyTrackStatus`, with the
  *                                verdict a close carries — the approver is who
  *                                closed it), a stage
@@ -59,6 +61,7 @@ import {
 } from "../../../services/tracks/goal-content.js";
 import { trackRepository } from "../../../services/tracks/track-repo.js";
 import { readListedStepSpaces } from "../../../services/tracks/track-space-grant.js";
+import { readTrackFromEntity } from "../../../services/tracks/goal-source-entity.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import {
@@ -142,6 +145,11 @@ export function registerTrackExecutors(): void {
         ...(typeof data.replacesTrackId === "string"
           ? { replacesTrackId: data.replacesTrackId }
           : {}),
+        // "Make it a goal" (D2): re-checked by the same door (still visible,
+        // never converted twice), then linked `entity --promoted_to--> track`
+        // and, for an entity that had ended, closed or dropped — as the
+        // approver.
+        fromEntity: readTrackFromEntity(data.fromEntity),
         // Decision 2a: this approval IS the consent to the spaces the
         // proposal listed, for the agent the proposal's COLUMN names.
         approvedSpaceGrant: {

@@ -40,6 +40,10 @@ import {
   type TrackActor,
 } from "../services/tracks/tracks-service.js";
 import { readTrackHistory } from "../services/tracks/track-history.js";
+import {
+  convertEntityToGoal,
+  convertToGoalInputSchema,
+} from "../services/tracks/convert-to-goal.js";
 import { trackGoalInputSchema } from "../services/tracks/goal-content.js";
 import { GOAL_ACCEPTANCE_DECISIONS } from "@synap-core/types/units";
 import {
@@ -181,6 +185,31 @@ export const tracksRouter = router({
       return {
         status: result.status,
         track: await loadWrittenTrackView(result.track, ctx),
+      };
+    }),
+
+  /**
+   * "Make it a goal" (D2): a goal / objective / okr entity becomes a goal —
+   * once, through the start door (`convertEntityToGoal` → `startTrack`). Its
+   * fields are mapped (key results → measured criteria), its owner owns the
+   * goal, the entity is linked `promoted_to` the goal and kept as it is; an
+   * entity that had ended arrives closed (met) or dropped. `projectId` is
+   * required when the entity is filed in no or several projects.
+   */
+  convertFromEntity: podProcedure
+    .input(convertToGoalInputSchema)
+    .mutation(async ({ ctx, input }) => {
+      const { reasoning: why, ...rest } = input;
+      const result = await convertEntityToGoal({
+        ...rest,
+        actor: actorOf(ctx, why),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+        entityId: result.entityId,
+        notCarried: result.notCarried,
       };
     }),
 

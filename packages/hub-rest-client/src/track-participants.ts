@@ -32,6 +32,8 @@ export interface HubTrackParticipant {
   principalKind: HubTrackPrincipalKind;
   /** A user id: a person's, or an agent's own. */
   principalId: string;
+  /** The name a person reads, resolved by the pod — `null` when unknown. */
+  displayName: string | null;
   role: HubTrackParticipantRole;
   commitment: string | null;
   commitmentState: HubTrackCommitmentState | null;

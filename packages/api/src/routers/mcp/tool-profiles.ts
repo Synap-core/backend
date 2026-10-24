@@ -135,6 +135,7 @@ export const TOOL_GROUPS = {
     "synap_advance_track",
     "synap_set_track_status",
     "synap_reopen_track",
+    "synap_convert_to_goal",
     "synap_set_track_participant",
     "synap_set_track_params",
     "synap_update_track",

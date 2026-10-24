@@ -4083,6 +4083,48 @@ export const tools = {
         },
       },
       {
+        name: "synap_convert_to_goal",
+        annotations: {
+          title: "Make it a goal",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Make a goal, objective or OKR ENTITY a goal (a track) — once. Its title becomes the goal's name; its description / outcome / notes the end state (a target date is appended: '— by <date>'); an OKR's key results become measured criteria ('Qualified leads: target 40 per month', the current value in the hint) — one key result rides the end state instead (a goal has no criteria or 2–5). The entity's owner owns the goal. An entity already achieved arrives CLOSED as met (its key results in the end state); an abandoned or cancelled one arrives DROPPED (no longer needed). The entity is kept unchanged and linked to the goal (promoted_to). The goal lives in the project the entity is filed in; pass projectId when it is filed in none or several. Refused: another kind, an entity already made a goal (open that goal), a name a live goal on the project holds (pass name). Governed like synap_start_track: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the goal, and notCarried = the entity's fields the goal does not hold (progress, area…), to tell the person.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            entityId: {
+              type: "string",
+              description:
+                "UUID of the goal, objective or OKR entity to make a goal.",
+            },
+            projectId: {
+              type: "string",
+              description:
+                "UUID of the project the goal lives in — required only when the entity is filed in no project or in several (the refusal lists them). Never guess one: ask the person.",
+            },
+            name: {
+              type: "string",
+              description:
+                "Optional name for the goal — omit it to keep the entity's title.",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why it becomes a goal, in the person's words — shown to the reviewer. One line.",
+            },
+            sessionId: {
+              type: "string",
+              description:
+                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+            },
+          },
+          required: ["entityId"],
+        },
+      },
+      {
         name: "synap_set_track_participant",
         annotations: {
           title: "Set goal participant",

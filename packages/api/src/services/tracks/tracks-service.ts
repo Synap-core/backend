@@ -161,6 +161,11 @@ import {
   seedGoalOwner,
 } from "./track-participant-store.js";
 import { activityActorOf, loadActorRows } from "../activity/activity-actors.js";
+import {
+  assertGoalSource,
+  writeGoalLineage,
+  type TrackFromEntity,
+} from "./goal-source-entity.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
@@ -969,6 +974,17 @@ export interface StartTrackInput {
   uncertainty?: unknown;
   /** The goal's loop (0350, W4): `{ on, perWeek? }`; absent = the birth default. */
   loop?: unknown;
+  /**
+   * "MAKE IT A GOAL" (D2): the `goal` / `objective` / `okr` entity this goal
+   * is made from (`convertEntityToGoal` maps its fields onto the input above).
+   * Re-checked on every start, the replay included (`assertGoalSource`); the
+   * goal's owner is the person behind the entity; the new goal is linked
+   * `entity --promoted_to--> track`, and an entity that had ended arrives
+   * closed (`met`) or dropped (`no_longer_needed`) by the person deciding.
+   * Never set by the plain start doors — only by the convert door and the
+   * `track/create` replay of its proposal.
+   */
+  fromEntity?: TrackFromEntity | null;
   actor: TrackActor;
   /**
    * Pre-minted id — ONLY the approval replay passes it (the id the proposal
@@ -1057,6 +1073,11 @@ export async function startTrack(
   const replaces = input.replacesTrackId
     ? await assertReplaceableTrack(input.replacesTrackId, project.id, actor)
     : null;
+  // A conversion — re-checked here, so a replay approved after the entity
+  // became a goal (or after its owner lost the project) applies nothing.
+  const source = input.fromEntity
+    ? await assertGoalSource(input.fromEntity, project, actor)
+    : null;
 
   // Advisory, computed from the method AS IT STANDS (what would be pinned).
   const missingDomains = playbook
@@ -1075,6 +1096,14 @@ export async function startTrack(
   // predicate.
   const live = await (await repo()).findLiveByName(project.id, trackName);
   if (live) {
+    // A conversion never hands back an unrelated live goal as if it were the
+    // entity's: it would read "made a goal" with nothing linked.
+    if (source) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: `A live goal on this project is already named "${live.name}" — make "${input.fromEntity!.title}" a goal under another name.`,
+      });
+    }
     assertNameHeldBySameMethod(live, playbook);
     // Reopening: the live track holding the name must BE the new version (a
     // repeated reopen), never an unrelated goal handed back as if it were.
@@ -1148,6 +1177,20 @@ export async function startTrack(
     goalInput,
     actor.agentUserId ? null : actor.userId
   );
+  // An entity that was ACHIEVED arrives closed as met, and `met` needs every
+  // required criterion met — none can be yet, so its criteria ride the end
+  // state instead (`goalFromEntity`). Refused here, before anything is filed.
+  const endedAs = input.fromEntity?.ended ?? null;
+  if (
+    endedAs?.status === "completed" &&
+    (goalInput.criteria?.length ?? 0) > 0
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A goal made from an achieved entity is born closed as met — it carries no criteria to judge (put them in the end state).",
+    });
+  }
 
   const perm = await checkPermissionOrPropose({
     userId: actor.userId,
@@ -1157,8 +1200,11 @@ export async function startTrack(
     projectId: project.id,
     subjectType: "track",
     action: "create",
-    // An agent switching the loop on is always reviewed (W4).
-    ...(agentSwitchesLoopOn(goalInput, actor.agentUserId)
+    // An agent switching the loop on is always reviewed (W4). So is an
+    // agent's conversion of an entity that had ended: the goal is born closed
+    // or dropped, and a close is a person's act.
+    ...(agentSwitchesLoopOn(goalInput, actor.agentUserId) ||
+    (actor.agentUserId && endedAs)
       ? { forcePropose: true }
       : {}),
     source: actor.source,
@@ -1179,6 +1225,8 @@ export async function startTrack(
       ...pickTrackGoalInput(goalInput),
       // The closed version this one reopens (R8) — re-checked at approval.
       ...(replaces ? { replacesTrackId: replaces.track.id } : {}),
+      // The entity this goal is made from (D2) — re-checked at approval.
+      ...(input.fromEntity ? { fromEntity: input.fromEntity } : {}),
       // The consent the summary states ("…and let <agent> work in …").
       ...(spaceGrantConsent
         ? { [TRACK_SPACE_GRANT_KEY]: spaceGrantConsent }
@@ -1244,7 +1292,8 @@ export async function startTrack(
         project.userId
       );
     } else {
-      await seedGoalOwner(track, project.userId);
+      // A conversion's goal is owned by the person behind the entity.
+      await seedGoalOwner(track, project.userId, source?.ownerPersonId);
     }
   }
 
@@ -1291,6 +1340,14 @@ export async function startTrack(
       });
     }
   }
+  // MAKE IT A GOAL (D2): the lineage edge, then — for an entity that had
+  // ended — the close or drop, through THE status write (`applyTrackStatus`:
+  // the judge rule, the verdict stamp), as the person deciding (the approver
+  // on a replay), who `assertGoalSource` checked owns it when it is a close.
+  let born = track;
+  if (created && source) {
+    await writeGoalLineage(source.entity, track.id);
+  }
   if (created) {
     void emitSideEffects({
       subjectType: "track",
@@ -1309,9 +1366,23 @@ export async function startTrack(
     );
   }
 
+  if (created && source && endedAs) {
+    const close = { verdict: endedAs.verdict };
+    assertTrackTransition(track, endedAs.status, close, []);
+    born = (
+      await applyTrackStatus(
+        track,
+        project,
+        endedAs.status,
+        actor.userId,
+        close
+      )
+    ).track;
+  }
+
   return {
     status: created ? "started" : "exists",
-    track,
+    track: born,
     playbook: playbookRef,
     missingDomains,
   };

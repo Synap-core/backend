@@ -122,6 +122,12 @@ export interface TrackParticipant {
   principalKind: TrackPrincipalKind;
   /** A user id: the person's, or the agent's own user row. */
   principalId: string;
+  /**
+   * The name a person reads — resolved by the pod (the session roster's and
+   * the proposals' `actorDisplayName`: "Claude Code on devbox" for an agent on
+   * a computer), never looked up by a page. `null` = unknown, never invented.
+   */
+  displayName: string | null;
   role: TrackParticipantRole;
   /** What the delegate commits to — `null` for owner and judge. */
   commitment: string | null;
