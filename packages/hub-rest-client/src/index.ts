@@ -62,6 +62,8 @@ export type {
   HubSingleResponse,
   // Relations & Graph
   HubRelation,
+  HubConfigLink,
+  HubEntityNeighbours,
   HubGraphNode,
   HubGraphEdge,
   HubGraphResult,

@@ -18,14 +18,27 @@
  */
 
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { HubRestClient } from "./client.js";
+import type { HubEntityNeighbours } from "./types.js";
 
 const USER = { id: "user-1", email: "u@example.com", name: "U" };
+
+/**
+ * `GET /relations?entityId=…` answers the pod's `relations.getRelated`:
+ * `{ entities, configLinks }`. The fixture is typed with the client's own
+ * response type, so the mock cannot drift from what `getRelations` returns; the
+ * source scan below ties that type to the route.
+ */
+const NEIGHBOURS = {
+  entities: [{ id: "e2", title: "Neighbour", profileSlug: "note" }],
+  configLinks: [{ id: "l1", linkType: "about" }],
+} as unknown as HubEntityNeighbours;
 
 /** Bodies exactly as the pod returns them (shapes verified live). */
 const BODIES: Record<string, unknown> = {
   "/api/hub/users/me": USER,
-  "/api/hub/relations": { relations: [{ id: "r1" }, { id: "r2" }] },
+  "/api/hub/relations": NEIGHBOURS,
   "/api/hub/proposals": {
     proposals: [{ id: "p1" }, { id: "p2" }, { id: "p3" }],
     total: 322,
@@ -71,11 +84,39 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("list unwrapping — the five that silently returned []", () => {
-  it("getRelations reads the `relations` envelope", async () => {
-    const rows = await client.getRelations("e1");
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ id: "r1" });
+describe("list unwrapping — the ones that silently returned []", () => {
+  it("getRelations returns the entity's neighbours and config links", async () => {
+    const res = await client.getRelations("e1");
+    // Was `[]` on every call: it read a `relations` key the entity route never
+    // sends, and the old mock sent exactly that key.
+    expect(res.entities).toHaveLength(1);
+    expect(res.entities[0]).toMatchObject({ id: "e2" });
+    expect(res.configLinks).toHaveLength(1);
+  });
+
+  it("getRelations throws on a body that is not the neighbours shape", async () => {
+    BODIES["/api/hub/relations"] = { relations: [{ id: "r1" }] };
+    try {
+      await expect(client.getRelations("e1")).rejects.toThrow(
+        /unexpected shape/
+      );
+    } finally {
+      BODIES["/api/hub/relations"] = NEIGHBOURS;
+    }
+  });
+
+  it("the pod's getRelated still returns { entities, configLinks }", () => {
+    const src = readFileSync(
+      new URL("../../api/src/routers/relations.ts", import.meta.url),
+      "utf8"
+    );
+    const getRelated = src.slice(
+      src.indexOf("  getRelated: protectedProcedure")
+    );
+    expect(getRelated).toMatch(
+      /return \{ entities: relatedEntities, configLinks \}/
+    );
+    expect(getRelated).toMatch(/return \{ entities: \[\], configLinks \}/);
   });
 
   it("listProposals reads the `proposals` envelope", async () => {
