@@ -68,6 +68,7 @@ import {
 } from "@synap-core/types/proposals";
 import { buildPlanCallers } from "../../utils/plan-callers.js";
 import { preflightPlanOperations } from "./capture-plan-preflight.js";
+import { completeKnowledgeProposalProperties } from "../proposals/complete-knowledge-proposal.js";
 import {
   hasComposedSteps,
   planStepSummaries,
@@ -592,7 +593,19 @@ export async function buildCaptureGraphOperations(
       title: e.title ?? e.ref,
       ...(e.description ? { description: e.description } : {}),
       ...(e.content ? { content: e.content } : {}),
-      properties: e.properties ?? {},
+      // Knowledge's required `knowledgeForm` / `ek_claim` are derived here, as
+      // the text lane and the approval executor do, so the preflight below
+      // validates what will land instead of refusing fields no caller is
+      // asked for (ticket 091f412e). A supplied value is never touched.
+      properties: e.existingEntityId
+        ? (e.properties ?? {})
+        : (completeKnowledgeProposalProperties({
+            profileSlug: e.profileSlug,
+            properties: e.properties,
+            title: e.title ?? e.ref,
+            description: e.description,
+            content: e.content,
+          }) ?? {}),
       ...(e.existingEntityId ? { existingEntityId: e.existingEntityId } : {}),
       ...(e.facets ? { facets: e.facets } : {}),
       // Per-op pin when the producer already multi-homed (parity with import).

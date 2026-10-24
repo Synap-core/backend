@@ -3,10 +3,10 @@
  * (tRPC `projects.update`, Hub `PATCH /projects/:id` → MCP `update_project`
  * goes through the tRPC one) so their target checks can never disagree.
  *
- * The move itself is governed by the doors' own `checkPermissionOrPropose`
- * (gate on the project's CURRENT workspace, like every project update). This
- * adds the half that gate cannot see: the caller must be able to WRITE the
- * target. It runs BEFORE the gate, so an agent cannot file a proposal into a
+ * The move itself is governed by the doors' own `checkPermissionOrPropose`,
+ * gated on the DESTINATION (`updateProjectGoverned`; ticket 86b6faae). This
+ * adds what that gate cannot see: the target must be live and the caller must
+ * be able to WRITE it. It runs BEFORE the gate, so an agent cannot file a proposal into a
  * workspace its user cannot write, and again on the approval replay.
  */
 

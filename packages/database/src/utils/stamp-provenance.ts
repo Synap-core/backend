@@ -5,6 +5,7 @@
  */
 
 import type { ProvenanceKind } from "../schema/provenance.js";
+import { getActingAgentUserId } from "./request-write-context.js";
 
 export interface StampProvenanceInput {
   userId: string;
@@ -27,6 +28,11 @@ export interface ProvenanceStamp {
  * Derive the canonical provenance block: createdByKind defaults to
  * 'ai_agent' when agentUserId is present, else 'human' — unless the caller
  * passes an explicit override (e.g. 'system' for pod-provisioning writes).
+ *
+ * With neither an agent nor an override, the agent acting in this request
+ * (`getActingAgentUserId()`, entered at the key-auth doors) is the author: a
+ * composite write (the capture graph's internal callers) carries no
+ * `agentUserId` of its own and was stamped 'human' (ticket 63a0c0d8).
  */
 export function stampProvenance(input: StampProvenanceInput): ProvenanceStamp {
   const {
@@ -36,10 +42,12 @@ export function stampProvenance(input: StampProvenanceInput): ProvenanceStamp {
     correlationId,
     createdByKind,
   } = input;
+  const agent =
+    agentUserId ?? (createdByKind ? undefined : getActingAgentUserId());
   return {
-    createdByKind: createdByKind ?? (agentUserId ? "ai_agent" : "human"),
+    createdByKind: createdByKind ?? (agent ? "ai_agent" : "human"),
     createdByUserId: userId,
-    agentUserId,
+    agentUserId: agent,
     sourceProposalId,
     correlationId,
   };

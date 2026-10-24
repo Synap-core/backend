@@ -97,6 +97,7 @@ import {
   tools,
   focusSessions,
   playbooks,
+  proposals,
 } from "@synap/database";
 import {
   ExternalAgentExecutor,
@@ -172,7 +173,16 @@ const ctx = (sessionId: string, input: Record<string, unknown> = {}) => ({
 describe("external-agent executor — dispatch through the stored binding", () => {
   beforeAll(async () => {
     process.env.PUBLIC_URL = "https://pod.example.test";
-    for (const t of [users, apiKeys, links, tools, focusSessions, playbooks]) {
+    // `proposals`: attaching an agent settles its pending hand-offs (5de7efaa).
+    for (const t of [
+      users,
+      apiKeys,
+      links,
+      tools,
+      focusSessions,
+      playbooks,
+      proposals,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
     await q(
