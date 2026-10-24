@@ -811,6 +811,9 @@ const UNCOUNTABLE_NOUNS = new Set([
   "news",
   "advice",
   "analytics",
+  // Same in the plural: "3 Series", never "Serieses" (Content OS's `series`
+  // kind on a pod app's consent screen).
+  "series",
 ]);
 
 /**
@@ -1564,6 +1567,34 @@ export function resolveFirstPartyClientName(
 ): string {
   if (!clientId?.trim()) return "";
   return FIRST_PARTY_CLIENT_NAMES[clientId.trim()] ?? humanizeToken(clientId);
+}
+
+/**
+ * The ways a person makes their account on a pod (the invite page, join plan
+ * phase 4, decision B2): the Kratos credential they create, `synap_cloud`
+ * being the `cp` OIDC provider. `noun` names the way (a chip); `action` is the
+ * imperative a button says. One table, so the invite page, Settings and the
+ * apps name the three ways alike.
+ */
+export const SIGN_IN_WAY_LABELS = {
+  passkey: { noun: "Passkey", action: "Create a passkey" },
+  password: { noun: "Password", action: "Create a password" },
+  synap_cloud: { noun: "Synap Cloud", action: "Continue with Synap Cloud" },
+} as const;
+
+export type SignInWay = keyof typeof SIGN_IN_WAY_LABELS;
+
+export function resolveSignInWayLabel(
+  way: string | null | undefined,
+  form: "noun" | "action" = "noun"
+): string {
+  if (!way?.trim()) return "";
+  const row = (
+    SIGN_IN_WAY_LABELS as Readonly<
+      Record<string, { noun: string; action: string }>
+    >
+  )[way.trim().toLowerCase()];
+  return row ? row[form] : humanizeToken(way);
 }
 
 /**

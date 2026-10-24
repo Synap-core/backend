@@ -896,6 +896,26 @@ async function runStartupHooksInner(): Promise<void> {
     );
   }
 
+  // ONE-TIME MIGRATION of the pre-July `workspaces.settings.controlPlane`
+  // record (lane cp-link): its tier/trial seed the pod's plan until the first
+  // pull from the CP replaces it, and the block is removed from every workspace
+  // once the pod's link lives in its enrollment record. Idempotent; non-fatal.
+  try {
+    const { migrateLegacyControlPlaneRecord } = await import("@synap/database");
+    const result = await migrateLegacyControlPlaneRecord();
+    if (result.planSeeded || result.workspacesCleared > 0) {
+      logger.info(
+        result,
+        "Migrated the legacy workspace Control Plane record to the pod-level link and plan"
+      );
+    }
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to migrate the legacy Control Plane record on startup (non-fatal)"
+    );
+  }
+
   // Converge every installed capability CONTAINER to its Control-Plane template
   // (the capability-layer counterpart to reconcileWorkspacesToTemplates above) —
   // additively re-projects drifted skills (e.g. a `providerSpec.baseUrlOverride`

@@ -17,6 +17,10 @@ import {
   CP_PROJECT_SYNC_CRON,
 } from "./workers/cp-project-sync.js";
 import {
+  CP_ENTITLEMENT_SYNC_QUEUE,
+  CP_ENTITLEMENT_SYNC_CRON,
+} from "./workers/cp-entitlement-sync.js";
+import {
   TOOL_DEMAND_FORWARD_QUEUE,
   TOOL_DEMAND_FORWARD_CRON,
 } from "./workers/tool-demand-forward.js";
@@ -535,6 +539,19 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info("Registered cron: cp-project-sync (every 30min)");
   await sendSafe(boss, CP_PROJECT_SYNC_QUEUE, {});
   logger.info("Enqueued startup run: cp-project-sync");
+
+  // CP plan sync — pull this pod's tier and trial from its Control Plane every
+  // 15 minutes, AND once now so a freshly registered pod enforces its plan
+  // without waiting. No-ops when the pod has no CP link (self-hosted).
+  await scheduleSafe(
+    boss,
+    CP_ENTITLEMENT_SYNC_QUEUE,
+    CP_ENTITLEMENT_SYNC_CRON,
+    {}
+  );
+  logger.info("Registered cron: cp-entitlement-sync (every 15min)");
+  await sendSafe(boss, CP_ENTITLEMENT_SYNC_QUEUE, {});
+  logger.info("Enqueued startup run: cp-entitlement-sync");
 
   // PageRank centrality (every 6h + one startup run so a cold pod populates
   // entity_centrality without waiting for the first tick — this is also the

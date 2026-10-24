@@ -732,6 +732,9 @@ export function registerProposalsRoutes(app: HubHono): void {
       })) as {
         primaryId?: string;
         linked?: number;
+        /** A large approval handed to the background job — still applying. */
+        queued?: true;
+        approvalRun?: unknown;
         identity?: {
           verb: string;
           entityId: string;
@@ -772,6 +775,12 @@ export function registerProposalsRoutes(app: HubHono): void {
           // this response or a fill_empty conflict is dropped.
           ...(approval?.identity ? { identity: approval.identity } : {}),
           ...(approval?.identities ? { identities: approval.identities } : {}),
+          // A LARGE approval is applying in the background: `success` means
+          // the gates passed and it started, NOT that it finished. The run
+          // carries done / total; the proposal stays pending until it ends.
+          ...(approval?.queued
+            ? { queued: true, approvalRun: approval.approvalRun }
+            : {}),
         },
         200
       );
