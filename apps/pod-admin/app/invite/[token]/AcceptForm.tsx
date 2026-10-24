@@ -1,12 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { CopyButton } from "../../_lib/copy-button";
 import { Button, CardBody, Input, Tab, Tabs } from "@heroui/react";
-import { AlertCircle, CheckCircle2, LogIn, UserPlus } from "lucide-react";
+import { AlertCircle, CheckCircle2, KeyRound, UserPlus } from "lucide-react";
+import {
+  resolveSignInWayLabel,
+  type SignInWay,
+} from "@synap-core/types/vocabulary";
 import {
   collectErrorMessages,
+  createBrowserFlow,
   createLoginFlow,
   extractInitialValues,
   FLOW_RESET_ERROR_IDS,
@@ -14,10 +20,18 @@ import {
   passwordLoginBody,
   signOutInPlace,
   submitLoginFlow,
+  submitSelfServiceFlow,
   whoami,
   type KratosFlow,
   type KratosSession,
 } from "../../../lib/kratos-flow";
+import { createPasskey, isPasskeySupported } from "../../../lib/passkey";
+import {
+  joinWithPasskey,
+  joinWithSynapCloud,
+  type JoinDeps,
+  type JoinOutcome,
+} from "./join-ways";
 import { trpc, POD_URL } from "../../../lib/trpc";
 import { formatRelative, formatTimestamp } from "../../../lib/format";
 import { pairExit } from "../../../lib/open-in";
@@ -63,15 +77,63 @@ type PageState =
   /**
    * Joined. `signedIn`: this browser holds a pod session (sign-in path, or the
    * new account's automatic sign-in worked), so the console is one click away.
+   * `way`: how the account was made here (absent: an existing account).
    */
   | {
       status: "done";
       subject: InviteSubject;
       email: string;
       signedIn: boolean;
+      way?: SignInWay;
     };
 
-type AcceptTab = "register" | "login";
+/** Join (make the account) or sign in with an account this pod already has. */
+type AcceptMode = "join" | "sign-in";
+
+/** The real Kratos calls behind the passkey and Synap Cloud ways. */
+const JOIN_DEPS: JoinDeps = {
+  createFlow: (returnTo) => createBrowserFlow("registration", returnTo),
+  submit: submitSelfServiceFlow,
+  createPasskey,
+};
+
+/**
+ * Synap Cloud leaves this page and comes back to it (`?joined=synap_cloud`)
+ * after the pod accepted the invite, which is then gone. What the Done screen
+ * names (the space, the email) is kept for that return in this tab only.
+ * Best-effort: without storage the person lands signed in on the console.
+ */
+const CLOUD_RETURN_KEY = (token: string) => `synap:invite-join:${token}`;
+const JOINED_PARAM = "joined";
+
+function rememberCloudJoin(token: string, subject: OpenInvite): void {
+  try {
+    sessionStorage.setItem(
+      CLOUD_RETURN_KEY(token),
+      JSON.stringify({
+        type: subject.type,
+        inviterName: subject.inviterName,
+        role: subject.role,
+        workspaceName: subject.workspaceName,
+        email: subject.email,
+      })
+    );
+  } catch {
+    /* storage unavailable: see above */
+  }
+}
+
+function recallCloudJoin(
+  token: string
+): (InviteSubject & { email: string }) | null {
+  try {
+    const raw = sessionStorage.getItem(CLOUD_RETURN_KEY(token));
+    sessionStorage.removeItem(CLOUD_RETURN_KEY(token));
+    return raw ? (JSON.parse(raw) as InviteSubject & { email: string }) : null;
+  } catch {
+    return null;
+  }
+}
 
 /** The pod's own host (the API), not the console host this page is served on. */
 function podApiHost(): string | undefined {
@@ -85,12 +147,16 @@ function podApiHost(): string | undefined {
 export function AcceptForm({
   token,
   podHost,
+  cloudSignIn,
 }: {
   token: string;
   podHost?: string;
+  /** The pod offers "Continue with Synap Cloud" (discovery, read server-side). */
+  cloudSignIn: boolean;
 }) {
   const [state, setState] = useState<PageState>({ status: "loading" });
-  const [tab, setTab] = useState<AcceptTab>("register");
+  const [mode, setMode] = useState<AcceptMode>("join");
+  const joinedVia = useSearchParams().get(JOINED_PARAM);
   // Set when "Create account" found an account for this email already: the
   // person is moved to "Sign in" and told why.
   const [accountExists, setAccountExists] = useState(false);
@@ -105,14 +171,18 @@ export function AcceptForm({
 
   const acceptMutation = trpc.workspaces.acceptInvite.useMutation();
 
-  const done = useCallback((preview: OpenInvite, signedIn: boolean) => {
-    setState({
-      status: "done",
-      subject: preview,
-      email: preview.email,
-      signedIn,
-    });
-  }, []);
+  const done = useCallback(
+    (preview: OpenInvite, signedIn: boolean, way?: SignInWay) => {
+      setState({
+        status: "done",
+        subject: preview,
+        email: preview.email,
+        signedIn,
+        ...(way ? { way } : {}),
+      });
+    },
+    []
+  );
 
   /** One place a refusal becomes what the page shows. */
   const refuse = useCallback(
@@ -129,7 +199,7 @@ export function AcceptForm({
           return;
         case "account-exists":
           setAccountExists(true);
-          setTab("login");
+          setMode("sign-in");
           return;
         case "retry":
           setAcceptError(refusal.message);
@@ -171,6 +241,23 @@ export function AcceptForm({
         return;
       }
       const preview = previewQuery.data;
+      // Back from Synap Cloud: the pod accepted the invite (so it is gone)
+      // and signed this browser in as the invited person.
+      if (!preview && joinedVia === "synap_cloud") {
+        const joined = recallCloudJoin(token);
+        const session = joined ? await whoami() : null;
+        const email = session?.identity.traits?.email;
+        if (joined && email?.toLowerCase() === joined.email.toLowerCase()) {
+          setState({
+            status: "done",
+            subject: joined,
+            email: joined.email,
+            signedIn: true,
+            way: "synap_cloud",
+          });
+          return;
+        }
+      }
       if (!preview) {
         setState({ status: "not-found" });
         return;
@@ -182,7 +269,13 @@ export function AcceptForm({
       const session = await whoami();
       setState({ status: "ready", preview, session });
     })();
-  }, [previewQuery.isLoading, previewQuery.isError, previewQuery.data]);
+  }, [
+    previewQuery.isLoading,
+    previewQuery.isError,
+    previewQuery.data,
+    joinedVia,
+    token,
+  ]);
 
   if (state.status === "loading")
     return (
@@ -220,6 +313,7 @@ export function AcceptForm({
           subject={state.subject}
           email={state.email}
           signedIn={state.signedIn}
+          way={state.way}
         />
       </Shell>
     );
@@ -261,50 +355,28 @@ export function AcceptForm({
     );
   }
 
-  // Not signed in → create an account or sign in
+  // Not signed in → make the account here (one of three ways) or sign in.
   const returnHere = `/invite/${encodeURIComponent(token)}`;
   return (
     <Shell podHost={podHost}>
       <InviteHeader preview={preview} />
-      <Tabs
-        aria-label="How to accept"
-        variant="underlined"
-        selectedKey={tab}
-        onSelectionChange={(key) => setTab(key as AcceptTab)}
-        classNames={{
-          base: "w-full",
-          tabList: "gap-4 border-b border-foreground/[0.08] pb-0",
-        }}
-      >
-        <Tab
-          key="register"
-          title={
-            <span className="flex items-center gap-1.5 text-[13px]">
-              <UserPlus className="h-3.5 w-3.5" />
-              Create account
-            </span>
+      {mode === "join" ? (
+        <JoinWays
+          token={token}
+          preview={preview}
+          cloudSignIn={cloudSignIn}
+          onJoined={(signedIn, way) => done(preview, signedIn, way)}
+          onRefused={(refusal) => void refuse(refusal, preview)}
+          onSignedIn={async () =>
+            setState({ status: "ready", preview, session: await whoami() })
           }
-        >
-          <RegisterPanel
-            token={token}
-            inviteEmail={preview.email}
-            onSuccess={(signedIn) => done(preview, signedIn)}
-            onRefused={(refusal) => void refuse(refusal, preview)}
-          />
-        </Tab>
-        <Tab
-          key="login"
-          title={
-            <span className="flex items-center gap-1.5 text-[13px]">
-              <LogIn className="h-3.5 w-3.5" />
-              Sign in
-            </span>
-          }
-        >
+        />
+      ) : (
+        <>
           {accountExists ? (
             <p
               role="status"
-              className="mt-4 text-[13px] leading-relaxed text-foreground/70"
+              className="text-[13px] leading-relaxed text-foreground/70"
             >
               This pod already has an account for this email. Sign in with it to
               join. Forgot the password?{" "}
@@ -325,9 +397,298 @@ export function AcceptForm({
             acceptError={acceptError}
             isAccepting={acceptMutation.isPending}
           />
-        </Tab>
-      </Tabs>
+        </>
+      )}
+      <QuietSwitch
+        label={
+          mode === "join"
+            ? "Already have an account on this pod? Sign in"
+            : "No account here yet? Join instead"
+        }
+        onPress={() => setMode(mode === "join" ? "sign-in" : "join")}
+      />
     </Shell>
+  );
+}
+
+function QuietSwitch({
+  label,
+  onPress,
+}: {
+  label: string;
+  onPress: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onPress}
+      className="inline-flex min-h-10 items-center self-start text-[13px] text-foreground/70 underline-offset-2 hover:text-foreground hover:underline"
+    >
+      {label}
+    </button>
+  );
+}
+
+// ─── Join ways ───────────────────────────────────────────────────────────────
+
+/**
+ * The three ways to make the account (decision B2), as chips with a default:
+ * a passkey on a device that can make one, else a password. Synap Cloud only
+ * when the pod offers it. Labels come from the vocabulary door.
+ */
+function JoinWays({
+  token,
+  preview,
+  cloudSignIn,
+  onJoined,
+  onRefused,
+  onSignedIn,
+}: {
+  token: string;
+  preview: OpenInvite;
+  cloudSignIn: boolean;
+  onJoined: (signedIn: boolean, way: SignInWay) => void;
+  onRefused: (refusal: AcceptRefusal) => void;
+  onSignedIn: () => Promise<void>;
+}) {
+  // Known only in the browser; null until then (no flash of a wrong default).
+  const [passkeyOk, setPasskeyOk] = useState<boolean | null>(null);
+  const [chosen, setChosen] = useState<SignInWay | null>(null);
+  useEffect(() => setPasskeyOk(isPasskeySupported()), []);
+
+  const ways: SignInWay[] = [
+    ...(passkeyOk ? (["passkey"] as const) : []),
+    "password",
+    ...(cloudSignIn ? (["synap_cloud"] as const) : []),
+  ];
+  const way: SignInWay =
+    chosen && ways.includes(chosen)
+      ? chosen
+      : passkeyOk
+        ? "passkey"
+        : "password";
+
+  const panel = (w: SignInWay) =>
+    w === "passkey" ? (
+      <PasskeyPanel
+        token={token}
+        inviteEmail={preview.email}
+        onJoined={() => onJoined(true, "passkey")}
+        onSignedIn={onSignedIn}
+      />
+    ) : w === "synap_cloud" ? (
+      <CloudPanel token={token} preview={preview} onSignedIn={onSignedIn} />
+    ) : (
+      <RegisterPanel
+        token={token}
+        inviteEmail={preview.email}
+        onSuccess={(signedIn) => onJoined(signedIn, "password")}
+        onRefused={onRefused}
+      />
+    );
+
+  if (passkeyOk === null) {
+    return (
+      <div className="h-40 rounded-md bg-foreground/[0.04] shimmer-pulse" />
+    );
+  }
+  return (
+    <div className="flex flex-col">
+      {ways.length > 1 ? (
+        <Tabs
+          aria-label="How to join"
+          variant="solid"
+          radius="full"
+          size="sm"
+          selectedKey={way}
+          onSelectionChange={(key) => setChosen(key as SignInWay)}
+          classNames={{ panel: "px-0 pb-0 pt-2" }}
+        >
+          {ways.map((w) => (
+            <Tab key={w} title={resolveSignInWayLabel(w)}>
+              {panel(w)}
+            </Tab>
+          ))}
+        </Tabs>
+      ) : (
+        panel(way)
+      )}
+    </div>
+  );
+}
+
+/** The page's own address with `?joined=<way>`: where Kratos sends the browser back. */
+function joinReturnTo(token: string, way: SignInWay): string {
+  const url = new URL(
+    `/invite/${encodeURIComponent(token)}`,
+    window.location.origin
+  );
+  url.searchParams.set(JOINED_PARAM, way);
+  return url.toString();
+}
+
+/** What a join attempt that did not finish here means for the panel. */
+async function settle(
+  outcome: JoinOutcome,
+  on: {
+    joined: () => void;
+    signedIn: () => Promise<void>;
+    error: (message: string) => void;
+  }
+): Promise<void> {
+  switch (outcome.kind) {
+    case "joined":
+      on.joined();
+      return;
+    case "redirect":
+      window.location.assign(outcome.to);
+      return;
+    case "signed-in":
+      await on.signedIn();
+      return;
+    case "refused":
+      on.error(outcome.message);
+      return;
+    case "cancelled":
+      return;
+  }
+}
+
+const JOIN_UNREACHABLE =
+  "We could not reach this pod's sign-in. Check your connection and try again.";
+
+function PasskeyPanel({
+  token,
+  inviteEmail,
+  onJoined,
+  onSignedIn,
+}: {
+  token: string;
+  inviteEmail: string;
+  onJoined: () => void;
+  onSignedIn: () => Promise<void>;
+}) {
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const onSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setSubmitting(true);
+    try {
+      const outcome = await joinWithPasskey(
+        {
+          token,
+          email: inviteEmail,
+          ...(name.trim() ? { name: name.trim() } : {}),
+          returnTo: joinReturnTo(token, "passkey"),
+        },
+        JOIN_DEPS
+      );
+      await settle(outcome, {
+        joined: onJoined,
+        signedIn: onSignedIn,
+        error: setError,
+      });
+    } catch {
+      setError(JOIN_UNREACHABLE);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form className="flex flex-col gap-4" onSubmit={onSubmit}>
+      {error ? <ErrorBanner message={error} /> : null}
+      <Input
+        label="Email"
+        labelPlacement="outside"
+        type="email"
+        value={inviteEmail}
+        isReadOnly
+        size="sm"
+        radius="md"
+        variant="flat"
+        classNames={{ input: "text-foreground/65" }}
+      />
+      <Input
+        label="Display name (optional)"
+        labelPlacement="outside"
+        type="text"
+        placeholder="Jane Smith"
+        value={name}
+        onValueChange={setName}
+        autoComplete="name"
+        size="sm"
+        radius="md"
+        variant="flat"
+      />
+      <Button
+        type="submit"
+        color="primary"
+        radius="md"
+        size="md"
+        isLoading={submitting}
+        startContent={submitting ? null : <KeyRound className="h-4 w-4" />}
+      >
+        {resolveSignInWayLabel("passkey", "action")}
+      </Button>
+    </form>
+  );
+}
+
+function CloudPanel({
+  token,
+  preview,
+  onSignedIn,
+}: {
+  token: string;
+  preview: OpenInvite;
+  onSignedIn: () => Promise<void>;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState(false);
+
+  const go = async () => {
+    setError(null);
+    setLeaving(true);
+    rememberCloudJoin(token, preview);
+    try {
+      const outcome = await joinWithSynapCloud(
+        { token, returnTo: joinReturnTo(token, "synap_cloud") },
+        JOIN_DEPS
+      );
+      await settle(outcome, {
+        joined: () => undefined,
+        signedIn: onSignedIn,
+        error: setError,
+      });
+      // The browser is leaving for Synap Cloud: keep the button busy.
+      if (outcome.kind !== "redirect") setLeaving(false);
+    } catch {
+      setError(JOIN_UNREACHABLE);
+      setLeaving(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      {error ? <ErrorBanner message={error} /> : null}
+      <p className="text-[13px] leading-relaxed text-foreground/70">
+        Use the Synap Cloud account for{" "}
+        <span className="font-medium text-foreground/85">{preview.email}</span>.
+      </p>
+      <Button
+        color="primary"
+        radius="md"
+        size="md"
+        isLoading={leaving}
+        onPress={() => void go()}
+      >
+        {resolveSignInWayLabel("synap_cloud", "action")}
+      </Button>
+    </div>
   );
 }
 
@@ -426,13 +787,7 @@ function RegisterPanel({
   );
 
   return (
-    <form className="mt-4 flex flex-col gap-4" onSubmit={onSubmit}>
-      {/* Honest about what this makes (2026-10-21): an account on THIS pod
-          with its own password. Joining with a Synap Cloud account is not
-          offered to invitees yet. */}
-      <p className="text-[13px] leading-relaxed text-foreground/70">
-        This makes your account on this pod, with its own password.
-      </p>
+    <form className="flex flex-col gap-4" onSubmit={onSubmit}>
       {error ? <ErrorBanner message={error} /> : null}
       <Input
         label="Email"
@@ -478,7 +833,9 @@ function RegisterPanel({
         isLoading={submitting}
         isDisabled={password.length < MIN_PASSWORD}
       >
-        {submitting ? "Creating account…" : "Create account and join"}
+        {submitting
+          ? "Creating account…"
+          : resolveSignInWayLabel("password", "action")}
       </Button>
     </form>
   );
@@ -596,12 +953,12 @@ function LoginPanel({
 
   if (loading) {
     return (
-      <div className="mt-4 h-24 rounded-md bg-foreground/[0.04] shimmer-pulse" />
+      <div className="h-24 rounded-md bg-foreground/[0.04] shimmer-pulse" />
     );
   }
 
   return (
-    <form className="mt-4 flex flex-col gap-4" onSubmit={onSubmit}>
+    <form className="flex flex-col gap-4" onSubmit={onSubmit}>
       {error || acceptError ? (
         <ErrorBanner message={error ?? acceptError!} />
       ) : null}
@@ -797,14 +1154,23 @@ function ExpiredBody() {
  * install hatch beside it. Focus moves to the headline so a screen reader
  * hears the outcome.
  */
+/** How the person signs in next time, said on the Done screen. */
+const SIGN_IN_WITH: Record<SignInWay, string> = {
+  passkey: "with your passkey",
+  password: "with this pod's password",
+  synap_cloud: "with Synap Cloud",
+};
+
 function DoneBody({
   subject,
   email,
   signedIn,
+  way,
 }: {
   subject: InviteSubject;
   email: string;
   signedIn: boolean;
+  way?: SignInWay;
 }) {
   const exit = pairExit(POD_URL, email);
   const host = podApiHost();
@@ -825,11 +1191,12 @@ function DoneBody({
         </h1>
         <p className="text-[13.5px] leading-relaxed text-foreground/65">
           {exit ? "In the Synap app, sign" : "Sign"} in to {host ?? "this pod"}{" "}
-          as <span className="font-medium text-foreground/85">{email}</span>{" "}
-          with this pod&apos;s password.
+          as <span className="font-medium text-foreground/85">{email}</span>
+          {way ? ` ${SIGN_IN_WITH[way]}` : ""}.
         </p>
       </div>
       {exit ? <OpenInSynap exit={exit} /> : null}
+      {way === "synap_cloud" ? <AddPasskeyInvite /> : null}
       {POD_URL ? <PodAddress origin={new URL(POD_URL).origin} /> : null}
       <a
         href={signedIn ? "/" : "/login?return=/"}
@@ -838,6 +1205,31 @@ function DoneBody({
         {signedIn ? "Open this pod's console" : "Sign in to this pod's console"}
       </a>
     </>
+  );
+}
+
+/**
+ * An INVITE, never a requirement: a person who joined with Synap Cloud only
+ * has no way into this pod without it (and cannot confirm a sensitive change
+ * with it, B1 step-up). Settings › Security › Passkeys makes one.
+ */
+function AddPasskeyInvite() {
+  return (
+    <div className="flex flex-col items-start gap-2 rounded-medium p-3 ring-1 ring-inset ring-foreground/10">
+      <p className="flex items-start gap-2 text-[13px] leading-relaxed text-foreground/75">
+        <KeyRound aria-hidden className="mt-0.5 h-4 w-4 shrink-0" />
+        Add a passkey to this pod, so you can sign in here without Synap Cloud.
+      </p>
+      <Button
+        as="a"
+        href="/settings/security#passkeys"
+        size="sm"
+        radius="md"
+        variant="flat"
+      >
+        Add a passkey to this pod
+      </Button>
+    </div>
   );
 }
 
