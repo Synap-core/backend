@@ -142,8 +142,14 @@ const CLASSIFIED: Record<string, { sites: number; why: string }> = {
     why: "system-created pod-admin workspace: literal settings / {...stored, systemSlug, surfaceClass}",
   },
   "apps/api/src/routers/provision.ts": {
-    sites: 3,
-    why: "{...stored, intelligenceServiceId} / stored minus intelligenceServiceId / stored minus controlPlane",
+    sites: 2,
+    why: "{...stored, intelligenceServiceId} / stored minus intelligenceServiceId",
+  },
+  // The legacy Control Plane record's one-time cleanup (cp-link): removes a
+  // code-literal key, never adds one.
+  "packages/database/src/utils/control-plane-link.ts": {
+    sites: 1,
+    why: "settings - 'controlPlane'",
   },
   // Writes that do not touch settings at all.
   // R8a moved the archive column write out of routers/workspaces.ts into the

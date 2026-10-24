@@ -25,12 +25,14 @@
  * The Intake Room (`?view=room`) is the app's; links to it keep bouncing.
  *
  * Under the header, top → down: who started it and where it lives (chips,
- * each a door); its room (the session channel, from the continuation packet's
- * `room` — a door to `/open/channel/:id`); what it owes (declared
- * deliverables) and its criteria; then what it left — its outputs
- * (`focusSessions.outputs`) and its report (`focusSessions.document`). Every
- * section with nothing in it is OMITTED; a section whose read failed says so.
- * All doors read through the same session floor as `get`.
+ * each a door); what it waits on the owner for — the agents' questions and
+ * blockers, answered in place, and the changes it proposed, each a door to
+ * its review (`session-needs-you.tsx`); its room (the session channel, from
+ * the continuation packet's `room` — a door to `/open/channel/:id`); what it
+ * owes (declared deliverables) and its criteria; then what it left — its
+ * outputs (`focusSessions.outputs`) and its report (`focusSessions.document`).
+ * Every section with nothing in it is OMITTED; a section whose read failed
+ * says so. All doors read through the same session floor as `get`.
  */
 
 import { useState, type ReactNode } from "react";
@@ -101,6 +103,7 @@ import {
   type SessionStarter,
 } from "../session-status";
 import { useSessionMoves } from "../use-session-moves";
+import { NeedsYouSection, ProposedChangesSection } from "./session-needs-you";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { OpenInAppLink } from "../open-in-app-link";
 import { useReauthOnUnauthorized } from "../use-reauth";
@@ -415,6 +418,8 @@ export function SessionBody({ id, frame }: { id: string; frame: ObjectFrame }) {
           </p>
         )}
 
+        {owner && <NeedsYouSection sessionId={id} />}
+        <ProposedChangesSection sessionId={id} />
         <RoomSection
           room={room}
           name={channel.data?.channel.title?.trim() || null}

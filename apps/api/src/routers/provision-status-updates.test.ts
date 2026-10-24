@@ -24,6 +24,8 @@ const h = vi.hoisted(() => {
     jwtOpts: [] as unknown[],
     session: null as null | { identity: { id: string } },
     admin: false,
+    link: undefined as unknown,
+    plan: null as unknown,
   };
 });
 
@@ -76,23 +78,12 @@ vi.mock("@synap/api", () => ({
   }),
 }));
 vi.mock("@synap/database", () => ({
-  getDb: async () => ({
-    query: {
-      workspaces: {
-        findFirst: async () => ({
-          settings: {
-            controlPlane: {
-              url: "https://api.synap.live",
-              podId: "pod-secret-id",
-              cpApiKey: "k",
-              connectedAt: "2026-10-01T00:00:00Z",
-              lastPingAt: null,
-            },
-          },
-        }),
-      },
-    },
-  }),
+  getDb: async () => ({}),
+  // The pod's Control Plane link (its own suite: database
+  // control-plane-link.test.ts) — the enrollment record a registered pod has.
+  readControlPlaneLink: async () => h.link,
+  readControlPlaneEntitlement: async () => h.plan,
+  readControlPlaneEntitlementSync: async () => null,
   eq: vi.fn(),
   and: vi.fn(),
   sql: vi.fn(),
@@ -139,6 +130,14 @@ beforeEach(() => {
   h.jwtOpts = [];
   h.session = null;
   h.admin = false;
+  h.link = {
+    podId: "pod-secret-id",
+    url: "https://api.synap.live",
+    issuer: "https://api.synap.live",
+    since: "2026-10-01T00:00:00Z",
+    source: "enrollment",
+  };
+  h.plan = null;
 });
 
 describe("GET /api/provision/status → who reads the details", () => {
@@ -264,5 +263,46 @@ describe("GET /api/provision/status → updates", () => {
     const body = await status();
     expect(body.updates.settings).toBeNull();
     expect(body.updates.settingsRead).toBe("failed");
+  });
+});
+
+// lane cp-link: the CP link is the pod-level record the registration / enroll
+// door wrote (read through `readControlPlaneLink`), never a workspace's
+// settings. A pod registered after July has no workspace record at all (the
+// db stub above has none) and must still read connected.
+describe("GET /api/provision/status → the Control Plane link", () => {
+  it("a registered pod reads connected, with its CP pod id and plan", async () => {
+    h.plan = {
+      tier: "pro",
+      status: "active",
+      trialEnd: null,
+      lab: false,
+      source: "pull",
+      checkedAt: "2026-10-23T10:00:00.000Z",
+    };
+    const body = await status();
+    expect(body.connected).toBe(true);
+    expect(body.controlPlane).toMatchObject({
+      podId: "pod-secret-id",
+      connectedAt: "2026-10-01T00:00:00Z",
+      lastPingAt: "2026-10-23T10:00:00.000Z",
+      source: "enrollment",
+    });
+    expect(body.plan).toMatchObject({ tier: "pro", status: "active" });
+  });
+
+  it("a pod with no link reads disconnected", async () => {
+    h.link = null;
+    const res = await provisionRouter.request("/status");
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.connected).toBe(false);
+    expect(body.connectionState).toBe("disconnected");
+  });
+
+  it("a link that cannot be read is an error, never 'disconnected'", async () => {
+    h.link = Promise.reject(new Error("enrollment unreadable"));
+    (h.link as Promise<unknown>).catch(() => {});
+    const res = await provisionRouter.request("/status");
+    expect(res.status).toBe(500);
   });
 });

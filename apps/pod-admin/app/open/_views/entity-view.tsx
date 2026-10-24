@@ -17,14 +17,15 @@
  */
 
 import { Chip } from "@heroui/react";
-import {
-  planEntityFields,
-  type EffectivePropertyDef,
-} from "@synap-core/types/property-render";
+import { planEntityFields } from "@synap-core/types/property-render";
 import { trpc } from "../../../lib/trpc";
 import { formatRelative } from "../../../lib/format";
 import { FieldList } from "../../_lib/object/field-list";
 import { proseFields } from "../../_lib/object/field-rows";
+import {
+  definitionsOf,
+  type WirePropertyDef,
+} from "../../_lib/object/property-definitions";
 import {
   ContentBlock,
   DocumentContentSection,
@@ -58,34 +59,9 @@ type EntityPayload = {
     displayName?: string;
     uiHints?: { icon?: string | null; color?: string | null } | null;
   };
-  effectiveProperties?: Array<{
-    id?: string;
-    slug?: string;
-    valueType?: string;
-    constraints?: Record<string, unknown> | null;
-    displayOrder?: number;
-    uiHints?: Record<string, unknown> | null;
-  }>;
+  effectiveProperties?: WirePropertyDef[];
   facets?: Array<{ profile?: Record<string, unknown> }>;
 };
-
-/** Wire defs → the planner's shape; a def with no slug is not a field. */
-function definitionsOf(data: EntityPayload): EffectivePropertyDef[] {
-  return (data.effectiveProperties ?? []).flatMap((d) =>
-    d.slug
-      ? [
-          {
-            id: d.id ?? d.slug,
-            slug: d.slug,
-            valueType: d.valueType ?? "string",
-            constraints: d.constraints ?? null,
-            uiHints: d.uiHints ?? null,
-            displayOrder: d.displayOrder,
-          },
-        ]
-      : []
-  );
-}
 
 function roleSlugs(data: EntityPayload): string[] {
   const slugs = new Set<string>();
@@ -128,7 +104,7 @@ export function EntityView({ id }: { id: string }) {
     "entity";
   const noun = data.profile?.displayName?.trim() || undefined;
   const summary = entitySummary(entity);
-  const definitions = definitionsOf(data);
+  const definitions = definitionsOf(data.effectiveProperties);
   const properties = entity.properties ?? {};
   const plan = planEntityFields({
     definitions,
