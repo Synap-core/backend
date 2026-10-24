@@ -792,6 +792,13 @@ export const tools = {
               description:
                 "Proposal UUID, as returned verbatim by synap_list_proposals or by the `proposalId` of a `proposed` write. A leading fragment of one also resolves, but pass the full id you were given.",
             },
+            detail: {
+              type: "string",
+              enum: ["lean", "full"],
+              default: "lean",
+              description:
+                "'lean' (default) = one copy of the payload (`data`), `review`, provenance, status; `request.data` and revision before/patch bodies are left out. 'full' = the whole row (about 3x larger).",
+            },
           },
           required: ["proposalId"],
         },
@@ -2681,6 +2688,17 @@ export const tools = {
               description:
                 "Optional: only sessions ABOUT this entity (the subject-spine anchor).",
             },
+            trackId: {
+              type: "string",
+              description: "Optional: only sessions in this track.",
+            },
+            detail: {
+              type: "string",
+              enum: ["lean", "full"],
+              default: "lean",
+              description:
+                "'lean' (default) = id, title, status, kind, trackId, projectId, workspaceId, updatedAt per row. 'full' = every column (goal, criteria, stages, metadata…): large, use `synap_get_session` for one session instead.",
+            },
             playbookId: {
               type: "string",
               description:
@@ -2942,6 +2960,12 @@ export const tools = {
               type: "string",
               description:
                 "Optional project you are working in. Never filters — it ranks a track template (scope project) above its same-name session twin.",
+            },
+            limit: {
+              type: "number",
+              default: 5,
+              description:
+                "Candidates to return, 1–20 (default 5). Rows carried only by a word many playbooks share are dropped; `goalTemplate` is cut at 200 chars (`synap_list_playbooks` has the whole).",
             },
           },
           required: [],
