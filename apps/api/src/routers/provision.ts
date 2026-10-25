@@ -11,10 +11,14 @@
  *   POST /api/provision/register-intelligence — Intelligence service registration
  *   POST /api/provision/reset-intelligence    — Clear stale intelligence registration
  *   GET  /api/provision/status                — Liveness for anyone; details for the CP or a pod admin
- *   POST /api/provision/disconnect            — Remove a provisioning connection
+ *
+ * The pod's Control Plane link (CP url, issuer, pod id) and plan are read
+ * through `readControlPlaneLink` / `readControlPlaneEntitlement`
+ * (`@synap/database` utils/control-plane-link.ts), never from a workspace.
  *
  * Retired compatibility endpoints:
  *   /connect          → no generic replacement (optional operations are local)
+ *   /disconnect       → none: the link is the operator's enrollment record
  *   /authorize-issuer → /api/federation/identity-links
  *   /seed-trust      → /api/federation/identity-links
  *   /seed-admin      → Pod-local setup, then /api/federation/access-grants
@@ -38,7 +42,15 @@ import {
   resolveServiceKey,
   verifyTrustedIssuerJwt,
 } from "@synap/api";
-import { getDb, eq, drizzleSql, TrustedIssuerService } from "@synap/database";
+import {
+  getDb,
+  eq,
+  readControlPlaneEntitlement,
+  readControlPlaneEntitlementSync,
+  readControlPlaneLink,
+  TrustedIssuerService,
+  type ControlPlaneLink,
+} from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
   workspaces,
@@ -57,6 +69,27 @@ const SYNAP_HUB_SERVICE_ID = "synap-hub";
 const logger = createLogger({ module: "provision" });
 
 export const provisionRouter = new Hono();
+
+/**
+ * This pod's Control Plane link for a CP-JWT-gated route, or a 500 response
+ * when it cannot be read (a failed read is never "not provisioned").
+ */
+async function linkOrFailure(
+  c: Context,
+  route: string
+): Promise<{ link: ControlPlaneLink | null } | { response: Response }> {
+  try {
+    return { link: await readControlPlaneLink() };
+  } catch (err) {
+    logger.error({ err }, `${route}: could not read the Control Plane link`);
+    return {
+      response: c.json(
+        { error: "Could not read this pod's Control Plane link" },
+        500
+      ),
+    };
+  }
+}
 
 function retiredProvisioningEndpoint(c: Context, successor?: string) {
   c.header("Deprecation", "true");
@@ -121,19 +154,11 @@ provisionRouter.post("/register-intelligence", async (c) => {
   }
   const token = authHeader.slice(7);
 
-  // Resolve the legacy issuer binding from workspace settings when it exists.
-  let cpUrl: string | undefined;
-  try {
-    const db = await getDb();
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const cp = (ws?.settings as Record<string, unknown> | null)
-      ?.controlPlane as { url?: string } | undefined;
-    cpUrl = cp?.url;
-  } catch {
-    // Fall through to undefined: the trusted issuer registry still gates `iss`.
-  }
+  // Pin the issuer to this pod's linked CP when it has one; without a link the
+  // trusted issuer registry still gates `iss`.
+  const linked = await linkOrFailure(c, "register-intelligence");
+  if ("response" in linked) return linked.response;
+  const cpUrl = linked.link?.issuer ?? undefined;
 
   const podPublicUrl = podAudience();
   if (!podPublicUrl) {
@@ -386,7 +411,7 @@ provisionRouter.post("/register-intelligence", async (c) => {
 // Security:
 //   - JWT signature verified via JWKS (same as /register-intelligence)
 //   - type MUST be "provision" — rejects tier_update and other lightweight token types
-//   - payload.podId MUST match the registered controlPlane.podId — prevents JWT replay
+//   - payload.podId MUST match this pod's Control Plane link podId — prevents JWT replay
 //     from a different pod being used to wipe this pod's IS credentials
 //
 // Returns: { success: true, cleared: boolean }
@@ -398,21 +423,11 @@ provisionRouter.post("/reset-intelligence", async (c) => {
   }
   const token = authHeader.slice(7);
 
-  // Resolve the legacy issuer binding from workspace settings when it exists.
-  let cpUrl: string | undefined;
-  let registeredPodId: string | undefined;
-  try {
-    const db = await getDb();
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const cp = (ws?.settings as Record<string, unknown> | null)
-      ?.controlPlane as { url?: string; podId?: string } | undefined;
-    cpUrl = cp?.url;
-    registeredPodId = cp?.podId;
-  } catch {
-    /* fall through */
-  }
+  // The issuer pin and the pod id anchor: this pod's Control Plane link.
+  const linked = await linkOrFailure(c, "reset-intelligence");
+  if ("response" in linked) return linked.response;
+  const cpUrl = linked.link?.issuer ?? undefined;
+  const registeredPodId = linked.link?.podId;
 
   const podPublicUrl = podAudience();
   if (!podPublicUrl) {
@@ -559,20 +574,11 @@ provisionRouter.post("/validate-credentials", async (c) => {
   }
   const token = authHeader.slice(7);
 
-  let cpUrl: string | undefined;
-  let registeredPodId: string | undefined;
-  try {
-    const db = await getDb();
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const cp = (ws?.settings as Record<string, unknown> | null)
-      ?.controlPlane as { url?: string; podId?: string } | undefined;
-    cpUrl = cp?.url;
-    registeredPodId = cp?.podId;
-  } catch {
-    /* fall through */
-  }
+  // The issuer pin and the pod id anchor: this pod's Control Plane link.
+  const linked = await linkOrFailure(c, "validate-credentials");
+  if ("response" in linked) return linked.response;
+  const cpUrl = linked.link?.issuer ?? undefined;
+  const registeredPodId = linked.link?.podId;
 
   const podPublicUrl = podAudience();
   if (!podPublicUrl) {
@@ -784,41 +790,17 @@ async function statusReader(
 
 provisionRouter.get("/status", async (c) => {
   try {
-    const db = await getDb();
-    // The CP connection is POD-level state that lives in the settings of the
-    // workspace it was written to — NOT of "whichever workspace comes first".
-    // `findFirst()` with no filter read an arbitrary space, so a pod whose
-    // first space carried no `controlPlane` reported `connected:false` /
-    // "disconnected" while the CP link was fine.
-    const ws =
-      (await db.query.workspaces.findFirst({
-        columns: { settings: true },
-        where: drizzleSql`${workspaces.settings}->'controlPlane' IS NOT NULL`,
-      })) ??
-      (await db.query.workspaces.findFirst({ columns: { settings: true } }));
+    // The CP connection is POD-level state: the link the registration or
+    // enroll door recorded (`readControlPlaneLink`), never a workspace's
+    // settings — a pod registered after July has no such workspace record and
+    // read "disconnected" while its CP link was fine. A failed read is a 500
+    // (the catch below), never "disconnected".
+    const cp = await readControlPlaneLink();
 
-    const reader = await statusReader(
-      c,
-      (
-        (ws?.settings as Record<string, unknown> | null)?.controlPlane as
-          { url?: string } | undefined
-      )?.url
-    );
+    const reader = await statusReader(c, cp?.issuer ?? undefined);
     if (reader === "denied") {
       return c.json({ error: "Issuer is not approved for this Pod" }, 401);
     }
-
-    const settings = (ws?.settings as Record<string, unknown>) ?? {};
-    const cp = settings.controlPlane as
-      | {
-          url: string;
-          podId: string;
-          cpApiKey: string;
-          connectedAt: string;
-          lastPingAt: string | null;
-          authorizedIntelligenceHubUrl?: string;
-        }
-      | undefined;
 
     // The service that ACTUALLY serves — through the resolver routing itself
     // uses (capability → workspace → user → pod default → env), never a
@@ -890,9 +872,6 @@ provisionRouter.get("/status", async (c) => {
     if (cp && !intelligenceService) {
       connectionIssues.push("hub_not_registered");
     }
-    if (cp && cp.authorizedIntelligenceHubUrl && !intelligenceService) {
-      connectionIssues.push("hub_push_failed");
-    }
 
     const connectionState = !cp
       ? "disconnected"
@@ -910,7 +889,6 @@ provisionRouter.get("/status", async (c) => {
       key_expiring: "API key expires within 14 days. Re-provision to refresh.",
       hub_not_registered:
         "Intelligence Service has not registered with this pod.",
-      hub_push_failed: "Credential delivery to pod failed during provisioning.",
     };
     for (const issue of connectionIssues) {
       if (issueHints[issue]) {
@@ -935,6 +913,11 @@ provisionRouter.get("/status", async (c) => {
       });
     }
 
+    const [plan, planSync] = await Promise.all([
+      readControlPlaneEntitlement(),
+      readControlPlaneEntitlementSync(),
+    ]);
+
     // The URL the runtime actually uses — the resolver's own answer.
     const resolvedIsUrl: string = serving.url;
     const resolvedIsSource: "database" | "env_fallback" =
@@ -958,13 +941,26 @@ provisionRouter.get("/status", async (c) => {
         ? {
             url: cp.url,
             podId: cp.podId,
-            connectedAt: cp.connectedAt,
-            lastPingAt: cp.lastPingAt,
-            // authorizedHubUrl tells the UI which IS URL is expected to register
-            authorizedHubUrl: cp.authorizedIntelligenceHubUrl ?? null,
-            // cpApiKey intentionally omitted from status response
+            connectedAt: cp.since,
+            // The last time the CP answered this pod (its plan pull).
+            lastPingAt: plan?.checkedAt ?? null,
+            // No record names an expected IS URL since the July retirement.
+            authorizedHubUrl: null,
+            source: cp.source,
           }
         : null,
+      // The plan this pod enforces (pulled from its CP) and the last pull.
+      plan: plan
+        ? {
+            tier: plan.tier,
+            status: plan.status,
+            trialEnd: plan.trialEnd,
+            lab: plan.lab,
+            source: plan.source,
+            checkedAt: plan.checkedAt,
+          }
+        : null,
+      planSync,
       // null when unprovisioned — same contract as controlPlane above. Spreading
       // a null here would emit `{}`, which reads as "provisioned, status unknown"
       // to every consumer that truth-tests the object.
@@ -1079,7 +1075,7 @@ provisionRouter.get("/debug", async (c) => {
     isBuiltIn: boolean;
     createdAt: string;
   }> = [];
-  let workspaceControlPlane: Record<string, unknown> | null = null;
+  let controlPlaneLink: Record<string, unknown> | null = null;
   try {
     const svc = new TrustedIssuerService();
     const issuers = await svc.list();
@@ -1090,18 +1086,13 @@ provisionRouter.get("/debug", async (c) => {
       createdAt: i.createdAt?.toISOString() ?? "",
     }));
 
-    const db = await getDb();
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const cp = (ws?.settings as Record<string, unknown> | null)
-      ?.controlPlane as Record<string, unknown> | undefined;
+    const cp = await readControlPlaneLink();
     if (cp) {
-      workspaceControlPlane = {
+      controlPlaneLink = {
         url: cp.url,
         podId: cp.podId,
-        connectedAt: cp.connectedAt,
-        lastPingAt: cp.lastPingAt,
+        connectedAt: cp.since,
+        source: cp.source,
       };
     }
   } catch (err) {
@@ -1121,7 +1112,7 @@ provisionRouter.get("/debug", async (c) => {
         (i) => i.status === "approved" && i.isBuiltIn
       ),
       issuers: trustedIssuers,
-      workspaceControlPlane,
+      controlPlaneLink,
     },
     kratos: {
       healthy: kratosHealthy,
@@ -1289,79 +1280,11 @@ provisionRouter.post("/deactivate-addon", (c) =>
   retiredProvisioningEndpoint(c)
 );
 
-// ─── POST /api/provision/disconnect ──────────────────────────────────────────
+// ─── Retired: POST /api/provision/disconnect ─────────────────────────────────
 //
-// Removes the Control Plane connection.
-// Auth: same JWT mechanism (type: "deprovision") OR an admin can call this
-// directly from the CLI (which writes to DB directly, bypassing this endpoint).
+// It deleted the pre-July `workspaces.settings.controlPlane` record. The link is
+// now the enrollment record in the deploy dir, the operator's file, which a CP
+// token cannot remove. No caller remains (CP, CLI and backend checked
+// 2026-10-23): an older one gets an explicit 410.
 
-provisionRouter.post("/disconnect", async (c) => {
-  const body = await c.req.json().catch(() => null);
-  const parsed = z.object({ token: z.string().min(1) }).safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: "Invalid request body" }, 400);
-  }
-  const { token } = parsed.data;
-
-  const podPublicUrl = podAudience();
-  if (!podPublicUrl) {
-    logger.error(
-      "disconnect refused: PUBLIC_URL not configured — audience check is mandatory"
-    );
-    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
-  }
-
-  let cpUrl: string | undefined;
-  try {
-    const db = await getDb();
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const cp = (ws?.settings as Record<string, unknown> | null)
-      ?.controlPlane as { url?: string } | undefined;
-    cpUrl = cp?.url;
-  } catch {
-    /* fall through */
-  }
-
-  const payload = await verifyTrustedIssuerJwt<{ type?: string }>(token, {
-    pinnedIssuer: cpUrl,
-    audience: podPublicUrl,
-  });
-  if (!payload) {
-    return c.json({ error: "Invalid or expired token" }, 401);
-  }
-
-  // Only "provision" JWTs carry the authority to remove the CP connection.
-  // "tier_update" JWTs are distributed more broadly and must not be able to disconnect.
-  if (payload.type !== "provision") {
-    return c.json(
-      {
-        error:
-          "Invalid token type — only 'provision' tokens may disconnect the pod",
-      },
-      403
-    );
-  }
-
-  try {
-    const db = await getDb();
-    const ws = await db.query.workspaces.findFirst();
-    if (!ws) {
-      return c.json({ error: "No workspace found" }, 404);
-    }
-
-    const settings = (ws.settings as Record<string, unknown>) ?? {};
-    const { controlPlane: _removed, ...rest } = settings;
-    await db
-      .update(workspaces)
-      .set({ settings: rest })
-      .where(eq(workspaces.id, ws.id));
-
-    logger.info("Control Plane connection removed");
-    return c.json({ success: true });
-  } catch (err) {
-    logger.error({ err }, "Failed to remove Control Plane connection");
-    return c.json({ error: "Internal server error" }, 500);
-  }
-});
+provisionRouter.post("/disconnect", (c) => retiredProvisioningEndpoint(c));

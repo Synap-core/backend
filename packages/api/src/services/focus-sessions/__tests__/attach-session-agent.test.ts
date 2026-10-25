@@ -11,13 +11,28 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * what these assert is the row the door would write.
  */
 
-const { rows, sets, lockedWith, forMode, updateWhereCalls } = vi.hoisted(
+const {
+  rows,
+  sets,
+  lockedWith,
+  forMode,
+  updateWhereCalls,
+  expireCalls,
+  actioned,
+} = vi.hoisted(() => ({
+  rows: { current: [] as unknown[] },
+  sets: [] as Record<string, unknown>[],
+  lockedWith: [] as unknown[],
+  forMode: [] as string[],
+  updateWhereCalls: { count: 0 },
+  expireCalls: [] as Array<{ input: unknown; executor: unknown }>,
+  actioned: [] as string[][],
+}));
+
+vi.mock(
+  "../../../notifications/mark-proposal-notifications-actioned.js",
   () => ({
-    rows: { current: [] as unknown[] },
-    sets: [] as Record<string, unknown>[],
-    lockedWith: [] as unknown[],
-    forMode: [] as string[],
-    updateWhereCalls: { count: 0 },
+    markProposalNotificationsActioned: (ids: string[]) => actioned.push(ids),
   })
 );
 
@@ -55,6 +70,15 @@ vi.mock("@synap/database", async (importOriginal) => {
     db: {
       transaction: vi.fn(async (cb: (t: unknown) => unknown) => cb(tx)),
     },
+    // Its SQL is proven on PGlite (`expire-pending-hand-offs.pglite.test.ts`);
+    // here: the door hands it the pair, in the locked transaction.
+    expirePendingHandOffsOfAttachedAgent: async (
+      input: unknown,
+      executor: unknown
+    ) => {
+      expireCalls.push({ input, executor });
+      return ["handoff-1"];
+    },
   };
 });
 
@@ -87,6 +111,8 @@ describe("attachSessionAgent", () => {
     forMode.length = 0;
     updateWhereCalls.count = 0;
     rows.current = [];
+    expireCalls.length = 0;
+    actioned.length = 0;
   });
 
   it("appends an agent that is not yet on the roster", async () => {
@@ -148,6 +174,27 @@ describe("attachSessionAgent", () => {
     // The point of idempotency: no duplicate, and no write at all.
     expect(sets).toHaveLength(0);
     expect(updateWhereCalls.count).toBe(0);
+  });
+
+  it("SETTLES the pending hand-offs of the pair, even when the agent was already on (5de7efaa)", async () => {
+    rows.current = [{ agentIds: ["agent-2"] }];
+
+    await attachSessionAgent({
+      sessionId: SESSION,
+      agentId: " agent-2 ",
+      userId: "user-a",
+      viaProposalId: "approving-1",
+    });
+
+    expect(expireCalls).toHaveLength(1);
+    expect(expireCalls[0]!.input).toEqual({
+      sessionId: SESSION,
+      agentId: "agent-2",
+      landedByProposalId: "approving-1",
+    });
+    // In the locked transaction, not on the pool.
+    expect(expireCalls[0]!.executor).toHaveProperty("select");
+    expect(actioned).toEqual([["handoff-1"]]);
   });
 
   it("REFUSES a session that is not the caller's — indistinguishable from missing", async () => {

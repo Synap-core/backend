@@ -12,6 +12,7 @@
  * verbatim) plus re-exports of everything an external importer needs.
  */
 
+import { readLatestApprovalRun } from "../services/proposals/approval-runs.js";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
@@ -1178,6 +1179,22 @@ export const proposalsRouter = router({
     }),
 
   /**
+   * How far a LARGE approval has got — the background attempt's progress
+   * (`services/proposals/approval-runs.ts`). The latest attempt, or null when
+   * this proposal was never applied in the background. Same read floor as
+   * `get`: anyone who may open the proposal sees its progress. A light read on
+   * purpose — a reader polls it every second or two while it runs, and `get`
+   * would re-render a 4,000-operation proposal each time.
+   */
+  approvalProgress: protectedProcedure
+    .input(z.object({ proposalId: z.string().uuid() }))
+    .query(async ({ input, ctx }) => {
+      const userId = requireUserId(ctx.userId);
+      await assertProposalVisibleTo(input.proposalId, userId, { db });
+      return readLatestApprovalRun(input.proposalId);
+    }),
+
+  /**
    * Proposal → SOURCE lineage. Given a proposalId, return deeplink targets
    * branched by PROVENANCE — "where did this proposal come from?" — for the
    * redesign's source panel. All data is already stamped on the proposal row
@@ -1554,7 +1571,15 @@ export const proposalsRouter = router({
       // Composite, document-content and registry dispatch all live in the ONE
       // shared door below — `batchApprove` calls the SAME function, so a batch
       // approve is exactly N single approves and the two can never drift.
-      return await applyProposalApproval({ proposal, userId, input, ctx });
+      // `background`: this interactive door takes a QUEUED answer for a large
+      // graph (applied by the `proposal-approve` job after the same gates).
+      return await applyProposalApproval({
+        proposal,
+        userId,
+        input,
+        ctx,
+        background: true,
+      });
     }),
 
   /**

@@ -36,7 +36,6 @@ import {
   apiKeyExternalUsers,
   workspaces,
   workspaceMembers,
-  invites,
   users,
   EventRepository,
   eventRepository,
@@ -105,6 +104,7 @@ import {
 
 import { kratosAdmin, safeTokenEqual } from "@synap/auth";
 import { acceptInviteFor } from "../../workspaces/accept-invite-for.js";
+import { findInviteByToken } from "../../workspaces/invite-token.js";
 import type { Context } from "hono";
 import {
   logger,
@@ -2187,9 +2187,7 @@ export function registerSetupRoutes(app: HubHono): void {
       return c.json({ error: "Password must be at least 8 characters" }, 400);
     }
 
-    const invite = await db.query.invites.findFirst({
-      where: eq(invites.token, inviteToken),
-    });
+    const invite = await findInviteByToken(inviteToken);
     if (!invite)
       return c.json({ error: "Invite not found or already used" }, 404);
     if (invite.expiresAt < new Date())

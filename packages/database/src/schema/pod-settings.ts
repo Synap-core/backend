@@ -242,6 +242,39 @@ export interface PodAppsPolicySetting {
   changedAt: string;
 }
 
+/**
+ * The plan this pod enforces (its tier and trial), as its Control Plane
+ * answered `GET /internal/plan` (CP `lib/pod-plan.ts`). Written ONLY by the
+ * `cp-entitlement-sync` job on a successful pull — and once, before the first
+ * pull, from the pre-July `workspaces.settings.controlPlane` record (`source:
+ * "legacy"`). Read by tier-check and the trial guard through
+ * `readControlPlaneEntitlement` (utils/control-plane-link.ts). Absent = the CP
+ * never answered: no plan record, which is not an expired one.
+ */
+export interface ControlPlaneEntitlement {
+  /** null = no live plan; the pod enforces its floor ("solo"). */
+  tier: string | null;
+  /** The plan's subscription status (e.g. "active", "trialing"), or null. */
+  status: string | null;
+  /** ISO end of a running trial, else null. */
+  trialEnd: string | null;
+  lab: boolean;
+  source: "pull" | "legacy";
+  /** When this value was last confirmed by the CP (ISO); null for legacy. */
+  checkedAt: string | null;
+}
+
+/**
+ * The last ATTEMPT to pull the plan, kept apart from the plan itself so a
+ * failed pull never overwrites the last good answer.
+ */
+export interface ControlPlaneEntitlementSync {
+  lastAttemptAt: string;
+  outcome: "ok" | "unreachable" | "refused" | "unsupported" | "invalid";
+  /** One plain sentence when `outcome` is not "ok". */
+  message: string | null;
+}
+
 export interface PodSettingsBlob {
   machineDefaults?: PodMachineDefaults;
   podApps?: PodAppsPolicySetting;
@@ -255,6 +288,8 @@ export interface PodSettingsBlob {
   marketplaceSourceStatus?: Record<string, MarketplaceSourceStatus>;
   marketplaceSourceTombstones?: Record<string, MarketplaceSourceTombstone>;
   officialCatalogSignature?: OfficialCatalogSignature;
+  controlPlaneEntitlement?: ControlPlaneEntitlement;
+  controlPlaneEntitlementSync?: ControlPlaneEntitlementSync;
   [k: string]: unknown;
 }
 

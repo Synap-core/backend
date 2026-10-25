@@ -1046,6 +1046,14 @@ export interface PermissionCheckBaseOpts {
    */
   ownWorkOrganise?: boolean;
   /**
+   * FB1020 B6 — the write lands as the PERSON's held draft and does nothing
+   * until they accept it (an agent's direct playbook run, held by
+   * `runPlaybook`). The engine's plain default then executes instead of
+   * filing a second ask; every floor and rule above it still decides. Set
+   * ONLY by `playbooks.run` for an agent's own (non-replay) run.
+   */
+  heldAsDraft?: boolean;
+  /**
    * The duplicate door (`findDuplicateCandidates`) found a possible twin of
    * this create (same kind, same name or strong identity, as a record or a
    * pending proposal). An AI write is then proposed with the
@@ -1336,6 +1344,9 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     // records — an unattributed write is never "its own".
     ownWorkOrganise: undefined,
     governanceRuleIsOwnOrganise: undefined,
+    // B6: only an attributed agent's run is held as the person's draft
+    // (`runPlaybook` holds on `agentUserId`); an unattributed write never is.
+    heldAsDraft: undefined,
   };
   return input;
 }
@@ -1941,6 +1952,7 @@ async function evaluatePermission(
         // B3: a session that forces every write keeps forcing (effective
         // forcePropose above wins at 2.1); the proof only reaches the store.
         ownWorkOrganise: opts.ownWorkOrganise,
+        heldAsDraft: opts.heldAsDraft,
         podAdminSchemaChange,
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
         // owner let the ladder classify origin trust server-side and force-propose
@@ -3342,8 +3354,7 @@ export function buildProposalResponseFields(opts: {
   );
   return {
     summary,
-    reasoning:
-      opts.reasoning ?? defaultApprovalSentence(opts.action, opts.subjectType),
+    reasoning: opts.reasoning ?? defaultApprovalSentence(),
     reviewPath: openPath(opts.proposalId),
     reviewUrl: openLink(opts.proposalId),
   };
@@ -4212,10 +4223,7 @@ async function createProposal(args: {
         proposalId: existing.id,
         proposalType: `${subjectType}.${action}`,
         summary,
-        reasoning:
-          reasoning ||
-          policyReason ||
-          defaultApprovalSentence(action, singularType),
+        reasoning: reasoning || policyReason || defaultApprovalSentence(),
         reviewPath: openPath(existing.id),
         reviewUrl: openLink(existing.id),
         deduped: true,
@@ -4300,10 +4308,7 @@ async function createProposal(args: {
     proposalId: proposal.id,
     proposalType: `${subjectType}.${action}`,
     summary,
-    reasoning:
-      reasoning ??
-      policyReason ??
-      defaultApprovalSentence(action, singularType),
+    reasoning: reasoning ?? policyReason ?? defaultApprovalSentence(),
     reviewPath: openPath(proposal.id),
     reviewUrl: openLink(proposal.id),
     ...(deduped ? { deduped: true } : {}),
@@ -4381,16 +4386,26 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
     .limit(1);
   if (agentUser?.userType !== "agent") return null;
 
+  const [ws] = await db
+    .select({ name: workspaces.name, archivedAt: workspaces.archivedAt })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  // An archived space takes no new member: a join filed there could only be
+  // approved into a retired space (ticket 86b6faae). Refused in words, in
+  // dry-run too, since it is the verdict.
+  if (ws?.archivedAt) {
+    return {
+      denied: true,
+      reason: `The space "${ws.name}" is archived, so an agent cannot join it or write there. A person must do this, or restore the space first.`,
+    };
+  }
+
   // Verdict resolved (agent → join proposal). In dry-run stop here: everything
   // below either reads to build the card or WRITES the proposal.
   if (dryRun) return DRY_RUN_PROPOSE;
 
   const role = "editor";
-  const [ws] = await db
-    .select({ name: workspaces.name })
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
-    .limit(1);
   const agentName = agentUser.name ?? "Agent";
   const workspaceName = ws?.name ?? workspaceId;
   // Enrich the summary when we know WHAT the agent wanted to do — a join

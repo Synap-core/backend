@@ -1245,7 +1245,11 @@ export const invites = pgTable("invites", {
   // Invite details
   email: text("email").notNull(),
   role: text("role").notNull(), // 'admin' | 'editor' | 'viewer'
+  // Plaintext link token: EXPAND phase only (0353), written for the previous
+  // release's rollback; never read except as the fallback for a digest-less row.
   token: text("token").notNull().unique(),
+  // SHA-256 (hex) of the token: the ONE lookup key (`findInviteByToken`).
+  tokenDigest: text("token_digest").unique(),
 
   // Metadata
   invitedBy: text("invited_by").notNull(), // userId

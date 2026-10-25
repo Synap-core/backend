@@ -42,11 +42,34 @@ jobs:
       id-token: write
 
     steps:
+      # Who pushes the bump commit to main. Once the Synap Release App exists
+      # (SECURITY-RELEASE-RUNBOOK.md §5), main's ruleset lets only that App push
+      # directly, so the push must carry the App's token: GITHUB_TOKEN would be
+      # refused AFTER npm had accepted the version (the registry ahead of the
+      # repo again). The token is minted FIRST, before any build or publish, so
+      # a misconfigured App fails the run while nothing is published yet. It
+      # lives one hour, which covers the install, the builds and the publish.
+      # Without SYNAP_RELEASE_APP_ID this step is skipped and the checkout keeps
+      # GITHUB_TOKEN, exactly as before the App.
+      - name: Mint the release push token (GitHub App)
+        id: app-token
+        if: ${{ vars.SYNAP_RELEASE_APP_ID != '' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ vars.SYNAP_RELEASE_APP_ID }}
+          private-key: ${{ secrets.SYNAP_RELEASE_APP_KEY }}
+          owner: Synap-core
+          repositories: backend
+          permission-contents: write
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # Full history: the final step rebases the bump commit onto a main that
           # moved during the run (a shallow clone has no merge base to rebase on).
           fetch-depth: 0
+          # checkout persists this token in the git config, so it is the
+          # credential the final `git push origin HEAD:main` uses.
+          token: ${{ steps.app-token.outputs.token || github.token }}
 
       # Version comes from the repo's `packageManager: pnpm@10.28.0`, which pins
       # it MORE precisely than a `version: 10` input would. Passing both makes

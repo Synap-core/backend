@@ -16,6 +16,8 @@ export { hubProtocolRestApp } from "./routers/hub-protocol-rest.js";
 export { AUTOMATION_SCHEMA } from "./routers/hub-protocol/rest/automation-schema-doc.js";
 export { apiKeyService } from "./services/api-keys.js";
 export { ImportOrchestrator } from "./services/import-orchestrator.js";
+// The background approval job (handler slot of @synap/jobs proposal-approve).
+export { runApprovalJob } from "./services/proposals/approval-runs.js";
 // The Library light read: the job handler + hourly sweep the app registers in
 // the @synap/jobs slots at boot.
 export {
@@ -116,6 +118,14 @@ export {
   resolveWorkspaceTemplate,
   type ResolvedWorkspaceTemplate,
 } from "./services/capabilities/resolve-workspace-template.js";
+// Invite accept door + token lookup, for the Kratos registration gate's
+// invite-bound Synap Cloud sign-up (apps/api webhooks/kratos.ts).
+export { acceptInviteFor } from "./routers/workspaces/accept-invite-for.js";
+export {
+  findInviteByToken,
+  inviteTokenColumns,
+} from "./routers/workspaces/invite-token.js";
+export { ensureUserRow } from "./scripts/create-admin-user.js";
 export { healthRouter } from "./routers/health.js";
 export { projectsRouter } from "./routers/projects.js";
 export { sourceConfigsRouter } from "./routers/source-configs.js";

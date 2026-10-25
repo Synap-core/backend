@@ -264,8 +264,10 @@ describe("(b) approve and batchApprove share one implementation", () => {
   });
 
   it("single approve calls the same function", () => {
-    expect(ROUTER).toContain(
-      "return await applyProposalApproval({ proposal, userId, input, ctx });"
+    // The interactive door opts in to the background hand-off for a large
+    // graph (`background: true`) — the same function, the same gates.
+    expect(ROUTER).toMatch(
+      /return await applyProposalApproval\(\{\s*proposal,\s*userId,\s*input,\s*ctx,\s*background: true,\s*\}\);/
     );
     // Exactly two call sites: the two approve doors. A third would be drift.
     expect(ROUTER.match(/await applyProposalApproval\(/g)?.length).toBe(2);
