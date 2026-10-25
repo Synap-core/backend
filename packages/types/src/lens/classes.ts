@@ -190,10 +190,11 @@ export const FAILURE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * THE list of GOAL JUDGEMENT notification types — a verdict on a goal that
- * only its judge or owner can give (work model, W5 2026-10-23). Blocking, a
+ * THE list of GOAL JUDGEMENT notification types — an answer on a goal that
+ * only one person can give: a verdict by its judge or owner (work model, W5
+ * 2026-10-23), or a commitment asked or countered (2026-10-25). Blocking, a
  * `decision` in the Inbox, and ranked FIRST in its order — before any other
- * decision — because a goal's whole run of work waits on it
+ * decision — because the goal's work waits on it
  * (`needs-you/buckets.ts` `isJudgementSignal`):
  *
  *   - `track.review_ready` — every required criterion of a goal is met or
@@ -204,7 +205,11 @@ export const FAILURE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
  *   - `track.report_unacknowledged` — a delegate reported their part
  *     impossible and nobody acknowledged it for 48 h (R10), to the owner;
  *   - `track.close_proposed` — an agent proposed to close (or drop) a goal,
- *     and only its judge's (or owner's) approval applies.
+ *     and only its judge's (or owner's) approval applies;
+ *   - `track.commitment_asked` — a person was asked to commit to part of a
+ *     goal: that part waits on their answer;
+ *   - `track.commitment_countered` — a delegate countered: that part waits
+ *     on the owner's (or judge's) answer ("Counter-offer · Review").
  *
  * The api registry declares both types; `api/src/notifications/__tests__/
  * judgement-notification-parity.test.ts` holds this set to the registry.
@@ -214,6 +219,8 @@ export const JUDGEMENT_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   "track.criterion_claimed",
   "track.report_unacknowledged",
   "track.close_proposed",
+  "track.commitment_asked",
+  "track.commitment_countered",
 ]);
 
 /**

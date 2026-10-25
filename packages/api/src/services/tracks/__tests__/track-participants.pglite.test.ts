@@ -968,6 +968,46 @@ describe("a delegate answers their OWN commitment", () => {
     expect((await items()).every((r) => r.status === "actioned")).toBe(true);
   });
 
+  it("an ASK reaches the person asked; their answer settles it, a new ask is news again; an agent asked is not told", async () => {
+    const id = await goal("Asked");
+    await add(id, person(OWNER), DELEGATE, "delegate", "Write the brief");
+    await add(id, person(OWNER), AGENT_A, "delegate", "Draft the copy");
+    const asks = async () =>
+      (
+        await q<{ user_id: string; status: string; title: string }>(
+          `select user_id, status, title from notifications
+            where type = 'track.commitment_asked' and source_id = $1
+            order by created_at`,
+          [id]
+        )
+      ).rows;
+    expect((await asks()).map((r) => [r.user_id, r.status])).toEqual([
+      [DELEGATE, "unread"],
+    ]);
+    expect((await asks())[0]!.title).toContain("asks you to commit on Asked");
+    const row = (await rowOf(id, DELEGATE, "delegate"))!;
+    await changeTrackParticipants({
+      trackId: id,
+      actor: person(DELEGATE),
+      change: {
+        op: "move",
+        participantId: row.id,
+        move: "counter",
+        text: "An outline, not the brief",
+      },
+    });
+    expect((await asks()).map((r) => r.status)).toEqual(["actioned"]);
+    // Asked again with the counter-offer: a new ask, unread.
+    await add(
+      id,
+      person(OWNER),
+      DELEGATE,
+      "delegate",
+      "An outline, not the brief"
+    );
+    expect((await asks()).map((r) => r.status)).toEqual(["actioned", "unread"]);
+  });
+
   it("counter needs words; impossible only after accepting; the report is acknowledged by the owner, never by an agent", async () => {
     const id = await goal("Report");
     await add(id, person(OWNER), DELEGATE, "delegate", "Review it");

@@ -404,7 +404,9 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
      * `sourceId` is the goal; `groupKey` the delegate on that goal
      * (`trackCounterGroupKey`). An ITEM in Needs you; settled when that
      * delegate's commitment changes again (asked again, answered, removed)
-     * or the goal ends (`goal-end.ts`). A nudge, never a verdict.
+     * or the goal ends (`goal-end.ts`). Ranked with the JUDGEMENTS
+     * (`JUDGEMENT_NOTIFICATION_TYPES`): that part of the goal waits on the
+     * answer.
      */
     type: "track.commitment_countered",
     category: "data",
@@ -414,6 +416,38 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     titleTemplate: "{{delegateName}} counters on {{trackName}}",
     bodyTemplate:
       "Asked for “{{commitment}}”, they would commit to: {{counterText}}. Ask again with it, or keep the ask.",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Review",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
+  {
+    /**
+     * A PERSON was ASKED to commit to part of a goal by someone else (its
+     * owner or judge, or an agent's approved proposal) — the delegate's half
+     * of the counter-offer above. Producer: `applyTrackParticipantChange`
+     * (`services/tracks/track-participants.ts`), on the ask itself; an agent
+     * principal is not told (it answers through its own doors). `sourceId`
+     * is the goal; `groupKey` the person on that goal (`trackAskGroupKey`).
+     * An ITEM in Needs you, ranked with the JUDGEMENTS: that part of the goal
+     * waits on the answer. Settled when they answer (accept, counter,
+     * decline), are asked again, are removed, or the goal ends.
+     */
+    type: "track.commitment_asked",
+    category: "data",
+    label: "Asked to commit",
+    icon: "message-square",
+    priority: "normal",
+    titleTemplate: "{{askerName}} asks you to commit on {{trackName}}",
+    bodyTemplate:
+      "“{{commitment}}”. Accept it, counter with what you can commit to, or decline.",
     defaultChannels: ["in_app"],
     ttl: 0,
     dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,

@@ -280,6 +280,30 @@ describe("needsYouBuckets — a partition, ordered by what blocks the most", () 
     expect(counts.decision).toBe(4);
   });
 
+  it("a commitment asked or countered ranks with the judgements, ahead of a plain decision", () => {
+    const page: Row[] = [
+      proposal("decide-in-session", { count: 2, groupKey: "session:s1" }),
+      {
+        id: "counter-offer",
+        kind: "notification",
+        count: 1,
+        notificationType: "track.commitment_countered",
+      },
+      {
+        id: "asked",
+        kind: "notification",
+        count: 1,
+        notificationType: "track.commitment_asked",
+      },
+    ];
+    const { rows } = needsYouBuckets(page, { intentOf });
+    expect(rows.map((r) => r.signal.id)).toEqual([
+      "counter-offer",
+      "asked",
+      "decide-in-session",
+    ]);
+  });
+
   it("inside a bucket, a row that stops a session's work leads; then server order", () => {
     const page: Row[] = [
       proposal("free-newest", { count: 2 }),

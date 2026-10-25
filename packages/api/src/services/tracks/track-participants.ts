@@ -58,6 +58,7 @@ import {
   mayStaffGoal,
   trackCounterGroupKey,
   trackReportGroupKeyPrefix,
+  trackAskGroupKey,
   TRACK_COMMITMENT_MOVES,
   TRACK_COMMITMENT_MOVE_KEYS,
   type TrackCommitmentMove,
@@ -508,6 +509,11 @@ export async function applyTrackParticipantChange(p: {
     });
     // Asked again (a new commitment): their counter-offer is answered.
     await settleCounterNotice(track.id, change.principalId);
+    // A person asked by someone else is told; an earlier ask is replaced.
+    await settleAskNotice(track.id, change.principalId);
+    if (state === "proposed" && plan.principalKind === "person") {
+      await noticeAsk(track, change.principalId, change.commitment, decidedBy);
+    }
     // A new judge: the old one's judgement items leave, the new one is told
     // of every claim waiting on them.
     if (change.role === "judge") await refreshGoalJudgements(track.id);
@@ -536,6 +542,7 @@ export async function applyTrackParticipantChange(p: {
         )
       );
     await settleCounterNotice(track.id, row.principalId);
+    await settleAskNotice(track.id, row.principalId);
     // The judge left: the owner judges now.
     if (row.role === "judge") await refreshGoalJudgements(track.id);
     return;
@@ -575,6 +582,8 @@ export async function applyTrackParticipantChange(p: {
         "This commitment changed while you answered — read the goal again."
       );
     }
+    // The delegate answered: the ask leaves their Needs you.
+    await settleAskNotice(track.id, row.principalId);
     // A counter-offer is the owner's (and judge's) to answer; any other
     // answer replaces it.
     if (change.move === "counter") {
@@ -657,6 +666,68 @@ async function noticeCounter(
       "the counter-offer could not be told"
     );
   }
+}
+
+/**
+ * A PERSON was ASKED for a commitment by someone else
+ * (`track.commitment_asked`): they are told, one open item per goal — accept,
+ * counter or decline it on the goal. An agent principal is not: it answers
+ * through its own doors. Never throws: the ask is recorded either way.
+ */
+async function noticeAsk(
+  track: ProjectTrack,
+  principalId: string,
+  commitment: string | undefined,
+  askedBy: string
+): Promise<void> {
+  try {
+    const db = await getDb();
+    const [project] = await db
+      .select({ workspaceId: projects.workspaceId })
+      .from(projects)
+      .where(eq(projects.id, track.projectId))
+      .limit(1);
+    const names = await participantDisplayNames([askedBy]);
+    const { NotificationService } =
+      await import("../../notifications/NotificationService.js");
+    await NotificationService.create({
+      type: "track.commitment_asked",
+      userId: principalId,
+      workspaceId: project?.workspaceId ?? null,
+      sourceType: "track",
+      sourceId: track.id,
+      groupKey: trackAskGroupKey(track.id, principalId),
+      data: {
+        trackId: track.id,
+        trackName: track.name,
+        askerName: names.get(askedBy) ?? "Someone",
+        commitment: commitment ?? "",
+      },
+    });
+  } catch (err) {
+    logger.warn(
+      { err, trackId: track.id, principalId },
+      "the ask could not be told"
+    );
+  }
+}
+
+/** The ask was answered, replaced or withdrawn: its item leaves Needs you. */
+async function settleAskNotice(
+  trackId: string,
+  principalId: string
+): Promise<void> {
+  const db = await getDb();
+  await db
+    .update(notifications)
+    .set({ status: "actioned", readAt: new Date() })
+    .where(
+      and(
+        eq(notifications.type, "track.commitment_asked"),
+        eq(notifications.groupKey, trackAskGroupKey(trackId, principalId)),
+        ne(notifications.status, "actioned")
+      )
+    );
 }
 
 /** The delegate's counter-offer was answered: its item leaves Needs you. */

@@ -80,8 +80,9 @@ export function isFailureSignal(
 }
 
 /**
- * A goal JUDGEMENT ({@link JUDGEMENT_NOTIFICATION_TYPES}): the goal's judge or
- * owner owes a verdict the goal's whole run waits on. A `decision`, ranked
+ * A goal JUDGEMENT ({@link JUDGEMENT_NOTIFICATION_TYPES}): one person owes an
+ * answer the goal's work waits on — its judge's or owner's verdict, or a
+ * commitment asked or countered. A `decision`, ranked
  * first. Never routine: it is a notification, and only a proposal batches.
  */
 export function isJudgementSignal(

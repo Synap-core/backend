@@ -118,6 +118,15 @@ export function trackCounterGroupKey(
   return `track-counter:${trackId}:${principalId}`;
 }
 
+/**
+ * One open "asked to commit" item per person on a goal
+ * (`track.commitment_asked`) — keyed by the person, so their answer, a new
+ * ask, their removal and the goal ending can each settle it.
+ */
+export function trackAskGroupKey(trackId: string, principalId: string): string {
+  return `track-ask:${trackId}:${principalId}`;
+}
+
 export function trackReportGroupKeyPrefix(participantId: string): string {
   return `track-report:${participantId}:`;
 }
