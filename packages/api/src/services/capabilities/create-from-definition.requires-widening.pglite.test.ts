@@ -122,8 +122,8 @@ function ddlFor(table: PgTable): string {
   return `create table "${cfg.name}" (${cols.join(", ")});`;
 }
 
-const UID = "22222222-2222-2222-2222-222222222222";
-const WS = "11111111-1111-1111-1111-111111111111";
+const UID = "22222222-2222-4222-8222-222222222222";
+const WS = "11111111-1111-4111-8111-111111111111";
 const APIFY = "55555555-0000-4000-8000-000000000001";
 const STRIPE = "55555555-0000-4000-8000-000000000002";
 const SKILL = "score_handle";
