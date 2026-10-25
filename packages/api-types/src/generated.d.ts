@@ -13226,6 +13226,21 @@ export interface CapabilityVerbStateWithResponseShape extends CapabilityVerbStat
 	 * from it (`account` vs `none`) — no cost field is stored.
 	 */
 	credentialed?: true;
+	/**
+	 * Present exactly when the run door would REFUSE this verb as "installed but
+	 * not yet enabled": an active backing skill exists and `approvalRefusesRun`
+	 * holds for every one of them (no approved copy). Per VERB, because the
+	 * row's `enabled` judges the TOOL row and its `blocked` judges "any verb
+	 * launchable" — Apify read `enabled:true` with `granted:true` verbs while
+	 * `apify_run_actor`'s code skill was unapproved, and the first run was
+	 * refused (ticket 509c9358). A grant does not clear it: a grant is posture,
+	 * approval is the switch. Absent for a verb with no active backing skill at
+	 * all — the run door answers `not_found` there, which enabling cannot fix.
+	 */
+	blocked?: "not_enabled";
+	/** The enable door for a `blocked` verb — the same `enable` a refused run
+	 *  carries (`capabilityNextAction("draft", …)` on the verb's container). */
+	enable?: CapabilityNextAction;
 }
 /**
  * The registry's own capability row: the shared `Capability` contract with the
@@ -38309,6 +38324,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				allowedWorkspaceIds?: string[] | undefined;
 				applicableKinds?: string[] | undefined;
 				defaultValues?: Record<string, unknown> | undefined;
+				deferredFields?: {
+					constraints?: Record<string, unknown> | undefined;
+					defaultValue?: unknown;
+					displayOrder?: number | undefined;
+					overlay?: boolean | undefined;
+					required?: boolean | undefined;
+					slug: string;
+					uiHints?: Record<string, unknown> | undefined;
+					valueType: string;
+				}[] | undefined;
 				displayName: string;
 				entityScope?: "pod" | "workspace" | undefined;
 				parentProfileId?: string | undefined;
@@ -38481,6 +38506,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				widened: boolean;
 			} | {
 				existing?: undefined;
+				fieldsIncluded?: number | undefined;
 				message: string;
 				profile: Record<string, unknown> | null;
 				promoted?: undefined;
@@ -41997,6 +42023,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				parameters?: Record<string, unknown> | undefined;
 				providerSpec?: Record<string, unknown> | undefined;
+				requiredToolIds?: string[] | undefined;
 				scope?: "pod" | "user" | "workspace" | undefined;
 				slug?: string | undefined;
 				timeoutSeconds?: number | undefined;
