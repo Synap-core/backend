@@ -11,6 +11,8 @@
  *
  * Negative control (2026-10-25, negctl/tickets-1025-7): the three keys
  * dropped from `PROTECTED_ENVELOPE_FIELDS` turn every refusal case red.
+ * The round-trip cases (review R1) were red against the presence check of
+ * 4728fec33 (negctl/tickets-1025-8).
  */
 import { describe, it, expect } from "vitest";
 import { computeRevisedEnvelope } from "./proposals-service.js";
@@ -83,6 +85,64 @@ describe("computeRevisedEnvelope — the approved scope is not revisable", () =>
       { slug: "botscore", valueType: "number" },
     ]);
     expect((merged.data as Record<string, unknown>).displayName).toBe("Audit");
+  });
+
+  // The web reviewer's "Save & Approve" / "Save draft" send the WHOLE stored
+  // inner back (`proposals.revise({ data: { data: <inner> } })`, an envelope
+  // patch), protected keys included and unchanged. Refusing on PRESENCE made
+  // every kind with fields and every skill with tools un-editable (R1).
+  it.each([
+    ["kind", kindProposal, "displayName", "Audit (edited)"],
+    ["skill", skillProposal, "code", "return 2;"],
+  ] as const)(
+    "the web edit door round-trips a %s: stored inner sent back verbatim with one edit",
+    (_label, envelope, key, value) => {
+      const stored = envelope();
+      const { merged } = computeRevisedEnvelope({
+        envelope: stored,
+        patch: {
+          kind: "envelope",
+          fields: { data: { ...structuredClone(stored.data), [key]: value } },
+        },
+      });
+      expect(merged.data).toEqual({ ...stored.data, [key]: value });
+    }
+  );
+
+  it("an inner patch carrying the stored scope verbatim (Hub door) is accepted", () => {
+    const stored = kindProposal();
+    const { merged } = computeRevisedEnvelope({
+      envelope: stored,
+      patch: {
+        kind: "inner",
+        fields: {
+          kindFields: structuredClone(stored.data.kindFields),
+          displayName: "Audit",
+        },
+      },
+    });
+    expect((merged.data as Record<string, unknown>).kindFields).toEqual(
+      stored.data.kindFields
+    );
+  });
+
+  it("the round-trip still refuses ONE changed element inside the scope", () => {
+    const stored = skillProposal();
+    expect(() =>
+      computeRevisedEnvelope({
+        envelope: stored,
+        patch: {
+          kind: "envelope",
+          fields: {
+            data: {
+              ...structuredClone(stored.data),
+              code: "return 2;",
+              requiredToolNames: ["apify_api", "stripe_api"],
+            },
+          },
+        },
+      })
+    ).toThrow(/requiredToolNames/);
   });
 
   it("a payload that merely uses the word `fields` (workspace projection) stays revisable", () => {
