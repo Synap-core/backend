@@ -117,7 +117,12 @@ beforeAll(async () => {
   // Every table the access predicates may touch (members, grants, …): the
   // real floors run, so their tables must exist — empty is the honest state.
   const seen = new Set<string>();
-  for (const t of [...Object.values(database), userPreferences]) {
+  // Widened on purpose: the union of every export's type is past what tsc
+  // represents (TS2590); `is(t, PgTable)` below narrows each value anyway.
+  const exported: unknown[] = Object.values(
+    database as Record<string, unknown>
+  );
+  for (const t of [...exported, userPreferences]) {
     if (!is(t, PgTable)) continue;
     const name = getTableConfig(t).name;
     if (seen.has(name)) continue;
