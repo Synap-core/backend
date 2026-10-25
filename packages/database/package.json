@@ -88,6 +88,7 @@
     "@synap-core/core": "workspace:*",
     "@synap-core/field-crypto": "workspace:*",
     "@synap-core/markdown-core": "workspace:*",
+    "@synap-core/types": "workspace:*",
     "@synap/governance-policy": "workspace:*",
     "@synap/storage": "workspace:*",
     "bcrypt": "^6.0.0",

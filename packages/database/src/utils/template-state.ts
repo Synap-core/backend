@@ -37,68 +37,22 @@ import {
   toWorkspaceIdentityError,
 } from "./workspace-identity.js";
 
+// The state's shape (`TemplateState`, its apply-state names and pack entries)
+// is declared once in `@synap-core/types/workspaces/settings` — it is
+// `WorkspaceSettings.template` on the wire — and re-exported here.
+import type {
+  TemplateApplyStateName,
+  TemplatePackEntry,
+  TemplateState,
+} from "@synap-core/types/workspaces/settings";
+
+export type {
+  TemplateApplyStateName,
+  TemplatePackEntry,
+  TemplateState,
+} from "@synap-core/types/workspaces/settings";
+
 const logger = createLogger({ module: "template-state" });
-
-/** Where the last template apply on a space stands. */
-export type TemplateApplyStateName =
-  /** Layer 1 is being built (legacy `provisioningStatus: "pending"`). */
-  | "building"
-  /** Built, nothing unfinished. The STAMP (`version`) says "converged". */
-  | "active"
-  /** Layer 2 only filed proposals (nothing failed). */
-  | "awaiting-approval"
-  /** A layer-2 item errored. */
-  | "partial"
-  /** This door ran layer 1 only; the living layers were never applied. */
-  | "layer-2-not-run"
-  /** An apply threw (`failedLayer` says which layer). */
-  | "failed";
-
-/** One overlay pack recorded on a space (legacy `installedPacks[]`). */
-export interface TemplatePackEntry {
-  slug: string;
-  /** The pack version that CONVERGED; `null` = recorded, not yet earned. */
-  version: string | null;
-  installedAt: string;
-}
-
-export interface TemplateState {
-  /**
-   * The template identity (also the `package_slug` column). `null` for a space
-   * built from a definition with no catalog identity, or one that only carries
-   * packs — such a space still has a build state (and a resume ledger).
-   */
-  slug: string | null;
-  /** The version stamp — written only on convergence. */
-  version: string | null;
-  state: TemplateApplyStateName;
-  /**
-   * The version an UNFINISHED apply (awaiting-approval · partial ·
-   * layer-2-not-run) was converging to — never the stamp (legacy
-   * `templateApply.version`).
-   */
-  pendingVersion?: string | null;
-  failedLayer?: 1 | 2;
-  failedStep?: string;
-  error?: string;
-  /** Layer-1 resume ledger. */
-  completedSteps?: string[];
-  proposals?: string[];
-  failures?: string[];
-  packs?: TemplatePackEntry[];
-  /**
-   * The template data changes (conversion opKeys) the last stamp is HELD for
-   * (TEMPLATE-LIFECYCLE Contract C): layer 1 and layer 2 converged, but a
-   * consentable change still touches the template's profiles, so the version
-   * (or a pack's) was not stamped. `[]` only with `heldForDataChangesUnreadable`
-   * (the pending list could not be read — held, never guessed "none"). Absent =
-   * nothing held; cleared by the next stamp. Written only by the finisher.
-   */
-  heldForDataChanges?: string[];
-  heldForDataChangesUnreadable?: true;
-  /** When this state was last written ("" = unknown, a legacy record). */
-  at: string;
-}
 
 /**
  * A change to the state. `undefined` = keep; `null` = clear. A `state` change

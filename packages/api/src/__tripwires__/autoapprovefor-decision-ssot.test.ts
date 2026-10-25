@@ -56,8 +56,6 @@ const ALLOWLIST: Record<string, string> = {
   // Type declarations only (the JSONB shape itself) — no runtime read.
   "packages/database/src/schema/users.ts":
     "type declaration (AgentMetadata.autoApproveFor field), not a read",
-  "packages/database/src/schema/workspaces.ts":
-    "type declaration (WorkspaceSettings.aiGovernance.autoApproveFor field), not a read",
 
   // Display/introspection surface: `getEffectiveGovernance` reports what the
   // JSONB currently holds to the caller (GET .../governance, skills) — it
