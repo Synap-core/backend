@@ -9,7 +9,7 @@
  *
  * The pod's copy of the target edge role: `@synap-core/types/workers`
  * `WORKER_TARGET_ROLE` (types imports this package, so the pod cannot import
- * it). `types/src/workers/pod-parity.contract.ts` pins the two EQUAL at
+ * it). `database/src/wire-parity/workers.ts` pins the two EQUAL at
  * compile time.
  */
 

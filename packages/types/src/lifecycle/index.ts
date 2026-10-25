@@ -8,8 +8,9 @@
  * grouping, tone) and never guess from an option's name.
  *
  * The pod keeps its own copy of the category list and option shape
- * (`@synap/database` `utils/lifecycle-model.ts`, it cannot import this
- * package); `./pod-parity.contract.ts` pins the two EQUAL at compile time.
+ * (`@synap/database` `utils/lifecycle-model.ts`);
+ * `packages/database/src/wire-parity/lifecycle.ts` pins the two EQUAL at
+ * compile time.
  */
 import type { LifecycleCategory, LifecycleOption } from "./option.js";
 

@@ -97,7 +97,7 @@ function effectiveLifecycleOf(
  * surface that draws a renderer reads. This package cannot import it —
  * `@synap-core/types` already builds against `@synap/database`, so the
  * reverse edge is a build cycle — so the pod keeps this structural copy, and
- * `packages/types/src/renderer-ref/pod-parity.contract.ts` holds the two
+ * `packages/database/src/wire-parity/renderer-ref.ts` holds the two
  * EXACTLY equal at compile time. Change both, in the same commit.
  *
  * Stored as JSONB on `profiles.default_renderers`, `renderer_bindings.ref` and

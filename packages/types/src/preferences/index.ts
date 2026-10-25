@@ -1,13 +1,10 @@
 /**
- * User Preferences Types - SSOT from Database
+ * User Preferences Types
  *
- * Re-exports database schemas and types. Only UI-specific Zod schemas
- * remain in this package for validation.
+ * The row and its JSONB shapes are declared in ./model.js (the wire shape);
+ * @synap/database imports them and proves its inferred row equal. Only
+ * UI-specific Zod schemas remain alongside for validation.
  */
-
-// ============================================================================
-// DATABASE RE-EXPORTS (Single Source of Truth)
-// ============================================================================
 
 export type {
   UserPreference,
@@ -19,12 +16,11 @@ export type {
   EntityOpenMode,
   UIPreferences,
   GraphPreferences,
-} from "@synap/database";
+} from "./model.js";
 
 // NOTE: Zod schemas (insertUserPreferenceSchema, selectUserPreferenceSchema)
-// intentionally NOT re-exported — they pull in postgres/drizzle which breaks
-// browser/Electron builds. Backend consumers should import directly from
-// @synap/database.
+// live with the drizzle table in @synap/database and are not part of this
+// package.
 
 // ============================================================================
 // UI-SPECIFIC SCHEMAS (Frontend Validation)

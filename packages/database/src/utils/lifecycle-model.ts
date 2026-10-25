@@ -13,7 +13,7 @@
  *
  * This file is the pod's copy of the model. `@synap-core/types/lifecycle`
  * (which the frontends import) holds the same category list and option shape,
- * pinned EQUAL at compile time by `types/src/lifecycle/pod-parity.contract.ts`
+ * pinned EQUAL at compile time by `database/src/wire-parity/lifecycle.ts`
  * — this package cannot import `@synap-core/types` (types builds against it).
  */
 
