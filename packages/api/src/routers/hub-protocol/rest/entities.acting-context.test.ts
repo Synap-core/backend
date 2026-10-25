@@ -1,7 +1,8 @@
 /**
  * entities.ts routes carried nine hand-rolled copies of the `!!c.get("apiKeyId")`
  * "service key" check, which let ANY bearer key name any user via `userId`. They
- * now route through `mayActAsUser`. This drives ONE of them — DELETE
+ * now route through `actingUserIdFor` (`mayActAsUser` + the own-agent →
+ * linked-human rule). This drives ONE of them — DELETE
  * /facets/{facetId} — through the real router with the predicate UNMOCKED.
  *
  * Granularity: this proves the detachFacet site. The other eight sites are held
@@ -67,12 +68,12 @@ describe("DELETE /facets/{facetId} — identity bound by the real mayActAsUser",
     expect(getCaller).not.toHaveBeenCalled();
   });
 
-  it("the same key naming its own agent principal reaches the door as that user", async () => {
+  it("the same key naming its own agent principal reaches the door as its linked human", async () => {
     getCaller.mockClear();
     const res = await detach(makeApp(agentKey), AGENT);
     expect(res.status).toBe(200);
     expect(getCaller).toHaveBeenCalledWith(expect.anything(), {
-      userId: AGENT,
+      userId: HUMAN,
     });
   });
 

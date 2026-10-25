@@ -28,7 +28,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-const { mayActAsUser, resolveActingContext } = await import("./_shared.js");
+const { actingUserIdFor, mayActAsUser, resolveActingContext } =
+  await import("./_shared.js");
 
 function ctx(vars: Record<string, unknown>) {
   return { get: (k: string) => vars[k] };
@@ -120,9 +121,12 @@ describe("resolveActingContext — body.userId is bound to identities the caller
     expect(r).toMatchObject({ ok: true, userId: HUMAN });
   });
 
-  it("hub_inbound key naming its OWN agent principal → allowed, acts as the agent", async () => {
+  it("hub_inbound key naming its OWN agent principal → allowed, acts as the LINKED HUMAN", async () => {
+    // The auth middleware's rule (effectiveUserId = linkedUserId ?? userId):
+    // flooring as the agent read as "not found" (it owns nothing) and a
+    // forwarded hub tRPC call refused it (`assertMayActAs`).
     const r = await resolveActingContext(ctx(agentKey), { userId: AGENT });
-    expect(r).toMatchObject({ ok: true, userId: AGENT });
+    expect(r).toMatchObject({ ok: true, userId: HUMAN });
   });
 
   it("no body.userId → acts as the authenticated user", async () => {
@@ -158,5 +162,55 @@ describe("mayActAsUser — edge cases of the shared predicate", () => {
         VICTIM
       )
     ).toBe(false);
+  });
+});
+
+describe("actingUserIdFor — the identity a request ACTS AS", () => {
+  it("own agent principal → the authenticated (linked) human", () => {
+    expect(actingUserIdFor(ctx(agentKey), AGENT)).toBe(HUMAN);
+  });
+
+  it("no userId, or the human itself → the human", () => {
+    expect(actingUserIdFor(ctx(agentKey), undefined)).toBe(HUMAN);
+    expect(actingUserIdFor(ctx(agentKey), "")).toBe(HUMAN);
+    expect(actingUserIdFor(ctx(agentKey), HUMAN)).toBe(HUMAN);
+  });
+
+  it("any other user → refused (null), for every non-override key", () => {
+    expect(actingUserIdFor(ctx(agentKey), VICTIM)).toBeNull();
+    expect(
+      actingUserIdFor(
+        ctx({ userId: HUMAN, apiKeyId: "k", keyType: "service" }),
+        VICTIM
+      )
+    ).toBeNull();
+    expect(actingUserIdFor(ctx({ userId: HUMAN }), VICTIM)).toBeNull();
+  });
+
+  it("an agent id that is NOT the caller's own principal → refused", () => {
+    const OTHER_AGENT = "0eeeeeee-0000-4000-8000-000000000005";
+    expect(actingUserIdFor(ctx(agentKey), OTHER_AGENT)).toBeNull();
+  });
+
+  it("under a resolved sub-token the parent's agent principal is not held → refused", () => {
+    expect(
+      actingUserIdFor(
+        ctx({ ...agentKey, userId: VICTIM, externalUserId: "ext-1" }),
+        AGENT
+      )
+    ).toBeNull();
+  });
+
+  it("an override key still acts as the user it names", () => {
+    expect(
+      actingUserIdFor(
+        ctx({ userId: HUMAN, apiKeyId: "k", keyType: "system" }),
+        VICTIM
+      )
+    ).toBe(VICTIM);
+  });
+
+  it("no authenticated user → refused", () => {
+    expect(actingUserIdFor(ctx({}), undefined)).toBeNull();
   });
 });

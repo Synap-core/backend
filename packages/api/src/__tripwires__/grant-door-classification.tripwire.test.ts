@@ -12,11 +12,17 @@
  * NOT COVERED (stated): whether a declared subject list is COMPLETE for its
  * door is a review question, not something this scan can see; a door that
  * reads one more subject than it declares is bounded too loosely. Hub REST
- * GET routes are not derived (the fence keeps its allow-list, fail closed).
+ * GET routes are not derived (the fence keeps its allow-list, fail closed);
+ * their DECLARED subjects (`GRANT_REST_GET_READS`, `GRANT_REST_POST_READS`)
+ * are checked against the read hook below.
  */
 import { describe, expect, it } from "vitest";
 import { tools } from "../routers/mcp/tools/index.js";
-import { MCP_READ_TOOL_DOORS } from "../access/grant-door-fence.js";
+import {
+  GRANT_REST_GET_READS,
+  GRANT_REST_POST_READS,
+  MCP_READ_TOOL_DOORS,
+} from "../access/grant-door-fence.js";
 import { GRANT_READ_SPECS } from "../access/grant-read.js";
 
 describe("MCP read-tool classification (derived from the live tool list)", () => {
@@ -40,9 +46,18 @@ describe("MCP read-tool classification (derived from the live tool list)", () =>
     expect(classified.filter((n) => !reads.includes(n))).toEqual([]);
   });
 
-  it("declares only subjects the read hook knows", () => {
+  it("declares only subjects the read hook knows (MCP tools and Hub REST doors)", () => {
     const known = new Set([...GRANT_READ_SPECS.values()].map((s) => s.subject));
-    const unknown = Object.entries(MCP_READ_TOOL_DOORS).flatMap(([n, d]) =>
+    const doors = [
+      ...Object.entries(MCP_READ_TOOL_DOORS),
+      ...[...GRANT_REST_GET_READS, ...GRANT_REST_POST_READS].map(
+        ([r, d]) => [String(r), d] as const
+      ),
+    ];
+    // Non-vacuity: the REST declarations are in the scanned set.
+    expect(GRANT_REST_GET_READS.length).toBeGreaterThanOrEqual(5);
+    expect(known.has("session")).toBe(true);
+    const unknown = doors.flatMap(([n, d]) =>
       d.bound === "reads"
         ? d.subjects.filter((s) => !known.has(s)).map((s) => `${n}:${s}`)
         : []

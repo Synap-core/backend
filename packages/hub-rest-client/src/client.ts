@@ -188,6 +188,7 @@ import type {
   RerunFocusSessionResult,
   HubDocument,
   HubRelation,
+  HubEntityNeighbours,
   HubGraphResult,
   HubConnectionsResult,
   HubProfile,
@@ -906,8 +907,13 @@ export class HubRestClient {
   // ─── Relations & Graph ────────────────────────────────────────────────────
 
   /**
-   * Get all relations for an entity — inbound and outbound.
-   * Use to discover connections before graph traversal.
+   * Get an entity's neighbours — the entities on the other end of its relations
+   * (inbound and outbound) plus its config links. Use to discover connections
+   * before graph traversal.
+   *
+   * The pod answers `{ entities, configLinks }` for an entity, not relation
+   * rows; a body without those arrays throws rather than reading as "no
+   * connections".
    *
    * This method resolves userId automatically; workspaceId falls back to the
    * client default. Without any workspace the pod reads pod-wide (every
@@ -916,15 +922,24 @@ export class HubRestClient {
   async getRelations(
     entityId: string,
     options?: { workspaceId?: string }
-  ): Promise<HubRelation[]> {
+  ): Promise<HubEntityNeighbours> {
     const userId = await this.resolveUserId();
     const wsId = options?.workspaceId ?? this.workspaceId;
     const params = new URLSearchParams({ userId, entityId });
     if (wsId) params.set("workspaceId", wsId);
-    const result = await this.request<
-      HubRelation[] | HubListResponse<HubRelation>
-    >("GET", `/api/hub/relations?${params}`);
-    return unwrapList(result, "relations");
+    const result = await this.request<HubEntityNeighbours>(
+      "GET",
+      `/api/hub/relations?${params}`
+    );
+    if (
+      !Array.isArray(result?.entities) ||
+      !Array.isArray(result?.configLinks)
+    ) {
+      throw new Error(
+        "GET /api/hub/relations?entityId answered an unexpected shape (expected { entities, configLinks })"
+      );
+    }
+    return result;
   }
 
   /**
@@ -975,7 +990,7 @@ export class HubRestClient {
   }
 
   /**
-   * Delete a relation by ID (get from getRelations()).
+   * Delete a relation by ID.
    */
   async deleteRelation(relationId: string): Promise<void> {
     const userId = await this.resolveUserId();

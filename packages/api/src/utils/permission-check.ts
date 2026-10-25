@@ -4420,16 +4420,26 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
     .limit(1);
   if (agentUser?.userType !== "agent") return null;
 
+  const [ws] = await db
+    .select({ name: workspaces.name, archivedAt: workspaces.archivedAt })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  // An archived space takes no new member: a join filed there could only be
+  // approved into a retired space (ticket 86b6faae). Refused in words, in
+  // dry-run too, since it is the verdict.
+  if (ws?.archivedAt) {
+    return {
+      denied: true,
+      reason: `The space "${ws.name}" is archived, so an agent cannot join it or write there. A person must do this, or restore the space first.`,
+    };
+  }
+
   // Verdict resolved (agent → join proposal). In dry-run stop here: everything
   // below either reads to build the card or WRITES the proposal.
   if (dryRun) return DRY_RUN_PROPOSE;
 
   const role = "editor";
-  const [ws] = await db
-    .select({ name: workspaces.name })
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
-    .limit(1);
   const agentName = agentUser.name ?? "Agent";
   const workspaceName = ws?.name ?? workspaceId;
   // Enrich the summary when we know WHAT the agent wanted to do — a join
