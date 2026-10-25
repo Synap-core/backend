@@ -6,77 +6,27 @@
 
 import { pgTable, text, timestamp, boolean, jsonb } from "drizzle-orm/pg-core";
 
-// Type definitions for JSONB columns
-export interface CustomTheme {
-  colors?: {
-    primary?: string;
-    accent?: string;
-    background?: string;
-    border?: string;
-    text?: string;
-  };
-  spacing?: {
-    small?: string;
-    medium?: string;
-    large?: string;
-  };
-  radii?: {
-    small?: string;
-    medium?: string;
-    large?: string;
-  };
-  animations?: {
-    enabled?: boolean;
-    speed?: "slow" | "normal" | "fast";
-  };
-}
+// Type definitions for JSONB columns — declared once in
+// `@synap-core/types/preferences/model` (the wire shape), imported here to type
+// the columns and re-exported for pod code.
+import type {
+  CustomTheme,
+  DefaultTemplates,
+  CustomEntityType,
+  EntityMetadataSchemas,
+  UIPreferences,
+  GraphPreferences,
+} from "@synap-core/types/preferences/model";
 
-export interface DefaultTemplates {
-  [entityType: string]: string; // entityType -> templateId
-}
-
-export interface CustomEntityType {
-  id: string;
-  name: string;
-  icon: string;
-  color: string;
-  metadataSchema: Record<string, any>;
-}
-
-export interface EntityMetadataSchemas {
-  [entityType: string]: Record<string, any>;
-}
-
-/** How to open entity detail when user clicks an entity (workspace-wide) */
-export type EntityOpenMode = "floating" | "side" | "modal";
-
-export interface UIPreferences {
-  sidebarCollapsed?: boolean;
-  panelPositions?: Record<string, { x: number; y: number }>;
-  lastActiveView?: string;
-  compactMode?: boolean;
-  fontSize?: string;
-  animations?: boolean;
-  defaultView?: "list" | "grid" | "timeline";
-  /** Where to open entity detail: floating panel (default), side panel, or modal */
-  entityOpenMode?: EntityOpenMode;
-}
-
-export interface GraphPreferences {
-  forceSettings?: {
-    linkDistance?: number;
-    chargeStrength?: number;
-    alphaDecay?: number;
-    velocityDecay?: number;
-  };
-  defaultFilters?: {
-    entityTypes?: string[];
-    relationTypes?: string[];
-  };
-  zoom?: number;
-  pan?: { x: number; y: number };
-  showMinimap?: boolean;
-}
+export type {
+  CustomTheme,
+  DefaultTemplates,
+  CustomEntityType,
+  EntityMetadataSchemas,
+  EntityOpenMode,
+  UIPreferences,
+  GraphPreferences,
+} from "@synap-core/types/preferences/model";
 
 export const userPreferences = pgTable("user_preferences", {
   // Primary key
