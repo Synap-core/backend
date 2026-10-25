@@ -400,6 +400,27 @@ describe('per verb: `blocked: "not_enabled"` ⇔ the run door refuses it (ticket
   });
 });
 
+describe("the row's `enabled` is the gate's own predicate (review of #199)", () => {
+  it("a tool whose approval is unset (null) reads enabled, as the gate runs it", async () => {
+    const id = await tool("null_approval_tool", { approved: true, verbs: [] });
+    await q(`update tools set approved = null where id = $1`, [id]);
+    const caps = await listCapabilities(
+      { workspaceId: null, userId: U },
+      { limit: null }
+    );
+    const row = caps.find((c) => c.id === id);
+    expect(row).toBeDefined();
+    expect(row!.enabled).toBe(true);
+    // And a refused one still reads off.
+    const off = await tool("off_tool", { approved: false, verbs: [] });
+    const caps2 = await listCapabilities(
+      { workspaceId: null, userId: U },
+      { limit: null }
+    );
+    expect(caps2.find((c) => c.id === off)!.enabled).toBe(false);
+  });
+});
+
 describe("allSpaces — one read, every visible space, deduped and tagged", () => {
   it("returns pod-wide once + each visible space's row tagged, never an invisible space", async () => {
     // Pod-wide, installed TWICE (the duplicate-install shape): one row.

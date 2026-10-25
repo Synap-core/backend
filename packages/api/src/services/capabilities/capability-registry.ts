@@ -1221,7 +1221,8 @@ export async function listCapabilities(
     executor: row.executor as ExecutorRef,
     // Run posture, stamped once every row is built (below).
     governance: "none",
-    enabled: row.approved === true,
+    // The gate's own predicate (`approvalRefusesRun`), never a second spelling.
+    enabled: !approvalRefusesRun(row),
     containerId:
       containerByMember.get(containerMemberKey("tool", row.id))?.id ?? null,
     containerName:
@@ -1282,7 +1283,7 @@ export async function listCapabilities(
           inputSchema: asInputSchema(row.parameters),
           executor: "is-agent",
           governance: "none",
-          enabled: row.approved === true,
+          enabled: !approvalRefusesRun(row),
         }
       : {
           kind: "skill",
@@ -1296,7 +1297,7 @@ export async function listCapabilities(
           executor: "is-agent",
           // Run posture, stamped once every row is built (below).
           governance: "none",
-          enabled: row.approved === true,
+          enabled: !approvalRefusesRun(row),
           skillKind: row.kind,
           skillMetadata:
             (row.metadata as Record<string, unknown> | null) ?? null,
