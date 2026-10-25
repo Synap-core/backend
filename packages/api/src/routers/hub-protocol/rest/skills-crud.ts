@@ -10,9 +10,9 @@
  * (resolveActingContext) then invoke the top-level `skillsRouter` through a
  * hub-protocol caller context — the permission check, insert, audit log, and
  * side-effects all run inside the tRPC handler (same pattern hub-protocol/
- * skills.ts uses). The `requires: toolId[]` tool links reuse the SAME router's
- * `setRequiredTools` (which writes `skill → requires → tool` edges via the
- * links service) — no inline link writes here.
+ * skills.ts uses). The `requires: toolId[]` tool links ride that same create
+ * as `requiredToolIds` (governed with the skill; written through the
+ * `setRequiredTools` body) — no inline link writes here.
  *
  * NOTE: the EXISTING rest/skills.ts owns the static `/skills/system` doc
  * endpoint. These routes add the CRUD seam. Static `/skills` (no param) is
@@ -340,20 +340,14 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
         timeoutSeconds: body.timeoutSeconds ?? 30,
         workspaceId: workspaceId ?? undefined,
         agentUserId,
+        // The declared tool scope rides the create itself: checked visible
+        // to the author, carried on a proposal (and re-checked as the
+        // approver), written on the direct path — never a second, ungoverned
+        // `setRequiredTools` call after the fact (review of #199, M4).
+        ...(body.requires && body.requires.length > 0
+          ? { requiredToolIds: body.requires }
+          : {}),
       });
-
-      // Wire required-tool links only when the skill was actually created
-      // (a proposed skill has no row yet to attach links to).
-      if (
-        result.status === "created" &&
-        body.requires &&
-        body.requires.length > 0
-      ) {
-        await caller.setRequiredTools({
-          skillId: result.id,
-          toolIds: body.requires,
-        });
-      }
 
       return c.json(
         {
