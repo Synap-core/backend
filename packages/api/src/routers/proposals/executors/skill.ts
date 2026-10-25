@@ -57,9 +57,13 @@ export function registerSkillExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const { insertSkillGoverned } = await import("../../skills.js");
+      const { insertSkillGoverned, replaceSkillRequiredTools } =
+        await import("../../skills.js");
+      // Not a `skills` column: the declared `requires` edges, replayed below
+      // once the row exists (ticket c5058d24).
+      const { requiredToolIds, ...skillValues } = innerData;
       const result = await insertSkillGoverned({
-        ...(innerData as Record<string, unknown>),
+        ...(skillValues as Record<string, unknown>),
         // Own the skill as the APPROVER (mirrors project/view) — no agentUserId
         // so the re-entrant gate auto-grants for the operator authority. `id` in
         // innerData is stripped by insertSkillGoverned (it mints its own).
@@ -127,6 +131,27 @@ export function registerSkillExecutors(): void {
           .set({ approved: false, updatedAt: new Date() })
           .where(eq(skills.id, materializedSkill.id));
         materializedSkill.approved = false;
+      }
+
+      // The tools the author declared, which the reviewer approved with the
+      // skill — through the same body as `skills.setRequiredTools`. Non-fatal,
+      // like the wiring below: the skill row is committed, and a missing edge
+      // only means the verb's own calls are gated again (the safe direction).
+      if (Array.isArray(requiredToolIds) && requiredToolIds.length > 0) {
+        try {
+          await replaceSkillRequiredTools({
+            userId,
+            skill: materializedSkill,
+            toolIds: requiredToolIds.filter(
+              (id): id is string => typeof id === "string"
+            ),
+          });
+        } catch (err) {
+          logger.error(
+            { skillId: materializedSkill.id, err },
+            "skill/create approval: requires edges not written (non-fatal — approval proceeds)"
+          );
+        }
       }
 
       const providerSpec = materializedSkill.providerSpec;

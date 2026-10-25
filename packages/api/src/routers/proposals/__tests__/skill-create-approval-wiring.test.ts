@@ -89,8 +89,21 @@ vi.mock("../executors/shared.js", () => ({ reportApproved: () => undefined }));
 
 /** What `insertSkillGoverned` returns — set per test. */
 let insertResult: Record<string, unknown>;
+/** What the executor handed `insertSkillGoverned` / the requires-edge door. */
+let insertInputs: Record<string, unknown>[] = [];
+let requiresWrites: { skill: { id: string }; toolIds: readonly string[] }[] =
+  [];
 vi.mock("../../skills.js", () => ({
-  insertSkillGoverned: async () => insertResult,
+  insertSkillGoverned: async (input: Record<string, unknown>) => {
+    insertInputs.push(input);
+    return insertResult;
+  },
+  replaceSkillRequiredTools: async (p: {
+    skill: { id: string };
+    toolIds: readonly string[];
+  }) => {
+    requiresWrites.push(p);
+  },
 }));
 
 /** Args typed so `.mock.calls[0][1]` is a real tuple index, not `never`. */
@@ -134,6 +147,7 @@ const run = async (opts: {
   skill?: Record<string, unknown>;
   approver?: string;
   ctx?: Record<string, unknown>;
+  data?: Record<string, unknown>;
 }) => {
   if (!executor) throw new Error("skill/create executor not registered");
   insertResult = {
@@ -152,7 +166,9 @@ const run = async (opts: {
       projectId: null,
       agentUserId: opts.agentUserId ?? null,
       sourceMessageId: null,
-      data: { data: { name: "fetch_invoice", kind: "declarative" } },
+      data: {
+        data: opts.data ?? { name: "fetch_invoice", kind: "declarative" },
+      },
     },
     payload: null,
     userId: opts.approver ?? APPROVER,
@@ -163,6 +179,8 @@ const run = async (opts: {
 };
 
 beforeEach(() => {
+  insertInputs = [];
+  requiresWrites = [];
   wireCreatedVerb.mockClear();
   proposalRows = [];
   toolRows = [{ id: "tool-1" }];
@@ -256,5 +274,29 @@ describe("BORN-APPROVED DOWNGRADE stays intact (security)", () => {
       skill: declarativeSkill({ kind: "instruction", approved: true }),
     });
     expect(updates.find((u) => u.table === SKILLS)).toBeUndefined();
+  });
+});
+
+describe("skill/create approval writes the DECLARED requires edges (ticket c5058d24)", () => {
+  it("replays `requiredToolIds` onto the materialized skill, never into its row", async () => {
+    await run({
+      agentUserId: AGENT,
+      skill: declarativeSkill({ kind: "code", providerSpec: null }),
+      data: {
+        name: "score_handle",
+        kind: "code",
+        requiredToolIds: ["tool-apify"],
+      },
+    });
+    expect(requiresWrites).toHaveLength(1);
+    expect(requiresWrites[0]!.skill.id).toBe("skill-1");
+    expect(requiresWrites[0]!.toolIds).toEqual(["tool-apify"]);
+    // Not a `skills` column: it must not reach the governed insert.
+    expect(insertInputs[0]).not.toHaveProperty("requiredToolIds");
+  });
+
+  it("writes no edges when the author declared none", async () => {
+    await run({ agentUserId: AGENT });
+    expect(requiresWrites).toEqual([]);
   });
 });

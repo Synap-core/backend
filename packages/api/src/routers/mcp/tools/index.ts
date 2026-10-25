@@ -1833,7 +1833,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Define a new entity KIND — AND the door for ADDING A FIELD to a kind that already exists. It is SLUG-IDEMPOTENT: re-call it with an EXISTING slug and it returns that profile and adds only the `properties[]` that are not there yet (an existing field reports status 'unchanged' and is never rewritten). So to add `wedge_stage` to `question`, call this with slug 'question' and just that one field — there is NO separate add-property tool, and schema editing is NOT browser-only. A field takes `valueType`, `constraints` (an enum of allowed values lives here), `defaultValue`, `required`, and `overlay: true` to add it as a WORKSPACE OVERLAY instead of a base field on the kind — which is what you want for a field that only one domain should see, on a pod-wide kind like note/task/question. Call list_profiles + extend-first (load_skill system/synap-schema/extend-first) BEFORE minting a new slug. A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. POD-WIDE default. Governed: 'proposed' is success. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
+          "Define a new entity KIND — AND the door for ADDING A FIELD to a kind that already exists. It is SLUG-IDEMPOTENT: re-call it with an EXISTING slug and it returns that profile and adds only the `properties[]` that are not there yet (an existing field reports status 'unchanged' and is never rewritten). So to add `wedge_stage` to `question`, call this with slug 'question' and just that one field — there is NO separate add-property tool, and schema editing is NOT browser-only. A field takes `valueType`, `constraints` (an enum of allowed values lives here), `defaultValue`, `required`, and `overlay: true` to add it as a WORKSPACE OVERLAY instead of a base field on the kind — which is what you want for a field that only one domain should see, on a pod-wide kind like note/task/question. Call list_profiles + extend-first (load_skill system/synap-schema/extend-first) BEFORE minting a new slug. A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. POD-WIDE default. Slugs are NORMALISED to lowercase words joined by '-' (social_account_audit → social-account-audit, botScore → botscore): the result's `notice`/`normalized` names every rewrite — use the stored slugs in code and later calls. Governed: 'proposed' is success. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5030,7 +5030,7 @@ export const tools = {
             pathTemplate: {
               type: "string",
               description:
-                "Request path with {{param}} interpolation, e.g. '/v2/acts/{{actorId}}/runs'.",
+                "Request path RELATIVE to the tool's base URL, with {{param}} interpolation, e.g. '/acts/{{actorId}}/runs' on apify_api (base https://api.apify.com/v2). Never repeat a version prefix the base URL already ends in ('/v2/acts/…' there calls /v2/v2/acts/…).",
             },
             query: {
               type: "object",
@@ -5394,7 +5394,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until the owner approves it — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
+          "Author a skill: Documentation (always) + OPTIONAL code. Send `body` alone for a TEACHING skill — reusable prose (a process, a checklist, a house style) that any agent later pulls with synap_load_skill; a teaching skill needs a `slug`, because that is the ref load_skill resolves. Send `code` for a runnable sandboxed executable, or both: read synap_load_skill('system/synap/code-skills') first for the runtime (the async (args, context) wrapper, callProvider and its return shape, hubProtocol reads, propose.entity, limits). A code skill that calls an installed tool with callProvider should declare it in `requiredTools`, so a run is approved once, not once more per call. `kind` is derived from code presence — do not guess it. For a deterministic provider HTTP call on an already-installed tool use synap_create_verb instead. Governed like every write: an agent create returns status='proposed'. An agent-authored skill is born UNAPPROVED either way and does NOT load or run until the owner approves it — code executes, and instruction prose lands in a future agent's system prompt, so both need a deliberate human OK. Creates it on this pod only; an official template is written in the catalog and published with `synap catalog publish --official`.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5431,6 +5431,19 @@ export const tools = {
               type: "string",
               description:
                 "Optional workspace to scope the skill to (default: pod-wide).",
+            },
+            requiredTools: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Code skills: the installed tools the code calls with callProvider, by name (e.g. ['apify_api']). The reviewer approves them with the skill; a run's own calls to these tools then ride the verb's approval instead of filing a second proposal.",
+            },
+            timeoutSeconds: {
+              type: "integer",
+              minimum: 1,
+              maximum: 300,
+              description:
+                "Code skills: how long one run may take, in seconds (default 30, max 300).",
             },
           },
           required: ["name"],

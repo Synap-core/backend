@@ -925,6 +925,58 @@ export const buildHandlers: McpHandlerMap = {
     if (authoringProblem) return ok({ error: authoringProblem });
     const skillWorkspaceId =
       typeof args.workspaceId === "string" ? args.workspaceId : undefined;
+    // Same bound as `skills.create` (1..300 s), refused here in words rather
+    // than as a zod dump.
+    let timeoutSeconds: number | undefined;
+    if (args.timeoutSeconds !== undefined) {
+      const t = args.timeoutSeconds;
+      if (typeof t !== "number" || !Number.isInteger(t) || t < 1 || t > 300) {
+        return ok({
+          error: "timeoutSeconds must be a whole number of seconds, 1 to 300.",
+        });
+      }
+      timeoutSeconds = t;
+    }
+    // `requiredTools` are tool NAMES (as synap_list_capabilities lists them),
+    // resolved under the same visibility + lens `synap_create_verb` uses for
+    // its parent tool. An unknown name is refused, never dropped.
+    let requiredToolIds: string[] | undefined;
+    if (args.requiredTools !== undefined) {
+      if (
+        !Array.isArray(args.requiredTools) ||
+        !args.requiredTools.every((n) => typeof n === "string" && n.trim())
+      ) {
+        return ok({
+          error:
+            'requiredTools must be an array of installed tool names, e.g. ["apify_api"].',
+        });
+      }
+      const { parentToolWhere, parentToolMissingMessage } =
+        await import("../../../services/capabilities/create-declarative-verb.js");
+      const { tools: toolsTable } = await import("@synap/database/schema");
+      const db = await getDb();
+      requiredToolIds = [];
+      for (const raw of new Set(args.requiredTools as string[])) {
+        const toolName = raw.trim();
+        const [tool] = await db
+          .select({ id: toolsTable.id })
+          .from(toolsTable)
+          .where(
+            parentToolWhere({
+              userId,
+              toolName,
+              workspaceId: skillWorkspaceId ?? null,
+            })
+          )
+          .limit(1);
+        if (!tool) {
+          return ok({
+            error: parentToolMissingMessage(toolName, skillWorkspaceId),
+          });
+        }
+        requiredToolIds.push(tool.id);
+      }
+    }
     const skillsCtx = await createHubProtocolCallerContext(
       userId,
       apiKeyScopes,
@@ -950,6 +1002,8 @@ export const buildHandlers: McpHandlerMap = {
       body: skillBody,
       code: skillCode,
       parameters: args.parameters as Record<string, unknown> | undefined,
+      ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+      ...(requiredToolIds?.length ? { requiredToolIds } : {}),
       agentUserId: agentUserId ?? undefined,
     });
     return ok(result);

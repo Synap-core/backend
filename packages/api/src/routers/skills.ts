@@ -18,6 +18,7 @@ import {
   inArray,
   getActingAgentUserId,
   isDelegationHeaders,
+  userVisibleWhere,
   type SQL,
 } from "@synap/database";
 import { skills, tools } from "@synap/database/schema";
@@ -312,6 +313,48 @@ export {
   readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
+
+/**
+ * Replace the set of tools a skill `requires` — the body of
+ * `skills.setRequiredTools`, shared with the two doors that declare the set at
+ * CREATE time: `skills.create`'s direct path and the `skill/create` approval
+ * replay (ticket c5058d24). These edges are the scope a verb's decision covers
+ * (`verbAct`, execute-capability.ts), so a code skill that declares its tools
+ * is not gated a second time on its own `callProvider` calls. Diffs against
+ * the existing edges: adds new, removes dropped. Idempotent.
+ */
+export async function replaceSkillRequiredTools(params: {
+  userId: string;
+  skill: { id: string; workspaceId: string | null };
+  toolIds: readonly string[];
+}): Promise<void> {
+  const { userId, skill, toolIds } = params;
+  const edges = await getLinksFor(userId, "skill", skill.id);
+  const existing = edges.filter(
+    (e) => e.linkType === "requires" && e.toType === "tool"
+  );
+  const existingIds = new Set(existing.map((e) => e.toId));
+  const wanted = new Set(toolIds);
+
+  // Remove edges no longer wanted.
+  for (const e of existing) {
+    if (!wanted.has(e.toId)) await deleteLink(e.id);
+  }
+  // Add new edges.
+  const toAdd = toolIds.filter((id) => !existingIds.has(id));
+  if (toAdd.length) {
+    await createLinks(
+      toAdd.map((toolId) => ({
+        workspaceId: skill.workspaceId ?? null,
+        fromType: "skill" as const,
+        fromId: skill.id,
+        toType: "tool" as const,
+        toId: toolId,
+        linkType: "requires" as const,
+      }))
+    );
+  }
+}
 
 /**
  * The ONE governed persistence path for inserting a `skills` row. Shared by
@@ -1100,6 +1143,14 @@ export const skillsRouter = router({
         executionMode: z.enum(["sync", "async"]).default("sync"),
         timeoutSeconds: z.number().min(1).max(300).default(30),
         /**
+         * The tools this skill `requires` (its `callProvider` targets), written
+         * through `replaceSkillRequiredTools` — the `setRequiredTools` body —
+         * on the direct path AND by the `skill/create` approval replay, so a
+         * reviewer approves the declared scope with the skill. Each id must be
+         * a tool the caller can see.
+         */
+        requiredToolIds: z.array(z.string().uuid()).max(20).optional(),
+        /**
          * The skill's vendor-INDEPENDENT routing intent (the
          * `capability_intents` vocabulary): what this verb MEANS, so an agent can
          * ask "what can send a message?" without already knowing `gmail_send`.
@@ -1187,6 +1238,30 @@ export const skillsRouter = router({
       // learns the gap now, not the reviewer at approval or the run at execution.
       assertSkillCodeAllowed(kind, input.code);
 
+      // A declared tool must exist and be visible to the author NOW — a
+      // proposal naming a tool nobody can see would approve a scope that
+      // binds nothing.
+      const requiredToolIds = [...new Set(input.requiredToolIds ?? [])];
+      if (requiredToolIds.length > 0) {
+        const visible = await db
+          .select({ id: tools.id })
+          .from(tools)
+          .where(
+            and(
+              inArray(tools.id, requiredToolIds),
+              userVisibleWhere(tools.workspaceId, userId)
+            )
+          );
+        const seen = new Set(visible.map((t) => t.id));
+        const missing = requiredToolIds.filter((id) => !seen.has(id));
+        if (missing.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `requiredToolIds: no installed tool you can see has id ${missing.join(", ")}.`,
+          });
+        }
+      }
+
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
         userId,
@@ -1223,6 +1298,9 @@ export const skillsRouter = router({
           ...(input.urlPatterns?.length
             ? { urlPatterns: input.urlPatterns }
             : {}),
+          // Replayed by the `skill/create` executor through the same
+          // `replaceSkillRequiredTools` once the skill row exists.
+          ...(requiredToolIds.length ? { requiredToolIds } : {}),
         },
         agentUserId: input.agentUserId,
       });
@@ -1289,6 +1367,14 @@ export const skillsRouter = router({
           approved: kind === "instruction" && !input.agentUserId,
         })
         .returning();
+
+      if (requiredToolIds.length > 0) {
+        await replaceSkillRequiredTools({
+          userId,
+          skill,
+          toolIds: requiredToolIds,
+        });
+      }
 
       // 3. Audit log
       auditLog({
@@ -2078,31 +2164,11 @@ export const skillsRouter = router({
       if (!skill)
         throw new TRPCError({ code: "NOT_FOUND", message: "Skill not found" });
 
-      const edges = await getLinksFor(userId, "skill", input.skillId);
-      const existing = edges.filter(
-        (e) => e.linkType === "requires" && e.toType === "tool"
-      );
-      const existingIds = new Set(existing.map((e) => e.toId));
-      const wanted = new Set(input.toolIds);
-
-      // Remove edges no longer wanted.
-      for (const e of existing) {
-        if (!wanted.has(e.toId)) await deleteLink(e.id);
-      }
-      // Add new edges.
-      const toAdd = input.toolIds.filter((id) => !existingIds.has(id));
-      if (toAdd.length) {
-        await createLinks(
-          toAdd.map((toolId) => ({
-            workspaceId: skill.workspaceId ?? null,
-            fromType: "skill" as const,
-            fromId: input.skillId,
-            toType: "tool" as const,
-            toId: toolId,
-            linkType: "requires" as const,
-          }))
-        );
-      }
+      await replaceSkillRequiredTools({
+        userId,
+        skill,
+        toolIds: input.toolIds,
+      });
       return { skillId: input.skillId, toolIds: input.toolIds };
     }),
 });
