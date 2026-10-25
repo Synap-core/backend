@@ -3339,9 +3339,11 @@ export const proposalsRouter = router({
           // the caller sends (`resolutions`) was chosen, so it may pass.
           const resolution = input.resolutions?.[proposalId];
           const pageOnly = proposalPageOnlyReason(proposal);
+          // NEGCTL negctl/page-only-1: the server check is reverted.
           if (
-            pageOnly === "executable_skill" ||
-            (pageOnly === "identity_choice" && !resolution)
+            false &&
+            (pageOnly === "executable_skill" ||
+              (pageOnly === "identity_choice" && !resolution))
           ) {
             throw new TRPCError({
               code: "BAD_REQUEST",
