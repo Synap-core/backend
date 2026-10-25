@@ -20,8 +20,14 @@ import type { Equal } from "./equal.js";
 
 type ProposalColumns = typeof proposals.$inferSelect;
 
-/** Columns the wire `Proposal` does not carry. */
-type ProposalWithheld = never;
+/**
+ * Columns the wire `Proposal` does not carry — recorded as they stood on
+ * 2026-10-25, when this contract first compiled the interface against the table
+ * (the interface had never been checked against it). Carrying one of them on the
+ * wire is a decision; this list is where it is made.
+ */
+type ProposalWithheld =
+  "projectId" | "subjectUserId" | "governanceReason" | "apiKeyId";
 
 export const _proposalStatus: Equal<ProposalStatus, WireProposalStatus> = true;
 export const _proposalColumns: Equal<

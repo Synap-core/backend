@@ -74,10 +74,19 @@ type ChannelColumns = typeof channels.$inferSelect;
 type MessageColumns = typeof messages.$inferSelect;
 type ContextItemColumns = typeof channelContextItems.$inferSelect;
 
-/** Columns the wire `Channel` does not carry. */
-type ChannelWithheld = never;
+/**
+ * Columns the wire `Channel` does not carry: the per-channel agent config and
+ * MCP server list are read server-side (agent routing), never by a client.
+ */
+type ChannelWithheld = "agentConfig" | "mcpServerIds";
 /** Columns the wire `MessageRow` does not carry. */
 type MessageWithheld = never;
+/**
+ * Columns the wire `MessageRow` WIDENS: `metadata` is `unknown` there (its doc:
+ * so a client need not resolve `@synap-core/core`'s message metadata type).
+ * Proven assignable below, not equal.
+ */
+type MessageWidened = "metadata";
 /** Columns the wire `ChannelContextItem` does not carry. */
 type ContextItemWithheld = never;
 
@@ -90,9 +99,15 @@ export const _channelWithheld: Equal<
   ChannelWithheld
 > = true;
 export const _messageColumns: Equal<
-  Pick<MessageColumns, keyof MessageRow & keyof MessageColumns>,
-  MessageRow
+  Omit<
+    Pick<MessageColumns, keyof MessageRow & keyof MessageColumns>,
+    MessageWidened
+  >,
+  Omit<MessageRow, MessageWidened>
 > = true;
+export const _messageWidened: MessageColumns[MessageWidened] extends MessageRow[MessageWidened]
+  ? true
+  : false = true;
 export const _messageWithheld: Equal<
   Exclude<keyof MessageColumns, keyof MessageRow>,
   MessageWithheld

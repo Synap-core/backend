@@ -13,7 +13,6 @@
 import type {
   WorkspaceDefaultSource,
   WorkspaceLayoutDefinition,
-  WorkspaceLayoutConfig,
   WorkspaceSettings,
   WorkspaceSourceRole,
   WorkspaceVisibility,
