@@ -39,6 +39,19 @@ describe("a goal's verbs", () => {
     );
   });
 
+  it("the owner's two answers to a counter-offer are their own verbs, in both moods", () => {
+    expect(resolveActionLabel("track.take_offer", "imperative")).toBe(
+      "Take their offer"
+    );
+    expect(resolveActionLabel("track.take_offer", "past")).toBe(
+      "Took their offer"
+    );
+    expect(resolveActionLabel("track.keep_ask", "imperative")).toBe(
+      "Keep my ask"
+    );
+    expect(resolveActionLabel("track.keep_ask", "past")).toBe("Kept my ask");
+  });
+
   it("every commitment move, and the judge's and owner's answers, have a curated row in both moods", () => {
     const acts = [
       ...TRACK_COMMITMENT_MOVE_KEYS,

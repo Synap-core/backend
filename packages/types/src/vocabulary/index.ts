@@ -367,6 +367,14 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
     imperative: "Keep it running",
     past: "Kept it running",
   },
+  // The owner's two answers to a delegate's counter-offer — both re-ask the
+  // delegate through the participants door (`op: "add"`): with the
+  // counter-offer as the commitment, or with the original one.
+  "track.take_offer": {
+    imperative: "Take their offer",
+    past: "Took their offer",
+  },
+  "track.keep_ask": { imperative: "Keep my ask", past: "Kept my ask" },
   // Pod hygiene (`profile/retire`, the cleanup pack). `retire` is a SOFT,
   // reversible hide of a kind — not a delete, so it never reads "Deleted".
   // `close` ends an idle session through the close door; `expire` takes a
