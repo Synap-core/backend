@@ -12,10 +12,11 @@
  * derived by scanning `apps/api/src/index.ts`, so a new provider or a new
  * static mount joins this test by existing.
  *
- * Negative control (2026-10-25): with the webhooks pattern removed from
- * `SECRET_PATH_PATTERNS`, every provider case, the logger case and the
- * error-egress case go red; the "static routes stay readable" cases stay
- * green (they pin the exclusion, not the mask).
+ * Negative control (2026-10-25, branch negctl/tickets-1025-1): with the
+ * webhooks pattern removed from `SECRET_PATH_PATTERNS`, 8 of 13 go red (the 4
+ * providers, the query-string line, deny-by-default, the logger and the
+ * error-egress sink); the 5 green are the non-vacuity check and the "static
+ * routes stay readable" cases, which pin the exclusion, not the mask.
  *
  * What this does NOT cover: a token-in-path route mounted OUTSIDE
  * `/webhooks/` (the pattern is keyed on that segment).
