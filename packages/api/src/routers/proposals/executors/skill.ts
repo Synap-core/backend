@@ -15,6 +15,7 @@ import type { InsertSkillGovernedInput } from "../../skills.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
 import { isAgentPrincipal } from "../review-authority.js";
+import { skillBornApproved } from "../../../services/capabilities/skill-born-approved.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import type { Context } from "../../../context.js";
 
@@ -107,38 +108,7 @@ export function registerSkillExecutors(): void {
       // never break the approval, whose skill row is already committed.
       const materializedSkill = result.skill;
 
-      // BORN-APPROVED DOWNGRADE (security). insertSkillGoverned's rule is
-      // `approved = kind === "instruction" && !agentUserId` — "an instruction
-      // skill is auto-approved only when a trusted HUMAN installs it". We must
-      // re-run its permission gate as the APPROVER (agentUserId: undefined
-      // above), otherwise the agent branch of checkPermissionOrPropose fires
-      // again and the approval dead-ends in "unexpectedly re-proposed". That
-      // operator identity also makes the born-approved rule read `true` — so an
-      // AGENT-authored instruction skill would materialize `approved: true` and
-      // land in the agent's system prompt with NO owner approval (the
-      // prompt-injection vector the rule exists to close). The proposal row
-      // still carries the real author, so restore the intended verdict here —
-      // UNLESS a PERSON approved this proposal: their click on a review that
-      // shows the full body IS the owner approval the rule asks for, and a
-      // second toggle left owner-approved skills unloadable. Anything else (an
-      // agent travelling behind a human, an agent key, an agent principal)
-      // keeps the downgrade. A governance rule never reaches this executor:
-      // auto-approval runs the door with the agent id, born approved:false.
-      const approvedByPerson =
-        !ctx?.agentUserId &&
-        !getActingAgentUserId() &&
-        !(await isAgentPrincipal(userId));
-      if (
-        proposal.agentUserId &&
-        materializedSkill.approved &&
-        !approvedByPerson
-      ) {
-        await db
-          .update(skills)
-          .set({ approved: false, updatedAt: new Date() })
-          .where(eq(skills.id, materializedSkill.id));
-        materializedSkill.approved = false;
-      }
+      const refusals: string[] = [];
 
       // The tools the author declared, which the reviewer approved with the
       // skill — RE-RESOLVED under the approver's visibility (a stored id is
@@ -147,7 +117,6 @@ export function registerSkillExecutors(): void {
       // `skills.setRequiredTools`. An id that no longer resolves is REFUSED
       // and reported, never written. Non-fatal for the skill: a missing edge
       // only means its own calls are gated again (the safe direction).
-      const refusals: string[] = [];
       const declaredToolIds = Array.isArray(requiredToolIds)
         ? requiredToolIds.filter((id): id is string => typeof id === "string")
         : [];
@@ -232,6 +201,68 @@ export function registerSkillExecutors(): void {
           logger.error(
             { skillId: materializedSkill.id, err },
             "skill/create approval: wireCreatedVerb failed (non-fatal — approval proceeds)"
+          );
+        }
+      }
+
+      // THE APPROVAL VERDICT (`skillBornApproved`, one rule with the create
+      // doors). insertSkillGoverned re-ran its gate as the APPROVER
+      // (agentUserId: undefined above), or the agent branch of
+      // checkPermissionOrPropose would fire again and the approval dead-end in
+      // "unexpectedly re-proposed". That operator identity is not the author,
+      // so the row it wrote is corrected here from the proposal's real author
+      // and from who approved:
+      //   - a PERSON approved: the review showed the whole code or body, so the
+      //     click IS the owner's OK. The skill lands approved and runs, with no
+      //     second enable step (founder decision 2). Turned on through
+      //     `setSkillApproved`, the one enable door (its owner gate, audit and
+      //     pack re-sync).
+      //   - anything else (an agent travelling behind a human, an agent key, an
+      //     agent principal) on an AGENT's proposal: approved:false. Otherwise
+      //     an agent-authored instruction skill would land in the agent's
+      //     system prompt with no owner approval (the prompt-injection vector).
+      // A governance rule never reaches this executor: auto-approval runs the
+      // door with the agent id, born approved:false. Decided AFTER the requires
+      // edges and the verb wiring above, so turning it on re-syncs the packs
+      // the verb was just attached to.
+      const approvedByPerson =
+        !ctx?.agentUserId &&
+        !getActingAgentUserId() &&
+        !(await isAgentPrincipal(userId));
+      const approved = skillBornApproved({
+        kind: materializedSkill.kind,
+        agentUserId: proposal.agentUserId,
+        personApprovedProposal: approvedByPerson,
+      });
+      if (!approved && materializedSkill.approved) {
+        await db
+          .update(skills)
+          .set({ approved: false, updatedAt: new Date() })
+          .where(eq(skills.id, materializedSkill.id));
+        materializedSkill.approved = false;
+      } else if (approved && !materializedSkill.approved) {
+        // Dynamic, like the skills.js imports above: the enable door's module
+        // graph (pack sync) stays out of the executor registry's load.
+        const { setSkillApproved } =
+          await import("../../../services/capabilities/set-skill-approved.js");
+        try {
+          await setSkillApproved({
+            userId,
+            skillId: materializedSkill.id,
+            approved: true,
+            agentUserId: ctx?.agentUserId ?? null,
+          });
+          materializedSkill.approved = true;
+        } catch (err) {
+          // A reviewer the workspace lets approve proposals (an admin, the
+          // agent's owner) may still not be the one who turns a verb on (the
+          // workspace owner; pod admin for a pod-wide skill). The skill is
+          // created, left off, and the approval SAYS so — never a silent off.
+          if (!(err instanceof TRPCError) || err.code !== "FORBIDDEN") {
+            throw err;
+          }
+          refusals.push(
+            `The skill was created but not turned on: ${err.message}`
           );
         }
       }

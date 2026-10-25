@@ -52,6 +52,7 @@ import {
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
 import { auditLog } from "../utils/audit-log.js";
 import { setSkillApproved } from "../services/capabilities/set-skill-approved.js";
+import { skillBornApproved } from "../services/capabilities/skill-born-approved.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID } from "crypto";
 import { parseSkillMd } from "../skills/skill-md-parser.js";
@@ -385,13 +386,11 @@ export async function replaceSkillRequiredTools(params: {
  * `checkPermissionOrPropose` gate `create` runs — no door hardcodes
  * `approved: true` on its own insert.
  *
- * Born-approved rule: an `instruction` skill (prompt-only, no side effects) is
- * approved when installed by a trusted human (no `agentUserId`). Anything
- * executable (`code`/`declarative`), OR an install initiated by an agent
- * identity — including instruction content, which lands in the agent's system
- * prompt and is therefore a prompt-injection vector — is born UNAPPROVED and
- * needs an explicit owner approval (`setApproved`) before it runs or loads as
- * an agent tool.
+ * Born-approved rule: `skillBornApproved` — an `instruction` skill installed
+ * by a trusted human (no `agentUserId`). Anything executable, or anything an
+ * agent authored, is born UNAPPROVED and needs a person's OK before it runs or
+ * loads as an agent tool: approving its `skill/create` proposal (the executor
+ * turns it on), or `setApproved` when no person reviewed the create.
  */
 export type InsertSkillGovernedInput = typeof skills.$inferInsert & {
   agentUserId?: string;
@@ -448,7 +447,7 @@ export async function insertSkillGoverned(
     return { status: "proposed", proposalId: perm.proposalId };
   }
 
-  const approved = values.kind === "instruction" && !agentUserId;
+  const approved = skillBornApproved({ kind: values.kind, agentUserId });
 
   const [skill] = await db
     .insert(skills)
@@ -1348,10 +1347,9 @@ export const skillsRouter = router({
       //    …but ONLY for a trusted human author. An AGENT-initiated instruction
       //    skill is born UNAPPROVED: its body lands in a future agent's system
       //    prompt, so prose is a prompt-injection vector exactly as code is an
-      //    execution one. This mirrors `insertSkillGoverned`'s rule verbatim
-      //    (`kind === "instruction" && !agentUserId`); the two born-approved
-      //    decisions MUST stay identical or this direct path becomes the
-      //    bypass the shared door exists to prevent. Normally an agent create
+      //    execution one. Both born-approved sites read the ONE rule
+      //    (`skillBornApproved`); were they to differ, this direct path would
+      //    become the bypass the shared door exists to prevent. Normally an agent create
       //    returns `proposed` before reaching here — this closes the case where
       //    a governance rule has widened `skill/create` to auto for an agent.
       const [skill] = await db
@@ -1388,7 +1386,10 @@ export const skillsRouter = router({
           // source-link); omitted → the column default `{}` applies.
           ...(input.metadata ? { metadata: input.metadata } : {}),
           status: "active",
-          approved: kind === "instruction" && !input.agentUserId,
+          approved: skillBornApproved({
+            kind,
+            agentUserId: input.agentUserId,
+          }),
         })
         .returning();
 
