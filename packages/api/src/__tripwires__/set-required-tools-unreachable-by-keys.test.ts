@@ -32,9 +32,9 @@
  * must see it. The proof check reads that the test imports the caller's
  * module, not that it reaches the call.
  *
- * Negative controls (2026-10-26, negctl/tickets-1025-8): this file run
- * against 4728fec33 (the applier not yet classified, its proof test absent) and
- * a re-added REST `caller.setRequiredTools(...)` each turn it red.
+ * Negative control (2026-10-26, negctl/tickets-1025-8): a REST route
+ * (`skills-crud.ts`) mentioning `caller.setRequiredTools(...)` turns
+ * "every source reaching the requires writer is classified" red.
  */
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";

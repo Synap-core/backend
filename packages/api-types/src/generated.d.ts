@@ -11265,7 +11265,7 @@ export interface CapabilityCardVerb {
 	 * than a create/update. TODO: promote fully to explicit skill metadata.
 	 */
 	type: "action" | "read" | "write";
-	/** Backing skill `approved === true`. */
+	/** The backing skill passes the run gate's `approvalRefusesRun`. */
 	enabled: boolean;
 	/**
 	 * Run posture for an agent (`catalogVerbPosture`): `auto` runs now, `propose`
