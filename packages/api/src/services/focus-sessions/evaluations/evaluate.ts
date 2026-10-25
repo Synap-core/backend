@@ -43,6 +43,7 @@ import {
 } from "./record.js";
 import {
   buildJudgeMaterial,
+  isClippedMaterial,
   LEGACY_IS_MATERIAL_MAX,
   loadProducedMaterial,
   loadRoomMaterial,
@@ -251,53 +252,91 @@ export async function evaluateSession(
         loadProducedMaterial({ sessionId, userId }),
         loadRoomMaterial({ channelId: session.channelId, userId }),
       ]);
-      const judge = (max: number) =>
-        judgeSessionCriteria(svc.endpoint, svc.serviceApiKey, {
-          criteria: judged.map((c) => ({
-            key: c.key,
-            statement: c.statement,
-            ...(c.check.hint ? { hint: c.check.hint } : {}),
-          })),
-          material: buildJudgeMaterial(
-            session,
-            rows,
-            params.evidence,
-            produced,
-            room,
-            max,
-            new Set(judged.map((c) => c.key))
-          ),
-          ...(typeof modelId === "string" && modelId
-            ? { excludeModel: modelId }
-            : {}),
-        });
-      // An IS deployed before the material cap was raised refuses the larger
-      // material as a bad request: rebuild it at that IS's cap (the same fair
-      // budget, not a blind cut) and ask ONCE more. Any other failure, or a
-      // second refusal, is "the judge could not run" below.
-      const judgement = await judge(MATERIAL_MAX).catch((err: unknown) => {
-        if (!isJudgeRequestRefused(err)) throw err;
-        logger.warn(
-          { sessionId, err: err instanceof Error ? err.message : String(err) },
-          `IS refused the judge request; retrying with material capped at ${LEGACY_IS_MATERIAL_MAX}`
+      // Earlier verdicts of EVERY criterion graded now are withheld from
+      // every call, so a split into several calls never shows one criterion
+      // another's prior verdict on itself.
+      const judgedKeys = new Set(judged.map((c) => c.key));
+      const material = (max: number, focus?: SessionCriterion) =>
+        buildJudgeMaterial(
+          session,
+          rows,
+          params.evidence,
+          produced,
+          room,
+          max,
+          judgedKeys,
+          focus
+            ? {
+                key: focus.key,
+                statement: focus.statement,
+                ...(focus.check.hint ? { hint: focus.check.hint } : {}),
+              }
+            : undefined
         );
-        return judge(LEGACY_IS_MATERIAL_MAX);
-      });
-      const byKey = new Map(judgement.verdicts.map((v) => [v.key, v]));
+      // ONE call over one shared material while everything fits. Once
+      // something must be cut, each criterion gets material chosen for it
+      // (its outline + sections, `judge-material.ts` `excerpt`), and criteria
+      // whose material comes out identical share a call.
+      const shared = material(MATERIAL_MAX);
+      const scoped = isClippedMaterial(shared);
+      const groups = new Map<string, SessionCriterion[]>();
       for (const c of judged) {
-        const v = byKey.get(c.key);
-        if (judgement.decider === "none" || !judgement.model || !v) {
-          results.push({
-            key: c.key,
-            status: "skipped",
-            reason: v?.rationale || "No judge could grade this criterion.",
+        const m = scoped ? material(MATERIAL_MAX, c) : shared;
+        groups.set(m, [...(groups.get(m) ?? []), c]);
+      }
+      for (const [first, group] of groups) {
+        try {
+          const judge = (m: string) =>
+            judgeSessionCriteria(svc.endpoint, svc.serviceApiKey, {
+              criteria: group.map((c) => ({
+                key: c.key,
+                statement: c.statement,
+                ...(c.check.hint ? { hint: c.check.hint } : {}),
+              })),
+              material: m,
+              ...(typeof modelId === "string" && modelId
+                ? { excludeModel: modelId }
+                : {}),
+            });
+          // An IS deployed before the material cap was raised refuses the
+          // larger material as a bad request: rebuild it at that IS's cap
+          // (the same fair budget and the same focus, not a blind cut) and
+          // ask ONCE more. Any other failure, or a second refusal, is "the
+          // judge could not run" below.
+          const judgement = await judge(first).catch((err: unknown) => {
+            if (!isJudgeRequestRefused(err)) throw err;
+            logger.warn(
+              {
+                sessionId,
+                err: err instanceof Error ? err.message : String(err),
+              },
+              `IS refused the judge request; retrying with material capped at ${LEGACY_IS_MATERIAL_MAX}`
+            );
+            return judge(
+              material(LEGACY_IS_MATERIAL_MAX, scoped ? group[0] : undefined)
+            );
           });
-          continue;
+          const byKey = new Map(judgement.verdicts.map((v) => [v.key, v]));
+          for (const c of group) {
+            const v = byKey.get(c.key);
+            if (judgement.decider === "none" || !judgement.model || !v) {
+              results.push({
+                key: c.key,
+                status: "skipped",
+                reason: v?.rationale || "No judge could grade this criterion.",
+              });
+              continue;
+            }
+            await record(c, v.verdict, {
+              evaluatorId: judgement.model,
+              rationale: v.rationale,
+            });
+          }
+        } catch (err) {
+          const reason = `The judge could not run: ${err instanceof Error ? err.message : String(err)}`;
+          for (const c of group)
+            results.push({ key: c.key, status: "skipped", reason });
         }
-        await record(c, v.verdict, {
-          evaluatorId: judgement.model,
-          rationale: v.rationale,
-        });
       }
     } catch (err) {
       const reason = `The judge could not run: ${err instanceof Error ? err.message : String(err)}`;
