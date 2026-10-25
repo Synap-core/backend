@@ -140,6 +140,9 @@ function apply(requires: string[]) {
         {
           name: SKILL,
           kind: "code",
+          // Workspace-scoped, so the applier resolves the tools in WS (a pod
+          // skill looks them up pod-wide).
+          scope: "workspace",
           description: "Score a social handle",
           code: "return 1;",
           requires,
