@@ -40,6 +40,7 @@ import {
   documents,
   entities,
   profiles,
+  profileSlugScopeCondition,
   relations,
 } from "@synap/database";
 import {
@@ -49,6 +50,7 @@ import {
 } from "@synap-core/types/presentation";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { loadReadableDocument } from "./document-edit-access.js";
+import { resolveFacetVisibilityScope } from "./workspace-membership.js";
 
 export interface SignableDocument {
   id: string;
@@ -263,6 +265,13 @@ export async function loadLinkedFileRefs(
   ];
   if (targetIds.length === 0) return byEntity;
 
+  // The kind-aware scope door (no-kind-blind-reads tripwire), identity-wide:
+  // the edge already named the rows, the `entities` rule below narrows them.
+  const isFile = await profileSlugScopeCondition(
+    db,
+    "file",
+    await resolveFacetVisibilityScope(userId, undefined)
+  );
   const files = await scoped.findMany<{
     id: string;
     userId: string;
@@ -272,7 +281,7 @@ export async function loadLinkedFileRefs(
     columns: { id: true, userId: true, title: true, documentId: true },
     where: and(
       inArray(entities.id, targetIds),
-      eq(entities.type, "file"),
+      isFile,
       isNull(entities.deletedAt)
     ),
   });
