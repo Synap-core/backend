@@ -21,7 +21,6 @@ export function proposalSubjectKind(
   p: { targetType: string },
   payload: unknown
 ): string {
-  return p.targetType === "entity"
-    ? (proposalProfileSlug(payload) ?? p.targetType)
-    : p.targetType;
+  void payload;
+  return p.targetType;
 }
