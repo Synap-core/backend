@@ -40,6 +40,7 @@ import {
 } from "../../../(admin)/review/_lib/review-rows";
 import { proposalHeading } from "../../../proposal/[id]/proposal-heading";
 import { proposalRequester } from "../../../proposal/[id]/proposal-requester";
+import { proposalSubjectKind } from "../../../proposal/[id]/proposal-subject-kind";
 import { objectPage } from "../content/markdown-model";
 import { kindIcon, kindLabel } from "../kind-icon";
 import { OpenInAppLink } from "../open-in-app-link";
@@ -173,23 +174,6 @@ function OwedRow({ row, sessionId }: { row: ReviewRow; sessionId: string }) {
   );
 }
 
-/**
- * The kind a proposal is about. An entity proposal's `targetType` is the
- * generic `entity`; the thing's own kind is the profile slug its payload
- * carries (`profileSlug`, else `type` — the resolution the review's always-
- * approve menu reads). Anything else keeps its `targetType`.
- */
-function proposalKind(p: { targetType: string }, payload: unknown): string {
-  if (p.targetType !== "entity" || !payload || typeof payload !== "object") {
-    return p.targetType;
-  }
-  const { profileSlug, type } = payload as Record<string, unknown>;
-  for (const slug of [profileSlug, type]) {
-    if (typeof slug === "string" && slug.trim()) return slug.trim();
-  }
-  return p.targetType;
-}
-
 export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
   const list = trpc.proposals.list.useQuery(
     { sessionId, status: "pending", limit: PROPOSALS_LIMIT },
@@ -227,7 +211,7 @@ export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
         {shown.map((p) => {
           const payload = p.request?.data ?? p.data;
           const { heading } = proposalHeading(p, payload);
-          const kind = proposalKind(p, payload);
+          const kind = proposalSubjectKind(p, payload);
           const Icon = kindIcon(kind);
           const href = objectPage("proposal", p.id);
           // `pending` reads both waiting and approved-but-failed-to-apply.
