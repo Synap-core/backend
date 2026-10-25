@@ -173,6 +173,23 @@ function OwedRow({ row, sessionId }: { row: ReviewRow; sessionId: string }) {
   );
 }
 
+/**
+ * The kind a proposal is about. An entity proposal's `targetType` is the
+ * generic `entity`; the thing's own kind is the profile slug its payload
+ * carries (`profileSlug`, else `type` — the resolution the review's always-
+ * approve menu reads). Anything else keeps its `targetType`.
+ */
+function proposalKind(p: { targetType: string }, payload: unknown): string {
+  if (p.targetType !== "entity" || !payload || typeof payload !== "object") {
+    return p.targetType;
+  }
+  const { profileSlug, type } = payload as Record<string, unknown>;
+  for (const slug of [profileSlug, type]) {
+    if (typeof slug === "string" && slug.trim()) return slug.trim();
+  }
+  return p.targetType;
+}
+
 export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
   const list = trpc.proposals.list.useQuery(
     { sessionId, status: "pending", limit: PROPOSALS_LIMIT },
@@ -208,8 +225,10 @@ export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
       {failure}
       <ul className="flex flex-col">
         {shown.map((p) => {
-          const { heading } = proposalHeading(p, p.request?.data ?? p.data);
-          const Icon = kindIcon(p.targetType);
+          const payload = p.request?.data ?? p.data;
+          const { heading } = proposalHeading(p, payload);
+          const kind = proposalKind(p, payload);
+          const Icon = kindIcon(kind);
           const href = objectPage("proposal", p.id);
           // `pending` reads both waiting and approved-but-failed-to-apply.
           const failed = p.status !== "pending";
@@ -237,7 +256,7 @@ export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
                 )}
                 <span className="text-[12px] text-foreground/65">
                   {[
-                    kindLabel(p.targetType),
+                    kindLabel(kind),
                     proposalRequester(p),
                     formatRelative(p.createdAt, { empty: "" }),
                   ]
