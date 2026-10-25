@@ -8,9 +8,8 @@
  * api runner and the jobs step read these, which is why they live here.
  *
  * The pod's copy of the target edge role: `@synap-core/types/workers`
- * `WORKER_TARGET_ROLE` (types imports this package, so the pod cannot import
- * it). `database/src/wire-parity/workers.ts` pins the two EQUAL at
- * compile time.
+ * `WORKER_TARGET_ROLE`. `database/src/wire-parity/workers.ts` pins the two
+ * EQUAL at compile time.
  */
 
 import { and, eq, gte, inArray, or, sql } from "drizzle-orm";
