@@ -1,7 +1,7 @@
 /**
  * WHO IS ON A GOAL on PGlite (work model W3, 0348) — the REAL participants
  * door (`changeTrackParticipants` → `applyTrackParticipantChange`), the REAL
- * close door (`setTrackStatus` → `applyTrackStatus` → `assertGoalCloser`), the
+ * close door (`setTrackStatus` → `applyTrackStatus` → `assertGoalEnder`), the
  * REAL `track/update` and `track/assign_agent` approval replays, the REAL
  * access registry, and the REAL 0348 migration (CHECKs, one-owner / one-judge
  * indexes, the upsert's conflict target).
@@ -12,6 +12,9 @@
  *     named (a rule "owner or judge" would admit them);
  *   - an approver who is not the judge is refused on replay, the judge's
  *     approval applies and stamps the judge as `verdictBy`;
+ *   - a DROP is the owner's or the judge's (F7): an editor of the space who
+ *     only works on the goal is refused; an agent's drop always proposes, and
+ *     the owner and judge are told (F12), as the judge is of an agent's close;
  *   - a delegate WITH WRITE ACCESS (an editor) cannot add participants — the
  *     project write floor alone would admit them;
  *   - an agent's acceptance of its own commitment applies; an agent cannot
@@ -71,6 +74,8 @@ vi.mock("@synap/database", async (importOriginal) => {
       projects: actual.projects as never,
       workspaceMembers: actual.workspaceMembers as never,
       trackParticipants: actual.trackParticipants as never,
+      // The one notification door reads the recipient's preferences (F12).
+      notificationPreferences: actual.notificationPreferences as never,
     },
   });
   return {
@@ -145,6 +150,7 @@ import {
   channelMembers,
   focusSessions,
   links,
+  notificationPreferences,
   notifications,
   playbooks,
   podMembers,
@@ -311,11 +317,17 @@ beforeAll(async () => {
     channels,
     channelMembers,
     notifications,
+    notificationPreferences,
     // What a goal holds (W2): a goal's criteria are graded from these rows.
     sessionEvaluations,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
+  // The column default the pod has (a new notification is `unread`): the
+  // settles compare `status <> 'actioned'`, which a NULL never satisfies.
+  await h.client!.exec(
+    `alter table notifications alter column status set default 'unread'`
+  );
   await h.client!.exec(`
     create table project_tracks (
       id uuid primary key default gen_random_uuid(),
@@ -516,9 +528,50 @@ describe("only the judge closes the goal", () => {
     expect(res.status).toBe("updated");
   });
 
-  it("a drop stays W1's rule: any person with write access, the judge not required", async () => {
+  it("a judge who can only READ the space closes it — the seat is the right (code.md)", async () => {
+    const id = await goal("Viewer judges");
+    // DELEGATE is a VIEWER of the space: no write on the project.
+    await add(id, person(OWNER), DELEGATE, "judge");
+    const res = await setTrackStatus({
+      trackId: id,
+      status: "completed",
+      verdict: "met",
+      actor: person(DELEGATE),
+    });
+    expect(res.status).toBe("updated");
+    // The seat, not read access, is what admits: another viewer is refused.
+    const other = await goal("Viewer without the seat");
+    await expect(
+      setTrackStatus({
+        trackId: other,
+        status: "completed",
+        verdict: "met",
+        actor: person(DELEGATE),
+      })
+    ).rejects.toMatchObject({
+      // The write floor answers: refused, or not found for a writer.
+      code: expect.stringMatching(/^(FORBIDDEN|NOT_FOUND)$/),
+    });
+  });
+
+  it("F7 — a drop is the owner's or the judge's: an editor who only works on it is refused", async () => {
     const id = await goal("Owner drops");
     await add(id, person(OWNER), JUDGE, "judge");
+    await add(id, person(OWNER), STAFFER, "delegate", "Ship the page");
+    // STAFFER can write the space (the old floor would admit them).
+    await expect(
+      setTrackStatus({
+        trackId: id,
+        status: "archived",
+        verdict: "no_longer_needed",
+        actor: person(STAFFER),
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringContaining(
+        "Only this goal's owner or judge can drop it"
+      ),
+    });
     const res = await setTrackStatus({
       trackId: id,
       status: "archived",
@@ -526,6 +579,55 @@ describe("only the judge closes the goal", () => {
       actor: person(OWNER),
     });
     expect(res.status).toBe("updated");
+    const byJudge = await goal("Judge drops");
+    await add(byJudge, person(OWNER), JUDGE, "judge");
+    expect(
+      (
+        await setTrackStatus({
+          trackId: byJudge,
+          status: "archived",
+          verdict: "mistake",
+          actor: person(JUDGE),
+        })
+      ).status
+    ).toBe("updated");
+  });
+
+  it("F7 — an agent's drop always proposes; only the owner's or judge's approval applies; F12 — they are told", async () => {
+    const id = await goal("Agent proposes the drop");
+    await add(id, person(OWNER), JUDGE, "judge");
+    const res = await setTrackStatus({
+      trackId: id,
+      status: "archived",
+      verdict: "no_longer_needed",
+      actor: agentOf(OWNER, AGENT_A),
+    });
+    expect(res.status).toBe("proposed");
+    expect(h.permCalls.at(-1)!.forcePropose).toBe(true);
+    const told = (
+      await q<{ user_id: string; source_type: string; source_id: string }>(
+        `select user_id, source_type, source_id from notifications where type = 'track.close_proposed' and group_key = $1 order by user_id`,
+        [`track-end:${(res as { proposalId: string }).proposalId}`]
+      )
+    ).rows;
+    // A drop waits on the owner or the judge: both are told, as judgements
+    // settled by the proposal's own decision (sourceType proposal).
+    expect(told.map((r) => r.user_id).sort()).toEqual([JUDGE, OWNER].sort());
+    expect(told.every((r) => r.source_type === "proposal")).toBe(true);
+
+    const data = h.permCalls.at(-1)!.data as Record<string, unknown>;
+    await expect(
+      replay("track/update", id, data, STAFFER, AGENT_A)
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await replay("track/update", id, data, JUDGE, AGENT_A);
+    expect(
+      (
+        await q<{ status: string }>(
+          `select status from project_tracks where id = $1`,
+          [id]
+        )
+      ).rows[0]!.status
+    ).toBe("archived");
   });
 
   it("an agent's close is a proposal; an approver who is not the judge is refused on replay, the judge's approval applies", async () => {
@@ -538,6 +640,15 @@ describe("only the judge closes the goal", () => {
       actor: agentOf(OWNER, AGENT_A),
     });
     expect(res.status).toBe("proposed");
+    // F12 — the close waits on the JUDGE alone: it is in their Needs you.
+    expect(
+      (
+        await q<{ user_id: string }>(
+          `select user_id from notifications where type = 'track.close_proposed' and source_id = $1`,
+          [(res as { proposalId: string }).proposalId]
+        )
+      ).rows.map((r) => r.user_id)
+    ).toEqual([JUDGE]);
     const data = h.permCalls.at(-1)!.data as Record<string, unknown>;
 
     await expect(
@@ -583,6 +694,38 @@ describe("the acceptance door reads the same judge as the close", () => {
     });
     if (res.status === "proposed") throw new Error("unexpected proposal");
     const id = res.track.id;
+    // Both CLAIMED by an AI judge on a run: the judge decides about claims.
+    const run = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, project_id, track_id, status, goal, criteria, agent_ids, started_at, updated_at)
+       values ($1, $2, $3, $4, $5, 'closed', 'work', $6::jsonb, '{}', now(), now())`,
+      [
+        run,
+        OWNER,
+        WS,
+        PROJECT,
+        id,
+        JSON.stringify([
+          {
+            key: "copy",
+            statement: "The copy is approved",
+            check: { kind: "human" },
+          },
+          {
+            key: "legal",
+            statement: "Legal signed off",
+            check: { kind: "human" },
+          },
+        ]),
+      ]
+    );
+    for (const key of ["copy", "legal"]) {
+      await q(
+        `insert into session_evaluations (id, session_id, user_id, criterion_key, attempt, verdict, evaluator_kind, evaluator_id, evidence, created_at)
+         values (gen_random_uuid(), $1, $2, $3, 1, 'pass', 'judge', 'model-x', '{}'::jsonb, now())`,
+        [run, OWNER, key]
+      );
+    }
     // No judge named: the owner judges, so the owner accepts.
     expect(
       (
@@ -784,6 +927,47 @@ describe("a delegate answers their OWN commitment", () => {
     expect(res.status).toBe("updated");
   });
 
+  it("a COUNTER reaches the owner and the judge as a counter-offer; asking again settles it", async () => {
+    const id = await goal("Countered");
+    await add(id, person(OWNER), JUDGE, "judge");
+    await add(id, person(OWNER), DELEGATE, "delegate", "Write the brief");
+    const row = (await rowOf(id, DELEGATE, "delegate"))!;
+    await changeTrackParticipants({
+      trackId: id,
+      actor: person(DELEGATE),
+      change: {
+        op: "move",
+        participantId: row.id,
+        move: "counter",
+        text: "An outline, not the brief",
+      },
+    });
+    const items = async () =>
+      (
+        await q<{ user_id: string; status: string; title: string }>(
+          `select user_id, status, title from notifications
+            where type = 'track.commitment_countered' and source_id = $1
+            order by user_id`,
+          [id]
+        )
+      ).rows;
+    expect((await items()).map((r) => [r.user_id, r.status])).toEqual(
+      [
+        [JUDGE, "unread"],
+        [OWNER, "unread"],
+      ].sort()
+    );
+    // Asked again with the counter-offer: answered, it leaves Needs you.
+    await add(
+      id,
+      person(OWNER),
+      DELEGATE,
+      "delegate",
+      "An outline, not the brief"
+    );
+    expect((await items()).every((r) => r.status === "actioned")).toBe(true);
+  });
+
   it("counter needs words; impossible only after accepting; the report is acknowledged by the owner, never by an agent", async () => {
     const id = await goal("Report");
     await add(id, person(OWNER), DELEGATE, "delegate", "Review it");
@@ -918,5 +1102,92 @@ describe("D5-A — being on a goal grants no read", () => {
         { where: eq(focusSessions.id, session) }
       )
     ).toBeTruthy();
+  });
+});
+
+describe("an ENDED goal leaves nothing behind", () => {
+  it("a close marks accepted commitments done, silences no one, settles its escalations and loop stops, and expires its loop's proposals", async () => {
+    const id = await goal("Ends clean");
+    await add(id, person(OWNER), STAFFER, "delegate", "Ship the page");
+    await add(id, person(OWNER), DELEGATE, "delegate", "Review it");
+    await q(
+      `update track_participants set commitment_state = 'accepted' where track_id = $1 and principal_id = $2`,
+      [id, STAFFER]
+    );
+    const staffer = (await rowOf(id, STAFFER, "delegate"))!;
+    // What the goal still asks of people: an escalated report, a loop stop,
+    // and a pending run its loop proposed.
+    for (const [type, groupKey] of [
+      [
+        "track.report_unacknowledged",
+        `track-report:${staffer.id}:${new Date().toISOString()}`,
+      ],
+      ["track.loop_stopped", `track.loop_stopped:${id}:copy:run-1`],
+    ]) {
+      await q(
+        `insert into notifications (id, user_id, type, category, title, status, group_key, source_type, source_id, created_at)
+         values (gen_random_uuid(), $1, $2, 'data', 't', 'unread', $3, 'track', $4, now())`,
+        [OWNER, type, groupKey, id]
+      );
+    }
+    const loopProposal = randomUUID();
+    await q(
+      `insert into proposals (id, status, target_type, target_id, proposal_type, data, created_by, created_at)
+       values ($1, 'pending', 'focus_session', $2, 'create', $3::jsonb, 'system:goal-loop', now())`,
+      [loopProposal, randomUUID(), JSON.stringify({ data: { goalLoopOf: id } })]
+    );
+
+    const res = await setTrackStatus({
+      trackId: id,
+      status: "completed",
+      verdict: "met",
+      actor: person(OWNER),
+    });
+    expect(res.status).toBe("updated");
+
+    expect((await rowOf(id, STAFFER, "delegate"))!.commitment_state).toBe(
+      "done"
+    );
+    // Asked, never answered: nothing to mark done — but never "silent" either.
+    expect((await rowOf(id, DELEGATE, "delegate"))!.commitment_state).toBe(
+      "proposed"
+    );
+    const view = await loadTrackView(
+      (await getTrack(id, person(OWNER)))!,
+      person(OWNER)
+    );
+    expect(view.participants!.map((p) => p.silentSince)).toEqual(
+      view.participants!.map(() => null)
+    );
+    const open = await q<{ type: string }>(
+      `select type from notifications where source_id = $1 and status <> 'actioned'`,
+      [id]
+    );
+    expect(open.rows).toEqual([]);
+    const [p] = (
+      await q<{ status: string }>(
+        `select status from proposals where id = $1`,
+        [loopProposal]
+      )
+    ).rows;
+    expect(p!.status).toBe("expired");
+  });
+
+  it("a DROP marks nothing done (nothing was delivered)", async () => {
+    const id = await goal("Dropped clean");
+    await add(id, person(OWNER), STAFFER, "delegate", "Ship the page");
+    await q(
+      `update track_participants set commitment_state = 'accepted' where track_id = $1 and principal_id = $2`,
+      [id, STAFFER]
+    );
+    await setTrackStatus({
+      trackId: id,
+      status: "archived",
+      verdict: "no_longer_needed",
+      actor: person(OWNER),
+    });
+    expect((await rowOf(id, STAFFER, "delegate"))!.commitment_state).toBe(
+      "accepted"
+    );
   });
 });

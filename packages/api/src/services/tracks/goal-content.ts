@@ -23,8 +23,10 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
   and,
+  drizzleSql,
   eq,
   inArray,
+  notInArray,
   or,
   focusSessions,
   getDb,
@@ -46,19 +48,26 @@ import {
   deriveGoalCriteria,
   deriveWaitingOn,
   goalInReview,
+  operationPeriodReading,
+  operationWeekStart,
   isTrackUncertainty,
   isTrackWorkKind,
   owedSlotWaitingSources,
   readGoalCriterionAcceptance,
   type GoalCriterionAcceptance,
+  type GoalCriterionClaim,
   type GoalCriterionView,
   type GoalRunFacts,
+  type OperationPeriodReading,
   type TrackUncertainty,
   type TrackWorkKind,
   type WaitingOnMark,
   type WaitingOnSource,
 } from "@synap-core/types/units";
-import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
+import {
+  TERMINAL_SESSION_STATUSES,
+  isTerminalSessionStatus,
+} from "@synap-core/types/focus-sessions";
 import {
   GOAL_LOOP_DEFAULT_ON,
   GOAL_LOOP_MAX_PER_WEEK,
@@ -66,7 +75,12 @@ import {
 } from "@synap-core/types/units";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
-import { loadGoalJudge, loadGoalOwner } from "./track-participant-store.js";
+import {
+  loadGoalJudge,
+  loadGoalJudges,
+  loadGoalOwner,
+  participantDisplayNames,
+} from "./track-participant-store.js";
 
 // ── input ───────────────────────────────────────────────────────────────────
 
@@ -407,7 +421,7 @@ function stripNullAcceptance(
 /**
  * WHO JUDGES the goal — accepts its criteria (R2): the goal's judge seat,
  * else its owner (`loadGoalJudge`, the SAME answer the close reads — only the
- * judge closes, `assertGoalCloser`). A key acting as an agent is refused
+ * judge closes, `assertGoalEnder`). A key acting as an agent is refused
  * before this is asked (`mayAcceptGoalCriterion`).
  */
 export async function isGoalJudge(
@@ -434,6 +448,8 @@ export async function goalOwnerToAsk(
 
 /** What every track read adds about the goal's content — DERIVED, never stored. */
 export interface TrackGoalFacts {
+  /** R6: an operation's reading for this week; `null` for any other kind. */
+  periodReading: OperationPeriodReading | null;
   criteria: GoalCriterionView[];
   inReview: boolean;
   waitingOn: WaitingOnMark[];
@@ -467,6 +483,7 @@ export async function loadGoalRuns(
     gradedSessionIds.length > 0
       ? await db
           .select({
+            id: sessionEvaluations.id,
             sessionId: sessionEvaluations.sessionId,
             criterionKey: sessionEvaluations.criterionKey,
             verdict: sessionEvaluations.verdict,
@@ -490,40 +507,244 @@ export async function loadGoalRuns(
       track.id,
       sessions
         .filter((s) => s.trackId === track.id)
-        .map((s) => {
-          const modelId = (s.metadata as { modelId?: unknown } | null)?.modelId;
-          return {
-            sessionId: s.id,
-            open: !isTerminalSessionStatus(s.status),
-            criterionKeys: readCriteria(s.criteria).map((c) => c.key),
-            authors: [
-              s.userId,
-              ...(s.agentIds ?? []),
-              ...(typeof modelId === "string" && modelId ? [modelId] : []),
-            ],
-            evaluations: rowsBySession.get(s.id) ?? [],
-          };
-        })
+        .map((s) => ({
+          sessionId: s.id,
+          ownerId: s.userId,
+          open: !isTerminalSessionStatus(s.status),
+          criterionKeys: readCriteria(s.criteria).map((c) => c.key),
+          authors: runAuthors(s),
+          evaluations: rowsBySession.get(s.id) ?? [],
+        }))
     );
   }
   return { sessions, runsOf };
 }
 
-async function selectGoalSessions(trackIds: string[]) {
+/** Who did a run's work: its owner, its agents, the model that ran it. */
+function runAuthors(s: {
+  userId: string;
+  agentIds: string[] | null;
+  modelId: string | null;
+}): string[] {
+  return [s.userId, ...(s.agentIds ?? []), ...(s.modelId ? [s.modelId] : [])];
+}
+
+/** The runs filed into `trackIds` — every one, or only the open ones. */
+async function selectGoalSessions(
+  trackIds: string[],
+  opts: { openOnly?: boolean } = {}
+) {
   const db = await getDb();
   return db
     .select({
       id: focusSessions.id,
       trackId: focusSessions.trackId,
+      title: focusSessions.title,
       status: focusSessions.status,
       userId: focusSessions.userId,
       criteria: focusSessions.criteria,
       agentIds: focusSessions.agentIds,
-      metadata: focusSessions.metadata,
+      // Only the model id is read off `metadata` (F4), never the whole bag.
+      modelId: drizzleSql<
+        string | null
+      >`nullif(${focusSessions.metadata}->>'modelId', '')`,
       expectedOutputs: focusSessions.expectedOutputs,
     })
     .from(focusSessions)
-    .where(inArray(focusSessions.trackId, trackIds));
+    .where(
+      and(
+        inArray(focusSessions.trackId, trackIds),
+        opts.openOnly
+          ? notInArray(focusSessions.status, [...TERMINAL_SESSION_STATUSES])
+          : undefined
+      )
+    );
+}
+
+/** `execute` resolves to the rows (postgres-js) or to `{ rows }` (pglite). */
+function executedRows<T>(result: unknown): T[] {
+  return (
+    Array.isArray(result)
+      ? result
+      : ((result as { rows?: unknown[] } | null)?.rows ?? [])
+  ) as T[];
+}
+
+const sqlList = (values: readonly string[]) =>
+  drizzleSql.join(
+    values.map((v) => drizzleSql`${v}`),
+    drizzleSql`, `
+  );
+
+/**
+ * THE LIST READ of goal runs (code-core F4) — what `deriveGoalCriteria` can
+ * pick, never every run a goal ever had. Three queries for any number of
+ * goals:
+ *   · the OPEN runs, whole (under way, what they owe, their proposals);
+ *   · per goal, criterion and kind of row, the LATEST evaluation on a run
+ *     that carries that criterion — human, measured (evidence, capability),
+ *     other — with its run's owner, agents and title: the derivation's
+ *     current row is the latest human row else the latest row
+ *     (`latestEvaluationPerCriterion`), its value the latest measured row,
+ *     so no older row can change a mark;
+ *   · the criterion keys CLOSED runs carried — "not met" (tried, none open)
+ *     versus "not started" — aggregated in SQL, standing in as one run with
+ *     no rows of its own.
+ * The loop and anything that needs a goal's whole history read
+ * {@link loadGoalRuns}; `goal-reads-w5.pglite.test.ts` (F4) holds the two
+ * derivations equal. A failed read THROWS.
+ */
+export async function loadGoalRunsForRead(
+  tracks: ReadonlyArray<Pick<ProjectTrack, "id" | "criteria">>
+): Promise<{
+  openSessions: Awaited<ReturnType<typeof selectGoalSessions>>;
+  titleOf: Map<string, string | null>;
+  runsOf: Map<string, GoalRunFacts[]>;
+}> {
+  const runsOf = new Map<string, GoalRunFacts[]>();
+  const titleOf = new Map<string, string | null>();
+  if (tracks.length === 0) return { openSessions: [], titleOf, runsOf };
+  const db = await getDb();
+  const graded = tracks
+    .filter((t) => readCriteria(t.criteria).length > 0)
+    .map((t) => t.id);
+  const terminal = sqlList(TERMINAL_SESSION_STATUSES);
+  // The kind of row the derivation tells apart: a person's grade (it wins
+  // over any other), a measured one (it gives the value), any other.
+  const rank = drizzleSql`(CASE WHEN e.evaluator_kind = 'human' THEN 0
+      WHEN e.evaluator_kind IN ('evidence', 'capability') THEN 1
+      ELSE 2 END)`;
+  const [openSessions, carriedRaw, latestRaw] = await Promise.all([
+    selectGoalSessions(
+      tracks.map((t) => t.id),
+      { openOnly: true }
+    ),
+    graded.length > 0
+      ? db.execute(drizzleSql`
+          SELECT DISTINCT s.track_id AS "trackId", c->>'key' AS "key"
+          FROM ${focusSessions} s,
+               LATERAL jsonb_array_elements(
+                 CASE WHEN jsonb_typeof(s.criteria) = 'array'
+                      THEN s.criteria ELSE '[]'::jsonb END
+               ) c
+          WHERE s.track_id IN (${sqlList(graded)})
+            AND s.status IN (${terminal})
+            AND c->>'key' IS NOT NULL
+        `)
+      : Promise.resolve([]),
+    graded.length > 0
+      ? db.execute(drizzleSql`
+          SELECT DISTINCT ON (s.track_id, e.criterion_key, ${rank})
+                 s.track_id AS "trackId",
+                 e.id AS "id",
+                 e.session_id AS "sessionId",
+                 e.criterion_key AS "criterionKey",
+                 e.verdict AS "verdict",
+                 e.evaluator_kind AS "evaluatorKind",
+                 e.evaluator_id AS "evaluatorId",
+                 e.rationale AS "rationale",
+                 e.attempt AS "attempt",
+                 e.created_at AS "createdAt",
+                 s.status AS "status",
+                 s.title AS "title",
+                 s.user_id AS "userId",
+                 s.agent_ids AS "agentIds",
+                 nullif(s.metadata->>'modelId', '') AS "modelId"
+          FROM ${sessionEvaluations} e
+          JOIN ${focusSessions} s ON s.id = e.session_id
+          WHERE s.track_id IN (${sqlList(graded)})
+            AND jsonb_typeof(s.criteria) = 'array'
+            AND s.criteria @> jsonb_build_array(
+                  jsonb_build_object('key', e.criterion_key))
+          ORDER BY s.track_id, e.criterion_key, ${rank},
+                   e.created_at DESC, e.attempt DESC NULLS LAST
+        `)
+      : Promise.resolve([]),
+  ]);
+  const carried = executedRows<{ trackId: string; key: string }>(carriedRaw);
+  const latest = executedRows<{
+    trackId: string;
+    id: string;
+    sessionId: string;
+    criterionKey: string;
+    verdict: GoalRunFacts["evaluations"][number]["verdict"];
+    evaluatorKind: GoalRunFacts["evaluations"][number]["evaluatorKind"];
+    evaluatorId: string | null;
+    rationale: string | null;
+    attempt: number | null;
+    createdAt: Date | string;
+    status: string;
+    title: string | null;
+    userId: string;
+    agentIds: string[] | null;
+    modelId: string | null;
+  }>(latestRaw);
+
+  // Every run the read touched, by id: the open ones whole, the closed ones
+  // the latest rows came from (carrying at least those rows' keys).
+  const runs = new Map<string, GoalRunFacts & { trackId: string }>();
+  for (const s of openSessions) {
+    if (!s.trackId) continue;
+    titleOf.set(s.id, s.title);
+    runs.set(s.id, {
+      trackId: s.trackId,
+      sessionId: s.id,
+      ownerId: s.userId,
+      open: true,
+      criterionKeys: readCriteria(s.criteria).map((c) => c.key),
+      authors: runAuthors(s),
+      evaluations: [],
+    });
+  }
+  for (const r of latest) {
+    titleOf.set(r.sessionId, r.title);
+    let run = runs.get(r.sessionId);
+    if (!run) {
+      run = {
+        trackId: r.trackId,
+        sessionId: r.sessionId,
+        ownerId: r.userId,
+        open: !isTerminalSessionStatus(r.status),
+        criterionKeys: [],
+        authors: runAuthors(r),
+        evaluations: [],
+      };
+      runs.set(r.sessionId, run);
+    }
+    if (!run.criterionKeys.includes(r.criterionKey)) {
+      (run.criterionKeys as string[]).push(r.criterionKey);
+    }
+    (run.evaluations as GoalRunFacts["evaluations"][number][]).push({
+      id: r.id,
+      criterionKey: r.criterionKey,
+      verdict: r.verdict,
+      evaluatorKind: r.evaluatorKind,
+      evaluatorId: r.evaluatorId,
+      rationale: r.rationale,
+      attempt: r.attempt ?? undefined,
+      createdAt: r.createdAt,
+    });
+  }
+  for (const track of tracks) runsOf.set(track.id, []);
+  for (const { trackId, ...run } of runs.values()) {
+    runsOf.get(trackId)?.push(run);
+  }
+  // What closed runs carried, as one run with no rows of its own.
+  const carriedOf = new Map<string, string[]>();
+  for (const c of carried) {
+    carriedOf.set(c.trackId, [...(carriedOf.get(c.trackId) ?? []), c.key]);
+  }
+  for (const [trackId, keys] of carriedOf) {
+    runsOf.get(trackId)?.push({
+      sessionId: `carried:${trackId}`,
+      ownerId: null,
+      open: false,
+      criterionKeys: keys,
+      authors: [],
+      evaluations: [],
+    });
+  }
+  return { openSessions, titleOf, runsOf };
 }
 
 /**
@@ -535,7 +756,9 @@ async function selectGoalSessions(trackIds: string[]) {
  * THROWS — never folded into "nothing claimed, waiting on nothing".
  */
 export async function loadTrackGoalFacts(
-  tracks: ReadonlyArray<Pick<ProjectTrack, "id" | "criteria">>,
+  tracks: ReadonlyArray<
+    Pick<ProjectTrack, "id" | "userId" | "criteria" | "workKind">
+  >,
   userId: string
 ): Promise<Map<string, TrackGoalFacts>> {
   const out = new Map<string, TrackGoalFacts>();
@@ -543,10 +766,10 @@ export async function loadTrackGoalFacts(
   const db = await getDb();
   const trackIds = tracks.map((t) => t.id);
 
-  const { sessions, runsOf } = await loadGoalRuns(tracks);
-  const openSessions = sessions.filter(
-    (s) => !isTerminalSessionStatus(s.status)
-  );
+  const [{ openSessions, titleOf, runsOf }, judges] = await Promise.all([
+    loadGoalRunsForRead(tracks),
+    loadGoalJudges(tracks),
+  ]);
   const openSessionIds = openSessions.map((s) => s.id);
 
   // Loaded on first use, never at module init: `dependency-links` reaches the
@@ -587,12 +810,64 @@ export async function loadTrackGoalFacts(
     ),
   ]);
 
-  const trackOfSession = new Map(sessions.map((s) => [s.id, s.trackId]));
+  const trackOfSession = new Map(openSessions.map((s) => [s.id, s.trackId]));
+
+  const statesOf = new Map(
+    tracks.map((track) => [
+      track.id,
+      deriveGoalCriteria(
+        readGoalCriteria(track.criteria),
+        runsOf.get(track.id) ?? [],
+        { judgeId: judges.get(track.id) ?? null }
+      ),
+    ])
+  );
+  // What backs each claim (its evidence) and who made it, by name — read
+  // once for the whole list, only for the rows that claim something.
+  const claims = [...statesOf.values()].flatMap((states) =>
+    states.flatMap((st) => (st.claim ? [st.claim] : []))
+  );
+  const claimEvaluationIds = claims.flatMap((c) =>
+    c.evaluationId ? [c.evaluationId] : []
+  );
+  const [evidenceRows, claimNames] = await Promise.all([
+    claimEvaluationIds.length > 0
+      ? db
+          .select({
+            id: sessionEvaluations.id,
+            evidence: sessionEvaluations.evidence,
+          })
+          .from(sessionEvaluations)
+          .where(inArray(sessionEvaluations.id, claimEvaluationIds))
+      : Promise.resolve([]),
+    participantDisplayNames(claims.flatMap((c) => (c.by ? [c.by] : []))),
+  ]);
+  const evidenceOf = new Map(
+    evidenceRows.map((r) => [r.id, readClaimEvidence(r.evidence)])
+  );
+  const claimView = (
+    c: NonNullable<ReturnType<typeof deriveGoalCriteria>[number]["claim"]>
+  ): GoalCriterionClaim => ({
+    by: c.by,
+    byName: c.by ? (claimNames.get(c.by) ?? null) : null,
+    sessionId: c.sessionId,
+    sessionTitle: titleOf.get(c.sessionId)?.trim() || null,
+    evidence: c.evaluationId ? (evidenceOf.get(c.evaluationId) ?? null) : null,
+    note: c.note,
+    at: c.at,
+  });
+
+  // R6: the period an operation is read over — this week.
+  const weekFrom = operationWeekStart(new Date());
+  const week = {
+    from: weekFrom,
+    to: new Date(weekFrom.getTime() + 7 * 24 * 60 * 60 * 1000),
+  };
 
   for (const track of tracks) {
     const criteria = readGoalCriteria(track.criteria);
-    const filed = sessions.filter((s) => s.trackId === track.id);
-    const states = deriveGoalCriteria(criteria, runsOf.get(track.id) ?? []);
+    const filed = openSessions.filter((s) => s.trackId === track.id);
+    const states = statesOf.get(track.id)!;
     const stateOf = new Map(states.map((s) => [s.key, s]));
 
     const sources: WaitingOnSource[] = [];
@@ -630,13 +905,30 @@ export async function loadTrackGoalFacts(
           acceptanceState: s.acceptanceState,
           meaning: s.meaning,
           currentValue: s.currentValue,
+          claim: s.claim ? claimView(s.claim) : null,
         };
       }),
       inReview: goalInReview(criteria, states),
+      // R6: the bounded runs carry the latest row of each kind, so the latest
+      // one inside the week is among them — the same answer as every row.
+      periodReading:
+        track.workKind === "operation"
+          ? operationPeriodReading(criteria, runsOf.get(track.id) ?? [], week)
+          : null,
       waitingOn: deriveWaitingOn(sources),
     });
   }
   return out;
+}
+
+/** A claim's evidence — an object with something in it, else none. */
+function readClaimEvidence(raw: unknown): Record<string, unknown> | null {
+  return raw &&
+    typeof raw === "object" &&
+    !Array.isArray(raw) &&
+    Object.keys(raw).length > 0
+    ? (raw as Record<string, unknown>)
+    : null;
 }
 
 /** The kind of work, read tolerantly (a value no option declares reads as none). */

@@ -292,15 +292,16 @@ export async function recordSessionEvaluation(
     });
   }
 
-  // A pass on a run filed into a goal may put the GOAL in review (every
-  // required criterion claimed): its judge is told — a judgement, first in
-  // their Needs you (W5). After the commit; never throws. Loaded on use:
-  // the goal reader pulls the tracks service graph, which this module must
-  // not drag into every importer at init.
-  if (params.verdict === "pass" && outcome.session.trackId) {
-    const { noticeGoalReviewReady } =
+  // A grade on a run filed into a goal may CLAIM one of its criteria, put
+  // the goal in review, or take a claim back (a later fail): its judge's
+  // items are refreshed — judgements, first in their Needs you (W5, F1).
+  // After the commit; never throws. Loaded on use: the goal reader pulls the
+  // tracks service graph, which this module must not drag into every
+  // importer at init.
+  if (outcome.session.trackId) {
+    const { refreshGoalJudgements } =
       await import("../../tracks/goal-review-notice.js");
-    await noticeGoalReviewReady(outcome.session.trackId);
+    await refreshGoalJudgements(outcome.session.trackId);
   }
 
   return { status: "recorded", evaluation: outcome.evaluation, escalated };

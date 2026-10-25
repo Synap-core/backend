@@ -145,6 +145,11 @@ export function registerTrackExecutors(): void {
         ...(typeof data.replacesTrackId === "string"
           ? { replacesTrackId: data.replacesTrackId }
           : {}),
+        // Keep it running (R6): re-checked by the same door (still closed as
+        // met), then linked `new --spawned_from--> old`.
+        ...(typeof data.spawnedFromTrackId === "string"
+          ? { spawnedFromTrackId: data.spawnedFromTrackId }
+          : {}),
         // "Make it a goal" (D2): re-checked by the same door (still visible,
         // never converted twice), then linked `entity --promoted_to--> track`
         // and, for an entity that had ended, closed or dropped — as the

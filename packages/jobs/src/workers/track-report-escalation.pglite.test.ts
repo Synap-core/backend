@@ -70,6 +70,7 @@ async function goalWithReport(opts: {
   hoursAgo: number;
   acknowledged?: boolean;
   withOwnerRow?: boolean;
+  status?: string;
 }): Promise<{ trackId: string; participantId: string }> {
   const projectId = randomUUID();
   const trackId = randomUUID();
@@ -78,8 +79,8 @@ async function goalWithReport(opts: {
     [projectId, STARTER, WS]
   );
   await q(
-    `insert into project_tracks (id, project_id, user_id, name, status) values ($1, $2, $3, 'Launch', 'active')`,
-    [trackId, projectId, STARTER]
+    `insert into project_tracks (id, project_id, user_id, name, status) values ($1, $2, $3, 'Launch', $4)`,
+    [trackId, projectId, STARTER, opts.status ?? "active"]
   );
   if (opts.withOwnerRow !== false) {
     await q(
@@ -163,6 +164,17 @@ describe("R10 — an unacknowledged impossible report escalates to the owner", (
     expect(sent.filter((n) => n.data.participantId === participantId)).toEqual(
       []
     );
+  });
+
+  it("a goal that ENDED escalates nothing — closed or dropped, it asks nobody", async () => {
+    for (const status of ["completed", "archived"]) {
+      const { participantId } = await goalWithReport({ hoursAgo: 72, status });
+      await escalateUnacknowledgedReports();
+      expect(
+        sent.filter((n) => n.data.participantId === participantId),
+        status
+      ).toEqual([]);
+    }
   });
 
   it("a goal with no owner row reads its starter (the backfill's rule)", async () => {

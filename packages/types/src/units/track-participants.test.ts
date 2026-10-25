@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   commitmentMoveRefusal,
   goalJudge,
+  goalMayDrop,
   goalOwner,
   isOpenCommitment,
   mayStaffGoal,
@@ -39,6 +40,26 @@ describe("goalJudge — the one answer to who closes a goal", () => {
     expect(mayStaffGoal(rows, track, "ana")).toBe(true);
     expect(mayStaffGoal(rows, track, "bob")).toBe(true);
     expect(mayStaffGoal(rows, track, "cy")).toBe(false);
+  });
+});
+
+describe("goalMayDrop — F7, one rule for the pod and every Drop", () => {
+  const rows = [
+    { role: "owner" as const, principalId: "ana" },
+    { role: "judge" as const, principalId: "bob" },
+    { role: "delegate" as const, principalId: "cy" },
+  ];
+  const ask = (viewerId: string | null, viewerIsAgent = false) =>
+    goalMayDrop({ track, participants: rows, viewerId, viewerIsAgent });
+  it("the owner and the judge drop; a delegate (with write access or not) is refused", () => {
+    expect(ask("ana")).toBe("allowed");
+    expect(ask("bob")).toBe("allowed");
+    // Rules out "anyone who can write the project drops it".
+    expect(ask("cy")).toBe("refused");
+    expect(ask(null)).toBe("refused");
+  });
+  it("an agent's drop proposes — even an agent acting for the owner", () => {
+    expect(ask("ana", true)).toBe("proposes");
   });
 });
 

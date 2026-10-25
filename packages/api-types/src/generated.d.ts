@@ -9747,6 +9747,22 @@ declare const GOAL_CRITERION_MARKS: readonly [
 ];
 export type GoalCriterionMark = (typeof GOAL_CRITERION_MARKS)[number];
 /**
+ * A claim as every goal read returns it (`GoalCriterionView.claim`): who
+ * claimed, in which run, and what backs it — names resolved by the pod,
+ * never looked up by a page (`null` = not known, never an id).
+ */
+export interface GoalCriterionClaim {
+	by: string | null;
+	byName: string | null;
+	sessionId: string;
+	sessionTitle: string | null;
+	/** The evaluation's evidence (links, files, numbers) — `null` when none. */
+	evidence: Record<string, unknown> | null;
+	note: string | null;
+	/** ISO-8601. */
+	at: string;
+}
+/**
  * One goal criterion as every track read returns it (`TrackView.criteria`):
  * the stored criterion (the session criterion shape), the judge's stored
  * decision, and the derived state. `mark` is `null` only on a view that could
@@ -9772,6 +9788,25 @@ export interface GoalCriterionView {
 	acceptanceState: GoalAcceptanceState | null;
 	meaning: CriterionCheckMeaning;
 	currentValue: string | null;
+	/**
+	 * Who claimed it, in which run, what backs it — the current passing
+	 * evaluation (`null` when none: never claimed, or accepted from an outside
+	 * decision with no run). `undefined` never: a write's fallback reads `null`.
+	 */
+	claim: GoalCriterionClaim | null;
+}
+declare const OPERATION_PERIOD_MARKS: readonly [
+	"met",
+	"not_met",
+	"unmeasured"
+];
+export type OperationPeriodMark = (typeof OPERATION_PERIOD_MARKS)[number];
+export interface OperationPeriodReading {
+	/** ISO-8601, inclusive. */
+	from: string;
+	/** ISO-8601, exclusive. */
+	to: string;
+	mark: OperationPeriodMark;
 }
 declare const WAITING_ON_REASONS: readonly [
 	"input",
@@ -18844,11 +18879,17 @@ export interface TrackView {
 	kindConfirmedBy: string | null;
 	kindConfirmedAt: string | null;
 	/**
-	 * DERIVED — every required criterion claimed and none accepted yet (a
-	 * mark inside the active category, never a status). `null` on a write's
-	 * fallback view.
+	 * DERIVED — every required criterion met or claimed and one at least
+	 * claimed (a mark inside the active category, never a status). `null` on a
+	 * write's fallback view.
 	 */
 	inReview: boolean | null;
+	/**
+	 * DERIVED (R6) — an OPERATION's reading for THIS week (Monday 00:00 UTC):
+	 * met / not met / unmeasured from its required criteria's grades in the
+	 * week. `null` for any other kind of work, and on a write's fallback view.
+	 */
+	periodReading: OperationPeriodReading | null;
 	/**
 	 * DERIVED (R4) — what the goal waits on, one mark per reason present
 	 * (input · approval · access · another_work · outside_world) with how many.
@@ -38049,6 +38090,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		pinSurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeGoals?: boolean | undefined;
 				label?: string | undefined;
 				profileSlug?: string | undefined;
 				trackId?: string | undefined;
@@ -38060,7 +38102,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 		}>;
 		railPins: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
+			input: {
+				includeGoals?: boolean | undefined;
+			} | undefined;
 			meta: object;
 			output: {
 				pins: RailPin[];
@@ -38068,6 +38112,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		reorderRailPins: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeGoals?: boolean | undefined;
 				keys: string[];
 			};
 			meta: object;
@@ -38114,6 +38159,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		unpinSurface: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				includeGoals?: boolean | undefined;
 				key: string;
 			};
 			meta: object;
@@ -44819,6 +44865,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasoning?: string | undefined;
 				uncertainty?: "chaotic" | "clear" | "complex" | "complicated" | "unknown" | null | undefined;
 				workKind?: "commission" | "flow" | "incident" | "investigation" | "operation" | "pathway" | "project" | null | undefined;
+			};
+			meta: object;
+			output: (ProposedOutcome & {
+				missingDomains: string[];
+			}) | {
+				status: "exists" | "started";
+				track: TrackView;
+			};
+		}>;
+		startOperationFrom: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				name?: string | undefined;
+				reasoning?: string | undefined;
 			};
 			meta: object;
 			output: (ProposedOutcome & {

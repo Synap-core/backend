@@ -337,6 +337,60 @@ describe("convertEntityToGoal — an OKR", () => {
     expect(await entityRow(id)).toEqual(before);
   });
 
+  it("F9 — a lineage write that fails undoes the birth; the retry makes ONE goal, linked", async () => {
+    const id = await entity("okr", "Born whole", OKR);
+    // A real failure at the seam: the database refuses the lineage edge.
+    await h.client!.exec(`
+      create or replace function refuse_promoted_to() returns trigger as $$
+      begin
+        if new.link_type = 'promoted_to' then raise exception 'lineage refused'; end if;
+        return new;
+      end $$ language plpgsql;
+      create trigger refuse_promoted_to before insert on links
+        for each row execute function refuse_promoted_to();
+    `);
+    const goalsNamed = async () =>
+      (
+        await q<{ id: string }>(
+          `select id from project_tracks where name = 'Born whole'`
+        )
+      ).rows;
+    try {
+      // The driver wraps it ("Failed query: insert into links…"); the
+      // trigger's own words ride the cause.
+      const err = await convertEntityToGoal({
+        entityId: id,
+        actor: human,
+      }).then(
+        () => null,
+        (e: unknown) => e as { message?: string; cause?: { message?: string } }
+      );
+      expect(err).not.toBeNull();
+      expect(`${err?.message} ${err?.cause?.message}`).toMatch(
+        /lineage refused|promoted_to/
+      );
+      // Nothing half-made: no goal holds the name, no owner row is left.
+      expect(await goalsNamed()).toEqual([]);
+      expect(
+        (
+          await q(
+            `select 1 from track_participants tp left join project_tracks t on t.id = tp.track_id where t.id is null`
+          )
+        ).rows
+      ).toEqual([]);
+    } finally {
+      // Never leak the refusal into the suite's other conversions.
+      await h.client!.exec(`drop trigger refuse_promoted_to on links`);
+    }
+    const res = await convertEntityToGoal({ entityId: id, actor: human });
+    if (res.status === "proposed") throw new Error("unexpected proposal");
+    expect(res.status).toBe("started");
+    expect((await goalsNamed()).map((r) => r.id)).toEqual([res.track.id]);
+    expect(await promotedTo(id)).toEqual([
+      { to_id: res.track.id, workspace_id: WS },
+    ]);
+  });
+
   it("refuses a second conversion — the edge says it is already a goal", async () => {
     const id = await entity("okr", "Only once", OKR);
     await convertEntityToGoal({ entityId: id, actor: human });

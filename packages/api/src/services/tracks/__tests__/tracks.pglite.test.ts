@@ -189,6 +189,7 @@ import {
   toTrackView,
   setTrackDirection,
   acceptGoalCriterion,
+  applyTrackDirection,
   loadTrackViews,
 } from "../tracks-service.js";
 import { getProjectPath } from "../../projects/project-path.js";
@@ -1436,8 +1437,24 @@ describe("closing a goal — the verdict rule and the person's act", () => {
       intoTerminal: true,
       humanOnly: false,
     });
+    // An agent's drop is ALWAYS a proposal (F7): only the owner or judge may.
+    expect(h.permCalls.at(-1)!.forcePropose).toBe(true);
     await setTrackStatus({ trackId: id, status: "paused", actor: agent });
     expect(h.permCalls.at(-1)!.lifecycleMove).toBeUndefined();
+    expect(h.permCalls.at(-1)!.forcePropose).toBeUndefined();
+  });
+
+  it("F11 — agreeing is a person's act: an agent's move into agreed is human-only, a person's applies", async () => {
+    const id = await goal("Agree first");
+    await setTrackStatus({ trackId: id, status: "agreed", actor: agent });
+    expect(h.permCalls.at(-1)!.lifecycleMove).toEqual({
+      intoTerminal: false,
+      humanOnly: true,
+    });
+    expect(
+      (await setTrackStatus({ trackId: id, status: "agreed", actor: human }))
+        .status
+    ).toBe("updated");
   });
 
   it("the open statuses are reachable by explicit moves, and a shaped goal takes work; a closed one does not", async () => {
@@ -1794,6 +1811,64 @@ describe("what a goal holds (W2) — content, derived marks, acceptance, the clo
     });
   });
 
+  it("an edit of the criteria never drops a decision recorded after it read them (compare-and-set)", async () => {
+    const id = await goal("Raced", { criteria: [crit("a"), crit("b")] });
+    const stale = (await getTrack(id, human))!;
+    // The judge's decision lands between the editor's read and its write.
+    await q(
+      `update project_tracks
+          set criteria = jsonb_set(criteria, '{0,acceptance}',
+                '{"decision":"accepted","by":"user-1","at":"2026-10-24T10:00:00.000Z"}'::jsonb)
+        where id = $1`,
+      [id]
+    );
+    const project = { id: GOALS2, workspaceId: null, userId: USER };
+    const edit = { criteria: [crit("a"), crit("b"), crit("c")] };
+    const who = { userId: USER, statedBy: USER, confirmedBy: USER };
+    await expect(
+      applyTrackDirection(stale, project, edit, who)
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const decided = () =>
+      q<{ acceptance: unknown }>(
+        `select criteria->0->'acceptance' as acceptance from project_tracks where id = $1`,
+        [id]
+      );
+    expect((await decided()).rows[0]!.acceptance).toMatchObject({
+      decision: "accepted",
+    });
+    // Read again: the edit lands and the decision rides along (same contract).
+    await applyTrackDirection((await getTrack(id, human))!, project, edit, who);
+    expect((await decided()).rows[0]!.acceptance).toMatchObject({
+      decision: "accepted",
+    });
+    expect((await view(id)).criteria.map((c) => c.key)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
+  it("a person confirms the AI's kind as it stands — the header's 'to confirm' door (confirmKind)", async () => {
+    const id = await goal("Keep the site up");
+    // The AI's proposal as stored: a kind nobody confirmed yet.
+    await q(
+      `update project_tracks set work_kind = 'operation', uncertainty = 'clear', kind_confirmed_by = null, kind_confirmed_at = null where id = $1`,
+      [id]
+    );
+    expect(await view(id)).toMatchObject({ kindConfirmedBy: null });
+    const r = await setTrackDirection({
+      trackId: id,
+      confirmKind: true,
+      actor: human,
+    });
+    expect(r.status).toBe("updated");
+    expect(await view(id)).toMatchObject({
+      workKind: "operation",
+      uncertainty: "clear",
+      kindConfirmedBy: USER,
+    });
+  });
+
   it("marks come from the sessions filed into the goal: claimed → in review; waiting on what its runs owe", async () => {
     const id = await goal("Ship the pricing page", {
       criteria: [crit("copy"), crit("legal", "human")],
@@ -1940,10 +2015,88 @@ describe("what a goal holds (W2) — content, derived marks, acceptance, the clo
     );
   });
 
+  it("F14 — the judge accepts a CLAIM; an outside party's decision only with its source", async () => {
+    const id = await goal("Outside decides", {
+      criteria: [
+        crit("ours"),
+        crit("legal", "human", { checkKind: "decided_outside" }),
+      ],
+    });
+    // Nothing claims "ours": accepting it would be a grade with no run.
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "ours",
+        decision: "accepted",
+        actor: human,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringMatching(/Nothing claims/),
+    });
+    // Sending back and rejecting stay open on an unclaimed criterion.
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "ours",
+        decision: "rejected",
+        actor: human,
+      })
+    ).resolves.toMatchObject({ status: "updated" });
+    // An outside party's decision: refused with no source…
+    await expect(
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: "legal",
+        decision: "accepted",
+        actor: human,
+      })
+    ).rejects.toMatchObject({ message: expect.stringMatching(/source/) });
+    // …recorded with one, and the note stays on the acceptance.
+    await acceptGoalCriterion({
+      trackId: id,
+      criterionKey: "legal",
+      decision: "accepted",
+      note: "Signed by ACME counsel, contract v3 (Drive)",
+      actor: human,
+    });
+    const legal = (await view(id)).criteria.find((c) => c.key === "legal")!;
+    expect(legal).toMatchObject({
+      mark: "met",
+      acceptance: {
+        decision: "accepted",
+        note: "Signed by ACME counsel, contract v3 (Drive)",
+      },
+    });
+  });
+
+  it("F2 — a person's pass accepts only when it is the judge's; anyone else's is a claim", async () => {
+    const id = await goal("Delegate grades", {
+      criteria: [crit("copy", "human"), crit("legal", "human")],
+    });
+    const run = await fileSession(id, {
+      status: "closed",
+      keys: ["copy", "legal"],
+    });
+    // A delegate (not the judge) grades their own run: a CLAIM.
+    await grade(run, "copy", "pass", "human", STRANGER, "2026-10-21T10:00:00Z");
+    // The judge (the owner, no judge row) grades: that IS their acceptance.
+    await grade(run, "legal", "pass", "human", USER, "2026-10-21T10:00:00Z");
+    const v = await view(id);
+    expect(v.criteria.map((c) => [c.key, c.mark, c.acceptanceState])).toEqual([
+      ["copy", "claimed", "waiting"],
+      ["legal", "met", "accepted"],
+    ]);
+  });
+
   it("a rewrite keeps the judge's decision on an unchanged criterion, and drops it on a changed one", async () => {
     const id = await goal("Rewritten criteria", {
       criteria: [crit("a"), crit("b")],
     });
+    // Both CLAIMED first: the judge decides about claims (F14).
+    const run = await fileSession(id, { status: "closed", keys: ["a", "b"] });
+    await grade(run, "a", "pass", "judge", "model-x", "2026-10-21T10:00:00Z");
+    await grade(run, "b", "pass", "judge", "model-x", "2026-10-21T10:00:00Z");
     await acceptGoalCriterion({
       trackId: id,
       criterionKey: "a",

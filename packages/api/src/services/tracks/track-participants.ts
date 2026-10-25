@@ -56,6 +56,7 @@ import {
   commitmentMoveRefusal,
   isTrackClosed,
   mayStaffGoal,
+  trackCounterGroupKey,
   trackReportGroupKeyPrefix,
   TRACK_COMMITMENT_MOVES,
   TRACK_COMMITMENT_MOVE_KEYS,
@@ -80,10 +81,17 @@ import {
 } from "./tracks-service.js";
 import {
   goalParticipantRows,
+  loadGoalJudge,
+  loadGoalOwner,
   loadTrackParticipantViews,
+  participantDisplayNames,
 } from "./track-participant-store.js";
+import { createLogger } from "@synap-core/core";
+import { refreshGoalJudgements } from "./goal-review-notice.js";
 
 const Text = z.string().trim().min(1).max(2000);
+
+const logger = createLogger({ module: "track-participants" });
 
 /** What a caller may change — the same shape on every door and in a proposal. */
 export const trackParticipantChangeSchema = z.discriminatedUnion("op", [
@@ -498,6 +506,11 @@ export async function applyTrackParticipantChange(p: {
           set: fresh,
         });
     });
+    // Asked again (a new commitment): their counter-offer is answered.
+    await settleCounterNotice(track.id, change.principalId);
+    // A new judge: the old one's judgement items leave, the new one is told
+    // of every claim waiting on them.
+    if (change.role === "judge") await refreshGoalJudgements(track.id);
     return;
   }
 
@@ -511,6 +524,20 @@ export async function applyTrackParticipantChange(p: {
           eq(trackParticipants.trackId, track.id)
         )
       );
+    // Nothing about a participant who left stays in anyone's Needs you: an
+    // escalated report of theirs is settled.
+    await db
+      .update(notifications)
+      .set({ status: "actioned", readAt: now })
+      .where(
+        and(
+          eq(notifications.type, "track.report_unacknowledged"),
+          drizzleSql`${notifications.groupKey} LIKE ${`${trackReportGroupKeyPrefix(row.id)}%`}`
+        )
+      );
+    await settleCounterNotice(track.id, row.principalId);
+    // The judge left: the owner judges now.
+    if (row.role === "judge") await refreshGoalJudgements(track.id);
     return;
   }
 
@@ -548,6 +575,13 @@ export async function applyTrackParticipantChange(p: {
         "This commitment changed while you answered — read the goal again."
       );
     }
+    // A counter-offer is the owner's (and judge's) to answer; any other
+    // answer replaces it.
+    if (change.move === "counter") {
+      await noticeCounter(track, row, text);
+    } else {
+      await settleCounterNotice(track.id, row.principalId);
+    }
     return;
   }
 
@@ -570,6 +604,75 @@ export async function applyTrackParticipantChange(p: {
       and(
         eq(notifications.type, "track.report_unacknowledged"),
         drizzleSql`${notifications.groupKey} LIKE ${`${trackReportGroupKeyPrefix(row.id)}%`}`
+      )
+    );
+}
+
+/**
+ * A delegate COUNTERED (`track.commitment_countered`): the goal's owner —
+ * and its judge, when that is someone else — is told, one open item per
+ * delegate on the goal. Never throws: the counter is recorded either way.
+ */
+async function noticeCounter(
+  track: ProjectTrack,
+  row: TrackParticipantRow,
+  counterText: string | null
+): Promise<void> {
+  try {
+    const db = await getDb();
+    const [project] = await db
+      .select({ workspaceId: projects.workspaceId })
+      .from(projects)
+      .where(eq(projects.id, track.projectId))
+      .limit(1);
+    const [owner, judge] = await Promise.all([
+      loadGoalOwner(track),
+      loadGoalJudge(track),
+    ]);
+    const names = await participantDisplayNames([row.principalId]);
+    const { NotificationService } =
+      await import("../../notifications/NotificationService.js");
+    for (const userId of new Set([owner, judge])) {
+      if (userId === row.principalId) continue;
+      await NotificationService.create({
+        type: "track.commitment_countered",
+        userId,
+        workspaceId: project?.workspaceId ?? null,
+        sourceType: "track",
+        sourceId: track.id,
+        groupKey: trackCounterGroupKey(track.id, row.principalId),
+        data: {
+          trackId: track.id,
+          trackName: track.name,
+          participantId: row.id,
+          delegateName: names.get(row.principalId) ?? "A delegate",
+          commitment: row.commitment ?? "",
+          counterText: counterText ?? "",
+        },
+      });
+    }
+  } catch (err) {
+    logger.warn(
+      { err, trackId: track.id, participantId: row.id },
+      "the counter-offer could not be told"
+    );
+  }
+}
+
+/** The delegate's counter-offer was answered: its item leaves Needs you. */
+async function settleCounterNotice(
+  trackId: string,
+  principalId: string
+): Promise<void> {
+  const db = await getDb();
+  await db
+    .update(notifications)
+    .set({ status: "actioned", readAt: new Date() })
+    .where(
+      and(
+        eq(notifications.type, "track.commitment_countered"),
+        eq(notifications.groupKey, trackCounterGroupKey(trackId, principalId)),
+        ne(notifications.status, "actioned")
       )
     );
 }

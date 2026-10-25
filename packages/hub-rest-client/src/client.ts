@@ -279,6 +279,8 @@ import type {
   HubTrackStatus,
   HubTrackWriteResult,
   ReopenTrackInput,
+  ConvertToGoalInput,
+  HubConvertToGoalResult,
   TrackCloseInput,
   UpdateTrackInput,
   AcceptTrackCriterionInput,
@@ -2771,6 +2773,36 @@ export class HubRestClient {
       "POST",
       `/api/hub/tracks/${encodeURIComponent(trackId)}/participants/${encodeURIComponent(participantId)}/acknowledge`,
       {}
+    );
+  }
+
+  /**
+   * "Make it a goal": a goal / objective / okr ENTITY becomes a goal, once
+   * (linked `promoted_to`; an ended entity arrives closed or dropped). An
+   * agent's conversion comes back `proposed`.
+   */
+  async convertToGoal(
+    input: ConvertToGoalInput
+  ): Promise<HubConvertToGoalResult> {
+    return this.request<HubConvertToGoalResult>(
+      "POST",
+      "/api/hub/tracks/convert",
+      input
+    );
+  }
+
+  /**
+   * "Keep watching it": from a goal closed as met, a new goal of kind
+   * operation that keeps its result alive (linked `spawned_from`).
+   */
+  async startOperationFrom(
+    trackId: string,
+    input?: ReopenTrackInput
+  ): Promise<HubStartTrackResult> {
+    return this.request<HubStartTrackResult>(
+      "POST",
+      `/api/hub/tracks/${encodeURIComponent(trackId)}/operation`,
+      input ?? {}
     );
   }
 

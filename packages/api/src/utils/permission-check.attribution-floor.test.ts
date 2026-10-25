@@ -231,3 +231,37 @@ describe("D12 — the gate resolves the acting agent from ambient", () => {
     expect(row.agentUserId).toBe("agent-in-process");
   });
 });
+
+describe("F3 — a proposal the POD files names the pod as its author", () => {
+  /** The goal loop's call: forced, AI-sourced, no agent, for the owner. */
+  const LOOP_WRITE = {
+    userId: "user-abc",
+    workspaceId: "ws-123",
+    subjectType: "focus_session",
+    action: "create",
+    source: "intelligence",
+    forcePropose: true,
+    data: { id: "run-1", goal: "Next run", goalLoopOf: "goal-1" },
+  } as const;
+
+  it("machineAuthor becomes the row's createdBy, with no agent on it", async () => {
+    setupAgentSelectSequence({});
+    await gate({ ...LOOP_WRITE, machineAuthor: "system:goal-loop" });
+    const row = mockInsertPendingProposal.mock.calls.at(-1)?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(row.createdBy).toBe("system:goal-loop");
+    expect(row.agentUserId ?? null).toBeNull();
+  });
+
+  it("CONTROL: without it the same call is filed as the person's own", async () => {
+    setupAgentSelectSequence({});
+    await gate(LOOP_WRITE);
+    const row = mockInsertPendingProposal.mock.calls.at(-1)?.[0] as Record<
+      string,
+      unknown
+    >;
+    expect(row.createdBy).toBe("user-abc");
+  });
+});

@@ -65,14 +65,17 @@ vi.mock("../../../utils/permission-check.js", () => ({
     if (opts.agentUserId || opts.forcePropose) {
       const id = randomUUID();
       await h.client!.query(
-        `insert into proposals (id, status, target_type, target_id, proposal_type, data, created_at)
-         values ($1, 'pending', $2, $3, $4, $5::jsonb, now())`,
+        // `created_by` as the real gate stamps it: a machine author, else
+        // the person (`createProposal`).
+        `insert into proposals (id, status, target_type, target_id, proposal_type, data, created_by, created_at)
+         values ($1, 'pending', $2, $3, $4, $5::jsonb, $6, now())`,
         [
           id,
           opts.subjectType,
           (opts.data as { id?: string })?.id ?? id,
           opts.action,
           JSON.stringify({ data: opts.data }),
+          opts.machineAuthor ?? opts.userId,
         ]
       );
       return {
@@ -324,6 +327,8 @@ describe("runGoalLoop — proposes the next run", () => {
       subjectType: "focus_session",
       action: "create",
       forcePropose: true,
+      // F3: the POD authors it — never the owner's own act.
+      machineAuthor: "system:goal-loop",
     });
     expect(call!.agentUserId).toBeUndefined();
     const data = call!.data as Record<string, unknown>;
@@ -338,7 +343,7 @@ describe("runGoalLoop — proposes the next run", () => {
     );
     // The goal's end state rides as the run's brief.
     expect(String(data.goal)).toContain(
-      "Done looks like: The new site is live"
+      "What done looks like: The new site is live"
     );
     expect(String(data.goal)).toContain("- No broken links");
     // No session was written: a proposal only.
@@ -616,5 +621,21 @@ describe("the seams that run it", () => {
     );
     expect(proposedFor).toContain(id);
     expect(proposedFor).not.toContain(off);
+  });
+
+  it("F5 — the sweep pages on past its page size: no goal is starved", async () => {
+    const ids = [
+      await goal({ name: "Paged one" }),
+      await goal({ name: "Paged two" }),
+      await goal({ name: "Paged three" }),
+    ];
+    // A page of ONE: a sweep that read one page only would check one goal.
+    const r = await sweepGoalLoops({ pageSize: 1 });
+    expect(r.failed).toBe(0);
+    expect(r.checked).toBeGreaterThanOrEqual(3);
+    const proposedFor = loopCalls().map(
+      (c) => (c.data as { trackId: string }).trackId
+    );
+    for (const id of ids) expect(proposedFor).toContain(id);
   });
 });

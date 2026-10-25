@@ -15,6 +15,8 @@
  * neither: it is ONE deduplicated status banner ({@link placeSignal} → `banner`).
  */
 
+import { GOAL_FIELD_LABELS } from "../vocabulary/index.js";
+
 /** In SECTION order (the order {@link LENS_SECTION_ORDER} draws them). */
 export const ATTENTION_CLASSES = [
   "blocking",
@@ -53,7 +55,8 @@ export type LensSection = (typeof LENS_SECTION_ORDER)[number];
 
 /** The section headings — one spelling for the header's count doors AND the sections. */
 export const LENS_SECTION_LABELS = {
-  doneWhen: "Done when",
+  // A goal's criteria — the goal field's own word (vocabulary door).
+  doneWhen: GOAL_FIELD_LABELS.criteria,
   blocking: "Needs you",
   participants: "Who's on it",
   happening: "Happening",
@@ -193,17 +196,24 @@ export const FAILURE_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
  * decision — because a goal's whole run of work waits on it
  * (`needs-you/buckets.ts` `isJudgementSignal`):
  *
- *   - `track.review_ready` — every required criterion of a goal is claimed,
- *     waiting on its judge (decision 2: "in review");
+ *   - `track.review_ready` — every required criterion of a goal is met or
+ *     claimed, a claim at least waiting on its judge (decision 2: "in
+ *     review"; never for an operation);
+ *   - `track.criterion_claimed` — ONE claimed criterion waiting on the
+ *     judge, on its own;
  *   - `track.report_unacknowledged` — a delegate reported their part
- *     impossible and nobody acknowledged it for 48 h (R10), to the owner.
+ *     impossible and nobody acknowledged it for 48 h (R10), to the owner;
+ *   - `track.close_proposed` — an agent proposed to close (or drop) a goal,
+ *     and only its judge's (or owner's) approval applies.
  *
  * The api registry declares both types; `api/src/notifications/__tests__/
  * judgement-notification-parity.test.ts` holds this set to the registry.
  */
 export const JUDGEMENT_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   "track.review_ready",
+  "track.criterion_claimed",
   "track.report_unacknowledged",
+  "track.close_proposed",
 ]);
 
 /**

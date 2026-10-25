@@ -106,6 +106,18 @@ export const TRACK_REPORT_ESCALATE_AFTER_HOURS = 48;
  * and when it reported, so a second report after a re-ask is news again.
  * Acknowledging marks every row under the participant's prefix actioned.
  */
+/**
+ * One open "counter-offer" item per delegate on a goal
+ * (`track.commitment_countered`) — keyed by the person, so asking again
+ * (which keeps their row) and the goal ending can both settle it.
+ */
+export function trackCounterGroupKey(
+  trackId: string,
+  principalId: string
+): string {
+  return `track-counter:${trackId}:${principalId}`;
+}
+
 export function trackReportGroupKeyPrefix(participantId: string): string {
   return `track-report:${participantId}:`;
 }
@@ -197,6 +209,32 @@ export function mayStaffGoal(
     userId === goalOwner(participants, track) ||
     userId === goalJudge(participants, track)
   );
+}
+
+/**
+ * What a viewer's DROP of a goal (a move into lost) does:
+ *   allowed  — a person who owns or judges it drops it;
+ *   proposes — an agent's drop is a proposal its owner or judge approves;
+ *   refused  — anyone else (a person who only works on it, or no viewer).
+ */
+export type GoalDropAnswer = "allowed" | "proposes" | "refused";
+
+/**
+ * WHO MAY DROP a goal (code-core F7) — ONE rule for the pod's status door and
+ * every surface's Drop: its owner or its judge, as a person; an agent's drop
+ * proposes. The access floor (project write) is the door's, on top of this.
+ */
+export function goalMayDrop(args: {
+  track: { userId: string };
+  participants: readonly RoleRow[];
+  viewerId: string | null | undefined;
+  viewerIsAgent: boolean;
+}): GoalDropAnswer {
+  if (args.viewerIsAgent) return "proposes";
+  if (!args.viewerId) return "refused";
+  return mayStaffGoal(args.participants, args.track, args.viewerId)
+    ? "allowed"
+    : "refused";
 }
 
 /** What a delegate may do to their own commitment. */

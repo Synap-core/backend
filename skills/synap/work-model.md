@@ -55,6 +55,14 @@ A worker is a playbook **activator**, declared on the method and owned by the li
 
 A goal is a _track_ in every tool and field name (`start_track`, `trackId`) — say "goal" to the person; a session's one-line `goal` is its **Aim**. A goal holds an owner, a direction, instructions, the workers it turns on, and what done means (criteria, or a number measured as transitions into `done`). It has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met (`set_track_status` `completed` + `verdict`; dropped = `archived`, with a `verdict` saying why). Your close is a proposal; a closed goal comes back only as a new version. Pause it while nobody should work on it. Work in it = `start_session` + `trackId`. A thing may count for two goals. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old goals started from a method; never `advance_track` without the user.
 
+**The rest of the goal protocol** (`set_track_participant`, `reopen_track`, `convert_to_goal`, `update_track`):
+
+- **A delegate's commitment.** The owner or judge asks someone (`add`, role `delegate`, with a `commitment`). The delegate answers only their own: `accept`, `counter` (text = what they would commit to instead), `decline`, or later `report_impossible` (text = why). A report is not the goal's verdict: the owner or judge `acknowledge`s it and re-plans. Never answer for a person; adding yourself as a delegate commits you.
+- **Claims and the judge.** A session that passes a goal criterion CLAIMS it. Only the judge (the owner unless one is named) accepts or sends back a claim, and only the judge closes the goal. Never accept your own claim.
+- **Reopen = a new version.** A closed or dropped goal never moves back: `reopen_track` starts a new version linked to it, with the same people asked again.
+- **Make it a goal.** A goal, objective or OKR entity becomes a goal once with `convert_to_goal` (its key results become measured criteria). Offer it when the person treats such an entity as live work; never convert one twice.
+- **The loop** is OFF by default. When it is on (`update_track` `loop: { on: true, perWeek? }`), the goal proposes its next session while a required criterion is unmet, and a person approves each one. Your switch-on is always a proposal: the person turns it on. If it stops after two failures on one criterion, ask the owner to re-plan; do not switch it on again yourself.
+
 ### The homes: what each space makes, what is moving
 
 Home, a space and a project read the work through two reads (the same answer every app shows):

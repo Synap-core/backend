@@ -143,8 +143,14 @@ export interface HubTrack {
   /** The person who confirmed kind + uncertainty — `null` while proposed. */
   kindConfirmedBy?: string | null;
   kindConfirmedAt?: string | null;
-  /** Every required criterion claimed, none accepted yet — derived. */
+  /** Every required criterion met or claimed, one at least claimed — derived. */
   inReview?: boolean | null;
+  /** An operation's reading for this week (R6); `null` for other kinds. */
+  periodReading?: {
+    from: string;
+    to: string;
+    mark: "met" | "not_met" | "unmeasured";
+  } | null;
   /** What the goal waits on — derived; `[]` = nothing. */
   waitingOn?: Array<{ reason: HubWaitingOnReason; count: number }> | null;
   /**
@@ -310,6 +316,26 @@ export interface ReopenTrackInput {
   name?: string;
   reasoning?: string;
 }
+
+/** "Make it a goal" (D2) — a goal / objective / okr entity becomes a goal, once. */
+export interface ConvertToGoalInput {
+  entityId: string;
+  /** Required when the entity is filed in no project, or in several. */
+  projectId?: string;
+  /** A name other than the entity's title. */
+  name?: string;
+  reasoning?: string;
+}
+
+export type HubConvertToGoalResult =
+  | {
+      status: "started" | "exists";
+      track: HubTrack;
+      entityId: string;
+      /** The entity's fields the goal does not hold (to tell the person). */
+      notCarried: string[];
+    }
+  | HubTrackProposed;
 
 export type HubTrackWriteResult =
   { status: "updated" | "unchanged"; track: HubTrack } | HubTrackProposed;

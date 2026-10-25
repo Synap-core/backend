@@ -9,8 +9,11 @@ import {
   criterionMeaning,
   deriveGoalCriteria,
   deriveWaitingOn,
+  goalAcceptanceRefusal,
   goalInReview,
   mayAcceptGoalCriterion,
+  operationPeriodReading,
+  operationWeekStart,
   owedSlotWaitingSources,
   readGoalCriterionAcceptance,
   type GoalCriterionAcceptance,
@@ -67,10 +70,13 @@ const row = (
   rationale,
 });
 
+/** The goal's judge in these fixtures (the owner, who also ran "a"). */
+const JUDGE = "user-1";
 const markOf = (
   c: Parameters<typeof deriveGoalCriteria>[0][number],
-  runs: GoalRunFacts[]
-) => deriveGoalCriteria([c], runs)[0]!;
+  runs: GoalRunFacts[],
+  judgeId: string | null = JUDGE
+) => deriveGoalCriteria([c], runs, { judgeId })[0]!;
 
 describe("deriveGoalCriteria — one mark per criterion", () => {
   it("no run ever carried it → not_started; an open run carries it → under_way; a closed one → not_met", () => {
@@ -102,6 +108,32 @@ describe("deriveGoalCriteria — one mark per criterion", () => {
       }),
     ]);
     expect(s).toMatchObject({ mark: "met", acceptanceState: "accepted" });
+  });
+
+  it("ANOTHER person's pass is a claim waiting on the judge, never their own acceptance (F2)", () => {
+    // Rules out "any person's grade accepts": a delegate grading their own
+    // run would accept their own work and bypass the judge.
+    const delegates = markOf(byPerson, [
+      run({ evaluations: [row("signoff", "pass", "human", T1, "delegate-9")] }),
+    ]);
+    expect(delegates).toMatchObject({
+      mark: "claimed",
+      acceptanceState: "waiting",
+    });
+    // The judge's own grade is their acceptance.
+    expect(
+      markOf(byPerson, [
+        run({ evaluations: [row("signoff", "pass", "human", T1, JUDGE)] }),
+      ]).mark
+    ).toBe("met");
+    // An unknown judge accepts nothing on anyone's behalf.
+    expect(
+      markOf(
+        byPerson,
+        [run({ evaluations: [row("signoff", "pass", "human", T1, JUDGE)] })],
+        null
+      ).mark
+    ).toBe("claimed");
   });
 
   it("a MEASURED pass by a capability is accepted automatically", () => {
@@ -182,6 +214,37 @@ describe("deriveGoalCriteria — one mark per criterion", () => {
     ).toMatchObject({ mark: "claimed", acceptanceState: "waiting" });
   });
 
+  it("the claim names who, which run and the check's words; null when nothing passes", () => {
+    const s = markOf(judged, [
+      run({
+        sessionId: "run-7",
+        ownerId: "user-3",
+        evaluations: [
+          {
+            ...row("tone", "pass", "judge", T1, "model-x", "Warm, on brand"),
+            id: "ev-1",
+          },
+        ],
+      }),
+    ]);
+    // An AI judge's pass: the RUN claims it (its owner), not the model.
+    expect(s.claim).toEqual({
+      by: "user-3",
+      sessionId: "run-7",
+      evaluationId: "ev-1",
+      evaluatorKind: "judge",
+      note: "Warm, on brand",
+      at: T1,
+    });
+    // An agent's evidence: the agent claims it.
+    expect(
+      markOf(measured, [
+        run({ evaluations: [row("pages", "pass", "evidence", T1, "agent-1")] }),
+      ]).claim?.by
+    ).toBe("agent-1");
+    expect(markOf(judged, [run({ open: true })]).claim).toBeNull();
+  });
+
   it("a measured criterion carries its latest measured value; others never do", () => {
     const s = markOf(measured, [
       run({
@@ -202,7 +265,7 @@ describe("deriveGoalCriteria — one mark per criterion", () => {
   });
 });
 
-describe("goalInReview — every REQUIRED criterion claimed, none accepted", () => {
+describe("goalInReview — every REQUIRED criterion met or claimed, one at least claimed", () => {
   const criteria = [judged, { ...byPerson, required: false }];
   it("all required claimed → in review; an optional one does not hold it back", () => {
     expect(
@@ -212,7 +275,9 @@ describe("goalInReview — every REQUIRED criterion claimed, none accepted", () 
       ])
     ).toBe(true);
   });
-  it("one required accepted (met) or not claimed → not in review; no criteria → never", () => {
+  it("one required met and one claimed → STILL in review (F1: mixed goals, a first acceptance)", () => {
+    // Rules out "every required claimed": a measured criterion that passed,
+    // or the judge's first acceptance, would hide the claim still waiting.
     expect(
       goalInReview(
         [judged, byPerson],
@@ -221,8 +286,65 @@ describe("goalInReview — every REQUIRED criterion claimed, none accepted", () 
           { key: "signoff", mark: "met" },
         ]
       )
+    ).toBe(true);
+  });
+  it("all met (nothing waits on the judge), or one required not claimed → not in review; no criteria → never", () => {
+    expect(
+      goalInReview(
+        [judged, byPerson],
+        [
+          { key: "tone", mark: "met" },
+          { key: "signoff", mark: "met" },
+        ]
+      )
+    ).toBe(false);
+    expect(
+      goalInReview(
+        [judged, byPerson],
+        [
+          { key: "tone", mark: "claimed" },
+          { key: "signoff", mark: "under_way" },
+        ]
+      )
     ).toBe(false);
     expect(goalInReview([], [])).toBe(false);
+  });
+  it("an optional claimed criterion counts as the one waiting", () => {
+    expect(
+      goalInReview(criteria, [
+        { key: "tone", mark: "met" },
+        { key: "signoff", mark: "claimed" },
+      ])
+    ).toBe(true);
+  });
+});
+
+describe("goalAcceptanceRefusal — F14, the judge decides about CLAIMS", () => {
+  const ask = (
+    decision: "accepted" | "changes_asked" | "rejected",
+    mark: Parameters<typeof goalAcceptanceRefusal>[0]["mark"],
+    meaning: Parameters<typeof goalAcceptanceRefusal>[0]["meaning"],
+    note: string | null = null
+  ) => goalAcceptanceRefusal({ decision, mark, meaning, note });
+  it("accepting needs a claim — not a criterion nobody worked or already met", () => {
+    expect(ask("accepted", "claimed", "judged")).toBeNull();
+    expect(ask("accepted", "not_started", "judged")).toMatch(/Nothing claims/);
+    expect(ask("accepted", "under_way", "handed_over")).toMatch(
+      /Nothing claims/
+    );
+    expect(ask("accepted", "met", "judged")).toMatch(/already met/);
+  });
+  it("an outside party's decision or a certificate: recorded with its source, claim or not", () => {
+    expect(ask("accepted", "not_started", "decided_outside")).toMatch(/source/);
+    expect(
+      ask("accepted", "not_started", "decided_outside", "Board vote, 3 Oct")
+    ).toBeNull();
+    expect(ask("accepted", "not_met", "certified", "ISO cert #42")).toBeNull();
+  });
+  it("sending back needs a note; rejecting stays open", () => {
+    expect(ask("changes_asked", "claimed", "judged")).toMatch(/needs a note/);
+    expect(ask("changes_asked", "claimed", "judged", "Warmer")).toBeNull();
+    expect(ask("rejected", "not_started", "judged")).toBeNull();
   });
 });
 
@@ -365,5 +487,72 @@ describe("the close rule with criteria (checkTrackClose)", () => {
   it("a lasting goal (no criteria) closes on its judge's word", () => {
     expect(checkTrackClose("completed", { verdict: "met" }, [])).toBeNull();
     expect(checkTrackClose("completed", { verdict: "met" })).toBeNull();
+  });
+});
+
+describe("R6 — an operation is read per period", () => {
+  // T1/T2 fall in the week of Mon 19 Oct; a Sunday-night row is last week's.
+  const SUNDAY = "2026-10-18T22:00:00.000Z";
+  const week = {
+    from: operationWeekStart(new Date(T2)),
+    to: new Date("2026-10-26T00:00:00.000Z"),
+  };
+  const criteria = [judged, { ...byPerson, required: false }];
+
+  it("the week starts Monday 00:00 UTC", () => {
+    expect(operationWeekStart(new Date(T2)).toISOString()).toBe(
+      "2026-10-19T00:00:00.000Z"
+    );
+    expect(
+      operationWeekStart(new Date("2026-10-19T00:00:00.000Z")).toISOString()
+    ).toBe("2026-10-19T00:00:00.000Z");
+  });
+
+  it("met when every required criterion's grade IN the period passes", () => {
+    const r = operationPeriodReading(
+      criteria,
+      [run({ evaluations: [row("tone", "pass", "judge", T1)] })],
+      week
+    );
+    expect(r).toEqual({
+      from: "2026-10-19T00:00:00.000Z",
+      to: "2026-10-26T00:00:00.000Z",
+      mark: "met",
+    });
+  });
+
+  it("a pass from LAST week does not make this week met — unmeasured", () => {
+    // Rules out reading the latest grade regardless of the period.
+    expect(
+      operationPeriodReading(
+        criteria,
+        [run({ evaluations: [row("tone", "pass", "judge", SUNDAY)] })],
+        week
+      ).mark
+    ).toBe("unmeasured");
+  });
+
+  it("the latest grade in the period wins: a later fail is not met; unmeasured is not a fail", () => {
+    expect(
+      operationPeriodReading(
+        criteria,
+        [
+          run({
+            evaluations: [
+              row("tone", "pass", "judge", T1),
+              row("tone", "fail", "judge", T2),
+            ],
+          }),
+        ],
+        week
+      ).mark
+    ).toBe("not_met");
+    expect(
+      operationPeriodReading(
+        criteria,
+        [run({ evaluations: [row("tone", "unmeasured", "judge", T1)] })],
+        week
+      ).mark
+    ).toBe("unmeasured");
   });
 });

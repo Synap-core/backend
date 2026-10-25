@@ -168,6 +168,7 @@ import {
   loadWrittenTrackView,
   setTrackParams,
   startStageSession,
+  setTrackStatus,
   startTrack,
 } from "../tracks-service.js";
 import { createFocusSession } from "../../focus-sessions/create-session.js";
@@ -534,6 +535,33 @@ describe("M1 stage stamping + M3 dedup by stage", () => {
     expect(JSON.stringify(out), JSON.stringify(out)).toMatch(
       /Goal step \\"bogus\\" was not applied/
     );
+  });
+});
+
+describe("plan.md — a run is never filed into a goal that ended", () => {
+  it("the approval replay leaves a goal CLOSED since the proposal out, and says why", async () => {
+    const res = await startTrack({
+      projectId: PROJECT,
+      name: "Closed before approval",
+      actor: human,
+    });
+    if (res.status === "proposed") throw new Error("unexpected proposal");
+    const closed = res.track.id;
+    await setTrackStatus({
+      trackId: closed,
+      status: "completed",
+      verdict: "met",
+      actor: human,
+    });
+    const sessionId = randomUUID();
+    const out = await execute(
+      "focus_session/create",
+      { id: sessionId, goal: "Late run", trackId: closed },
+      { targetId: sessionId, projectId: PROJECT, targetType: "focus_session" }
+    );
+    // Rules out the old filter (`ne archived` only): a CLOSED goal passed it.
+    expect((await sessionRow(sessionId)).track_id).toBeNull();
+    expect(JSON.stringify(out)).toMatch(/is closed and takes no new work/);
   });
 });
 

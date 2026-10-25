@@ -261,19 +261,19 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   },
   {
     /**
-     * A goal is IN REVIEW (decision 2, W5 2026-10-23): every required
-     * criterion is claimed and the judge has not decided yet. Producer:
-     * `noticeGoalReviewReady` (services/tracks/goal-review-notice.ts), after a
-     * passing evaluation is recorded on a run filed into the goal
-     * (`recordSessionEvaluation`). To the goal's JUDGE (the owner when none is
-     * named). `sourceId` is the goal; `groupKey` one per goal, so a goal in
-     * review is ONE open row however many claims land.
+     * A goal is IN REVIEW (decision 2, W5 2026-10-23; F1 2026-10-24): every
+     * required criterion is met or claimed and at least one claim waits on
+     * the judge. Never for an operation (R6). Producer:
+     * `refreshGoalJudgements` (services/tracks/goal-review-notice.ts), after
+     * a grade on a run filed into the goal, a judge's decision, or a change
+     * of judge. To the goal's JUDGE (the owner when none is named).
+     * `sourceId` is the goal; `groupKey` one per goal, so a goal in review is
+     * ONE open row however many claims land.
      *
      * A JUDGEMENT (`JUDGEMENT_NOTIFICATION_TYPES`, @synap-core/types/lens):
-     * a `decision` in the Inbox, ranked first. The judge's decision on any
-     * criterion, or the goal closing, marks it actioned
-     * (`settleGoalReviewNotice`) — a later claim after a send-back raises it
-     * again.
+     * a `decision` in the Inbox, ranked first. Settled only when no claim is
+     * left (never on a single decision while others wait), when the judge
+     * changes, or when the goal leaves the active category.
      */
     type: "track.review_ready",
     category: "data",
@@ -282,7 +282,7 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     priority: "high",
     titleTemplate: "{{trackName}} is ready for your verdict",
     bodyTemplate:
-      "Every required criterion is claimed. Accept them, send one back, or close the goal with a verdict.",
+      "Every required criterion is met or claimed. Accept the claims, send one back, or close the goal with a verdict.",
     defaultChannels: ["in_app", "os"],
     ttl: 0,
     dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
@@ -292,6 +292,71 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
         label: "Open goal",
         variant: "primary",
         handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
+  {
+    /**
+     * ONE CLAIMED CRITERION waits on the goal's judge (2026-10-24): a run
+     * passed it and nobody with the judge's seat accepted it yet — an item on
+     * its own, whether or not the whole goal is in review. Producer:
+     * `refreshGoalJudgements` (services/tracks/goal-review-notice.ts). To the
+     * JUDGE; `sourceId` the goal; `groupKey` one per goal and criterion.
+     * Settled when the criterion stops being claimed (accepted, sent back,
+     * rejected, regressed), when the judge changes, or when the goal leaves
+     * the active category. A JUDGEMENT, ranked first.
+     */
+    type: "track.criterion_claimed",
+    category: "data",
+    label: "Claim waiting on your decision",
+    icon: "scale",
+    priority: "high",
+    titleTemplate: "{{claimedBy}} claims “{{criterionStatement}}”",
+    bodyTemplate:
+      "On {{trackName}}. Accept it, send it back with what to change, or reject it.",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open goal",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
+  {
+    /**
+     * An AGENT proposed to END a goal (code-core F12, 2026-10-24): a close
+     * applies only when the goal's JUDGE approves it, a drop only when its
+     * owner or judge does (`assertGoalEnder`) — so the proposal is put in
+     * THEIR Needs you, not only in every reviewer's queue. Producer:
+     * `noticeGoalEndProposed` (services/tracks/goal-review-notice.ts), from
+     * the status door (`setTrackStatus`) when governance filed the move.
+     * `sourceType: "proposal"`, `sourceId` the proposal: approving, rejecting
+     * or expiring it settles the row (`markProposalNotificationsActioned`).
+     *
+     * A JUDGEMENT (`JUDGEMENT_NOTIFICATION_TYPES`): the goal's ending is
+     * theirs to decide.
+     */
+    type: "track.close_proposed",
+    category: "governance",
+    label: "Goal end proposed",
+    icon: "scale",
+    priority: "high",
+    titleTemplate: "{{proposerName}} proposes to {{endingVerb}} {{trackName}}",
+    bodyTemplate:
+      "Verdict: {{verdictLabel}}. Only your approval applies — review the proposal.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "review",
+        label: "Review",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "proposal" },
       },
     ],
   },
@@ -331,14 +396,46 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   },
   {
     /**
-     * A goal this goal waited on (`blocked_by`) ENDED — closed (it delivered:
-     * "nothing else holds it up" or "still waits on N other things") or
-     * dropped (it did not: the goal waits until its owner re-plans). Producer:
-     * the `track-blocker-ended-notify` reactor
-     * (`notifications/track-blocker-ended-reactor.ts`), off the status door's
-     * `track.update` emit; the outcome is re-derived from the rows. `sourceId`
-     * is the WAITING goal — where its owner acts. Its twin for a waiting
-     * session is `session.blocker_goal_ended`.
+     * A delegate COUNTERED the commitment they were asked for (W3, review
+     * fixes 2026-10-24): the goal's owner — and its judge, when that is
+     * someone else — decides whether to ask again with the counter-offer or
+     * keep the ask. Producer: `applyTrackParticipantChange`
+     * (`services/tracks/track-participants.ts`), on the counter itself.
+     * `sourceId` is the goal; `groupKey` the delegate on that goal
+     * (`trackCounterGroupKey`). An ITEM in Needs you; settled when that
+     * delegate's commitment changes again (asked again, answered, removed)
+     * or the goal ends (`goal-end.ts`). A nudge, never a verdict.
+     */
+    type: "track.commitment_countered",
+    category: "data",
+    label: "Counter-offer",
+    icon: "message-square",
+    priority: "normal",
+    titleTemplate: "{{delegateName}} counters on {{trackName}}",
+    bodyTemplate:
+      "Asked for “{{commitment}}”, they would commit to: {{counterText}}. Ask again with it, or keep the ask.",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Review",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "track" },
+      },
+    ],
+  },
+  {
+    /**
+     * A goal this goal waited on (`blocked_by`) ENDED, and that is news:
+     * closed and NOTHING else holds it now (the last-open-blocker rule), or
+     * dropped (it did not deliver: the goal waits until its owner re-plans).
+     * Producer: the `session-unblock-notify` reactor
+     * (`notifications/session-unblock-reactor.ts`, code-core F6 — one rule
+     * for "a blocker ended"), off the status door's `track.update` status
+     * move; re-derived from the rows. `sourceId` is the WAITING goal — where
+     * its owner acts.
      */
     type: "track.blocker_ended",
     category: "data",
@@ -1280,7 +1377,8 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
      * Fires once per unblocking, not once per closed blocker — a session
      * waiting on three things is not "unblocked" twice while two remain
      * (Asana's rule, and the reason the reactor re-derives `openBlockerIds`
-     * instead of reacting to the close alone). Producer: the
+     * instead of reacting to the close alone). A blocker is a session that
+     * closed or a GOAL that closed (code-core F6). Producer: the
      * `session-unblock-notify` reactor (`session-unblock-reactor.ts`).
      */
     type: "session.unblocked",
@@ -1305,12 +1403,11 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
   },
   {
     /**
-     * A GOAL this session waited on (`blocked_by`) ended — closed or dropped.
-     * The goal twin of `session.unblocked` (whose producer reacts to a
-     * SESSION closing only), with the dropped case said too: a dropped goal
-     * holds the session until its owner re-plans. Producer: the
-     * `track-blocker-ended-notify` reactor
-     * (`notifications/track-blocker-ended-reactor.ts`). `sourceId` is the
+     * A GOAL this session waited on (`blocked_by`) was DROPPED: it did not
+     * deliver, so the session waits until its owner re-plans. A goal that
+     * closed is `session.unblocked` instead, once nothing else holds the
+     * session (code-core F6). Producer: the `session-unblock-notify` reactor
+     * (`notifications/session-unblock-reactor.ts`). `sourceId` is the
      * waiting session.
      */
     type: "session.blocker_goal_ended",

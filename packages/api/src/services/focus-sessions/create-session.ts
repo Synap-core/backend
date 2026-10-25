@@ -271,9 +271,17 @@ export interface CreateFocusSessionParams {
    * the start is ALWAYS a proposal a person approves (the gate's
    * `forcePropose`, whoever switched the loop on), and the proposal carries
    * `goalLoopOf` — what the loop's budget and its one-pending rule count.
+   * The POD files it ({@link GOAL_LOOP_AUTHOR}), not the owner it asks.
    */
   goalLoopOf?: string;
 }
+
+/**
+ * The machine author of every proposal a goal's loop files (code-core F3):
+ * the row's `createdBy`, so the run reads as the goal's proposal and not the
+ * owner's own act, and the loop's budget finds its rows by an indexed column.
+ */
+export const GOAL_LOOP_AUTHOR = "system:goal-loop" as const;
 
 /** What happened to the create-time `spawned_from` edge. */
 export type CreateTimeParentLink =
@@ -670,7 +678,9 @@ export async function createFocusSession(
     action: "create",
     source: "intelligence",
     // A goal's loop never starts a run: it proposes one (W4).
-    ...(params.goalLoopOf ? { forcePropose: true } : {}),
+    ...(params.goalLoopOf
+      ? { forcePropose: true, machineAuthor: GOAL_LOOP_AUTHOR }
+      : {}),
     // Carry the non-goal fields through the proposal so the approve executor
     // (proposals/approve-executors.ts, focus_session/create) can materialize a
     // full session — otherwise they'd be lost on the PROPOSED path. Only include

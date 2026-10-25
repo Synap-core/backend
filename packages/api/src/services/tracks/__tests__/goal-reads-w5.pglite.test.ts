@@ -89,8 +89,28 @@ vi.mock("../../../utils/permission-check.js", () => ({
   proposedMessageFor: (_t: string, fallback: string) => fallback,
 }));
 
+// The link writer, kept to the rows a start writes (`spawned_from` is read
+// back by "keep watching it"): inserted as is, nothing else of the door.
 vi.mock("../../links/links-service.js", () => ({
-  createLinks: async () => [],
+  createLinks: async (
+    inputs: Array<{
+      workspaceId: string | null;
+      fromType: string;
+      fromId: string;
+      toType: string;
+      toId: string;
+      linkType: string;
+    }>
+  ) => {
+    for (const l of inputs) {
+      await h.client!.query(
+        `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+         values (gen_random_uuid(), $1, $2, $3, $4, $5, $6, '{}'::jsonb, now())`,
+        [l.workspaceId, l.fromType, l.fromId, l.toType, l.toId, l.linkType]
+      );
+    }
+    return [];
+  },
 }));
 
 vi.mock("@synap/events", () => ({
@@ -117,17 +137,29 @@ import {
 import {
   acceptGoalCriterion,
   decodeTrackListCursor,
+  getTrack,
   listTracksPage,
+  loadTrackView,
   reopenTrack,
   setTrackStatus,
+  startOperationFrom,
   startTrack,
   type TrackActor,
 } from "../tracks-service.js";
 import { changeTrackParticipants } from "../track-participants.js";
+import {
+  loadGoalRuns,
+  loadGoalRunsForRead,
+  readGoalCriteria,
+} from "../goal-content.js";
+import { deriveGoalCriteria } from "@synap-core/types/units";
 import { recordSessionEvaluation } from "../../focus-sessions/evaluations/record.js";
 import {
+  GOAL_CLAIM_NOTIFICATION_TYPE,
   GOAL_REVIEW_NOTIFICATION_TYPE,
+  goalClaimGroupKey,
   goalReviewGroupKey,
+  refreshGoalJudgements,
 } from "../goal-review-notice.js";
 
 const OWNER = "owner-1";
@@ -345,32 +377,149 @@ describe("a goal in review reaches its judge (W5)", () => {
     expect(reviewNotices()).toEqual([]);
   });
 
-  it("the judge's decision settles the open notice", async () => {
+  it("F1 — the judge's decision settles THAT claim's item; the review item stays while another claim waits", async () => {
     const id = await goal("Settle me", PROJECT, person(OWNER), {
       criteria: [crit("a"), crit("b")],
     });
-    await q(
-      `insert into notifications (id, user_id, type, category, title, status, group_key, source_type, source_id, created_at)
-       values (gen_random_uuid(), $1, $2, 'data', 'Settle me is ready for your verdict', 'unread', $3, 'track', $4, now())`,
-      [OWNER, GOAL_REVIEW_NOTIFICATION_TYPE, goalReviewGroupKey(id), id]
-    );
     const run = await fileRun(id, ["a", "b"]);
     await claim(run, "a");
     await claim(run, "b");
-    const r = await acceptGoalCriterion({
-      trackId: id,
-      criterionKey: "a",
-      decision: "accepted",
-      actor: person(OWNER),
+    // The open rows the notification door would hold (it is stubbed here).
+    for (const [type, groupKey] of [
+      [GOAL_REVIEW_NOTIFICATION_TYPE, goalReviewGroupKey(id)],
+      [GOAL_CLAIM_NOTIFICATION_TYPE, goalClaimGroupKey(id, "a")],
+      [GOAL_CLAIM_NOTIFICATION_TYPE, goalClaimGroupKey(id, "b")],
+    ]) {
+      await q(
+        `insert into notifications (id, user_id, type, category, title, status, group_key, source_type, source_id, created_at)
+         values (gen_random_uuid(), $1, $2, 'data', 't', 'unread', $3, 'track', $4, now())`,
+        [OWNER, type, groupKey, id]
+      );
+    }
+    const statusOf = async (groupKey: string) =>
+      (
+        await q<{ status: string }>(
+          `select status from notifications where group_key = $1`,
+          [groupKey]
+        )
+      ).rows[0]?.status;
+    const accept = (key: string) =>
+      acceptGoalCriterion({
+        trackId: id,
+        criterionKey: key,
+        decision: "accepted",
+        actor: person(OWNER),
+      });
+    expect((await accept("a")).status).toBe("updated");
+    expect(await statusOf(goalClaimGroupKey(id, "a"))).toBe("actioned");
+    // Rules out "any decision settles the review": "b" still waits.
+    expect(await statusOf(goalReviewGroupKey(id))).toBe("unread");
+    expect(await statusOf(goalClaimGroupKey(id, "b"))).toBe("unread");
+    await accept("b");
+    expect(await statusOf(goalReviewGroupKey(id))).toBe("actioned");
+    expect(await statusOf(goalClaimGroupKey(id, "b"))).toBe("actioned");
+  });
+
+  it("each claimed criterion is a judgement on its own, before the goal is in review", async () => {
+    const id = await goal("One at a time", PROJECT, person(OWNER), {
+      criteria: [crit("copy"), crit("legal")],
     });
-    expect(r.status).toBe("updated");
-    const [row] = (
-      await q<{ status: string }>(
-        `select status from notifications where group_key = $1`,
-        [goalReviewGroupKey(id)]
-      )
-    ).rows;
-    expect(row?.status).toBe("actioned");
+    const run = await fileRun(id, ["copy", "legal"]);
+    await claim(run, "copy");
+    expect(reviewNotices()).toEqual([]);
+    expect(
+      h.notices.filter((n) => n.type === GOAL_CLAIM_NOTIFICATION_TYPE)
+    ).toEqual([
+      expect.objectContaining({
+        userId: OWNER,
+        sourceId: id,
+        groupKey: goalClaimGroupKey(id, "copy"),
+        data: expect.objectContaining({
+          criterionKey: "copy",
+          criterionStatement: "Criterion copy",
+        }),
+      }),
+    ]);
+  });
+
+  it("F1 — a goal mixing a MET measured criterion and a claimed one is in review, and its judge told", async () => {
+    const id = await goal("Mixed", PROJECT, person(OWNER), {
+      criteria: [
+        {
+          ...crit("pages"),
+          check: { kind: "evidence", evidenceKey: "pages_migrated" },
+          checkKind: "measured",
+        },
+        crit("tone"),
+      ],
+    });
+    const run = await fileRun(id, ["pages", "tone"]);
+    // A machine check that is not the run's author passes "pages": met.
+    await q(
+      `insert into session_evaluations (id, session_id, user_id, criterion_key, attempt, verdict, evaluator_kind, evaluator_id, evidence, created_at)
+       values (gen_random_uuid(), $1, $2, 'pages', 1, 'pass', 'evidence', 'ci-bot', '{"url":"https://ci/run/9"}'::jsonb, now())`,
+      [run, OWNER]
+    );
+    await claim(run, "tone");
+    const v = await loadTrackView(
+      (await getTrack(id, person(OWNER)))!,
+      person(OWNER)
+    );
+    expect(v.criteria.map((c) => [c.key, c.mark])).toEqual([
+      ["pages", "met"],
+      ["tone", "claimed"],
+    ]);
+    expect(v.inReview).toBe(true);
+    expect(reviewNotices().map((n) => n.userId)).toEqual([OWNER]);
+    // The claim names who, which run, what backs it.
+    expect(v.criteria[0]!.claim).toMatchObject({
+      by: "ci-bot",
+      sessionId: run,
+      evidence: { url: "https://ci/run/9" },
+    });
+    expect(v.criteria[1]!.claim).toMatchObject({
+      by: OWNER,
+      byName: OWNER,
+      sessionId: run,
+    });
+  });
+
+  it("a claim the judge already READ is not raised a second time by a later grade", async () => {
+    const id = await goal("Read once", PROJECT, person(OWNER), {
+      criteria: [crit("a"), crit("b")],
+    });
+    const run = await fileRun(id, ["a", "b"]);
+    // The judge read "a"'s item (the door's dedupe only holds UNREAD rows).
+    await q(
+      `insert into notifications (id, user_id, type, category, title, status, group_key, source_type, source_id, created_at)
+       values (gen_random_uuid(), $1, $2, 'data', 't', 'read', $3, 'track', $4, now())`,
+      [OWNER, GOAL_CLAIM_NOTIFICATION_TYPE, goalClaimGroupKey(id, "a"), id]
+    );
+    await claim(run, "a");
+    await claim(run, "b");
+    expect(
+      h.notices
+        .filter(
+          (n) => n.type === GOAL_CLAIM_NOTIFICATION_TYPE && n.sourceId === id
+        )
+        .map((n) => n.groupKey)
+    ).toEqual([goalClaimGroupKey(id, "b")]);
+  });
+
+  it("an OPERATION is never 'ready for your verdict' — its claims still reach the judge", async () => {
+    const id = await goal("Keep it running", PROJECT, person(OWNER), {
+      criteria: [crit("a"), crit("b")],
+      workKind: "operation",
+    });
+    const run = await fileRun(id, ["a", "b"]);
+    await claim(run, "a");
+    await claim(run, "b");
+    const refreshed = await refreshGoalJudgements(id);
+    expect(refreshed).toEqual({ claimed: ["a", "b"], inReview: false });
+    expect(reviewNotices()).toEqual([]);
+    expect(
+      h.notices.filter((n) => n.type === GOAL_CLAIM_NOTIFICATION_TYPE).length
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -413,6 +562,50 @@ describe("the pod-wide goals list (W5)", () => {
       expect(cursor).not.toBeNull();
     }
     expect(seen).toEqual(all.map((r) => r.id));
+  });
+
+  it("rows started in the SAME millisecond page cleanly, in both orders (microseconds apart)", async () => {
+    // Four goals one millisecond apart at most, a few microseconds apart —
+    // the column keeps microseconds, the cursor carries milliseconds.
+    const ids: string[] = [];
+    for (const n of ["µ one", "µ two", "µ three", "µ four"]) {
+      ids.push(await goal(n, OTHER_PROJECT));
+    }
+    await q(
+      `update project_tracks
+          set created_at = timestamptz '2030-01-01 00:00:00.123000+00'
+                           + (array_position($1::uuid[], id) * interval '1 microsecond')
+        where id = any($1::uuid[])`,
+      [ids]
+    );
+    const walk = async (projectId: string | null) => {
+      const seen: string[] = [];
+      let cursor = null as ReturnType<typeof decodeTrackListCursor>;
+      for (let i = 0; i < 50; i++) {
+        const page = (await listTracksPage({
+          ...(projectId ? { projectId } : {}),
+          actor: person(OWNER),
+          limit: 1,
+          cursor,
+        }))!;
+        seen.push(...page.rows.map((r) => r.id));
+        if (!page.nextCursor) break;
+        cursor = decodeTrackListCursor(page.nextCursor);
+      }
+      return seen;
+    };
+    for (const projectId of [OTHER_PROJECT, null]) {
+      const all = (await listTracksPage({
+        ...(projectId ? { projectId } : {}),
+        actor: person(OWNER),
+        limit: 100,
+      }))!.rows.map((r) => r.id);
+      const seen = await walk(projectId);
+      // Rules out the ms cursor against µs rows: a repeat or a skip here.
+      expect(seen, String(projectId)).toEqual(all);
+      expect(new Set(seen).size).toBe(seen.length);
+      for (const id of ids) expect(seen).toContain(id);
+    }
   });
 
   it("a project the caller cannot see is null, not an empty page", async () => {
@@ -545,5 +738,178 @@ describe("a reopened goal keeps its people (R8, W5)", () => {
     });
     const res = await reopenTrack({ trackId: old, actor: person(OWNER) });
     expect(res.status).not.toBe("proposed");
+  });
+});
+
+describe("F4 — the list read of a goal's runs is bounded, and derives the same marks", () => {
+  /** A closed run carrying `keys`, at `minutesAgo`. */
+  async function closedRun(trackId: string, keys: string[]): Promise<string> {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, track_id, project_id, status, goal, criteria, expected_outputs, agent_ids, metadata, created_at, updated_at)
+       values ($1, $2, $3, $4, $5, 'closed', 'work', $6::jsonb, '[]'::jsonb, '{agent-9}', '{"modelId":"model-x"}'::jsonb, now(), now())`,
+      [id, OWNER, WS, trackId, PROJECT, JSON.stringify(keys.map(crit))]
+    );
+    return id;
+  }
+  async function grade(
+    sessionId: string,
+    key: string,
+    verdict: "pass" | "fail",
+    kind: string,
+    by: string,
+    minutesAgo: number,
+    rationale: string | null = null
+  ) {
+    await q(
+      `insert into session_evaluations (id, session_id, user_id, criterion_key, attempt, verdict, evaluator_kind, evaluator_id, rationale, evidence, created_at)
+       values (gen_random_uuid(), $1, $2, $3, 1, $4, $5, $6, $7, '{}'::jsonb, now() - ($8::int * interval '1 minute'))`,
+      [sessionId, OWNER, key, verdict, kind, by, rationale, minutesAgo]
+    );
+  }
+
+  it("equal to the whole-history derivation, from fewer runs", async () => {
+    const id = await goal("Bounded", PROJECT, person(OWNER), {
+      criteria: [
+        crit("tone"),
+        {
+          ...crit("pages"),
+          check: { kind: "evidence", evidenceKey: "pages" },
+          checkKind: "measured",
+        },
+        crit("legal"),
+        crit("press"),
+      ],
+    });
+    // Many closed attempts on "tone": only the latest of each kind matters.
+    for (let i = 0; i < 5; i++) {
+      const r = await closedRun(id, ["tone", "pages"]);
+      await grade(r, "tone", "fail", "judge", "model-x", 100 - i);
+      await grade(
+        r,
+        "pages",
+        "pass",
+        "evidence",
+        "ci-bot",
+        90 - i,
+        `${i} of 9 pages`
+      );
+    }
+    // An OLDER person's grade still wins over every later AI row.
+    const human = await closedRun(id, ["tone"]);
+    await grade(human, "tone", "pass", "human", "user-7", 200);
+    // The latest measured row is a fail with its own value.
+    const last = await closedRun(id, ["pages"]);
+    await grade(
+      last,
+      "pages",
+      "fail",
+      "evidence",
+      "ci-bot",
+      10,
+      "8 of 9 pages"
+    );
+    // "legal" was carried by a closed run that nobody graded: not met.
+    await closedRun(id, ["legal"]);
+    // An open run on "tone" with a newer AI pass — under way, not the winner.
+    const open = await fileRun(id, ["tone"]);
+    await grade(open, "tone", "pass", "judge", "model-x", 1);
+
+    const track = (await getTrack(id, person(OWNER)))!;
+    const criteria = readGoalCriteria(track.criteria);
+    const ctx = { judgeId: OWNER };
+    const full = (await loadGoalRuns([track])).runsOf.get(id)!;
+    const bounded = (await loadGoalRunsForRead([track])).runsOf.get(id)!;
+    const derived = (runs: typeof full) =>
+      deriveGoalCriteria(criteria, runs, ctx);
+    expect(derived(bounded)).toEqual(derived(full));
+    // Non-vacuity: the fixture exercises each rule the bounded read keeps.
+    expect(derived(full).map((c) => [c.key, c.mark, c.currentValue])).toEqual([
+      ["tone", "claimed", null],
+      ["pages", "not_met", "8 of 9 pages"],
+      ["legal", "not_met", null],
+      ["press", "not_started", null],
+    ]);
+    expect(derived(full)[0]!.claim).toMatchObject({
+      by: "user-7",
+      sessionId: human,
+    });
+    // …and it read fewer runs than the goal has.
+    expect(full.length).toBe(9);
+    expect(bounded.length).toBeLessThan(full.length);
+  });
+});
+
+describe("R6 — keep watching it, and an operation's week", () => {
+  it("a goal closed as met starts an OPERATION linked spawned_from it, read per week; a repeat hands it back", async () => {
+    const id = await goal("Site is live", PROJECT, person(OWNER), {
+      criteria: [crit("up"), crit("fast")],
+    });
+    const run = await fileRun(id, ["up", "fast"]);
+    // The owner judges: their own grade is the acceptance.
+    for (const key of ["up", "fast"]) {
+      await recordSessionEvaluation({
+        sessionId: run,
+        userId: OWNER,
+        criterionKey: key,
+        verdict: "pass",
+        evaluatorKind: "human",
+        evaluatorId: OWNER,
+      });
+    }
+    await setTrackStatus({
+      trackId: id,
+      status: "completed",
+      verdict: "met",
+      actor: person(OWNER),
+    });
+
+    const res = await startOperationFrom({ trackId: id, actor: person(OWNER) });
+    if (res.status === "proposed") throw new Error("unexpected proposal");
+    expect(res.status).toBe("started");
+    expect(res.track).toMatchObject({
+      name: "Site is live",
+      workKind: "operation",
+      status: "active",
+    });
+    const edges = await q<{ to_id: string }>(
+      `select to_id from links where from_type = 'track' and from_id = $1 and link_type = 'spawned_from'`,
+      [res.track.id]
+    );
+    expect(edges.rows).toEqual([{ to_id: id }]);
+
+    // Its week: unmeasured until a run of it is graded this week, then met.
+    const view = async () =>
+      loadTrackView(
+        (await getTrack(res.track.id, person(OWNER)))!,
+        person(OWNER)
+      );
+    expect((await view()).periodReading).toMatchObject({ mark: "unmeasured" });
+    const opRun = await fileRun(res.track.id, ["up", "fast"]);
+    await claim(opRun, "up");
+    // One required criterion still ungraded this week: not yet met.
+    expect((await view()).periodReading).toMatchObject({ mark: "unmeasured" });
+    await claim(opRun, "fast");
+    expect((await view()).periodReading).toMatchObject({ mark: "met" });
+    // Any other kind of work reads no period.
+    expect(
+      (await loadTrackView((await getTrack(id, person(OWNER)))!, person(OWNER)))
+        .periodReading
+    ).toBeNull();
+
+    const again = await startOperationFrom({
+      trackId: id,
+      name: "Another name",
+      actor: person(OWNER),
+    });
+    expect(again).toMatchObject({ status: "exists" });
+    if (again.status !== "proposed") expect(again.track.id).toBe(res.track.id);
+  });
+
+  it("refuses a goal that was not closed as met", async () => {
+    const id = await goal("Still running", PROJECT, person(OWNER));
+    await expect(
+      startOperationFrom({ trackId: id, actor: person(OWNER) })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });

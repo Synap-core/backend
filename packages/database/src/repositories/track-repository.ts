@@ -81,6 +81,15 @@ export interface TrackDirectionPatch {
   kpi?: Partial<ProjectTrackKpi> | null;
   /** What a goal holds (0345) — each field written whole. */
   goal?: TrackGoalPatch;
+  /**
+   * COMPARE-AND-SET on the criteria (code.md): the stored criteria as the
+   * caller READ them. Set whenever the patch writes criteria whole, so a
+   * judge's decision stamped in between (`setCriterionAcceptance`) is never
+   * silently dropped — the write lands only while the criteria still are what
+   * the caller merged onto (`null` back: gone, or changed). `undefined` = no
+   * check.
+   */
+  expectedCriteria?: unknown;
 }
 
 /** One stage appended to a running track (`appendStage`). */
@@ -423,7 +432,18 @@ export class TrackRepository extends BaseRepository<
         ...goalSet(patch.goal),
         updatedAt: new Date(),
       })
-      .where(eq(projectTracks.id, id))
+      .where(
+        and(
+          eq(projectTracks.id, id),
+          patch.expectedCriteria === undefined
+            ? undefined
+            : sql`${projectTracks.criteria} IS NOT DISTINCT FROM ${
+                patch.expectedCriteria === null
+                  ? null
+                  : JSON.stringify(patch.expectedCriteria)
+              }::jsonb`
+        )
+      )
       .returning();
     if (!track) return null;
     await this.emitCompleted("update", track, userId);

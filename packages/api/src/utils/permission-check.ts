@@ -1045,6 +1045,15 @@ export interface PermissionCheckBaseOpts {
    */
   forcePropose?: boolean;
   /**
+   * The POD files this proposal on its own, not the person it is filed for
+   * (code-core F3, 2026-10-24): a `system:<producer>` author stamped as the
+   * row's `createdBy` — the machine marker the codebase already reads
+   * (`MACHINE_CREATED_BY_PREFIX`, @synap/database). `userId` stays the person
+   * it is for (the owner floor), so they still see and decide it; it is no
+   * longer counted as their own act. Today: the goal loop's next run.
+   */
+  machineAuthor?: `system:${string}`;
+  /**
    * FB1020 B3 — the door PROVED this write organises the acting agent's own
    * fresh work (`isOwnFreshWork`, @synap/database): same key, last 24 h,
    * untouched by a person, into a project the person named. Set ONLY by the
@@ -1575,6 +1584,7 @@ async function evaluatePermission(
           if (actorRow?.userType === "agent") {
             if (dryRun) return DRY_RUN_PROPOSE;
             return createProposal({
+              createdBy: opts.machineAuthor,
               envelope: writeEnvelope,
               workspaceId,
               subjectType,
@@ -1649,6 +1659,7 @@ async function evaluatePermission(
           if (reviewerExists) {
             if (dryRun) return DRY_RUN_PROPOSE;
             return createProposal({
+              createdBy: opts.machineAuthor,
               envelope: writeEnvelope,
               proposedByUserId: userId,
               workspaceId,
@@ -1691,6 +1702,7 @@ async function evaluatePermission(
     if (opts.issuer && opts.issuer.trusted === false) {
       if (dryRun) return DRY_RUN_PROPOSE;
       return createProposal({
+        createdBy: opts.machineAuthor,
         envelope: writeEnvelope,
         workspaceId,
         subjectType,
@@ -2099,6 +2111,7 @@ async function evaluatePermission(
       if (gov.decision === "propose" && !lifecycleCloseEscape) {
         if (dryRun) return DRY_RUN_PROPOSE;
         return createProposal({
+          createdBy: opts.machineAuthor,
           envelope: governedEnvelope,
           workspaceId,
           subjectType,
@@ -2588,6 +2601,7 @@ async function evaluatePermission(
       }
       if (dryRun) return DRY_RUN_PROPOSE;
       return createProposal({
+        createdBy: opts.machineAuthor,
         envelope: writeEnvelope,
         workspaceId,
         subjectType,
@@ -3847,6 +3861,8 @@ async function createProposal(args: {
    * (they carry `agentUserId` on the envelope's access instead).
    */
   proposedByUserId?: string;
+  /** A machine author (`PermissionCheckOpts.machineAuthor`) — else `userId`. */
+  createdBy?: string;
   workspaceId: string | null | undefined;
   subjectType: string;
   action: string;
@@ -3891,6 +3907,7 @@ async function createProposal(args: {
   const {
     envelope,
     proposedByUserId,
+    createdBy: machineAuthor,
     workspaceId,
     subjectType,
     action,
@@ -4275,7 +4292,7 @@ async function createProposal(args: {
           ...(reqEventId ? { requestedEventId: reqEventId } : {}),
         },
         agentUserId: attributionAgentUserId ?? undefined,
-        createdBy: userId,
+        createdBy: machineAuthor ?? userId,
         proposedByUserId: proposedByUserId ?? null,
         threadId: threadId ?? null,
         commandRunId: commandRunId ?? null,
